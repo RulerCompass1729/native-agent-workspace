@@ -374,40 +374,125 @@ function applyColumnTerminalHeight(binding, height, mode = 'redraw') {
   else if (mode === 'redraw' && before !== undefined && before !== value) revealTerminalCursor(terminals.get(binding.id));
   return value;
 }
+// The source's screen line is shared, not its numeric height: forms and footers can differ.
+function columnTerminalAlignment(source) {
+  const key = memberMenuKey(source.id), room = spaceId;
+  if (!key || columnTerminalBinding(source.id) !== source) return null;
+  const targets = orderedMembers().map(member => ({ id: member.id, binding: columnTerminalBinding(member.id) }));
+  for (const target of targets) if (target.binding) target.bottom = target.binding.nativeSash.getBoundingClientRect().top + target.binding.terminalHeight;
+  return { source, key, room, targets };
+}
+function cancelColumnTerminalAlignment(group, message = 'toast.terminalAlignCancelled') {
+  if (!group || group.cancelled) return false;
+  group.cancelled = true;
+  if (group.adjusted) for (const t of group.targets) {
+    if (!t.binding || sessionComposers.get(t.id) !== t.binding) continue;
+    if (columnTerminalBinding(t.id) === t.binding) applyColumnTerminalHeight(t.binding, columnTerminalHeight(t.id), 'adjust');
+    else { t.binding.terminalHeight = undefined; t.binding.nativeHost.style.height = ''; }
+  }
+  if (group.source.terminalDrag?.group === group) group.source.terminalDrag = null;
+  toastMessage(message); return false;
+}
+function alignColumnTerminals(group, requestedY, save = true) {
+  if (!group || group.cancelled) return false;
+  if (group.room !== spaceId || group.key !== memberMenuKey(group.source.id) || columnTerminalBinding(group.source.id) !== group.source) return cancelColumnTerminalAlignment(group);
+  const membersNow = orderedMembers();
+  if (membersNow.length !== group.targets.length || group.targets.some((t, i) => t.id !== membersNow[i]?.id || t.binding !== columnTerminalBinding(t.id))) return cancelColumnTerminalAlignment(group);
+  const visible = group.targets.filter(t => t.binding);
+  // A layout change during a captured drag is not permission to move a different line.
+  if (visible.some(t => Math.abs(t.binding.nativeSash.getBoundingClientRect().top + t.binding.terminalHeight - t.bottom) > 1)) return cancelColumnTerminalAlignment(group);
+  const minY = Math.max(...visible.map(t => t.bottom - columnTerminalTallest(t.binding)));
+  const maxY = Math.min(...visible.map(t => t.bottom - columnTerminalLimits(t.binding).min));
+  if (minY > maxY) return cancelColumnTerminalAlignment(group, 'toast.terminalAlignUnavailable');
+  const y = Math.max(minY, Math.min(maxY, requestedY));
+  for (const t of visible) applyColumnTerminalHeight(t.binding, t.bottom - y, 'adjust');
+  group.adjusted = true;
+  if (save) {
+    for (const t of group.targets) {
+      rememberColumnTerminalHeight(t.id, t.binding ? t.binding.terminalHeight : group.source.terminalHeight);
+      if (t.binding) fitColumnTerminal(t.binding);
+    }
+    attempt(persistView);
+    group.adjusted = false;
+    toastMessage(Math.abs(y - requestedY) > 1 ? 'toast.terminalAlignLimited' : 'toast.terminalAligned');
+  }
+  return true;
+}
+let columnTerminalOverlay;
+function hideColumnTerminalHint(binding) {
+  if (!columnTerminalOverlay || binding && columnTerminalOverlay.binding !== binding) return;
+  columnTerminalOverlay.hint.hidden = columnTerminalOverlay.guide.hidden = true; columnTerminalOverlay.binding = null;
+}
+function showColumnTerminalHint(binding) {
+  if (!columnTerminalBinding(binding.id)) return hideColumnTerminalHint(binding);
+  if (!columnTerminalOverlay) {
+    const hint = node('div', undefined, 'column-terminal-hint'), guide = node('div', undefined, 'column-terminal-guide');
+    hint.id = 'column-terminal-height-hint'; hint.setAttribute('role', 'tooltip'); guide.setAttribute('aria-hidden', 'true');
+    (binding.nativeSash.closest('.naw') || document.body).append(hint, guide); columnTerminalOverlay = { hint, guide };
+  }
+  const { hint, guide } = columnTerminalOverlay, rect = binding.nativeSash.getBoundingClientRect();
+  const area = binding.nativeSash.closest('.collaboration-readers')?.getBoundingClientRect() || binding.nativeSash.parentElement.getBoundingClientRect();
+  hint.textContent = uiText('terminal.heightHint'); hint.hidden = guide.hidden = false;
+  hint.style.left = `${Math.max(8, Math.min(window.innerWidth - hint.offsetWidth - 8, rect.left + (rect.width - hint.offsetWidth) / 2))}px`;
+  hint.style.top = `${Math.max(8, rect.top - hint.offsetHeight - 8)}px`;
+  guide.style.left = `${Math.max(0, area.left)}px`; guide.style.width = `${Math.max(0, Math.min(window.innerWidth, area.right) - Math.max(0, area.left))}px`;
+  guide.style.top = `${rect.top + rect.height / 2}px`; columnTerminalOverlay.binding = binding;
+}
 function columnTerminalSash(binding) {
   if (binding.nativeSash) return binding.nativeSash;
   const sash = node('div', undefined, 'column-terminal-sash'); sash.tabIndex = 0;
   sash.setAttribute('role', 'separator'); sash.setAttribute('aria-orientation', 'horizontal');
-  // The drag is kept on the binding so a redraw in the middle of it leaves the dragged height alone.
+  sash.setAttribute('aria-describedby', 'column-terminal-height-hint');
+  const align = () => { binding.terminalDrag = null; const group = columnTerminalAlignment(binding); if (group) alignColumnTerminals(group, sash.getBoundingClientRect().top); showColumnTerminalHint(binding); };
   const finish = event => {
     const drag = binding.terminalDrag; if (drag?.pointerId !== event.pointerId) return;
-    binding.terminalDrag = null; if (drag.value !== undefined && binding.nativeVisible) applyColumnTerminalHeight(binding, drag.value, 'save');
+    binding.terminalDrag = null;
+    if (drag.value !== undefined && binding.nativeVisible) {
+      if (drag.group) alignColumnTerminals(drag.group, drag.value, true);
+      else applyColumnTerminalHeight(binding, drag.value, 'save');
+    }
+    if (sash.matches(':hover') || document.activeElement === sash) showColumnTerminalHint(binding); else hideColumnTerminalHint(binding);
   };
+  sash.addEventListener('pointerenter', () => showColumnTerminalHint(binding));
+  sash.addEventListener('focus', () => showColumnTerminalHint(binding));
+  sash.addEventListener('pointerleave', () => { if (!binding.terminalDrag && document.activeElement !== sash) hideColumnTerminalHint(binding); });
+  sash.addEventListener('blur', () => { if (!binding.terminalDrag) hideColumnTerminalHint(binding); });
+  sash.addEventListener('dblclick', event => { event.preventDefault(); align(); });
   sash.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;
+    const group = event.shiftKey ? columnTerminalAlignment(binding) : null;
+    if (event.shiftKey && !group) return;
     event.preventDefault(); sash.setPointerCapture(event.pointerId);
-    binding.terminalDrag = { pointerId: event.pointerId, y: event.clientY, height: binding.terminalHeight ?? columnTerminalHeight(binding.id) };
+    binding.terminalDrag = { pointerId: event.pointerId, y: event.clientY, height: binding.terminalHeight ?? columnTerminalHeight(binding.id),
+      line: sash.getBoundingClientRect().top, group };
   });
   sash.addEventListener('pointermove', event => {
-    const drag = binding.terminalDrag; if (drag?.pointerId !== event.pointerId) return;
-    if (!(event.buttons & 1)) return finish(event);
-    drag.value = applyColumnTerminalHeight(binding, drag.height + drag.y - event.clientY, 'adjust');
+    const drag = binding.terminalDrag;
+    if (drag?.pointerId === event.pointerId) {
+      if (!(event.buttons & 1)) return finish(event);
+      if (drag.group) { drag.value = drag.line + event.clientY - drag.y; alignColumnTerminals(drag.group, drag.value, false); }
+      else drag.value = applyColumnTerminalHeight(binding, drag.height + drag.y - event.clientY, 'adjust');
+    }
+    showColumnTerminalHint(binding);
   });
   for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) sash.addEventListener(type, finish);
   sash.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); align(); return; }
     const now = binding.terminalHeight ?? columnTerminalHeight(binding.id);
     const next = { ArrowUp: now + COLUMN_TERMINAL.step, ArrowDown: now - COLUMN_TERMINAL.step, Home: columnTerminalTallest(binding), End: COLUMN_TERMINAL.min }[event.key];
     if (next === undefined) return;
-    event.preventDefault(); applyColumnTerminalHeight(binding, next, 'save');
+    event.preventDefault(); applyColumnTerminalHeight(binding, next, 'save'); showColumnTerminalHint(binding);
   });
   return binding.nativeSash = sash;
 }
 // A smaller window lowers a tall terminal (not below 112px) so the input stays in the column.
 window.addEventListener('resize', () => {
+  hideColumnTerminalHint();
   for (const binding of sessionComposers.values()) if (columnTerminalBinding(binding.id) && !binding.terminalDrag) applyColumnTerminalHeight(binding, columnTerminalHeight(binding.id));
 });
 function removeColumnInput(id) {
   const binding = sessionComposers.get(id); if (!binding) return;
+  hideColumnTerminalHint(binding);
   binding.revision++; binding.visible = binding.nativeVisible = false; binding.resizeAllowed = false; binding.terminalDrag = null;
   binding.ui.suspend(); if (binding !== soloComposer) composerParking.append(binding.ui.form);
   const entry = terminals.get(id); cancelViewInput(entry); if (entry) { cancelColumnComposition(entry); entry.term.blur(); } syncTerminalMount(id);
