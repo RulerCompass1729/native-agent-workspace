@@ -4829,3 +4829,49 @@ the reviewer also reports an uncalled internal advisor, without logged use.
 Order inversion, cancellation and disconnect coverage here is unit evidence.
 General 166 compatibility, installation, routing by the original retained
 consumer and the complete messaging task remain unqualified at this checkpoint.
+
+
+
+**Grouped sidebar compact source slice, 2026-11-04 (scoped source approval):**
+The user asks for tighter rows and a recognizable space disclosure while keeping
+member state text readable. The existing grouped tree keeps the same membership,
+buttons, menus, per-view fold state, native IDs and draft mechanisms. A decorative
+22px SVG replaces the tiny disclosure glyph, with a 40 by 44px target; expanded
+rows use a 40px minimum and may grow with content. Member font sizes are unchanged.
+A targeted source check caught indentation leaking into the narrow rail; the
+indentation and compact row sizing are now scoped to the expanded sidebar.
+
+Actual isolated source GUI comparison, with synthetic transport and identical
+four-member name/status content at the same 279.5px sidebar width, measured a
+226px to 209px group and 47px to 41px member rows. Five candidate groups cover
+disclosure versus entering the space, keyboard/menu/rename, attention, fold
+preferences, renderer reload, native identity and private draft preservation,
+and a collapsed-shell round trip. The current short state rows remain unclipped;
+a fleet update did not produce a long visible state, so this is not long-string
+GUI coverage. Existing locale and sidebar checks pass 52 tests without skips.
+
+Two initial baseline runs failed on an author locator missing a literal ellipsis
+and a disposed-handle exporter. A corrective baseline preserved usable geometry
+and passed four UI groups, then failed on an absent control counter; it is not a
+whole baseline pass. The final candidate exits successfully. All four owned GUI
+and synthetic daemon starts were cleaned up and their exact mutex tokens
+released. Observed synthetic input/send/queue/steer/forward/approval/answer/
+resume/pause counters remain zero; the absent run counter is uninstrumented,
+not zero. Synthetic display opens/resizes are nonzero. No product model, real
+provider process, clipboard operation or daily-app action was used. This is
+source/synthetic-GUI evidence only; installed acceptance belongs to Main.
+
+Source review identified two additional boundary cases: the new group margin
+also tightened a collapsed rail, and a missing collapsed attribute could leave
+expanded rows at the old spacing. The margin is now scoped to the expanded
+sidebar and its selector matches the host's existing not-collapsed condition.
+The recorded candidate had an explicit false attribute, so both selector forms
+match that same state; the final two-selector repair has no additional GUI run.
+The same independent checkpoint will verify the delta and direct callers.
+
+The same independent reviewer checked the two-selector delta, actual fold/menu/
+locale/focus bindings, original raw failures and the final 52-test result, and
+approved this bounded source increment. The collapsed-rail spacing fix is
+source-verified; its final spacing, long state strings, native providers and
+installed behavior remain unverified by this increment. No further GUI trial
+was used to relabel those limits.

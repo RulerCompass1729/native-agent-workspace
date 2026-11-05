@@ -2059,7 +2059,10 @@ function renderSessions() {
       if (!entry) {
         const element = node('section', undefined, 'session-space-group'), heading = node('h3'), body = node('div');
         const title = group.id ? button('', () => selectSpace(group.id)) : node('span');
-        const toggle = button('▾', () => toggleSidebarGroup(group.id), 'session-space-toggle'), attention = node('span', undefined, 'session-space-attention');
+        const toggle = button('', () => toggleSidebarGroup(group.id), 'session-space-toggle'), attention = node('span', undefined, 'session-space-attention');
+        // A decorative, persistent SVG keeps disclosure distinct from entering
+        // the space. The existing button owns its name, keyboard and fold state.
+        toggle.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
         body.id = `session-space-members-${crypto.randomUUID()}`; attention.id = `${body.id}-attention`;
         toggle.setAttribute('aria-controls', body.id); heading.append(toggle, title, attention); element.append(heading, body); element.dataset.sessionGroup = group.id || 'independent';
         let more = null;
@@ -2090,7 +2093,7 @@ function renderSessions() {
       const menuRow = sessionMenu?.kind === 'session' && sessionRows.get(sessionMenu.rowKey);
       const closeMenu = rowsHidden && sessionMenu?.kind === 'session' && entry.body.contains(menuRow?.element || sessionMenu.anchor);
       const hiddenFocus = rowsHidden && (entry.body.contains(document.activeElement) || closeMenu);
-      entry.body.hidden = closed; entry.toggle.textContent = closed ? '▸' : '▾'; entry.toggle.setAttribute('aria-expanded', String(!closed));
+      entry.body.hidden = closed; entry.toggle.setAttribute('aria-expanded', String(!closed));
       const groupLabel = () => ({ name: group.name ?? uiText('sidebar.independent') });
       ui.display.attribute(entry.toggle, 'aria-label', closed ? 'sidebar.expand' : 'sidebar.collapse', groupLabel); ui.display.attribute(entry.toggle, 'title', closed ? 'sidebar.expand' : 'sidebar.collapse', groupLabel);
       const attention = group.people.map(record => ({ record, presentation: sidebarPresentation(record) })).filter(item => item.presentation.marker === '!');

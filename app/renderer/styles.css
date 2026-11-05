@@ -546,6 +546,23 @@ header h1, header p { overflow-wrap: anywhere; }
 .session-space-group .session-space-heading{flex:1;min-width:0;overflow-wrap:anywhere}
 .session-space-attention{flex:none;font-size:11px;color:var(--ink)}
 .session-space-heading{color:var(--space-ink,var(--muted));font-size:11px;font-weight:600;padding:4px 2px;text-align:left}
+/* V3 grouped tree: keep the existing disclosure and entry as separate targets.
+   Forty pixels is a minimum; long state facts still determine their own height. */
+.sidebar .session-space-group h3{min-height:44px;margin:1px 0;gap:2px}
+.sidebar .session-space-toggle{display:inline-flex;align-items:center;justify-content:center;width:40px;min-width:40px;height:44px;min-height:44px;color:var(--ink)}
+.sidebar .session-space-toggle svg{display:block;width:22px;height:22px;flex:none}
+.sidebar .session-space-toggle[aria-expanded="false"] svg{transform:rotate(-90deg)}
+.sidebar .session-space-heading{font-size:14px;line-height:20px;font-weight:650;padding:4px 5px;border-radius:4px}
+/* The host's narrow rail keeps its original sizing; only the expanded tree
+   gets the compact rows. This also outranks its existing 6px row padding. */
+&[data-native-surface="sidebar"]:not([data-collapsed="true"]){
+  .sidebar .session-space-group{margin:0 0 4px}
+  .sidebar .session-space-group>div{margin-left:14px}
+  .sidebar .session-space-group .session-row{min-height:40px;margin:0}
+  .sidebar .session-space-group .session-link{min-height:40px;padding-top:3px;padding-bottom:3px}
+  .sidebar .session-space-group .session-link .label{line-height:18px}
+  .sidebar .session-space-group .session-link .session-metadata small{line-height:14px;margin-top:0;white-space:normal;overflow-wrap:anywhere}
+}
 #new-space{margin:2px 8px 6px;font-size:12px;text-align:left}
 .space-file-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:8px 0;border-bottom:1px solid var(--border)}
 .space-file-row>button:first-child{min-width:0;overflow-wrap:anywhere;text-align:left}
