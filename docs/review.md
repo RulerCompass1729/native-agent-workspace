@@ -4983,3 +4983,16 @@ No locked production channel or operator grant is enabled. A later retention
 check observes one old Claude secretary service and native process restart. Its
 native ID and reported settings are retained; the trigger is unknown. The
 original development processes remain unchanged. The lifecycle finding stays open.
+
+
+**Queued process-fold notification, 2026-11-04 (source only):** a manual
+process fold can save a reading choice twice: immediately, then from the browser's
+queued details notification. The second save can revoke a newer JumpLatest.
+The three existing summary/more/group handlers now acknowledge that queued event
+through the existing expected-open field; later manual changes still save their
+choice. A native Electron HTML counter shows all three old paths lose follow
+and all three repaired paths retain it. New source regressions fail on the old
+code; 136 affected checks pass without skips. Independent scoped source review
+passes; test-count and unchanged-caller checks are author verified. This is not
+installed acceptance or a reproduction of the person's cache-gap recurrence,
+which remains open. No provider/model calls or daily application actions.

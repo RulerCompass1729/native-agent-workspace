@@ -495,7 +495,7 @@ function processGroupRows(view, rows, plans, explorations, room, key) {
       };
       summary.addEventListener('click', event => {
         if (event.target.closest('button,a,input')) return;
-        event.preventDefault(); group.expectedOpen = undefined; disclosure.open = !disclosure.open; remember();
+        event.preventDefault(); group.expectedOpen = !disclosure.open; disclosure.open = group.expectedOpen; remember();
       });
       disclosure.addEventListener('toggle', () => {
         if (group.expectedOpen === disclosure.open) { group.expectedOpen = undefined; return; }
@@ -617,9 +617,9 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         };
         summary.addEventListener('click', event => {
           if (event.target.closest('button,a,input')) return;
-          event.preventDefault(); entry.expectedOpen = undefined; disclosure.open = !disclosure.open; rememberFold();
+          event.preventDefault(); entry.expectedOpen = !disclosure.open; disclosure.open = entry.expectedOpen; rememberFold();
         });
-        entry.more.onclick = () => { entry.expectedOpen = undefined; disclosure.open = true; rememberFold(); };
+        entry.more.onclick = () => { entry.expectedOpen = true; disclosure.open = true; rememberFold(); };
         disclosure.addEventListener('toggle', () => {
           if (entry.expectedOpen === disclosure.open) { entry.expectedOpen = undefined; return; }
           entry.expectedOpen = undefined; rememberFold();

@@ -33,7 +33,7 @@ class Element {
   remove() { if (!this.parentElement) return; const a = this.parentElement.childNodes; a.splice(a.indexOf(this), 1); this.parentElement = null; }
   before(child) { this.parentElement.insertBefore(child, this); }
   after(child) { this.parentElement.insertBefore(child, this.nextSibling); }
-  addEventListener() {}
+  addEventListener(type, listener) { (this.listeners ||= {})[type] = listener; }
   removeEventListener() {}
   contains(other) { return other === this || this.childNodes.some(child => child.contains(other)); }
   getClientRects() { return []; }
@@ -472,3 +472,35 @@ test('only NAW-owned gap status labels switch language; raw native statuses and 
   f.switch('en'); assert.ok(entry.heading.textContent.includes('Result unconfirmed')); assert.equal(JSON.stringify(rows), raw);
   delete rows[0].uiMessage; f.context.messageList(f.root, rows, false, f.state.sessions[0].id); f.switch('zh'); assert.ok(entry.heading.textContent.includes('unconfirmed')); assert.deepEqual(f.calls, []);
 });
+
+// The browser queues a native details toggle after the click handler. That
+// acknowledgement must not revoke a more recent explicit reading action.
+for (const action of ['summary', 'more', 'group']) {
+  test(`late ${action} toggle preserves JumpLatest while later manual changes still leave follow`, () => {
+    const rows = ['a', 'b'].slice(0, action === 'group' ? 2 : 1).map(id => ({ id, role: 'tool', kind: 'tool', nativeBlock: true,
+      nativeId: 'native-A', turnId: 'turn-A', title: 'Bash', toolKind: 'commandExecution', text: 'ORIGINAL output\n'.repeat(5), status: 'complete' }));
+    const persisted = [], f = fixture(rows, false, {}, { readingState: positions => persisted.push(plain(positions)) });
+    f.context.attempt = fn => fn();
+    const group = [...f.view.groups.values()][0], entry = f.view.entries.get('a');
+    // Initial render toggles settle before the person starts reading.
+    for (const item of [...f.view.entries.values(), ...f.view.groups.values()]) item.disclosure?.listeners.toggle();
+    const target = action === 'group' ? group : entry, summary = target.disclosure.firstChild;
+    const original = JSON.stringify(f.state);
+    if (action === 'more') entry.more.onclick();
+    else summary.listeners.click({ target: summary, preventDefault() {} });
+    assert.equal(target.disclosure.open, true);
+    assert.equal(persisted.at(-1)[f.view.key].follow, false);
+    f.context.changeReadingPage(f.view, 'latest');
+    assert.equal(persisted.at(-1)[f.view.key].follow, true);
+    const saves = persisted.length;
+    target.disclosure.listeners.toggle();
+    assert.equal(persisted.length, saves, 'the queued acknowledgement does not save another manual intent');
+    assert.equal(f.view.intent.position.follow, true);
+    // A subsequent native/accessibility change is a new manual action.
+    target.disclosure.open = false; target.disclosure.listeners.toggle();
+    assert.equal(persisted.at(-1)[f.view.key].follow, false);
+    assert.equal(f.view.intent, null);
+    assert.equal(JSON.stringify(f.state), original);
+    assert.deepEqual(f.calls, []);
+  });
+}
