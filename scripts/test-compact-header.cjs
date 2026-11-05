@@ -172,7 +172,7 @@ async function run() {
     assert.equal(await page.locator('#header').evaluate(n => n.classList.contains('compact-session')), false); assert.equal(await page.locator('#room-session #session-toolbar').count(), 1); assert.equal(await page.locator('#session-files').isVisible(), true);
     assert.equal((await snapshot()).sessions.find(s => s.id === id).owner, ownerBeforeFocus); assert.equal((await fixture()).headerCalls.claim, callsBeforeFocus, 'Passive room focus does not claim input');
     await page.locator('#usage-button').click(); await page.locator('#privacy-dialog').waitFor(); assert.equal(await page.locator('#privacy-dialog h2').innerText(), `${longName} · 用量`); await page.locator('#close-privacy').click();
-    await page.locator('.collaboration-back').click(); await page.locator(`[data-session-id="${id}"]`).click();
+    await page.locator('#room-overview').click(); await page.locator(`[data-session-id="${id}"]`).click();
     await menu('#session-header-more'); await page.locator(`[data-session-id="${other}"]`).click(); await page.getByRole('menu').waitFor({ state: 'hidden' }); await page.locator(`[data-session-id="${id}"]`).click();
     const draftBeforeReload = await input.inputValue(); await page.reload(); await page.locator('#session-header-more').waitFor(); await until(async () => await input.inputValue() === draftBeforeReload, 'Reload retains the draft');
     if ((await fixture()).pending.includes(id)) await fixture('release', id);
