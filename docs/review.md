@@ -6034,3 +6034,12 @@ the preceding executed operator after version substitution. No native process
 is migrated. User operations in the daily profile remain pending, so this closes
 the signed/installation stage rather than the whole task or milestone. Retention
 has no automatic deletion authority; no disk-space release is claimed.
+
+
+### Review-round spacing: source only
+
+Three original Run-dialog spacing rules are adopted unchanged after verifying
+the original source/review packet and current composition build. Existing text,
+fonts, controls and round-consent logic are unchanged. Runtime geometry and
+signed/daily operation remain unqualified; this source increment is held for a
+later batch and does not start a round or create a release.

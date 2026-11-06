@@ -746,3 +746,6 @@ header h1, header p { overflow-wrap: anywhere; }
 #context-dialog { padding:20px; }
 #context-dialog > p:first-of-type { margin:8px 0; }
 #context-dialog .dialog-actions { margin-top:16px; }
+#run-dialog { padding:20px; }
+#run-dialog form > p { margin:8px 0; }
+#run-dialog .dialog-actions { margin-top:16px; }

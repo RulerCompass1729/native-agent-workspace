@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-11-05. This is a local Apple Silicon macOS technical trial.
+As of 2026-11-06. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
