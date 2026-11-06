@@ -760,3 +760,13 @@ header h1, header p { overflow-wrap: anywhere; }
 /* A persistent goal is distinct from a running turn and from native approval. */
 .state-dot.idle.goal-stopped{background:transparent;border:1.5px solid #b78c42;box-shadow:0 0 0 2px var(--ring,var(--panel,#fff))}
 .state-dot.idle.goal-enabled{background:transparent;border:1.5px solid #5b7fa6;box-shadow:0 0 0 2px var(--ring,var(--panel,#fff))}
+/* Compact existing merge preview: keep text and controls unchanged. */
+#space-merge-preview>h3{margin:8px 0}
+#space-merge-preview>p{margin:8px 0}
+/* End compact existing merge preview. */
+
+/* Compact existing usage dialog only. */
+#privacy-dialog[data-mode="usage"] { padding:20px; }
+#privacy-dialog[data-mode="usage"] #trust-status > section { border-top:0; padding:8px 0; }
+#privacy-dialog[data-mode="usage"] [data-usage-session] { padding:8px 0; }
+#privacy-dialog[data-mode="usage"] [data-usage-session] h4 { margin:0 0 4px; }

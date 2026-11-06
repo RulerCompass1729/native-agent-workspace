@@ -6183,3 +6183,27 @@ All 156 directly affected checks pass without skips. Independent review accepts
 the exact source repair and raw failure/fix evidence. This is source acceptance;
 installed delivery, occupied-backend adoption and daily behavior remain open.
 No native input, goal mutation, automatic continuation or new polling is added.
+
+
+### Existing preview and usage spacing: source intake
+
+The merge preview changes only its heading and paragraph margins. Sixteen
+actual before/after comparisons retain original text, fonts and control sizes
+across languages, narrow windows, expanded notes, conflicts and unknown stages.
+Two complete trials remain failed because of invalid test IPC/projection shapes.
+A separate valid-projection trial passes with identities, metadata, both drafts,
+action counters and no page errors. Independent acceptance covers the exact
+ordinary source composition, not the experimental root GUI or installation.
+
+Four usage-only rules reduce padding and heading margins. Five complete source
+GUI flows retain native facts, unknown values, fonts, control sizes and drafts:
+known readings, refresh failure, fresh loading, unknown quotas and narrow English
+keyboard use. One failed trial had not normalized the scroll-to-top comparison
+precondition; it remains failed. The corrected trial passes. The divider above
+the native-readings section is intentionally removed; member borders remain.
+No claim is made that all borders are unchanged. Independent review accepts the
+four rules and their disjoint scope from the preview rules.
+
+These are synthetic source-GUI qualifications. No real native engine, provider
+turn, account read or daily-app operation is used; fixture account reads are
+counted separately. Signed installation and daily acceptance remain open.
