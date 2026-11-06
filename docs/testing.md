@@ -1,5 +1,26 @@
 # Bounded testing
 
+## Alpha.207: observed goal facts in existing status lines
+
+Committed source `cead349` passes the unchanged 2,957-check source scope. Three
+signed rendering groups qualify supplied goal facts, ordinary state precedence,
+lost/cleared observations, narrow/expanded return, grouped accessible facts and
+keyboard basics. Two groups complete in one failed trial; the third completes
+before another unrelated driver failure. Those full outcomes remain FAIL.
+Exact byte comparison excludes only deferred dialog CSS from the final build;
+a fresh final-source goal binding passes. A normal empty-profile bootstrap adds
+three checks. Six Main-owned profiles are cleaned; the original author's failed
+source profile is separate. All 71 payload files and strict signatures match.
+
+Failed driver assumptions include backend acknowledgement before a visible
+state settles, an unavailable API counter, and hidden navigation targets.
+Existing callable boundaries must have counters; an absent gated API is N/A,
+never zero. An accidental source-only build was quarantined before installation;
+the final build uses an explicit source/version/HEAD/clean guard. No provider
+turn is used by product tests; review inference is separate. Main OS counters
+are unavailable. Native delivery, physical/VO/IME, older-backend adoption and
+daily changed-surface acceptance are not inferred from these rendering checks.
+
 ## Alpha.206: pending creation and keyboard continuation
 
 Clean committed source `fe9a64f` passes 2,915 checks without skips. Six signed

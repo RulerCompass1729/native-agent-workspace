@@ -6137,7 +6137,34 @@ qualify Escape/backdrop gestures, real backend discard, focus or the whole task.
 
 - User problem: an idle session with a blocked persistent goal still looked ready. Existing goal notifications now supply status-only metadata to the existing header, sidebar and member status lines; working turns and pending approvals keep their own state.
 - Never-observed goals, including Goals being disabled, keep the existing display. Only a previously verified goal whose observation is lost becomes unconfirmed. An exact native cleared notification removes the goal hint. No getter, polling, goal mutation, native input or recovery action was added.
-- Independent design review caught the initial unconditional unknown badge; the corrected prototype passed the same reviewer. Independent source and raw-evidence review passed for this checkpoint; GUI and native delivery remain pending.
+- Independent design review caught the initial unconditional unknown badge; the corrected prototype passed the same reviewer. Independent source and raw-evidence review passed; subsequent signed rendering acceptance is scoped below. Native delivery remains pending.
 - Current Main baseline: 29 failures and two controls. Later source-cycle, duplicate-notification, malformed-scalar and resume-order counterexamples failed before correction. The same-tick resume notification is retained but withheld until identity confirmation. The exact current Main source bands now pass all 34 focused checks; the lane passes all 2,684 unit checks without skips. Both UI builds pass. New product checks use synthetic native transport, with no real provider/model turn; independent review usage is separate.
 - The new projection excludes goal text, budgets and counters. Main applies only the reviewed compatibility hunks: the existing space-create focus and pending-submit changes remain intact. The separate privacy CSS candidate is excluded. Main passes 49 directly affected checks and all 3,015 local checks without skips; these source checks do not qualify native delivery or the daily app.
-- Source-only checkpoint: actual GUI dimensions, wrapping, keyboard/accessibility, native notification delivery and installed behavior still require their own acceptance. Main alone integrates, installs and pushes; the lane performs its own precommit privacy scan.
+- The original checkpoint was source-only. Later signed rendering checks do not qualify actual native delivery, occupied-backend adoption, daily changed operations, physical input or the whole task. Main alone integrates, installs and pushes; the lane performs its own precommit privacy scan.
+
+
+### T117 ordinary installed rendering checkpoint
+
+Signed source `cead349` shows supplied goal facts in the existing surfaces.
+The source-only failed trial and four failed signed trials remain recorded.
+Completed groups are accepted only after their assertions, identity/draft checks
+and required counters pass; the final build binds unchanged goal code to those
+groups by exact compiled comparison and a fresh visible blocked-state check.
+The optional review-dialog spacing is omitted and remains source-only.
+
+Independent review accepts the core signed-rendering scope. It explicitly leaves
+real notification delivery and old-backend adoption open. The two private update
+path bindings receive a separate narrow review; its stale-record concern is
+resolved by checking the exact final source/CDHash. Normal bootstrap passes with
+no native session. The visible daily update retains 14 rows, 16 live native
+identities, 13 draft scopes and seven occupied older backends across 150 seconds;
+the original goal identity, objective, creation and active status remain. Daily
+changed-surface acceptance and the full goal stay open. No push is performed.
+
+A wrong build working directory produced a source-only artifact, not an update.
+Its source/version and new artifact identities are verified and quarantined;
+the final build guard checks the explicit ordinary path, version, HEAD, clean
+worktree and excluded experimental interface before allocating build work.
+The previous content of that mistakenly overwritten historical artifact was not
+recorded, so no historical-retention claim is made for it. Current and immediate
+rollback archives are separately verified. No native user session was stopped.

@@ -4,30 +4,32 @@ As of 2026-11-06. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.206, clean committed build source `fe9a64f`.
-An older space-creation result retains a newer name, selection and current view.
-Narrow cancellation restores an existing visible focus target, including when
-Cancel still has focus inside the already closed dialog. No timer or new panel
-is added. The interrupted-session menu hides profile-archived sessions while
-keeping their native resume metadata; merge selection uses the qualified compact
-spacing. All 2,915 candidate source checks pass without skips.
+Current daily GUI: alpha.207, clean committed build source `cead349`.
+Observed Codex goal status appears in the existing header, sidebar and member
+lines. Running turns and approvals keep their own state. Never-observed goals
+make no claim; a lost observation is unconfirmed, and native clearing removes
+the hint. No goal getter, setter, polling or automatic resume is added.
 
-Six signed user-task groups pass real app-local creation, two delayed original
-replies, busy cancellation, keyboard continuation, archive-menu filtering and
-merge-selection cancellation. A separate normal empty-profile bootstrap passes
-three checks. The author verifies all 71 payload files and strict signatures;
-independent review accepts the source and signed task scope. The first actual
-trial stopped on a wrong test condition about when an editor clears; its failure
-and cleanup remain recorded separately. No provider turn is used. Missing run or
-OS counters remain unmeasured, and emulated viewports do not qualify physical
-windows, IME or accessibility.
+All 2,957 source checks pass without skips. Actual signed rendering covers six
+states, working/approval precedence, lost/cleared observations, narrow reading,
+visible return, grouped disclosure, keyboard basics and retained private/shared
+drafts. Full failed trials remain failed; only completed groups are reused.
+The final source differs solely by omitting three unqualified cosmetic dialog
+rules, with exact compiled-content comparison and a fresh signed binding check.
+Normal empty-profile bootstrap passes three checks; all 71 payload files and
+strict signatures match. Independent source and signed-rendering review passes.
+These tests supply synthetic facts: real native notification delivery, occupied
+older-backend adoption and changed daily operations remain unverified.
 
 The ordinary visible update retains 14 records, 16 live native process identities,
 13 draft scopes, seven occupied older backends and the same active Main goal
-across 150 seconds. Automatic migration stays off. Changed operations in the daily
-profile still require authorized AX/manual acceptance; signed tests and retention
-do not close that gate. No daily debugger, native backend adoption, push or
-whole-goal completion is claimed.
+across 150 seconds. Automatic migration stays off. One installed application
+entry remains. Daily AX/manual acceptance, physical input, real workdays and the
+full dogfood milestone remain open; no daily debugger or push is used.
+
+Previously qualified alpha.206, source `fe9a64f`, preserves pending creation,
+keyboard continuation, archived-menu filtering and compact merge selection. Its
+unchanged source and signed qualifications remain applicable.
 
 Previously qualified alpha.205, source `6c9e858`, retains edits during pending
 notes/context operations and preserves merge Preview guards. Its unchanged
@@ -37,7 +39,7 @@ installation, rollback, pins, verification or occupancy keeps deletion candidate
 empty; no automatic-retention count or deletion is approved.
 
 Unreleased operator phase 1a keeps its earlier source/synthetic qualifications.
-Native qualification, daily grants and installation remain gated; alpha.206
+Native qualification, daily grants and installation remain gated; alpha.207
 excludes this interface entirely.
 
 Previously qualified alpha.204, source `48a6fd1`, compacted existing file previews,
