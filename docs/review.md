@@ -6240,3 +6240,10 @@ draft types are retained; owned resources and the strict signature are checked.
 The earlier independent design/source approval is reused for the exact rule.
 These new runtime checks are author-run; the change is not packaged or daily
 accepted. Physical/IME/VoiceOver and the full milestone remain unqualified.
+
+
+### Shared member terminal visibility: source intake, installed acceptance pending (2026-11-06)
+
+A live member terminal was hidden when its input route was chat. The visibility predicate now preserves that native screen while input ownership, view, epoch and generation gates remain unchanged. The original author commit is retained unchanged. The final regression fails three cases against the old renderer; the fixed source passes 32 related checks without skips and scoped independent source review.
+
+The first source GUI completed three groups before an incorrect member-heading selector stopped it. Main's corrected-source journey completed five groups, including solo return and narrow input layout, before an absent optional `run` counter caused a final assertion failure. Both attempts remain incomplete. The test now resolves required action guards before allocating a profile and labels absent optional methods unavailable, rather than reporting them as observed zero calls. A zero-allocation preflight passes and a missing-required-method canary refuses before launch. These are source and test-operator results, not installed or daily-app acceptance.

@@ -1,18 +1,27 @@
 // T135/T166: a live member terminal remains visible while its input route is chat.
 // Real source GUI/service, existing synthetic provider; no real native engine/model.
-if (process.argv[2] !== '--run' || !process.env.NAW_EVIDENCE_DIR) {
-  console.error('Supply --run and an external NAW_EVIDENCE_DIR; nothing started.'); process.exit(64);
+const preflightOnly = process.argv[2] === '--preflight';
+if (!['--run', '--preflight'].includes(process.argv[2]) || (!preflightOnly && !process.env.NAW_EVIDENCE_DIR)) {
+  console.error('Supply --run with external NAW_EVIDENCE_DIR, or --preflight; nothing started.'); process.exit(64);
 }
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const assert = require('node:assert/strict'), { randomUUID, createHash } = require('node:crypto');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
-const evidence = path.resolve(process.env.NAW_EVIDENCE_DIR), token = randomUUID();
+const evidence = path.resolve(process.env.NAW_EVIDENCE_DIR || '.'), token = randomUUID();
 const common = require('node:child_process').execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock');
 const sha = file => createHash('sha256').update(fs.readFileSync(path.join(code, file))).digest('hex');
 const sourcePins = Object.fromEntries(['app/renderer/renderer.js', 'app/dsh/client.js'].map(file => [file, sha(file)]));
 assert.ok(fs.readFileSync(path.join(code, 'app/dsh/client.js'), 'utf8').includes(fs.readFileSync(path.join(code, 'app/renderer/renderer.js'), 'utf8')), 'Build the exact renderer first');
-const result = { at: new Date().toISOString(), token, checks: [], errors: [], sourcePins, realNativeEngines: 0, productModels: 0, realProviders: 0 };
+// Resolve observability before allocating a profile or launching the GUI. A missing
+// optional source method is unavailable, never an observed zero-call counter.
+const { Workspace } = require(path.join(code, 'app/workspace.cjs'));
+const requiredActions = ['send', 'queue', 'steer', 'forward', 'approve', 'answer', 'resume'];
+for (const name of requiredActions) assert.equal(typeof Workspace.prototype[name], 'function', `Required guarded method is absent: ${name}`);
+const guardedActions = [...requiredActions], unavailableActions = [];
+for (const name of ['run']) (typeof Workspace.prototype[name] === 'function' ? guardedActions : unavailableActions).push(name);
+if (preflightOnly) { console.log(JSON.stringify({ sourcePins, guardedActions, unavailableActions, allocations: 0 })); process.exit(0); }
+const result = { at: new Date().toISOString(), token, checks: [], errors: [], sourcePins, guardedActions, unavailableActions, realNativeEngines: 0, productModels: 0, realProviders: 0 };
 let scratch, daemon, client, app, guiChild, page, parent, profile, identity, admitted = false, started, request = 0;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const write = name => fs.writeFileSync(path.join(evidence, name), JSON.stringify(result, null, 2) + '\n');
@@ -175,7 +184,7 @@ async function main() {
     assert.deepEqual(identities(await snapshot()), stable);
     assert.equal((await snapshot()).sessions.find(s => s.id === peer).view, 'chat');
     assert.equal(afterInput.stats.inputs, 1); assert.equal(afterInput.stats.sends, 0);
-    for (const key of ['send', 'queue', 'steer', 'forward', 'approve', 'answer', 'run', 'resume']) assert.equal(afterInput.overviewCalls[key], 0, key);
+    for (const key of guardedActions) assert.equal(afterInput.overviewCalls[key], 0, key);
     assert.equal(afterInput.overviewCalls.pause, beforeInput.overviewCalls.pause + 1, 'The one explicit native key retains the existing human-input pause');
     result.finalStats = afterInput; result.finalState = await snapshot();
     assert.deepEqual(result.errors, []); assert.deepEqual(Object.fromEntries(Object.keys(sourcePins).map(file => [file, sha(file)])), sourcePins);
