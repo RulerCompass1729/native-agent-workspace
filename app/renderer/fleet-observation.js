@@ -61,23 +61,39 @@
       running: children.filter(c => c.status === 'running').length, unknown: children.filter(c => c.status === 'unknown').length };
   }
   // `text` renders catalog keys in the display language (T-60); without it the Chinese originals stay.
+  function goalStatus(record, connected = true, text = defaultText) {
+    text ||= defaultText;
+    const empty = { text: '', tone: '' };
+    if (record.provider !== 'codex' || record.archived || typeof record.nativeId !== 'string' || !record.nativeId || record.nativeGoal == null) return empty;
+    const goal = record.nativeGoal;
+    if (goal.status === null && goal.known !== false) return empty;
+    const keys = { active: 'goalStatus.active', paused: 'goalStatus.paused', blocked: 'goalStatus.blocked',
+      usageLimited: 'goalStatus.usageLimited', budgetLimited: 'goalStatus.budgetLimited', complete: 'goalStatus.complete' };
+    const live = connected && !record.backendUnavailable && !record.transportDisconnected && !record.nativeContextPending &&
+      !['disconnected', 'recoverable', 'ended', 'stopping'].includes(record.state);
+    if (!live || goal.known === false || goal.nativeId !== record.nativeId ||
+        typeof goal.status !== 'string' || !Object.hasOwn(keys, goal.status) || !Number.isFinite(goal.observedAt)) return { text: text('goalStatus.unconfirmed'), tone: 'bg-unknown' };
+    return { text: text(keys[goal.status]), tone: goal.status === 'active' ? 'goal-enabled' : goal.status === 'paused' ? 'bg-unknown'
+      : ['blocked', 'usageLimited', 'budgetLimited'].includes(goal.status) ? 'goal-stopped' : '' };
+  }
   function fleetStatus(record, base, connected = true, text = defaultText) {
     text ||= defaultText;
     const fleet = currentFleet(record, connected, text), idle = record.state === 'idle';
     // A mixed fleet keeps both facts: running children never hide unknown ones.
     const children = (fleet.running ? text('fleet.running', { count: fleet.running }) : '') + (fleet.unknown ? text('fleet.unknown') : '');
-    if (idle && fleet.work.count) return fleet.work.text;
-    if (idle && fleet.work.unconfirmed) return fleet.work.text + children;
-    if (!fleet.observed || fleet.settled && !fleet.children.length) return base;
-    return (idle ? text('fleet.rootReady') : base) + children;
+    const status = idle && fleet.work.count ? fleet.work.text : idle && fleet.work.unconfirmed ? fleet.work.text + children
+      : !fleet.observed || fleet.settled && !fleet.children.length ? base : (idle ? text('fleet.rootReady') : base) + children;
+    const goal = goalStatus(record, connected, text);
+    return status + (goal.text ? ' · ' + goal.text : '');
   }
   // Green means idle with nothing reported in flight. Codex has no turn-end report, so its dot is unchanged.
   function workTone(record, connected = true) {
-    if (record.state !== 'idle' || record.provider === 'codex') return '';
+    if (record.state !== 'idle') return '';
+    if (record.provider === 'codex') return goalStatus(record, connected).tone;
     const fleet = currentFleet(record, connected);
     return fleet.work.count || fleet.running ? 'bg-work' : fleet.work.unconfirmed || fleet.unknown ? 'bg-unknown' : '';
   }
-  const api = { observedFleet, currentFleet, fleetStatus, backgroundWork, workTone };
+  const api = { observedFleet, currentFleet, fleetStatus, backgroundWork, workTone, goalStatus };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else target.nativeWorkspaceFleet = api;
 })(typeof window === 'undefined' ? globalThis : window);

@@ -6131,3 +6131,13 @@ dialog protection and late preview results. Three private controlled mutations
 are rejected; they are test-quality controls, not original product failures.
 Source-test review is reused unchanged. This adds no product code and does not
 qualify Escape/backdrop gestures, real backend discard, focus or the whole task.
+
+
+## T117: distinguish a persistent Codex goal from the current turn
+
+- User problem: an idle session with a blocked persistent goal still looked ready. Existing goal notifications now supply status-only metadata to the existing header, sidebar and member status lines; working turns and pending approvals keep their own state.
+- Never-observed goals, including Goals being disabled, keep the existing display. Only a previously verified goal whose observation is lost becomes unconfirmed. An exact native cleared notification removes the goal hint. No getter, polling, goal mutation, native input or recovery action was added.
+- Independent design review caught the initial unconditional unknown badge; the corrected prototype passed the same reviewer. Independent source and raw-evidence review passed for this checkpoint; GUI and native delivery remain pending.
+- Current Main baseline: 29 failures and two controls. Later source-cycle, duplicate-notification, malformed-scalar and resume-order counterexamples failed before correction. The same-tick resume notification is retained but withheld until identity confirmation. The exact current Main source bands now pass all 34 focused checks; the lane passes all 2,684 unit checks without skips. Both UI builds pass. New product checks use synthetic native transport, with no real provider/model turn; independent review usage is separate.
+- The new projection excludes goal text, budgets and counters. Main applies only the reviewed compatibility hunks: the existing space-create focus and pending-submit changes remain intact. The separate privacy CSS candidate is excluded. Main passes 49 directly affected checks and all 3,015 local checks without skips; these source checks do not qualify native delivery or the daily app.
+- Source-only checkpoint: actual GUI dimensions, wrapping, keyboard/accessibility, native notification delivery and installed behavior still require their own acceptance. Main alone integrates, installs and pushes; the lane performs its own precommit privacy scan.

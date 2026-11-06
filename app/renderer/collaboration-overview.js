@@ -33,7 +33,8 @@
     const pending = record.nativeApproval?.requests?.length || record.approvals?.length || 0;
     // Short form of the child facts: say what is running or unknown (T-145); the full text keeps 部分观察.
     const compactChild = children.children.length ? [children.running && text('collab.runningShort', { count: children.running }), children.unknown && text('collab.unknownShort', { count: children.unknown }), !children.running && !children.unknown && text('collab.endedShort', { count: children.children.length })].filter(Boolean).join(' · ') : '';
-    return { state: pending > 1 ? text('collab.pending', { state, count: pending }) : state, child, freshness: stale ? text('collab.lastObserved', { time }) : time, stale,
+    const rootState = pending > 1 ? text('collab.pending', { state, count: pending }) : state, goal = fleet.goalStatus(record, live, text);
+    return { rootState, state: rootState + (goal.text ? ' · ' + goal.text : ''), child, freshness: stale ? text('collab.lastObserved', { time }) : time, stale,
       compactChild, freshnessReported: age !== null || stale };
   }
   function excerpt(record, messages = record.messages || [], limit = 220) {

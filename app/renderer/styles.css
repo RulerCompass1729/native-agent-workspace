@@ -756,3 +756,7 @@ header h1, header p { overflow-wrap: anywhere; }
 /* End compact existing merge options. */
 
 #space-create-dialog { padding:20px }
+
+/* A persistent goal is distinct from a running turn and from native approval. */
+.state-dot.idle.goal-stopped{background:transparent;border:1.5px solid #b78c42;box-shadow:0 0 0 2px var(--ring,var(--panel,#fff))}
+.state-dot.idle.goal-enabled{background:transparent;border:1.5px solid #5b7fa6;box-shadow:0 0 0 2px var(--ring,var(--panel,#fff))}

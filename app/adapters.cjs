@@ -1564,6 +1564,7 @@ class Codex extends EventEmitter {
     if (event.kind === 'disconnected') {
       if (this.terminalRpc !== event.rpc) return;
       const ownedNotifications = this.terminalNotificationSource;
+      if (ownedNotifications) this.invalidateNativeGoal();
       this.emit('approvalUnavailable', event.rpc);
       for (const [key, request] of this.nativeRequests) if (request.rpc === event.rpc) this.nativeRequests.delete(key);
       this.terminalRequestKeys?.clear();
@@ -1587,6 +1588,7 @@ class Codex extends EventEmitter {
     }
     if (event.ephemeral) return; // Native title/Recap helpers are not the displayed root.
     if (event.kind === 'request') {
+      this.invalidateNativeGoal();
       this.terminalSettingsRequest = { key: event.key, previous: this.nativeSettings };
       if (event.method === 'thread/resume' && event.threadId === this.record.nativeId && !this.terminalSwitch) return;
       if (!this.record.nativeId) return;
@@ -1595,6 +1597,7 @@ class Codex extends EventEmitter {
       this.emit('capability'); return;
     }
     if (event.kind === 'uncertain') {
+      this.invalidateNativeGoal();
       this.chatAvailable = false;
       if (this.record.nativeId) this.emit('contextEnd', { nativeId: this.record.nativeId, reason: 'terminal-switch' });
       this.emit('capability'); return;
@@ -1713,6 +1716,45 @@ class Codex extends EventEmitter {
       this.activeNativeItems.delete(params.item.id); this.workspaceMcpCalls?.delete(params.item.id);
     }
     this.publishNativeActivity();
+  }
+  invalidateNativeGoal() {
+    if (!this.nativeGoalObservation?.valid) return;
+    this.nativeGoalObservation.valid = false; this.emit('nativeGoal');
+  }
+  observeNativeGoal(params, sourceRpc, cleared = false) {
+    const source = this.terminalNotificationSource ? this.terminalRpc : this.host.rpc;
+    // A resume snapshot may precede its Promise continuation. Retain the bound
+    // notification; nativeGoalSnapshot still waits for observation confirmation.
+    if (!sourceRpc || sourceRpc !== source || !this.currentRpc(sourceRpc) || this.stopped ||
+        this.transportDisconnected || this.record.nativeContextPending) return;
+    const nativeId = this.record.nativeId;
+    if (params.threadId && params.threadId !== nativeId) return;
+    const status = cleared ? null : params.goal?.status;
+    if (typeof nativeId !== 'string' || !nativeId || params.threadId !== nativeId ||
+        !cleared && (params.goal?.threadId !== nativeId || !['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'].includes(status))) {
+      this.invalidateNativeGoal();
+      return;
+    }
+    const previous = this.nativeGoalObservation;
+    if (previous?.valid && previous.nativeId === nativeId && previous.status === status &&
+        previous.sourceRpc === sourceRpc && previous.lifecycleRevision === this.lifecycleRevision) {
+      previous.observedAt = Date.now(); return;
+    }
+    // Keep only display facts. Goal text, budget, counters and controls stay native.
+    this.nativeGoalObservation = { nativeId, status, observedAt: Date.now(), sourceRpc,
+      lifecycleRevision: this.lifecycleRevision, valid: true };
+    this.emit('nativeGoal');
+  }
+  nativeGoalSnapshot() {
+    const goal = this.nativeGoalObservation;
+    if (!goal) return null; // Silence, including Goals off, makes no goal claim.
+    const source = this.terminalNotificationSource ? this.terminalRpc : this.host.rpc;
+    const current = goal.valid && goal.nativeId === this.record.nativeId && goal.sourceRpc === source &&
+      goal.lifecycleRevision === this.lifecycleRevision && source && this.currentRpc(source) &&
+      (!this.terminalNotificationSource || source.connected === true) && !this.stopped && !this.closed &&
+      !this.transportDisconnected && !this.nativeObservationPending && !this.record.nativeContextPending;
+    if (!current) return goal.status === null ? null : { nativeId: this.record.nativeId, known: false };
+    return { nativeId: goal.nativeId, status: goal.status, observedAt: goal.observedAt };
   }
   observeStatus(status) {
     this.nativeWait = status?.activeFlags?.includes('waitingOnUserInput') ? 'waitingOnUserInput' : status?.activeFlags?.includes('waitingOnApproval') ? 'waitingOnApproval' : null;
@@ -1898,6 +1940,8 @@ class Codex extends EventEmitter {
     }
     switch (message.method) {
       case 'thread/settings/updated': this.observeSettings(p.threadSettings); break;
+      case 'thread/goal/updated': if (message.id === undefined) this.observeNativeGoal(p, sourceRpc); break;
+      case 'thread/goal/cleared': if (message.id === undefined) this.observeNativeGoal(p, sourceRpc, true); break;
       case 'serverRequest/resolved': {
         const key = this.nativeRequestKey(p.requestId, sourceRpc), request = this.nativeRequests.get(key);
         if (!request || request.rpc !== sourceRpc) break;

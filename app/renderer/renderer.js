@@ -2113,10 +2113,11 @@ function sidebarPresentation(record) {
   const facts = window.nativeWorkspaceCollaboration.statusFacts(record, !disconnected, Date.now(), ui.language.getSnapshot().active);
   const fleet = window.nativeWorkspaceFleet.currentFleet(record, !disconnected, uiText), work = fleet.work, recovery = exhaustedRecovery(record);
   const workTone = window.nativeWorkspaceFleet.workTone(record, !disconnected);
+  const goal = window.nativeWorkspaceFleet.goalStatus(record, !disconnected, uiText), goalSuffix = goal.text ? ' · ' + goal.text : '';
   const waiting = Boolean(record.approval || record.approvalOverflow || record.claudeQuestion || record.nativeApproval?.requests?.length || record.nativeInputRequired);
   const question = Boolean(record.claudeQuestion || record.approval?.method === 'item/tool/requestUserInput');
   const reported = record.state === 'idle' && (work.count > 0 || work.unconfirmed);
-  let base = switchedAway(record) ? uiText('state.switched') : facts.state;
+  let base = switchedAway(record) ? uiText('state.switched') : (facts.rootState || facts.state);
   if (live && !record.nativeContextPending) {
     if (record.nativeInputRequired) base = uiText('composer.nativeInput');
     else if (waiting && !question) base = uiText('state.approval');
@@ -2135,9 +2136,9 @@ function sidebarPresentation(record) {
   const tone = !live || record.nativeContextPending ? 'disconnected' : waiting || recovery || record.state === 'error'
     ? 'approval' : fleet.running || ['working', 'starting', 'background'].includes(record.state) ? 'working' : record.state === 'idle' ? 'idle' : record.state || 'disconnected';
   const childTone = workTone || (tone === 'idle' && fleet.unknown ? 'bg-unknown' : '');
-  const marker = tone === 'approval' || tone === 'disconnected' ? '!' : tone === 'working' || childTone === 'bg-work' ? '…' : childTone === 'bg-unknown' ? '◌' : '○';
-  return { compact, full, tone, workTone: childTone, marker,
-    detail: Boolean(waiting || childrenActive || reported || recovery || !['idle', 'working', 'starting'].includes(record.state) || !live || record.nativeContextPending || record.nativeInputRequired) };
+  const marker = tone === 'approval' || tone === 'disconnected' ? '!' : tone === 'working' || childTone === 'bg-work' ? '…' : childTone === 'goal-stopped' ? '!' : childTone === 'bg-unknown' ? '◌' : '○';
+  return { compact: compact + goalSuffix, full: full + goalSuffix, tone, workTone: childTone, marker,
+    detail: Boolean(goal.text || waiting || childrenActive || reported || recovery || !['idle', 'working', 'starting'].includes(record.state) || !live || record.nativeContextPending || record.nativeInputRequired) };
 }
 function sidebarDetails(record) {
   const memberships = allSpaces().filter(room => !room.archived && inSpace(record, room.id));
