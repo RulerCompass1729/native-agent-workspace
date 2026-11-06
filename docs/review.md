@@ -6278,3 +6278,41 @@ This verifies refusal only. Successful real clicks, focus, literal input,
 background delivery policy and adoption by installed native callers remain
 unqualified. The restricted-view route and native provider factories are
 unchanged; integration and installed acceptance remain with Main.
+
+
+### Live chat-view member terminals: signed candidate qualification
+
+The collaboration terminal disappeared when its input route was chat even
+though the original native terminal was alive. The original one-line visibility
+repair is preserved; input ownership and terminal identity are unchanged. A
+separate operator correction checks action observability before allocating a
+test profile: seven required methods must exist; absent optional `run` is
+reported unavailable, never a zero-call observation.
+
+The earlier source GUI run is retained as failed: five groups completed before
+an assertion treated the absent run counter as zero. A distinct signed
+alpha.209 candidate based on installed alpha.208 passed all six user journeys:
+live display, read-only key rejection, records round trip with private caret
+and shared draft, solo round trip, narrow columns, and explicit native control
+with one synthetic Escape. The privacy dialog also opened and closed with
+20px vertical padding. The 2,965 source checks and normal signed bootstrap
+passed. All 71 shipped payload files matched the clean committed source.
+Both owned test instances, services and profiles were removed; strict signature
+verification passed after testing. No real provider or product model was used.
+
+Independent review accepted this narrow signed scope and its raw observations.
+A generic assumption that `_electron.launch` meant Playwright's Node inspector
+was withdrawn after checking the actual project helper and child arguments:
+only the owned renderer loopback debugging endpoint was opened. Test authority
+was consumed by the author after the run, not automatically by the operator.
+The current canonical contract is reread before allocation and after taking
+the GUI lease, so an already-consumed or changed grant refuses a new run.
+
+Limits remain explicit: size is unchanged during passive viewing, while
+explicit native control intentionally changes owner/view and permits resizing.
+The final synthetic input-pending flag was not verified to clear. Viewport was
+emulated; OS input counters were unavailable. The daily app is still alpha.208
+and locked-screen visibility prevents the ordinary visible-update acceptance.
+Real native delivery, daily operation and the separate desktop-control repair
+remain open. This candidate excludes the unshipped operator work and desktop
+postcondition changes; it is not whole-milestone approval.
