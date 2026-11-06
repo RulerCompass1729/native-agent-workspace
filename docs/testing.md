@@ -1,5 +1,32 @@
 # Bounded testing
 
+## Alpha.202: installed native message and compact grid
+
+The clean committed build passes 2,812 source checks without skips. One normal
+signed bootstrap and two actual Applications journeys use three owned profiles
+and windows, all cleaned. The grid task preserves original facts, unknown states,
+fonts, keyboard focus, source/space navigation and positive private/scoped drafts;
+list geometry stays unchanged. Three synthetic cards save 64.5 px total at 1200 px
+and 56.5 px at 850 px. The legacy multi-space vector is explicitly seeded by the
+fixture; this is not new membership-creation or persistence proof.
+
+The native journey boots one pinned 0.164 engine normally through the installed
+service, with two fresh synthetic threads. A visible ordinary shared send triggers
+one native workspace-message call, one receiver wake and one shared receipt.
+The receiver's unsent draft and native identities remain; all three model HTTP
+responses are deterministic loopback data, with no paid inference. The raw initial,
+before and after room run fields are exactly null. No original goal, parent or
+occupied backend is changed. This is not a blocked-goal resume test.
+
+The independent source review and same-checkpoint installed delta pass scoped
+review. The author separately verifies hashes, full decoded installed CSS,
+signatures, test counts and cleanup. The signed renderer cannot instrument main
+clipboard/dialog counters; per-run hidden/non-focusable state is not remeasured.
+The ordinary visible update retains existing sessions, reported settings, drafts
+and native identities across 150 seconds. Old-backend adoption and full dogfood
+completion remain open.
+
+
 Historical validation records. For the current delivery scope, see [readiness](readiness.md).
 
 ## Compact list, notice keys and explicit tool entry — 2026-11-05

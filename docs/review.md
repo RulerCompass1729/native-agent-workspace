@@ -5653,3 +5653,26 @@ The original developer's workspace-message attempt was unconfirmed. The receiver
 Author checks: the newly selected 0.164 stdio test failed against the old receiver; the repair and affected provenance/handoff tests passed (31, no skips), including changed body/session, bad token and unknown/beta versions. A first invalid lock checkpoint made no edit and selected no test; that preliminary output is retained separately and is not the baseline failure. The owned native capture used two deterministic local responses and one read-only MCP call, with no paid inference, goal setter, original-session retry or actual workspace delivery. Owned processes, listener and temporary profile were cleaned. Raw native initialization metadata remains private.
 
 A fresh read-only Fable review approved the source delta after eight reads (87.46 seconds; reported list cost about $0.458, not a billing measurement). It inspected raw provenance and the unchanged fences; the test execution totals remain author-run evidence. Its query about a direct item observer's thread filter is bounded by the actual caller: Codex.event rejects another thread before calling observeNativeItem. The retained 0.164 resume response already reports sessionId; the pinned binary hash was checked separately by the author. Installed acceptance and adoption by occupied older backends remain open. This is not completion of agent wake, goal continuation or the dogfood milestone.
+
+### I244: installed 0.164 standing wake and existing grid
+
+The independently approved grid patch is integrated unchanged, preserving its
+original author. One actual Applications grid task preserves source navigation,
+original text/fonts/facts and private/scoped drafts. One actual installed native
+0.164 task sends through the shared composer, stages through the native MCP hook,
+wakes the selected idle receiver once, and shows the exact shared receipt. The
+receiver's unsent draft and native identities remain. Three fixed local responses
+use no paid inference. Original sessions/goals and old backends are untouched.
+
+The source reviewer approves the combined installed delta after eight read/search
+calls (110.95 seconds; the CLI reports a $1.188 list-cost field, not an invoice or
+an independently summed cost). It reads actual raw state, screenshots and the
+adapted operator. It correctly limits the claims: the installed driver counts
+pages rather than measuring hidden/non-focusable state; main clipboard/dialog
+counters are unavailable. The CSS pin initially covers the repository source;
+the author additionally decodes the one actual installed style literal and checks
+the full CSS. The no-directed-run assertion is weaker than needed, but the retained
+initial/before/after raw run fields are all exactly null, checked offline without
+replaying the task. Author-run signature, payload, cleanup and daily-retention
+checks remain distinguished from independent review. Restricted daily control,
+blocked-goal resumption, safe adoption and the whole dogfood goal remain open.

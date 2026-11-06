@@ -4,7 +4,27 @@ As of 2026-11-05. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.201, committed build source `e9ca627`. The session
+Current daily GUI: alpha.202, committed build source `c73c138`. Compact session
+overview grid cards retain existing text, fonts, actions, unknown states and
+navigation; the list layout is unchanged. The actual Applications UI passes
+source navigation, keyboard focus and positive private/scoped-draft checks.
+
+Codex 0.164.0 now uses the existing strictly authenticated native-message path,
+after actual native metadata qualification. In one isolated Applications journey,
+an ordinary shared send causes the sender's own native MCP call, then one wake
+of an idle receiver after source completion. The exact shared trace and native
+receipt appear; native identities and the receiver's unsent draft remain.
+Two fresh synthetic native threads use three deterministic local responses,
+with no paid provider inference or goal writes. This does not prove resuming a
+blocked goal or adoption by occupied older backends. Source checks (2,812, no
+skips), signed bootstrap, post-native signature and 71 payload files pass.
+The ordinary visible update preserves the same 14 records, 16 live native
+identities, 13 draft scopes, seven occupied backends and active goal for 150
+seconds. Combined installed behavior passes scoped independent review; machine
+checks remain author-run. Per-run hidden/focus state was not newly measured.
+Restricted production computer use, safe adoption and the whole goal remain open.
+
+Previously qualified alpha.201, committed build source `e9ca627`. The session
 overview list uses compact existing rows, preserving verbatim content, fonts,
 state facts, focus and navigation. Escape dismisses a notice while preserving
 editor keys outside it; inside the notice it returns focus safely. The signed
