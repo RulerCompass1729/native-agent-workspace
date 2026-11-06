@@ -2310,7 +2310,7 @@ class NativeHost {
           Promise.resolve().then(async () => {
             const identity = event.identity, runtime = this.codexTargets.get(identity?.nativeId);
             const args = event.arguments;
-            if (event.token !== this.codexMessageToken || !['0.165.0', '0.166.0'].includes(this.rpc?.nativeVersion) || !runtime || !runtime.addressedCall) throw uiError("error.nativeToolOriginUnconfirmed");
+            if (event.token !== this.codexMessageToken || !['0.164.0', '0.165.0', '0.166.0'].includes(this.rpc?.nativeVersion) || !runtime || !runtime.addressedCall) throw uiError("error.nativeToolOriginUnconfirmed");
             const call = await workspaceMcpProof(runtime, identity, args, socket);
             return runtime.addressedCall({ ...identity, valid: () => !socket.destroyed && runtime.workspaceMcpCalls?.get(identity.callId) === call }, args);
           }).then(result => { if (!socket.destroyed) socket.end(JSON.stringify(result) + '\n'); }, error => { if (!socket.destroyed) socket.end(JSON.stringify({ status: 'unconfirmed', message: error.message }) + '\n'); });

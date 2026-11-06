@@ -10,7 +10,7 @@ test('MCP native provenance rejects missing, inconsistent and argument-supplied 
   assert.deepEqual(metadataIdentity({ ...meta, 'x-codex-turn-metadata': JSON.stringify(meta['x-codex-turn-metadata']) }), metadataIdentity(meta));
   for (const value of [{}, { ...meta, callId: '' }, { ...meta, threadId: 'other' }, { ...meta, sessionId: undefined }, { ...meta, 'x-codex-turn-metadata': {} }, { ...meta, 'x-codex-turn-metadata': 'bad' }]) assert.throws(() => metadataIdentity(value), /provenance/);
 });
-for (const nativeVersion of ['0.165.0', '0.166.0']) test('actual MCP stdio waits for bound root staging via authenticated hook socket ' + nativeVersion, async t => {
+for (const nativeVersion of ['0.164.0', '0.165.0', '0.166.0']) test('actual MCP stdio waits for bound root staging via authenticated hook socket ' + nativeVersion, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-mcp-'));
   const host = new NativeHost(dir); await host.start(); host.rpc = { nativeVersion };
   const runtime = new Codex({ nativeId: meta.threadId, messages: [] }, host);
@@ -39,7 +39,17 @@ for (const nativeVersion of ['0.165.0', '0.166.0']) test('actual MCP stdio waits
   const received = await result; assert.equal(received.result.isError, false); assert.deepEqual(JSON.parse(received.result.content[0].text), { status: 'staged', id: 'durable-ticket' });
   const stale = await call('tools/call', { name: 'workspace_message', arguments: args, _meta: { ...meta, 'x-codex-turn-metadata': { thread_id: meta.threadId, turn_id: 'old-turn' } } });
   assert.equal(JSON.parse(stale.result.content[0].text).status, 'unconfirmed'); assert.equal(calls, 1);
-  for (const unknownVersion of ['0.164.0', '0.166.0-beta', '0.167.0', undefined]) {
+  const changedBody = await call('tools/call', { name: 'workspace_message', arguments: { ...args, message: 'Unobserved replacement body.' }, _meta: meta });
+  assert.equal(JSON.parse(changedBody.result.content[0].text).status, 'unconfirmed'); assert.equal(calls, 1, 'qualified native version still needs the exact observed body');
+  const changedSession = await call('tools/call', { name: 'workspace_message', arguments: args, _meta: { ...meta, sessionId: 'other-native-session' } });
+  assert.equal(JSON.parse(changedSession.result.content[0].text).status, 'unconfirmed'); assert.equal(calls, 1, 'qualified version cannot substitute a session');
+  const wrongToken = await new Promise((resolve, reject) => {
+    const socket = require('node:net').connect(host.hookSocket); let data = '';
+    socket.setEncoding('utf8'); socket.on('error', reject); socket.on('connect', () => socket.write(JSON.stringify({ workspaceMessage: true, token: 'not-the-host-token', identity: metadataIdentity(meta), arguments: args }) + '\n'));
+    socket.on('data', part => data += part); socket.on('end', () => resolve(JSON.parse(data)));
+  });
+  assert.equal(wrongToken.status, 'unconfirmed'); assert.equal(calls, 1, 'qualified version does not bypass hook authentication');
+  for (const unknownVersion of ['0.163.0', '0.164.0-beta', '0.166.0-beta', '0.167.0', undefined]) {
     host.rpc.nativeVersion = unknownVersion;
     const refused = await call('tools/call', { name: 'workspace_message', arguments: args, _meta: meta });
     assert.equal(JSON.parse(refused.result.content[0].text).status, 'unconfirmed');

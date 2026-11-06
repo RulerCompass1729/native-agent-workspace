@@ -5645,3 +5645,11 @@ preserves the original goal and native processes. The record checker required
 one optional-success-field correction; raw GUI results were unchanged and no
 test was repeated for it. Full-day use, native safe adoption, restricted daily
 control, the original reading recurrence and publication remain open.
+
+### I243: qualified Codex 0.164 native MCP provenance (source only)
+
+The original developer's workspace-message attempt was unconfirmed. The receiver deliberately admitted only previously qualified 0.165/0.166 runtimes. A fresh owned 0.164 engine, with credentials absent and networking restricted to one fixed-response loopback fixture, produced matching native MCP metadata and item notifications for the thread, session, turn, inner call ID, recipient and body. The outer code-mode item ID differed and was not substituted. This adds only exact 0.164.0 admission to the existing authenticated hook and retains all current-turn, call, session, argument and transport checks.
+
+Author checks: the newly selected 0.164 stdio test failed against the old receiver; the repair and affected provenance/handoff tests passed (31, no skips), including changed body/session, bad token and unknown/beta versions. A first invalid lock checkpoint made no edit and selected no test; that preliminary output is retained separately and is not the baseline failure. The owned native capture used two deterministic local responses and one read-only MCP call, with no paid inference, goal setter, original-session retry or actual workspace delivery. Owned processes, listener and temporary profile were cleaned. Raw native initialization metadata remains private.
+
+A fresh read-only Fable review approved the source delta after eight reads (87.46 seconds; reported list cost about $0.458, not a billing measurement). It inspected raw provenance and the unchanged fences; the test execution totals remain author-run evidence. Its query about a direct item observer's thread filter is bounded by the actual caller: Codex.event rejects another thread before calling observeNativeItem. The retained 0.164 resume response already reports sessionId; the pinned binary hash was checked separately by the author. Installed acceptance and adoption by occupied older backends remain open. This is not completion of agent wake, goal continuation or the dogfood milestone.
