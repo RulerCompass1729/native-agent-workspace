@@ -715,3 +715,11 @@ header h1, header p { overflow-wrap: anywhere; }
 #space-files-dialog>p.quiet{margin:8px 0}
 #space-files-dialog .dialog-actions{margin-top:12px}
 /* End compact space files. */
+/* Compact local file preview: preserve original text, typography and actions. */
+#file-dialog{padding:20px}
+#file-dialog h2{margin-bottom:8px;overflow-wrap:anywhere}
+#file-dialog #file-info{margin:6px 0 10px}
+#file-dialog #file-content{margin:6px 0}
+#file-dialog>p:not([id]){margin:8px 0}
+#file-dialog .dialog-actions{margin-top:12px;margin-left:20px}
+/* End compact local file preview. */

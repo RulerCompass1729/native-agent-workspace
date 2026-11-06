@@ -5842,3 +5842,39 @@ controls and native behavior. The author prototype GUI shows three to four fully
 visible rows in the same viewport; exact source and raw evidence pass scoped
 independent review. The patch is merged unchanged. Current signed/Applications
 acceptance remains required; native import and daily behavior are not newly claimed.
+
+
+### Ordinary signed build and visible update, alpha.203
+
+Only the previously reviewed ordinary patches enter this clean committed build;
+the operator interface is excluded. Twenty exact directional hunks bind the port
+to the original approvals. The signed compiled client contains no operator
+identifiers. Source checks pass without skips; normal signed bootstrap preserves
+the signature and starts no provider session.
+
+Affected signed file actions, five layouts, original notice body and history
+geometry are qualified within their recorded scope. Two harness cases remain
+failed: clicking an already closed creation dialog, and requiring a history read
+in a remainder that intentionally reused prior history evidence. No raw outcome
+is rewritten as a clean pass. The sampled submitted label preceded a queued
+render; the later screen is correct. Settled source-state proof is reused, not
+called a new native receipt. Hardened Main clipboard/dialog counters are unavailable.
+
+Independent integration review closed missing patch and prior-review bindings.
+It also found an update guard skipped all automation checks on an empty active
+backend. The corrected operator checks every room, lease and pending message at
+three checkpoints while allowing native work to continue; six author-run guard
+cases pass. Exact delta review approves one ordinary visible update. Direct
+native messages can still race after the final check; no atomic quiescence claim.
+The visible update preserves native identities, settings, drafts and the original
+active goal for 150 seconds. Changed-surface daily interaction remains pending.
+
+### File preview and invitation caption, unchanged source adoption
+
+The original author's reviewed preview styles retain content, typography and
+controls; normal cases are shorter, while an unbroken long filename grows to
+wrap fully. Invitation entries retain their existing blocked reason during
+ordinary snapshots, preserving the initial eligibility and permission behavior.
+Both source GUI journeys and approvals are reused unchanged after exact blob
+comparison. Current affected checks and build are author-run; these new changes
+are not part of the installed alpha.203 and still need signed/daily acceptance.

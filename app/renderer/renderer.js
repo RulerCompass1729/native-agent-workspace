@@ -3456,7 +3456,7 @@ function render() {
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
       const record = state.sessions.find(s => s.id === entry.dataset.inviteSession);
-      if (record) ui.display.text(entry, 'invite.joinName', { name: participantLabel(record, state.sessions) });
+      if (record) ui.display.text(entry, entry.getAttribute('aria-disabled') === 'true' ? 'invite.legacyBlocked' : 'invite.joinName', { name: participantLabel(record, state.sessions) });
     }
     renderHeader(s, inRoom);
     if (inPanorama || panoramaView.returning) renderPanorama();

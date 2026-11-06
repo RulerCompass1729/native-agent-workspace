@@ -8,9 +8,24 @@ Unreleased source: operator phase 1a creation grants and durable reports pass
 2,870 combined checks and four synthetic GUI flows. Integration fixes retained
 hook upgrades, cancellation confirmation, unavailable report metadata and mixed
 backend control. Native qualification and daily grants/installation remain gated;
-the installed alpha.202 does not contain this interface.
+the installed alpha.203 does not contain this interface.
 
-Current daily GUI: alpha.202, committed build source `c73c138`. Compact session
+Current daily GUI: alpha.203, clean committed build source `b8b4d27`.
+It carries compact existing setup/history/files dialogs, stable sender-notice
+reading, the native-goal refusal check, and current cached file actions. Phase
+1a is entirely excluded from this build. Source checks pass (2,841, no skips);
+scoped signed qualification reuses unchanged source approvals. Two signed GUI
+runs retain their harness failures; completed checks are qualified individually,
+not represented as clean suite passes. Normal signed bootstrap and strict
+post-test signatures pass without provider sessions or model calls.
+
+The ordinary visible update retains 14 records, 16 live native process
+identities, 13 draft scopes, seven occupied older backends and the same original
+active Main goal across 150 seconds. Automatic migration stays off. Operation
+of each changed surface in the daily profile remains pending; signed evidence
+and retention do not close that gate. No push or whole-goal completion is claimed.
+
+Previously qualified alpha.202, committed build source `c73c138`. Compact session
 overview grid cards retain existing text, fonts, actions, unknown states and
 navigation; the list layout is unchanged. The actual Applications UI passes
 source navigation, keyboard focus and positive private/scoped-draft checks.
