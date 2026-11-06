@@ -732,3 +732,9 @@ header h1, header p { overflow-wrap: anywhere; }
 #invite-dialog p{margin:8px 0}
 #invite-dialog #invite-list{margin:12px 0;gap:8px}
 /* End compact existing invitation dialog. */
+/* Compact existing notes dialog: preserve editor and controls. */
+#notes-dialog{padding:20px 30px}
+#notes-dialog h2{margin-bottom:8px}
+#notes-dialog p{margin:8px 0}
+#notes-dialog .dialog-actions{margin-top:12px}
+/* End compact existing notes dialog. */

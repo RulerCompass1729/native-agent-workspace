@@ -4486,10 +4486,21 @@ $('room-notes').onclick = () => openNotes(); $('cancel-notes').onclick = () => $
 $('notes-form').onsubmit = async event => {
   event.preventDefault(); const ticket = dialogTickets.get($('notes-dialog'));
   if (!currentDialogTicket(ticket) || $('save-notes').disabled) return;
+  const submitted = $('room-notes-text').value;
   $('save-notes').disabled = true; $('notes-error').hidden = true;
   try {
-    await api.spaceAction(ticket.roomId, 'notes', [$('room-notes-text').value, notesRevision]);
-    if (currentDialogTicket(ticket)) $('notes-dialog').close(); else toastMessage("toast.notesSavedEarlier");
+    await api.spaceAction(ticket.roomId, 'notes', [submitted, notesRevision]);
+    if (!currentDialogTicket(ticket)) toastMessage("toast.notesSavedEarlier");
+    else if ($('room-notes-text').value === submitted) $('notes-dialog').close();
+    else {
+      // The editor stays editable during Save. Keep newer input, and only
+      // rebase its next explicit save if our submitted notes are still current.
+      const snapshot = await api.initial();
+      if (!currentDialogTicket(ticket)) return;
+      const latest = (snapshot?.rooms || (snapshot?.room ? [snapshot.room] : [])).find(room => room.id === ticket.roomId);
+      if (latest?.notes !== submitted || !Number.isSafeInteger(latest.metadataRevision) || latest.metadataRevision < 0) throw uiError('error.room.dataChangedElsewhere');
+      notesRevision = latest.metadataRevision;
+    }
   } catch (error) {
     if (currentDialogTicket(ticket)) { ui.showError($('notes-error'), error); $('notes-error').hidden = false; }
     else toastMessage('toast.notesFailedEarlier', () => ({ error: ui.errorText(error) }));

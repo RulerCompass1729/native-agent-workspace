@@ -4,26 +4,37 @@ As of 2026-11-05. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Unreleased source also retains notes typed while Save is pending, requiring a
+second explicit save. Twelve focused checks and a controlled current-source GUI
+journey pass independent review. This repair is not yet in installed alpha.204.
+
 Unreleased source: operator phase 1a creation grants and durable reports pass
 2,870 combined checks and four synthetic GUI flows. Integration fixes retained
 hook upgrades, cancellation confirmation, unavailable report metadata and mixed
 backend control. Native qualification and daily grants/installation remain gated;
-the installed alpha.203 does not contain this interface.
+the installed alpha.204 does not contain this interface.
 
-Current daily GUI: alpha.203, clean committed build source `b8b4d27`.
-It carries compact existing setup/history/files dialogs, stable sender-notice
-reading, the native-goal refusal check, and current cached file actions. Phase
-1a is entirely excluded from this build. Source checks pass (2,841, no skips);
-scoped signed qualification reuses unchanged source approvals. Two signed GUI
-runs retain their harness failures; completed checks are qualified individually,
-not represented as clean suite passes. Normal signed bootstrap and strict
-post-test signatures pass without provider sessions or model calls.
+Current daily GUI: alpha.204, clean committed build source `48a6fd1`.
+It adds compact existing file previews, invitation lists and shared records,
+and keeps a blocked invitation's original caption during refresh. Existing text,
+fonts, controls, guarded states and drafts are preserved. Operator phase 1a is
+entirely excluded. Source checks pass (2,847, no skips). Scoped independent review
+qualifies the executed signed checks; the first GUI run retains its harness
+failure, and only the missed invitation cases pass the separate remainder.
+Normal signed bootstrap and strict post-test signatures pass without native
+sessions or model calls. All 71 application-source payloads match.
 
 The ordinary visible update retains 14 records, 16 live native process
 identities, 13 draft scopes, seven occupied older backends and the same original
 active Main goal across 150 seconds. Automatic migration stays off. Operation
 of each changed surface in the daily profile remains pending; signed evidence
-and retention do not close that gate. No push or whole-goal completion is claimed.
+and retention do not close that gate. The blocked-caption case is covered by
+source tests and a source GUI fixture, not a newly tested retained old backend.
+No push, native backend adoption or whole-goal completion is claimed.
+
+Previously qualified alpha.203, committed build source `b8b4d27`, carried the
+compact setup/history/files dialogs, sender-notice reading, native-goal refusal
+check and cached file actions. Its unchanged qualifications remain applicable.
 
 Previously qualified alpha.202, committed build source `c73c138`. Compact session
 overview grid cards retain existing text, fonts, actions, unknown states and

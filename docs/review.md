@@ -5904,3 +5904,60 @@ states; exact source and approval are reused unchanged. Main already contains
 the required refresh-caption fix. Build, focused checks and the no-allocation
 preflight pass after fitting only this delta, preserving other dialog and room
 styles. Signed and daily behavior remain pending; no provider or model test ran.
+
+
+### Ordinary compact-dialog batch: signed qualification and visible update
+
+The accepted preview, invitation and two shared-record margin deltas are carried
+unchanged into the ordinary build; gated operator code is absent. Source checks
+pass (2,847, no skips). Signed comparisons retain original text, fonts, hit targets,
+unknown-delivery warnings, identities and positive drafts: shared records save
+44 px at both stable widths, preview 45 px, normal invitations 43 px and empty
+invitations 51 px. Widths are CSS viewports, not physical window proof.
+
+The first GUI run remains incomplete: the test clicked an already closed file
+list after preview. The actual file-row handler closes it before opening preview.
+Only the missed invitation checks ran in the corrected remainder. The initial
+source citation used Main's line against the ordinary candidate; its correction
+uses the candidate's source and LF-based compiled offsets. No product change or
+clean-suite claim follows from that harness correction. Prefix fixture counters
+were not captured; Main clipboard/dialog instrumentation was unavailable. The
+retained old-backend blocked-caption path is not newly qualified.
+
+Scoped independent review accepts only those executed checks and the single
+attestation-field rename needed by the unchanged update guards. Normal signed
+bootstrap, payload comparison and cleanup are author-run. The first update
+admission stops before quitting because the rollback archive is in a different
+owned release directory; its known digest and archive identity are verified
+before retaining it at the required path. The ordinary visible update then
+retains native processes, settings, drafts and the original active Main goal
+for 150 seconds. Changed-surface daily interaction remains pending.
+
+### Original goal continuation: additional bounded evidence
+
+Another original development lane supplies raw native completion and distinct
+goal-triggered starts, with two real completed commands between those boundaries.
+Its exact independently reviewed packet is accepted unchanged. Source-journal
+readback and goal-metadata comparisons remain author-run. This supports that
+author's natural continuation, not message delivery from Main, fresh budget or
+draft equality, the whole team chain, locked-screen control or the dogfood goal.
+
+
+### Notes typed during a pending save remain in the editor
+
+The old notes-submit callback closed the dialog after a successful save even
+when the user had typed newer text while waiting. The original author's exact
+repair captures the submitted value, keeps newer input open and updates its next
+explicit save revision only while that same room and submitted value remain
+current. A concurrent change retains the editor and shows the existing conflict;
+late results do not affect a reopened dialog. No automatic second save is added.
+
+Twelve focused checks pass; the original baseline has seven failing cases and
+five controls. The original source GUI stopped on a compile-consumed test
+selector and remains incomplete. One distinct current-Main corrected journey
+passes 18 layout/state cases and four contrast checks, including actual original
+IPC delay, newer typing, explicit resave, revision conflict and disk/history
+contents in both languages. Identities, owners and positive private/shared drafts
+remain; provider/input/send/clipboard/dialog actions are absent. Independent
+review accepts this source repair and source GUI only. Hashes, cleanup and exact
+source adoption are author-run. Signed and daily acceptance remain pending.
