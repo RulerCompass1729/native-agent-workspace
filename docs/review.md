@@ -5976,3 +5976,17 @@ product JavaScript. One synthetic terminal observation occurs; input, send,
 forward and approval counters stay zero. Current GUI evidence is author-run;
 unchanged source approval is reused. Combined signed and daily acceptance remain
 pending, with the notes repair to travel in the same ordinary batch.
+
+
+### Merge Preview remains gated during requests and reconnection
+
+The original author's exact three-region repair reuses one pending/selection/
+connection predicate when choices change, a request finishes or a normal snapshot
+arrives. Failure no longer enables Preview with fewer than two sources, repeated
+clicks stay blocked while pending, and reconnection restores eligibility without
+rebuilding focused option nodes. Original source approval and five-stage GUI
+fault/reconnection evidence are reused after exact patch and artifact checks.
+The source faults are controlled IPC/event fixtures, not an actual network or
+backend merge qualification. Main's 23 focused notes/preview checks pass without
+skips; its notes callback and sharing styles remain intact. Combined signed and
+daily acceptance of this source change is pending in the next ordinary batch.

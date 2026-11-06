@@ -1087,6 +1087,11 @@ function mergeCheckbox(text, checked, change) {
   input.onchange = () => change(input.checked); label.append(input, node('span', text)); return { label, input };
 }
 function mergeError(message) { if (message && typeof message !== 'string') ui.showError($('space-merge-error'), message); else { ui.display.unbind($('space-merge-error')); $('space-merge-error').textContent = message || ''; } $('space-merge-error').hidden = !message; }
+function updateMergePreview() {
+  const draft = mergeDialog;
+  $('preview-space-merge').disabled = !draft || Boolean(draft.previewPending) || disconnected ||
+    draft.rooms.filter(room => draft.sourceInputs.get(room.id)?.checked).length < 2;
+}
 function mergeButtons(preview, record = false) {
   $('space-merge-options').hidden = preview; $('space-merge-preview').hidden = !preview;
   $('preview-space-merge').hidden = preview; $('back-space-merge').hidden = !preview || record;
@@ -1137,7 +1142,7 @@ function renderMergeChoices() {
     };
     $('space-merge-selection').append(details);
   }
-  $('preview-space-merge').disabled = chosen.length < 2 || disconnected;
+  updateMergePreview();
 }
 function openSpaceMerge(origin = spaceId) {
   if (!state.capabilities?.includes('spaceMergeV1')) return toastMessage('merge.unsupported');
@@ -3458,6 +3463,7 @@ function render() {
       const record = state.sessions.find(s => s.id === entry.dataset.inviteSession);
       if (record) ui.display.text(entry, entry.getAttribute('aria-disabled') === 'true' ? 'invite.legacyBlocked' : 'invite.joinName', { name: participantLabel(record, state.sessions) });
     }
+    if ($('space-merge-dialog').open && mergeDialog?.sourceInputs) updateMergePreview();
     renderHeader(s, inRoom);
     if (inPanorama || panoramaView.returning) renderPanorama();
     if (inPanorama) {
@@ -4049,13 +4055,13 @@ $('back-space-merge').onclick = () => {
 $('preview-space-merge').onclick = () => attempt(async () => {
   const draft = mergeDialog, ticket = draft?.ticket;
   if (!currentDialogTicket(ticket) || $('preview-space-merge').disabled) return;
-  $('preview-space-merge').disabled = true; mergeError('');
+  draft.previewPending = true; $('preview-space-merge').disabled = true; mergeError('');
   try {
     const batch = await api.spaceMerge('preview', mergeSpec());
     if (!currentDialogTicket(ticket)) { api.spaceMerge('discard', { operationId: batch.operationId }).catch(() => {}); return; }
     draft.batch = batch; mergeButtons(true); renderMergeBatch(batch); $('confirm-space-merge').focus();
   } catch (error) { if (currentDialogTicket(ticket)) mergeError(error); else toastError(error); }
-  finally { if (currentDialogTicket(ticket)) $('preview-space-merge').disabled = false; }
+  finally { draft.previewPending = false; if (currentDialogTicket(ticket)) updateMergePreview(); }
 });
 async function submitSpaceMerge(action) {
   const draft = mergeDialog, ticket = draft?.ticket, batch = draft?.batch, revision = selectionRevision;
