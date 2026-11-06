@@ -5961,3 +5961,18 @@ contents in both languages. Identities, owners and positive private/shared draft
 remain; provider/input/send/clipboard/dialog actions are absent. Independent
 review accepts this source repair and source GUI only. Hashes, cleanup and exact
 source adoption are author-run. Signed and daily acceptance remain pending.
+
+
+### Existing share preview: current-source qualification
+
+The original four dialog-scoped styles are adopted unchanged with their source
+approval. A current-Main source journey preserves selected and edited original
+text, the recipient, eight rows, fonts, hit targets, caret, guarded native-input
+state, identities and positive drafts. Four stable comparisons save 37 px;
+Cancel, English, Escape and reopen complete. The original author's incomplete
+run is retained: hidden visibility preceded the queued close-field cleanup.
+The corrected private operator waits for that observable effect, adding no
+product JavaScript. One synthetic terminal observation occurs; input, send,
+forward and approval counters stay zero. Current GUI evidence is author-run;
+unchanged source approval is reused. Combined signed and daily acceptance remain
+pending, with the notes repair to travel in the same ordinary batch.
