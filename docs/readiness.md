@@ -4,33 +4,41 @@ As of 2026-11-06. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.205, clean committed build source `6c9e858`.
-Notes retain edits made during a pending save; context insertion blocks duplicate
-activation and retains newer editor text. Sharing/context dialogs use compact
-existing spacing, and merge Preview keeps its selection/connection guards.
-Original source approvals and controlled late-acknowledgement evidence are reused
-unchanged. All 2,890 candidate source checks pass without skips. One signed
-seven-group journey passes sharing, actual notes revision conflict, normal context
-insertion and real local empty-room merge Preview/back/cancel, without confirming
-a merge or sending a model task. Normal empty-profile bootstrap and first-room
-creation pass separately; all 71 payload files and strict signatures match.
+Current daily GUI: alpha.206, clean committed build source `fe9a64f`.
+An older space-creation result retains a newer name, selection and current view.
+Narrow cancellation restores an existing visible focus target, including when
+Cancel still has focus inside the already closed dialog. No timer or new panel
+is added. The interrupted-session menu hides profile-archived sessions while
+keeping their native resume metadata; merge selection uses the qualified compact
+spacing. All 2,915 candidate source checks pass without skips.
 
-Successful packaging now emits a retention report. Unknown policy, installation,
-rollback, pins, verification or occupancy keeps deletion candidates empty. There
-is no deletion API or approved automatic-retention count; this report alone does
-not finish disk-growth prevention. Its pure filesystem tests and success hook
-pass scoped independent review, and the actual build emits the report.
+Six signed user-task groups pass real app-local creation, two delayed original
+replies, busy cancellation, keyboard continuation, archive-menu filtering and
+merge-selection cancellation. A separate normal empty-profile bootstrap passes
+three checks. The author verifies all 71 payload files and strict signatures;
+independent review accepts the source and signed task scope. The first actual
+trial stopped on a wrong test condition about when an editor clears; its failure
+and cleanup remain recorded separately. No provider turn is used. Missing run or
+OS counters remain unmeasured, and emulated viewports do not qualify physical
+windows, IME or accessibility.
 
 The ordinary visible update retains 14 records, 16 live native process identities,
 13 draft scopes, seven occupied older backends and the same active Main goal
 across 150 seconds. Automatic migration stays off. Changed operations in the daily
-profile still require authorized AX/manual acceptance; candidate checks and
-retention do not close that gate. No daily debugger, native backend adoption,
-push or whole-goal completion is claimed.
+profile still require authorized AX/manual acceptance; signed tests and retention
+do not close that gate. No daily debugger, native backend adoption, push or
+whole-goal completion is claimed.
 
-Unreleased source: operator phase 1a creation grants and durable reports retain
-their earlier source/synthetic qualifications. Native qualification, daily grants
-and installation remain gated; alpha.205 excludes this interface entirely.
+Previously qualified alpha.205, source `6c9e858`, retains edits during pending
+notes/context operations and preserves merge Preview guards. Its unchanged
+source approvals and controlled acknowledgement evidence remain applicable.
+Successful packaging emits a report-only retention inventory. Unknown policy,
+installation, rollback, pins, verification or occupancy keeps deletion candidates
+empty; no automatic-retention count or deletion is approved.
+
+Unreleased operator phase 1a keeps its earlier source/synthetic qualifications.
+Native qualification, daily grants and installation remain gated; alpha.206
+excludes this interface entirely.
 
 Previously qualified alpha.204, source `48a6fd1`, compacted existing file previews,
 invitations and shared records while retaining blocked captions. Its source and

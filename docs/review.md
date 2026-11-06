@@ -6101,3 +6101,23 @@ is added. Fifteen source regressions pass, including the measured close ordering
 and protection for another dialog. Main preserves the original author's worktree
 and imports only the two reviewed focus regions and test; installed acceptance
 remains pending.
+
+
+### Pending creation: signed acceptance and retained ordinary update
+
+The signed task now holds two original backend replies after actual local
+creation. Newer text and selection survive the first result; busy cancellation
+keeps a later-created room without taking focus or changing the current view.
+An existing keyboard menu then creates a space at a narrow viewport. Archive
+filtering retains both resume records, and merge selection closes without a
+merge. The first actual trial failed an incorrect test assumption, and its raw
+evidence stays separate. A stale pre-admission file reference allocated nothing.
+The corrected six-group task and normal-bootstrap evidence pass scoped independent
+review. Missing run/OS counters and physical-input limits remain explicit.
+
+Source `fe9a64f` is visibly installed as alpha.206 with unchanged native identity,
+settings, drafts and original active goal across 150 seconds. The update operator
+matches the previously executed template after version/path binding. One legacy
+version caption in its raw report remains recorded with an explicit derived
+correction; authoritative package and installation fields are alpha.206. Daily
+changed-surface operations and the whole dogfood milestone remain open.

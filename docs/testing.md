@@ -1,5 +1,20 @@
 # Bounded testing
 
+## Alpha.206: pending creation and keyboard continuation
+
+Clean committed source `fe9a64f` passes 2,915 checks without skips. Six signed
+user-task groups exercise actual local creation, delayed replies, narrow Cancel,
+keyboard creation, archived-menu filtering and merge selection without confirming
+a merge. A normal empty-profile bootstrap adds three checks. The first actual
+phase failed a test's incorrect clear-on-close condition; its evidence remains
+separate from the corrected passing phase. Three owned profiles are cleaned,
+and strict signatures and 71 payload files match. No provider turn is used;
+run/OS counters, physical windows, IME and daily changed-surface acceptance are
+not inferred from these checks. Visible installation retains existing native
+identities, settings, drafts and the original active goal across 150 seconds.
+
+Historical validation records follow.
+
 ## Alpha.202: installed native message and compact grid
 
 The clean committed build passes 2,812 source checks without skips. One normal
