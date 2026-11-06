@@ -42,28 +42,31 @@ test('native tool catalog removes broad capture defaults and requires explicit n
 });
 const capture = { name: 'see', arguments: { app_target: 'PID:123', window_id: 456, fresh: true } };
 const inspectCapture = { name: 'inspect_ui', arguments: { ...capture.arguments, include_elements: true } };
-function inspected() {
-  return { content: [{ type: 'text', text: 'Synthetic owned controls' }], _meta: {
-    snapshot_id: 'owned-ax', used_cache: false,
+function inspected(snapshot = 'owned-ax', value = 'OWNED') {
+  return { isError: false, content: [{ type: 'text', text: 'Synthetic owned controls' }], _meta: {
+    snapshot_id: snapshot, used_cache: false,
     target_receipt: { pid: 123, window_id: 456, process_start_identity_decimal: '1700000000123456' },
+    focused_element: { processIdentifier: 123, windowID: 456, role: 'AXTextField', frame: [[10, 20], [100, 30]] },
     ui_elements: [
-      { id: 'button', ax_role: 'AXButton', is_actionable: true, is_enabled: true },
-      { id: 'field', ax_role: 'AXTextField', is_actionable: true, is_enabled: true, is_value_settable: true },
+      { id: 'button', label: 'Synthetic button', ax_role: 'AXButton', is_actionable: true, is_enabled: true },
+      { id: 'field', label: 'Synthetic field', value, bounds: { x: 10, y: 20, width: 100, height: 30 }, ax_role: 'AXTextField', is_actionable: true, is_enabled: true, is_value_settable: true },
       { id: 'disabled', ax_role: 'AXButton', is_actionable: true, is_enabled: false },
+      ...(snapshot.startsWith('after') ? [{ id: 'new-button', label: 'Synthetic dialog cancel', ax_role: 'AXButton', is_actionable: true, is_enabled: true }] : []),
     ],
   } };
 }
 test('native AX-only observations are read through the same exact NAW PID/window gate', async () => {
   const gate = createComputerUseGate({ identity: pid => pid === 123 ? { pid, started: 'original' } : null });
-  let calls = 0;
-  const invoke = async params => { calls++; return params.name === 'inspect_ui' ? inspected() : {}; };
+  let calls = 0, reads = 0;
+  const invoke = async params => { calls++; return params.name === 'inspect_ui' ? inspected(++reads === 1 ? 'owned-ax' : 'after-ax') : {}; };
   for (const args of [{}, { ...inspectCapture.arguments, app_target: 'frontmost' }, { ...inspectCapture.arguments, app_target: 'PID:999' },
     { ...inspectCapture.arguments, window_id: undefined }, { ...inspectCapture.arguments, fresh: false }, { ...inspectCapture.arguments, web_focus: true },
     { ...inspectCapture.arguments, snapshot: 'other-client' }]) await assert.rejects(gate({ name: 'inspect_ui', arguments: args }, invoke));
   assert.equal(calls, 0);
   await gate(inspectCapture, invoke);
-  await gate({ name: 'click', arguments: { snapshot: 'owned-ax', on: 'button' } }, invoke);
-  assert.equal(calls, 2);
+  const result = await gate({ name: 'click', arguments: { snapshot: 'owned-ax', on: 'button', expect: { label: 'Synthetic dialog cancel' } } }, invoke);
+  assert.equal(result.isError, false);
+  assert.equal(calls, 3, 'one action and one read-only post-observation');
 });
 test('AX-only structured elements are required before any desktop read is invoked', async () => {
   const gate = createComputerUseGate({ identity: pid => ({ pid, started: 'original' }) });let reads = 0;
@@ -88,13 +91,13 @@ test('AX-only input authority requires an exact fresh receipt and non-fallback r
   for (const change of invalid) {
     result = inspected(); await gate(inspectCapture, invoke);
     result = inspected(); change(result); await assert.rejects(gate(inspectCapture, invoke), /AX-only observation/);
-    await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned-ax', on: 'button' } }, invoke));
+    await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned-ax', on: 'button', expect: { label: 'Synthetic dialog cancel' } } }, invoke), /fresh exact NAW snapshot/);
   }
   assert.equal(inputs, 0, 'failed inspection cannot reuse a previous valid input receipt');
 });
 test('AX-only input targets one current actionable ID; no coordinate/query or non-text typing', async () => {
   const gate = createComputerUseGate({ identity: pid => ({ pid, started: 'original' }) }); let inputs = 0;
-  const invoke = async params => params.name === 'inspect_ui' ? inspected() : (inputs++, {});
+  const invoke = async params => params.name === 'inspect_ui' ? inspected(inputs ? 'after-ax' : 'owned-ax') : (inputs++, {});
   for (const request of [
     { name: 'click', arguments: { on: 'missing' } }, { name: 'click', arguments: { on: 'disabled' } },
     { name: 'click', arguments: { coords: '100,200' } }, { name: 'click', arguments: { on: 'button', coords: '100,200' } },
@@ -105,13 +108,14 @@ test('AX-only input targets one current actionable ID; no coordinate/query or no
     await assert.rejects(gate({ name: request.name, arguments: { snapshot: 'owned-ax', ...request.arguments } }, invoke), /AX-only input/);
   }
   assert.equal(inputs, 0);
-  await gate(inspectCapture, invoke); await gate({ name: 'type', arguments: { snapshot: 'owned-ax', on: 'field', text: 'OWNED', clear: true } }, invoke);
-  await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned-ax', on: 'button' } }, invoke));
+  await gate(inspectCapture, invoke); const result = await gate({ name: 'type', arguments: { snapshot: 'owned-ax', on: 'field', text: 'OWNED', clear: true } }, invoke);
+  assert.equal(result.isError, false);
+  await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned-ax', on: 'button', expect: { label: 'Synthetic dialog cancel' } } }, invoke), /fresh exact NAW snapshot/);
   assert.equal(inputs, 1, 'AX-only typing retains the existing single-use receipt');
 });
 test('broad, non-NAW, file-writing and focusing captures are rejected before invoking Peekaboo', async () => {
   const gate = createComputerUseGate({ identity: pid => pid === 123 ? { pid, started: 'original' } : null });
-  let calls = 0; const invoke = async () => { calls++; return { _meta: { snapshot_id: 'owned-snapshot' } }; };
+  let calls = 0; const invoke = async () => { calls++; return { isError: false, _meta: { snapshot_id: 'owned-snapshot' } }; };
   for (const args of [{}, { ...capture.arguments, app_target: 'frontmost' }, { ...capture.arguments, app_target: 'PID:999' },
     { ...capture.arguments, window_id: undefined }, { ...capture.arguments, fresh: false }, { ...capture.arguments, path: '/tmp/not-owned.png' },
     { ...capture.arguments, ocr: true }, { ...capture.arguments, web_focus: true }, { ...capture.arguments, snapshot: 'other-client' }]) {
@@ -123,20 +127,20 @@ test('broad, non-NAW, file-writing and focusing captures are rejected before inv
 test('input is tied to the last capture and consumed once even when dispatch result is uncertain', async () => {
   const gate = createComputerUseGate({ identity: pid => ({ pid, started: 'original' }), now: () => 100 });
   let clicks = 0;
-  const invoke = async params => params.name === 'see' ? { _meta: { snapshot_id: 'owned' } } : (clicks++, { isError: true });
-  await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned', on: 'button' } }, invoke));
+  const invoke = async params => params.name === 'see' ? inspected('owned') : (clicks++, { isError: true });
+  await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned', on: 'button', expect: { label: 'Synthetic dialog cancel' } } }, invoke), /fresh exact NAW snapshot/);
   await gate(capture, invoke);
-  await gate({ name: 'click', arguments: { snapshot: 'owned', on: 'button' } }, invoke);
-  await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned', on: 'button' } }, invoke));
+  await gate({ name: 'click', arguments: { snapshot: 'owned', on: 'button', expect: { label: 'Synthetic dialog cancel' } } }, invoke);
+  await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned', on: 'button', expect: { label: 'Synthetic dialog cancel' } } }, invoke), /completion unknown/);
   assert.equal(clicks, 1, 'no automatic resend or stale replay');
 });
 test('uncertain mutation permanently refuses later observation and input from this client', async () => {
   for (const name of ['click', 'type']) {
     const gate = createComputerUseGate({ identity: pid => ({ pid, started: 'original' }) });
     let calls = 0;
-    const invoke = async params => { calls++; if (params.name === 'see') return { _meta: { snapshot_id: 'owned' } }; throw Error('transport timed out; remote completion unknown'); };
+    const invoke = async params => { calls++; if (params.name === 'see') return inspected('owned'); throw Error('transport timed out; remote completion unknown'); };
     await gate(capture, invoke);
-    await assert.rejects(gate({ name, arguments: { snapshot: 'owned', on: 'field', text: 'owned', clear: true } }, invoke), /timed out/);
+    await assert.rejects(gate({ name, arguments: { snapshot: 'owned', on: 'field', text: 'owned', clear: true, expect: { label: 'Synthetic dialog cancel' } } }, invoke), /timed out/);
     await assert.rejects(gate(capture, invoke), /completion unknown/);
     await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned', on: 'button' } }, invoke), /completion unknown/);
     assert.equal(calls, 2, 'no operation reaches the bridge after uncertain input');
@@ -145,37 +149,42 @@ test('uncertain mutation permanently refuses later observation and input from th
 test('long click waits are refused before bridge dispatch', async () => {
   const gate = createComputerUseGate({ identity: pid => ({ pid, started: 'original' }) });
   let clicks = 0;
-  const invoke = async params => params.name === 'see' ? { _meta: { snapshot_id: 'owned' } } : (clicks++, {});
+  const invoke = async params => ['see', 'inspect_ui'].includes(params.name) ? inspected(params.name === 'see' ? 'owned' : 'after') : (clicks++, {});
   for (const wait_for of [-1, 5001, 60000, 0.5, '5000']) {
     await gate(capture, invoke);
-    await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned', on: 'button', wait_for } }, invoke), /5000/);
+    await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned', on: 'button', expect: { label: 'Synthetic dialog cancel' }, wait_for } }, invoke), /5000/);
   }
   assert.equal(clicks, 0);
-  await gate(capture, invoke); await gate({ name: 'click', arguments: { snapshot: 'owned', on: 'button', wait_for: 5000 } }, invoke);
+  await gate(capture, invoke); assert.equal((await gate({ name: 'click', arguments: { snapshot: 'owned', on: 'button', expect: { label: 'Synthetic dialog cancel' }, wait_for: 5000 } }, invoke)).isError, false);
   assert.equal(clicks, 1);
 });
 test('stale, changed-process, cross-target and foreground input are refused', async () => {
   let time = 100, started = 'original', calls = 0;
   const gate = createComputerUseGate({ identity: pid => ({ pid, started }), now: () => time });
-  const invoke = async params => params.name === 'see' ? { _meta: { snapshot_id: 'owned' } } : (calls++, {});
-  const click = { name: 'click', arguments: { snapshot: 'owned', on: 'button' } };
+  const invoke = async params => ['see', 'inspect_ui'].includes(params.name) ? inspected(params.name === 'see' ? 'owned' : 'after') : (calls++, {});
+  const click = { name: 'click', arguments: { snapshot: 'owned', on: 'button', expect: { label: 'Synthetic dialog cancel' } } };
+  await gate(capture, invoke); assert.equal((await gate(click, invoke)).isError, false);
+  assert.equal(calls, 1, 'positive control reaches the mutation exactly once');
   for (const change of [() => { time += 60001; }, () => { started = 'replacement'; }, () => { click.arguments.pid = 999; },
-    () => { click.arguments.coordinate_reference = 'other'; }, () => { click.arguments.foreground = true; }]) {
-    time = 100; started = 'original'; click.arguments = { snapshot: 'owned', on: 'button' };
-    await gate(capture, invoke); change(); await assert.rejects(gate(click, invoke));
+    () => { click.arguments.coordinate_reference = 'other'; }, () => { click.arguments.foreground = true; },
+    () => { click.arguments.window_id = 999; }, () => { click.arguments.app_target = 'PID:999'; }]) {
+    time = 100; started = 'original'; click.arguments = { snapshot: 'owned', on: 'button', expect: { label: 'Synthetic dialog cancel' } };
+    await gate(capture, invoke); change(); await assert.rejects(gate(click, invoke), /fresh exact NAW snapshot/);
+    assert.equal(calls, 1, 'the specific identity/freshness guard prevents another mutation');
   }
-  assert.equal(calls, 0);
+  assert.equal(calls, 1);
 });
 test('qualified type is explicit single-line replacement, never an Enter or implicit append', async () => {
   const gate = createComputerUseGate({ identity: pid => ({ pid, started: 'original' }) });let typed = 0;
-  const invoke = async params => params.name === 'see' ? { _meta: { snapshot_id: 'owned' } } : (typed++, {});
+  let typedText = 'OWNED';
+  const invoke = async params => ['see', 'inspect_ui'].includes(params.name) ? inspected(params.name === 'see' ? 'owned' : 'after', typedText) : (typed++, typedText = params.arguments.text, {});
   for (const args of [{ text: 'hello' }, { text: 'hello\n' , clear: true }, { text: 'hello', clear: false },
     ...['n', 't', 'e', 'r'].map(char => ({ text: 'hello\\' + char, clear: true })),
     ...[{ delay: 10000 }, { wpm: 80 }, { profile: 'human' }].map(pacing => ({ text: 'hello', clear: true, ...pacing }))]) {
-    await gate(capture, invoke); await assert.rejects(gate({ name: 'type', arguments: { snapshot: 'owned', ...args } }, invoke));
+    await gate(capture, invoke); await assert.rejects(gate({ name: 'type', arguments: { snapshot: 'owned', on: 'field', ...args } }, invoke));
   }
   assert.equal(typed, 0);
-  await gate(capture, invoke);await gate({ name: 'type', arguments: { snapshot: 'owned', text: 'T58-OWNED', clear: true } }, invoke);assert.equal(typed, 1);
+  await gate(capture, invoke);assert.equal((await gate({ name: 'type', arguments: { snapshot: 'owned', on: 'field', text: 'T58-OWNED', clear: true } }, invoke)).isError, false);assert.equal(typed, 1);
 });
 test('computer-use startup requires an explicit signed pinned GUI Bridge with existing grants', () => {
   const socket = bridgeSocket('/tmp/naw-test-home'); assert.doesNotThrow(() => validateBridgeStatus(status(socket), socket));

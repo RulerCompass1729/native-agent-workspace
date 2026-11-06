@@ -98,16 +98,48 @@ function scopedTools(list) {
       schema.properties.web_focus = { type: 'boolean', const: false };
     } else {
       required.add('snapshot');
-      if (tool.name === 'click') schema.properties.wait_for = { type: 'integer', minimum: 0, maximum: 5000, default: 5000 };
+      if (tool.name === 'click') {
+        schema.properties.wait_for = { type: 'integer', minimum: 0, maximum: 5000, default: 5000 };
+        required.add('expect');
+        schema.properties.expect = { oneOf: [
+          { type: 'object', additionalProperties: false, properties: { label: { type: 'string', minLength: 1, maxLength: 512 } }, required: ['label'] },
+          { type: 'object', additionalProperties: false, properties: { focused: { const: true } }, required: ['focused'] },
+        ], description: 'Postcondition: one exact enabled AX control label absent from the before snapshot and present on the resulting page, or focus on the clicked text field. Use inspect_ui before actions. Dispatch alone is not success.' };
+      }
       if (tool.name === 'type') {
         for (const name of ['delay', 'wpm', 'profile']) delete schema.properties[name];
-        required.add('text'); required.add('clear'); schema.properties.clear = { type: 'boolean', const: true };
+        required.add('text'); required.add('clear'); required.add('on'); schema.properties.clear = { type: 'boolean', const: true };
         schema.properties.text = { type: 'string', minLength: 1, maxLength: 16000, pattern: '^[^\\u0000-\\u001f\\u005c\\u007f]+$', description: 'One printable text line without backslashes for explicit replacement of an authorized field; no Enter/key commands. Observe first and preserve human drafts.' };
       }
     }
     schema.required = [...required];
     return { ...tool, description: 'NAW only: use one exact installed NAW window and a fresh explicit snapshot. For messages prefer collaboration-space @, and use the corresponding session GUI only if that route fails; verify target/body and the visible send result. Never send through a service or change goal status as a substitute for a message. Never approve permissions, issue terminal commands, or replace human drafts without authorization. ' + tool.description, inputSchema: schema };
   }) };
+}
+function actionObservation(result, pid, windowId) {
+  const meta = result?._meta, target = meta?.target_receipt;
+  if (result?.isError !== false || typeof meta?.snapshot_id !== 'string' || !meta.snapshot_id || meta.used_cache !== false ||
+      target?.pid !== pid || target.window_id !== windowId || typeof target.process_start_identity_decimal !== 'string' ||
+      !/^[1-9][0-9]{0,19}$/.test(target.process_start_identity_decimal) || !Array.isArray(meta.ui_elements) ||
+      !Array.isArray(result.content) || !result.content.every(block => block.type === 'text')) return null;
+  const elements = meta.ui_elements.filter(e => e?.is_actionable === true && e.is_enabled === true && typeof e.id === 'string' && e.id);
+  return elements.length ? { meta, elements, generation: target.process_start_identity_decimal } : null;
+}
+function fieldFocused(element, focus, pid, windowId) {
+  const bounds = element?.bounds, frame = focus?.frame;
+  return Boolean(bounds && focus?.processIdentifier === pid && focus.windowID === windowId && focus.role === element.ax_role &&
+    Array.isArray(frame) && frame.length === 2 && frame.every(v => Array.isArray(v) && v.length === 2) &&
+    [bounds.x, bounds.y, bounds.width, bounds.height].every((n, i) => Number.isFinite(n) && Number.isFinite(frame.flat()[i]) && Math.abs(n - frame.flat()[i]) <= 1));
+}
+function actionResult(output, observed, kind, reason) {
+  const meta = output?._meta;
+  const refused = meta?.mutation_dispatched === false && meta?.dispatch_state === 'none';
+  const result = { outcome: observed ? 'postcondition_observed' : refused ? 'refused' : 'dispatched_unverified', postcondition: kind,
+    observed, deliveryVerified: false, dispatchState: typeof meta?.dispatch_state === 'string' ? meta.dispatch_state : 'unconfirmed',
+    mutationDispatched: typeof meta?.mutation_dispatched === 'boolean' ? meta.mutation_dispatched : null,
+    dispatchedUnitCount: Number.isSafeInteger(meta?.dispatched_unit_count) && meta.dispatched_unit_count >= 0 ? meta.dispatched_unit_count : null,
+    retrySafe: refused && meta.retry_safe === true, ...(reason ? { reason } : {}) };
+  return { isError: !observed, structuredContent: result, content: [{ type: 'text', text: JSON.stringify(result) }] };
 }
 function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now } = {}) {
   let receipt = null, busy = false, completionUnknown = false;
@@ -127,7 +159,9 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
         const pid = Number(args.app_target.slice(4)), before = identity(pid);
         if (!before) throw Error('The requested process is not the current user\'s installed NAW.');
         const result = await invoke(params), after = identity(pid), meta = result?._meta, snapshot = meta?.snapshot_id;
-        if (!result?.isError && typeof snapshot === 'string' && snapshot && after?.started === before.started) {
+        if (result?.isError === true) return result;
+        if (result?.isError !== false) throw Error('Observation has no explicit protocol success; no input authority was created.');
+        if (typeof snapshot === 'string' && snapshot && after?.started === before.started) {
           let axElements;
           if (name === 'inspect_ui') {
             const target = meta.target_receipt;
@@ -140,13 +174,18 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
               throw Error('AX-only observation lacks a qualified exact-window receipt; no input authority was created.');
             }
           }
-          receipt = { pid, started: before.started, snapshot, at: now(), axElements };
+          const observed = actionObservation(result, pid, args.window_id);
+          receipt = { pid, windowId: args.window_id, started: before.started, snapshot, at: now(),
+            axElements: observed?.elements || axElements, focus: observed?.meta.focused_element, generation: observed?.generation };
         }
+        if (!receipt) throw Error('Observation has no qualified snapshot; no input authority was created.');
         return result;
       }
       const previous = receipt; receipt = null;
       if (!previous || args.snapshot !== previous.snapshot || now() - previous.at < 0 || now() - previous.at > 60000 ||
           identity(previous.pid)?.started !== previous.started || (args.pid !== undefined && args.pid !== previous.pid) ||
+          (args.window_id !== undefined && args.window_id !== previous.windowId) ||
+          (args.app_target !== undefined && args.app_target !== `PID:${previous.pid}`) ||
           (args.coordinate_reference !== undefined && args.coordinate_reference !== previous.snapshot) || args.foreground === true ||
           args.background === false || args.modifiers !== undefined) throw Error('Input requires this client\'s fresh exact NAW snapshot; foreground and stale targets are refused.');
       if (previous.axElements) {
@@ -157,12 +196,53 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
         }
       }
       if (name === 'click' && args.wait_for !== undefined && (!Number.isInteger(args.wait_for) || args.wait_for < 0 || args.wait_for > 5000)) throw Error('Click observation is limited to 5000 milliseconds.');
+      const expect = args.expect;
+      if (name === 'click' && (!expect || typeof expect !== 'object' || Array.isArray(expect) || Object.keys(expect).length !== 1 ||
+          !(expect.focused === true && Object.hasOwn(expect, 'focused') || Object.hasOwn(expect, 'label') && typeof expect.label === 'string' && expect.label.length > 0 && expect.label.length <= 512 && !/[\x00-\x1f\x7f]/.test(expect.label)))) {
+        throw Error('Click requires one explicit page or text-field focus postcondition.');
+      }
+      if (name === 'click' && expect.label && (!previous.axElements || previous.axElements.some(e => e.label === expect.label))) {
+        throw Error('Click needs a new page postcondition, not an already visible label; inspect the exact window first.');
+      }
       if (name === 'type' && (args.clear !== true || typeof args.text !== 'string' || !args.text || args.text.length > 16000 || /[\x00-\x1f\x7f\\]/.test(args.text) ||
           ['delay', 'wpm', 'profile'].some(key => args[key] !== undefined))) {
         throw Error('The qualified type path requires explicit replacement with one printable text line; no Enter or terminal input.');
       }
-      try { return await invoke(params); }
+      const field = previous.axElements?.find(e => e.id === args.on);
+      if ((name === 'type' || expect?.focused) && (!field || field.is_value_settable !== true ||
+          !['AXTextField', 'AXTextArea', 'AXSearchField', 'AXComboBox'].includes(field.ax_role) || field.label === 'Terminal input' ||
+          (name === 'type' && !fieldFocused(field, previous.focus, previous.pid, previous.windowId)))) {
+        throw Error('Input requires the exact focused settable field; terminal and unknown focus are refused.');
+      }
+      const { expect: _expect, ...wireArgs } = args;
+      let output;
+      try { output = await invoke({ ...params, arguments: wireArgs }); }
       catch (error) { completionUnknown = true; throw error; }
+      if (output?.isError) {
+        if (!(output._meta?.mutation_dispatched === false && output._meta?.dispatch_state === 'none')) completionUnknown = true;
+        return actionResult(output, false, name === 'type' ? 'text_and_focus' : expect.focused ? 'focus' : 'page', 'Bridge refused or could not confirm the action; do not retry.');
+      }
+      let post;
+      try { post = actionObservation(await invoke({ name: 'inspect_ui', arguments: { app_target: `PID:${previous.pid}`,
+        window_id: previous.windowId, fresh: true, include_elements: true } }), previous.pid, previous.windowId); } catch { /* No repeat observation or mutation. */ }
+      const current = identity(previous.pid);
+      if (!post || current?.started !== previous.started || post.meta.snapshot_id === previous.snapshot ||
+          previous.generation && post.generation !== previous.generation) {
+        completionUnknown = true;
+        return actionResult(output, false, name === 'type' ? 'text_and_focus' : 'page', 'Fresh same-window post-action observation is unavailable; do not retry.');
+      }
+      let verified;
+      if (name === 'click' && expect.label) verified = post.elements.filter(e => e.label === expect.label).length === 1;
+      else {
+        const matches = post.elements.filter(e => e.ax_role === field.ax_role && e.label === field.label &&
+          e.is_value_settable === true && ['x', 'y', 'width', 'height'].every(key => Number.isFinite(field.bounds?.[key]) &&
+            Number.isFinite(e.bounds?.[key]) && Math.abs(e.bounds[key] - field.bounds[key]) <= 1) &&
+          fieldFocused(e, post.meta.focused_element, previous.pid, previous.windowId));
+        verified = matches.length === 1 && (name !== 'type' || matches[0].value === args.text);
+      }
+      if (!verified) completionUnknown = true;
+      return actionResult(output, verified, name === 'type' ? 'text_and_focus' : expect.focused ? 'focus' : 'page',
+        verified ? undefined : 'Requested page, focus or complete literal text was not observed; no retry or further input is allowed.');
     } finally { busy = false; }
   };
 }

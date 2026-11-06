@@ -6247,3 +6247,34 @@ accepted. Physical/IME/VoiceOver and the full milestone remain unqualified.
 A live member terminal was hidden when its input route was chat. The visibility predicate now preserves that native screen while input ownership, view, epoch and generation gates remain unchanged. The original author commit is retained unchanged. The final regression fails three cases against the old renderer; the fixed source passes 32 related checks without skips and scoped independent source review.
 
 The first source GUI completed three groups before an incorrect member-heading selector stopped it. Main's corrected-source journey completed five groups, including solo return and narrow input layout, before an absent optional `run` counter caused a final assertion failure. Both attempts remain incomplete. The test now resolves required action guards before allocating a profile and labels absent optional methods unavailable, rather than reporting them as observed zero calls. A zero-allocation preflight passes and a missing-required-method canary refuses before launch. These are source and test-operator results, not installed or daily-app acceptance.
+
+
+## Desktop actions: verify the page, focus and literal text
+
+The default computer-use gate now separates dispatch from the observed result.
+A click requires an explicit new page-control label or exact text-field focus.
+Typing requires the exact field already focused, followed by readback of the
+whole replacement, including spaces. One fresh AX observation of the same
+process generation and window checks the postcondition. Missing or mismatched
+evidence returns an unverified error and prevents further operations in that
+instance. An observed end state does not prove physical event delivery.
+No terminal commands, Return, foreground capture or automatic retry were added.
+
+The old module failed all ten initial postcondition cases. Related source
+checks now pass all 41 cases without skips. Independent review caught old
+guard tests that could reject for the wrong reason; valid positive controls,
+exact refusal assertions and seven guard-removal counterexamples close that
+test-evidence gap. The independent source verdict is scoped approval. Its
+measured tool inventory and calls were read-only; an unused tool-definition
+exposure discrepancy remains recorded privately.
+
+One actual isolated signed-app journey connected the candidate gate directly
+to the pinned Peekaboo MCP. With the OS locked and the owned window hidden,
+inspection returned ACCESSIBILITY_INCOMPLETE without a usable snapshot. A
+subsequent no-receipt request was refused before dispatch: zero clicks, inputs
+or sends. Drafts and identity remained intact, the frontmost app and lock state
+were unchanged, and owned resources and the canonical slot were released.
+This verifies refusal only. Successful real clicks, focus, literal input,
+background delivery policy and adoption by installed native callers remain
+unqualified. The restricted-view route and native provider factories are
+unchanged; integration and installed acceptance remain with Main.
