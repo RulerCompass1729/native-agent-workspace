@@ -1,9 +1,11 @@
-// Use the existing Peekaboo MCP implementation, not a second NAW control API.
+// Use existing computer-use MCP implementations, not a second NAW control API.
 // This process does not alter native permission modes or auto-approve its tools.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const net = require('node:net');
+const { Transform } = require('node:stream');
 const { spawn, execFileSync } = require('node:child_process');
 
 const VERSION = '4.9.7';
@@ -11,11 +13,13 @@ const CLI_SHA256 = '7568134c863c578a11d6f674ce354e1d09b5acf7ad47a2500434dda2382d
 const SOURCE = '5639e70501010ca9dcae5f594a0b57dd69e9b395';
 const CLI = '/opt/homebrew/Cellar/peekaboo/4.9.7/bin/peekaboo';
 const NAW_EXECUTABLE = '/Applications/Native Agent Workspace.app/Contents/MacOS/Native Agent Workspace';
-function computerUseMcpServer() {
-  return { command: process.execPath, args: ['--disable-sigusr1', __filename, '--serve'], env: { ELECTRON_RUN_AS_NODE: '1' } };
+function computerUseMcpServer({ viewLeaseFile } = {}) {
+  if (viewLeaseFile !== undefined && (typeof viewLeaseFile !== 'string' || !path.isAbsolute(viewLeaseFile))) throw Error('An explicit absolute view lease file is required.');
+  return { command: process.execPath, args: ['--disable-sigusr1', __filename,
+    ...(viewLeaseFile === undefined ? ['--serve'] : ['--serve-view', viewLeaseFile])], env: { ELECTRON_RUN_AS_NODE: '1' } };
 }
-function codexComputerUseMcpArgs() {
-  const server = computerUseMcpServer();
+function codexComputerUseMcpArgs(options) {
+  const server = computerUseMcpServer(options);
   return [['command', server.command], ['args', server.args], ['env.ELECTRON_RUN_AS_NODE', '1']]
     .flatMap(([key, value]) => ['-c', `mcp_servers.peekaboo.${key}=${JSON.stringify(value)}`]);
 }
@@ -162,6 +166,194 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
     } finally { busy = false; }
   };
 }
+// Main owns the independent view and stock MCP connection. Native children get
+// only this short-lived Unix lease, never a CDP endpoint or the stock catalog.
+const VIEW_TOOLS = ['browser_snapshot', 'browser_click', 'browser_type'];
+const VIEW_REFUSAL = 'Restricted NAW view unavailable or request refused; no fallback or retry was started.';
+function viewTools() {
+  return { tools: VIEW_TOOLS.map(name => ({ name,
+    description: name === 'browser_snapshot' ? 'Observe only the authorized independent space composer. The returned JSON contains a single-use snapshot receipt.' :
+      'Use a fresh snapshot receipt and exact element reference in the authorized space composer. No terminal, permission, clipboard or navigation actions. A tool acknowledgement is not delivery.',
+    inputSchema: { type: 'object', additionalProperties: false,
+      properties: name === 'browser_snapshot' ? {} : { snapshot: { type: 'string' }, target: { type: 'string', pattern: '^e[0-9]+$' },
+        ...(name === 'browser_type' ? { text: { type: 'string', minLength: 1, maxLength: 16000 } } : {}) },
+      required: name === 'browser_snapshot' ? [] : ['snapshot', 'target', ...(name === 'browser_type' ? ['text'] : [])] },
+  })) };
+}
+function viewResult(value) { return { content: [{ type: 'text', text: JSON.stringify(value) }] }; }
+function createComputerUseViewGate({ grant, invoke, inspect, target, now = Date.now, onRevoke = () => {} }) {
+  if (!grant || !['owner', 'spaceId', 'recipientId', 'nativeId', 'memberRevision', 'text'].every(k => grant[k] !== undefined) ||
+      typeof grant.text !== 'string' || !grant.text || grant.text.length > 16000 || /[\x00-\x1f\x7f\u2028\u2029]/.test(grant.text) ||
+      ![invoke, inspect, target].every(f => typeof f === 'function')) throw Error(VIEW_REFUSAL);
+  grant = Object.freeze({ ...grant });
+  let receipt, busy = false, revoked = false, submitted = false;
+  const refuse = () => { throw Error(VIEW_REFUSAL); };
+  const revoke = () => { if (!revoked) { revoked = true; receipt = null; onRevoke(); } };
+  const active = () => { if (revoked) refuse(); };
+  const valid = facts => {
+    active();
+    if (!facts || facts.closed || facts.owner !== grant.owner || facts.spaceId !== grant.spaceId || facts.selected !== 'room' ||
+        facts.surface !== 'records' || facts.nativeId !== grant.nativeId || facts.memberRevision !== grant.memberRevision ||
+        typeof facts.revision !== 'string' || !facts.revision) { revoke(); refuse(); }
+  };
+  return { revoke, async call(name, args = {}) {
+    active();
+    if (busy || !VIEW_TOOLS.includes(name) || (submitted && name !== 'browser_snapshot') || !args || typeof args !== 'object' || Array.isArray(args)) refuse();
+    const snapshot = name === 'browser_snapshot', allowed = snapshot ? [] : name === 'browser_click' ? ['snapshot', 'target'] : ['snapshot', 'target', 'text'];
+    if (Object.keys(args).some(k => !allowed.includes(k)) || (!snapshot && (typeof args.target !== 'string' || !/^e\d+$/.test(args.target)))) refuse();
+    // The grant permits selecting its @ recipient, then replacing only its own
+    // initially empty composer with the exact approved body. Never press Enter.
+    if (name === 'browser_type' && args.text !== '@' && args.text !== grant.text) refuse();
+    const previous = receipt; receipt = null;
+    if (!snapshot && (!previous || args.snapshot !== previous.id || now() < previous.at || now() - previous.at > 60000)) refuse();
+    busy = true;
+    try {
+      const facts = await inspect(); valid(facts);
+      if (snapshot) {
+        const output = await invoke(name, { target: '#room-composer' });
+        valid(await inspect());
+        if (output?.isError || !Array.isArray(output?.content) || output.content.some(b => b.type !== 'text')) refuse();
+        // Stock output can contain tab URLs, generated code and file links.
+        // Keep only its single inline composer snapshot; no raw error escapes.
+        const text = output.content.map(b => b.text).join('\n');
+        const trees = [...text.matchAll(/### Snapshot\s*\n```yaml\n([\s\S]*?)\n```/g)];
+        if (trees.length !== 1 || !trees[0][1] || trees[0][1].length > 100000) refuse();
+        receipt = { id: crypto.randomUUID(), at: now(), revision: facts.revision };
+        return viewResult({ snapshot: receipt.id, tree: trees[0][1] });
+      }
+      if (facts.revision !== previous.revision) refuse();
+      const control = await target(args.target); active();
+      if (!control || control.disabled || !control.visible || (name === 'browser_type' ? control.id !== 'shared-input' || control.readOnly : !['mention', 'send'].includes(control.kind))) refuse();
+      if (control.kind === 'mention' && control.recipientId !== grant.recipientId) refuse();
+      if (name === 'browser_type' && !['', '@', grant.text].includes(facts.body)) refuse();
+      if (control.kind === 'send' && (facts.recipientId !== grant.recipientId || facts.body !== grant.text || facts.ready !== true)) refuse();
+      // Recheck after resolving the ref, before dispatch. The Main invoker must
+      // serialize selection/inspection/action on this one owned stock view.
+      const current = await inspect(); valid(current);
+      if (current.revision !== facts.revision) refuse();
+      const wire = { target: args.target, element: 'Authorized space composer',
+        ...(name === 'browser_type' ? { text: args.text, submit: false, slowly: true } : {}) };
+      let output;
+      try { output = await invoke(name, wire); active(); if (output?.isError) throw Error(); }
+      catch { revoke(); refuse(); }
+      if (control.kind === 'send') submitted = true;
+      return viewResult({ outcome: 'dispatched_unconfirmed', observeAgain: true, delivery: 'unconfirmed' });
+    } catch { receipt = null; refuse(); }
+    finally { busy = false; }
+  } };
+}
+function privateViewEntry(filename, kind) {
+  if (typeof filename !== 'string' || !path.isAbsolute(filename) || fs.realpathSync(filename) !== filename) throw Error(VIEW_REFUSAL);
+  const dir = fs.lstatSync(path.dirname(filename)), entry = fs.lstatSync(filename), uid = process.getuid?.();
+  if (!dir.isDirectory() || dir.uid !== uid || (dir.mode & 0o777) !== 0o700 || entry.uid !== uid ||
+      (entry.mode & 0o777) !== 0o600 || (kind === 'file' ? !entry.isFile() || entry.nlink !== 1 || entry.size > 4096 : !entry.isSocket())) throw Error(VIEW_REFUSAL);
+  return entry;
+}
+function readViewLease(filename, now = Date.now()) {
+  privateViewEntry(filename, 'file');
+  const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  let lease;
+  try { lease = JSON.parse(fs.readFileSync(fd, 'utf8')); } finally { fs.closeSync(fd); }
+  if (Object.keys(lease).sort().join(',') !== 'capability,expiresAt,socketPath,version' || lease.version !== 1 ||
+      typeof lease.capability !== 'string' || !/^[a-f0-9]{64}$/.test(lease.capability) || !Number.isSafeInteger(lease.expiresAt) ||
+      lease.expiresAt <= now || lease.expiresAt - now > 300000 || path.dirname(lease.socketPath) !== path.dirname(filename)) throw Error(VIEW_REFUSAL);
+  privateViewEntry(lease.socketPath, 'socket');
+  return lease;
+}
+// Bound each newline-delimited MCP frame before the existing SDK parses it.
+function boundedViewInput(input, abort) {
+  let length = 0;
+  const bounded = new Transform({ transform(chunk, _encoding, done) {
+    for (const byte of chunk) { length = byte === 10 ? 0 : length + 1; if (length > 256 * 1024) { abort(); return done(Error(VIEW_REFUSAL)); } }
+    done(null, chunk);
+  } });
+  bounded.on('error', abort); input.on('error', abort); input.pipe(bounded); return bounded;
+}
+async function createComputerUseViewLease({ grant, invoke, inspect, target, dispose, ttlMs = 120000 }) {
+  if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > 300000 || typeof dispose !== 'function') throw Error(VIEW_REFUSAL);
+  const { JsonRpcLineTransport } = await import('@deepseek-ai/dsh-sdk-protocol');
+  const gate = createComputerUseViewGate({ grant, invoke, inspect, target, onRevoke: () => setImmediate(() => close()) });
+  // Canonical short parent avoids Darwin's Unix socket path limit. This is a
+  // private Unix listener, not a browser/debugging/TCP listener.
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync('/tmp'), 'naw-view-')); fs.chmodSync(dir, 0o700);
+  const dirIdentity = fs.lstatSync(dir);
+  const socketPath = path.join(dir, 'view.sock'), leaseFile = path.join(dir, 'lease.json');
+  if (Buffer.byteLength(socketPath) > 100) { fs.rmdirSync(dir); throw Error(VIEW_REFUSAL); }
+  const capability = crypto.randomBytes(32).toString('hex'), expiresAt = Date.now() + ttlMs;
+  let socket, transport, timer, authenticated = false, closed = false, closePromise;
+  const server = net.createServer(connection => {
+    if (socket || closed) { connection.destroy(); return; }
+    socket = connection;
+    const handshake = setTimeout(() => connection.destroy(), 3000); handshake.unref();
+    transport = new JsonRpcLineTransport(boundedViewInput(connection, () => connection.destroy()), connection);
+    transport.onRequest(async (method, params) => {
+      if (closed || Date.now() >= expiresAt) throw Error(VIEW_REFUSAL);
+      if (method === 'initialize' && !authenticated) {
+        const offered = params?._meta?.nawViewCapability;
+        if (typeof offered !== 'string' || !/^[a-f0-9]{64}$/.test(offered) || !crypto.timingSafeEqual(Buffer.from(offered), Buffer.from(capability))) { connection.destroy(); throw Error(VIEW_REFUSAL); }
+        authenticated = true; clearTimeout(handshake);
+        return { protocolVersion: '2024-11-05', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'naw-restricted-view', version: '1' } };
+      }
+      if (!authenticated) throw Error(VIEW_REFUSAL);
+      if (method === 'ping') return {};
+      if (method === 'tools/list') return viewTools();
+      if (method !== 'tools/call') throw Error(VIEW_REFUSAL);
+      const deadline = setTimeout(() => { gate.revoke(); }, 15000); deadline.unref();
+      try { return await gate.call(params?.name, params?.arguments); } finally { clearTimeout(deadline); }
+    });
+    transport.start();
+    connection.once('close', () => { clearTimeout(handshake); transport.close(); if (authenticated) close(); else socket = null; });
+  });
+  function close() {
+    if (closePromise) return closePromise;
+    closed = true; gate.revoke(); clearTimeout(timer); socket?.destroy(); transport?.close();
+    closePromise = (async () => {
+      await new Promise(resolve => server.close(resolve));
+      try { await dispose(); } finally {
+        const current = fs.lstatSync(dir);
+        if (current.ino !== dirIdentity.ino || current.dev !== dirIdentity.dev) throw Error(VIEW_REFUSAL);
+        fs.rmSync(leaseFile, { force: true }); fs.rmdirSync(dir);
+      }
+    })();
+    // Lifecycle callers can await failures, but an expiry callback cannot create
+    // an unhandled rejection or expose the owner's raw cleanup error to native.
+    closePromise.catch(() => {}); return closePromise;
+  }
+  try {
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
+    fs.chmodSync(socketPath, 0o600);
+    fs.writeFileSync(leaseFile, JSON.stringify({ version: 1, socketPath, capability, expiresAt }), { mode: 0o600, flag: 'wx' });
+    timer = setTimeout(close, Math.max(1, expiresAt - Date.now())); timer.unref();
+    return { leaseFile, expiresAt, close };
+  } catch { await close(); throw Error(VIEW_REFUSAL); }
+}
+async function serveView(leaseFile) {
+  const lease = readViewLease(leaseFile);
+  const { JsonRpcLineTransport } = await import('@deepseek-ai/dsh-sdk-protocol');
+  const socket = net.createConnection(lease.socketPath);
+  const client = new JsonRpcLineTransport(boundedViewInput(process.stdin, () => socket.destroy()), process.stdout);
+  const bridge = new JsonRpcLineTransport(boundedViewInput(socket, () => socket.destroy()), socket);
+  let initialized = false;
+  const close = () => { clearTimeout(expiry); bridge.close(); client.close(); socket.destroy(); process.stdin.pause(); };
+  const expiry = setTimeout(close, Math.max(1, lease.expiresAt - Date.now())); expiry.unref();
+  socket.on('error', () => { process.exitCode = 1; close(); }); socket.once('close', close);
+  bridge.start();
+  client.onRequest(async (method, params) => {
+    try {
+      if (method === 'initialize' && !initialized) {
+        const result = await bridge.request(method, { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'naw-native-view', version: '1' },
+          _meta: { nawViewCapability: lease.capability } }, AbortSignal.timeout(5000));
+        initialized = true; return result;
+      }
+      if (!initialized || !['ping', 'tools/list', 'tools/call'].includes(method)) throw Error();
+      if (method === 'tools/list') return viewTools();
+      return await bridge.request(method, params, AbortSignal.timeout(16000));
+    } catch { throw Error(VIEW_REFUSAL); }
+  });
+  client.start(); process.stdin.once('end', close);
+  for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, close);
+}
+
 async function serve() {
   const config = prepareComputerUse();
   const { JsonRpcLineTransport } = await import('@deepseek-ai/dsh-sdk-protocol');
@@ -187,7 +379,9 @@ async function serve() {
   });
 }
 if (require.main === module) {
-  if (process.argv.length !== 3 || process.argv[2] !== '--serve') process.exitCode = 1;
-  else serve().catch(error => { process.stderr.write(error.message + '\n'); process.exitCode = 1; });
+  const view = process.argv.length === 4 && process.argv[2] === '--serve-view';
+  const run = view ? () => serveView(process.argv[3]) : process.argv.length === 3 && process.argv[2] === '--serve' ? serve : null;
+  if (!run) process.exitCode = 1;
+  else run().catch(error => { process.stderr.write((view ? VIEW_REFUSAL : error.message) + '\n'); process.exitCode = 1; });
 }
-module.exports = { computerUseMcpServer, codexComputerUseMcpArgs, computerUseEnvironment, bridgeSocket, validateBridgeStatus, prepareComputerUse, scopedTools, createComputerUseGate };
+module.exports = { computerUseMcpServer, codexComputerUseMcpArgs, computerUseEnvironment, bridgeSocket, validateBridgeStatus, prepareComputerUse, scopedTools, createComputerUseGate, viewTools, createComputerUseViewGate, createComputerUseViewLease, readViewLease };

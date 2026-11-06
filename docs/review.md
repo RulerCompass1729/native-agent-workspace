@@ -5559,3 +5559,42 @@ are 1.5669608 USD for the first combined checkpoint and 0.7605322 USD for the
 second, each cumulative rather than summed partial calls, and not invoices.
 The whole dogfood milestone, original reading recurrence, safe native adoption
 and restricted production tool access remain open. No publication is performed.
+
+### Explicit restricted-view computer-use entry
+
+The computer-use launcher previously entered Peekaboo qualification before any
+alternative could run, and its catalog accepted only the four Peekaboo tools.
+The same product module now has an explicit `viewLeaseFile` option on both native
+launcher factories and a real `--serve-view` stdio branch. Default launches keep
+their existing behavior and native approval settings. The new branch uses the
+existing MCP transport over a private, expiring Unix lease issued by the view
+owner; it receives no browser endpoint or general stock tool catalog.
+
+The Main-side lease factory adapts the qualified stock MCP mechanism to three
+tools: observe the independent space composer, select its granted recipient,
+and type/send its granted body. Snapshots contain a model-visible, single-use
+receipt and only the inline composer tree. Raw page URLs, generated code, file
+links, action output and stock errors are not forwarded. Scope, native identity,
+membership, current view revision, target and draft checks precede input;
+unknown mutation outcomes revoke the lease. One grant permits one send attempt.
+Expiry, authenticated disconnect and explicit close dispose the owned route.
+
+The old executable refuses the new mode; the new real stdio child passes the
+private-lease test. All 27 related checks pass without skips. A zero-model
+isolated journey also used this product child, its lease, real pinned stock MCP
+and two actual Electron views. Eight consumer calls selected one synthetic
+recipient and obtained one synthetic submitted receipt, with zero terminal
+inputs. The other view retained positive private/shared drafts, recipient and
+caret. The OS remained locked with loginwindow in front. Active time was 19.482
+seconds; owned consumer, lease, stock process, GUI, service and profile cleanup
+completed in 2.298 seconds before releasing the canonical GUI slot.
+
+This is source qualification of the explicit entry. The installed app module was
+not replaced. Main still must bind a transient view and stock connection to a
+native runtime, supply the live lease to the two factory call sites, and retain
+close/expiry cleanup without persisting or exposing a human view. Existing
+no-argument adapter call sites still select Peekaboo. Production transport and
+lease renewal remain integration work; this change does not approve a daily
+browser-wide debugging port, attest arbitrary same-user native identities, or
+qualify physical input or all-provider installed operation. Existing native
+consumer and locked daily-message evidence are reused rather than repeated.
