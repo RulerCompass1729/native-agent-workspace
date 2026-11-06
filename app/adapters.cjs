@@ -1582,6 +1582,9 @@ class Codex extends EventEmitter {
         this.nativeObservationPending = false;
         this.observeReplySettings(result, settings);
         if (stateRevision === this.stateRevision) this.observeStatus(result.thread.status);
+        // Identity is confirmed even while history is still loading. Newer live
+        // settings/state may have suppressed both other publication paths.
+        this.emit('capability');
         if (await this.hydrateHistory(id, revision, true) && revision === this.lifecycleRevision && !this.stopped) { this.chatAvailable = true; this.emit('capability'); }
       }).catch(() => this.emit('activity', ...uiActivity("notice.activity.terminalExitedGuiUnconfirmed")));
       this.emit('capability'); return;

@@ -146,3 +146,42 @@ test('a resume snapshot in the same tick as its response is retained but hidden 
   assert.equal(f.snapshot().nativeGoal?.status, 'blocked');
   assert.deepEqual(existingResumeCalls, ['thread/resume'], 'No goal read, goal write or extra turn is added');
 });
+
+
+test('confirmed goal reaches subscribers while reconnect history remains pending', async t => {
+  const f = fixture(t), terminal = { connected: true }, calls = [], published = [];
+  let resolveResume, resolveHistory;
+  f.host.rpc.call = (method, params) => {
+    calls.push(method);
+    assert.equal(params.threadId, f.s.nativeId);
+    if (method === 'thread/resume') return new Promise(resolve => { resolveResume = resolve; });
+    if (method === 'thread/items/list') return new Promise(resolve => { resolveHistory = resolve; });
+    throw Error('Unexpected RPC: ' + method);
+  };
+  f.w.on('change', () => published.push(f.snapshot()));
+  f.r.observeSettings({ model: 'synthetic-model', effort: 'medium' });
+  f.r.terminalRpc = terminal; f.r.terminalNotificationSource = true;
+  f.update('paused', { rpc: terminal });
+  f.r.observeTerminalContext({ kind: 'disconnected', rpc: terminal });
+  f.r.event({ method: 'thread/settings/updated', params: { threadId: f.s.nativeId,
+    threadSettings: { model: 'synthetic-model', effort: 'high' } } });
+  f.r.event({ method: 'thread/status/changed', params: { threadId: f.s.nativeId, status: { type: 'idle' } } });
+  resolveResume({ model: 'synthetic-model', reasoningEffort: 'medium', thread: {
+    id: f.s.nativeId, status: { type: 'active', activeFlags: [] },
+  } });
+  f.update('blocked');
+  await Promise.resolve();
+  const during = { direct: f.snapshot(), published: published.at(-1), historyPending: !!resolveHistory,
+    observationPending: f.r.nativeObservationPending };
+  resolveHistory({ data: [], nextCursor: null });
+  await f.r.observing;
+  assert.equal(during.historyPending, true);
+  assert.equal(during.observationPending, false);
+  assert.equal(during.direct.nativeGoal?.status, 'blocked');
+  assert.equal(during.published.nativeGoal?.status, 'blocked', 'Publish confirmed facts before history finishes');
+  assert.equal(during.published.state, 'idle', 'The older resume reply must not rewind live state');
+  assert.equal(during.published.nativeSettings.effort, 'high', 'The older reply must not rewind settings');
+  assert.equal(during.published.chatAvailable, false, 'History still controls chat readiness');
+  assert.equal(during.published.liveDraft, 'Synthetic unsent draft');
+  assert.deepEqual(calls, ['thread/resume', 'thread/items/list'], 'No extra reads or goal mutation');
+});

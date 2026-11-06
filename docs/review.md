@@ -6168,3 +6168,18 @@ worktree and excluded experimental interface before allocating build work.
 The previous content of that mistakenly overwritten historical artifact was not
 recorded, so no historical-retention claim is made for it. Current and immediate
 rollback archives are separately verified. No native user session was stopped.
+
+
+### T117 confirmed reconnect facts before history completion
+
+A newer settings and status event could suppress both resume-reply publication
+paths. The same-thread goal was already confirmed internally, but subscribers
+kept an unconfirmed snapshot until history loading finished. A held-history
+regression fails on the previous source and passes after the existing capability
+event is emitted at confirmation. Newer state/settings, draft and history-gated
+chat readiness are retained; the existing two RPC calls are unchanged.
+
+All 156 directly affected checks pass without skips. Independent review accepts
+the exact source repair and raw failure/fix evidence. This is source acceptance;
+installed delivery, occupied-backend adoption and daily behavior remain open.
+No native input, goal mutation, automatic continuation or new polling is added.
