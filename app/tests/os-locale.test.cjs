@@ -42,7 +42,7 @@ test('the actual backend-switch handler translates its confirmation reason and p
     const option = { backendKey: 'original-backend', switch: plan }, before = JSON.stringify(option), dialogs = []; let handler, refreshes = 0, updates = 0;
     const c = { win: {}, client: { async refresh() { refreshes++; } } };
     vm.runInNewContext(main.slice(a, b), { register(name, fn) { assert.equal(name, 'switchBackend'); handler = fn; },
-      app: { getVersion: () => 'synthetic' }, roomState: {}, connectionUpdateOptions: () => [option], uiError, uiLocale: locale, displayLanguage: () => language,
+      app: { getVersion: () => 'synthetic' }, backendSwitch: require('../backend-switch.cjs'), roomState: {}, connectionUpdateOptions: () => [option], uiError, uiLocale: locale, displayLanguage: () => language,
       displayText: (key, params) => locale.format(language, key, params), dialog: { async showMessageBox(win, options) { assert.equal(win, c.win); dialogs.push(options); return { response: 0 }; } },
       runBackendSwitch() { updates++; throw Error('Cancel must not reach a backend operation'); } });
     assert.equal(await handler(c, plain(option)), false); assert.equal(refreshes, 1); assert.equal(updates, 0); assert.equal(dialogs.length, 1);

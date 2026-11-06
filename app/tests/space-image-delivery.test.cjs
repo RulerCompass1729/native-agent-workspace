@@ -54,7 +54,7 @@ test('service layout resolves image storage to its existing profile, without cal
 function router(t, change = {}) {
   const root = directory(t), client = new EventEmitter(), calls = [], images = packet(root);
   const state = { owner: 'owner', runtimeVersion: 'synthetic-current', capabilities: ['nativeInputIsolation', 'nativeContextTransitions', 'collaborationSpacesV1', 'spaceImageInputV1'],
-    sessions: [{ id: 'recipient', provider: 'codex', nativeId: 'native-recipient', roomId: 'shared', state: 'idle', spaceImagesAvailable: true, ...change }],
+    sessions: [{ id: 'recipient', provider: 'codex', nativeId: 'native-recipient', owner: 'owner', roomId: 'shared', state: 'idle', spaceImagesAvailable: true, ...change }],
     room: { id: 'shared', revision: 0, messages: [] }, rooms: [], diagnostics: { dispatches: 0, shellModelCalls: 0 } };
   client.call = async (method, ...args) => { calls.push([method, ...args]); return method === 'initial' ? structuredClone(state) : { tag: 'accepted-tag' }; };
   client.close = () => {};
@@ -64,6 +64,12 @@ function router(t, change = {}) {
 test('WorkspaceClient preserves the optional image packet through ordinary forwarding argument trimming', async t => {
   const f = router(t); await f.c.callSpace('shared', 'forward', ['recipient', '', 'native-recipient', undefined, f.images]);
   const wire = f.calls.find(([method]) => method === 'forward'); assert.ok(wire); assert.deepEqual(wire.slice(1), ['recipient', '', 'native-recipient', null, f.images]);
+});
+test('an image task with an unknown legacy controller is refused before pause or dispatch', async t => {
+  const f = router(t, { owner: null });
+  await assert.rejects(f.c.callSpace('shared', 'forward', ['recipient', '', 'native-recipient', undefined, f.images]),
+    error => error.uiMessage?.key === 'error.sharedInputOwnershipUnavailable');
+  assert.equal(f.calls.some(([method]) => ['pause', 'forward', 'spaceAction', 'claim'].includes(method)), false);
 });
 test('a retained backend or revoked image capability cannot silently reduce an image task to text', async t => {
   const f = router(t, { spaceImagesAvailable: false });
