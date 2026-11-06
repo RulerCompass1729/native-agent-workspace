@@ -9,7 +9,7 @@ function fixture({ holdInitial = false } = {}) {
       showModal() { this.open = true; }, close() { this.open = false; }, focus() { this.focused = true; } });
     return elements.get(id);
   };
-  const context = vm.createContext({ $, attempt: fn => { const p = fn(); tasks.push(p); return p; },
+  const context = vm.createContext({ $, document: { activeElement: null }, attempt: fn => { const p = fn(); tasks.push(p); return p; },
     api: { spaceCreate(name) { const request = { name, ...deferred() }; creates.push(request); return request.promise; },
       initial() { initialReads++; return holdInitial ? initial.promise : Promise.resolve({ rooms: ['created-room'] }); } },
     updateState() {}, render() {}, selectSpace: async id => selections.push(id), toastMessage: key => notices.push(key),

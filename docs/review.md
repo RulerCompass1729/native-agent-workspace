@@ -6087,3 +6087,17 @@ uses the raw native identities and connection states, retaining archived pending
 resume metadata. The original two failing regressions and cleanup control now
 pass with 36 affected checks and independent source approval. Main adopts the
 exact patch; GUI, installation and the wider recovery task remain separate.
+
+
+### Space creation cancellation restores visible keyboard focus
+
+The first source candidate passed its VM checks but failed a real narrow-window
+Cancel. A separate bounded native-DOM trace shows why: during the close handler,
+focus still belongs to Cancel inside the already closed dialog; it reaches BODY
+only later. The exact independently reviewed repair also accepts that closed
+dialog descendant, while preserving the unavailable-opener, other-modal and
+visible-enabled-fallback guards. No timer, layout change or submit-handler change
+is added. Fifteen source regressions pass, including the measured close ordering
+and protection for another dialog. Main preserves the original author's worktree
+and imports only the two reviewed focus regions and test; installed acceptance
+remains pending.

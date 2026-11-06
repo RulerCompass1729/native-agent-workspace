@@ -1075,8 +1075,10 @@ function renderSpaceNavigation() {
   ui.display.text($('workspace-group-summary'), 'sidebar.spaceCount', { count: active.length });
 }
 function openSpaceCreate() {
+  const opener = document.activeElement;
   $('space-create-name').value = ''; $('space-create-error').hidden = true; $('confirm-space-create').disabled = false;
-  openTransientDialog('space-create-dialog'); $('space-create-name').focus();
+  const ticket = openTransientDialog('space-create-dialog'); ticket.spaceCreateOpener = opener;
+  $('space-create-name').focus();
 }
 let mergeDialog;
 function mergeSourceLabel(room, choices) {
@@ -4679,6 +4681,14 @@ for (const dialog of document.querySelectorAll('dialog')) {
   });
   dialog.addEventListener('close', () => {
     if (dialog.open) return; // A queued old close must not clear a new opening.
+    if (dialog.id === 'space-create-dialog') {
+      const opener = dialogTickets.get(dialog)?.spaceCreateOpener, fallback = $('workspace-toggle');
+      if (opener && (!opener.isConnected || !opener.getClientRects().length) &&
+          (document.activeElement === document.body || dialog.contains(document.activeElement)) && !document.querySelector('dialog[open]') &&
+          fallback?.isConnected && fallback.getClientRects().length && !fallback.disabled) {
+        fallback.focus({ preventScroll: true });
+      }
+    }
     dialogTickets.delete(dialog); dialog.scrollTop = 0;
     if (dialog.id === 'create-dialog') {
       for (const id of ['session-name', 'claude-history-id']) $(id).value = '';
