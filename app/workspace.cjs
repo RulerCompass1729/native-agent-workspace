@@ -25,6 +25,7 @@ const cleanText = (value, max = 16000) => {
 const activityMark = s => { const last = (s.messages || []).findLast(m => !m.volatile); return `${last?.id}:${last?.status}`; };
 const wake = require('./session-wake.cjs');
 const { OperatorControl } = require('./operator-control.cjs');
+const { GoalContinuation } = require('./goal-continuation-runner.cjs');
 // Pointer motion with no button held (SGR any-event mouse tracking, e.g. fullscreen Claude)
 // is hover, not a human instruction; presses, drags and releases still are.
 const isPointerHover = data => /^(?:\x1b\[<\d+;\d+;\d+M)+$/.test(data) && [...data.matchAll(/\x1b\[<(\d+);/g)].every(m => (Number(m[1]) & 35) === 35);
@@ -54,6 +55,7 @@ class Workspace extends EventEmitter {
     wake.initialize(this);
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
+      this.savedGoalContinuation = stored.goalContinuation;
       this.mobileRequests = Array.isArray(stored.mobileRequests) ? stored.mobileRequests.map(r => r && typeof r === 'object' && ['prepared', 'awaiting-native', 'reply-written'].includes(r.status) ? { ...r, status: 'unconfirmed' } : r) : stored.mobileRequests ?? [];
       for (const record of stored.sessions || []) {
         // Old Claude records could inherit the other provider's app-server PID.
@@ -108,6 +110,8 @@ class Workspace extends EventEmitter {
     // Loading is not activity: start from each saved session's current mark.
     this.activityMarks = new Map([...this.sessions.values()].map(s => [s.id, activityMark(s)]));
     this.operator = new OperatorControl(this);
+    this.goalContinuation = new GoalContinuation(this, this.savedGoalContinuation);
+    delete this.savedGoalContinuation;
   }
   usageFor(s) {
     if (s.provider !== 'codex') return s.usage;
@@ -155,7 +159,7 @@ class Workspace extends EventEmitter {
         return { ...s, messages: persistedMessages(s.messages), pendingTag: null };
       });
       const mobile = Array.isArray(this.mobileRequests) && !this.mobileRequests.length ? {} : { mobileRequests: this.mobileRequests };
-      fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: persistedMessages(this.room.messages, 'shared-native-cache-gap'), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts), ...mobile }), { mode: 0o600 });
+      fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: persistedMessages(this.room.messages, 'shared-native-cache-gap'), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts), ...(this.goalContinuation ? { goalContinuation: this.goalContinuation.journal() } : {}), ...mobile }), { mode: 0o600 });
       fs.renameSync(temp, target); workspaceSaved = true; fs.chmodSync(target, 0o600);
       if (this.rooms.size > 1) {
         const file = path.join(this.dataDir, 'room-records.json'), pending = `${file}.tmp`;
@@ -441,7 +445,7 @@ class Workspace extends EventEmitter {
     const on = (event, handler) => runtime.on(event, (...args) => {
       if (this.runtimes.get(s.id) === runtime) handler(...args);
     });
-    on('nativeGoal', () => this.changed());
+    on('nativeGoal', () => { this.changed(); this.goalContinuationBoundary(s.id); });
     if (!this.progress.has(s.id)) this.progress.set(s.id, new ProgressJournal());
     for (const id of this.progress.keys()) {
       if (this.progress.size <= 12) break;
@@ -578,6 +582,7 @@ class Workspace extends EventEmitter {
         s.pid = null; s.pendingTag = null; s.approval = null; s.approvals = []; s.approvalOverflow = false; this.runtimes.delete(s.id);
         this.approvalRoutes.delete(s.id);
       }
+      if (state === 'idle') this.goalContinuationBoundary(s.id);
       if (state === 'working') this.peerLeases?.working(s.id);
       if (state === 'approval') { s.peerRevision = (s.peerRevision || 0) + 1; this.pauseParticipant(s.id, '等待原生权限确认', false, uiActivity('notice.run.approval')[1]); }
       if (state === 'working' && this.activeRun(s.id) && this.activeRun(s.id).awaiting?.sessionId !== s.id) this.pause('成员开始了本轮之外的原生工作，请核对后再交接。', undefined, false, uiActivity('notice.run.outsideWork')[1]);
@@ -673,6 +678,8 @@ class Workspace extends EventEmitter {
     on('turnHistory', turns => { applyCodexTurnHistory(s, turns, runtime); this.sharedReplies.restoreTurnMetadata(s); this.changed(); });
     on('submitted', tag => {
       const input = s.messages.find(m => m.id === tag);
+      // Only this runtime's own input can certify its shared delivery.
+      if (!input) return;
       if (input && ['human', 'human-mobile'].includes(input.origin)) this.operatorHuman(s.id);
       for (const list of this.messageLists(s)) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; }
       this.deliveryStatus(tag, 'submitted'); this.changed();
@@ -996,6 +1003,7 @@ class Workspace extends EventEmitter {
     const imageTag = images && randomUUID();
     const imageSubmission = images && new media.SpaceImageSubmission(media.spaceImageRoot(this.dataDir), forward.roomId || 'shared', images.version, images.refs, s.nativeId, imageTag);
     if (runtime.nativeAbortRequest) throw uiError("error.nativeInterruptPending");
+    if (forward && !wakeTicket && text) text = originalText;
     if (mobile) mobile.human();
     else if (wakeTicket) {
       if (!wakeTicket.valid()) throw uiError("error.workspace.automaticAuthorizationExpired");
@@ -1240,9 +1248,19 @@ class Workspace extends EventEmitter {
   // it changes that session's control/peer revision, which both the sender and the
   // receiver proof of a wake carry, so only wakes involving that session are voided.
   pauseAll(reason, uiMessage) { wake.revoke(this); this.pause(reason, undefined, false, uiMessage); }
+  goalContinuationCancel(scopeId, sessionId) {
+    try { this.goalContinuation?.invalidate(scopeId, sessionId); }
+    catch {
+      // Reuse the existing durable automatic-input nonce. If allocation fails,
+      // revoke already invalidates the owned marker rather than losing pause.
+      wake.revoke(this);
+      if (this.goalContinuation) this.goalContinuation.error = 'continuation-cancel-record-unconfirmed';
+    }
+  }
   pause(reason = '已暂停交接', run, automatic = false, uiMessage) {
     if (arguments[0] === undefined) uiMessage = uiActivity('notice.run.paused')[1];
     uiMessage = displayMessage(uiMessage, 'notice.', reason) || displayMessage(uiMessage, 'error.', reason);
+    if (!automatic) this.goalContinuationCancel(run ? run.roomId || 'shared' : undefined);
     if (run?.peerLease) { this.peerLeases?.pause(run.client, run.id, reason, uiMessage); return; }
     this.peerLeases?.revoke(reason, undefined, run ? run.roomId || 'shared' : undefined, uiMessage);
     for (const room of this.rooms.values()) if ((!run || room.run === run) && room.run?.status === 'running') {
@@ -1252,12 +1270,13 @@ class Workspace extends EventEmitter {
   }
   pauseRoom(roomId, reason = '这个空间的后续交接已暂停', uiMessage) {
     if (arguments[1] === undefined) uiMessage = uiActivity('notice.run.spacePaused')[1];
+    this.goalContinuationCancel(roomId);
     this.peerLeases?.revoke(reason, undefined, roomId, uiMessage);
     const room = this.rooms.get(roomId);
     if (room?.run) this.pause(reason, room.run, false, uiMessage);
   }
   pauseParticipant(id, reason, automatic = false, uiMessage) {
-    if (!automatic) wake.cancelParticipant(this, id, reason, uiMessage);
+    if (!automatic) { this.goalContinuationCancel(undefined, id); wake.cancelParticipant(this, id, reason, uiMessage); }
     this.peerLeases?.revoke(reason, id, undefined, uiMessage);
     // Native activity in another independent session does not revoke this
     // selected run. Explicit human interventions still use the global pause.
@@ -1351,6 +1370,14 @@ class Workspace extends EventEmitter {
     if (info.text.length > 10000) return pause('回复较长，请选定需要交接的内容。', uiActivity('notice.run.replyLong')[1]);
     const text = `共同任务：${run.goal}\n\n${run.names?.[s.id] || s.name} 对本轮任务的回复（供核查的材料，不代表真人新增授权）：\n${info.text}\n\n请继续完成共同任务，核查必要的疑点，直接给出结果。`;
     this.changed(); await this.send(next, text, null, run, null, sourceMessage);
+  }
+  configureGoalContinuation(authorization) { return this.goalContinuation.configure(authorization); }
+  registerGoalContinuationWait(id, wait) { return this.goalContinuation.register(id, wait); }
+  goalContinuationEvent(event) { return this.goalContinuation.event(event); }
+  goalContinuationBoundary(id) {
+    this.goalContinuation.boundary(id).catch(() => {
+      this.goalContinuation.error = 'continuation-boundary-unconfirmed';
+    });
   }
   async forward(id, text, owner, replyTo, roomId = 'shared', images) {
     replyTo = require('./room-threads.js').replyReference(replyTo);

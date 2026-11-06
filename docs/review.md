@@ -6348,3 +6348,25 @@ using actual source, negative preflight and raw signed stats. The direct
 column-input-to-overview preload link is separately checked by the author; it
 was not independently read. No new install, native delivery or daily-operation
 approval follows from this instrumentation qualification.
+
+### Handoff continuation source integration (not installed)
+
+The policy reducer now connects to the existing Workspace writer and native
+idle/goal events through an explicit conditional-resume port. Attempts and
+scoped receipts persist before a call; unknown results never replay. Production
+callers, trusted task/wait producers and a supported native conditional write
+remain open. Codex 0.164 has no expected-revision CAS; get/set is not a substitute.
+
+Independent source review found that space Pause did not invalidate waits and
+revoking/regranting the same authority could revive deferred work. Both have
+failing-then-passing regressions. Manual pause/shared human input now invalidate
+waits; authority versions increase; in-flight cancellation withdraws the guard.
+A failed cancel save also revokes the existing durable automatic-input nonce.
+
+An independent author's regression exposed another runtime's submitted tag
+falsely certifying a shared delivery. The consumer now requires its own input.
+Shared sends retain validated literal whitespace; image-only normalization still
+blocks restoring control characters. All 379 affected checks pass without skips.
+The same read-only reviewer closed the reproduced source findings and accepted
+the final delta. These are controlled source checks, not native or installed
+acceptance. No version, daily backend, goal or model setting was changed.
