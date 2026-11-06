@@ -723,3 +723,6 @@ header h1, header p { overflow-wrap: anywhere; }
 #file-dialog>p:not([id]){margin:8px 0}
 #file-dialog .dialog-actions{margin-top:12px;margin-left:20px}
 /* End compact local file preview. */
+
+#room-messages .message { margin-bottom: 12px; }
+#room-messages .timeline-day { margin-bottom: 12px; }

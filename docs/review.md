@@ -5878,3 +5878,18 @@ ordinary snapshots, preserving the initial eligibility and permission behavior.
 Both source GUI journeys and approvals are reused unchanged after exact blob
 comparison. Current affected checks and build are author-run; these new changes
 are not part of the installed alpha.203 and still need signed/daily acceptance.
+
+
+### Shared record spacing - current source qualification
+
+The original two room-scoped margin rules are adopted unchanged after source
+and design review. Current Main GUI checks retain all six original stored message
+bodies, existing unknown-delivery warnings, fonts, controls, focus, selection,
+identities and positive private/shared drafts. Both the wide content window and
+a stable narrow CSS viewport save 44 px. The initial narrow sample drifted while
+resizing; its raw passing label is retained but that inference is invalidated.
+The bounded narrow-only check now requires a stable viewport, reader box and row
+heights, removing and restoring only the actual compiled style delta.
+All owned profiles, backends and windows are cleaned. These are author-run
+synthetic source checks, not real-provider, physical-window or installed proof.
+Unchanged source approvals are reused; combined signed and daily acceptance stay open.
