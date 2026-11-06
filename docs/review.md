@@ -6324,3 +6324,27 @@ ordinary visible-update operator. Original records, native process generations,
 reported settings, drafts and Main goal remain; occupied backends keep their
 old code. The 150-second retention witness passes. This is installation and
 preservation evidence, not daily interactive acceptance while the OS is locked.
+
+
+### Supplemental local-run test observation
+
+An overlooked author READY corrected the fixture's run key to wrap the actual
+Workspace.startRun method. The original four-file source delta is adopted
+unchanged; its source approval is reused. Eleven affected checks pass. The
+Main preflight now requires the actual mapped method before allocation; an
+injected missing startRun refuses before GUI or profile work. This changes
+test instrumentation only, with no package or product-runtime change.
+
+A distinct supplemental signed-alpha.209 trial uses the new fixture against
+the installed classes in one isolated profile. Local startRun attempts are
+observed at zero alongside the seven existing guarded actions; one explicit
+synthetic Escape reaches the fake target. No provider or model is used; owned
+resources are removed in 1.919 seconds. Earlier failed and unobserved readings
+remain unchanged. Counts mean local attempts, not peer-run success, native
+delivery, daily interaction or clearance of the input-pending flag.
+
+The same integration reviewer accepts this supplemental counter delta only,
+using actual source, negative preflight and raw signed stats. The direct
+column-input-to-overview preload link is separately checked by the author; it
+was not independently read. No new install, native delivery or daily-operation
+approval follows from this instrumentation qualification.

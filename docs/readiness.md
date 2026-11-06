@@ -15,8 +15,9 @@ six terminal/navigation/input journeys and privacy open/close; normal empty-
 profile bootstrap passes three checks. All 71 payload files match the committed
 source/build output, and strict signatures pass after testing. Independent review
 accepts this scoped source/signed combination, not real native delivery or goal
-resume. Earlier failed source-driver runs remain failed; the absent optional run
-counter is now explicitly unavailable rather than zero.
+resume. Earlier failed source-driver runs remain failed. The initial trial reported
+the run counter unavailable; a later test-only correction binds it to actual
+local startRun attempts, observed at zero in a supplemental signed trial.
 
 The ordinary visible update retains 14 records, 16 live native process identities,
 13 draft scopes, seven occupied older backends and the same active Main goal

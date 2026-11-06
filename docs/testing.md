@@ -10,8 +10,11 @@ columns and explicit native control with one fake Escape. Private/shared drafts,
 private selection, terminal instance and identity are asserted. Privacy open/close
 retains 20px vertical padding. Normal signed bootstrap passes three checks.
 All 71 payloads and strict signature match after testing; cleanup removes owned
-profiles and processes. Seven required action counters are zero; optional `run`
-is unavailable, not zero. No real provider or model is used in these tests.
+profiles and processes. The first trial observed seven action counters and
+reported run unavailable. A supplemental test-only fixture maps run to the
+actual local startRun method and observes all eight counters at zero; missing
+actual methods refuse before allocation. This does not retroactively measure
+the earlier run or qualify peer-run delivery. No provider or model is used.
 
 Earlier failed source runs remain failed. Packaging first failed three negative
 build-pin tests because a dependency symlink changed require.resolve paths; the

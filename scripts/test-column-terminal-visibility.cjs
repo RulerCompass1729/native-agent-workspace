@@ -14,14 +14,14 @@ const sha = file => createHash('sha256').update(fs.readFileSync(path.join(code, 
 const sourcePins = Object.fromEntries(['app/renderer/renderer.js', 'app/dsh/client.js'].map(file => [file, sha(file)]));
 assert.ok(fs.readFileSync(path.join(code, 'app/dsh/client.js'), 'utf8').includes(fs.readFileSync(path.join(code, 'app/renderer/renderer.js'), 'utf8')), 'Build the exact renderer first');
 // Resolve observability before allocating a profile or launching the GUI. A missing
-// optional source method is unavailable, never an observed zero-call counter.
+// operation key is mapped to the actual Workspace method before allocation.
 const { Workspace } = require(path.join(code, 'app/workspace.cjs'));
-const requiredActions = ['send', 'queue', 'steer', 'forward', 'approve', 'answer', 'resume'];
-for (const name of requiredActions) assert.equal(typeof Workspace.prototype[name], 'function', `Required guarded method is absent: ${name}`);
+const requiredActions = ['send', 'queue', 'steer', 'forward', 'approve', 'answer', 'resume', 'run'];
+const actionMethods = Object.fromEntries(requiredActions.map(name => [name, name === 'run' ? 'startRun' : name]));
+for (const [name, method] of Object.entries(actionMethods)) assert.equal(typeof Workspace.prototype[method], 'function', `Required guarded method is absent: ${name} -> ${method}`);
 const guardedActions = [...requiredActions], unavailableActions = [];
-for (const name of ['run']) (typeof Workspace.prototype[name] === 'function' ? guardedActions : unavailableActions).push(name);
-if (preflightOnly) { console.log(JSON.stringify({ sourcePins, guardedActions, unavailableActions, allocations: 0 })); process.exit(0); }
-const result = { at: new Date().toISOString(), token, checks: [], errors: [], sourcePins, guardedActions, unavailableActions, realNativeEngines: 0, productModels: 0, realProviders: 0 };
+if (preflightOnly) { console.log(JSON.stringify({ sourcePins, actionMethods, guardedActions, unavailableActions, allocations: 0 })); process.exit(0); }
+const result = { at: new Date().toISOString(), token, checks: [], errors: [], sourcePins, actionMethods, guardedActions, unavailableActions, realNativeEngines: 0, productModels: 0, realProviders: 0 };
 let scratch, daemon, client, app, guiChild, page, parent, profile, identity, admitted = false, started, request = 0;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const write = name => fs.writeFileSync(path.join(evidence, name), JSON.stringify(result, null, 2) + '\n');
