@@ -5503,3 +5503,59 @@ and publication gates remain unchanged. The overall dogfood goal stays open.
 - Independent source review found that image Escape stops bubbling before the
   reader sees it. Its new regression failed on the initial patch; a capture
   key handler now records this manual collapse before the image callback.
+
+
+## 2026-11-05 — shared input and newer human intent (I236–I238)
+
+An old backend-update menu compared only session identity, allowing a newer
+human controller to be stopped. The menu and per-stop checks now include owner,
+view and control/connection revisions. Two old-code race counters fail; 25
+affected checks pass. Candidate and Applications exercise the actual two-window
+menu/takeover/selection: the native recheck error is visible, the newer controller
+and drafts remain, and stop/resume/input/send counts stay zero. The first review
+timed out and was not accepted; its same-session follow-up requested actual fresh
+plan/error observations, which are now present and program-verified. This is not
+an atomic compare-and-stop or qualification to retire an occupied native backend.
+
+The unchanged reviewed peer image patch `e1b9df4` is integrated as `9fd116f`.
+Its asynchronous expansion callback preserves a newer reading intent rather
+than saving a manual position. Actual old/fixed signed renderers demonstrate
+Latest lost versus retained; Applications repeats the fixed task. Later return
+and Escape still collapse the image. Six source intent regressions and 48
+affected checks pass. The original spontaneous-rebound producer remains unknown;
+this does not establish Escape alone leaving Latest. Initial premature-render
+and package-source-location setup failures remain distinct from runtime proof.
+
+Independent shared views previously either failed the private owner check or
+claimed that owner while forwarding. `428e667` reuses the existing space-action
+envelope and complete peer identity proof, with an explicit backend capability.
+Public forward/steer/queue retain the private controller, native identity and
+positive draft; private routes keep their owner requirement. The real Unix
+receiver refuses missing/stale proofs before side effects. Final affected tests
+pass 142 checks without skips. Candidate and Applications each run the three
+visible input modes with one synthetic receipt each and no control claim. A
+fresh independent checkpoint passes source and installed raw evidence after a
+bounded same-session verdict following the initial turn limit. The reviewer
+does not rerun the GUI; author-run old/new tests are labelled separately.
+
+A suggested old-backend pause concern is disproved by the actual guard order
+and a bounded client probe: rejection precedes both pause and forward, with zero
+calls. An unowned new-capability recipient is not exercised live, and future
+callers must keep click-time proof capture; neither is silently claimed tested.
+The earlier live failure's sole cause remains unknown. Production locked-tool
+wiring is still pending rather than implied by this shared-input repair.
+
+Alpha.200 is built only from clean committed `428e667`. Strict signatures and
+all 71 shipped files match. Each of the three Applications tasks passes and
+cleans its owned profile/processes/lease; no real provider or product-model turn
+runs. The previously accepted visible-update operator is unchanged except for
+version/hash values. Its 150-second check retains 14 records, 16 native identity
+witnesses, 13 draft scopes and seven occupied old backends; automatic migration
+stays off. The original goal's identity, body and creation remain; its observed
+post-update state is active. No Main goal setter, hidden daily launch, debugger
+or native backend replacement is used. The exact source approvals are reused;
+artifact and record comparisons are machine checks. Reported review list costs
+are 1.5669608 USD for the first combined checkpoint and 0.7605322 USD for the
+second, each cumulative rather than summed partial calls, and not invoices.
+The whole dogfood milestone, original reading recurrence, safe native adoption
+and restricted production tool access remain open. No publication is performed.

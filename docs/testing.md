@@ -2,6 +2,31 @@
 
 Historical validation records. For the current delivery scope, see [readiness](readiness.md).
 
+## Shared input and newer human intent — 2026-11-05
+
+Alpha.200 / `428e667`: candidate and Applications each pass three complete
+journeys. An independent shared view sends to idle Codex, steers active Codex and
+queues for active Claude without claiming their private input or changing their
+positive drafts. These produce one synthetic receipt per mode. A delayed image
+expansion retains a later Latest click; returning to the image and pressing
+Escape still collapses it manually. A second window takes control after opening
+the update menu; selecting the old entry shows the recheck error and stops no
+session. Fresh native identity, control and membership refusal tests complement
+these visible tasks. Final affected sets pass 25, 48 and 142 checks, without skips;
+they overlap and are not a full-suite total.
+
+The earlier stale-menu observer gap and image setup failures remain recorded.
+Scoped independent source/raw-result reviews pass; installed checks, exact
+operator reuse and delivery records are author-verified. Applications runs take
+4.871, 3.109 and 3.495 seconds; each cleans its owned processes/profile and lease.
+Strict post-test signatures and all 71 payload files match. No real provider or
+product-model turns. The ordinary visible GUI update retains 14 records, 16 live
+native identity witnesses, 13 draft scopes and seven occupied older backends for
+150 seconds. The same original goal is active after the update, with its body
+and creation unchanged; no Main goal setter runs. Automatic migration stays off.
+This does not qualify old backend adoption, actual native delivery, Escape alone
+leaving Latest, production locked access or the whole milestone.
+
 ## Collapsed empty-space discovery — 2026-11-05
 
 Alpha.199 / `726a29a`: the signed candidate and Applications each pass six

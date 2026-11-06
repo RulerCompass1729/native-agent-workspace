@@ -4,7 +4,24 @@ As of 2026-11-05. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.199, committed build source `726a29a`. The narrow icon
+Current daily GUI: alpha.200, committed build source `428e667`. Shared-space
+send, steer and queue keep the private controller and draft; stale native,
+membership and control proofs are refused. Private input still requires control.
+An older backend without the new shared-input capability refuses an independent
+view explicitly. Pending image expansion keeps a newer Latest choice, and an old
+backend-update menu is rejected if control changed before selection.
+
+The signed candidates and actual Applications executable pass all three bounded
+journeys using synthetic transports. Independent source and raw-result reviews
+pass; installed operations are author-run. The ordinary visible update retains
+14 records, 16 live native identities, 13 draft scopes and the original goal
+identity/body/creation across 150 seconds; its observed status is active. Seven
+occupied older backends remain untouched and automatic migration stays off.
+All 71 payload files, strict signatures and one searchable application match.
+No real provider/model turns. Production locked-tool access, safe native backend
+adoption, the original spontaneous reading rebound and full dogfood remain open.
+
+Previously qualified alpha.199, committed build source `726a29a`. The narrow icon
 rail now hides full empty-space prose and wide-only controls, retaining their
 expanded text and create action. Candidate and Applications each pass six phases
 of expand, create/cancel, group, collapse and restore. All 64 affected checks pass;
