@@ -335,7 +335,7 @@ function renderColumnInput(host, record, visible) {
     else if (binding.ui.form.parentElement !== composerParking) composerParking.append(binding.ui.form);
     updateSessionComposer(binding, record, true);
   }
-  const nativeVisible = visible && record.view === 'terminal' && binding !== soloComposer;
+  const nativeVisible = visible && (record.view === 'terminal' || record.terminalState?.alive === true) && binding !== soloComposer;
   binding.nativeVisible = nativeVisible; binding.nativeHost.hidden = !nativeVisible;
   if (binding.nativeSash) {
     binding.nativeSash.hidden = !nativeVisible;
