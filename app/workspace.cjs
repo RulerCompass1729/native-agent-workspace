@@ -446,6 +446,7 @@ class Workspace extends EventEmitter {
       if (this.runtimes.get(s.id) === runtime) handler(...args);
     });
     on('nativeGoal', () => { this.changed(); this.goalContinuationBoundary(s.id); });
+    on('goalContinuationReady', () => this.goalContinuationBoundary(s.id));
     if (!this.progress.has(s.id)) this.progress.set(s.id, new ProgressJournal());
     for (const id of this.progress.keys()) {
       if (this.progress.size <= 12) break;

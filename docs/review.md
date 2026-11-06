@@ -6370,3 +6370,10 @@ blocks restoring control characters. All 379 affected checks pass without skips.
 The same read-only reviewer closed the reproduced source findings and accepted
 the final delta. These are controlled source checks, not native or installed
 acceptance. No version, daily backend, goal or model setting was changed.
+
+A subsequent source admission regression found that a missing native port consumed
+a never-sent handoff. The event now remains pending with one scoped unavailable
+notice, and the real runtime readiness event rechecks it before one call.
+All 139 directly affected checks pass without skips; independent source review
+accepts the admission change and readiness binding. Real native writes, actual
+callers and installed acceptance remain unverified.

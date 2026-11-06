@@ -176,6 +176,19 @@ class GoalContinuation {
       if (next.state !== this.data.policy) { const data = copy(this.data); data.policy = next.state; this.save(data); }
       return { status: next.status, reason: next.reason };
     }
+    // Missing execution capability is admission failure, not a native attempt.
+    // Keep the confirmed event pending until the port is actually available.
+    const canResume = () => typeof r.goalContinuationResume === 'function' &&
+      policy.REQUIREMENTS.every(cap => r.goalContinuationCapabilities?.includes(cap));
+    if (!canResume()) {
+      if (!this.data.policy.waits[waitId].capabilityUnavailable) {
+        const held = copy(this.data); held.policy.waits[waitId].capabilityUnavailable = true;
+        this.save(held, { id: `${waitId}:native-capability`, scopeId: binding.scopeId,
+          nativeId: binding.nativeId, taskId: this.data.policy.waits[waitId].taskId,
+          status: 'waiting', reason: 'conditional-native-resume-unavailable' });
+      }
+      return fail('conditional-native-resume-unavailable');
+    }
     const intent = next.intent, data = copy(this.data); data.policy = next.state;
     delete data.pending[waitId];
     const receipt = { id: intent.id, scopeId: binding.scopeId, taskId: intent.taskId,
@@ -191,8 +204,7 @@ class GoalContinuation {
     let result;
     try {
       if (!valid()) result = { status: 'rejected', reason: 'authority-or-control-changed' };
-      else if (typeof r.goalContinuationResume !== 'function' ||
-          !policy.REQUIREMENTS.every(cap => r.goalContinuationCapabilities?.includes(cap))) {
+      else if (!canResume()) {
         result = { status: 'rejected', reason: 'conditional-native-resume-unavailable' };
       } else {
         const native = await r.goalContinuationResume(intent, { valid });

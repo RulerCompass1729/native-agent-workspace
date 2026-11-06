@@ -83,11 +83,22 @@ for (const [name, change] of [
   if (name === 'private draft') assert.equal(f.w.drafts.get(f.id), 'DO NOT LOSE');
 });
 
-test('missing real conditional capability is explicit rejection, never get/set masquerading as CAS', async t => {
+test('missing native capability does not consume an unsent handoff; the ready port receives it once', async t => {
   const f = await fixture(t); await f.register(); f.runtime.goalContinuationCapabilities = [];
   const result = (await f.w.goalContinuationEvent(f.event))[0];
-  assert.equal(result.status, 'rejected'); assert.equal(result.reason, 'conditional-native-resume-unavailable');
-  assert.equal(f.writes(), 0); await f.w.goalContinuationEvent(f.event); assert.equal(f.writes(), 0);
+  assert.equal(result.status, 'denied'); assert.equal(result.reason, 'conditional-native-resume-unavailable');
+  assert.equal(f.writes(), 0);
+  assert.equal(f.w.goalContinuation.data.policy.waits.wait.status, 'waiting');
+  assert.equal(f.w.goalContinuation.data.pending.wait.id, f.event.id);
+  assert.equal(f.w.room.messages.some(row => row.goalContinuation?.status === 'attempting'), false);
+  await f.w.goalContinuationEvent(f.event);
+  assert.equal(f.w.room.messages.filter(row => row.goalContinuation?.reason === 'conditional-native-resume-unavailable').length, 1);
+  f.runtime.goalContinuationCapabilities = [...REQUIREMENTS];
+  f.runtime.emit('goalContinuationReady');
+  await turn(); await turn();
+  assert.equal(f.writes(), 1);
+  await f.w.goalContinuationEvent(f.event);
+  assert.equal(f.writes(), 1);
 });
 
 test('uncertain native operation is terminal and is not replayed on service reconstruction', async t => {
