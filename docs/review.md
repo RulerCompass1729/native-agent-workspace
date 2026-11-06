@@ -6121,3 +6121,13 @@ matches the previously executed template after version/path binding. One legacy
 version caption in its raw report remains recorded with an explicit derived
 correction; authoritative package and installation fields are alpha.206. Daily
 changed-surface operations and the whole dogfood milestone remain open.
+
+
+### Merge cancellation source contract
+
+The original author's exact eight source tests cover one discard of an unsubmitted
+preview, no discard of a committed record, retained choices after Back, reopened
+dialog protection and late preview results. Three private controlled mutations
+are rejected; they are test-quality controls, not original product failures.
+Source-test review is reused unchanged. This adds no product code and does not
+qualify Escape/backdrop gestures, real backend discard, focus or the whole task.
