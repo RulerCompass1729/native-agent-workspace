@@ -663,3 +663,24 @@ header h1, header p { overflow-wrap: anywhere; }
 #create-dialog .provider-choice{margin:14px 0}
 #create-dialog .dialog-actions{margin-top:16px}
 #create-dialog p:empty{margin:0}
+/* Compact setup dialog: preserve existing controls, labels and lifecycle. */
+#setup-dialog{padding:20px;max-height:calc(100vh - 40px);overflow:auto}
+#setup-dialog h2{margin-bottom:8px}
+#setup-dialog #ui-language-label{display:inline-block;margin:0 12px 0 0;vertical-align:middle}
+#setup-dialog #ui-language{min-height:40px;max-width:100%;vertical-align:middle}
+#setup-dialog #setup-intro{margin:10px 0}
+#setup-dialog #setup-status{container-type:inline-size}
+#setup-dialog .setup-program{padding:8px 0}
+#setup-dialog .setup-program>strong{display:block;min-width:0}
+#setup-dialog .program-path{margin:4px 0}
+#setup-dialog .actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+#setup-dialog .actions button{flex:0 1 auto;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+#setup-dialog button{min-height:40px}
+#setup-dialog .dialog-actions{margin-top:16px}
+@container(min-width:420px){
+  #setup-dialog:not(:has(#ui-language option[value="en"]:checked)) .setup-program:not(:has(.actions button:nth-child(3))){display:grid;grid-template-columns:minmax(150px,1fr) auto;align-items:center;gap:4px 10px}
+  #setup-dialog:not(:has(#ui-language option[value="en"]:checked)) .setup-program:not(:has(.actions button:nth-child(3)))>strong{grid-area:1/1}
+  #setup-dialog:not(:has(#ui-language option[value="en"]:checked)) .setup-program:not(:has(.actions button:nth-child(3))) .actions{grid-area:1/2;margin:0}
+  #setup-dialog:not(:has(#ui-language option[value="en"]:checked)) .setup-program:not(:has(.actions button:nth-child(3))) .program-path{grid-area:2/1/3/3;margin:0}
+}
+/* End compact setup dialog. */
