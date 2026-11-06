@@ -1,5 +1,29 @@
 # Bounded testing
 
+
+## Alpha.209: live member terminal display
+
+Committed source `c0650f8` passes 2,965 source checks without skips. One signed
+isolated GUI with two synthetic records passes six journeys: passive terminal
+visibility, read-only input rejection, records return, solo return, narrow
+columns and explicit native control with one fake Escape. Private/shared drafts,
+private selection, terminal instance and identity are asserted. Privacy open/close
+retains 20px vertical padding. Normal signed bootstrap passes three checks.
+All 71 payloads and strict signature match after testing; cleanup removes owned
+profiles and processes. Seven required action counters are zero; optional `run`
+is unavailable, not zero. No real provider or model is used in these tests.
+
+Earlier failed source runs remain failed. Packaging first failed three negative
+build-pin tests because a dependency symlink changed require.resolve paths; the
+correct local lexical binding passes the unchanged full suite. Initial updater
+argument/version/rollback preflights refused before any daily quit; the final
+operator retains its existing logic, changing only version and artifact paths.
+The actual visible update preserves original native identities, settings, drafts,
+old backends and goal across 150 seconds. Review covers only this signed scope.
+Daily changed operations remain untested while locked, along with physical/OS
+input and final synthetic input-pending clearance. C4 desktop postconditions and
+unshipped operator1a are excluded from this package.
+
 ## Alpha.208: confirmed facts and existing dialog spacing
 
 Committed source `1f324ec` passes all 2,958 source checks without skips.

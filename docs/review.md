@@ -6311,8 +6311,16 @@ the GUI lease, so an already-consumed or changed grant refuses a new run.
 Limits remain explicit: size is unchanged during passive viewing, while
 explicit native control intentionally changes owner/view and permits resizing.
 The final synthetic input-pending flag was not verified to clear. Viewport was
-emulated; OS input counters were unavailable. The daily app is still alpha.208
-and locked-screen visibility prevents the ordinary visible-update acceptance.
+emulated; OS input counters were unavailable. At candidate qualification the daily app was still alpha.208. The locked
+screen leaves daily changed-operation acceptance open; it does not prevent a
+normal visible launch verified through window metadata.
 Real native delivery, daily operation and the separate desktop-control repair
 remain open. This candidate excludes the unshipped operator work and desktop
 postcondition changes; it is not whole-milestone approval.
+
+
+The qualified alpha.209 package was subsequently installed through the existing
+ordinary visible-update operator. Original records, native process generations,
+reported settings, drafts and Main goal remain; occupied backends keep their
+old code. The 150-second retention witness passes. This is installation and
+preservation evidence, not daily interactive acceptance while the OS is locked.

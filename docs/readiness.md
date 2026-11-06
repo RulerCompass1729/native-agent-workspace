@@ -4,27 +4,27 @@ As of 2026-11-06. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.208, clean committed build source `1f324ec`.
-Confirmed reconnect facts reach readers before history finishes loading, without
-rewinding newer native settings or state. Chat still waits for its history.
-Existing merge-preview and usage spacing is compacted while retaining original
-text, fonts, controls and unknown values. The usage section divider is removed;
-member borders remain.
+Current daily GUI: alpha.209, clean committed build source `c0650f8`.
+Live member terminals remain visible while their input route is chat. Passive
+viewing preserves terminal identity and input ownership. Existing privacy-mode
+vertical padding is 20px. The confirmed-facts, merge-preview and usage repairs
+from alpha.208 remain included.
 
-All 2,958 source checks pass without skips. Seventeen checks load the actual
-packaged backend classes using synthetic RPCs. Two signed interface flows retain
-facts, identities, room metadata and private/shared drafts. Normal empty-profile
-bootstrap passes three checks. All 71 payload files match source/build output,
-and strict signatures pass. Independent review accepts the scoped source and
-signed integration; it does not qualify real native delivery or goal resume.
+All 2,965 source checks pass without skips. The signed isolated package passes
+six terminal/navigation/input journeys and privacy open/close; normal empty-
+profile bootstrap passes three checks. All 71 payload files match the committed
+source/build output, and strict signatures pass after testing. Independent review
+accepts this scoped source/signed combination, not real native delivery or goal
+resume. Earlier failed source-driver runs remain failed; the absent optional run
+counter is now explicitly unavailable rather than zero.
 
 The ordinary visible update retains 14 records, 16 live native process identities,
 13 draft scopes, seven occupied older backends and the same active Main goal
-across 150 seconds. Automatic migration stays off. One installed application
-entry remains. Occupied runtimes keep their previous code; the reconnect repair
-is present in the new build. Daily changed-surface operation, physical input,
-real workdays and the full dogfood milestone remain open. No daily debugger or
-push is used.
+across 150 seconds. Automatic migration stays off. Occupied runtimes retain their
+previous code. The app reopened normally without background/debug arguments.
+The OS remains locked; daily changed-surface operation, physical input, real
+workdays and the full dogfood milestone remain open. The final synthetic native
+input-pending flag was not verified to clear. No push is used.
 
 Previously qualified alpha.207, source `cead349`, shows observed Codex goal facts
 in the existing header, sidebar and member lines. Its unchanged notification,
@@ -42,7 +42,7 @@ installation, rollback, pins, verification or occupancy keeps deletion candidate
 empty; no automatic-retention count or deletion is approved.
 
 Unreleased operator phase 1a keeps its earlier source/synthetic qualifications.
-Native qualification, daily grants and installation remain gated; alpha.208
+Native qualification, daily grants and installation remain gated; alpha.209
 excludes this interface entirely.
 
 Previously qualified alpha.204, source `48a6fd1`, compacted existing file previews,
