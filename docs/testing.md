@@ -2,6 +2,34 @@
 
 Historical validation records. For the current delivery scope, see [readiness](readiness.md).
 
+## Compact list, notice keys and explicit tool entry — 2026-11-05
+
+Alpha.201 / `e9ca627`: candidate and Applications each pass the same two tasks.
+Three list rows are 43.5px shorter in total at 1200px and 63.5px at 850px; full
+names/quotes, fonts, unknown facts, positive private/shared drafts and original
+navigation survive. Grid geometry is unchanged. Real menu moves create action
+notices: Escape in the editor bubbles without prevention and retains caret/value;
+Escape on the toast action is consumed and restores safe editor focus. Original
+membership and native ownership are restored without sends or interruptions.
+
+The second task loads the helper from each signed bundle and uses a real stdio
+child, private Unix lease and pinned stock MCP to operate one owned composer.
+Eight consumer calls expose only three tools; one exact synthetic submitted
+receipt per artifact is separate from unconfirmed tool acknowledgements. Other
+view drafts/recipient/caret and OS state remain. This does not qualify active
+steer/queue, native provider adoption or production daily control.
+
+All 2,811 source checks pass, zero skips. The first full check's two stale-fixture
+failures remain recorded: missing real comparator in a VM and missing controller
+metadata in a positive image case. Corrections keep all assertions and add an
+unknown-controller refusal before pause/dispatch. Independent combined/delta
+review passes; tests and GUI operations are author-run. Five isolated profiles,
+five GUI starts and seven intentional windows cover bootstrap and both tasks at
+both artifacts; all owned resources are cleaned, with no real provider or
+product-model turn. Signed main clipboard APIs are not instrumented, and widths
+are CSS viewports. No fresh locked-screen qualification is claimed. The 150-second
+visible-update retention and remaining gates are recorded in [readiness](readiness.md).
+
 ## Shared input and newer human intent — 2026-11-05
 
 Alpha.200 / `428e667`: candidate and Applications each pass three complete

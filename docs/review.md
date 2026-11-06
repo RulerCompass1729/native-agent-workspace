@@ -5617,3 +5617,31 @@ consumer and locked daily-message evidence are reused rather than repeated.
 - Source-only: no GUI, provider, native-input or clipboard trial was added. Real
   keyboard/IME/assistive behavior and installed acceptance remain unverified;
   other T128 concerns and the original T134 screenshot stay open.
+
+
+## 2026-11-05 — alpha.201 combined installed acceptance (I240–I242)
+
+The unchanged reviewed tool-entry, Escape and list-density patches are adopted
+as `9d40b41`, `bc2e24f` and `f5b07fe`, preserving their authors. Their frozen
+source/evidence manifests match. Main's two fixture corrections are test-only:
+the locale VM uses the real plan comparator, and the positive image case states
+its owner. A separate unknown-owner case refuses before pause or dispatch; no
+production protection or assertion is weakened. The initial full failures are
+retained; corrected checks pass without skips.
+
+The signed candidate and actual Applications each pass the complete tasks in
+[testing](testing.md). A fresh independent combined review reads actual GUI
+results/operators and code; its same-session delta closes the initially unread
+fixture patch. Both passes are scoped, with no independent GUI/test rerun.
+Source/hash/template/install comparisons remain Main-run machine evidence.
+Reported cumulative review list cost is 0.7108892 USD, not an invoice or a sum of
+partial totals. The reviewer notes that raw caret values are asserted rather
+than stored and keeps the existing toolbar placement note nonblocking.
+
+The explicit helper runs from the signed module; its default native callers
+remain unchanged and production routing is disabled. Idle synthetic receipt
+proof does not imply working-agent/provider adoption. Ordinary visible updating
+preserves the original goal and native processes. The record checker required
+one optional-success-field correction; raw GUI results were unchanged and no
+test was repeated for it. Full-day use, native safe adoption, restricted daily
+control, the original reading recurrence and publication remain open.

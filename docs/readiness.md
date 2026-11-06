@@ -4,7 +4,28 @@ As of 2026-11-05. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.200, committed build source `428e667`. Shared-space
+Current daily GUI: alpha.201, committed build source `e9ca627`. The session
+overview list uses compact existing rows, preserving verbatim content, fonts,
+state facts, focus and navigation. Escape dismisses a notice while preserving
+editor keys outside it; inside the notice it returns focus safely. The signed
+candidate and Applications each pass the complete list/navigation and two actual
+move-to-notice keyboard paths. All 2,811 source checks pass without skips after
+correcting two stale test fixtures, with the failed results retained.
+
+An explicit leased three-tool helper entry is packaged and passes an owned
+synthetic GUI/stdio task at both signed paths. Default native factories still use
+Peekaboo: production view lifecycle, transport and native adoption are **not
+enabled**. No product-model/provider turns run in these checks. Normal signed
+bootstrap copies the exact helper; all 71 payload files and strict signatures
+match. The visible update retains 14 records, 16 live native identities, 13 draft
+scopes, seven occupied old backends and the same active goal across 150 seconds.
+Automatic migration stays off. Source approvals are reused unchanged; combined
+interactions and the two fixture corrections pass scoped independent review.
+Installed operations and record comparisons are author-run. The whole dogfood,
+restricted daily control, safe backend adoption and original reading recurrence
+remain open.
+
+Previously qualified alpha.200, committed build source `428e667`. Shared-space
 send, steer and queue keep the private controller and draft; stale native,
 membership and control proofs are refused. Private input still requires control.
 An older backend without the new shared-input capability refuses an independent
