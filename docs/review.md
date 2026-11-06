@@ -6043,3 +6043,18 @@ the original source/review packet and current composition build. Existing text,
 fonts, controls and round-consent logic are unchanged. Runtime geometry and
 signed/daily operation remain unqualified; this source increment is held for a
 later batch and does not start a round or create a release.
+
+
+### Merge selection density qualified on current source
+
+Three original scoped margin rules preserve full text, fonts, control sizes,
+values, flags, room metadata and positive drafts across 22 current-source GUI
+comparisons. Empty content saves 32px, normal content 44px and expanded content
+76px of scrolling. The independently accepted criterion allows natural text
+reflow only when the measured scrollbar gutter disappears; original text in
+PRE blocks remains strict. Pending/error layouts, native details expansion,
+short-window inner/outer scrolling, unavailable members and both languages pass.
+One synthetic metadata fault occurs; no backend merge, native input or model
+call occurs. Exact owned cleanup passes. Four earlier author GUI runs remain
+failed; this is a separately bounded Main composition check, accepted by a fresh
+independent reviewer. Signed/daily acceptance waits for a later batch.

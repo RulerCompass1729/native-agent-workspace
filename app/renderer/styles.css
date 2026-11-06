@@ -749,3 +749,8 @@ header h1, header p { overflow-wrap: anywhere; }
 #run-dialog { padding:20px; }
 #run-dialog form > p { margin:8px 0; }
 #run-dialog .dialog-actions { margin-top:16px; }
+/* Compact existing merge options: preserve original fields and controls. */
+#space-merge-options fieldset{margin:8px 0}
+#space-merge-options .merge-option{margin:4px 0}
+#space-merge-options>p{margin:8px 0}
+/* End compact existing merge options. */
