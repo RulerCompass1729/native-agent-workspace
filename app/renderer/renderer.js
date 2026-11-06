@@ -4097,10 +4097,11 @@ $('open-space-merge-target').onclick = () => attempt(async () => {
 $('cancel-space-create').onclick = () => $('space-create-dialog').close();
 $('space-create-form').onsubmit = event => { event.preventDefault(); attempt(async () => {
   const ticket = dialogTickets.get($('space-create-dialog')); if (!currentDialogTicket(ticket) || $('confirm-space-create').disabled) return;
+  const submittedName = $('space-create-name').value;
   $('confirm-space-create').disabled = true; $('space-create-error').hidden = true;
   try {
-    const id = await api.spaceCreate($('space-create-name').value); updateState(await api.initial()); render();
-    if (currentDialogTicket(ticket)) { $('space-create-dialog').close(); await selectSpace(id); }
+    const id = await api.spaceCreate(submittedName); updateState(await api.initial()); render();
+    if (currentDialogTicket(ticket) && $('space-create-name').value === submittedName) { $('space-create-dialog').close(); await selectSpace(id); }
     else toastMessage("toast.createdSpaceRetained");
   } catch (error) { if (currentDialogTicket(ticket)) { ui.showError($('space-create-error'), error); $('space-create-error').hidden = false; } else toastError(error); }
   finally { if (currentDialogTicket(ticket)) $('confirm-space-create').disabled = false; }

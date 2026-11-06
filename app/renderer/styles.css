@@ -754,3 +754,5 @@ header h1, header p { overflow-wrap: anywhere; }
 #space-merge-options .merge-option{margin:4px 0}
 #space-merge-options>p{margin:8px 0}
 /* End compact existing merge options. */
+
+#space-create-dialog { padding:20px }

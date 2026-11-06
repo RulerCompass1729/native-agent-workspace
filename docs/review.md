@@ -6058,3 +6058,21 @@ One synthetic metadata fault occurs; no backend merge, native input or model
 call occurs. Exact owned cleanup passes. Four earlier author GUI runs remain
 failed; this is a separately bounded Main composition check, accepted by a fresh
 independent reviewer. Signed/daily acceptance waits for a later batch.
+
+
+### New space names survive an earlier creation result: source repair
+
+A controlled promise reproduces three failures in the actual submit handler:
+an older creation result closes a newer editable name after creation or refresh,
+and prevents its next explicit creation. The original author's exact repair
+captures the submitted name and closes/navigates only while that input remains
+unchanged. A completed space stays available; a newer name remains editable and
+is neither renamed nor automatically submitted. Source review and 23 affected
+checks pass; current combined GUI, signed and daily acceptance remain pending.
+
+The original one-rule space-create padding change separately passes three
+current-source comparisons, a real invalid-name error, cancel during a delayed
+real creation and an explicit creation. These tests use an immutable Main
+snapshot and two synthetic sessions. Their scope excludes the new late-name
+repair. Narrow cancellation leaves BODY focused; that measured gap remains open
+with the original focus-repair author, and its padding causality is unknown.
