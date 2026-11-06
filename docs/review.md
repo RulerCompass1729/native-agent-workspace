@@ -5893,3 +5893,14 @@ heights, removing and restoring only the actual compiled style delta.
 All owned profiles, backends and windows are cleaned. These are author-run
 synthetic source checks, not real-provider, physical-window or installed proof.
 Unchanged source approvals are reused; combined signed and daily acceptance stay open.
+
+
+### Existing invitation spacing - unchanged source adoption
+
+Four dialog-scoped spacing rules preserve the original invitation fields,
+fonts, click targets and guarded states. The original author source journey
+covers 18 cases across language, width, theme, blocked, error and actual empty
+states; exact source and approval are reused unchanged. Main already contains
+the required refresh-caption fix. Build, focused checks and the no-allocation
+preflight pass after fitting only this delta, preserving other dialog and room
+styles. Signed and daily behavior remain pending; no provider or model test ran.

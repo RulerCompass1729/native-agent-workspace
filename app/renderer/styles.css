@@ -726,3 +726,9 @@ header h1, header p { overflow-wrap: anywhere; }
 
 #room-messages .message { margin-bottom: 12px; }
 #room-messages .timeline-day { margin-bottom: 12px; }
+/* Compact existing invitation dialog: original controls and state retained. */
+#invite-dialog{padding:20px 30px}
+#invite-dialog h2{margin-bottom:8px}
+#invite-dialog p{margin:8px 0}
+#invite-dialog #invite-list{margin:12px 0;gap:8px}
+/* End compact existing invitation dialog. */
