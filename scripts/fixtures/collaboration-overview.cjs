@@ -13,10 +13,11 @@ NativeHost.prototype.create = function (record) {
 };
 const calls = Object.create(null);
 for (const method of ['claim', 'terminal', 'terminalSnapshot', 'input', 'send', 'queue', 'steer', 'forward', 'approve', 'answer', 'run', 'resume', 'pause']) {
-  const original = Workspace.prototype[method];
+  const target = method === 'run' ? 'startRun' : method;
+  const original = Workspace.prototype[target];
   if (typeof original !== 'function') continue;
   calls[method] = 0;
-  Workspace.prototype[method] = function (...args) { calls[method]++; return original.apply(this, args); };
+  Workspace.prototype[target] = function (...args) { calls[method]++; return original.apply(this, args); };
 }
 const send = process.send;
 process.send = function (message, ...args) {

@@ -94,7 +94,7 @@ async function run() {
   const packet = await fixture('stats'); assert.equal(packet.stats.inputs, 0); assert.equal(packet.stats.sends, 0);
   for (const [name, count] of Object.entries(packet.overviewCalls)) if (!['claim', 'terminal', 'terminalSnapshot'].includes(name)) assert.equal(count, 0, name);
   assert.deepEqual(errors, []); assert.deepEqual(hashes(), sourceBefore); withinBudget();
-  return { identity, originalName, otherSpace: other, stats: packet.stats, workspaceCalls: packet.overviewCalls, runCounter: 'UNINSTRUMENTED', finalSpaceName: 'Renamed shared workspace' };
+  return { identity, originalName, otherSpace: other, stats: packet.stats, workspaceCalls: packet.overviewCalls, runCounter: 'LOCAL_START_RUN_ATTEMPTS_ONLY', finalSpaceName: 'Renamed shared workspace' };
 }
 run().then(value => { details = value; }).catch(async error => { failure = error.stack; process.exitCode = 1; console.error(failure); if (page && !page.isClosed()) await capture('failure').catch(() => {}); }).finally(async () => {
   try { await scratch.release(); assert.equal(JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))).token, token); fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot); cleanupConfirmed = true; }

@@ -104,7 +104,7 @@ async function run() {
   for (const key of ['input', 'send', 'queue', 'steer', 'forward', 'approve', 'answer', 'resume', 'pause']) assert.equal(packet.overviewCalls[key], 0, key);
   assert.deepEqual(errors, []); assert.deepEqual(hashes(), before);
   assert.ok(Date.now() - start < 120000, 'Active GUI cap');
-  details = { controlled: id, stats: packet.stats, workspaceCalls: packet.overviewCalls, runCounter: 'UNINSTRUMENTED', original: result.original, saved: result.saved, restored: restored.viewState };
+  details = { controlled: id, stats: packet.stats, workspaceCalls: packet.overviewCalls, runCounter: 'LOCAL_START_RUN_ATTEMPTS_ONLY', original: result.original, saved: result.saved, restored: restored.viewState };
 }
 run().catch(async error => {
   failure = error.stack; process.exitCode = 1; console.error(failure);
