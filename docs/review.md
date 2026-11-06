@@ -5833,3 +5833,12 @@ preview-close defect. No close-handler change was made. Independent review
 approves only this source and synthetic-GUI combination; raw machine checks and
 exact owned cleanup are author-run. Applications/daily and real provider file
 permission acceptance remain open. No new model test, package or install ran.
+
+
+### Native history spacing - unchanged scoped author patch
+
+Four measured spacing rules preserve the existing picker text, fonts, borders,
+controls and native behavior. The author prototype GUI shows three to four fully
+visible rows in the same viewport; exact source and raw evidence pass scoped
+independent review. The patch is merged unchanged. Current signed/Applications
+acceptance remains required; native import and daily behavior are not newly claimed.

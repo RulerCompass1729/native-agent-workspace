@@ -370,6 +370,10 @@ header h1, header p { overflow-wrap: anywhere; }
 .native-history-row span { min-width: 0; }
 .native-history-row strong, .native-history-row small { display: block; overflow-wrap: anywhere; }
 .native-history-row small { color: var(--muted); margin-top: 5px; line-height: 1.5; }
+#native-history-dialog { padding:20px; }
+#native-history-dialog .native-history-row { padding:6px 4px; margin-bottom:0; }
+#native-history-dialog .native-history-row small { margin-top:3px; }
+#native-history-dialog .dialog-actions { margin-top:16px; }
 .native-tool-input { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: 0.9em; }
 .message.tool .message-body { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 .thread-heading,.reply-context{display:flex;align-items:center;gap:12px;padding:8px 20px;border-bottom:1px solid var(--border);font-size:13px;min-width:0}.thread-heading strong,.reply-context span{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.reply-context{padding:0 0 8px;margin-bottom:8px;color:var(--muted)}.thread-heading[hidden],.reply-context[hidden]{display:none}
