@@ -1,5 +1,29 @@
 # Bounded testing
 
+## Alpha.208: confirmed facts and existing dialog spacing
+
+Committed source `1f324ec` passes all 2,958 source checks without skips.
+Seventeen checks use the actual packaged Codex/Workspace classes with synthetic
+RPCs. Owned temporary directories are removed; the supplemental shared `naw-*`
+count is 455 before and after this isolated check, without deleting old entries.
+
+Two actual signed flows compare unchanged text, fonts, control sizes and values
+while applying the exact spacing changes: usage saves 131 pixels of scroll
+height; merge preview saves 22 pixels of scroll and 22.75 of dialog height.
+Original notes, native identities, owners, room metadata and both draft types
+remain. Normal empty-profile bootstrap passes three checks. All owned test
+profiles/processes are cleaned; signatures and all 71 payloads match afterward.
+
+Earlier source-driver failures remain failed: invalid IPC/projection shapes and
+an unmet scroll-to-top comparison precondition. The update operator also refused
+a stale previous-version parameter before quitting the daily app. Its corrected
+template differs from the last executed operator only in version parameters.
+The final signed trial records one synthetic account read; absent `startClaude`
+and `run` methods are unobserved, not measured zero. Two native source bands
+match the reviewed code. Review inference is separate from zero-provider tests.
+Real native delivery, old-runtime adoption and daily changed operations remain
+unqualified; installation retention alone does not close those requirements.
+
 ## Alpha.207: observed goal facts in existing status lines
 
 Committed source `cead349` passes the unchanged 2,957-check source scope. Three

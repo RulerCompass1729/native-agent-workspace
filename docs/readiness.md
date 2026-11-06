@@ -4,28 +4,31 @@ As of 2026-11-06. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.207, clean committed build source `cead349`.
-Observed Codex goal status appears in the existing header, sidebar and member
-lines. Running turns and approvals keep their own state. Never-observed goals
-make no claim; a lost observation is unconfirmed, and native clearing removes
-the hint. No goal getter, setter, polling or automatic resume is added.
+Current daily GUI: alpha.208, clean committed build source `1f324ec`.
+Confirmed reconnect facts reach readers before history finishes loading, without
+rewinding newer native settings or state. Chat still waits for its history.
+Existing merge-preview and usage spacing is compacted while retaining original
+text, fonts, controls and unknown values. The usage section divider is removed;
+member borders remain.
 
-All 2,957 source checks pass without skips. Actual signed rendering covers six
-states, working/approval precedence, lost/cleared observations, narrow reading,
-visible return, grouped disclosure, keyboard basics and retained private/shared
-drafts. Full failed trials remain failed; only completed groups are reused.
-The final source differs solely by omitting three unqualified cosmetic dialog
-rules, with exact compiled-content comparison and a fresh signed binding check.
-Normal empty-profile bootstrap passes three checks; all 71 payload files and
-strict signatures match. Independent source and signed-rendering review passes.
-These tests supply synthetic facts: real native notification delivery, occupied
-older-backend adoption and changed daily operations remain unverified.
+All 2,958 source checks pass without skips. Seventeen checks load the actual
+packaged backend classes using synthetic RPCs. Two signed interface flows retain
+facts, identities, room metadata and private/shared drafts. Normal empty-profile
+bootstrap passes three checks. All 71 payload files match source/build output,
+and strict signatures pass. Independent review accepts the scoped source and
+signed integration; it does not qualify real native delivery or goal resume.
 
 The ordinary visible update retains 14 records, 16 live native process identities,
 13 draft scopes, seven occupied older backends and the same active Main goal
 across 150 seconds. Automatic migration stays off. One installed application
-entry remains. Daily AX/manual acceptance, physical input, real workdays and the
-full dogfood milestone remain open; no daily debugger or push is used.
+entry remains. Occupied runtimes keep their previous code; the reconnect repair
+is present in the new build. Daily changed-surface operation, physical input,
+real workdays and the full dogfood milestone remain open. No daily debugger or
+push is used.
+
+Previously qualified alpha.207, source `cead349`, shows observed Codex goal facts
+in the existing header, sidebar and member lines. Its unchanged notification,
+precedence, loss/clear and narrow-reading qualifications remain applicable.
 
 Previously qualified alpha.206, source `fe9a64f`, preserves pending creation,
 keyboard continuation, archived-menu filtering and compact merge selection. Its
@@ -39,7 +42,7 @@ installation, rollback, pins, verification or occupancy keeps deletion candidate
 empty; no automatic-retention count or deletion is approved.
 
 Unreleased operator phase 1a keeps its earlier source/synthetic qualifications.
-Native qualification, daily grants and installation remain gated; alpha.207
+Native qualification, daily grants and installation remain gated; alpha.208
 excludes this interface entirely.
 
 Previously qualified alpha.204, source `48a6fd1`, compacted existing file previews,

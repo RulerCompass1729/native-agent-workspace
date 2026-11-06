@@ -6207,3 +6207,23 @@ four rules and their disjoint scope from the preview rules.
 These are synthetic source-GUI qualifications. No real native engine, provider
 turn, account read or daily-app operation is used; fixture account reads are
 counted separately. Signed installation and daily acceptance remain open.
+
+
+### Ordinary alpha.208 signed and retention checkpoint
+
+The scoped signed review accepts committed source `1f324ec`, its payload binding
+and two real signed dialog flows. The packaged backend class checks and normal
+bootstrap are author-run evidence. Two native source bands, rather than three,
+match the reviewed source; the exact repair patch is bound separately. The signed
+trial has one synthetic account read, rather than the two in the earlier source
+trial. Absent fixture methods remain unobserved despite initialized zero fields.
+
+The qualified visible update operator first refuses a stale previous-version
+parameter before any quit. Its corrected version substitutions preserve every
+other byte of the last executed template. The exact candidate is then installed
+visibly. Fourteen native records, 16 live process witnesses, 13 draft scopes and
+seven occupied older backends are retained across 150 seconds, with the original
+active goal unchanged. One application entry and strict signature remain.
+Occupied native backends are not adopted. Actual daily changed operations,
+native goal delivery/continuation and the full milestone remain open. No push
+or broader daily debugging permission is inferred.
