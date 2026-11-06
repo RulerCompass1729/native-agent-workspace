@@ -4178,13 +4178,21 @@ function renderSpaceFiles() {
   ui.display.text($('space-files-title'), 'files.titleName', { name: room.name });
   $('add-space-files').disabled = disconnected || room.archived;
   const signature = JSON.stringify(room.files || []), list = $('space-files-list');
-  if (list.dataset.signature === signature) return; list.dataset.signature = signature;
-  list.replaceChildren(...(room.files || []).map(file => {
-    const row = node('div', undefined, 'space-file-row'), open = button(file.name, async () => { $('space-files-dialog').close(); if (spaceId !== filesSpace) await selectSpace(filesSpace); await openLocalFile(true, file.id); }); open.title = file.path;
-    const remove = uiButton('files.remove', async () => { await api.spaceAction(filesSpace, 'removeFile', [file.id, room.metadataRevision]); updateState(await api.initial()); renderSpaceFiles(); }); remove.disabled = room.archived; ui.display.attribute(remove, 'aria-label', 'files.removeAction', { space: room.name, file: file.name });
-    row.append(open, remove); return row;
-  }));
-  if (!list.children.length) list.append(uiNode('p', 'files.empty', undefined, 'quiet'));
+  if (list.dataset.signature !== signature) {
+    list.dataset.signature = signature;
+    list.replaceChildren(...(room.files || []).map(file => {
+      const row = node('div', undefined, 'space-file-row'), open = button(file.name, async () => { $('space-files-dialog').close(); if (spaceId !== filesSpace) await selectSpace(filesSpace); await openLocalFile(true, file.id); }); open.title = file.path;
+      const remove = uiButton('files.remove', async () => { await api.spaceAction(filesSpace, 'removeFile', [file.id, remove.fileRevision]); updateState(await api.initial()); renderSpaceFiles(); });
+      row.append(open, remove); return row;
+    }));
+    if (!list.children.length) list.append(uiNode('p', 'files.empty', undefined, 'quiet'));
+  }
+  for (const [index, file] of (room.files || []).entries()) {
+    const remove = list.children[index].lastElementChild;
+    remove.disabled = room.archived;
+    remove.fileRevision = room.metadataRevision;
+    ui.display.attribute(remove, 'aria-label', 'files.removeAction', { space: room.name, file: file.name });
+  }
 }
 $('close-space-files').onclick = () => $('space-files-dialog').close();
 $('add-space-files').onclick = () => attempt(async () => { const id = filesSpace; await api.spaceFiles(id); updateState(await api.initial()); if (filesSpace === id) renderSpaceFiles(); });

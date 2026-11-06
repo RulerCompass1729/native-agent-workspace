@@ -698,3 +698,16 @@ header h1, header p { overflow-wrap: anywhere; }
   #setup-dialog:not(:has(#ui-language option[value="en"]:checked)) .setup-program:not(:has(.actions button:nth-child(3))) .program-path{grid-area:2/1/3/3;margin:0}
 }
 /* End compact setup dialog. */
+/* Compact space files: keep every filename, path hint and existing action. */
+#space-files-dialog{padding:20px;max-height:calc(100vh - 40px);overflow:auto}
+#space-files-dialog h2{margin-bottom:8px}
+#space-files-dialog .space-file-row{padding:4px 0}
+#space-files-dialog .space-file-row>button{min-height:40px}
+#space-files-dialog .space-file-row>button:first-child{
+  flex:1;background:transparent;border-color:transparent;color:var(--green);
+  body[data-ds-dark-theme] &{color:var(--dsw-alias-link,var(--ink))}
+}
+#space-files-dialog .space-file-row>button:first-child:hover{background:var(--hover)}
+#space-files-dialog>p.quiet{margin:8px 0}
+#space-files-dialog .dialog-actions{margin-top:12px}
+/* End compact space files. */

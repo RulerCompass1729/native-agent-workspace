@@ -5814,3 +5814,22 @@ Markdown-test marker was updated while preserving the file-origin assertions.
 Independent review approves only this source plus synthetic-GUI integration.
 Raw checks are author-run. Actual provider delivery, physical dragging/copying,
 Applications/daily acceptance and continuous original-goal recovery remain open.
+
+
+### Space file actions and compact list — scoped source integration
+
+The existing file list now refreshes cached archive state, accessible names and
+the last rendered metadata revision without replacing focused filename targets.
+Removal retains the server revision guard. The dialog uses less padding while
+preserving complete filenames/path hints, fonts and action targets.
+
+The current Main source GUI passes the full preview/close/stale-token refusal,
+reference removal, offline, archive/restore and English journey. Private/shared
+drafts, synthetic native identities and all six original files are preserved.
+Five layout cases retain text, fonts and target sizes; measured normal/hover
+contrast passes in both themes. All 2,899 source checks pass without skips.
+Earlier author driver failures remain failed; they did not establish a product
+preview-close defect. No close-handler change was made. Independent review
+approves only this source and synthetic-GUI combination; raw machine checks and
+exact owned cleanup are author-run. Applications/daily and real provider file
+permission acceptance remain open. No new model test, package or install ran.
