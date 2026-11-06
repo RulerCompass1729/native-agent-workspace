@@ -740,10 +740,10 @@ async function boot() {
     const settings = typeof auto === 'boolean' ? backendSwitch.writeSettings(dataDir, auto) : backendSwitch.readSettings(dataDir);
     // A record not belonging to a move in progress names sessions a move ended, including after a quit
     // mid-move; a record whose sessions all run again is cleared.
-    await c.client.refresh(); const live = c.client.snapshot().sessions;
+    await c.client.refresh(); const snapshot = c.client.snapshot(), live = snapshot.sessions;
     for (const [key, record] of Object.entries(backendSwitch.readRecords(dataDir))) if (key !== backendSwitching && !record.sessions.some(value => notReconnected(live, value))) backendSwitch.clearRecord(dataDir, key);
     switchRecords = backendSwitch.readRecords(dataDir);
-    return { auto: settings.auto, interrupted: endedByMove(live).map(value => value.name) };
+    return { auto: settings.auto, interrupted: endedByMove(roomState.apply(snapshot).sessions).map(value => value.name) };
   });
   register('switchBackend', async (c, expected) => {
     await c.client.refresh();

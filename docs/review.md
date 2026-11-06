@@ -6076,3 +6076,14 @@ real creation and an explicit creation. These tests use an immutable Main
 snapshot and two synthetic sessions. Their scope excludes the new late-name
 repair. Narrow cancellation leaves BODY focused; that measured gap remains open
 with the original focus-repair author, and its padding causality is unknown.
+
+
+### Archived sessions stay out of the reconnection menu
+
+The actual registered settings callback listed a profile-archived session even
+though the sidebar hid it. The original repair applies the existing RoomState
+projection only to the returned interrupted-session names. Record cleanup still
+uses the raw native identities and connection states, retaining archived pending
+resume metadata. The original two failing regressions and cleanup control now
+pass with 36 affected checks and independent source approval. Main adopts the
+exact patch; GUI, installation and the wider recovery task remain separate.
