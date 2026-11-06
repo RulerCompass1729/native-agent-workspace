@@ -6010,3 +6010,27 @@ The ordinary candidate's complete source run passes 2,890 checks without skips.
 Actual successful packaging must still demonstrate the hook. Reporting failure
 fails the build status while retaining artifacts; existing scratch cleanup stays
 unchanged. Automatic cleanup and a retention count remain unapproved.
+
+
+### Ordinary signed batch installed; daily operation gate retained
+
+The committed alpha.205 candidate passes seven actual signed GUI groups: four
+sharing states, notes save/reopen and a real revision conflict, normal explicit
+context insertion, and two empty rooms through real local merge Preview/back/
+cancel. No merge is confirmed. Controlled pending/late-edit/stale-opening and
+negative-acknowledgement context tests reuse the original author's five real
+view-store checkpoints after exact behavior-block comparison. Source GUI and
+installed normal-path evidence remain distinct. Signed empty-profile bootstrap,
+first-room creation and post-exit signatures pass; machine checks bind all 71
+payloads, four artifact digests, the report-only build output and exact cleanup.
+The same independent checkpoint accepts the scoped actual journeys and report;
+its readings and author-run counts are recorded separately.
+
+The visible ordinary update preserves all 14 session records, 16 live PID/start
+identities, 13 draft scopes, seven occupied backends and the active original goal
+through 150 seconds. The first admission stopped on an old version token before
+any GUI action; only that token changed, and the update template still matches
+the preceding executed operator after version substitution. No native process
+is migrated. User operations in the daily profile remain pending, so this closes
+the signed/installation stage rather than the whole task or milestone. Retention
+has no automatic deletion authority; no disk-space release is claimed.

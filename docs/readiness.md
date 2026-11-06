@@ -4,33 +4,39 @@ As of 2026-11-05. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Unreleased source also retains notes typed while Save is pending, requiring a
-second explicit save. Twelve focused checks and a controlled current-source GUI
-journey pass independent review. This repair is not yet in installed alpha.204.
+Current daily GUI: alpha.205, clean committed build source `6c9e858`.
+Notes retain edits made during a pending save; context insertion blocks duplicate
+activation and retains newer editor text. Sharing/context dialogs use compact
+existing spacing, and merge Preview keeps its selection/connection guards.
+Original source approvals and controlled late-acknowledgement evidence are reused
+unchanged. All 2,890 candidate source checks pass without skips. One signed
+seven-group journey passes sharing, actual notes revision conflict, normal context
+insertion and real local empty-room merge Preview/back/cancel, without confirming
+a merge or sending a model task. Normal empty-profile bootstrap and first-room
+creation pass separately; all 71 payload files and strict signatures match.
 
-Unreleased source: operator phase 1a creation grants and durable reports pass
-2,870 combined checks and four synthetic GUI flows. Integration fixes retained
-hook upgrades, cancellation confirmation, unavailable report metadata and mixed
-backend control. Native qualification and daily grants/installation remain gated;
-the installed alpha.204 does not contain this interface.
+Successful packaging now emits a retention report. Unknown policy, installation,
+rollback, pins, verification or occupancy keeps deletion candidates empty. There
+is no deletion API or approved automatic-retention count; this report alone does
+not finish disk-growth prevention. Its pure filesystem tests and success hook
+pass scoped independent review, and the actual build emits the report.
 
-Current daily GUI: alpha.204, clean committed build source `48a6fd1`.
-It adds compact existing file previews, invitation lists and shared records,
-and keeps a blocked invitation's original caption during refresh. Existing text,
-fonts, controls, guarded states and drafts are preserved. Operator phase 1a is
-entirely excluded. Source checks pass (2,847, no skips). Scoped independent review
-qualifies the executed signed checks; the first GUI run retains its harness
-failure, and only the missed invitation cases pass the separate remainder.
-Normal signed bootstrap and strict post-test signatures pass without native
-sessions or model calls. All 71 application-source payloads match.
+The ordinary visible update retains 14 records, 16 live native process identities,
+13 draft scopes, seven occupied older backends and the same active Main goal
+across 150 seconds. Automatic migration stays off. Changed operations in the daily
+profile still require authorized AX/manual acceptance; candidate checks and
+retention do not close that gate. No daily debugger, native backend adoption,
+push or whole-goal completion is claimed.
 
-The ordinary visible update retains 14 records, 16 live native process
-identities, 13 draft scopes, seven occupied older backends and the same original
-active Main goal across 150 seconds. Automatic migration stays off. Operation
-of each changed surface in the daily profile remains pending; signed evidence
-and retention do not close that gate. The blocked-caption case is covered by
-source tests and a source GUI fixture, not a newly tested retained old backend.
-No push, native backend adoption or whole-goal completion is claimed.
+Unreleased source: operator phase 1a creation grants and durable reports retain
+their earlier source/synthetic qualifications. Native qualification, daily grants
+and installation remain gated; alpha.205 excludes this interface entirely.
+
+Previously qualified alpha.204, source `48a6fd1`, compacted existing file previews,
+invitations and shared records while retaining blocked captions. Its source and
+executed signed evidence remain applicable, with the original harness failure
+and separately passed invitation remainder preserved. Changed daily operations
+remain open; no retained-old-backend invitation qualification is inferred.
 
 Previously qualified alpha.203, committed build source `b8b4d27`, carried the
 compact setup/history/files dialogs, sender-notice reading, native-goal refusal
