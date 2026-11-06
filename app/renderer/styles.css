@@ -770,3 +770,5 @@ header h1, header p { overflow-wrap: anywhere; }
 #privacy-dialog[data-mode="usage"] #trust-status > section { border-top:0; padding:8px 0; }
 #privacy-dialog[data-mode="usage"] [data-usage-session] { padding:8px 0; }
 #privacy-dialog[data-mode="usage"] [data-usage-session] h4 { margin:0 0 4px; }
+
+#privacy-dialog[data-mode="privacy"] { padding-block:20px; }

@@ -6227,3 +6227,16 @@ active goal unchanged. One application entry and strict signature remain.
 Occupied native backends are not adopted. Actual daily changed operations,
 native goal delivery/continuation and the full milestone remain open. No push
 or broader daily debugging permission is inferred.
+
+
+### Privacy-mode vertical padding: source intake only
+
+The unchanged reviewed rule reduces only privacy-mode vertical padding to 20px;
+horizontal padding stays 30px. An isolated signed alpha.208 baseline with CSS
+injection verifies four language/width combinations: each saves 20px of scroll
+height while retaining original text, fonts, button sizes and focus. Usage mode
+does not match the selector and remains unchanged. Identities, metadata and both
+draft types are retained; owned resources and the strict signature are checked.
+The earlier independent design/source approval is reused for the exact rule.
+These new runtime checks are author-run; the change is not packaged or daily
+accepted. Physical/IME/VoiceOver and the full milestone remain unqualified.
