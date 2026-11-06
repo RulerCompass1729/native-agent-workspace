@@ -7491,3 +7491,27 @@ An older backend whose sessions were all ended exposed a ready continuation, but
 The click and automatic ready route now share the post-confirmation identity/transport guard, refreshed eligibility check, maintenance, continuation, socket replacement and maintenance release. Automatic continuation uses the existing auto-or-migrate setting, skips the confirmation dialog only for a ready option, and remembers failed backends for this app run. Disconnected sessions remain ineligible. The existing backend-switched notice names the updated backend without restarting ended sessions. No space record is added; backendPlan, nextBackendMove, migrationReady and the nonempty-stop move path are unchanged.
 
 Author validation: 174 related checks and 20 isolated service checks passed, zero failures or skips; no model-backed tests or daily app operation. The dedicated ready-path tests exercise refresh races, effective active state, shared operation generations, maintenance cleanup, failure suppression, manual confirmation/cancellation and socket replacement in two synthetic windows. Independent review requested changes: automatic failures must name the backend, and a completed backend update followed by a failed window reconnect must be reported separately. Additional notice/cleanup assertions failed before the correction (29 passing, 3 failing); these failures did not independently isolate every later reconnect assertion. Both findings were corrected and sent to the same reviewer for delta review. The new shared lock also serializes manual confirmations; releasing it broadcasts fresh display state so interrupted-session names are not left temporarily hidden. Second-refresh effective active-state coverage was added. The same independent reviewer approved the correction delta after reading its actual changes and raw failing/fixed output; the initial readiness/guard checks plus that delta review close this source checkpoint. The review explicitly includes the automatic path bypassing the click confirmation. Independent runtime reruns, GUI and real-provider acceptance were not performed. Daily installation and the person's end-to-end acceptance are outside this source delivery.
+
+
+## T-159 orphaned test recovery — 2026-11-09
+
+At main 9401ba0, six of the seven orphaned test commits already have equivalent
+or stronger coverage. The outbox page tests and merge-dismiss GUI driver are
+byte-identical to 567ed22 and efffec1. Only a357c6c remains absent: its eight
+staging-transport cases cover fragmented replies, timeout/error/truncated or
+malformed replies, the size limit, late replies and no reconnect/repeated write.
+This checkpoint replays that original 81-line test without changing product code.
+The existing stageNative implementation is exercised directly in a VM; no real
+socket or provider is used by this restored test.
+
+Author-run baseline: 44 related local tests pass. With the restored test, 52 pass,
+zero failures or skips. The unchanged main dialog-lifecycle GUI driver passes all
+13 checks, including its named-dialog inventory: T-159① no longer fails. The
+unchanged merge-dismiss driver also passes all four preview-dismissal/late-result
+cases. Both GUI trials use hidden isolated instances and synthetic transports,
+with zero product model calls, native sends or clipboard use; owned profiles are
+removed. This result does not cover T-159②, installation or daily-app acceptance.
+The independent read-only reviewer approved this test-only source delivery after
+reading the exact diff, current transport, per-commit report and raw local test
+output. The normal npm test command matches app/tests/*.test.cjs, so the restored
+file is included. Reported review cost for this checkpoint: USD 0.6766.
