@@ -80,3 +80,31 @@ test('the actual signing library disables timestamp requests on every signing co
   const signed = args.filter(a => a.includes('--sign')); assert.ok(signed.length >= 2);
   for (const call of signed) { assert.ok(call.includes('--timestamp=none')); assert.ok(!call.includes('--timestamp')); }
 });
+
+
+test('successful packaging reports unknown policy without removing files or guessing installed versions', t => {
+  const { reportArtifactRetention } = require('../../scripts/package-mac.cjs');
+  const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-package-retention-')));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const version = '0.1.0-alpha.12';
+  for (const kind of ['zip', 'dmg']) {
+    const file = `native-agent-workspace-${version}-mac-arm64.${kind}`;
+    fs.writeFileSync(path.join(folder, file), 'synthetic archive');
+    fs.writeFileSync(path.join(folder, `${file}.sha256`), 'unverified checksum');
+  }
+  fs.mkdirSync(path.join(folder, 'history'));
+  const before = fs.readdirSync(folder).sort().map(name => [name, String(fs.lstatSync(path.join(folder, name), { bigint: true }).mtimeNs)]);
+  const messages = [], report = reportArtifactRetention(folder, version, message => messages.push(message));
+  assert.equal(report.reportOnly, true); assert.deepEqual(report.eligible, []);
+  for (const reason of ['approved-policy-required', 'explicit-retention-count-required', 'current-installed-version-required',
+    'verified-rollback-version-required', 'explicit-pinned-versions-required', 'file-verification-required', 'file-occupancy-required']) {
+    assert.ok(report.blockedBy.includes(reason), reason);
+  }
+  assert.equal(messages.length, 1); assert.match(messages[0], /no files removed/);
+  assert.deepEqual(fs.readdirSync(folder).sort().map(name => [name, String(fs.lstatSync(path.join(folder, name), { bigint: true }).mtimeNs)]), before);
+  const checksum = path.join(folder, `native-agent-workspace-${version}-mac-arm64.dmg.sha256`);
+  fs.unlinkSync(checksum);
+  assert.throws(() => reportArtifactRetention(folder, version, () => assert.fail('partial build reported')), /complete four-file/);
+  fs.symlinkSync(path.join(folder, `native-agent-workspace-${version}-mac-arm64.zip`), checksum);
+  assert.throws(() => reportArtifactRetention(folder, version, () => assert.fail('symlink reported')), /complete four-file/);
+});

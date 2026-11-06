@@ -38,6 +38,24 @@ function sourceRevision(directory = root) {
   if (git(['status', '--porcelain', '--untracked-files=normal'])) throw new Error('Commit source changes before packaging; no bundle was published.');
   return git(['rev-parse', '--verify', 'HEAD']);
 }
+// The successful whole build is the only caller. Report missing policy and
+// proofs explicitly; never infer installation, occupancy, N or deletion consent.
+function reportArtifactRetention(directory, version, output = console.log) {
+  const { inventoryArtifacts, planRetention } = require('./artifact-retention.cjs');
+  const inventory = inventoryArtifacts(directory);
+  const names = ['zip', 'dmg'].flatMap(kind => [
+    `native-agent-workspace-${version}-mac-arm64.${kind}`,
+    `native-agent-workspace-${version}-mac-arm64.${kind}.sha256`,
+  ]);
+  if (!inventory.snapshotStable || inventory.errors.length || names.some(name =>
+    !inventory.entries.some(row => row.name === name && row.version === version && row.regular && row.stable && row.type === 'file'))) {
+    throw Error('Retention report requires a stable complete four-file build.');
+  }
+  const report = planRetention(inventory, { root: inventory.root,
+    rootIdentity: inventory.rootIdentity, buildSucceeded: true, newBuildVersion: version });
+  output('Artifact retention (report only; no files removed): ' + JSON.stringify(report));
+  return report;
+}
 async function build() {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('This alpha is verified only on Apple Silicon macOS.');
   const revision = sourceRevision();
@@ -118,8 +136,9 @@ async function build() {
     const digest = createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
     fs.writeFileSync(`${archive}.sha256`, `${digest}  ${path.basename(archive)}\n`);
     require('./package-dmg.cjs').buildDmg(app);
+    reportArtifactRetention(path.join(root, 'dist'), manifest.version);
     console.log(`Built ${path.basename(archive)} from ${revision}; ${inventory.length} production packages. Not notarized; publication requires artifact review.`);
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 }
 if (require.main === module) build().catch(error => { console.error(error.message); process.exitCode = 1; });
-module.exports = { sourceRevision, localSigningIdentity, verifyLocalSigning, localSigningOptions };
+module.exports = { sourceRevision, localSigningIdentity, verifyLocalSigning, localSigningOptions, reportArtifactRetention };

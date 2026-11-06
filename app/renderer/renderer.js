@@ -2871,7 +2871,9 @@ function updateContextControls() {
   $('context-scope-note').hidden = !edited;
   $('context-text').disabled = !contextSnapshot;
   const unavailable = !contextSnapshot || !text.trim() || text.length > 12000 || !text.isWellFormed();
-  $('copy-context').disabled = unavailable; $('insert-context').disabled = unavailable;
+  const ticket = dialogTickets.get($('context-dialog'));
+  $('copy-context').disabled = unavailable;
+  $('insert-context').disabled = unavailable || Boolean(currentDialogTicket(ticket) && ticket.contextInsert);
 }
 function generateContextPreview() {
   if (contextEdited()) {
@@ -4521,16 +4523,27 @@ $('copy-context').onclick = () => attempt(async () => {
 });
 $('insert-context').onclick = () => attempt(async () => {
   const ticket = dialogTickets.get($('context-dialog')), revision = selectionRevision;
-  if (!currentDialogTicket(ticket)) return;
+  if (!currentDialogTicket(ticket) || ticket.contextInsert) return;
   const target = contextTarget, text = $('context-text').value;
   if (!contextSnapshot || !text.trim() || text.length > 12000 || !text.isWellFormed()) return contextProblem(uiError('error.contextCheckPreview'));
   if (!target?.room || target.roomId !== spaceId || selected !== 'room') return contextProblem(uiError('error.contextViewChanged'));
   const input = $('shared-input');
   const next = appendedDraft(input, text, true);
   if (next.length > 16000) { ui.display.text($('context-error'), 'context.tooLong'); $('context-error').hidden = false; return; }
+  const insertion = {}; ticket.contextInsert = insertion;
   input.value = next;
-  roomDraftRevision++; await persistView();
-  if (currentDialogTicket(ticket) && revision === selectionRevision) { $('context-dialog').close(); render(); input.focus(); }
+  roomDraftRevision++; updateContextControls();
+  try {
+    await persistView();
+    if (currentDialogTicket(ticket) && revision === selectionRevision && $('context-text').value === text) {
+      $('context-dialog').close(); render(); input.focus();
+    }
+  } finally {
+    if (ticket.contextInsert === insertion) {
+      delete ticket.contextInsert;
+      if (currentDialogTicket(ticket)) updateContextControls();
+    }
+  }
 });
 $('share-recipient').onchange = $('share-text').oninput = () => { shareRevision++; updateSharingControls(); };
 $('pause-button').onclick = () => attempt(async () => {

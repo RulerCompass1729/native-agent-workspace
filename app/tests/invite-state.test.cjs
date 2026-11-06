@@ -14,7 +14,7 @@ function declaration(name) {
 function fixture(language = 'zh') {
   const state = { sessions: [], positivePrivateDraft: 'PRIVATE UNSENT', positiveSharedDraft: 'SHARED UNSENT' };
   const dialog = { open: true }, list = { children: [] }, writes = [];
-  const context = { state, $: id => ({ 'invite-dialog': dialog, 'invite-list': list })[id], members: () => state.sessions,
+  const context = { state, $: id => ({ 'invite-dialog': dialog, 'invite-list': list, 'space-merge-dialog': { open: false } })[id], members: () => state.sessions,
     ui: { display: { text(element, key, params) { writes.push(key); element.textContent = locale.format(language, key, params); } } } };
   vm.createContext(context);
   vm.runInContext(declaration('sessionShortId') + '\n' + declaration('participantLabel'), context);

@@ -5990,3 +5990,23 @@ The source faults are controlled IPC/event fixtures, not an actual network or
 backend merge qualification. Main's 23 focused notes/preview checks pass without
 skips; its notes callback and sharing styles remain intact. Combined signed and
 daily acceptance of this source change is pending in the next ordinary batch.
+
+
+### Pending context insertion and report-only artifact retention
+
+The original context-insertion repair is adopted unchanged: pending activation
+appends once, keeps the material editor editable, and does not close newer edits
+when an earlier save returns. Its original source review remains applicable;
+current signed and daily interaction acceptance is still pending. Three original
+context-dialog spacing rules travel with it, preserving fonts and controls.
+
+The packaging success path now emits a report after ZIP, DMG and their two
+checksum files exist as stable regular single-link files. The reused pure planner
+has no deletion API; unknown retention policy, installation, rollback, pins,
+digests or occupancy yields no eligible files. Existence does not verify digests.
+Seventeen owned filesystem/packaging checks and 31 affected checks pass; a fresh
+bounded integration review accepts only this source hook and fixture correction.
+The ordinary candidate's complete source run passes 2,890 checks without skips.
+Actual successful packaging must still demonstrate the hook. Reporting failure
+fails the build status while retaining artifacts; existing scratch cleanup stays
+unchanged. Automatic cleanup and a retention count remain unapproved.
