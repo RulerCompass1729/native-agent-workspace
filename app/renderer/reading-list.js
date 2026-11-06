@@ -6,6 +6,59 @@ function readingDeliveryStatusKey(message, delivery) {
   if (message.imageDraftVersion && message.images?.length) return message.imageReceipt?.status === 'accepted' && message.imageReceipt.basis === 'native-local-image-echo' ? 'roomImages.accepted' : 'roomImages.receiptPending';
   return ({ submitted: 'delivery.submitted', 'awaiting-native': message.inputMode === 'queue' ? 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'delivery.unconfirmed', 'not-sent': 'delivery.notSent' }[delivery.status] || 'delivery.unknown');
 }
+// A sender's durable notice is not a room mirror or a native tool receipt.
+function readingWakeIntent(message, room, session) {
+  const wake = message.wake;
+  return !room && session && typeof session.nativeId === 'string' && session.nativeId && typeof message.id === 'string' && message.id && message.role === 'system' && message.kind === 'notice' && message.origin === 'agent-wake-intent' &&
+    wake && message.id === wake.id && wake.senderId === session.id && wake.nativeId === session.nativeId &&
+    typeof wake.body === 'string' && wake.body.length <= 6000 && typeof wake.recipientId === 'string' && wake.recipientId ? wake : null;
+}
+function readingWakeStatus(wake) {
+  const labels = { staged: 'reading.wakeRegistered', sending: 'delivery.awaiting', consumed: 'delivery.awaiting',
+    submitted: 'delivery.submitted', unconfirmed: 'delivery.unconfirmed', cancelled: 'delivery.notSent' };
+  return typeof wake.status === 'string' && Object.hasOwn(labels, wake.status) ? labels[wake.status] : 'delivery.unknown';
+}
+function cancelReadingWakeCollapse(entry) {
+  if (entry.wakeTimer !== undefined) clearTimeout(entry.wakeTimer);
+  delete entry.wakeTimer;
+}
+function readingWakeHeld(view, entry) {
+  if (view.folds[entry.message.id] !== undefined || entry.item.dataset.searchTarget === 'true' ||
+      view.intent?.searchQuery && view.intent.position.anchor === entry.message.id || entry.item.contains(document.activeElement)) return true;
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) return false;
+  if (entry.item.contains(selection.anchorNode) || entry.item.contains(selection.focusNode)) return true;
+  // A selection can span this record with both endpoints outside it.
+  try { return selection.rangeCount > 0 && selection.getRangeAt(0).intersectsNode(entry.item); }
+  catch { return true; }
+}
+function updateReadingWake(view, entry, wake) {
+  const previous = entry.wakeState, observed = entry.wakeObserved;
+  if (previous === wake?.status && observed === Boolean(wake)) return;
+  cancelReadingWakeCollapse(entry);
+  entry.wakeState = wake?.status; entry.wakeObserved = Boolean(wake);
+  // An already received history row does not replay a presentation timer.
+  entry.wakeExpanded = Boolean(wake && (wake.status !== 'submitted' || observed && previous !== 'submitted'));
+  if (!wake || wake.status !== 'submitted' || !entry.wakeExpanded || readingWakeHeld(view, entry)) return;
+  const key = view.key, id = entry.message.id, callId = wake.callId, turnId = wake.turnId;
+  const timer = setTimeout(() => {
+    if (entry.wakeTimer !== timer) return;
+    delete entry.wakeTimer;
+    const current = readingWakeIntent(entry.message, false, view.session);
+    if (view.key !== key || view.entries.get(id) !== entry || !view.el.isConnected || !view.el.clientHeight || !view.el.clientWidth || !entry.disclosure || !current ||
+        current.status !== 'submitted' || current.callId !== callId || current.turnId !== turnId || readingWakeHeld(view, entry)) return;
+    // This is layout, not a human fold. Preserve a newer Latest/search intent
+    // and ignore the browser's clamp scroll until the existing follow frame.
+    if (!view.intent) {
+      captureReading(view);
+      view.intent = { position: readingPositions[view.key] || { top: view.el.scrollTop, follow: true, anchor: '', offset: 0 } };
+    }
+    entry.wakeExpanded = false; view.pageChanging = true;
+    entry.expectedOpen = false; entry.disclosure.open = false;
+    updateProcessTail(entry); scheduleReading(view);
+  }, 2500);
+  entry.wakeTimer = timer;
+}
 function readingMessageClock(message, now = Date.now(), language = []) {
   const important = ['user', 'human'].includes(message.role) || message.role === 'assistant' &&
     (!message.kind || message.kind === 'response') && message.phase !== 'commentary' && message.status !== 'streaming';
@@ -317,11 +370,11 @@ function readingView(el, key) {
     };
     el.addEventListener('pointerdown', press); el.addEventListener('pointermove', hover, { passive: true }); el.ownerDocument.addEventListener('pointerup', release, true); el.ownerDocument.addEventListener('pointercancel', release, true); el.addEventListener('wheel', wheel, { passive: true }); el.addEventListener('keydown', keydown); el.addEventListener('scroll', scroll, { passive: true });
     view.observer = new ResizeObserver(() => scheduleReading(view)); view.observer.observe(el);
-    view.dispose = () => { for (const entry of view.entries.values()) { entry.images?.dispose(); if (entry.imageReceipt) ui.display.unbind(entry.imageReceipt, 'text'); } view.observer.disconnect(); cancelAnimationFrame(view.frame); el.removeEventListener('pointerdown', press); el.removeEventListener('pointermove', hover); el.ownerDocument.removeEventListener('pointerup', release, true); el.ownerDocument.removeEventListener('pointercancel', release, true); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', keydown); el.removeEventListener('scroll', scroll); view.reload = null; view.loadMessage = null; view.pageData = null; ui.clearMarkdown(el); };
+    view.dispose = () => { for (const entry of view.entries.values()) { cancelReadingWakeCollapse(entry); entry.images?.dispose(); if (entry.imageReceipt) ui.display.unbind(entry.imageReceipt, 'text'); } view.observer.disconnect(); cancelAnimationFrame(view.frame); el.removeEventListener('pointerdown', press); el.removeEventListener('pointermove', hover); el.ownerDocument.removeEventListener('pointerup', release, true); el.ownerDocument.removeEventListener('pointercancel', release, true); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', keydown); el.removeEventListener('scroll', scroll); view.reload = null; view.loadMessage = null; view.pageData = null; ui.clearMarkdown(el); };
     messageViews.set(el, view);
   }
   if (view.key !== key) {
-    for (const entry of view.entries.values()) { entry.images?.dispose(); if (entry.imageReceipt) ui.display.unbind(entry.imageReceipt, 'text'); }
+    for (const entry of view.entries.values()) { cancelReadingWakeCollapse(entry); entry.images?.dispose(); if (entry.imageReceipt) ui.display.unbind(entry.imageReceipt, 'text'); }
     captureReading(view); ui.clearMarkdown(el); el.replaceChildren();
     view.entries.clear(); view.groups.clear(); view.days.clear(); view.key = key; view.contentKey = null; view.folds = Object.assign(Object.create(null), readingPositions[key]?.folds || {});
     view.pageRange = null; view.pageRequest = null; view.pageChanging = false; view.autoPages = 4; view.reload = null; view.loadMessage = null;
@@ -600,18 +653,21 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         rows.push(divider); days.add(day); lastDay = day;
       }
     }
+    const wake = readingWakeIntent(m, room, session);
     let entry = view.entries.get(m.id);
     if (!entry) {
       const item = node('article'), heading = node('div', undefined, 'message-heading'), body = node('div', undefined, 'message-body'), actions = node('div', undefined, 'message-actions');
       body.id = `reading-payload-${++readingPayloadId}`;
       item.dataset.messageId = m.id; item.append(heading, body, actions);
       entry = { item, heading, body, actions }; view.entries.set(m.id, entry);
-      if ((m.role === 'tool' || m.kind === 'summary') && !(Array.isArray(m.images) && m.images.length)) {
+      if ((wake || m.role === 'tool' || m.kind === 'summary') && !(Array.isArray(m.images) && m.images.length)) {
         const disclosure = node('details', undefined, 'process-details'), summary = node('summary'), content = node('div', undefined, 'process-content');
-        entry.disclosure = disclosure; entry.preview = node('span', undefined, 'process-label'); entry.tail = node('pre', undefined, 'process-tail'); entry.content = content;
+        entry.wakeDisclosure = Boolean(wake); entry.disclosure = disclosure; entry.preview = node('span', undefined, 'process-label'); entry.tail = node('pre', undefined, 'process-tail'); entry.content = content;
         entry.more = node('button', undefined, 'process-more'); entry.more.type = 'button';
         summary.append(heading); content.append(body); disclosure.append(summary, content); item.replaceChildren(disclosure, entry.tail, entry.more, actions);
         const rememberFold = () => {
+          cancelReadingWakeCollapse(entry);
+          if (entry.wakeDisclosure) delete entry.item.dataset.searchTarget;
           updateProcessTail(entry);
           if (view.key !== key) return;
           // A manual choice belongs to this source record, not its latest status.
@@ -668,12 +724,22 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         actions.append(entry.openRecipient);
       }
     }
+    if (entry.wakeDisclosure && !wake) {
+      cancelReadingWakeCollapse(entry);
+      entry.item.replaceChildren(...[entry.heading, entry.inputBody, entry.body, entry.actions].filter(Boolean));
+      for (const field of ['disclosure', 'content', 'preview', 'tail', 'more', 'wakeDisclosure']) delete entry[field];
+    }
     entry.message = m; entry.exploration = explorations.get(m.id); retained.add(m.id); rows.push(entry.item);
     entry.item.className = `message ${m.role}${m.kind === 'turn' ? ' native-turn' : ''}${entry.disclosure ? ' process' : ''}`;
     if (m.operator || entry.operatorControls) renderOperatorControls(entry, m, context);
     entry.item.classList.toggle('native-notice', Boolean(m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && session?.nativeContexts?.some(c => c.boundaryId === m.id))));
     const nativeTitle = entry.exploration ? entry.exploration.active ? 'Exploring' : 'Explored' : m.toolKind === 'commandExecution' ? ['running', 'streaming'].includes(m.status) ? 'Running' : m.commandSource === 'userShell' ? 'You ran' : 'Ran' : m.kind === 'summary' && m.title === '过程摘要' || m.kind === 'plan' && m.title === '计划' || m.toolKind === 'webSearch' && ['搜索网页', '打开网页', '页内查找'].includes(m.title) || m.toolKind === 'fileChange' && m.title === '文件修改' ? '' : m.title;
     const messageName = () => {
+      if (wake) {
+        const target = state.sessions.find(s => s.id === wake.recipientId);
+        const recipient = target ? participantLabel(target, state.sessions) : wake.recipientId;
+        return `${wake.senderName || session.name || wake.senderId} → ${recipient}${recipient === wake.recipientId ? '' : ' · ' + wake.recipientId}`;
+      }
       if (m.nativeBlock && m.kind === 'input' && m.inputMode === 'native-inline') return uiText('reading.nativeSession');
       if (!room && m.commandSource === 'userShell') return uiText('reading.you'); // the person's own `!` command
       if (!room && m.role === 'system' && !m.sessionId) return ui.displayText(m.name, m.uiNameMessage) || uiText('reading.nativeSession');
@@ -720,7 +786,9 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       // Current activity lives in the session/progress status, not this record.
       // Only Claude rows take queued input; native sends it once the agent is idle.
       const status = { 'awaiting-native': m.inputMode === 'queue' ? 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'reading.status.unconfirmed', 'not-sent': 'delivery.notSent', streaming: 'reading.status.streaming', running: !room && session?.provider === 'claude' && m.role === 'tool' ? 'reading.status.toolRequested' : 'reading.status.running', failed: 'reading.status.failed', declined: 'reading.status.declined', interrupted: 'reading.status.interrupted', 'reply-private': 'reading.status.private' }[m.status];
-      if (entry.exploration) { if (entry.exploration.error) entry.heading.append(node('span', entry.exploration.error)); }
+      delete entry.wakeLabel;
+      if (wake) { entry.wakeLabel = node('span'); entry.heading.append(entry.wakeLabel); }
+      else if (entry.exploration) { if (entry.exploration.error) entry.heading.append(node('span', entry.exploration.error)); }
       else if (status && (ownGap || !m.nativeBlock && !m.sharedStream)) { const label = node('span'); ui.display.text(label, status); entry.heading.append(label); }
       else if ((m.nativeBlock || m.sharedStream) && ['failed', 'declined', 'interrupted', 'unconfirmed'].includes(m.status)) entry.heading.append(node('span', m.status));
       else if (m.manualReply && m.status === 'submitted') { const label = node('span'); ui.display.text(label, 'reading.manualReply'); entry.heading.append(label); }
@@ -734,7 +802,9 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     ui.display.computed(entry.share, 'aria-label', () => uiText('reading.shareAction', { label: readingActionLabel(m, messageName()) }));
     // Keep tools' original disclosure and source IDs. The toolbar belongs to
     // this heading, rather than floating over the next record's content.
-    if (m.role !== 'system' && entry.actions.parentElement !== entry.heading) entry.heading.append(entry.actions);
+    if ((wake || m.role !== 'system') && entry.actions.parentElement !== entry.heading) entry.heading.append(entry.actions);
+    if (wake && entry.wakeLabel) ui.display.computed(entry.wakeLabel, 'text', () => uiText(readingWakeStatus(entry.message.wake)));
+    updateReadingWake(view, entry, wake);
     if (entry.disclosure) {
       const error = entry.exploration ? entry.exploration.error : m.incomplete ? 'incomplete' : ['failed', 'declined', 'interrupted', 'unconfirmed'].includes(m.status) ? m.status : '';
       entry.error = error;
@@ -743,7 +813,8 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       const choice = view.folds[m.id];
       const savedOpen = typeof choice === 'boolean' ? choice : choice?.open;
       const failedTool = m.role === 'tool' && (m.status === 'failed' || entry.exploration?.error === 'failed');
-      const open = Boolean(savedOpen !== undefined ? savedOpen : reveal || error && !failedTool);
+      const searchReveal = wake && entry.item.dataset.searchTarget === 'true';
+      const open = Boolean(searchReveal || (savedOpen !== undefined ? savedOpen : reveal || (wake ? entry.wakeExpanded || entry.disclosure.open && readingWakeHeld(view, entry) : error && !failedTool)));
       if (entry.disclosure.open !== open) { entry.expectedOpen = open; entry.disclosure.open = open; }
       entry.item.dataset.running = String(entry.exploration ? entry.exploration.active : ['running', 'streaming'].includes(m.status));
       let inputPreview = m.input;
@@ -751,7 +822,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         try { const value = JSON.parse(inputPreview); inputPreview = [value.command, value.description, value.file_path, value.path, value.query].find(field => typeof field === 'string' && field.trim()) || inputPreview; }
         catch { /* The expandable original remains authoritative. */ }
       }
-      const preview = (failedTool && !entry.exploration && m.toolKind !== 'commandExecution' && m.title !== 'Bash' && m.text?.trim() ? m.text : entry.exploration || m.toolKind === 'webSearch' ? '' : m.toolKind === 'commandExecution' ? nativeCommandPreview(m) : inputPreview || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
+      const preview = wake ? '' : (failedTool && !entry.exploration && m.toolKind !== 'commandExecution' && m.title !== 'Bash' && m.text?.trim() ? m.text : entry.exploration || m.toolKind === 'webSearch' ? '' : m.toolKind === 'commandExecution' ? nativeCommandPreview(m) : inputPreview || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
       if (entry.preview.textContent !== preview) entry.preview.textContent = preview;
       updateProcessTail(entry);
     }
@@ -804,10 +875,16 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (!entry.inputBody) { entry.inputBody = node('pre', undefined, 'native-tool-input'); entry.body.before(entry.inputBody); }
       entry.inputBody.textContent = m.input || ''; entry.inputBody.hidden = !m.input;
     }
-    const displayText = nativeCompletionText(m);
+    const wakeBody = wake && ['staged', 'sending', 'consumed', 'submitted'].includes(wake.status);
+    const displayText = wakeBody ? wake.body : nativeCompletionText(m);
     const ownNotice = readingOwnMessage(m);
     const noticeSignature = ownNotice ? JSON.stringify(ownNotice) : '';
-    if (entry.noticeSignature !== noticeSignature) { entry.text = undefined; entry.noticeSignature = noticeSignature; }
+    if (entry.noticeSignature !== noticeSignature) {
+      // A generated delivery caption can change while the original body does not.
+      // Keep its selected text nodes; copy metadata still follows the new notice.
+      if (!wakeBody) entry.text = undefined;
+      entry.noticeSignature = noticeSignature;
+    }
     entry.displayText = displayText;
     entry.copyPayload = ownNotice ? () => readingOwnText(m, ownNotice) : null;
     const fileSession = room ? state.sessions.find(s => s.id === m.sessionId) : session;
@@ -821,7 +898,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (entry.role && entry.role !== m.role) ui.clearMarkdown(entry.body);
       entry.text = displayText; entry.role = m.role; entry.streaming = m.status === 'streaming'; entry.fileSourceKey = fileSourceKey;
       if (m.role === 'assistant') ui.markdown(entry.body, m.text, entry.streaming, () => { if (view.key === key) scheduleReading(view); }, fileSource);
-      else if (ownNotice) ui.display.computed(entry.body, 'text', () => readingOwnText(m, ownNotice));
+      else if (ownNotice && !wakeBody) ui.display.computed(entry.body, 'text', () => readingOwnText(m, ownNotice));
       else { ui.display.unbind(entry.body); entry.body.textContent = displayText; }
     }
     const footer = readingTurnFooter(m);
@@ -935,7 +1012,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   while (cursor) { const next = cursor.nextSibling; ui.clearMarkdown(cursor); cursor.remove(); cursor = next; }
   // Move every retained original out of obsolete wrappers before disposing
   // their old parents, including filtered T29 descendants with live Markdown.
-  for (const [id, entry] of view.entries) if (!retained.has(id)) { entry.images?.dispose(); if (entry.imageReceipt) ui.display.unbind(entry.imageReceipt, 'text'); ui.clearMarkdown(entry.item); entry.item.remove(); view.entries.delete(id); }
+  for (const [id, entry] of view.entries) if (!retained.has(id)) { cancelReadingWakeCollapse(entry); entry.images?.dispose(); if (entry.imageReceipt) ui.display.unbind(entry.imageReceipt, 'text'); ui.clearMarkdown(entry.item); entry.item.remove(); view.entries.delete(id); }
   for (const [day, divider] of view.days) if (!days.has(day)) { divider.remove(); view.days.delete(day); }
   if (selected?.anchor.isConnected && selected.focus?.isConnected &&
       selected.anchorOffset <= (selected.anchor.nodeType === 3 ? selected.anchor.length : selected.anchor.childNodes.length) &&

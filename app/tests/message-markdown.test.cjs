@@ -90,12 +90,12 @@ test('an unconfirmed system receipt and typed file failure repaint without repea
 });
 test('the actual reading render updates a cached row when its message source changes', () => {
   const sourceText=fs.readFileSync(path.join(__dirname,'../renderer/reading-list.js'),'utf8');
-  const start=sourceText.indexOf('    const displayText = nativeCompletionText(m);'), end=sourceText.indexOf('    const footer = readingTurnFooter(m);',start);
+  const start=sourceText.indexOf('    const displayText = '), end=sourceText.indexOf('    const footer = readingTurnFooter(m);',start);
   assert.ok(start>=0 && end>start,'Keep the file-origin probe on the actual Markdown rendering block');
   const owned = sourceText.slice(sourceText.indexOf('function readingOwnMessage('), sourceText.indexOf('function readingOwnText('));
   const block=owned+'{'+sourceText.slice(start,end)+'}';
   const entry={body:{}},calls=[],a={id:'a',nativeId:'native-a',cwd:'/example/a'},b={id:'b',nativeId:'native-b',cwd:'/example/b'};
-  const context={entry,room:false,session:a,state:{sessions:[a,b]},m:{id:'same-row',role:'assistant',text:'[Report](report.md)',status:'complete',nativeId:'native-a'},nativeCompletionText:m=>m.text,ui:{display:{unbind(){}},markdown:(...args)=>calls.push(args),clearMarkdown(){}},view:{key:'view'},key:'view',scheduleReading(){}};
+  const context={entry,wakeBody:false,room:false,session:a,state:{sessions:[a,b]},m:{id:'same-row',role:'assistant',text:'[Report](report.md)',status:'complete',nativeId:'native-a'},nativeCompletionText:m=>m.text,ui:{display:{unbind(){}},markdown:(...args)=>calls.push(args),clearMarkdown(){}},view:{key:'view'},key:'view',scheduleReading(){}};
   vm.runInNewContext(block,context);
   context.session=b;context.m={...context.m,nativeId:'native-b'};vm.runInNewContext(block,context);
   context.room=true;context.session=null;context.m={...context.m,sessionId:'a',nativeId:'native-a'};vm.runInNewContext(block,context);

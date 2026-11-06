@@ -5793,3 +5793,24 @@ read occurs, with no goal write or receiver input. The initial human send is
 synthetic. Owned resources are cleaned. This is one refusal-path repair, not
 proof of original-author goal resumption, the complete team handoff chain or a
 daily/installed qualification; those gates remain open.
+
+
+### Sender handoff readability — scoped source integration
+
+The user needs to see who received a handoff, its original text and its actual
+state without selected text, manual folds or the reading position being lost.
+The corrected reader patch is integrated with the current operator hook and
+image/delivery guards. Only the sender/native-matched private notice gets the
+existing disclosure; unknown or unconfirmed causes retain their original text.
+Received transitions collapse after exposure unless focus, selection, search or
+a manual choice holds them open. Historical receipts do not replay the timer.
+
+Checks: 2,895 source tests pass without skips. Six actual source-GUI groups cover
+Latest, focus, selected text, manual/search folds, removal and same-window reload;
+synthetic identities and positive private/shared drafts remain. The first Main
+GUI failed an unavailable fixture-counter assertion; it remains failed. The
+corrected bounded phase passes, and its owned resources are gone. A stale
+Markdown-test marker was updated while preserving the file-origin assertions.
+Independent review approves only this source plus synthetic-GUI integration.
+Raw checks are author-run. Actual provider delivery, physical dragging/copying,
+Applications/daily acceptance and continuous original-goal recovery remain open.
