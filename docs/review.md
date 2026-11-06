@@ -5770,3 +5770,26 @@ metadata deltas receive scoped independent review. Checks, hashes and counts are
 author-run. This is source/synthetic acceptance, with no new installed, native
 producer, default-model, original-goal or process-recovery proof. Phase 1b,
 Codex reports, daily grants/installation and paid native trials stay gated.
+
+
+## Team continuation: retain the native goal refusal (source)
+
+Ordinary message receipt does not resume a paused, blocked or limited native
+goal. The existing automatic-handoff path now validates the goal's thread and
+six reported states with the same contract as capacity continuation. Wrong-thread,
+missing-thread and undefined goal responses no longer permit an automatic write.
+The existing refusal preserves the exact known state in either interface language,
+alongside the original message. The goal, model, budget and permissions are not
+changed; no extra query, goal setter, retry, endpoint or panel is added.
+
+The original implementation fails seven checks with the corrected fixture; the
+repair passes 70 affected and 2,880 full checks without skips. A prior test used a
+snapshot-only draft field instead of the authoritative draft map; its failure is
+retained and is not product evidence. One isolated source GUI task uses two
+synthetic backends and one hidden, non-focusable window. Its existing receipt
+shows the raw blocked state and original body in Chinese and English. Both
+positive unsent drafts, identities and owners remain; one existing target goal
+read occurs, with no goal write or receiver input. The initial human send is
+synthetic. Owned resources are cleaned. This is one refusal-path repair, not
+proof of original-author goal resumption, the complete team handoff chain or a
+daily/installed qualification; those gates remain open.

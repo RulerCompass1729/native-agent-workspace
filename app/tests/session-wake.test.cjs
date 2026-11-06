@@ -426,3 +426,25 @@ test('a retained sender with an unavailable original wake message is unknown wit
   assert.equal(require('../ui-locale.js').displayText('en', row.text, row.uiMessage), `The sender's original message could not be verified; delivery is unconfirmed.\n${body}`);
   assert.deepEqual(f.writes, [], 'reading a missing source row never dispatches or retries');
 });
+
+for (const status of ['blocked','paused','usageLimited','budgetLimited']) test('native goal refusal retains its exact observed state without resuming it: '+status, async t=>{
+ const f=await fixture(t),nativeId=f.target.get(f.b).nativeId;
+ const goal={threadId:nativeId,status,objective:'PRIVATE_ORIGINAL_GOAL_BODY',tokenBudget:123};const original=structuredClone(goal),reads=[];
+ f.target.setDraft(f.b,'POSITIVE UNSENT RECEIVER DRAFT','target-owner');
+ f.rb.host.rpc.call=async(method,params)=>{reads.push([method,params]);assert.equal(method,'thread/goal/get');assert.equal(params.threadId,nativeId);return {goal};};
+ await f.call('Exact shared task body.');await f.finish();
+ assert.equal(f.writes.length,0);assert.equal(reads.length,1);assert.deepEqual(goal,original);assert.equal(f.target.get(f.b).nativeId,nativeId);assert.equal(f.target.get(f.b).owner,'target-owner');assert.equal(f.target.drafts.get(f.b),'POSITIVE UNSENT RECEIVER DRAFT');
+ const row=f.source.get(f.a).messages.find(m=>m.wake);assert.equal(row.wake.status,'unconfirmed');
+ const locale=require('../ui-locale.js');for(const language of ['zh','en']){const text=locale.displayText(language,row.text,row.uiMessage);assert.ok(text.includes(status));assert.ok(text.endsWith('Exact shared task body.'));assert.doesNotMatch(text,/PRIVATE_ORIGINAL_GOAL_BODY|123/);}
+});
+for(const kind of ['other-thread-active','missing-thread-active','undefined-goal','unknown-status'])test('unverified native goal never permits an automatic handoff: '+kind,async t=>{
+ const f=await fixture(t),nativeId=f.target.get(f.b).nativeId;
+ const result=kind==='undefined-goal'?{goal:undefined}:{goal:{threadId:kind==='other-thread-active'?'another-native':kind==='missing-thread-active'?undefined:nativeId,status:kind==='unknown-status'?'new-unknown':'active'}};
+ f.rb.host.rpc.call=async(method,params)=>{assert.equal(method,'thread/goal/get');assert.equal(params.threadId,nativeId);return result;};
+ await f.call();await f.finish();assert.equal(f.writes.length,0);assert.equal(f.source.get(f.a).messages.find(m=>m.wake).wake.status,'unconfirmed');
+});
+for(const status of ['active','complete'])test('same-thread confirmed native goal still allows one handoff without any goal write: '+status,async t=>{
+ const f=await fixture(t),goal={threadId:f.target.get(f.b).nativeId,status,objective:'PRIVATE_ACTIVE_GOAL'},before=structuredClone(goal),methods=[];
+ f.rb.host.rpc.call=async(method,params)=>{methods.push(method);assert.equal(method,'thread/goal/get');assert.equal(params.threadId,goal.threadId);return {goal};};
+ await f.call();await f.finish();assert.equal(f.writes.length,1);assert.deepEqual(methods,['thread/goal/get']);assert.deepEqual(goal,before);
+});

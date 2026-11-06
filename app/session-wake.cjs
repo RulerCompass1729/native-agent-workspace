@@ -183,8 +183,12 @@ async function receive(w, spec) {
   if (intent.id !== spec.id || intent.senderId !== spec.senderId || intent.recipientId !== s.id || intent.boundary !== generation || !same(s, proof) || !eligible(w, s, r, intent)) throw uiError("error.wake.recipientChangedOrLimited");
   if (s.provider === 'codex') {
     const result = await r.host?.rpc?.call('thread/goal/get', { threadId: s.nativeId }).catch(error => { if (error?.nativeGoalsDisabled === true) return { goal: null }; throw error; });
-    if (!result || !Object.hasOwn(result, 'goal') || result.goal && !['active', 'complete'].includes(result.goal.status)) throw uiError("error.wake.nativeGoalDisallows");
     if (!eligible(w, s, r, intent)) throw uiError("error.wake.humanOrRecipientChanged");
+    // Use the same native identity/state contract as capacity continuation.
+    // A successful ordinary input is never permission to resume a stopped goal.
+    if (!result || !Object.hasOwn(result, 'goal') || (result.goal !== null &&
+        (result.goal?.threadId !== s.nativeId || !['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'].includes(result.goal?.status)))) throw uiError("error.wake.nativeGoalDisallows");
+    if (result.goal && !['active', 'complete'].includes(result.goal.status)) throw uiError('error.wake.nativeGoalStateDisallows', { status: result.goal.status });
   }
   const old = s.wakeBudget || {}, streak = old.humanRevision === (s.wakeHumanRevision || 0) ? old.streak || 0 : 0;
   s.wakeBudget = { id: intent.id, lastAt: Date.now(), streak: streak + 1, humanRevision: s.wakeHumanRevision || 0 };
