@@ -5598,3 +5598,22 @@ lease renewal remain integration work; this change does not approve a daily
 browser-wide debugging port, attest arbitrary same-user native identities, or
 qualify physical input or all-provider installed operation. Existing native
 consumer and locked daily-message evidence are reused rather than repeated.
+
+
+### T128 Escape dismisses a notice without taking native keys
+
+- The earlier pointer dismissal left keyboard Escape unfinished. A visible toast
+  now closes on ordinary Escape; IME, modified and keys already handled earlier
+  in capture are ignored. Outside the toast the key and focus remain with their original
+  terminal, editor or dialog.
+- When the toast owns focus, Escape is consumed locally and restores a valid
+  previous control without scrolling. Replacing an old action retains that
+  origin; a removed or hidden origin is not focused. Both new listeners leave
+  through the existing renderer cleanup registry.
+- The old main-source fixture fails four Escape cases; all nine toast checks
+  pass after this exact patch on a private main-source copy. The 23 affected
+  unit checks and UI build pass. Plain 6.5-second notices, unlimited action
+  notices and pointer shielding retain their existing behavior.
+- Source-only: no GUI, provider, native-input or clipboard trial was added. Real
+  keyboard/IME/assistive behavior and installed acceptance remain unverified;
+  other T128 concerns and the original T134 screenshot stay open.

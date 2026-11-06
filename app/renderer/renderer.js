@@ -976,6 +976,31 @@ document.addEventListener('pointerdown', event => {
   if ($('toast').hidden || !$('toast').querySelector('.toast-action')) return;
   if (!(event.target instanceof Element && $('toast').contains(event.target) && event.target.closest('button'))) $('toast').hidden = true;
 }, true);
+let toastFocusOrigin = null;
+function rememberToastFocus(event) {
+  const notice = $('toast');
+  if (notice.contains(event.target) && !notice.contains(event.relatedTarget)) toastFocusOrigin = event.relatedTarget;
+}
+function dismissToastWithEscape(event) {
+  const notice = $('toast');
+  if (notice.hidden || event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229 ||
+    event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  const focused = document.activeElement, ownsFocus = notice.contains(focused), origin = toastFocusOrigin;
+  clearTimeout(toastTimer); notice.hidden = true; toastFocusOrigin = null;
+  // Outside this non-modal notice, Escape still belongs to the native terminal,
+  // editor or dialog. Do not consume it or change that surface's focus.
+  if (!ownsFocus) return;
+  event.preventDefault(); event.stopPropagation();
+  if (origin instanceof Element && origin.isConnected && !origin.disabled && origin.getClientRects().length) origin.focus({ preventScroll: true });
+  else focused?.blur?.();
+}
+function disposeToastKeyboard() {
+  document.removeEventListener('focusin', rememberToastFocus, true);
+  document.removeEventListener('keydown', dismissToastWithEscape, true);
+  toastFocusOrigin = null;
+}
+document.addEventListener('focusin', rememberToastFocus, true);
+document.addEventListener('keydown', dismissToastWithEscape, true);
 function toastMessage(key, params, action) { toast('', action); ui.display.text($('toast-text'), key, params); }
 function toastError(error) { toast(''); ui.showError($('toast-text'), error); }
 function sessionNoticeMessage(key, params, id) { sessionNotice('', id); ui.display.text($('toast-text'), key, params); }
@@ -3768,6 +3793,7 @@ function fitTerminal(id) {
 // Keep legacy payloads; an unindexed event withdraws the optional ordering hint.
 function writeTerminal(entry, event) { const indexed = Number.isSafeInteger(entry.observationIndex) && entry.observationIndex >= 0; if (indexed) { if (event.epoch !== entry.epoch || !Number.isSafeInteger(event.sequence) || event.sequence < 0) return; if (!(event.index === undefined && event.kind !== 'resize' && typeof event.data === 'string' && event.sequence > entry.sequence)) { if (!Number.isSafeInteger(event.index) || event.index <= entry.observationIndex) return; if (event.kind === 'resize') { if (event.sequence < entry.sequence || !Number.isInteger(event.cols) || event.cols < 20 || event.cols > 400 || !Number.isInteger(event.rows) || event.rows < 5 || event.rows > 200 || terminals.get(event.id) !== entry) return; entry.observationIndex = event.index; entry.term.write('', () => { if (terminals.get(event.id) === entry && event.epoch === entry.epoch) entry.term.resize(event.cols, event.rows); }); return; } if (typeof event.data !== 'string' || event.sequence <= entry.sequence) return; } } if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data, () => { if (document.activeElement === entry.term.textarea && !entry.columnReading && (!entry.term.buffer?.active || entry.term.buffer.active.viewportY === entry.term.buffer.active.baseY)) revealTerminalCursor(entry); }); entry.keyboardFlags = event.keyboardFlags || 0; entry.sequence = event.sequence; if (indexed) entry.observationIndex = event.index; } }
 const disposers = [
+  disposeToastKeyboard,
   api.onProgress(updateLegacyProgress),
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
   api.onState(next => { updateState(next); render(); }),
