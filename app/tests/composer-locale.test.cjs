@@ -93,3 +93,54 @@ for (const [name, overrides, expected] of [
   assert.equal(kind(), expected); assert.deepEqual([input.readOnly, f.send.disabled, f.send.type, f.ui.native.hidden, f.ui.native.disabled], flags);
   assert.equal(input.value, f.record.liveDraft); assert.equal(JSON.stringify(f.record), before); assert.deepEqual(f.actorCalls, []);
 });
+
+for (const column of [false, true]) for (const [name, record, confirmation] of [
+  ['busy without an input route', { state: 'working' }, false],
+  ['unconfirmed previous input', { state: 'idle', pendingTag: 'original-input' }, true],
+  ['unconfirmed steering', { state: 'working', steerAvailable: true, activeTurnId: 'original-turn', pendingSteer: true }, true],
+]) test((column ? 'column' : 'solo') + ' explains why ' + name + ' cannot send and retains the draft', () => {
+  const f = fixture(record); f.paint(column);
+  const before = JSON.stringify(f.record), input = f.input;
+  assert.equal(input.readOnly, false); assert.equal(Boolean(f.send.disabled), true); assert.equal(f.send.type, 'submit');
+  assert.match(f.hint.textContent, /不能.*发送/);
+  if (confirmation) assert.match(f.hint.textContent, /确认/);
+  input.event('keydown', { key: 'Enter' }); assert.deepEqual(f.actorCalls, []);
+  input.event('compositionstart'); f.switch('en');
+  assert.match(f.hint.textContent, /cannot send/i);
+  if (confirmation) assert.match(f.hint.textContent, /confirmation/i);
+  assert.equal(f.ui.input, input); assert.equal(input.value, f.record.liveDraft);
+  assert.equal(input.selectionStart, 2); assert.equal(input.selectionEnd, 7);
+  assert.equal(f.ui.composing, true); assert.equal(Boolean(f.send.disabled), true);
+  input.event('keydown', { key: 'Enter', isComposing: true });
+  assert.equal(JSON.stringify(f.record), before); assert.deepEqual(f.actorCalls, []);
+});
+
+test('busy queue and bound steering keep their usable routes, while an unbound turn remains blocked', () => {
+  for (const column of [false, true]) {
+    for (const record of [{ state: 'working', queueAvailable: true, pendingTag: 'current-turn' },
+      { state: 'working', steerAvailable: true, activeTurnId: 'original-turn' }]) {
+      const f = fixture(record); f.paint(column); f.switch('en');
+      assert.equal(Boolean(f.send.disabled), false); assert.equal(f.input.readOnly, false);
+      assert.doesNotMatch(f.hint.textContent, /cannot send/i);
+      f.input.event('keydown', { key: 'Enter' }); assert.deepEqual(f.actorCalls, ['submit']);
+    }
+    const missing = fixture({ state: 'working', steerAvailable: true }); missing.paint(column); missing.switch('en');
+    assert.equal(Boolean(missing.send.disabled), true); assert.match(missing.hint.textContent, /cannot send/i);
+    missing.input.event('keydown', { key: 'Enter' }); assert.deepEqual(missing.actorCalls, []);
+  }
+});
+
+test('empty input, approval, owner and native-view reasons retain their existing precedence', () => {
+  const empty = fixture(); empty.input.value = ''; empty.paint(false); empty.switch('en');
+  assert.equal(empty.send.disabled, true); assert.equal(empty.hint.textContent, 'Enter to send · Shift Enter for a new line');
+  for (const [record, column, hint, readOnly] of [
+    [{ state: 'approval', approval: { id: 'original-approval' } }, false, /approval|confirm/i, false],
+    [{ state: 'working', owner: 'another-view' }, false, /read-only/i, true],
+    [{ state: 'working', view: 'terminal' }, true, /enable input/i, true],
+    [{ state: 'working', transportDisconnected: true }, false, /connection/i, true],
+  ]) {
+    const f = fixture(record); f.paint(column); f.switch('en');
+    assert.match(f.hint.textContent, hint); assert.equal(f.input.readOnly, readOnly);
+    f.input.event('keydown', { key: 'Enter' }); assert.deepEqual(f.actorCalls, []);
+  }
+});

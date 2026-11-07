@@ -886,12 +886,12 @@ function soloAction(s, context = {}) {
   // Native runs a plugin's queued prompt only once idle; text typed in the TUI reaches the running turn.
   if (s.pendingQueue) return choice({ kind: 'send', labelKey: 'composer.waitNative', hintKey: 'composer.queuePendingHint' });
   if (s.state === 'working' && s.queueAvailable && !s.approval) return choice({ kind: 'send', labelKey: 'composer.queue', hintKey: 'composer.queueHint' });
-  if (s.state === 'working' && s.steerAvailable && s.activeTurnId && !s.approval) return choice({ kind: 'send', labelKey: 'composer.steer', hintKey: 'composer.steerHint' });
+  if (s.state === 'working' && s.steerAvailable && s.activeTurnId && !s.approval) return choice({ kind: 'send', labelKey: 'composer.steer', hintKey: s.pendingSteer ? 'composer.inputPendingHint' : 'composer.steerHint' });
   return choice({ kind: 'send', labelKey: 'composer.send', hintKey: s.state === 'approval'
     ? s.approvalResolved ? 'composer.approvedHint'
       : s.approval?.pending ? 'composer.decisionPendingHint'
         : 'composer.approvalHint'
-    : s.state === 'working' || s.pendingTag ? 'composer.workingHint' : 'composer.keyboardHint' });
+    : s.state === 'working' ? 'composer.workingHint' : s.pendingTag ? 'composer.inputPendingHint' : 'composer.keyboardHint' });
 }
 function renderComposer(s) {
   renderDraftRecovery(s?.id);
