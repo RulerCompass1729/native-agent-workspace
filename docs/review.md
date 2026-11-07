@@ -6461,3 +6461,16 @@ skips after restoring the previously qualified lexical dependency binding.
 The initial three candidate negative-guard failures are retained. The candidate
 excludes the gated operator interface and inactive continuation policy. Signed
 payloads, original caller registration and real delivery remain unqualified.
+
+The first signed candidate started and created a space, but failed normal
+Browser.close: the async outbox handler re-entered quit before Electron finished
+unwinding the prevented close. A real hidden Electron counter retained the
+broker/Main handler and reproduced no exit; scheduling the final quit on the
+next event-loop turn exited zero. The lifecycle check now rejects same-turn
+re-entry. The failed signed candidate remains failed; daily installation is held
+until the corrected signed bundle closes normally. No native session was stopped.
+
+The same independent reviewer approves the one-line event-loop quit repair and
+its lifecycle test. The previous signed failure is preserved with its archive
+and source/CDHash. A corrected signed acceptance is still required; source
+approval is not a successful installed quit or a native delivery claim.

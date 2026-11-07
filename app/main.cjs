@@ -1056,7 +1056,7 @@ app.on('before-quit', event => {
     event.preventDefault();
     outboxClosing = true;
     Promise.resolve().then(() => outboxBroker.close()).then(() => {
-      outboxClosing = false; quitting = true; dsh?.stop(); app.quit();
+      outboxClosing = false; quitting = true; dsh?.stop(); setImmediate(() => app.quit());
     }, () => {
       outboxClosing = false; outboxUnavailable = true; outboxQuitFailed = true;
       for (const context of windows.values()) {
