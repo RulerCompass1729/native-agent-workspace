@@ -28,7 +28,7 @@ async function fixture(t, options = {}) {
         if (ended) return; ended = true; gate.revoke(); await config.dispose();
       } };
     } };
-    if (id === './computer-use-outbox-native.cjs') return require('../computer-use-outbox-native.cjs');
+    if (id === './computer-use-outbox-native.cjs') return require(path.join(path.dirname(source), id));
     assert.equal(id, 'node:crypto'); return require(id);
   }, module, source, path.dirname(source));
   const outbox = await module.exports.openOutbox(grant, {

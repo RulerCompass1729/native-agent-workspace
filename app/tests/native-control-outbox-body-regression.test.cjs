@@ -17,6 +17,7 @@ async function probe(text) {
     if (id === './native-computer-use.cjs') return { createComputerUseViewLease: async () => {
       leases++; throw Error('Unexpected lease after controlled view stop');
     } };
+    if (id === './computer-use-outbox-native.cjs') return require(path.join(path.dirname(source), id));
     assert.equal(id, 'node:crypto'); return require(id);
   }, module, source, path.dirname(source));
   await assert.rejects(module.exports.openOutbox({ callerId: 'caller', callerNativeId: 'native-caller',

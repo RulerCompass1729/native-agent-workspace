@@ -92,7 +92,7 @@ async function core(t, binding) {
         if (!closed) { closed = true; await config.dispose(); }
       } };
     } };
-    if (id === './computer-use-outbox-native.cjs') return require('../computer-use-outbox-native.cjs');
+    if (id === './computer-use-outbox-native.cjs') return require(path.join(path.dirname(file), id));
     assert.equal(id, 'node:crypto'); return require(id);
   }, module, file, path.dirname(file));
   let send;
@@ -143,7 +143,7 @@ test('unknown RPC failure stays unconfirmed and repeated original native call ca
   const f = await fixture(t, 'unknown'), binding = await f.bind();
   await assert.rejects(binding.forwardOnce(), error => {
     assert.equal(error.message.includes('outcome unknown'), false);
-    assert.deepEqual(require('../computer-use-outbox-native.cjs').classifyOutboxFailure(error),
+    assert.deepEqual(require(path.join(app, 'computer-use-outbox-native.cjs')).classifyOutboxFailure(error),
       { failurePhase: 'view-send', failureReason: 'send-unconfirmed' });
     return true;
   });

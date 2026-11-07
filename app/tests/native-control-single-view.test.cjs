@@ -73,7 +73,7 @@ async function core(t, binding) {
         if (!closed) { closed = true; await config.dispose(); }
       } };
     } };
-    if (id === './computer-use-outbox-native.cjs') return require('../computer-use-outbox-native.cjs');
+    if (id === './computer-use-outbox-native.cjs') return require(path.join(path.dirname(file), id));
     assert.equal(id, 'node:crypto'); return require(id);
   }, module, file, path.dirname(file));
   let send;
