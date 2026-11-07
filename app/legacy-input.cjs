@@ -212,7 +212,12 @@ class LegacyInput extends EventEmitter {
         fs.unlinkSync(ownerFile);
       } else if (fs.existsSync(socket)) throw uiError("error.legacy.inputAddressOccupiedNoReplace");
       fs.writeFileSync(ownerFile, JSON.stringify(processIdentity(process.pid)), { mode: 0o600, flag: 'wx' });
-      const targets = new Map(), transport = createSubmissionServer(socket, targets);
+      const targets = new Map(), transport = createSubmissionServer(socket, targets, {
+        restrictedOutboxCall: (proof, signal) => {
+          if (this.closed || typeof this.restrictedOutboxCall !== 'function') throw Object.assign(Error('Restricted outbox is unavailable'), { notSent: true });
+          return this.restrictedOutboxCall(proof, signal);
+        },
+      });
       try { await transport.start(); checkOpen(); }
       catch (e) { transport.server.closeAllConnections(); transport.server.close(); fs.unlinkSync(ownerFile); throw e; }
       server = { transport, targets, socket, ownerFile }; this.servers.set(directory, server);

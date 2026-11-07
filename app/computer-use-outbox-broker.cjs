@@ -56,7 +56,22 @@ async function createOutboxBroker({ descriptorFile, bind, createView }) {
   }
   const dir = fs.mkdtempSync(path.join(fs.realpathSync('/tmp'), 'naw-outbox-owner-')); fs.chmodSync(dir, 0o700);
   const socketPath = path.join(dir, 'outbox.sock'), capability = crypto.randomBytes(32).toString('hex');
-  const sockets = new Set(), operations = new Set(); let busy = false, closed = false, closing;
+  const sockets = new Set(), operations = new Set(), controllers = new Set(); let busy = false, closed = false, closing;
+  const submitAuthenticated = (factory, signal) => {
+    if (closed || busy || signal?.aborted || typeof factory !== 'function') return Promise.resolve(FAIL);
+    busy = true;
+    const abort = new AbortController(), cancelled = () => abort.abort();
+    const timer = setTimeout(cancelled, 100000);
+    signal?.addEventListener('abort', cancelled, { once: true }); controllers.add(abort);
+    const operation = Promise.resolve().then(async () => {
+      if (abort.signal.aborted) return FAIL;
+      const binding = await factory(abort.signal);
+      return operateOutbox(binding, createView, abort.signal);
+    }).catch(() => FAIL).finally(() => {
+      clearTimeout(timer); signal?.removeEventListener('abort', cancelled); controllers.delete(abort); operations.delete(operation); busy = false;
+    });
+    operations.add(operation); return operation;
+  };
   const server = net.createServer(socket => {
     sockets.add(socket); socket.on('error', () => {});
     const abort = new AbortController(); let data = '', accepted = false;
@@ -73,9 +88,7 @@ async function createOutboxBroker({ descriptorFile, bind, createView }) {
         if (closed || busy || Object.keys(request).sort().join(',') !== 'arguments,capability,identity' ||
             typeof request.capability !== 'string' || !/^[a-f0-9]{64}$/.test(request.capability) ||
             !crypto.timingSafeEqual(Buffer.from(capability), Buffer.from(request.capability))) return FAIL;
-        busy = true;
-        try { const binding = await bind(request.identity, request.arguments, abort.signal); return await operateOutbox(binding, createView, abort.signal); }
-        finally { busy = false; }
+        return submitAuthenticated(signal => bind(request.identity, request.arguments, signal), abort.signal);
       }).catch(() => FAIL).then(result => { if (!socket.destroyed) socket.end(JSON.stringify(result) + '\n'); });
       operations.add(operation); operation.finally(() => operations.delete(operation));
     });
@@ -86,6 +99,7 @@ async function createOutboxBroker({ descriptorFile, bind, createView }) {
     closed = true;
     closing = (async () => {
       for (const socket of sockets) socket.destroy();
+      for (const controller of controllers) controller.abort();
       await new Promise(resolve => server.close(resolve));
       await Promise.allSettled([...operations]);
       if (descriptorIdentity) {
@@ -102,7 +116,7 @@ async function createOutboxBroker({ descriptorFile, bind, createView }) {
     // Exclusive descriptor: an occupied owner must never be replaced silently.
     fs.writeFileSync(descriptorFile, JSON.stringify({ version: 1, socketPath, capability, issuer }), { flag: 'wx', mode: 0o600 });
     descriptorIdentity = fs.lstatSync(descriptorFile);
-    return { descriptorFile, close };
+    return { descriptorFile, close, submitAuthenticated };
   } catch (error) { await close(); throw error; }
 }
 module.exports = { createOutboxBroker, operateOutbox };

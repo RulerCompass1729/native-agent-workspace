@@ -22,7 +22,7 @@ const { identity: roomPeerIdentity } = require('./peer-handoffs.cjs');
 const { windowPlacement } = require('./window-placement.cjs');
 const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
 const { createOutboxBroker } = require('./computer-use-outbox-broker.cjs');
-const { bindOriginalOutbox } = require('./computer-use-outbox-owner.cjs');
+const { bindOriginalOutbox, bindClaudeOutbox } = require('./computer-use-outbox-owner.cjs');
 const { createStockOutboxView } = require('./computer-use-outbox-view.cjs');
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
@@ -186,6 +186,10 @@ function notifyCapacity(snapshot, win) {
 }
 function bindClient(context) {
   const { win, client } = context;
+  if (client.control?.legacyInput) client.control.legacyInput.restrictedOutboxCall = (proof, signal) => {
+    if (!outboxBroker) throw Object.assign(Error('Restricted outbox is unavailable'), { notSent: true });
+    return outboxBroker.submitAuthenticated(abort => bindClaudeOutbox({ contexts: () => windows.values(), roomState }, proof, abort), signal);
+  };
   // Rechecked by the router after awaited pauses as well as at IPC entry.
   // A task already accepted natively is not retroactively cancelled.
   client.authorizeOperation = (method, args, roomId = 'shared') => {

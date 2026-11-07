@@ -6474,3 +6474,44 @@ The same independent reviewer approves the one-line event-loop quit repair and
 its lifecycle test. The previous signed failure is preserved with its archive
 and source/CDHash. A corrected signed acceptance is still required; source
 approval is not a successful installed quit or a native delivery claim.
+
+
+### Original Claude caller to the scoped outbox
+
+The retained Claude submission route rejected addressed messages even when its
+existing root hook had completed native permission checks. The app now binds
+that one authenticated route to the existing outbox; ordinary retained
+addressed/operator capabilities stay disabled. The credential is process-local,
+one-use and bound to the live root lease, epoch, turn, prompt and exact body.
+Sender/recipient membership, transport, manual control and identity are checked
+again before forwarding. Claude and Codex share one broker slot and cleanup.
+
+An exact committed preimage loaded in an owned Node process reproduces the old
+HTTP refusal before any view or dispatch. The new source uses the actual native
+hook, HTTP transport, Main binding band, lease, LegacyInput and Codex reducers.
+Its view and native events are synthetic, including completed command/exit
+metadata. Negative cases cover failed native approval, wrong provenance,
+revoked control/identity, replay, busy, command failure and caller disconnect.
+The old hook receives its compatible staged envelope only with the outbox's
+native-received and completed-success receipt; a success label alone is refused.
+Initial fixture failures (invalid stock snapshot format and a missing native
+command-start frame) are retained separately and are not product regressions.
+
+No original CLI was started, interrupted or reconfigured. Actual adoption still
+requires the original secretary's already-loaded hook/tool and current root
+binding, followed by one new productive task to an idle original agent. The
+existing hook HTTP deadline has not been qualified in that real session. A lost
+connection aborts owned work without retry. Source checks and earlier locked
+browser evidence do not establish this new original-native journey or full P0
+completion. Main owns its quit repair, integration, installation and live case.
+
+Two producer-side restrictions remain explicit admission gates. The current
+compatibility hook does not observe addressed tools in legacyOnly mode; retained
+2.1.311/312 roots also keep native blocks disabled. A managed hook with an
+existing NAW_SUBMIT_SOCKET selects its original submit.sock before a GUI
+descriptor. Installing this callback alone cannot redirect that original
+caller. Main must establish the actual loaded tool, supported root binding and
+route before using a productive task; neither a seeded test root nor a tool
+catalog proves those facts. No compatibility gate or original backend is
+modified here. Both caller paths share a 100-second overall abort budget; a slow
+or disconnected result stays unconfirmed, with no automatic retry.

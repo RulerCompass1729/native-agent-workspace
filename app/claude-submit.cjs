@@ -68,7 +68,34 @@ class SubmissionChannel extends EventEmitter {
   close() { this.status(false); this.finish(uiError("error.safeSubmissionClosed")); this.poll?.end(JSON.stringify({ closed: true })); this.poll = null; }
 }
 
-function createSubmissionServer(filename, targets) {
+// This credential never crosses JSON. Only the already authenticated native
+// root hook can mint it; an outbox binder consumes it once before opening UI.
+const outboxProofs = new WeakMap(), outboxCalls = new WeakMap();
+const validToken = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && !/[\x00-\x1f\x7f]/.test(value);
+function rootOutboxProof(target, message, signal, stillTarget) {
+  const root = target.rootTurn, live = target.liveTurn;
+  const valid = () => !signal.aborted && stillTarget() && target.retainedReader === true && target.nativeBlocks === true &&
+    !target.disposed && !target.rootEnding && target.terminal?.alive && !target.nativeInputRequired && !target.record.nativeContextPending &&
+    target.validRootBinding(message) && message.epoch === target.observationEpoch && !target.displayGap &&
+    root && target.rootTurn === root && root.status === 'working' && root.id === message.turnId && root.promptId === message.promptId &&
+    live && target.liveTurn === live && live.id === message.turnId && live.promptId === message.promptId && !target.livePermissions?.size;
+  if (!['turnId', 'promptId', 'callId'].every(key => validToken(message[key])) || !valid()) throw Error('Native root outbox authority is unavailable');
+  let calls = outboxCalls.get(target);
+  if (calls?.root !== root) { calls = { root, ids: new Set() }; outboxCalls.set(target, calls); }
+  if (calls.ids.has(message.callId) || calls.ids.size >= 64) throw Error('Native root outbox call was already used');
+  calls.ids.add(message.callId);
+  const args = Object.freeze(require('./computer-use-outbox-native.cjs').validateOutboxArgs(message.arguments));
+  const proof = Object.freeze({});
+  outboxProofs.set(proof, { target, args, valid, consumed: false });
+  return proof;
+}
+function consumeRootOutboxProof(proof) {
+  const value = outboxProofs.get(proof);
+  if (!value || value.consumed || !value.valid()) throw Error('Native root outbox call could not be verified');
+  value.consumed = true;
+  return { target: value.target, args: value.args, valid: value.valid };
+}
+function createSubmissionServer(filename, targets, { restrictedOutboxCall } = {}) {
   const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'application/json');
     const target = targets.get(req.headers['x-workspace-token']);
@@ -109,6 +136,28 @@ function createSubmissionServer(filename, targets) {
         target.emit('capability'); return res.end(JSON.stringify({ received: true }));
       }
       if (req.url === '/addressed-message' || req.url === '/addressed-failed') {
+        // Retained roots keep their ordinary addressed/operator gates closed.
+        // This one existing hook route can use the app's restricted outbox.
+        if (target.retainedReader && typeof restrictedOutboxCall === 'function') {
+          const abort = new AbortController(), closed = () => abort.abort();
+          let proof;
+          try { proof = rootOutboxProof(target, message, abort.signal, () => targets.get(req.headers['x-workspace-token']) === target); }
+          catch { return res.end(JSON.stringify({ status: 'not-sent', retry: false })); }
+          if (req.url === '/addressed-failed') return res.end(JSON.stringify({ status: 'not-sent', retry: false }));
+          res.once('close', closed);
+          if (res.destroyed) abort.abort();
+          try {
+            const receipt = await restrictedOutboxCall(proof, abort.signal);
+            // Old loaded native hooks accept only 'staged'. Preserve that
+            // envelope solely after the full outbox's native command proof.
+            const confirmed = receipt?.status === 'working' && receipt.nativeReceived === true &&
+              validToken(receipt.messageId) && validToken(receipt.turnId) &&
+              receipt.firstCommand?.status === 'completed' && receipt.firstCommand.exitCode === 0;
+            const status = confirmed ? 'staged' : receipt?.status === 'working' ? 'unconfirmed' : receipt?.status || 'unconfirmed';
+            return res.end(JSON.stringify({ status, receipt, retry: false }));
+          } catch (error) { return res.end(JSON.stringify({ status: error.notSent === true ? 'not-sent' : 'unconfirmed', retry: false })); }
+          finally { res.off('close', closed); }
+        }
         try {
           if (!target.addressedSendAvailable || !target.validRootBinding(message) || message.epoch !== target.observationEpoch || !target.addressedCall) throw uiError("error.nativeDirectedUnsupported");
           const identity = { nativeId: message.sessionId, turnId: message.turnId, promptId: message.promptId, callId: message.callId };
@@ -150,4 +199,4 @@ function createSubmissionServer(filename, targets) {
   server.requestTimeout = 5000;
   return { server, async start() { await new Promise((resolve, reject) => { server.once('error', reject); server.listen(filename, resolve); }); fs.chmodSync(filename, 0o600); } };
 }
-module.exports = { SubmissionChannel, createSubmissionServer };
+module.exports = { SubmissionChannel, createSubmissionServer, consumeRootOutboxProof };
