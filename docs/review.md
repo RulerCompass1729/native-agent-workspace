@@ -6538,3 +6538,8 @@ This adds no resume method/capability, ready event, model request, terminal inpu
 or goal setter. Native atomic activation, trustworthy caller/task producers and
 actual original-session adoption remain separate unmet requirements. Source
 pairing is not original-native or installed acceptance.
+
+
+### T58 restricted outbox without a recipient-owned window
+
+The source binder rejected a shared task when only the sender window remained, despite an existing idle recipient transport. Bind that existing transport while pinning its original private owner and control revision; no claim, draft change or reply-sharing grant. The new same-fixture counter fails before the patch and passes after it, with owner/member/manual invalidation still denied. Native events are synthetic here: actual original secretary delivery and the completed first command remain an integration acceptance requirement. Independent source review pending at this checkpoint.

@@ -6,10 +6,10 @@ const { consumeRootOutboxProof } = require('./claude-submit.cjs');
 const FAIL = 'The original agent or its authorized space transport is unavailable; no resend.';
 function existingTransports(contexts) {
   const available = () => [...contexts()].filter(c => !c.win.isDestroyed() && !c.client.closing && !c.client.socket.destroyed);
-  function find(predicate, ownerRequired = false) {
+  function find(predicate) {
     const found = [];
     for (const context of available()) for (const entry of context.client.entries) {
-      for (const record of entry.state.sessions) if (predicate(record) && (!ownerRequired || record.owner === context.view.owner)) {
+      for (const record of entry.state.sessions) if (predicate(record)) {
         const bridge = context.client.control.legacyInput, root = bridge?.target(record), native = root?.native;
         if (native?.connected && !native.closed && native.adapter || root?.retainedReader && !root.disposed)
           found.push({ context, entry, record, bridge, native, root });
@@ -41,7 +41,7 @@ function bindRecipient({ roomState }, { available, find }, caller, proof) {
   // Retained alpha.2 forwarding is explicitly shared-space only. No silent
   // fallback from a requested non-default space into the default one.
   if (spaceId !== 'shared') throw Error(FAIL);
-  const target = find(s => s.id === proof.args.recipient_id && s.provider === 'codex', true);
+  const target = find(s => s.id === proof.args.recipient_id && s.provider === 'codex');
   const original = { ...target.record }, source = { ...caller.record };
   const member = membershipRevision(original, spaceId), sourceMember = membershipRevision(source, spaceId);
   const entryClient = target.entry.client, targetAdapter = target.native.adapter;
@@ -57,7 +57,8 @@ function bindRecipient({ roomState }, { available, find }, caller, proof) {
     const stable = callerValid && available().includes(target.context) && target.entry.client === entryClient &&
       !target.entry.closed && !client.control.maintenance.has(target.entry.key) && (client.control.generations.get(target.entry.key) || 0) === generation &&
       client.control.manualEpoch === epoch && record?.nativeId === original.nativeId && record.pid === original.pid &&
-      record.owner === target.context.view.owner && record.controlRevision === control && !record.archived && !record.nativeContextPending &&
+      typeof original.owner === 'string' && original.owner.length > 0 && record.owner === original.owner &&
+      record.controlRevision === control && !record.archived && !record.nativeContextPending &&
       isMember(record, spaceId) && membershipRevision(record, spaceId) === member && target.bridge.target(record)?.native === target.native &&
       target.native.connected && !target.native.closed && target.native.adapter === targetAdapter;
     const ready = stable && target.native.state === 'idle' && !target.native.pending && !target.native.approval && !target.native.nativeInputRequired &&
