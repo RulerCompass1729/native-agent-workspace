@@ -15,7 +15,7 @@ own terms. This is an independent product, not an official DSH distribution.
 | ws | 8.22.0 | MIT notice preserved in the persistent runtime copy |
 | Electron | 44.9.0 | Unmodified runtime before application metadata/ad-hoc signing; full Electron and Chromium notices copied inside the app |
 | Electron Packager | 20.3.0 | BSD-2-Clause build tool; not an application runtime dependency |
-| Playwright | 1.64.1 | Apache-2.0 test tool; not shipped in the application |
+| Playwright / Playwright Core | 1.64.1 | Apache-2.0; Playwright is a test tool, while Playwright Core supplies the isolated outbox MCP runtime. Browser binaries are not bundled. |
 
 The packaging script installs a clean, locked production dependency tree with
 installation scripts disabled. It checks for package notices and emits

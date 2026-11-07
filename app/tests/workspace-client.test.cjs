@@ -614,7 +614,7 @@ test('the registered desktop IPC run handler records intent before its first awa
     Menu: { setApplicationMenu: noop, buildFromTemplate: value => value },
   };
   const context = vm.createContext({
-    require: name => name === 'electron' ? electron : name === './service-client.cjs' ? { ensureService: async () => {}, connect: () => { throw new Error('No window should boot in this IPC ordering fixture'); } } : name === './dsh-host.cjs' ? { resetUiAuthentication: async () => {}, startDsh: async () => ({ origin: 'http://127.0.0.1:10101', url: 'http://127.0.0.1:10101/', stop: noop }) } : nativeRequire(name),
+    require: name => name === 'electron' ? electron : name === './computer-use-outbox-broker.cjs' ? { createOutboxBroker: async () => ({ close: async () => {} }) } : name === './service-client.cjs' ? { ensureService: async () => {}, connect: () => { throw new Error('No window should boot in this IPC ordering fixture'); } } : name === './dsh-host.cjs' ? { resetUiAuthentication: async () => {}, startDsh: async () => ({ origin: 'http://127.0.0.1:10101', url: 'http://127.0.0.1:10101/', stop: noop }) } : nativeRequire(name),
     __dirname: path.dirname(mainFile), process: { env: {}, execPath: process.execPath }, URL, setTimeout, clearTimeout,
   });
   vm.runInContext(fs.readFileSync(mainFile, 'utf8'), context, { filename: mainFile });

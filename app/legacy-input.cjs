@@ -96,7 +96,7 @@ class LegacyInput extends EventEmitter {
     const status = row => row.status === 'accepted' ? 'submitted' :
       this.targets.get(row.sessionId)?.pendingQueue === row.id ? 'awaiting-native' : 'unconfirmed';
     return [...this.records.filter(row => row.shared === true).map(row => ({
-      id: row.id, role: 'human', recipientId: row.sessionId, name: row.name, text: row.text, time: row.time,
+      id: row.id, role: row.senderId ? 'assistant' : 'human', ...(row.senderId ? { sessionId: row.senderId, senderNativeId: row.senderNativeId } : {}), recipientId: row.sessionId, name: row.name, text: row.text, time: row.time,
       status: status(row), manualReply: row.sharedReply !== true || row.replyPrivate === true,
       ...(row.inputMode ? { inputMode: row.inputMode } : {}),
       deliveryTracked: true, ...(row.replyTo ? { replyTo: row.replyTo } : {}),
@@ -281,13 +281,15 @@ class LegacyInput extends EventEmitter {
       }
     }
   }
-  async send(record, text, refresh, guard, shared = false, replyTo, expectedTurnId, waitForNativeTurn = false, shareAuthority) {
+  async send(record, text, refresh, guard, shared = false, replyTo, expectedTurnId, waitForNativeTurn = false, shareAuthority, outboxSource) {
     replyTo = require('./room-threads.js').replyReference(replyTo);
     const target = this.target(record);
     if (target?.nativeInputRequired) throw uiError("error.claudePluginInputPaused");
     if (!target?.submission.connected) throw uiError("error.legacy.inputNotReadyDraftRetained");
     if (typeof text !== 'string' || !text.trim() || text.length > 16000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) throw uiError("error.legacy.inputTooLong");
-    text = text.trim();
+    const source = outboxSource === undefined ? null : typeof outboxSource === 'function' && outboxSource();
+    if (outboxSource !== undefined && (!shared || !source || !['id', 'nativeId', 'name'].every(key => typeof source[key] === 'string' && source[key] && source[key].length <= 160 && !/[\x00-\x1f\x7f]/.test(source[key])))) throw uiError('error.nativeToolOriginUnconfirmed');
+    if (!source) text = text.trim();
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw uiError("error.nativeCommandUseTerminal");
     if (expectedTurnId !== undefined ? !target.native?.steerAvailable || target.native.pendingSteer : target.submission.pending) throw uiError("error.legacy.previousSendPending");
     if (waitForNativeTurn && !target.queueAvailable) throw uiError("error.legacy.waitingInputUnsupported");
@@ -295,6 +297,7 @@ class LegacyInput extends EventEmitter {
     if (expectedTurnId !== undefined) row.inputMode = 'steer';
     if (waitForNativeTurn) row.inputMode = 'queue';
     if (shared) Object.assign(row, { shared: true, text, name: `你 → ${record.name}`, recipientName: record.name, ...(replyTo ? { replyTo } : {}) });
+    if (source) Object.assign(row, { senderId: source.id, senderNativeId: source.nativeId, name: `${source.name} → ${record.name}` });
     if (shared && this.sharedReplies.authorize(record, target.native || target, row.id, row, shareAuthority)) row.sharedReply = true;
     if (shared && (expectedTurnId !== undefined || waitForNativeTurn) && !row.sharedReply) throw uiError("error.legacy.sharedReplyUnavailable");
     this.records.push(row);

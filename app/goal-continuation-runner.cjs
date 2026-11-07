@@ -10,7 +10,7 @@ const copy = value => structuredClone(value);
 const fail = reason => ({ status: 'denied', reason });
 class GoalContinuation {
   constructor(workspace, saved) {
-    this.w = workspace;
+    this.w = workspace; this.hasJournal = saved !== undefined;
     if (saved !== undefined && (saved?.version !== 1 || !map(saved.policy) || saved.policy.version !== 1 ||
         typeof saved.policy.enabled !== 'boolean' || !map(saved.policy.waits) || !map(saved.policy.events) ||
         !map(saved.bindings) || !map(saved.pending) ||
@@ -37,10 +37,10 @@ class GoalContinuation {
       }
     }
   }
-  journal() { return this.invalidSaved === undefined ? this.data : this.invalidSaved; }
+  journal() { return this.invalidSaved !== undefined ? this.invalidSaved : this.hasJournal ? this.data : undefined; }
   save(next, receipt) {
     if (this.error || this.w.closed || this.w.storageWarning) throw Error('Continuation storage unavailable');
-    this.data = next;
+    this.hasJournal = true; this.data = next;
     for (const row of receipt ? Array.isArray(receipt) ? receipt : [receipt] : []) {
       const room = this.w.rooms.get(row.scopeId);
       if (!room) throw Error('Continuation space no longer exists');

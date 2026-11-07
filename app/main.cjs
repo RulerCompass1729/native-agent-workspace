@@ -21,6 +21,10 @@ const { roomId: validRoomId } = require('./collaboration-spaces.cjs');
 const { identity: roomPeerIdentity } = require('./peer-handoffs.cjs');
 const { windowPlacement } = require('./window-placement.cjs');
 const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
+const { createOutboxBroker } = require('./computer-use-outbox-broker.cjs');
+const { bindOriginalOutbox } = require('./computer-use-outbox-owner.cjs');
+const { createStockOutboxView } = require('./computer-use-outbox-view.cjs');
+let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
 app.setName('Native Agent Workspace');
 process.env.NAW_APP_VERSION = app.getVersion();
@@ -201,7 +205,9 @@ function bindClient(context) {
 function displayState(snapshot, context) {
   const roomId = context?.view?.spaceId || 'shared';
   const display = roomState.apply(sessionLabels.apply(submissionState(snapshot)), roomId);
-  return { ...display, sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
+  const outboxWarning = outboxQuitFailed ? 'Outbox cleanup could not be confirmed. Quit again to close the app; native sessions keep running.'
+    : outboxUnavailable ? 'The independent space outbox is unavailable; new delivery cannot be confirmed.' : '';
+  return { ...display, ...(outboxWarning ? { storageWarning: [display.storageWarning, outboxWarning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     switchEnded: endedByMove(display.sessions) };
 }
 function reportViewStorage(warning, uiMessage = null) {
@@ -494,6 +500,16 @@ async function autoBackendSwitch() {
 let backendSwitchTimer;
 async function boot() {
   dataDir = app.getPath('userData'); fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 }); fs.chmodSync(dataDir, 0o700);
+  if (!outboxBroker) {
+    const descriptorFile = path.join(dataDir, 'outbox-owner.json');
+    delete process.env.NAW_OUTBOX_DESCRIPTOR;
+    try {
+      outboxBroker = await createOutboxBroker({ descriptorFile,
+        bind: (identity, args, signal) => bindOriginalOutbox({ contexts: () => windows.values(), roomState }, identity, args, signal),
+        createView: createStockOutboxView });
+      process.env.NAW_OUTBOX_DESCRIPTOR = descriptorFile; outboxUnavailable = false;
+    } catch { outboxUnavailable = true; } // Existing warning surface; never block ordinary app startup.
+  }
   sessionLabels = new SessionLabels(dataDir);
   roomState = new RoomState(dataDir);
   viewStore = new ViewStore(dataDir);
@@ -1027,6 +1043,7 @@ app.on('second-instance', (_event, argv) => { if (!argv?.includes('--background'
 if (primary) app.whenReady().then(start);
 app.on('window-all-closed', () => {});
 app.on('before-quit', event => {
+  if (outboxClosing) { event.preventDefault(); return; }
   if (quitting) return;
   try {
     if (viewStore?.loaded) {
@@ -1034,6 +1051,18 @@ app.on('before-quit', event => {
       saveViews();
     }
   } catch { event.preventDefault(); return; }
-  quitting = true; dsh?.stop();
+  if (outboxQuitFailed) { quitting = true; dsh?.stop(); return; }
+  if (outboxBroker) {
+    event.preventDefault();
+    outboxClosing = true;
+    Promise.resolve().then(() => outboxBroker.close()).then(() => {
+      outboxClosing = false; quitting = true; dsh?.stop(); app.quit();
+    }, () => {
+      outboxClosing = false; outboxUnavailable = true; outboxQuitFailed = true;
+      for (const context of windows.values()) {
+        try { if (!context.win.isDestroyed()) context.win.webContents.send('workspace:state', displayState(context.client.snapshot(), context)); } catch {}
+      }
+    });
+  } else { quitting = true; dsh?.stop(); }
 });
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.

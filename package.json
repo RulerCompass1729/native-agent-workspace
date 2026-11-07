@@ -73,7 +73,8 @@
     "@deepseek-ai/dsh-settings": "0.2.1-rc.2",
     "@deepseek-ai/dsh-api-settings-controller": "0.2.1-rc.2",
     "@deepseek-ai/dsh-native-command": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-sdk-protocol": "0.2.1-rc.2"
+    "@deepseek-ai/dsh-sdk-protocol": "0.2.1-rc.2",
+    "playwright-core": "1.64.1"
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",

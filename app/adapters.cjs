@@ -18,6 +18,7 @@ const { serverVersion, verifiedCodexProtocol } = require('./native-history.cjs')
 const { toolContent, toolStatus, toolTypes, fileChanges, nativeTextContent, nativeTextItemId } = require('./codex-tool-content.cjs');
 const { codexTurnBlock } = require('./native-blocks.cjs');
 const { computerUseMcpServer, codexComputerUseMcpArgs } = require('./native-computer-use.cjs');
+const { codexOutboxMcpArgs } = require('./computer-use-outbox-tool.cjs');
 
 // The pinned MIT-licensed addon omits OSC8. Extend an isolated copy so other
 // consumers keep the stock module. Private xterm interfaces and the minified
@@ -1711,12 +1712,18 @@ class Codex extends EventEmitter {
         if (this.workspaceMcpCalls.size < 64) this.workspaceMcpCalls.set(params.item.id, { turnId: params.turnId, arguments: params.item.arguments });
         this.emit('workspaceMcpProof');
       }
+      if (params.item.type === 'mcpToolCall' && params.item.server === 'native_outbox' && params.item.tool === 'workspace_outbox') {
+        this.outboxMcpCalls ||= new Map();
+        if (this.outboxMcpCalls.size < 64 && !this.outboxMcpCalls.has(params.item.id)) this.outboxMcpCalls.set(params.item.id,
+          { turnId: params.turnId, rpc: sourceRpc, lifecycle: this.lifecycleRevision, arguments: structuredClone(params.item.arguments) });
+        this.emit('outboxMcpProof');
+      }
     } else {
       if (binding) {
         // Keep a bounded tombstone: a late duplicate start is not new work.
         if (binding.items.has(params.item.id) || binding.items.size < 4096) binding.items.set(params.item.id, null);
       }
-      this.activeNativeItems.delete(params.item.id); this.workspaceMcpCalls?.delete(params.item.id);
+      this.activeNativeItems.delete(params.item.id); this.workspaceMcpCalls?.delete(params.item.id); this.outboxMcpCalls?.delete(params.item.id);
     }
     this.publishNativeActivity();
   }
@@ -2537,7 +2544,8 @@ class NativeHost {
         ['command', process.execPath], ['args', mcpArgs], ['env.ELECTRON_RUN_AS_NODE', '1'],
         ['env.NAW_MESSAGE_SOCKET', this.hookSocket], ['env.NAW_MESSAGE_TOKEN', this.codexMessageToken],
       ].flatMap(([key, value]) => ['-c', `mcp_servers.native_workspace.${key}=${JSON.stringify(value)}`]);
-      child = this.codexProcess = spawn(this.codexBinary, ['-c', 'analytics.enabled=false', ...mcpConfig, ...codexComputerUseMcpArgs(), 'app-server', '--listen', `unix://${this.codexSocket}`], { stdio: ['ignore', 'ignore', 'pipe'], env: nativeEnvironment() });
+      const outboxConfig = process.env.NAW_OUTBOX_DESCRIPTOR ? codexOutboxMcpArgs(process.env.NAW_OUTBOX_DESCRIPTOR) : [];
+      child = this.codexProcess = spawn(this.codexBinary, ['-c', 'analytics.enabled=false', ...mcpConfig, ...codexComputerUseMcpArgs(), ...outboxConfig, 'app-server', '--listen', `unix://${this.codexSocket}`], { stdio: ['ignore', 'ignore', 'pipe'], env: nativeEnvironment() });
       child.stderr.on('data', () => {});
       child.on('error', error => { spawnError = error; });
       for (let i = 0; i < 100 && !fs.existsSync(this.codexSocket); i++) {

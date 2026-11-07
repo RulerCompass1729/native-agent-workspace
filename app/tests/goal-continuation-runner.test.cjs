@@ -246,3 +246,17 @@ for (const [name, change] of [
   const f = await fixture(t); await f.register(); change(f);
   await f.w.goalContinuationEvent(f.event); assert.equal(f.writes(), 0);
 });
+
+// Preserve the ordinary empty-service format until the feature is actually used.
+test('unused continuation keeps empty storage unchanged and explicit revoke remains durable', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-continuation-unused-'));
+  const w = new Workspace({ binaries: {}, close() {} }, dir);
+  t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  assert.equal(w.goalContinuation.journal(), undefined);
+  assert.equal(w.persist(), true);
+  const read = () => JSON.parse(fs.readFileSync(path.join(dir, 'workspace.json'), 'utf8'));
+  assert.deepEqual(read(), { sessions: [], room: { messages: [] }, drafts: {} });
+  assert.equal(w.configureGoalContinuation(null).status, 'revoked');
+  assert.equal(read().goalContinuation.policy.enabled, false);
+  assert.equal(w.goalContinuation.journal().authorization, null);
+});

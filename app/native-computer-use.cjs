@@ -263,7 +263,7 @@ function viewTools() {
 function viewResult(value) { return { content: [{ type: 'text', text: JSON.stringify(value) }] }; }
 function createComputerUseViewGate({ grant, invoke, inspect, target, now = Date.now, onRevoke = () => {} }) {
   if (!grant || !['owner', 'spaceId', 'recipientId', 'nativeId', 'memberRevision', 'text'].every(k => grant[k] !== undefined) ||
-      typeof grant.text !== 'string' || !grant.text || grant.text.length > 16000 || /[\x00-\x1f\x7f\u2028\u2029]/.test(grant.text) ||
+      typeof grant.text !== 'string' || !grant.text.trim() || grant.text.length > 16000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(grant.text) ||
       ![invoke, inspect, target].every(f => typeof f === 'function')) throw Error(VIEW_REFUSAL);
   grant = Object.freeze({ ...grant });
   let receipt, busy = false, revoked = false, submitted = false;

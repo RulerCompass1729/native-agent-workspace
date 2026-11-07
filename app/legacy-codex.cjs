@@ -165,6 +165,7 @@ class LegacyCodex extends EventEmitter {
     try {
       const result = await rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true });
       if (this.closed || result.thread?.id !== this.record.nativeId) throw uiError("error.legacy.nativeConnectionUnconfirmed");
+      adapter.nativeSessionId = result.thread.sessionId;
       adapter.observeReplySettings(result, settings);
       if (revision === adapter.stateRevision) adapter.observeStatus(result.thread.status);
       this.subscribed = true;

@@ -6377,3 +6377,61 @@ notice, and the real runtime readiness event rechecks it before one call.
 All 139 directly affected checks pass without skips; independent source review
 accepts the admission change and readiness binding. Real native writes, actual
 callers and installed acceptance remain unverified.
+
+
+### Restricted space outbox: source and isolated UI checkpoint
+
+The outbox binds one live native Codex tool call to its original session, turn,
+call ID, exact recipient/body and connection lifecycle. It uses the existing
+restricted view lease and recorded shared-message transport; a tool ACK alone
+cannot confirm native receipt or the first command. Unsupported callers and
+spaces refuse without creating another native session or claiming private input.
+
+The isolated stock browser initially failed before dispatch on a long Darwin
+socket path, blocked file navigation and an unavailable tool name. The corrected
+path uses a short private directory and installs only its own nonce-protected
+composer into an isolated blank page with page-level evaluation. It enables no
+application debug endpoint, unrestricted file access or server code execution.
+An actual locked-screen Chrome journey retained loginwindow focus, sent one
+CRLF/tab/edge-whitespace body, and cleaned its exact processes and profile.
+Native receive/command events in that journey were synthetic, not original agents.
+
+Independent review findings are covered by focused source checks: stale broker
+startup cannot block normal application startup; repeated quit cannot bypass
+pending cleanup; after a failed cleanup the frontend remains usable and a later
+explicit quit proceeds. Tests execute the actual Main handler with a real broker
+whose cleanup rejects. DOM facts cannot override Main's caller or membership
+fields, and textarea normalization preserves the approved transport bytes.
+
+Related checks: `node --test app/tests/computer-use-outbox*.test.cjs` together
+with native computer-use, message-tool and retained-input regression tests.
+Original-host registration, an actual idle original agent's native receipt and
+first command, current-backend and Claude caller support, and installed delivery
+remain separate open acceptance work. The source/isolated checkpoint is not full
+control-channel delivery.
+
+Main integration found the continuation modules missing from both copied-runtime
+and application payload declarations. Loading the actual copied Workspace failed
+with a missing-module error in both paths; the lists now include its two direct
+dependencies. A payload check loads each real copied module graph and confirms
+that removing a dependency fails. It starts no service or provider.
+
+The imported page check initially failed because its source slicer also captured
+a newly added helper. It now calls the exported production HTML function directly;
+the embedded-page assertions remain the same. These are source checks, not
+installed delivery or original-goal continuation evidence.
+
+The full integration run also exposed two old VM desktop fixtures that opened
+the new real broker without closing it; those unrelated IPC checks now use an
+inert broker, while the dedicated lifecycle checks still exercise the real one.
+Only the two owned fixture children and their eight observed socket directories
+were cleaned. An existing empty-service test caught a second regression: unused
+continuation state changed the ordinary empty store. The journal is now absent
+until an actual control operation, including revocation, makes it durable.
+
+Independent integration review accepts the repaired Main source stage; 3,191
+source checks pass without skips. The first bounded review returned no verdict
+and was not a pass; the same reviewer then inspected the missing raw results
+and returned scoped source approval with unchanged files/index/HEAD. Original
+host registration, actual receive/command, the outbox-only ACK receipt correction
+and installed delivery remain open. No goal writes or release are qualified.
