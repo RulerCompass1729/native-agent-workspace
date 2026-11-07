@@ -6612,3 +6612,19 @@ conservatively; that mode does not inherit the direct RPC exception. An independ
 preparation only. It inspected the raw author-run counter evidence, without an
 independent rerun. Installed original secretary delivery, first command and
 conditional goal continuation remain open.
+
+
+### T58 optional native goal feature through the original TUI bridge
+
+The held-TUI RPC bridge discarded the host RPC's exact nativeGoalsDisabled flag.
+Consequently a backend with the optional goal feature disabled rejected ordinary
+agent input, although the normal host path treats that precise native error as
+an absent goal. Preserve only the same exact code/message predicate already used
+by the host RPC; unrelated failures still refuse and private native text does not
+reach the TUI or shared receipt. The same synthetic-server counter fails before
+the fix; 87 affected bridge, canonical wake and managed outbox checks pass without
+skips afterwards. No provider process or model was used. The same independent
+read-only reviewer approved this source delta from the exact predicate and raw
+counter evidence; no independent rerun. Signed candidate 211 predates this small delta; its tested enabled-goal
+path remains unchanged. Disabled-goal installed acceptance is queued for the next
+release batch, so this is not an installed compatibility claim.

@@ -99,7 +99,15 @@ class CodexTerminalBridge {
       try { response = JSON.parse(data.toString()); } catch {}
       if (response && !response.method && typeof response.id === 'string' && response.id.startsWith(appPrefix)) {
         const request = state.appPending.get(response.id); state.appPending.delete(response.id);
-        if (request) { clearTimeout(request.timer); response.error ? request.reject(uiError('error.nativeRequestRejected', { arg1: response.error.code })) : request.resolve(response.result); }
+        if (request) {
+          clearTimeout(request.timer);
+          if (response.error) {
+            const error = uiError('error.nativeRequestRejected', { arg1: response.error.code });
+            // Match the existing host RPC contract without exposing native text.
+            error.nativeGoalsDisabled = response.error.code === -32600 && response.error.message === 'goals feature is disabled';
+            request.reject(error);
+          } else request.resolve(response.result);
+        }
         return; // Even a late private response must not reach the native TUI.
       }
       if (response && !response.method && state.pending.has(response.id)) {

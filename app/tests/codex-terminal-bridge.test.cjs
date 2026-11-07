@@ -94,3 +94,27 @@ test('a pending native context switch prevents any scoped send on the old contex
  await assert.rejects(rpc.call('turn/start',{threadId:'original',clientUserMessageId:randomUUID(),input:[{type:'text',text:'new task',text_elements:[]}]}));
  assert.equal(seen,2);
 });
+
+test('held native goal reads preserve only the exact disabled-feature flag without exposing private errors', async t => {
+ const { nativeGoalStatus }=require('../session-wake.cjs');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-held-goal-')),endpoint=path.join(dir,'display.sock'),upstream=path.join(dir,'native.sock');
+ const server=http.createServer(),native=new WebSocket.Server({server}),observed=[],display=[],calls=[];
+ let error={code:-32600,message:'goals feature is disabled'};
+ native.on('connection',socket=>socket.on('message',data=>{const m=JSON.parse(data);calls.push(m);
+  if(m.method==='thread/start')return socket.send(JSON.stringify({id:m.id,result:{thread:{id:'original'}}}));
+  assert.equal(m.method,'thread/goal/get');socket.send(JSON.stringify({id:m.id,error}));
+ }));
+ await new Promise(r=>server.listen(upstream,r));const bridge=await new CodexTerminalBridge(endpoint,upstream,e=>observed.push(e)).start();
+ const client=new WebSocket('ws://localhost',{createConnection:()=>net.connect(endpoint)});
+ t.after(async()=>{client.terminate();bridge.close();for(const c of native.clients)c.terminate();await new Promise(r=>native.close(r));await new Promise(r=>server.close(r));fs.rmSync(dir,{recursive:true,force:true});});
+ client.on('message',data=>display.push(JSON.parse(data)));await once(client,'open');const started=once(client,'message');client.send(JSON.stringify({id:1,method:'thread/start',params:{ephemeral:false}}));await started;
+ const rpc=observed.find(e=>e.kind==='response').rpc,s={provider:'codex',nativeId:'original'};
+ assert.equal(await nativeGoalStatus(s,{},()=>true,rpc),null,'Native absence of the optional goal feature must not reject ordinary input');
+ for(const variant of [{code:-32601,message:'goals feature is disabled'},{code:-32600,message:'PRIVATE unrelated server error'}]){
+  error=variant;await assert.rejects(rpc.call('thread/goal/get',{threadId:'original'}),e=>e.nativeGoalsDisabled===false&&!e.message.includes('PRIVATE'));
+  await assert.rejects(nativeGoalStatus(s,{},()=>true,rpc));
+ }
+ assert.equal(calls.filter(m=>m.method==='thread/goal/get').length,5);
+ assert.equal(display.length,1,'Private scoped responses are never forwarded to the native display');
+ assert.equal(native.clients.size,1,'No new original native connection or engine');
+});
