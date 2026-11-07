@@ -1,5 +1,32 @@
 # Bounded testing
 
+## Alpha.211: managed outbox package and ordinary GUI update
+
+Committed build source `de7a69a` has 79 matching payloads and a valid strict
+signature after both signed isolated journeys. The normal empty-profile bootstrap
+passes three checks. The stock outbox connects the actual packaged service and
+Workspace to owned synthetic native events: one input, native echo and the first
+completed command with integer exit zero. It uses no provider engine or model;
+it is not original-agent delivery. Owned processes, profile and GUI lease are
+removed, and signature verification still passes.
+
+The visible daily update from 210 preserves 14 records, 16 live native process
+identities, 13 draft scopes and all seven occupied old backends across 150 seconds.
+Original goal identity, objective, creation and no-budget setting remain; the
+goal is active. Old runtime code is deliberately retained and automatic backend
+migration is off. Normal launch has no background/debug arguments. The independent
+reviewer accepts this exact ordinary GUI operation; a wrong version in prepared
+approval metadata was corrected before execution, without changing the operator.
+A failed template comparator had changed UUID digits only in its temporary
+expected string; the actual operator always retained the original UUID.
+
+Current real desktop capture fails because macOS is locked. AX inspection has
+one element and no usable mutation target; no click or native backend migration
+was sent. Original-caller receipt, continuous-goal recovery, pending native-input
+preservation and daily interactive acceptance remain open. Later source-only
+optional-goal bridge checks are not installed-alpha.211 evidence. No push occurs.
+
+
 
 ## Alpha.209: live member terminal display
 

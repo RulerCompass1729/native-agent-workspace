@@ -6628,3 +6628,27 @@ read-only reviewer approved this source delta from the exact predicate and raw
 counter evidence; no independent rerun. Signed candidate 211 predates this small delta; its tested enabled-goal
 path remains unchanged. Disabled-goal installed acceptance is queued for the next
 release batch, so this is not an installed compatibility claim.
+
+
+### Alpha.211 ordinary visible update: original runtimes retained
+
+The signed candidate's normal bootstrap and actual packaged-service/stock-outbox
+journey pass with the same committed source and signature. Its source, echo and
+first completed command are explicitly synthetic; original-agent delivery is not
+claimed. Cleanup succeeds without losing signature failures or earlier failures.
+
+A fresh read-only integration checkpoint reviews the ordinary GUI-update template,
+raw signed results and artifact pins. It blocks a prepared approval record naming
+the previous version; a one-field correction is approved by the same reviewer.
+The actual operator and original native UUID remain unchanged. The initial
+version comparator's UUID-substring error is retained separately; token-scoped
+comparison confirms the declared version/evidence-reference changes only.
+
+The executed ordinary update passes its original-process, settings, draft and
+150-second retention assertions: 14 records, 16 live native identities, 13 draft
+scopes and seven occupied older backends remain. Strict signature and normal
+visible launch pass; automatic backend migration stays off. A later real capture
+reports the OS locked, and AX has no usable target. No click or selected native
+runtime action follows. Current-viewport preservation is a local backup, not proof
+that every offscreen native draft is saved. The whole milestone, original native
+delivery and continuous-goal restoration remain open; no push is performed.

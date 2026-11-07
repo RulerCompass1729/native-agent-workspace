@@ -1,31 +1,40 @@
 # Readiness and next gates
 
-As of 2026-11-06. This is a local Apple Silicon macOS technical trial.
+As of 2026-11-07. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.209, clean committed build source `c0650f8`.
-Live member terminals remain visible while their input route is chat. Passive
-viewing preserves terminal identity and input ownership. Existing privacy-mode
-vertical padding is 20px. The confirmed-facts, merge-preview and usage repairs
-from alpha.208 remain included.
+Current daily GUI: alpha.211, clean committed build source `de7a69a`.
+The signed package contains 79 payload files matching that source. Normal
+bootstrap and the packaged-service outbox journey pass; the outbox's native
+receipt and first command are synthetic, with no provider inference.
 
-All 2,965 source checks pass without skips. The signed isolated package passes
-six terminal/navigation/input journeys and privacy open/close; normal empty-
-profile bootstrap passes three checks. All 71 payload files match the committed
-source/build output, and strict signatures pass after testing. Independent review
-accepts this scoped source/signed combination, not real native delivery or goal
-resume. Earlier failed source-driver runs remain failed. The initial trial reported
-the run counter unavailable; a later test-only correction binds it to actual
-local startRun attempts, observed at zero in a supplemental signed trial.
+The ordinary visible update from alpha.210 retains 14 records, all 16 verified
+live native process identities, 13 draft scopes, seven occupied older backends
+and the same active original goal across 150 seconds. Automatic migration stays
+off. Occupied runtimes keep their previous code; installing GUI support does not
+activate their new outbox producer. The app reopened normally without background
+or debugging arguments, and its strict signature remains valid.
 
-The ordinary visible update retains 14 records, 16 live native process identities,
-13 draft scopes, seven occupied older backends and the same active Main goal
-across 150 seconds. Automatic migration stays off. Occupied runtimes retain their
-previous code. The app reopened normally without background/debug arguments.
-The OS remains locked; daily changed-surface operation, physical input, real
-workdays and the full dogfood milestone remain open. The final synthetic native
-input-pending flag was not verified to clear. No push is used.
+The source and signed isolated qualification do not establish original-caller
+adoption, real recipient delivery or continuous-goal recovery. The real desktop
+capture reports a locked macOS session; its one-element AX observation provides
+no usable mutation target. No click or native backend update was attempted.
+Daily interactive acceptance and the whole dogfood milestone remain open.
+
+The current source head also contains a later TUI-bridge optional-goal repair;
+that small delta is not part of alpha.211 and awaits its next installed check.
+The operator phase 1a and goal-continuation interface remain unshipped. No push
+is used.
+
+Previously qualified alpha.209, source `c0650f8`, keeps live member terminals
+visible while their input route is chat, preserving passive input ownership.
+Its 2,965 source checks, six signed terminal/navigation/input journeys, privacy
+open/close and three normal-bootstrap checks remain scoped to that version.
+The test-only counter correction observes actual local startRun attempts at
+zero; it does not retroactively measure the earlier unavailable counter or
+qualify peer-run delivery. Earlier failed trials and the unverified final
+synthetic input-pending clearance remain unchanged.
 
 Previously qualified alpha.207, source `cead349`, shows observed Codex goal facts
 in the existing header, sidebar and member lines. Its unchanged notification,
@@ -43,7 +52,7 @@ installation, rollback, pins, verification or occupancy keeps deletion candidate
 empty; no automatic-retention count or deletion is approved.
 
 Unreleased operator phase 1a keeps its earlier source/synthetic qualifications.
-Native qualification, daily grants and installation remain gated; alpha.209
+Native qualification, daily grants and installation remain gated; alpha.211
 excludes this interface entirely.
 
 Previously qualified alpha.204, source `48a6fd1`, compacted existing file previews,
