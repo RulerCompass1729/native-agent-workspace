@@ -12,32 +12,59 @@ async function nativeOutboxCall(runtime, identity, arguments_, signal) {
   const args = validateOutboxArgs(arguments_);
   if (!identity || !['nativeId', 'sessionId', 'turnId', 'callId'].every(k => token(identity[k]))) throw Error(FAIL);
   const rpc = runtime?.host?.rpc, lifecycle = runtime?.lifecycleRevision;
-  let proof;
-  const valid = () => {
+  let proof, metadataVerified = false;
+  const candidate = () => {
     if (signal?.aborted || !rpc || runtime.stopped || runtime.transportDisconnected || runtime.record.nativeContextPending ||
         runtime.host.rpc !== rpc || runtime.lifecycleRevision !== lifecycle || runtime.record.nativeId !== identity.nativeId ||
-        runtime.nativeSessionId !== identity.sessionId || runtime.turnId !== identity.turnId) return false;
+        runtime.nativeSessionId !== identity.sessionId || runtime.turnId != null && runtime.turnId !== identity.turnId ||
+        runtime.turns?.get(identity.turnId)?.completed || runtime.turnId == null && runtime.latestState !== 'working') return false;
     const call = runtime.outboxMcpCalls?.get(identity.callId);
     if (!call || call.turnId !== identity.turnId || call.rpc !== rpc || call.lifecycle !== lifecycle ||
         call.arguments?.recipient_id !== args.recipient_id || call.arguments?.message !== args.message ||
         (call.arguments?.space_id || 'shared') !== args.space_id || proof && call !== proof) return false;
     return call;
   };
-  const first = valid();
+  const valid = () => candidate() && (runtime.turnId === identity.turnId || metadataVerified);
+  const first = candidate();
   if (first) proof = first;
   else await new Promise((resolve, reject) => {
     const finish = error => { clearTimeout(timer); runtime?.off('outboxMcpProof', observed); runtime?.off('nativeTurnEnd', ended); signal?.removeEventListener('abort', aborted); error ? reject(error) : resolve(); };
-    const observed = () => { const value = valid(); if (value) { proof = value; finish(); } };
+    const observed = () => { const value = candidate(); if (value) { proof = value; finish(); } };
     const ended = info => { if (info.turnId === identity.turnId) finish(Error(FAIL)); };
     const aborted = () => finish(Error(FAIL));
     const timer = setTimeout(aborted, 3000);
     if (!runtime || signal?.aborted) { aborted(); return; }
     runtime.on('outboxMcpProof', observed); runtime.on('nativeTurnEnd', ended); signal?.addEventListener('abort', aborted, { once: true }); observed();
   });
-  if (!valid() || proof.outboxConsumed) throw Error(FAIL);
+  if (!candidate() || proof.outboxConsumed) throw Error(FAIL);
   // A repeated RPC for this still-active native call is not a second send.
   // Mark before opening any UI or awaiting its first action.
   proof.outboxConsumed = true;
+  if (runtime.turnId == null) {
+    // Only the latest turn's ID/status, explicitly without loaded items. This
+    // read does not resume a thread, inspect history content or set turnId.
+    const result = await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error, value) => {
+        if (settled) return; settled = true; clearTimeout(timer); signal?.removeEventListener('abort', aborted);
+        error ? reject(Error(FAIL)) : resolve(value);
+      };
+      const aborted = () => finish(true), timer = setTimeout(aborted, 3000);
+      if (signal?.aborted) return aborted();
+      signal?.addEventListener('abort', aborted, { once: true });
+      Promise.resolve().then(() => {
+        if (!candidate()) throw Error(FAIL);
+        return rpc.call('thread/turns/list', { threadId: identity.nativeId,
+          limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' });
+      }).then(value => finish(false, value), () => finish(true));
+    });
+    const turn = result?.data?.[0];
+    if (!candidate() || !Array.isArray(result?.data) || result.data.length !== 1 ||
+        turn?.id !== identity.turnId || turn.status !== 'inProgress' || turn.itemsView !== 'notLoaded' ||
+        !Array.isArray(turn.items) || turn.items.length !== 0) throw Error(FAIL);
+    metadataVerified = true;
+  }
+  if (!valid()) throw Error(FAIL);
   return { args, valid: () => Boolean(valid()) };
 }
 // Subscribe before forwarding: the native input can precede the forward ACK.

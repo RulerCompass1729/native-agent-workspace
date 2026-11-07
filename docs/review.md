@@ -6543,3 +6543,8 @@ pairing is not original-native or installed acceptance.
 ### T58 restricted outbox without a recipient-owned window
 
 The source binder rejected a shared task when only the sender window remained, despite an existing idle recipient transport. Bind that existing transport while pinning its original private owner and control revision; no claim, draft change or reply-sharing grant. The new same-fixture counter fails before the patch and passes after it, with owner/member/manual invalidation still denied. Native events are synthetic here: actual original secretary delivery and the completed first command remain an integration acceptance requirement. Independent source review pending at this checkpoint.
+
+
+### T58 retained outbox origin after mid-turn attachment
+
+A retained reader that attached during an active original turn discarded later live outbox tool events because its UI turn ID was still unknown. Capture only the scoped native tool candidate and validate an unknown turn with one bounded metadata-only request; do not adopt global turn state or read loaded items. The old source fails the real retained-connection synthetic-server counter; invalid metadata, connection changes, completion, cancellation and delayed replay remain denied. A new turn-completion counter also required explicit outbox revocation because completed UI turn records are removed. Independent read-only source review approved the exact delta and old-source counter for Main intake. Original-secretary delivery, native first command and installed locked/background acceptance remain open.
