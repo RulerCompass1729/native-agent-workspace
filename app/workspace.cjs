@@ -122,7 +122,7 @@ class Workspace extends EventEmitter {
     return Object.keys(usage).length || account ? { ...usage, ...(account ? { account } : {}) } : null;
   }
   snapshot() {
-    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
+    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
   }
   changed() {
     for (const s of this.sessions.values()) {
@@ -1483,7 +1483,39 @@ class Workspace extends EventEmitter {
     if (this.approvalRoutes.get(id)?.get(requestId) === route) { route.approval = { ...route.approval, pending: true }; Object.assign(s, queue.snapshot()); }
     this.changed();
   }
-  stop(id) {
+  maintenanceStop(id, expected, requireAuto = false) {
+    const { sessionPlan, sameStop } = require('./backend-switch.cjs');
+    const s = this.get(id), runtime = this.runtime(id);
+    const check = () => {
+      const running = new Set();
+      for (const room of this.rooms.values()) if (room.run?.status === 'running') for (const member of room.run.ids || []) running.add(member);
+      const current = { ...s, draftRevision: this.draftRevisions.get(id) || 0,
+        activeTurnId: runtime.turnId, pendingQueue: runtime.pendingQueue, pendingSteer: runtime.pendingSteer,
+        nativeInputRequired: runtime.nativeInputRequired, interruptPending: runtime.nativeAbortRequest };
+      const plan = sessionPlan(current, current.state, running);
+      if (this.closed || this.storageWarning || this.sessions.get(id) !== s || this.runtimes.get(id) !== runtime || this.stops.has(id) ||
+          !plan.stop || !sameStop(plan.stop, expected) || (requireAuto && !plan.auto) || typeof runtime.stopForMaintenance !== 'function') throw uiError('error.backendSwitchSessionChanged', { name: s.name || id });
+    };
+    check();
+    return this.stop(id, { check, expected });
+  }
+  maintenanceResume(id, expected, owner) {
+    const { sameStop } = require('./backend-switch.cjs'), s = this.get(id);
+    if (!expected || s.state !== expected.state || !sameStop({ ...s, draftRevision: this.draftRevisions.get(id) || 0 }, expected)) throw uiError('error.backendSwitchSessionChanged', { name: s.name || id });
+    return this.resume(id, owner);
+  }
+  assertMaintenanceShutdown(expected) {
+    const { sameStop, sessionPlan } = require('./backend-switch.cjs');
+    if (this.pendingNativeImports || this.stops.size || !Array.isArray(expected) || expected.length !== this.sessions.size || new Set(expected.map(s => s?.id)).size !== expected.length) throw uiError('error.backendSwitchOldPending');
+    for (const room of this.rooms.values()) if (room.run?.status === 'running') throw uiError('error.backendSwitchOldPending');
+    for (const proof of expected) {
+      const s = this.sessions.get(proof?.id), runtime = this.runtimes.get(proof?.id);
+      const carried = s && sessionPlan(s, s.state).carry;
+      if (!s || !(carried || s.provider === 'codex' && s.state === 'disconnected') || s.state !== proof.state ||
+          !sameStop({ ...s, draftRevision: this.draftRevisions.get(s.id) || 0 }, proof) || s.pendingTag || s.nativeContextPending || runtime?.turnId || runtime?.pendingQueue || runtime?.pendingSteer || runtime?.nativeInputRequired) throw uiError('error.backendSwitchOldPending');
+    }
+  }
+  stop(id, maintenance = null) {
     if (this.stops.has(id)) return this.stops.get(id);
     const s = this.get(id);
     if (['ended', 'background'].includes(s.state)) return Promise.resolve();
@@ -1497,15 +1529,30 @@ class Workspace extends EventEmitter {
       setActivity(s, ...uiActivity("notice.activity.connectionCancelled")); this.changed(); return Promise.resolve();
     }
     const runtime = this.runtime(id);
-    this.pause('正在断开原生会话', undefined, false, uiActivity('notice.run.disconnecting')[1]); s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'stopping'; setActivity(s, ...uiActivity("notice.activity.waitingNativeConfirmation")); this.changed();
-    const operation = Promise.resolve().then(() => runtime.stop()).then(result => {
+    let committed = false, stoppedState;
+    const currentControl = () => ({ ...s, draftRevision: this.draftRevisions.get(id) || 0 });
+    const stillOurs = () => !maintenance || this.sessions.get(id) === s && this.runtimes.get(id) === runtime && require('./backend-switch.cjs').sameStop(currentControl(), stoppedState);
+    const begin = () => {
+      maintenance?.check();
+      committed = true;
+      this.pause('正在断开原生会话', undefined, false, uiActivity('notice.run.disconnecting')[1]); s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'stopping'; setActivity(s, ...uiActivity("notice.activity.waitingNativeConfirmation")); this.changed();
+      stoppedState = { ...maintenance?.expected, controlRevision: s.controlRevision, connectionRevision: s.connectionRevision };
+      this.stops.set(id, operation);
+    };
+    // A maintenance observer may await current native state. Keep those events
+    // visible until its final synchronous check; the ordinary stop still reserves now.
+    let operation;
+    operation = Promise.resolve().then(() => maintenance ? runtime.stopForMaintenance(begin) : runtime.stop()).then(result => {
+      if (!stillOurs()) throw uiError('error.backendSwitchDisconnectUnconfirmed', { name: s.name || id });
       if (!['ended', 'recoverable', 'disconnected'].includes(result?.state)) throw uiError("error.workspace.nativeEndUnconfirmed");
       s.state = result.state; s.pendingTag = null; s.approval = null; s.approvalResolved = false; s.approvals = []; s.approvalOverflow = false; this.approvalRoutes.delete(id);
       setActivity(s, ...(result.state === 'ended' ? ['', null] : uiActivity(result.state === 'recoverable' ? 'notice.activity.backendExited' : 'notice.activity.connectionDetached')));
       if (['ended', 'recoverable'].includes(s.state)) { s.pid = null; this.runtimes.delete(id); }
-    }).catch(error => { s.state = 'error'; setActivity(s, error.message, error.uiMessage); throw error; })
-      .finally(() => { this.stops.delete(id); this.changed(); });
-    this.stops.set(id, operation); return operation;
+      if (maintenance) return { stopped: true, expected: maintenance.expected, stoppedState: { ...stoppedState, state: s.state } };
+    }).catch(error => { if (committed && stillOurs()) { s.state = 'error'; setActivity(s, error.message, error.uiMessage); } throw error; })
+      .finally(() => { if (this.stops.get(id) === operation) { this.stops.delete(id); this.changed(); } });
+    if (!maintenance) begin();
+    return operation;
   }
   async resume(id, owner) {
     const s = this.get(id);

@@ -11,7 +11,7 @@ const now = 1_800_000_000_000;
 const claudeNew = (extra = {}) => ({ id: 'c', nativeId: 'native-c', provider: 'claude', name: 'Claude 2', state: 'idle', owner: 'view-a',
   terminalInputPending: false, backgroundStale: false, background: 0, scheduled: 0, ...extra });
 const codexNew = (extra = {}) => ({ id: 'x', nativeId: 'native-x', provider: 'codex', name: 'Codex 秘书', state: 'idle', owner: 'view-b', terminalInputPending: false, ...extra });
-const caps = ['atomicShutdown', 'resume'];
+const caps = ['atomicShutdown', 'resume', 'conditionalMaintenanceStopV1'];
 
 test('backend plan reasons carry exact canonical text and translate each known refusal without changing the plan', () => {
   const locale = require('../ui-locale.js'), rawName = 'RAW 中文 <name>{reason}';
@@ -109,6 +109,7 @@ test('the automatic setting defaults on and is one stored boolean', t => {
 async function service(directory, state, { onStop } = {}) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const transport = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-')), endpoint = path.join(transport, 's.sock'), sockets = new Set(), calls = [];
+  for (const record of state.sessions) record.draftRevision ??= 0;
   const child = spawn('/bin/sleep', ['60'], { stdio: 'ignore' }); state.servicePid = child.pid;
   fs.writeFileSync(path.join(directory, 'service.lock'), String(child.pid));
   const server = net.createServer(socket => {
@@ -123,12 +124,17 @@ async function service(directory, state, { onStop } = {}) {
         let value = true, error = null;
         const record = state.sessions.find(s => s.id === request.args?.[0]);
         if (request.method === 'initial') value = state;
-        else if (request.method === 'stop') { const next = onStop?.(record, state); if (next === 'reject') { record.state = 'error'; error = '原生未确认结束状态。'; } else record.state = next || (record.provider === 'codex' ? 'disconnected' : 'ended'); }
-        else if (request.method === 'resume') { // Same states the real resume accepts (ended/recoverable/error; disconnected Codex reconnects).
+        else if (request.method === 'maintenanceStop') { const next = onStop?.(record, state); if (next === 'reject') { record.state = 'error'; error = '原生未确认结束状态。'; } else { record.state = next || (record.provider === 'codex' ? 'disconnected' : 'ended'); record.controlRevision = (record.controlRevision || 0) + 1; record.connectionRevision = (record.connectionRevision || 0) + 1; value = { stopped: true, expected: request.args[1], stoppedState: { ...request.args[1], controlRevision: record.controlRevision, connectionRevision: record.connectionRevision, state: record.state } }; } }
+        else if (request.method === 'maintenanceResume') { // Same states the real resume accepts (ended/recoverable/error; disconnected Codex reconnects).
           if (!['ended', 'recoverable', 'error', 'disconnected'].includes(record.state)) error = '这个会话目前不能恢复。'; else record.state = 'idle'; }
-        else if (request.method === 'shutdown') {
-          if (state.sessions.some(s => !['ended', 'background'].includes(s.state))) error = '请先结束各原生会话，再关闭运行服务。';
-          else setTimeout(() => api.die(), 10);
+        else if (['shutdown', 'maintenanceShutdown'].includes(request.method)) {
+          if (request.method === 'maintenanceShutdown') {
+            const { Workspace } = require('../workspace.cjs'), guard = Object.create(Workspace.prototype);
+            Object.assign(guard, { sessions: new Map(state.sessions.map(s => [s.id, s])), runtimes: new Map(), stops: new Map(),
+              draftRevisions: new Map(state.sessions.map(s => [s.id, s.draftRevision])), rooms: new Map() });
+            try { guard.assertMaintenanceShutdown(request.args[0]); } catch (failure) { error = failure.message; }
+          } else if (state.sessions.some(s => !['ended', 'background'].includes(s.state))) error = '请先结束各原生会话，再关闭运行服务。';
+          if (!error) setTimeout(() => api.die(), 10);
         }
         socket.write(JSON.stringify({ id: request.id, ok: !error, error, value }) + '\n');
       }
@@ -149,7 +155,7 @@ function harness(t, sessions) {
     dataDir, key, directory, services,
     async old() { const s = await service(directory, { runtimeVersion: '0.1.0-alpha.157', capabilities: caps, sessions: structuredClone(sessions), room: { messages: [] } }); services.push(s); return s; },
     // The current code reloads the store: ended stays ended, anything else live becomes recoverable.
-    ensure: (stateFor = old => old.sessions.map(r => ({ ...r, state: r.state === 'ended' ? 'ended' : 'recoverable' }))) => async (dir, exe, k) => {
+    ensure: (stateFor = old => old.sessions.map(r => ({ ...r, owner: null, controlRevision: 0, draftRevision: 0, state: r.state === 'ended' ? 'ended' : 'recoverable' }))) => async (dir, exe, k) => {
       assert.equal(dir, dataDir); assert.equal(k, key);
       const next = await service(directory, { runtimeVersion: '0.1.0-alpha.158', capabilities: caps, sessions: stateFor(services[0].state), room: { messages: [] } }); services.push(next);
     },
@@ -157,7 +163,7 @@ function harness(t, sessions) {
     signal: s => (pid, name) => { assert.ok(directory.startsWith(fs.realpathSync(os.tmpdir())), 'Only a temporary test service can be signalled'); assert.equal(pid, s.pid); s.signals.push(name); s.die(); },
   };
 }
-const methods = s => s.calls.map(([method, id]) => id ? `${method}:${id}` : method).filter(m => m !== 'initial');
+const methods = s => s.calls.map(([method, id]) => id ? `${method}:${id}` : method).filter(m => m !== 'initial').map(m => m.startsWith('maintenanceShutdown:') ? 'maintenanceShutdown' : m);
 
 const record = (dir, key) => readRecords(dir)[key] || null;
 const ownersOf = (s, method) => s.calls.filter(([m]) => m === method).map(([, id, owner]) => `${id}:${owner}`);
@@ -166,11 +172,11 @@ test('a Claude and a Codex session are stopped, the proven old service is retire
   const old = await h.old(), expected = backendPlan(old.state, r => r.state);
   const result = await switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', expected, ensure: h.ensure(), owner: 'window-default',
     applicationVersion: '0.1.0-alpha.158', commandLine: h.command(old), signal: h.signal(old), now: () => now });
-  assert.deepEqual(methods(old), ['stop:c', 'stop:x'], 'The old guard refuses shutdown with a disconnected Codex, so no shutdown call is made');
-  assert.deepEqual(old.signals, ['SIGTERM']);
+  assert.deepEqual(methods(old), ['maintenanceStop:c', 'maintenanceStop:x', 'maintenanceShutdown'], 'The new guarded shutdown replaces the signal bypass');
+  assert.deepEqual(old.signals, []);
   const next = h.services[1];
-  assert.deepEqual(methods(next), ['resume:c', 'resume:x'], 'The already-ended session is not reconnected');
-  assert.deepEqual(ownersOf(next, 'resume'), ['c:view-a', 'x:view-b'], 'Each session keeps its previous owner');
+  assert.deepEqual(methods(next), ['maintenanceResume:c', 'maintenanceResume:x'], 'The already-ended session is not reconnected');
+  assert.deepEqual(ownersOf(next, 'maintenanceResume'), ['c:view-a', 'x:view-b'], 'Each session keeps its previous owner');
   assert.ok(!next.calls.some(([m]) => ['send', 'queue', 'steer', 'run', 'input'].includes(m)), 'NAW sends nothing');
   assert.deepEqual(result, { key: h.key, resumed: ['c', 'x'], left: [] }); assert.equal(record(h.dataDir, h.key), null);
 });
@@ -178,7 +184,7 @@ test('an all-Claude backend is retired with its own shutdown call, never a signa
   const h = harness(t, [claudeNew()]); const old = await h.old();
   await switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', ensure: h.ensure(), owner: 'view-b', applicationVersion: '0.1.0-alpha.158', requireAuto: true,
     commandLine: h.command(old), signal: () => assert.fail('No signal when shutdown is allowed'), now: () => now });
-  assert.deepEqual(methods(old), ['stop:c', 'shutdown']); assert.deepEqual(methods(h.services[1]), ['resume:c']);
+  assert.deepEqual(methods(old), ['maintenanceStop:c', 'maintenanceShutdown']); assert.deepEqual(methods(h.services[1]), ['maintenanceResume:c']);
 });
 test('an automatic move never stops a session that is not proven at the moment of its stop', async t => {
   const h = harness(t, [claudeNew(), codexNew()]); const old = await h.old();
@@ -190,8 +196,8 @@ test('an automatic move never stops a session that is not proven at the moment o
     { onStop: (r, state) => { if (r.id === 'c') state.sessions.find(s => s.id === 'c2').terminalInputPending = true; } }); h2.services.push(old2);
   await assert.rejects(switchBackend({ dataDir: h2.dataDir, key: h2.key, executablePath: 'unused', ensure: () => assert.fail(), applicationVersion: '0.1.0-alpha.158', requireAuto: true,
     commandLine: h2.command(old2), signal: () => assert.fail(), now: () => now }), /Claude 3 的状态已变化/);
-  assert.deepEqual(methods(old2), ['stop:c', 'resume:c'], 'Typing in the second session during the move stops it before its stop');
-  assert.deepEqual(ownersOf(old2, 'resume'), ['c:view-a'], 'Put back as its own owner'); assert.equal(record(h2.dataDir, h2.key), null);
+  assert.deepEqual(methods(old2), ['maintenanceStop:c', 'maintenanceResume:c'], 'Typing in the second session during the move stops it before its stop');
+  assert.deepEqual(ownersOf(old2, 'maintenanceResume'), ['c:view-a'], 'Put back as its own owner'); assert.equal(record(h2.dataDir, h2.key), null);
 });
 test('a service process that cannot be proven is never signalled and no session is stopped', async t => {
   const h = harness(t, [claudeNew(), codexNew()]); const old = await h.old();
@@ -215,9 +221,10 @@ test('a changed plan, an unconfirmed stop or a rejected stop puts every stopped 
       { onStop: r => r.provider === 'codex' ? outcome : null }); h2.services.push(old2);
     await assert.rejects(switchBackend({ dataDir: h2.dataDir, key: h2.key, executablePath: 'unused', ensure: () => assert.fail('No new service'), applicationVersion: '0.1.0-alpha.158',
       commandLine: h2.command(old2), signal: () => assert.fail('Never signalled'), now: () => now }), message);
-    assert.deepEqual(methods(old2), ['stop:c', 'stop:x', 'resume:c', 'resume:x'], outcome);
-    assert.deepEqual(ownersOf(old2, 'resume'), ['c:view-a', 'x:view-b']);
-    assert.equal(record(h2.dataDir, h2.key), null, 'Everything was put back');
+    assert.deepEqual(methods(old2), ['maintenanceStop:c', 'maintenanceStop:x', 'maintenanceResume:c', ...(outcome === 'reject' ? [] : ['maintenanceResume:x'])], outcome);
+    assert.deepEqual(ownersOf(old2, 'maintenanceResume'), ['c:view-a', ...(outcome === 'reject' ? [] : ['x:view-b'])]);
+    if (outcome === 'reject') assert.deepEqual(record(h2.dataDir, h2.key).sessions.map(s => s.id), ['x'], 'Unknown stop stays recorded, never automatically resumed');
+    else assert.equal(record(h2.dataDir, h2.key), null, 'Acknowledged stops were put back');
   }
 });
 test('every failure after the stops names the stopped sessions per backend, and another backend\'s move keeps them', async t => {
@@ -229,7 +236,7 @@ test('every failure after the stops names the stopped sessions per backend, and 
   const otherKey = 'backends/' + 'b'.repeat(20), otherDir = path.join(h.dataDir, otherKey);
   const other = await service(otherDir, { runtimeVersion: '0.1.0-alpha.157', capabilities: caps, sessions: [claudeNew({ id: 'o', nativeId: 'native-o', name: 'Other' })], room: { messages: [] } }); h.services.push(other);
   await switchBackend({ dataDir: h.dataDir, key: otherKey, executablePath: 'unused', owner: 'view-b', applicationVersion: '0.1.0-alpha.158',
-    ensure: async () => { h.services.push(await service(otherDir, { runtimeVersion: '0.1.0-alpha.158', capabilities: caps, sessions: [claudeNew({ id: 'o', nativeId: 'native-o', name: 'Other', state: 'ended' })], room: { messages: [] } })); },
+    ensure: async () => { h.services.push(await service(otherDir, { runtimeVersion: '0.1.0-alpha.158', capabilities: caps, sessions: [claudeNew({ id: 'o', nativeId: 'native-o', name: 'Other', owner: null, controlRevision: 0, state: 'ended' })], room: { messages: [] } })); },
     commandLine: pid => `/x ${otherDir}/runtimes/0/daemon.cjs ${pid}`, signal: () => assert.fail(), now: () => now });
   assert.deepEqual(Object.keys(readRecords(h.dataDir)), [h.key], 'Another backend\'s clean move does not clear this record');
   clearRecord(h.dataDir, h.key); assert.deepEqual(readRecords(h.dataDir), {});
@@ -241,7 +248,7 @@ test('every failure after the stops names the stopped sessions per backend, and 
     await assert.rejects(switchBackend({ dataDir: h2.dataDir, key: h2.key, executablePath: 'unused', ensure: ensure(h2), owner: 'view-b', applicationVersion: '0.1.0-alpha.158',
       commandLine: h2.command(old2), signal: () => assert.fail(), now: () => now }));
     assert.deepEqual(record(h2.dataDir, h2.key)?.sessions.map(s => s.id), ['c'], label); assert.equal(record(h2.dataDir, h2.key).phase, 'stopped');
-    assert.ok(h2.services.slice(1).every(s => !methods(s).includes('resume:c')), 'No resume onto a different or missing service: ' + label);
+    assert.ok(h2.services.slice(1).every(s => !methods(s).includes('maintenanceResume:c')), 'No resume onto a different or missing service: ' + label);
   }
 });
 
@@ -299,9 +306,9 @@ test('a human control change while another session stops preserves the changed s
     try { await switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', expected, ensure: h.ensure(), owner: 'view-default',
       applicationVersion: '0.1.0-alpha.158', commandLine: h.command(old), signal: h.signal(old), now: () => now }); }
     catch (e) { error = e; }
-    assert.deepEqual(methods(old), ['stop:c', 'resume:c'], label + ": do not stop the person's changed session");
+    assert.deepEqual(methods(old), ['maintenanceStop:c', 'maintenanceResume:c'], label + ": do not stop the person's changed session");
     assert.match(error?.message || '', /Claude 3 的状态已变化/, label);
-    assert.deepEqual(ownersOf(old, 'resume'), ['c:view-a']);
+    assert.deepEqual(ownersOf(old, 'maintenanceResume'), ['c:view-a']);
     assert.equal(h.services.length, 1, label + ': retain existing service');
     assert.equal(old.state.sessions[1].state, 'idle');
     assert.equal(old.state.sessions[1].nativeId, 'native-c2');
@@ -314,4 +321,14 @@ test('missing or malformed menu control proof cannot match a plan', () => {
   const plan = backendPlan({ servicePid: 42, capabilities: caps, sessions: [claudeNew()] });
   for (const value of [undefined, null, {}, { stops: null }, { stops: [null] }, { stops: [] }]) assert.equal(samePlan(plan, value), false);
   assert.equal(samePlan(plan, JSON.parse(JSON.stringify(plan))), true, 'The real menu transport preserves the proof');
+});
+
+for (const occupied of [false, true]) test('carried recoverable records pass the real final guard, occupied='+occupied, async t => {
+  const carried = claudeNew({ id: 'saved', nativeId: 'saved-native', state: 'recoverable', owner: null });
+  const h = harness(t, [...(occupied ? [codexNew()] : []), carried]), old = await h.old();
+  const result = await switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', ensure: h.ensure(), owner: 'original-view',
+    applicationVersion: '0.1.0-alpha.158', commandLine: h.command(old), signal: () => assert.fail('No signal bypass'), now: () => now });
+  assert.deepEqual(result.resumed, occupied ? ['x'] : []);
+  assert.equal(record(h.dataDir, h.key), null);
+  assert.ok(!methods(h.services[1]).some(m => m.endsWith(':saved')), 'Do not start a merely carried session');
 });

@@ -86,7 +86,9 @@ test('daemon startup failure removes its own temporary socket directory', () => 
   const profile=fs.mkdtempSync(path.join(os.tmpdir(),'daemon-failure-'));
   const adapters=path.resolve(__dirname,'../adapters.cjs'),daemon=path.resolve(__dirname,'../daemon.cjs');
   try {
-    const r=spawnSync(process.execPath,['-e',`const {NativeHost}=require(${JSON.stringify(adapters)});NativeHost.prototype.start=async function(){console.log(this.privateDir);throw Error('startup fixture');};process.argv[2]=${JSON.stringify(profile)};require(${JSON.stringify(daemon)});`],{encoding:'utf8',timeout:10000});
+    const preload=path.join(profile,'startup-failure.cjs');
+    fs.writeFileSync(preload,`const {NativeHost}=require(${JSON.stringify(adapters)});NativeHost.prototype.start=async function(){console.log(this.privateDir);throw Error('startup fixture');};`);
+    const r=spawnSync(process.execPath,['--require',preload,daemon,profile],{encoding:'utf8',timeout:10000});
     assert.equal(r.status,1);const dir=r.stdout.trim();assert.match(path.basename(dir),/^naw-service-/);assert.equal(fs.existsSync(dir),false,r.stderr);
   } finally { fs.rmSync(profile,{recursive:true,force:true}); }
 });

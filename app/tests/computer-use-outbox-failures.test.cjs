@@ -113,7 +113,7 @@ function originalOwner(t) {
     { id: args.recipient_id, nativeId: 'recipient-native', name: 'Recipient', provider: 'codex', pid: 102, owner: 'private-recipient', roomId: 'shared', memberRevision: 1, controlRevision: 2 },
   ];
   const natives = records.map(record => {
-    const adapter = new Codex({ ...record, messages: [] }, { rpc: {}, codexTargets: new Map() });
+    const adapter = new Codex({ ...record, messages: [] }, { rpc: { async call(method) { assert.equal(method, 'thread/goal/get'); return { goal: null }; } }, codexTargets: new Map() });
     const native = { adapter, connected: true, closed: false, state: 'idle', close() {},
       send() { assert.fail('The rejected owner guard must never reach native send'); } };
     bridge.targets.set(record.id, { record, native, submission: { connected: true, close() {} } }); return native;
@@ -121,7 +121,7 @@ function originalOwner(t) {
   const r = natives[0].adapter; r.turnId = identity.turnId; r.nativeSessionId = identity.sessionId;
   r.event({ method: 'item/started', params: { threadId: identity.nativeId, turnId: identity.turnId,
     item: { id: identity.callId, type: 'mcpToolCall', server: 'native_outbox', tool: 'workspace_outbox', arguments: args, status: 'inProgress' } } }, r.host.rpc);
-  const entry = { key: 'retained', client: {}, state: { sessions: records, room: { messages: [] } } };
+  const entry = { key: 'retained', client: {}, state: { sessions: records, wakePolicy: { enabled: true }, room: { messages: [] } } };
   const control = { legacyInput: bridge, manualEpoch: 1, maintenance: new Set(), generations: new Map() };
   const client = { entries: [entry], control, socket: { destroyed: false }, route: () => entry };
   const contexts = [{ client, view: { owner: records[0].owner }, win: { isDestroyed: () => false } }];

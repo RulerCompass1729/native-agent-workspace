@@ -20,7 +20,7 @@ for (const [manifest, variable] of [['app/service-client.cjs', 'names'], ['scrip
       fs.copyFileSync(path.join(root, 'app', name), target);
     }
     const load = () => spawnSync(process.execPath, ['-e',
-      'const assert = require("node:assert/strict"); assert.equal(typeof require(process.argv[1]).Workspace, "function");',
+      'const assert = require("node:assert/strict"); const { Workspace } = require(process.argv[1]); assert.equal(typeof Workspace, "function"); Workspace.prototype.assertMaintenanceShutdown.call({ sessions: new Map(), stops: new Map(), rooms: new Map() }, []);',
       path.join(directory, 'workspace.cjs')], { cwd: directory, encoding: 'utf8', timeout: 10000,
       env: { ...process.env, NODE_PATH: path.join(root, 'node_modules'), NODE_OPTIONS: '' } });
     const result = load();

@@ -36,7 +36,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 test('the actual backend-switch handler translates its confirmation reason and preserves the raw expected plan on cancel', async () => {
   const a = main.indexOf("  register('switchBackend',"), b = main.indexOf("  register('continueConnection',", a); assert.ok(a > 0 && b > a);
   const record = { id: 'original', nativeId: 'native-original', provider: 'codex', name: 'RAW 中文', owner: 'original-owner', state: 'idle' };
-  const plan = require('../backend-switch.cjs').backendPlan({ capabilities: ['atomicShutdown', 'resume'], servicePid: 42, sessions: [record] });
+  const plan = require('../backend-switch.cjs').backendPlan({ capabilities: ['atomicShutdown', 'resume', 'conditionalMaintenanceStopV1'], servicePid: 42, sessions: [record] });
   assert.equal(plan.ready, true); assert.equal(plan.auto, false);
   for (const language of ['zh', 'en']) {
     const option = { backendKey: 'original-backend', switch: plan }, before = JSON.stringify(option), dialogs = []; let handler, refreshes = 0, updates = 0;

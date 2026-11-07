@@ -54,7 +54,7 @@ async function main() {
     if (shuttingDown) throw uiError("error.backendClosingActionNotExecuted");
     if (method === 'scopedOutbox') return dispatchScopedOutbox(workspace, client, args, send);
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [...mobileCapabilities, ...(fs.existsSync(path.join(__dirname, 'scoped-outbox-runtime.cjs')) ? ['scopedNativeOutboxV1'] : []), ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [...mobileCapabilities, ...(fs.existsSync(path.join(__dirname, 'scoped-outbox-runtime.cjs')) ? ['scopedNativeOutboxV1'] : []), ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'conditionalMaintenanceStopV1', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'mergeSnapshot': {
         if (roomId !== 'shared' || args.length !== 1) throw uiError("error.invalidSnapshotImport");
         return workspace.mergeSnapshot(args[0]);
@@ -167,6 +167,12 @@ async function main() {
       }
       case 'approve': return workspace.approve(args[0], args[1], args[2], owner);
       case 'answer': return workspace.answer(args[0], args[1], args[2], owner);
+      case 'maintenanceStop': return workspace.maintenanceStop(args[0], args[1], args[2]);
+      case 'maintenanceResume': return workspace.maintenanceResume(args[0], args[1], owner);
+      case 'maintenanceShutdown':
+        workspace.assertMaintenanceShutdown(args[0]);
+        shuttingDown = true;
+        setTimeout(shutdown, 100); return true;
       case 'stop': return workspace.stop(args[0]);
       case 'resume': return workspace.resume(args[0], owner);
       case 'clearSharedHistory': return workspace.rooms.has(roomId) ? workspace.clearSharedHistory(roomId) : undefined;

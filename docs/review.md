@@ -6652,3 +6652,35 @@ reports the OS locked, and AX has no usable target. No click or selected native
 runtime action follows. Current-viewport preservation is a local backup, not proof
 that every offscreen native draft is saved. The whole milestone, original native
 delivery and continuous-goal restoration remain open; no push is performed.
+
+
+### Conditional backend maintenance: source checkpoint, not installed acceptance
+
+A deterministic source counter reproduces late work, owner and control changes
+arriving after an idle snapshot but before the ordinary stop RPC. The old path
+can unsubscribe that newly changed session; this is not a claimed daily incident.
+The repair gives maintenance its own conditional stop, rechecks after Codex
+observation settles, and preserves ordinary manual interruption. Native state
+continues to be observed until the final check. A refused guard changes no input,
+control or runtime state. Unknown stop results remain recorded and are not retried
+or automatically resumed. Rollback and service retirement also compare current
+control; retirement no longer signals past the service's check.
+
+Occupied legacy services that cannot enforce this contract report the existing
+unsupported-safe-update reason. Already-ended legacy services retain their
+ordinary guarded shutdown route. This does not qualify live legacy migration,
+remote-native atomicity, goal restoration, or installed use. Independent source review reproduced a carried-recoverable mismatch between
+the plan and final shutdown guard. Four bounded counters fail before its repair;
+the final guard now reuses the plan's carry condition, including its process
+checks. Legacy recoverable-only backends refuse before stopping anything. The
+copied-runtime dependency check also caught the new planner dependency missing
+from the service copy; its manifest and executable load check now include it.
+Three pre-existing failure-fixture mismatches were reproduced against exact
+pre-change sources and corrected without weakening production guards. Scoped
+independent delta review approves this source checkpoint. The complete author
+suite passes 3,327 checks without skips; a later error-message-only correction
+passes the 47 affected checks. One intermediate delta review exceeded its read
+budget and is not counted as approval. The same reviewer then gives the scoped
+source verdict after exact source and raw-evidence reads. Installed acceptance
+remains pending; original running backends and the daily app are not changed
+here.

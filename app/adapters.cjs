@@ -1238,6 +1238,7 @@ class Claude extends EventEmitter {
     return request.done;
   }
   async openTerminal() { return this.terminal; }
+  stopForMaintenance(check) { check(); return this.stop(); }
   async stop() { this.cancelNativeAbort(); clearTimeout(this.closedAwaitingBackground); this.closedAwaitingBackground = null; await this.terminal.stop(); this.host.hookTargets.delete(this.token); return { state: 'ended' }; }
 }
 
@@ -2391,7 +2392,15 @@ class Codex extends EventEmitter {
     this.emit('activity', ...uiActivity("notice.activity.guiDisconnected"));
     this.emit('state', this.stopped ? 'disconnected' : 'error');
   }
-  async stop() {
+  async stopForMaintenance(check) {
+    const lifecycle = this.lifecycleRevision, state = this.stateRevision, observing = this.observing;
+    await observing;
+    if (this.lifecycleRevision !== lifecycle || this.stateRevision !== state || this.observing !== observing || this.stopped || this.backendExitConfirmed || this.transportDisconnected ||
+        this.turnId || this.pendingQueue || this.pendingSteer || this.nativeInputRequired || this.nativeAbortRequest) throw uiError('error.backendSwitchSessionChanged', { name: this.record.name || this.record.id });
+    check();
+    return this.stop({ maintenance: true });
+  }
+  async stop({ maintenance = false } = {}) {
     if (this.backendExitConfirmed) return this.backendExited();
     ++this.lifecycleRevision;
     const previouslyStopped = this.stopped;
@@ -2403,8 +2412,10 @@ class Codex extends EventEmitter {
         await this.terminal?.stop();
         if (!this.record.nativeId) { this.emit('state', 'ended'); return { state: 'ended' }; }
       }
-      await this.observing;
-      if (this.turnId) await this.interrupt();
+      if (!maintenance) {
+        await this.observing;
+        if (this.turnId) await this.interrupt();
+      }
       await this.terminal?.stop();
       const result = await this.host.rpc.call('thread/unsubscribe', { threadId: this.record.nativeId });
       if (!['notLoaded', 'notSubscribed', 'unsubscribed'].includes(result.status)) throw uiError("error.unknownNativeDisconnectState");

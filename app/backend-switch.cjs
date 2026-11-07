@@ -13,6 +13,7 @@ const RECORD = 'backend-switch.json', SETTINGS = 'backend-switch-settings.json';
 const STATE_LABELS = { working: 'error.planWorking', starting: 'error.planStarting', stopping: 'error.planStopping', approval: 'error.planApproval', disconnected: 'error.planDisconnected', error: 'error.planError' };
 
 function waiting(record) {
+  if (record.activeTurnId || record.pendingQueue || record.pendingSteer || record.nativeInputRequired || record.interruptPending) return uiError('error.planPendingInput');
   if (record.pendingTag) return uiError('error.planPendingInput');
   if (record.approval || record.approvals?.length || record.approvalOverflow) return uiError('error.planPendingApproval');
   if (record.claudeQuestion || record.question || record.pendingQuestion) return uiError('error.planPendingQuestion');
@@ -70,7 +71,8 @@ function sessionPlan(record, state, running = new Set()) {
   if (fleet.current) return blocked(uiError('error.planCurrentChildren', { count: fleet.current }));
   const reason = unproven(record, fleet), warning = reason && named(reason);
   return { stop: { id: record.id, nativeId: record.nativeId, provider: record.provider, name, owner: record.owner || null,
-    view: record.view ?? null, controlRevision: record.controlRevision ?? null, connectionRevision: record.connectionRevision ?? null }, auto: !reason, reason: warning ? warning.message : '', reasonUiMessage: warning ? warning.uiMessage : null };
+    view: record.view ?? null, controlRevision: record.controlRevision ?? null, connectionRevision: record.connectionRevision ?? null,
+    draftRevision: record.draftRevision ?? null, peerRevision: record.peerRevision ?? null }, auto: !reason, reason: warning ? warning.message : '', reasonUiMessage: warning ? warning.uiMessage : null };
 }
 // Sessions in a running relay anywhere in this backend's own state.
 function runningIn(state) {
@@ -94,15 +96,19 @@ function backendPlan(state, sessionState = record => record.state, running = new
     const error = uiError('error.planBlockedReasons', { reasons: blocks.join('；') }, { parts: blockParts, param: 'reasons', separator: '；' });
     return { ready: false, auto: false, blocked: true, reason: error.message, reasonUiMessage: error.uiMessage, stops };
   }
+  // Old services cannot compare the confirmed authority at their stop boundary.
+  // Do not quietly substitute the ordinary, unconditional user-stop operation.
+  if ((stops.length || (state.sessions || []).some(s => s.state === 'recoverable')) && !state.capabilities?.includes('conditionalMaintenanceStopV1')) return refused('error.planOldBackend');
   const warning = unprovenReasons.length ? uiError('error.planUnprovenReasons', { reasons: unprovenReasons.join('；') }, { parts: reasonParts, param: 'reasons', separator: '；' }) : null;
   return { ready: true, auto: stops.length > 0 && unprovenReasons.length === 0, reason: warning ? warning.message : '', reasonUiMessage: warning ? warning.uiMessage : null, stops,
     endsCodex: stops.some(s => s.provider === 'codex') };
 }
 // A human may take control or change input mode while the confirmation is open
 // or an earlier session is stopping. Do not retire that newer choice as the old owner.
-const sameStop = (a, b) => Boolean(a && b) && ['id', 'nativeId', 'provider', 'owner', 'view', 'controlRevision', 'connectionRevision']
+const sameStop = (a, b) => Boolean(a && b) && ['id', 'nativeId', 'provider', 'owner', 'view', 'controlRevision', 'connectionRevision', 'draftRevision', 'peerRevision']
   .every(key => (a[key] ?? null) === (b[key] ?? null));
 const samePlan = (a, b) => Array.isArray(a?.stops) && Array.isArray(b?.stops) && a.stops.length === b.stops.length && a.stops.every((s, i) => sameStop(s, b.stops[i]));
+const maintenanceProof = record => Object.fromEntries(['id', 'nativeId', 'provider', 'owner', 'view', 'controlRevision', 'connectionRevision', 'draftRevision', 'peerRevision', 'state'].map(key => [key, record[key] ?? null]));
 
 function readSettings(dataDir) {
   try { const value = JSON.parse(fs.readFileSync(path.join(dataDir, SETTINGS), 'utf8')); return { auto: value?.auto !== false }; }
@@ -127,10 +133,8 @@ function clearRecord(dataDir, key) {
   if (Object.keys(backends).length) atomicWrite(path.join(dataDir, RECORD), { format: 2, backends }); else fs.rmSync(path.join(dataDir, RECORD), { force: true });
 }
 
-// The old service's own guard refuses to shut down while a Codex session is
-// only disconnected, so retiring it may need a signal. The signal goes only to
-// a process proven to be this store's service: the lock, the service's own
-// report and its command line must all agree.
+// Confirm the old service's process identity before requesting maintenance.
+// Retirement itself must pass its conditional, service-side shutdown guard.
 function serviceProcess(directory, pid, commandLine) {
   const lock = Number(fs.readFileSync(path.join(directory, 'service.lock'), 'utf8'));
   if (lock !== pid) throw uiError("error.backendSwitchProcessMismatch");
@@ -148,14 +152,24 @@ async function waitGone(directory, pid, identity, ms = 15000) {
 }
 
 async function switchBackend({ dataDir, key, executablePath, expected, ensure, owner, applicationVersion = process.env.NAW_APP_VERSION,
-  sessionState, running = () => new Set(), requireAuto = false, commandLine = psCommand, signal = (pid, name) => process.kill(pid, name), now = Date.now }) {
+  sessionState, running = () => new Set(), requireAuto = false, commandLine = psCommand, now = Date.now }) {
   const directory = path.join(dataDir, key), stopped = [];
   const effective = record => sessionState ? sessionState(record) : record.state;
   // Each session is reconnected as its own owner, so its window keeps control.
-  const resumeAs = async session => {
+  const resumeAs = async (session, fresh = false) => {
     const who = session.owner || owner; if (!who) throw uiError("error.backendSwitchWindowMissing");
     const connection = await connectService(directory, who);
-    try { await connection.call('resume', session.id); } finally { connection.close(); }
+    try {
+      let proof = session.stoppedState;
+      if (fresh) {
+        const snapshot = await connection.call('initial'), record = snapshot.sessions.find(s => s.id === session.id);
+        // The new service resets owner/control/draft generations on loading.
+        // A newer claimant must not be repinned as our restoration authority.
+        if (!record || record.nativeId !== session.nativeId || record.provider !== session.provider || record.owner != null || record.controlRevision !== 0 || (record.draftRevision || 0) !== 0 || !['ended', 'recoverable'].includes(record.state)) throw uiError('error.backendSwitchSessionChanged', { name: session.name });
+        proof = { ...record, draftRevision: record.draftRevision || 0 };
+      }
+      await connection.call('maintenanceResume', session.id, proof);
+    } finally { connection.close(); }
   };
   const keep = list => writeRecord(dataDir, key, { phase: 'stopped', failedAt: now(), sessions: list });
   let client = await connectService(directory, 'backend-switch'), state, plan, pid, identity;
@@ -172,8 +186,17 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
       const snapshot = await client.call('initial'), current = snapshot.sessions.find(s => s.id === session.id);
       const check = current && sessionPlan(current, effective(current), new Set([...running(), ...runningIn(snapshot)]));
       if (!check?.stop || !sameStop(check.stop, session) || (requireAuto && !check.auto)) throw uiError("error.backendSwitchSessionChanged", { name: session.name });
-      // The record names a session before its stop is requested, never one that was not stopped.
-      stopped.push(session); writeRecord(dataDir, key, { phase: 'stopping', startedAt: now(), sessions: stopped }); await client.call('stop', session.id);
+      // Persist an uncertain request for recovery, but rollback only a stop this
+      // service acknowledged. A refused guard must never resume newer human work.
+      writeRecord(dataDir, key, { phase: 'stopping', startedAt: now(), sessions: [...stopped, session] });
+      let receipt;
+      try { receipt = await client.call('maintenanceStop', session.id, session, requireAuto); }
+      catch (error) {
+        if (!error.uiMessage || error.uiMessage.key !== 'error.backendSwitchSessionChanged') error.maintenanceUnconfirmed = session;
+        throw error;
+      }
+      if (receipt?.stopped !== true || !sameStop(receipt.expected, session) || !receipt.stoppedState || !sameStop(receipt.stoppedState, { ...session, controlRevision: (session.controlRevision || 0) + 1, connectionRevision: (session.connectionRevision || 0) + 1 })) { const error = uiError('error.backendSwitchDisconnectUnconfirmed', { name: session.name }); error.maintenanceUnconfirmed = session; throw error; }
+      stopped.push({ ...session, stoppedState: receipt.stoppedState });
       const after = (await client.call('initial')).sessions.find(s => s.id === session.id);
       if (!['ended', 'disconnected'].includes(after?.state) || after.nativeId !== session.nativeId) throw uiError("error.backendSwitchDisconnectUnconfirmed", { name: session.name });
     }
@@ -191,16 +214,19 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
     const back = [];
     for (const session of stopped) { try { await resumeAs(session); back.push(session.id); } catch {} }
     client.close();
-    if (back.length === stopped.length) clearRecord(dataDir, key); else keep(stopped.filter(s => !back.includes(s.id)));
+    const left = stopped.filter(s => !back.includes(s.id));
+    if (error.maintenanceUnconfirmed) left.push(error.maintenanceUnconfirmed);
+    if (!left.length) clearRecord(dataDir, key); else keep(left);
     throw error;
   }
   // From here on, any failure names every stopped session for the person to continue.
   try {
     writeRecord(dataDir, key, { phase: 'restarting', startedAt: now(), sessions: stopped });
-    // The old guard refuses shutdown while a Codex session is only disconnected;
-    // only then is the proven service process signalled, with the same cleanup.
-    if (state.sessions.every(s => ['ended', 'background'].includes(s.state))) { await client.call('shutdown'); client.close(); }
-    else { client.close(); signal(pid, 'SIGTERM'); }
+    // The service reserves shutdown in the same synchronous dispatch that
+    // validates all final identities/control. Never signal past a newer input.
+    if (state.capabilities?.includes('conditionalMaintenanceStopV1')) await client.call('maintenanceShutdown', state.sessions.map(maintenanceProof));
+    else await client.call('shutdown'); // No occupied stops are admitted on legacy services.
+    client.close();
     await waitGone(directory, pid, identity);
     for (const record of state.sessions) if (record.provider === 'codex' && processMayBeAlive(record.serverIdentity)) {
       for (let i = 0; i < 50 && processMayBeAlive(record.serverIdentity); i++) await new Promise(resolve => setTimeout(resolve, 100));
@@ -218,9 +244,9 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
   } catch (error) { client.close(); keep(stopped); throw error; }
   writeRecord(dataDir, key, { phase: 'resuming', startedAt: now(), sessions: stopped });
   const resumed = [], left = [];
-  for (const session of stopped) { try { await resumeAs(session); resumed.push(session.id); } catch { left.push(session); } }
+  for (const session of stopped) { try { await resumeAs(session, true); resumed.push(session.id); } catch { left.push(session); } }
   if (left.length) keep(left); else clearRecord(dataDir, key);
   return { key, resumed, left: left.map(s => s.id) };
 }
 
-module.exports = { backendPlan, sessionPlan, samePlan, switchBackend, readSettings, writeSettings, readRecords, clearRecord, RECORD, SETTINGS };
+module.exports = { backendPlan, sessionPlan, samePlan, sameStop, maintenanceProof, switchBackend, readSettings, writeSettings, readRecords, clearRecord, RECORD, SETTINGS };
