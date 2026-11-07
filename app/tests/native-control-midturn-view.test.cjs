@@ -7,10 +7,11 @@ const app = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '..');
 const { LegacyCodex } = require(path.join(app, 'legacy-codex.cjs'));
 const { LegacyInput } = require(path.join(app, 'legacy-input.cjs'));
 const { bindOriginalOutbox } = require(path.join(app, 'computer-use-outbox-owner.cjs'));
+const { classifyOutboxFailure } = require(path.join(app, 'computer-use-outbox-native.cjs'));
 
 // Real retained connections, event reducers and delivery code. Only the native
 // server and isolated UI/lease are synthetic; no engine or command is launched.
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const dir = fs.mkdtempSync('/private/tmp/naw-midturn-flow-'); fs.chmodSync(dir, 0o700);
   const socket = path.join(dir, 'native.sock'), server = http.createServer();
   const wss = new WebSocketServer({ server }), calls = [], starts = [], peers = new Map(), unexpected = [];
@@ -50,6 +51,7 @@ async function fixture(t) {
         if (m.params.limit === 1) {
           assert.equal(record.id, 'sender');
           assert.deepEqual(m.params, { threadId: identity.nativeId, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' });
+          options.beforeMetadataReply?.({ records, control });
         }
         return reply({ data: record.id === 'sender' ? [{ id: identity.turnId, status: 'inProgress', itemsView: 'notLoaded', items: [] }] : [], nextCursor: null });
       case 'turn/start':
@@ -157,4 +159,25 @@ test('source turn ending after inspect revokes midturn grant at the real send si
   await assert.rejects(c.send()); await assert.rejects(f.bind());
   assert.equal(f.starts.length, 0); assert.equal(f.metadataCalls().length, 1); f.preserved();
   binding.close(); assert.equal(f.natives[1].adapter.listenerCount('nativeAcceptedInput'), beforeListeners - 1);
+});
+
+// A human control change during the source proof must revoke the original
+// authority, rather than becoming the baseline for a later send.
+for (const [name, change] of [
+  ['manual input epoch', f => { f.control.manualEpoch++; }],
+  ['recipient owner and control revision', f => { f.records[1].owner = 'new-human-view'; f.records[1].controlRevision++; }],
+]) test(`source metadata wait preserves original authority: ${name}`, { timeout: 4000 }, async t => {
+  const f = await fixture(t, { beforeMetadataReply: change });
+  let binding;
+  try {
+    binding = await f.bind();
+    await binding.forwardOnce();
+    assert.fail('Changed authority must refuse before creating a send record');
+  } catch (error) {
+    assert.equal(f.starts.length, 0);
+    assert.equal(f.bridge.records.length, 0);
+    assert.deepEqual(classifyOutboxFailure(error), { failurePhase: 'binding', failureReason: 'control-changed' });
+  } finally { binding?.close(); }
+  assert.equal(f.metadataCalls().length, 1);
+  assert.equal(fs.existsSync(f.bridge.filename), false);
 });

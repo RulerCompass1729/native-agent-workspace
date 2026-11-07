@@ -6558,3 +6558,20 @@ Generic failure catches erased the boundary reached by a failed call. Existing r
 ### Restricted outbox test intake after failure sanitization
 
 The actual Core failure classifier is now loaded from the Core source directory in all five isolated test loaders, preserving its process-local error identity. This retains exact body/recipient/native-tag checks, one-send/no-retry and original owner/control/draft assertions. The independent test author's reviewed mid-turn full-chain counter is adopted unchanged with its reviewed import delta. The integrated five-file run passes 22 cases with no skips. These are synthetic native-server/UI checks, including a turn-ending-before-send race; they do not establish managed-backend admission, original-secretary receipt, installed delivery or goal continuation. Existing source reviews are reused for unchanged test content.
+
+
+### T58 authority changes during native source-proof wait
+
+The existing connected transport captured control authority after awaiting native
+source metadata. Both human input and a recipient owner/revision change during
+that wait could still create a native send and a shared-message record. Pin the
+minimal source and recipient authority before the wait, then recheck it at binding
+and the existing send boundary. Recipient refusal remains hidden until the source
+call is proven. Manual input on either participating client now revokes the grant.
+The same final fixture fails twice against the old source; the integrated checks
+pass 83 tests with no skips. An independent read-only review approved only this
+connected-transport integration and inspected the raw author-run evidence; it did
+not independently rerun tests. No managed subscription, lazy connection or engine
+creation was added. Installed original-secretary delivery and its first completed
+command remain open. Claude authority before proof consumption is a separate
+unverified boundary; the existing synchronous path was not extended here.

@@ -1,17 +1,47 @@
 // Binds the restricted UI to existing, authenticated retained transports.
 // No new Workspace connection, initial snapshot, private input claim or terminal.
-const { nativeOutboxCall, nativeOutboxReceipt, outboxError, classifyOutboxFailure } = require('./computer-use-outbox-native.cjs');
+const { validateOutboxArgs, nativeOutboxCall, nativeOutboxReceipt, outboxError, classifyOutboxFailure } = require('./computer-use-outbox-native.cjs');
 const { isMember, membershipRevision } = require('./collaboration-spaces.cjs');
 const { consumeRootOutboxProof } = require('./claude-submit.cjs');
 const FAIL = 'The original agent or its authorized space transport is unavailable; no resend.';
+function outboxRecord(record) {
+  const result = {};
+  for (const key of ['id', 'nativeId', 'pid', 'provider', 'name', 'owner', 'controlRevision', 'archived', 'nativeContextPending',
+    'roomId', 'roomIds', 'memberRevision', 'roomMembershipRevisions'])
+    if (Object.hasOwn(record, key)) result[key] = record[key];
+  return result;
+}
+// Pin the existing control facts before any native proof or connection await.
+// Reusing facts after an await must not silently authorize a newer owner.
+function pinAuthority(peer, available, spaceId, unavailable) {
+  const original = outboxRecord(peer.record), client = peer.context.client, control = client.control;
+  const entryClient = peer.entry.client, generation = control.generations.get(peer.entry.key) || 0, epoch = control.manualEpoch;
+  let member;
+  try { member = membershipRevision(original, spaceId); }
+  catch { throw outboxError('membership-unconfirmed', 'binding', FAIL); }
+  return { original, member, reason() {
+    try {
+      const record = peer.entry.state.sessions.find(s => s.id === original.id);
+      if (!available().includes(peer.context) || peer.context.client !== client || client.control !== control ||
+          peer.entry.client !== entryClient || peer.entry.closed || control.maintenance.has(peer.entry.key) ||
+          (control.generations.get(peer.entry.key) || 0) !== generation ||
+          record?.nativeId !== original.nativeId || record.pid !== original.pid || record.provider !== original.provider ||
+          record.archived || record.nativeContextPending || client.route(original.id).client !== entryClient) return unavailable;
+      if (control.manualEpoch !== epoch || record.owner !== original.owner || record.controlRevision !== original.controlRevision) return 'control-changed';
+      if (membershipRevision(record, spaceId) !== member) return 'membership-changed';
+      if (!isMember(record, spaceId)) return 'membership-unconfirmed';
+      return null;
+    } catch { return unavailable; }
+  } };
+}
 function existingTransports(contexts) {
   const available = () => [...contexts()].filter(c => !c.win.isDestroyed() && !c.client.closing && !c.client.socket.destroyed);
-  function find(predicate, reason = 'recipient-unavailable') {
+  function find(predicate, reason = 'recipient-unavailable', requireNative = true) {
     const found = [];
     for (const context of available()) for (const entry of context.client.entries) {
       for (const record of entry.state.sessions) if (predicate(record)) {
         const bridge = context.client.control.legacyInput, root = bridge?.target(record), native = root?.native;
-        if (native?.connected && !native.closed && native.adapter || root?.retainedReader && !root.disposed)
+        if (!requireNative || native?.connected && !native.closed && native.adapter || root?.retainedReader && !root.disposed)
           found.push({ context, entry, record, bridge, native, root });
       }
     }
@@ -22,12 +52,23 @@ function existingTransports(contexts) {
   return { available, find };
 }
 async function bindOriginalOutbox(deps, identity, args, signal) {
+  args = validateOutboxArgs(args);
   const transports = existingTransports(deps.contexts);
   const caller = transports.find(s => s.provider === 'codex' && s.nativeId === identity.nativeId, 'caller-unavailable');
+  const authority = pinAuthority(caller, transports.available, args.space_id, 'caller-unavailable');
+  let selectedTarget, targetError;
+  try {
+    const target = transports.find(s => s.id === args.recipient_id && s.provider === 'codex', 'recipient-unavailable', false);
+    selectedTarget = { target, authority: pinAuthority(target, transports.available, args.space_id, 'recipient-unavailable') };
+  } catch (error) { targetError = error; }
   const runtime = caller.native?.adapter;
   if (!runtime) throw outboxError('caller-unavailable', 'binding', FAIL);
   const proof = await nativeOutboxCall(runtime, identity, args, signal);
-  return bindRecipient(deps, transports, caller, proof);
+  const reason = authority.reason();
+  if (reason) throw outboxError(reason, 'binding', FAIL);
+  // A caller must prove its live call before learning any recipient refusal.
+  if (targetError) throw targetError;
+  return bindRecipient(deps, transports, caller, proof, authority, selectedTarget);
 }
 function bindClaudeOutbox(deps, credential, signal) {
   let proof;
@@ -38,17 +79,25 @@ function bindClaudeOutbox(deps, credential, signal) {
   if (caller.root !== proof.target) throw outboxError('provenance-unconfirmed', 'binding', FAIL);
   const valid = proof.valid;
   proof.valid = () => !signal?.aborted && valid() && caller.bridge.target(caller.record) === caller.root;
-  return bindRecipient(deps, transports, caller, proof);
+  return bindRecipient(deps, transports, caller, proof,
+    pinAuthority(caller, transports.available, proof.args.space_id, 'caller-unavailable'));
 }
-function bindRecipient({ roomState }, { available, find }, caller, proof) {
+function bindRecipient({ roomState }, { available, find }, caller, proof, sourceAuthority, selectedTarget) {
   const spaceId = proof.args.space_id;
   // Retained alpha.2 forwarding is explicitly shared-space only. No silent
   // fallback from a requested non-default space into the default one.
   if (spaceId !== 'shared') throw outboxError('space-unavailable', 'binding', FAIL);
-  const target = find(s => s.id === proof.args.recipient_id && s.provider === 'codex');
-  if (!target.native?.adapter) throw outboxError('recipient-unavailable', 'binding', FAIL);
-  const original = { ...target.record }, source = { ...caller.record };
-  const member = membershipRevision(original, spaceId), sourceMember = membershipRevision(source, spaceId);
+  const selected = selectedTarget?.target || find(s => s.id === proof.args.recipient_id && s.provider === 'codex');
+  const authority = selectedTarget?.authority || pinAuthority(selected, available, spaceId, 'recipient-unavailable');
+  const reason = sourceAuthority.reason() || authority.reason();
+  if (reason) throw outboxError(reason, 'binding', FAIL);
+  // Resolve only an already connected original transport. This integration does
+  // not add managed subscription, lazy native connection or receiver preparation.
+  const target = find(s => s.id === selected.record.id && s.provider === 'codex');
+  if (target.context !== selected.context || target.entry !== selected.entry || target.bridge !== selected.bridge || !target.native?.adapter)
+    throw outboxError('recipient-unavailable', 'binding', FAIL);
+  const original = authority.original, source = sourceAuthority.original;
+  const member = authority.member, sourceMember = sourceAuthority.member;
   const entryClient = target.entry.client, targetAdapter = target.native.adapter;
   const generation = target.context.client.control.generations.get(target.entry.key) || 0;
   const control = original.controlRevision, epoch = target.context.client.control.manualEpoch;
@@ -60,7 +109,8 @@ function bindRecipient({ roomState }, { available, find }, caller, proof) {
     try { roomState.assertAvailable(original.id, true, spaceId); roomState.assertAvailable(source.id, true, spaceId); }
     catch { lastReason = 'space-unavailable'; throw outboxError(lastReason, phase, FAIL); }
     const originValid = proof.valid();
-    const callerValid = originValid && available().includes(caller.context) && caller.entry.client === caller.context.client.route(source.id).client &&
+    const pinnedReason = sourceAuthority.reason() || authority.reason();
+    const callerValid = originValid && !pinnedReason && available().includes(caller.context) && caller.entry.client === caller.context.client.route(source.id).client &&
       sender?.nativeId === source.nativeId && sender.pid === source.pid && !sender.nativeContextPending && !sender.archived && isMember(sender, spaceId) && membershipRevision(sender, spaceId) === sourceMember;
     const stable = callerValid && available().includes(target.context) && target.entry.client === entryClient &&
       !target.entry.closed && !client.control.maintenance.has(target.entry.key) && (client.control.generations.get(target.entry.key) || 0) === generation &&
@@ -78,6 +128,7 @@ function bindRecipient({ roomState }, { available, find }, caller, proof) {
     lastReason = null;
     if (!ready) {
       if (!originValid) lastReason = 'provenance-unconfirmed';
+      else if (pinnedReason) lastReason = pinnedReason;
       else if (sender && membershipRevision(sender, spaceId) !== sourceMember || record && membershipRevision(record, spaceId) !== member) lastReason = 'membership-changed';
       else if (sender && !isMember(sender, spaceId) || record && !isMember(record, spaceId)) lastReason = 'membership-unconfirmed';
       else if (record && (client.control.manualEpoch !== epoch || record.owner !== original.owner || record.controlRevision !== control)) lastReason = 'control-changed';
