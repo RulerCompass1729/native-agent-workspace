@@ -1,16 +1,35 @@
 // Native provenance, never display-journal guesses or terminal inspection.
 const FAIL = 'The original native outbox call could not be verified; no resend.';
+// Process-local tags only. Error messages, model arguments and enumerable
+// error properties never become diagnostics in the native tool's receipt.
+const failures = new WeakMap();
+const phases = new Set(['admission', 'binding', 'view-open', 'lease', 'view-snapshot', 'view-send', 'native-receipt', 'receipt-render', 'cleanup']);
+const reasons = new Set(['invalid-request', 'cancelled', 'owner-closed', 'busy', 'binding-unavailable',
+  'provenance-unconfirmed', 'duplicate-call', 'turn-metadata-unconfirmed', 'caller-unavailable', 'recipient-unavailable',
+  'recipient-not-idle', 'membership-changed', 'membership-unconfirmed', 'control-changed', 'control-unconfirmed', 'space-unavailable', 'view-unavailable', 'lease-unavailable',
+  'snapshot-unavailable', 'ambiguous-target', 'grant-invalidated', 'send-unconfirmed', 'receipt-unconfirmed',
+  'command-unconfirmed', 'command-failed', 'render-unconfirmed', 'cleanup-unconfirmed', 'operation-unconfirmed']);
+function outboxError(reason, phase, message = FAIL, cleanupUnconfirmed = false) {
+  const error = new Error(message);
+  failures.set(error, { failurePhase: phases.has(phase) ? phase : 'binding',
+    failureReason: reasons.has(reason) ? reason : 'operation-unconfirmed', ...(cleanupUnconfirmed ? { cleanupUnconfirmed: true } : {}) });
+  return error;
+}
+function classifyOutboxFailure(error, phase, reason) {
+  return { ...(error && failures.get(error) || { failurePhase: phases.has(phase) ? phase : 'binding',
+    failureReason: reasons.has(reason) ? reason : 'operation-unconfirmed' }) };
+}
 const token = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && !/[\x00-\x1f\x7f]/.test(value);
 function validateOutboxArgs(value) {
   if (!value || Array.isArray(value) || Object.keys(value).some(k => !['recipient_id', 'message', 'space_id'].includes(k)) ||
       !token(value.recipient_id) || value.space_id !== undefined && !token(value.space_id) ||
       typeof value.message !== 'string' || !value.message.trim() || value.message.length > 16000 ||
-      /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value.message)) throw Error(FAIL);
+      /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value.message)) throw outboxError('invalid-request', 'binding');
   return { recipient_id: value.recipient_id, message: value.message, space_id: value.space_id || 'shared' };
 }
 async function nativeOutboxCall(runtime, identity, arguments_, signal) {
   const args = validateOutboxArgs(arguments_);
-  if (!identity || !['nativeId', 'sessionId', 'turnId', 'callId'].every(k => token(identity[k]))) throw Error(FAIL);
+  if (!identity || !['nativeId', 'sessionId', 'turnId', 'callId'].every(k => token(identity[k]))) throw outboxError('provenance-unconfirmed', 'binding');
   const rpc = runtime?.host?.rpc, lifecycle = runtime?.lifecycleRevision;
   let proof, metadataVerified = false;
   const candidate = () => {
@@ -30,13 +49,14 @@ async function nativeOutboxCall(runtime, identity, arguments_, signal) {
   else await new Promise((resolve, reject) => {
     const finish = error => { clearTimeout(timer); runtime?.off('outboxMcpProof', observed); runtime?.off('nativeTurnEnd', ended); signal?.removeEventListener('abort', aborted); error ? reject(error) : resolve(); };
     const observed = () => { const value = candidate(); if (value) { proof = value; finish(); } };
-    const ended = info => { if (info.turnId === identity.turnId) finish(Error(FAIL)); };
-    const aborted = () => finish(Error(FAIL));
+    const ended = info => { if (info.turnId === identity.turnId) finish(outboxError('provenance-unconfirmed', 'binding')); };
+    const aborted = () => finish(outboxError('provenance-unconfirmed', 'binding'));
     const timer = setTimeout(aborted, 3000);
     if (!runtime || signal?.aborted) { aborted(); return; }
     runtime.on('outboxMcpProof', observed); runtime.on('nativeTurnEnd', ended); signal?.addEventListener('abort', aborted, { once: true }); observed();
   });
-  if (!candidate() || proof.outboxConsumed) throw Error(FAIL);
+  if (!candidate()) throw outboxError('provenance-unconfirmed', 'binding');
+  if (proof.outboxConsumed) throw outboxError('duplicate-call', 'binding');
   // A repeated RPC for this still-active native call is not a second send.
   // Mark before opening any UI or awaiting its first action.
   proof.outboxConsumed = true;
@@ -47,24 +67,28 @@ async function nativeOutboxCall(runtime, identity, arguments_, signal) {
       let settled = false;
       const finish = (error, value) => {
         if (settled) return; settled = true; clearTimeout(timer); signal?.removeEventListener('abort', aborted);
-        error ? reject(Error(FAIL)) : resolve(value);
+        if (error) {
+          const detail = classifyOutboxFailure(error, 'binding', 'turn-metadata-unconfirmed');
+          reject(outboxError(detail.failureReason, detail.failurePhase));
+        } else resolve(value);
       };
       const aborted = () => finish(true), timer = setTimeout(aborted, 3000);
       if (signal?.aborted) return aborted();
       signal?.addEventListener('abort', aborted, { once: true });
       Promise.resolve().then(() => {
-        if (!candidate()) throw Error(FAIL);
+        if (!candidate()) throw outboxError('provenance-unconfirmed', 'binding');
         return rpc.call('thread/turns/list', { threadId: identity.nativeId,
           limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' });
-      }).then(value => finish(false, value), () => finish(true));
+      }).then(value => finish(false, value), error => finish(error));
     });
     const turn = result?.data?.[0];
-    if (!candidate() || !Array.isArray(result?.data) || result.data.length !== 1 ||
+    if (!candidate()) throw outboxError('provenance-unconfirmed', 'binding');
+    if (!Array.isArray(result?.data) || result.data.length !== 1 ||
         turn?.id !== identity.turnId || turn.status !== 'inProgress' || turn.itemsView !== 'notLoaded' ||
-        !Array.isArray(turn.items) || turn.items.length !== 0) throw Error(FAIL);
+        !Array.isArray(turn.items) || turn.items.length !== 0) throw outboxError('turn-metadata-unconfirmed', 'binding');
     metadataVerified = true;
   }
-  if (!valid()) throw Error(FAIL);
+  if (!valid()) throw outboxError('provenance-unconfirmed', 'binding');
   return { args, valid: () => Boolean(valid()) };
 }
 // Subscribe before forwarding: the native input can precede the forward ACK.
@@ -100,4 +124,4 @@ function nativeOutboxReceipt(runtime, nativeId) {
     subscribe(listener) { listeners.add(listener); const value = snapshot(); if (value) listener(value); return () => listeners.delete(listener); },
     close() { closed = true; listeners.clear(); candidates.clear(); runtime.off('nativeAcceptedInput', accepted); runtime.off('progress', command); } };
 }
-module.exports = { validateOutboxArgs, nativeOutboxCall, nativeOutboxReceipt };
+module.exports = { validateOutboxArgs, nativeOutboxCall, nativeOutboxReceipt, outboxError, classifyOutboxFailure };

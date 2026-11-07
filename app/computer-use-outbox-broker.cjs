@@ -3,35 +3,56 @@ const { openOutbox } = require('./computer-use-outbox.cjs');
 const { readViewLease } = require('./native-computer-use.cjs');
 const { privateFile } = require('./computer-use-outbox-tool.cjs');
 const { processIdentity, processMayBeAlive } = require('./platform.cjs');
+const { outboxError, classifyOutboxFailure } = require('./computer-use-outbox-native.cjs');
 const FAIL = { status: 'unconfirmed', retry: false, message: 'The authorized outbox could not confirm delivery; do not resend automatically.' };
+const failed = (phase, reason, error) => ({ ...FAIL, ...classifyOutboxFailure(error, phase, reason) });
 async function operateOutbox(binding, createView, signal) {
-  let box, socket, transport;
+  let box, socket, transport, phase = 'view-open', primary;
   const aborted = () => { box?.close().catch(() => {}); };
   signal.addEventListener('abort', aborted, { once: true });
   try {
-    if (signal.aborted) return FAIL;
+    if (signal.aborted) { primary = classifyOutboxFailure(null, phase, 'cancelled'); return { ...FAIL, ...primary }; }
     box = await openOutbox(binding.grant, { ...binding,
       createView: (model, actions) => createView(model, actions, { inspectGrant: binding.inspectGrant }) });
-    if (signal.aborted) return FAIL;
+    if (signal.aborted) { primary = classifyOutboxFailure(null, phase, 'cancelled'); return { ...FAIL, ...primary }; }
+    phase = 'lease';
     const lease = readViewLease(box.leaseFile);
     const { JsonRpcLineTransport } = await import('@deepseek-ai/dsh-sdk-protocol');
     socket = net.connect(lease.socketPath); socket.on('error', () => {});
     transport = new JsonRpcLineTransport(socket, socket); transport.start();
     const call = (method, params) => transport.request(method, params, AbortSignal.any([signal, AbortSignal.timeout(20000)]));
     await call('initialize', { _meta: { nawViewCapability: lease.capability } });
+    phase = 'view-snapshot';
     const snapshot = await call('tools/call', { name: 'browser_snapshot', arguments: {} });
     const observed = JSON.parse(snapshot.content[0].text);
     const buttons = [...observed.tree.matchAll(/button "发送" \[ref=(e\d+)\]/g)];
-    if (buttons.length !== 1) return FAIL;
+    if (buttons.length !== 1) { primary = classifyOutboxFailure(null, phase, 'ambiguous-target'); return { ...FAIL, ...primary }; }
     // A single observed, uniquely identified send button in the leased view.
+    phase = 'view-send';
     await call('tools/call', { name: 'browser_click', arguments: { snapshot: observed.snapshot, target: buttons[0][1] } });
+    phase = 'native-receipt';
     const receipt = await box.wait({ timeoutMs: 60000 });
+    phase = 'receipt-render';
     const rendered = await box.flush();
-    return rendered.renderFailed ? rendered : receipt;
+    const result = rendered.renderFailed ? rendered : receipt;
+    if (result.status === 'working') return result;
+    primary = result.failurePhase ? classifyOutboxFailure(outboxError(result.failureReason, result.failurePhase, undefined, result.cleanupUnconfirmed === true), phase, 'operation-unconfirmed')
+      : classifyOutboxFailure(null, rendered.renderFailed ? phase : result.messageId ? 'native-receipt' : 'view-send', rendered.renderFailed ? 'render-unconfirmed'
+        : !result.messageId ? 'send-unconfirmed' : result.status === 'command-failed' ? 'command-failed' : result.nativeReceived ? 'command-unconfirmed' : 'receipt-unconfirmed');
+    return { ...result, ...primary };
+  } catch (error) {
+    primary = classifyOutboxFailure(error, phase, signal.aborted ? 'cancelled'
+      : ({ 'view-open': 'view-unavailable', lease: 'lease-unavailable', 'view-snapshot': 'snapshot-unavailable',
+        'view-send': 'send-unconfirmed', 'native-receipt': 'receipt-unconfirmed', 'receipt-render': 'render-unconfirmed' })[phase]);
+    throw outboxError(primary.failureReason, primary.failurePhase, undefined, primary.cleanupUnconfirmed === true);
   } finally {
     // Do not disconnect the lease until the receipt has been gathered: a
     // native tool ACK is not receipt, and socket close revokes this view.
-    try { if (box) await box.close(); } finally { signal.removeEventListener('abort', aborted); transport?.close(); socket?.destroy(); binding.close(); }
+    try {
+      try { if (box) await box.close(); } finally { signal.removeEventListener('abort', aborted); transport?.close(); socket?.destroy(); binding.close(); }
+    } catch {
+      throw outboxError(primary?.failureReason || 'cleanup-unconfirmed', primary?.failurePhase || 'cleanup', undefined, true);
+    }
   }
 }
 async function createOutboxBroker({ descriptorFile, bind, createView }) {
@@ -58,16 +79,17 @@ async function createOutboxBroker({ descriptorFile, bind, createView }) {
   const socketPath = path.join(dir, 'outbox.sock'), capability = crypto.randomBytes(32).toString('hex');
   const sockets = new Set(), operations = new Set(), controllers = new Set(); let busy = false, closed = false, closing;
   const submitAuthenticated = (factory, signal) => {
-    if (closed || busy || signal?.aborted || typeof factory !== 'function') return Promise.resolve(FAIL);
+    if (closed || busy || signal?.aborted || typeof factory !== 'function') return Promise.resolve(failed('admission',
+      closed ? 'owner-closed' : busy ? 'busy' : signal?.aborted ? 'cancelled' : 'invalid-request'));
     busy = true;
     const abort = new AbortController(), cancelled = () => abort.abort();
     const timer = setTimeout(cancelled, 100000);
     signal?.addEventListener('abort', cancelled, { once: true }); controllers.add(abort);
     const operation = Promise.resolve().then(async () => {
-      if (abort.signal.aborted) return FAIL;
+      if (abort.signal.aborted) return failed('admission', 'cancelled');
       const binding = await factory(abort.signal);
       return operateOutbox(binding, createView, abort.signal);
-    }).catch(() => FAIL).finally(() => {
+    }).catch(error => failed('binding', abort.signal.aborted ? 'cancelled' : 'binding-unavailable', error)).finally(() => {
       clearTimeout(timer); signal?.removeEventListener('abort', cancelled); controllers.delete(abort); operations.delete(operation); busy = false;
     });
     operations.add(operation); return operation;
@@ -85,11 +107,12 @@ async function createOutboxBroker({ descriptorFile, bind, createView }) {
       accepted = true;
       const operation = Promise.resolve().then(async () => {
         const request = JSON.parse(data.slice(0, end));
-        if (closed || busy || Object.keys(request).sort().join(',') !== 'arguments,capability,identity' ||
+        if (Object.keys(request).sort().join(',') !== 'arguments,capability,identity' ||
             typeof request.capability !== 'string' || !/^[a-f0-9]{64}$/.test(request.capability) ||
-            !crypto.timingSafeEqual(Buffer.from(capability), Buffer.from(request.capability))) return FAIL;
+            !crypto.timingSafeEqual(Buffer.from(capability), Buffer.from(request.capability))) return failed('admission', 'invalid-request');
+        if (closed || busy) return failed('admission', closed ? 'owner-closed' : 'busy');
         return submitAuthenticated(signal => bind(request.identity, request.arguments, signal), abort.signal);
-      }).catch(() => FAIL).then(result => { if (!socket.destroyed) socket.end(JSON.stringify(result) + '\n'); });
+      }).catch(() => failed('admission', 'invalid-request')).then(result => { if (!socket.destroyed) socket.end(JSON.stringify(result) + '\n'); });
       operations.add(operation); operation.finally(() => operations.delete(operation));
     });
   });

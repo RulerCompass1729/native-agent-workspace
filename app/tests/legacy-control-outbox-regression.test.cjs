@@ -155,7 +155,12 @@ test('submission-only events and an uncertain RPC never promote a pending shared
   assert.equal(f.bridge.sharedMessages()[0].status, 'unconfirmed');
   assert.equal(f.bridge.sharedMessages()[0].deliveries[0].status, 'unconfirmed');
   f.ack.reject(Error('Synthetic transport outcome unknown'));
-  await assert.rejects(pending, /outcome unknown/);
+  await assert.rejects(pending, error => {
+    assert.equal(error.message.includes('outcome unknown'), false);
+    assert.deepEqual(require('../computer-use-outbox-native.cjs').classifyOutboxFailure(error),
+      { failurePhase: 'view-send', failureReason: 'send-unconfirmed' });
+    return true;
+  });
   assert.equal(f.calls.length, 1, 'Uncertain outcome must not trigger an automatic resend');
   const cold = new LegacyInput(f.directory); t.after(() => cold.close());
   assert.equal(cold.sharedMessages()[0].id, row.id);

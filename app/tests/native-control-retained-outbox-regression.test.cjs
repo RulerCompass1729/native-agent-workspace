@@ -92,6 +92,7 @@ async function core(t, binding) {
         if (!closed) { closed = true; await config.dispose(); }
       } };
     } };
+    if (id === './computer-use-outbox-native.cjs') return require('../computer-use-outbox-native.cjs');
     assert.equal(id, 'node:crypto'); return require(id);
   }, module, file, path.dirname(file));
   let send;
@@ -140,7 +141,12 @@ test('actual adapter events preceding ACK retain exact target/body/tag, sender a
 
 test('unknown RPC failure stays unconfirmed and repeated original native call cannot dispatch again', { timeout: 3000 }, async t => {
   const f = await fixture(t, 'unknown'), binding = await f.bind();
-  await assert.rejects(binding.forwardOnce(), /Controlled RPC outcome unknown/);
+  await assert.rejects(binding.forwardOnce(), error => {
+    assert.equal(error.message.includes('outcome unknown'), false);
+    assert.deepEqual(require('../computer-use-outbox-native.cjs').classifyOutboxFailure(error),
+      { failurePhase: 'view-send', failureReason: 'send-unconfirmed' });
+    return true;
+  });
   await tick(); assert.equal(f.starts.length, 1); assert.equal(f.bridge.records.length, 1);
   assert.equal(f.bridge.records[0].status, 'unconfirmed');
   assert.equal(f.natives[0].adapter.outboxMcpCalls.get('owned-call').outboxConsumed, true);
