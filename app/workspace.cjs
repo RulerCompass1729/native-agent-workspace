@@ -994,6 +994,29 @@ class Workspace extends EventEmitter {
   mobileCommit(ticket, lease, action, client) { return require('./mobile-session.cjs').commit(this, ticket, lease, client, action); }
   mobileCancel(ticket, lease, action, client, reason) { return require('./mobile-session.cjs').cancel(this, ticket, lease, client, action, reason); }
   mobileDisconnected(client) { return require('./mobile-session.cjs').disconnected(this, client); }
+  scopedOutboxRequest(client, action, request, notify) {
+    this.scopedOutboxProducer ||= new (require('./scoped-outbox-runtime.cjs').ScopedOutboxRuntime)(this);
+    return this.scopedOutboxProducer.request(client, action, request, notify);
+  }
+  scopedOutboxDisconnected(client) { this.scopedOutboxProducer?.disconnected(client); }
+  closeScopedOutbox() { this.scopedOutboxProducer?.closeAll(); }
+  async sendScopedOutboxInput(s, runtime, text, tag, sender, rpc, guard) {
+    if (!guard() || this.runtimes.get(s.id) !== runtime) throw require('./computer-use-outbox-native.cjs').outboxError('grant-invalidated', 'view-send');
+    // The shared source-attributed row is owned by the existing GUI ledger.
+    // Only this exact native input is appended here; no private draft is read.
+    const input = { id: tag, role: 'user', origin: 'room', name: sender.name, text, time: Date.now(), status: 'awaiting-native' };
+    s.pendingTag = tag; s.messages.push(input); this.versions.dispatches++;
+    this.cancelCapacity(s.id); this.changed(); this.persist();
+    try {
+      if (this.storageWarning || !guard()) throw require('./computer-use-outbox-native.cjs').outboxError('grant-invalidated', 'view-send');
+      await runtime.sendScopedOutbox(text, tag, guard, rpc);
+      return tag;
+    } catch (error) {
+      if (input.status === 'awaiting-native') input.status = 'unconfirmed';
+      if (this.runtimes.get(s.id) === runtime && s.pendingTag === tag) s.pendingTag = null;
+      this.changed(); this.persist(); throw error;
+    }
+  }
   async send(id, text, owner, route = null, forward = null, sourceMessage = null, recovery = null, wakeTicket = null, mobile = null, images = null) {
     const originalText = text; text = images && typeof text === 'string' && text.length <= 16000 && !text.trim() ? '' : cleanText(text); if (wakeTicket || mobile) text = originalText;
     const mobileSession = mobile && require('./mobile-session.cjs');

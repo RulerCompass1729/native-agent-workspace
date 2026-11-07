@@ -165,13 +165,32 @@ function take(w, spec) {
   if (!intent || intent.status !== 'sending' || intent.recipientId !== spec.recipientId || intent.targetKey !== spec.targetKey || !r || !sourceValid(w, s, r, intent)) throw uiError("error.wake.credentialInvalid");
   intent.status = 'consumed'; durable(w); return { ...intent };
 }
-function eligible(w, s, r, intent, tag) {
+function budgetAllows(s, id) {
   const budget = s.wakeBudget || {}, streak = budget.humanRevision === (s.wakeHumanRevision || 0) ? budget.streak || 0 : 0;
-  const reserved = budget.id === intent.id;
+  return budget.id === id ? streak <= MAX_STREAK : streak < MAX_STREAK && (!budget.lastAt || Date.now() - budget.lastAt >= COOLDOWN);
+}
+function reserveBudget(s, id) {
+  const old = s.wakeBudget || {}, streak = old.humanRevision === (s.wakeHumanRevision || 0) ? old.streak || 0 : 0;
+  s.wakeBudget = { id, lastAt: Date.now(), streak: streak + 1, humanRevision: s.wakeHumanRevision || 0 };
+  return s.wakeBudget;
+}
+function goalAllows(status) { return status === null || status === 'active' || status === 'complete'; }
+async function nativeGoalStatus(s, r, valid, rpc = r.host?.rpc) {
+  if (s.provider !== 'codex') return null;
+  let result;
+  try { result = await rpc?.call('thread/goal/get', { threadId: s.nativeId }); }
+  catch (error) { if (error?.nativeGoalsDisabled === true) result = { goal: null }; else throw error; }
+  if (!valid()) throw uiError('error.wake.humanOrRecipientChanged');
+  if (!result || !Object.hasOwn(result, 'goal') || (result.goal !== null &&
+      (result.goal?.threadId !== s.nativeId || !['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'].includes(result.goal?.status))))
+    throw uiError('error.wake.nativeGoalDisallows');
+  return result.goal?.status ?? null;
+}
+function eligible(w, s, r, intent, tag) {
   return !w.closed && !w.storageWarning && enabled(w) && !s.wakeDisabled && boundary(w) === intent.boundary && same(s, intent.targetProof) &&
     w.runtimes.get(s.id) === r && !r.stopped && !r.transportDisconnected && r.chatAvailable !== false && s.state === 'idle' &&
     (!s.pendingTag || s.pendingTag === tag) && !s.approval && !s.nativeContextPending && !r.nativeInputRequired && !r.pendingQueue && !r.nativeAbortRequest &&
-    (reserved ? streak <= MAX_STREAK : streak < MAX_STREAK && (!budget.lastAt || Date.now() - budget.lastAt >= COOLDOWN));
+    budgetAllows(s, intent.id);
 }
 async function receive(w, spec) {
   if (!spec || typeof spec.sourceKey !== 'string' || !readLayout(root(w)).entries.includes(spec.sourceKey) || typeof spec.id !== 'string' || typeof spec.senderId !== 'string') throw uiError("error.wake.sourceInvalid");
@@ -182,16 +201,10 @@ async function receive(w, spec) {
   if (budget.humanRevision === (s.wakeHumanRevision || 0) && budget.streak >= MAX_STREAK) throw uiError("error.wake.consecutiveLimit");
   if (intent.id !== spec.id || intent.senderId !== spec.senderId || intent.recipientId !== s.id || intent.boundary !== generation || !same(s, proof) || !eligible(w, s, r, intent)) throw uiError("error.wake.recipientChangedOrLimited");
   if (s.provider === 'codex') {
-    const result = await r.host?.rpc?.call('thread/goal/get', { threadId: s.nativeId }).catch(error => { if (error?.nativeGoalsDisabled === true) return { goal: null }; throw error; });
-    if (!eligible(w, s, r, intent)) throw uiError("error.wake.humanOrRecipientChanged");
-    // Use the same native identity/state contract as capacity continuation.
-    // A successful ordinary input is never permission to resume a stopped goal.
-    if (!result || !Object.hasOwn(result, 'goal') || (result.goal !== null &&
-        (result.goal?.threadId !== s.nativeId || !['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'].includes(result.goal?.status)))) throw uiError("error.wake.nativeGoalDisallows");
-    if (result.goal && !['active', 'complete'].includes(result.goal.status)) throw uiError('error.wake.nativeGoalStateDisallows', { status: result.goal.status });
+    const status = await nativeGoalStatus(s, r, () => eligible(w, s, r, intent));
+    if (!goalAllows(status)) throw uiError('error.wake.nativeGoalStateDisallows', { status });
   }
-  const old = s.wakeBudget || {}, streak = old.humanRevision === (s.wakeHumanRevision || 0) ? old.streak || 0 : 0;
-  s.wakeBudget = { id: intent.id, lastAt: Date.now(), streak: streak + 1, humanRevision: s.wakeHumanRevision || 0 };
+  reserveBudget(s, intent.id);
   const ticket = { intent, valid: tag => eligible(w, s, r, intent, tag) };
   const text = `[Workspace message from ${intent.senderName} · ${intent.senderId} at ${new Date(intent.time).toISOString()}]\n${intent.body}`;
   durable(w);
@@ -199,4 +212,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, COOLDOWN, MAX_STREAK, snapshot, enabled, boundary, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, stage, complete, take, receive, validateArgs, root };
+module.exports = { CAPABILITY, COOLDOWN, MAX_STREAK, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, stage, complete, take, receive, validateArgs, root };

@@ -12,6 +12,9 @@ const { roomId: validRoomId, isMember, membershipRevision } = require('./collabo
 const { displayMessage } = require('./ui-locale.js');
 const gitWorktree = require('./git-worktree.cjs');
 
+function dispatchScopedOutbox(workspace, client, args, send) {
+  return workspace.scopedOutboxRequest(client, args[0], args[1], data => send(client, { event: 'scopedOutbox', data }));
+}
 async function main() {
   const dataDir = process.argv[2];
   if (!dataDir || !path.isAbsolute(dataDir)) throw new Error('Data directory required');
@@ -49,8 +52,9 @@ async function main() {
   let shuttingDown = false;
   const dispatch = async (owner, method, args, client, roomId = 'shared', scoped = false, inputProof = false) => {
     if (shuttingDown) throw uiError("error.backendClosingActionNotExecuted");
+    if (method === 'scopedOutbox') return dispatchScopedOutbox(workspace, client, args, send);
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [...mobileCapabilities, ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [...mobileCapabilities, ...(fs.existsSync(path.join(__dirname, 'scoped-outbox-runtime.cjs')) ? ['scopedNativeOutboxV1'] : []), ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'mergeSnapshot': {
         if (roomId !== 'shared' || args.length !== 1) throw uiError("error.invalidSnapshotImport");
         return workspace.mergeSnapshot(args[0]);
@@ -188,12 +192,13 @@ async function main() {
       if (!Array.isArray(request.args) || request.args.length > (request.method === 'run' ? 7 : 5) || !Number.isInteger(request.id)) { client.destroy(); return; }
       Promise.resolve().then(() => dispatch(owner, request.method, request.args, client)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。', uiMessage: error.message ? displayMessage(error.uiMessage) : uiError('error.main.operationIncomplete').uiMessage }));
     });
-    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); workspace.peerLeases.disconnected(client); if (mobileCapabilities.length) workspace.mobileDisconnected(client); if (!shuttingDown) workspace.release(owner); });
+    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); workspace.scopedOutboxDisconnected(client); workspace.peerLeases.disconnected(client); if (mobileCapabilities.length) workspace.mobileDisconnected(client); if (!shuttingDown) workspace.release(owner); });
   });
   await new Promise(resolve => server.listen(endpoint, resolve)); fs.chmodSync(endpoint, 0o600);
   const connection = path.join(dataDir, 'connection.json'); const tmp = `${connection}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ protocol: 1, endpoint, token, pid: process.pid }), { mode: 0o600 }); fs.renameSync(tmp, connection);
-  function shutdown() { shuttingDown = true; workspace.close(); server.close(); for (const c of clients) c.destroy(); fs.rmSync(connection, { force: true }); fs.rmSync(lockPath, { force: true }); setTimeout(() => process.exit(0), 500); }
+  function shutdown() { shuttingDown = true; workspace.closeScopedOutbox(); workspace.close(); server.close(); for (const c of clients) c.destroy(); fs.rmSync(connection, { force: true }); fs.rmSync(lockPath, { force: true }); setTimeout(() => process.exit(0), 500); }
   process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 }
-main().catch(() => process.exit(1));
+if (typeof module === 'undefined' || require.main === module) main().catch(() => process.exit(1));
+if (typeof module === 'object') module.exports = { dispatchScopedOutbox };

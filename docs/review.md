@@ -6575,3 +6575,40 @@ not independently rerun tests. No managed subscription, lazy connection or engin
 creation was added. Installed original-secretary delivery and its first completed
 command remain open. Claude authority before proof consumption is a separate
 unverified boundary; the existing synchronous path was not extended here.
+
+
+### T58 managed outbox integration and existing wake controls
+
+The managed route now uses the original runtime's held RPC and authenticated
+service connection; it does not create a native engine, resume a thread or claim
+its private input. The shared message keeps its source, exact body and native tag.
+Input identity is pinned before awaits, including connection/peer revisions and
+the native server's process identity. Native receipt and the first started command
+are tracked separately from acknowledgement; a later successful command cannot
+replace the first one.
+
+Independent integration review required the retained direct route to respect the
+global wake switch, and both routes to reuse native goal admission and the existing
+cooldown/streak limits. Those repairs use session-wake helpers and existing input
+storage, with no goal setter. Paused, blocked, usage-limited and budget-limited
+goals refuse agent input. A legacy backend that cannot report its wake policy
+cannot authorize this automatic route; human input in the same native TUI remains
+available. Read-only goal admission is not atomic goal restoration.
+
+The affected no-model suite passes 133 cases with no skips. Its first run's eight
+failures were test assertions reading private error tags as public properties;
+the classifier assertions were corrected without weakening the guards. Private
+installed-test cleanup now attempts each owned resource independently and records
+signature failure without losing the result. A second review found split quota accounting between direct inputs and service
+wakes. A backend advertising agentWakeV1, or reporting canonical wake-budget
+fields, now requires the managed producer; it cannot fall back to a bridge-row
+count. All current original managed backends use that route. The retained
+compatibility route is limited to backends without native wake accounting and
+still requires an explicit enabled policy; it is not a current-backend fallback.
+New mixed-route checks alternate actual native-wake receive and scoped outbox
+against one Workspace, persist one count, and reject the fourth automatic input.
+A terminal-bridge goal read that does not expose nativeGoalsDisabled refuses
+conservatively; that mode does not inherit the direct RPC exception. An independent read-only delta review approved the source and owned-fixture
+preparation only. It inspected the raw author-run counter evidence, without an
+independent rerun. Installed original secretary delivery, first command and
+conditional goal continuation remain open.

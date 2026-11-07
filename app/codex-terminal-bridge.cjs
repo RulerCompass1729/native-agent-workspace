@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
 const WebSocket = require('ws');
+const { randomUUID } = require('node:crypto');
 
 // Match Codex 0.164 app-server-client's bounded native websocket limit.
 // Plugin catalogs can legitimately exceed 16 MiB; rejecting one disconnects
@@ -31,14 +32,37 @@ class CodexTerminalBridge {
     const upstream = new WebSocket('ws://localhost', {
       createConnection: () => net.connect(this.upstream), maxPayload: CODEX_WEBSOCKET_MAX_PAYLOAD, handshakeTimeout: 10000,
     });
-    const state = { client, upstream, pending: new Map(), queue: [], queuedBytes: 0 };
+    const state = { client, upstream, pending: new Map(), queue: [], queuedBytes: 0, appPending: new Map(), threadId: null };
+    const appPrefix = `naw-outbox:${randomUUID()}:`; let appSequence = 0;
     const rpc = { reply(id, result) {
       if (upstream.readyState !== WebSocket.OPEN || client.readyState !== WebSocket.OPEN) throw uiError("error.terminalConnectionChangedNoDecision");
       upstream.send(JSON.stringify({ id, result }));
+    }, call(method, params) {
+      const keys = value => value && Object.keys(value).sort().join(',');
+      const metadata = method === 'thread/turns/list' && keys(params) === 'itemsView,limit,sortDirection,threadId' &&
+        params.limit === 1 && params.itemsView === 'notLoaded' && params.sortDirection === 'desc';
+      const goal = method === 'thread/goal/get' && keys(params) === 'threadId';
+      const input = params?.input?.[0];
+      const task = method === 'turn/start' && keys(params) === 'clientUserMessageId,input,threadId' &&
+        typeof params.clientUserMessageId === 'string' && /^[a-f0-9-]{36}$/i.test(params.clientUserMessageId) &&
+        Array.isArray(params.input) && params.input.length === 1 && keys(input) === 'text,text_elements,type' && input.type === 'text' &&
+        typeof input.text === 'string' && input.text.trim() && input.text.length <= 16000 && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(input.text) &&
+        Array.isArray(input.text_elements) && input.text_elements.length === 0;
+      if ((!metadata && !task && !goal) || !rpc.connected || !state.threadId || params.threadId !== state.threadId ||
+          [...state.pending.values()].some(p => !p.ephemeral) || state.appPending.size >= 8)
+        return Promise.reject(uiError('error.nativeSendUnavailable'));
+      return new Promise((resolve, reject) => {
+        const id = appPrefix + (++appSequence);
+        const timer = setTimeout(() => { state.appPending.delete(id); reject(uiError('error.nativeRequestTimeout')); }, 30000);
+        timer.unref(); state.appPending.set(id, { resolve, reject, timer });
+        upstream.send(JSON.stringify({ id, method, params }));
+      });
     }, get connected() { return upstream.readyState === WebSocket.OPEN && client.readyState === WebSocket.OPEN; } };
     this.connections.add(state);
     const close = () => {
       if (!this.connections.delete(state)) return;
+      for (const request of state.appPending.values()) { clearTimeout(request.timer); request.reject(uiError('error.nativeDisconnectedNoReplay')); }
+      state.appPending.clear();
       client.terminate(); upstream.terminate();
       this.observe({ kind: 'disconnected', rpc });
     };
@@ -73,8 +97,14 @@ class CodexTerminalBridge {
       if (client.readyState !== WebSocket.OPEN) { close(); return; }
       let response;
       try { response = JSON.parse(data.toString()); } catch {}
+      if (response && !response.method && typeof response.id === 'string' && response.id.startsWith(appPrefix)) {
+        const request = state.appPending.get(response.id); state.appPending.delete(response.id);
+        if (request) { clearTimeout(request.timer); response.error ? request.reject(uiError('error.nativeRequestRejected', { arg1: response.error.code })) : request.resolve(response.result); }
+        return; // Even a late private response must not reach the native TUI.
+      }
       if (response && !response.method && state.pending.has(response.id)) {
         const metadata = state.pending.get(response.id); state.pending.delete(response.id);
+        if (!metadata.ephemeral && !response.error && typeof response.result?.thread?.id === 'string') state.threadId = response.result.thread.id;
         this.observe({ kind: 'response', ...metadata, result: response.result, error: Boolean(response.error), rpc });
       }
       if (response?.method) this.observe({ kind: 'native', message: response, rpc });

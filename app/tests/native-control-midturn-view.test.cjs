@@ -54,6 +54,7 @@ async function fixture(t, options = {}) {
           options.beforeMetadataReply?.({ records, control });
         }
         return reply({ data: record.id === 'sender' ? [{ id: identity.turnId, status: 'inProgress', itemsView: 'notLoaded', items: [] }] : [], nextCursor: null });
+      case 'thread/goal/get': assert.equal(record?.id, 'recipient'); return reply({ goal: null });
       case 'turn/start':
         assert.equal(record?.id, 'recipient'); starts.push(m.params); return reply({ turn: { id: 'recipient-turn' } });
       default:
@@ -68,7 +69,7 @@ async function fixture(t, options = {}) {
   }
   assert.equal(natives[0].state, 'working'); assert.equal(natives[1].state, 'idle');
   const entry = { key: 'retained', client: { call() { throw Error('No backend reads or input ownership claims'); } },
-    state: { sessions: records, room: { messages: [] }, sharedDraft } };
+    state: { wakePolicy: { enabled: true }, sessions: records, room: { messages: [] }, sharedDraft } };
   const control = { legacyInput: bridge, generations: new Map(), manualEpoch: 1, maintenance: new Set() };
   const client = { entries: [entry], control, socket: { destroyed: false }, route: () => entry };
   const contexts = [{ client, view: { owner: 'observer-view' }, win: { isDestroyed: () => false } }];

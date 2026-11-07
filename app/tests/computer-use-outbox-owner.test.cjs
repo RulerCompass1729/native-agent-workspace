@@ -2,6 +2,7 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { Codex } = require('../adapters.cjs');
 const { LegacyInput } = require('../legacy-input.cjs');
+const { classifyOutboxFailure } = require('../computer-use-outbox-native.cjs');
 const { bindOriginalOutbox } = require('../computer-use-outbox-owner.cjs');
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'outbox-source-'));
@@ -12,7 +13,7 @@ function fixture(t) {
   const bridge = new LegacyInput(dir), args = { recipient_id: 'recipient', message: '  Task one\n\tactual context.  ' };
   const identity = { nativeId: records[0].nativeId, sessionId: 'sender-session', turnId: 'sender-turn', callId: 'call-1' };
   const natives = records.map(record => {
-    const host = { rpc: {}, codexTargets: new Map() }, adapter = new Codex({ ...record, messages: [] }, host);
+    const host = { rpc: { async call(method, params) { assert.equal(method, 'thread/goal/get'); assert.equal(params.threadId, record.nativeId); return { goal: native.goalStatus ? { threadId: record.nativeId, status: native.goalStatus } : null }; } }, codexTargets: new Map() }, adapter = new Codex({ ...record, messages: [] }, host);
     adapter.turnId = 'sender-turn'; adapter.nativeSessionId = 'sender-session'; adapter.latestState = 'working';
     const native = { adapter, record: adapter.record, connected: true, closed: false, state: 'idle', close() {}, sharedReplyAvailable: false };
     native.send = async (text, tag, refresh, guard) => {
@@ -29,7 +30,7 @@ function fixture(t) {
   const caller = natives[0].adapter;
   caller.event({ method: 'item/started', params: { threadId: identity.nativeId, turnId: identity.turnId,
     item: { id: identity.callId, type: 'mcpToolCall', server: 'native_outbox', tool: 'workspace_outbox', arguments: args, status: 'inProgress' } } }, caller.host.rpc);
-  const entry = { key: 'retained', client: { call() { throw Error('No backend reads are permitted by this test'); } }, state: { sessions: records, room: { messages: [] } } };
+  const entry = { key: 'retained', client: { call() { throw Error('No backend reads are permitted by this test'); } }, state: { wakePolicy: { enabled: true }, sessions: records, room: { messages: [] } } };
   const control = { legacyInput: bridge, generations: new Map(), manualEpoch: 1, maintenance: new Set() };
   const client = { entries: [entry], control, socket: { destroyed: false }, route: () => entry };
   const contexts = records.map(record => ({ client, view: { owner: record.owner }, win: { isDestroyed: () => false } }));
@@ -108,4 +109,52 @@ test('changed native receipt connection/lifecycle cannot promote an ACK, and clo
     assert.equal(f.bridge.sharedMessages().find(row => row.id === tag).status, 'unconfirmed'); assert.equal(f.bridge.outboxReceipts.size, 0);
     binding.close(); f.bridge.close(); assert.equal(f.bridge.outboxReceipts.size, 0);
   }
+});
+
+test('direct native outbox respects global off or unavailable policy before reserving input', async t => {
+  for (const policy of [{ enabled: false }, undefined]) {
+    const f = fixture(t); f.entry.state.wakePolicy = policy;
+    await assert.rejects(bindOriginalOutbox(f.deps, f.identity, f.args), error => classifyOutboxFailure(error).failureReason === ('wake-policy-unavailable'));
+    assert.equal(f.bridge.records.length, 0);
+  }
+});
+test('direct native outbox rechecks global off and native goal before native write', async t => {
+  for (const status of ['paused', 'blocked', 'usageLimited', 'budgetLimited']) {
+    const f = fixture(t), binding = await bindOriginalOutbox(f.deps, f.identity, f.args);
+    let writes = 0; f.natives[1].goalStatus = status;
+    f.natives[1].send = async (_text, _tag, refresh) => { await refresh(); writes++; };
+    await assert.rejects(binding.forwardOnce(), error => classifyOutboxFailure(error).failureReason === ('native-goal-disallows'));
+    assert.equal(writes, 0); assert.equal(f.bridge.records.length, 1);
+    assert.equal(f.bridge.records[0].agentWakeBudget.streak, 1);
+    await binding.close();
+  }
+  const f = fixture(t), binding = await bindOriginalOutbox(f.deps, f.identity, f.args);
+  f.entry.state.wakePolicy.enabled = false;
+  await assert.rejects(binding.forwardOnce(), error => classifyOutboxFailure(error).failureReason === ('wake-policy-unavailable'));
+  assert.equal(f.bridge.records.length, 0); await binding.close();
+});
+test('direct native outbox shares existing cooldown and streak admission', async t => {
+  for (const budget of [{ lastAt: Date.now(), streak: 1, humanRevision: 0 }, { lastAt: 1, streak: 3, humanRevision: 0 }]) {
+    const f = fixture(t); f.bridge.records.push({ sessionId: 'recipient', nativeId: 'recipient-native', agentWakeBudget: budget });
+    await assert.rejects(bindOriginalOutbox(f.deps, f.identity, f.args), error => classifyOutboxFailure(error).failureReason === ('wake-limited'));
+    assert.equal(f.bridge.records.length, 1);
+  }
+});
+
+test('a backend with canonical wake accounting cannot fall back to a stale direct ledger', async t => {
+  for (const policy of ['capability', 'persisted-budget']) {
+    const f = fixture(t);
+    f.bridge.records.push({ sessionId: 'recipient', nativeId: 'recipient-native', agentWakeBudget: { lastAt: 1, streak: 1, humanRevision: 0 } });
+    if (policy === 'capability') f.entry.state.capabilities = ['agentWakeV1'];
+    else f.records[1].wakeBudget = { lastAt: 1, streak: 3, humanRevision: 0 };
+    await assert.rejects(bindOriginalOutbox(f.deps, f.identity, f.args), error => classifyOutboxFailure(error).failureReason === 'wake-policy-unavailable');
+    assert.equal(f.bridge.records.length, 1);
+  }
+});
+
+test('a direct grant cannot survive the arrival of canonical wake accounting', async t => {
+  const f = fixture(t), binding = await bindOriginalOutbox(f.deps, f.identity, f.args);
+  f.entry.state.capabilities = ['agentWakeV1'];
+  await assert.rejects(binding.forwardOnce(), error => classifyOutboxFailure(error).failureReason === 'wake-policy-unavailable');
+  assert.equal(f.bridge.records.length, 0); await binding.close();
 });

@@ -1888,8 +1888,17 @@ class Codex extends EventEmitter {
     if (['item/started', 'item/completed'].includes(message.method)) this.observeNativeItem(message.method, p, sourceRpc);
     if (message.method === 'item/completed' && p.item?.type === 'userMessage' &&
       p.turnId && this.ownInputs.has(p.item.clientId)) {
-      this.nativeAcceptedInput = { turnId: p.turnId, tag: p.item.clientId, rpc: this.host.rpc, lifecycle: this.lifecycleRevision };
+      this.nativeAcceptedInput = { turnId: p.turnId, tag: p.item.clientId, rpc: sourceRpc, lifecycle: this.lifecycleRevision };
       this.emit('nativeAcceptedInput');
+    }
+    if (p.item?.type === 'commandExecution' &&
+        (message.method === 'item/started' ||
+          message.method === 'item/completed' && ['completed', 'failed'].includes(p.item.status) && Number.isSafeInteger(p.item.exitCode))) {
+      this.emit('scopedOutboxCommand', { id: p.item.id, turnId: p.turnId, inputTag, source: 'codex-native', kind: 'commandExecution',
+        ...(typeof p.item.command === 'string' && p.item.command && p.item.command.length <= 4096 ? { input: p.item.command } : {}),
+        status: message.method === 'item/started' ? 'inProgress' : p.item.status,
+        ...(message.method === 'item/completed' ? { exitCode: p.item.exitCode } : {}),
+        rpc: sourceRpc, lifecycle: this.lifecycleRevision });
     }
     if (['item/started', 'item/completed'].includes(message.method) && p.item?.type && !['agentMessage', 'userMessage', 'reasoning', 'plan'].includes(p.item.type)) {
       const item = p.item;
@@ -2143,6 +2152,35 @@ class Codex extends EventEmitter {
     }
   }
   get spaceImagesAvailable() { return this.host.rpc?.nativeVersion === '0.166.0' && this.host.rpc?.ws?.readyState === WebSocket.OPEN && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
+  scopedOutboxRpc() {
+    const rpc = this.terminalNotificationSource ? this.terminalRpc : this.host.rpc;
+    if (this.stopped || this.transportDisconnected || this.record.nativeContextPending || !this.currentRpc(rpc) ||
+        typeof rpc?.call !== 'function' || this.terminalNotificationSource && !rpc.connected ||
+        !this.terminalNotificationSource && (this.needsSubscription || !this.chatAvailable)) return null;
+    return rpc;
+  }
+  async sendScopedOutbox(text, tag, guard, rpc) {
+    if (!rpc || this.scopedOutboxRpc() !== rpc || this.pending || !guard()) throw uiError('error.nativeSendUnavailable');
+    const pending = this.pending = { tag, turnId: null }; this.ownInputs.add(tag);
+    const lifecycle = this.lifecycleRevision, revision = this.stateRevision;
+    try {
+      const result = await rpc.call('turn/start', { threadId: this.record.nativeId, clientUserMessageId: tag,
+        input: [{ type: 'text', text, text_elements: [] }] });
+      if (lifecycle !== this.lifecycleRevision || this.stopped || this.scopedOutboxRpc() !== rpc) throw uiError('error.nativeObservationChanged');
+      if (typeof result.turn?.id !== 'string' || !result.turn.id) throw uiError('error.nativeObservationChanged');
+      pending.turnId = result.turn.id;
+      if (!this.turnId) this.turnId = result.turn.id;
+      if (revision === this.stateRevision) this.emit('state', 'working');
+      this.emit('submitted', tag); this.emit('replyBound', { tag, nativeId: this.record.nativeId, turnId: pending.turnId });
+      for (const id of this.turns.keys()) this.finishTurn(id);
+      return pending.turnId;
+    } catch (error) {
+      if (this.pending === pending) this.pending = null;
+      if (lifecycle === this.lifecycleRevision) for (const id of this.turns.keys()) this.finishTurn(id);
+      throw error;
+    }
+    // Deliberately no observeAcceptedTurn/resume or new connection fallback.
+  }
   spaceImageCurrent(pending) { return this.pending === pending && pending.imageRpc === this.host.rpc && pending.imageLifecycle === this.lifecycleRevision && pending.spaceImages.nativeId === this.record.nativeId && !this.stopped && !this.transportDisconnected; }
   async send(text, tag, guard, spaceImages) {
     if (!this.chatAvailable || this.pending || !guard()) throw uiError("error.nativeSendUnavailable");

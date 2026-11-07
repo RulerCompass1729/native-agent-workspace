@@ -17,7 +17,7 @@ async function fixture(t, mode) {
     { id: 'receiver', name: 'Receiver', nativeId: 'receiver-native', pid: 202, owner: 'receiver-view', memberRevision: 2 },
   ].map(record => ({ ...record, provider: 'codex', roomId: 'shared', controlRevision: 4,
     draft: 'UNSENT_PRIVATE_DRAFT_' + record.id, messages: [] }));
-  const bridge = new LegacyInput(root), calls = [], starts = [], natives = [], bindings = [];
+  const bridge = new LegacyInput(root), calls = [], goalReads = [], starts = [], natives = [], bindings = [];
   let release;
   const heldACK = new Promise(resolve => { release = resolve; });
   for (const record of records) {
@@ -25,6 +25,7 @@ async function fixture(t, mode) {
     const rpc = { nativeVersion: '0.164.0', async call(method, params) {
       // Record before assertions: observation-error catches must not hide an
       // unexpected settings/history/write RPC from the final trace check.
+      if (method === 'thread/goal/get') { assert.equal(params.threadId, record.nativeId); goalReads.push([record.id, method]); return { goal: null }; }
       calls.push([record.id, method]);
       assert.equal(record.id, 'receiver'); assert.equal(method, 'turn/start', 'No backend/history/connection metadata reads');
       starts.push(params);
@@ -58,7 +59,7 @@ async function fixture(t, mode) {
     natives.push(native); bridge.targets.set(record.id, { record, native, submission: native });
   }
   const entry = { key: 'retained', client: { call() { throw Error('No initial/backend reads'); } },
-    state: { sessions: records, room: { messages: [] } } };
+    state: { wakePolicy: { enabled: true }, sessions: records, room: { messages: [] } } };
   const control = { legacyInput: bridge, generations: new Map(), manualEpoch: 1, maintenance: new Set() };
   const client = { entries: [entry], control, socket: { destroyed: false }, route: () => entry };
   const contexts = records.map(record => ({ client, view: { owner: record.owner }, win: { isDestroyed: () => false } }));

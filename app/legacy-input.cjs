@@ -14,6 +14,7 @@ const { LegacyCodex, eligibleCodex, retainedSocket } = require('./legacy-codex.c
 const { LegacyClaude, readerPath } = require('./legacy-claude.cjs');
 const { LegacyShared } = require('./legacy-shared.cjs');
 const { installPlugin } = require('./claude-compat-plugin.cjs');
+const { prepareManagedRecipient } = require('./managed-outbox-transport.cjs');
 
 function eligible(state, record) {
   return eligibleCodex(state, record) || (supportsLegacyObservation(state, record) && /^[a-f0-9-]{36}$/i.test(record.nativeId || '')
@@ -27,6 +28,7 @@ class LegacyInput extends EventEmitter {
   constructor(dataDir) {
     super(); this.dataDir = dataDir; this.servers = new Map(); this.targets = new Map(); this.readers = new Map(); this.pendingPrepare = new Map(); this.readerFailures = new Map(); this.outboxReceipts = new Map();
     this.filename = path.join(dataDir, 'legacy-dispatches.json'); this.records = []; this.closed = false; this.connecting = new Set(); this.readerGenerations = new Map();
+    this.managedOutboxTargets = new Map();
     try { this.records = JSON.parse(fs.readFileSync(this.filename, 'utf8')); if (!Array.isArray(this.records)) throw Error('Invalid ledger'); }
     catch (e) { if (e.code !== 'ENOENT') this.storageError = true; }
     this.sharedReplies = new LegacyShared(dataDir, () => this.emit('change'));
@@ -54,6 +56,26 @@ class LegacyInput extends EventEmitter {
     const t = this.targets.get(record.id);
     return t && t.record.nativeId === record.nativeId && t.record.pid === record.pid ? t : null;
   }
+  outboxTarget(record) {
+    const target = record && this.managedOutboxTargets.get(record.id);
+    return target?.record.nativeId === record.nativeId && target.record.pid === record.pid ? target : this.target(record);
+  }
+  async prepareOutbox(entry, record, grant) {
+    if (this.closed || this.managedOutboxTargets.has(record.id)) throw uiError('error.nativeToolOriginUnconfirmed');
+    const generation = this.readerGenerations.get(record.id) || 0;
+    const target = await prepareManagedRecipient(entry, record, grant);
+    if (this.closed || this.managedOutboxTargets.has(record.id) || (this.readerGenerations.get(record.id) || 0) !== generation) {
+      await target.native.close(); throw uiError('error.nativeToolOriginUnconfirmed');
+    }
+    this.managedOutboxTargets.set(record.id, target); return target;
+  }
+  releaseOutbox(record, target) {
+    if (target?.managed && this.managedOutboxTargets.get(record.id) === target) {
+      for (const watch of this.outboxReceipts.values()) if (watch.sessionId === record.id) watch.close();
+      this.managedOutboxTargets.delete(record.id); return target.native.close();
+    }
+  }
+  localDispatchCount() { return this.records.filter(row => !row.managed).length; }
   effectiveState(record) {
     const target = this.target(record);
     // The retained Codex transport is the same authenticated native source
@@ -116,6 +138,8 @@ class LegacyInput extends EventEmitter {
     this.emit('change');
   }
   forgetReader(record) {
+    const managed = this.managedOutboxTargets.get(record.id);
+    if (managed?.record.nativeId === record.nativeId) { this.managedOutboxTargets.delete(record.id); managed.native.close().catch(() => {}); }
     for (const watch of this.outboxReceipts.values()) if (watch.sessionId === record.id) watch.close();
     this.readerGenerations.set(record.id, (this.readerGenerations.get(record.id) || 0) + 1);
     // Revoke unpublished handshakes too. Their late RPC responses cannot
@@ -280,6 +304,8 @@ class LegacyInput extends EventEmitter {
       } catch (e) { if (e.code !== 'ENOENT') this.readerFailures.set(record.id, record.nativeId); }
     }
     for (const link of links) {
+      // The failed separate-native observer experiment is never restored.
+      if (link.outboxOnly === true) continue;
       if ((this.readerGenerations.get(link.id) || 0) !== (generations.get(link.id) || 0)) continue;
       const entry = entries.find(e => e.key === link.key), record = entry?.state.sessions.find(s => s.id === link.id && s.pid === link.pid && s.nativeId === link.nativeId);
       if (record && eligible(entry.state, record)) {
@@ -288,6 +314,21 @@ class LegacyInput extends EventEmitter {
     }
   }
   watchOutboxReceipt(record, target, tag) {
+    if (target.managed) {
+      let unsubscribe = () => {};
+      const close = () => { unsubscribe(); this.outboxReceipts.delete(tag); };
+      unsubscribe = target.watchReceipt(value => {
+        if (value.inputTag !== tag || value.nativeId !== record.nativeId || value.nativeReceived !== true ||
+            value.source !== 'codex-native' || this.outboxTarget(record) !== target) return;
+        const row = this.records.find(row => row.id === tag && row.sessionId === record.id && row.nativeId === record.nativeId && row.senderId);
+        if (!row) return;
+        row.status = 'accepted';
+        try { this.save(); } catch { this.storageError = true; setWarning(this, 'storageWarning', 'error.warning.legacyAcceptedUnsaved'); }
+        this.emit('change');
+        close();
+      });
+      this.outboxReceipts.set(tag, { sessionId: record.id, close }); return;
+    }
     const runtime = target.native?.adapter, rpc = runtime?.host?.rpc, lifecycle = runtime?.lifecycleRevision;
     if (!rpc || typeof runtime.on !== 'function' || typeof runtime.off !== 'function' || this.outboxReceipts.size >= 64) throw uiError('error.nativeToolOriginUnconfirmed');
     const current = () => !this.closed && this.targets.get(record.id) === target && target.native.adapter === runtime &&
@@ -315,7 +356,7 @@ class LegacyInput extends EventEmitter {
   }
   async send(record, text, refresh, guard, shared = false, replyTo, expectedTurnId, waitForNativeTurn = false, shareAuthority, outboxSource) {
     replyTo = require('./room-threads.js').replyReference(replyTo);
-    const target = this.target(record);
+    const target = outboxSource === undefined ? this.target(record) : this.outboxTarget(record);
     if (target?.nativeInputRequired) throw uiError("error.claudePluginInputPaused");
     if (!target?.submission.connected) throw uiError("error.legacy.inputNotReadyDraftRetained");
     if (typeof text !== 'string' || !text.trim() || text.length > 16000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) throw uiError("error.legacy.inputTooLong");
@@ -326,11 +367,13 @@ class LegacyInput extends EventEmitter {
     if (expectedTurnId !== undefined ? !target.native?.steerAvailable || target.native.pendingSteer : target.submission.pending) throw uiError("error.legacy.previousSendPending");
     if (waitForNativeTurn && !target.queueAvailable) throw uiError("error.legacy.waitingInputUnsupported");
     const row = { id: crypto.randomUUID(), sessionId: record.id, nativeId: record.nativeId, time: Date.now(), status: 'unconfirmed' };
+    if (target.managed) row.managed = true;
     if (expectedTurnId !== undefined) row.inputMode = 'steer';
     if (waitForNativeTurn) row.inputMode = 'queue';
     if (shared) Object.assign(row, { shared: true, text, name: `你 → ${record.name}`, recipientName: record.name, ...(replyTo ? { replyTo } : {}) });
     if (source) Object.assign(row, { senderId: source.id, senderNativeId: source.nativeId, name: `${source.name} → ${record.name}` });
-    if (shared && this.sharedReplies.authorize(record, target.native || target, row.id, row, shareAuthority)) row.sharedReply = true;
+    if (source?.agentWakeBudget) row.agentWakeBudget = { ...source.agentWakeBudget };
+    if (shared && !source && this.sharedReplies.authorize(record, target.native || target, row.id, row, shareAuthority)) row.sharedReply = true;
     if (shared && (expectedTurnId !== undefined || waitForNativeTurn) && !row.sharedReply) throw uiError("error.legacy.sharedReplyUnavailable");
     this.records.push(row);
     try { this.save(); } catch (error) { this.sharedReplies.close(row.id); throw error; }
@@ -359,6 +402,8 @@ class LegacyInput extends EventEmitter {
   }
   close() {
     this.closed = true;
+    for (const target of this.managedOutboxTargets.values()) target.native.close().catch(() => {});
+    this.managedOutboxTargets.clear();
     for (const watch of this.outboxReceipts.values()) watch.close();
     this.sharedReplies.dispose();
     for (const native of this.connecting) native.close();

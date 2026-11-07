@@ -207,7 +207,7 @@ class WorkspaceClient extends EventEmitter {
       error: operators.find(e => e.state.operatorPolicy?.error)?.state.operatorPolicy.error || null, domains: operators.flatMap(e => e.state.operatorPolicy?.domains || []) } : null;
     return { ...this.active.state, operatorPolicy, nativeImageCacheRoots: snapshotImageRoots(this.entries.map(e => e.state.nativeImageCacheRoot).filter(Boolean)), wakePolicy: this.entries.find(e => e.state.capabilities?.includes('agentWakeV1'))?.state.wakePolicy, sessions, capabilities,
       rooms, room: rooms.find(r => r.id === roomId) || { id: roomId, revision: 0, run: null, messages: [] },
-      diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.records.length || 0) },
+      diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.localDispatchCount?.() ?? this.control.legacyInput?.records.length ?? 0) },
       storageWarning: storageDisplay.message || null, storageWarningUiMessage: storageDisplay.uiMessage || null,
       storageRetryable: this.entries.some(e => e.state.storageRetryable && e.state.capabilities?.includes('retrySave')),
       services: this.entries.map(e => ({ version: e.state.runtimeVersion, active: e === this.active, sessions: e.state.sessions.length })),

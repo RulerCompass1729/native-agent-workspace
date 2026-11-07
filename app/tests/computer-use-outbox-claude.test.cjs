@@ -25,7 +25,7 @@ async function fixture(t, options = {}) {
   root.observeRoot({ ...binding, epoch: binding.observationEpoch, sequence: 1, block: true,
     id: 'control:turn-start', kind: 'control', status: 'running', ...turn });
   bridge.targets.set('secretary', root);
-  const adapter = new Codex({ ...records[1], messages: [] }, { rpc: {}, codexTargets: new Map() });
+  const adapter = new Codex({ ...records[1], messages: [] }, { rpc: { async call(method, params) { assert.equal(method, 'thread/goal/get'); assert.equal(params.threadId, records[1].nativeId); return { goal: null }; } }, codexTargets: new Map() });
   const counts = { forwards: 0, views: 0, closes: 0 }, args = { recipient_id: 'recipient', message: '  Implement the owned task.\r\n\tKeep its exact context.  ' };
   const native = { record: adapter.record, adapter, connected: true, closed: false, state: 'idle', sharedReplyAvailable: false, close() {} };
   native.send = async (text, tag, refresh, guard) => {
@@ -41,7 +41,7 @@ async function fixture(t, options = {}) {
     return adapter.turnId;
   };
   bridge.targets.set('recipient', { record: records[1], native, submission: native });
-  const entry = { key: 'retained', client: { call() { throw Error('No backend or private initial reads'); } }, state: { sessions: records, room: { messages: [] } } };
+  const entry = { key: 'retained', client: { call() { throw Error('No backend or private initial reads'); } }, state: { wakePolicy: { enabled: true }, sessions: records, room: { messages: [] } } };
   const control = { legacyInput: bridge, manualEpoch: 1, generations: new Map(), maintenance: new Set() };
   const client = { entries: [entry], control, socket: { destroyed: false }, route: () => entry, on() {} };
   const contexts = records.map(record => ({ client, view: { owner: record.owner }, win: { isDestroyed: () => false } }));

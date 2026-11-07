@@ -30,6 +30,7 @@ function fixture(t, body = '  first line\n\tsecond line  ') {
       owner: 'recipient-view', roomId: 'shared', memberRevision: 3, controlRevision: 4, liveDraft: 'recipient private draft' },
   ];
   const rpc = { async call(method, params) {
+    if (method === 'thread/goal/get') { assert.deepEqual(params, { threadId: records[1].nativeId }); return { goal: null }; }
     calls.push({ method, params });
     assert.equal(method, 'turn/start', 'No connection, claim, settings or history RPC is allowed');
     return ack.promise;
@@ -48,7 +49,7 @@ function fixture(t, body = '  first line\n\tsecond line  ') {
   sender.event({ method: 'item/started', params: { threadId: identity.nativeId, turnId: identity.turnId,
     item: { id: identity.callId, type: 'mcpToolCall', server: 'native_outbox', tool: 'workspace_outbox', arguments: args, status: 'inProgress' } } }, sender.host.rpc);
   const entry = { key: 'retained', client: { call() { throw Error('No backend or native connection permitted'); } },
-    state: { sessions: records, room: { messages: [] } } };
+    state: { wakePolicy: { enabled: true }, sessions: records, room: { messages: [] } } };
   const control = { legacyInput: bridge, generations: new Map(), manualEpoch: 1, maintenance: new Set() };
   const client = { entries: [entry], control, socket: { destroyed: false }, route: () => entry };
   const contexts = records.map(record => ({ client, view: { owner: record.owner }, win: { isDestroyed: () => false } }));

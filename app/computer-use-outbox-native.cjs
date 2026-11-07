@@ -6,7 +6,7 @@ const failures = new WeakMap();
 const phases = new Set(['admission', 'binding', 'view-open', 'lease', 'view-snapshot', 'view-send', 'native-receipt', 'receipt-render', 'cleanup']);
 const reasons = new Set(['invalid-request', 'cancelled', 'owner-closed', 'busy', 'binding-unavailable',
   'provenance-unconfirmed', 'duplicate-call', 'turn-metadata-unconfirmed', 'caller-unavailable', 'recipient-unavailable',
-  'recipient-not-idle', 'membership-changed', 'membership-unconfirmed', 'control-changed', 'control-unconfirmed', 'space-unavailable', 'view-unavailable', 'lease-unavailable',
+  'recipient-not-idle', 'native-goal-unconfirmed', 'native-goal-disallows', 'wake-policy-unavailable', 'wake-limited', 'membership-changed', 'membership-unconfirmed', 'control-changed', 'control-unconfirmed', 'space-unavailable', 'view-unavailable', 'lease-unavailable',
   'snapshot-unavailable', 'ambiguous-target', 'grant-invalidated', 'send-unconfirmed', 'receipt-unconfirmed',
   'command-unconfirmed', 'command-failed', 'render-unconfirmed', 'cleanup-unconfirmed', 'operation-unconfirmed']);
 function outboxError(reason, phase, message = FAIL, cleanupUnconfirmed = false) {
@@ -30,17 +30,20 @@ function validateOutboxArgs(value) {
 async function nativeOutboxCall(runtime, identity, arguments_, signal) {
   const args = validateOutboxArgs(arguments_);
   if (!identity || !['nativeId', 'sessionId', 'turnId', 'callId'].every(k => token(identity[k]))) throw outboxError('provenance-unconfirmed', 'binding');
-  const rpc = runtime?.host?.rpc, lifecycle = runtime?.lifecycleRevision;
+  const hostRpc = runtime?.host?.rpc, lifecycle = runtime?.lifecycleRevision;
+  let rpc;
   let proof, metadataVerified = false;
   const candidate = () => {
-    if (signal?.aborted || !rpc || runtime.stopped || runtime.transportDisconnected || runtime.record.nativeContextPending ||
-        runtime.host.rpc !== rpc || runtime.lifecycleRevision !== lifecycle || runtime.record.nativeId !== identity.nativeId ||
+    if (signal?.aborted || !hostRpc || runtime.stopped || runtime.transportDisconnected || runtime.record.nativeContextPending ||
+        runtime.host.rpc !== hostRpc || runtime.lifecycleRevision !== lifecycle || runtime.record.nativeId !== identity.nativeId ||
         runtime.nativeSessionId !== identity.sessionId || runtime.turnId != null && runtime.turnId !== identity.turnId ||
         runtime.turns?.get(identity.turnId)?.completed || runtime.turnId == null && runtime.latestState !== 'working') return false;
     const call = runtime.outboxMcpCalls?.get(identity.callId);
-    if (!call || call.turnId !== identity.turnId || call.rpc !== rpc || call.lifecycle !== lifecycle ||
+    if (!call || !(runtime.currentRpc ? runtime.currentRpc(call.rpc) : call.rpc === hostRpc) ||
+        rpc && call.rpc !== rpc || call.turnId !== identity.turnId || call.lifecycle !== lifecycle ||
         call.arguments?.recipient_id !== args.recipient_id || call.arguments?.message !== args.message ||
         (call.arguments?.space_id || 'shared') !== args.space_id || proof && call !== proof) return false;
+    rpc ||= call.rpc;
     return call;
   };
   const valid = () => candidate() && (runtime.turnId === identity.turnId || metadataVerified);
@@ -93,14 +96,16 @@ async function nativeOutboxCall(runtime, identity, arguments_, signal) {
 }
 // Subscribe before forwarding: the native input can precede the forward ACK.
 // Only the eventually returned tag is projected, without any command output.
-function nativeOutboxReceipt(runtime, nativeId) {
-  const rpc = runtime.host.rpc, lifecycle = runtime.lifecycleRevision, candidates = new Map(), listeners = new Set();
+function nativeOutboxReceipt(runtime, nativeId, options = {}) {
+  const rpc = options.rpc || runtime.host.rpc, hostRpc = runtime.host.rpc, lifecycle = runtime.lifecycleRevision, candidates = new Map(), listeners = new Set();
   let tag, closed = false;
-  const current = () => !closed && !runtime.stopped && !runtime.transportDisconnected && runtime.host.rpc === rpc &&
+  const current = () => !closed && !runtime.stopped && !runtime.transportDisconnected && runtime.host.rpc === hostRpc &&
+    (runtime.currentRpc ? runtime.currentRpc(rpc) : rpc === runtime.host.rpc) &&
     runtime.lifecycleRevision === lifecycle && runtime.record.nativeId === nativeId;
   const snapshot = () => {
     const record = current() && candidates.get(tag);
-    return record ? { ...record, nativeId, inputTag: tag, nativeReceived: true, source: 'codex-native' } : null;
+    return record ? { turnId: record.turnId, ...(record.firstCommand ? { firstCommand: { ...record.firstCommand } } : {}),
+      nativeId, inputTag: tag, nativeReceived: true, source: 'codex-native' } : null;
   };
   const publish = () => { const value = snapshot(); if (value) for (const listener of listeners) listener(value); };
   const accepted = () => {
@@ -111,17 +116,25 @@ function nativeOutboxReceipt(runtime, nativeId) {
     publish();
   };
   const command = item => {
-    if (!current() || item?.source !== 'codex-native' || item.kind !== 'commandExecution' || !token(item.id) ||
-        !['completed', 'failed'].includes(item.status) || !Number.isSafeInteger(item.exitCode)) return;
+    if (!current() || item?.source !== 'codex-native' || item.kind !== 'commandExecution' ||
+        options.scoped && (item.rpc !== rpc || item.lifecycle !== lifecycle)) return;
     const record = candidates.get(item.inputTag);
-    if (!record || record.turnId !== item.turnId || record.firstCommand || typeof item.input !== 'string' || !item.input || item.input.length > 4096) return;
+    if (!record || record.turnId !== item.turnId || record.firstCommand) return;
+    if (options.scoped && item.status === 'inProgress') {
+      if (!Object.hasOwn(record, 'firstCommandId')) record.firstCommandId = token(item.id) ? item.id : null;
+      return;
+    }
+    if (!token(item.id) || typeof item.input !== 'string' || !item.input || item.input.length > 4096 ||
+        options.scoped && record.firstCommandId !== item.id ||
+        !['completed', 'failed'].includes(item.status) || !Number.isSafeInteger(item.exitCode)) return;
     record.firstCommand = { kind: 'commandExecution', id: item.id, command: item.input, inputTag: item.inputTag,
       turnId: item.turnId, status: item.status, exitCode: item.exitCode };
     publish();
   };
-  runtime.on('nativeAcceptedInput', accepted); runtime.on('progress', command);
+  const event = options.scoped ? 'scopedOutboxCommand' : 'progress';
+  runtime.on('nativeAcceptedInput', accepted); runtime.on(event, command);
   return { bind(messageId) { if (!token(messageId) || tag) throw Error(FAIL); tag = messageId; publish(); },
     subscribe(listener) { listeners.add(listener); const value = snapshot(); if (value) listener(value); return () => listeners.delete(listener); },
-    close() { closed = true; listeners.clear(); candidates.clear(); runtime.off('nativeAcceptedInput', accepted); runtime.off('progress', command); } };
+    close() { closed = true; listeners.clear(); candidates.clear(); runtime.off('nativeAcceptedInput', accepted); runtime.off(event, command); } };
 }
 module.exports = { validateOutboxArgs, nativeOutboxCall, nativeOutboxReceipt, outboxError, classifyOutboxFailure };

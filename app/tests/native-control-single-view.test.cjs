@@ -17,11 +17,12 @@ async function fixture(t, unknownRPC = false) {
   ].map(record => ({ ...record, provider: 'codex', roomId: 'shared', controlRevision: 4,
     liveDraft: 'PRIVATE UNSENT ' + record.id, messages: [] }));
   const saved = structuredClone(records), sharedDraft = { text: 'SHARED UNSENT', recipient: 'sender' };
-  const sharedBefore = structuredClone(sharedDraft), calls = [], starts = [], natives = [], bindings = [];
+  const sharedBefore = structuredClone(sharedDraft), calls = [], goalReads = [], starts = [], natives = [], bindings = [];
   const bridge = new LegacyInput(root);
   let expectedStarts = 0;
   for (const record of records) {
     const rpc = { nativeVersion: '0.164.0', async call(method, params) {
+      if (method === 'thread/goal/get') { assert.equal(params.threadId, record.nativeId); goalReads.push([record.id, method]); return { goal: null }; }
       calls.push([record.id, method]);
       assert.equal(record.id, 'recipient'); assert.equal(method, 'turn/start', 'No new metadata, history, settings or native command requests');
       starts.push(params);
@@ -40,7 +41,7 @@ async function fixture(t, unknownRPC = false) {
     natives.push(native); bridge.targets.set(record.id, { record, native, submission: native });
   }
   const entry = { key: 'retained', client: { call() { throw Error('No backend reads, connections or input claims'); } },
-    state: { sessions: records, room: { messages: [] }, sharedDraft } };
+    state: { wakePolicy: { enabled: true }, sessions: records, room: { messages: [] }, sharedDraft } };
   const control = { legacyInput: bridge, generations: new Map(), manualEpoch: 1, maintenance: new Set() };
   const client = { entries: [entry], control, socket: { destroyed: false }, route: () => entry };
   const contexts = [{ client, view: { owner: 'observer-view' }, win: { isDestroyed: () => false } }];

@@ -49,7 +49,7 @@ async function operateOutbox(binding, createView, signal) {
     // Do not disconnect the lease until the receipt has been gathered: a
     // native tool ACK is not receipt, and socket close revokes this view.
     try {
-      try { if (box) await box.close(); } finally { signal.removeEventListener('abort', aborted); transport?.close(); socket?.destroy(); binding.close(); }
+      try { if (box) await box.close(); } finally { signal.removeEventListener('abort', aborted); transport?.close(); socket?.destroy(); await binding.close(); }
     } catch {
       throw outboxError(primary?.failureReason || 'cleanup-unconfirmed', primary?.failurePhase || 'cleanup', undefined, true);
     }
