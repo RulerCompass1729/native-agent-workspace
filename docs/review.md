@@ -6515,3 +6515,26 @@ route before using a productive task; neither a seeded test root nor a tool
 catalog proves those facts. No compatibility gate or original backend is
 modified here. Both caller paths share a 100-second overall abort budget; a slow
 or disconnected result stays unconfirmed, with no automatic retry.
+
+
+### Trusted observation for original-goal handoff registration
+
+Main's continuation runner requested a full native goal observation, but the
+production Codex adapter exposed only display status. The new private observer
+reads exactly thread/goal/get on its existing connection. It preserves the full
+objective, explicit null token budget, counters and effective model/effort.
+Private provenance stamps bind settings/status to their actual RPC and lifecycle;
+transport, identity, turn, control, state or observation changes during the read
+return unknown. Missing fields are not filled from display-only state. Existing
+UI settings/status projections and request order are unchanged.
+
+An author-run controlled pairing uses the actual Main Workspace/policy and the
+actual adapter, with provider startup/RPC replies synthetic. The exact committed
+preimage cannot register a handoff wait. The new source registers waiting; a
+confirmed dependency event remains pending with conditional-native-resume-
+unavailable, and no write occurs. Raw goal text does not enter the journal.
+Native paused/limited states and private input/approval boundaries stay intact.
+This adds no resume method/capability, ready event, model request, terminal input
+or goal setter. Native atomic activation, trustworthy caller/task producers and
+actual original-session adoption remain separate unmet requirements. Source
+pairing is not original-native or installed acceptance.
