@@ -13,6 +13,13 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+function observedInput(f, tag, body, turnId = 'recipient-turn') {
+  f.native.adapter.event({ method: 'item/completed', params: {
+    threadId: f.records[1].nativeId, turnId,
+    item: { id: `native-input-${tag}`, type: 'userMessage', clientId: tag, content: [{ type: 'text', text: body }] },
+  } }, f.native.adapter.host.rpc);
+}
+
 function fixture(t, body = '  first line\n\tsecond line  ') {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'legacy-control-outbox-'));
   const bridge = new LegacyInput(directory), ack = deferred(), calls = [];
@@ -70,14 +77,23 @@ for (const [name, body] of [['LF', ' \tfirst line\n\tsecond line  \n'], ['CRLF',
     assert.equal(row.status, 'unconfirmed');
     assert.equal(row.deliveries[0].id, row.id); assert.equal(row.deliveries[0].recipientId, before[1].id);
     assert.equal(row.deliveries[0].text, body); assert.equal(row.deliveries[0].status, 'unconfirmed');
-    // A transport ACK can settle submission; it cannot prove native input observation.
+    // This shared status is rendered as "Received by native session". An ACK
+    // alone must therefore leave both the message and its delivery unconfirmed.
     let received = 0;
     const unsubscribe = binding.watchReceipt({ messageId: row.id }, () => received++);
     t.after(unsubscribe);
     f.ack.resolve({ turn: { id: 'recipient-turn' } });
     assert.equal(await pending, row.id);
-    assert.equal(f.bridge.sharedMessages()[0].status, 'submitted');
+    assert.equal(f.bridge.sharedMessages()[0].status, 'unconfirmed');
+    assert.equal(f.bridge.sharedMessages()[0].deliveries[0].status, 'unconfirmed');
     assert.equal(received, 0); assert.equal(f.native.adapter.nativeAcceptedInput, undefined);
+    f.native.adapter.ownInputs.add('older-tag');
+    observedInput(f, 'older-tag', 'Unrelated older input', 'older-turn');
+    assert.equal(f.bridge.sharedMessages()[0].status, 'unconfirmed', 'A different native input tag cannot settle this delivery');
+    observedInput(f, row.id, body);
+    assert.equal(f.bridge.sharedMessages()[0].status, 'submitted');
+    assert.equal(f.bridge.sharedMessages()[0].deliveries[0].status, 'submitted');
+    assert.equal(received, 1);
     assert.deepEqual(f.records, before, 'Forwarding never claims ownership or edits either solo draft');
     const cold = new LegacyInput(f.directory); t.after(() => cold.close());
     assert.deepEqual(cold.sharedMessages(), f.bridge.sharedMessages(), 'Reload keeps source, exact body and delivery tag');
@@ -85,6 +101,22 @@ for (const [name, body] of [['LF', ' \tfirst line\n\tsecond line  \n'], ['CRLF',
     assert.equal(cold.sharedMessages().length, 1);
   });
 }
+
+test('exact native input before the RPC ACK settles only its own shared delivery and survives the late ACK', async t => {
+  const body = '  receipt before ACK\r\n\tstill exact  ';
+  const f = fixture(t, body), before = structuredClone(f.records), binding = await f.bind(); t.after(() => binding.close());
+  const pending = binding.forwardOnce(); await new Promise(resolve => setImmediate(resolve));
+  const row = f.bridge.sharedMessages()[0];
+  assert.equal(row.status, 'unconfirmed'); assert.equal(f.calls.length, 1);
+  observedInput(f, row.id, body);
+  assert.equal(f.bridge.sharedMessages()[0].status, 'submitted');
+  assert.equal(f.bridge.sharedMessages()[0].deliveries[0].status, 'submitted');
+  f.ack.resolve({ turn: { id: 'recipient-turn' } }); assert.equal(await pending, row.id);
+  assert.equal(f.bridge.sharedMessages()[0].status, 'submitted');
+  assert.deepEqual(f.records, before);
+  const cold = new LegacyInput(f.directory); t.after(() => cold.close());
+  assert.equal(cold.sharedMessages()[0].status, 'submitted'); assert.equal(cold.sharedMessages()[0].text, body);
+});
 
 for (const [name, revoke] of [
   ['owner', f => { f.records[1].owner = 'other-view'; }],

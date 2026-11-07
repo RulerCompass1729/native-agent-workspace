@@ -68,7 +68,7 @@ async function fixture(t, options = {}) {
   const event = (delta = {}) => ({ messageId: 'message-one', recipientId: 'receiver', nativeId: 'native-receiver',
     inputTag: 'message-one', source: 'codex-native', nativeReceived: true, turnId: 'turn-one', ...delta });
   const command = (delta = {}) => ({ kind: 'commandExecution', id: 'command-one', inputTag: 'message-one',
-    turnId: 'turn-one', command: 'pwd', ...delta });
+    turnId: 'turn-one', command: 'pwd', status: 'completed', exitCode: 0, ...delta });
   return { outbox, grant, facts, attempts, snapshots, compose, action, event, command,
     send: () => send(), notify: value => notify(value), viewSpec: () => viewSpec,
     subscribed: () => subscribed, closed: () => closed, unsubscribed: () => unsubscribed };
@@ -133,7 +133,7 @@ test('an atomic initial matching receipt is retained even if subscription later 
   const f = await fixture(t, { watch: async (_spec, notify) => {
     notify({ messageId: 'message-one', recipientId: 'receiver', nativeId: 'native-receiver', inputTag: 'message-one',
       source: 'codex-native', nativeReceived: true, turnId: 'turn-one', firstCommand: {
-        kind: 'commandExecution', id: 'command-one', inputTag: 'message-one', turnId: 'turn-one', command: 'pwd' } });
+        kind: 'commandExecution', id: 'command-one', inputTag: 'message-one', turnId: 'turn-one', command: 'pwd', status: 'completed', exitCode: 0 } });
     throw Error('Subscription ended after initial receipt');
   } });
   await f.compose(); await f.send();
@@ -172,4 +172,23 @@ test('closing during dispatch cannot reopen the receipt or subscribe after clean
     assert.equal(f.outbox.receipt().nativeReceived, false);
     await assert.rejects(f.send()); assert.equal(f.attempts.length, 1); assert.equal(f.closed(), 1);
   } finally { release(); }
+});
+
+// Callback-boundary checks only. Actual Codex.event -> owner -> Core command
+// provenance is exercised by native-control-retained-outbox-regression.test.cjs.
+test('Core refuses incomplete command evidence and retains a failed exit without retry', { timeout: 3000 }, async t => {
+  const f = await fixture(t); await f.compose(); await f.send();
+  for (const delta of [{ status: 'running' }, { status: 'declined' }, { exitCode: undefined },
+    { exitCode: null }, { exitCode: '0' }, { exitCode: 0.5 }]) {
+    f.notify(f.event({ firstCommand: f.command(delta) }));
+    assert.equal(f.outbox.receipt().status, 'received');
+    assert.equal(f.outbox.receipt().firstCommand, null);
+  }
+  f.notify(f.event({ firstCommand: f.command({ status: 'failed', exitCode: 7 }) }));
+  const value = await f.outbox.wait({ timeoutMs: 100 });
+  assert.equal(value.status, 'command-failed'); assert.equal(value.firstCommand.status, 'failed');
+  assert.equal(value.firstCommand.exitCode, 7); assert.equal(value.retry, false);
+  f.notify(f.event({ firstCommand: f.command({ id: 'later-success' }) }));
+  assert.equal(f.outbox.receipt().status, 'command-failed', 'Later success cannot replace the first failed command');
+  await assert.rejects(f.send()); assert.equal(f.attempts.length, 1);
 });

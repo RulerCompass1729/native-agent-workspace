@@ -60,11 +60,11 @@ test('native receipt is captured before ACK; only the exact accepted tag/turn fi
   r.ownInputs.add('new-tag');
   r.nativeAcceptedInput = { tag: 'new-tag', turnId: 'new-turn', rpc: r.host.rpc, lifecycle: r.lifecycleRevision };
   r.emit('nativeAcceptedInput');
-  r.emit('progress', { id: 'foreign', kind: 'commandExecution', input: 'SECRET', source: 'codex-native', inputTag: 'other-tag', turnId: 'new-turn' });
-  r.emit('progress', { id: 'wrong-turn', kind: 'commandExecution', input: 'SECRET', source: 'codex-native', inputTag: 'new-tag', turnId: 'other-turn' });
+  r.emit('progress', { id: 'foreign', kind: 'commandExecution', status: 'completed', exitCode: 0, input: 'SECRET', source: 'codex-native', inputTag: 'other-tag', turnId: 'new-turn' });
+  r.emit('progress', { id: 'wrong-turn', kind: 'commandExecution', status: 'completed', exitCode: 0, input: 'SECRET', source: 'codex-native', inputTag: 'new-tag', turnId: 'other-turn' });
   capture.bind('new-tag'); const unsubscribe = capture.subscribe(result => { value = result; });
   assert.equal(value.nativeReceived, true); assert.equal(value.firstCommand, undefined);
-  r.emit('progress', { id: 'command', kind: 'commandExecution', input: 'git status --short', source: 'codex-native', inputTag: 'new-tag', turnId: 'new-turn', text: 'DO_NOT_EXPOSE_OUTPUT' });
+  r.emit('progress', { id: 'command', kind: 'commandExecution', status: 'completed', exitCode: 0, input: 'git status --short', source: 'codex-native', inputTag: 'new-tag', turnId: 'new-turn', text: 'DO_NOT_EXPOSE_OUTPUT' });
   assert.equal(value.firstCommand.command, 'git status --short'); assert.ok(!JSON.stringify(value).includes('SECRET')); assert.ok(!JSON.stringify(value).includes('DO_NOT_EXPOSE'));
   unsubscribe(); capture.close(); assert.equal(r.listenerCount('nativeAcceptedInput'), 0); assert.equal(r.listenerCount('progress'), 0);
 });
@@ -75,4 +75,17 @@ test('native receive on another RPC/lifecycle and submission-only ACK never coun
     r.nativeAcceptedInput = { tag: 'new-tag', turnId: 'new-turn', rpc: r.host.rpc, lifecycle: r.lifecycleRevision, ...change }; r.emit('nativeAcceptedInput');
   }
   r.emit('submitted', 'new-tag'); assert.equal(received, 0); capture.close();
+});
+test('actual native started-then-declined command never counts as execution; only a completed command carries its exit evidence', () => {
+  const r = runtime(), capture = nativeOutboxReceipt(r, r.record.nativeId); let value;
+  capture.bind('message-tag'); capture.subscribe(receipt => { value = receipt; }); r.ownInputs.add('message-tag');
+  const emit = (method, item) => r.event({ method, params: { threadId: r.record.nativeId, turnId: r.turnId, item } }, r.host.rpc);
+  emit('item/completed', { id: 'input', type: 'userMessage', clientId: 'message-tag', content: [{ type: 'inputText', text: 'One task' }] });
+  const item = { id: 'declined-command', type: 'commandExecution', command: 'git status --short', status: 'inProgress', cwd: '/synthetic', commandActions: [] };
+  emit('item/started', item); assert.equal(value.firstCommand, undefined);
+  emit('item/completed', { ...item, status: 'declined' }); assert.equal(value.firstCommand, undefined);
+  emit('item/started', { ...item, id: 'real-command' }); assert.equal(value.firstCommand, undefined);
+  emit('item/completed', { ...item, id: 'real-command', status: 'completed', exitCode: 0, aggregatedOutput: 'DO_NOT_EXPOSE_OUTPUT' });
+  assert.equal(value.firstCommand.id, 'real-command'); assert.equal(value.firstCommand.status, 'completed'); assert.equal(value.firstCommand.exitCode, 0);
+  assert.ok(!JSON.stringify(value).includes('DO_NOT_EXPOSE')); capture.close();
 });

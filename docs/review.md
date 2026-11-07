@@ -6435,3 +6435,29 @@ and was not a pass; the same reviewer then inspected the missing raw results
 and returned scoped source approval with unchanged files/index/HEAD. Original
 host registration, actual receive/command, the outbox-only ACK receipt correction
 and installed delivery remain open. No goal writes or release are qualified.
+
+
+A subsequent controlled counterexample used the actual LegacyInput, LegacyCodex
+and Codex send methods with only the native RPC faked: a turn-start ACK without
+any native accepted-input event incorrectly displayed "Received by native
+session" in the shared record. Outbox-source rows now remain unconfirmed until
+the exact tag, native identity, connection and lifecycle report acceptance. The
+bounded event listener also handles acceptance after the ACK, cancels on removal
+or transport changes, and is removed on receipt or shutdown. Ordinary retained
+input semantics remain outside this scoped correction. Original-agent delivery
+and the first real command still require the separate Main acceptance case.
+
+Another controlled event sequence showed that a command-start followed by an
+explicit native decline could previously count as the first command. Receipt
+qualification now waits for a terminal command result with an integer exit code.
+Only a completed command with exit code zero reports working; a known failed or
+nonzero result reports command-failed without replay. Starts, declines and
+exit-less records cannot turn a received task into a success report.
+
+Independent Main integration review accepts the source/build stage, including
+the stricter completion fixtures and retained-path declined-command counter.
+Root source passes 3,198 checks; the ordinary candidate passes 3,042 without
+skips after restoring the previously qualified lexical dependency binding.
+The initial three candidate negative-guard failures are retained. The candidate
+excludes the gated operator interface and inactive continuation policy. Signed
+payloads, original caller registration and real delivery remain unqualified.

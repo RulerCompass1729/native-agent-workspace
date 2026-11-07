@@ -60,10 +60,12 @@ function nativeOutboxReceipt(runtime, nativeId) {
     publish();
   };
   const command = item => {
-    if (!current() || item?.source !== 'codex-native' || item.kind !== 'commandExecution' || !token(item.id)) return;
+    if (!current() || item?.source !== 'codex-native' || item.kind !== 'commandExecution' || !token(item.id) ||
+        !['completed', 'failed'].includes(item.status) || !Number.isSafeInteger(item.exitCode)) return;
     const record = candidates.get(item.inputTag);
     if (!record || record.turnId !== item.turnId || record.firstCommand || typeof item.input !== 'string' || !item.input || item.input.length > 4096) return;
-    record.firstCommand = { kind: 'commandExecution', id: item.id, command: item.input, inputTag: item.inputTag, turnId: item.turnId };
+    record.firstCommand = { kind: 'commandExecution', id: item.id, command: item.input, inputTag: item.inputTag,
+      turnId: item.turnId, status: item.status, exitCode: item.exitCode };
     publish();
   };
   runtime.on('nativeAcceptedInput', accepted); runtime.on('progress', command);

@@ -21,7 +21,7 @@ async function fixture(t) {
         forwardOnce: async () => { forwards++; return 'message-id'; },
         watchReceipt: async (scope, listener) => {
           listener({ ...scope, inputTag: 'message-id', source: 'codex-native', turnId: 'receiver-turn', nativeReceived: true,
-            firstCommand: { id: 'command', kind: 'commandExecution', inputTag: 'message-id', turnId: 'receiver-turn', command: 'git status --short' } });
+            firstCommand: { id: 'command', kind: 'commandExecution', status: 'completed', exitCode: 0, inputTag: 'message-id', turnId: 'receiver-turn', command: 'git status --short' } });
           return () => {};
         }, close() {} };
     },

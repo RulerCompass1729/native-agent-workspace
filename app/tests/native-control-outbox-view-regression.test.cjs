@@ -1,10 +1,22 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const Module = require('node:module');
 const file = process.env.NAW_TEST_OUTBOX_VIEW_SOURCE || path.resolve(__dirname, '../computer-use-outbox-view.cjs');
-const { outboxHTML: html } = require(file);
-assert.equal(typeof html, 'function', 'Use the exported production page entry point.');
+const source = fs.readFileSync(file, 'utf8');
+const loaded = { exports: {} };
+const denied = () => { throw Error('Page-only regression must not allocate files, browsers or processes'); };
+vm.runInNewContext(Module.wrap(source), {}, { filename: file })(loaded.exports, spec => {
+  assert.match(spec, /^node:/, 'Review any new page module dependency explicitly');
+  if (spec === 'node:child_process') return { spawn: denied };
+  if (spec === 'node:fs') return { ...fs, mkdtempSync: denied, mkdirSync: denied,
+    writeFileSync: denied, chmodSync: denied, rmSync: denied };
+  return require(spec);
+}, loaded, file, path.dirname(file));
+const { outboxHTML: html, projectOutboxFacts } = loaded.exports;
+assert.equal(typeof html, 'function'); assert.equal(typeof projectOutboxFacts, 'function');
 
 function page(text = 'One  approved task 中文 🙂.\nKeep the paragraph.') {
   const model = { requestId: 'owned-request', spaceId: 'shared', recipient: { id: 'receiver', label: 'Receiver <literal>' }, text };
@@ -61,4 +73,16 @@ test('page facts report body edits and receipt rendering leaves the approved inp
   assert.equal(f.elements.receipt.textContent, JSON.stringify(receipt));
   assert.equal(f.elements['shared-input'].value, f.model.text + ' CHANGED');
   assert.equal(f.window.takeOutboxSend(), false);
+});
+
+test('projection preserves approved CRLF only for an unchanged DOM value and cannot invent readiness', { timeout: 1000 }, () => {
+  const model = { recipient: { id: 'receiver' }, spaceId: 'shared', text: '  First\r\n\tSecond  ' };
+  const grant = { callerValid: true, nativeId: 'receiver-native', memberRevision: 3, ready: true };
+  const facts = { recipientId: 'receiver', body: model.text.replace(/\r\n?/g, '\n'), revision: '1', ready: true };
+  const observed = projectOutboxFacts(model, grant, facts, 'owned-view');
+  assert.equal(observed.body, model.text); assert.equal(observed.recipientId, 'receiver');
+  assert.equal(observed.owner, 'owned-view'); assert.equal(observed.nativeId, grant.nativeId);
+  const edited = facts.body + ' CHANGED';
+  assert.equal(projectOutboxFacts(model, grant, { ...facts, body: edited }, 'owned-view').body, edited);
+  assert.equal(projectOutboxFacts(model, { ...grant, ready: false }, facts, 'owned-view').ready, false);
 });

@@ -5,7 +5,7 @@ const { openOutbox } = require('../computer-use-outbox.cjs');
 const grant = { callerId: 'sender', callerNativeId: 'native-sender', spaceId: 'shared',
   recipientId: 'recipient', recipientName: 'Recipient', nativeId: 'native-recipient',
   memberRevision: 1, text: 'Read the current task and run the assigned command' };
-const command = { kind: 'commandExecution', id: 'command-1', command: 'git status --short', inputTag: 'message-1', turnId: 'turn-1' };
+const command = { kind: 'commandExecution', id: 'command-1', command: 'git status --short', status: 'completed', exitCode: 0, inputTag: 'message-1', turnId: 'turn-1' };
 const nativeReceipt = extra => ({ messageId: 'message-1', recipientId: grant.recipientId,
   nativeId: grant.nativeId, source: 'codex-native', inputTag: 'message-1', turnId: 'turn-1', nativeReceived: true, ...extra });
 async function fixture(t, options = {}) {
@@ -55,7 +55,7 @@ test('only native receive and the same input/turn first command complete the rec
   const f = await fixture(t, { initial: nativeReceipt({ firstCommand: command, privateChat: 'DO_NOT_EXPOSE' }) });
   await f.send(); const value = await f.outbox.wait();
   assert.equal(value.status, 'working'); assert.equal(value.nativeReceived, true);
-  assert.deepEqual(value.firstCommand, { id: command.id, command: command.command, source: 'codex-native' });
+  assert.deepEqual(value.firstCommand, { id: command.id, command: command.command, source: 'codex-native', status: 'completed', exitCode: 0 });
   assert.ok(!JSON.stringify(value).includes('DO_NOT_EXPOSE'));
   assert.deepEqual(f.calls.watch, [{ messageId: 'message-1', recipientId: grant.recipientId, nativeId: grant.nativeId }]);
 });
@@ -75,6 +75,16 @@ test('foreign receipts, unbound commands and forged success cannot count as this
   f.update(nativeReceipt({ turnId: 'other', firstCommand: { ...command, turnId: 'other' } }));
   assert.equal(f.outbox.receipt().turnId, 'turn-1');
   f.update(nativeReceipt({ firstCommand: command })); assert.equal(f.outbox.receipt().status, 'working');
+});
+test('started, declined or exit-less commands cannot report success; an actual nonzero exit is an explicit failure with no resend', async t => {
+  const f = await fixture(t); await f.send();
+  for (const change of [{ status: 'running', exitCode: undefined }, { status: 'declined', exitCode: undefined }, { status: 'completed', exitCode: undefined }]) {
+    f.update(nativeReceipt({ firstCommand: { ...command, ...change } }));
+    assert.equal(f.outbox.receipt().status, 'received'); assert.equal(f.outbox.receipt().firstCommand, null);
+  }
+  f.update(nativeReceipt({ firstCommand: { ...command, status: 'failed', exitCode: 7 } }));
+  const value = await f.outbox.wait(); assert.equal(value.status, 'command-failed'); assert.equal(value.firstCommand.exitCode, 7);
+  assert.equal(value.retry, false); assert.equal(f.calls.forward.length, 1);
 });
 test('stale caller, recipient membership or edited body prevents even the first forward', async t => {
   for (const delta of [{ callerValid: false }, { callerId: 'other' }, { callerNativeId: 'other' },

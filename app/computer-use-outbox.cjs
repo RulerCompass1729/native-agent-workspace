@@ -24,7 +24,7 @@ async function openOutbox(verifiedGrant, { createView, forwardOnce, watchReceipt
   const waiters = new Set();
   const receipt = () => copy({ requestId, senderId: grant.callerId, senderNativeId: grant.callerNativeId, spaceId: grant.spaceId, recipient, text: grant.text, messageId,
     nativeId: grant.nativeId, turnId, status, nativeReceived, firstCommand, retry: false });
-  const terminal = () => ['working', 'not-sent', 'unconfirmed', 'closed'].includes(status);
+  const terminal = () => ['working', 'command-failed', 'not-sent', 'unconfirmed', 'closed'].includes(status);
   const publish = () => {
     if (!closed) {
       const value = receipt();
@@ -50,12 +50,13 @@ async function openOutbox(verifiedGrant, { createView, forwardOnce, watchReceipt
     nativeReceived = true; turnId = event.turnId;
     const command = event.firstCommand;
     if (!firstCommand && command?.kind === 'commandExecution' && token(command.id) &&
+        ['completed', 'failed'].includes(command.status) && Number.isSafeInteger(command.exitCode) &&
         command.inputTag === messageId && command.turnId === turnId &&
         typeof command.command === 'string' && command.command.length > 0 && command.command.length <= 4096 &&
         !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(command.command)) {
-      firstCommand = { id: command.id, command: command.command, source: event.source };
+      firstCommand = { id: command.id, command: command.command, source: event.source, status: command.status, exitCode: command.exitCode };
     }
-    status = firstCommand ? 'working' : 'received'; publish();
+    status = firstCommand ? firstCommand.status === 'completed' && firstCommand.exitCode === 0 ? 'working' : 'command-failed' : 'received'; publish();
   };
   async function sendOnce() {
     if (closed || !ready || attempted) throw Error(REFUSED);

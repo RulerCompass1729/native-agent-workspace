@@ -20,7 +20,7 @@ function fixture(t) {
       adapter.ownInputs.add(tag);
       adapter.nativeAcceptedInput = { tag, turnId: 'receiver-turn', rpc: host.rpc, lifecycle: adapter.lifecycleRevision };
       adapter.emit('nativeAcceptedInput');
-      adapter.emit('progress', { id: 'native-command', source: 'codex-native', kind: 'commandExecution', inputTag: tag,
+      adapter.emit('progress', { id: 'native-command', source: 'codex-native', kind: 'commandExecution', status: 'completed', exitCode: 0, inputTag: tag,
         turnId: 'receiver-turn', input: 'git status --short', text: 'PRIVATE_OUTPUT_NOT_PROJECTED' });
       return 'receiver-turn';
     };
@@ -34,7 +34,7 @@ function fixture(t) {
   const client = { entries: [entry], control, socket: { destroyed: false }, route: () => entry };
   const contexts = records.map(record => ({ client, view: { owner: record.owner }, win: { isDestroyed: () => false } }));
   const deps = { contexts: () => contexts, roomState: { assertAvailable() {} } };
-  t.after(() => { clearTimeout(bridge.sharedReplies.saveTimer); fs.rmSync(dir, { recursive: true }); });
+  t.after(() => { bridge.close(); fs.rmSync(dir, { recursive: true }); });
   return { args, identity, deps, records, bridge, natives, control, entry };
 }
 test('production owner binding sends one exact task using existing authority, records real sender and exposes its native receipt only', async t => {
@@ -65,4 +65,25 @@ test('a requested different space never silently falls back to shared', async t 
 test('missing original receiver transport fails without new connections, claims or backend reads', async t => {
   const f = fixture(t); f.bridge.targets.delete('recipient');
   await assert.rejects(bindOriginalOutbox(f.deps, f.identity, f.args, AbortSignal.timeout(3000))); assert.equal(f.bridge.records.length, 0);
+});
+test('outbox ACK alone remains unconfirmed, then the exact late native input settles its shared row', async t => {
+  const f = fixture(t), native = f.natives[1], r = native.adapter;
+  native.send = async (_text, tag, refresh, guard) => { await refresh(); assert.equal(guard(), true); r.ownInputs.add(tag); return 'ack-only-turn'; };
+  const binding = await bindOriginalOutbox(f.deps, f.identity, f.args, AbortSignal.timeout(3000)), tag = await binding.forwardOnce();
+  assert.equal(f.bridge.sharedMessages().find(row => row.id === tag).status, 'unconfirmed'); assert.equal(f.bridge.outboxReceipts.size, 1);
+  r.nativeAcceptedInput = { tag: 'other', turnId: 'other-turn', rpc: r.host.rpc, lifecycle: r.lifecycleRevision }; r.emit('nativeAcceptedInput');
+  assert.equal(f.bridge.sharedMessages().find(row => row.id === tag).status, 'unconfirmed');
+  r.nativeAcceptedInput = { tag, turnId: 'actual-turn', rpc: r.host.rpc, lifecycle: r.lifecycleRevision }; r.emit('nativeAcceptedInput');
+  assert.equal(f.bridge.sharedMessages().find(row => row.id === tag).status, 'submitted'); assert.equal(f.bridge.outboxReceipts.size, 0);
+  binding.close();
+});
+test('changed native receipt connection/lifecycle cannot promote an ACK, and close removes its bounded watch', async t => {
+  for (const change of [{ rpc: {} }, { lifecycle: 99 }]) {
+    const f = fixture(t), native = f.natives[1], r = native.adapter;
+    native.send = async (_text, tag) => { r.ownInputs.add(tag); return 'ack-only-turn'; };
+    const binding = await bindOriginalOutbox(f.deps, f.identity, f.args, AbortSignal.timeout(3000)), tag = await binding.forwardOnce();
+    r.nativeAcceptedInput = { tag, turnId: 'actual-turn', rpc: r.host.rpc, lifecycle: r.lifecycleRevision, ...change }; r.emit('nativeAcceptedInput');
+    assert.equal(f.bridge.sharedMessages().find(row => row.id === tag).status, 'unconfirmed'); assert.equal(f.bridge.outboxReceipts.size, 0);
+    binding.close(); f.bridge.close(); assert.equal(f.bridge.outboxReceipts.size, 0);
+  }
 });

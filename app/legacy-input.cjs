@@ -25,7 +25,7 @@ function privateDirectory(directory) {
 }
 class LegacyInput extends EventEmitter {
   constructor(dataDir) {
-    super(); this.dataDir = dataDir; this.servers = new Map(); this.targets = new Map(); this.readers = new Map(); this.pendingPrepare = new Map(); this.readerFailures = new Map();
+    super(); this.dataDir = dataDir; this.servers = new Map(); this.targets = new Map(); this.readers = new Map(); this.pendingPrepare = new Map(); this.readerFailures = new Map(); this.outboxReceipts = new Map();
     this.filename = path.join(dataDir, 'legacy-dispatches.json'); this.records = []; this.closed = false; this.connecting = new Set(); this.readerGenerations = new Map();
     try { this.records = JSON.parse(fs.readFileSync(this.filename, 'utf8')); if (!Array.isArray(this.records)) throw Error('Invalid ledger'); }
     catch (e) { if (e.code !== 'ENOENT') this.storageError = true; }
@@ -116,6 +116,7 @@ class LegacyInput extends EventEmitter {
     this.emit('change');
   }
   forgetReader(record) {
+    for (const watch of this.outboxReceipts.values()) if (watch.sessionId === record.id) watch.close();
     this.readerGenerations.set(record.id, (this.readerGenerations.get(record.id) || 0) + 1);
     // Revoke unpublished handshakes too. Their late RPC responses cannot
     // recreate a projection, connection reference or writer after deletion.
@@ -281,6 +282,32 @@ class LegacyInput extends EventEmitter {
       }
     }
   }
+  watchOutboxReceipt(record, target, tag) {
+    const runtime = target.native?.adapter, rpc = runtime?.host?.rpc, lifecycle = runtime?.lifecycleRevision;
+    if (!rpc || typeof runtime.on !== 'function' || typeof runtime.off !== 'function' || this.outboxReceipts.size >= 64) throw uiError('error.nativeToolOriginUnconfirmed');
+    const current = () => !this.closed && this.targets.get(record.id) === target && target.native.adapter === runtime &&
+      runtime.host.rpc === rpc && runtime.lifecycleRevision === lifecycle && runtime.record.nativeId === record.nativeId && !runtime.stopped && !runtime.transportDisconnected;
+    const close = () => {
+      clearTimeout(timer); runtime.off('nativeAcceptedInput', observed); runtime.off('state', changed); this.outboxReceipts.delete(tag);
+    };
+    const observed = () => {
+      if (!current()) { close(); return; }
+      const input = runtime.nativeAcceptedInput;
+      if (input?.tag !== tag) return;
+      if (input.rpc !== rpc || input.lifecycle !== lifecycle || typeof input.turnId !== 'string' || !input.turnId || !runtime.ownInputs.has(tag)) { close(); return; }
+      const row = this.records.find(row => row.id === tag && row.sessionId === record.id && row.nativeId === record.nativeId && row.senderId);
+      close(); if (!row) return;
+      row.status = 'accepted';
+      try { this.save(); } catch {
+        this.storageError = true; setWarning(this, 'storageWarning', 'error.warning.legacyAcceptedUnsaved');
+      }
+      this.emit('change');
+    };
+    const changed = state => { if (!current() || ['ended', 'disconnected', 'error'].includes(state)) close(); };
+    const timer = setTimeout(close, 120000); timer.unref();
+    this.outboxReceipts.set(tag, { sessionId: record.id, close });
+    runtime.on('nativeAcceptedInput', observed); runtime.on('state', changed);
+  }
   async send(record, text, refresh, guard, shared = false, replyTo, expectedTurnId, waitForNativeTurn = false, shareAuthority, outboxSource) {
     replyTo = require('./room-threads.js').replyReference(replyTo);
     const target = this.target(record);
@@ -302,6 +329,7 @@ class LegacyInput extends EventEmitter {
     if (shared && (expectedTurnId !== undefined || waitForNativeTurn) && !row.sharedReply) throw uiError("error.legacy.sharedReplyUnavailable");
     this.records.push(row);
     try { this.save(); } catch (error) { this.sharedReplies.close(row.id); throw error; }
+    if (source) this.watchOutboxReceipt(record, target, row.id);
     target.refresh = refresh;
     try {
       if (!waitForNativeTurn && expectedTurnId === undefined && !target.native) target.claimFailedTurnInput?.();
@@ -314,7 +342,7 @@ class LegacyInput extends EventEmitter {
       // Clearing shared text may replace a pending ledger row while native
       // acceptance is in flight. Update the retained metadata by stable ID.
       const stored = this.records.find(record => record.id === row.id);
-      if (stored) stored.status = 'accepted';
+      if (stored && !source) stored.status = 'accepted';
       try { this.save(); }
       catch {
         this.storageError = true;
@@ -326,6 +354,7 @@ class LegacyInput extends EventEmitter {
   }
   close() {
     this.closed = true;
+    for (const watch of this.outboxReceipts.values()) watch.close();
     this.sharedReplies.dispose();
     for (const native of this.connecting) native.close();
     this.connecting.clear();
