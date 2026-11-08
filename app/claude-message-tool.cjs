@@ -13,10 +13,15 @@ function metadataIdentity(meta) {
 }
 function stageNative(identity, args) {
   return new Promise((resolve, reject) => {
-    const socket = net.connect(process.env.NAW_MESSAGE_SOCKET); let data = '';
-    const fail = () => { socket.destroy(); reject(Error('Workspace staging result is unconfirmed; do not retry.')); };
+    const socket = net.connect(process.env.NAW_MESSAGE_SOCKET); let data = '', writeAttempted = false;
+    const fail = () => { socket.destroy(); reject(Error(writeAttempted
+      ? 'Workspace staging result is unconfirmed; do not retry.'
+      : 'Workspace message was not sent because the local staging connection failed; do not retry automatically.')); };
     socket.setEncoding('utf8'); socket.setTimeout(10000, fail); socket.once('error', fail);
-    socket.once('connect', () => socket.write(JSON.stringify({ token: process.env.NAW_MESSAGE_TOKEN, workspaceMessage: true, identity, arguments: args }) + '\n'));
+    socket.once('connect', () => {
+      writeAttempted = true;
+      socket.write(JSON.stringify({ token: process.env.NAW_MESSAGE_TOKEN, workspaceMessage: true, identity, arguments: args }) + '\n');
+    });
     socket.on('data', part => {
       data += part; if (data.length > 16384) return fail();
       const end = data.indexOf('\n'); if (end < 0) return;
