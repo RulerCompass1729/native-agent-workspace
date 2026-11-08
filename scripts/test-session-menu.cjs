@@ -68,11 +68,14 @@ async function run() {
   assert.ok(await more(b.id).evaluate(el => el === document.activeElement));
   await anchor.dispose(); await focused.dispose();
   await link(b.id).click({ button: 'right' }); await item('重命名…').click();
+  // Renaming is inline in the sidebar row since 5a9bfd1; the closed checks below watch this same editor,
+  // so seeing it open here shows they can fail.
+  await page.locator('#rename-editor').waitFor({ state: 'visible' });
   assert.equal(await page.locator('#rename-name').inputValue(), b.name);
   await page.locator('#rename-name').fill('   '); await page.locator('#confirm-rename').click();
   await page.locator('#rename-error').waitFor({ state: 'visible' });
   await page.locator('#rename-name').fill('研究 & <计划>'); await page.locator('#rename-name').press('Enter');
-  await until(async () => !(await page.locator('#rename-dialog').isVisible()), 'Rename closes');
+  await until(async () => !(await page.locator('#rename-editor').isVisible()), 'Rename closes');
   let after = await snapshot();
   assert.equal(after.viewState.selected, a.id);
   assert.equal(after.sessions.find(s => s.id === a.id).name, a.name);
@@ -84,11 +87,11 @@ async function run() {
   await more(b.id).click(); await item('重命名…').waitFor({ state: 'visible' });
   await page.keyboard.press('Tab');
   assert.equal(await page.getByRole('menu').count(), 0);
-  assert.equal(await page.locator('#rename-dialog').isVisible(), false);
+  assert.equal(await page.locator('#rename-editor').isVisible(), false);
   assert.equal(application.windows().length, 1);
   await more(b.id).click(); await item('重命名…').waitFor({ state: 'visible' });
   await page.keyboard.press('Shift+Tab'); assert.equal(await page.getByRole('menu').count(), 0);
-  assert.equal(await page.locator('#rename-dialog').isVisible(), false);
+  assert.equal(await page.locator('#rename-editor').isVisible(), false);
   await more(b.id).click(); await item('重命名…').waitFor({ state: 'visible' });
   await more(b.id).click(); assert.equal(await page.getByRole('menu').count(), 0, 'Trigger toggles closed');
   await more(b.id).click(); await item('重命名…').waitFor({ state: 'visible' });
