@@ -166,7 +166,7 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
         // The new service resets owner/control/draft generations on loading.
         // A newer claimant must not be repinned as our restoration authority.
         if (!record || record.nativeId !== session.nativeId || record.provider !== session.provider || record.owner != null || record.controlRevision !== 0 || (record.draftRevision || 0) !== 0 || !['ended', 'recoverable'].includes(record.state)) throw uiError('error.backendSwitchSessionChanged', { name: session.name });
-        proof = { ...record, draftRevision: record.draftRevision || 0 };
+        proof = { ...maintenanceProof(record), draftRevision: record.draftRevision || 0 };
       }
       await connection.call('maintenanceResume', session.id, proof);
     } finally { connection.close(); }

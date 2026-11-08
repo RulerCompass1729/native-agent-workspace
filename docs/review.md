@@ -6712,3 +6712,10 @@ settings and drafts; normal launch and the strict signature pass. A locked
 desktop's zero visible-window observation remains pending. GUI installation is
 not original-backend migration, original-recipient delivery or completion of
 T166/the dogfood milestone. Those acceptances stay open.
+
+### Large retained histories during backend recovery
+
+- Trigger/severity: P0 local maintenance could leave an original native session recoverable when its retained history exceeded the 2 MiB request limit; the client sent the entire snapshot as its conditional resume proof.
+- Owner/status: external maintainer; source fixed and independently reviewed, installed acceptance recorded separately.
+- Repair: use the existing bounded identity/revision proof, preserving the missing draft revision default and every conditional guard. Conversation history remains on the service.
+- Evidence/recheck: old-source regression fails through an actual Unix socket and production request frame reader with synthetic history larger than 6 MiB; the bounded proof restores the same session and clears its continuation record. Related transport/stop/switch tests pass with zero skips. Independent review passed the exact source change; no native delivery or release claim follows from this source result.

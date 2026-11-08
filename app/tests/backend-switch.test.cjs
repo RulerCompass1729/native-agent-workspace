@@ -6,6 +6,7 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), net = require('node:net');
 const { spawn } = require('node:child_process');
 const { backendPlan, sessionPlan, samePlan, switchBackend, readRecords, clearRecord, readSettings, writeSettings } = require('../backend-switch.cjs');
+const { readFrames, REQUEST_BYTES } = require('../service-transport.cjs');
 
 const now = 1_800_000_000_000;
 const claudeNew = (extra = {}) => ({ id: 'c', nativeId: 'native-c', provider: 'claude', name: 'Claude 2', state: 'idle', owner: 'view-a',
@@ -114,13 +115,10 @@ async function service(directory, state, { onStop } = {}) {
   fs.writeFileSync(path.join(directory, 'service.lock'), String(child.pid));
   const server = net.createServer(socket => {
     sockets.add(socket); socket.on('close', () => sockets.delete(socket)); socket.on('error', () => {});
-    let buffer = '', owner;
-    socket.on('data', chunk => {
-      buffer += chunk;
-      for (let end; (end = buffer.indexOf('\n')) >= 0;) {
-        const request = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
-        if (owner === undefined) { owner = request.owner; socket.write(JSON.stringify({ ready: true }) + '\n'); continue; }
-        calls.push([request.method, request.args?.[0], owner]);
+    let owner;
+    readFrames(socket, REQUEST_BYTES, request => {
+        if (owner === undefined) { owner = request.owner; socket.write(JSON.stringify({ ready: true }) + '\n'); return; }
+        calls.push([request.method, request.args?.[0], owner, request.args?.[1]]);
         let value = true, error = null;
         const record = state.sessions.find(s => s.id === request.args?.[0]);
         if (request.method === 'initial') value = state;
@@ -137,7 +135,6 @@ async function service(directory, state, { onStop } = {}) {
           if (!error) setTimeout(() => api.die(), 10);
         }
         socket.write(JSON.stringify({ id: request.id, ok: !error, error, value }) + '\n');
-      }
     });
   });
   fs.writeFileSync(path.join(directory, 'connection.json'), JSON.stringify({ protocol: 1, endpoint, token: 'synthetic' }), { mode: 0o600 });
@@ -185,6 +182,20 @@ test('an all-Claude backend is retired with its own shutdown call, never a signa
   await switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', ensure: h.ensure(), owner: 'view-b', applicationVersion: '0.1.0-alpha.158', requireAuto: true,
     commandLine: h.command(old), signal: () => assert.fail('No signal when shutdown is allowed'), now: () => now });
   assert.deepEqual(methods(old), ['maintenanceStop:c', 'maintenanceShutdown']); assert.deepEqual(methods(h.services[1]), ['maintenanceResume:c']);
+});
+test('a restored session with history larger than the request limit resumes using only bounded identity proof', async t => {
+  const messages = [{ role: 'assistant', text: 'Synthetic retained history. '.repeat(250000) }];
+  assert.ok(Buffer.byteLength(JSON.stringify(messages)) > REQUEST_BYTES, 'The response may contain more history than a request may carry');
+  const h = harness(t, [codexNew({ messages, peerRevision: 7, connectionRevision: 4, controlRevision: 3 })]), old = await h.old();
+  const result = await switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', expected: backendPlan(old.state),
+    ensure: h.ensure(), owner: 'view-default', applicationVersion: '0.1.0-alpha.158', commandLine: h.command(old), now: () => now });
+  assert.deepEqual(result, { key: h.key, resumed: ['x'], left: [] }, 'Large response history must not disconnect the resume request');
+  const next = h.services[1], proof = next.calls.find(([method]) => method === 'maintenanceResume')?.[3];
+  assert.deepEqual(proof, { id: 'x', nativeId: 'native-x', provider: 'codex', owner: null, view: null,
+    controlRevision: 0, connectionRevision: 5, draftRevision: 0, peerRevision: 7, state: 'recoverable' });
+  assert.ok(Buffer.byteLength(JSON.stringify(proof)) < 1024, 'Only fixed identity and revision fields belong in the request');
+  assert.deepEqual(next.state.sessions[0].messages, messages, 'History stays on the service record unchanged');
+  assert.equal(record(h.dataDir, h.key), null, 'Confirmed recovery clears the continuation record');
 });
 test('an automatic move never stops a session that is not proven at the moment of its stop', async t => {
   const h = harness(t, [claudeNew(), codexNew()]); const old = await h.old();
