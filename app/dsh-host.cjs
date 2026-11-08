@@ -42,8 +42,18 @@ async function startDsh(dataDir, { onLocale } = {}) {
     cwd: dataDir, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     env: { ...Object.fromEntries(['PATH', 'TMPDIR', 'LANG', 'LC_ALL'].filter(key => process.env[key]).map(key => [key, process.env[key]])), ELECTRON_RUN_AS_NODE: '1', DSH_HOME: home },
   });
+  const settingsRequests = new Map();
+  const settings = (...args) => new Promise((resolve, reject) => {
+    if (!child.connected || settingsRequests.size >= 8) return reject(Error('Interface settings are unavailable'));
+    const id = require('node:crypto').randomUUID();
+    const timer = setTimeout(() => finish({ error: 'Interface settings result is unconfirmed' }), 8000);
+    const finish = value => { clearTimeout(timer); settingsRequests.delete(id); value.error ? reject(Error(value.error)) : resolve(value.value); };
+    settingsRequests.set(id, finish);
+    child.send({ type: 'ui-settings', id, args }, error => { if (error) finish({ error: 'Interface settings connection closed' }); });
+  });
   // Listen before the URL is ready: the first accepted snapshot precedes it.
   child.on('message', value => {
+    if (value?.type === 'ui-settings-result') { settingsRequests.get(value.id)?.(value); return; }
     if (value?.type !== 'ui-locale') return;
     const warning = ['unavailable', 'migrationNotSaved'].includes(value.warning) ? value.warning : null;
     if (Object.hasOwn(value, 'preference') && validPreference(value.preference) && Number.isSafeInteger(value.revision) && value.revision >= 0) {
@@ -52,6 +62,7 @@ async function startDsh(dataDir, { onLocale } = {}) {
   });
   if (child.pid) fs.writeFileSync(registry, JSON.stringify({ pid: child.pid, parentPid: process.pid }), { mode: 0o600 });
   child.once('exit', () => {
+    for (const finish of settingsRequests.values()) finish({ error: 'Interface settings host exited' });
     try { if (JSON.parse(fs.readFileSync(registry, 'utf8')).pid === child.pid) fs.rmSync(registry); } catch {}
   });
   const stop = () => { if (child.connected) child.disconnect(); else if (child.exitCode === null) child.kill('SIGTERM'); };
@@ -64,6 +75,6 @@ async function startDsh(dataDir, { onLocale } = {}) {
     child.once('error', () => { clearTimeout(timer); reject(uiError("error.dshStartupFailed")); });
     child.once('exit', code => { clearTimeout(timer); reject(uiError("error.dshExited", { arg1: code })); });
   });
-  return { child, stop, url, origin: new URL(url).origin };
+  return { child, stop, url, origin: new URL(url).origin, settings };
 }
 module.exports = { startDsh, resetUiAuthentication };

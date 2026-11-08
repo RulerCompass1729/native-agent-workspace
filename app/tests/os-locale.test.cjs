@@ -11,10 +11,14 @@ function visit(node) {
   if (!node || typeof node !== 'object') return;
   const callee = node.callee;
   const dialog = node.type === 'CallExpression' && callee?.object?.name === 'dialog' && ['showMessageBox', 'showOpenDialog', 'showSaveDialog'].includes(callee.property?.name);
+  const routed = node.type === 'CallExpression' && callee?.name === 'showDialog';
   const notification = node.type === 'NewExpression' && callee?.name === 'Notification';
-  if (dialog || notification) {
+  if (dialog || routed || notification) {
     const object = node.arguments.find(arg => arg.type === 'ObjectExpression');
-    assert.ok(object); options.push({ type: notification ? 'notification' : callee.property.name, source: main.slice(object.start, object.end) });
+    assert.ok(object); const source = main.slice(object.start, object.end);
+    // The original fourteen OS surfaces remain the contract below. Background
+    // permission cards are covered separately and never open native dialogs.
+    if (!source.includes("displayText('background.confirm')")) options.push({ type: notification ? 'notification' : routed ? ({ message: 'showMessageBox', open: 'showOpenDialog', save: 'showSaveDialog' })[node.arguments[1].value] : callee.property.name, source });
   }
   for (const value of Object.values(node)) if (value && typeof value === 'object') { if (Array.isArray(value)) value.forEach(visit); else visit(value); }
 }
@@ -22,7 +26,7 @@ visit(ast);
 test('the actual IPC catch labels only its own empty-message fallback and retains unknown native errors', async () => {
   const register = ast.body.find(node => node.type === 'FunctionDeclaration' && node.id.name === 'register'); assert.ok(register);
   let handle; const sender = { id: 17 }, frame = { url: 'synthetic-trusted' }; sender.mainFrame = frame;
-  const context = vm.createContext({ ipcMain: { handle(name, handler) { assert.equal(name, 'workspace:synthetic'); handle = handler; } }, windows: new Map([[17, {}]]), trusted: url => url === frame.url, uiLocale: locale, uiError });
+  const context = vm.createContext({ applicationHandlers: new Map(), ipcMain: { handle(name, handler) { assert.equal(name, 'workspace:synthetic'); handle = handler; } }, windows: new Map([[17, {}]]), trusted: url => url === frame.url, uiLocale: locale, uiError });
   vm.runInContext(main.slice(register.start, register.end), context);
   context.register('synthetic', async () => { throw Error(''); });
   const fallback = await handle({ sender, senderFrame: frame });
@@ -44,6 +48,7 @@ test('the actual backend-switch handler translates its confirmation reason and p
     vm.runInNewContext(main.slice(a, b), { register(name, fn) { assert.equal(name, 'switchBackend'); handler = fn; },
       app: { getVersion: () => 'synthetic' }, backendSwitch: require('../backend-switch.cjs'), roomState: {}, connectionUpdateOptions: () => [option], uiError, uiLocale: locale, displayLanguage: () => language,
       displayText: (key, params) => locale.format(language, key, params), dialog: { async showMessageBox(win, options) { assert.equal(win, c.win); dialogs.push(options); return { response: 0 }; } },
+      showDialog(context, kind, options) { return require('../background-control.cjs').dialog(context, kind, options, async (win, value) => { assert.equal(win, c.win); dialogs.push(value); return { response: 0 }; }); },
       runBackendSwitch() { updates++; throw Error('Cancel must not reach a backend operation'); } });
     assert.equal(await handler(c, plain(option)), false); assert.equal(refreshes, 1); assert.equal(updates, 0); assert.equal(dialogs.length, 1);
     const options = dialogs[0], translated = locale.displayText(language, plan.reason, plan.reasonUiMessage);

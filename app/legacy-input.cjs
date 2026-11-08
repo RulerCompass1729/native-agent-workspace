@@ -242,6 +242,10 @@ class LegacyInput extends EventEmitter {
           if (this.closed || typeof this.restrictedOutboxCall !== 'function') throw Object.assign(Error('Restricted outbox is unavailable'), { notSent: true });
           return this.restrictedOutboxCall(proof, signal);
         },
+        backgroundControlCall: (proof, signal) => {
+          if (this.closed || typeof this.backgroundControlCall !== 'function') throw Error('Background control is unavailable');
+          return this.backgroundControlCall(proof, signal);
+        },
       });
       try { await transport.start(); checkOpen(); }
       catch (e) { transport.server.closeAllConnections(); transport.server.close(); fs.unlinkSync(ownerFile); throw e; }

@@ -28,6 +28,6 @@ test('create consumes the exact preview once and rejects changed or duplicate pl
 });
 test('a newly picked directory invalidates the old preview without creating anything',async()=>{
   const c=context(); c.worktreePlan={nonce:'old'};
-  const choose=handler('chooseFolder',{dialog:{showOpenDialog:async()=>({canceled:false,filePaths:['/synthetic/new-repo']})}});
+  const choose=handler('chooseFolder',{showDialog:(c,kind,options)=>require('../background-control.cjs').dialog(c,kind,options,async()=>({canceled:false,filePaths:['/synthetic/new-repo']}))});
   assert.equal(await choose(c),'/synthetic/new-repo'); assert.equal(c.worktreeSource,'/synthetic/new-repo'); assert.equal(c.worktreePlan,null); assert.equal(c.calls.length,0);
 });

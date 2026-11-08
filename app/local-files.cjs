@@ -83,7 +83,7 @@ function material(file, stat) {
   if (!stat.isFile() || stat.isSymbolicLink?.() || Number(stat.mode) & 0o111) throw uiError("error.files.onlyNonExecutableMaterials");
 }
 const sameFile = (a, b) => ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].every(key => a[key] === b[key]);
-async function openMessageFile({ snapshot, openPath, isCurrent = () => true }, source, requestedPath, options) {
+async function openMessageFile({ snapshot, openPath, isCurrent = () => true, background = false }, source, requestedPath, options) {
   if (!validPath(requestedPath) || /^[a-z][a-z0-9+.-]*:/i.test(requestedPath) || /^[/\\]{2}/u.test(requestedPath)) throw uiError("error.files.localPathInvalid");
   if (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options) ||
     Object.keys(options).some(key => key !== 'line') || options.line !== undefined && (!Number.isSafeInteger(options.line) || options.line < 1))) throw uiError("error.files.locationInvalid");
@@ -108,6 +108,15 @@ async function openMessageFile({ snapshot, openPath, isCurrent = () => true }, s
     const after = await fs.promises.lstat(file, { bigint: true }); material(file, after);
     if (!sameFile(opened, after) || resolved !== canonical) throw uiError("error.files.changedBeforeOpen");
     current();
+    if (background) {
+      // Resolve and validate the same material without launching another app.
+      // Text is actually read; other material returns its validated local path.
+      const extension = path.extname(canonical).slice(1).toLowerCase();
+      const preview = extensions.includes(extension) ? await readPreview(canonical) : null;
+      current();
+      return { accepted: true, path: canonical, line: line ?? null, lineNavigation: false,
+        background: true, externalAppOpened: false, ...(preview ? { name: preview.name, text: preview.text, size: preview.bytes.length } : { material: extension }) };
+    }
     const error = await openPath(canonical);
     if (error !== '') throw (typeof error === 'string' && error ? Error(error) : uiError("error.localOpenUnconfirmed"));
     // This is an OS dispatch receipt, not proof that another app displayed it.

@@ -27,8 +27,9 @@ function validateOutboxArgs(value) {
       /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value.message)) throw outboxError('invalid-request', 'binding');
   return { recipient_id: value.recipient_id, message: value.message, space_id: value.space_id || 'shared' };
 }
-async function nativeOutboxCall(runtime, identity, arguments_, signal) {
-  const args = validateOutboxArgs(arguments_);
+async function nativeOutboxCall(runtime, identity, arguments_, signal, control = false) {
+  const args = control ? require('./background-control.cjs').validate(arguments_) : validateOutboxArgs(arguments_);
+  const calls = control ? 'backgroundMcpCalls' : 'outboxMcpCalls', event = control ? 'backgroundMcpProof' : 'outboxMcpProof';
   if (!identity || !['nativeId', 'sessionId', 'turnId', 'callId'].every(k => token(identity[k]))) throw outboxError('provenance-unconfirmed', 'binding');
   const hostRpc = runtime?.host?.rpc, lifecycle = runtime?.lifecycleRevision;
   let rpc;
@@ -38,11 +39,12 @@ async function nativeOutboxCall(runtime, identity, arguments_, signal) {
         runtime.host.rpc !== hostRpc || runtime.lifecycleRevision !== lifecycle || runtime.record.nativeId !== identity.nativeId ||
         runtime.nativeSessionId !== identity.sessionId || runtime.turnId != null && runtime.turnId !== identity.turnId ||
         runtime.turns?.get(identity.turnId)?.completed || runtime.turnId == null && runtime.latestState !== 'working') return false;
-    const call = runtime.outboxMcpCalls?.get(identity.callId);
+    const call = runtime[calls]?.get(identity.callId);
     if (!call || !(runtime.currentRpc ? runtime.currentRpc(call.rpc) : call.rpc === hostRpc) ||
         rpc && call.rpc !== rpc || call.turnId !== identity.turnId || call.lifecycle !== lifecycle ||
-        call.arguments?.recipient_id !== args.recipient_id || call.arguments?.message !== args.message ||
-        (call.arguments?.space_id || 'shared') !== args.space_id || proof && call !== proof) return false;
+        (control ? !require('node:util').isDeepStrictEqual(call.arguments, args) :
+          call.arguments?.recipient_id !== args.recipient_id || call.arguments?.message !== args.message ||
+          (call.arguments?.space_id || 'shared') !== args.space_id) || proof && call !== proof) return false;
     rpc ||= call.rpc;
     return call;
   };
@@ -50,13 +52,13 @@ async function nativeOutboxCall(runtime, identity, arguments_, signal) {
   const first = candidate();
   if (first) proof = first;
   else await new Promise((resolve, reject) => {
-    const finish = error => { clearTimeout(timer); runtime?.off('outboxMcpProof', observed); runtime?.off('nativeTurnEnd', ended); signal?.removeEventListener('abort', aborted); error ? reject(error) : resolve(); };
+    const finish = error => { clearTimeout(timer); runtime?.off(event, observed); runtime?.off('nativeTurnEnd', ended); signal?.removeEventListener('abort', aborted); error ? reject(error) : resolve(); };
     const observed = () => { const value = candidate(); if (value) { proof = value; finish(); } };
     const ended = info => { if (info.turnId === identity.turnId) finish(outboxError('provenance-unconfirmed', 'binding')); };
     const aborted = () => finish(outboxError('provenance-unconfirmed', 'binding'));
     const timer = setTimeout(aborted, 3000);
     if (!runtime || signal?.aborted) { aborted(); return; }
-    runtime.on('outboxMcpProof', observed); runtime.on('nativeTurnEnd', ended); signal?.addEventListener('abort', aborted, { once: true }); observed();
+    runtime.on(event, observed); runtime.on('nativeTurnEnd', ended); signal?.addEventListener('abort', aborted, { once: true }); observed();
   });
   if (!candidate()) throw outboxError('provenance-unconfirmed', 'binding');
   if (proof.outboxConsumed) throw outboxError('duplicate-call', 'binding');

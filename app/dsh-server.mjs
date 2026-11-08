@@ -41,6 +41,25 @@ observeLocaleProfile(ctx, value => {
   if (value.explicit) { restoreLocaleSchema(); localeWarning = undefined; }
   try { if (process.connected) process.send({ type: 'ui-locale', ...value, warning: value.warning || localeWarning || null }); } catch {}
 });
+// Same Host settings writer as the visible configuration forms, reached only
+// over the existing parent's private IPC. No browser activation or new port.
+process.on('message', async request => {
+  if (request?.type !== 'ui-settings' || typeof request.id !== 'string') return;
+  const allowed = new Set(['locale', 'client-ui-theme']);
+  try {
+    if (!Array.isArray(request.args) || request.args.length > 4) throw Error('Invalid interface settings command');
+    const [action, namespace, patch, revision] = request.args, settings = ctx.get('settings');
+    if (!settings || !['describe', 'update'].includes(action)) throw Error('Interface settings are unavailable');
+    if (action === 'update') {
+      if (!allowed.has(namespace) || !patch || Array.isArray(patch) || !Number.isSafeInteger(revision)) throw Error('Current interface settings revision is required');
+      await settings.update(namespace, patch, revision);
+    }
+    const value = settings.describe({ redactSecrets: true }).filter(row => allowed.has(row.ns));
+    if (process.connected) process.send({ type: 'ui-settings-result', id: request.id, value });
+  } catch (error) {
+    if (process.connected) process.send({ type: 'ui-settings-result', id: request.id, error: error.message || 'Interface settings update failed' });
+  }
+});
 // Only the desktop parent consumes this private launch URL; never persist it.
 console.log(`dsh web: ${ctx.connection.authenticatedUrl(ctx.webServer.getOrigin())}`);
 let closing;

@@ -7059,3 +7059,113 @@ both have run with it.
 Verified in the GUI (hidden, synthetic, 0 model): collaboration-overview, daily-use, native-state, member-actions,
 collaboration-list, member-header-menu, room-member-route, test-check-room and test-desktop pass.
 test-room-navigation stops at its source-freeze guard (:18) before any step, as it did in the census.
+
+
+## Background application control — source checkpoint, 2026-11-08
+
+User failure: operating NAW through desktop computer use moves the single mouse
+and requires the application to be in front. The requested outcome is autonomous
+background operation with retained message/action traces and unchanged human
+foreground, selection and draft. Owner: original secretary; independent review
+and installed original-native acceptance remain open.
+
+The source adds one authenticated native tool reusing existing application
+handlers, separate hidden agent views, durable operation IDs and native receipt
+tracking. Existing permission and destructive confirmation decisions remain
+human; foreground paths remain available. File pickers and clipboard are scoped
+to the agent view. The existing Host owns interface preference changes.
+
+Author-run source checks use the real hidden Electron app, actual daemon, stdio
+MCP helper, authenticated original-runtime proof, GUI history and persistence;
+native producer events are synthetic, with zero provider calls. Eight journeys
+cover rename, selection/draft isolation, exact send/deduplication/receipt, busy
+queue input, inline confirmation cancellation, actual Host settings, independent
+file/clipboard operations, and GUI restart without resend. Frontmost application
+and physical pointer were read before/after and unchanged. Private evidence:
+`background-control-20261108/gui-extended/`. This is not installed-native proof.
+
+Regression findings: the new common dialog/handler entry required existing VM
+fixtures to import its production router; two exact previously committed Claude
+compatibility hook hashes were absent from the upgrade list. They are added
+without allowing edited copies. The first full source run had 3469/3479 passing;
+those failures and their targeted corrective results remain in private evidence.
+A canonical temporary-profile path was required by the existing private-socket
+check; its failed launch is retained, and no real agent or daily app was stopped.
+
+Delivery is not yet complete: original runtime adoption, native MCP discovery,
+and the same task from an installed original native agent must still be proven.
+No model, permission, native goal/budget or daily installation was changed by
+this source checkpoint.
+
+Independent review found B1 (high): a human decision awaited identity refresh
+before reserving the actor, allowing a concurrent identical invocation to reuse
+the first operation's confirmation through shared context state. The author
+reproduced the race with a delayed identity check; the old implementation failed.
+The actor is now reserved synchronously, each invocation carries its own request
+in AsyncLocalStorage, and approvals bind to the exact operation ID. The direct
+regression passes. Source review remains pending for this delta.
+
+The same review's N1–N3 were addressed: receipt matching includes the sender's
+native ID; failed startup closes and clears hidden contexts; automatic backend
+selection excludes agent views. Closing background control releases its owned
+connections before waiting for pending commands, without stopping native work.
+Shared message labels and pause reasons now retain the actual agent attribution.
+The full author-run source suite passes 3485/3485 with no skips. The earlier
+hidden-UI run with these control fixes passed all eight journeys; an additional
+ordinary shared-label check is recorded separately. Its first test-harness
+attempt wrongly called a module-local function from page evaluation and failed;
+the replacement inspects the ordinary visible record. All failures are retained.
+
+Private evidence: `review-B1-before.tap`, `review-B1-final.tap`, `attribution.tap`,
+`all-source-reviewed-fix.tap`, `gui-reviewed-fix/`, and `gui-source-final/` under
+the original secretary's `background-control-20261108` evidence directory.
+
+Final shared-record acceptance found the old built frontend still labeled input
+as the person, then exposed the distinction between a backend's stored name and
+the GUI alias after rebuilding. The renderer now resolves the recipient and the
+same original native sender by identity; a replacement native sender retains the
+historical name and ID. Targeted label checks pass, and the rebuilt hidden GUI
+passes all eight journeys plus the actual shared-message heading check in
+`gui-verified-final/`. Its screenshot and exact label are retained. This adds
+source evidence only; the daily GUI's separate alpha.218 update does not adopt
+this unintegrated feature into its retained alpha.215 backends.
+
+B2 (medium/high): the general background entry originally bypassed the existing
+automatic-message off switches. The existing switches are now enforced before
+the shared GUI handler, again by its router after awaited work, and by actual
+workspace input methods and native submission guards. The latter capture the
+origin so a later native callback still checks the switch; background relay
+records retain that origin for subsequent inputs. Reading and drafts remain
+available while disabled, and ordinary human input is unchanged. No policy
+switch was changed in the daily profile. Ten direct old-code regressions failed
+before the repair. The actual hidden GUI now refuses all eight input commands
+and an explicit-space route for both global and recipient disablement, then
+passes normal exact send and busy queue after the fixture re-enables its own
+switches. Private evidence: `review-B2-before.tap`, `review-B2-final.tap` and
+`gui-policy-final/` (nine passing journeys, synthetic native events only).
+
+A related author-found steering case could clear an identical human draft after
+native acknowledgement. Its original line fails the real workspace/adapter
+counter in `private-steer-before.tap`; the repaired source preserves the draft.
+The final source suite passes 3498/3498, zero skipped, in
+`all-source-policy-final.tap`. Same-reviewer verification of this final delta is
+pending; installed original-native acceptance remains open.
+
+Final source decision: the same independent reviewer passed the policy and
+private-steer delta, carrying forward its verified B1/N1–N3 fixes. The author
+confirmed HEAD, index and all 42 staged files were unchanged during that review.
+Its raw source-only verdict is retained privately as `review-policy-verdict.json`.
+This paragraph records that decision without changing the reviewed implementation.
+Main owns integration and safe original-runtime adoption; the original secretary
+continues to own the complete background-operation outcome and native acceptance.
+
+Concurrent integration advanced main to 194ce71 before handoff adoption. The
+author rebased this isolated delivery: preserve the new human `youToName` catalog
+metadata on human rows, omit it on agent rows, and retain both review histories.
+The compatibility list admits only the exact committed capacity-hook copy with
+the installer's existing `legacyOnly` transformation. One initial compatibility
+counter failed on the raw-hook hash; the installed-copy hash fixes it. Final
+combined source checks pass 3523/3523 and the nine hidden GUI journeys pass on
+this base (`all-source-rebased-final.tap`, `gui-rebased/`). The source handoff's
+single workspace-message attempt was refused by revoked automatic-message
+authorization; no native receipt, repeat send or daily adoption is claimed.

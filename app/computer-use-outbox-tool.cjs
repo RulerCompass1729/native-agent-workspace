@@ -17,8 +17,8 @@ function privateFile(filename) {
   try { const current = fs.fstatSync(fd); if (current.ino !== stat.ino || current.dev !== stat.dev) throw Error(FAIL); return JSON.parse(fs.readFileSync(fd, 'utf8')); }
   finally { fs.closeSync(fd); }
 }
-function requestOutbox(filename, identity, args, signal) {
-  validateOutboxArgs(args);
+function requestOutbox(filename, identity, args, signal, control = false) {
+  if (control) require('./background-control.cjs').validate(args); else validateOutboxArgs(args);
   const info = privateFile(filename), dir = fs.lstatSync(path.dirname(info.socketPath)), endpoint = fs.lstatSync(info.socketPath);
   if (info.version !== 1 || typeof info.capability !== 'string' || !/^[a-f0-9]{64}$/.test(info.capability) ||
       fs.realpathSync(info.socketPath) !== info.socketPath || !endpoint.isSocket() || endpoint.uid !== process.getuid() || (endpoint.mode & 0o777) !== 0o600 ||
@@ -31,9 +31,9 @@ function requestOutbox(filename, identity, args, signal) {
     if (signal?.aborted) { finish(true); return; }
     signal?.addEventListener('abort', aborted, { once: true });
     socket.on('error', () => finish(true)); socket.on('end', () => { if (!settled) finish(true); });
-    socket.on('connect', () => socket.write(JSON.stringify({ capability: info.capability, identity, arguments: args }) + '\n'));
+    socket.on('connect', () => socket.write(JSON.stringify({ capability: info.capability, identity, arguments: args, ...(control ? { kind: 'control' } : {}) }) + '\n'));
     socket.setEncoding('utf8'); socket.on('data', part => {
-      data += part; if (Buffer.byteLength(data) > 100000) return finish(true);
+      data += part; if (Buffer.byteLength(data) > (control ? 4 * 1024 * 1024 : 100000)) return finish(true);
       const end = data.indexOf('\n'); if (end < 0) return;
       try { finish(false, JSON.parse(data.slice(0, end))); } catch { finish(true); }
     });

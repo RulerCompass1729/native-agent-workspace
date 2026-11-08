@@ -16,11 +16,11 @@ class ScopedOutboxRuntime {
     this.changed = () => { for (const scope of [...this.scopes.values()]) this.check(scope); };
     workspace.on('change', this.changed);
   }
-  actor(id, reason = 'recipient-unavailable') {
+  actor(id, reason = 'recipient-unavailable', control = false) {
     const w = this.workspace, s = w.sessions.get(id), runtime = w.runtimes.get(id);
-    if (w.closed || !s || s.provider !== 'codex' || !runtime || runtime.stopped || runtime.transportDisconnected ||
+    if (w.closed || !s || !(s.provider === 'codex' || control && s.provider === 'claude') || !runtime || runtime.stopped || runtime.transportDisconnected ||
         s.archived || s.nativeContextPending || runtime.record.nativeId !== s.nativeId || !token(s.nativeId) ||
-        !token(runtime.nativeSessionId) || !runtime.host?.rpc || !isMember(s, 'shared') || !wake.enabled(w)) throw outboxError(reason, 'binding');
+        (s.provider === 'codex' && (!token(runtime.nativeSessionId) || !runtime.host?.rpc)) || !control && (!isMember(s, 'shared') || !wake.enabled(w))) throw outboxError(reason, 'binding');
     return { s, runtime, nativeId: s.nativeId, pid: s.pid, owner: s.owner, control: s.controlRevision,
       connection: s.connectionRevision, peer: s.peerRevision, member: membershipRevision(s, 'shared'), hostRpc: runtime.host.rpc,
       sessionId: runtime.nativeSessionId, lifecycle: runtime.lifecycleRevision, inputIdentity: sharedInputIdentity(s), wakeBoundary: wake.boundary(w) };
@@ -29,11 +29,11 @@ class ScopedOutboxRuntime {
     try {
     const a = scope.actor, { s, runtime } = a, w = this.workspace;
     return !w.closed && !w.storageWarning && !scope.closed && !scope.client.destroyed &&
-      wake.enabled(w) && wake.boundary(w) === a.wakeBoundary && (scope.kind === 'call' || !s.wakeDisabled) && w.sessions.get(s.id) === s && w.runtimes.get(s.id) === runtime &&
+      (scope.control || wake.enabled(w) && wake.boundary(w) === a.wakeBoundary && (scope.kind === 'call' || !s.wakeDisabled)) && w.sessions.get(s.id) === s && w.runtimes.get(s.id) === runtime &&
       !runtime.stopped && !runtime.transportDisconnected && !s.archived && !s.nativeContextPending &&
       s.nativeId === a.nativeId && s.pid === a.pid && s.owner === a.owner && s.controlRevision === a.control &&
       s.connectionRevision === a.connection && s.peerRevision === a.peer && runtime.host.rpc === a.hostRpc && runtime.nativeSessionId === a.sessionId &&
-      runtime.lifecycleRevision === a.lifecycle && isMember(s, 'shared') && membershipRevision(s, 'shared') === a.member &&
+      runtime.lifecycleRevision === a.lifecycle && (scope.control || isMember(s, 'shared') && membershipRevision(s, 'shared') === a.member) &&
       isDeepStrictEqual(sharedInputIdentity(s), a.inputIdentity);
     } catch { return false; }
   }
@@ -89,18 +89,21 @@ class ScopedOutboxRuntime {
   async request(client, action, p, notify) {
     try {
       if (!p || client.destroyed) throw outboxError('owner-closed', 'binding');
-      if (action === 'call') {
+      if (action === 'call' || action === 'controlCall') {
         if (!exact(p, 'op,callerId,identity,arguments')) throw outboxError('invalid-request', 'binding');
-        const args = validateOutboxArgs(p.arguments);
-        if (args.space_id !== 'shared') throw outboxError('space-unavailable', 'binding');
-        const actor = this.actor(p.callerId, 'caller-unavailable');
+        const control = action === 'controlCall';
+        const args = control ? require('./background-control.cjs').validate(p.arguments) : validateOutboxArgs(p.arguments);
+        if (!control && args.space_id !== 'shared') throw outboxError('space-unavailable', 'binding');
+        const actor = this.actor(p.callerId, 'caller-unavailable', control);
         if (actor.nativeId !== p.identity?.nativeId) throw outboxError('caller-unavailable', 'binding');
         const scope = this.attach(client, p, actor, 'call', notify);
+        scope.control = control;
         try {
-          scope.proof = await nativeOutboxCall(actor.runtime, p.identity, args, scope.abort.signal); scope.pendingProof = false;
+          scope.proof = control ? await require('./background-control-native.cjs').nativeCall(actor.runtime, p.identity, args, scope.abort.signal)
+            : await nativeOutboxCall(actor.runtime, p.identity, args, scope.abort.signal); scope.pendingProof = false;
           if (!this.check(scope)) throw outboxError('provenance-unconfirmed', 'binding');
           return { ok: true, value: { token: scope.token, sender: { id: actor.s.id, nativeId: actor.nativeId,
-            provider: 'codex', name: actor.s.name || 'Agent' } } };
+            provider: actor.s.provider, name: actor.s.name || 'Agent' } } };
         } catch (error) { this.close(scope); throw error; }
       }
       if (action === 'prepare') {

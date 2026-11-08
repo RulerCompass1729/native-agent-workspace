@@ -94,6 +94,7 @@ function handlers(client, answer, events) {
     uiError: require('../ui-errors.cjs').uiError,
     displayText: (key, params) => locale.format('zh', key, params), uiLocale: locale, displayLanguage: () => 'zh',
     dialog: { async showMessageBox() { events.dialog++; return answer(); } },
+    showDialog(c, kind, options) { return require('../background-control.cjs').dialog(c, kind, options, () => { events.dialog++; return answer(); }); },
     async continueService() { events.update++; throw Error('Unexpected backend write'); },
     dataDir: 'synthetic-profile', process: { execPath: 'synthetic-node' } };
   vm.runInNewContext(main.slice(start, end), scope); return registered;

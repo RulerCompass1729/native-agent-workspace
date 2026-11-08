@@ -120,6 +120,23 @@ async function bindOriginalOutbox(deps, identity, args, signal) {
     throw error;
   }
 }
+async function bindOriginalControl(deps, identity, args, signal) {
+  args = require('./background-control.cjs').validate(args);
+  const transports = existingTransports(deps.contexts);
+  const provider = identity.provider === 'claude' ? 'claude' : 'codex';
+  const caller = transports.find(s => s.provider === provider && s.nativeId === identity.nativeId, 'caller-unavailable', false);
+  const proof = await openManagedCall(caller.entry, caller.record, identity, args, signal, true);
+  return { ...proof, identity: { ...identity } };
+}
+async function bindClaudeControl(deps, credential, signal) {
+  const proof = require('./background-control-native.cjs').consumeCredential(credential);
+  const transports = existingTransports(deps.contexts);
+  const caller = transports.find(s => s.provider === 'claude' && s.nativeId === proof.identity.nativeId, 'caller-unavailable');
+  if (caller.root !== proof.target) throw Error('Native control root changed');
+  return { args: proof.args, identity: proof.identity,
+    sender: { id: caller.record.id, nativeId: caller.record.nativeId, provider: 'claude', name: caller.record.name || 'Agent' },
+    valid: () => !signal?.aborted && proof.valid() && caller.bridge.target(caller.record) === caller.root };
+}
 function bindClaudeOutbox(deps, credential, signal) {
   let proof;
   try { proof = consumeRootOutboxProof(credential); }
@@ -250,4 +267,4 @@ async function bindRecipient({ roomState }, { available, find, prepareRecipient 
     throw error;
   }
 }
-module.exports = { bindOriginalOutbox, bindClaudeOutbox };
+module.exports = { bindOriginalOutbox, bindClaudeOutbox, bindOriginalControl, bindClaudeControl };

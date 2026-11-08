@@ -56,6 +56,15 @@ for (const order of ['ack-first', 'echo-first', 'complete-first']) test(`shared 
   assert.equal(s.pendingTag, null); assert.equal(runtime.turnId, null); assert.equal(s.state, 'idle');
   assert.equal(w.drafts.get(id), 'Private unsent draft'); assert.equal(w.versions.dispatches, 1);
 });
+test('background private steering preserves an identical unsent human draft after native acknowledgement', async t => {
+  const f = await fixture(t), operation = require('../background-operation.cjs');
+  const actor = { provider: 'codex', id: 'operator', nativeId: 'operator-native', name: 'Operator', callId: 'call', turnId: 'turn', operationId: 'steer' };
+  f.w.setDraft(f.id, 'Same exact text', 'owner');
+  const sending = operation.run(actor, () => f.w.steer(f.id, 'Same exact text', 'owner', 'active'));
+  assert.equal(f.calls.length, 1); f.ack(); await sending;
+  assert.equal(f.w.drafts.get(f.id), 'Same exact text');
+  assert.equal(f.s.messages.find(m => m.inputMode === 'steer').agentControl.id, 'operator');
+});
 for (const failure of ['missing-echo', 'wrong-turn-echo', 'wrong-receipt', 'rejected', 'leave', 'rejoin', 'owner', 'context', 'permission', 'foreign-input', 'disconnected', 'history-only']) test(`shared steer ${failure} never publishes an uncertain or revoked response`, async t => {
   const f = await fixture(t), { w, s, runtime, id } = f;
   const sending = w.steer(id, 'Shared request', 'owner', 'active', {}), tag = runtime.pendingSteer;

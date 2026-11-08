@@ -17,6 +17,12 @@ function label(lang, sessions, row) {
   return result;
 }
 for (const lang of ['en', 'zh']) {
+  test(lang + ': a recorded background send names its agent instead of attributing it to the person', () => {
+    const row = { role: 'human', recipientId: recipient, name: 'Original agent → Receiver',
+      agentControl: { id: sender, name: 'Original agent', nativeId: 'original-native', operationId: 'actual-send' }, text: 'Exact body' };
+    assert.equal(label(lang, [{ ...record(sender, 'Renamed agent'), nativeId: 'original-native' }, record(recipient, 'Receiver')], row), 'Renamed agent → Receiver');
+    assert.equal(label(lang, [{ ...record(sender, 'Replacement agent'), nativeId: 'replacement-native' }, record(recipient, 'Receiver')], row), 'Original agent · abcdef → Receiver');
+  });
   test(lang + ': a removed recorded sender retains its ID and unverified status', () => {
     const result = label(lang, [record(recipient, 'Receiver')], message());
     assert.equal(result, locale.format(lang, 'identity.unverifiedSender', { name: 'Stored name · abcdef', recipient: 'Receiver' }));

@@ -3,6 +3,7 @@ const { EventEmitter } = require('node:events');
 const { readFrames, RESPONSE_BYTES } = require('./service-transport.cjs');
 const { uiError } = require('./ui-errors.cjs');
 const { displayMessage } = require('./ui-locale.js');
+const background = require('./background-operation.cjs');
 
 class ServiceClient extends EventEmitter {
   constructor(socket) {
@@ -34,7 +35,8 @@ class ServiceClient extends EventEmitter {
       // Its single pending operation is bounded by the native session/transport,
       // not an arbitrary timer that would suggest retrying accepted native work.
       const timer = ['queue', 'queueShared'].includes(method) ? null : setTimeout(() => { this.pending.delete(id); reject(uiError('error.confirmationTimeout')); }, 40000);
-      this.pending.set(id, { resolve, reject, timer }); this.socket.write(JSON.stringify({ id, method, args }) + '\n');
+      this.pending.set(id, { resolve, reject, timer });
+      this.socket.write(JSON.stringify({ id, method, args, ...(background.current() ? { backgroundActor: background.current() } : {}) }) + '\n');
     });
   }
   close() { this.socket.end(); }

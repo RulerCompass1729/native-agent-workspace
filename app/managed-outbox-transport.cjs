@@ -69,14 +69,15 @@ async function cleanupFailure(link, error) {
   }
   throw error;
 }
-async function openManagedCall(entry, caller, identity, args, signal) {
+async function openManagedCall(entry, caller, identity, args, signal, control = false) {
   if (!supported(entry)) throw outboxError('caller-unavailable', 'binding');
+  if (control && !entry.state.capabilities?.includes(require('./background-operation.cjs').CAPABILITY)) throw outboxError('caller-unavailable', 'binding');
   const link = new ScopeLink(entry.client, identity.nativeId, signal);
   try {
-    const value = await request(entry.client, 'call', { op: link.op, callerId: caller.id, identity, arguments: args });
+    const value = await request(entry.client, control ? 'controlCall' : 'call', { op: link.op, callerId: caller.id, identity, arguments: args });
     link.bind(value);
     const s = value.sender;
-    if (s?.id !== caller.id || s.nativeId !== identity.nativeId || s.provider !== 'codex' || !token(s.name)) throw outboxError('provenance-unconfirmed', 'binding');
+    if (s?.id !== caller.id || s.nativeId !== identity.nativeId || s.provider !== (control ? caller.provider : 'codex') || !token(s.name)) throw outboxError('provenance-unconfirmed', 'binding');
     return { args, sender: { id: s.id, nativeId: s.nativeId, provider: s.provider, name: s.name },
       valid: () => link.live && !link.closed && !signal?.aborted, refresh: () => link.check(), close: () => link.close() };
   } catch (error) { return cleanupFailure(link, error); }

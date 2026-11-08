@@ -745,6 +745,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     entry.message = m; entry.exploration = explorations.get(m.id); retained.add(m.id); rows.push(entry.item);
     entry.item.className = `message ${m.role}${m.kind === 'turn' ? ' native-turn' : ''}${entry.disclosure ? ' process' : ''}`;
     if (m.operator || entry.operatorControls) renderOperatorControls(entry, m, context);
+    if (m.backgroundOperation || entry.backgroundControls) renderBackgroundControls(entry, m);
     entry.item.classList.toggle('native-notice', Boolean(m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && session?.nativeContexts?.some(c => c.boundaryId === m.id))));
     const nativeTitle = entry.exploration ? entry.exploration.active ? 'Exploring' : 'Explored' : m.toolKind === 'commandExecution' ? ['running', 'streaming'].includes(m.status) ? 'Running' : m.commandSource === 'userShell' ? 'You ran' : 'Ran' : m.kind === 'summary' && m.title === '过程摘要' || m.kind === 'plan' && m.title === '计划' || m.toolKind === 'webSearch' && ['搜索网页', '打开网页', '页内查找'].includes(m.title) || m.toolKind === 'fileChange' && m.title === '文件修改' ? '' : m.title;
     const messageName = () => {

@@ -95,7 +95,7 @@ function consumeRootOutboxProof(proof) {
   value.consumed = true;
   return { target: value.target, args: value.args, valid: value.valid };
 }
-function createSubmissionServer(filename, targets, { restrictedOutboxCall } = {}) {
+function createSubmissionServer(filename, targets, { restrictedOutboxCall, backgroundControlCall } = {}) {
   const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'application/json');
     const target = targets.get(req.headers['x-workspace-token']);
@@ -117,6 +117,19 @@ function createSubmissionServer(filename, targets, { restrictedOutboxCall } = {}
       }
       if (target.rootLease && !target.validRootBinding(message)) { res.writeHead(409); res.end('{}'); return; }
       if (message.sessionId !== target.record.nativeId) { res.writeHead(409); res.end('{}'); return; }
+      if (req.url === '/background-control') {
+        const abort = new AbortController(), closed = () => abort.abort();
+        res.once('close', closed);
+        try {
+          const proof = require('./background-control-native.cjs').rootCall(target, message, abort.signal, () => targets.get(req.headers['x-workspace-token']) === target);
+          const result = backgroundControlCall
+            ? await backgroundControlCall(proof.credential, abort.signal)
+            : await require('./computer-use-outbox-tool.cjs').requestOutbox(process.env.NAW_OUTBOX_DESCRIPTOR, proof.identity, proof.args, abort.signal, true);
+          if (!res.destroyed) res.end(JSON.stringify(result));
+        } catch (error) { if (!res.destroyed) res.end(JSON.stringify({ state: 'unconfirmed', error: error.message, retry: false })); }
+        finally { res.off('close', closed); }
+        return;
+      }
       if (req.url === '/operator-capability') {
         const names = require('./operator-control.cjs').names;
         if (!target.validRootBinding(message) || !Array.isArray(message.tools) || message.tools.some(n => !names.includes(n))) { res.writeHead(409); res.end('{}'); return; }

@@ -22,8 +22,12 @@ const { identity: roomPeerIdentity } = require('./peer-handoffs.cjs');
 const { windowPlacement } = require('./window-placement.cjs');
 const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
 const { createOutboxBroker } = require('./computer-use-outbox-broker.cjs');
-const { bindOriginalOutbox, bindClaudeOutbox } = require('./computer-use-outbox-owner.cjs');
+const { bindOriginalOutbox, bindClaudeOutbox, bindOriginalControl, bindClaudeControl } = require('./computer-use-outbox-owner.cjs');
 const { createStockOutboxView } = require('./computer-use-outbox-view.cjs');
+const background = require('./background-control.cjs');
+const backgroundOperation = require('./background-operation.cjs');
+const applicationHandlers = new Map();
+let backgroundControl, backgroundUnavailable = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
 app.setName('Native Agent Workspace');
@@ -190,9 +194,14 @@ function bindClient(context) {
     if (!outboxBroker) throw Object.assign(Error('Restricted outbox is unavailable'), { notSent: true });
     return outboxBroker.submitAuthenticated(abort => bindClaudeOutbox({ contexts: () => windows.values(), roomState }, proof, abort), signal);
   };
+  if (client.control?.legacyInput) client.control.legacyInput.backgroundControlCall = (proof, signal) => {
+    if (!outboxBroker) throw Error('Background control is unavailable');
+    return outboxBroker.submitControlAuthenticated(abort => bindClaudeControl({ contexts: () => windows.values(), roomState }, proof, abort), signal);
+  };
   // Rechecked by the router after awaited pauses as well as at IPC entry.
   // A task already accepted natively is not retroactively cancelled.
   client.authorizeOperation = (method, args, roomId = 'shared') => {
+    if (context.background) backgroundOperation.assertDeliveryPolicy(client.snapshot(), method, args);
     if (['send', 'queue', 'queueShared', 'steerShared', 'steer', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'answer', 'draft', 'resume'].includes(method)) {
       for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'queueShared', 'steerShared', 'run'].includes(method), roomId);
     }
@@ -200,7 +209,7 @@ function bindClient(context) {
   const send = (channel, ...data) => { if (context.client === client && !win.isDestroyed()) win.webContents.send(channel, ...data); };
   client.on('state', data => { if (context.client === client && !win.isDestroyed()) {
     const display = displayState(data, context);
-    send('workspace:state', display); notifyToolWait(data, win); notifyCapacity(display, win);
+    send('workspace:state', display); if (!context.background) { notifyToolWait(data, win); notifyCapacity(display, win); }
   } });
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('progress', data => send('workspace:progress', data));
@@ -209,7 +218,16 @@ function bindClient(context) {
 function displayState(snapshot, context) {
   const roomId = context?.view?.spaceId || 'shared';
   const display = roomState.apply(sessionLabels.apply(submissionState(snapshot)), roomId);
-  const outboxWarning = outboxQuitFailed ? 'Outbox cleanup could not be confirmed. Quit again to close the app; native sessions keep running.'
+  display.sessions = display.sessions.map(s => ({ ...s }));
+  if (backgroundControl) for (const s of display.sessions) {
+    const rows = backgroundControl.rows(s.id);
+    if (rows.length) s.messages = [...s.messages, ...rows].sort((a, b) => a.time - b.time);
+    if (context?.background) {
+      s.liveDraft = ''; s.draft = '';
+      if (s.id !== context.view.selected) s.messages = [];
+    }
+  }
+  const outboxWarning = backgroundUnavailable ? 'Background control is unavailable; existing native sessions and ordinary controls remain available.' : outboxQuitFailed ? 'Outbox cleanup could not be confirmed. Quit again to close the app; native sessions keep running.'
     : outboxUnavailable ? 'The independent space outbox is unavailable; new delivery cannot be confirmed.' : '';
   return { ...display, ...(outboxWarning ? { storageWarning: [display.storageWarning, outboxWarning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     switchEnded: endedByMove(display.sessions) };
@@ -441,7 +459,42 @@ function runningRelays(client) {
   for (const entry of client.entries) for (const room of [entry.state.room, ...(Array.isArray(entry.state.rooms) ? entry.state.rooms : [])]) if (room?.run?.status === 'running') for (const id of room.run.ids || []) ids.add(id);
   return ids;
 }
+function showDialog(c, kind, options) {
+  const method = { message: 'showMessageBox', open: 'showOpenDialog', save: 'showSaveDialog' }[kind];
+  return background.dialog(c, kind, options, (win, value) => dialog[method](win, value));
+}
 function register(name, handler) {
+  applicationHandlers.set(name, async (c, ...args) => {
+    if (c.background) {
+      const request = backgroundOperation.request();
+      if (!request || request.context !== c) throw Error('Background command has no originating operation');
+      await request.valid();
+      if (backgroundOperation.deliveryTargets(name, args)) {
+        await c.client.refresh();
+        backgroundOperation.assertDeliveryPolicy(c.client.snapshot(), name, args);
+      }
+      if (['approve', 'operatorAction', 'wakePolicy', 'backendSwitchSettings', 'quitService'].includes(name)) {
+        const answer = await showDialog(c, 'message', { type: 'warning', message: name, detail: JSON.stringify(args), buttons: [displayText('common.cancel'), displayText('background.confirm')], cancelId: 0 });
+        if (answer.response !== 1) return { cancelled: true };
+      }
+      if (name === 'input') {
+        const s = (await c.client.call('initial')).sessions.find(s => s.id === args[0]);
+        if (s?.approval || s?.nativeApproval || s?.nativeInputRequired) {
+          const answer = await showDialog(c, 'message', { type: 'warning', message: name, detail: JSON.stringify(args), buttons: [displayText('common.cancel'), displayText('background.confirm')], cancelId: 0 });
+          if (answer.response !== 1) return { cancelled: true };
+        }
+      }
+      // Never silently fall back to an old backend that cannot retain actor
+      // attribution or preserve the person's draft for these input paths.
+      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom']);
+      if (!local.has(name)) {
+        const targetIds = (name === 'spaceAction' ? [args[2]?.[0]].flat() : [args[0]].flat()).filter(id => typeof id === 'string');
+        const targets = c.client.entries.filter(e => !targetIds.length || e.state.sessions.some(s => targetIds.includes(s.id)));
+        for (const entry of targets.length ? targets : c.client.entries) if (!entry.state.capabilities?.includes(backgroundOperation.CAPABILITY)) throw Error('This backend must adopt background-control support before this operation');
+      }
+    }
+    return handler(c, ...args);
+  });
   ipcMain.handle(`workspace:${name}`, async (event, ...args) => {
     const context = windows.get(event.sender.id);
     if (!context || event.senderFrame !== event.sender.mainFrame || !trusted(event.senderFrame.url)) throw new Error('Unexpected IPC source');
@@ -490,7 +543,7 @@ async function runBackendSwitch(c, option, requireAuto = false) {
 // Automatic moves run only for plans the runtime proved, one backend at a time.
 async function autoBackendSwitch() {
   if (quitting || backendSwitching || !backendSwitch.readSettings(dataDir).auto) return;
-  const c = [...windows.values()].find(context => !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed);
+  const c = [...windows.values()].find(context => !context.background && !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed);
   if (!c) return;
   await c.client.refresh();
   const option = connectionUpdateOptions(c.client, app.getVersion(), roomState).find(value => value.switch?.ready && value.switch.auto && !autoSwitchFailed.has(value.backendKey));
@@ -510,6 +563,8 @@ async function boot() {
     try {
       outboxBroker = await createOutboxBroker({ descriptorFile,
         bind: (identity, args, signal) => bindOriginalOutbox({ contexts: () => windows.values(), roomState }, identity, args, signal),
+        bindControl: (identity, args, signal) => bindOriginalControl({ contexts: () => windows.values(), roomState }, identity, args, signal),
+        control: (binding, args) => { if (!backgroundControl) throw Error('Background control storage is unavailable'); return backgroundControl.call(binding, args); },
         createView: createStockOutboxView });
       process.env.NAW_OUTBOX_DESCRIPTOR = descriptorFile; outboxUnavailable = false;
     } catch { outboxUnavailable = true; } // Existing warning surface; never block ordinary app startup.
@@ -519,6 +574,47 @@ async function boot() {
   viewStore = new ViewStore(dataDir);
   const loaded = dropRetiredViewFields(viewStore.load());
   views = loaded.views;
+  try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: () => { broadcastRoom().catch(() => {}); },
+    context: async (actor, saved) => {
+      const view = saved || { owner: randomUUID(), selected: actor.id, mode: 'chat', preference: 'chat', active: false };
+      backups(view);
+      const client = await connect(dataDir, view.owner);
+      const win = new BrowserWindow({ ...windowOptions(), show: false, focusable: false, skipTaskbar: true });
+      const context = { background: true, actor, win, client, view, failed: false };
+      context.checkActor = async () => {
+        await client.refresh();
+        const record = client.snapshot().sessions.find(s => s.id === actor.id);
+        if (!record || record.nativeId !== actor.nativeId || record.archived || record.nativeContextPending) throw Error('The originating native session changed');
+      };
+      context.fingerprint = command => {
+        const strings = new Set();
+        const scan = v => { if (typeof v === 'string') strings.add(v); else if (Array.isArray(v)) v.forEach(scan); else if (v && typeof v === 'object') Object.values(v).forEach(scan); };
+        scan(command.arguments);
+        const state = client.snapshot();
+        const global = ['quitService', 'clearSharedHistory', 'archiveRoom', 'switchBackend', 'continueConnection'].includes(command.method);
+        return { sessions: state.sessions.filter(s => global || strings.has(s.id)).map(s => ({ id: s.id, nativeId: s.nativeId, pid: s.pid, owner: s.owner, state: s.state, activeTurnId: s.activeTurnId, pendingTag: s.pendingTag, controlRevision: s.controlRevision,
+          connectionRevision: s.connectionRevision, archived: s.archived, approval: s.approval, nativeApproval: s.nativeApproval })),
+          rooms: (state.rooms || [state.room]).filter(r => r && (global || strings.has(r.id))).map(r => ({ id: r.id, memberIds: r.memberIds })) };
+      };
+      context.delivery = async (command, value, sender, guard) => {
+        const method = command.method === 'spaceAction' ? command.arguments[1] : command.method;
+        if (!['send', 'forward', 'queue', 'queueShared', 'steer', 'steerShared'].includes(method)) return null;
+        const args = command.method === 'spaceAction' ? command.arguments[2] : command.arguments;
+        await client.refresh();
+        const record = client.snapshot().sessions.find(s => s.id === args[0]);
+        const expected = guard?.sessions?.find(s => s.id === args[0]);
+        if (!record || expected && record.nativeId !== expected.nativeId || record.nativeContextPending) return { recipientId: args[0], nativeReceived: false, status: 'context-changed' };
+        const message = record.messages.find(m => m.agentControl?.operationId === sender.operationId && m.agentControl?.id === sender.id && m.agentControl?.nativeId === sender.nativeId);
+        if (!message) return { recipientId: args[0], nativeReceived: false, status: 'unconfirmed' };
+        return { recipientId: record.id, nativeId: record.nativeId, messageId: message.id,
+          nativeReceived: message.status === 'submitted', status: message.status, body: message.text };
+      };
+      const id = win.webContents.id;
+      windows.set(id, context); bindClient(context);
+      win.on('closed', () => { windows.delete(id); client.close(); });
+      return context;
+    } }); backgroundUnavailable = false;
+  } catch { backgroundUnavailable = true; }
   if (loaded.changed) saveViews();
   process.env.NAW_RUNTIME_CONFIG = path.join(dataDir, 'runtime-locations.json');
   await ensureService(dataDir, process.execPath);
@@ -535,6 +631,10 @@ async function boot() {
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).host !== new URL(dsh.origin).host }));
   if (!wired) {
   wired = true;
+  register('backgroundDecision', (c, sessionId, nativeId, id, response) => {
+    if (c.background) throw Error('An agent cannot confirm its own background request');
+    return backgroundControl.decide(sessionId, nativeId, id, response);
+  });
   for (const name of ['prepareInput', 'observe', 'unobserve', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve', 'answer', 'wakePolicy', 'operatorAction']) register(name, (c, ...args) => {
     if (['prepareInput', 'claim', 'terminal', 'input', 'approve', 'answer'].includes(name)) roomState.assertAvailable(args[0]);
     return c.client.call(name, ...args);
@@ -604,7 +704,7 @@ async function boot() {
         // A clear every backend would refuse is refused before the person is asked; the client checks again after (T-149).
         const refusal = await c.client.clearSharedHistoryProblem(roomId); if (refusal) throw typeof refusal === 'string' ? Error(refusal) : refusal;
         const value = roomState.metadata(roomId), revision = value.revision;
-        const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: displayText('os.clearSpaceTitle', { name: value.name }), detail: displayText('os.clearSpaceDetail'), buttons: [displayText('common.cancel'), displayText('os.clearSharedButton')], defaultId: 0, cancelId: 0 });
+        const answer = await showDialog(c, 'message', { type: 'warning', message: displayText('os.clearSpaceTitle', { name: value.name }), detail: displayText('os.clearSpaceDetail'), buttons: [displayText('common.cancel'), displayText('os.clearSharedButton')], defaultId: 0, cancelId: 0 });
         if (answer.response !== 1) return false;
         if (roomState.metadata(roomId).revision !== revision) throw uiError("error.main.spaceDataChangedBeforeClear");
         roomState.writable(roomId);
@@ -640,7 +740,7 @@ async function boot() {
     if (c.fileChoosing) throw uiError("error.main.filePickerAlreadyOpen");
     c.fileChoosing = true;
     try {
-      const result = await dialog.showOpenDialog(c.win, { title: displayText('os.spaceFileTitle', { name: value.name }), filters: [{ name: displayText('os.textFiles'), extensions: textExtensions }], properties: ['openFile', 'multiSelections', 'dontAddToRecent'] });
+      const result = await showDialog(c, 'open', { title: displayText('os.spaceFileTitle', { name: value.name }), filters: [{ name: displayText('os.textFiles'), extensions: textExtensions }], properties: ['openFile', 'multiSelections', 'dontAddToRecent'] });
       if (result.canceled || c.win.isDestroyed()) return false;
       for (const file of result.filePaths) await readPreview(file);
       roomState.assertAvailable(null, true, roomId); roomState.addFiles(result.filePaths, roomId); await broadcastRoom(); return true;
@@ -708,21 +808,22 @@ async function boot() {
     return result;
   });
   register('preflight', () => preflight());
+  register('interfaceSettings', (_c, ...args) => dsh.settings(...args));
   register('runtimeLocation', async (c, key, reset = false) => {
     if (!['claude', 'codex', 'python3'].includes(key) || typeof reset !== 'boolean') throw uiError("error.main.unknownProgramSetting");
     if (reset) setLocation(process.env.NAW_RUNTIME_CONFIG, key, null);
     else {
-      const result = await dialog.showOpenDialog(c.win, { title: displayText('os.chooseProgram'), buttonLabel: displayText('os.useProgram'), properties: ['openFile', 'showHiddenFiles'] });
+      const result = await showDialog(c, 'open', { title: displayText('os.chooseProgram'), buttonLabel: displayText('os.useProgram'), properties: ['openFile', 'showHiddenFiles'] });
       if (!result.canceled && result.filePaths.length === 1) setLocation(process.env.NAW_RUNTIME_CONFIG, key, result.filePaths[0]);
     }
     return preflight();
   });
-  register('dataDirectory', () => shell.openPath(dataDir));
+  register('dataDirectory', c => c.background ? { path: dataDir } : shell.openPath(dataDir));
   register('quitService', async c => { await c.client.call('shutdown'); app.quit(); });
   register('clearSharedHistory', async c => {
     const state = await c.client.call('initial');
     if (state.room.run?.pausePending || state.room.run?.pauseUnconfirmed) throw uiError("error.main.clearNeedsLeaseRevocation");
-    const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: displayText('os.clearSharedTitle'), detail: displayText('os.clearSharedDetail'), buttons: [displayText('common.cancel'), displayText('os.clearSharedButton')], defaultId: 0, cancelId: 0 });
+    const answer = await showDialog(c, 'message', { type: 'warning', message: displayText('os.clearSharedTitle'), detail: displayText('os.clearSharedDetail'), buttons: [displayText('common.cancel'), displayText('os.clearSharedButton')], defaultId: 0, cancelId: 0 });
     if (answer.response === 1) {
       const revision = roomState.value.revision;
       const result = await c.client.call('clearSharedHistory');
@@ -736,6 +837,7 @@ async function boot() {
     if (typeof text !== 'string' || text.length > 16000) throw uiError("error.main.draftTooLong");
     if (typeof id !== 'string' || id.length > 100) throw uiError("error.main.invalidSession");
     const draft = beginDraft(c.view, id, text); saveViews();
+    if (c.background) { acknowledgeDraft(c.view, id, draft); return; }
     try { roomState.assertAvailable(id); await c.client.call('draft', id, text); }
     catch (error) {
       if (backups(c.view)[id] === draft && text) { retainRecovery(c.view, id, text); saveViews(); }
@@ -771,7 +873,7 @@ async function boot() {
     const same = value => backendSwitch.samePlan(value, expected?.switch);
     if (!option?.switch?.ready || !same(option.switch)) throw uiError("error.backendSwitchRecheck");
     const names = option.switch.stops.map(value => value.name).join('、');
-    const answer = await dialog.showMessageBox(c.win, {
+    const answer = await showDialog(c, 'message', {
       type: 'warning', message: displayText('os.switchBackendTitle', { count: option.switch.stops.length }),
       detail: displayText('os.switchBackendDetail', { names }) +
         (option.switch.endsCodex ? '\n\n' + displayText('os.switchBackendCodex') : '') +
@@ -788,10 +890,10 @@ async function boot() {
     const matches = value => value && value.backendKey === target.key && value.nativeId === nativeId && value.version === version;
     if (expected !== undefined && (!matches(expected) || !connectionUpdateOptions(c.client, app.getVersion(), roomState).some(option => option.id === id && option.ready && matches(option)))) throw uiError("error.main.backendUpdateEligibilityChanged");
     if (!status.ready) {
-      await dialog.showMessageBox(c.win, { type: 'info', message: displayText('os.keepNativeWork'), detail: uiLocale.displayText(displayLanguage(), status.reason, status.reasonUiMessage), buttons: [displayText('os.ok')] });
+      await showDialog(c, 'message', { type: 'info', message: displayText('os.keepNativeWork'), detail: uiLocale.displayText(displayLanguage(), status.reason, status.reasonUiMessage), buttons: [displayText('os.ok')] });
       return false;
     }
-    const answer = await dialog.showMessageBox(c.win, {
+    const answer = await showDialog(c, 'message', {
       type: 'warning', message: displayText('os.updateConnectionTitle'),
       detail: displayText('os.updateConnectionDetail'),
       buttons: [displayText('os.keepConnection'), displayText('os.confirmUpdate')], defaultId: 0, cancelId: 0,
@@ -819,7 +921,7 @@ async function boot() {
     // The explicit resume action already expresses consent. The workspace
     // still verifies identity, ownership and liveness before native resume.
     if (action === 'resume') return c.client.call(action, id);
-    const answer = await dialog.showMessageBox(c.win, {
+    const answer = await showDialog(c, 'message', {
       type: 'question', message: displayText('os.forgetTitle'),
       detail: displayText('os.forgetDetail'),
       buttons: [displayText('common.cancel'), displayText('os.removeRecord')], defaultId: 0, cancelId: 0,
@@ -843,23 +945,24 @@ async function boot() {
     const record = (await c.client.call('initial')).sessions.find(s => s.id === id);
     if (!record) throw uiError("error.sessionMissing");
     const codex = record.provider === 'codex';
-    const answer = await dialog.showMessageBox(c.win, {
+    const answer = await showDialog(c, 'message', {
       type: 'warning', message: codex ? displayText('os.disconnectCodexTitle') : displayText('os.endNativeTitle'),
       detail: codex ? displayText('os.disconnectCodexDetail') : displayText('os.endNativeDetail'),
       buttons: [displayText('os.keepSession'), codex ? displayText('os.disconnect') : displayText('os.endSession')], defaultId: 0, cancelId: 0,
     });
     if (answer.response === 1) return c.client.call('stop', id);
   });
-  register('openExternal', (_c, href) => { const url = new URL(href); if (!['http:', 'https:'].includes(url.protocol)) throw uiError("error.main.unsupportedLinkType"); return shell.openExternal(url.href); });
+  register('openExternal', (c, href) => { const url = new URL(href); if (!['http:', 'https:'].includes(url.protocol)) throw uiError("error.main.unsupportedLinkType"); return c.background ? { url: url.href } : shell.openExternal(url.href); });
   register('openMessageFile', (c, source, file, options) => openMessageFile({
     snapshot: async () => roomState.apply(await c.client.call('initial')),
     openPath: target => shell.openPath(target),
+    background: c.background,
     isCurrent: () => !c.win.isDestroyed() && windows.get(c.win.webContents.id) === c,
   }, source, file, options));
   register('initial', async c => {
     const appBuild = await (applicationBuild ||= appBuildInfo(app, dataDir));
     const display = displayState(await c.client.call('initial'), c);
-    notifyCapacity(display, c.win);
+    if (!c.background) notifyCapacity(display, c.win);
     return { ...display, viewState: c.view, appVersion: app.getVersion(), appBuild, localeWarning, preflight: preflight() };
   });
   register('readingState', (c, positions, panorama) => {
@@ -923,7 +1026,7 @@ async function boot() {
       const snapshot = await c.client.call('initial');
       const record = snapshot.sessions.find(s => s.id === sessionId);
       if (sessionId && !record) throw uiError("error.main.sessionChangedFile");
-      const result = await dialog.showOpenDialog(c.win, { title: displayText('os.openMaterial'), defaultPath: record?.cwd || snapshot.defaultWorkspace,
+      const result = await showDialog(c, 'open', { title: displayText('os.openMaterial'), defaultPath: record?.cwd || snapshot.defaultWorkspace,
         filters: [{ name: displayText('os.textFiles'), extensions: textExtensions }], properties: ['openFile', 'dontAddToRecent'] });
       if (result.canceled || c.win.isDestroyed()) return null;
       const preview = await readPreview(result.filePaths[0]);
@@ -939,23 +1042,23 @@ async function boot() {
     c.fileSaving = true;
     try {
       const ext = path.extname(preview.name);
-      const result = await dialog.showSaveDialog(c.win, { title: displayText('os.saveCopy'), defaultPath: `${path.basename(preview.name, ext)}-copy${ext}`, properties: ['dontAddToRecent'] });
+      const result = await showDialog(c, 'save', { title: displayText('os.saveCopy'), defaultPath: `${path.basename(preview.name, ext)}-copy${ext}`, properties: ['dontAddToRecent'] });
       if (result.canceled || c.win.isDestroyed()) return false;
       if (c.filePreview !== preview) throw uiError("error.main.filePreviewChangedBeforeSave");
       await saveCopy(preview, result.filePath); return true;
     } finally { c.fileSaving = false; }
   });
   register('chooseFolder', async c => {
-    const result = await dialog.showOpenDialog(c.win, { title: displayText('os.chooseFolder'), properties: ['openDirectory', 'createDirectory'] });
+    const result = await showDialog(c, 'open', { title: displayText('os.chooseFolder'), properties: ['openDirectory', 'createDirectory'] });
     if (result.canceled || c.win.isDestroyed()) return null;
     c.worktreeSource = result.filePaths[0]; c.worktreePlan = null;
     c.worktreePreviewRevision = (c.worktreePreviewRevision || 0) + 1;
     return result.filePaths[0];
   });
-  register('newWindow', async (c, id) => { const snapshot = await c.client.call('initial'); if (id && !snapshot.sessions.some(s => s.id === id)) throw uiError("error.main.sessionNotFound"); await openWindow({ owner: randomUUID(), selected: id || '', mode: c.view.mode, preference: c.view.preference, active: true }); });
-  register('copy', (_c, text) => { if (typeof text !== 'string' || text.length > 100000) throw uiError("error.main.invalidCopyContent"); return clipboard.writeText(text); });
+  register('newWindow', async (c, id) => { const snapshot = await c.client.call('initial'); if (id && !snapshot.sessions.some(s => s.id === id)) throw uiError("error.main.sessionNotFound"); if (c.background) return backgroundControl.newView(c.actor, id, c.view.mode); await openWindow({ owner: randomUUID(), selected: id || '', mode: c.view.mode, preference: c.view.preference, active: true }); });
+  register('copy', (c, text) => { if (typeof text !== 'string' || text.length > 100000) throw uiError("error.main.invalidCopyContent"); if (c.background) { c.clipboardText = text; c.clipboardImage = null; return; } return clipboard.writeText(text); });
   // Read only when the person presses Paste; never watch or persist clipboard content.
-  register('pasteText', async () => { const text = await clipboard.readText(); if (text.length > 65500) throw uiError("error.main.pasteTooLong"); return text; });
+  register('pasteText', async c => { const text = c.background ? c.clipboardText || '' : await clipboard.readText(); if (text.length > 65500) throw uiError("error.main.pasteTooLong"); return text; });
   const imageTarget = async (c, id, expectedNativeId) => {
     roomState.assertAvailable(id);
     const snapshot = await c.client.call('initial'), record = snapshot.sessions.find(s => s.id === id);
@@ -967,14 +1070,14 @@ async function boot() {
     return require('./local-images.cjs').saveImages(dataDir, id, files, nativeImage);
   });
   register('pasteNativeContent', async (c, id, nativeId) => {
-    const image = clipboard.readImage();
+    const image = c.background ? c.clipboardImage || nativeImage.createEmpty() : clipboard.readImage();
     if (!image.isEmpty()) {
       await imageTarget(c, id, nativeId);
       return { images: require('./local-images.cjs').saveImages(dataDir, id, [image.toPNG()], nativeImage) };
     }
     // Text keeps the original paste path, including native permission/question
     // prompts. Only importing images requires the stricter idle/working gate.
-    const text = clipboard.readText(); if (text.length > 65500) throw uiError("error.main.pasteTooLong"); return { text };
+    const text = c.background ? c.clipboardText || '' : clipboard.readText(); if (text.length > 65500) throw uiError("error.main.pasteTooLong"); return { text };
   });
   const imagesFor = c => c.imagePreviews ||= new ImagePreviews({ nativeImage,
     snapshot: async source => source?.kind === 'space-draft' ? null : roomState.apply(await c.client.call('initial')),
@@ -999,7 +1102,7 @@ async function boot() {
     } });
   register('previewImage', (c, source) => imagesFor(c).preview(source));
   register('expandImage', (c, token) => imagesFor(c).expand(token));
-  register('copyImage', (c, token) => imagesFor(c).copy(token, clipboard));
+  register('copyImage', (c, token) => imagesFor(c).copy(token, c.background ? { writeImage: image => { c.clipboardImage = image; c.clipboardText = ''; } } : clipboard));
   register('releaseImage', (c, token) => c.imagePreviews?.release(token));
   updateApplicationMenu();
   }
@@ -1021,6 +1124,7 @@ async function start() {
   }
   catch (error) {
     dsh?.stop();
+    await backgroundControl?.close(); backgroundControl = null;
     for (const c of [...windows.values()]) { c.failed = true; c.client.close(); c.win.destroy(); }
     if (!quitting && (!startupWindow || startupWindow.isDestroyed())) {
       startupWindow = createWindow(); await startupWindow.loadFile(startupFile);
@@ -1033,7 +1137,7 @@ ipcMain.handle('workspace:startup-data', event => { if (startupWindow?.webConten
 function focusOrOpen() {
   if (backgroundLaunch && !backgroundTest && process.platform === 'darwin') app.setActivationPolicy('regular');
   backgroundLaunch = false;
-  const win = startupWindow && !startupWindow.isDestroyed() ? startupWindow : windows.values().next().value?.win;
+  const win = startupWindow && !startupWindow.isDestroyed() ? startupWindow : [...windows.values()].find(c => !c.background && !c.win.isDestroyed())?.win;
   if (win) { if (!backgroundTest) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } }
   else if (!starting && !quitting) {
     if (dsh && wired) {
@@ -1059,7 +1163,7 @@ app.on('before-quit', event => {
   if (outboxBroker) {
     event.preventDefault();
     outboxClosing = true;
-    Promise.resolve().then(() => outboxBroker.close()).then(() => {
+    Promise.resolve().then(() => Promise.all([outboxBroker.close(), backgroundControl?.close()])).then(() => {
       outboxClosing = false; quitting = true; dsh?.stop(); setImmediate(() => app.quit());
     }, () => {
       outboxClosing = false; outboxUnavailable = true; outboxQuitFailed = true;

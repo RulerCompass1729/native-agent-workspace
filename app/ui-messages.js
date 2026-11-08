@@ -2,6 +2,15 @@
 (function (root) {
   const messages = {
   "zh": {
+    "background.confirm": "确认此操作",
+    "error.backgroundMessagesDisabled": "自动 agent 消息已关闭或接收者不可用；未发送。",
+    "notice.run.agentControl": "{name} 接管会话",
+    "notice.run.agentPriority": "{name} 发送了新输入",
+    "notice.run.agentQueue": "{name} 追加等待输入",
+    "notice.run.agentSteer": "{name} 追加指令",
+    "notice.run.agentTerminalAction": "{name} 在原生终端操作",
+    "notice.run.agentTerminalInput": "{name} 在原生终端输入",
+    "notice.run.agentInterrupt": "{name} 中断当前回复",
     "roomImages.receiptPending": "\u56fe\u7247\u63a5\u6536\u672a\u786e\u8ba4",
     "roomImages.cacheRetained": "\u9644\u4ef6\u5df2\u79fb\u51fa\u8349\u7a3f\uff1b\u672c\u673a\u7f13\u5b58\u6682\u672a\u6e05\u7406\uff0c\u539f\u8bb0\u5f55\u548c\u56fe\u7247\u4ecd\u4fdd\u7559\u3002",
     "roomImages.sendHint": "\u56fe\u7247\u4ec5\u53d1\u9001\u7ed9\u5f53\u524d @ \u6536\u4ef6\u4eba\uff1b\u786e\u8ba4\u539f\u751f\u56fe\u7247\u8f93\u5165\u540e\u624d\u6e05\u9664\u9644\u4ef6\u8349\u7a3f\u3002",
@@ -2215,6 +2224,15 @@
     "native.terminalUnclaimed": " \u00b7 \u7ec8\u7aef\u672a\u63a5\u901a\uff0c\u53ef\u70b9\u300c\u539f\u751f\u7ec8\u7aef\u300d\u91cd\u8bd5"
   },
   "en": {
+    "background.confirm": "Confirm this action",
+    "error.backgroundMessagesDisabled": "Automatic agent messages are disabled or the recipient is unavailable; nothing was sent.",
+    "notice.run.agentControl": "{name} took control of the session",
+    "notice.run.agentPriority": "{name} sent new input",
+    "notice.run.agentQueue": "{name} added queued input",
+    "notice.run.agentSteer": "{name} added an instruction",
+    "notice.run.agentTerminalAction": "{name} operated the native terminal",
+    "notice.run.agentTerminalInput": "{name} entered input in the native terminal",
+    "notice.run.agentInterrupt": "{name} interrupted the current reply",
     "roomImages.receiptPending": "Image reception unconfirmed",
     "roomImages.cacheRetained": "The attachment was removed from the draft. Its local cache could not be cleaned; existing records and images are kept.",
     "roomImages.sendHint": "Images go only to the current @ recipient. Attachments clear only after native image input is confirmed.",

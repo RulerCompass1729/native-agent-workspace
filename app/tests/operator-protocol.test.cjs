@@ -16,11 +16,11 @@ async function helper(t, codex = false) {
   t.after(async () => { child.stdin.end(); if (child.exitCode === null) await once(child, 'exit'); });
   return (method, params = {}) => new Promise((resolve, reject) => { const id = ++serial; const timeout = setTimeout(() => reject(Error('Helper response timeout')), 3000); pending.set(id, value => { clearTimeout(timeout); resolve(value); }); child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n'); });
 }
-test('actual helper exposes only the three approved Claude tools; Codex gets no unqualified operator tools', async t => {
+test('actual helper exposes background control and the three qualified Claude operator tools', async t => {
   for (const codex of [false, true]) {
     const call = await helper(t, codex); assert.ok((await call('initialize')).result.capabilities.tools);
     const catalog = (await call('tools/list')).result.tools.map(t => t.name);
-    assert.deepEqual(catalog, ['workspace_message', ...(codex ? [] : names)]);
+    assert.deepEqual(catalog, ['workspace_message', 'workspace_control', ...(codex ? [] : names)]);
     if (codex) { assert.ok((await call('tools/call', { name: 'workspace_sessions', arguments: {} })).error); continue; }
     const approved = await call('tools/call', { name: 'workspace_report', arguments: { request_id: 'r', dispatch_id: 'd', state: 'blocked', body: 'Exact evidence', question: null } });
     const value = JSON.parse(approved.result.content[0].text); assert.equal(value.approved, true); assert.equal(value.operator, 'workspace_report');
@@ -34,6 +34,7 @@ async function bridge() {
   const source = raw + `
 export function prepareForTest(options = {}) {
  stopped = false; observationGap = false;
+ nativeBlocks = options.nativeBlocks === true;
  rootBinding = { sessionId: 'fixture-root', socketPath: '/fixture/socket', token: 'fixture-token', lease: 'fixture-lease', observationEpoch: 'fixture-epoch' };
  activeTurn = 'fixture-turn'; rootPrompt = { id: 'fixture-prompt' };
  promptTurns.set(rootPrompt.id, { binding: rootBinding, turnId: activeTurn, ambiguous: options.ambiguous === true });
@@ -67,6 +68,28 @@ test('actual named root hook rejects child/ambiguous/wrong prompt/non-engine/gap
   assert.equal((await hook($, event, refused)).deny, 'Native permission denied'); assert.equal(saves, 1);
   const changed = async () => { mod.changeForTest(); return next(); }; changed.origin = next.origin;
   assert.ok((await hook($, event, changed)).deny); assert.equal(saves, 1);
+});
+
+test('background Claude hook preserves the actual native permission decision and exact root-bound arguments', async () => {
+  const { mod, hooks } = await bridge(), hook = hooks.get('tool.call:mcp__native_workspace__workspace_control');
+  const args = { action: 'invoke', operation_id: 'native-background', method: 'rename', arguments: ['target', '  Exact\r\n名字  '] };
+  let nativeCalls = 0, backgroundCalls = 0;
+  const next = async () => { nativeCalls++; return { text: JSON.stringify({ approved: true, background: { arguments: args.arguments, method: args.method, operation_id: args.operation_id, action: args.action } }) }; }; next.origin = { plugin: 'engine' };
+  const $ = { http: { fetch: async (url, spec) => {
+    assert.ok(url.endsWith('/background-control')); backgroundCalls++; const body = JSON.parse(spec.body);
+    assert.deepEqual(body.arguments, args); assert.equal(body.callId, 'actual-call'); assert.equal(body.turnId, 'fixture-turn');
+    return { ok: true, text: JSON.stringify({ state: 'complete', id: args.operation_id }) };
+  } } };
+  const event = { ...args, tool_use_id: 'actual-call' };
+  for (const options of [{}, { nativeBlocks: true, gap: true }, { nativeBlocks: true, ambiguous: true }, { nativeBlocks: true, wrongPrompt: true }]) {
+    mod.prepareForTest(options); assert.ok((await hook($, event, next)).deny);
+  }
+  assert.equal(nativeCalls, 0); mod.prepareForTest({ nativeBlocks: true });
+  const refused = async () => ({ deny: 'Actual native denial' }); refused.origin = next.origin;
+  assert.equal((await hook($, event, refused)).deny, 'Actual native denial'); assert.equal(backgroundCalls, 0);
+  assert.equal(JSON.parse((await hook($, event, next)).result).state, 'complete'); assert.equal(backgroundCalls, 1);
+  const moved = async () => { mod.changeForTest(); return next(); }; moved.origin = next.origin;
+  assert.ok((await hook($, event, moved)).deny); assert.equal(backgroundCalls, 1);
 });
 
 test('private synchronous endpoint validates lease/epoch and returns a report only after the real journal exists', async t => {

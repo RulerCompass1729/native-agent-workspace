@@ -1855,6 +1855,26 @@ async function setOperatorEnabled(id, enabled) {
   await api.operatorAction(id, 'enabled', enabled);
   toastMessage(enabled ? 'operator.enableNote' : 'operator.disabledNote');
 }
+function renderBackgroundControls(entry, message) {
+  const op = message.backgroundOperation, question = op?.state === 'confirmation-required' && op.confirmation;
+  const key = JSON.stringify([op, disconnected]);
+  if (key === entry.backgroundKey) return;
+  entry.backgroundKey = key;
+  entry.backgroundControls?.remove(); entry.backgroundControls = null;
+  if (question?.kind !== 'message' || !Array.isArray(question.options?.buttons)) return;
+  const controls = node('div', undefined, 'operator-controls background-controls'); entry.backgroundControls = controls; entry.actions.before(controls);
+  controls.append(node('strong', question.options.message), node('p', question.options.detail || ''));
+  question.options.buttons.forEach((label, response) => {
+    const button = node('button', label, 'small'); button.disabled = disconnected;
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try { await api.backgroundDecision(op.sessionId, op.nativeId, op.id, response); }
+      catch (error) { toast(error); }
+      finally { button.disabled = disconnected; }
+    });
+    controls.append(button);
+  });
+}
 function renderOperatorControls(entry, message, context = {}) {
   const clearCancel = () => { entry.operatorCancelWarning?.remove(); entry.operatorCancelWarning = null; entry.operatorCancelKey = ''; };
   const op = message.operator;
@@ -2650,6 +2670,13 @@ function historicalParticipantLabel(name, id) {
 }
 function roomMessageLabel(m) {
   const displayName = ui.displayText(m.name, m.uiNameMessage);
+  if (m.agentControl) {
+    const actor = m.agentControl;
+    const source = state.sessions.find(s => s.id === actor.id && s.nativeId === actor.nativeId);
+    const sender = source ? participantLabel(source, state.sessions) : historicalParticipantLabel(actor.name, actor.id);
+    const target = state.sessions.find(s => s.id === m.recipientId);
+    return m.recipientId ? `${sender} → ${target ? participantLabel(target, state.sessions) : historicalParticipantLabel('', m.recipientId)}` : sender;
+  }
   if (m.snapshotBatch) {
     const id = m.role === 'human' ? m.recipientId : m.sessionId, label = displayName || (m.role === 'human' ? uiText('reading.you') : historicalParticipantLabel('', m.sessionId));
     const actors = new Set((state.room?.messages || []).filter(row => row.snapshotBatch && row.role === m.role && row.name === m.name)

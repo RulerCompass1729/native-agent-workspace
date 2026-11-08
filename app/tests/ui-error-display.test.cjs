@@ -179,7 +179,9 @@ function serviceFixture() {
 
 function daemonFailure(error, request) {
   const source = read('daemon.cjs');
-  const line = source.split('\n').find(line => line.includes('Promise.resolve().then(() => dispatch(owner, request.method, request.args, client))'));
+  const start = source.indexOf('Promise.resolve().then(() => request.backgroundActor');
+  const end = source.indexOf('\n', source.indexOf('error => send(client,', start));
+  const line = start >= 0 && end > start && source.slice(start, end);
   assert.ok(line, 'Exercise the actual failed dispatch response, never launch a daemon');
   return new Promise(resolve => vm.runInNewContext(line, { Promise, request, owner: 'fixture-owner', client: {}, displayMessage: locale.displayMessage,
     dispatch() { throw error; }, send(_client, frame) { resolve(plain(frame)); } }));
@@ -187,7 +189,7 @@ function daemonFailure(error, request) {
 function mainFailure(handler) {
   const source = read('main.cjs'), start = source.indexOf('function register('), end = source.indexOf('async function boot()', start);
   const frame = { url: 'app://synthetic' }, sender = { id: 42, mainFrame: frame }, handlers = new Map();
-  const context = vm.createContext({ ipcMain: { handle(name, callback) { handlers.set(name, callback); } }, windows: new Map([[42, {}]]), trusted: () => true, uiLocale: locale });
+  const context = vm.createContext({ applicationHandlers: new Map(), ipcMain: { handle(name, callback) { handlers.set(name, callback); } }, windows: new Map([[42, {}]]), trusted: () => true, uiLocale: locale });
   vm.runInContext(source.slice(start, end), context);
   context.register('send', handler);
   return (...args) => handlers.get('workspace:send')({ sender, senderFrame: frame }, ...args);

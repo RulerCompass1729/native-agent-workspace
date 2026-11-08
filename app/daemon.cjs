@@ -11,6 +11,7 @@ const { readFrames, REQUEST_BYTES, encodeFrame, createWriter } = require('./serv
 const { roomId: validRoomId, isMember, membershipRevision } = require('./collaboration-spaces.cjs');
 const { displayMessage } = require('./ui-locale.js');
 const gitWorktree = require('./git-worktree.cjs');
+const background = require('./background-operation.cjs');
 
 function dispatchScopedOutbox(workspace, client, args, send) {
   return workspace.scopedOutboxRequest(client, args[0], args[1], data => send(client, { event: 'scopedOutbox', data }));
@@ -54,7 +55,7 @@ async function main() {
     if (shuttingDown) throw uiError("error.backendClosingActionNotExecuted");
     if (method === 'scopedOutbox') return dispatchScopedOutbox(workspace, client, args, send);
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [...mobileCapabilities, ...(fs.existsSync(path.join(__dirname, 'scoped-outbox-runtime.cjs')) ? ['scopedNativeOutboxV1'] : []), ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'agentAddressedHandoffs', 'agentWakeV1', require('./session-wake.cjs').PREFLIGHT, 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'conditionalMaintenanceStopV1', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [background.CAPABILITY, ...mobileCapabilities, ...(fs.existsSync(path.join(__dirname, 'scoped-outbox-runtime.cjs')) ? ['scopedNativeOutboxV1'] : []), ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'agentAddressedHandoffs', 'agentWakeV1', require('./session-wake.cjs').PREFLIGHT, 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'conditionalMaintenanceStopV1', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'mergeSnapshot': {
         if (roomId !== 'shared' || args.length !== 1) throw uiError("error.invalidSnapshotImport");
         return workspace.mergeSnapshot(args[0]);
@@ -164,7 +165,7 @@ async function main() {
         const tag = await workspace.forward(args[0], args[1], owner, args[3], roomId, args[4]);
         const current = workspace.get(args[0]);
         const receipt = args[4] && workspace.roomFor(roomId).messages.find(row => row.id === tag)?.imageReceipt;
-        return { contextChanged: current.nativeId !== nativeId || Boolean(current.nativeContextPending), ...(args[4] ? { tag, imageReceipt: receipt } : {}) };
+        return { contextChanged: current.nativeId !== nativeId || Boolean(current.nativeContextPending), ...(background.current() ? { tag } : {}), ...(args[4] ? { tag, imageReceipt: receipt } : {}) };
       }
       case 'approve': return workspace.approve(args[0], args[1], args[2], owner);
       case 'answer': return workspace.answer(args[0], args[1], args[2], owner);
@@ -197,7 +198,9 @@ async function main() {
         authenticated = true; owner = request.owner; clients.add(client); clearTimeout(authTimer); send(client, { ready: true }); return;
       }
       if (!Array.isArray(request.args) || request.args.length > (request.method === 'run' ? 7 : 5) || !Number.isInteger(request.id)) { client.destroy(); return; }
-      Promise.resolve().then(() => dispatch(owner, request.method, request.args, client)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。', uiMessage: error.message ? displayMessage(error.uiMessage) : uiError('error.main.operationIncomplete').uiMessage }));
+      Promise.resolve().then(() => request.backgroundActor
+        ? background.run(request.backgroundActor, () => dispatch(owner, request.method, request.args, client))
+        : dispatch(owner, request.method, request.args, client)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。', uiMessage: error.message ? displayMessage(error.uiMessage) : uiError('error.main.operationIncomplete').uiMessage }));
     });
     client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); workspace.scopedOutboxDisconnected(client); workspace.peerLeases.disconnected(client); if (mobileCapabilities.length) workspace.mobileDisconnected(client); if (!shuttingDown) workspace.release(owner); });
   });

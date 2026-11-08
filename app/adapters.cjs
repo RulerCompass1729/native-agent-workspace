@@ -1878,6 +1878,17 @@ class Codex extends EventEmitter {
       this.nativeRetry = null; this.publishNativeActivity();
     }
     this.eventRevision++;
+    if (['item/started', 'item/completed'].includes(message.method) && typeof p.turnId === 'string' && p.turnId &&
+        p.item?.type === 'mcpToolCall' && p.item.server === 'native_workspace' && p.item.tool === 'workspace_control' &&
+        typeof p.item.id === 'string' && p.item.id && !this.stopped) {
+      this.backgroundMcpCalls ||= new Map();
+      if (message.method === 'item/started' && p.item.status === 'inProgress' && !this.backgroundMcpCalls.has(p.item.id) && this.backgroundMcpCalls.size < 256) {
+        this.backgroundMcpCalls.set(p.item.id, { turnId: p.turnId, rpc: sourceRpc,
+          lifecycle: this.lifecycleRevision, arguments: structuredClone(p.item.arguments) });
+        this.emit('backgroundMcpProof');
+      } else if (message.method === 'item/completed' && (this.backgroundMcpCalls.has(p.item.id)
+          ? this.backgroundMcpCalls.get(p.item.id)?.turnId === p.turnId : this.backgroundMcpCalls.size < 256)) this.backgroundMcpCalls.set(p.item.id, null);
+    }
     // A retained reader can attach after turn/started. Keep only this live
     // outbox candidate; its caller must separately verify unknown turn identity
     // using content-free native metadata. Never adopt UI turn state from it.
@@ -2080,6 +2091,7 @@ class Codex extends EventEmitter {
       case 'turn/started':
         this.workspaceMcpCalls?.clear();
         this.outboxMcpCalls?.clear();
+        this.backgroundMcpCalls?.clear();
         this.emit('nativeTurnStart', { nativeId: this.record.nativeId, turnId: p.turn.id });
         this.turnId = p.turn.id; this.activeNativeItems.clear(); this.nativeWait = null; this.nativeRetry = null; this.nativeTurnFinished = false;
         this.turn(p.turn.id).liveStarted = true;
@@ -2124,6 +2136,7 @@ class Codex extends EventEmitter {
       case 'turn/completed': {
         if (p.threadId !== this.record.nativeId) break;
         for (const [id, call] of this.outboxMcpCalls || []) if (call?.turnId === p.turn.id) this.outboxMcpCalls.set(id, null);
+        for (const [id, call] of this.backgroundMcpCalls || []) if (call?.turnId === p.turn.id) this.backgroundMcpCalls.set(id, null);
         if (p.turn.id === this.turnId) { this.nativeTurnFinished = true; this.activeNativeItems.clear(); this.nativeWait = null; this.publishNativeActivity(); }
         this.textEndedTurns.add(p.turn.id);
         for (const [id, parts] of this.nativeTextParts) if (parts.turnId === p.turn.id) this.nativeTextParts.delete(id);
@@ -2704,6 +2717,7 @@ class NativeHost {
       const mcpConfig = [
         ['command', process.execPath], ['args', mcpArgs], ['env.ELECTRON_RUN_AS_NODE', '1'],
         ['env.NAW_MESSAGE_SOCKET', this.hookSocket], ['env.NAW_MESSAGE_TOKEN', this.codexMessageToken],
+        ...(process.env.NAW_OUTBOX_DESCRIPTOR ? [['env.NAW_CONTROL_DESCRIPTOR', process.env.NAW_OUTBOX_DESCRIPTOR]] : []),
       ].flatMap(([key, value]) => ['-c', `mcp_servers.native_workspace.${key}=${JSON.stringify(value)}`]);
       const outboxConfig = process.env.NAW_OUTBOX_DESCRIPTOR ? codexOutboxMcpArgs(process.env.NAW_OUTBOX_DESCRIPTOR) : [];
       child = this.codexProcess = spawn(this.codexBinary, ['-c', 'analytics.enabled=false', ...mcpConfig, ...codexComputerUseMcpArgs(), ...outboxConfig, 'app-server', '--listen', `unix://${this.codexSocket}`], { stdio: ['ignore', 'ignore', 'pipe'], env: nativeEnvironment() });

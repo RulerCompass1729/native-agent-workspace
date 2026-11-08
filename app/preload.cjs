@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('__DSH_LOCALE__', Object.freeze({
   onChange() {},
 }));
 const api = {};
+api.backgroundDecision = async (...args) => { const result = await ipcRenderer.invoke('workspace:backgroundDecision', ...args); if (!result.ok) throw apiFailure(result); return result.value; };
 function apiFailure(result) {
   const message = result.error;
   // Sandboxed preload cannot load local helpers. Main already validates this

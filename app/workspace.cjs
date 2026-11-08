@@ -1,3 +1,4 @@
+const backgroundOperation = require('./background-operation.cjs');
 const { copySnapshotImages } = require('./native-images.cjs');
 const { EventEmitter } = require('node:events');
 const { randomUUID } = require('node:crypto');
@@ -956,7 +957,7 @@ class Workspace extends EventEmitter {
     const s = this.get(id);
     if (!['chat', 'terminal'].includes(view)) throw uiError("error.workspace.unknownView");
     if (s.owner !== owner || s.view !== view) {
-      if (s.owner !== owner) { if (s.owner !== null) wake.human(this, id); if (roomId === undefined) this.pause('真人接管会话', undefined, false, uiActivity('notice.run.humanControl')[1]); else { this.pauseParticipant(id, '真人接管会话', false, uiActivity('notice.run.humanControl')[1]); this.pauseRoom(roomId, '真人接管会话', uiActivity('notice.run.humanControl')[1]); } s.controlRevision++; }
+      if (s.owner !== owner) { if (s.owner !== null) if (!backgroundOperation.current()) wake.human(this, id); if (roomId === undefined) this.pause('真人接管会话', undefined, false, uiActivity('notice.run.humanControl')[1]); else { this.pauseParticipant(id, '真人接管会话', false, uiActivity('notice.run.humanControl')[1]); this.pauseRoom(roomId, '真人接管会话', uiActivity('notice.run.humanControl')[1]); } s.controlRevision++; }
       // Viewing the same session is not a new instruction. Real terminal input
       // still invalidates queued work; taking control from another view does too.
       s.owner = owner; s.view = view; this.changed();
@@ -1022,7 +1023,8 @@ class Workspace extends EventEmitter {
     }
   }
   async send(id, text, owner, route = null, forward = null, sourceMessage = null, recovery = null, wakeTicket = null, mobile = null, images = null) {
-    const originalText = text; text = images && typeof text === 'string' && text.length <= 16000 && !text.trim() ? '' : cleanText(text); if (wakeTicket || mobile) text = originalText;
+    const backgroundValid = backgroundOperation.inputGuard(this, [id], backgroundOperation.current() || route?.agentControl);
+    const originalText = text; text = images && typeof text === 'string' && text.length <= 16000 && !text.trim() ? '' : cleanText(text); if (wakeTicket || mobile || backgroundOperation.current()) text = originalText;
     const mobileSession = mobile && require('./mobile-session.cjs');
     if (mobile && (!mobileSession.valid(mobile) || route || forward || sourceMessage || recovery || wakeTicket)) throw uiError("error.workspace.mobileDelegationUnconfirmed");
     const s = this.get(id); const runtime = this.runtime(id);
@@ -1040,7 +1042,7 @@ class Workspace extends EventEmitter {
       if (s.owner !== owner) throw uiError("error.workspace.takeControlFirst");
       s.peerRevision = (s.peerRevision || 0) + 1;
       if (recovery) this.pauseParticipant(id, `${recovery.reason === 'routing' ? '路由发现超时' : '模型满载'}自动继续；原协作交接保持暂停`, true, uiActivity(recovery.reason === 'routing' ? 'notice.run.automaticRouting' : 'notice.run.automaticCapacity')[1]);
-      else { wake.human(this, id); if (forward) { this.pauseParticipant(id, '真人输入优先', false, uiActivity('notice.run.humanPriority')[1]); this.pauseRoom(forward.roomId || 'shared', '真人输入优先', uiActivity('notice.run.humanPriority')[1]); } else this.pause('真人输入优先', undefined, false, uiActivity('notice.run.humanPriority')[1]); }
+      else { if (!backgroundOperation.current()) wake.human(this, id); if (forward) { this.pauseParticipant(id, '真人输入优先', false, uiActivity('notice.run.humanPriority')[1]); this.pauseRoom(forward.roomId || 'shared', '真人输入优先', uiActivity('notice.run.humanPriority')[1]); } else this.pause('真人输入优先', undefined, false, uiActivity('notice.run.humanPriority')[1]); }
     }
     const failedTurn = !route && s.state === 'error' ? runtime.failedTurnInputId : null;
     if ((s.state !== 'idle' && !failedTurn && !(recovery && s.state === 'error')) || s.pendingTag || runtime.pendingQueue || s.approval || runtime.nativeInputRequired) throw uiError("error.workspace.sessionNotReady");
@@ -1049,7 +1051,7 @@ class Workspace extends EventEmitter {
     const control = s.controlRevision; const member = spaces.membershipRevision(s, roomId); const connection = s.connectionRevision;
     const guard = () => {
       this.expireRun(route);
-      return (!mobile || mobileSession.valid(mobile)) && (!wakeTicket || wakeTicket.valid(wakeTicket.tag)) && (!recovery || this.capacityValid(s, recovery)) && !runtime.nativeInputRequired && s.state !== 'ended' && s.controlRevision === control &&
+      return backgroundValid() && (!mobile || mobileSession.valid(mobile)) && (!wakeTicket || wakeTicket.valid(wakeTicket.tag)) && (!recovery || this.capacityValid(s, recovery)) && !runtime.nativeInputRequired && s.state !== 'ended' && s.controlRevision === control &&
         (!failedTurn || runtime.submission?.pending?.authorized || runtime.pending?.accepted || runtime.failedTurnInputMatches(failedTurn)) &&
         (!(route || forward) || (spaces.isMember(s, roomId) && spaces.membershipRevision(s, roomId) === member)) && (!route || (this.routeValid(route))) && (roomId === 'shared' || !this.storageWarning);
     };
@@ -1059,12 +1061,12 @@ class Workspace extends EventEmitter {
     if (recovery) recovery.tag = tag;
     if (wakeTicket) wakeTicket.tag = tag;
     const draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
-    const clearedDraft = !mobile && !wakeTicket && !route && !forward && typeof draft === 'string' && draft.trim() === text;
-    s.messages.push({ id: tag, role: 'user', text, time: Date.now(), ...(mobile ? { origin: 'human-mobile' } : wakeTicket ? { name: `来自 ${wakeTicket.intent.senderName}`, uiNameMessage: displayMessage({ version: 1, key: 'notice.wake.from', params: { name: wakeTicket.intent.senderName } }, 'notice.') || undefined, origin: 'agent-wake', wakeSource: { id: wakeTicket.intent.id, senderId: wakeTicket.intent.senderId, nativeId: wakeTicket.intent.nativeId, turnId: wakeTicket.intent.turnId, time: wakeTicket.intent.time } } : recovery ? { name: 'NAW', origin: 'capacity-recovery' } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native' });
+    const clearedDraft = !backgroundOperation.current() && !mobile && !wakeTicket && !route && !forward && typeof draft === 'string' && draft.trim() === text;
+    s.messages.push({ id: tag, role: 'user', text, time: Date.now(), ...(mobile ? { origin: 'human-mobile' } : wakeTicket ? { name: `来自 ${wakeTicket.intent.senderName}`, uiNameMessage: displayMessage({ version: 1, key: 'notice.wake.from', params: { name: wakeTicket.intent.senderName } }, 'notice.') || undefined, origin: 'agent-wake', wakeSource: { id: wakeTicket.intent.id, senderId: wakeTicket.intent.senderId, nativeId: wakeTicket.intent.nativeId, turnId: wakeTicket.intent.turnId, time: wakeTicket.intent.time } } : recovery ? { name: 'NAW', origin: 'capacity-recovery' } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native', ...backgroundOperation.message() });
     if (images) s.messages.at(-1).spaceUploads = images.refs.map(ref => ({ ...ref }));
     if (forward) {
       this.forwards.set(tag, { ...forward, roomId, control });
-      sourceMessage = { id: tag, role: 'human', recipientId: s.id, name: `你 → ${s.name}`, uiNameMessage: youToName(s.name), text, status: 'awaiting-native', time: Date.now(), deliveryTracked: true, ...(forward.replyTo ? { replyTo: forward.replyTo } : {}) };
+      sourceMessage = { id: tag, role: 'human', recipientId: s.id, name: `你 → ${s.name}`, uiNameMessage: backgroundOperation.current() ? undefined : youToName(s.name), ...backgroundOperation.message(s.name), text, status: 'awaiting-native', time: Date.now(), deliveryTracked: true, ...(forward.replyTo ? { replyTo: forward.replyTo } : {}) };
       if (images) Object.assign(sourceMessage, { images: images.refs.map(ref => ({ ...ref })), imageDraftVersion: images.version,
         imageReceipt: { status: 'awaiting-native', tag, nativeId: s.nativeId, recipientId: s.id } });
       room.messages.push(sourceMessage);
@@ -1112,7 +1114,8 @@ class Workspace extends EventEmitter {
     return tag;
   }
   async queue(id, text, owner, shared = null) {
-    text = cleanText(text);
+    const backgroundValid = backgroundOperation.inputGuard(this, [id]);
+    const originalText = text; text = cleanText(text); if (backgroundOperation.current()) text = originalText;
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw uiError("error.nativeCommandUseTerminal");
     const s = this.get(id), runtime = this.runtime(id);
     // Public space input does not take over the private composer or terminal.
@@ -1127,16 +1130,16 @@ class Workspace extends EventEmitter {
     // private input still revokes its output scope immediately.
     if (!shared) s.controlRevision++;
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
-    const valid = () => this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending &&
+    const valid = () => backgroundValid() && this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending &&
       s.controlRevision === control && s.connectionRevision === connection && !s.approval && !['ended', 'recoverable', 'error', 'disconnected'].includes(s.state) &&
       (!shared || (spaces.isMember(s, roomId) && spaces.membershipRevision(s, roomId) === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed)) && (roomId === 'shared' || !this.storageWarning);
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
     // Like a native TUI queue, the recorded message leaves the composer at once.
-    const clearedDraft = !shared && typeof draft === 'string' && draft.trim() === text;
+    const clearedDraft = !backgroundOperation.current() && !shared && typeof draft === 'string' && draft.trim() === text;
     runtime.pendingQueue = tag;
-    const message = { id: tag, role: 'user', text, origin: 'human', status: 'awaiting-native', inputMode: 'queue', time: Date.now() };
+    const message = { id: tag, role: 'user', text, origin: 'human', ...backgroundOperation.message(), status: 'awaiting-native', inputMode: 'queue', time: Date.now() };
     if (shared) {
-      const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, uiNameMessage: youToName(s.name), text, status: 'awaiting-native', inputMode: 'queue', time: Date.now(), deliveryTracked: true,
+      const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, uiNameMessage: backgroundOperation.current() ? undefined : youToName(s.name), ...backgroundOperation.message(s.name), text, status: 'awaiting-native', inputMode: 'queue', time: Date.now(), deliveryTracked: true,
         ...(replyTo ? { replyTo } : {}), deliveries: [{ id: tag, recipientId: id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() }] };
       room.messages.push(source); this.forwards.set(tag, { roomId, member, control, replyTo });
       // No running private turn is adopted. Only the next native prompt's
@@ -1170,7 +1173,8 @@ class Workspace extends EventEmitter {
     } finally { if (runtime.pendingQueue === tag) runtime.pendingQueue = null; this.changed(); }
   }
   async steer(id, text, owner, expectedTurnId, shared = null) {
-    text = cleanText(text);
+    const backgroundValid = backgroundOperation.inputGuard(this, [id]);
+    const originalText = text; text = cleanText(text); if (backgroundOperation.current()) text = originalText;
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw uiError("error.nativeCommandUseTerminal");
     const s = this.get(id), runtime = this.runtime(id);
     // Public space input does not take over the private composer or terminal.
@@ -1182,16 +1186,16 @@ class Workspace extends EventEmitter {
       !runtime.steerAvailable || runtime.pendingSteer || typeof expectedTurnId !== 'string' || !expectedTurnId || runtime.turnId !== expectedTurnId) throw uiError("error.workspace.nativeTurnOrControlChanged");
     if (shared) { this.pauseParticipant(id, '真人追加指令', false, uiActivity('notice.run.humanSteer')[1]); this.pauseRoom(roomId, '真人追加指令', uiActivity('notice.run.humanSteer')[1]); } else this.pause('真人追加指令', undefined, false, uiActivity('notice.run.humanSteer')[1]); s.controlRevision++;
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
-    const valid = () => this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending && s.controlRevision === control &&
+    const valid = () => backgroundValid() && this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending && s.controlRevision === control &&
       s.connectionRevision === connection && !['ended', 'recoverable', 'error', 'disconnected', 'approval'].includes(s.state) && !s.approval && runtime.turnId === expectedTurnId &&
       (!shared || (spaces.isMember(s, roomId) && spaces.membershipRevision(s, roomId) === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed)) && (roomId === 'shared' || !this.storageWarning);
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
-    const message = { id: tag, role: 'user', text, origin: 'human', status: 'awaiting-native', inputMode: 'steer', turnId: expectedTurnId, time: Date.now() };
+    const message = { id: tag, role: 'user', text, origin: 'human', ...backgroundOperation.message(), status: 'awaiting-native', inputMode: 'steer', turnId: expectedTurnId, time: Date.now() };
     let accepted = false;
     try {
       runtime.pendingSteer = tag;
       if (shared) {
-        const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, uiNameMessage: youToName(s.name), text, status: 'awaiting-native', inputMode: 'steer', time: Date.now(), deliveryTracked: true,
+        const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, uiNameMessage: backgroundOperation.current() ? undefined : youToName(s.name), ...backgroundOperation.message(s.name), text, status: 'awaiting-native', inputMode: 'steer', time: Date.now(), deliveryTracked: true,
           ...(replyTo ? { replyTo } : {}), deliveries: [{ id: tag, recipientId: id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() }] };
         room.messages.push(source); this.forwards.set(tag, { roomId, member, control, replyTo });
         this.sharedReplies.authorize(s, runtime, tag, source, null, roomId);
@@ -1201,7 +1205,7 @@ class Workspace extends EventEmitter {
       await runtime.steer(text, tag, expectedTurnId, valid, Boolean(shared));
       accepted = true;
       message.status = 'submitted'; this.deliveryStatus(tag, 'submitted');
-      if (!shared && s.controlRevision === control && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
+      if (!backgroundOperation.current() && !shared && s.controlRevision === control && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
       return tag;
     } catch (error) {
       // Do not relabel ongoing output as cancelled or retry this input.
@@ -1243,6 +1247,7 @@ class Workspace extends EventEmitter {
     return snapshot;
   }
   input(id, data, owner) {
+    backgroundOperation.inputGuard(this, [id]);
     const s = this.get(id);
     if (typeof data !== 'string' || data.length > 65536) throw uiError("error.workspace.invalidTerminalInput");
     if (s.owner !== owner) throw uiError("error.workspace.controlledByAnotherWindow");
@@ -1251,7 +1256,7 @@ class Workspace extends EventEmitter {
     // Terminal-generated device/cursor replies are not human instructions.
     const response = isTerminalResponse(data);
     if (!response && s.view !== 'terminal') throw uiError("error.workspace.useNativeTerminal");
-    if (!response) { wake.human(this, id); this.cancelCapacity(id); this.pause('真人在原生终端操作', undefined, false, uiActivity('notice.run.humanTerminalAction')[1]); s.controlRevision++; s.terminalInputPending = true; }
+    if (!response) { if (!backgroundOperation.current()) wake.human(this, id); this.cancelCapacity(id); this.pause('真人在原生终端操作', undefined, false, uiActivity('notice.run.humanTerminalAction')[1]); s.controlRevision++; s.terminalInputPending = true; }
     const t = runtime.terminal; if (!t?.alive) throw uiError("error.workspace.terminalNotConnected"); t.input(data);
   }
   resize(id, owner, cols, rows) { const s = this.get(id); if (s.owner === owner && Number.isInteger(cols) && Number.isInteger(rows)) this.runtime(id).terminal?.resize(cols, rows); }
@@ -1287,6 +1292,7 @@ class Workspace extends EventEmitter {
   }
   pause(reason = '已暂停交接', run, automatic = false, uiMessage) {
     if (arguments[0] === undefined) uiMessage = uiActivity('notice.run.paused')[1];
+    [reason, uiMessage] = backgroundOperation.activity(reason, uiMessage);
     uiMessage = displayMessage(uiMessage, 'notice.', reason) || displayMessage(uiMessage, 'error.', reason);
     if (!automatic) this.goalContinuationCancel(run ? run.roomId || 'shared' : undefined);
     if (run?.peerLease) { this.peerLeases?.pause(run.client, run.id, reason, uiMessage); return; }
@@ -1298,12 +1304,14 @@ class Workspace extends EventEmitter {
   }
   pauseRoom(roomId, reason = '这个空间的后续交接已暂停', uiMessage) {
     if (arguments[1] === undefined) uiMessage = uiActivity('notice.run.spacePaused')[1];
+    [reason, uiMessage] = backgroundOperation.activity(reason, uiMessage);
     this.goalContinuationCancel(roomId);
     this.peerLeases?.revoke(reason, undefined, roomId, uiMessage);
     const room = this.rooms.get(roomId);
     if (room?.run) this.pause(reason, room.run, false, uiMessage);
   }
   pauseParticipant(id, reason, automatic = false, uiMessage) {
+    [reason, uiMessage] = backgroundOperation.activity(reason, uiMessage);
     if (!automatic) { this.goalContinuationCancel(undefined, id); wake.cancelParticipant(this, id, reason, uiMessage); }
     this.peerLeases?.revoke(reason, id, undefined, uiMessage);
     // Native activity in another independent session does not revoke this
@@ -1329,6 +1337,7 @@ class Workspace extends EventEmitter {
     else this.pause(reason, run, false, uiMessage);
   }
   async startRun(ids, goal, maxSteps, mode = 'strict', labels = {}, _contexts, replyTo, roomId = 'shared') {
+    backgroundOperation.inputGuard(this, Array.isArray(ids) ? ids : []);
     const room = this.roomFor(roomId);
     if ([...this.rooms.values()].some(r => r.run?.pausePending || r.run?.pauseUnconfirmed)) throw uiError("error.client.revokeBeforeNewCollaboration");
     replyTo = require('./room-threads.js').replyReference(replyTo);
@@ -1346,7 +1355,8 @@ class Workspace extends EventEmitter {
       return [id, `${name} · ${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${id.slice(0, 6)}`];
     }));
     const run = { id: randomUUID(), roomId, ids: [...ids], names, goal, mode, maxSteps, steps: 0, status: 'running', reason: '', startedAt: Date.now(), deadline: Date.now() + 10 * 60 * 1000, awaiting: null, replies: {} };
-    const sourceMessage = { id: randomUUID(), role: 'human', name: '你', uiNameMessage: uiNotice('notice.name.you').uiMessage, text: goal, time: Date.now(), runId: run.id, deliveryTracked: true, ...(replyTo ? { replyTo } : {}) };
+    if (backgroundOperation.current()) run.agentControl = { ...backgroundOperation.current() };
+    const sourceMessage = { id: randomUUID(), role: 'human', name: '你', uiNameMessage: backgroundOperation.current() ? undefined : uiNotice('notice.name.you').uiMessage, ...backgroundOperation.message(), text: goal, time: Date.now(), runId: run.id, deliveryTracked: true, ...(replyTo ? { replyTo } : {}) };
     run.sourceId = sourceMessage.id;
     room.run = run; room.messages.push(sourceMessage); this.changed();
     this.runEvent(mode === 'directed' ? `已授权成员选择接收者，最多 ${maxSteps} 次回复、10 分钟；没有定向调用就结束，不广播或轮询。` : mode === 'replies' ? `已授权依次转交本次回复，最多 ${maxSteps} 次、10 分钟；未知的原生子任务不视为结束。` : '核实原生工作状态后交接。', roomId, uiActivity(mode === 'directed' ? 'notice.run.authorizedDirected' : mode === 'replies' ? 'notice.run.authorizedReplies' : 'notice.run.authorizedStrict', mode === 'directed' || mode === 'replies' ? { maxSteps } : undefined)[1]);

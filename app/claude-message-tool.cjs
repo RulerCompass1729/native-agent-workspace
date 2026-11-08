@@ -4,6 +4,7 @@
 const net = require('node:net');
 const { tool } = require('./addressed-handoffs.cjs');
 const operator = require('./operator-control.cjs');
+const background = require('./background-control.cjs');
 function metadataIdentity(meta) {
   let turn = meta?.['x-codex-turn-metadata'];
   if (typeof turn === 'string') { try { turn = JSON.parse(turn); } catch { turn = null; } }
@@ -40,9 +41,15 @@ async function main() {
   transport.onRequest(async (method, params) => {
     if (method === 'initialize') return { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'workspace', version: '1' } };
     if (method === 'ping') return {};
-    if (method === 'tools/list') return { tools: [tool, ...(process.argv.includes('--codex') ? [] : operator.tools)].map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,
-      annotations: { destructiveHint: false, openWorldHint: false, readOnlyHint: t.name === 'workspace_sessions' } })) };
+    if (method === 'tools/list') return { tools: [tool, background.tool, ...(process.argv.includes('--codex') ? [] : operator.tools)].map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,
+      annotations: t.annotations || { destructiveHint: false, openWorldHint: false, readOnlyHint: t.name === 'workspace_sessions' } })) };
     if (method !== 'tools/call') throw Error('Unsupported workspace tool request');
+    if (params.name === background.tool.name) {
+      const args = background.validate(params.arguments);
+      if (!process.argv.includes('--codex')) return { content: [{ type: 'text', text: JSON.stringify({ approved: true, background: args }) }] };
+      const result = await require('./computer-use-outbox-tool.cjs').requestOutbox(process.env.NAW_CONTROL_DESCRIPTOR, metadataIdentity(params._meta), args, undefined, true);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: !['complete', 'received', 'awaiting-native'].includes(result.state) };
+    }
     if (!process.argv.includes('--codex') && operator.names.includes(params.name)) {
       const args = operator.validate(params.name, params.arguments);
       // This is only native permission approval. The root-bound bridge must
