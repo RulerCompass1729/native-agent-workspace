@@ -123,7 +123,9 @@ async function run() {
   // The section's content: from its top to the bottom of 新建空间 (the last thing shown), plus the body's padding.
   const fit = await page.evaluate(() => { const g = document.querySelector('#workspace-group'), body = g.querySelector('.sidebar-group-body'), last = document.querySelector('#new-space');
     return { section: Math.round(g.getBoundingClientRect().height), content: Math.round(last.getBoundingClientRect().bottom - g.getBoundingClientRect().top + parseFloat(getComputedStyle(body).paddingBottom || 0)), list: Math.round(document.querySelector('#sessions-group').getBoundingClientRect().height) }; });
-  measurements.push({ groupedFit: fit }); assert.ok(Math.abs(fit.section - fit.content) <= 8, `协作空间 takes only its content's height (${JSON.stringify(fit)})`);
+  // Since 3751738 the grouped view hides 协作空间 entirely and moves 新建空间 into 会话 (全部空间 is at the top), so it takes no height.
+  measurements.push({ groupedFit: fit }); assert.equal(fit.section, 0, `协作空间 takes no height in the grouped view (${JSON.stringify(fit)})`);
+  assert.equal(await page.locator('#sessions-group #new-space').count(), 1, '新建空间 is in 会话');
   assert.ok(fit.list > flatList + 40, `The session list gets the freed height (${flatList} → ${fit.list})`);
   assert.equal(await page.locator('#session-list [data-session-group="independent"]').count(), 1, 'Solo one is independent');
   const longGroup = page.locator(`#session-list [data-session-group="${long}"]`);

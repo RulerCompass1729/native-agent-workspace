@@ -4,6 +4,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const assert = require('node:assert/strict'), { randomUUID, createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process'), { once } = require('node:events');
 const scratch = require('./fixtures/test-scratch.cjs');
+const { testLanguage } = require('./fixtures/test-language.cjs');
 const { fork } = scratch.childProcess, { _electron } = scratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), evidence = process.env.NAW_EVIDENCE_DIR;
 if (evidence) {
@@ -57,7 +58,10 @@ async function run() {
   const messages = [{ id: 'old-reply', role: 'assistant', text: 'Existing recorded response.', time: first }, { id: 'local-cache-gap', role: 'system', kind: 'gap', text: 'Synthetic cache gap.', time: later }, progress];
   await project(a, { messages }); await project(b, { createdAt: first, lastActivityAt: 1e20, messages: [{ id: 'unknown', role: 'assistant', text: 'No timestamp.', time: null }, progress] });
   await project(c, { createdAt: first, lastActivityAt: reported, messages: [{ id: 'newer-message', role: 'assistant', text: 'Ignored when backend activity exists.', time: reported + 3600000 }] });
-  await launch(); const display = value => page.evaluate(n => new Date(n).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), value);
+  // Recorded times are shown in the interface language, not the system's (abb6759, renderer.js sessionTime). The test
+  // pins that language (test-language.cjs); with 'system' it follows the system, like the page's default.
+  const shownLanguage = testLanguage() === 'system' ? [] : testLanguage();
+  await launch(); const display = value => page.evaluate(([n, language]) => new Date(n).toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit' }), [value, shownLanguage]);
   const firstText = await display(first), laterText = await display(later), reportedText = await display(reported);
   await until(async () => (await status(a).innerText()).includes('推算 ' + firstText), 'Estimated recorded time visible');
   assert.ok((await status(b).innerText()).includes('时间未知')); assert.ok((await status(c).innerText()).includes(reportedText)); assert.ok(!(await status(c).innerText()).includes('推算'));
