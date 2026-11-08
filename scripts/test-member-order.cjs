@@ -29,6 +29,9 @@ const checks = [], errors = [], measurements = [];
 let app, page, sequence = 0, failure = null;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label) { for (let i = 0; i < 200; i++) { if (await fn()) return; await delay(50); } throw Error(label); }
+// A new page (another window, a reload or a relaunch) reads each terminal it shows once, after it renders (census③).
+// Wait until those read-only loads have landed, so the next baseline counts only what the steps after it do.
+async function settledStats() { const counts = s => JSON.stringify([s.stats, s.overviewCalls]); let last = await fixture('stats'), same = 0; for (let i = 0; i < 40 && same < 3; i++) { await delay(250); const now = await fixture('stats'); same = counts(now) === counts(last) ? same + 1 : 0; last = now; } return last; }
 function fixture(method, target, value) {
   const id = ++sequence;
   return new Promise((resolve, reject) => {
@@ -191,7 +194,10 @@ async function run() {
   measurements.push({name:'wrapped-drop-real-ipc',trace:await app.evaluate(()=>globalThis.orderIpcTrace)});
   await name(d).focus();await name(d).press('Alt+ArrowDown');await expectOrder(page,[b,c,a,d]);
   await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setContentSize(1240,850));
+  assert.deepEqual((await fixture('stats')).overviewCalls,initialCalls.overviewCalls,'Reordering in one window has no native/session or membership actions');
   const windowPromise=app.waitForEvent('window'); await page.evaluate(()=>workspace.newWindow()); const other=await windowPromise; other.setDefaultTimeout(10000); await other.locator('#room-nav').click(); await expectOrder(other,[b,c,a,d]);
+  // The second window's first display reads each member's terminal once; count reordering from here.
+  const windowCalls = await settledStats();
   async function watchMovingMember(target,id) {
     const r=target.locator(`.collaboration-member-reader[data-member-id="${id}"] .messages`),n=target.locator(`.collaboration-member-status[data-member-id="${id}"] .collaboration-member-name`);
     await n.focus();await r.hover();await target.mouse.wheel(0,-160);await delay(120);
@@ -211,7 +217,9 @@ async function run() {
   await capture('03d-observed-member-moved-earlier');
   await name(a).press('Alt+ArrowDown');await expectOrder(page,[b,c,a,d]);await expectOrder(other,[b,c,a,d]);
   await name(a).press('Alt+ArrowDown');await expectOrder(page,[b,c,d,a]);await expectOrder(other,[b,c,d,a]);
-  const finalCalls=await fixture('stats'); assert.deepEqual(finalCalls.overviewCalls,initialCalls.overviewCalls,'Presentation reorder has no native/session or membership actions');
+  const finalCalls=await fixture('stats'); assert.deepEqual(finalCalls.overviewCalls,windowCalls.overviewCalls,'Presentation reorder has no native/session or membership actions');
+  const { terminalSnapshot: _readsSince, ...writesSince } = finalCalls.overviewCalls, { terminalSnapshot: _readsBefore, ...writesBefore } = initialCalls.overviewCalls;
+  assert.deepEqual(writesSince, writesBefore, 'No claim, terminal, input, send or other native action, including when the second window opened');
   assert.equal(finalCalls.stats.sends,0); assert.equal((await snapshot()).diagnostics.dispatches,0); assert.deepEqual(errors,[]);
   await other.close(); await app.close(); await launch(); overview=page.locator('#collaboration-overview'); await page.locator('#room-nav').click(); await expectOrder(page,[b,c,d,a]);
   assert.deepEqual(identity(await snapshot()),original); assert.equal(await page.locator('#shared-input').inputValue(),shared); assert.equal(await page.locator('#recipient').inputValue(),recipient);

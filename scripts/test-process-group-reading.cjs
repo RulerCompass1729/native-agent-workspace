@@ -40,6 +40,9 @@ function fixture(method, target, value) {
   });
 }
 async function until(fn, label) { for (let i = 0; i < 160; i++) { if (await fn()) return; await delay(50); } throw Error(label); }
+// A new page (another window, a reload or a relaunch) reads each terminal it shows once, after it renders (census③).
+// Wait until those read-only loads have landed, so the next baseline counts only what the steps after it do.
+async function settledStats() { const counts = s => JSON.stringify([s.stats, s.overviewCalls]); let last = await fixture('stats'), same = 0; for (let i = 0; i < 40 && same < 3; i++) { await delay(250); const now = await fixture('stats'); same = counts(now) === counts(last) ? same + 1 : 0; last = now; } return last; }
 const snapshot = () => page.evaluate(() => workspace.initial());
 const check = text => { checks.push(text); console.log('PASS:', text); };
 const identity = state => state.sessions.map(s => [s.id, s.nativeId, s.pid, s.owner, s.controlRevision, s.model]).sort();
@@ -79,6 +82,8 @@ async function run() {
   await until(async () => (await snapshot()).sessions.find(s => s.id === b).liveDraft === 'UNSENT_PRIVATE_PROCESS_DRAFT', 'Private draft saved');
   await page.locator('#room-nav').click(); await chooseRecipient(page, b); await fillRoomMessage(page, 'UNSENT_SHARED_PROCESS_DRAFT');
   const initial = await snapshot(), nativeIdentity = identity(initial), baseline = await fixture('stats');
+  let callsBaseline = baseline;
+  const sameCalls = async () => assert.deepEqual((await fixture('stats')).overviewCalls, callsBaseline.overviewCalls, 'All reading/disclosure/search/copy actions preserve ownership and native task calls');
   const keyA = `collaboration:shared:${a}`, keyB = `collaboration:shared:${b}`;
   await fixture('processTurn', a, { turnId: 'claude-turn-one', state: 'working' });
   for (const id of ['tool:bash-one', 'tool:bash-two']) await emit(a, id, { kind: 'tool', title: 'Bash', turnId: 'claude-turn-one', status: 'complete', input: `{"command":"echo ${id}"}`, text: `ORIGINAL_${id}` });
@@ -137,7 +142,8 @@ async function run() {
   await emit(b, 'turn:codex-turn-two', { kind: 'turn', turnId: 'codex-turn-two', status: 'complete', text: '' });
   await until(() => detail(gb).evaluate(el => !el.open), 'Manual group close survives output and completion');
   assert.equal(await detail(second).evaluate(el => el.open), false);
-  const beforeReload = identity(await snapshot()); await app.close(); app = null; await launch();
+  await sameCalls();
+  const beforeReload = identity(await snapshot()); await app.close(); app = null; await launch(); callsBaseline = await settledStats();
   gb = await group(b, 'summary:public'); await gb.waitFor(); second = await row(b, 'tool:second');
   assert.equal(await detail(gb).evaluate(el => el.open), false); assert.equal(await detail(second).evaluate(el => el.open), false);
   assert.deepEqual(identity(await snapshot()), beforeReload);
@@ -158,7 +164,7 @@ async function run() {
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   let saved = (await snapshot()).viewState.readingPositions[focused].folds;
   assert.equal(saved['process:' + await nativeId(b, 'summary:public')], false); assert.equal(saved[await nativeId(b, 'tool:second')], false);
-  await summary(second).click(); await summary(gb).click(); await page.reload(); await page.locator('#messages').waitFor();
+  await summary(second).click(); await summary(gb).click(); await sameCalls(); await page.reload(); await page.locator('#messages').waitFor(); callsBaseline = await settledStats();
   gb = await group(b, 'summary:public', page.locator('#messages')); await until(() => detail(gb).evaluate(el => !el.open), 'Manual close after search does not reopen on reload');
   check('Search reveals and focuses the exact original behind both disclosures without changing saved choices; manual reclose survives rerender/reload');
 
@@ -180,6 +186,8 @@ async function run() {
   await capture('03-shared-source-context-and-boundaries');
   check('Shared provenance/answer/filter boundaries stay separate; context navigation synchronously reveals original rows without overwriting a saved group fold');
   await page.locator('#room-overview').click();
+  // The reloaded page opened elsewhere, so this is where it first shows the two member terminals: one read each.
+  { const shown = await settledStats(); assert.equal(shown.overviewCalls.terminalSnapshot - callsBaseline.overviewCalls.terminalSnapshot, 2); callsBaseline = shown; }
   const uncertainTurn = 'codex-turn-uncertain';
   await fixture('processTurn', b, { turnId: uncertainTurn, state: 'working' });
   await emit(b, 'tool:boundary-edit', { kind: 'tool', toolKind: 'fileChange', title: 'Edit', turnId: uncertainTurn, status: 'complete', text: 'ORIGINAL_BOUNDARY_EDIT' });
@@ -202,7 +210,9 @@ async function run() {
   check('An original unconfirmed T29 exploration stays outside adjacent folded groups with its exact status and original text visible');
   assert.deepEqual(errors, []); assert.deepEqual(identity(await snapshot()), nativeIdentity);
   const final = await fixture('stats'); assert.equal(final.stats.inputs, 0); assert.equal(final.stats.sends, 0);
-  assert.deepEqual(final.overviewCalls, baseline.overviewCalls, 'All reading/disclosure/search/copy actions preserve ownership and native task calls');
+  assert.deepEqual(final.overviewCalls, callsBaseline.overviewCalls, 'All reading/disclosure/search/copy actions preserve ownership and native task calls');
+  const { terminalSnapshot: _readsSince, ...writesSince } = final.overviewCalls, { terminalSnapshot: _readsBefore, ...writesBefore } = baseline.overviewCalls;
+  assert.deepEqual(writesSince, writesBefore, 'No claim, terminal, input, send or other native action across the relaunch and reload');
   const result = { checks, errors, nativeStats: final.stats, workspaceCalls: final.overviewCalls, productModelCalls: 0, realProviderProcesses: 0, limits: 'Synthetic native transport; Claude thinking has no body here. No physical clipboard/IME/screenreader, installed or new native compatibility certification.' };
   fs.writeFileSync(path.join(profile, 'process-groups-result.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result, null, 2));
 }

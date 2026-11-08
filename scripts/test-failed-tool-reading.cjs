@@ -43,6 +43,9 @@ function fixture(method, target, value) {
   });
 }
 async function until(fn, label) { for (let i = 0; i < 160; i++) { if (await fn()) return; await delay(50); } throw Error(label); }
+// A new page (another window, a reload or a relaunch) reads each terminal it shows once, after it renders (census③).
+// Wait until those read-only loads have landed, so the next baseline counts only what the steps after it do.
+async function settledStats() { const counts = s => JSON.stringify([s.stats, s.overviewCalls]); let last = await fixture('stats'), same = 0; for (let i = 0; i < 40 && same < 3; i++) { await delay(250); const now = await fixture('stats'); same = counts(now) === counts(last) ? same + 1 : 0; last = now; } return last; }
 const snapshot = () => page.evaluate(() => workspace.initial());
 const identity = state => state.sessions.map(s => [s.id, s.nativeId, s.owner, s.view, s.controlRevision]).sort();
 const check = value => { checks.push(value); console.log('PASS:', value); };
@@ -93,6 +96,9 @@ async function run() {
   await emit(a, 'failed-edit'); await fixture('nativeBlock', a, { id: 'response:retry', kind: 'response', text: 'Subsequent retry succeeded; original failure stays retained.', status: 'complete' });
   let failed = await row(a, 'failed-edit'); await failed.waitFor();
   const before = await snapshot(), statsBefore = { ...(await fixture('stats')).stats };
+  let statsBaseline = statsBefore;
+  // Reading steps before a reload make no native calls; the reloaded page then reads its terminals once.
+  async function reloadPage() { assert.deepEqual((await fixture('stats')).stats, statsBaseline); await page.reload(); await page.locator('#new-session').waitFor(); statsBaseline = { ...(await settledStats()).stats }; }
   const baseline = { open: await detail(failed).evaluate(el => el.open), heading: await summary(failed).innerText(), height: (await failed.boundingBox()).height, originalInput: await failed.locator('.native-tool-input').textContent(), originalError: await failed.locator('.message-body').textContent() };
   fs.writeFileSync(path.join(profile, 'baseline-facts.json'), JSON.stringify(baseline, null, 2)); await capture('01-default-failed-tool');
   assert.equal(baseline.open, false, 'A complete failed tool defaults collapsed even after a successful retry');
@@ -120,12 +126,12 @@ async function run() {
   await toggle(failed, false); await emit(a, 'failed-edit');
   await fixture('nativeBlock', b, { id: 'response:other', kind: 'response', text: 'Other member continues streaming again.', status: 'streaming' });
   assert.equal(await detail(failed).evaluate(el => el.open), false);
-  await page.reload(); await page.locator('#new-session').waitFor(); failed = await row(a, 'failed-edit');
+  await reloadPage(); failed = await row(a, 'failed-edit');
   assert.equal(await detail(failed).evaluate(el => el.open), false);
   await summary(failed).focus(); await page.keyboard.press('Enter');
   await until(() => detail(failed).evaluate(el => el.open), 'Keyboard opens existing disclosure');
   await acknowledged(failed, true);
-  await page.reload(); await page.locator('#new-session').waitFor(); failed = await row(a, 'failed-edit');
+  await reloadPage(); failed = await row(a, 'failed-edit');
   assert.equal(await detail(failed).evaluate(el => el.open), true);
   await toggle(failed, false);
   check('Manual close and open each survive stream/rerender and real renderer reload without changing originals');
@@ -141,7 +147,7 @@ async function run() {
   await toggle(transition, false); await emit(a, 'transition', 'failed');
   await until(() => transition.locator('.message-body').textContent().then(text => text === originalError), 'Subsequent failure actually rendered');
   assert.equal(await detail(transition).evaluate(el => el.open), false);
-  await page.reload(); await page.locator('#new-session').waitFor(); transition = await row(a, 'transition'); assert.equal(await detail(transition).evaluate(el => el.open), false);
+  await reloadPage(); transition = await row(a, 'transition'); assert.equal(await detail(transition).evaluate(el => el.open), false);
   check('Explicit detail choices win across running/failed/complete transitions and remain persisted');
   await emit(a, 'transition', 'complete', 'Original complete trace with an older explicit open choice.');
   await until(() => transition.locator('.message-body').textContent().then(text => text.startsWith('Original complete trace')), 'Final complete source before legacy metadata setup');
@@ -151,11 +157,11 @@ async function run() {
   positions[key].folds[messageId] = { open: true, error: 'failed' };
   await page.evaluate(value => workspace.readingState(value), positions);
   assert.deepEqual((await snapshot()).viewState.readingPositions[key].folds[messageId], { open: true, error: 'failed' });
-  await page.reload(); await page.locator('#new-session').waitFor(); transition = await row(a, 'transition'); assert.equal(await detail(transition).evaluate(el => el.open), true);
+  await reloadPage(); transition = await row(a, 'transition'); assert.equal(await detail(transition).evaluate(el => el.open), true);
   await toggle(transition, false); await emit(a, 'transition', 'unconfirmed', 'Native result remains unconfirmed; no failure is invented.');
   await until(() => transition.locator('.message-body').textContent().then(text => text.startsWith('Native result remains unconfirmed')), 'Unconfirmed original actually rendered');
   await toggle(transition, true); await toggle(transition, false);
-  await page.reload(); await page.locator('#new-session').waitFor(); transition = await row(a, 'transition'); assert.equal(await detail(transition).evaluate(el => el.open), false);
+  await reloadPage(); transition = await row(a, 'transition'); assert.equal(await detail(transition).evaluate(el => el.open), false);
   check('Existing legacy object choices and supported boolean metadata preserve intent without schema changes or invented failure');
   await page.locator('#room-record').click(); const retained = page.locator(`#room-messages [data-message-id="${sharedTool.id}"]`); await retained.waitFor();
   assert.equal(await detail(retained).evaluate(el => el.open), false);
@@ -165,10 +171,12 @@ async function run() {
   await page.locator('#room-search').fill('SHARED_QUERY_ERROR:');
   assert.equal(await detail(retained).evaluate(el => el.open), false);
   await until(async () => (await snapshot()).viewState.roomSearch === 'SHARED_QUERY_ERROR:', 'Local query metadata acknowledged');
-  await page.reload(); await page.locator('#new-session').waitFor(); await page.locator('#room-record').click();
+  await reloadPage(); await page.locator('#room-record').click();
   assert.equal(await detail(retained).evaluate(el => el.open), false); assert.equal(await retained.locator('.message-body').textContent(), sharedTool.text);
   check('An explicit local query reveals source, then a manual close wins over rerender, query changes and reload');
   await page.locator('#room-overview').click();
+  // The reloaded page opened on the record, so this is where it first shows the two member terminals: one read each.
+  { const shown = { ...(await settledStats()).stats }; assert.equal(shown.opens - statsBaseline.opens, 2); statsBaseline = shown; }
   const command = 'npm test -- --runInBand', commandOutput = '> fixture test\nPreparing fixture checks.\nERROR: synthetic test failure\n';
   await fixture('nativeBlock', b, { id: 'tool:failed-command', kind: 'tool', toolKind: 'commandExecution', title: 'Run', turnId: 'failed-command-turn', input: command, text: commandOutput, status: 'failed', exitCode: 1 });
   const commandRow = await row(b, 'failed-command'); await commandRow.waitFor();
@@ -191,7 +199,8 @@ async function run() {
   assert.equal(await app.evaluate(() => globalThis.failedToolCopies.at(-1)), bashOutput); await toggle(bashRow, false);
   await capture('04-failed-commands-preserve-preview');
   check('Failed Codex command and Claude Bash keep their original command preview once, bounded output and exact trace/copy');
-  const after = await snapshot(); assert.deepEqual(identity(after), identity(before)); assert.deepEqual((await fixture('stats')).stats, statsBefore);
+  const after = await snapshot(); assert.deepEqual(identity(after), identity(before)); const statsAfter = (await fixture('stats')).stats; assert.deepEqual(statsAfter, statsBaseline);
+  assert.deepEqual([statsAfter.inputs, statsAfter.resizes, statsAfter.sends], [statsBefore.inputs, statsBefore.resizes, statsBefore.sends], 'No native input, resize or send across the reloads');
   assert.deepEqual(errors, []); const final = { checks, errors, productModelCalls: 0, realProviderProcesses: 0, nativeStats: statsBefore, limitations: 'Actual source Electron/DSH/service, synthetic native transport; deterministic DOM Range selection and clipboard method interception, no physical input/OS clipboard read-write/installed proof.' };
   fs.writeFileSync(path.join(profile, 'final-snapshot.json'), JSON.stringify(after, null, 2));
   fs.writeFileSync(path.join(process.env.NAW_EVIDENCE_DIR || profile, 'failed-tool-result.json'), JSON.stringify(final, null, 2));
