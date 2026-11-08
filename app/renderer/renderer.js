@@ -3936,8 +3936,19 @@ function flushTerminalEvents(entry) {
 }
 function writeTerminal(entry, event) {
   if (entry.failed) return;
-  if (entry.ready === false) { entry.queued.push(event); return; }
   const indexed = Number.isSafeInteger(entry.observationIndex) && entry.observationIndex >= 0;
+  // Native key encoding follows the newest accepted header, even while older
+  // screen output waits for parsing. Replaying that output must not roll it back.
+  const keyboardStamp = entry.keyboardStamp;
+  if (event.kind !== 'resize' && typeof event.data === 'string' &&
+      (!entry.epoch || event.epoch === entry.epoch) &&
+      Number.isSafeInteger(event.sequence) && event.sequence > entry.sequence &&
+      (!indexed || event.index === undefined || Number.isSafeInteger(event.index) && event.index > entry.observationIndex) &&
+      (!keyboardStamp || keyboardStamp.epoch !== event.epoch || event.sequence > keyboardStamp.sequence)) {
+    entry.keyboardFlags = event.keyboardFlags || 0;
+    entry.keyboardStamp = { epoch: event.epoch, sequence: event.sequence };
+  }
+  if (entry.ready === false || entry.restoring) { entry.queued.push(event); return; }
   if (indexed) {
     if (event.epoch !== entry.epoch || !Number.isSafeInteger(event.sequence) || event.sequence < 0) return;
     if (!(event.index === undefined && event.kind !== 'resize' && typeof event.data === 'string' && event.sequence > entry.sequence)) {
@@ -3956,27 +3967,32 @@ function writeTerminal(entry, event) {
     if (terminals.get(event.id) !== entry || !Number.isInteger(event.cols) || event.cols < 20 || event.cols > 400 || !Number.isInteger(event.rows) || event.rows < 5 || event.rows > 200) return;
     try { validateTerminalFrame({ buffer: event.data, continuation: event.continuation }); }
     catch (error) { entry.failed = true; entry.ready = false; entry.queued = []; render(); toastError(error); return; }
-    // Reuse the existing ready/queued boundary. No later output or resize may
-    // overtake snapshot parsing and continuation restoration.
-    entry.ready = false; render();
+    // Queue later output while restoring, without withdrawing already-owned
+    // input. Initial loading and invalid native views still use ready=false.
+    entry.restoring = true;
     entry.sequence = event.sequence;
     if (indexed) entry.observationIndex = event.index;
     entry.pending = new Promise((resolve, reject) => entry.term.write('', () => {
-      if (terminals.get(event.id) !== entry || (entry.epoch && event.epoch !== entry.epoch)) { resolve(); return; }
+      if (terminals.get(event.id) !== entry || (entry.epoch && event.epoch !== entry.epoch)) {
+        if (terminals.get(event.id) === entry) { entry.restoring = false; entry.ready = false; render(); }
+        resolve(); return;
+      }
       try {
         entry.term.resize(event.cols, event.rows);
         entry.term.write(event.data, () => {
-          if (terminals.get(event.id) !== entry || (entry.epoch && event.epoch !== entry.epoch)) { resolve(); return; }
+          if (terminals.get(event.id) !== entry || (entry.epoch && event.epoch !== entry.epoch)) {
+            if (terminals.get(event.id) === entry) { entry.restoring = false; entry.ready = false; render(); }
+            resolve(); return;
+          }
           try {
             restoreTerminalContinuation(entry.term, { buffer: event.data, continuation: event.continuation });
-            entry.keyboardFlags = event.keyboardFlags || 0;
-            entry.ready = true; flushTerminalEvents(entry); render(); resolve();
+            entry.restoring = false; flushTerminalEvents(entry); render(); resolve();
           } catch (error) { reject(error); }
         });
       } catch (error) { reject(error); }
     })).catch(error => {
       if (terminals.get(event.id) !== entry) return;
-      entry.failed = true; entry.ready = false; entry.queued = [];
+      entry.failed = true; entry.ready = false; entry.restoring = false; entry.queued = [];
       render(); toastError(error);
     });
     return;
@@ -3984,7 +4000,6 @@ function writeTerminal(entry, event) {
   entry.term.write(event.data, () => {
     if (document.activeElement === entry.term.textarea && !entry.columnReading && (!entry.term.buffer?.active || entry.term.buffer.active.viewportY === entry.term.buffer.active.baseY)) revealTerminalCursor(entry);
   });
-  entry.keyboardFlags = event.keyboardFlags || 0;
   entry.sequence = event.sequence;
   if (indexed) entry.observationIndex = event.index;
 }

@@ -165,7 +165,8 @@ test('real receiver snapshot restoration completes before queued resize and the 
   const source = screen(t); await write(source.term, hidden);
   const frame = await sourceTerminal(source).snapshot(), target = rendererFixture(t), held = holdBarrier(target);
   target.writeTerminal(target.entry, eventFor(target, frame)); await held.waiting;
-  assert.equal(target.entry.ready, false);
+  assert.equal(target.entry.ready, true);
+  assert.equal(target.entry.restoring, true);
   target.writeTerminal(target.entry, { id: target.id, epoch: target.entry.epoch, sequence: 1, index: 2, kind: 'resize', cols: 30, rows: 5 });
   target.writeTerminal(target.entry, { id: target.id, epoch: target.entry.epoch, sequence: 2, index: 3, kind: 'output', data: ESC + '[4mC', keyboardFlags: 21 });
   assert.equal(target.entry.queued.length, 2); assert.deepEqual(held.operations, [['write', '']]);
@@ -225,4 +226,40 @@ test('future snapshot metadata replays existing text and subsequent output witho
   assert.equal(target.term.buffer.active.getLine(0).translateToString(true), 'LEGACY NEXT');
   assert.equal(target.entry.ready, true); assert.equal(target.entry.failed, false);
   assert.deepEqual(target.errors, []); assert.deepEqual(target.calls, []);
+});
+
+
+test('live snapshot replay keeps already-authorized human input and rejects an owner or connection change', async t => {
+  const source = screen(t); await write(source.term, hidden);
+  const frame = await sourceTerminal(source).snapshot(), target = rendererFixture(t), held = holdBarrier(target);
+  const record = { id: target.id, owner: 'synthetic-owner', view: 'terminal', connectionRevision: 0,
+    nativeId: 'synthetic-native', terminalState: { alive: true, epoch: target.entry.epoch } };
+  Object.assign(target.entry, { generation: 0, nativeId: record.nativeId });
+  const calls = []; let input;
+  const start = renderer.indexOf('function terminalCanInput('), end = renderer.indexOf('\nfunction cancelViewInput(', start);
+  const onDataStart = renderer.indexOf('  term.onData(data => {'), onDataEnd = renderer.indexOf('\n  let confirmingEnter', onDataStart);
+  assert.ok(start >= 0 && end > start && onDataStart >= 0 && onDataEnd > onDataStart);
+  const context = { terminals: target.terminals, state: { sessions: [record] }, owner: record.owner, disconnected: false,
+    terminalContextVisible: () => true, nativeUsable: () => true, columnTerminalBinding: () => null,
+    id: target.id, entry: target.entry, term: { onData: callback => { input = callback; } },
+    api: { input: (id, data) => { calls.push([id, data]); return Promise.resolve(); } },
+    uiError: code => Error(code), preserveUnconfirmed() { throw Error('Unexpected input uncertainty'); },
+    toastError(error) { throw error; }, render() {} };
+  const gate = vm.runInNewContext(renderer.slice(start, end) + '\nterminalCanInput', context);
+  context.canCaptureTerminal = () => false; context.canFlushComposition = () => false;
+  vm.runInNewContext(renderer.slice(onDataStart, onDataEnd), context);
+  assert.equal(gate(target.id), true);
+  target.writeTerminal(target.entry, eventFor(target, frame)); await held.waiting;
+  try {
+    assert.equal(target.entry.keyboardFlags, 13, 'Accepted native keyboard modes must not wait for display parsing');
+    target.writeTerminal(target.entry, { id: target.id, epoch: target.entry.epoch, sequence: 2, index: 2, kind: 'output', data: ' NEXT', keyboardFlags: 21 });
+    assert.equal(target.entry.keyboardFlags, 21, 'Queued newer native output still controls current key encoding');
+    input('a');
+    assert.deepEqual(calls, [[target.id, 'a']], 'A replay barrier must not drop a legitimate human key');
+    record.owner = 'another-owner'; input('b');
+    assert.deepEqual(calls, [[target.id, 'a']], 'Replay does not bypass the existing ownership guard');
+    record.owner = context.owner; record.connectionRevision++; input('c');
+    assert.deepEqual(calls, [[target.id, 'a']], 'Replay does not bypass the existing connection guard');
+  } finally { held.release(); await target.entry.pending; await held.drain(); }
+  assert.equal(target.entry.keyboardFlags, 21, 'Older display replay cannot roll back the current key encoding');
 });
