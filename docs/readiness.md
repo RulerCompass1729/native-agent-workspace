@@ -4,7 +4,27 @@ As of 2026-11-07. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.214, clean committed build source `45999b2`.
+Current daily GUI: alpha.216, clean committed build source `9cf91e8`.
+The ordinary launch has one observed visible main window and one daily search
+entry. Its update preserves 15 records, drafts and live native processes.
+The five original development/secretary backends now run alpha.215 with their
+original native versions and settings. Alpha.216 changes only the GUI caller's
+bounded recovery proof; these backends need no further move for that change.
+
+One original Main-to-secretary outbox task has an exact shared ledger entry,
+native receipt and completed first command. The recipient's native
+`codex_tui.read_thread` returns through its real client without an observed NAW
+approval or a NAW-authored reply. Its live-runtime read happened in the second
+command, so the requested first-command ordering is not passed. Original C3
+also keeps one native tool call pending for 92 seconds, receives the real
+GUI-update event and runs its next command in the same thread with its active
+goal and saved draft preserved. These are observed cases, not a generic
+blocked-goal setter, a one-hour wait qualification or the whole milestone.
+Scoped source/runtime independent review and author-run raw evidence support
+only these stated paths. Physical IME and the other existing gates remain open.
+No push is used.
+
+Previously qualified alpha.214, build source `45999b2`:
 All 79 runtime payload files match that commit, including after normal startup.
 The source integration passes 3,365 Root and 3,204 ordinary-release checks without
 skips. Conditional maintenance guards, literal outbox text and exact native
@@ -21,9 +41,10 @@ remains pending; this does not gate independent development or maintenance.
 
 Installing the GUI does not update occupied backends. The new guarded path
 explicitly refuses an occupied legacy backend without conditional-stop support.
-Separate, authorized maintenance at actual author checkpoints is still needed;
-original-caller task delivery, continued native work, full-day use and the whole
-dogfood milestone remain open. No push is used.
+That checkpoint still needed separate authorized maintenance and original-caller
+delivery. The later five-backend adoption and scoped original-task evidence
+above supersede those two pending items; full-day and whole-milestone conclusions
+remain governed by their original evidence and outstanding findings.
 
 Previously qualified alpha.209, source `c0650f8`, keeps live member terminals
 visible while their input route is chat, preserving passive input ownership.
