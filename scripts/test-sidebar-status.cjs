@@ -149,8 +149,12 @@ async function run() {
   measurements.push({ renameError: await error.innerText() });
   await page.keyboard.press('Escape'); await editor.waitFor({ state: 'hidden' });
   // T-155: with 协作空间 folded, renaming a space from its heading unfolds the section and shows the editor there.
+  // Grouped mode hides the whole space section; fold it while the flat layout exposes its toggle,
+  // then return to grouped headings to exercise rename with the saved folded state.
+  await page.locator('#sessions-flat').click();
   const workspaceToggle = page.locator('#workspace-toggle');
   await workspaceToggle.click(); await until(async () => await workspaceToggle.getAttribute('aria-expanded') === 'false', '协作空间 folded');
+  await page.locator('#sessions-grouped').click();
   await longGroup.locator('.space-group-more').click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click();
   await editor.waitFor({ state: 'visible' });
   assert.equal(await workspaceToggle.getAttribute('aria-expanded'), 'true', 'Renaming unfolded 协作空间');
@@ -160,7 +164,7 @@ async function run() {
   await page.keyboard.press('Escape'); await editor.waitFor({ state: 'hidden' });
   check('With 协作空间 folded, renaming a space from its heading unfolds the section and focuses the editor there');
   await page.evaluate(id => workspace.join(id, true), solo);
-  await until(async () => await page.locator('#session-list [data-session-group="independent"]').count() === 0, 'The empty 独立会话 group goes');
+  await until(async () => await page.locator('#session-list [data-session-group="independent"]:visible').count() === 0, 'The empty 独立会话 group takes no visible space');
   await capture('03-grouped');
   await page.locator('#sessions-flat').click();
   await until(async () => await page.locator('#workspace-group .room-row').evaluateAll(rows => rows.filter(r => r.getBoundingClientRect().height > 0).length) >= 2, 'The flat view lists the spaces again');
