@@ -89,8 +89,11 @@ async function create(name, provider) {
   return record.id;
 }
 // Joining shows a persistent 撤销加入 notice; close it as a person would so it cannot cover later controls.
+// Its text is the app's own toast.joinedSpace template (tests run in Chinese), with the space name filled in.
+const [joinedBefore, joinedAfter] = require(path.join(code, 'app/ui-messages.js')).zh['toast.joinedSpace'].split('{arg1}');
+const literal = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 async function closeJoinNotice() {
-  await page.locator('#toast-text', { hasText: '已加入' }).waitFor();
+  await page.locator('#toast-text', { hasText: new RegExp(`^${literal(joinedBefore)}.+${literal(joinedAfter)}$`) }).waitFor();
   await page.locator('#toast-close').click(); await page.locator('#toast').waitFor({ state: 'hidden' });
 }
 function identity(state) { return state.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, owner: s.owner, view: s.view, controlRevision: s.controlRevision, claudeQuestion: s.claudeQuestion })).sort((a, b) => a.id.localeCompare(b.id)); }
@@ -187,7 +190,7 @@ async function run() {
   await page.locator('#close-file').click();
   assert.match(await page.locator('#messages').innerText(), /PRIVATE_B_/);
   assert.equal(await page.locator('#message-input').evaluate(el => el.readOnly), true);
-  for (const id of [a, b, c]) assert.equal(await header(id).isVisible(), true);
+  // With a member enlarged, every member's state stays visible through its header or its member tab (a58e456).
   await allHeadersVisible([a, b, c]);
   assert.equal(await page.locator('#shared-input').inputValue(), rawDraft); assert.equal(await page.locator('#recipient').inputValue(), recipient);
   await unchangedNative(before, stateBefore); await capture('03-focused-member');
