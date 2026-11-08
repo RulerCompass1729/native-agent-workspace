@@ -10,13 +10,13 @@ test('MCP native provenance rejects missing, inconsistent and argument-supplied 
   assert.deepEqual(metadataIdentity({ ...meta, 'x-codex-turn-metadata': JSON.stringify(meta['x-codex-turn-metadata']) }), metadataIdentity(meta));
   for (const value of [{}, { ...meta, callId: '' }, { ...meta, threadId: 'other' }, { ...meta, sessionId: undefined }, { ...meta, 'x-codex-turn-metadata': {} }, { ...meta, 'x-codex-turn-metadata': 'bad' }]) assert.throws(() => metadataIdentity(value), /provenance/);
 });
-for (const nativeVersion of ['0.164.0', '0.165.0', '0.166.0']) test('actual MCP stdio waits for bound root staging via authenticated hook socket ' + nativeVersion, async t => {
+for (const nativeVersion of ['0.164.0', '0.165.0', '0.166.0', '0.167.0']) test('actual MCP stdio waits for bound root staging via authenticated hook socket ' + nativeVersion, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-mcp-'));
   const host = new NativeHost(dir); await host.start(); host.rpc = { nativeVersion };
   const runtime = new Codex({ nativeId: meta.threadId, messages: [] }, host);
   runtime.turnId = 'native-turn'; runtime.nativeSessionId = 'native-session'; host.codexTargets.set(meta.threadId, runtime);
   const args = { recipient_id: 'target-id', message: 'One explicit bounded task.' };
-  const observeProof = () => runtime.observeNativeItem('item/started', { turnId: runtime.turnId, item: { id: meta.callId, type: 'mcpToolCall', server: 'native_workspace', tool: 'workspace_message', arguments: args } });
+  const observeProof = () => runtime.observeNativeItem('item/started', { threadId: meta.threadId, turnId: runtime.turnId, item: { id: meta.callId, type: 'mcpToolCall', status: 'inProgress', server: 'native_workspace', tool: 'workspace_message', arguments: args } });
   let release, acceptedIdentity, calls = 0;
   runtime.addressedCall = (identity, body) => { calls++; acceptedIdentity = identity; assert.equal(identity.valid(), true); assert.equal(identity.turnId, runtime.turnId); assert.deepEqual(body, args); return new Promise(resolve => { release = () => resolve({ status: 'staged', id: 'durable-ticket' }); }); };
   const child = spawn(process.execPath, [path.join(__dirname, '../claude-message-tool.cjs'), '--codex'], { env: { ...process.env, NAW_MESSAGE_SOCKET: host.hookSocket, NAW_MESSAGE_TOKEN: host.codexMessageToken }, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -49,14 +49,14 @@ for (const nativeVersion of ['0.164.0', '0.165.0', '0.166.0']) test('actual MCP 
     socket.on('data', part => data += part); socket.on('end', () => resolve(JSON.parse(data)));
   });
   assert.equal(wrongToken.status, 'unconfirmed'); assert.equal(calls, 1, 'qualified version does not bypass hook authentication');
-  for (const unknownVersion of ['0.163.0', '0.164.0-beta', '0.166.0-beta', '0.167.0', undefined]) {
+  for (const unknownVersion of ['0.163.0', '0.164.0-beta', '0.166.0-beta', '0.167.0-beta', '0.167.1', '0.168.0', undefined]) {
     host.rpc.nativeVersion = unknownVersion;
     const refused = await call('tools/call', { name: 'workspace_message', arguments: args, _meta: meta });
     assert.equal(JSON.parse(refused.result.content[0].text).status, 'unconfirmed');
     assert.equal(calls, 1, 'unknown native version cannot stage another message');
   }
   host.rpc.nativeVersion = nativeVersion;
-  runtime.observeNativeItem('item/completed', { turnId: runtime.turnId, item: { id: meta.callId, type: 'mcpToolCall', server: 'native_workspace', tool: 'workspace_message', arguments: args } });
+  runtime.observeNativeItem('item/completed', { threadId: meta.threadId, turnId: runtime.turnId, item: { id: meta.callId, type: 'mcpToolCall', status: 'completed', server: 'native_workspace', tool: 'workspace_message', arguments: args } });
   assert.equal(acceptedIdentity.valid(), false, 'completed native call cannot retain staging authority');
 });
 test('cold receiver recovery retains native client identity for an earlier automatic workspace input', async () => {

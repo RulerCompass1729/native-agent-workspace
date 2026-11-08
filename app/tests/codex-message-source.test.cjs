@@ -1,15 +1,18 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), vm = require('node:vm'), { EventEmitter } = require('node:events');
 const source = fs.readFileSync(require.resolve('../adapters.cjs'), 'utf8');
-const start = source.indexOf('async function workspaceMcpProof('), end = source.indexOf('\nclass NativeHost', start);
+const start = source.indexOf('function currentWorkspaceMcpProof('), end = source.indexOf('\nclass NativeHost', start);
 assert.ok(start >= 0 && end > start);
-const proof = vm.runInNewContext('(' + source.slice(start, end) + ')', { uiError: require('../ui-errors.cjs').uiError });
+const proof = vm.runInNewContext('(() => { ' + source.slice(start, end) + '; return workspaceMcpProof; })()', { uiError: require('../ui-errors.cjs').uiError });
 const turnId = 'owned-native-turn', callId = 'exec-owned-inner-call';
 const identity = { nativeId: 'owned-thread', sessionId: 'owned-session', turnId, callId };
 const args = { recipient_id: 'owned-peer', message: 'Synthetic capture only.' };
 function fixture(ready = true) {
-  const runtime = new EventEmitter(), socket = new EventEmitter(), call = { turnId, arguments: { ...args } };
-  Object.assign(runtime, { nativeSessionId: identity.sessionId, turnId, workspaceMcpCalls: new Map(ready ? [[callId, call]] : []) });
+  const runtime = new EventEmitter(), socket = new EventEmitter(), rpc = {};
+  const call = { nativeId: identity.nativeId, turnId, lifecycle: 1, rpc, arguments: { ...args } };
+  Object.assign(runtime, { nativeSessionId: identity.sessionId, turnId, record: { nativeId: identity.nativeId },
+    host: { codexTargets: new Map([[identity.nativeId, runtime]]) }, lifecycleRevision: 1, currentRpc: value => value === rpc,
+    workspaceMcpCalls: new Map(ready ? [[callId, call]] : []) });
   socket.destroyed = false;
   return { runtime, socket, call };
 }

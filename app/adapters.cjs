@@ -1712,9 +1712,11 @@ class Codex extends EventEmitter {
         const serial = this.nativeToolPhaseSerial = (this.nativeToolPhaseSerial || 0) + 1;
         binding.items.set(params.item.id, { type: params.item.type, progressAt: Date.now(), serial });
       }
-      if (params.item.type === 'mcpToolCall' && params.item.server === 'native_workspace' && params.item.tool === 'workspace_message') {
+      if (binding?.items.get(params.item.id) && params.item.status === 'inProgress' && params.item.type === 'mcpToolCall' && params.item.server === 'native_workspace' && params.item.tool === 'workspace_message') {
         this.workspaceMcpCalls ||= new Map();
-        if (this.workspaceMcpCalls.size < 64) this.workspaceMcpCalls.set(params.item.id, { turnId: params.turnId, arguments: params.item.arguments });
+        if (!this.workspaceMcpCalls.has(params.item.id) && this.workspaceMcpCalls.size < 64) this.workspaceMcpCalls.set(params.item.id, {
+          nativeId: this.record.nativeId, turnId: params.turnId, lifecycle: this.lifecycleRevision, rpc: sourceRpc, arguments: params.item.arguments,
+        });
         this.emit('workspaceMcpProof');
       }
     } else {
@@ -2438,13 +2440,20 @@ class Codex extends EventEmitter {
 // Native WS notifications and MCP stdio use different transports. Wait on the
 // existing runtime events, within the socket deadline, rather than guessing a
 // sender when the authoritative item notification has not arrived yet.
+function currentWorkspaceMcpProof(runtime, identity, args, socket, call) {
+  return Boolean(call && !runtime.stopped && !runtime.transportDisconnected && !socket.destroyed &&
+    runtime.host.codexTargets.get(identity.nativeId) === runtime && runtime.record.nativeId === identity.nativeId &&
+    identity.sessionId === runtime.nativeSessionId && identity.turnId === runtime.turnId &&
+    call.nativeId === identity.nativeId && call.turnId === identity.turnId && call.lifecycle === runtime.lifecycleRevision &&
+    runtime.currentRpc(call.rpc) && runtime.workspaceMcpCalls?.get(identity.callId) === call &&
+    call.arguments?.recipient_id === args?.recipient_id && call.arguments?.message === args?.message);
+}
 async function workspaceMcpProof(runtime, identity, args, socket) {
   const check = () => {
     if (runtime.stopped || runtime.transportDisconnected || socket.destroyed) throw uiError("error.nativeConnectionChangedNoAutoMessage");
     const call = runtime.workspaceMcpCalls?.get(identity.callId);
     if (!call || !runtime.nativeSessionId) return false;
-    if (identity.sessionId !== runtime.nativeSessionId || identity.turnId !== runtime.turnId || call.turnId !== identity.turnId ||
-        !call.arguments || call.arguments.recipient_id !== args?.recipient_id || call.arguments.message !== args?.message) throw uiError("error.nativeToolOriginUnconfirmed");
+    if (!currentWorkspaceMcpProof(runtime, identity, args, socket, call)) throw uiError("error.nativeToolOriginUnconfirmed");
     return call;
   };
   const ready = check(); if (ready) return ready;
@@ -2482,9 +2491,11 @@ class NativeHost {
           Promise.resolve().then(async () => {
             const identity = event.identity, runtime = this.codexTargets.get(identity?.nativeId);
             const args = event.arguments;
-            if (event.token !== this.codexMessageToken || !['0.164.0', '0.165.0', '0.166.0'].includes(this.rpc?.nativeVersion) || !runtime || !runtime.addressedCall) throw uiError("error.nativeToolOriginUnconfirmed");
+            if (event.token !== this.codexMessageToken || !['0.164.0', '0.165.0', '0.166.0', '0.167.0'].includes(this.rpc?.nativeVersion) || !runtime || !runtime.addressedCall) throw uiError("error.nativeToolOriginUnconfirmed");
             const call = await workspaceMcpProof(runtime, identity, args, socket);
-            return runtime.addressedCall({ ...identity, valid: () => !socket.destroyed && runtime.workspaceMcpCalls?.get(identity.callId) === call }, args);
+            const valid = () => currentWorkspaceMcpProof(runtime, identity, args, socket, call);
+            if (!valid()) throw uiError("error.nativeToolOriginUnconfirmed");
+            return runtime.addressedCall({ ...identity, valid }, args);
           }).then(result => { if (!socket.destroyed) socket.end(JSON.stringify(result) + '\n'); }, error => { if (!socket.destroyed) socket.end(JSON.stringify({ status: 'unconfirmed', message: error.message }) + '\n'); });
           return;
         }
