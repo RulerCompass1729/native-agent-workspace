@@ -448,6 +448,16 @@ test('recently committed compatibility hooks can upgrade to this working tree', 
  }
  assert.ok(checked>=5,'At least five earlier committed hooks were checked');
 });
+// The operator-grant hook (9245065) was committed without being recognised, so its copy refused to upgrade.
+// It must upgrade even after it leaves the last six hook commits; one changed byte still makes it someone else's.
+test('the exact operator-grant hook copy upgrades and an edited copy of it stays', t => {
+  const { cwd } = fixture(t), file = path.join(cwd, '.claude/skills/native-workspace-compat/hooks/register.js');
+  const prior = require('node:child_process').execFileSync('git', ['show', '9245065:app/claude-bridge/hooks/register.js'], { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8' }).replace('const legacyOnly = false;', 'const legacyOnly = true;');
+  installPlugin(cwd); const current = fs.readFileSync(file, 'utf8'); assert.notEqual(prior, current);
+  fs.writeFileSync(file, prior); installPlugin(cwd); assert.equal(fs.readFileSync(file, 'utf8'), current);
+  fs.writeFileSync(file, prior + ' '); assert.throws(() => installPlugin(cwd), /未覆盖/);
+  assert.equal(fs.readFileSync(file, 'utf8'), prior + ' ', 'An edited copy is left exactly as it was');
+});
 
 // T-100: Claude loads a compat copy left in a folder even when NAW itself
 // starts the session there, so a launch refreshes NAW's own copy first.
