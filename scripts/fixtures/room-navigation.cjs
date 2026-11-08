@@ -8,6 +8,11 @@ const { Workspace } = require(path.join(root, 'app/workspace.cjs'));
 let instance;
 const create = Workspace.prototype.create;
 Workspace.prototype.create = function (...args) { instance = this; return create.apply(this, args); };
+// Which session each read-only terminal snapshot was for: a page reads a terminal once when it first shows it.
+const snapshotReads = [], snapshot = Workspace.prototype.terminalSnapshot;
+Workspace.prototype.terminalSnapshot = function (id, ...rest) { snapshotReads.push(id); return snapshot.call(this, id, ...rest); };
+const send = process.send;
+process.send = function (message, ...args) { if (message?.stats) message.snapshotReads = snapshotReads.slice(); return send.call(this, message, ...args); };
 process.on('message', async question => {
   if (!question.navigationRequest) return;
   const reply = { navigationReply: question.navigationRequest };

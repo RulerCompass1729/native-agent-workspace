@@ -29,7 +29,7 @@ try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw e
 const slotIdentity=fs.lstatSync(slot);
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'CodexMain', task: 'T163 UI006/UI007 navigation', token, pid: process.pid, at: new Date().toISOString() }));
 fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
-let profile, child, client, app, page, expired = false, deadline, launches = 0, sequence = 0, passiveBaseline;
+let profile, child, client, app, page, expired = false, deadline, launches = 0, sequence = 0, passiveBaseline, pageReads = 0;
 const guiProcesses = [], checks = [], errors = [], trace = [], layoutReadings = [];
 const started = Date.now(), pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label) { for (let i = 0; i < 100; i++) { if (expired) throw Error('Navigation GUI budget exhausted'); if (await fn()) return; await pause(50); } throw Error(label); }
@@ -59,9 +59,16 @@ async function nativeDisplay(id, name, passive = true) {
   if (passive) assert.equal(await surface.evaluate(el => el.contains(document.activeElement)), false, 'Restored display does not hold terminal input focus');
   await capture(name);
 }
-function noUnexpectedCalls(reply) {
-  const actual = reply.overviewCalls || {};
-  assert.deepEqual(actual, passiveBaseline || Object.fromEntries(Object.keys(actual).map(key => [key, 0])), 'Navigation adds no claim, send, queue, steer, input, approval, run or native terminal call');
+// A page creates one terminal host for each session it shows and reads that session's snapshot once, read-only
+// (renderer.js ensureTerminal; census③, 384fddc). Navigation itself reads nothing. pageReads is where this page's reads start.
+async function noUnexpectedCalls(reply) {
+  const { terminalSnapshot: _reads, ...actual } = reply.overviewCalls || {};
+  const { terminalSnapshot: _baseReads, ...expected } = passiveBaseline || Object.fromEntries(Object.keys(reply.overviewCalls || {}).map(key => [key, 0]));
+  assert.deepEqual(actual, expected, 'Navigation adds no claim, send, queue, steer, input, approval, run or native terminal call');
+  const hosts = await page.locator('.terminal-host[data-terminal-id]').evaluateAll(elements => elements.map(el => el.dataset.terminalId));
+  let reads = reply.snapshotReads.slice(pageReads);
+  for (let i = 0; i < 40 && reads.length < hosts.length; i++) { await pause(50); reads = (await fixture('stats')).snapshotReads.slice(pageReads); }
+  assert.deepEqual(reads.slice().sort(), hosts.slice().sort(), 'Each terminal this page shows is read once; nothing else is read');
   assert.equal(reply.stats.inputs, 0); assert.equal(reply.stats.sends, 0);
 }
 async function launch() {
@@ -75,7 +82,7 @@ async function launch() {
   await page.locator('#new-session').waitFor(); const initial = await uiState();
   assert.equal(initial.servicePid, child.pid); assert.equal(initial.runtimeVersion, require('../package.json').version); assert.equal(initial.services.length, 1);
 }
-async function checked(name, body) { assert.ok(checks.length < 5); await body(); noUnexpectedCalls(await fixture('stats')); checks.push(name); fs.writeFileSync(path.join(evidence, 'checks.json'), JSON.stringify(checks, null, 2)); console.log('PASS', name); }
+async function checked(name, body) { assert.ok(checks.length < 5); await body(); await noUnexpectedCalls(await fixture('stats')); checks.push(name); fs.writeFileSync(path.join(evidence, 'checks.json'), JSON.stringify(checks, null, 2)); console.log('PASS', name); }
 async function run() {
   profile = fs.realpathSync(scratch.directory(path.join(os.tmpdir(), 'naw-room-navigation-')));
   const cwd = path.join(profile, 'workspace'); fs.mkdirSync(cwd, { mode: 0o700 });
@@ -131,7 +138,7 @@ async function run() {
     assert.equal(kept.roomFilter, 'synthetic-departed-member'); assert.equal(kept.roomSearch, 'retained');
   });
   await checked('3 explicit native viewing is remembered, while subsequent tab and record navigation does not take control', async () => {
-    noUnexpectedCalls(await fixture('stats'));
+    await noUnexpectedCalls(await fixture('stats'));
     await page.locator('#terminal-tab').click(); await until(async () => (await uiState()).viewState.mode === 'terminal', 'Explicit native view');
     await fixture('output', ids[0], { data: '\x1b[2J\x1b[HOWNED NAVIGATION DISPLAY\r\n' });
     await nativeDisplay(ids[0], '06-explicit-native-display', false);
@@ -142,7 +149,7 @@ async function run() {
     await page.locator('#member-related-records').click(); await page.locator('#room-record-return').click();
     await until(async () => (await uiState()).viewState.mode === 'terminal', 'Native view restored after related records');
     await nativeDisplay(ids[0], '08-related-restored-native-display');
-    noUnexpectedCalls(await fixture('stats'));
+    await noUnexpectedCalls(await fixture('stats'));
   });
   await checked('4 three/four/five members share stable tabs; narrow names remain accessible and removal rejects the old return target', async () => {
     for (const [index, id] of ids.slice(3).entries()) { await client.call('join', id, true); await until(async () => await page.locator('#room-member-tabs button').count() === index + 4, 'New member tab'); }
@@ -173,7 +180,7 @@ async function run() {
     assert.equal(await page.locator('#room-messages [data-search-target="true"]').count(),1);
     assert.equal((await uiState()).viewState.roomViews.shared.roomFilter,'synthetic-departed-member','Opening a result without Return preserves canonical history on save');
     await capture('09-recent-preview-before-close');
-    await app.close(); app = null; await launch();
+    await app.close(); app = null; pageReads = (await fixture('stats')).snapshotReads.length; await launch();
     await until(async () => await page.locator('#room-filter').inputValue() === 'synthetic-departed-member', 'Original history after reopen');
     assert.equal(await page.locator('#room-record-return').isVisible(), false); assert.equal(await page.locator('#room-search').inputValue(), 'retained');
     assert.equal(await page.locator('#shared-input').inputValue(), sharedDraft); assert.equal((await uiState()).viewState.roomViews.shared.roomRecipient, ids[0]);
@@ -185,7 +192,7 @@ async function run() {
   const finalRecords = (await snapshot()).sessions.map(({ id, nativeId, liveDraft }) => ({ id, nativeId, liveDraft }));
   assert.deepEqual(finalRecords.map(s => [s.id, s.nativeId]), original);
   assert.deepEqual(finalRecords.map(s => s.liveDraft), ids.map((_, i) => `Private unsent ${i}`));
-  const final = await fixture('stats'); noUnexpectedCalls(final);
+  const final = await fixture('stats'); await noUnexpectedCalls(final);
   assert.equal(checks.length, layoutOnly ? 4 : 5); assert.deepEqual(errors, []); assert.deepEqual(sourceHashes(), frozen);
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks: checks.slice(), scope: layoutOnly ? 'targeted-layout-no-reopen' : 'five-complete-journeys', launches, activeSeconds: (Date.now() - started) / 1000, original, finalRecords, final, errors, layoutReadings, source: frozen }, null, 2));
 }
