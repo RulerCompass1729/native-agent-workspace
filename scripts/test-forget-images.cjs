@@ -2,6 +2,7 @@
 // the ones its shared record shows (the removal dialog promises shared content stays); clearing
 // that shared record then removes them and the folder. Actual hidden Electron/DSH and service
 // with the real Claude receiver; only the native event source is synthetic (0 model).
+const { textPattern } = require('./fixtures/ui-text.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
@@ -37,7 +38,7 @@ async function create(name) {
   const id = (await snapshot()).sessions.find(s => s.name === name).id;
   // Joining is 加入此空间 in the session's ⋯ menu; close its 撤销加入 notice as a person would.
   await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入此空间', exact: true }).click();
-  await page.locator('#toast-text', { hasText: '已加入' }).waitFor(); await page.locator('#toast-close').click(); return id;
+  await page.locator('#toast-text', { hasText: textPattern('toast.joinedSpace') }).waitFor(); await page.locator('#toast-close').click(); return id;
 }
 async function tool(id, source, turn) {
   await emit(id, { id: source, kind: 'tool', title: 'Read', input: '{"file_path":"/shot.png"}', turnId: turn, text: '', status: 'running' });

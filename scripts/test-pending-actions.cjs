@@ -45,7 +45,8 @@ async function capture(name) { if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(pro
   assert.equal(await page.locator('#approval').isVisible(),false,'Unselected private request details stay out of the main room view');
   assert.ok(!(await page.locator('#room-messages').innerText()).includes('PRIVATE_B_'));
   await capture('three-member-pending');
-  await card(b).locator('.collaboration-member-name').click();
+  // Opening a member hides the overview (a58e456); return to it before opening the next card.
+  await page.locator('#room-overview').click(); await card(b).locator('.collaboration-member-name').click();
   await until(async()=>await page.locator('#approval-request option').count()===2,'Two original requests remain available');
   assert.equal((await snapshot()).viewState.roomRecipient,c);assert.equal(await roomBody(page),'Keep this unsent draft for C.');
   // Resolve the latest nonblocking question first: the older permission must reappear.

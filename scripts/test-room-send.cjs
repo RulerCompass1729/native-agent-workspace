@@ -60,7 +60,8 @@ async function run() {
   assert.equal(await page.locator('#run-button').isDisabled(), true); passed.push('One member: default form sends only to its recipient, without starting a run');
   const b = await create('codex'); await chooseRecipient(b); await fillRoomMessage(page, '只分享这段'); await page.locator('#shared-input').press('Shift+Enter');
   assert.equal(await roomBody(page), '只分享这段\n'); assert.equal((await native('stats')).sends.length, 1);
-  await page.locator('#forward-button').click(); await sent(2, b, '只分享这段'); assert.equal((await snapshot()).room.run, null); await complete('SECOND-REPLY\nSECOND-LINE');
+  // Shared input is sent literally since ccf47c8, including the Shift+Enter newline asserted just above.
+  await page.locator('#forward-button').click(); await sent(2, b, '只分享这段\n'); assert.equal((await snapshot()).room.run, null); await complete('SECOND-REPLY\nSECOND-LINE');
   // T-150: since c9800cc a sent message takes its @recipient with it (the mention is part of the message), so the next
   // message names its recipient again, as a person types @ for it.
   await chooseRecipient(b); await fillRoomMessage(page, 'x'.repeat(6000)); assert.ok((await page.locator('#shared-input').inputValue()).length > 6000);

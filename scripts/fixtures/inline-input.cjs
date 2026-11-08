@@ -9,7 +9,7 @@ const create = NativeHost.prototype.create, runtimes = new Map();
 NativeHost.prototype.create = function (record) {
   const runtime = create.call(this, record); record.nativeId = randomUUID();
   runtime.submission = new SubmissionChannel();
-  for (const name of ['bindRoot', 'validRootBinding', 'observeRoot', 'observeBlock', 'observeRootGap', 'cancelNativeAbort', 'reportCapacityFailure', 'hook']) runtime[name] = Claude.prototype[name];
+  for (const name of ['bindRoot', 'validRootBinding', 'observeRoot', 'observeBlock', 'observeRootGap', 'cancelNativeAbort', 'reportCapacityFailure', 'firstPromptRow', 'promptFirstText', 'hook']) runtime[name] = Claude.prototype[name];
   runtime.bindRoot({ sessionId: record.nativeId, nativeBlocks: true, nativeInlineInput: true, nativePromptInput: true, nativeQueue: true });
   Object.defineProperty(runtime, 'nativeActivity', { get() { return Object.getOwnPropertyDescriptor(Claude.prototype, 'nativeActivity').get.call(this); } });
   runtimes.set(record.id, runtime); return runtime;

@@ -76,7 +76,9 @@ async function run() {
   await shot('damaged-record-retained'); await close();
   assert.equal(fs.readFileSync(file, 'utf8'), damaged);
   assert.equal(fs.readFileSync(path.join(profile, 'connection.json'), 'utf8'), connection);
-  assert.equal(fs.existsSync(path.join(profile, 'dsh')), false);
+  // The fixture seeds dsh/cordis.patch.yml to pin the language (abb6759); a damaged startup must still start no UI host.
+  assert.equal(fs.existsSync(path.join(profile, 'ui-host.json')), false);
+  assert.deepEqual((fs.existsSync(path.join(profile, 'dsh')) ? fs.readdirSync(path.join(profile, 'dsh')) : []).filter(name => name !== 'cordis.patch.yml'), []);
   checks.push('Damaged startup, repeated Retry and Quit retain every original byte; guarded data-folder button routes only to the isolated profile');
 
   fs.chmodSync(file, 0o000);

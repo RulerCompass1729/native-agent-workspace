@@ -210,7 +210,8 @@ async function run() {
   await page.locator('#conversation-pane').waitFor();
   assert.equal(await page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${a}"] .collaboration-member-name`).getAttribute('aria-pressed'),'true','A is the open member');
   assert.equal(await page.locator('#recipient').inputValue(),b,'Showing A does not replace the addressed B');
-  await page.locator('#collaboration-overview').getByRole('button',{name:'← 返回共同工作',exact:true}).click();
+  // A member now opens in the space's tabs (a58e456); return to the member overview tab.
+  await page.locator('#room-overview').click();
   await page.locator('#room-record').click(); await page.locator('#forward-button').click();
   assert.deepEqual((await fixture('stats')).sends.at(-1),{id:b,text:'核对材料：12、18、25，文档声称总额60。'},'The message and its draft go to the addressed B');
   await fixture('replyBound',b,{turnId:'check-b'});

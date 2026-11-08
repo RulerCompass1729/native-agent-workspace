@@ -1,6 +1,7 @@
 // T-134: a working member's grid column keeps following its latest output after
 // 跳到最新 and after the wheel reaches the end, while rows above change size.
 // Actual hidden Electron/DSH and service; only the provider is synthetic (0 model).
+const { textPattern } = require('./fixtures/ui-text.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
@@ -97,7 +98,7 @@ async function run() {
     const id = await create(name, provider); ids.push(id);
     await fixture('history', id, Array.from({ length: 120 }, (_, j) => ({ id: `history-${ids.length}-${j}`, type: 'agentMessage', turnId: 'turn-' + Math.floor(j / 6), text: `${name} paragraph ${j}\n\n` + 'Long line of text that wraps in a narrow column. '.repeat(3) })));
     await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入此空间', exact: true }).click();
-    await page.locator('#toast-text', { hasText: '已加入' }).waitFor(); await page.locator('#toast-close').click();
+    await page.locator('#toast-text', { hasText: textPattern('toast.joinedSpace') }).waitFor(); await page.locator('#toast-close').click();
   }
   const [busy, other] = ids;
   await (await app.browserWindow(page)).evaluate(w => w.setContentSize(1240, 900));

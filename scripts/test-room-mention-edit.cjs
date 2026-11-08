@@ -62,7 +62,8 @@ async function suffixChoices() {
     if (evidence) fs.writeFileSync(path.join(evidence, 'suffix-' + label + '.json'), JSON.stringify(proof, null, 2));
     assert.equal(proof.popupVisible, false, 'Explicit choice before existing whitespace must stay closed so Enter sends');
     await input().press('Enter'); await until(async () => (await native()).sends.length === before + 1, 'Enter sends once after explicit mention choice');
-    assert.deepEqual((await native()).sends.at(-1), { id: b, text: suffix.trim() }); await native('release');
+    // Shared input is sent literally since ccf47c8; only the one space after the mention is the mention's own.
+    assert.deepEqual((await native()).sends.at(-1), { id: b, text: suffix.replace(/^ /u, '') }); await native('release');
     await until(async () => await value() === '' && await recipient() === '', 'T87 clears sent body and mention');
     check('Choose single-word Bob before existing ' + label + ': list stays closed and Enter sends exactly once');
   }

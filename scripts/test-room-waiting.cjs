@@ -1,3 +1,4 @@
+const { textPattern } = require('./fixtures/ui-text.cjs');
 const testScratch = require('./fixtures/test-scratch.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
@@ -71,7 +72,7 @@ async function run() {
   for (const id of [a, b]) {
     await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#session-header-more').click();
     await page.getByRole('menuitem', { name: '加入此空间', exact: true }).click();
-    await page.locator('#toast-text', { hasText: '已加入' }).waitFor(); await page.locator('#toast-close').click();
+    await page.locator('#toast-text', { hasText: textPattern('toast.joinedSpace') }).waitFor(); await page.locator('#toast-close').click();
   }
   // The sidebar marks exactly one current place, visibly (bar + frame) and with aria-current.
   const current = () => page.evaluate(() => [...document.querySelectorAll('[aria-current="page"]')].map(el => el.id || el.dataset.sessionId));

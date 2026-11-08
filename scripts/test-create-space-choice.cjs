@@ -1,6 +1,7 @@
 // T-115: 开始一个会话 can put the new session in a collaboration space: independent (default), an existing space, or a
 // new space it names. Real isolated Electron + service; only the native transport is synthetic. Failures are injected by
 // wrapping the app's own IPC handlers, and each handler call is counted, so a retry provably creates nothing twice.
+const { textPattern } = require('./fixtures/ui-text.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process'), { randomUUID } = require('node:crypto');
 const scratch = require('./fixtures/test-scratch.cjs');
@@ -104,7 +105,7 @@ async function run() {
   await page.locator('#create-space-existing').selectOption(studyId);
   await page.locator('#confirm-create').click(); await page.locator('#create-dialog').waitFor({ state: 'hidden' });
   const [helper] = await named('学习助手'); assert.equal(helper.provider, 'claude'); assert.deepEqual(await spacesOf(helper.id), [studyId]);
-  await until(async () => (await page.locator('#toast-text').innerText()).includes('新会话已移到「学习小组」'), 'Join toast');
+  await until(async () => textPattern('toast.createdSessionJoined').test((await page.locator('#toast-text').innerText()).trim()), 'Join toast');
   check('A Claude session created with 加入已有空间 is a member of exactly that space, and the result is shown');
 
   // 4. Create a new space and join (Codex entry).

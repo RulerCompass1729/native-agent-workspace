@@ -33,8 +33,9 @@ const snapshot = () => page.evaluate(() => workspace.initial());
   await page.locator('#message-input').fill('New GUI question'); await page.locator('#send-button').click();
   await page.locator('#messages').getByText('New GUI question', { exact: true }).waitFor();
   await page.locator('#messages').getByText('Live reply from original session', { exact: true }).waitFor();
-  await page.locator('#messages').getByText('Native intermediate tool output', { exact: true }).waitFor();
-  assert.equal(await page.locator('#messages').getByText('Native intermediate tool output', { exact: true }).count(), 1);
+  // The process-group preview (2eaab0d) repeats the tail; the original output is the message body.
+  await page.locator('#messages .message-body').getByText('Native intermediate tool output', { exact: true }).waitFor();
+  assert.equal(await page.locator('#messages .message-body').getByText('Native intermediate tool output', { exact: true }).count(), 1);
   await until(async () => await page.locator('#send-button').textContent() === '追加指令 ↑', 'Native working-turn action');
   await page.locator('#message-input').fill('Adjust the current task'); await page.locator('#send-button').click();
   await until(async () => (await fixture('stats')).requests.filter(m => m === 'turn/steer').length === 1, 'One native steer');

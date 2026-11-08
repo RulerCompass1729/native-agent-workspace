@@ -82,7 +82,8 @@ async function run() {
   assert.equal(await page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${c}"] .collaboration-member-name`).getAttribute('aria-pressed'),'true','C is the open member');
   // The shared composer and its 文件… are hidden while a member is open, so the file step below runs after returning.
   assert.equal(await page.locator('#recipient').inputValue(),a,'Opening a member does not choose the file or message recipient');
-  await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).click();
+  // A member now opens in the space's tabs (a58e456); return to the member overview tab.
+  await page.locator('#room-overview').click();
   await page.locator('#room-record').click();
   assert.equal(await page.locator('#room-record-view').isVisible(),true);
   assert.equal(await page.locator('#recipient').inputValue(),a,'Returning to the record keeps the recipient');

@@ -44,7 +44,8 @@ async function run() {
   const openMember = async id => { await page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${id}"] .collaboration-member-name`).click(); await page.locator('#terminal-tab').click(); };
   await page.locator('#room-nav').click(); await page.locator('#room-overview').click(); await openMember(a.id); await checkLoading(a.id);
   // Switching away from a loading member must not defer any input to it.
-  await openMember(b.id); await checkLoading(b.id); await native('release', b.id);
+  // Opening a member hides the overview (a58e456); return to it before opening the next card.
+  await page.locator('#room-overview').click(); await openMember(b.id); await checkLoading(b.id); await native('release', b.id);
   await input(b.id).waitFor({ state: 'visible' }); await until(async () => await input(b.id).evaluate(el => el === document.activeElement), 'Ready terminal focused');
   await page.keyboard.type('FIRST-B'); await until(async () => (await native('stats')).inputs.filter(x => x.id === b.id).map(x => x.data).join('') === 'FIRST-B', 'First input reaches B');
   await native('release', a.id); await delay(150); assert.equal(await input(b.id).evaluate(el => el === document.activeElement), true, 'Late A must not steal focus');

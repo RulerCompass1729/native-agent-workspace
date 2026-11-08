@@ -1,4 +1,5 @@
 // Actual isolated source GUI/service. Only native output is synthetic.
+const { textPattern } = require('./fixtures/ui-text.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
@@ -74,7 +75,7 @@ async function run() {
   }
   // Joining shows a 撤销加入 notice with no time limit; close it as a person would.
   async function closeJoinNotice() {
-    await page.locator('#toast-text', { hasText: '已加入' }).waitFor(); await page.locator('#toast-close').click();
+    await page.locator('#toast-text', { hasText: textPattern('toast.joinedSpace') }).waitFor(); await page.locator('#toast-close').click();
   }
   async function joinFromSolo(id) {
     await (await row(id)).click(); await page.locator('#session-header-more').click();
