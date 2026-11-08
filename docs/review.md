@@ -6761,3 +6761,9 @@ Source-only qualification: exact native routing-discovery timeouts on Codex0.166
 A source counter changed from165PASS/166+167FAIL to3PASS; affected tests pass118/118 with no skips. One actual source GUI journey with synthetic166 transport passed the existing four stages: visible schedule/original error, cancel/draft protection, one same-identity continue with independent draft preserved, reopen without replay and unrelated-error refusal. Zero model calls/native provider processes. Actual166/167 transport/getter/backoff/window primitives reuse the unchanged qualified T110 evidence; no new native engine or upstream real routing failure was exercised. All owned cleanup completed and the canonical token was released before offline work.
 
 Source only; no signed installation or original-backend activation. Native goal restoration/CAS, real upstream routing failure and broader protocol qualification remain outside this delivery. Main alone integrates, installs and publishes.
+
+### Native failure notice does not invent collaboration state
+
+- Installed isolated acceptance reproduces an independent failed turn with no room run, yet the generic native-failure caption claims collaboration is paused. The native error body and bounded recovery remain correct.
+- The Codex adapter has no room context when it emits this notice. Its two locale entries now describe only the observed interrupted/failed turn. Actual group pause remains represented by the collaboration state; original native error text is unchanged.
+- Source scope is two existing message values, no runtime control, new UI, schema or native calls. The same batch candidate will recheck the independent failure view, cancellation, draft preservation and bounded continuation before this finding is closed.
