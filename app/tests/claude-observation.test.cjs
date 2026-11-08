@@ -238,9 +238,9 @@ for (const version of ['2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2
   assert.equal(f.r.nativeAbortAvailable === true, ['2.1.310', '2.1.311', '2.1.312'].includes(version));
   assert.equal(f.r.nativeCapacityAvailable === true, ['2.1.310', '2.1.311', '2.1.312'].includes(version));
 });
-test('native 2.1.316 can abort its turn but does not yet arm capacity recovery (T-133)', async () => {
+test('native 2.1.316 can abort its turn and arms capacity recovery (T-133, T-32)', async () => {
   const f = await mod({ version: '2.1.316' });
-  assert.equal(f.r.nativeAbortAvailable, true); assert.notEqual(f.r.nativeCapacityAvailable, true);
+  assert.equal(f.r.nativeAbortAvailable, true); assert.equal(f.r.nativeCapacityAvailable, true);
 });
 test('a mod that predates nativeCapacity keeps capacity recovery with abort, as before', () => {
   for (const [fields, capacity] of [[{ nativeAbort: true }, true], [{ nativeAbort: true, nativeCapacity: false }, false], [{ nativeAbort: false }, false]]) {
@@ -259,7 +259,7 @@ test('native 2.1.316 binds the root so a main-turn workspace message reaches the
     if (url.endsWith('/addressed-message')) { staged.push(body); return { ok: true, text: JSON.stringify({ status: 'staged' }) }; }
   } });
   assert.equal(f.r.nativeBlocks, true);
-  for (const flag of ['nativeCapacityAvailable', 'nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
+  for (const flag of ['nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
   assert.equal(f.r.nativeQueue, true, 'The queue is qualified on 2.1.316 (T-133)');
   assert.equal(f.r.nativeMedia, true, 'Tool-result media is qualified on 2.1.316 (T-133)');
   for (const fn of f.clock.splice(0).filter(fn => fn.delay === 500)) await fn();
@@ -487,9 +487,9 @@ test('native 2.1.312 (the main session\'s binary): a typed turn and a turn NAW s
   assert.equal(inside?.deny, undefined);
   assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['woken-312', submitted]]);
 });
-test('native 2.1.317 binds and stages like 2.1.316: blocks, transitions, abort, turn records and narration, no capacity (T-133)', async () => {
+test('native 2.1.317 binds and stages like 2.1.316: blocks, transitions, abort, capacity, turn records and narration (T-133, T-32)', async () => {
   const f = await addressedMod('2.1.317'), promptId = randomUUID();
-  assert.equal(f.r.nativeBlocks, true); assert.equal(f.r.nativeAbortAvailable, true); assert.notEqual(f.r.nativeCapacityAvailable, true);
+  assert.equal(f.r.nativeBlocks, true); assert.equal(f.r.nativeAbortAvailable, true); assert.equal(f.r.nativeCapacityAvailable, true);
   assert.equal(f.r.nativeTurnRecords, true); assert.equal(f.r.nativeNarration, true);
   for (const flag of ['nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
   assert.equal(f.r.nativeQueue, true, 'The queue is qualified on 2.1.317 (T-133)');
@@ -1182,6 +1182,52 @@ test(`native API failure uses only processed same-turn text: ${legacy ? 'retaine
   assert.equal(f.r.failedTurnInputId, null, 'A delayed failure update cannot grant another send');
 });
 
+// T-32: capacity recovery per Claude version, through the real bridge and adapter. 2.1.316 and 2.1.317 build the same
+// API-error row and StopFailure input as the qualified 2.1.312 (read-only comparison of the installed bundles; no real
+// 529 was reproduced). 2.1.318 and 2.1.319 wait for their abort and native blocks (T-160).
+async function capacityThroughBridge(t, version, row = {}, order = 'relay-last') {
+  const f = await mod({ version }), prompt = randomUUID(), turn = randomUUID(), errorId = randomUUID(), text = 'API Error: Repeated 529 Overloaded errors';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-claude-capacity-version-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, f.r.record.nativeId + '.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ uuid: errorId, sessionId: f.r.record.nativeId, type: 'assistant', isSidechain: false,
+    isApiErrorMessage: true, message: { model: '<synthetic>' }, apiErrorStatus: 529, ...row }) + '\n');
+  const ends = []; f.r.on('nativeTurnEnd', e => ends.push(e));
+  f.r.lastPromptId = prompt; f.r.submission.status(true);
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: prompt });
+  await f.invoke('turn.start', { turnId: turn });
+  await f.append(response(text, { uuid: errorId, origin: { kind: 'model', model: '<synthetic>' } }),
+    async e => ({ uuid: e.uuid, message: { type: 'assistant', content: [{ type: 'text', text }] } }));
+  // A real turn's start reaches the adapter long before it ends.
+  while (f.clock.length) await f.clock.shift()();
+  // The adapter hears StopFailure from the classic hook relay, with the saved transcript: after the bridge's
+  // failed-turn block reaches it, or after the bridge has seen the failure but before that block is delivered.
+  const relay = () => f.r.hook({ hook_event_name: 'StopFailure', session_id: f.r.record.nativeId, prompt_id: prompt, transcript_path: file });
+  await f.invoke('turn.complete', { turnId: turn, reason: 'error', answer: '', durationMs: 100 });
+  await f.invoke('classic.StopFailure', { session_id: f.r.record.nativeId, prompt_id: prompt });
+  if (order === 'relay-before-delivery') relay();
+  while (f.clock.length) await f.clock.shift()();
+  if (order === 'relay-last') relay();
+  return { f, ends, turn };
+}
+for (const order of ['relay-last', 'relay-before-delivery'])
+for (const version of ['2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319']) test(`Claude capacity recovery is armed only on qualified versions, through the real bridge: ${version} ${order}`, async t => {
+  const { f, ends, turn } = await capacityThroughBridge(t, version, {}, order), armed = ['2.1.312', '2.1.316', '2.1.317'].includes(version);
+  assert.equal(f.r.nativeCapacityAvailable === true, armed);
+  if (armed) assert.deepEqual(ends, [{ nativeId: f.r.record.nativeId, turnId: turn, status: 'failed', errorInfo: 'serverOverloaded' }]);
+  else assert.ok(ends.every(e => e.errorInfo !== 'serverOverloaded'), JSON.stringify(ends));
+});
+for (const version of ['2.1.316', '2.1.317'])
+  for (const [label, row] of [['500', { apiErrorStatus: 500 }], ['401', { apiErrorStatus: 401 }], ['no status (timeout)', { apiErrorStatus: null }],
+    ['StopFailure without its error row', { uuid: randomUUID() }]])
+    test(`Claude ${version}: a failure that is not capacity never schedules a continue: ${label}`, async t => {
+      // A wrong continue is a hidden extra model call, worse than none. The chain must still reach the transcript
+      // check: the turn ends failed once, with no capacity cause.
+      const { f, ends, turn } = await capacityThroughBridge(t, version, row);
+      // A missing row is read again a bounded number of times before the turn ends as an ordinary failure.
+      for (let read = 0; read < 5 && !ends.length; read++) f.r.reportCapacityFailure(true);
+      assert.deepEqual(ends, [{ nativeId: f.r.record.nativeId, turnId: turn, status: 'failed', errorInfo: null }]);
+    });
 test('late root failure cannot erase a newer native task or child work', () => {
   const r = adapter(), current = randomUUID(), old = randomUUID(), states = [];
   r.lastPromptId = current; r.rootTurn = { id: 'new-turn', promptId: current, status: 'working' };

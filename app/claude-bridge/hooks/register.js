@@ -651,10 +651,13 @@ async function bindRoot($, ownGeneration) {
     nativePromptInput: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     // On 2.1.316 and 2.1.317 only tool results carry images; prompt images need the input gates, which stay off.
     nativeMedia: nativeMediaVersion(version),
-    // 2.1.316 and 2.1.317: turn.abort is qualified (T-133). Capacity recovery, which reads the
-    // native transcript and continues the session, is not yet; say so explicitly.
+    // 2.1.316 and 2.1.317: turn.abort is qualified (T-133), and so is capacity recovery, which reads the native
+    // transcript and continues the session (T-32): their bundles build the same API-error row (isApiErrorMessage,
+    // apiErrorStatus) and StopFailure input (prompt, session, agent, transcript) as 2.1.312, by read-only comparison;
+    // no real 529 was reproduced. 2.1.318 and 2.1.319 match too, but capacity needs abort and native blocks, which
+    // they do not have yet (they bind model-only, T-160).
     nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(version),
-    nativeCapacity: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
+    nativeCapacity: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(version),
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302',
     nativeTurnRecords: !legacyOnly && ['2.1.316', '2.1.317'].includes(version),
     nativeNarration: !legacyOnly && ['2.1.316', '2.1.317'].includes(version) }, binding);
