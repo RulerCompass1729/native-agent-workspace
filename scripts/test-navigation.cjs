@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 // Real hidden Electron navigation with many synthetic histories; no model tasks.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
@@ -61,7 +62,7 @@ async function create(name) {
   return (await snapshot()).sessions.find(s => s.name === name).id;
 }
 async function run() {
-  await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service ready'); client = await connect(profile, 'navigation-observer'); await launch();
+  await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service ready'); client = await connect(profile, 'navigation-observer'); await launch(); await revealDefaultSpace(page);
   await controls('60 histories at initial size'); await capture('long-list');
   await searchName('学习项目 59', 'synthetic-session-59');
   assert.equal(await page.locator('#title').innerText(), '学习项目 59');

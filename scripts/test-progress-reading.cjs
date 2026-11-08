@@ -18,6 +18,7 @@ for (const repo of [fs.realpathSync(root), fs.realpathSync(path.resolve(slot, '.
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('OCCUPIED: no profile, daemon or GUI started'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 3', task: plan.task, token, pid: process.pid, time: new Date().toISOString() }));
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { fork } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
 const { createIn } = require('./fixtures/create-view.cjs');
@@ -83,6 +84,7 @@ async function run() {
   client = await connect(profile, 'progress-observer'); const backend = await client.call('initial');
   assert.equal(backend.servicePid, child.pid); assert.equal(backend.runtimeVersion, require('../package.json').version); assert.equal(backend.sessions.length, 0);
   await launch();
+  await revealDefaultSpace(page);
   const a = await create('Reading A'), b = await create('Reading B', 'codex');
   const text = Array.from({ length: 100 }, (_, i) => `Result line ${i}: local output`).join('\n');
   await fixture('nativeBlock', a, { id: 'tool:read', kind: 'tool', turnId: 'a', title: 'Read', input: 'fixture.txt', text, status: 'complete' });

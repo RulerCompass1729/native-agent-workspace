@@ -19,6 +19,7 @@ for (const repo of [fs.realpathSync(root), fs.realpathSync(path.resolve(slot, '.
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('OCCUPIED: no profile, daemon or GUI started'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 3', task: plan.task, token, pid: process.pid, time: new Date().toISOString() }));
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { fork, spawn } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
 const { createIn } = require('./fixtures/create-view.cjs');
@@ -87,6 +88,7 @@ async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon ready'); client = await connect(profile, 'daily-observer');
   const backend = await client.call('initial'); assert.equal(backend.servicePid, child.pid); assert.equal(backend.runtimeVersion, require('../package.json').version); assert.equal(backend.sessions.length, 0);
   await launch();
+  await revealDefaultSpace(page);
   await page.locator('#setup-button').click(); await page.locator('#setup-dialog').waitFor(); assert.match(await page.locator('#version-info').innerText(), /应用/);
   await require('./check-theme.cjs').checkTheme(page); await page.locator('#close-setup').click();
   check('Fresh app profile renders setup and light/dark controls; native environment installation is not simulated');

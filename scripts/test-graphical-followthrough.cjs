@@ -19,6 +19,7 @@ for (const repo of [fs.realpathSync(root), fs.realpathSync(path.resolve(slot, '.
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('OCCUPIED: no profile, daemon or GUI started'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 3', task: plan.task, token, pid: process.pid, time: new Date().toISOString() }));
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { fork } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
 const { createIn } = require('./fixtures/create-view.cjs');
@@ -138,7 +139,7 @@ async function run() {
   console.log('Profile:', profile);
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service ready'); client = await connect(profile, 'followthrough-observer');
   const backend = await client.call('initial'); assert.equal(backend.servicePid, child.pid); assert.equal(backend.runtimeVersion, require('../package.json').version); assert.equal(backend.sessions.length, 0);
-  await launch(); const a = await create('claude', '预算整理'), b = await create('codex', '预算核查');
+  await launch(); await revealDefaultSpace(page); const a = await create('claude', '预算整理'), b = await create('codex', '预算核查');
   const identities = (await snapshot()).sessions.map(s => [s.id, s.nativeId]);
   await room(); await inlineRecipient(page, b);
   const task = '核查三人出游预算：每人午餐 18 元、交通 7 元。给出总计和人均，保留明细。';
@@ -193,7 +194,8 @@ async function run() {
   assert.ok(copied.includes(summary)); assert.ok(!copied.includes('私人备注'));
   await page.locator('#room-notes').click(); await page.locator('#room-notes-text').fill('已确认预算\n' + summary); await page.locator('#save-notes').click();
   await until(async () => (await snapshot()).room.notes === '已确认预算\n' + summary, 'Local note saved');
-  const noteId = (await snapshot()).room.events.find(e => e.kind === 'notes').id;
+  // The latest notes event is this note: revealDefaultSpace saved an earlier one at launch (T-170).
+  const noteId = (await snapshot()).room.events.findLast(e => e.kind === 'notes').id;
   await openSearchScope('room'); await page.locator('#search-input').fill('已确认预算');
   await page.locator(`[data-search-key="shared:${noteId}"]`).click();
   await page.locator(`#room-messages [data-message-id="${noteId}"]`).waitFor();

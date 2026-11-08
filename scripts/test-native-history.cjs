@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 // Actual app interactions with a controlled native transport, no model calls.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
@@ -21,6 +22,7 @@ async function choose(n) { await page.locator(`input[name="native-history-choice
 async function run() {
   console.log('Profile:', profile); await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon ready'); await launch();
   assert.equal((await stats()).calls.length, 0, 'Launch must not browse or resume history');
+  await revealDefaultSpace(page);
   await open(); await page.locator('#close-native-history').click(); await delay(300);
   assert.equal((await snapshot()).sessions.length, 0); assert.equal((await stats()).calls.some(c => c.method === 'thread/resume'), false);
   await open(); await page.locator('input[name="native-history-choice"]').first().waitFor();

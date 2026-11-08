@@ -18,6 +18,7 @@ for (const repo of [fs.realpathSync(root), fs.realpathSync(path.resolve(slot, '.
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('OCCUPIED: no profile, daemon or GUI started'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'CodexMain', task: plan.task, token, pid: process.pid, time: new Date().toISOString() }));
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { fork } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
 const { createIn } = require('./fixtures/create-view.cjs');
@@ -90,6 +91,7 @@ async function run() {
   application = await _electron.launch({ executablePath, args, env: env({ NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }), timeout: 70000 });
   guiPids.push(application.process().pid);
   page = await application.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
+  await revealDefaultSpace(page);
   // Test-only inspection of the actual xterm instances; no production debug API.
   await page.evaluate(() => {
     window.progressTestTerminals = []; window.progressTestLatencies = [];

@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // One hidden app, real shipped adapter/workspace/IPC, synthetic providers.
@@ -68,7 +69,7 @@ async function performDrag(source, target, cancel) {
 }
 async function run() {
   console.log('Synthetic profile:', profile, 'Code root:', code);
-  await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon ready'); client = await connect(profile, 'collaboration-observer'); await launch();
+  await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon ready'); client = await connect(profile, 'collaboration-observer'); await launch(); await revealDefaultSpace(page);
   const a = await create('claude'), b = await create('codex'), ids = identities(await snapshot());
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await page.locator('#manage-members').click();

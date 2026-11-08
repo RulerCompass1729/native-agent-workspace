@@ -18,6 +18,7 @@ for (const repo of [fs.realpathSync(root), fs.realpathSync(path.resolve(slot, '.
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('OCCUPIED: no profile, daemon or GUI started'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 3', task: plan.task, token, pid: process.pid, time: new Date().toISOString() }));
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { fork } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
 const { createIn } = require('./fixtures/create-view.cjs');
@@ -91,6 +92,7 @@ async function run() {
   const backend = await client.call('initial'); assert.equal(backend.servicePid, child.pid); assert.equal(backend.runtimeVersion, require('../package.json').version); assert.equal(backend.sessions.length, 0);
   application = await _electron.launch({ executablePath, args, env: env({ NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }), timeout: 70000 }); guiPids.push(application.process().pid);
   page = await application.firstWindow(); page.setDefaultTimeout(12000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
+  await revealDefaultSpace(page);
   await page.evaluate(() => { window.progressTestTerminals = []; const open = Terminal.prototype.open; Terminal.prototype.open = function (...args) { progressTestTerminals.push(this); return open.apply(this, args); }; });
   const b = await create('codex'); await join(b);
   const a = await create('claude'), share = page.locator('#header-actions').getByRole('button', { name: '分享选中内容', exact: true, includeHidden: true });

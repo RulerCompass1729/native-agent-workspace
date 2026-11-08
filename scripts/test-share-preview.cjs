@@ -18,6 +18,7 @@ for (const repo of [fs.realpathSync(root), fs.realpathSync(path.resolve(slot, '.
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('OCCUPIED: no profile, daemon or GUI started'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 3', task: plan.task, token, pid: process.pid, time: new Date().toISOString() }));
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { fork } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
 const { createIn } = require('./fixtures/create-view.cjs');
@@ -93,6 +94,7 @@ async function run() {
   page = await app.firstWindow(); page.setDefaultTimeout(12000);
   page.on('pageerror', error => errors.push(error.message));
   await page.locator('#new-session').waitFor();
+  await revealDefaultSpace(page);
   const a = await create('claude'), b = await create('codex');
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   const seed = client.call('forward', a, 'SYNTHETIC SOURCE');

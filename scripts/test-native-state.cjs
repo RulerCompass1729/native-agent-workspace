@@ -18,6 +18,7 @@ for (const repo of [fs.realpathSync(root), fs.realpathSync(path.resolve(slot, '.
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('OCCUPIED: no profile, daemon or GUI started'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 3', task: plan.task, token, pid: process.pid, time: new Date().toISOString() }));
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { fork } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
 const { createIn } = require('./fixtures/create-view.cjs');
@@ -58,7 +59,7 @@ async function join(id){
 async function guards(){const values=await app.evaluate(()=>globalThis.stateGuards);assert.deepEqual(values,{clipboard:0,external:0,dialogs:0,maintenance:0,replacement:0});guardSamples.push(values);}
 async function check(text){assert.ok(Date.now()-started<plan.maxRunMs,'Five-minute stage-entry budget');checks.push(text);console.log('PASS:',text);await capture('stage-'+String(checks.length).padStart(2,'0'));}
 async function run(){
- await until(()=>fs.existsSync(path.join(profile,'connection.json')),'Service');client=await connect(profile,'state-observer');const backend=await client.call('initial');assert.equal(backend.servicePid,child.pid);assert.equal(backend.runtimeVersion,require('../package.json').version);assert.equal(backend.sessions.length,0);await launch();
+ await until(()=>fs.existsSync(path.join(profile,'connection.json')),'Service');client=await connect(profile,'state-observer');const backend=await client.call('initial');assert.equal(backend.servicePid,child.pid);assert.equal(backend.runtimeVersion,require('../package.json').version);assert.equal(backend.sessions.length,0);await launch();await revealDefaultSpace(page);
  const a=await create('claude','Claude state');
  await fixture('native-activity',a,{turnId:'turn-a',label:'正在请求',phase:'requesting'});
  await page.locator('#native-phase').getByText('Claude state · 正在请求',{exact:true}).waitFor();

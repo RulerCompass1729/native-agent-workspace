@@ -5,6 +5,7 @@ const assert = require('node:assert/strict'), { randomUUID, createHash } = requi
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const scratch = require('./fixtures/test-scratch.cjs'), { createIn } = require('./fixtures/create-view.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { _electron } = scratch.playwright(require('playwright'));
 const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
@@ -113,7 +114,7 @@ async function terminalDisplayDialog() {
 }
 async function notes() { if (!(await page.locator('#room-notes').isVisible())) await page.locator('#room-record').click(); await page.locator('#room-notes').click(); await page.locator('#notes-dialog').waitFor(); }
 async function run() {
- setup(); await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Owned daemon ready'); await launch();
+ setup(); await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Owned daemon ready'); await launch(); await revealDefaultSpace(page);
  const initial = await snapshot(); assert.ok(fs.realpathSync(initial.defaultWorkspace).startsWith(owned + path.sep));
  // T-159: every light-dismiss dialog by name, so a new one fails here by name. Its cancellation belongs below; the space
  // dialogs added on 10-30 (c9800cc, 3305174): space-create and space-files are checked below, space-merge is not yet.
