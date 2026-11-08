@@ -222,6 +222,18 @@ test('an actual backend plan refusal passes through Main and repaints in the exi
   assert.equal(f.c.backendSwitchedText({ error: own.message, errorUiMessage: own.uiMessage }), 'Automatic backend update did not complete: ' + locale.errorText('en', own));
   assert.equal(f.c.backendSwitchedText({ error: 'RAW upstream 中文 {reason}' }), 'Automatic backend update did not complete: RAW upstream 中文 {reason}');
 });
+test('a legacy maintenance refusal reaches the actual menu instead of a generic native-end warning', async () => {
+  const record = { id: 'saved', nativeId: 'saved-native', provider: 'claude', name: 'Saved', state: 'idle', owner: 'original-view' };
+  const entry = { key: 'old', state: { runtimeVersion: '0.1.0-alpha.120', servicePid: 42, capabilities: ['atomicShutdown', 'resume'], sessions: [record], room: { messages: [] } } };
+  const [option] = mainOptions({ entries: [entry], snapshot: () => ({ sessions: [record], room: { messages: [] } }) });
+  assert.equal(option.switch?.ready, false);
+  assert.equal(option.switch.reasonUiMessage.key, 'error.planOldBackend');
+  const f = menuFixture(), opening = f.c.open(); f.resolve([option]); await opening; await f.menu.onSelect('0');
+  assert.equal(f.toast.textContent, '这个早期后台不支持安全的一步更新。');
+  f.switch('en'); assert.equal(f.toast.textContent, 'This early backend does not support a safe one-step update.');
+  assert.equal(f.calls.updates.length + f.calls.switches.length, 0);
+});
+
 test('sessions ended by an unfinished update are named in the menu even with no old backend left', async () => {
   const f = menuFixture(); f.settings.interrupted = ['Claude 2', 'Codex 秘书']; const opening = f.c.open(); f.resolve([]); await opening;
   assert.deepEqual(plain(f.menu.items.map(item => item.id)), ['interrupted', 'auto']);

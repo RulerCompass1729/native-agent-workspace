@@ -98,7 +98,7 @@ function backendPlan(state, sessionState = record => record.state, running = new
   }
   // Old services cannot compare the confirmed authority at their stop boundary.
   // Do not quietly substitute the ordinary, unconditional user-stop operation.
-  if ((stops.length || (state.sessions || []).some(s => s.state === 'recoverable')) && !state.capabilities?.includes('conditionalMaintenanceStopV1')) return refused('error.planOldBackend');
+  if ((stops.length || (state.sessions || []).some(s => s.state === 'recoverable')) && !state.capabilities?.includes('conditionalMaintenanceStopV1')) return { ...refused('error.planOldBackend'), blocked: true, stops };
   const warning = unprovenReasons.length ? uiError('error.planUnprovenReasons', { reasons: unprovenReasons.join('；') }, { parts: reasonParts, param: 'reasons', separator: '；' }) : null;
   return { ready: true, auto: stops.length > 0 && unprovenReasons.length === 0, reason: warning ? warning.message : '', reasonUiMessage: warning ? warning.uiMessage : null, stops,
     endsCodex: stops.some(s => s.provider === 'codex') };
