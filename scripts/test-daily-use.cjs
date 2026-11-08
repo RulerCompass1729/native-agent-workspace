@@ -149,7 +149,8 @@ async function run() {
   await page.locator(`.collaboration-member-status[data-member-id="${codex}"] .collaboration-member-name`).click();
   await page.locator('#terminal-tab').click(); await until(() => input(codex).evaluate(el => document.activeElement === el), 'Explicit original member terminal focus');
   await page.keyboard.type('-ROOM');
-  await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).click();
+  // T-121 A: the open member's own tab returns to the whole space (its card and ← 返回共同工作 are hidden while it is open).
+  await page.locator(`#room-member-tabs [data-room-session="${codex}"]`).click(); await page.locator('#collaboration-overview').waitFor();
   await page.locator('#room-record').click(); await chooseRecipient(claude); await fillRoomMessage(page, '下一次核查草稿');
   await page.locator(`[data-session-id="${codex}"]`).click(); await membership(codex, false);
   await terminal(codex); await page.keyboard.type('-SOLO');

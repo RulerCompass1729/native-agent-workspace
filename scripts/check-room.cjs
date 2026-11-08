@@ -12,7 +12,8 @@ const identity = s => s.sessions.map(x => [x.id, x.nativeId, x.pid, x.messages.l
 const focus = (page, id) => page.waitForFunction(id => document.activeElement?.classList.contains('xterm-helper-textarea') && document.activeElement.closest('[data-terminal-id]')?.dataset.terminalId === id, id);
 const tab = (page, id) => page.locator(`[data-room-session="${id}"]`);
 const openTerminal = async (page, id) => {
-  await tab(page, id).click();
+  // T-121 A: clicking the open member's tab returns to all members, so click it only when it is not pressed.
+  if (await tab(page, id).getAttribute('aria-pressed') !== 'true') await tab(page, id).click();
   // A member tab is passive and restores that member's saved mode.
   await page.locator('#terminal-tab').click();
   await focus(page, id);

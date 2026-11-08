@@ -40,6 +40,7 @@ const check = text => { checks.push(text); console.log('PASS:', text); };
 const header = id => page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${id}"]`);
 const more = id => header(id).locator('[data-member-menu]');
 const name = id => header(id).locator('.collaboration-member-name');
+const tab = id => page.locator(`#room-member-tabs [data-room-session="${id}"]`);
 const identity = state => state.sessions.map(s => [s.id, s.nativeId, s.pid, s.model, s.nativePermissionMode, s.skipPermissions]).sort();
 async function capture(name) {
   if (!process.env.NAW_SCREENSHOTS_DIR) return;
@@ -67,7 +68,9 @@ async function visibleStates(ids, menu = false) {
     // T-150: since b4a764c each card holds an aria-hidden compact child-task span; the room surface shows it only when it
     // has text (no observed child tasks leaves it empty and display:none). Only the empty span is skipped: with text it is
     // the one visible child-task fact, so it must still be on screen.
-    const facts = await header(id).evaluate(el => [el, ...el.children].filter(n => !n.matches('.collaboration-member-child-compact:empty')).map(n => n.getBoundingClientRect().toJSON()));
+    // a58e456: while a member is open or 共享记录 shows, the cards are hidden and each state shows on the member's tab.
+    const target = await header(id).isVisible() ? header(id) : tab(id);
+    const facts = await target.evaluate(el => [el, ...el.children].filter(n => !n.matches('.collaboration-member-child-compact:empty')).map(n => n.getBoundingClientRect().toJSON()));
     for (const r of facts) {
       assert.ok(r.width > 0 && r.height > 0 && r.left >= 0 && r.right <= bounds.width + 1 && r.top >= 0 && r.bottom <= bounds.height + 1, 'Every member state fact remains in the visible reading surface');
       if (menuBox) assert.ok(menuBox.y >= r.bottom - 1 || menuBox.y + menuBox.height <= r.top + 1 || menuBox.x >= r.right - 1 || menuBox.x + menuBox.width <= r.left + 1, 'The member menu must not cover any state card');
@@ -154,8 +157,10 @@ async function run() {
   assert.equal((await snapshot()).sessions.find(s => s.id === b).owner, owners.find(s => s[0] === b)[1]);
   check('Detach stays in the room; explicit Open uses the exact original ID, preserving identities and private/shared drafts');
 
-  await name(a).click(); await more(b).click(); await visibleStates([a, b, c], true); await page.keyboard.press('Escape');
-  await page.locator('#room-record').click(); await more(c).click(); await visibleStates([a, b, c], true); await page.keyboard.press('Escape');
+  // With a member open its state facts stay visible on the tabs and the member menus are on the overview's cards (a58e456);
+  // T-121 A: the open member's own tab returns to the whole space.
+  await name(a).click(); await visibleStates([a, b, c]); await tab(a).click(); await more(b).click(); await visibleStates([a, b, c], true); await page.keyboard.press('Escape');
+  await page.locator('#room-record').click(); await visibleStates([a, b, c]); await page.locator('#room-overview').click(); await more(c).click(); await visibleStates([a, b, c], true); await page.keyboard.press('Escape');
   await page.locator('#room-overview').click();
   await app.browserWindow(page).then(win => win.evaluate(win => win.setSize(680, 860)));
   await page.getByRole('button', { name: '简化信息', exact: true }).click();

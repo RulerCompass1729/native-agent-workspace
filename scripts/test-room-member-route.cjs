@@ -39,6 +39,8 @@ function fixture(method, target, value) {
 }
 const snapshot = () => page.evaluate(() => workspace.initial());
 const tab = id => page.locator(`#room-member-tabs [data-room-session="${id}"]`);
+// T-121 A: clicking the open member's tab returns to all members, so open a member only when its tab is not pressed.
+const openTab = async id => { if (await tab(id).getAttribute('aria-pressed') !== 'true') await tab(id).click(); };
 async function capture(name) { if (!screenshots) return; fs.mkdirSync(screenshots, { recursive: true }); const file = path.join(screenshots, name + '.png'); await page.screenshot({ path: file }); witnesses.push(file); }
 async function settle() { await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))); }
 async function closeNotice() { if (await page.locator('#toast-close').isVisible()) await page.locator('#toast-close').click(); }
@@ -125,7 +127,7 @@ async function run() {
   record('Switching through an empty second space preserves the first space saved member/native mode and drafts without a native claim');
   await tab(b).click(); assert.equal(await page.locator('#message-input').isEditable(), true); assert.equal(await page.locator('#send-button').isDisabled(), true); assert.equal(await page.locator('#message-input').inputValue(), permissionBefore.draft); assert.deepEqual((await snapshot()).sessions.find(s => s.id === b).approvals.map(r => r.requestId), permissionBefore.requests); assert.ok((await tab(b).innerText()).includes('待'));
   await tab(a).click(); await page.locator('#native-pane').waitFor(); assert.deepEqual(controls(await fixture('stats')), afterExplicitNative);
-  const e = await create('Route E with a longer readable member name', 'claude'); await page.locator('#room-nav').click(); await tab(a).click();
+  const e = await create('Route E with a longer readable member name', 'claude'); await page.locator('#room-nav').click(); await openTab(a);
   await page.locator('#chat-tab').click(); await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(850, 600)); await settle(); await visibleStates([a, b, d, e]); await capture('04-narrow-four-member-states');
   // Rejoin the same historical logical/native pair; this is the owned fixture,
   // not a migration or a provider/native session creation.
@@ -134,7 +136,7 @@ async function run() {
   const geometry = await page.evaluate(() => ({ chatHeight: document.getElementById('messages').clientHeight, privateBottom: document.getElementById('composer-wrap').getBoundingClientRect().bottom, viewport: innerHeight, font: getComputedStyle(document.getElementById('message-input')).fontSize }));
   assert.ok(geometry.chatHeight >= 80); assert.ok(geometry.privateBottom <= geometry.viewport + 1); assert.equal(geometry.font, '14px'); await capture('05-narrow-five-member-states');
   record('Permission/input guards survive tab changes; four/five member statuses remain visible at850x600 with reading and14px private draft');
-  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 860)); await tab(a).click(); await page.locator('#member-related-records').click(); await detach(a);
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 860)); await openTab(a); await page.locator('#member-related-records').click(); await detach(a);
   await until(() => page.locator('#room-record-return').isDisabled(), 'Departed return disabled'); assert.equal(await tab(a).count(), 0); assert.match(await page.locator('#room-messages').innerText(), /SYNTHETIC_SHARED_A/);
   assert.equal(await page.locator('#shared-input').inputValue(), roomDraft); assert.equal(await page.locator('#recipient').inputValue(), recipient);
   const final = await fixture('stats'); assert.equal(final.stats.inputs, 0); assert.equal(final.stats.sends, 2); assert.deepEqual(errors, []);

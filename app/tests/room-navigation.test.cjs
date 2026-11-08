@@ -36,7 +36,7 @@ function harness(){
  $('shared-input').value='@Agent a UNSENT';$('recipient').value='a';
  const fields=source.match(/const roomViewFields = (\[[^;]+\]);/);assert.ok(fields);vm.runInContext(`const roomViewFields=${fields[1]};`,ctx);
  const names=['focusRoomMember','rememberRoomMemberView','restoreRoomMemberView','openRoomMember','timeline','timelineParticipants','filteredTimeline','showRoomRecords','returnRoomRecordMember','clearRoomRecordFilter','restoreRoomRecordFilter','renderTimeline','refreshRoomMemberTabs','captureRoomView','persistedRoomViews'];
- for(const name of ['roomRecentPreview','roomNavigationKey','renderRoomMemberTabs'])if(source.includes('function '+name+'('))names.push(name);
+ for(const name of ['roomRecentPreview','roomNavigationKey','memberTabClick','renderRoomMemberTabs'])if(source.includes('function '+name+'('))names.push(name);
  vm.runInContext(names.map(actual).join('\n'),ctx);vm.runInContext(source.split('\n').find(l=>l.startsWith('const roomReadingKey =')),ctx);ctx.renderSnapshotMaterials=()=>{};
  if(!ctx.renderRoomMemberTabs){const from=source.indexOf("      const tabs = $('room-member-tabs');",source.indexOf('function render()'));const tail='      refreshRoomMemberTabs(people);';const to=source.indexOf(tail,from);assert.ok(from>=0&&to>from);vm.runInContext('function renderRoomMemberTabs(){const people=orderedMembers();\n'+source.slice(from,to+tail.length)+'\n}',ctx)}
  return{ctx,$,document,calls,key:()=>vm.runInContext('roomReadingKey()',ctx)};
@@ -89,4 +89,19 @@ test('opening an explicit search result from recent-all retains the canonical hi
  $('search-dialog').close=()=>{};const text=fs.readFileSync(require.resolve('../renderer/search-view.js'),'utf8'),from=text.indexOf('async function openSearchResult('),to=text.indexOf('async function returnToReading(',from);assert.ok(from>=0&&to>from);vm.runInContext(text.slice(from,to),ctx);
  await ctx.openSearchResult({kind:'shared',roomId:'shared',messageId:'result-b'});
  assert.equal(ctx.roomViews.shared.roomFilter,'a');assert.equal(ctx.roomViews.shared.roomSearch,'original history');assert.equal(ctx.roomRecordScope,'');assert.equal(ctx.roomRecordReturn,null);assert.deepEqual(calls.native,[]);
+});
+
+// T-121 A: the open member's own tab returns to all members; another member's tab still opens that member.
+test('clicking the open member tab returns to all members, but not on a double-click or Control-click',()=>{
+ const{ctx,$}=harness();ctx.renderRoomMemberTabs();const tabs=$('room-member-tabs').children,a=tabs.find(t=>t.dataset.roomSession==='a'),b=tabs.find(t=>t.dataset.roomSession==='b');
+ assert.equal(a.getAttribute('aria-pressed'),'true');assert.equal(a.getAttribute('title'),ctx.uiText('room.tabRestoreHint',{label:'Agent a · a'}));assert.equal(b.getAttribute('title'),ctx.uiText('room.tabHint',{label:'Agent b · b'}));
+ ctx.memberTabClick('a',{detail:2});assert.equal(ctx.roomSession,'a','The second click of a double-click stays');
+ ctx.memberTabClick('a',{detail:1,ctrlKey:true});assert.equal(ctx.roomSession,'a','A Control-click stays');
+ ctx.memberTabClick('a',{detail:1});assert.equal(ctx.roomSession,'');assert.equal(ctx.roomSurface,'overview');
+ ctx.renderRoomMemberTabs();assert.equal(a.getAttribute('aria-pressed'),'false');assert.equal(a.getAttribute('title'),ctx.uiText('room.tabHint',{label:'Agent a · a'}));
+ ctx.memberTabClick('b',{detail:1});assert.equal(ctx.roomSession,'b','Another member tab opens that member');
+ ctx.memberTabClick('b',{detail:0});assert.equal(ctx.roomSession,'','Enter or Space on the open tab returns too');
+ a.click();assert.equal(ctx.roomSession,'a','The tab listener opens a member');
+ ctx.memberTabClick('a',{detail:1});ctx.memberTabClick('a',{detail:2});assert.equal(ctx.roomSession,'','A double-click on the open tab returns once and does not reopen');
+ ctx.memberTabClick('b',{detail:1});ctx.memberTabClick('b',{detail:2});assert.equal(ctx.roomSession,'b','A double-click on another tab opens it once');
 });

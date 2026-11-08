@@ -195,9 +195,9 @@ async function run() {
   assert.equal(await page.locator('#shared-input').inputValue(), rawDraft); assert.equal(await page.locator('#recipient').inputValue(), recipient);
   await unchangedNative(before, stateBefore); await capture('03-focused-member');
   await page.locator('#messages').hover(); await page.mouse.wheel(0, 140); await delay(120);
-  // Since T-121 the enlarged member's own card returns to the whole space, like ← 返回共同工作.
-  await header(b).locator('.collaboration-member-name').click();
-  await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).waitFor({ state: 'hidden' });
+  // T-121 A: while a member is open its card is hidden (a58e456), so its own tab returns to the whole space, like ← 返回共同工作.
+  await page.locator(`#room-member-tabs [data-room-session="${b}"]`).click();
+  await until(async () => !(await snapshot()).viewState.roomSession && await page.locator('#collaboration-overview').isVisible(), 'The open member tab returns to the whole space');
   assert.ok(Math.abs(await reader(b).evaluate(el => el.scrollTop) - positionBeforeFocus) < 3);
   assert.equal(await page.locator('#shared-input').inputValue(), rawDraft); assert.equal(await page.locator('#recipient').inputValue(), recipient);
   await unchangedNative(before, stateBefore);
@@ -221,7 +221,8 @@ async function run() {
   await page.getByRole('button', { name: '网格', exact: true }).click();
   await page.locator('#room-record').click(); assert.equal(await page.locator('#room-messages').isVisible(), true);
   assert.ok(!(await page.locator('#room-messages').innerText()).includes('PRIVATE_'));
-  for (const id of [a, b, c]) assert.equal(await header(id).isVisible(), true);
+  // On 共享记录 the cards are hidden (a58e456); every member's state stays visible on its tab.
+  await allHeadersVisible([a, b, c]);
   await page.locator('#room-overview').click(); await unchangedNative(before, stateBefore);
   assert.equal((await application.windows()).length, 1);
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 840));
@@ -286,6 +287,8 @@ async function run() {
   const sameB = (await snapshot()).sessions.find(s => s.id === b);
   assert.equal(sameB.nativeId, ids.find(x => x[0] === b)[1]);
   assert.equal(sameB.liveDraft, 'Unsent private member B draft');
+  // B is still open from the rename and its card is hidden (a58e456); its own tab returns to the whole space (T-121 A).
+  await page.locator(`#room-member-tabs [data-room-session="${b}"]`).click(); await until(async () => !(await snapshot()).viewState.roomSession, 'B returns to the whole space');
   const handle = header(b).locator('.collaboration-member-name'), detachedLabel = await handle.innerText(); assert.equal(await handle.getAttribute('draggable'), 'true');
   await handle.dragTo(page.locator('#solo-drop'));
   await until(async () => !(await snapshot()).sessions.find(s => s.id === b).roomId, 'Visible member drag detaches existing native session');

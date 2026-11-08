@@ -181,8 +181,10 @@ async function run() {
 
   const name = header(ids[0]).locator('.collaboration-member-name'); await name.focus(); await name.press('Enter');
   await page.locator('#room-session #session-view').waitFor();
-  for (const id of ids) { assert.equal(await header(id).isVisible(), true); assert.equal(await header(id).evaluate(el => el.parentElement.classList.contains('collaboration-statuses')), true); }
-  await layout('← 返回共同工作').click();
+  // a58e456: with a member open the cards are hidden and each member's state shows on its tab. T-121 A: that member's
+  // own tab returns to the whole space, like ← 返回共同工作, and focus returns to its card.
+  for (const id of ids) { assert.equal(await page.locator(`#room-member-tabs [data-room-session="${id}"]`).isVisible(), true); assert.equal(await header(id).evaluate(el => el.parentElement.classList.contains('collaboration-statuses')), true); }
+  await page.locator(`#room-member-tabs [data-room-session="${ids[0]}"]`).click();
   assert.equal(await name.evaluate(el => document.activeElement === el), true);
   for (const id of ids) assert.equal(await header(id).evaluate(el => el.parentElement.dataset.memberId === el.dataset.memberId), true);
   const more = header(ids[3]).locator('.collaboration-member-more'); await more.focus(); await more.press('Enter');

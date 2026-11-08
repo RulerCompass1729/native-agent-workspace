@@ -593,6 +593,17 @@ function openRoomMember(id) {
   if (roomSession !== id || roomSurface !== 'overview') focusRoomMember(id, roomSession, roomOverview?.key(id));
   [...$('room-member-tabs').children].find(tab => tab.dataset.roomSession === id)?.focus({ preventScroll: true });
 }
+// T-121 A: the open member's own tab also returns to all members, through the overview's Back path, as its card name
+// did before the tabs. The second click of a double-click and a Control-click (a context-menu gesture on macOS) never
+// leave the member; Enter and Space do. Like Back, focus returns to that member's card in the overview.
+function memberTabClick(id, event) {
+  // A double-click acts once: its second click neither leaves nor reopens the member.
+  if (event?.detail > 1) return;
+  if (!(roomSurface === 'overview' && roomSession === id)) return openRoomMember(id);
+  if (event?.ctrlKey) return;
+  roomOverview?.focus('');
+  if (focusedRoomMember()) focusRoomMember('', id, roomOverview?.key(id));
+}
 function refreshRoomMemberTabs(people = orderedMembers()) {
   const tabs = $('room-member-tabs');
   for (const tab of tabs.children) {
@@ -604,7 +615,7 @@ function refreshRoomMemberTabs(people = orderedMembers()) {
       const facts = window.nativeWorkspaceCollaboration.statusFacts(member, !disconnected, Date.now(), ui.language.getSnapshot().active);
       return [facts.state, facts.compactChild, facts.freshnessReported ? facts.freshness : ''].filter(Boolean).join(' · ');
     });
-    ui.display.attribute(tab, 'title', 'room.tabHint', { label: `${member.name} · ${sessionShortId(member.id)}` });
+    ui.display.attribute(tab, 'title', tab.getAttribute('aria-pressed') === 'true' ? 'room.tabRestoreHint' : 'room.tabHint', { label: `${member.name} · ${sessionShortId(member.id)}` });
     ui.display.computed(tab, 'aria-label', () => `${member.name} · ${sessionShortId(member.id)} · ${tab.querySelector('.room-member-state').textContent}`);
     tab.classList.toggle('needs-attention', Boolean(count));
   }
@@ -614,7 +625,7 @@ function renderRoomMemberTabs(people = orderedMembers()) {
   for (const [index, member] of people.entries()) {
     let tab = retained.get(member.id); retained.delete(member.id);
     if (!tab) {
-      tab = button('', () => openRoomMember(member.id)); tab.dataset.roomSession = member.id;
+      tab = node('button'); tab.type = 'button'; tab.addEventListener('click', event => attempt(() => memberTabClick(member.id, event))); tab.dataset.roomSession = member.id;
       tab.append(node('span', undefined, 'room-member-name'), node('span', undefined, 'room-member-state'));
       draggableSession(tab, member.id);
     }

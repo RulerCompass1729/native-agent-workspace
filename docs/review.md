@@ -7029,3 +7029,33 @@ Not fixed here, each separate from the header:
    would show no tab text and could run into the toolbar. Two members with the
    same leading letters look alike in the tab row; the cards, hover titles and
    accessible names still tell them apart.
+
+## T-121 A in the member-tab view: the open member's tab returns to all members (2026-11-08, Claude 3)
+
+Decision status: the Claude secretary session applied the recommended option A under the user's earlier "全按推荐"
+(go with every recommendation). The user has not decided this sub-question directly and can still veto it.
+
+Since a58e456, opening a member hides the whole overview, including that member's card and ← 返回共同工作, so only
+成员概览 led back to all members. Now a click, Enter or Space on the open member's own tab returns to all members,
+through the overview's Back path (`renderer.js memberTabClick`), as the enlarged card name did before the tabs
+(47beb61). The second click of a double-click is ignored whether or not the tab was open, so a double-click acts
+once. A Control-click on the open tab never leaves the member. The open tab's hint says a click returns
+(`room.tabRestoreHint`). After a double-click on the open tab, focus ends on the tab rather than the card.
+
+Independent review (claude-opus-5-5, session 6ba3bd50): round 1 CHANGES. A double-click on the open tab left and
+reopened the member; fixed and pinned by a unit step that fails under the old order. Two scripts still clicked the
+hidden Back button. Round 2 PASS.
+
+Exceptions to "scripts that used the hidden card controls now use the tabs" in the commit message: two scripts in
+Claude 2's active claim still click the hidden Back button and were broken by a58e456. They are handed to Claude 2,
+not edited here.
+- `scripts/test-compact-room.cjs:138` presses Enter on `name(a)`, then clicks ← 返回共同工作.
+- `scripts/test-collaboration-panorama.cjs:267` clicks `.collaboration-back:visible` after opening a member from its
+  card (:264).
+
+Fix for both: click the open member's `#room-member-tabs [data-room-session=…]` instead. T-121 is not complete until
+both have run with it.
+
+Verified in the GUI (hidden, synthetic, 0 model): collaboration-overview, daily-use, native-state, member-actions,
+collaboration-list, member-header-menu, room-member-route, test-check-room and test-desktop pass.
+test-room-navigation stops at its source-freeze guard (:18) before any step, as it did in the census.

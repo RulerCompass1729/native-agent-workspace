@@ -46,6 +46,7 @@ const snapshot = () => page.evaluate(() => workspace.initial());
 const header = id => page.locator(`.collaboration-member-status[data-member-id="${id}"]`);
 const name = id => header(id).locator('.collaboration-member-name');
 const more = id => header(id).locator('[data-member-menu]');
+const tab = id => page.locator(`#room-member-tabs [data-room-session="${id}"]`);
 const reader = id => page.locator(`.collaboration-member-reader[data-member-id="${id}"]`);
 const identity = s => s.sessions.map(({ id, nativeId, cwd, model, nativePermissionMode, skipPermissions }) => ({ id, nativeId, cwd, model, nativePermissionMode, skipPermissions }));
 const ownerState = s => s.sessions.map(({ id, owner, controlRevision }) => ({ id, owner, controlRevision }));
@@ -143,7 +144,7 @@ async function run() {
     measurements.push({ group: 'CDP-Control-left-click', before, after, menuCount: count, events: observed, qualified: contextEvents.length > 0 && before === after, limit: contextEvents.length ? 'CDP event sequence only, no physical mouse qualification' : 'CDP did not synthesize an OS contextmenu; physical Ctrl-click unqualified' });
     if (contextEvents.length) assert.equal(after, before, 'A delivered contextmenu cannot also passively enlarge the member');
     if (count) await closeMenu(b);
-    if (after) await page.getByRole('button', { name: '← 返回共同工作', exact: true }).click();
+    if (after) await tab(after).click();
   });
   await group('3 list, narrow, brief and passive focused states remain usable', async () => {
     await page.getByRole('button', { name: '列表', exact: true }).click(); await header(b).scrollIntoViewIfNeeded(); await rightTitle(b); await closeMenu(b);
@@ -151,26 +152,26 @@ async function run() {
     await header(c).scrollIntoViewIfNeeded(); await name(c).focus(); await page.keyboard.press('Shift+F10'); await menuReady(c); await closeMenu(c);
     await win.evaluate(w => w.setContentSize(1240, 850)); await page.getByRole('button', { name: '网格', exact: true }).click();
     const owner = (await snapshot()).sessions.find(s => s.id === b).owner;
-    await name(b).click(); await until(async () => (await snapshot()).viewState.roomSession === b, 'Passive member enlarged'); await rightTitle(b); await closeMenu(b);
-    // The enlarged member's own card control shows restore and toggles back to the whole space.
-    const arrow = id => name(id).evaluate(n => ({ mark: getComputedStyle(n, '::after').content, pressed: n.getAttribute('aria-pressed'), label: n.getAttribute('aria-label') }));
-    const enlarged = await arrow(b), other = await arrow(a);
-    assert.equal(enlarged.pressed, 'true'); assert.equal(other.pressed, 'false'); assert.notEqual(enlarged.mark, other.mark, 'The enlarged card shows a restore mark');
+    await name(b).click(); await until(async () => (await snapshot()).viewState.roomSession === b, 'Passive member enlarged');
+    // T-121 A: while a member is open its card is hidden (a58e456); its own tab is pressed, says a click returns, and toggles
+    // back to the whole space. Its card menu is checked again once the card shows.
+    const state = id => tab(id).evaluate(n => ({ pressed: n.getAttribute('aria-pressed'), hint: n.getAttribute('title') }));
+    const enlarged = await state(b), other = await state(a);
+    assert.equal(enlarged.pressed, 'true'); assert.equal(other.pressed, 'false'); assert.match(enlarged.hint, /再点一次回到全员/, 'The open tab says a click returns');
     const room = async () => (await snapshot()).viewState.roomSession || '';
-    await name(b).click(); await until(async () => !(await room()), 'Clicking the enlarged card returns to the whole space');
-    assert.deepEqual(await arrow(b), { ...other, label: enlarged.label }, 'Returned card shows the enlarge mark again');
+    await tab(b).click(); await until(async () => !(await room()), 'Clicking the open member tab returns to the whole space');
+    assert.equal((await state(b)).pressed, 'false'); assert.doesNotMatch((await state(b)).hint, /再点一次回到全员/, 'The returned tab no longer offers to return'); await rightTitle(b); await closeMenu(b);
     await name(b).focus(); await page.keyboard.press('Enter'); await until(async () => await room() === b, 'Enter enlarges the member');
-    await name(b).focus(); await page.keyboard.press('Enter'); await until(async () => !(await room()), 'Enter on the enlarged card returns');
-    await name(b).dblclick(); await until(async () => await room() === b, 'Double-click enlarges'); await settle(); await delay(150);
+    await tab(b).focus(); await page.keyboard.press('Enter'); await until(async () => !(await room()), 'Enter on the open member tab returns');
+    await tab(b).dblclick(); await until(async () => await room() === b, 'Double-click enlarges'); await settle(); await delay(150);
     assert.equal(await room(), b, 'A double-click acts once and does not immediately return');
-    await drainEvents(); await page.keyboard.down('Control'); try { await name(b).click(); } finally { await page.keyboard.up('Control'); }
+    await drainEvents(); await page.keyboard.down('Control'); try { await tab(b).click(); } finally { await page.keyboard.up('Control'); }
     await settle(); const ctrlAfter = await room(), ctrlObserved = await page.evaluate(() => window.t75Events.splice(0)); events.push(...ctrlObserved);
     const ctrlContext = ctrlObserved.filter(e => e.type === 'contextmenu');
     measurements.push({ group: 'CDP-Control-left-click-enlarged', before: b, after: ctrlAfter, events: ctrlObserved, qualified: ctrlContext.length > 0 && ctrlAfter === b, limit: 'CDP event sequence only, no physical mouse qualification' });
-    if (ctrlContext.length) assert.equal(ctrlAfter, b, 'A delivered contextmenu cannot also leave the enlarged member');
-    if (await menu().count()) await closeMenu(b);
-    if (ctrlAfter !== b) { await name(b).click(); await until(async () => await room() === b, 'Member enlarged again'); }
-    assert.equal((await snapshot()).sessions.find(s => s.id === b).owner, owner); await page.getByRole('button', { name: '← 返回共同工作', exact: true }).click();
+    assert.equal(ctrlAfter, b, 'A Control-click on the open tab does not leave the member');
+    if (await menu().count()) await page.keyboard.press('Escape');
+    assert.equal((await snapshot()).sessions.find(s => s.id === b).owner, owner); await tab(b).click();
     await page.getByRole('button', { name: '简化信息', exact: true }).click(); await rightTitle(a); await closeMenu(a); await page.getByRole('button', { name: '简化信息', exact: true }).click();
   });
   await group('4 stale membership and removed targets close and cannot act', async () => {

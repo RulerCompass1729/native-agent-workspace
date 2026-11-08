@@ -113,10 +113,11 @@ async function run(){
  await page.locator('#room-messages').getByText('Public partial',{exact:true}).waitFor();await capture('shared-public-before-permission');
  await fixture('native-permission',a,permission);
  assert.equal(await page.locator('#room-messages').isVisible(),true);
- const waitingMember=page.locator(`.collaboration-member-status[data-member-id="${a}"]`);await waitingMember.waitFor();
- await until(async()=>await waitingMember.getAttribute('data-state')==='approval','The original member visibly reports waiting for permission');
- assert.ok((await waitingMember.innerText()).includes('等待确认'));await capture('room-waiting-member');
- await waitingMember.locator('.collaboration-member-name').click();
+ // On 共享记录 the member cards are hidden (a58e456); the member's tab shows the same state facts and opens the member.
+ const waitingMember=page.locator(`#room-member-tabs [data-room-session="${a}"]`);await waitingMember.waitFor();
+ await until(async()=>(await waitingMember.locator('.room-member-state').innerText()).includes('等待确认')&&await waitingMember.evaluate(el=>el.classList.contains('needs-attention')),'The original member visibly reports waiting for permission');
+ await capture('room-waiting-member');
+ await waitingMember.click();
  await page.locator('#approval').getByText('Claude state',{exact:true}).waitFor();
  assert.ok(!(await snapshot()).room.messages.some(m=>m.text.includes('check-document')),'Permission arguments never become room messages');
  await page.locator('#approval').getByRole('button',{name:'在 Claude state 的原生终端处理',exact:true}).click();
