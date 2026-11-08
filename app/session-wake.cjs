@@ -82,10 +82,20 @@ function nativeStart(w, r, info, s) {
 }
 function identity(s) { return require('./peer-handoffs.cjs').identity(s); }
 function same(s, expected) { return s && JSON.stringify(identity(s)) === JSON.stringify(expected); }
-function sourceValid(w, s, r, intent) {
-  return !w.closed && !w.storageWarning && w.runtimes.get(s.id) === r && !r.stopped && !r.transportDisconnected &&
-    enabled(w) && boundary(w) === intent.boundary && same(s, intent.sourceProof);
+function sourceIssue(w, s, r, intent) {
+  if (w.closed) return { code: 'workspace-closed' };
+  if (w.storageWarning) return { code: 'storage-unavailable' };
+  if (w.runtimes.get(s.id) !== r || r.stopped || r.transportDisconnected) return { code: 'source-runtime-changed' };
+  if (!enabled(w)) return { code: 'automatic-messages-disabled' };
+  if (boundary(w) !== intent.boundary) return { code: 'authorization-boundary-changed' };
+  if (!same(s, intent.sourceProof)) {
+    const current = identity(s);
+    // Record field names only, never owner IDs, process details or draft contents.
+    return { code: 'source-identity-changed', fields: Object.keys(current).filter(key => JSON.stringify(current[key]) !== JSON.stringify(intent.sourceProof?.[key])) };
+  }
+  return null;
 }
+function sourceValid(w, s, r, intent) { return !sourceIssue(w, s, r, intent); }
 function durable(w) { w.changed(); w.persist(); if (w.storageWarning) throw uiError("error.wake.recordSaveFailed"); }
 function notSent(error) {
   return { status: 'not-sent', reason: error.message, reasonUiMessage: displayMessage(error.uiMessage) || null };
@@ -150,9 +160,11 @@ function complete(w, s, r, info) {
   for (const row of s.messages || []) {
     const intent = row.wake;
     if (intent?.status !== 'staged' || intent.nativeId !== info.nativeId || intent.turnId !== info.turnId) continue;
-    if (info.status !== 'completed' || !sourceValid(w, s, r, intent)) {
+    const issue = info.status !== 'completed' ? { code: 'turn-not-completed' } : sourceIssue(w, s, r, intent);
+    if (issue) {
+      intent.cancellation = { ...issue, nativeStatus: info.status ?? null, at: Date.now() };
       // T-141: `boundary` is a turn whose authority an input or permission boundary took mid-turn.
-      intent.status = 'cancelled'; row.text = `${info.status === 'boundary' ? '发送方这一轮中途有新的输入或权限确认' : '原生回合未正常结束或授权已变化'}；自动消息未投递。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: info.status === 'boundary' ? 'notice.wake.turnBoundaryCancelled' : 'notice.wake.turnCancelled', params: { body: intent.body } }, 'notice.', row.text) || undefined; durable(w); continue;
+      intent.status = 'cancelled'; row.text = `${info.status === 'boundary' ? '发送方这一轮中途有新的输入或权限确认' : info.status === 'completed' ? '原生回合已正常结束，但授权校验未通过' : '原生回合未正常结束或授权已变化'}；自动消息未投递。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: info.status === 'boundary' ? 'notice.wake.turnBoundaryCancelled' : info.status === 'completed' ? 'notice.wake.completedTurnRevoked' : 'notice.wake.turnCancelled', params: { body: intent.body } }, 'notice.', row.text) || undefined; durable(w); continue;
     }
     intent.status = 'sending'; durable(w);
     // Persist before the one transfer. Reopening never replays sending/staged rows.

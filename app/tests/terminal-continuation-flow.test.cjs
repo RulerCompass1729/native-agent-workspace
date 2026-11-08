@@ -249,6 +249,13 @@ test('live snapshot replay keeps already-authorized human input and rejects an o
   context.canCaptureTerminal = () => false; context.canFlushComposition = () => false;
   vm.runInNewContext(renderer.slice(onDataStart, onDataEnd), context);
   assert.equal(gate(target.id), true);
+  // The observing terminal must not send its own DECRPM responses: the
+  // canonical service terminal already answered the same native queries.
+  const replies = [], reporting = screen(t);
+  reporting.term.onData(data => { replies.push(data); input(data); });
+  await write(reporting.term, '\x1b[?2026$p\x1b[?2004$p');
+  assert.deepEqual(replies, ['\x1b[?2026;2$y', '\x1b[?2004;2$y']);
+  assert.deepEqual(calls, []);
   target.writeTerminal(target.entry, eventFor(target, frame)); await held.waiting;
   try {
     assert.equal(target.entry.keyboardFlags, 13, 'Accepted native keyboard modes must not wait for display parsing');

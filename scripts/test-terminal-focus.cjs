@@ -11,9 +11,9 @@ const child = fork(path.join(root, 'app/daemon.cjs'), [profile], { execArgv: ['-
 let app, page, client, sequence = 0; const errors = [], passed = [];
 const delay = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, label) { for (let i = 0; i < 100; i++) { if (await fn()) return; await delay(50); } throw Error(label); }
-function fixture(method, target) { const id = ++sequence; return new Promise((resolve, reject) => {
+function fixture(method, target, value) { const id = ++sequence; return new Promise((resolve, reject) => {
   const timer = setTimeout(() => { child.off('message', cb); reject(Error('Fixture timeout')); }, 5000);
-  const cb = m => { if (m.requestId === id) { clearTimeout(timer); child.off('message', cb); resolve(m); } }; child.on('message', cb); child.send({ id, method, target });
+  const cb = m => { if (m.requestId === id) { clearTimeout(timer); child.off('message', cb); resolve(m); } }; child.on('message', cb); child.send({ id, method, target, value });
 }); }
 const snapshot = () => page.evaluate(() => workspace.initial());
 const input = id => page.locator(`[data-terminal-id="${id}"] .xterm-helper-textarea`);
@@ -50,6 +50,13 @@ async function run() {
   await page.keyboard.type('FIRST-A'); await until(async () => await text(a.id) === 'FIRST-A', 'First input arrives exactly once');
   await capture('first-input');
   passed.push('Before control the terminal stays hidden and nothing reaches A; after acknowledgement the first input goes to A once');
+  const beforeReports = (await snapshot()).sessions.find(s => s.id === a.id).controlRevision;
+  await fixture('terminal', a.id, { sequence: 1, data: '\x1b[?2026$p\x1b[?2004$pMODE-REPORT-PROBE' });
+  await until(() => input(a.id).evaluate(el => el.closest('[data-terminal-id]').textContent.includes('MODE-REPORT-PROBE')), 'Mode queries parsed and rendered');
+  await delay(150);
+  assert.equal(await text(a.id), 'FIRST-A', 'The observing xterm must not echo its own mode reports to native input');
+  assert.equal((await snapshot()).sessions.find(s => s.id === a.id).controlRevision, beforeReports);
+  passed.push('Native mode queries render without observer input or withdrawal of message authority');
   await toChat(a.id); await holdAndChoose(a.id); await chooseRoom(b.id);
   await until(async () => (await fixture('stats')).pending.includes(b.id), 'B snapshot'); await fixture('release', b.id); await until(() => focused(b.id), 'B focus');
   await fixture('release-claim', a.id); await delay(150); assert.equal(await focused(b.id), true);

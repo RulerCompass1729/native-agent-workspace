@@ -3778,7 +3778,7 @@ async function ensureTerminal(id, explicit = false) {
     // The service's canonical terminal answers device queries, once. Focus
     // reports belong to this observing view, not to the native input stream:
     // changing tabs or windows must not impersonate a human intervention.
-    if (/^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\[[IO]$/.test(data) || /^\x1b\]/.test(data)) return;
+    if (/^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\[\??\d+;[0-4]\$y$/.test(data) || /^\x1b\[[IO]$/.test(data) || /^\x1b\]/.test(data)) return;
     const token = entry.composition;
     if (token?.cancelled) return;
     if (entry.viewInput && !canCaptureTerminal(id)) {

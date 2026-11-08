@@ -33,7 +33,7 @@ const { GoalContinuation } = require('./goal-continuation-runner.cjs');
 // Pointer motion with no button held (SGR any-event mouse tracking, e.g. fullscreen Claude)
 // is hover, not a human instruction; presses, drags and releases still are.
 const isPointerHover = data => /^(?:\x1b\[<\d+;\d+;\d+M)+$/.test(data) && [...data.matchAll(/\x1b\[<(\d+);/g)].every(m => (Number(m[1]) & 35) === 35);
-const isTerminalResponse = data => /^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data) || isPointerHover(data);
+const isTerminalResponse = data => /^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\[\??\d+;[0-4]\$y$/.test(data) || /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data) || isPointerHover(data);
 
 class Workspace extends EventEmitter {
   constructor(host, dataDir, newWorkspaceRoot = path.join(dataDir, 'session-workspaces')) {

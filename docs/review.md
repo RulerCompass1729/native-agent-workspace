@@ -7245,3 +7245,32 @@ new occupied 219 backends are retained. Signature remains strict and one daily
 search entry is observed. Window visibility/daily changed operations, original
 native background-tool adoption, goal resume, physical IME/pointer/resize and
 full-day use are not claimed. The overall milestone remains open.
+
+## Staged wake cancellation and terminal mode reports (2026-11-08)
+
+A reported wake was staged and later cancelled despite a native completed-turn
+record. Its historical notice combined abnormal completion and authorization
+changes; the exact historical predicate cannot be recovered from that notice.
+The following reproduced failure is narrower than attributing that incident.
+
+The actual xterm parser produces DECRPM mode replies which the observer input
+handler did not suppress and the workspace classified as human input. A mode
+query could therefore withdraw a staged message without a human instruction.
+Two new source/receiver cases fail on the old product (cancelled/not-sent) and
+pass after the repair. The observing renderer now suppresses these exact replies;
+the existing service/client classifier treats them as terminal responses. Real
+keys, presses and mixed/malformed strings retain the human-control boundary.
+
+Completion cancellation now records the native end status and the failed guard
+category, including changed identity field names without their values. A normally
+completed turn no longer displays the ambiguous abnormal-completion notice. No
+existing cancelled message is retried or rewritten, and no guard is removed.
+
+The focused source suite passes 491 tests without skips, including actual Codex
+adapter completion followed by a queued turn, new-input revocation during transfer,
+global/session off switches, recipient changes, exact payloads and draft retention.
+The native producer in these checks is synthetic. Independent read-only source
+review approves this exact repair; its eight reads find no blocker. The prepared
+Electron probe did not launch because the shared GUI slot remained occupied in
+a bounded wait. Installed/original-native acceptance remains open; this source
+result is not evidence that the historical cancellation cause has been proven.
