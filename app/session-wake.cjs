@@ -5,7 +5,7 @@ const { displayMessage } = require('./ui-locale.js');
 const fs = require('node:fs'), path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { readLayout } = require('./service-layout.cjs');
-const CAPABILITY = 'agentWakeV1', COOLDOWN = 60000, MAX_STREAK = 3;
+const CAPABILITY = 'agentWakeV1', PREFLIGHT = 'agentWakePreflightV1', COOLDOWN = 60000, MAX_STREAK = 3;
 function root(w) { return w.peerRunner?.root() || (/^[a-f0-9]{20}$/.test(path.basename(w.dataDir)) && path.basename(path.dirname(w.dataDir)) === 'backends' ? path.dirname(path.dirname(w.dataDir)) : w.dataDir); }
 function marker(w, name) { return path.join(root(w), name); }
 function safeFile(file) {
@@ -87,6 +87,15 @@ function sourceValid(w, s, r, intent) {
     enabled(w) && boundary(w) === intent.boundary && same(s, intent.sourceProof);
 }
 function durable(w) { w.changed(); w.persist(); if (w.storageWarning) throw uiError("error.wake.recordSaveFailed"); }
+function notSent(error) {
+  return { status: 'not-sent', reason: error.message, reasonUiMessage: displayMessage(error.uiMessage) || null };
+}
+function refusedNotice(row, result) {
+  row.wake.status = 'not-sent';
+  row.text = `自动消息没有发出；不会自动重发。\n${result.reason}\n${row.wake.body}`;
+  const cause = { message: result.reason, uiMessage: result.reasonUiMessage };
+  row.uiMessage = displayMessage(uiError('error.wake.notSent', { reason: result.reason, body: row.wake.body }, { cause, param: 'reason' }).uiMessage, 'error.', row.text) || undefined;
+}
 function validateArgs(args) {
   if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(k => !['recipient_id', 'message'].includes(k)) ||
     typeof args.recipient_id !== 'string' || !args.recipient_id || args.recipient_id.length > 100 ||
@@ -96,7 +105,7 @@ function stage(w, s, r, native, args) {
   if (r.wakeTurn?.boundary !== boundary(w) || native?.valid?.() === false || r.wakeTurn.human !== humanProof(s)) throw uiError("error.wake.turnRevokedByHuman");
   const pending = r.wakeStagePending;
   if (pending?.turnId === native?.turnId && pending.nativeId === native?.nativeId) {
-    if (pending.callId === native.callId && pending.recipient === args?.recipient_id && pending.body === args?.message) return pending.promise.then(result => { const row = s.messages.find(m => m.id === result.id); return row?.wake?.status === 'staged' ? result : { status: 'unconfirmed', id: result.id, message: '原登记已经撤销或结果未确认；不会重发。' }; });
+    if (pending.callId === native.callId && pending.recipient === args?.recipient_id && pending.body === args?.message) return pending.promise.then(result => { const row = s.messages.find(m => m.id === result.id); return ['staged', 'not-sent'].includes(row?.wake?.status) ? result : { status: 'unconfirmed', id: result.id, message: '原登记已经撤销或结果未确认；不会重发。' }; });
     throw uiError("error.wake.turnAlreadyRequested");
   }
   const promise = stageOnce(w, s, r, native, args);
@@ -121,18 +130,21 @@ async function stageOnce(w, s, r, native, args) {
     sourceProof: identity(s), recipientId: args.recipient_id, body: args.message, boundary: turn.boundary, time: Date.now(), status: 'staged' };
   if (!sourceValid(w, s, r, intent)) throw uiError("error.wake.turnRevokedByHumanOrSetting");
   if (!w.peerRunner) throw uiError("error.wake.backendUnsupported");
-  const target = await w.peerRunner.lookupWake(args.recipient_id);
+  const target = await w.peerRunner.lookupWake(args.recipient_id, { id: intent.id, boundary: intent.boundary });
   if (native.valid?.() === false || !sourceValid(w, s, r, intent) || r.turnId !== native.turnId) throw uiError("error.wake.authorizationInvalidated");
   intent.targetKey = target.key; intent.targetProof = identity(target.session);
   const row = { id: intent.id, role: 'system', kind: 'notice', name: '自动消息', origin: 'agent-wake-intent', text: `发给 ${target.session.name} 的消息已登记，尚未投递。\n${args.message}`, status: 'complete', time: intent.time, wake: intent };
   row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.registered', params: { name: target.session.name, body: args.message } }, 'notice.', row.text) || undefined;
   row.uiNameMessage = uiActivity('notice.wake.name')[1];
+  if (target.readiness?.status === 'not-sent') refusedNotice(row, target.readiness);
   s.messages.push(row);
   // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
   // push and the save, and an unsaved staged wake would still be sent when the turn ends.
   w.mirrorWake?.(s, intent, target.session, row);
   try { durable(w); } catch (e) { intent.status = 'unconfirmed'; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
-  return { status: 'staged', id: intent.id, message: '已保存，尚未投递。当前原生回合正常结束后只尝试一次；不要等待或重试。真人可随时撤销。' };
+  if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text };
+  const readiness = target.readiness?.status === 'ready' ? 'checked' : 'deferred';
+  return { status: 'staged', id: intent.id, readiness, message: '已保存，尚未投递。当前原生回合正常结束后只尝试一次；不要等待或重试。真人可随时撤销。' + (readiness === 'deferred' ? ' 收件后台不支持即时就绪检查，尚未确认它能接收。' : '') };
 }
 function complete(w, s, r, info) {
   for (const row of s.messages || []) {
@@ -145,7 +157,8 @@ function complete(w, s, r, info) {
     intent.status = 'sending'; durable(w);
     // Persist before the one transfer. Reopening never replays sending/staged rows.
     w.peerRunner.transferWake(intent).then(result => {
-      intent.status = result.status; row.text = `发给原会话的自动消息：${result.status === 'submitted' ? '原生已接收' : '接收结果未确认'}。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: result.status === 'submitted' ? 'notice.wake.submitted' : 'notice.wake.unconfirmed', params: { body: intent.body } }, 'notice.', row.text) || undefined;
+      if (result.status === 'not-sent') refusedNotice(row, result);
+      else { intent.status = result.status; row.text = `发给原会话的自动消息：${result.status === 'submitted' ? '原生已接收' : '接收结果未确认'}。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: result.status === 'submitted' ? 'notice.wake.submitted' : 'notice.wake.unconfirmed', params: { body: intent.body } }, 'notice.', row.text) || undefined; }
       durable(w);
     }).catch(error => { intent.status = 'unconfirmed'; row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; row.uiMessage = displayMessage(uiError('error.wake.deliveryUnconfirmed', { reason: error.message, body: intent.body }, { cause: error, param: 'reason' }).uiMessage, 'error.', row.text) || undefined; w.changed(); w.persist(); });
   }
@@ -192,18 +205,37 @@ function eligible(w, s, r, intent, tag) {
     (!s.pendingTag || s.pendingTag === tag) && !s.approval && !s.nativeContextPending && !r.nativeInputRequired && !r.pendingQueue && !r.nativeAbortRequest &&
     budgetAllows(s, intent.id);
 }
+// This read-only check reserves nothing and is not delivery authority. The
+// receiver checks the consumed, exact sender intent again at actual dispatch.
+async function check(w, spec) {
+  if (!spec || typeof spec.id !== 'string' || !spec.id || typeof spec.recipientId !== 'string' || !spec.recipientId ||
+      typeof spec.boundary !== 'string' || !spec.targetProof || typeof spec.targetProof !== 'object') throw uiError('error.wake.sourceInvalid');
+  try {
+    const s = w.get(spec.recipientId), r = w.runtime(s.id);
+    const budget = s.wakeBudget || {};
+    if (budget.humanRevision === (s.wakeHumanRevision || 0) && budget.streak >= MAX_STREAK) throw uiError('error.wake.consecutiveLimit');
+    if (!eligible(w, s, r, spec)) throw uiError('error.wake.recipientChangedOrLimited');
+    if (s.provider === 'codex') {
+      const status = await nativeGoalStatus(s, r, () => eligible(w, s, r, spec));
+      if (!goalAllows(status)) throw uiError('error.wake.nativeGoalStateDisallows', { status });
+    }
+    return { status: 'ready' };
+  } catch (error) { return notSent(error); }
+}
 async function receive(w, spec) {
   if (!spec || typeof spec.sourceKey !== 'string' || !readLayout(root(w)).entries.includes(spec.sourceKey) || typeof spec.id !== 'string' || typeof spec.senderId !== 'string') throw uiError("error.wake.sourceInvalid");
   const s = w.get(spec.recipientId), r = w.runtime(s.id);
   const proof = identity(s), generation = boundary(w);
   const intent = await w.peerRunner.takeWake(spec);
-  const budget = s.wakeBudget || {};
-  if (budget.humanRevision === (s.wakeHumanRevision || 0) && budget.streak >= MAX_STREAK) throw uiError("error.wake.consecutiveLimit");
-  if (intent.id !== spec.id || intent.senderId !== spec.senderId || intent.recipientId !== s.id || intent.boundary !== generation || !same(s, proof) || !eligible(w, s, r, intent)) throw uiError("error.wake.recipientChangedOrLimited");
-  if (s.provider === 'codex') {
-    const status = await nativeGoalStatus(s, r, () => eligible(w, s, r, intent));
-    if (!goalAllows(status)) throw uiError('error.wake.nativeGoalStateDisallows', { status });
-  }
+  try {
+    const budget = s.wakeBudget || {};
+    if (budget.humanRevision === (s.wakeHumanRevision || 0) && budget.streak >= MAX_STREAK) throw uiError("error.wake.consecutiveLimit");
+    if (intent.id !== spec.id || intent.senderId !== spec.senderId || intent.recipientId !== s.id || intent.boundary !== generation || !same(s, proof) || !eligible(w, s, r, intent)) throw uiError("error.wake.recipientChangedOrLimited");
+    if (s.provider === 'codex') {
+      const status = await nativeGoalStatus(s, r, () => eligible(w, s, r, intent));
+      if (!goalAllows(status)) throw uiError('error.wake.nativeGoalStateDisallows', { status });
+    }
+  } catch (error) { return notSent(error); }
   reserveBudget(s, intent.id);
   const ticket = { intent, valid: tag => eligible(w, s, r, intent, tag) };
   const text = `[Workspace message from ${intent.senderName} · ${intent.senderId} at ${new Date(intent.time).toISOString()}]\n${intent.body}`;
@@ -212,4 +244,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, COOLDOWN, MAX_STREAK, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, stage, complete, take, receive, validateArgs, root };
+module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, stage, complete, take, receive, check, validateArgs, root };

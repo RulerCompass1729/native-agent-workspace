@@ -131,7 +131,7 @@ class PeerRunner {
     return /^[a-f0-9]{20}$/.test(path.basename(this.dataDir)) && path.basename(path.dirname(this.dataDir)) === 'backends'
       ? path.dirname(path.dirname(this.dataDir)) : this.dataDir;
   }
-  async lookupWake(id) {
+  async lookupWake(id, readiness) {
     const root = this.root(), layout = readLayout(root); let found;
     for (const key of layout.entries) {
       const client = await this.connect(path.join(root, key), 'workspace-wake-lookup');
@@ -139,11 +139,18 @@ class PeerRunner {
         const state = await client.call('initial'), session = state.sessions.find(s => s.id === id);
         if (session) {
           if (found || !state.capabilities?.includes('agentWakeV1') || state.storageWarning) throw uiError("error.peer.recipientBackendUnavailable");
-          found = { key, session };
+          found = { key, session, canCheckWake: state.capabilities.includes('agentWakePreflightV1') };
         }
       } finally { client.close(); }
     }
     if (!found) throw uiError("error.peer.exactSessionMissing");
+    if (readiness && found.canCheckWake) {
+      const client = await this.connect(path.join(root, found.key), 'workspace-wake-check');
+      try {
+        found.readiness = await client.call('wakeCheck', { ...readiness, recipientId: id, targetProof: identity(found.session) });
+        if (!['ready', 'not-sent'].includes(found.readiness?.status) || found.readiness.status === 'not-sent' && typeof found.readiness.reason !== 'string') throw uiError('error.wake.nativeGoalDisallows');
+      } finally { client.close(); }
+    }
     return found;
   }
   async transferWake(intent) {

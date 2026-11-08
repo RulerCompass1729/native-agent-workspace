@@ -10,7 +10,7 @@ const invalid = () => uiError ? uiError('error.spaceMembershipUnverifiable') : E
 function completedSharedRecord(message) {
   if (!message || message.incomplete || message.kind === 'gap') return false;
   // An agent wake row is complete only once its sender's record shows a final state (T-137).
-  if (message.wake && !['submitted', 'cancelled', 'unconfirmed'].includes(message.wakeStatus)) return false;
+  if (message.wake && !['submitted', 'cancelled', 'not-sent', 'unconfirmed'].includes(message.wakeStatus)) return false;
   if (message.role === 'human') {
     const deliveries = message.deliveries;
     if (deliveries !== undefined && (!Array.isArray(deliveries) || deliveries.some(delivery => !delivery || typeof delivery !== 'object' || Array.isArray(delivery) || delivery.status !== 'submitted'))) return false;

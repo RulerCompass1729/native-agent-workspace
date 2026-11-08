@@ -6,7 +6,7 @@ const { isMember, membershipRevision } = require('./collaboration-spaces.cjs');
 const TOOL = 'workspace_message';
 const NAMESPACE = 'workspace';
 const tool = { type: 'function', name: TOOL,
-  description: 'Address one message to an exact workspace participant ID. A current human-authorized directed discussion keeps its finite grant; otherwise standing human permission permits one wake of an idle peer, subject to its off switch and strict limits. Stages one handoff after your current turn finishes; does not wait for a reply. Without a tool call your answer goes to the human and cooperation stops. Never use for ordinary @ text or file references.',
+  description: 'Address one message to an exact workspace participant ID. A current human-authorized directed discussion keeps its finite grant; otherwise standing human permission permits one wake of an idle peer, subject to its off switch and strict limits. Updated receivers are checked before staging: not-sent means no input was dispatched; staged means not yet delivered. Stages one handoff after your current turn finishes; does not wait for a reply. Without a tool call your answer goes to the human and cooperation stops. Never use for ordinary @ text or file references.',
   inputSchema: { type: 'object', properties: {
     recipient_id: { type: 'string', description: 'Exact workspace participant ID from the current authorized task.' },
     message: { type: 'string', description: 'The complete message to that participant, at most 6000 characters.' },

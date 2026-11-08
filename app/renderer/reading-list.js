@@ -15,7 +15,7 @@ function readingWakeIntent(message, room, session) {
 }
 function readingWakeStatus(wake) {
   const labels = { staged: 'reading.wakeRegistered', sending: 'delivery.awaiting', consumed: 'delivery.awaiting',
-    submitted: 'delivery.submitted', unconfirmed: 'delivery.unconfirmed', cancelled: 'delivery.notSent' };
+    submitted: 'delivery.submitted', unconfirmed: 'delivery.unconfirmed', cancelled: 'delivery.notSent', 'not-sent': 'delivery.notSent' };
   return typeof wake.status === 'string' && Object.hasOwn(labels, wake.status) ? labels[wake.status] : 'delivery.unknown';
 }
 function cancelReadingWakeCollapse(entry) {

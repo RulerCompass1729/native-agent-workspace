@@ -25,7 +25,11 @@ function stageNative(identity, args) {
     socket.on('data', part => {
       data += part; if (data.length > 16384) return fail();
       const end = data.indexOf('\n'); if (end < 0) return;
-      try { const result = JSON.parse(data.slice(0, end)); socket.destroy(); resolve(result); } catch { fail(); }
+      try {
+        const result = JSON.parse(data.slice(0, end));
+        if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.status !== 'string' || !result.status.trim()) return fail();
+        socket.destroy(); resolve(result);
+      } catch { fail(); }
     });
     socket.once('end', () => { if (!data.includes('\n')) fail(); });
   });

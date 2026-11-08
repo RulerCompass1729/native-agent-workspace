@@ -103,8 +103,8 @@ test('old submitted history is compact immediately and does not replay a timer o
   assert.equal(f.timers.size, 0);
 });
 
-test('unconfirmed, cancelled and future states keep their original reason and never auto-collapse', () => {
-  for (const status of ['unconfirmed', 'cancelled', 'future-state', 'toString', '__proto__', null, { toString: null }, undefined]) {
+test('unconfirmed, not-sent, cancelled and future states keep their original reason and never auto-collapse', () => {
+  for (const status of ['unconfirmed', 'not-sent', 'cancelled', 'future-state', 'toString', '__proto__', null, { toString: null }, undefined]) {
     const raw = 'EXACT CAUSE\n' + body, row = notice(status, { text: raw, uiMessage: undefined });
     if (status === undefined) delete row.wake.status;
     const f = fixture(row);
@@ -112,6 +112,15 @@ test('unconfirmed, cancelled and future states keep their original reason and ne
     assert.equal(f.entry().body.textContent, raw); f.advance(10000);
     assert.equal(f.entry().disclosure.open, true); assert.equal(f.timers.size, 0);
   }
+});
+
+test('a definite pre-dispatch refusal is labelled not sent while its original reason remains readable', () => {
+  const raw = 'Exact blocked reason\n' + body, f = fixture(notice('not-sent', { text: raw, uiMessage: undefined }));
+  assert.match(f.entry().heading.textContent, /没有发出/);
+  assert.equal(f.entry().body.textContent, raw);
+  f.switch('en'); assert.match(f.entry().heading.textContent, /Not sent/);
+  assert.equal(f.entry().body.textContent, raw); f.advance(10000);
+  assert.equal(f.entry().disclosure.open, true); assert.equal(f.calls.length, 0);
 });
 
 test('manual choice, focus, selection and search reveal all defeat a later automatic collapse', () => {

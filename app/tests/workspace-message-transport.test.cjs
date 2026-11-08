@@ -77,3 +77,30 @@ for (const [name, reply] of [
   assert.deepEqual(actual.requests[0], { token: 'synthetic-token', workspaceMessage: true,
     identity: { nativeId: identity.threadId, sessionId: identity.sessionId, turnId: 'synthetic-turn', callId: identity.callId }, arguments: body });
 });
+
+for (const [name, reply] of [
+  ['null envelope', null],
+  ['array envelope', []],
+  ['missing status', {}]
+]) test('actual MCP rejects malformed staging receipt: ' + name, { timeout: 5000 }, async t => {
+  const f = await fixture(t, socket => socket.end(JSON.stringify(reply) + '\n'));
+  const result = await f.call();
+  assert.match(result.error?.message || '', /unconfirmed; do not retry/i);
+  assert.equal(f.observed().connections, 1); assert.equal(f.observed().requests.length, 1);
+  assert.deepEqual(f.observed().requests[0].arguments, body);
+});
+
+for (const reply of [
+  { status: 'staged', id: 'synthetic-intent', readiness: 'checked', message: 'Saved, not delivered.' },
+  { status: 'staged', message: 'Directed discussion saved; no id in this protocol.' },
+  { status: 'not-sent', id: 'synthetic-intent', recipient_id: body.recipient_id, reason: 'recipient unavailable', reasonUiMessage: { key: 'synthetic.refusal' }, message: 'No submission was attempted.' },
+  { status: 'unconfirmed', message: 'The staging result is unknown; do not retry.' }
+]) test('actual MCP preserves the complete valid ' + (reply.status === 'staged' ? reply.id ? 'wake staged' : 'directed staged without id' : reply.status) + ' receipt', { timeout: 5000 }, async t => {
+  const f = await fixture(t, socket => socket.end(JSON.stringify(reply) + '\n'));
+  const result = await f.call();
+  assert.equal(result.error, undefined);
+  assert.equal(result.result.isError, reply.status !== 'staged');
+  assert.deepEqual(JSON.parse(result.result.content[0].text), reply);
+  assert.equal(f.observed().connections, 1); assert.equal(f.observed().requests.length, 1);
+  assert.deepEqual(f.observed().requests[0].arguments, body);
+});

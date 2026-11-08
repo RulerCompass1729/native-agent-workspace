@@ -4,7 +4,7 @@ const { EventEmitter } = require('node:events');
 const { Workspace } = require('../workspace.cjs');
 const { PeerRunner } = require('../peer-handoffs.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-async function fixture(t, sourceProvider = 'codex') {
+async function fixture(t, sourceProvider = 'codex', preflight = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-test-'));
   const key = 'backends/aaaaaaaaaaaaaaaaaaaa', dirs = [root, path.join(root, key)];
   fs.mkdirSync(dirs[1], { recursive: true, mode: 0o700 }); fs.chmodSync(path.dirname(dirs[1]), 0o700);
@@ -23,8 +23,9 @@ async function fixture(t, sourceProvider = 'codex') {
   const connect = async dir => {
     const i = dirs.indexOf(dir); assert.notEqual(i, -1); const w = workspaces[i];
     return { close() {}, async call(method, spec) {
-      if (method === 'initial') return { ...w.snapshot(), capabilities: ['agentWakeV1'] };
+      if (method === 'initial') return { ...w.snapshot(), capabilities: ['agentWakeV1', ...(preflight ? ['agentWakePreflightV1'] : [])] };
       const wake = require('../session-wake.cjs');
+      if (method === 'wakeCheck' && preflight) return wake.check(w, spec);
       if (method === 'wakeTake') return wake.take(w, spec);
       if (method === 'wakeReceive') return wake.receive(w, spec);
       throw Error('Unexpected method ' + method);
@@ -41,6 +42,55 @@ async function fixture(t, sourceProvider = 'codex') {
   const finish = async (status = 'completed') => { const turnId = ra.turnId; if (sourceProvider === 'claude') ra.liveTurn = null; else ra.turnId = null; ra.emit('state', 'idle'); ra.emit('nativeTurnEnd', { nativeId: source.get(a).nativeId, turnId, status }); for (let i = 0; i < 8; i++) await tick(); };
   return { root, source, target, a, b, ra, rb, call, finish, start, writes };
 }
+test('a blocked original recipient reports not-sent in the calling turn, with no goal write or later dispatch', async t => {
+  const f = await fixture(t), nativeId = f.target.get(f.b).nativeId;
+  const goal = { threadId: nativeId, status: 'blocked', objective: 'PRIVATE preserved goal', tokenBudget: 91 };
+  const before = structuredClone(goal), methods = [];
+  f.target.setDraft(f.b, 'UNSENT original receiver draft', 'target-owner');
+  f.rb.host.rpc.call = async (method, args) => { methods.push(method); assert.equal(method, 'thread/goal/get'); assert.equal(args.threadId, nativeId); return { goal }; };
+  const body = 'RAW task 中文\n  Preserve this body exactly.  ', result = await f.call(body);
+  assert.equal(result.status, 'not-sent');
+  assert.match(result.message, /blocked/); assert.deepEqual(methods, ['thread/goal/get']);
+  const row = f.source.get(f.a).messages.find(m => m.wake);
+  assert.equal(row.wake.status, 'not-sent'); assert.equal(row.wake.body, body);
+  assert.equal((await f.call(body)).status, 'not-sent');
+  await f.finish(); assert.deepEqual(f.writes, []); assert.deepEqual(goal, before);
+  assert.deepEqual(methods, ['thread/goal/get']); assert.equal(f.target.get(f.b).wakeBudget, undefined);
+  assert.equal(f.target.drafts.get(f.b), 'UNSENT original receiver draft');
+  assert.equal(f.target.get(f.b).nativeId, nativeId); assert.equal(f.target.get(f.b).owner, 'target-owner');
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE preserved goal|tokenBudget/);
+});
+test('a recipient blocked after readiness was checked is definitively not-sent, not an uncertain dispatch', async t => {
+  const f = await fixture(t), goal = { threadId: f.target.get(f.b).nativeId, status: 'active' };
+  f.rb.host.rpc.call = async () => ({ goal });
+  const result = await f.call('Keep the exact pending body.'); assert.equal(result.status, 'staged');
+  goal.status = 'blocked'; await f.finish();
+  assert.equal(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'not-sent');
+  assert.deepEqual(f.writes, []); assert.equal(goal.status, 'blocked');
+});
+test('human takeover during the immediate readiness check prevents staging a send', async t => {
+  const f = await fixture(t); let release;
+  f.rb.host.rpc.call = () => new Promise(resolve => { release = resolve; });
+  const pending = f.call();
+  for (let i = 0; i < 8 && !release; i++) await tick();
+  assert.equal(typeof release, 'function');
+  f.target.claim(f.b, 'new-human-owner'); release({ goal: null });
+  const result = await pending; assert.equal(result.status, 'not-sent');
+  assert.equal(f.target.get(f.b).owner, 'new-human-owner');
+  await f.finish(); assert.deepEqual(f.writes, []);
+});
+test('a native dispatch whose acknowledgement is lost stays unconfirmed and is never retried', async t => {
+  const f = await fixture(t); let sends = 0;
+  f.rb.send = async () => { sends++; throw Error('Native acknowledgement was lost after input'); };
+  await f.call(); await f.finish();
+  assert.equal(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'unconfirmed');
+  assert.equal(sends, 1); await f.finish(); assert.equal(sends, 1);
+});
+test('an older recipient without readiness capability retains its guarded deferred delivery', async t => {
+  const f = await fixture(t, 'codex', false), result = await f.call();
+  assert.equal(result.status, 'staged'); assert.equal(result.readiness, 'deferred');
+  await f.finish(); assert.equal(f.writes.length, 1);
+});
 test('native explicit wake is staged durably, transfers once across backends, and preserves owner plus identical draft', async t => {
   const { root, source, target, a, b, call, finish, writes } = await fixture(t);
   const text = 'Continue one bounded task.'; target.setDraft(b, text, 'target-owner');
@@ -59,8 +109,8 @@ test('native explicit wake is staged durably, transfers once across backends, an
   assert.equal(target.get(b).messages.find(m => m.origin === 'agent-wake').status, 'submitted');
 });
 
-test('wake display changes language through registration, acceptance and cold restore while the one native payload stays exact', async t => {
-  const locale = require('../ui-locale.js'), f = await fixture(t), body = 'RAW native message 中文\n  ';
+test('legacy wake display changes language through registration, acceptance and cold restore while the one native payload stays exact', async t => {
+  const locale = require('../ui-locale.js'), f = await fixture(t, 'codex', false), body = 'RAW native message 中文\n  ';
   await f.call(body); const row = f.source.get(f.a).messages.find(m => m.wake), intent = row.wake;
   assert.equal(locale.displayText('en', row.text, row.uiMessage), 'Message to Receiver registered; not yet delivered.\n' + body);
   assert.equal(locale.displayText('en', row.name, row.uiNameMessage), 'Automatic message');
@@ -286,6 +336,18 @@ async function joined(t, sender, receiver, provider) {
   if (sender) join(f.source.get(f.a), sender); if (receiver) join(f.target.get(f.b), receiver);
   return f;
 }
+test('a known unsent wake remains a complete space record with its exact body and reason', async t => {
+  const f = await joined(t, ['shared'], ['shared']), body = 'Original handoff 中文\n  exact text  ';
+  f.rb.host.rpc.call = async () => ({ goal: { threadId: f.target.get(f.b).nativeId, status: 'blocked' } });
+  assert.equal((await f.call(body)).status, 'not-sent');
+  const [row] = wakeRows(f.source);
+  assert.equal(row.wakeStatus, 'not-sent'); assert.match(row.text, /blocked/); assert.ok(row.text.endsWith(body));
+  assert.equal(require('../collaboration-spaces.cjs').completedSharedRecord(row), true);
+  await f.finish(); assert.deepEqual(f.writes, []);
+  const reopened = new Workspace({ binaries: {}, close() {} }, f.root); t.after(() => reopened.close());
+  const [restored] = wakeRows(reopened);
+  assert.equal(restored.wakeStatus, 'not-sent'); assert.equal(restored.text, row.text);
+});
 test('a wake appears in the shared space with its live status, written only by the sender\'s backend (T-137)', async t => {
   const f = await joined(t, ['shared'], ['shared']);
   assert.equal((await f.call()).status, 'staged');
@@ -434,17 +496,17 @@ for (const status of ['blocked','paused','usageLimited','budgetLimited']) test('
  f.rb.host.rpc.call=async(method,params)=>{reads.push([method,params]);assert.equal(method,'thread/goal/get');assert.equal(params.threadId,nativeId);return {goal};};
  await f.call('Exact shared task body.');await f.finish();
  assert.equal(f.writes.length,0);assert.equal(reads.length,1);assert.deepEqual(goal,original);assert.equal(f.target.get(f.b).nativeId,nativeId);assert.equal(f.target.get(f.b).owner,'target-owner');assert.equal(f.target.drafts.get(f.b),'POSITIVE UNSENT RECEIVER DRAFT');
- const row=f.source.get(f.a).messages.find(m=>m.wake);assert.equal(row.wake.status,'unconfirmed');
+ const row=f.source.get(f.a).messages.find(m=>m.wake);assert.equal(row.wake.status,'not-sent');
  const locale=require('../ui-locale.js');for(const language of ['zh','en']){const text=locale.displayText(language,row.text,row.uiMessage);assert.ok(text.includes(status));assert.ok(text.endsWith('Exact shared task body.'));assert.doesNotMatch(text,/PRIVATE_ORIGINAL_GOAL_BODY|123/);}
 });
 for(const kind of ['other-thread-active','missing-thread-active','undefined-goal','unknown-status'])test('unverified native goal never permits an automatic handoff: '+kind,async t=>{
  const f=await fixture(t),nativeId=f.target.get(f.b).nativeId;
  const result=kind==='undefined-goal'?{goal:undefined}:{goal:{threadId:kind==='other-thread-active'?'another-native':kind==='missing-thread-active'?undefined:nativeId,status:kind==='unknown-status'?'new-unknown':'active'}};
  f.rb.host.rpc.call=async(method,params)=>{assert.equal(method,'thread/goal/get');assert.equal(params.threadId,nativeId);return result;};
- await f.call();await f.finish();assert.equal(f.writes.length,0);assert.equal(f.source.get(f.a).messages.find(m=>m.wake).wake.status,'unconfirmed');
+ await f.call();await f.finish();assert.equal(f.writes.length,0);assert.equal(f.source.get(f.a).messages.find(m=>m.wake).wake.status,'not-sent');
 });
 for(const status of ['active','complete'])test('same-thread confirmed native goal still allows one handoff without any goal write: '+status,async t=>{
  const f=await fixture(t),goal={threadId:f.target.get(f.b).nativeId,status,objective:'PRIVATE_ACTIVE_GOAL'},before=structuredClone(goal),methods=[];
  f.rb.host.rpc.call=async(method,params)=>{methods.push(method);assert.equal(method,'thread/goal/get');assert.equal(params.threadId,goal.threadId);return {goal};};
- await f.call();await f.finish();assert.equal(f.writes.length,1);assert.deepEqual(methods,['thread/goal/get']);assert.deepEqual(goal,before);
+ await f.call();await f.finish();assert.equal(f.writes.length,1);assert.deepEqual(methods,['thread/goal/get','thread/goal/get']);assert.deepEqual(goal,before);
 });
