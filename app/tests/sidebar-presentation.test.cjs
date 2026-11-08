@@ -19,7 +19,7 @@ function harness(record, connected = true) {
     sidebarSessions: () => records, orderedMembers: () => records, attempt: fn => fn(), focusSessionAction: () => {},
     openRename: () => actions.push('rename'), moveSidebarSession: () => actions.push('move'), moveRoomMember: () => actions.push('move'),
     addToSpace: () => actions.push('join'), detach: () => actions.push('leave'), toast() {} };
-  vm.createContext(ctx);
+  ctx.spaceName ??= room => room?.name; vm.createContext(ctx);
   vm.runInContext(source.slice(0, source.indexOf('\nlet state, owner,')) + '\n' + section('function sessionTime(', '\nfunction renderDraftRecovery(') + '\n' + section('function versionValue(', '\nfunction appVersionReport(') + '\n' + section('function sessionShortId(', '\nasync function moveSidebarSession(') + '\n' + section('function sessionMenuModel(', '\nfunction memberMenuKey('), ctx);
   return { ctx, copied, actions, menus, updates, records, record, present: () => ctx.sidebarPresentation(record), details: () => ctx.sidebarDetails(record), open: () => ctx.openSessionMenu(record.id) };
 }

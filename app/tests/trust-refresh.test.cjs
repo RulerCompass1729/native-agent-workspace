@@ -29,7 +29,7 @@ function fixture() {
   let language = 'zh'; const elements = new Map(), requests = [];
   const uiText = (key, params) => locale.format(language, key, params), display = createBindings(uiText);
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
-  const context = vm.createContext({ $, uiText, ui: { display, displayText: (raw, message) => locale.displayText(language, raw, message), language: { getSnapshot: () => ({ active: language }) }, errorText: error => locale.errorText(language, error) }, spaceId: 'shared', spaceRecord: () => ({ id: 'shared', name: 'Synthetic shared' }), selectionRevision: 1, node: (tag, text) => new Element(tag, text), participantLabel: s => s.name,
+  const context = vm.createContext({ spaceName: room => room?.name, $, uiText, ui: { display, displayText: (raw, message) => locale.displayText(language, raw, message), language: { getSnapshot: () => ({ active: language }) }, errorText: error => locale.errorText(language, error) }, spaceId: 'shared', spaceRecord: () => ({ id: 'shared', name: 'Synthetic shared' }), selectionRevision: 1, node: (tag, text) => new Element(tag, text), participantLabel: s => s.name,
     window: { nativeWorkspaceUsage: require('../native-usage.js') }, api: { initial() { const request = pending(); requests.push(request); return request.promise; } } });
   vm.runInContext(source.slice(source.indexOf('const uiNode ='), source.indexOf('const states =')), context);
   vm.runInContext(source.slice(source.indexOf('let trustScope ='), source.indexOf('function openCreate(')), context);

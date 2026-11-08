@@ -2,6 +2,10 @@
 const uiError = typeof module === 'object' && module.exports ? require('./ui-errors.cjs').uiError : target.nativeWorkspaceLocale?.createError;
 // Shared data contract only. Existing profile/service writers own persistence.
 const DEFAULT_ROOM_ID = 'shared';
+// The name the default space is created with (room-state.cjs, workspace.cjs). Stored data keeps it; a display
+// may show the interface-language name only while the stored name is still exactly this (T-60).
+const DEFAULT_ROOM_NAME = '共同工作';
+const untouchedDefault = room => room?.id === DEFAULT_ROOM_ID && room.name === DEFAULT_ROOM_NAME;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const roomId = value => value === DEFAULT_ROOM_ID || typeof value === 'string' && UUID.test(value);
 const revision = value => Number.isSafeInteger(value) && value >= 0;
@@ -91,7 +95,7 @@ function canJoin(session, id) {
   return id === DEFAULT_ROOM_ID || !Array.isArray(capabilities) || capabilities.includes('collaborationSpacesV1');
 }
 
-const contract = { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, withMembership, placementRevision, withPlacement, canJoin, completedSharedRecord };
+const contract = { DEFAULT_ROOM_ID, DEFAULT_ROOM_NAME, untouchedDefault, roomId, roomIds, isMember, membershipRevision, withMembership, placementRevision, withPlacement, canJoin, completedSharedRecord };
 if (typeof module !== 'undefined' && module.exports) module.exports = contract;
 else target.nativeWorkspaceSpaces = contract;
 })(typeof window === 'undefined' ? globalThis : window);

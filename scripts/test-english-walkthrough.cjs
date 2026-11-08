@@ -68,15 +68,8 @@ function scanPage() {
 // Known items, each with its reason. Every entry must still appear, so a fixed item has to leave this list.
 const known = [
   { kind: 'option', text: '中文', where: '#ui-language', why: 'Language choices name each language in its own script.' },
-  // Open (T-60): the default shared space is stored as 共同工作. Showing it in English needs a display-time name across
-  // the sidebar (Claude · NAW 开发 band) and the panorama. Only the observed exact forms are listed.
-  { kind: 'option', text: '共同工作', where: '#panorama-view' },
-  { kind: 'text', text: '共同工作', where: '#room-nav-name' },
-  ...['aria-label', 'title'].flatMap(kind => [
-    { kind, pattern: /^Open space “共同工作” · Members: \d+$/, where: '#room-nav' },
-    { kind, text: 'Space actions: 共同工作', where: '#room-more' }]),
 ];
-const matches = (rule, item) => rule.kind === item.kind && (rule.text ? item.text === rule.text : rule.pattern.test(item.text)) && item.where.includes(rule.where);
+const matches = (rule, item) => rule.kind === item.kind && item.text === rule.text && item.where.includes(rule.where);
 const pages = [], failures = [], errors = [];
 let app, page;
 async function visit(name, action, expected) {
@@ -168,6 +161,14 @@ async function run() {
     assert.ok([en('error.labels.nameRequired'), en('error.labels.nameEmpty')].includes((await page.locator('#rename-error').innerText()).trim()), 'The empty-name error is shown in English'); });
   await page.keyboard.press('Escape');
   await visit('archive', async () => { await more(beta).first().click(); await item(en('menu.archiveSession')).click(); await delay(300); await page.locator('#archive-button').click(); });
+  // The untouched default space shows its English name; its accessible name and tooltip use the same name (T-60).
+  await visit('default-space', async () => {
+    const name = en('space.defaultName');
+    assert.equal((await page.locator('#room-nav-name').innerText()).trim(), name);
+    for (const attr of ['aria-label', 'title']) assert.match(await page.locator('#room-nav').getAttribute(attr), new RegExp(`“${name}”`));
+    assert.equal(await page.locator('#room-more').getAttribute('aria-label'), en('sidebar.spaceActions', { name }));
+    await page.locator('#room-nav').click();
+  }, en('space.defaultName'));
 }
 let result, report;
 setupDone = true;
@@ -188,7 +189,7 @@ Promise.race([run(), new Promise((_, reject) => { timer = setTimeout(() => rejec
       report = { ...result, pages: pages.map(p => ({ name: p.name, count: p.hits.length })), unique: unique.length, items: unique, unreached: failures, pageErrors: errors, clipboard };
       const unexpected = unique.filter(item => !known.some(rule => matches(rule, item)));
       const unseen = known.filter(rule => !unique.some(item => matches(rule, item)));
-      report.unexpected = unexpected; report.unseenKnown = unseen.map(rule => rule.text || String(rule.pattern));
+      report.unexpected = unexpected; report.unseenKnown = unseen.map(rule => rule.text);
       console.log(`UNIQUE Chinese items: ${unique.length} (unexpected ${unexpected.length}, known ${unique.length - unexpected.length}); pages: ${pages.length}; unreached: ${failures.length}; page errors: ${errors.length}`);
       for (const item of unexpected) console.log(`UNEXPECTED [${item.kind}] ${item.text} @ ${item.where} on ${item.pages.join(', ')}`);
       if (result?.ok && (unexpected.length || unseen.length || failures.length || errors.length || JSON.stringify(clipboard?.attempts) !== JSON.stringify(['readText']))) {

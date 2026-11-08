@@ -28,7 +28,7 @@ function fixture() {
   const showStart = bootstrap.indexOf('        function showError('), showEnd = bootstrap.indexOf('        const language =', showStart);
   assert.ok(showStart >= 0 && showEnd > showStart);
   ui.showError = vm.runInNewContext(bootstrap.slice(showStart, showEnd) + ';showError', { window: { nativeWorkspaceLocale: locale }, display: ui.display });
-  const context = vm.createContext({ $, uiError: locale.createError, spaceId: 'shared', spaceRecord: () => context.state.room, state: { appVersion: 'fixture', room: { id: 'shared', name: 'Synthetic space', notes: 'Saved original', metadataRevision: 7 } }, notesRevision: 0,
+  const context = vm.createContext({ spaceName: room => room?.name, $, uiError: locale.createError, spaceId: 'shared', spaceRecord: () => context.state.room, state: { appVersion: 'fixture', room: { id: 'shared', name: 'Synthetic space', notes: 'Saved original', metadataRevision: 7 } }, notesRevision: 0,
     ui, uiText,
     toast: text => messages.push(text), toastMessage: (key, params) => messages.push(locale.format('zh', key, typeof params === 'function' ? params() : params)), node: (_tag, text) => new Element(text), button: (text, onclick) => Object.assign(new Element(text), { onclick }), createReadiness() {},
     api: Object.fromEntries(['preflight', 'spaceAction', 'runtimeLocation'].map(method => [method, (...args) => { const request = pending(); calls.push({ method, args, ...request }); return request.promise; }])) });

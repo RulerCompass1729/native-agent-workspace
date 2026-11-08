@@ -70,6 +70,7 @@
   function create(options) {
     const host = options.host, doc = host.ownerDocument;
     const language = () => options.language?.getSnapshot().active || 'zh';
+    const spaceName = room => options.spaceName?.(room) ?? room.name;
     const text = (key, params) => locale.format(language(), key, params);
     const display = options.display || {
       text(el, key, params) { el.textContent = text(key, params); },
@@ -154,11 +155,11 @@
       });
       display.attribute(summary, 'title', 'panorama.summaryHelp');
       const spaceRecords = data.rooms || (data.room ? [data.room] : []);
-      const signature = JSON.stringify([scope, spaceRecords.filter(room => !room.archived).map(room => [room.id, room.name])]);
+      const signature = JSON.stringify([scope, spaceRecords.filter(room => !room.archived).map(room => [room.id, spaceName(room)])]);
       if (filter.dataset.signature !== signature) {
-        const values = [['', undefined, 'panorama.title'], ...spaceRecords.filter(room => !room.archived).map(room => [room.id, room.name])];
+        const values = [['', undefined, 'panorama.title'], ...spaceRecords.filter(room => !room.archived).map(room => [room.id, () => spaceName(room)])];
         if (scope && !values.some(([id]) => id === scope)) values.push([scope, undefined, 'panorama.unavailableSpace']);
-        filter.replaceChildren(...values.map(([id, name, key]) => { const option = element('option', name); option.value = id; if (key) display.text(option, key); return option; }));
+        filter.replaceChildren(...values.map(([id, name, key]) => { const option = element('option', typeof name === 'function' ? undefined : name); option.value = id; if (key) display.text(option, key); else if (typeof name === 'function') display.computed(option, 'text', name); return option; }));
         filter.dataset.signature = signature;
       }
       filter.value = scope;
@@ -177,8 +178,8 @@
         if (row.references.dataset.signature !== referenceSignature) {
           row.references.replaceChildren(...person.spaces.map(room => {
             const reference = room.unavailable ? element('span')
-              : control(room.name, () => options.onSpace?.(room.id));
-            if (room.unavailable) display.computed(reference, 'text', () => room.name + text(room.archived ? 'panorama.archivedSuffix' : 'panorama.unverifiedSuffix'));
+              : control(spaceName(room), () => options.onSpace?.(room.id));
+            if (room.unavailable) display.computed(reference, 'text', () => spaceName(room) + text(room.archived ? 'panorama.archivedSuffix' : 'panorama.unverifiedSuffix'));
             if (!room.unavailable) reference.addEventListener('pointerdown', rememberBeforePointer);
             reference.dataset.panoramaSpace = room.id; return reference;
           }));

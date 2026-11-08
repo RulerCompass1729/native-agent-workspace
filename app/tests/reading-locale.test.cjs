@@ -61,7 +61,7 @@ function fixture(messages, room = false, roomMetadata = {}, imageAPI = {}) {
     if (key === 'copy') return text => { copies.push(text); return new Promise(resolve => { resolveCopy = resolve; }); };
     calls.push(key); throw Error('Locale refresh called product API: ' + key);
   } });
-  const context = vm.createContext({ console, Intl, Date, uiText, node, document, state, api,
+  const context = vm.createContext({ spaceName: room => room?.name, console, Intl, Date, uiText, node, document, state, api,
     ui: { language: { getSnapshot: () => ({ active: language }) }, display, displayText: (raw, message) => locale.displayText(language, raw, message), createError: locale.createError, markdown(el, text) { markdown.push(text); el.textContent = text; }, clearMarkdown() {} },
     window: { nativeWorkspaceLocale: locale, getSelection: () => selection }, current: () => session,
     button: (text, action, cls) => { const el = node('button', text, cls); el.onclick = action; return el; },
@@ -107,7 +107,7 @@ test('unknown notice metadata never translates native or user bodies', () => {
 test('legacy process metadata cannot reject or truncate a long original native title', () => {
   const renderer = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8'), nativeTitle = 'RAW 中文 '.repeat(5000), item = { id: 'tool-original', title: nativeTitle, text: 'ORIGINAL result 中文', status: 'complete' };
   const session = { id: 'session-A', provider: 'codex', messages: [], nativeBlockMapping: false }, cache = { items: new Map([[item.id, item]]) };
-  const context = vm.createContext({ legacyProgress: new Map([[session.id, cache]]), legacyProgressOffline: () => false, ui: { createNotice: locale.createNotice }, freezeLegacyProgress() { throw Error('Unexpected state change'); } });
+  const context = vm.createContext({ spaceName: room => room?.name, legacyProgress: new Map([[session.id, cache]]), legacyProgressOffline: () => false, ui: { createNotice: locale.createNotice }, freezeLegacyProgress() { throw Error('Unexpected state change'); } });
   const from = renderer.indexOf('function sessionMessages('), to = renderer.indexOf('function updateLegacyProgress(', from); assert.ok(from >= 0 && to > from);
   vm.runInContext(renderer.slice(from, to), context); const rows = plain(context.sessionMessages(session));
   assert.equal(rows[0].legacyOriginalTitle, nativeTitle); assert.equal(rows[0].text, item.text); assert.equal(rows[0].uiTitleMessage.params.title, '');
@@ -282,7 +282,7 @@ function imageLocaleFixture(images = [{}], status = 'complete') {
   const uiText = (key, params) => locale.format(language, key, params), display = createBindings(uiText);
   const pending = (queue, arg) => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); queue.push({ arg, resolve, reject }); return promise; };
   const api = { previewImage: source => pending(previews, plain(source)), expandImage: token => pending(expands, token), copyImage: token => pending(copies, token), releaseImage: token => { releases.push(token); return Promise.resolve(); } };
-  const context = vm.createContext({ window: { IntersectionObserver: class {
+  const context = vm.createContext({ spaceName: room => room?.name, window: { IntersectionObserver: class {
     constructor(callback) { this.callback = callback; observers.push(this); }
     observe() {} disconnect() { effects.push('unobserve'); }
   } } });
@@ -412,7 +412,7 @@ test('legacy owned hook title localizes in its existing wrapper, then same-id ra
   const renderer = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8'), own = locale.createNotice('notice.run.approval');
   const item = { id: 'hook-same', title: own.text, uiTitleMessage: own.uiMessage, text: 'RAW 原生通知 result', status: 'observed' };
   const session = { id: 'session-A', provider: 'claude', messages: [], nativeBlockMapping: false }, cache = { items: new Map([[item.id, item]]) };
-  const context = vm.createContext({ legacyProgress: new Map([[session.id, cache]]), legacyProgressOffline: () => false, ui: { createNotice: locale.createNotice }, freezeLegacyProgress() { throw Error('Unexpected state change'); } });
+  const context = vm.createContext({ spaceName: room => room?.name, legacyProgress: new Map([[session.id, cache]]), legacyProgressOffline: () => false, ui: { createNotice: locale.createNotice }, freezeLegacyProgress() { throw Error('Unexpected state change'); } });
   const from = renderer.indexOf('function sessionMessages('), to = renderer.indexOf('function updateLegacyProgress(', from);
   vm.runInContext(renderer.slice(from, to), context); const rows = plain(context.sessionMessages(session));
   const f = fixture(rows); f.switch('en'); const entry = f.view.entries.get(rows[0].id), body = entry.body, originalHeading = entry.heading;

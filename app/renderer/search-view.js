@@ -95,11 +95,11 @@ async function openSearchResult(result) {
     if (!room || result.messageId && !records.some(m => m.id === result.messageId)) { renderSearch(); toast(uiText('search.sharedRemoved')); return; }
     if (room.archived) {
       const message = result.messageId ? records.find(m => m.id === result.messageId) : null;
-      const previewText = () => message?.text ?? uiText('search.roomPreview', { name: room.name, count: new Intl.NumberFormat(ui.language.getSnapshot().active).format(room.messages.length), notes: room.notes ? uiText('search.notes', { notes: room.notes }) : '' });
+      const previewText = () => message?.text ?? uiText('search.roomPreview', { name: spaceName(room), count: new Intl.NumberFormat(ui.language.getSnapshot().active).format(room.messages.length), notes: room.notes ? uiText('search.notes', { notes: room.notes }) : '' });
       const body = $('search-preview-body'); ui.clearMarkdown(body); ui.display.unbind(body);
       if (message) body.textContent = message.text;
       else ui.display.computed(body, 'text', previewText);
-      ui.display.text($('search-preview-title'), 'search.archivedTitle', { name: room.name });
+      ui.display.text($('search-preview-title'), 'search.archivedTitle', () => ({ name: spaceName(room) }));
       // Copy the current visible summary. The original recorded body is never
       // translated, and an in-flight copy retains the text captured on click.
       $('search-preview-copy').onclick = () => attempt(() => api.copy(previewText()));

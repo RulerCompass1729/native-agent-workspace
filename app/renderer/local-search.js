@@ -23,7 +23,7 @@
     }
     const rooms = scope === 'room' ? [state.room] : state.rooms || [state.room];
     for (const room of rooms) if (room && (scope === 'room' || scope === 'all') && (!room.archived || archived || scope === 'room')) {
-      const roomId = room.id || 'shared', base = { roomId, name: room.name || '共同工作', ...(!room.name ? { nameKey: 'search.sharedFallback' } : {}), archived: Boolean(room.archived) };
+      const roomId = room.id || 'shared', base = { roomId, name: room.name || '共同工作', ...(!room.name || globalThis.nativeWorkspaceSpaces?.untouchedDefault?.(room) ? { nameKey: 'search.sharedFallback' } : {}), archived: Boolean(room.archived) };
       if (!query || matches(room.name)) add({ ...base, kind: 'room', key: roomId === 'shared' ? 'room' : `room:${roomId}`, text: room.name || '共同工作' });
       if (query) for (const m of [...(room.messages || []), ...(room.events || [])]) if (matches(m.text)) add({
         ...base, kind: 'shared', key: roomId === 'shared' ? `shared:${m.id}` : `shared:${roomId}:${m.id}`, messageId: m.id, role: m.role, text: snippet(m.text),

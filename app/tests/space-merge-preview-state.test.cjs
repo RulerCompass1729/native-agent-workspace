@@ -29,7 +29,7 @@ function fixture(){
   ui:{language:{text,getSnapshot:()=>({active:'en'})},display:{text(e,key,params){e.textContent=text(key,params);},computed(e,slot,fn){e.textContent=fn();},attribute(e,slot,key,params){e.setAttribute(slot,text(key,params));},unbind(){}},displayText:t=>t,showError(e,error){e.textContent=error.message;}},
   attempt:run=>run(),toastError:e=>errors.push(e.message),renderMergeBatch:()=>{},
   api:{spaceMerge(action,spec){calls.push({action,spec});return action==='preview'?request:Promise.resolve();}}};
- vm.createContext(context);
+ context.spaceName ??= room => room?.name; vm.createContext(context);
  const helpers=source.split('\n').filter(s=>s.startsWith('const node =')||s.startsWith('const uiNode =')).join('\n');
  const renderBlock=source.slice(source.indexOf('function mergeSourceLabel('),source.indexOf('function openSpaceMerge('));
  vm.runInContext(helpers+'\n'+['currentDialogTicket','mergeSpec'].map(declaration).join('\n')+'\n'+renderBlock+'\n'+handler,context);

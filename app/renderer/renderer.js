@@ -50,6 +50,8 @@ const storedSpaces = () => state?.rooms || (state?.room ? [state.room] : []);
 // reveal it as soon as it has members or any saved activity; never migrate it.
 const allSpaces = () => storedSpaces().filter(r => r.id !== 'shared' || r.metadataRevision || r.revision || r.archived || r.notes || r.files?.length || r.messages?.length || r.events?.length || state?.sessions.some(s => inSpace(s, r.id)));
 const spaceRecord = id => storedSpaces().find(r => r.id === id);
+// A space's name as shown: the untouched default space follows the interface language; any name the person gave stays as is (T-60).
+const spaceName = room => window.nativeWorkspaceSpaces.untouchedDefault(room) ? uiText('space.defaultName') : room?.name;
 const spaceCall = (action, ...args) => api.spaceAction(spaceId, action, args);
 const roomViewFields = ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo', 'roomSurface', 'roomImages', 'roomImageVersion', 'roomImageSend', 'roomMemberViews', 'roomRecordScope', 'roomRecordReturn', 'roomFilterHistory', 'draftRevision'];
 const focusedRoomMember = () => selected === 'room' && roomSurface === 'overview' && Boolean(roomSession);
@@ -110,14 +112,14 @@ async function addToSpace(id, destination) {
   if (window.nativeWorkspaceSpaces.roomIds(record).length && !inSpace(record, destination) && !record.serviceCapabilities?.includes('singleHomeMoveV1')) throw uiError('error.movePlacementUnsupported');
   const receipt = await api.spaceAction(destination, 'join', [id, true, placementProof(record)]);
   updateState(await api.initial()); render();
-  if (!receipt?.changed) return toastMessage("toast.alreadyMember", { arg1: room.name });
-  toastMessage("toast.joinedSpace", { arg1: room.name }, { label: uiText('action.undoJoin'), labelKey: 'action.undoJoin', nameKey: 'action.undoJoinName', params: { name: room.name }, run: async () => {
+  if (!receipt?.changed) return toastMessage("toast.alreadyMember", { arg1: spaceName(room) });
+  toastMessage("toast.joinedSpace", { arg1: spaceName(room) }, { label: uiText('action.undoJoin'), labelKey: 'action.undoJoin', nameKey: 'action.undoJoinName', params: () => ({ name: spaceName(room) }), run: async () => {
     const previous = receipt.previousRoomId || null;
     const proof = receipt.placementRevision !== undefined
       ? { nativeId: receipt.nativeId, placementRevision: receipt.placementRevision, connectionRevision: receipt.connectionRevision }
       : { revision: receipt.revision, nativeId: receipt.nativeId };
     await api.spaceAction(previous || destination, 'join', [id, Boolean(previous), proof]);
-    updateState(await api.initial()); render(); toastMessage("toast.undoJoinDone", { arg1: spaceRecord(destination)?.name || room.name });
+    updateState(await api.initial()); render(); toastMessage("toast.undoJoinDone", { arg1: spaceName(spaceRecord(destination) || room) });
   } });
 }
 let sidebarLayout;
@@ -660,7 +662,7 @@ async function returnToPanorama() {
 function renderPanorama() {
   if (!panorama) panorama = window.nativeWorkspacePanorama.create({
     host: $('panorama-view'), view: panoramaView, display: ui.display, language: ui.language,
-    label: s => participantLabel(s, state.sessions),
+    label: s => participantLabel(s, state.sessions), spaceName,
     onChange: next => {
       if (selected !== 'panorama' || panoramaView.returning) return;
       panoramaView = { ...next, returning: false };
@@ -1066,9 +1068,9 @@ function renderSpaceNavigation() {
     row.nav.disabled = Boolean(room.archived); row.more.disabled = disconnected || Boolean(room.archived) || renameTarget?.id === 'room' && renameTarget.roomId === room.id;
     row.nav.className = `room-nav ${roomTone(room.id)}`; row.nav.classList.toggle('active', selected === 'room' && spaceId === room.id);
     if (selected === 'room' && spaceId === room.id) row.nav.setAttribute('aria-current', 'page'); else row.nav.removeAttribute('aria-current');
-    const navParams = () => ({ name: room.name, count: members(room.id).length }); ui.display.attribute(row.nav, 'aria-label', 'sidebar.spaceNav', navParams); ui.display.attribute(row.nav, 'title', 'sidebar.spaceNav', navParams);
-    row.name.textContent = room.name; row.count.textContent = members(room.id).length;
-    ui.display.attribute(row.more, 'aria-label', 'sidebar.spaceActions', { name: room.name }); ui.display.attribute(row.more, 'title', 'sidebar.spaceActions', { name: room.name });
+    const navParams = () => ({ name: spaceName(room), count: members(room.id).length }); ui.display.attribute(row.nav, 'aria-label', 'sidebar.spaceNav', navParams); ui.display.attribute(row.nav, 'title', 'sidebar.spaceNav', navParams);
+    ui.display.computed(row.name, 'text', () => spaceName(room)); row.count.textContent = members(room.id).length;
+    ui.display.attribute(row.more, 'aria-label', 'sidebar.spaceActions', () => ({ name: spaceName(room) })); ui.display.attribute(row.more, 'title', 'sidebar.spaceActions', () => ({ name: spaceName(room) }));
   }
   const active = allSpaces().filter(r => !r.archived);
   $('workspace-empty').hidden = Boolean(active.length) || !allSpaces().some(r => r.archived);
@@ -1082,7 +1084,7 @@ function openSpaceCreate() {
 }
 let mergeDialog;
 function mergeSourceLabel(room, choices) {
-  return choices.filter(value => value.name === room.name).length > 1 ? `${room.name} · ${room.id.slice(0, 8)}` : room.name;
+  return choices.filter(value => value.name === room.name).length > 1 ? `${spaceName(room)} · ${room.id.slice(0, 8)}` : spaceName(room);
 }
 function mergeCheckbox(text, checked, change) {
   const label = node('label', undefined, 'merge-option'), input = node('input'); input.type = 'checkbox'; input.checked = checked;
@@ -1134,7 +1136,7 @@ function renderMergeChoices() {
         for (const record of records) {
           const field = mergeCheckbox(text(record), selectedIds.has(record.id), checked => checked ? selectedIds.add(record.id) : selectedIds.delete(record.id));
           ui.display.computed(field.label.lastElementChild, 'text', () => text(record));
-          ui.display.attribute(field.input, 'aria-label', 'merge.importAction', () => ({ name: room.name, kind: uiText(title), id: record.id })); inputs.push(field.input); section.append(field.label);
+          ui.display.attribute(field.input, 'aria-label', 'merge.importAction', () => ({ name: spaceName(room), kind: uiText(title), id: record.id })); inputs.push(field.input); section.append(field.label);
           if (record.text) { const full = node('details'), label = uiNode('summary', 'merge.original'); full.append(label, node('pre', record.text)); section.append(full); }
         }
         body.append(section);
@@ -1477,9 +1479,9 @@ async function showTrust(options) {
   const generation = ++trustRevision;
   const scope = options?.usageScope || (wasOpen ? trustScope : null);
   if (!wasOpen) trustClearRoom = spaceId;
-  ui.display.text($('clear-shared-history'), 'trust.clearSpace', () => ({ name: spaceRecord(trustClearRoom)?.name || uiText('sidebar.space') }));
+  ui.display.text($('clear-shared-history'), 'trust.clearSpace', () => ({ name: spaceName(spaceRecord(trustClearRoom)) || uiText('sidebar.space') }));
   trustScope = scope; dialog.dataset.mode = scope ? 'usage' : 'privacy';
-  ui.display.text(dialog.querySelector('h2'), scope ? 'trust.namedUsage' : 'privacy.open', scope ? () => ({ name: scope.kind === 'room' && scope.unavailable ? uiText('space.unavailable') : scope.name }) : undefined);
+  ui.display.text(dialog.querySelector('h2'), scope ? 'trust.namedUsage' : 'privacy.open', scope ? () => ({ name: scope.kind === 'room' && scope.unavailable ? uiText('space.unavailable') : scope.kind === 'room' ? spaceName({ id: scope.roomId, name: scope.name }) : scope.name }) : undefined);
   if (!wasOpen) dialog.showModal();
   trustLoading = true;
   $('refresh-trust').disabled = true; ui.display.text($('refresh-trust'), 'trust.refreshing');
@@ -1565,12 +1567,12 @@ function createSpaceChoice() {
 function renderCreateSpaces() {
   if (!$('create-dialog').open) return;
   const kind = $('create-space-kind').value, select = $('create-space-existing'), rooms = allSpaces().filter(room => !room.archived);
-  const roster = JSON.stringify(rooms.map(room => [room.id, room.name]));
+  const roster = JSON.stringify(rooms.map(room => [room.id, room.name, spaceName(room)]));
   if (select.dataset.roster !== roster) {
     const chosen = select.value, named = name => rooms.filter(room => room.name === name).length > 1;
     const placeholder = new Option('', ''); ui.display.text(placeholder, 'create.spacePlaceholder');
     select.replaceChildren(placeholder);
-    for (const room of rooms) select.add(new Option(named(room.name) ? `${room.name} · ${room.id.slice(0, 6)}` : room.name, room.id));
+    for (const room of rooms) select.add(new Option(named(room.name) ? `${spaceName(room)} · ${room.id.slice(0, 6)}` : spaceName(room), room.id));
     select.value = rooms.some(room => room.id === chosen) ? chosen : ''; select.dataset.roster = roster;
     if (chosen && !select.value) createReadiness(); // the chosen space went away: 创建 must reflect it now
   }
@@ -1581,7 +1583,7 @@ function renderCreateSpaces() {
 async function finishCreateSpace(ticket, revision) {
   const creation = ticket.creation, fresh = () => currentDialogTicket(ticket) && revision === selectionRevision;
   const kept = () => { const record = state.sessions.find(s => s.id === creation.sessionId), room = creation.roomId && spaceRecord(creation.roomId);
-    return uiText('create.keptSession', { name: record?.name || sessionShortId(creation.sessionId), space: room ? uiText('create.keptSpace', { name: room.name }) : '' }); };
+    return uiText('create.keptSession', { name: record?.name || sessionShortId(creation.sessionId), space: room ? uiText('create.keptSpace', { name: spaceName(room) }) : '' }); };
   // Not fresh means either the dialog closed or (still open) the selection moved; say which, and offer the retry if open.
   const paused = step => {
     const open = currentDialogTicket(ticket), key = open ? 'create.pausedChanged' : 'create.pausedClosed';
@@ -1621,7 +1623,7 @@ async function finishCreateSpace(ticket, revision) {
     // (branch table: E2, the join while the selection moved).
     if (fresh()) { $('create-dialog').close(); await select(record.id, creation.view); }
     else if (currentDialogTicket(ticket)) $('create-dialog').close();
-    toastMessage('toast.createdSessionJoined', { name: room.name });
+    toastMessage('toast.createdSessionJoined', { name: spaceName(room) });
   } catch (error) {
     if (error.final) creation.blocked = true;
     // Whether the dialog is still open decides where the message goes and which retry it offers (a moved selection keeps
@@ -1978,7 +1980,7 @@ function openRoomMenu(point, anchor, id = spaceId) {
 function sessionMenuModel(id, row) {
   const record = state.sessions.find(s => s.id === id), group = row.spaceId;
   const visible = group ? orderedMembers(group) : sidebarSessions(), index = visible.findIndex(s => s.id === id);
-  const roomItems = allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: uiText(inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', { name: r.name }), labelKey: inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', labelParams: { name: r.name } }));
+  const roomItems = allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: uiText(inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', { name: spaceName(r) }), labelKey: inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', labelParams: { name: spaceName(r) } }));
   // Right under the version fact that says this backend is older (T-131).
   const update = backendVersionNotice(record, state.appVersion)?.kind === 'old' && !record.archived ? [{ id: 'update-backend', label: uiText('menu.updateThisBackend'), labelKey: 'menu.updateThisBackend' }] : [];
   const actions = [...update, { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }, { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
@@ -2144,7 +2146,7 @@ function sidebarDetails(record) {
   const memberships = allSpaces().filter(room => !room.archived && inSpace(record, room.id));
   const notice = backendVersionNotice(record, state.appVersion), provider = record.provider === 'claude' ? 'Claude' : 'Codex';
   return [record.name, provider, 'NAW ' + record.id, provider + ' ' + (record.nativeId || uiText('advanced.establishing')), sidebarPresentation(record).full,
-    memberships.length ? uiText('sidebar.membershipFacts', { names: memberships.map(room => room.name).join('、') }) : uiText('sidebar.independent'), sessionTimes(record),
+    memberships.length ? uiText('sidebar.membershipFacts', { names: memberships.map(room => spaceName(room)).join('、') }) : uiText('sidebar.independent'), sessionTimes(record),
     notice?.title || uiText('sidebar.versionFacts', { backend: versionValue(record.runtimeVersion) || uiText('version.unreported'), app: versionValue(state.appVersion) || uiText('version.unreported') })];
 }
 function sidebarFactsKey(record) {
@@ -2305,7 +2307,7 @@ function renderSessions() {
   const list = $('session-list');
   $('sessions-flat').setAttribute('aria-pressed', String(!grouped)); $('sessions-grouped').setAttribute('aria-pressed', String(grouped));
   if (grouped) {
-    const groups = allSpaces().filter(r => !r.archived).map(r => ({ id: r.id, name: r.name, people: orderedMembers(r.id).filter(s => visible.includes(s)) }));
+    const groups = allSpaces().filter(r => !r.archived).map(r => ({ id: r.id, name: spaceName(r), people: orderedMembers(r.id).filter(s => visible.includes(s)) }));
     // Every listed session appears at least once: a session left only in an archived or unknown space counts as independent.
     const independent = visible.filter(s => !groups.some(group => inSpace(s, group.id)));
     groups.push({ id: '', name: null, people: independent });
@@ -2390,19 +2392,19 @@ function renderSessions() {
       element.addEventListener('keydown', event => { if (event.target.closest('#rename-editor')) return; if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); openSessionMenu(record.id, undefined, key); } });
       element.append(link, more); row = { element, link, more, name, shortId, badges, status, dot, marker, time, version, sessionId: record.id, spaceId: group }; sessionRows.set(key, row);
     }
-    const memberships = allSpaces().filter(r => !r.archived && inSpace(record, r.id)), membershipNames = memberships.map(r => r.name).join('、');
+    const memberships = allSpaces().filter(r => !r.archived && inSpace(record, r.id)), membershipNames = memberships.map(r => spaceName(r)).join('、');
     const presentation = sidebarPresentation(record);
     const label = () => `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${sidebarPresentation(record).full}`;
     const association = () => memberships.length ? uiText('sidebar.memberships', { names: membershipNames }) : uiText('sidebar.independent');
     const occurrence = () => grouped && memberships.length > 1 ? uiText('sidebar.sameIdentity') : '';
     const version = () => backendVersionNotice(record, state.appVersion);
     row.link.disabled = false; ui.display.computed(row.link, 'aria-label', () => `${label()} · ${association()}${occurrence()} · ${sessionTimes(record)}${version() ? ' · ' + version().title : ''}`); ui.display.computed(row.link, 'title', () => `${label()}\n${association()}${occurrence()}\n${sessionTimes(record)}${version() ? '\n' + version().title : ''}`);
-    const badgeKey = JSON.stringify(memberships.map(r => [r.id, r.name]));
+    const badgeKey = JSON.stringify(memberships.map(r => [r.id, spaceName(r)]));
     row.badges.hidden = Boolean(grouped && group);
     if (row.badgeKey !== badgeKey) {
       // One badge plus a count keeps membership on its line; the badge shows the space's whole name and CSS
       // shortens it only by the width it has (T-144). The full list is in the title and details.
-      row.badges.replaceChildren(...memberships.slice(0, 1).map(r => { const badge = node('span', r.name, `space-badge ${roomTone(r.id)}`); ui.display.attribute(badge, 'title', 'sidebar.spaceBadge', { name: r.name }); return badge; }));
+      row.badges.replaceChildren(...memberships.slice(0, 1).map(r => { const badge = node('span', undefined, `space-badge ${roomTone(r.id)}`); ui.display.computed(badge, 'text', () => spaceName(r)); ui.display.attribute(badge, 'title', 'sidebar.spaceBadge', () => ({ name: spaceName(r) })); return badge; }));
       if (memberships.length > 1) { const more = node('span', `+${memberships.length - 1}`, 'space-badge space-badge-more'); more.title = membershipNames; row.badges.append(more); }
       row.badgeKey = badgeKey;
     }
@@ -2510,10 +2512,10 @@ function renderArchives() {
   if ($('archive-group-body').hidden) return;
   const list = $('archive-list');
   const origin = document.activeElement, oldRow = origin?.closest('.archive-item'), oldIndex = oldRow ? [...list.children].indexOf(oldRow) : -1;
-  const signature = JSON.stringify([archivedRooms.map(r => [r.id, r.name]), records.map(s => [s.id, s.name, s.state, sessionTimes(s)]), state.sessions.map(s => [s.id, s.name])]);
+  const signature = JSON.stringify([archivedRooms.map(r => [r.id, r.name, spaceName(r)]), records.map(s => [s.id, s.name, s.state, sessionTimes(s)]), state.sessions.map(s => [s.id, s.name])]);
   if (list.dataset.signature === signature) return; list.dataset.signature = signature; list.replaceChildren();
   for (const room of archivedRooms) {
-    const row = node('div', undefined, 'archive-item'); row.dataset.archivedRoom = room.id; row.append(node('strong', room.name), uiNode('small', 'archive.roomInfo'), uiButton('archive.restoreRoom', () => restoreArchivedRoom(room.id))); list.append(row);
+    const row = node('div', undefined, 'archive-item'); row.dataset.archivedRoom = room.id; row.append(node('strong', spaceName(room)), uiNode('small', 'archive.roomInfo'), uiButton('archive.restoreRoom', () => restoreArchivedRoom(room.id))); list.append(row);
   }
   for (const s of records) {
     const row = node('div', undefined, 'archive-item'); row.dataset.archivedSession = s.id;
@@ -2860,7 +2862,7 @@ function dropTarget(element, join, destination = 'shared') {
 function openNotes(id = spaceId) {
   const room = spaceRecord(id); if (!room) return;
   notesRevision = room.metadataRevision;
-  $('room-notes-text').value = room.notes || ''; ui.display.text($('notes-heading'), 'notes.titleName', { name: room.name }); $('notes-error').hidden = true; $('save-notes').disabled = false;
+  $('room-notes-text').value = room.notes || ''; ui.display.text($('notes-heading'), 'notes.titleName', () => ({ name: spaceName(room) })); $('notes-error').hidden = true; $('save-notes').disabled = false;
   const ticket = openTransientDialog('notes-dialog'); ticket.roomId = id;
 }
 let contextSnapshot = null;
@@ -2903,7 +2905,7 @@ function openContext() {
     const row = node('div', undefined, 'run-person'), label = node('label'), check = document.createElement('input');
     check.type = 'checkbox'; check.dataset.contextSpace = room.id; check.checked = room.id === spaceId;
     const duplicate = rooms.some(other => other.id !== room.id && other.name === room.name);
-    label.append(check, document.createTextNode(room.name + (duplicate ? ' · ' + room.id : '')));
+    label.append(check, document.createTextNode(spaceName(room) + (duplicate ? ' · ' + room.id : '')));
     check.onchange = generateContextPreview; row.append(label); return row;
   }));
   // Solo drafts are owned by the native session's active window. Copying lets
@@ -3088,7 +3090,7 @@ function renderHeaderLayout(s, inRoom) {
   $('conversation-pane-toolbar').hidden = !compact;
   $('terminal-more').hidden = !compact;
   $('title').tabIndex = compact || compactRoom ? 0 : -1;
-  ui.display.computed($('title'), 'title', () => compact ? s.name : compactRoom ? state.room.unavailable ? uiText('space.unavailable') : state.room.name : '');
+  ui.display.computed($('title'), 'title', () => compact ? s.name : compactRoom ? state.room.unavailable ? uiText('space.unavailable') : spaceName(state.room) : '');
   $('title').onfocus = () => { if (header.classList.contains('compact-room')) { captureReadingViews(); restoreOverviewReading(); header.classList.add('reveal-room-title'); } };
   $('title').onblur = () => { if (header.classList.contains('reveal-room-title')) { captureReadingViews(); restoreOverviewReading(); header.classList.remove('reveal-room-title'); } };
   if (!compactRoom) header.classList.remove('reveal-room-title');
@@ -3454,7 +3456,8 @@ function render() {
     $('panorama-nav').setAttribute('aria-pressed', String(inPanorama));
     $('return-panorama').hidden = !panoramaView.returning || inPanorama;
     if (inRoom && state.room.unavailable) ui.display.text($('title'), 'space.unavailable');
-    else if (inRoom || s?.name) { ui.display.unbind($('title')); $('title').textContent = inRoom ? state.room.name : s.name; }
+    else if (inRoom) ui.display.computed($('title'), 'text', () => spaceName(state.room));
+    else if (s?.name) { ui.display.unbind($('title')); $('title').textContent = s.name; }
     else ui.display.text($('title'), 'header.workspace');
     const warningText = (raw, message) => message ? ui.displayText(raw, message) : raw;
     const warning = () => [disconnected ? uiText('error.serviceDisconnectedNotice') : [warningText(state.storageWarning, state.storageWarningUiMessage), warningText(state.sessionNameWarning, state.sessionNameWarningUiMessage), warningText(state.roomStorageWarning, state.roomStorageWarningUiMessage)].filter(Boolean).join(' '), warningText(state.viewStorageWarning, state.viewStorageWarningUiMessage)].filter(Boolean).join(' ');
@@ -4277,7 +4280,7 @@ function openSpaceFiles() {
 function renderSpaceFiles() {
   if (!filesSpace) return;
   const room = spaceRecord(filesSpace); if (!room) return;
-  ui.display.text($('space-files-title'), 'files.titleName', { name: room.name });
+  ui.display.text($('space-files-title'), 'files.titleName', () => ({ name: spaceName(room) }));
   $('add-space-files').disabled = disconnected || room.archived;
   const signature = JSON.stringify(room.files || []), list = $('space-files-list');
   if (list.dataset.signature !== signature) {
@@ -4293,7 +4296,7 @@ function renderSpaceFiles() {
     const remove = list.children[index].lastElementChild;
     remove.disabled = room.archived;
     remove.fileRevision = room.metadataRevision;
-    ui.display.attribute(remove, 'aria-label', 'files.removeAction', { space: room.name, file: file.name });
+    ui.display.attribute(remove, 'aria-label', 'files.removeAction', () => ({ space: spaceName(room), file: file.name }));
   }
 }
 $('close-space-files').onclick = () => $('space-files-dialog').close();

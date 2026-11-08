@@ -8,6 +8,32 @@ const UNKNOWN = '22222222-2222-4222-8222-222222222222';
 const rooms = [{ id: 'shared', name: 'A' }, { id: B, name: 'B' }];
 const session = (id, roomIds = [], extra = {}) => ({ id, nativeId: `native-${id}`, name: '同名成员', state: 'idle', roomIds, messages: [], ...extra });
 
+// A minimal DOM for panorama rendering with real display bindings.
+function fakeDom() {
+  class Element {
+    constructor(tag) { this.tagName = tag.toUpperCase(); this.ownerDocument = doc; this.children = []; this.dataset = {}; this.attrs = new Map(); this.classList = { add() {} }; this.clientHeight = 0; this.scrollTop = 0; this._text = ''; }
+    set textContent(value) { this._text = String(value); this.children = []; this.firstChild = value ? { textContent: String(value), parentElement: this } : null; }
+    get textContent() { return this._text || this.children.map(child => child.textContent).join(''); }
+    setAttribute(key, value) { this.attrs.set(key, String(value)); }
+    getAttribute(key) { return this.attrs.get(key) ?? null; }
+    hasAttribute(key) { return this.attrs.has(key); }
+    removeAttribute(key) { this.attrs.delete(key); }
+    addEventListener() {}
+    append(...nodes) { for (const node of nodes) { node.remove(); node.parentElement = this; this.children.push(node); } this.firstChild = this.children[0] || null; }
+    insertBefore(node, before) { if (node === before) return; node.remove(); node.parentElement = this; const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, node); this.firstChild = this.children[0] || null; }
+    replaceChildren(...nodes) { for (const node of this.children) node.parentElement = null; this.children = []; this._text = ''; this.append(...nodes); }
+    remove() { if (this.parentElement) { const list = this.parentElement.children; list.splice(list.indexOf(this), 1); this.parentElement = null; } }
+    querySelectorAll(selector) {
+      assert.equal(selector, '[data-naw-i18n-bound]'); const found = [];
+      const visit = element => { for (const child of element.children) { if (child.hasAttribute('data-naw-i18n-bound')) found.push(child); visit(child); } };
+      visit(this); return found;
+    }
+  }
+  const doc = { createElement: tag => new Element(tag), getSelection: () => null, addEventListener() {}, activeElement: null };
+  doc.Element = Element;
+  return { doc };
+}
+
 test('one primary projection reaches B-only U and counts shared S only once', () => {
   const sessions = [session('S', ['shared', B]), session('T', ['shared']), session('U', [B]), session('V')];
   const before = JSON.stringify({ rooms, sessions });
@@ -32,26 +58,7 @@ test('projection paints the same observed facts in English without changing memb
 
 test('real display bindings repaint panorama labels without replacing its focused control, raw source node or scroll', () => {
   const binding = require('./fixtures/locale-ui.cjs')('zh');
-  class Element {
-    constructor(tag) { this.tagName = tag.toUpperCase(); this.ownerDocument = doc; this.children = []; this.dataset = {}; this.attrs = new Map(); this.classList = { add() {} }; this.clientHeight = 0; this.scrollTop = 0; this._text = ''; }
-    set textContent(value) { this._text = String(value); this.children = []; this.firstChild = value ? { textContent: String(value), parentElement: this } : null; }
-    get textContent() { return this._text || this.children.map(child => child.textContent).join(''); }
-    setAttribute(key, value) { this.attrs.set(key, String(value)); }
-    getAttribute(key) { return this.attrs.get(key) ?? null; }
-    hasAttribute(key) { return this.attrs.has(key); }
-    removeAttribute(key) { this.attrs.delete(key); }
-    addEventListener() {}
-    append(...nodes) { for (const node of nodes) { node.remove(); node.parentElement = this; this.children.push(node); } this.firstChild = this.children[0] || null; }
-    insertBefore(node, before) { if (node === before) return; node.remove(); node.parentElement = this; const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, node); this.firstChild = this.children[0] || null; }
-    replaceChildren(...nodes) { for (const node of this.children) node.parentElement = null; this.children = []; this._text = ''; this.append(...nodes); }
-    remove() { if (this.parentElement) { const list = this.parentElement.children; list.splice(list.indexOf(this), 1); this.parentElement = null; } }
-    querySelectorAll(selector) {
-      assert.equal(selector, '[data-naw-i18n-bound]'); const found = [];
-      const visit = element => { for (const child of element.children) { if (child.hasAttribute('data-naw-i18n-bound')) found.push(child); visit(child); } };
-      visit(this); return found;
-    }
-  }
-  const doc = { createElement: tag => new Element(tag), getSelection: () => null, addEventListener() {}, activeElement: null };
+  const { doc } = fakeDom(); const Element = doc.Element;
   const host = new Element('div'), api = create({ host, display: binding.ui.display, language: binding.ui.language, view: { spaceId: 'shared' } });
   const record = session('S', ['shared'], { background: 2, backgroundKinds: ['shell', 'monitor'], backgroundAt: 1 });
   const data = { rooms: [{ id: 'shared', name: 'RAW 中文 space' }], sessions: [record] };
@@ -192,4 +199,17 @@ test('an earlier pointer release cannot erase a newer source-reading snapshot', 
 
   api.captureOrigin(true); listeners.get('pointercancel')();
   assert.equal(api.captureOrigin().pointerCaptured, false, 'cancelled pointers are still discarded');
+});
+
+test('the untouched default space shows its interface-language name; a renamed space stays as named (T-60)', () => {
+  const binding = require('./fixtures/locale-ui.cjs')('zh'), spaces = require('../collaboration-spaces.cjs'), locale = require('../ui-locale.js');
+  const { doc } = fakeDom(), host = new doc.Element('div');
+  const spaceName = room => spaces.untouchedDefault(room) ? locale.format(binding.ui.language.getSnapshot().active, 'space.defaultName') : room.name;
+  const api = create({ host, display: binding.ui.display, language: binding.ui.language, view: { spaceId: 'shared' }, spaceName });
+  api.update({ rooms: [{ id: 'shared', name: spaces.DEFAULT_ROOM_NAME }, { id: B, name: 'Team 中文' }], sessions: [session('S', ['shared', B])] });
+  const filter = host.children[0].children.find(child => child.tagName === 'SELECT'), [, shared, team] = filter.children;
+  assert.equal(shared.textContent, '共同工作'); assert.equal(team.textContent, 'Team 中文');
+  binding.setLanguage('en'); binding.ui.display.refresh(host);
+  assert.equal(shared.textContent, 'Shared work', 'the same option repaints in English'); assert.equal(team.textContent, 'Team 中文', 'a name the person gave is not translated');
+  assert.equal(filter.children[1], shared); assert.equal(filter.value, 'shared');
 });

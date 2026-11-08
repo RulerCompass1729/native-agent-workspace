@@ -6959,3 +6959,27 @@ failed at :81 and the fixed checks passed. check-room.cjs now polls and awaits e
 reading (waitForState); the fixed file passed 10 of 10 isolated runs. This failure
 says nothing about whether a message can reach a member who just left; that is a
 separate check, recorded on T-151.
+
+## Default space name in the interface language (T-60) — 2026-11-08
+
+A new profile stores its default space as 共同工作, so the English
+interface showed Chinese wherever the space is named. One display helper,
+`spaceName(room)`, now shows the catalog name (`space.defaultName`: zh
+共同工作, en "Shared work") only while the default space keeps its
+untouched system name; a renamed space shows its own name and stored data
+never changes. The rule lives in the shared spaces contract
+(`DEFAULT_ROOM_NAME`, `untouchedDefault`). The sidebar row, its accessible
+name and tooltip, badges, header title, panorama options, archive list,
+menus, toasts and dialog titles use the helper; comparisons, matching and
+the usage scope keep the raw name.
+
+Tests cover the rule in both languages, a renamed space and agreement with
+the stored backend default; a panorama test proves the same option
+repaints in English, and making the panorama ignore the helper turns it
+red. Ten renderer-slice tests now provide `spaceName`. The English
+walkthrough opens the default space and checks that the visible name,
+accessible name and tooltip agree; its only remaining Chinese is the
+language choice 中文. A fresh headless reviewer passed the change after
+asking for the undo-join name, a raw usage scope and live dialog titles.
+Panorama space references still take the name from the last data render,
+because a locale repaint must keep their raw node.

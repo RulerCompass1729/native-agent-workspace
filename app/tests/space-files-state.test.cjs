@@ -11,9 +11,9 @@ function fixture() {
  let room = { name: 'Synthetic room', files: [{ id: 'file-one', name: '完整名称.md', path: '/opt/synthetic/完整名称.md' }], archived: false, metadataRevision: 1 };
  const button = (text, onclick) => ({ textContent: text, onclick, disabled: false, attributes: {} });
  const calls = [];
- const context = { $: id => elements[id], filesSpace: 'shared', spaceRecord: () => room, disconnected: false, node, button, uiButton: button, uiNode: node,
+ const context = { spaceName: room => room?.name, $: id => elements[id], filesSpace: 'shared', spaceRecord: () => room, disconnected: false, node, button, uiButton: button, uiNode: node,
   api: { async spaceAction(...args) { calls.push(args); }, async initial() { return {}; } }, updateState() {},
-  ui: { display: { text() {}, attribute(element, name, _key, params) { element.attributes[name] = { ...params }; } } } };
+  ui: { display: { text() {}, attribute(element, name, _key, params) { element.attributes[name] = { ...(typeof params === 'function' ? params() : params) }; } } } };
  return { get room() { return room; }, set room(value) { room = value; }, list, add, context, calls, render: vm.runInNewContext('(' + renderSource + ')', context) };
 }
 test('cached file rows adopt archive/restore and room name without replacing focused targets', () => {

@@ -9,7 +9,9 @@ const renderer = source('app/renderer/renderer.js');
 const ui = { displayText: (raw, metadata) => require('../ui-locale.js').displayText('zh', raw, metadata) };
 function actualFunction(text, name, next, context) {
   const start = text.indexOf(`function ${name}(`), end = text.indexOf(`function ${next}(`, start + 1);
-  assert.ok(start >= 0 && end > start); return vm.runInNewContext(text.slice(start, end) + `;${name}`, context);
+  assert.ok(start >= 0 && end > start);
+  if (context && !('spaceName' in context)) context.spaceName = room => room?.name;
+  return vm.runInNewContext(text.slice(start, end) + `;${name}`, context || { spaceName: room => room?.name });
 }
 test('the actual reading timeline keeps source blocks before C activity, resolves imported reply display links and preserves raw payloads', () => {
   const raw = [
