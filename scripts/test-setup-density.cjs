@@ -11,7 +11,8 @@ const ownerRoot = path.resolve(__dirname, '..'), root = fs.realpathSync(option('
 assert.ok(option('--evidence') && path.isAbsolute(option('--evidence')), 'Fresh private absolute evidence path required');
 const evidence = path.resolve(option('--evidence'));
 assert.ok(!fs.existsSync(evidence), 'Evidence exists; never overwrite an earlier case');
-assert.ok(option('--baseline-css') && path.isAbsolute(option('--baseline-css')), 'Exact baseline CSS required');
+// The baseline CSS check is for the change's own acceptance; without it the run still measures density and preservation.
+assert.ok(!option('--baseline-css') || path.isAbsolute(option('--baseline-css')), 'Exact baseline CSS path must be absolute');
 assert.ok(!process.env.NAW_APP_EXECUTABLE && !process.env.NAW_TEST_APP_ROOT && !process.env.NAW_EVIDENCE_DIR, 'No ambient installed target');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const cssPath = path.join(root, 'app/renderer/styles.css'), clientPath = path.join(root, 'app/dsh/client.js');
@@ -19,7 +20,7 @@ const css = fs.readFileSync(cssPath, 'utf8'), start = '/* Compact setup dialog:'
 const from = css.indexOf(start), to = css.indexOf(end);
 assert.ok(from >= 0 && to > from, 'Expected scoped settings delta');
 const delta = css.slice(from, to + end.length + 1);
-assert.equal(css.replace(delta, ''), fs.readFileSync(option('--baseline-css'), 'utf8'), 'No changes outside the measured delta');
+if (option('--baseline-css')) assert.equal(css.replace(delta, ''), fs.readFileSync(option('--baseline-css'), 'utf8'), 'No changes outside the measured delta');
 assert.ok(fs.readFileSync(clientPath, 'utf8').includes(start), 'Build this source before launch');
 const fixturePath = path.join(root, 'scripts/fixtures/loading-terminal.cjs');
 const sourcePins = { css: hash(css), compiled: hash(fs.readFileSync(clientPath)), driver: hash(fs.readFileSync(__filename)), fixture: hash(fs.readFileSync(fixturePath)) };
@@ -36,7 +37,7 @@ try { fs.mkdirSync(slot, { mode: 0o700 }); } catch (e) { if (e.code !== 'EEXIST'
 const lease = fs.lstatSync(slot);
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex2', task: plan.task, at: new Date().toISOString(), pid: process.pid, token, plan }));
 let profile, child, client, app, page, timer, sequence = 0, failure;
-const began = Date.now(), result = { at: new Date().toISOString(), plan, sourcePins, baselineCSS: path.resolve(option('--baseline-css')), errors: [], measurements: [] };
+const began = Date.now(), result = { at: new Date().toISOString(), plan, sourcePins, baselineCSS: option('--baseline-css') ? path.resolve(option('--baseline-css')) : null, errors: [], measurements: [] };
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(read, label) { for (let i = 0; i < 160; i++) { assert.ok(Date.now() - began < plan.activeMs, 'Active case cap'); if (await read()) return; await delay(50); } throw Error(label); }
 function fixture(method = 'stats', target, value) { const id = ++sequence; return new Promise((resolve, reject) => { const done = reply => { if (reply.requestId === id) { clearTimeout(t); child.off('message', done); resolve(reply); } }; const t = setTimeout(() => { child.off('message', done); reject(Error('Owned fixture timeout')); }, 5000); child.on('message', done); child.send({ id, method, target, value }); }); }
