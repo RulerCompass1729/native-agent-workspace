@@ -3853,17 +3853,22 @@ async function ensureTerminal(id, explicit = false) {
       }
       if (snapshot.epoch && live?.epoch && snapshot.epoch !== live.epoch) throw uiError("error.terminalViewChanged");
       entry.epoch = snapshot.epoch;
+      validateTerminalFrame(snapshot);
       term.resize(snapshot.cols || 100, snapshot.rows || 30);
       if (snapshot.cursorModesVersion === 1) term.options.cursorBlink = false;
       await new Promise(resolve => term.write(snapshot.buffer, resolve));
+      if (terminals.get(id) !== entry) return;
+      live = state.sessions.find(s => s.id === id)?.terminalState;
+      if (snapshot.epoch && live?.epoch && snapshot.epoch !== live.epoch) throw uiError("error.terminalViewChanged");
+      restoreTerminalContinuation(term, snapshot);
       entry.keyboardFlags = snapshot.keyboardFlags || 0;
       if (terminals.get(id) !== entry) return;
       live = state.sessions.find(s => s.id === id)?.terminalState;
       if (snapshot.epoch && live?.epoch && snapshot.epoch !== live.epoch) throw uiError("error.terminalViewChanged");
       entry.observationIndex = Number.isSafeInteger(snapshot.observationIndex) && snapshot.observationIndex >= 0 && Number.isSafeInteger(snapshot.sequence) && snapshot.sequence >= 0 && typeof snapshot.epoch === 'string' && snapshot.epoch ? snapshot.observationIndex : undefined;
       entry.sequence = snapshot.sequence; entry.ready = true;
-      for (const event of entry.queued) writeTerminal(entry, event);
-      entry.queued = []; loading.remove(); surface.hidden = false; surface.inert = false;
+      flushTerminalEvents(entry);
+      loading.remove(); surface.hidden = false; surface.inert = false;
       render(); if (!columnTerminalBinding(id)) { fitTerminal(id); if (intent === selectionRevision) focusTerminal(id); } else revealTerminalCursor(entry);
     } catch (error) {
       if (terminals.get(id) === entry) {
@@ -3912,7 +3917,77 @@ function fitTerminal(id) {
 }
 // Follow the producer's journal order, including resizes with no new output.
 // Keep legacy payloads; an unindexed event withdraws the optional ordering hint.
-function writeTerminal(entry, event) { const indexed = Number.isSafeInteger(entry.observationIndex) && entry.observationIndex >= 0; if (indexed) { if (event.epoch !== entry.epoch || !Number.isSafeInteger(event.sequence) || event.sequence < 0) return; if (!(event.index === undefined && event.kind !== 'resize' && typeof event.data === 'string' && event.sequence > entry.sequence)) { if (!Number.isSafeInteger(event.index) || event.index <= entry.observationIndex) return; if (event.kind === 'resize') { if (event.sequence < entry.sequence || !Number.isInteger(event.cols) || event.cols < 20 || event.cols > 400 || !Number.isInteger(event.rows) || event.rows < 5 || event.rows > 200 || terminals.get(event.id) !== entry) return; entry.observationIndex = event.index; entry.term.write('', () => { if (terminals.get(event.id) === entry && event.epoch === entry.epoch) entry.term.resize(event.cols, event.rows); }); return; } if (typeof event.data !== 'string' || event.sequence <= entry.sequence) return; } } if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data, () => { if (document.activeElement === entry.term.textarea && !entry.columnReading && (!entry.term.buffer?.active || entry.term.buffer.active.viewportY === entry.term.buffer.active.baseY)) revealTerminalCursor(entry); }); entry.keyboardFlags = event.keyboardFlags || 0; entry.sequence = event.sequence; if (indexed) entry.observationIndex = event.index; } }
+function restoreTerminalContinuation(term, frame) {
+  if (frame.continuation == null) return;
+  validateTerminalFrame(frame);
+  try { window.nativeWorkspaceTerminalContinuation.restore(term, frame.continuation); }
+  catch { throw uiError("error.legacy.nativeScreenInvalid"); }
+}
+function validateTerminalFrame(frame) {
+  if (frame.continuation == null) return;
+  try {
+    const helper = window.nativeWorkspaceTerminalContinuation;
+    if (helper.validate(frame.continuation) && helper.frameBytes({ buffer: frame.buffer, continuation: frame.continuation }) > helper.MAX_BYTES) throw Error();
+  } catch { throw uiError("error.legacy.nativeScreenInvalid"); }
+}
+function flushTerminalEvents(entry) {
+  const queued = entry.queued; entry.queued = [];
+  for (const event of queued) { if (entry.failed) break; writeTerminal(entry, event); }
+}
+function writeTerminal(entry, event) {
+  if (entry.failed) return;
+  if (entry.ready === false) { entry.queued.push(event); return; }
+  const indexed = Number.isSafeInteger(entry.observationIndex) && entry.observationIndex >= 0;
+  if (indexed) {
+    if (event.epoch !== entry.epoch || !Number.isSafeInteger(event.sequence) || event.sequence < 0) return;
+    if (!(event.index === undefined && event.kind !== 'resize' && typeof event.data === 'string' && event.sequence > entry.sequence)) {
+      if (!Number.isSafeInteger(event.index) || event.index <= entry.observationIndex) return;
+      if (event.kind === 'resize') {
+        if (event.sequence < entry.sequence || !Number.isInteger(event.cols) || event.cols < 20 || event.cols > 400 || !Number.isInteger(event.rows) || event.rows < 5 || event.rows > 200 || terminals.get(event.id) !== entry) return;
+        entry.observationIndex = event.index;
+        entry.term.write('', () => { if (terminals.get(event.id) === entry && event.epoch === entry.epoch) entry.term.resize(event.cols, event.rows); });
+        return;
+      }
+      if (typeof event.data !== 'string' || event.sequence <= entry.sequence) return;
+    }
+  }
+  if ((entry.epoch && event.epoch !== entry.epoch) || event.sequence <= entry.sequence) return;
+  if (event.kind === 'snapshot' && event.continuation !== undefined) {
+    if (terminals.get(event.id) !== entry || !Number.isInteger(event.cols) || event.cols < 20 || event.cols > 400 || !Number.isInteger(event.rows) || event.rows < 5 || event.rows > 200) return;
+    try { validateTerminalFrame({ buffer: event.data, continuation: event.continuation }); }
+    catch (error) { entry.failed = true; entry.ready = false; entry.queued = []; render(); toastError(error); return; }
+    // Reuse the existing ready/queued boundary. No later output or resize may
+    // overtake snapshot parsing and continuation restoration.
+    entry.ready = false; render();
+    entry.sequence = event.sequence;
+    if (indexed) entry.observationIndex = event.index;
+    entry.pending = new Promise((resolve, reject) => entry.term.write('', () => {
+      if (terminals.get(event.id) !== entry || (entry.epoch && event.epoch !== entry.epoch)) { resolve(); return; }
+      try {
+        entry.term.resize(event.cols, event.rows);
+        entry.term.write(event.data, () => {
+          if (terminals.get(event.id) !== entry || (entry.epoch && event.epoch !== entry.epoch)) { resolve(); return; }
+          try {
+            restoreTerminalContinuation(entry.term, { buffer: event.data, continuation: event.continuation });
+            entry.keyboardFlags = event.keyboardFlags || 0;
+            entry.ready = true; flushTerminalEvents(entry); render(); resolve();
+          } catch (error) { reject(error); }
+        });
+      } catch (error) { reject(error); }
+    })).catch(error => {
+      if (terminals.get(event.id) !== entry) return;
+      entry.failed = true; entry.ready = false; entry.queued = [];
+      render(); toastError(error);
+    });
+    return;
+  }
+  entry.term.write(event.data, () => {
+    if (document.activeElement === entry.term.textarea && !entry.columnReading && (!entry.term.buffer?.active || entry.term.buffer.active.viewportY === entry.term.buffer.active.baseY)) revealTerminalCursor(entry);
+  });
+  entry.keyboardFlags = event.keyboardFlags || 0;
+  entry.sequence = event.sequence;
+  if (indexed) entry.observationIndex = event.index;
+}
 const disposers = [
   disposeToastKeyboard,
   api.onProgress(updateLegacyProgress),

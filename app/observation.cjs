@@ -1,3 +1,4 @@
+const terminalContinuation = require('./terminal-continuation.js');
 const { randomUUID } = require('node:crypto');
 const { displayMessage } = require('./ui-locale.js');
 
@@ -9,13 +10,18 @@ class TerminalJournal {
     this.checkpoint = { index: 0, time: Date.now(), cols, rows, buffer: '' };
     this.truncated = false;
   }
-  append(kind, data, cols, rows, serialize) {
-    const event = { epoch: this.epoch, index: ++this.index, time: Date.now(), kind, cols, rows, data };
+  append(kind, data, cols, rows, serialize, continuation) {
+    const event = { epoch: this.epoch, index: ++this.index, time: Date.now(), kind, cols, rows, data,
+      ...(terminalContinuation.validate(continuation) ? { continuation } : {}) };
     const size = Buffer.byteLength(JSON.stringify(event), 'utf8');
     if (this.bytes + size > this.maxBytes || this.events.length >= this.maxEvents) {
-      const buffer = serialize();
-      this.checkpoint = Buffer.byteLength(JSON.stringify(buffer), 'utf8') <= this.maxCheckpointBytes
-        ? { index: this.index, time: event.time, cols, rows, buffer } : null;
+      const captured = serialize();
+      const frame = typeof captured === 'string' ? { buffer: captured } : captured;
+      if (!frame || typeof frame.buffer !== 'string') throw Error('Invalid native terminal checkpoint');
+      const checkpoint = { index: this.index, time: event.time, cols, rows, buffer: frame.buffer,
+        ...(terminalContinuation.validate(frame.continuation) ? { continuation: frame.continuation } : {}) };
+      // Keep the old string contract; paired checkpoints account for all state.
+      this.checkpoint = terminalContinuation.frameBytes(checkpoint.continuation ? checkpoint : checkpoint.buffer) <= this.maxCheckpointBytes ? checkpoint : null;
       this.events = []; this.bytes = 0; this.truncated = true;
       event.checkpointRequired = true;
     } else { this.events.push(event); this.bytes += size; }

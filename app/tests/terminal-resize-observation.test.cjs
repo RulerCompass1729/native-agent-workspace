@@ -5,10 +5,10 @@ const { Terminal: Screen } = require('@xterm/headless');
 const write = (screen, data = '') => new Promise(resolve => screen.write(data, resolve));
 const source = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
 const start = '      const snapshot = await api.terminalSnapshot(id);';
-const end = '      entry.queued = []; loading.remove(); surface.hidden = false; surface.inert = false;';
+const end = '      loading.remove(); surface.hidden = false; surface.inert = false;';
 const hydration = source.slice(source.indexOf(start), source.indexOf(end));
-const eventWriter = source.match(/^function writeTerminal\(entry, event\) \{.+\}$/m)[0];
-const fitSource = source.slice(source.indexOf('function fitTerminal(id) {'), source.indexOf('function writeTerminal(entry, event) {'));
+const eventWriter = source.slice(source.indexOf('function restoreTerminalContinuation('), source.indexOf('\nconst disposers = ['));
+const fitSource = source.slice(source.indexOf('function fitTerminal(id) {'), source.indexOf('function restoreTerminalContinuation(term, frame) {'));
 
 function producer(t) {
   const worker = new EventEmitter(), commands = [];
@@ -55,7 +55,7 @@ function capture(screen) {
 async function observer(t, frame, queued = []) {
   const term = new Screen({ cols: 40, rows: 5, scrollback: 5000, allowProposedApi: true });
   const id = 'synthetic-view', entry = { term, queued }, state = { sessions: [{ id, owner: 'other-owner', terminalState: { alive: true, epoch: frame.epoch } }] };
-  const context = { term, entry, state, id, terminals: new Map([[id, entry]]),
+  const context = { window: { nativeWorkspaceTerminalContinuation: require('../terminal-continuation.js') }, uiError: require('../ui-errors.cjs').uiError, term, entry, state, id, terminals: new Map([[id, entry]]),
     api: { terminalSnapshot: async () => frame, initial: async () => state }, document: { activeElement: null },
     reveals: 0, revealTerminalCursor() { context.reveals++; }, updateState(next) { context.state = next; } };
   vm.createContext(context);

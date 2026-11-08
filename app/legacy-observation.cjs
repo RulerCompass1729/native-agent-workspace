@@ -1,3 +1,4 @@
+const terminalContinuation = require('./terminal-continuation.js');
 const { uiError } = require('./ui-errors.cjs');
 const { TerminalJournal } = require('./observation.cjs');
 
@@ -34,10 +35,19 @@ class LegacyObservation {
         || !Number.isInteger(frame.rows) || frame.rows < 5 || frame.rows > 200) throw uiError("error.legacy.nativeScreenInvalid");
       // A complete checkpoint provides its own dimensions. Never interpret
       // unlabelled old output bytes using guessed resize ordering.
-      const fingerprint = [frame.sequence, frame.cols, frame.rows];
+      const fingerprint = [frame.sequence, frame.cols, frame.rows, frame.epoch ?? null];
       if (this.last && fingerprint.every((value, i) => value === this.last[i])) return;
+      let continuation;
+      try { if (terminalContinuation.validate(frame.continuation)) continuation = frame.continuation; }
+      catch { throw uiError("error.legacy.nativeScreenInvalid"); }
+      if (continuation && terminalContinuation.frameBytes({ buffer: '\x1bc' + frame.buffer, continuation }) > this.journal.maxCheckpointBytes) {
+        continuation = undefined;
+        if (!this.continuationFallbackWarned) console.warn('Native terminal continuation unavailable; retaining the legacy snapshot.');
+        this.continuationFallbackWarned = true;
+      }
+      const captured = { buffer: frame.buffer, ...(continuation ? { continuation } : {}) };
+      const event = this.journal.append('snapshot', '\x1bc' + frame.buffer, frame.cols, frame.rows, () => captured, continuation);
       this.last = fingerprint;
-      const event = this.journal.append('snapshot', '\x1bc' + frame.buffer, frame.cols, frame.rows, () => frame.buffer);
       this.publish(event);
     })().finally(() => {
       this.pending = null;

@@ -387,3 +387,24 @@ test('T79 render ambiguous constructor source refuses the real build', () => {
   const marker = 'this._register(this._bufferService.onResize((()=>{this._clearCurrentLink(),this._wasResized=!0})))';
   rejectHoverUpdateSource(text => text.replace(marker, marker + ',' + marker));
 });
+
+
+// The actual GUI's D cell held the URI but the native provider returned no
+// target: a link starting at the final trimmed cell never reached its flush.
+for (const [name, input, expected] of [
+  ['single first cell', open('https://example.invalid/a') + 'D' + close, [['https://example.invalid/a', 1, 1]]],
+  ['single after plain prefix', 'C' + open('https://example.invalid/a') + 'D' + close, [['https://example.invalid/a', 2, 2]]],
+  ['adjacent final different group', open('https://example.invalid/a','a') + 'A' + close + open('https://example.invalid/b','b') + 'B' + close, [['https://example.invalid/a',1,1],['https://example.invalid/b',2,2]]],
+  ['adjacent final same URI different id', open('https://example.invalid/a','a') + 'A' + close + open('https://example.invalid/a','b') + 'B' + close, [['https://example.invalid/a',1,1],['https://example.invalid/a',2,2]]],
+  ['unlinked suffix control', open('https://example.invalid/a') + 'D' + close + ' x', [['https://example.invalid/a',1,1]]],
+  ['multichar end control', open('https://example.invalid/a') + 'DD' + close, [['https://example.invalid/a',1,2]]],
+  ['non-HTTP policy retained', open('javascript:alert(1)') + 'D' + close, []],
+]) test('end-of-line native links: ' + name, async t => {
+  const { OscLinkProvider } = hoverUpdateClasses ||= hoverUpdateCompiledClasses();
+  const screen = new Screen({ cols: 20, rows: 5, allowProposedApi: true }); t.after(() => screen.dispose());
+  await write(screen,input);
+  const provider = new OscLinkProvider(screen._core._bufferService, { rawOptions: {} }, screen._core._oscLinkService);
+  let links;
+  provider.provideLinks(1,value=>{links=value;});
+  assert.deepEqual(Array.from(links||[],link=>[link.text,link.range.start.x,link.range.end.x]),expected);
+});

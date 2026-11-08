@@ -19,7 +19,7 @@ const palette = css.match(/:root\{([^}]*)\}/)[1];
 css = css.replace(/:root\{[^}]*\}/, '').replace(/body\{[^}]*\}/, '');
 css = `.naw{${palette};font-size:14px;height:100%;min-height:0;overflow:hidden;${css}}\n.naw>.sidebar{width:100%;height:100%}.naw>main{height:100%}`;
 const bootstrap = read('app/dsh/bootstrap.js');
-const renderer = read('app/collaboration-spaces.cjs') + '\n' + read('app/room-mention.js') + '\n' + read('app/native-usage.js') + '\n' + read('app/room-threads.js') + '\n' + read('app/approval-policy.js') + '\n' + ['sidebar-layout.js', 'fleet-observation.js', 'local-search.js', 'native-images.js', 'reading-list.js', 'search-view.js', 'session-composer.js', 'collaboration-overview.js', 'coordinator-context.js', 'collaboration-panorama.js', 'context-menu.js', 'renderer.js'].map(name => read(`app/renderer/${name}`)).join('\n');
+const renderer = read('app/collaboration-spaces.cjs') + '\n' + read('app/room-mention.js') + '\n' + read('app/native-usage.js') + '\n' + read('app/room-threads.js') + '\n' + read('app/approval-policy.js') + '\n' + read('app/terminal-continuation.js') + '\n' + ['sidebar-layout.js', 'fleet-observation.js', 'local-search.js', 'native-images.js', 'reading-list.js', 'search-view.js', 'session-composer.js', 'collaboration-overview.js', 'coordinator-context.js', 'collaboration-panorama.js', 'context-menu.js', 'renderer.js'].map(name => read(`app/renderer/${name}`)).join('\n');
 const licensed = (name, entry) => `/*!\n${read(`node_modules/${name}/LICENSE`)}\n*/\n${read(`node_modules/${name}/${entry}`)}`;
 // xterm 6.0 keeps wider alternate-screen backing cells when columns shrink.
 // DomRendererRowFactory must stop at the active grid, including link-hover
@@ -27,6 +27,17 @@ const licensed = (name, entry) => `/*!\n${read(`node_modules/${name}/LICENSE`)}\
 // A retained double-width cell straddling the edge cannot be drawn completely.
 let xterm = licensed('@xterm/xterm', 'lib/xterm.js');
 if (JSON.parse(read('node_modules/@xterm/xterm/package.json')).version !== '6.0.0') throw Error('Requalify the terminal DOM column fix for this xterm version.');
+// Flush the native OSC8 run with an empty end-of-line sentinel. Upstream's
+// early continue skips a link that starts on the final trimmed cell, including
+// a different link immediately after another. Do not change URI policy.
+for (const [before, after] of [
+  ['for(let t=0;t<a;t++)if(-1!==c||i.hasContent(t)){if(i.loadCell(t,o),', 'for(let t=0;t<=a;t++)if(-1!==c||t<a&&i.hasContent(t)){if(t===a)d=!0;else if(i.loadCell(t,o),'],
+  ['if(d||-1!==c&&t===a-1){const i=this._oscLinkService.getLinkData(h)?.uri;', 'if(d){const i=this._oscLinkService.getLinkData(h)?.uri;'],
+  ['d=!1,o.hasExtendedAttrs()&&o.extended.urlId?(c=t,h=o.extended.urlId)', 'd=!1,t<a&&o.hasExtendedAttrs()&&o.extended.urlId?(c=t,h=o.extended.urlId)'],
+]) {
+  if (xterm.split(before).length !== 2) throw Error('Pinned native link provider changed; requalify end-of-line links.');
+  xterm = xterm.replace(before, after);
+}
 // Returning to the same cell must resolve the current buffer's link. Leaving
 // clears hover, but upstream keeps both the last cell and the old line cache.
 const linkLeave = 'this._isMouseOut=!0,this._clearCurrentLink()';

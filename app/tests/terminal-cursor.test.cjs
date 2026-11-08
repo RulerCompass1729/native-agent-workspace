@@ -135,15 +135,15 @@ for (const route of ['direct snapshot', 'output rollover', 'resize rollover']) t
 
 const renderer = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
 const hydrationStart = '      const snapshot = await api.terminalSnapshot(id);';
-const hydrationEnd = '      entry.queued = []; loading.remove(); surface.hidden = false; surface.inert = false;';
+const hydrationEnd = '      loading.remove(); surface.hidden = false; surface.inert = false;';
 assert.equal(renderer.split(hydrationStart).length, 2);
 assert.equal(renderer.split(hydrationEnd).length, 2);
 const hydration = renderer.slice(renderer.indexOf(hydrationStart), renderer.indexOf(hydrationEnd));
-const eventWriter = renderer.match(/^function writeTerminal\(entry, event\) \{.+\}$/m)[0];
+const eventWriter = renderer.slice(renderer.indexOf('function restoreTerminalContinuation('), renderer.indexOf('\nconst disposers = ['));
 async function hydrate(frame, { queued = [], retired = false, staleEpoch = false } = {}) {
   const term = new Screen({ allowProposedApi: true, cursorBlink: true, cols: 40, rows: 10 });
   const entry = { term, queued }, state = { sessions: [{ id: 'synthetic', terminalState: { alive: true, epoch: staleEpoch ? 'another-epoch' : frame.epoch } }] };
-  const context = { uiError: require('../ui-errors.cjs').uiError, term, entry, state, id: 'synthetic', terminals: new Map([['synthetic', retired ? {} : entry]]),
+  const context = { window: { nativeWorkspaceTerminalContinuation: require('../terminal-continuation.js') }, uiError: require('../ui-errors.cjs').uiError, uiError: require('../ui-errors.cjs').uiError, term, entry, state, id: 'synthetic', terminals: new Map([['synthetic', retired ? {} : entry]]),
     api: { terminalSnapshot: async () => frame, initial: async () => state }, document: { activeElement: null },
     revealTerminalCursor() { throw Error('No DOM focus or input in this headless replay'); } };
   context.updateState = next => { context.state = next; };

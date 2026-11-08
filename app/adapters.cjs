@@ -44,7 +44,7 @@ function createTerminalSerializeAddon() {
       if (snapshotSource.split(before).length !== 2) throw Error('Unqualified serializer cursor boundary');
       snapshotSource = snapshotSource.replace(before, after);
     }
-    isolated._compile(snapshotSource.replace(marker, marker + ';(' + installLinks.toString() + ')(u,t.SerializeAddon);'), file);
+    isolated._compile(snapshotSource.replace(marker, marker + ';(' + installLinks.toString() + ')(u,t.SerializeAddon,require(' + JSON.stringify(require.resolve('./terminal-continuation.js')) + '));'), file);
     Candidate = isolated.exports.SerializeAddon;
   } catch {
     // Preserve service availability; the build and semantic tests reject this
@@ -60,6 +60,13 @@ function createTerminalSerializeAddon() {
         this.warnLinkFallback(); return this.serializePlain(options);
       }
     }
+    serializeSnapshot(options) {
+      return typeof super.serializeSnapshot === 'function' ? super.serializeSnapshot(options) : { buffer: this.serialize(options) };
+    }
+    warnContinuationFallback() {
+      if (!this.continuationFallbackWarned) console.warn('Native terminal continuation unavailable; retaining the legacy snapshot.');
+      this.continuationFallbackWarned = true;
+    }
     serializePlain(options) {
       const plain = new Stock(); plain.activate(this.snapshotTerminal);
       try { return plain.serialize(options); } finally { plain.dispose(); }
@@ -70,8 +77,8 @@ function createTerminalSerializeAddon() {
     }
   };
 
-  function installLinks(Handler, Addon) {
-    let context;
+  function installLinks(Handler, Addon, continuation) {
+    let context, paired;
     const serialize = Addon.prototype.serialize, next = Handler.prototype._nextCell;
     const diff = Handler.prototype._diffStyle, rowEnd = Handler.prototype._rowEnd;
     // Restore per-buffer regions before mode flags, retaining pending wrap when possible.
@@ -178,10 +185,11 @@ function createTerminalSerializeAddon() {
       return position === null ? content : content + position;
     };
     const close = '\x1b]8;;\x1b\\';
+    const wireLink = (id, data) => ({ id: data.id === undefined ? context.prefix + '-' + id : data.id, uri: data.uri });
     const osc = (id, data) => {
       // Anonymous links need a snapshot-local wire id to preserve grouping
       // across rows and the open pen's later output, including mid-buffer pens.
-      const wireId = data.id === undefined ? context.prefix + '-' + id : data.id;
+      const wireId = wireLink(id, data).id;
       const bytes = Buffer.byteLength(wireId) + Buffer.byteLength(data.uri) + 12;
       if (context.bytes + bytes > 4 * 1024 * 1024) {
         const error = Error('Native hyperlink snapshot budget exceeded'); error.code = 'NAW_LINK_SNAPSHOT_BUDGET'; throw error;
@@ -197,8 +205,22 @@ function createTerminalSerializeAddon() {
         const pen = this._terminal._core._inputHandler._curAttrData;
         const id = pen.hasExtendedAttrs() ? pen.extended.urlId : 0;
         const data = this._terminal._core._oscLinkService.getLinkData(id);
-        return content + (data ? osc(id, data) : '');
+        const buffer = content + (data ? osc(id, data) : '');
+        if (paired && !snapshotOptions?.range && !snapshotOptions?.excludeModes && !snapshotOptions?.excludeAltBuffer && snapshotOptions?.scrollback === undefined) {
+          try { paired.continuation = continuation.capture(this._terminal, wireLink); }
+          catch { paired.unavailable = true; }
+        }
+        return buffer;
       } finally { context = previous; }
+    };
+    Addon.prototype.serializeSnapshot = function (options) {
+      const previous = paired, capture = {};
+      paired = capture;
+      try {
+        const buffer = this.serialize(options);
+        if (capture.unavailable) this.warnContinuationFallback();
+        return { buffer, ...(capture.continuation ? { continuation: capture.continuation } : {}) };
+      } finally { paired = previous; }
     };
     const withoutLink = cell => {
       if (!cell.hasExtendedAttrs() || !cell.extended.urlId) return cell;
@@ -285,7 +307,7 @@ class Terminal extends EventEmitter {
           const data = this.decoder.write(Buffer.from(message.data, 'base64'));
           const receivedAt = Date.now();
           this.screen.write(data, () => {
-            const observation = this.journal.append('output', data, this.screen.cols, this.screen.rows, () => this.serializeBuffer());
+            const observation = this.journal.append('output', data, this.screen.cols, this.screen.rows, () => this.serializeFrame());
             this.emit('data', { ...observation, receivedAt, sequence: ++this.sequence, keyboardFlags: this.keyboardModes.flags });
           });
         }
@@ -306,27 +328,34 @@ class Terminal extends EventEmitter {
     this.worker.stdin.write(JSON.stringify(message) + '\n');
   }
   input(data) { this.command({ type: 'input', data }); }
-  serializeBuffer() {
+  serializeBuffer() { return Terminal.prototype.serializeFrame.call(this).buffer; }
+  serializeFrame() {
     const cursor = this.cursorModes.snapshot();
-    let buffer = this.serialize.serialize() + cursor;
-    if (Buffer.byteLength(JSON.stringify(buffer)) > this.journal.maxCheckpointBytes) {
+    const frame = typeof this.serialize.serializeSnapshot === 'function'
+      ? this.serialize.serializeSnapshot() : { buffer: this.serialize.serialize() };
+    frame.buffer += cursor;
+    const continuation = require('./terminal-continuation.js');
+    if (continuation.frameBytes(frame.continuation ? frame : frame.buffer) > this.journal.maxCheckpointBytes) {
       const plain = this.serialize.serializePlain() + cursor;
-      if (Buffer.byteLength(JSON.stringify(plain)) <= this.journal.maxCheckpointBytes) {
-        this.serialize.warnLinkFallback(); buffer = plain;
-      }
+      // Never combine a degraded buffer with continuation from another replay.
+      const hadContinuation = Boolean(frame.continuation);
+      delete frame.continuation;
+      if (continuation.frameBytes(plain) <= this.journal.maxCheckpointBytes) {
+        this.serialize.warnLinkFallback(); frame.buffer = plain;
+      } else if (hadContinuation) this.serialize.warnContinuationFallback();
     }
-    return buffer;
+    return frame;
   }
   resize(cols, rows) {
     cols = Math.max(20, Math.min(400, cols)); rows = Math.max(5, Math.min(200, rows));
     if (this.alive) this.screen.write('', () => {
       if (!this.alive || (cols === this.screen.cols && rows === this.screen.rows)) return;
       this.screen.resize(cols, rows); this.command({ type: 'resize', cols, rows });
-      const observation = this.journal.append('resize', '', cols, rows, () => this.serializeBuffer());
+      const observation = this.journal.append('resize', '', cols, rows, () => this.serializeFrame());
       this.emit('data', { ...observation, sequence: this.sequence });
     });
   }
-  snapshot() { return new Promise(resolve => this.screen.write('', () => resolve({ buffer: this.serializeBuffer(), sequence: this.sequence, epoch: this.journal.epoch, observationIndex: this.journal.index, cols: this.screen.cols, rows: this.screen.rows, pid: this.pid, keyboardFlags: this.keyboardModes.flags, cursorModesVersion: 1 }))); }
+  snapshot() { return new Promise(resolve => this.screen.write('', () => resolve({ ...this.serializeFrame(), sequence: this.sequence, epoch: this.journal.epoch, observationIndex: this.journal.index, cols: this.screen.cols, rows: this.screen.rows, pid: this.pid, keyboardFlags: this.keyboardModes.flags, cursorModesVersion: 1 }))); }
   observe() { return new Promise(resolve => this.screen.write('', () => resolve({ ...this.journal.snapshot(), alive: this.alive }))); }
   stop(timeout = 5000) {
     if (this.stopPending) return this.stopPending;

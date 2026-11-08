@@ -11,7 +11,7 @@ const functions = [
   between('function currentTerminalDisplay(', '\nfunction canCaptureTerminal('),
   between('function terminalCanInput(', '\nfunction currentTerminalDisplay('),
   between('function focusTerminal(', '\n// 原生终端'),
-  between('function writeTerminal(', '\nconst disposers'),
+  between('function restoreTerminalContinuation(', '\nconst disposers'),
   between('async function ensureTerminal(', '\nfunction fitTerminal(')
 ].join('\n');
 const bootstrap = between('  entry.pending = (async () => {', '\n  return entry.pending;');
