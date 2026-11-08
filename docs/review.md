@@ -6869,3 +6869,26 @@ headless reviewer found the dropped projection, the name kept after clearing
 and a person's name left on a routed agent row; after the fix the same
 session approved the delta. English display of these rows in the installed
 app is not yet observed.
+
+
+## English interface walkthrough (T-60 batch 3) — 2026-11-08
+
+`scripts/test-english-walkthrough.cjs` walks 23 screens in English on the
+synthetic NativeHost (sidebar, create, space grid/list, shared records, the ⋯
+menus, notes, files, settings, privacy and usage, panorama, permission, chat
+unavailable, connection closed, session error, rename error, archive),
+screenshots each and lists Chinese the interface shows. Fixture names are
+ASCII. Each state page waits for its own English text before it counts, and a
+positive control proves the scanner finds visible text, attributes and
+generated content while skipping hidden text. It fails on Chinese outside a
+short known list, a known item no longer seen, an unreached page, a page
+error or any clipboard call beyond the guard's own probe.
+
+On the integration candidate the only items are the language choice 中文
+(each language in its own script, by design) and the default shared space's
+stored name 共同工作 in the sidebar row and panorama selector: six places,
+open, because an English display name needs the sidebar code. A fresh
+reviewer asked for state proofs, exact known forms, wider scanning and an
+early slot release; the same reviewer approved the delta. Not covered:
+terminal content, OS menus and notifications, canvas and shadow DOM, notices
+shorter than the settle delay, a recovering terminal, installed builds.
