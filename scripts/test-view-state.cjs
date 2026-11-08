@@ -73,11 +73,12 @@ async function run() {
   assert.deepEqual(await app.evaluate(() => global.viewStateOpenedPaths), [profile]);
   await page.locator('#retry').click(); await blocked();
   assert.equal(fs.readFileSync(file, 'utf8'), damaged);
+  // While the damaged window is open: a UI host would have registered itself here (dsh-host.cjs) and removes it on stop.
+  assert.equal(fs.existsSync(path.join(profile, 'ui-host.json')), false, 'A damaged startup starts no UI host');
   await shot('damaged-record-retained'); await close();
   assert.equal(fs.readFileSync(file, 'utf8'), damaged);
   assert.equal(fs.readFileSync(path.join(profile, 'connection.json'), 'utf8'), connection);
-  // The fixture seeds dsh/cordis.patch.yml to pin the language (abb6759); a damaged startup must still start no UI host.
-  assert.equal(fs.existsSync(path.join(profile, 'ui-host.json')), false);
+  // The fixture seeds dsh/cordis.patch.yml to pin the language (abb6759); nothing else may appear there.
   assert.deepEqual((fs.existsSync(path.join(profile, 'dsh')) ? fs.readdirSync(path.join(profile, 'dsh')) : []).filter(name => name !== 'cordis.patch.yml'), []);
   checks.push('Damaged startup, repeated Retry and Quit retain every original byte; guarded data-folder button routes only to the isolated profile');
 
