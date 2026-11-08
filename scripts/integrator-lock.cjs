@@ -1,9 +1,9 @@
-// Private operator coordination, not product scheduling or backup authorization.
-// A backup must first validate the current secretary handoff on the task board.
+// Private operator coordination, not product scheduling or permission authority.
+// Every owner references its already-authorized task; the label grants no role.
 const fs = require('node:fs'), path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { execFileSync, spawn } = require('node:child_process');
-const owners = ['CodexMain', 'Codex2', 'Codex3'];
+const ownerLabel = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && value === value.trim() && !/\p{Cc}/u.test(value);
 const text = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 4096;
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 function refusal(message) { const e = new Error(message); e.code = 'INTEGRATOR_LOCKED'; e.exitCode = 75; return e; }
@@ -17,13 +17,13 @@ function inspect(directory) {
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw refusal('Integrator lock is not an ordinary directory; keep it intact.');
   try {
     const owner = JSON.parse(fs.readFileSync(path.join(directory, 'owner.json'), 'utf8'));
-    if (owner.protocol !== 1 || !owners.includes(owner.owner) || !uuid(owner.token) || !text(owner.reason)) throw Error('Incomplete owner record');
+    if (owner.protocol !== 1 || !ownerLabel(owner.owner) || !uuid(owner.token) || !text(owner.reason)) throw Error('Incomplete owner record');
     return { state: 'occupied', owner };
   } catch (e) { return { state: 'occupied', owner: null, incomplete: true }; }
 }
 function acquire(directory, { owner, reason, delegation = null }) {
-  if (!owners.includes(owner) || !text(reason)) throw Error('Supply a supported owner and a reason.');
-  if (owner !== 'CodexMain' && !text(delegation)) throw Error('Backup acquisition requires an explicitly verified current secretary handoff reference.');
+  if (!ownerLabel(owner) || !text(reason)) throw Error('Supply an exact owner label of at most 160 characters without control characters or surrounding whitespace, and a reason.');
+  if (!text(delegation)) throw Error('Acquisition requires a current authorized task or handoff reference in --delegation; this is not coordinator approval.');
   fs.mkdirSync(path.dirname(directory), { recursive: true, mode: 0o700 });
   try { fs.mkdirSync(directory, { mode: 0o700 }); } catch (e) { if (e.code === 'EEXIST') throw refusal('Integrator lock occupied; do not infer expiry or steal it.'); throw e; }
   const record = { protocol: 1, owner, token: randomUUID(), acquiredAt: new Date().toISOString(), reason, delegation };
@@ -117,7 +117,7 @@ if (require.main === module) {
       if (!args[i]?.startsWith('--') || args[i + 1] === undefined || !['owner', 'reason', 'delegation', 'token', 'checkpoint', 'directory'].includes(key) || Object.hasOwn(options, key)) throw Error('Options require a known, unique name and a value.');
       options[key] = args[i + 1];
     }
-    if (!['acquire', 'inspect', 'release', 'run'].includes(command)) throw Error('Usage: integrator-lock.cjs run --owner CodexMain --reason TEXT --checkpoint FILE -- COMMAND [ARGS]; also acquire/inspect/release. Optional --directory PATH for an isolated rehearsal.');
+    if (!['acquire', 'inspect', 'release', 'run'].includes(command)) throw Error('Usage: integrator-lock.cjs run --owner OWNER --reason TEXT --delegation TASK_REFERENCE --checkpoint FILE -- COMMAND [ARGS]; also acquire/inspect/release. Optional --directory PATH for an isolated rehearsal.');
     const directory = options.directory ? path.resolve(options.directory) : canonicalDirectory();
     if (process.env.NAW_INTEGRATOR_REHEARSAL_DIRECTORY && directory !== path.resolve(process.env.NAW_INTEGRATOR_REHEARSAL_DIRECTORY)) throw Error('Rehearsal directory mismatch; no coordination lock touched.');
     const result = command === 'run' ? await run(directory, options, foreground) : command === 'acquire' ? acquire(directory, options) : command === 'inspect' ? inspect(directory) : release(directory, options.token, JSON.parse(fs.readFileSync(options.checkpoint, 'utf8')));

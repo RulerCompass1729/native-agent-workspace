@@ -15,6 +15,57 @@ that foundation and the native session service when improving either GUI or TUI.
 Do not present planned integrations as working features, install provider runtimes,
 or start paid model runs as a side effect of editing documents.
 
+## Task-led collaboration
+
+- Every agent keeps its full implementation and verification capabilities. Roles
+  such as secretary, researcher, tester and integrator describe the current work,
+  not permanent limits. Within existing authorization, any agent may claim a
+  ready, unowned complete user outcome without waiting for a new dispatch.
+- Keep one owner responsible for each outcome through reproduction, necessary
+  implementation, relevant checks and usable delivery. A helper may claim and
+  finish an independent dependency; the outcome owner keeps responsibility for
+  interfaces and acceptance, without becoming an approval step for ordinary
+  authorized work. An owner continues implementation, not only coordination.
+- Before claiming, exclude missing authorization, task-specific stage gates and
+  conflicting live work. Then prefer an actionable blocker of a current delivery,
+  a ready-to-finish outcome, and the next highest-priority independent task, in
+  that order. Familiar context breaks ties. Do not interrupt a productive author
+  to reshuffle work; change hands at a saved checkpoint.
+- Record the outcome and acceptance condition, current owner and stage, worktree,
+  directly affected functions/interfaces or shared resources, and the next step
+  or evidence pointer on the existing task board/lane. Recheck the current claim
+  before editing. Same-file names alone do not establish conflict; overlapping
+  behavior, interface contracts, uncommitted work or daily runtime operations can.
+  Resolve only that conflict and continue other authorized work.
+- Stages belong to tasks: one may await a design decision while another proceeds
+  to implementation or acceptance. Reuse decisions and checks for unchanged
+  content; check only the new risk. Each author checks the requested outcome and
+  side effects on other views before delivery. Required independent review stays with someone
+  who did not author that patch, under the shared risk-based review gates.
+- Integration is one bounded shared operation at a time, not a gate on independent
+  development. The current batch keeps its explicitly designated integrator until
+  an explicit saved handoff. Use the committed canonical main checkout's
+  `scripts/integrator-lock.cjs run`, not an older lane/release copy, with a current
+  authorized task/handoff reference in `--delegation`; it is a reference to
+  existing authority, not a request for new secretary approval. Do not hold the
+  Root integration lock across model turns, dependency/reviewer waits, isolated
+  implementation, tests or builds. Prepare a clean committed release worktree,
+  release the shared-write lease, then build/check it independently. Reacquire
+  only for the next necessary shared mutation or authorized daily activation.
+  Keep other named resource locks only for their actual conflicting operation.
+  Never steal a live/unknown lease or infer permission from elapsed time.
+- The secretary finds ownerless actionable blockers, delivers necessary context
+  and verifies actual receipt/progress; it does not approve each normal claim and
+  may itself own an authorized complete task in an isolated worktree. Do not
+  treat idle/working labels as task eligibility or accomplishment. Measure useful
+  work left waiting, time to a usable result, and avoidable handoffs/rework from
+  existing records instead of creating polling/model activity to look busy.
+- NAW-owned collaboration tools and provider-native execution tools remain
+  separate. Task ownership does not grant native session control, permission,
+  model/budget changes, publication, spending or access to another user's draft.
+  When a real dependency remains, keep its existing event wait in the original
+  native execution path; do not replace it with repeated no-progress goal turns.
+
 ## Test costs and instances
 
 - Default to checks that do not call a model. Use real Claude/Codex turns only
@@ -61,9 +112,7 @@ or start paid model runs as a side effect of editing documents.
   initialization can generate files beside the plugin. Verify the installed
   bundle's strict signature after native testing, not only before it. Synthetic
   transport fixtures may boot directly when they never initialize a provider.
-- Current development preference: the main agent implements and tests directly;
-  do not delegate coding or routine testing unless requested. The independent
-  reviewer, when the shared risk gates require one, is a separate headless Claude Code session,
+- The independent reviewer, when the shared risk gates require one, is a separate headless Claude Code session,
   not a subagent of the main agent. Start each new checkpoint in a fresh session,
   saving its UUID with that checkpoint's private evidence. Point the brief only to
   relevant rows/sections of `docs/review.md`, not its whole history. Apply the
@@ -149,10 +198,11 @@ or start paid model runs as a side effect of editing documents.
   downgraded. Rule changes are shown to the person first. Not traded for speed:
   the pre-push privacy and secret scan, no self-review, asking before
   irreversible or outward actions, and requirements the person stated. In
-  practice: each change gets one author-side review that quotes the person's
-  words and checks side effects on other views; integration review runs once per
-  batch and covers only the combined interactions and the edits made while
-  integrating; the daily update operator is compared by program with the last
+  practice: use the shared risk-based review gates once per delivery checkpoint,
+  quoting the person's words and checking side effects on other views when a
+  review is required; integration review covers only the batch interactions and
+  edits made while integrating, reusing unchanged approved patches. The daily
+  update operator is compared by program with the last
   operator that ran, allowing only version numbers and hashes to differ, and
   goes to review only when that template changes; install records are checked by
   script against commit ids and counts instead of review.
