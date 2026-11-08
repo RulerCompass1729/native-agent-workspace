@@ -7201,3 +7201,13 @@ The next combined source run catches one integration-only stale fixture:
 helper required by the current GUI-test ratchet. Its existing setup now calls
 that helper; no exemption is added and product behavior is unchanged. The
 initial full run is retained: 3,564 pass, one failure, zero skips.
+
+### T-121 final integration callers
+
+The user's subsequent explicit recommendation decision selects A. The two
+remaining compact-room and panorama callers now use the current member tab
+instead of the hidden old Back button. Each actual source GUI script passes
+once at the integrated product source, including original reading anchors,
+selection, scoped drafts, focus return and reopen preservation. Native producers
+are synthetic; no real provider or model is used. No product delta is added.
+The signed candidate and daily operation remain separate acceptance stages.

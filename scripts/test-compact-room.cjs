@@ -135,7 +135,7 @@ async function run() {
   await page.locator('#room-overview').focus();await page.keyboard.press('Tab');await name(a).focus();await delay(120);
   assert.equal(await name(a).evaluate(el=>el.matches(':focus-visible')&&el.classList.contains('is-revealed')&&el.querySelector('.collaboration-name-text').scrollWidth<=el.querySelector('.collaboration-name-text').clientWidth),true,'A sighted keyboard user can read the full duplicate name');
   await capture('01c-full-duplicate-name-keyboard');await page.getByRole('button',{name:'列表',exact:true}).click();await name(a).focus();
-  const beforeBack=await readingAnchor(reader(a));await name(a).press('Enter');await page.getByRole('button',{name:'← 返回共同工作',exact:true}).click();
+  const beforeBack=await readingAnchor(reader(a));await name(a).press('Enter');await page.locator('#room-member-tabs [data-room-session="'+a+'"]').click();
   await until(async()=>{const x=await readingAnchor(reader(a));return x?.id===beforeBack.id&&Math.abs(x.offset-beforeBack.offset)<=2;},'Back restores the original source anchor after moving header tools');
   assert.equal(await name(a).evaluate(el=>document.activeElement===el),true);
   assert.equal(await page.evaluate(()=>globalThis.compactOriginalNodes.every(([r,m])=>r.isConnected&&r.querySelector('.messages')===m)),true);

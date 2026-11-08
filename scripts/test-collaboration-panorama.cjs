@@ -266,7 +266,7 @@ async function run() {
     await status.locator('.collaboration-member-name').click();
     await settleDisplays();
     assert.equal((await snapshot()).viewState.spaceId, room);
-    await page.locator('.collaboration-back:visible').click();
+    await page.locator('#room-member-tabs [data-room-session="' + ids[0] + '"]').click();
     assert.equal(await page.locator('#shared-input').inputValue(), roomDrafts[room].sharedDraft);
     await page.locator('#return-panorama').click();
     assert.equal(await page.evaluate(() => document.activeElement.dataset.panoramaSpace), room);
