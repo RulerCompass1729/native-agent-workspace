@@ -372,7 +372,17 @@ function readingView(el, key) {
       else if (view.paged && el.scrollHeight - el.scrollTop - el.clientHeight <= 1 && !view.pageRange.tail) changeReadingPage(view, 'newer');
     };
     el.addEventListener('pointerdown', press); el.addEventListener('pointermove', hover, { passive: true }); el.ownerDocument.addEventListener('pointerup', release, true); el.ownerDocument.addEventListener('pointercancel', release, true); el.addEventListener('wheel', wheel, { passive: true }); el.addEventListener('keydown', keydown); el.addEventListener('scroll', scroll, { passive: true });
-    view.observer = new ResizeObserver(() => scheduleReading(view)); view.observer.observe(el);
+    // A settled reader has no pending intent: a clamp scroll with no input ended it, and its saved
+    // position still follows. A resize from outside (the window, a column terminal) fires no scroll, so
+    // re-arm that saved target here, as restoreOverviewReading does on layout. A held scrollbar or a
+    // move away within 500ms still wins (followRenderGuard); a reader read further up saved follow:false,
+    // and one with a text selection in it does not follow (readingFollow), so neither is pulled to the end.
+    view.observer = new ResizeObserver(() => {
+      const selection = window.getSelection(), selecting = Boolean(selection && !selection.isCollapsed && el.contains(selection.anchorNode));
+      if (!view.intent && !selecting && readingPositions[view.key]?.follow && followRenderGuard(view)) { view.intent = { position: readingPositions[view.key] }; view.pageChanging = true; }
+      scheduleReading(view);
+    });
+    view.observer.observe(el);
     view.dispose = () => { for (const entry of view.entries.values()) { cancelReadingWakeCollapse(entry); entry.images?.dispose(); if (entry.imageReceipt) ui.display.unbind(entry.imageReceipt, 'text'); } view.observer.disconnect(); cancelAnimationFrame(view.frame); el.removeEventListener('pointerdown', press); el.removeEventListener('pointermove', hover); el.ownerDocument.removeEventListener('pointerup', release, true); el.ownerDocument.removeEventListener('pointercancel', release, true); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', keydown); el.removeEventListener('scroll', scroll); view.reload = null; view.loadMessage = null; view.pageData = null; ui.clearMarkdown(el); };
     messageViews.set(el, view);
   }

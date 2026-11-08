@@ -6,13 +6,13 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 function harness() {
   const displayFixture = localeUI();
-  const frames = [], saved = [], clock = { now: 10000 };
+  const frames = [], saved = [], observers = [], clock = { now: 10000 };
   const element = () => ({ hidden: false, dataset: {}, attrs: {}, setAttribute(k,v) { this.attrs[k]=String(v); }, getAttribute(k) { return this.attrs[k]??null; }, removeAttribute(k) { delete this.attrs[k]; }, append() {}, onclick: null });
   const context = vm.createContext({ ...displayFixture,
     Map, Set, Object, Number, Math, JSON, structuredClone, performance: { now: () => clock.now },
     window: { getSelection: () => ({ isCollapsed: true }) }, document: { activeElement: null },
     requestAnimationFrame: fn => { frames.push(fn); return frames.length; }, cancelAnimationFrame() {},
-    ResizeObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
     button: (text, onclick) => ({ ...element(), text, onclick }), node: () => element(),
     ui: { ...displayFixture.ui, clearMarkdown() {} }, api: { readingState: positions => saved.push(JSON.parse(JSON.stringify(positions))) }, attempt: fn => fn(),
   });
@@ -29,7 +29,7 @@ function harness() {
   const view = vm.runInContext('readingView', context)(el, 'session-a');
   view.pageRange = { start: 0, end: 1, tail: true }; // a rendered list whose last page is loaded
   view.seen = { top: 2500, height: 3000 }; el.scrollTop = 2500; // its last frame left it at the end
-  return { context, view, el, listeners, documentListeners, frames, saved, row, clock };
+  return { context, view, el, listeners, documentListeners, frames, saved, row, clock, resize: () => observers.forEach(fn => fn()) };
 }
 test('while following, a wheel-down, ArrowDown, PageDown or Space keeps following and the render guard', () => {
   const target = { closest: () => null };
@@ -83,6 +83,34 @@ test('跳到最新 or End right after a wheel-up is a move to the latest: the gu
     h.view.pageChanging = guard(); h.el.scrollTop = 2300; h.listeners.scroll();
     assert.equal(h.view.intent?.position.follow, true, 'the clamp scroll does not end following');
   }
+});
+// 2026-11-08 census (b): collaboration-list at 850x600. Growing the window clamped a following reader
+// with no input, which ends the pending intent; the saved position still follows. Shrinking it then
+// fires no scroll, and the reader's own ResizeObserver did nothing without an intent.
+test('a settled following reader that the window then shrinks sticks to the latest again', () => {
+  const h = harness(), positions = () => vm.runInContext('readingPositions', h.context);
+  h.el.scrollTop = 2490; h.listeners.scroll(); // the window grew: a clamp scroll with no input settles the reader
+  assert.equal(h.view.intent, null); assert.equal(positions()['session-a'].follow, true, 'saved as following');
+  h.el.clientHeight = 300; h.resize(); // the window shrinks: no scroll event, the end is now 210px below
+  assert.equal(h.frames.length, 1, 'the resize schedules a follow frame');
+  h.el.scrollTop = 2400; h.listeners.scroll(); // a layout scroll before that frame
+  assert.equal(h.view.intent?.position.follow, true, 'a layout scroll before the frame does not end it'); h.frames.shift()();
+  assert.equal(h.el.scrollTop, h.el.scrollHeight, 'back at the latest'); assert.equal(h.view.intent?.position.follow, true);
+});
+test('a resize leaves a reader the person moved away from, is moving away from, or holds by its scrollbar', () => {
+  const away = harness(); away.listeners.wheel({ type: 'wheel', deltaY: -600 }); away.el.scrollTop = 1800; away.listeners.scroll();
+  away.clock.now += 1000; away.el.clientHeight = 300; away.resize();
+  assert.equal(away.frames.length, 0); assert.equal(away.el.scrollTop, 1800, 'read further up: stays');
+  const moving = harness(); moving.listeners.wheel({ type: 'wheel', deltaY: -40 }); moving.el.scrollTop = 2460; moving.listeners.scroll();
+  moving.el.clientHeight = 300; moving.resize();
+  assert.equal(moving.frames.length, 0, 'within 500ms of a wheel-up the person is still moving: not pulled back');
+  const held = harness(); held.listeners.pointerdown({ target: held.el, clientX: 395 }); held.el.scrollTop = 2490; held.listeners.scroll();
+  held.el.clientHeight = 300; held.resize();
+  assert.equal(held.frames.length, 0, 'a held scrollbar is not pulled back');
+  const selecting = harness(); selecting.el.scrollTop = 2490; selecting.listeners.scroll();
+  selecting.context.window.getSelection = () => ({ isCollapsed: false, anchorNode: selecting.row }); // text selected, no scroll
+  selecting.el.clientHeight = 300; selecting.resize();
+  assert.equal(selecting.frames.length, 0, 'a reader with a text selection is not pulled to the end');
 });
 test('a press on a row or button inside the reader keeps the guard, so a click on 复制 keeps following', () => {
   const h = harness();
