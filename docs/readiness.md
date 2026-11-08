@@ -4,27 +4,37 @@ As of 2026-11-08. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.219, clean committed build source `674449f`.
-The ordinary launch retains 15 records, all draft scopes, reported settings and
-live native process identities. The five original development/secretary backends
-remain alpha.215. Automatic backend migration remains off; adopting new native
-runtime behavior requires a separate safe checkpoint. The desktop was locked at
-the update, so daily window visibility and changed daily operations remain pending.
+Current daily GUI: alpha.220, clean committed build source `82bdcbd`.
+Ordinary launch retains all 16 records, native identities/live process start
+identities, reported settings and private/shared draft scopes. The five original
+development/secretary backends remain alpha.215; the newly occupied alpha.219
+backend is also retained. Automatic backend migration remains off. One daily
+application-search entry is observed. Window visibility and changed daily
+operations are pending rather than inferred from ordinary launch.
 
-The signed 219 payload has 83 matching runtime files. Its unchanged product
-source passes 3,533 checks without skips; five normal empty-profile bootstrap
-checks and ten signed GUI journeys pass with synthetic native workers and no
-product model calls. They cover following reading, compact member tabs and UI
-language changes while retaining literal native content. Physical window resize
-in the signed bundle and original provider receipt/continuation are not inferred.
-Source-author resize evidence remains scoped to its actual source run.
+The combined source suite passes 3,570 checks without failures or skips. All 86
+signed payload files match the clean release tree. Ten scoped signed GUI/MCP
+journeys and five normal cold-bootstrap checks pass with synthetic native
+producers and zero product model calls. T-121's remaining compact and panorama
+return callers also pass their actual source GUI journeys. Original draft,
+focus, reading-anchor, clipboard separation and no-replay checks remain explicit.
 
-Independent review accepts the combined source and GUI-only update operator.
-The operator now waits only for the exact empty active backend's connection
-readiness after ordinary open; it never repeats an install or restarts an
-occupied native backend. Actual adoption preserves every inactive backend's
-PID/start identity/version, reported settings and the original inputs. Strict
-signature verification passes after launch. No debug argument is used.
+Fresh independent batch review accepts this GUI-only adoption. The initial
+read-budget termination is retained as incomplete; the same reviewer's bounded
+closeout supplies the actual scoped verdict. Post-launch strict signing passes.
+Earlier signed-test failures remain recorded: a Chinese-only locator on an
+English UI, a mistaken CDP page count for an unloaded hidden window, and changed
+pointer coordinates with unchanged foreground application. The final adapter
+corrects its language/count assumptions; physical pointer isolation remains
+unverified instead of being declared passed. No product patch masks those trials.
+
+Background application control is now packaged, but installing frontend files
+does not add its proof collector or tool catalog to retained old native backends.
+Original native workspace_control registration, actual original-agent delivery
+and continued native work need separate adoption and acceptance. The dormant
+mobile prefix validation repair enables no phone/network listener. Physical
+IME, original goal resume, signed physical resize and full-day dogfood remain
+open. No push is used.
 
 One original Main-to-secretary outbox task has an exact shared ledger entry,
 native receipt and completed first command. The recipient's native

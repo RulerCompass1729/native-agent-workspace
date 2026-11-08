@@ -7211,3 +7211,37 @@ once at the integrated product source, including original reading anchors,
 selection, scoped drafts, focus return and reopen preservation. Native producers
 are synthetic; no real provider or model is used. No product delta is added.
 The signed candidate and daily operation remain separate acceptance stages.
+
+## Alpha.220 combined source and GUI-only adoption (2026-11-08, Main)
+
+The exact S64 background-control candidate, T-121 A, test-health repairs and
+source-only mobile prefix guard are integrated. The first combined source run
+has one stale setup failure; final source checks pass 3,570 with no skips. The
+two remaining T-121 compact/panorama callers pass actual source GUI journeys.
+All 86 signed runtime files match build `82bdcbd`, whose product source is
+unchanged from the tested integration except three version fields.
+
+Signed acceptance retains all earlier failures. A Chinese-only cancel locator
+is replaced by its exact current-language catalog key; CDP rendered-page count
+is separated from an unloaded hidden BrowserWindow count. A later pointer
+coordinate change has no attributed source; physical pointer isolation stays
+unverified. The failed adapter originally removed its profile before closing
+its own signed GUI; that exact owned process required SIGTERM. The corrected
+adapter closes its GUI before scratch cleanup. No daily process was targeted.
+
+The final signed run passes ten scoped background/MCP/navigation journeys with
+synthetic native events, private drafts, inline human cancellation, off-switches,
+literal agent attribution, original operation receipts and no replay across GUI
+reopen. Five normal empty-profile bootstrap checks pass. No actual native
+producer or product model is called. The fresh read-only reviewer initially
+exceeds its 16-read budget and is stopped without verdict; the same session's
+bounded closeout returns explicit GUI-only PASS with no more reads. Residual
+nonblocking policy/performance suggestions are retained privately, not expanded
+into new work.
+
+Actual ordinary installation retains all 16 records and native identities,
+settings, live process start identities and draft scopes; original 215 and the
+new occupied 219 backends are retained. Signature remains strict and one daily
+search entry is observed. Window visibility/daily changed operations, original
+native background-tool adoption, goal resume, physical IME/pointer/resize and
+full-day use are not claimed. The overall milestone remains open.

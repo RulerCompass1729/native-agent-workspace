@@ -116,7 +116,8 @@ async function run() {
   await card.waitFor(); assert.ok((await card.textContent()).includes('原生会话已收到'));
   const stop = await control(invoke('stop', [recipient])); assert.equal(stop.state, 'confirmation-required');
   assert.equal((await state()).sessions.find(s => s.id === recipient).state, 'working');
-  await page.locator('.background-controls').getByRole('button', { name: '保留会话', exact: true }).click();
+  const keepSessionText = require('../app/ui-messages.js')[(await page.locator('html').getAttribute('lang')).startsWith('en') ? 'en' : 'zh']['os.keepSession'];
+  await page.locator('.background-controls').getByRole('button', { name: keepSessionText, exact: true }).click();
   await until(async () => JSON.parse(fs.readFileSync(path.join(profile, 'background-operations.json'))).records.some(r => r.id === stop.id && r.state === 'cancelled'), 'Human cancellation recorded');
   checks.push('Existing confirmation is inline and nonmodal; cancellation does not stop native work');
   const selected = path.join(cwd, 'material.txt'); fs.writeFileSync(selected, 'Actual material contents');
