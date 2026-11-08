@@ -170,8 +170,9 @@ async function run() {
   for (const id of [a, b]) assert.ok(context.includes(`成员：`) && context.includes(` · ${id}\n归属：`), 'The context lists every current member: ' + id);
   assert.ok(!context.includes('PRIVATE-'));
   await page.locator('#insert-context').click(); assert.equal(await roomBody(page), context); assert.equal((await fixture()).sends.length, 1);
-  // T-157: every send is trimmed (workspace.cjs cleanText), and since 64420d2 the preview ends in a newline.
-  await page.locator('#forward-button').click(); await until(async () => (await fixture()).sends.length === 2, 'Explicit context submission'); assert.deepEqual((await fixture()).sends[1], { id: b, text: context.trim() }); await reply('本条背景已接收。');
+  // Shared input is sent and recorded as typed, trailing newline included (ccf47c8, "Preserve ... literal shared input");
+  // since 64420d2 the preview ends in a newline.
+  await page.locator('#forward-button').click(); await until(async () => (await fixture()).sends.length === 2, 'Explicit context submission'); assert.deepEqual((await fixture()).sends[1], { id: b, text: context }); await reply('本条背景已接收。');
   await page.locator('#room-search').fill('本条背景已接收');
   const secondContext=page.locator('#room-messages').getByRole('button', { name: '查看上下文', exact: true });
   await secondContext.locator('xpath=ancestor::article').hover(); await secondContext.click();
@@ -191,7 +192,7 @@ async function run() {
   // T-157: since 64420d2 a session that left is simply not a member in the space's context (was 「已独立使用」).
   { const after = await page.locator('#context-text').inputValue(); assert.ok(after.includes(` · ${a}\n归属：`) && !after.includes(` · ${b}\n归属：`), 'The left session is no longer listed as a member'); }
   await page.locator('#close-context').click();
-  assert.ok((await snapshot()).sessions.find(s => s.id === b).messages.some(m => m.text === context.trim()));
+  assert.ok((await snapshot()).sessions.find(s => s.id === b).messages.some(m => m.text === context));
   // #recipient lists only current members, so it reads '' here whatever happened; leftRecipientCleared checks the saved view.
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await leftRecipientCleared();
@@ -283,7 +284,7 @@ async function run() {
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); });
   await page.locator('#privacy-button').click(); await page.locator('#privacy-dialog summary').filter({ hasText: '清理与完全退出' }).click(); await page.locator('#clear-shared-history').click();
   await until(async () => { const s = await snapshot(); return !s.room.messages.length && !s.room.events.length && !s.room.notes; }, 'All shared data cleared');
-  assert.equal((await snapshot()).room.name, '共享复盘'); assert.ok((await snapshot()).sessions.find(s => s.id === b).messages.some(m => m.text === context.trim()));
+  assert.equal((await snapshot()).room.name, '共享复盘'); assert.ok((await snapshot()).sessions.find(s => s.id === b).messages.some(m => m.text === context));
   assert.deepEqual(errors, []); assert.equal((await fixture()).sends.length, 4);
   passed.push('Shared-history deletion includes new timeline and notes, keeps native history and room name; no hidden dispatch');
   console.log(JSON.stringify({ passed, errors, syntheticDispatches: 4, nativeProcesses: 0, modelCalls: 0, oneWindow: app.windows().length === 1 }, null, 2));
