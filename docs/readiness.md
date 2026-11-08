@@ -4,28 +4,26 @@ As of 2026-11-07. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.211, clean committed build source `de7a69a`.
-The signed package contains 79 payload files matching that source. Normal
-bootstrap and the packaged-service outbox journey pass; the outbox's native
-receipt and first command are synthetic, with no provider inference.
+Current daily GUI: alpha.214, clean committed build source `45999b2`.
+All 79 runtime payload files match that commit, including after normal startup.
+The source integration passes 3,365 Root and 3,204 ordinary-release checks without
+skips. Conditional maintenance guards, literal outbox text and exact native
+0.167 workspace proof qualification share this batch; gated operator and goal
+continuation interfaces remain absent.
 
-The ordinary visible update from alpha.210 retains 14 records, all 16 verified
-live native process identities, 13 draft scopes, seven occupied older backends
-and the same active original goal across 150 seconds. Automatic migration stays
-off. Occupied runtimes keep their previous code; installing GUI support does not
-activate their new outbox producer. The app reopened normally without background
-or debugging arguments, and its strict signature remains valid.
+The signed isolated instance passes five normal-bootstrap/RPC checks and the
+actual unsupported-maintenance menu operation, with no native engines, model
+tests or dispatches. Its owned processes, profiles and socket directories are
+removed. The ordinary daily update retains 15 records, native process
+identities, reported settings and drafts. It starts with ordinary launch
+arguments and retains its strict signature. Locked-desktop window visibility
+remains pending; this does not gate independent development or maintenance.
 
-The source and signed isolated qualification do not establish original-caller
-adoption, real recipient delivery or continuous-goal recovery. The real desktop
-capture reports a locked macOS session; its one-element AX observation provides
-no usable mutation target. No click or native backend update was attempted.
-Daily interactive acceptance and the whole dogfood milestone remain open.
-
-The current source head also contains a later TUI-bridge optional-goal repair;
-that small delta is not part of alpha.211 and awaits its next installed check.
-The operator phase 1a and goal-continuation interface remain unshipped. No push
-is used.
+Installing the GUI does not update occupied backends. The new guarded path
+explicitly refuses an occupied legacy backend without conditional-stop support.
+Separate, authorized maintenance at actual author checkpoints is still needed;
+original-caller task delivery, continued native work, full-day use and the whole
+dogfood milestone remain open. No push is used.
 
 Previously qualified alpha.209, source `c0650f8`, keeps live member terminals
 visible while their input route is chat, preserving passive input ownership.

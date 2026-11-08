@@ -6684,3 +6684,31 @@ budget and is not counted as approval. The same reviewer then gives the scoped
 source verdict after exact source and raw-evidence reads. Installed acceptance
 remains pending; original running backends and the daily app are not changed
 here.
+
+
+### Ordinary alpha.214 efficiency integration
+
+The batch combines conditional backend maintenance, literal-bound outbox input
+and exact Codex 0.167 workspace proof qualification. The original proof repair
+and input patch retain their source reviews. Combined review covers the ordinary
+release exclusions and shared paths; operator and goal-policy interfaces stay
+unshipped. Real source and signed isolated menu operations reproduce the old
+generic refusal and verify the precise unsupported-maintenance reason.
+
+Integration found an extracted proof-function fixture missing its new helper;
+it now loads both real functions and matching native/RPC/lifecycle facts. The
+complete Root/release suites pass 3,365/3,204 checks without skips. Source-mutation
+tests also use canonical dependency paths so release worktrees exercise their
+intended rejection checks. Earlier failed runs remain in private evidence.
+
+Independent review found stale worktree and rollback paths in the GUI update
+operator. Both were corrected before execution; the previous archive is checked
+by hash. Read-budget termination was not accepted as a pass. The same reviewer
+then approved the source delta and signed evidence for GUI-only adoption.
+
+The signed package passes five real bootstrap/RPC checks and an isolated menu
+journey. Actual daily adoption preserves 15 records, live native identities,
+settings and drafts; normal launch and the strict signature pass. A locked
+desktop's zero visible-window observation remains pending. GUI installation is
+not original-backend migration, original-recipient delivery or completion of
+T166/the dogfood milestone. Those acceptances stay open.
