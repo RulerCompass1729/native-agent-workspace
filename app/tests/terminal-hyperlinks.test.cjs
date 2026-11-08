@@ -21,7 +21,7 @@ function actualTerminal(t, mutate) {
   isolated.require = name => {
     if (mutate === 'source' && name === 'node:fs') return { ...fs, readFileSync(file, ...args) {
       const data = fs.readFileSync(file, ...args);
-      return file === require.resolve('@xterm/addon-serialize') ? data + '\n' : data;
+      return fs.realpathSync(file) === require.resolve('@xterm/addon-serialize') ? data + '\n' : data;
     } };
     if (mutate === name) return { ...originalRequire(name), version: '0.0.0-unqualified' };
     if (name === 'node:child_process') return { ...saved, execFileSync: forbidden,
@@ -207,7 +207,7 @@ test('the UI/package build rejects an unqualified serializer source before writi
   let writes = 0;
   const fakeFs = { ...fs, readFileSync(file, ...args) {
     const data = fs.readFileSync(file, ...args);
-    return file === require.resolve('@xterm/addon-serialize') ? data + '\n' : data;
+    return fs.realpathSync(file) === require.resolve('@xterm/addon-serialize') ? data + '\n' : data;
   }, writeFileSync() { writes++; throw Error('Unexpected build output'); } };
   assert.throws(() => vm.runInNewContext(fs.readFileSync(file, 'utf8'), {
     require: name => name === 'node:fs' ? fakeFs : require(name), __dirname: path.dirname(file), console,
@@ -372,7 +372,7 @@ function rejectHoverUpdateSource(transform) {
   const vm = require('node:vm'), root = path.resolve(__dirname, '../..'); let writes = 0;
   const files = { ...fs, readFileSync(file, ...args) {
     const value = fs.readFileSync(file, ...args);
-    return file === require.resolve('@xterm/xterm') ? transform(value) : value;
+    return fs.realpathSync(file) === require.resolve('@xterm/xterm') ? transform(value) : value;
   }, writeFileSync() { writes++; } };
   assert.throws(() => vm.runInNewContext(fs.readFileSync(path.join(root, 'scripts/build-ui.cjs'), 'utf8'), {
     __dirname: path.join(root, 'scripts'), console: { log() {} },
