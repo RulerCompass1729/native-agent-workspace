@@ -69,6 +69,21 @@ test('the following-render guard steps aside while the person moves away, and re
   p.documentListeners.pointerup(); assert.equal(held(), true, 'released: guard again, so a click on a row keeps following');
   p.listeners.pointerdown({ target: p.el, clientX: 395 }); p.listeners.pointermove({ buttons: 0 }); assert.equal(held(), true, 'a move with no button ends a hold whose release was missed');
 });
+// 2026-11-08 grid-follow census: a 跳到最新 click within 500ms of the last wheel-up left the guard
+// aside, so a fold in the next render let the browser's clamp scroll end the new following.
+test('跳到最新 or End right after a wheel-up is a move to the latest: the guard is back at once', () => {
+  for (const jump of [h => h.view.jump.onclick(), h => h.listeners.keydown({ type: 'keydown', key: 'End', target: { closest: () => null }, preventDefault() {} })]) {
+    const h = harness(), guard = () => h.context.followRenderGuard(h.view, h.clock.now);
+    h.view.paged = true; h.view.reload = () => {}; h.view.pageData = { messages: [] };
+    h.listeners.wheel({ type: 'wheel', deltaY: -600 }); assert.equal(guard(), false, 'moving away: no guard');
+    h.clock.now += 100; jump(h);
+    assert.equal(h.view.intent?.position.follow, true, 'following the latest again');
+    assert.equal(guard(), true, 'the next render is guarded, 100ms after the wheel-up');
+    // That render folds rows; the browser's clamp scroll arrives before the follow frame.
+    h.view.pageChanging = guard(); h.el.scrollTop = 2300; h.listeners.scroll();
+    assert.equal(h.view.intent?.position.follow, true, 'the clamp scroll does not end following');
+  }
+});
 test('a press on a row or button inside the reader keeps the guard, so a click on 复制 keeps following', () => {
   const h = harness();
   h.listeners.pointerdown({ target: h.row, clientX: 100 }); assert.equal(h.context.followRenderGuard(h.view, h.clock.now), true);

@@ -182,6 +182,9 @@ function changeReadingPage(view, action, fromButton = false, automatic = false) 
   const position = action === 'latest' ? { top: 0, follow: true, anchor: '', offset: 0 }
     : action === 'first' ? { top: 0, follow: false, anchor: view.pageData.messages[0]?.id || '', offset: 0 }
     : { ...previous, follow: Boolean(automatic && previous.follow && view.pageRange.tail) };
+  // 跳到最新 and End (the only callers of 'latest') end a wheel-up's move away. Otherwise the
+  // guard stayed aside for the rest of its 500ms, and a fold then ended the new following.
+  if (action === 'latest') view.awayAt = undefined;
   view.intent = { position }; saveReading(view, position);
   view.pageRequest = { action }; view.pageChanging = true; view.loadingPage = true;
   try { view.reload(); } finally { view.loadingPage = false; }
