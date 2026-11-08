@@ -277,6 +277,21 @@ test('only explicitly shared text persists in the shared timeline; no automatic 
   assert.equal(cold.records.length, 2, 'Dispatch accounting is retained');
 });
 
+test('a shared row shows You → name in English and clearing removes the name with its catalog copy (T-60)', async t => {
+  const locale = require('../ui-locale.js');
+  const f = fixture(t), bridge = new LegacyInput(f.root); t.after(() => bridge.close());
+  const target = { record: { ...f.record, name: 'Test agent' }, submission: { connected: true, close() {} }, native: { async send() {} } };
+  bridge.targets.set(f.record.id, target);
+  await bridge.send(target.record, 'explicit shared task', async () => {}, () => true, true);
+  const cold = new LegacyInput(f.root); t.after(() => cold.close());
+  const [row] = cold.sharedMessages();
+  assert.equal(row.name, '你 → Test agent');
+  assert.equal(locale.displayText('en', row.name, row.uiNameMessage), 'You → Test agent');
+  cold.clearSharedHistory();
+  assert.equal(fs.readFileSync(cold.filename, 'utf8').includes('Test agent'), false, 'No copy of the recipient name survives clearing');
+  assert.ok(cold.records.every(record => !Object.hasOwn(record, 'uiNameMessage')));
+});
+
 test('clearing a pending shared row retains late ACK and never erases a newer share', async t => {
   const f = fixture(t), bridge = new LegacyInput(f.root); t.after(() => bridge.close());
   let accept, sent = 0;

@@ -210,6 +210,19 @@ test('shared waiting input binds only its next native prompt and preserves the s
   assert.equal(source.deliveries[0].status, 'submitted');
   assert.equal(w.drafts.get(id), 'solo draft'); assert.equal(w.versions.dispatches, 1);
 });
+test('a shared input row keeps 你 → name and shows You → name in English (T-60)', async t => {
+  const locale = require('../ui-locale.js');
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const s = w.get(id); w.join(id, true); s.state = 'working'; r.queueAvailable = true; r.nativeBlocks = true;
+  let tag; r.queue = (_text, value) => { tag = value; return new Promise(() => {}); };
+  w.queue(id, 'shared task', 'owner', {});
+  const source = w.room.messages.find(m => m.id === tag);
+  assert.equal(source.name, `你 → ${s.name}`);
+  assert.equal(locale.displayText('zh', source.name, source.uiNameMessage), `你 → ${s.name}`);
+  assert.equal(locale.displayText('en', source.name, source.uiNameMessage), `You → ${s.name}`);
+  // A stored name that no longer matches drops the catalog name, so the record never shows a different person.
+  assert.equal(locale.displayText('en', '你 → 别的会话', source.uiNameMessage), '你 → 别的会话');
+});
 for (const change of ['leave', 'takeover', 'clear', 'context', 'approval']) test(`shared waiting input loses permission after ${change} without erasing receipt`, async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   const s = w.get(id); w.join(id, true); s.state = 'working'; r.queueAvailable = true; r.nativeBlocks = true;

@@ -162,3 +162,114 @@ test('explicit backend notice, gap, own progress, fleet and room-event literal s
   // content still require consumer tests and user-flow review.
   assert.deepEqual(hits, []);
 });
+
+// Backend records the renderer shows as a name or body (rows with a role, or a name with a text), direct
+// .text/.activity writes, and pause/revoke/activity reasons. Chinese there needs a catalog message beside it:
+// in the same object (or a spread of uiNotice/uiError), as a later `<same variable>.uiMessage =` /
+// `.uiNameMessage =` in the same block, or as a message argument after the reason. The original Chinese stays,
+// so old records and the text-must-match rule keep working. Bounded: values built in other variables and text
+// for native agents (prompts, tool results) are not followed; those need consumer tests and flow review.
+const recordReasonCalls = { pause: 0, pauseRoom: 1, pauseAll: 0, pauseParticipant: 1, revoke: 0, nativeWorkObserved: 1, setActivity: 1 };
+const propertyName = p => p.type === 'Property' && !p.computed ? (p.key.name ?? p.key.value) : null;
+function spreadKeys(expression, keys) {
+  if (!expression) return keys;
+  if (expression.type === 'ObjectExpression') for (const p of expression.properties) { const k = propertyName(p); if (k) keys.add(k); else if (p.type === 'SpreadElement') spreadKeys(p.argument, keys); }
+  if (expression.type === 'ConditionalExpression') { spreadKeys(expression.consequent, keys); spreadKeys(expression.alternate, keys); }
+  if (expression.type === 'LogicalExpression') spreadKeys(expression.right, keys);
+  if (expression.type === 'CallExpression' && ['uiNotice', 'uiError'].includes(expression.callee.name)) { keys.add('text'); keys.add('uiMessage'); }
+  return keys;
+}
+function messageArgument(e) {
+  if (!e) return false;
+  if (e.type === 'Identifier') return /uimessage/i.test(e.name);
+  if (e.type === 'ObjectExpression') { const keys = e.properties.map(propertyName); return keys.includes('version') && keys.includes('key'); }
+  if (e.type === 'MemberExpression') return !e.computed && /uimessage$/i.test(e.property.name || '') || e.object.type === 'CallExpression' && ['uiActivity', 'uiNotice', 'uiError'].includes(e.object.callee.name);
+  if (e.type === 'CallExpression') return ['uiActivity', 'uiNotice', 'uiError', 'displayMessage'].includes(e.callee.name) || e.callee.property?.name === 'displayMessage';
+  if (e.type === 'ConditionalExpression') return messageArgument(e.consequent) && (messageArgument(e.alternate) || e.alternate.type === 'Identifier' && e.alternate.name === 'undefined');
+  if (e.type === 'LogicalExpression') return messageArgument(e.left) || messageArgument(e.right);
+  return false;
+}
+function recordFieldHits(source) {
+  const ast = box.exports.parse(source, { ecmaVersion: 'latest', locations: true, allowReturnOutsideFunction: true });
+  const hits = [], pending = [{ node: ast, blocks: [] }];
+  const variable = parent => parent?.type === 'VariableDeclarator' && parent.id.type === 'Identifier' ? parent.id.name
+    : parent?.type === 'AssignmentExpression' && parent.left.type === 'Identifier' ? parent.left.name : null;
+  // A later `<name>.<field> =` in the innermost enclosing block pairs the record.
+  // Text match, bounded to the rest of that block: `<name>.<field> =`, not `x.<name>.` nor a `==`/`===` comparison.
+  const pairedLater = (blocks, name, field, after) => !!name && new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}\\.${field}\\s*=(?!=)`).test(source.slice(after, blocks.at(-1)?.end ?? source.length));
+  while (pending.length) {
+    const { node, parent, blocks } = pending.pop(); if (!node || typeof node !== 'object') continue;
+    if (node.type === 'ObjectExpression') {
+      const keys = new Set(), values = {};
+      for (const p of node.properties) { const k = propertyName(p); if (k) { keys.add(k); values[k] = p.value; } else if (p.type === 'SpreadElement') spreadKeys(p.argument, keys); }
+      if (keys.has('role') || keys.has('name') && keys.has('text')) {
+        // Object.assign(row, { … }) adds to `row`; otherwise the variable the record is stored in.
+        const name = parent?.type === 'CallExpression' && parent.callee.property?.name === 'assign' && parent.arguments[0]?.type === 'Identifier' ? parent.arguments[0].name : variable(parent);
+        if (ownsHan(values.name) && !keys.has('uiNameMessage') && !pairedLater(blocks, name, 'uiNameMessage', node.end)) hits.push({ line: values.name.loc.start.line, sink: 'record name' });
+        if (ownsHan(values.text) && !keys.has('uiMessage') && !pairedLater(blocks, name, 'uiMessage', node.end)) hits.push({ line: values.text.loc.start.line, sink: 'record text' });
+      }
+    }
+    if (node.type === 'AssignmentExpression' && node.left.type === 'MemberExpression' && !node.left.computed && ['text', 'activity'].includes(node.left.property.name) && ownsHan(node.right)) {
+      const name = node.left.object.type === 'Identifier' ? node.left.object.name : null, field = node.left.property.name === 'text' ? 'uiMessage' : 'activityUiMessage';
+      if (!pairedLater(blocks, name, field, node.end)) hits.push({ line: node.loc.start.line, sink: node.left.property.name });
+    }
+    if (node.type === 'CallExpression') {
+      const callee = node.callee.type === 'MemberExpression' ? node.callee.property.name : node.callee.name, at = recordReasonCalls[callee];
+      if (at !== undefined && ownsHan(node.arguments[at]) && !node.arguments.slice(at + 1).some(messageArgument)) hits.push({ line: node.loc.start.line, sink: callee + ' reason' });
+    }
+    const inner = ['BlockStatement', 'Program'].includes(node.type) ? [...blocks, node] : blocks;
+    for (const value of Object.values(node)) if (value && typeof value === 'object') for (const child of Array.isArray(value) ? value : [value]) pending.push({ node: child, parent: node, blocks: inner });
+  }
+  return hits.sort((a, b) => a.line - b.line || a.sink.localeCompare(b.sink));
+}
+
+test('record scanner catches unpaired names, bodies, direct writes and reasons, and accepts every pairing form', () => {
+  const caught = [
+    ["m.push({ role: 'system', name: '自动消息', text: body });", 'record name'],
+    ["const row = { role: 'user', text: `发给 ${name}` };", 'record text'],
+    ["Object.assign(row, { text, name: `你 → ${n}` });", 'record name'],
+    ["row.text = '没有发出';", 'text'],
+    ["s.activity = '正在连接';", 'activity'],
+    ["this.pause('协作已被替换');", 'pause reason'],
+    ["this.peerLeases.revoke('边界已变化：' + reason, id);", 'revoke reason'],
+    ["setActivity(s, '正在恢复');", 'setActivity reason'],
+  ];
+  for (const [source, sink] of caught) assert.deepEqual(recordFieldHits(source), [{ line: 1, sink }], source);
+  const paired = [
+    "m.push({ role: 'system', name: '协作', uiNameMessage: n, text: '已暂停', uiMessage: u });",
+    "m.push({ role: 'system', name, ...uiNotice('notice.x') });",
+    "m.push({ role: 'system', name: '甲', ...(nm ? { uiNameMessage: nm } : {}), text: x });",
+    "{ const row = { role: 'system', name: '自动消息', text: `发给 ${a}` }; row.uiMessage = m; row.uiNameMessage = n; }",
+    "{ row.text = `没有发出`; row.uiMessage = m; }",
+    "this.pause('协作已被替换', uiActivity('notice.x')[1]);",
+    "this.pause(lease.reason || '授权已变化', lease.reason ? lease.reasonUiMessage : uiActivity('notice.y')[1]);",
+    "revoke('边界已变化：' + r, id, undefined, { version: 1, key: 'notice.z', params: {} });",
+    "const room = { id: 'shared', name: '共同工作', revision: 0 };",
+  ];
+  for (const source of paired) assert.deepEqual(recordFieldHits(source), [], source);
+  // Comparisons and another object's field are not a pairing; `$` in a name is matched literally.
+  assert.deepEqual(recordFieldHits("{ const row = { role: 'system', name: '自动消息' }; if (row.uiNameMessage === n) f(); }"), [{ line: 1, sink: 'record name' }]);
+  assert.deepEqual(recordFieldHits("{ const row = { role: 'system', name: '自动消息' }; x.row.uiNameMessage = n; }"), [{ line: 1, sink: 'record name' }]);
+  assert.deepEqual(recordFieldHits("{ const $row = { role: 'system', name: '自动消息' }; $row.uiNameMessage = n; }"), []);
+  // A pairing in another block does not count.
+  assert.deepEqual(recordFieldHits("{ const row = { role: 'system', name: '自动消息' }; } row.uiNameMessage = n;"), [{ line: 1, sink: 'record name' }]);
+});
+
+test('backend records shown to people carry catalog messages beside their Chinese', () => {
+  // Each exception names the exact source text and why it stays raw.
+  const allowed = [
+    { file: 'workspace.cjs', sink: 'record name', source: "kind: 'agent-wake', name: `${s.name || '会话'} → ${target?.name || '会话'}`",
+      why: 'The space view labels live wake rows by participant ID (renderer roomMessageLabel, wake branch); merged copies drop `wake` (space-merge.cjs fields) and show this stored name. ' +
+        'The "A → B" has no Chinese of its own: sessions are named at creation (workspace.cjs create: Claude N / Codex N), so 会话 appears only for a record without a name.' },
+  ];
+  const app = path.join(__dirname, '..'), hits = [], used = new Set();
+  for (const file of fs.readdirSync(app).filter(name => /\.(cjs|js)$/.test(name) && name !== 'ui-messages.js')) {
+    const source = fs.readFileSync(path.join(app, file), 'utf8'), lines = source.split('\n');
+    for (const hit of recordFieldHits(source)) {
+      const rule = allowed.find(a => a.file === file && a.sink === hit.sink && lines[hit.line - 1].includes(a.source));
+      if (rule) used.add(rule); else hits.push(`${file}:${hit.line}:${hit.sink}: ${lines[hit.line - 1].trim().slice(0, 100)}`);
+    }
+  }
+  assert.deepEqual(hits, []);
+  assert.deepEqual(allowed.filter(rule => !used.has(rule)), [], 'Remove exceptions that no longer match source.');
+});

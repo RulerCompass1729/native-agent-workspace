@@ -13,6 +13,9 @@ const { NativeHistory, claudeMetadata, nativeId, codexVersionInfo } = require('.
 const spaces = require('./collaboration-spaces.cjs');
 const { uiError, uiNotice, uiActivity, setActivity, setWarning } = require('./ui-errors.cjs');
 const { displayMessage } = require('./ui-locale.js');
+// A person's row to one session keeps 「你 → 名字」 and carries its catalog name (T-60). Null when the name
+// is not a plain string, so the raw text shows as before.
+const youToName = name => displayMessage({ version: 1, key: 'notice.name.youToNamed', params: { name } }, 'notice.', `你 → ${name}`) || undefined;
 const gitWorktree = require('./git-worktree.cjs');
 const { cachedImageKey, removeCachedImages } = require('./native-images.cjs');
 
@@ -1061,7 +1064,7 @@ class Workspace extends EventEmitter {
     if (images) s.messages.at(-1).spaceUploads = images.refs.map(ref => ({ ...ref }));
     if (forward) {
       this.forwards.set(tag, { ...forward, roomId, control });
-      sourceMessage = { id: tag, role: 'human', recipientId: s.id, name: `你 → ${s.name}`, text, status: 'awaiting-native', time: Date.now(), deliveryTracked: true, ...(forward.replyTo ? { replyTo: forward.replyTo } : {}) };
+      sourceMessage = { id: tag, role: 'human', recipientId: s.id, name: `你 → ${s.name}`, uiNameMessage: youToName(s.name), text, status: 'awaiting-native', time: Date.now(), deliveryTracked: true, ...(forward.replyTo ? { replyTo: forward.replyTo } : {}) };
       if (images) Object.assign(sourceMessage, { images: images.refs.map(ref => ({ ...ref })), imageDraftVersion: images.version,
         imageReceipt: { status: 'awaiting-native', tag, nativeId: s.nativeId, recipientId: s.id } });
       room.messages.push(sourceMessage);
@@ -1133,7 +1136,7 @@ class Workspace extends EventEmitter {
     runtime.pendingQueue = tag;
     const message = { id: tag, role: 'user', text, origin: 'human', status: 'awaiting-native', inputMode: 'queue', time: Date.now() };
     if (shared) {
-      const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, text, status: 'awaiting-native', inputMode: 'queue', time: Date.now(), deliveryTracked: true,
+      const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, uiNameMessage: youToName(s.name), text, status: 'awaiting-native', inputMode: 'queue', time: Date.now(), deliveryTracked: true,
         ...(replyTo ? { replyTo } : {}), deliveries: [{ id: tag, recipientId: id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() }] };
       room.messages.push(source); this.forwards.set(tag, { roomId, member, control, replyTo });
       // No running private turn is adopted. Only the next native prompt's
@@ -1188,7 +1191,7 @@ class Workspace extends EventEmitter {
     try {
       runtime.pendingSteer = tag;
       if (shared) {
-        const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, text, status: 'awaiting-native', inputMode: 'steer', time: Date.now(), deliveryTracked: true,
+        const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, uiNameMessage: youToName(s.name), text, status: 'awaiting-native', inputMode: 'steer', time: Date.now(), deliveryTracked: true,
           ...(replyTo ? { replyTo } : {}), deliveries: [{ id: tag, recipientId: id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() }] };
         room.messages.push(source); this.forwards.set(tag, { roomId, member, control, replyTo });
         this.sharedReplies.authorize(s, runtime, tag, source, null, roomId);

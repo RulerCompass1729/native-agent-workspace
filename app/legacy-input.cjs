@@ -1,4 +1,5 @@
 const { uiError, uiNotice, setWarning } = require('./ui-errors.cjs');
+const { displayMessage } = require('./ui-locale.js');
 // Explicit, same-process compatibility for inspected alpha.2 native hosts.
 // Native hooks remain the sole writer of conversation history. This transport
 // records dispatch metadata and explicitly shared text only. It never calls
@@ -118,7 +119,7 @@ class LegacyInput extends EventEmitter {
     const status = row => row.status === 'accepted' ? 'submitted' :
       this.targets.get(row.sessionId)?.pendingQueue === row.id ? 'awaiting-native' : 'unconfirmed';
     return [...this.records.filter(row => row.shared === true).map(row => ({
-      id: row.id, role: row.senderId ? 'assistant' : 'human', ...(row.senderId ? { sessionId: row.senderId, senderNativeId: row.senderNativeId } : {}), recipientId: row.sessionId, name: row.name, text: row.text, time: row.time,
+      id: row.id, role: row.senderId ? 'assistant' : 'human', ...(row.senderId ? { sessionId: row.senderId, senderNativeId: row.senderNativeId } : {}), recipientId: row.sessionId, name: row.name, ...(row.uiNameMessage ? { uiNameMessage: row.uiNameMessage } : {}), text: row.text, time: row.time,
       status: status(row), manualReply: row.sharedReply !== true || row.replyPrivate === true,
       ...(row.inputMode ? { inputMode: row.inputMode } : {}),
       deliveryTracked: true, ...(row.replyTo ? { replyTo: row.replyTo } : {}),
@@ -132,7 +133,7 @@ class LegacyInput extends EventEmitter {
     const previous = this.records;
     this.records = previous.map(row => {
       if (!selected.has(row.id)) return row;
-      const { text, name, recipientName, shared, replyTo, ...metadata } = row; return metadata;
+      const { text, name, uiNameMessage, recipientName, shared, replyTo, ...metadata } = row; return metadata;
     });
     try { this.save(); } catch (error) { this.records = previous; throw error; }
     this.emit('change');
@@ -370,7 +371,9 @@ class LegacyInput extends EventEmitter {
     if (target.managed) row.managed = true;
     if (expectedTurnId !== undefined) row.inputMode = 'steer';
     if (waitForNativeTurn) row.inputMode = 'queue';
-    if (shared) Object.assign(row, { shared: true, text, name: `你 → ${record.name}`, recipientName: record.name, ...(replyTo ? { replyTo } : {}) });
+    if (shared) Object.assign(row, { shared: true, text, name: `你 → ${record.name}`,
+      // An agent's routed row is renamed just below; only a person's row carries 你 → name (T-60).
+      uiNameMessage: source ? undefined : displayMessage({ version: 1, key: 'notice.name.youToNamed', params: { name: record.name } }, 'notice.', `你 → ${record.name}`) || undefined, recipientName: record.name, ...(replyTo ? { replyTo } : {}) });
     if (source) Object.assign(row, { senderId: source.id, senderNativeId: source.nativeId, name: `${source.name} → ${record.name}` });
     if (source?.agentWakeBudget) row.agentWakeBudget = { ...source.agentWakeBudget };
     if (shared && !source && this.sharedReplies.authorize(record, target.native || target, row.id, row, shareAuthority)) row.sharedReply = true;

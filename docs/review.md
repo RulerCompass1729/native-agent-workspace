@@ -6841,3 +6841,31 @@ The actual ordinary daily GUI update preserves 15 original records, live native 
 - Trigger/severity: P2 cost. In one weekly usage window, about 15% of the development agents' tool calls were empty waits of one second or less on a command that was still running. Each wait is a full model call over the whole context, and the team exhausted its weekly allowance in about three and a half days.
 - Owner/status: Claude, rule-only change approved by the person: one sentence in the shared project rules (Test costs and instances) asks for one long wait that returns when the command exits, instead of repeated short polls. No product code or native settings changed. Agents apply it after rereading the rules at a safe checkpoint.
 - Evidence/recheck: counts come from the agents' own local session records, with no model calls. Across four development agents, 121 waits of at least five seconds were measured. All 57 that saw the command exit returned at exit, before the full yield. The other 64 waited the full yield while the command was still running, and none of them received new output, so returning on output remains unverified. The measurements are from Codex sessions; the Claude side of the rule is untested. An independent read-only review approved the sentence and found no conflict with the existing polling-prompt and single-background-command rules. Reasoning effort and context length were also observed as large cost factors; they are native settings and were not changed.
+
+
+## Person-to-session row names in English (T-60) — 2026-11-08
+
+Rows a person sends to one session stored the name 你 → 名字 without a
+catalog message. Live space rows are labelled by participant ID, but merged
+space copies show the stored name, so English showed 你 there. The legacy
+shared-input path also dropped the name message when projecting its ledger
+rows. The four producers now add `uiNameMessage` (`notice.name.youToNamed`)
+beside the unchanged Chinese; a name that is not a plain string keeps the raw
+text. The legacy ledger passes the message on, and clearing shared history
+removes it together with the name, so no copy of the recipient name remains.
+
+`ui-owned-text.test.cjs` adds a bounded backend check for record names and
+bodies, direct `.text`/`.activity` writes and pause/revoke/activity reasons.
+It is a syntactic guard with one documented exception (agent-wake row names),
+not dataflow. It does not cover snapshot notice fields in
+`workspace-client.cjs`, mobile request errors, or reasons sent to another
+backend.
+
+Removing one pairing turns both new tests red; restoring the old clear turns
+the privacy assertion red. Unit 3472/3473: the remaining failure, the
+compat-hook upgrade history test, fails identically on clean main. The
+interface-language GUI passes 3/3 with the pasteboard unchanged. A fresh
+headless reviewer found the dropped projection, the name kept after clearing
+and a person's name left on a routed agent row; after the fix the same
+session approved the delta. English display of these rows in the installed
+app is not yet observed.
