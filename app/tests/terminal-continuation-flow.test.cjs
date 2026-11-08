@@ -66,7 +66,7 @@ function rendererFixture(t, target = screen(t)) {
   const context = { window: { nativeWorkspaceTerminalContinuation: continuation }, terminals,
     document: { activeElement: null }, api, uiError: code => Error(code),
     render() {}, toastError: error => errors.push(error.message), revealTerminalCursor() { throw Error('No focus change'); } };
-  const functions = vm.runInNewContext(renderer.slice(rendererStart, rendererEnd) + '\n({writeTerminal,flushTerminalEvents})', context);
+  const functions = vm.runInNewContext(renderer.slice(rendererStart, rendererEnd) + '\n({writeTerminal,flushTerminalEvents,validateTerminalFrame,restoreTerminalContinuation})', context);
   return { ...target, ...functions, id, terminals, entry, errors, calls };
 }
 function eventFor(target, frame, extra = {}) {
@@ -262,4 +262,35 @@ test('live snapshot replay keeps already-authorized human input and rejects an o
     assert.deepEqual(calls, [[target.id, 'a']], 'Replay does not bypass the existing connection guard');
   } finally { held.release(); await target.entry.pending; await held.drain(); }
   assert.equal(target.entry.keyboardFlags, 21, 'Older display replay cannot roll back the current key encoding');
+});
+
+
+test('real first-open callback queues native modes until the snapshot loads, then adopts the newer header', async t => {
+  const source = screen(t); await write(source.term, hidden);
+  const frame = await sourceTerminal(source, { sequence: 1, flags: 0 }).snapshot();
+  const target = rendererFixture(t); Object.assign(target.entry, { ready: false, epoch: undefined });
+  let receive, resolveSnapshot;
+  const snapshot = new Promise(resolve => { resolveSnapshot = resolve; });
+  const context = { id: target.id, entry: target.entry, term: target.term, terminals: target.terminals,
+    api: { onTerminal: callback => { receive = callback; }, terminalSnapshot: () => snapshot },
+    state: { sessions: [{ id: target.id, terminalState: { alive: true, epoch: frame.epoch } }] },
+    validateTerminalFrame: target.validateTerminalFrame, restoreTerminalContinuation: target.restoreTerminalContinuation,
+    flushTerminalEvents: target.flushTerminalEvents, writeTerminal: target.writeTerminal,
+    render() {}, loading: { remove() {} }, surface: { hidden: true, inert: true },
+    columnTerminalBinding: () => null, fitTerminal() {}, focusTerminal() {}, selectionRevision: 0, intent: 0,
+    updateState() { throw Error('Unexpected state refresh'); }, uiError: code => Error(code),
+    ui: { display: { text() { throw Error('Unexpected initial-load failure'); } } } };
+  const callback = renderer.split('\n').find(line => line.includes('api.onTerminal(event =>'));
+  assert.ok(callback); vm.runInNewContext(callback.trim().replace(/,$/, ''), context);
+  const start = renderer.indexOf('  entry.pending = (async () => {');
+  const end = renderer.indexOf('\n  return entry.pending;', start);
+  assert.ok(start >= 0 && end > start); vm.runInNewContext(renderer.slice(start, end), context);
+  receive({ id: target.id, epoch: frame.epoch, sequence: 2, index: 1, kind: 'output', data: ' NEXT', keyboardFlags: 21 });
+  assert.equal(target.entry.queued.length, 1); assert.equal(target.entry.keyboardStamp, undefined);
+  assert.equal(target.entry.ready, false);
+  resolveSnapshot(frame); await target.entry.pending; await write(target.term);
+  assert.equal(target.entry.ready, true); assert.equal(target.entry.keyboardFlags, 21);
+  assert.equal(target.entry.sequence, 2); assert.ok(target.term.buffer.active.getLine(0).translateToString(true).includes('NEXT'));
+  assert.equal(context.surface.hidden, false); assert.equal(context.surface.inert, false);
+  assert.deepEqual(target.errors, []); assert.deepEqual(target.calls, []);
 });

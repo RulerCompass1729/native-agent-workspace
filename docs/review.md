@@ -6802,3 +6802,29 @@ Optional continuation shares the snapshot serialization context and a four-MiB c
 
 
 Integration found a live-replay input regression: the snapshot parser temporarily cleared the same readiness flag used by the real terminal input callback. A held real-xterm write barrier reproduced a dropped legitimate key (ten other flow checks passed). Display restoration now has its own bounded queue flag; existing owner, connection and epoch checks still gate input. Native keyboard headers update before delayed display parsing and older queued output cannot roll them back. The focused counter and the combined affected suite pass (363 checks, no failures or skips). Final signed GUI acceptance and independent delta review remain separate gates.
+
+The integration reviewer questioned whether initial loading could roll back keyboard modes. The actual production event callback queues all output while the entry is not ready and never calls the new header observer then. A regression check executes that callback and the complete actual initial-load closure with real xterm: newer queued modes win after snapshot loading. It passes; a private negative control that removes the callback queue fails. No additional product branch was added for the unreachable trigger. The independent continuation verdict remains separate.
+
+The same independent reviewer checked the production callers and both raw counter-runs, withdrew that blocker and approved the input delta. The final signed GUI passed six owned-worker stages, including same-identity/draft reopen, exact link revival and one actual GUI key. This is installed synthetic-transport evidence; actual provider-emitted links, original backend adoption and daily use remain outside this checkpoint.
+
+
+## Codex terminal model-switch reminder opt-out — 2026-11-08
+
+The native rate-limit model-switch picker adds an input step during unattended
+work. Both terminal-first startup and retained-thread terminal attachment now
+pass `-c notice.hide_rate_limit_model_nudge=true` to the native client. This
+keeps the existing model and effort selection, permission flags, endpoint, cwd
+and native thread ID; it does not approve a request or resume a goal.
+
+Four existing captured-argv cases fail on the original source because the
+opt-out is absent. The repaired resume and effective-settings suites pass all
+86 cases without skips, using synthetic hosts and no provider/model calls.
+Native client source reads this notice from bootstrap/local preferences; no
+provider capability or version gate changes.
+
+This affects newly started or reattached terminal clients. An already open
+picker is not dismissed by changing future launch arguments. Existing-session
+independent review approves the exact source delta; its first invocation hit
+the read budget without a verdict, and its bounded continuation approved it.
+Installed/original-session acceptance and non-165 native engine qualification
+remain open. The review verifies source configuration flow, not a live picker.

@@ -222,6 +222,9 @@ for (const scenario of ['pending', 'empty', 'missing-history', 'missing-disconne
     assert.equal(starts, 1); assert.ok(results.every(result => result === r.terminal));
     assert.equal(argv.at(-1), record.nativeId); assert.ok(argv.includes('resume'));
     assert.deepEqual(argv.slice(1,5), ['-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false']);
+    assert.ok(argv.includes('notice.hide_rate_limit_model_nudge=true'), 'NAW must opt out of the native model-switch reminder');
+    assert.equal(argv[argv.indexOf('notice.hide_rate_limit_model_nudge=true') - 1], '-c');
+    assert.equal(argv.includes('-m') || argv.includes('--model') || argv.some(arg => /^(?:model|model_reasoning_effort)=/.test(arg)), false);
     assert.equal(r.hasHistory, true);
   } else {
     await assert.rejects(r.openTerminal(), ['empty', 'missing-history'].includes(scenario) ? /请先在对话中发送第一条消息/ : /原生/);
@@ -304,6 +307,9 @@ for (const skipPermissions of [false, true]) test('terminal-first startup keeps 
   await r.startFromTerminal();
   assert.equal(starts, 1); assert.equal(record.nativeId, 'new-native');
   assert.deepEqual(argv.slice(1, 5), ['-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false']);
+  assert.ok(argv.includes('notice.hide_rate_limit_model_nudge=true'), 'NAW must opt out of the native model-switch reminder');
+  assert.equal(argv[argv.indexOf('notice.hide_rate_limit_model_nudge=true') - 1], '-c');
+  assert.equal(argv.includes('-m') || argv.includes('--model') || argv.some(arg => /^(?:model|model_reasoning_effort)=/.test(arg)), false);
   assert.equal(argv.includes('never'), skipPermissions); assert.equal(argv.includes('danger-full-access'), skipPermissions);
   assert.equal(argv.includes('resume'), false); assert.deepEqual(argv.slice(-4), ['--remote', 'unix:///synthetic/socket', '-C', record.cwd]);
   assert.equal(host.pendingCodex, null);
