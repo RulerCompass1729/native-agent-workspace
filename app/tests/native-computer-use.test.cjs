@@ -134,16 +134,23 @@ test('input is tied to the last capture and consumed once even when dispatch res
   await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned', on: 'button', expect: { label: 'Synthetic dialog cancel' } } }, invoke), /completion unknown/);
   assert.equal(clicks, 1, 'no automatic resend or stale replay');
 });
-test('uncertain mutation permanently refuses later observation and input from this client', async () => {
+test('uncertain mutation preserves read-only observation without reopening input from this client', async () => {
   for (const name of ['click', 'type']) {
     const gate = createComputerUseGate({ identity: pid => ({ pid, started: 'original' }) });
     let calls = 0;
-    const invoke = async params => { calls++; if (params.name === 'see') return inspected('owned'); throw Error('transport timed out; remote completion unknown'); };
+    const invoke = async params => { calls++; if (['see', 'inspect_ui'].includes(params.name)) return inspected('owned'); throw Error('transport timed out; remote completion unknown'); };
     await gate(capture, invoke);
     await assert.rejects(gate({ name, arguments: { snapshot: 'owned', on: 'field', text: 'owned', clear: true, expect: { label: 'Synthetic dialog cancel' } } }, invoke), /timed out/);
-    await assert.rejects(gate(capture, invoke), /completion unknown/);
-    await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned', on: 'button' } }, invoke), /completion unknown/);
-    assert.equal(calls, 2, 'no operation reaches the bridge after uncertain input');
+    for (const observation of [capture, inspectCapture]) {
+      const result = await gate(observation, invoke);
+      assert.equal(result.isError, false);
+      assert.equal(result._meta.naw_input_blocked, true);
+      assert.match(JSON.stringify(result.content), /completion unknown/);
+      for (const action of ['click', 'type']) {
+        await assert.rejects(gate({ name: action, arguments: { snapshot: 'owned', on: 'field', text: 'owned', clear: true } }, invoke), /completion unknown/);
+      }
+    }
+    assert.equal(calls, 4, 'only the two explicit observations reach the bridge after uncertain input');
   }
 });
 test('long click waits are refused before bridge dispatch', async () => {

@@ -1494,8 +1494,10 @@ class Codex extends EventEmitter {
     return this.terminal;
   }
   async terminalEndpoint() {
-    // Older native services keep their original protocol; no speculative parser.
-    if (!verifiedCodexProtocol(this.host.rpc)) return this.host.codexSocket;
+    // Native 0.166/0.167 use the same transparent terminal event stream. Observe it
+    // from the first turn so native MCP provenance is not lost before a later
+    // history attachment. This does not qualify unrelated history/steer APIs.
+    if (!verifiedCodexProtocol(this.host.rpc) && !['0.166.0', '0.167.0'].includes(this.host.rpc?.nativeVersion)) return this.host.codexSocket;
     if (!this.terminalBridge) {
       const { CodexTerminalBridge } = require('./codex-terminal-bridge.cjs');
       const bridge = new CodexTerminalBridge(path.join(this.host.privateDir, `tui-${crypto.randomUUID()}.sock`), this.host.codexSocket, event => this.observeTerminalContext(event));

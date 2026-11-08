@@ -144,10 +144,10 @@ function actionResult(output, observed, kind, reason) {
 function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now } = {}) {
   let receipt = null, busy = false, completionUnknown = false;
   return async (params, invoke) => {
-    if (completionUnknown) throw Error('Previous input completion unknown; this computer-use instance refuses further operations.');
     if (busy) throw Error('A computer-use operation is already in flight; observe again after it settles.');
     const name = params?.name, args = params?.arguments;
     if (!['see', 'inspect_ui', 'click', 'type'].includes(name) || !args || typeof args !== 'object' || Array.isArray(args)) throw Error('Unsupported computer-use request.');
+    if (completionUnknown && name !== 'see' && name !== 'inspect_ui') throw Error('Previous input completion unknown; further input is blocked. Use see or inspect_ui to check the current window without retrying the action.');
     busy = true;
     try {
       if (name === 'see' || name === 'inspect_ui') {
@@ -179,6 +179,13 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
             axElements: observed?.elements || axElements, focus: observed?.meta.focused_element, generation: observed?.generation };
         }
         if (!receipt) throw Error('Observation has no qualified snapshot; no input authority was created.');
+        if (completionUnknown) {
+          // Preserve diagnosis after an uncertain action, without treating a
+          // later snapshot as proof that the original input finished safely.
+          receipt = null;
+          return { ...result, _meta: { ...result._meta, naw_input_blocked: true },
+            content: [...result.content, { type: 'text', text: 'Previous input completion unknown. This is a read-only observation; further input remains blocked. Do not retry the previous action.' }] };
+        }
         return result;
       }
       const previous = receipt; receipt = null;

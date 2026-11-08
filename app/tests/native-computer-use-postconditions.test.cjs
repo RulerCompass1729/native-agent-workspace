@@ -40,8 +40,11 @@ test('a successful dispatch with unchanged actual page is an error, never clicke
   assert.equal(t.result.structuredContent.outcome, 'dispatched_unverified');
   assert.equal(t.result.structuredContent.retrySafe, false);
   assert.ok(!JSON.stringify(t.result.content).includes('Clicked successfully'));
-  await assert.rejects(t.gate(observe, t.invoke), /completion unknown/);
-  assert.deepEqual(t.counts(), { reads: 2, actions: 1 });
+  const result = await t.gate(observe, t.invoke);
+  assert.equal(result.isError, false);
+  assert.equal(result._meta.naw_input_blocked, true);
+  await assert.rejects(t.gate({ ...click, arguments: { ...click.arguments, snapshot: 'after' } }, t.invoke), /completion unknown/);
+  assert.deepEqual(t.counts(), { reads: 3, actions: 1 });
 });
 test('only a fresh exact-window expected page fact verifies the postcondition, not transport delivery', async () => {
   const t = await trial(click, capture('after', { opened: true }));
