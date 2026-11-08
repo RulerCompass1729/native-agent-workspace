@@ -318,10 +318,26 @@ function createComputerUseViewGate({ grant, invoke, inspect, target, now = Date.
       // serialize selection/inspection/action on this one owned stock view.
       const current = await inspect(); valid(current);
       if (current.revision !== facts.revision) refuse();
+      // The independent outbox is already populated from the authorized body.
+      // Observing that exact value must not retype it through keyboard/IME input.
+      if (name === 'browser_type' && args.text === grant.text && current.body === grant.text) {
+        return viewResult({ outcome: 'postcondition_observed', postcondition: 'literal_text',
+          mutationDispatched: false, observeAgain: true, delivery: 'unconfirmed' });
+      }
       const wire = { target: args.target, element: 'Authorized space composer',
-        ...(name === 'browser_type' ? { text: args.text, submit: false, slowly: true } : {}) };
+        // Preserve the existing @ key-handler path; the authorized task body
+        // is replaced as a whole rather than appended one key at a time.
+        ...(name === 'browser_type' ? { text: args.text, submit: false, slowly: args.text === '@' } : {}) };
       let output;
-      try { output = await invoke(name, wire); active(); if (output?.isError) throw Error(); }
+      try {
+        output = await invoke(name, wire); active(); if (output?.isError) throw Error();
+        if (name === 'browser_type') {
+          // Stock whole-field fill bypasses OS key synthesis. Its ACK alone
+          // still cannot prove that the complete literal body reached the field.
+          const after = await inspect(); valid(after);
+          if (after.body !== args.text) throw Error();
+        }
+      }
       catch { revoke(); refuse(); }
       if (control.kind === 'send') submitted = true;
       return viewResult({ outcome: 'dispatched_unconfirmed', observeAgain: true, delivery: 'unconfirmed' });

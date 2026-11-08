@@ -53,7 +53,7 @@ test('real composer journey preserves exact text, uses stock typing, and never c
   await action(gate, 'browser_type', 'e1', grant.text);
   const out = decode(await action(gate, 'browser_click', 'e3'));
   assert.deepEqual(out, { outcome: 'dispatched_unconfirmed', observeAgain: true, delivery: 'unconfirmed' });
-  assert.deepEqual(calls.find(c => c.args.text === grant.text).args, { target: 'e1', element: 'Authorized space composer', text: grant.text, submit: false, slowly: true });
+  assert.deepEqual(calls.find(c => c.args.text === grant.text).args, { target: 'e1', element: 'Authorized space composer', text: grant.text, submit: false, slowly: false });
   await assert.rejects(action(gate, 'browser_click', 'e3'), /refused/);
   assert.equal(calls.filter(c => c.name === 'browser_click' && c.args.target === 'e3').length, 1, 'one grant cannot double-send');
 });
