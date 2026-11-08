@@ -205,11 +205,15 @@ test('the untouched default space shows its interface-language name; a renamed s
   const binding = require('./fixtures/locale-ui.cjs')('zh'), spaces = require('../collaboration-spaces.cjs'), locale = require('../ui-locale.js');
   const { doc } = fakeDom(), host = new doc.Element('div');
   const spaceName = room => spaces.untouchedDefault(room) ? locale.format(binding.ui.language.getSnapshot().active, 'space.defaultName') : room.name;
-  const api = create({ host, display: binding.ui.display, language: binding.ui.language, view: { spaceId: 'shared' }, spaceName });
+  const api = create({ host, display: binding.ui.display, language: binding.ui.language, view: { spaceId: 'shared' }, spaceName, defaultSpace: spaces.untouchedDefault });
   api.update({ rooms: [{ id: 'shared', name: spaces.DEFAULT_ROOM_NAME }, { id: B, name: 'Team 中文' }], sessions: [session('S', ['shared', B])] });
   const filter = host.children[0].children.find(child => child.tagName === 'SELECT'), [, shared, team] = filter.children;
   assert.equal(shared.textContent, '共同工作'); assert.equal(team.textContent, 'Team 中文');
+  const [sharedReference, teamReference] = api.reader.children[0].children[1].children, teamNode = teamReference.firstChild;
+  assert.equal(sharedReference.textContent, '共同工作'); assert.equal(teamReference.textContent, 'Team 中文');
   binding.setLanguage('en'); binding.ui.display.refresh(host);
+  assert.equal(sharedReference.textContent, 'Shared work', 'the default space reference repaints with the language');
+  assert.equal(teamReference.textContent, 'Team 中文'); assert.equal(teamReference.firstChild, teamNode, 'a named reference keeps its raw node');
   assert.equal(shared.textContent, 'Shared work', 'the same option repaints in English'); assert.equal(team.textContent, 'Team 中文', 'a name the person gave is not translated');
   assert.equal(filter.children[1], shared); assert.equal(filter.value, 'shared');
 });

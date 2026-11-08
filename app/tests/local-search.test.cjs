@@ -33,3 +33,17 @@ test('large results expose total and bounded snippets without truncating source 
   assert.equal(searchRecords(data, 'needle', { limit: 1000 }).results.length, 600);
   assert.equal(data.sessions[0].messages[0].text.length, 1006);
 });
+
+test('the untouched default space is found by its stored and shown names in both languages; renamed spaces by their own (T-60)', () => {
+  const B = '11111111-1111-4111-8111-111111111111';
+  const state = { sessions: [], rooms: [{ id: 'shared', name: '共同工作', messages: [] }, { id: B, name: 'Team', messages: [] }] };
+  for (const query of ['Shared', 'shared work', '共同']) {
+    const rooms = searchRecords(state, query).results.filter(r => r.kind === 'room');
+    assert.deepEqual(rooms.map(r => [r.roomId, r.nameKey]), [['shared', 'space.defaultName']], query);
+  }
+  const renamed = { sessions: [], rooms: [{ id: 'shared', name: 'Lab', messages: [] }, { id: B, name: '共同工作', messages: [] }] };
+  assert.deepEqual(searchRecords(renamed, 'Shared').results, [], 'a renamed default space and another space keep their stored names only');
+  assert.deepEqual(searchRecords(renamed, '共同').results.map(r => [r.roomId, r.nameKey]), [[B, undefined]]);
+  const unnamed = { sessions: [], rooms: [{ id: 'shared', name: '', messages: [] }] };
+  for (const query of ['Shared', '共同']) assert.deepEqual(searchRecords(unnamed, query).results.map(r => [r.roomId, r.nameKey]), [['shared', 'search.sharedFallback']], 'a space shown under the fallback name is found by it: ' + query);
+});

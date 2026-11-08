@@ -662,7 +662,7 @@ async function returnToPanorama() {
 function renderPanorama() {
   if (!panorama) panorama = window.nativeWorkspacePanorama.create({
     host: $('panorama-view'), view: panoramaView, display: ui.display, language: ui.language,
-    label: s => participantLabel(s, state.sessions), spaceName,
+    label: s => participantLabel(s, state.sessions), spaceName, defaultSpace: window.nativeWorkspaceSpaces.untouchedDefault,
     onChange: next => {
       if (selected !== 'panorama' || panoramaView.returning) return;
       panoramaView = { ...next, returning: false };

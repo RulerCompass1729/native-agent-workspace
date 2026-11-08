@@ -179,6 +179,8 @@
           row.references.replaceChildren(...person.spaces.map(room => {
             const reference = room.unavailable ? element('span')
               : control(spaceName(room), () => options.onSpace?.(room.id));
+            // Only the untouched default space has a language-dependent name; other references keep their raw text node.
+            if (!room.unavailable && options.defaultSpace?.(room)) display.computed(reference, 'text', () => spaceName(room));
             if (room.unavailable) display.computed(reference, 'text', () => spaceName(room) + text(room.archived ? 'panorama.archivedSuffix' : 'panorama.unverifiedSuffix'));
             if (!room.unavailable) reference.addEventListener('pointerdown', rememberBeforePointer);
             reference.dataset.panoramaSpace = room.id; return reference;

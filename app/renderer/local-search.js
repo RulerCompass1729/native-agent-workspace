@@ -1,6 +1,14 @@
 // Search only the application's already-loaded records. No native calls,
 // filesystem scan, durable index, draft inspection or query persistence.
 (function (target) {
+  const node = typeof module !== 'undefined' && module.exports;
+  const spaces = () => target.nativeWorkspaceSpaces || (node ? require('../collaboration-spaces.cjs') : null);
+  const locale = () => target.nativeWorkspaceLocale || (node ? require('../ui-locale.js') : null);
+  // The untouched default space is also found by its shown name in either language (T-60); other spaces match their stored name.
+  const defaultSpace = room => Boolean(spaces()?.untouchedDefault?.(room));
+  // A space without a stored name is shown under the fallback name, so it is found by that name too.
+  const shownKey = room => defaultSpace(room) ? 'space.defaultName' : !room.name ? 'search.sharedFallback' : null;
+  const roomNames = room => shownKey(room) && locale() ? [room.name, ...['zh', 'en'].map(language => locale().format(language, shownKey(room)))] : [room.name];
   function searchRecords(state, query, { scope = 'all', sessionId = '', archived = false, limit = 60 } = {}) {
     query = String(query || '').trim().toLocaleLowerCase();
     limit = Math.max(1, Math.min(600, Math.floor(limit) || 60));
@@ -23,8 +31,8 @@
     }
     const rooms = scope === 'room' ? [state.room] : state.rooms || [state.room];
     for (const room of rooms) if (room && (scope === 'room' || scope === 'all') && (!room.archived || archived || scope === 'room')) {
-      const roomId = room.id || 'shared', base = { roomId, name: room.name || '共同工作', ...(!room.name || globalThis.nativeWorkspaceSpaces?.untouchedDefault?.(room) ? { nameKey: 'search.sharedFallback' } : {}), archived: Boolean(room.archived) };
-      if (!query || matches(room.name)) add({ ...base, kind: 'room', key: roomId === 'shared' ? 'room' : `room:${roomId}`, text: room.name || '共同工作' });
+      const roomId = room.id || 'shared', base = { roomId, name: room.name || '共同工作', ...(shownKey(room) ? { nameKey: shownKey(room) } : {}), archived: Boolean(room.archived) };
+      if (!query || roomNames(room).some(matches)) add({ ...base, kind: 'room', key: roomId === 'shared' ? 'room' : `room:${roomId}`, text: room.name || '共同工作' });
       if (query) for (const m of [...(room.messages || []), ...(room.events || [])]) if (matches(m.text)) add({
         ...base, kind: 'shared', key: roomId === 'shared' ? `shared:${m.id}` : `shared:${roomId}:${m.id}`, messageId: m.id, role: m.role, text: snippet(m.text),
       });
