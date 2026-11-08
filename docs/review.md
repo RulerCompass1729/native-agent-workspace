@@ -6983,3 +6983,49 @@ language choice 中文. A fresh headless reviewer passed the change after
 asking for the undo-join name, a raw usage scope and live dialog titles.
 Panorama space references still take the name from the last data render,
 because a locale repaint must keep their raw node.
+
+## Compact room header grown by member tabs (GUI census ①) — 2026-11-08
+
+The GUI census found the compact room header about 190px tall at 850×600 with
+four members, one with a long name, against compact-room's 100px limit (:110);
+the reading area below lost its first lines. renderHeaderLayout moves
+#room-tabs into #header for a room without an open member. Since the member-tab
+view (a58e456) each member tab shows a full name line and a state line and may
+wrap, and the compact rules (b4a764c) let the tab row wrap, so the four tabs
+formed a 2×2 grid with the long name broken over several lines.
+
+In the compact room header only, member tabs now share one row with equal
+widths up to 200px and each line ends in an ellipsis, as the compact title and
+member card names do. Each tab's accessible name keeps the full name, short id
+and state, and its hover title the full name. The non-compact header (a member
+open) and the compact session header are unchanged.
+
+Evidence (author-run): before, compact-room failed at :110. After, the header
+measured 87px, the header check passed, and keyboard focus on each of the four
+tabs kept its whole outline with the header still 87px (a temporary probe copy
+of compact-room). collaboration-list-name passed (6 checks), compact-header
+(8) and room-member-route (6) passed, and the unit suite passed 3530 of 3530. A
+fresh headless reviewer hit its turn limit on the first run, which did not
+count; resumed in the same session it passed the patch and corrected the
+account of the remaining failures below.
+
+Not fixed here, each separate from the header:
+
+1. compact-room :138 clicks the removed 「← 返回共同工作」 button and then
+   expects focus back on the member name. It waits for the person's decision
+   on the member-tab return path, as test-collaboration-overview :198 does.
+2. collaboration-list :184 expects every member card to stay visible after
+   Enter opens member 0, before any Back step. In the member-tab view the cards
+   are hidden while a member is open; whether that is intended is an open
+   question.
+3. collaboration-list's 850×600 settle step (:123, reported at :33) failed in 3
+   of 8 runs after the fix. All four readers were following but not pinned to
+   the latest. scheduleReading in reading-list.js returns when no intent is
+   pending, and the reader ResizeObserver only calls it, so a following reader
+   that a native resize shrinks after it settled is not re-pinned. Runs before
+   the fix show the same unpinned following state.
+4. Untested: more than five members. Tabs cannot shrink below their padding
+   and border, so roughly ten or more members at 850px with the sidebar open
+   would show no tab text and could run into the toolbar. Two members with the
+   same leading letters look alike in the tab row; the cards, hover titles and
+   accessible names still tell them apart.
