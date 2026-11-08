@@ -1995,6 +1995,10 @@ class Codex extends EventEmitter {
       sourceRpc.reply(message.id, { success, contentItems: [{ type: 'inputText', text: JSON.stringify(result) }] });
       return;
     }
+    // Other dynamic tools belong to the native client (for example codex_tui).
+    // They are callbacks, not permission requests. The transparent terminal
+    // bridge forwards them and the native client's reply without our decision.
+    if (message.id !== undefined && message.method === 'item/tool/call') return;
     if (message.id !== undefined) {
       const key = this.nativeRequestKey(message.id, sourceRpc, true);
       let request = this.nativeRequests.get(key);

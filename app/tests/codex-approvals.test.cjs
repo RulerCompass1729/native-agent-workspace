@@ -14,6 +14,35 @@ function fixture(t) {
   const progress = () => w.progress.get(s.id).snapshot().items;
   return { w, s, r, host, replies, request, resolve, progress };
 }
+for (const source of ['host', 'terminal']) test(`native client dynamic tools do not become permission requests (${source})`, t => {
+  const f = fixture(t);
+  const terminal = { connected: true, reply: () => assert.fail('NAW must not answer the native client tool') };
+  if (source === 'terminal') f.r.terminalRpc = terminal;
+  f.r.emit('state', 'working');
+  const rpc = source === 'terminal' ? terminal : f.host.rpc;
+  f.r.event({ id: 'native-client-tool', method: 'item/tool/call', params: {
+    threadId: f.s.nativeId, turnId: 'current-turn', callId: 'native-tool-execution',
+    namespace: 'codex_tui', tool: 'read_thread', arguments: { threadId: 'other-native-thread' },
+  } }, rpc);
+  assert.equal(f.s.state, 'working');
+  assert.equal(Boolean(f.s.approval), false);
+  assert.equal(f.r.nativeRequests.size, 0);
+  assert.deepEqual(f.replies, []);
+  f.r.event({ id: 'same-tool-name-foreign-owner', method: 'item/tool/call', params: {
+    threadId: f.s.nativeId, turnId: 'current-turn', callId: 'foreign-workspace-message',
+    namespace: 'codex_tui', tool: 'workspace_message', arguments: { recipient_id: 'other', message: 'native owned' },
+  } }, rpc);
+  assert.equal(f.r.nativeRequests.size, 0, 'a matching tool name cannot claim a foreign namespace');
+  assert.deepEqual(f.replies, []);
+  f.request('real-permission');
+  const approval = f.s.approval.requestId;
+  f.r.event({ id: 'another-client-tool', method: 'item/tool/call', params: {
+    threadId: f.s.nativeId, namespace: 'native-client', tool: 'another_tool', arguments: {},
+  } }, rpc);
+  assert.equal(f.s.approval.requestId, approval, 'a genuine pending permission is retained');
+  assert.equal(f.r.nativeRequests.size, 1);
+  assert.deepEqual(f.replies, []);
+});
 test('a later nonblocking question cannot hide the original unresolved confirmation after resolution', t => {
   const f = fixture(t); f.request(1); const first = f.s.approval.requestId;
   f.r.event({ id:'question',method:'item/tool/requestUserInput',params:{threadId:f.s.nativeId,isBlocking:false,questions:[{id:'q',header:'Question',question:'Synthetic choice?',options:[]}]}});
