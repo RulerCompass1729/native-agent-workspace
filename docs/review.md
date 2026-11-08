@@ -6828,3 +6828,10 @@ independent review approves the exact source delta; its first invocation hit
 the read budget without a verdict, and its bounded continuation approved it.
 Installed/original-session acceptance and non-165 native engine qualification
 remain open. The review verifies source configuration flow, not a live picker.
+
+
+### Signed GUI batch adoption and retained original runtimes
+
+The committed signed alpha.218 build passes 450 affected source checks, 86 checks against its actual Electron/bundled modules, five normal empty-profile bootstrap checks and the scoped six-stage terminal reopen/link/input journey. Reuse is bounded by exact unchanged compiled-reader/helper/Terminal bytes; original native provider emission is not claimed. The source delta and GUI-only update operator have independent approval.
+
+The actual ordinary daily GUI update preserves 15 original records, live native identities, settings, owners and draft scopes. One visible ordinary window and one application-search entry remain. Original occupied backends retain their existing versions. The first post-open observer failed during an empty backend's connection-file replacement; a later read-only verification satisfies every preservation postcondition without repeating quit, swap or open. Independent review accepts the limited GUI adoption and retains that failure. Before reusing the next update operator, replace its fixed startup delay with a bounded wait for the exact expected backend. This is not original-backend adoption, native goal recovery or whole-milestone completion.

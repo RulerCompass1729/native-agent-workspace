@@ -1,15 +1,34 @@
 # Readiness and next gates
 
-As of 2026-11-07. This is a local Apple Silicon macOS technical trial.
+As of 2026-11-08. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.216, clean committed build source `9cf91e8`.
+Current daily GUI: alpha.218, clean committed build source `0faedc6`.
 The ordinary launch has one observed visible main window and one daily search
-entry. Its update preserves 15 records, drafts and live native processes.
-The five original development/secretary backends now run alpha.215 with their
-original native versions and settings. Alpha.216 changes only the GUI caller's
-bounded recovery proof; these backends need no further move for that change.
+entry. Its update preserves 15 records, draft scopes, reported settings and all
+live native process identities. The five original development/secretary backends
+remain alpha.215; their new runtime behavior needs separate safe-checkpoint
+adoption. Automatic backend migration remains off.
+
+This batch integrates terminal snapshot continuation, immediate known no-send
+feedback, precise MCP transport failures, exact capacity/routing qualification,
+and the native model-notice opt-out for future terminal clients. The combined
+affected source suite passes 450 checks without skips. The final signed bundle
+has 83 matching runtime files, passes 86 captured-argv/effective-setting checks
+using its real Electron runtime and modules, and passes five empty-profile cold
+bootstrap checks. The six signed terminal reopen/link/input stages are reused
+only after verifying identical compiled reader, helper and Terminal code.
+Original provider-emitted links, existing picker dismissal and original-backend
+adoption are not established by those synthetic-worker journeys.
+
+The GUI update's first post-open observer failed on a transient missing connection
+file while the empty active backend was replaced. No mutation was repeated. A
+read-only completion verified the actual installed source/signature, visible
+ordinary window, all retained identities/settings/drafts and every inactive
+backend PID/version. Independent review accepts that limited GUI adoption while
+retaining the original observer failure. The next update operator must wait for
+that exact backend's readiness instead of a fixed delay.
 
 One original Main-to-secretary outbox task has an exact shared ledger entry,
 native receipt and completed first command. The recipient's native
