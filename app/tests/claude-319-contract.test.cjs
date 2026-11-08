@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const vm = require('node:vm');
 
 // Diagnostic contract check only. Imports the JavaScript mod with an in-memory
 // API, never a Claude executable, provider, socket or real native session.
@@ -50,21 +51,41 @@ test('T160 diagnostic: qualified 318 model-only cold start still binds and reads
   t.diagnostic(JSON.stringify({ version: '2.1.318', observedMockRoutes: f.calls.map(c => c.route), modelMetadataReads: f.modelReads.length, realProviderCalls: false }));
 });
 
-test('T160 diagnostic: current 319 policy omits cold binding and model reads, not a protocol verdict', async t => {
+test('qualified 319 model-only cold start binds and reads its initial native model', async t => {
   const f = await startup('2.1.319');
-  assert.equal(f.calls[0]?.route, '/next');
-  assert.equal(f.calls.some(c => c.route === '/root-bind'), false);
-  assert.equal(f.modelReads.length, 0);
-  assert.ok(f.calls.every(c => c.route === '/next'));
+  assert.equal(f.calls[0]?.route, '/root-bind');
+  assert.equal(f.modelReads.length, 1);
+  const binding = f.calls[0].body;
+  for (const key of ['nativeBlocks', 'nativeQueue', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia', 'nativeAbort', 'nativeCapacity', 'nativeSharedDisplay', 'nativeTurnRecords', 'nativeNarration']) assert.equal(binding[key], false, key);
   t.diagnostic(JSON.stringify({ version: '2.1.319', observedMockRoutes: f.calls.map(c => c.route), modelMetadataReads: f.modelReads.length, realProviderCalls: false }));
 });
 
-test('T160 diagnostic: 319 PostModelSwitch cannot bypass the unqualified model gate', async () => {
+test('319 uses the native post-switch model while keeping all input and tool capabilities off', async () => {
   const f = await startup('2.1.319');
-  await f.hooks.get('classic.PostModelSwitch')(f.api, {}, async event => event);
+  await f.hooks.get('classic.PostModelSwitch')(f.api, { session_id: '11111111-1111-4111-8111-111111111111', to_model: 'claude-native-selected' }, async event => event);
   await tick();
-  assert.equal(f.modelReads.length, 0);
+  for (const item of f.clock.splice(0)) await item.callback();
+  await tick();
+  assert.equal(f.modelReads.length, 1, 'The post event must not read an old model from the API');
+  const rows = f.calls.filter(c => c.route === '/observation').map(c => c.body);
+  assert.equal(rows.at(-1)?.model, 'claude-native-selected');
+  assert.ok(rows.length > 0);
+  assert.ok(rows.every(row => row.kind === 'control' && row.id === 'control:model'));
+});
+
+for (const version of ['2.1.319-beta', '2.1.320']) test(`unqualified model metadata ${version} remains off`, async () => {
+  const f = await startup(version);
   assert.equal(f.calls.some(c => c.route === '/root-bind'), false);
+  assert.equal(f.modelReads.length, 0);
+});
+
+test('the native runner admits exact319 only in its solo model-only path', () => {
+  const runner = fs.readFileSync(path.join(__dirname, '../../scripts/test-native-queue.cjs'), 'utf8');
+  const guard = runner.split('\n').find(line => line.startsWith('assert.match(nativeVersion,'));
+  assert.ok(guard);
+  for (const version of ['2.1.319 (Claude Code)', '2.1.319']) vm.runInNewContext(guard, { assert, nativeVersion: version, inlineTrial: false, noModelServer: true });
+  for (const version of ['2.1.319-beta (Claude Code)', '2.1.320 (Claude Code)']) assert.throws(() => vm.runInNewContext(guard, { assert, nativeVersion: version, inlineTrial: false, noModelServer: true }));
+  for (const inlineTrial of [false, true]) assert.throws(() => vm.runInNewContext(guard, { assert, nativeVersion: '2.1.319 (Claude Code)', inlineTrial, noModelServer: false }));
 });
 
 test('T160 diagnostic: below-minimum version starts neither a poll nor model metadata', async () => {

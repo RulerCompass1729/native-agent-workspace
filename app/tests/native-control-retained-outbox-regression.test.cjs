@@ -155,30 +155,48 @@ test('unknown RPC failure stays unconfirmed and repeated original native call ca
   assert.equal(f.starts.length, 1); assert.equal(f.bridge.records.length, 1); f.assertPreserved();
 });
 
-test('actual started, declined and malformed-exit frames cannot certify execution before a completed zero exit', { timeout: 3000 }, async t => {
-  const f = await fixture(t, 'ACK-only'), binding = await f.bind(), c = await core(t, binding);
-  await c.send(); assert.equal(c.outbox.receipt().status, 'delivery-unconfirmed');
-  f.acceptInput(); assert.equal(c.outbox.receipt().status, 'received');
-  let finished = false; const waiting = c.outbox.wait({ timeoutMs: 1000 }).then(value => { finished = true; return value; });
-  const emit = (id, status, exitCode) => {
-    const command = { id, type: 'commandExecution', command: 'git status --short', status: 'inProgress' };
-    f.frame('item/started', command);
-    assert.equal(c.outbox.receipt().firstCommand, null, 'Started is not executed');
-    f.frame('item/completed', { ...command, status, exitCode, aggregatedOutput: 'DO_NOT_EXPOSE_COMMAND_OUTPUT' });
-  };
+test('a later success cannot replace the actual first command when its execution stays unconfirmed', { timeout: 3000 }, async t => {
   const incomplete = [['declined', undefined], ['completed', undefined], ['completed', null], ['completed', '0'], ['completed', 0.5]];
-  for (let n = 0; n < incomplete.length; n++) {
-    emit('incomplete-' + n, ...incomplete[n]);
+  for (const [status, exitCode] of incomplete) {
+    const f = await fixture(t, 'ACK-only'), binding = await f.bind(), c = await core(t, binding);
+    await c.send(); assert.equal(c.outbox.receipt().status, 'delivery-unconfirmed');
+    f.acceptInput(); assert.equal(c.outbox.receipt().status, 'received');
+    let finished = false; const waiting = c.outbox.wait({ timeoutMs: 30 }).then(value => { finished = true; return value; });
+    const emit = (id, status, exitCode) => {
+      const command = { id, type: 'commandExecution', command: 'git status --short', status: 'inProgress' };
+      f.frame('item/started', command);
+      assert.equal(c.outbox.receipt().firstCommand, null, 'Started is not executed');
+      f.frame('item/completed', { ...command, status, exitCode, aggregatedOutput: 'DO_NOT_EXPOSE_COMMAND_OUTPUT' });
+    };
+    emit('first-command', status, exitCode);
     assert.equal(c.outbox.receipt().status, 'received'); assert.equal(c.outbox.receipt().firstCommand, null);
+    await Promise.resolve(); assert.equal(finished, false, 'A native receive does not settle execution waiting');
+    emit('later-command', 'completed', 0);
+    assert.equal(c.outbox.receipt().status, 'received'); assert.equal(c.outbox.receipt().firstCommand, null);
+    const value = await waiting;
+    assert.equal(value.status, 'unconfirmed'); assert.equal(value.firstCommand, null);
+    assert.equal(value.nativeId, 'receiver-native');
+    assert.equal(value.recipient.id, 'receiver'); assert.equal(value.senderId, 'caller'); assert.equal(value.text, f.args.message);
+    assert.ok(!JSON.stringify(value).includes('DO_NOT_EXPOSE_COMMAND_OUTPUT')); assert.equal(value.retry, false);
+    await assert.rejects(c.send()); assert.equal(f.starts.length, 1); f.assertPreserved();
   }
-  await tick(); assert.equal(finished, false, 'A native receive does not settle execution waiting');
-  emit('completed-command', 'completed', 0);
-  const value = await waiting;
-  assert.equal(value.status, 'working'); assert.equal(value.firstCommand.status, 'completed');
-  assert.equal(value.firstCommand.exitCode, 0); assert.equal(value.firstCommand.id, 'completed-command');
-  assert.equal(value.firstCommand.command, 'git status --short'); assert.equal(value.nativeId, 'receiver-native');
-  assert.equal(value.recipient.id, 'receiver'); assert.equal(value.senderId, 'caller'); assert.equal(value.text, f.args.message);
-  assert.ok(!JSON.stringify(value).includes('DO_NOT_EXPOSE_COMMAND_OUTPUT')); assert.equal(value.retry, false);
+});
+
+test('the same first command can confirm its own eventual integer exit after an incomplete frame', { timeout: 3000 }, async t => {
+  const f = await fixture(t, 'ACK-only'), binding = await f.bind(), c = await core(t, binding);
+  await c.send(); f.acceptInput();
+  const first = { id: 'first-command', type: 'commandExecution', command: 'git status --short', status: 'inProgress' };
+  f.frame('item/started', first);
+  f.frame('item/completed', { ...first, status: 'completed' });
+  const later = { ...first, id: 'later-command', command: 'git diff --stat' };
+  f.frame('item/started', later);
+  f.frame('item/completed', { ...later, status: 'completed', exitCode: 0 });
+  assert.equal(c.outbox.receipt().status, 'received'); assert.equal(c.outbox.receipt().firstCommand, null);
+  f.frame('item/completed', { ...first, status: 'completed', exitCode: 0, aggregatedOutput: 'DO_NOT_EXPOSE_COMMAND_OUTPUT' });
+  const value = await c.outbox.wait({ timeoutMs: 100 });
+  assert.equal(value.status, 'working'); assert.equal(value.firstCommand.id, first.id);
+  assert.equal(value.firstCommand.command, first.command); assert.equal(value.firstCommand.exitCode, 0);
+  assert.equal(value.retry, false); assert.ok(!JSON.stringify(value).includes('DO_NOT_EXPOSE_COMMAND_OUTPUT'));
   await assert.rejects(c.send()); assert.equal(f.starts.length, 1); f.assertPreserved();
 });
 

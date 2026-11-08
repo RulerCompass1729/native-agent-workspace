@@ -1678,10 +1678,10 @@ for (const version of ['2.1.316', '2.1.317']) test(`native ${version}: only a cr
 });
 
 
-// A model-only observer must not qualify any of 318's untested native capabilities.
-test('318 model-only binding updates metadata without enabling content, input, usage or control', async () => {
+// A model-only observer must not qualify any other untested native capabilities.
+for (const version of ['2.1.318', '2.1.319']) test(`${version} model-only binding updates metadata without enabling content, input, usage or control`, async () => {
   let binding, toolReads = 0;
-  const f = await mod({ version: '2.1.318', toolReader: async () => { toolReads++; return [{ name: 'mcp__native_workspace__workspace_message' }]; }, requestHandler: async (url, options, body) => { if (url.endsWith('/root-bind')) binding = body; } });
+  const f = await mod({ version, toolReader: async () => { toolReads++; return [{ name: 'mcp__native_workspace__workspace_message' }]; }, requestHandler: async (url, options, body) => { if (url.endsWith('/root-bind')) binding = body; } });
   assert.ok(f.poll, 'Existing input listener reaches its next poll');
   assert.equal(toolReads, 0, 'Metadata-only binding cannot discover directed-send capability');
   assert.equal(binding.addressedTool, false);

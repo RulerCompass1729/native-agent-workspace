@@ -4,7 +4,7 @@ const { Codex } = require('../adapters.cjs');
 const { LegacyInput } = require('../legacy-input.cjs');
 const { classifyOutboxFailure } = require('../computer-use-outbox-native.cjs');
 const { bindOriginalOutbox } = require('../computer-use-outbox-owner.cjs');
-function fixture(t) {
+function fixture(t, options = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'outbox-source-'));
   const records = [
     { id: 'sender', name: 'Sender', nativeId: 'sender-native', pid: 201, provider: 'codex', owner: 'sender-view', roomId: 'shared', memberRevision: 1, controlRevision: 2 },
@@ -19,10 +19,15 @@ function fixture(t) {
     native.send = async (text, tag, refresh, guard) => {
       await refresh(); assert.equal(guard(), true); assert.equal(text, args.message);
       adapter.ownInputs.add(tag);
-      adapter.nativeAcceptedInput = { tag, turnId: 'receiver-turn', rpc: host.rpc, lifecycle: adapter.lifecycleRevision };
-      adapter.emit('nativeAcceptedInput');
-      adapter.emit('progress', { id: 'native-command', source: 'codex-native', kind: 'commandExecution', status: 'completed', exitCode: 0, inputTag: tag,
-        turnId: 'receiver-turn', input: 'git status --short', text: 'PRIVATE_OUTPUT_NOT_PROJECTED' });
+      adapter.event({ method: 'turn/started', params: { threadId: record.nativeId, turn: { id: 'receiver-turn' } } }, host.rpc);
+      const emit = (method, item) => adapter.event({ method, params: { threadId: record.nativeId, turnId: 'receiver-turn', item } }, host.rpc);
+      emit('item/completed', { id: 'native-input', type: 'userMessage', clientId: tag,
+        content: [{ type: 'inputText', text }] });
+      if (!options.manualCommands) {
+        const command = { id: 'native-command', type: 'commandExecution', command: 'git status --short', cwd: '/synthetic', commandActions: [] };
+        emit('item/started', { ...command, status: 'inProgress' });
+        emit('item/completed', { ...command, status: 'completed', exitCode: 0, aggregatedOutput: 'PRIVATE_OUTPUT_NOT_PROJECTED' });
+      }
       return 'receiver-turn';
     };
     bridge.targets.set(record.id, { record, native, submission: native }); return native;
@@ -36,7 +41,11 @@ function fixture(t) {
   const contexts = records.map(record => ({ client, view: { owner: record.owner }, win: { isDestroyed: () => false } }));
   const deps = { contexts: () => contexts, roomState: { assertAvailable() {} } };
   t.after(() => { bridge.close(); fs.rmSync(dir, { recursive: true }); });
-  return { args, identity, deps, records, bridge, natives, control, entry, contexts };
+  const commandEvent = (method, item) => {
+    const r = natives[1].adapter;
+    r.event({ method, params: { threadId: r.record.nativeId, turnId: 'receiver-turn', item } }, r.host.rpc);
+  };
+  return { args, identity, deps, records, bridge, natives, control, entry, contexts, commandEvent };
 }
 test('a single sender window can send a shared task without opening or taking over the recipient private view', async t => {
   const f = fixture(t);
@@ -66,6 +75,54 @@ test('production owner binding sends one exact task using existing authority, re
   assert.equal(row.name, 'Sender → Recipient'); assert.equal(row.text, f.args.message);
   assert.equal(f.records[1].owner, 'receiver-view'); assert.equal(f.records[1].controlRevision, 4);
   unsubscribe(); binding.close();
+});
+test('local receipt keeps the first started command when a later command succeeds first', async t => {
+  const f = fixture(t, { manualCommands: true });
+  const binding = await bindOriginalOutbox(f.deps, f.identity, f.args, AbortSignal.timeout(3000));
+  const tag = await binding.forwardOnce(); let receipt;
+  binding.watchReceipt({ messageId: tag }, value => { receipt = value; });
+  const command = { type: 'commandExecution', cwd: '/synthetic', commandActions: [] };
+  f.commandEvent('item/started', { ...command, id: 'first', command: 'synthetic-first', status: 'inProgress' });
+  f.commandEvent('item/started', { ...command, id: 'later', command: 'synthetic-later', status: 'inProgress' });
+  f.commandEvent('item/completed', { ...command, id: 'later', command: 'synthetic-later', status: 'completed', exitCode: 0 });
+  assert.equal(receipt.nativeReceived, true);
+  assert.equal(receipt.firstCommand, undefined, 'A later success cannot stand in for the first command still running');
+  f.commandEvent('item/completed', { ...command, id: 'first', command: 'synthetic-first', status: 'failed', exitCode: 7 });
+  assert.equal(receipt.firstCommand.id, 'first');
+  assert.equal(receipt.firstCommand.status, 'failed'); assert.equal(receipt.firstCommand.exitCode, 7);
+  await binding.close();
+  assert.equal(f.natives[1].adapter.listenerCount('scopedOutboxCommand'), 0);
+});
+for (const first of ['declined', 'unprojectable']) test(`local receipt does not replace a ${first} first command with a later success`, async t => {
+  const f = fixture(t, { manualCommands: true });
+  const binding = await bindOriginalOutbox(f.deps, f.identity, f.args, AbortSignal.timeout(3000));
+  const tag = await binding.forwardOnce(); let receipt;
+  binding.watchReceipt({ messageId: tag }, value => { receipt = value; });
+  const command = { type: 'commandExecution', cwd: '/synthetic', commandActions: [] };
+  const firstCommand = first === 'unprojectable' ? 'x'.repeat(4097) : 'synthetic-first';
+  f.commandEvent('item/started', { ...command, id: 'first', command: firstCommand, status: 'inProgress' });
+  f.commandEvent('item/completed', { ...command, id: 'first', command: firstCommand,
+    status: first === 'declined' ? 'declined' : 'completed', ...(first === 'declined' ? {} : { exitCode: 0 }) });
+  f.commandEvent('item/started', { ...command, id: 'later', command: 'synthetic-later', status: 'inProgress' });
+  f.commandEvent('item/completed', { ...command, id: 'later', command: 'synthetic-later', status: 'completed', exitCode: 0 });
+  assert.equal(receipt.nativeReceived, true); assert.equal(receipt.firstCommand, undefined);
+  await binding.close();
+});
+test('local receipt rejects an earlier command start on another RPC or lifecycle', async t => {
+  for (const change of [{ rpc: {} }, { lifecycle: 99 }]) {
+    const f = fixture(t, { manualCommands: true });
+    const binding = await bindOriginalOutbox(f.deps, f.identity, f.args, AbortSignal.timeout(3000));
+    const tag = await binding.forwardOnce(); let receipt;
+    binding.watchReceipt({ messageId: tag }, value => { receipt = value; });
+    const r = f.natives[1].adapter;
+    r.emit('scopedOutboxCommand', { id: 'foreign', input: 'foreign-command', source: 'codex-native', kind: 'commandExecution',
+      inputTag: tag, turnId: 'receiver-turn', status: 'inProgress', rpc: r.host.rpc, lifecycle: r.lifecycleRevision, ...change });
+    const command = { id: 'actual', type: 'commandExecution', command: 'synthetic-actual', cwd: '/synthetic', commandActions: [] };
+    f.commandEvent('item/started', { ...command, status: 'inProgress' });
+    f.commandEvent('item/completed', { ...command, status: 'completed', exitCode: 0 });
+    assert.equal(receipt.firstCommand.id, 'actual'); assert.equal(receipt.firstCommand.exitCode, 0);
+    await binding.close();
+  }
 });
 test('changed caller, owner, membership and manual control refuse before creating a send record', async t => {
   for (const windowCount of [1, 2]) for (const change of [f => { f.natives[0].adapter.turnId = 'changed'; }, f => { f.records[1].owner = 'other'; },

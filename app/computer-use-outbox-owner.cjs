@@ -206,7 +206,10 @@ async function bindRecipient({ roomState }, { available, find, prepareRecipient 
   }
   if (!facts().ready || source.id === original.id) throw outboxError(lastReason || 'recipient-unavailable', 'binding', FAIL);
   await checkGoal('binding');
-  const monitor = target.root.managed ? target.root.monitor : nativeOutboxReceipt(targetAdapter, original.nativeId);
+  // Local LegacyCodex sends and observes on host.rpc; keep its first started item,
+  // including when a later command completes first or the first cannot be exposed.
+  const monitor = target.root.managed ? target.root.monitor :
+    nativeOutboxReceipt(targetAdapter, original.nativeId, { rpc: targetAdapter.host.rpc, scoped: true });
   return { grant: { callerId: source.id, callerNativeId: source.nativeId, spaceId, recipientId: original.id,
       recipientName: original.name, nativeId: original.nativeId, memberRevision: member, text: proof.args.message },
     inspectGrant: facts,
