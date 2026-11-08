@@ -14,7 +14,7 @@ const fs = require('node:fs'), path = require('node:path');
 const opens = /locator\(\s*['"`]#room-nav['"`]\s*\)\s*\.click\(|\.click\(\s*['"`]#room-nav['"`]|移到「(?:共同工作|\$\{)/;
 const usesHelper = source => /\brevealDefaultSpace\(/.test(source);
 // Remove a name when its script adopts the helper or stops opening the space, and lower the cap with it. Never add one.
-const legacyCap = 69;
+const legacyCap = 67;
 const legacy = new Set([
   'check-room.cjs', 'check-tui.cjs', 'test-active-process-fold.cjs', 'test-bounded-away.cjs',
   'test-capacity-room.cjs', 'test-check-room.cjs', 'test-claude-image-reading.cjs', 'test-codex-usability.cjs',
@@ -22,7 +22,7 @@ const legacy = new Set([
   'test-collaboration-overview.cjs', 'test-column-input.cjs', 'test-column-terminal-align.cjs',
   'test-column-terminal-latest.cjs', 'test-column-terminal-visibility.cjs', 'test-column-terminal.cjs',
   'test-command-actions.cjs', 'test-compact-header.cjs', 'test-compact-room.cjs', 'test-context-menu.cjs',
-  'test-control-focus.cjs', 'test-coordinator-context.cjs', 'test-desktop-workflow.cjs',
+  'test-control-focus.cjs', 'test-desktop-workflow.cjs',
   'test-english-walkthrough.cjs', 'test-failed-tool-reading.cjs', 'test-five-member-columns.cjs',
   'test-forget-images.cjs', 'test-grid-follow.cjs', 'test-grouped-space-rename.cjs', 'test-inline-input-reading.cjs',
   'test-inline-rename.cjs', 'test-installed-workspace.cjs', 'test-markdown-copy.cjs', 'test-member-actions.cjs',
@@ -33,7 +33,7 @@ const legacy = new Set([
   'test-native-steer.cjs', 'test-native-summaries.cjs', 'test-native-tools.cjs', 'test-native-version.cjs',
   'test-operator-control.cjs', 'test-peer-workflow.cjs', 'test-pending-actions.cjs',
   'test-process-group-reading.cjs', 'test-reading-pages.cjs', 'test-reading-turns.cjs', 'test-room-member-route.cjs',
-  'test-room-send.cjs', 'test-room-waiting.cjs', 'test-search.cjs', 'test-session-menu.cjs', 'test-sidebar.cjs',
+  'test-room-send.cjs', 'test-room-waiting.cjs', 'test-search.cjs', 'test-session-menu.cjs',
   'test-six-session-workflow.cjs', 'test-solo-use.cjs', 'test-terminal-focus.cjs', 'test-terminal-ready.cjs'
 ]);
 const dir = path.join(__dirname, '../../scripts');

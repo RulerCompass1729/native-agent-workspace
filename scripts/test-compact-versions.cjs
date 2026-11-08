@@ -36,7 +36,11 @@ async function group(name, work) {
   await work(); assert.deepEqual(identity(await snapshot()), identity(initial));
   for (const trial of trials) {
     const stats = await fixture(trial, 'stats', undefined, '');
-    assert.deepEqual(stats.stats, { inputs: 0, opens: 0, resizes: 0, sends: 0 });
+    // Since 3f4590d a page shows member terminals and reads each one once, read-only (census③, 384fddc). Every open is
+    // such a read, and no claim, terminal, input, send or other native action happens.
+    const { opens, ...actions } = stats.stats, { terminalSnapshot, ...calls } = stats.overviewCalls;
+    assert.deepEqual(actions, { inputs: 0, resizes: 0, sends: 0 }); assert.deepEqual(Object.entries(calls).filter(([, n]) => n), []);
+    assert.equal(opens, terminalSnapshot, 'Every terminal open is a read-only display'); assert.ok(terminalSnapshot <= trial.ids.length, 'One page reads each terminal at most once');
   }
   const metrics = await app.evaluate(() => globalThis.t81Compact);
   assert.equal(metrics.osClipboard, 0); assert.equal(metrics.external, 0); assert.equal(metrics.maintenance, 0); assert.equal(metrics.replacementSpawn, 0);
@@ -44,7 +48,7 @@ async function group(name, work) {
 }
 async function createBackend(directory, version, count) {
   assert.ok(trials.length < 2); fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const child = scratch.childProcess.fork(path.join(root, 'app/daemon.cjs'), [directory], { execArgv: ['--require', path.join(root, 'scripts/fixtures/compact-versions.cjs')], env: env({ NAW_TEST_APP_ROOT: root, NAW_WORKSPACE: path.join(profile, 'workspace'), NAW_APP_VERSION: version }), stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+  const child = scratch.childProcess.fork(path.join(root, 'app/daemon.cjs'), [directory], { execArgv: ['--require', path.join(root, 'scripts/fixtures/compact-versions.cjs'), '--require', path.join(root, 'scripts/fixtures/legacy-membership.cjs')], env: env({ NAW_TEST_APP_ROOT: root, NAW_WORKSPACE: path.join(profile, 'workspace'), NAW_APP_VERSION: version }), stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
   const trial = { child, directory, ids: [] }; trials.push(trial);
   await until(() => fs.existsSync(path.join(directory, 'connection.json')), 'Exact synthetic backend ready'); trial.client = await connectService(directory, owner);
   assert.equal((await trial.client.call('initial')).servicePid, child.pid);

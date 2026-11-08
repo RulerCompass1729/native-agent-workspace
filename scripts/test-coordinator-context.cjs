@@ -21,6 +21,7 @@ const scratch = require('./fixtures/test-scratch.cjs');
 const { fork } = scratch.childProcess, { _electron } = scratch.playwright(require('playwright'));
 const { connect } = require('../app/service-client.cjs');
 const { chooseRecipient, fillRoomMessage } = require('./room-input.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const mentions = require('../app/room-mention.js');
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('OCCUPIED: no profile/backend/GUI started'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 3', task: plan.task, token, pid: process.pid, time: new Date().toISOString() }));
@@ -39,7 +40,7 @@ fs.writeFileSync(path.join(entry, 'main.cjs'), [
   "const {WorkspaceClient}=require(" + JSON.stringify(path.join(root, 'app/workspace-client.cjs')) + ");const call=WorkspaceClient.prototype.call;WorkspaceClient.prototype.call=function(method,...args){globalThis.contextCalls.push({method,id:typeof args[0]==='string'?args[0]:null});return call.call(this,method,...args);};WorkspaceClient.prototype.maintainService=function(){globalThis.contextGuards.maintenance++;throw Error('Backend update prohibited');};",
   "require(" + JSON.stringify(path.join(root, 'app/main.cjs')) + ");",
 ].join('\n'));
-const child = fork(path.join(root, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')],
+const child = fork(path.join(root, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs'), '--require', path.join(__dirname, 'fixtures/legacy-membership.cjs')],
   env: env({ NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: root, NAW_APP_VERSION: require('../package.json').version }), stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 let app, page, client, guiPid, pageReloads = 0, sequence = 0, failure, navigationStart, ipcNavigationStart;
 const checks = [], errors = [], guardSamples = [], started = Date.now();
@@ -91,10 +92,12 @@ async function run() {
   fs.writeFileSync(path.join(profile, 'views.json'), JSON.stringify([{ owner: 'context-gui-window', active: true, selected: 'room', mode: 'chat', preference: 'chat', roomSession: '', sharedDraft: '' }]), { mode: 0o600 });
   app = await _electron.launch({ executablePath: require('electron'), args: [entry], env: env({ NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }), timeout: 70000 });
   guiPid = app.process().pid; page = await app.firstWindow(); page.setDefaultTimeout(12000); page.on('pageerror', error => errors.push(error.message));
-  await page.locator('#room-nav').waitFor();
+  await revealDefaultSpace(page); await page.locator('#room-nav').waitFor();
   assert.deepEqual(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), focusable: win.isFocusable() }))), [{ visible: false, focusable: false }]);
   const b = await page.evaluate(() => workspace.spaceCreate('Scope B')), outside = await page.evaluate(() => workspace.spaceCreate('UNSELECTED_R'));
-  for (const [room, id] of [['shared', ids[0]], ['shared', ids[1]], [b, ids[0]], [b, ids[2]], [outside, ids[2]]]) await page.evaluate(({ room, id }) => workspace.spaceAction(room, 'join', [id, true]), { room, id });
+  // ids[0] in A and B, ids[2] in B and R are legacy overlapping records (single home since 3751738): seed them through the
+  // backend's own connection (as compact-versions does), where fixtures/legacy-membership.cjs keeps them; a join from the page would move the session instead.
+  for (const [room, id] of [['shared', ids[0]], ['shared', ids[1]], [b, ids[0]], [b, ids[2]], [outside, ids[2]]]) await client.active.client.call('spaceAction', room, 'join', [id, true], {});
   for (const [room, text] of [['shared', 'ALLOWED_A_SHARED_NOTE'], [b, 'ALLOWED_B_SHARED_NOTE'], [outside, 'PRIVATE_R_NOTE']]) await page.evaluate(async ({ room, text }) => {
     const s = await workspace.initial(); await workspace.spaceAction(room, 'notes', [text, s.rooms.find(value => value.id === room).metadataRevision]);
   }, { room, text });
@@ -164,12 +167,16 @@ async function run() {
   assert.ok(!(await page.locator('#context-text').inputValue()).includes('Explicitly reviewed')); await closeBackground(); await settleDisplays();
   const state = await fixture(); for (const key of ['inputs', 'sends', 'interruptions', 'pending', 'waitingInputs']) assert.deepEqual(state[key], []);
   const calls = await app.evaluate(() => globalThis.contextCalls), ipc = await app.evaluate(() => globalThis.contextIPC);
+  fs.writeFileSync(path.join(evidence, 'call-accounting.json'), JSON.stringify({ navigationStart, setup: calls.slice(0, navigationStart), navigation: calls.slice(navigationStart), ipcNavigationStart, setupIPC: ipc.slice(0, ipcNavigationStart), navigationIPC: ipc.slice(ipcNavigationStart) }, null, 2)); // written before the checks, so a failure keeps it
   const allowed = new Set(['initial', 'uiReady', 'viewState', 'readingState', 'terminalSnapshot', 'resize', 'observe', 'unobserve', 'copy']);
   assert.deepEqual(calls.slice(navigationStart).filter(call => !allowed.has(call.method)), []);
   assert.deepEqual(ipc.slice(ipcNavigationStart).filter(call => !allowed.has(call.method)), []);
   assert.equal(ipc.slice(ipcNavigationStart).filter(call => call.method === 'copy').length, 2);
-  for (const call of calls.slice(navigationStart).filter(call => ['terminalSnapshot', 'resize', 'observe', 'unobserve'].includes(call.method))) assert.equal(call.id, ids[2]);
-  fs.writeFileSync(path.join(evidence, 'call-accounting.json'), JSON.stringify({ navigationStart, setup: calls.slice(0, navigationStart), navigation: calls.slice(navigationStart), ipcNavigationStart, setupIPC: ipc.slice(0, ipcNavigationStart), navigationIPC: ipc.slice(ipcNavigationStart) }, null, 2));
+  // Since 3f4590d a new page reads each member terminal it shows once, read-only (census③, 384fddc): the reload above
+  // shows the default space's two members. Every other terminal read, and all sizing and watching, still targets only U.
+  const shownReads = calls.slice(navigationStart).filter(call => call.method === 'terminalSnapshot' && call.id !== ids[2]).map(call => call.id).sort();
+  assert.deepEqual(shownReads, [ids[0], ids[1]].sort(), 'The reopened page reads each shown member terminal exactly once');
+  for (const call of calls.slice(navigationStart).filter(call => ['resize', 'observe', 'unobserve'].includes(call.method))) assert.equal(call.id, ids[2]);
   assert.deepEqual(errors, []);
   await check('Renderer reload retains exact native identities/owners and both draft scopes; a fresh preview resets its transient selection, with zero claim/send/input/approval and only two intercepted copies');
 }

@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 // Actual hidden Electron/DSH, desktop metadata and lifecycle; synthetic native
 // transport only. No provider process, model, task send or terminal input.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
@@ -50,7 +51,7 @@ async function capture(name) {
   await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, name + '.png') });
 }
 async function run() {
-  await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Fixture service ready'); client = await connect(profile, 'sidebar-test-observer'); await launch();
+  await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Fixture service ready'); client = await connect(profile, 'sidebar-test-observer'); await launch(); await revealDefaultSpace(page);
   await page.locator('#composer').getByRole('button', { name: '继续原生会话', exact: true }).click();
   await until(async () => (await snapshot()).sessions.find(s => s.id === ids[0]).state === 'idle', 'Resume original synthetic session');
   await page.locator('#message-input').fill('保留的私人草稿，不发送');

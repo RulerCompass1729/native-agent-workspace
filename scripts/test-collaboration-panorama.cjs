@@ -37,7 +37,7 @@ const entryCode = [
   "require(" + JSON.stringify(path.join(root, 'app/main.cjs')) + ");",
 ].join('\n');
 fs.writeFileSync(path.join(entry, 'main.cjs'), entryCode);
-const child = fork(path.join(root, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')],
+const child = fork(path.join(root, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs'), '--require', path.join(__dirname, 'fixtures/legacy-membership.cjs')],
   env: env({ NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: root, NAW_APP_VERSION: require('../package.json').version }), stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 let app, page, client, fullStarts = 0, sequence = 0, failure, navigationStart = 0, ipcNavigationStart = 0;
 const guiPids = [], samples = [], callBatches = [], ipcBatches = [], originBatches = [], selectionDiagnostics = [], checks = [], errors = [], started = Date.now();
@@ -134,7 +134,9 @@ async function run() {
   for (let i = 0; i < 100; i++) {
     const destinations = i === 0 ? [rooms[0], rooms[1]] : i === 1 ? [rooms[0]] : i === 2 ? [rooms[1]] : [rooms[2 + (i - 3) % 8]];
     if (i >= 3 && i < 20) destinations.push(rooms[2 + (i - 2) % 8]);
-    for (const room of destinations) await page.evaluate(({ room, id }) => workspace.spaceAction(room, 'join', [id, true]), { room, id: ids[i] });
+    // Two homes are legacy overlapping records (single home since 3751738): seed them through the service, where
+    // fixtures/legacy-membership.cjs keeps them; a join from the page would move the session instead.
+    for (const room of destinations) await client.active.client.call('spaceAction', room, 'join', [ids[i], true], {});
     await fixture('messageItem', ids[i], { id: 'source-' + i, role: 'assistant', text: 'Source ' + i + ': original text for this existing session. No shared grant or new task.', status: 'complete' });
   }
   await fixture('native-activity', ids[0], { turnId: 'synthetic-turn', observedAt: Date.now() - 30000, label: 'Synthetic existing progress' });

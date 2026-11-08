@@ -35,7 +35,11 @@ async function group(name, work) {
   await work(); const state = await snapshot();
   assert.deepEqual(identities(state), identities(initial));
   assert.equal(state.viewState.roomViews[roomA].sharedDraft, 'Positive shared draft');
-  assert.deepEqual((await fixture('stats')).stats, { inputs: 0, opens: 0, resizes: 0, sends: 0 });
+  // Since 3f4590d a page shows member terminals and reads each one once, read-only (census③, 384fddc). Every open is
+  // such a read, and no claim, terminal, input, send or other native action happens.
+  const reply = await fixture('stats'), { opens, ...actions } = reply.stats, { terminalSnapshot, ...calls } = reply.overviewCalls;
+  assert.deepEqual(actions, { inputs: 0, resizes: 0, sends: 0 }); assert.deepEqual(Object.entries(calls).filter(([, n]) => n), []);
+  assert.equal(opens, terminalSnapshot, 'Every terminal open is a read-only display'); assert.ok(terminalSnapshot <= initial.sessions.length, 'One page reads each terminal at most once');
   const metrics = await app.evaluate(() => globalThis.railGuards);
   assert.deepEqual(metrics, { clipboard: 0, external: 0, dialogs: 0, maintenance: 0, replacement: 0 });
   checks.push({ name, metrics }); console.log('PASS:', name); await capture(String(checks.length).padStart(2, '0'));
@@ -82,7 +86,7 @@ async function run() {
   lease = true; started = Date.now(); fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 3', task: plan.task, token, pid: process.pid, time: new Date().toISOString() }));
   fs.mkdirSync(evidence, { recursive: true }); process.env.NAW_EVIDENCE_DIR = path.join(evidence, 'scratch'); frozen = hashes();
   profile = scratch.directory(path.join(os.tmpdir(), 'naw-membership-rail-'));
-  child = scratch.childProcess.fork(path.join(root, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(root, 'scripts/fixtures/collaboration-overview.cjs')], env: env({ NAW_TEST_APP_ROOT: root, NAW_WORKSPACE: path.join(profile, 'workspace'), NAW_APP_VERSION: require('../package.json').version }), stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+  child = scratch.childProcess.fork(path.join(root, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(root, 'scripts/fixtures/collaboration-overview.cjs'), '--require', path.join(root, 'scripts/fixtures/legacy-membership.cjs')], env: env({ NAW_TEST_APP_ROOT: root, NAW_WORKSPACE: path.join(profile, 'workspace'), NAW_APP_VERSION: require('../package.json').version }), stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Exact synthetic backend ready'); client = await connectService(profile, owner);
   const backend = await client.call('initial'); assert.equal(backend.servicePid, child.pid); assert.equal(backend.runtimeVersion, require('../package.json').version);
   const ids = [];
@@ -128,7 +132,9 @@ require(${JSON.stringify(path.join(root, 'app/main.cjs'))});`);
     assert.equal(await page.locator('#new-space').isVisible(), true); assert.equal(await sidebar().locator('.session-space-badges:visible').count(), 0, 'The grouped view does not repeat the space as a label (T-144)');
   });
   await group('05 folded groups still list their sessions in the narrow rail, which has no headings to unfold from (T-132)', async () => {
-    await expand(); await page.locator('#sessions-grouped').click(); const toggles = sidebar().locator('.session-space-toggle'), total = await toggles.count(); assert.ok(total >= 3);
+    await expand(); await page.locator('#sessions-grouped').click(); // The unused default space keeps its group hidden since 3751738 (T-170), so fold every group shown: exactly A and B.
+    const toggles = sidebar().locator('.session-space-toggle:visible'), total = await toggles.count();
+    assert.deepEqual((await sidebar().locator('[data-session-group]:visible').evaluateAll(groups => groups.map(g => g.dataset.sessionGroup))).sort(), [roomA, roomB].sort()); assert.equal(total, 2);
     for (let n = 0; n < total; n++) { await toggles.nth(n).click(); assert.equal(await toggles.nth(n).getAttribute('aria-expanded'), 'false'); }
     const listed = () => sidebar().locator('.session-row:visible').evaluateAll(rows => new Set(rows.map(row => row.dataset.sessionRow)).size);
     assert.equal(await listed(), 0, 'Folded in the wide sidebar'); await collapse(); await until(async () => await listed() === 7, 'Every session listed in the rail despite folds'); await capture('05-folded-rail');

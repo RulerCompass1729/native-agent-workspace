@@ -2,6 +2,7 @@
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process'), { randomUUID } = require('node:crypto');
 const scratch = require('./fixtures/test-scratch.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { _electron } = scratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
@@ -43,6 +44,8 @@ async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Own fixture startup'); client = await connect(profile, 'directory-observer');
   app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [code], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(8000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
+  // T-170: the space step below picks the default space, which a fresh profile hides until something uses it.
+  await revealDefaultSpace(page);
   await app.evaluate(({ dialog }) => { globalThis.directoryDialog = dialog.showOpenDialog; globalThis.directoryPick = null; dialog.showOpenDialog = async () => globalThis.directoryPick ? { canceled: false, filePaths: [globalThis.directoryPick] } : { canceled: true, filePaths: [] }; });
   const first = await open('Cancelled');
   assert.notEqual(first, legacy, 'Default preview must be a new directory, not the shared folder');
