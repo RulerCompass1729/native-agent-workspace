@@ -1681,7 +1681,11 @@ It does not establish fleet termination or an exact billing total.
 The alpha build can be exercised by the same visible lifecycle runner:
 set `NAW_APP_EXECUTABLE` to the built app's executable and run
 `node scripts/test-desktop.cjs`. It uses its own stable test profile and launches
-no model tasks. A fresh profile has no native sessions; identity/draft assertions
+no model tasks. Before the first launch it pins that profile's interface language
+to the test language (`NAW_TEST_UI_LANGUAGE`, default `zh`;
+`scripts/fixtures/test-language.cjs`), because a profile with no saved language
+follows the system language. If the profile has saved a different language or other
+interface settings, it stops without overwriting them. A fresh profile has no native sessions; identity/draft assertions
 on that empty profile do not replace the separate live-session evidence in alpha.md.
 
 The runner now checks rendered foreground/background contrast in both light and

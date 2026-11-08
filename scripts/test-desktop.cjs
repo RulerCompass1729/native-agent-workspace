@@ -9,6 +9,7 @@ const { _electron } = require('playwright');
 const { connect } = require('../app/service-client.cjs');
 const { checkTui, verifyTui, restoreTui } = require('./check-tui.cjs');
 const { waitForState } = require('./fixtures/wait-state.cjs');
+const { pinStableProfileLanguage } = require('./fixtures/test-language.cjs');
 const { checkRoom, verifyRoom, restoreRoom } = require('./check-room.cjs');
 const root = path.resolve(__dirname, '..');
 const executablePath = process.env.NAW_APP_EXECUTABLE || require('electron');
@@ -96,6 +97,9 @@ async function run() {
     fs.rmSync(lock);
   }
   fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }), { flag: 'wx', mode: 0o600 }); ownsLock = true;
+  // This stable profile does not go through test-scratch, so pin the test language here (T-170): with nothing saved,
+  // the interface follows the system language, and the checks below expect Chinese.
+  await pinStableProfileLanguage(dataDir);
   let before = await launch();
   await page.locator('#setup-button').click();
   await page.locator('#setup-dialog').waitFor({ state: 'visible' });
@@ -104,6 +108,10 @@ async function run() {
   console.log('PASS: light/dark workspace and setup-dialog text contrast.');
   await page.locator('#close-setup').click();
   console.log('PASS: packaged/source UI composition and setup screen render.');
+  // The untouched default space is hidden until it is used (3751738), and checkTui and checkRoom open it, so give it a
+  // note first, as test-check-room does (T-170).
+  await page.evaluate(async () => { const shared = (await workspace.initial()).rooms.find(room => room.id === 'shared'); await workspace.spaceAction('shared', 'notes', ['T170 shared space in use', shared.metadataRevision]); });
+  await page.locator('#room-nav').waitFor({ state: 'visible' });
   tuiCheck = { original: before.viewState };
   tuiCheck = await checkTui(page);
   roomCheck = {}; await checkRoom(page, application, roomCheck);
