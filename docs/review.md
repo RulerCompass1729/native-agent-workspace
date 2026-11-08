@@ -6945,3 +6945,17 @@ member, which a person could also see. It is recorded on T-151 and not changed
 here; whether to merge with it is the integrator's decision.
 The old-check baseline (NAW_CHECK_ROOM_BASELINE) was not rerun on this main; the
 four-group, 33.503 s result above is the original lane's run.
+
+Correction (Claude 3, 2026-11-08): the cause given above for the check-room.cjs:81
+failure is wrong; the member overview's focus callback was not involved. Playwright
+1.64.1's waitForFunction does not await a predicate that returns a Promise
+(playwright-core coreBundle.js, around lines 25707-25711: a truthy result ends the
+wait), and check-room.cjs passed async predicates, so the leave wait ended after a
+single reading. A temporary main-process probe of every view save (author-run)
+showed the window's last save after the leave setting roomSession to '' and no
+later save, while that run's snapshot had read the member id: the read came before
+the correct save. With every view save delayed 400 ms (author-run), the old checks
+failed at :81 and the fixed checks passed. check-room.cjs now polls and awaits each
+reading (waitForState); the fixed file passed 10 of 10 isolated runs. This failure
+says nothing about whether a message can reach a member who just left; that is a
+separate check, recorded on T-151.

@@ -2,6 +2,12 @@
 const assert = require('node:assert/strict');
 const { joinSpace } = require('./fixtures/space-membership.cjs');
 const snapshot = page => page.evaluate(() => workspace.initial());
+// Playwright's waitForFunction does not await an async predicate: the Promise it returns is truthy, so the wait
+// ends after one evaluation even when that evaluation is false. Poll the service state and await each reading.
+async function waitForState(page, check, arg, label) {
+  for (let attempt = 0; attempt < 100; attempt++) { if (await page.evaluate(check, arg)) return; await page.waitForTimeout(50); }
+  throw Error('Timed out waiting for ' + label);
+}
 const identity = s => s.sessions.map(x => [x.id, x.nativeId, x.pid, x.messages.length]);
 const focus = (page, id) => page.waitForFunction(id => document.activeElement?.classList.contains('xterm-helper-textarea') && document.activeElement.closest('[data-terminal-id]')?.dataset.terminalId === id, id);
 const tab = (page, id) => page.locator(`[data-room-session="${id}"]`);
@@ -28,7 +34,7 @@ async function checkRoom(page, application, result) {
   for (const person of people) {
     await page.locator(`[data-session-id="${person.id}"]`).click();
     await joinSpace(page);
-    await page.waitForFunction(async id => (await workspace.initial()).sessions.find(s => s.id === id).roomId === 'shared', person.id);
+    await waitForState(page, async id => (await workspace.initial()).sessions.find(s => s.id === id).roomId === 'shared', person.id, 'the member in 共同工作');
   }
   await page.locator('#room-nav').click();
   const joined = await snapshot(page);
@@ -71,10 +77,10 @@ async function checkRoom(page, application, result) {
 
   const beforeDetach = await snapshot(page);
   await page.locator('#header-actions').getByRole('button', { name: '离开此空间', exact: true }).click();
-  await page.waitForFunction(async id => {
+  await waitForState(page, async id => {
     const state = await workspace.initial();
     return !state.sessions.find(s => s.id === id).roomId && state.viewState.selected === 'room' && state.viewState.roomSession === '';
-  }, person.id);
+  }, person.id, 'the left member to be cleared from the saved view');
   const detached = await snapshot(page);
   assert.equal(detached.sessions.find(s => s.id === person.id).roomId, null);
   assert.equal(detached.viewState.selected, 'room');
@@ -86,11 +92,11 @@ async function checkRoom(page, application, result) {
   await page.locator(`[data-session-id="${person.id}"]`).click();
   await page.locator('#solo-session #terminal-area').waitFor({ state: 'visible' });
   await joinSpace(page);
-  await page.waitForFunction(async id => (await workspace.initial()).sessions.find(s => s.id === id).roomId === 'shared', person.id);
+  await waitForState(page, async id => (await workspace.initial()).sessions.find(s => s.id === id).roomId === 'shared', person.id, 'the member in 共同工作');
   await page.locator('#room-nav').click();
   assert.equal(await page.locator('#room-view').isVisible(), true, 'Room navigation must open the room after rejoin');
   await openTerminal(page, person.id);
-  await page.waitForFunction(async id => { const v = (await workspace.initial()).viewState; return v.selected === 'room' && v.roomSession === id; }, person.id);
+  await waitForState(page, async id => { const v = (await workspace.initial()).viewState; return v.selected === 'room' && v.roomSession === id; }, person.id, 'the returned member to be the saved view');
   const after = await snapshot(page);
   assert.equal(after.diagnostics.dispatches, before.diagnostics.dispatches);
   assert.deepEqual(after.room.messages, before.room.messages);
