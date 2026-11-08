@@ -1,7 +1,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const { Workspace } = require('../workspace.cjs');
 const { MobileAccess } = require('../mobile-access.cjs');
 const { ApprovalQueue } = require('../approval-policy.js');
@@ -44,7 +44,7 @@ test('oversized replies and unsupported attachments are explicit without silentl
   assert.equal(JSON.stringify(view).includes('/synthetic/image.png'), false);
 });
 for (const provider of ['claude', 'codex']) test(provider + ' mobile private input preserves desktop owner, view, draft and native identity', async t => {
-  const f = await fixture(t, provider), spec = f.spec(); f.w.setDraft(f.id, spec.text, 'desktop-owner');
+  const f = await fixture(t, provider), spec = f.spec('  Original ! and # text.\n手机输入  '); f.w.setDraft(f.id, spec.text, 'desktop-owner');
   const before = { owner: f.s.owner, view: f.s.view, nativeId: f.s.nativeId, room: f.s.roomId }, status = f.w.room.messages.length;
   const result = await f.w.mobileSend(f.ticket('send'), spec);
   assert.equal(result.status, 'submitted'); assert.equal(f.calls.length, 1); assert.equal(f.calls[0].text, spec.text);
@@ -360,4 +360,46 @@ test('positive native acceptance remains submitted if a later transport result i
   const result = await f.w.mobileSend(f.ticket('send'), spec);
   assert.equal(result.status, 'submitted'); assert.equal(f.s.messages.at(-1).status, 'submitted'); assert.equal(result.error, 'Synthetic later transport error');
   assert.deepEqual(await f.w.mobileSend(f.ticket('send'), spec), result); assert.equal(f.calls.length, 1);
+});
+
+for (const provider of ['claude', 'codex']) {
+  for (const method of ['prepare', 'send']) test(provider + ' mobile ' + method + ' refuses native command prefixes before any reservation or intervention', async t => {
+    const f = await fixture(t, provider);
+    f.w.setDraft(f.id, 'Retained desktop draft', 'desktop-owner');
+    const snapshot = () => JSON.stringify({ owner: f.s.owner, view: f.s.view, nativeId: f.s.nativeId,
+      control: f.s.controlRevision, peer: f.s.peerRevision, messages: f.s.messages,
+      receipts: f.w.mobileRequests, room: f.w.room.messages, draft: f.w.drafts.get(f.id) });
+    const before = snapshot();
+    for (const text of ['!synthetic', ' \n\t!synthetic', '#synthetic', ' \t#synthetic']) {
+      const ticket = f.ticket('send'), spec = f.spec(text);
+      if (method === 'prepare') assert.throws(() => f.w.mobilePrepare(ticket, spec, 'send', {}));
+      else await assert.rejects(f.w.mobileSend(ticket, spec));
+      assert.equal(snapshot(), before);
+      assert.equal(f.calls.length, 0);
+    }
+  });
+}
+
+test('older stored command-shaped receipts remain readable and cannot create another send', async t => {
+  for (const provider of ['claude', 'codex']) {
+    const f = await fixture(t, provider), connection = {}, ordinary = f.spec('Original ordinary preparation');
+    const ready = f.w.mobilePrepare(f.ticket('send'), ordinary, 'send', connection);
+    mobile.disconnected(f.w, connection);
+    // Seed the existing persisted receipt schema for a body accepted by the
+    // earlier service. The preparation supplies the authenticated namespace.
+    const spec = { ...ordinary, text: '!synthetic historical input' };
+    const stored = f.w.mobileRequests.find(row => row.requestId === spec.requestId);
+    stored.digest = createHash('sha256').update(JSON.stringify({ proof: {
+      connectionRevision: spec.proof.connectionRevision, controlRevision: spec.proof.controlRevision,
+      nativeId: spec.proof.nativeId }, requestId: spec.requestId, text: spec.text })).digest('hex');
+    stored.status = 'unconfirmed'; stored.error = 'Historical result remains unknown';
+    const before = JSON.stringify(f.w.mobileRequests);
+    const receipt = mobile.find(f.w, f.ticket('send'), spec, 'send');
+    assert.equal(receipt.status, 'unconfirmed'); assert.equal(receipt.tag, ready.receipt.tag);
+    assert.deepEqual(f.w.mobilePrepare(f.ticket('send'), spec, 'send', {}), { receipt });
+    assert.deepEqual(await f.w.mobileSend(f.ticket('send'), spec), receipt);
+    assert.equal(JSON.stringify(f.w.mobileRequests), before); assert.equal(f.calls.length, 0);
+    await assert.rejects(f.w.mobileSend(f.ticket('send'), f.spec(spec.text)));
+    assert.equal(JSON.stringify(f.w.mobileRequests), before); assert.equal(f.calls.length, 0);
+  }
 });

@@ -7169,3 +7169,35 @@ combined source checks pass 3523/3523 and the nine hidden GUI journeys pass on
 this base (`all-source-rebased-final.tap`, `gui-rebased/`). The source handoff's
 single workspace-message attempt was refused by revoked automatic-message
 authorization; no native receipt, repeat send or daily adoption is claimed.
+
+
+### Local prepared mobile requests follow the native-command input restriction
+
+- Trigger/severity: P2 validation-policy gap. An already-authorized local mobile caller could bypass the previously approved outer input restriction for leading ! and #. The shared local request validator rejected only slash commands, so the prepare and send entry points accepted these inputs. This is not evidence of upstream shell execution or an enabled phone/network bridge.
+- Owner/status: Codex 3; reject the already-forbidden ! and # prefixes for new submissions after the authenticated existing-receipt lookup and before reservation or human intervention. The original slash rule is unchanged. Stored outcomes remain readable and duplicate preparation/send returns that outcome without another lease or native write; ordinary literal text is unchanged. No Unicode normalization or new phone/network authority is added.
+- Evidence/recheck: four real MobileAccess/Workspace synthetic-fixture checks fail on the original predicate (40 other checks pass), covering Claude/Codex and prepare/send. An initial implementation also rejected stored command-shaped receipt lookups; a dedicated historical-receipt regression reproduced that side effect and the new-submission-only guard removes it. The final session/routing group passes all 60 checks without skips, including historical receipt preservation and the existing serialized Unix preparation/commit check. Verification uses the existing trusted-project no-model unit workflow and fake native adapters, not an adversarial audit or actual provider incident. Source review and actual adoption are separate gates.
+
+## Alpha.219 GUI adoption and following-reader batch (2026-11-08, Main)
+
+Source `ebadb7c` passes 3,533 source checks with zero failures/skips. Signed build
+`674449f` differs only in its three version fields; dependencies and app/scripts
+are identical. All 83 payload files match the committed build. The signed
+renderer passes ten following/header/language journeys; cold bootstrap passes
+five checks. Native producers are synthetic and product model calls are zero.
+
+The fresh read-only headless reviewer accepts the combined source and GUI update
+operator; its sole requested source/build equivalence fact was supplied and
+accepted in the same session. A bounded exact-path readiness wait replaces the
+previous fixed post-open delay; three direct checks cover readiness and refusal.
+Actual ordinary GUI adoption retains 15 native identities, live process start
+identities, settings and all saved draft scopes. Occupied backends remain on
+their existing versions. Post-open strict signing passes; the locked desktop
+leaves window visibility/daily changed operations pending. No native adoption,
+physical IME, runtime qualification of Claude 316/317, full-day use or push is
+claimed. The wider dogfood milestone remains open.
+
+The next combined source run catches one integration-only stale fixture:
+`test-background-control` opens the default space without the shared visibility
+helper required by the current GUI-test ratchet. Its existing setup now calls
+that helper; no exemption is added and product behavior is unchanged. The
+initial full run is retained: 3,564 pass, one failure, zero skips.

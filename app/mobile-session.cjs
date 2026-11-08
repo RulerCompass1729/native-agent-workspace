@@ -124,6 +124,8 @@ function leases(w) { if (!pending.has(w)) pending.set(w, new Map()); return pend
 function prepare(w, ticket, spec, action, connection) {
   if (!['send', 'answer'].includes(action)) throw denied();
   const previous = lookup(w, ticket, spec, action); if (previous) return { receipt: receipt(w, previous) };
+  // A stored outcome remains readable; only a new submission is refused.
+  if (action === 'send' && /^[!#]/.test(spec.text.trim())) throw denied();
   if (!connection || typeof connection !== 'object' || connection.destroyed) throw denied();
   if (records(w).filter(r => r.deviceId === ticket.deviceId && r.generation === ticket.generation && r.issuer === ticket.issuer.instance).length >= MAX_REQUESTS) throw denied();
   ticket = JSON.parse(JSON.stringify(ticket)); spec = JSON.parse(JSON.stringify(spec));

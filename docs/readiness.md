@@ -4,31 +4,27 @@ As of 2026-11-08. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.218, clean committed build source `0faedc6`.
-The ordinary launch has one observed visible main window and one daily search
-entry. Its update preserves 15 records, draft scopes, reported settings and all
+Current daily GUI: alpha.219, clean committed build source `674449f`.
+The ordinary launch retains 15 records, all draft scopes, reported settings and
 live native process identities. The five original development/secretary backends
-remain alpha.215; their new runtime behavior needs separate safe-checkpoint
-adoption. Automatic backend migration remains off.
+remain alpha.215. Automatic backend migration remains off; adopting new native
+runtime behavior requires a separate safe checkpoint. The desktop was locked at
+the update, so daily window visibility and changed daily operations remain pending.
 
-This batch integrates terminal snapshot continuation, immediate known no-send
-feedback, precise MCP transport failures, exact capacity/routing qualification,
-and the native model-notice opt-out for future terminal clients. The combined
-affected source suite passes 450 checks without skips. The final signed bundle
-has 83 matching runtime files, passes 86 captured-argv/effective-setting checks
-using its real Electron runtime and modules, and passes five empty-profile cold
-bootstrap checks. The six signed terminal reopen/link/input stages are reused
-only after verifying identical compiled reader, helper and Terminal code.
-Original provider-emitted links, existing picker dismissal and original-backend
-adoption are not established by those synthetic-worker journeys.
+The signed 219 payload has 83 matching runtime files. Its unchanged product
+source passes 3,533 checks without skips; five normal empty-profile bootstrap
+checks and ten signed GUI journeys pass with synthetic native workers and no
+product model calls. They cover following reading, compact member tabs and UI
+language changes while retaining literal native content. Physical window resize
+in the signed bundle and original provider receipt/continuation are not inferred.
+Source-author resize evidence remains scoped to its actual source run.
 
-The GUI update's first post-open observer failed on a transient missing connection
-file while the empty active backend was replaced. No mutation was repeated. A
-read-only completion verified the actual installed source/signature, visible
-ordinary window, all retained identities/settings/drafts and every inactive
-backend PID/version. Independent review accepts that limited GUI adoption while
-retaining the original observer failure. The next update operator must wait for
-that exact backend's readiness instead of a fixed delay.
+Independent review accepts the combined source and GUI-only update operator.
+The operator now waits only for the exact empty active backend's connection
+readiness after ordinary open; it never repeats an install or restarts an
+occupied native backend. Actual adoption preserves every inactive backend's
+PID/start identity/version, reported settings and the original inputs. Strict
+signature verification passes after launch. No debug argument is used.
 
 One original Main-to-secretary outbox task has an exact shared ledger entry,
 native receipt and completed first command. The recipient's native

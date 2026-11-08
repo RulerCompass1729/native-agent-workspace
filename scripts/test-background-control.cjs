@@ -1,5 +1,6 @@
 // Real hidden Electron UI and service; synthetic native producer, zero models.
 const scratch = require('./fixtures/test-scratch.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto'), { once } = require('node:events');
 const { execFileSync } = require('node:child_process');
@@ -143,6 +144,7 @@ async function run() {
   assert.deepEqual(desktop(), before); checks.push('Real GUI restart keeps audit, actor draft and human draft; old operation never resends');
   // Inspect the ordinary shared record only after verifying the human draft and
   // selection were preserved. These test-local UI actions never use the mouse.
+  await revealDefaultSpace(page);
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   const visibleLabel = await page.locator(`#room-messages [data-message-id="${sharedRow.id}"] .message-author`).textContent();
   assert.equal(visibleLabel, 'Synthetic operator → Background renamed recipient');
