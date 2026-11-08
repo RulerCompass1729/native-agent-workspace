@@ -271,7 +271,7 @@ for(const outcome of ['accepted','ACK lost','wrong turn','new draft','edited the
  }else{assert.equal(recovery,null);f.w.tickCapacity(Date.now()+86400000);await capacityTick();assert.equal(f.calls.filter(c=>c.method==='turn/start').length,0);}
  assert.equal(f.s.messages.filter(m=>m.inputMode==='steer').length,1,'Never replay the human instruction');
 });
-for(const version of ['0.164.0','0.165.0'])for(const cause of ['capacity','routing'])test('qualified native '+version+' recovers only the exact terminal transient cause: '+cause,async t=>{
+for(const version of ['0.164.0','0.165.0','0.166.0','0.167.0'])for(const cause of ['capacity','routing'])test('qualified native '+version+' recovers only the exact terminal transient cause: '+cause,async t=>{
  const f=capacityFixture(t);f.host.rpc.nativeVersion=version;
  const error={message:cause==='routing'?routingError:'NATIVE ORIGINAL',codexErrorInfo:cause==='routing'?'other':'serverOverloaded'};
  f.start('live');f.r.event({method:'error',params:{threadId:f.s.nativeId,turnId:'live',willRetry:true,error}});
@@ -292,7 +292,7 @@ for(const [label,code,message,status] of [
  const f=capacityFixture(t);f.host.rpc.nativeVersion='0.165.0';f.start('live');f.end('live',code,status,message);
  assert.equal(f.w.capacityStatus(f.s.id),null);assert.equal(f.calls.length,0);
 });
-for(const version of ['0.163.0','0.166.0',undefined])test('unqualified native version has no recovery: '+version,t=>{
+for(const version of ['0.163.0','0.168.0',undefined])test('unqualified native version has no recovery: '+version,t=>{
  const f=capacityFixture(t);f.host.rpc.nativeVersion=version;f.fail('overload');assert.equal(f.w.capacityStatus(f.s.id),null);
  f.fail('routing','other',routingError);assert.equal(f.w.capacityStatus(f.s.id),null);
 });
@@ -485,3 +485,33 @@ for(const [code,message,disabled] of [[-32600,'goals feature is disabled',true],
  const pending=rpc.call('thread/goal/get',{threadId:'owned'});ws.emit('message',JSON.stringify({id:1,error:{code,message}}));
  await assert.rejects(pending,error=>error.nativeGoalsDisabled===disabled&&!error.message.includes('goals feature is disabled'));ws.emit('close');
 });
+
+
+for (const version of ['0.166.0', '0.167.0']) {
+ test('qualified overload '+version+' preserves the active goal and submits one bounded continuation', async t => {
+  const f=capacityFixture(t);f.host.rpc.nativeVersion=version;
+  f.goal={threadId:f.s.nativeId,status:'active',objective:'Synthetic unfinished work',tokenBudget:100000,tokensUsed:100};
+  const originalGoal=JSON.stringify(f.goal),nativeId=f.s.nativeId,owner=f.s.owner;
+  f.start('live');f.r.event({method:'error',params:{threadId:nativeId,turnId:'live',willRetry:true,error:{message:'NATIVE ORIGINAL',codexErrorInfo:'serverOverloaded'}}});
+  assert.equal(f.w.capacityStatus(f.s.id),null,'Intermediate retries remain native');f.end('live');
+  const recovery=f.w.capacityStatus(f.s.id);assert.ok(recovery);assert.equal(recovery.reason,'capacity');assert.ok(recovery.due-Date.now()>119000);
+  assert.equal(f.calls.length,0);assert.equal(f.goalReads.length,0);
+  f.w.tickCapacity(recovery.due);await capacityTick();
+  assert.deepEqual(f.goalReads,[{threadId:nativeId}]);assert.deepEqual(f.calls.map(c=>c.method),['turn/start']);
+  assert.deepEqual(f.calls[0].params.input,[{type:'text',text:'继续',text_elements:[]}]);
+  assert.equal(JSON.stringify(f.goal),originalGoal,'No goal setter or reset');assert.equal(f.s.nativeId,nativeId);assert.equal(f.s.owner,owner);
+  assert.ok(f.s.messages.some(m=>m.kind==='notice'&&m.text==='NATIVE ORIGINAL'));
+ });
+ for (const code of ['policyCapacityUnavailable','other']) test('qualified transient recovery '+version+' rejects '+code,t=>{
+  const f=capacityFixture(t);f.host.rpc.nativeVersion=version;f.fail('live',code,'NATIVE ORIGINAL');
+  assert.equal(f.w.capacityStatus(f.s.id),null);assert.equal(f.calls.length,0);assert.equal(f.goalReads.length,0);
+ });
+ for (const intervention of ['paused goal','human draft']) test('qualified overload '+version+' preserves '+intervention,async t=>{
+  const f=capacityFixture(t);f.host.rpc.nativeVersion=version;f.goal={threadId:f.s.nativeId,status:intervention==='paused goal'?'paused':'active'};
+  const goal=JSON.stringify(f.goal);f.fail();const recovery=f.w.capacityStatus(f.s.id);assert.ok(recovery);
+  if(intervention==='human draft')f.w.setDraft(f.s.id,'Unsent human direction',f.s.owner);
+  f.w.tickCapacity(recovery.due);await capacityTick();
+  assert.equal(f.calls.length,0);assert.equal(f.w.capacityStatus(f.s.id),null);assert.equal(JSON.stringify(f.goal),goal);
+  if(intervention==='human draft')assert.equal(f.w.drafts.get(f.s.id),'Unsent human direction');
+ });
+}

@@ -13,7 +13,11 @@ fs.mkdirSync(base,{recursive:true,mode:0o700});
 fs.writeFileSync(path.join(base,'owned-fixture.json'),JSON.stringify({kind:'naw-native-fixture-v1',producer:'test-native-codex-context.cjs',uid:process.getuid()}),{mode:0o600});
 const profile=path.join(temporary,'profile'),cwd=path.join(base,'work'),home=path.join(base,'codex'),userHome=path.join(base,'home');
 for(const p of[profile,cwd,home,userHome])fs.mkdirSync(p,{mode:0o700});
-const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0','0.165.0'].includes(nativeVersion));
+const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';
+// Newer engines are qualified here only for this exact overload continuation flow.
+const overloadOnly=['0.166.0','0.167.0'].includes(nativeVersion)&&process.env.NAW_NATIVE_CAPACITY_TRIAL==='continue'&&
+  Object.keys(process.env).filter(key=>key.startsWith('NAW_NATIVE_')).every(key=>key==='NAW_NATIVE_CAPACITY_TRIAL');
+assert.ok(['0.163.0','0.164.0','0.165.0'].includes(nativeVersion)||overloadOnly);
 const binary=executable('codex');assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli '+nativeVersion);
 let app,page,calls=0,titles=0,seq=0,releaseRetry,releaseSearch,releaseGoal,goalRpc,goalCodeMode,budgetError,activeHeld;const errors=[],checks=[];
 const updateStartupTrial=process.env.NAW_NATIVE_UPDATE_STARTUP==='1';
@@ -151,7 +155,16 @@ async function nativeCommand(command){
   if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'startup-update-editor.png')});
   console.log(JSON.stringify({checks:['Actual164 new-terminal startup bypasses a fresh165 cached update menu, preserves original identity/owner/draft without persistent dismissal'],nativeVersion,localResponses:0,nativeTitleResponses:0,paidModelCalls:0,dispatches:0,evidence:base}));return;
  }
- if(initialTerminal){await require('./native-trust.cjs').acceptOwnedFolder(page,cwd,true);if(capacityTrial)await until(async()=>{const t=await terminalText();return !t.includes('Trust this folder?')&&t.includes('? for shortcuts');},'Owned native editor ready before the capacity task');await page.locator('#chat-tab').click();}
+ if(initialTerminal){
+  // Keep the native readiness label visible beside newer warning badges.
+  if(capacityTrial)await page.locator('#terminal-maximize').click();
+  await require('./native-trust.cjs').acceptOwnedFolder(page,cwd,!capacityTrial);
+  if(capacityTrial){
+   await until(async()=>{const t=await terminalText();return !t.includes('Trust this folder?')&&t.includes('? for shortcuts');},'Owned native editor ready before the capacity task');
+   await page.locator('#terminal-maximize').click();
+  }
+  await page.locator('#chat-tab').click();
+ }
  await until(async()=>(await snapshot()).sessions[0]?.state==='idle','Native ready');const before=(await snapshot()).sessions[0];assert.equal(before.model,'gpt-6-luna');
  if(scrollTrial){
   await page.locator('#message-input').fill('Show the numbered local fixture without changing files.');await page.locator('#send-button').click();
@@ -558,7 +571,7 @@ async function nativeCommand(command){
  assert.ok(catalog.data.some(row=>row.nativeId===before.nativeId||row.nativeId===current),'The original native thread remains in the read-only catalog');
  checks.push('Read-only native history catalog retains the original contexts without another task');
  assert.equal(calls,3);assert.deepEqual(errors,[]);console.log(JSON.stringify({checks,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));
-})().catch(async e=>{console.error(e.stack,'\nEvidence:',base);if(page&&!page.isClosed()){fs.writeFileSync(path.join(base,'failure.txt'),await page.locator('body').innerText());await page.screenshot({path:path.join(base,'failure.png')});}process.exitCode=1;}).finally(testScratch.cleanup(async()=>{
+})().catch(async e=>{fs.writeFileSync(path.join(base,'failure-counts.json'),JSON.stringify({calls,titles,budgetExceeded:Boolean(budgetError),paidModelCalls:0},null,2));console.error(e.stack,'\nEvidence:',base);if(page&&!page.isClosed()){fs.writeFileSync(path.join(base,'failure.txt'),await page.locator('body').innerText());await page.screenshot({path:path.join(base,'failure.png')});}process.exitCode=1;}).finally(testScratch.cleanup(async()=>{
  releaseRetry?.();releaseGoal?.();activeHeld?.destroy();goalRpc?.ws.close();if(app)await app.close().catch(()=>{});server.closeAllConnections();
  try{const c=await connect(profile,'native-context-cleanup');try{for(const s of(await c.call('initial')).sessions)await c.call('stop',s.id);const owned=c.entries.map(e=>processIdentity(e.state.servicePid));for(const p of owned){assert.ok(p&&processMayBeAlive(p));process.kill(p.pid,'SIGTERM');}await until(()=>owned.every(p=>!processMayBeAlive(p)),'Owned service exit',15000);}finally{c.close();}}catch(e){console.error('Cleanup:',e.message);process.exitCode=1;}
  await new Promise(r=>server.close(r));

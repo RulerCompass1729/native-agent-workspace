@@ -7,6 +7,7 @@ const scratch = require('./fixtures/test-scratch.cjs');
 const { fork } = scratch.childProcess, { _electron } = scratch.playwright(process.env.NAW_APP_EXECUTABLE ? { _electron: require('./fixtures/installed-renderer.cjs') } : require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const evidence = process.env.NAW_EVIDENCE_DIR;
+const syntheticNativeVersion = process.env.NAW_ROUTING_NATIVE_VERSION || '0.165.0';
 if (evidence) {
   let parent = path.resolve(evidence); while (!fs.existsSync(parent)) parent = path.dirname(parent);
   const target = path.join(fs.realpathSync(parent), path.relative(parent, path.resolve(evidence)));
@@ -62,6 +63,7 @@ async function run() {
   await until(async () => (await client.call('initial')).sessions.find(s => s.id === a).chatAvailable, 'First synthetic attachment');
   b = await client.call('create', { provider: 'codex', cwd, name: 'Independent B', view: 'chat' });
   await until(async () => (await client.call('initial')).sessions.every(s => s.chatAvailable), 'Actual adapter attached');
+  assert.ok((await client.call('initial')).sessions.every(s => s.nativeVersion === syntheticNativeVersion), 'Fixture reports the requested exact native contract');
   await launch(); await select(b); await page.locator('#message-input').fill('B unsent draft');
   await until(async () => (await session(b)).liveDraft === 'B unsent draft', 'Independent draft saved');
   await select(a); await send('First exact routing task.', 1);
@@ -96,7 +98,7 @@ async function run() {
   check('Reopen retains completion without replay; unrelated Other error remains readable with no automatic retry');
   assert.deepEqual(errors, []); assert.deepEqual(hashes(), sourceBefore);
   const final = await native(); assert.equal(final.modelCalls, 0); assert.equal(final.nativeProcesses, 0);
-  const result = { checks, errors, modelCalls: 0, nativeProviderProcesses: 0, syntheticDispatches: 4, identities, sourceBefore, sourceAfter: hashes(), profile };
+  const result = { checks, errors, syntheticNativeVersion, modelCalls: 0, nativeProviderProcesses: 0, syntheticDispatches: 4, identities, sourceBefore, sourceAfter: hashes(), profile };
   if (evidence) fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));
 }
 const cleanup = scratch.cleanup(async () => { try { if (app) await app.close(); client?.close(); } finally { if (child.connected) child.disconnect(); if (child.exitCode === null) { child.kill('SIGTERM'); await once(child, 'exit'); } } });

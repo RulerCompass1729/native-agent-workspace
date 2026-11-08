@@ -5,9 +5,11 @@ const root = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..');
 const { NativeHost } = require(path.join(root, 'app/adapters.cjs'));
 const { Workspace } = require(path.join(root, 'app/workspace.cjs'));
 const create = NativeHost.prototype.create, pending = new Map();
+const nativeVersion = process.env.NAW_ROUTING_NATIVE_VERSION || '0.165.0';
+if (!['0.165.0', '0.166.0', '0.167.0'].includes(nativeVersion)) throw Error('Unknown synthetic routing contract');
 NativeHost.prototype.create = function (...args) {
   const runtime = create.apply(this, args), call = this.rpc.call;
-  this.rpc.nativeVersion = '0.165.0';
+  this.rpc.nativeVersion = nativeVersion;
   this.rpc.call = (method, params) => method === 'thread/goal/get' ? Promise.resolve({ goal: null }) : call(method, params);
   return runtime;
 };
