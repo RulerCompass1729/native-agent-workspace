@@ -65,6 +65,39 @@ or start paid model runs as a side effect of editing documents.
   model/budget changes, publication, spending or access to another user's draft.
   When a real dependency remains, keep its existing event wait in the original
   native execution path; do not replace it with repeated no-progress goal turns.
+- Send every message to or between NAW sessions through NAW's own channel: NAW's
+  workspace message tools, or an @ in the target space (by GUI or computer use).
+  This applies to agents inside NAW and to coordinators outside it. Do not use a
+  provider's session-to-session messaging to or between NAW sessions: it leaves no record
+  in the space and does not reach other providers. A native team's internal
+  messaging (Claude Agent Teams, Codex fleets) stays as the provider runs it.
+  Computer use in the daily app types only into the target space's composer after
+  confirming the single recipient and that no draft is present, starts the message
+  with its sender's name, prefers the workspace tools when available, keeps
+  screenshots private, and follows the
+  daily-app rules below. Writing a board or lane entry records a message; it does
+  not prove the recipient received it.
+
+## Lightweight mode (the person, 2026-11-08)
+
+Records, hashing and waiting took most agent time while product edits were a few
+percent of tool calls. For local, reversible changes (source, tests or docs on a
+local branch or main; not installed, pushed or published):
+- The evidence is the commit plus the relevant test output: the command, pass and
+  fail counts, and the failing assertion if any. Do not create per-step hash
+  manifests, ready.json files, process-record files or evidence bundles for these
+  changes. Keep raw test output for failures and for any change a risk gate sends
+  to independent review.
+- A task-board or lane entry is at most 300 characters: what changed, the commit,
+  the test result and the next owner. A claim still names the fields listed under
+  Task-led collaboration; put anything longer in one file and link it.
+- When the risk gates require an independent review, run it once per integration
+  batch over the combined diff, not once per commit. A batch is a delivery
+  checkpoint in the review rules below.
+- Everything else in this file still applies, including privacy and secret scans
+  before every commit and push, asking first for irreversible or outward actions,
+  no self-review, the risk-gate reviews themselves, signed acceptance and daily-use
+  checks before a row is done, and requirements the person stated.
 
 ## Test costs and instances
 
