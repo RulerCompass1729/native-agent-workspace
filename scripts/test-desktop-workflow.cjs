@@ -91,7 +91,8 @@ async function run() {
   await fillRoomMessage(page, '请核查预算并给出结论。'); await chooseFile(material);
   assert.match(await page.locator('#file-content').innerText(), /午餐,3,18/); assert.equal((await native()).sends.length, 0);
   await shot('material-preview'); await page.locator('#insert-file').click();
-  await assert.rejects(page.evaluate(ids => workspace.run(ids, 'stale name should not dispatch', 3, 'replies', Object.fromEntries(ids.map(id => [id, 'obsolete alias']))), [a, b, c]), /名称已变化/);
+  // The refusal crosses preload as a plain object, so read its catalog key in the page.
+  assert.equal(await page.evaluate(async ids => { try { await workspace.run(ids, 'stale name should not dispatch', 3, 'replies', Object.fromEntries(ids.map(id => [id, 'obsolete alias']))); return null; } catch (error) { return error.uiMessage?.key; } }, [a, b, c]), 'error.main.participantNamesChanged');
   assert.equal((await native()).sends.length, 0);
   const goal = await roomBody(page); assert.ok(goal.includes('文件：计划.csv')); assert.ok(!goal.includes(profile));
   const longDraft = '材料'.repeat(3100); await fillRoomMessage(page, longDraft);

@@ -64,6 +64,8 @@ async function capture(name) { if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(pro
   await until(async()=>(await fixture('stats')).decisions.length===2,'Second decision delivered once');
   await resolved(b,3);await event(b,{method:'thread/status/changed',params:{status:{type:'idle'}}});
   // The cue is read from B's visible card. The card counts 「N 项待处理」 only from two, so B's own record must also hold no request.
+  // After the reload B's member tab is restored (a58e456); the card lives on the overview tab.
+  await page.locator('#room-overview').click();
   await until(async()=>{const s=(await snapshot()).sessions.find(x=>x.id===b);return !(s.approvals?.length||s.nativeApproval?.requests?.length)&&await card(b).isVisible()&&(await card(b).innerText()).trim().length>0&&!(await card(b).innerText()).includes('待处理');},'Only resolved member cue clears');
   const final=await snapshot(),stats=await fixture('stats');
   assert.deepEqual(stats.decisions,[{id:1,result:{decision:'accept'}},{id:3,result:{decision:'decline'}}]);

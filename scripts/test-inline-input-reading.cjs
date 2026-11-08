@@ -97,7 +97,8 @@ async function run() {
   check((installed ? 'Copy focus/exact source retained (source clipboard receipt reused); ' : 'Exact source copy succeeds; ') + 'private inline text and following output stay outside the old shared grant, and both drafts remain stored');
   await page.getByRole('button', { name: '放大 Inline A 的会话', exact: true }).click();
   await page.locator(`#messages [data-message-id="native:${nativeId}:${id}"]`).waitFor();
-  await page.getByRole('button', { name: '← 返回共同工作', exact: true }).click();
+  // A member now opens in the space's tabs (a58e456); return to the member overview tab.
+  await page.locator('#room-overview').click();
   await page.getByRole('button', { name: '简化信息', exact: true }).click();
   await page.getByRole('button', { name: '简化信息', exact: true }).click();
   await row.waitFor(); await capture('02-returned-original-input');
