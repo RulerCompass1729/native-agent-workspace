@@ -27,7 +27,8 @@ for (const format of ['per-space', 'legacy', 'migrated']) for (const before of [
     });
     const module = { exports: {} }, claims = [];
     vm.runInNewContext(fs.readFileSync(path.join(root, 'scripts/check-tui.cjs'), 'utf8'), {
-      module, require, workspace: {
+      // Resolve check-tui's own relative requires (fixtures/wait-state.cjs) from scripts/, as when it runs for real.
+      module, require: createRequire(path.join(root, 'scripts/check-tui.cjs')), workspace: {
         async initial() { return { viewState: structuredClone(view), owner: 'owner-a', sessions: [{ id: 'session-a', owner: 'owner-a' }] }; },
         async claim(...args) { claims.push(args); },
         async viewState(next) { handler({ view }, next); },

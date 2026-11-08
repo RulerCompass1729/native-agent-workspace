@@ -8,6 +8,7 @@ const { spawn } = require('node:child_process');
 const { _electron } = require('playwright');
 const { connect } = require('../app/service-client.cjs');
 const { checkTui, verifyTui, restoreTui } = require('./check-tui.cjs');
+const { waitForState } = require('./fixtures/wait-state.cjs');
 const { checkRoom, verifyRoom, restoreRoom } = require('./check-room.cjs');
 const root = path.resolve(__dirname, '..');
 const executablePath = process.env.NAW_APP_EXECUTABLE || require('electron');
@@ -116,7 +117,7 @@ async function run() {
     await until(async () => (await page.evaluate(() => workspace.initial())).sessions.find(s => s.id === testDraft).liveDraft === draftText, 'Draft was not saved');
     if (before.viewState.mode === 'terminal') {
       await page.locator('#terminal-tab').click();
-      await page.waitForFunction(async () => (await workspace.initial()).viewState.mode === 'terminal' && !document.querySelector('#terminal-area').hidden);
+      await waitForState(page, async () => (await workspace.initial()).viewState.mode === 'terminal' && !document.querySelector('#terminal-area').hidden, undefined, 'the saved terminal view');
     }
     before = await page.evaluate(() => workspace.initial());
   }

@@ -1,6 +1,7 @@
 // Visible UI checks. No model prompts or native input; native typing is a
 // separate, deliberately bounded check against an inspected idle terminal.
 const assert = require('node:assert/strict');
+const { waitForState } = require('./fixtures/wait-state.cjs');
 const sharedDraft = '协作草稿：保留到重开，不发送。';
 
 async function openTerminalDisplay(page) {
@@ -25,7 +26,7 @@ async function checkTui(page) {
   await page.locator('#room-nav').click();
   await page.locator('#room-record').click();
   await page.locator('#shared-input').fill(sharedDraft);
-  await page.waitForFunction(async value => (await workspace.initial()).viewState.sharedDraft === value, sharedDraft);
+  await waitForState(page, async value => (await workspace.initial()).viewState.sharedDraft === value, sharedDraft, 'the shared draft to be saved');
   const controlled = initial.sessions.find(s => s.id === initial.viewState.selected && s.owner === initial.owner && s.state === 'idle' && s.terminalAvailable);
   if (controlled) {
     const select = () => page.locator(`[data-session-id="${controlled.id}"]`).click();
@@ -35,10 +36,10 @@ async function checkTui(page) {
     await page.locator('#terminal-font-size').fill('17');
     await page.locator('#terminal-palette').selectOption('green');
     await page.locator('#close-terminal-display').click();
-    await page.waitForFunction(async () => {
+    await waitForState(page, async () => {
       const v = (await workspace.initial()).viewState;
       return v.terminalDisplay?.fontSize === 17 && v.terminalDisplay.palette === 'green';
-    });
+    }, undefined, 'the terminal display settings to be saved');
     await page.locator('#room-nav').click(); await select();
     await page.waitForFunction(id => document.activeElement?.classList.contains('xterm-helper-textarea') && document.activeElement.closest('[data-terminal-id]')?.dataset.terminalId === id, controlled.id);
     assert.equal(await page.locator('#terminal-paste').isEnabled(), true);

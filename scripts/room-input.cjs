@@ -1,5 +1,6 @@
 // Drive the public inline-mention interaction, retaining exact recipient IDs.
 const { valid, body } = require('../app/room-mention.js');
+const { waitForState } = require('./fixtures/wait-state.cjs');
 async function chooseRecipient(page, id) {
   const input = page.locator('#shared-input');
   const saved = (await page.evaluate(() => workspace.initial())).viewState.roomMention;
@@ -8,7 +9,7 @@ async function chooseRecipient(page, id) {
   await input.evaluate(el => el.setSelectionRange(0, 0));
   await input.pressSequentially('@');
   await page.locator(`[data-mention-id="${id}"]`).click();
-  await page.waitForFunction(id => workspace.initial().then(s => s.viewState.roomMention?.id === id), id);
+  await waitForState(page, id => workspace.initial().then(s => s.viewState.roomMention?.id === id), id, 'the chosen recipient to be saved');
 }
 async function fillRoomMessage(page, text) {
   const id = await page.locator('#recipient').inputValue();
