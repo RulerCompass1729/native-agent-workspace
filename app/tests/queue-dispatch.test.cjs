@@ -312,6 +312,11 @@ class FakeClient extends EventEmitter {
     return structuredClone(this.state);
   }
   async refresh() {
+    if (this.busyOnRefresh) {
+      // The person's message reaches the old session just as NAW reads fresh state.
+      this.busyOnRefresh = false;
+      this.state.sessions[0].state = 'working';
+    }
     return this.snapshot();
   }
   close() {}
@@ -1263,6 +1268,26 @@ test('typing into the old terminal after its screen was saved keeps the old sess
   const { client, notices } = await rotateTypedSession(t, false, false, true);
   assert.equal(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), false);
   assert.deepEqual(notices, ['kept']);
+});
+
+test('a session the person starts using just before the stop keeps its spaces and process', async t => {
+  const notices = [];
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })], {
+    notify: (kind, record) => notices.push(kind),
+  });
+  const joins = fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  client.reply('a', '交接：在 feature 分支。');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  // The person sends the old session a message in chat view while the successor takes over.
+  client.busyOnRefresh = true;
+  await dispatcher.schedule();
+  assert.equal(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), false);
+  assert.deepEqual(notices, ['kept']);
+  assert.equal(joins.some(join => join[0] === 'a' && join[1] === false), false, 'it never left its spaces');
 });
 
 test('a prompt left unsent keeps an assigned item waiting instead of failing it', async t => {

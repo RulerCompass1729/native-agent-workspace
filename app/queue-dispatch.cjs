@@ -1577,6 +1577,9 @@ class QueueDispatcher {
     if (!latest) {
       return false;
     }
+    if (latest.state !== 'idle' || latest.pendingTag) {
+      return true;
+    }
     if ((latest.controlRevision || 0) !== (old.controlRevision || 0)) {
       return true;
     }
@@ -1872,6 +1875,10 @@ class QueueDispatcher {
           unsaved = true;
         }
       }
+      // Fresh state before anything changes: a session used meanwhile keeps its spaces and process.
+      if (live && !inUse && await this.touchedSince(oldId, old)) {
+        inUse = true;
+      }
       if (live && !inUse) {
         for (const roomId of record.roomIds) {
           try {
@@ -1880,7 +1887,7 @@ class QueueDispatcher {
             // Leaving is cosmetic; ending the old process is what frees memory.
           }
         }
-        if (old.terminalInputPending === true && await this.touchedSince(oldId, old)) {
+        if (await this.touchedSince(oldId, old)) {
           inUse = true;
         } else {
           await withTimeout(this.client.call('stop', oldId), CALL_TIMEOUT_MS, 'stop-timeout');
