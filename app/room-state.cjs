@@ -567,10 +567,7 @@ class RoomState {
       } catch {
         continue;
       }
-      let params = { name: oldName, detail: detail || '' };
-      if (phase === 'requested') {
-        params = { name: oldName };
-      }
+      const params = { name: oldName, detail: detail || '' };
       const event = { kind: 'rotation', ...uiNotice(keys[phase], params) };
       this.update({}, event, id);
     }

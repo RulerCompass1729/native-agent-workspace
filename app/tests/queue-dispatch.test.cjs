@@ -208,7 +208,7 @@ test('a still-working member keeps its item in flight; an unconfirmed send is fa
 test('a member older than the rotation age is rotated before it receives its next item', () => {
   const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
   const old = member('a', { createdAt: NOW - 25 * HOUR });
-  assert.deepEqual(plan(rooms, [old]), [{ kind: 'rotate', sessionId: 'a' }]);
+  assert.deepEqual(plan(rooms, [old]), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
   const failed = { a: { phase: 'failed' } };
   assert.deepEqual(plan(rooms, [old], { rotations: failed }), [
     { kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' },
@@ -220,7 +220,7 @@ test('an old, quiet member of a queue space is rotated even with no work queued;
   const finished = item('1', { status: 'done', sentTo: 'a', sentAt: NOW - 2 * HOUR, tag: 't1' });
   const rooms = [{ id: 'shared', name: 'Team', queue: [finished] }];
   const quiet = member('a', { createdAt: NOW - 25 * HOUR, lastActivityAt: NOW - 40 * 60000 });
-  assert.deepEqual(plan(rooms, [quiet]), [{ kind: 'rotate', sessionId: 'a' }]);
+  assert.deepEqual(plan(rooms, [quiet]), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
   const talking = member('a', { createdAt: NOW - 25 * HOUR, lastActivityAt: NOW - 10 * 60000 });
   assert.deepEqual(plan(rooms, [talking]), []);
   const young = member('a', { createdAt: NOW - 2 * HOUR, lastActivityAt: NOW - 40 * 60000 });
@@ -872,4 +872,62 @@ test('a kept session rotated again keeps both successors visible; malformed log 
   assert.equal(dispatcher.rotationEntries().length, 1);
   assert.equal(dispatcher.rotationChains().length, 1);
   assert.equal(dispatcher.rotationChains(), dispatcher.rotationChains(), 'cached until the log changes');
+});
+
+test('memory or age, whichever comes first, makes a member due; machine pressure lowers the memory bar', () => {
+  const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
+  const young = member('a', { createdAt: NOW - HOUR });
+  const big = new Map([['a', 1600 * 1024 * 1024]]);
+  assert.deepEqual(plan(rooms, [young], { memory: big }), [{ kind: 'rotate', sessionId: 'a', reason: 'memory' }]);
+  const grown = new Map([['a', 900 * 1024 * 1024]]);
+  assert.deepEqual(plan(rooms, [young], { memory: grown }), [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' }]);
+  assert.deepEqual(plan(rooms, [young], { memory: grown, memoryLimit: rules.PRESSURE_LIMIT_BYTES }), [{ kind: 'rotate', sessionId: 'a', reason: 'memory' }]);
+  const old = member('a', { createdAt: NOW - 25 * HOUR });
+  assert.deepEqual(plan(rooms, [old], { memory: new Map() }), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
+  // A quiet member with no work is rotated for memory after 10 quiet minutes, not 30.
+  const finished = [{ id: 'shared', name: 'Team', queue: [item('2', { status: 'done' })] }];
+  const quiet = member('a', { lastActivityAt: NOW - 15 * 60000 });
+  assert.deepEqual(plan(finished, [quiet], { memory: big }), [{ kind: 'rotate', sessionId: 'a', reason: 'memory' }]);
+  const busyPerson = member('a', { lastActivityAt: NOW - 5 * 60000 });
+  assert.deepEqual(plan(finished, [busyPerson], { memory: big }), []);
+});
+
+test('a session\'s memory includes its child processes; swap usage is read from sysctl', () => {
+  const ps = ['  10   1  100000', '  11  10   50000', '  12  11   25000', '  20   1  300000', '  99   1  999999'].join('\n');
+  const memory = rules.processMemory([{ id: 'a', pid: 10 }, { id: 'b', pid: 20 }, { id: 'c', pid: 404 }], ps);
+  assert.equal(memory.get('a'), (100000 + 50000 + 25000) * 1024);
+  assert.equal(memory.get('b'), 300000 * 1024);
+  assert.equal(memory.has('c'), false);
+  assert.equal(rules.swapRatio('total = 31232.00M  used = 30043.50M  free = 1188.50M  (encrypted)').toFixed(2), '0.96');
+  assert.equal(rules.swapRatio('nonsense'), 0);
+  const real = rules.processMemory([{ id: 'self', pid: process.pid }], require('node:child_process').execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,rss='], { encoding: 'utf8' }));
+  assert.ok(real.get('self') > 0, 'measures a real process tree');
+});
+
+test('with no queued work, a quiet oversized member of a queue space is still rotated through an open window', async t => {
+  const { dir, room } = roomSetup(t);
+  const windowClient = new FakeClient([member('a', { pid: 4242, cwd: '/tmp', lastActivityAt: NOW - 20 * 60000 })]);
+  fakeMembership(room, windowClient);
+  const id = room.queueAdd('old task', null);
+  room.queueMarkSent('shared', id, 'a', 'A', NOW - 3600000);
+  room.queueSetDelivery('shared', id, 'tag-0', 0);
+  room.queueSettle('shared', id, 'done', '', 'A');
+  const dispatcher = new rules.QueueDispatcher({
+    roomState: room,
+    dataDir: dir,
+    clients: () => windowClient,
+    connect: async () => null,
+    now: () => NOW,
+    settleMs: 0,
+    tickMs: 3600000,
+    sampleProcesses: () => '4242 1 1700000\n',
+    sampleSwap: () => 'total = 1000.00M  used = 100.00M  free = 900.00M',
+  });
+  t.after(() => dispatcher.close());
+  await dispatcher.start();
+  const sends = windowClient.sends('a');
+  assert.equal(sends.length, 1);
+  assert.match(sends[0][2], /【NAW 换会话】这个会话（连同它的子进程）已占用约 1\.6 GB 内存/);
+  const requested = room.value.events.find(event => event.uiMessage.key === 'notice.rotation.requested');
+  assert.match(requested.text, /NAW 换会话（这个会话（连同它的子进程）已占用约 1\.6 GB 内存）/);
 });

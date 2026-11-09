@@ -6,6 +6,7 @@
 // The policy functions are pure; QueueDispatcher runs them in the main process.
 const fs = require('node:fs');
 const path = require('node:path');
+const cp = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { roomIds } = require('./collaboration-spaces.cjs');
 const fleet = require('./renderer/fleet-observation.js');
@@ -24,6 +25,17 @@ const UNCONFIRMED_SEND_MS = 120000;
 // A refusal before anything was sent returns the item to the queue at most this often.
 const NOT_SENT_ATTEMPTS = 5;
 const ROTATE_AFTER_MS = 24 * 60 * 60 * 1000;
+// A session (with its child processes) this large is rotated too; whichever comes first.
+// A fresh Claude session starts near 300 MB and a fresh Codex one near 60-125 MB.
+const MEMORY_LIMIT_BYTES = 1536 * 1024 * 1024;
+// When the machine is short of memory (swap more than half used), grown sessions go first.
+const PRESSURE_LIMIT_BYTES = 800 * 1024 * 1024;
+const PRESSURE_SWAP_RATIO = 0.5;
+// A memory-triggered rotation waits for this much quiet instead of the 30 minutes for age.
+const QUIET_MEMORY_MS = 10 * 60 * 1000;
+// With no queued work, quiet members of queue spaces are still checked this often.
+const MAINTENANCE_MS = 60 * 1000;
+const MEMORY_SAMPLE_MS = 30 * 1000;
 // An idle old member with no work is rotated only after this long without activity.
 const QUIET_BEFORE_ROTATE_MS = 30 * 60 * 1000;
 // A new member that never becomes ready (for example a startup prompt) ends the rotation.
@@ -315,17 +327,19 @@ function memberIds(room, sessions) {
   return ordered;
 }
 
-function rotationDue(session, now, rotateAfterMs, rotations) {
-  if (!rotateAfterMs || !Number.isFinite(session.createdAt)) {
-    return false;
+// Why a member is due for rotation now: 'age', 'memory' or null.
+function rotationReason(session, now, options, rotations) {
+  if (!['claude', 'codex'].includes(session.provider) || rotations[session.id]) {
+    return null;
   }
-  if (!['claude', 'codex'].includes(session.provider)) {
-    return false;
+  if (options.rotateAfterMs && Number.isFinite(session.createdAt) && now - session.createdAt >= options.rotateAfterMs) {
+    return 'age';
   }
-  if (rotations[session.id]) {
-    return false;
+  const used = options.memory ? options.memory.get(session.id) : undefined;
+  if (Number.isFinite(used) && options.memoryLimit && used >= options.memoryLimit) {
+    return 'memory';
   }
-  return now - session.createdAt >= rotateAfterMs;
+  return null;
 }
 
 // One pass over every space. Returns the actions in the order to run them.
@@ -336,6 +350,8 @@ function planDispatch(input) {
   const settleMs = input.settleMs ?? IDLE_SETTLE_MS;
   const rotateAfterMs = input.rotateAfterMs ?? ROTATE_AFTER_MS;
   const quietMs = input.quietMs ?? QUIET_BEFORE_ROTATE_MS;
+  const quietMemoryMs = input.quietMemoryMs ?? QUIET_MEMORY_MS;
+  const rotationOptions = { rotateAfterMs, memory: input.memory, memoryLimit: input.memoryLimit ?? MEMORY_LIMIT_BYTES };
   const humanQuietMs = input.humanQuietMs ?? HUMAN_QUIET_MS;
   const rotations = input.rotations || {};
   const idleSince = input.idleSince || new Map();
@@ -457,8 +473,9 @@ function planDispatch(input) {
         continue;
       }
       busy.add(target.id);
-      if (rotationDue(target, now, rotateAfterMs, rotations)) {
-        actions.push({ kind: 'rotate', sessionId: target.id });
+      const reason = rotationReason(target, now, rotationOptions, rotations);
+      if (reason) {
+        actions.push({ kind: 'rotate', sessionId: target.id, reason });
       } else {
         actions.push({ kind: 'dispatch', roomId: room.id, itemId: item.id, sessionId: target.id });
       }
@@ -474,18 +491,23 @@ function planDispatch(input) {
         continue;
       }
       const session = byId.get(id);
-      if (!available(session) || !rotationDue(session, now, rotateAfterMs, rotations)) {
+      const reason = available(session) ? rotationReason(session, now, rotationOptions, rotations) : null;
+      if (!reason) {
         continue;
       }
       let lastActivity = session.createdAt;
       if (Number.isFinite(session.lastActivityAt)) {
         lastActivity = session.lastActivityAt;
       }
-      if (now - lastActivity < quietMs) {
+      let quiet = quietMs;
+      if (reason === 'memory') {
+        quiet = quietMemoryMs;
+      }
+      if (now - lastActivity < quiet) {
         continue;
       }
       busy.add(id);
-      actions.push({ kind: 'rotate', sessionId: id });
+      actions.push({ kind: 'rotate', sessionId: id, reason });
     }
   }
   return actions;
@@ -501,9 +523,16 @@ function dispatchText(roomName, item) {
   ].join('\n');
 }
 
-function handoffRequestText(hours) {
+function rotationWhy(reason, hours, bytes) {
+  if (reason === 'memory') {
+    return `这个会话（连同它的子进程）已占用约 ${(bytes / 1073741824).toFixed(1)} GB 内存`;
+  }
+  return `这个会话已经开了 ${hours} 小时以上`;
+}
+
+function handoffRequestText(why) {
   return [
-    `【NAW 换会话】这个会话已经开了 ${hours} 小时以上。为了释放内存，NAW 会开一个新会话接着做，这个会话随后结束（记录保留，可以恢复）。`,
+    `【NAW 换会话】${why}。为了释放内存，NAW 会开一个新会话接着做，这个会话随后结束（记录保留，可以恢复）。`,
     '',
     '请现在只写交接，不要开始新工作。交接写给接手的新会话，包括：',
     '1. 正在做的事和目标；',
@@ -650,6 +679,57 @@ function rotationChains(entries) {
   return chains;
 }
 
+// Resident memory of each session's process and its children, from one ps listing.
+function processMemory(sessions, psOutput) {
+  const children = new Map();
+  const rss = new Map();
+  for (const line of psOutput.split('\n')) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)$/);
+    if (!match) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    const parent = Number(match[2]);
+    rss.set(pid, Number(match[3]) * 1024);
+    if (!children.has(parent)) {
+      children.set(parent, []);
+    }
+    children.get(parent).push(pid);
+  }
+  const result = new Map();
+  for (const session of sessions) {
+    if (!Number.isSafeInteger(session.pid) || !rss.has(session.pid)) {
+      continue;
+    }
+    let total = 0;
+    const stack = [session.pid];
+    const seen = new Set();
+    while (stack.length) {
+      const pid = stack.pop();
+      if (seen.has(pid)) {
+        continue;
+      }
+      seen.add(pid);
+      total += rss.get(pid) || 0;
+      for (const child of children.get(pid) || []) {
+        stack.push(child);
+      }
+    }
+    result.set(session.id, total);
+  }
+  return result;
+}
+
+// 'total = 31232.00M  used = 30043.50M  free = ...' -> used / total, or 0 when unknown.
+function swapRatio(text) {
+  const total = /total = ([\d.]+)M/.exec(text || '');
+  const used = /used = ([\d.]+)M/.exec(text || '');
+  if (!total || !used || Number(total[1]) <= 0) {
+    return 0;
+  }
+  return Number(used[1]) / Number(total[1]);
+}
+
 function notSent(error) {
   if (error && error.notSent === true) {
     return true;
@@ -730,6 +810,12 @@ class QueueDispatcher {
     this.rotateAfterMs = options.rotateAfterMs ?? ROTATE_AFTER_MS;
     this.quietMs = options.quietMs ?? QUIET_BEFORE_ROTATE_MS;
     this.tickMs = options.tickMs ?? TICK_MS;
+    this.memoryLimit = options.memoryLimit ?? MEMORY_LIMIT_BYTES;
+    this.pressureLimit = options.pressureLimit ?? PRESSURE_LIMIT_BYTES;
+    this.sampleProcesses = options.sampleProcesses || (() => cp.execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,rss='], { encoding: 'utf8', timeout: 5000 }));
+    this.sampleSwap = options.sampleSwap || (() => cp.execFileSync('/usr/sbin/sysctl', ['-n', 'vm.swapusage'], { encoding: 'utf8', timeout: 5000 }));
+    this.memorySample = null;
+    this.lastMaintenance = 0;
     this.owner = options.owner || randomUUID();
     this.idleSince = new Map();
     this.humanAt = new Map();
@@ -1005,20 +1091,59 @@ class QueueDispatcher {
     return session.name || session.id;
   }
 
+  // Session memory and swap pressure, sampled at most twice a minute.
+  memory(sessions, now) {
+    if (this.memorySample && now - this.memorySample.at < MEMORY_SAMPLE_MS) {
+      return this.memorySample;
+    }
+    let memory = new Map();
+    let limit = this.memoryLimit;
+    try {
+      memory = processMemory(sessions, this.sampleProcesses());
+      if (swapRatio(this.sampleSwap()) >= PRESSURE_SWAP_RATIO) {
+        limit = this.pressureLimit;
+      }
+    } catch {
+      // Without a sample only the age rule applies this time.
+    }
+    this.memorySample = { at: now, memory, limit };
+    return this.memorySample;
+  }
+
+  // Metadata only: does any space keep a queue whose members may need rotation?
+  queueSpaces() {
+    const rooms = [this.roomState.value, ...this.roomState.spaces.rooms];
+    for (const room of rooms) {
+      if (!room.archived && Array.isArray(room.queue) && room.queue.length) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async tick() {
     this.pruneRotations(this.now());
-    if (!this.hasOpenWork()) {
-      this.dropOwnClient();
-      this.listen(null);
-      this.idleSince.clear();
-      this.dirty = true;
-      return;
-    }
-    this.client = await this.source();
-    this.listen(this.client);
     const now = this.now();
+    if (!this.hasOpenWork()) {
+      // No queued work: still check quiet members for rotation once a minute, through a window only.
+      const windowClient = this.clients();
+      this.dropOwnClient();
+      if (!windowClient || !this.queueSpaces() || now - this.lastMaintenance < MAINTENANCE_MS) {
+        if (!windowClient) {
+          this.listen(null);
+        }
+        this.idleSince.clear();
+        this.dirty = true;
+        return;
+      }
+      this.lastMaintenance = now;
+      this.client = windowClient;
+    } else {
+      this.client = await this.source();
+    }
+    this.listen(this.client);
     const rotating = this.activeRotations().length > 0;
-    const due = this.dirty || rotating || now - this.lastFullPass >= FULL_PASS_MS || this.settlingSoon(now);
+    const due = this.dirty || rotating || now - this.lastFullPass >= FULL_PASS_MS || this.settlingSoon(now) || now === this.lastMaintenance;
     if (!due) {
       return;
     }
@@ -1029,6 +1154,7 @@ class QueueDispatcher {
       await this.advanceRotations(current.snapshot, current.now);
       current = this.view();
     }
+    const sample = this.memory(current.snapshot.sessions, current.now);
     const actions = planDispatch({
       rooms: current.snapshot.rooms,
       sessions: current.snapshot.sessions,
@@ -1040,6 +1166,8 @@ class QueueDispatcher {
       humanQuietMs: this.humanQuietMs,
       rotateAfterMs: this.rotateAfterMs,
       quietMs: this.quietMs,
+      memory: sample.memory,
+      memoryLimit: sample.limit,
       rotations: this.rotations,
     });
     for (const action of actions) {
@@ -1051,7 +1179,7 @@ class QueueDispatcher {
       } else if (action.kind === 'dispatch') {
         await this.dispatch(action);
       } else if (action.kind === 'rotate') {
-        await this.requestHandoff(action);
+        await this.requestHandoff(action, sample.memory.get(action.sessionId));
       }
     }
   }
@@ -1158,14 +1286,18 @@ class QueueDispatcher {
     return !(reply && reply.humanAfter);
   }
 
-  async requestHandoff(action) {
+  async requestHandoff(action, bytes) {
     const current = await this.freshReady(action.sessionId);
     if (!current) {
       return;
     }
     const session = current.session;
     const hours = Math.floor((current.now - session.createdAt) / 3600000);
+    const reason = action.reason || 'age';
+    const why = rotationWhy(reason, hours, bytes || 0);
     const record = {
+      reason,
+      why,
       phase: 'requested',
       requestedAt: current.now,
       tag: null,
@@ -1182,10 +1314,10 @@ class QueueDispatcher {
     this.rotations[session.id] = record;
     this.save();
     try {
-      record.tag = await this.send(session, handoffRequestText(hours), `rotation:${session.id}`);
+      record.tag = await this.send(session, handoffRequestText(why), `rotation:${session.id}`);
       this.save();
-      this.appendLog('requested', record);
-      this.roomState.rotationEvent(record.roomIds, 'requested', this.label(session.id, record.name), '');
+      this.appendLog('requested', record, { reason, why });
+      this.roomState.rotationEvent(record.roomIds, 'requested', this.label(session.id, record.name), why);
     } catch (error) {
       if (notSent(error)) {
         delete this.rotations[session.id];
@@ -1419,6 +1551,10 @@ module.exports = {
   shortText,
   notSent,
   readRotations,
+  processMemory,
+  swapRatio,
+  MEMORY_LIMIT_BYTES,
+  PRESSURE_LIMIT_BYTES,
   terminalReplyOnly,
   nextName,
   rotationChains,
