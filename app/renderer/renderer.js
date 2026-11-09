@@ -3506,7 +3506,7 @@ function render() {
     $('reconnect-button').hidden = !disconnected;
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
     renderSessions(); renderCreateSpaces();
-    renderArchives(); renderSpaceNavigation(); renderSpaceFiles();
+    renderArchives(); renderSpaceNavigation(); renderSpaceFiles(); renderQueue();
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
       const record = state.sessions.find(s => s.id === entry.dataset.inviteSession);
@@ -4342,6 +4342,138 @@ function renderSpaceFiles() {
 }
 $('close-space-files').onclick = () => $('space-files-dialog').close();
 $('add-space-files').onclick = () => attempt(async () => { const id = filesSpace; await api.spaceFiles(id); updateState(await api.initial()); if (filesSpace === id) renderSpaceFiles(); });
+// Space task queue: the person adds items; NAW sends each idle member its next one.
+let queueSpace = null;
+const QUEUE_FINISHED_SHOWN = 10;
+function openQueue() {
+  queueSpace = spaceId;
+  $('queue-list').dataset.signature = '';
+  renderQueue();
+  openTransientDialog('queue-dialog');
+}
+function queueMemberName(id) {
+  const record = state.sessions.find(s => s.id === id);
+  if (record) {
+    return record.name;
+  }
+  return sessionShortId(id);
+}
+function queueShownItems(room) {
+  const open = [];
+  const finished = [];
+  for (const item of room.queue || []) {
+    if (['queued', 'sent', 'waiting'].includes(item.status)) {
+      open.push(item);
+    } else {
+      finished.push(item);
+    }
+  }
+  return open.concat(finished.slice(-QUEUE_FINISHED_SHOWN));
+}
+function queueRow(item) {
+  const row = node('div', undefined, 'queue-row');
+  let text = item.text;
+  if (text.length > 300) {
+    text = text.slice(0, 299) + '…';
+  }
+  const body = node('div', text, 'queue-text');
+  let name = '';
+  if (item.sentTo) {
+    name = queueMemberName(item.sentTo);
+  } else if (item.assignee) {
+    name = queueMemberName(item.assignee);
+  }
+  const status = uiNode('span', 'queue.status.' + item.status, () => ({ name }), 'queue-status');
+  if (item.status === 'queued' && item.assignee) {
+    status.title = name;
+  }
+  const actions = node('span', undefined, 'queue-actions');
+  if (item.status === 'waiting') {
+    actions.append(uiButton('queue.resolve', async () => {
+      await api.spaceAction(queueSpace, 'queueResolve', [item.id]);
+      updateState(await api.initial());
+      renderQueue();
+    }, 'small'));
+  }
+  if (['queued', 'waiting'].includes(item.status)) {
+    actions.append(uiButton('queue.cancel', async () => {
+      await api.spaceAction(queueSpace, 'queueCancel', [item.id]);
+      updateState(await api.initial());
+      renderQueue();
+    }, 'small'));
+  }
+  row.dataset.queueItem = item.id;
+  row.dataset.status = item.status;
+  row.append(status, body, actions);
+  return row;
+}
+function renderQueue() {
+  if (!queueSpace) return;
+  const room = spaceRecord(queueSpace);
+  if (!room) return;
+  ui.display.text($('queue-title'), 'queue.titleName', () => ({ name: spaceName(room) }));
+  $('queue-off').hidden = state.wakePolicy?.enabled === true;
+  $('add-queue').disabled = disconnected || room.archived;
+  const members = [];
+  for (const record of state.sessions) {
+    if (inSpace(record, queueSpace) && !record.archived) {
+      members.push({ id: record.id, name: record.name });
+    }
+  }
+  const select = $('queue-assignee');
+  const memberSignature = JSON.stringify(members);
+  if (select.dataset.signature !== memberSignature) {
+    const chosen = select.value;
+    const anyone = uiNode('option', 'queue.anyone');
+    anyone.value = '';
+    const options = [anyone];
+    for (const member of members) {
+      const option = node('option', member.name);
+      option.value = member.id;
+      options.push(option);
+    }
+    select.replaceChildren(...options);
+    select.dataset.signature = memberSignature;
+    let stillMember = false;
+    for (const member of members) {
+      if (member.id === chosen) {
+        stillMember = true;
+      }
+    }
+    if (stillMember) {
+      select.value = chosen;
+    }
+  }
+  const items = queueShownItems(room);
+  const list = $('queue-list');
+  const signature = JSON.stringify([items, memberSignature]);
+  if (list.dataset.signature === signature) return;
+  list.dataset.signature = signature;
+  const rows = [];
+  for (const item of items) {
+    rows.push(queueRow(item));
+  }
+  list.replaceChildren(...rows);
+  if (!rows.length) {
+    list.append(uiNode('p', 'queue.empty', undefined, 'quiet'));
+  }
+}
+$('room-queue').onclick = openQueue;
+$('close-queue').onclick = () => $('queue-dialog').close();
+$('queue-form').onsubmit = event => {
+  event.preventDefault();
+  attempt(async () => {
+    const id = queueSpace;
+    const text = $('queue-text').value;
+    const assignee = $('queue-assignee').value || null;
+    await api.spaceAction(id, 'queueAdd', [text, assignee]);
+    $('queue-text').value = '';
+    updateState(await api.initial());
+    if (queueSpace === id) {
+      renderQueue();
+    }
+  });
+};
 function fileTargetMatches() {
   return fileTarget && (!fileTarget.room || fileTarget.roomId === spaceId) && fileTarget.revision === selectionRevision && fileTarget.mode === mode &&
     (fileTarget.room ? sharedSurface() && fileTarget.id === roomRecipient() : !sharedSurface() && fileTarget.id === activeSessionId());

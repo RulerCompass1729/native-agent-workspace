@@ -5,6 +5,7 @@ const { randomUUID, createHash } = require('node:crypto');
 const { validateName } = require('./session-labels.cjs');
 const { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
 const { captureSource, prepareBatch, assertCurrentSources, sameOperation, validateBatch } = require('./space-merge.cjs');
+const queueRules = require('./queue-dispatch.cjs');
 const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f]/u.test(id);
 const memberOrder = value => Array.isArray(value) && value.length <= 10000 ? [...new Set(value.filter(orderId))] : [];
 const initialRoom = name => ({ version: 1, name, notes: '', revision: 0, events: [], archived: false, restoreMembers: [], restorePlacements: {}, memberOrder: [], files: [] });
@@ -38,7 +39,23 @@ function validateRoom(data) {
   if (data.restorePlacements !== undefined && (!data.restorePlacements || typeof data.restorePlacements !== 'object' || Array.isArray(data.restorePlacements) || Object.entries(data.restorePlacements).some(([id, p]) => !orderId(id) || !p || typeof p !== 'object' || p.nativeId !== null && typeof p.nativeId !== 'string' || !Number.isSafeInteger(p.connectionRevision) || p.connectionRevision < 0 || !Number.isSafeInteger(p.revision) || p.revision < 0 || typeof p.signature !== 'string' || p.signature.length > 1048576))) throw Error('Invalid restore placement');
   if (data.files !== undefined && (!Array.isArray(data.files) || data.files.some(f => !f || typeof f.id !== 'string' || !roomId(f.id) || f.id === DEFAULT_ROOM_ID || typeof f.path !== 'string' || !path.isAbsolute(f.path) || /\u0000/.test(f.path) || typeof f.name !== 'string' || !f.name || /[\u0000-\u001f]/u.test(f.name)) || new Set(data.files.map(f => f.id)).size !== data.files.length)) throw Error('Invalid files');
   if (data.merge !== undefined) validateMerge(data.merge, data.id);
-  return { ...initialRoom(data.name), ...data, memberOrder: memberOrder(data.memberOrder) };
+  const room = { ...initialRoom(data.name), ...data, memberOrder: memberOrder(data.memberOrder) };
+  if (data.queue !== undefined) {
+    room.queue = queueRules.validateQueue(data.queue);
+  }
+  return room;
+}
+
+// A detached copy of a space queue for display and dispatch decisions.
+function copyQueue(queue) {
+  const copy = [];
+  if (!Array.isArray(queue)) {
+    return copy;
+  }
+  for (const item of queue) {
+    copy.push({ ...item });
+  }
+  return copy;
 }
 
 // One desktop-profile writer, independent of retained provider services.
@@ -401,6 +418,143 @@ class RoomState {
     if (revision !== value.revision) throw uiError("error.room.fileListChanged");
     if (value.files.some(f => f.id === fileId)) this.update({ files: value.files.filter(f => f.id !== fileId) }, { kind: 'files', ...uiNotice('notice.room.fileRemoved') }, id);
   }
+  // Task queue (queue-dispatch.cjs). The person adds and cancels; NAW sends.
+  queueItems(id) {
+    const value = this.metadata(id);
+    if (Array.isArray(value.queue)) {
+      return value.queue;
+    }
+    return [];
+  }
+  queueFind(id, itemId) {
+    for (const item of this.queueItems(id)) {
+      if (item.id === itemId) {
+        return item;
+      }
+    }
+    throw uiError("error.queue.itemMissing");
+  }
+  queueReplace(id, itemId, next, event) {
+    this.writable(id);
+    const queue = [];
+    for (const item of this.queueItems(id)) {
+      if (item.id === itemId) {
+        queue.push(next);
+      } else {
+        queue.push(item);
+      }
+    }
+    this.update({ queue: queueRules.validateQueue(queue) }, event, id);
+  }
+  queueAdd(text, assignee, id = DEFAULT_ROOM_ID) {
+    this.writable(id);
+    if (this.metadata(id).archived) {
+      throw uiError("error.queue.archived");
+    }
+    let item;
+    try {
+      item = queueRules.newItem(text, assignee ?? null);
+    } catch {
+      throw uiError("error.queue.invalid");
+    }
+    const items = this.queueItems(id);
+    let open = 0;
+    for (const existing of items) {
+      if (['queued', 'sent', 'waiting'].includes(existing.status)) {
+        open += 1;
+      }
+    }
+    if (open >= queueRules.QUEUE_LIMIT) {
+      throw uiError("error.queue.full");
+    }
+    const queue = queueRules.trimQueue([...items, item]);
+    const event = { kind: 'queue', ...uiNotice('notice.queue.added', { text: queueRules.shortText(text) }) };
+    this.update({ queue }, event, id);
+    return item.id;
+  }
+  queueCancel(itemId, id = DEFAULT_ROOM_ID) {
+    const item = this.queueFind(id, itemId);
+    if (!['queued', 'waiting'].includes(item.status)) {
+      throw uiError("error.queue.notCancellable");
+    }
+    const next = { ...item, status: 'cancelled', finishedAt: Date.now() };
+    const event = { kind: 'queue', ...uiNotice('notice.queue.cancelled', { text: queueRules.shortText(item.text) }) };
+    this.queueReplace(id, itemId, next, event);
+  }
+  queueResolve(itemId, id = DEFAULT_ROOM_ID) {
+    const item = this.queueFind(id, itemId);
+    if (item.status !== 'waiting') {
+      throw uiError("error.queue.notWaiting");
+    }
+    this.queueReplace(id, itemId, { ...item, status: 'done', finishedAt: Date.now() });
+  }
+  queueMarkSent(id, itemId, sessionId, name, now) {
+    const item = this.queueFind(id, itemId);
+    if (item.status !== 'queued') {
+      throw uiError("error.queue.notQueued");
+    }
+    const next = { ...item, status: 'sent', sentTo: sessionId, sentAt: now, tag: null };
+    const params = { text: queueRules.shortText(item.text), name };
+    const event = { kind: 'queue', sessionId, ...uiNotice('notice.queue.dispatched', params) };
+    this.queueReplace(id, itemId, next, event);
+  }
+  queueSetTag(id, itemId, tag) {
+    const item = this.queueFind(id, itemId);
+    this.queueReplace(id, itemId, { ...item, tag });
+  }
+  queueSettle(id, itemId, status, reason, name) {
+    const item = this.queueFind(id, itemId);
+    if (item.status !== 'sent') {
+      throw uiError("error.queue.notSent");
+    }
+    const next = { ...item, status, finishedAt: Date.now() };
+    if (reason) {
+      next.reason = reason;
+    }
+    // Only outcomes that need the person are written to the space record.
+    let event;
+    const text = queueRules.shortText(item.text);
+    if (status === 'waiting') {
+      event = { kind: 'queue', sessionId: item.sentTo, ...uiNotice('notice.queue.waiting', { text, name }) };
+    } else if (status === 'failed') {
+      const params = { text, name, reason: reason || '' };
+      event = { kind: 'queue', sessionId: item.sentTo, ...uiNotice('notice.queue.failed', params) };
+    }
+    this.queueReplace(id, itemId, next, event);
+  }
+  queueReassign(id, fromId, toId) {
+    this.writable(id);
+    const queue = [];
+    let changed = false;
+    for (const item of this.queueItems(id)) {
+      if (item.status === 'queued' && item.assignee === fromId) {
+        changed = true;
+        queue.push({ ...item, assignee: toId });
+      } else {
+        queue.push(item);
+      }
+    }
+    if (changed) {
+      this.update({ queue }, undefined, id);
+    }
+  }
+  rotationEvent(ids, phase, oldName, detail) {
+    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', failed: 'notice.rotation.failed' };
+    for (const id of ids) {
+      try {
+        this.metadata(id);
+        this.writable(id);
+      } catch {
+        continue;
+      }
+      let params = { name: oldName, detail: detail || '' };
+      if (phase === 'requested') {
+        params = { name: oldName };
+      }
+      const event = { kind: 'rotation', ...uiNotice(keys[phase], params) };
+      this.update({}, event, id);
+    }
+  }
   moveMember(change, records, room = DEFAULT_ROOM_ID) {
     this.writable(room);
     if (!change || ![Object.prototype, null].includes(Object.getPrototypeOf(change)) || !orderId(change.id) || !orderId(change.target) || typeof change.after !== 'boolean') throw uiError("error.room.invalidMemberOrder");
@@ -579,7 +733,7 @@ class RoomState {
     const metadata = [{ ...this.value, id: DEFAULT_ROOM_ID }, ...this.spaces.rooms];
     const rooms = metadata.map(value => {
       const backend = (snapshot.rooms || [snapshot.room]).find(r => r?.id === value.id || value.id === DEFAULT_ROOM_ID && r && !r.id);
-      return { ...(backend || { id: value.id, revision: 0, run: null, messages: [] }), id: value.id, name: value.name, notes: value.notes, metadataRevision: value.revision, events: value.events, archived: value.archived, memberOrder: [...value.memberOrder], files: value.files.map(f => ({ ...f })),
+      return { ...(backend || { id: value.id, revision: 0, run: null, messages: [] }), id: value.id, name: value.name, notes: value.notes, metadataRevision: value.revision, events: value.events, archived: value.archived, memberOrder: [...value.memberOrder], files: value.files.map(f => ({ ...f })), queue: copyQueue(value.queue),
         ...(value.merge ? { merge: { operationId: value.merge.batch.operationId, binding: value.merge.batch.binding, stage: value.merge.stage,
           imported: value.merge.imported, failures: [...value.merge.failures], failuresUiMessage: value.merge.failuresUiMessage || null, undoKeptTarget: Boolean(value.merge.undoKeptTarget),
           sources: value.merge.sources.map(source => ({ id: source.id, name: value.merge.batch.sources.find(original => original.id === source.id)?.name, status: source.status, error: source.error || '', errorUiMessage: source.errorUiMessage || null })),

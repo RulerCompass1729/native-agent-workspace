@@ -26,6 +26,7 @@ const { bindOriginalOutbox, bindClaudeOutbox, bindOriginalControl, bindClaudeCon
 const { createStockOutboxView } = require('./computer-use-outbox-view.cjs');
 const background = require('./background-control.cjs');
 const backgroundOperation = require('./background-operation.cjs');
+const { QueueDispatcher } = require('./queue-dispatch.cjs');
 const applicationHandlers = new Map();
 let backgroundControl, backgroundUnavailable = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
@@ -236,6 +237,41 @@ function reportViewStorage(warning, uiMessage = null) {
   if (viewStorageWarning === warning) return;
   viewStorageWarning = warning; viewStorageWarningUiMessage = uiMessage;
   for (const { win } of windows.values()) if (!win.isDestroyed()) win.webContents.send('workspace:view-storage', warning, uiMessage);
+}
+// Space task queues: NAW sends each idle member its next item (queue-dispatch.cjs).
+let queueDispatcher = null;
+async function startQueueDispatcher() {
+  if (queueDispatcher || process.env.NAW_QUEUE_DISPATCH === 'off') {
+    return;
+  }
+  try {
+    const options = {
+      roomState,
+      dataDir,
+      // Prefer a window's client: its state is already held and kept current.
+      clients: () => {
+        for (const context of windows.values()) {
+          const usable = !context.background && !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed;
+          if (usable) {
+            return context.client;
+          }
+        }
+        return null;
+      },
+      connect: owner => connect(dataDir, owner),
+      labels: sessionLabels.labels,
+      broadcast: broadcastRoom,
+    };
+    // Only a verified isolated test run may shorten the 24-hour rotation age.
+    const testRotation = Number(process.env.NAW_TEST_QUEUE_ROTATE_MS);
+    if (backgroundTest && Number.isSafeInteger(testRotation) && testRotation > 0) {
+      options.rotateAfterMs = testRotation;
+    }
+    queueDispatcher = await new QueueDispatcher(options).start();
+  } catch {
+    // Optional: the app and every native session keep working without it.
+    queueDispatcher = null;
+  }
 }
 async function broadcastRoom() {
   await Promise.allSettled([...windows.values()].map(async context => {
@@ -618,6 +654,7 @@ async function boot() {
   if (loaded.changed) saveViews();
   process.env.NAW_RUNTIME_CONFIG = path.join(dataDir, 'runtime-locations.json');
   await ensureService(dataDir, process.execPath);
+  await startQueueDispatcher();
   switchRecords = backendSwitch.readRecords(dataDir);
   if (quitting) return;
   const generation = localeHostGeneration;
@@ -698,6 +735,16 @@ async function boot() {
       try { return await roomState[action === 'archive' ? 'archiveRoom' : 'restoreRoom'](c.client, sessionLabels.labels, roomId); }
       finally { await broadcastRoom(); }
     } else if (action === 'removeFile') roomState.removeFile(args[0], args[1], roomId);
+    else if (action === 'queueAdd') {
+      const itemId = roomState.queueAdd(args[0], args[1] ?? null, roomId);
+      await broadcastRoom();
+      queueDispatcher?.schedule();
+      return itemId;
+    } else if (action === 'queueCancel') roomState.queueCancel(args[0], roomId);
+    else if (action === 'queueResolve') {
+      roomState.queueResolve(args[0], roomId);
+      queueDispatcher?.schedule();
+    }
     else if (['forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory'].includes(action)) {
       if (action === 'clearSharedHistory') {
         roomState.writable(roomId);
@@ -1174,3 +1221,4 @@ app.on('before-quit', event => {
   } else { quitting = true; dsh?.stop(); }
 });
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.
+app.on('will-quit', () => { queueDispatcher?.close(); });
