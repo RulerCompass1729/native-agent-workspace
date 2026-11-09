@@ -748,3 +748,29 @@ test('while the old session waits for a collaboration, the new member already ta
   assert.equal(client.calls.filter(call => call[0] === 'stop').length, 0, 'never stopped while a collaboration runs');
   assert.equal(dispatcher.rotations.a.phase, 'kept');
 });
+
+test('the person quoting NAW text is still the person; an ended old session needs no wait', () => {
+  const rooms = [{ id: 'shared', name: 'Team', queue: [sentItem()] }];
+  const quoted = [
+    { id: 't1', role: 'user', text: 'NAW task', origin: 'naw-dispatch' },
+    { id: 'h1', role: 'user', text: '关于【NAW 派活】那件，换个做法', origin: 'human' },
+    { id: 'r1', role: 'assistant', text: 'OK' },
+  ];
+  assert.equal(plan(rooms, [member('a', { messages: quoted })])[0].reason, 'person-intervened');
+});
+
+test('a rotation whose old session already ended finishes at once even while a collaboration runs', async t => {
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })]);
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  client.reply('a', '交接：分支 abc。');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  client.state.sessions[0].state = 'ended';
+  client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] };
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  assert.equal(dispatcher.rotations.a, undefined, 'record finished without waiting');
+  assert.equal(client.calls.filter(call => call[0] === 'stop').length, 0, 'nothing left to stop');
+});

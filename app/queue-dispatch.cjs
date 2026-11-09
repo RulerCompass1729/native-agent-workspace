@@ -261,8 +261,12 @@ function replyAfter(session, tag, sentAt) {
     if (!after) {
       continue;
     }
-    const nawText = typeof message.text === 'string' && (message.text.includes('【NAW 派活】') || message.text.includes('【NAW 换会话】'));
-    if (message.role === 'user' && !AUTOMATIC_ORIGINS.includes(message.origin) && !nawText) {
+    // A row with an origin is judged by it; only native rows without one fall back to NAW's marker.
+    let automatic = AUTOMATIC_ORIGINS.includes(message.origin);
+    if (message.origin === undefined && typeof message.text === 'string') {
+      automatic = message.text.includes('【NAW 派活】') || message.text.includes('【NAW 换会话】');
+    }
+    if (message.role === 'user' && !automatic) {
       humanAfter = true;
     }
     if (message.role === 'assistant' && typeof message.text === 'string' && message.text.trim()) {
@@ -1143,11 +1147,11 @@ class QueueDispatcher {
           collaborating = true;
         }
       }
+      const live = old && !['ended', 'background'].includes(old.state);
       const waitedTooLong = now - (record.handedAt || now) > STOP_WAIT_MS;
-      if (collaborating && !waitedTooLong) {
+      if (live && collaborating && !waitedTooLong) {
         return;
       }
-      const live = old && !['ended', 'background'].includes(old.state);
       let inUse = false;
       if (live) {
         const quiet = old.state === 'idle' && !old.pendingTag;
