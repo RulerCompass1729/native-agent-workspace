@@ -579,60 +579,73 @@ function shortId(id) {
   return id.slice(0, 6);
 }
 
+function validLogEntry(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    return false;
+  }
+  if (!['requested', 'done', 'kept', 'failed'].includes(entry.event) || !Number.isFinite(entry.time)) {
+    return false;
+  }
+  if (!Array.isArray(entry.spaces) || entry.spaces.some(space => typeof space !== 'string')) {
+    return false;
+  }
+  if (!entry.old || typeof entry.old !== 'object' || typeof entry.old.id !== 'string') {
+    return false;
+  }
+  return entry.new === null || (typeof entry.new === 'object' && typeof entry.new.id === 'string');
+}
+
 // Rotation log entries joined into chains: the sessions behind one continuing conversation.
+// A session kept and rotated again has several successors; each path is its own chain.
 function rotationChains(entries) {
   const nextOf = new Map();
   const previousOf = new Map();
   const sessionInfo = new Map();
+  const spacesOf = new Map();
   for (const entry of entries) {
-    if (entry.old && entry.old.id) {
-      sessionInfo.set(entry.old.id, { ...sessionInfo.get(entry.old.id), ...entry.old });
+    if (!validLogEntry(entry)) {
+      continue;
     }
-    if (entry.new && entry.new.id) {
+    sessionInfo.set(entry.old.id, { ...sessionInfo.get(entry.old.id), ...entry.old });
+    spacesOf.set(entry.old.id, entry.spaces);
+    if (entry.new) {
       sessionInfo.set(entry.new.id, { ...sessionInfo.get(entry.new.id), ...entry.new });
+      spacesOf.set(entry.new.id, entry.spaces);
     }
-    if (['done', 'kept'].includes(entry.event) && entry.old && entry.new) {
-      nextOf.set(entry.old.id, { id: entry.new.id, time: entry.time, event: entry.event });
+    if (['done', 'kept'].includes(entry.event) && entry.new) {
+      if (!nextOf.has(entry.old.id)) {
+        nextOf.set(entry.old.id, []);
+      }
+      nextOf.get(entry.old.id).push({ id: entry.new.id, time: entry.time, event: entry.event });
       previousOf.set(entry.new.id, entry.old.id);
     }
   }
   const chains = [];
+  function walk(links, id, seen) {
+    const nexts = nextOf.get(id) || [];
+    if (!nexts.length) {
+      const spaces = new Set();
+      for (const link of links) {
+        for (const space of spacesOf.get(link.id) || []) {
+          spaces.add(space);
+        }
+      }
+      chains.push({ spaces: [...spaces], sessions: links });
+      return;
+    }
+    for (const next of nexts) {
+      if (seen.has(next.id)) {
+        continue;
+      }
+      const link = { ...sessionInfo.get(next.id), id: next.id, handedAt: next.time, outcome: next.event };
+      walk([...links, link], next.id, new Set([...seen, next.id]));
+    }
+  }
   for (const id of nextOf.keys()) {
     if (previousOf.has(id)) {
       continue;
     }
-    const links = [];
-    let current = id;
-    let handedAt = null;
-    let outcome = null;
-    const seen = new Set();
-    while (current && !seen.has(current)) {
-      seen.add(current);
-      links.push({ ...sessionInfo.get(current), id: current, handedAt, outcome });
-      const next = nextOf.get(current);
-      if (!next) {
-        break;
-      }
-      handedAt = next.time;
-      outcome = next.event;
-      current = next.id;
-    }
-    chains.push({ spaces: [], sessions: links });
-  }
-  for (const chain of chains) {
-    const spaces = new Set();
-    for (const entry of entries) {
-      const ids = new Set();
-      for (const link of chain.sessions) {
-        ids.add(link.id);
-      }
-      if (entry.old && ids.has(entry.old.id)) {
-        for (const space of entry.spaces || []) {
-          spaces.add(space);
-        }
-      }
-    }
-    chain.spaces = [...spaces];
+    walk([{ ...sessionInfo.get(id), id, handedAt: null, outcome: null }], id, new Set([id]));
   }
   return chains;
 }
@@ -736,6 +749,7 @@ class QueueDispatcher {
     this.notify = options.notify || (() => {});
     this.logFile = path.join(options.dataDir, 'rotation-log.jsonl');
     this.log = this.loadLog();
+    this.chainsCache = null;
   }
 
   // The append-only rotation record: every session id and native id involved.
@@ -752,7 +766,10 @@ class QueueDispatcher {
         continue;
       }
       try {
-        entries.push(JSON.parse(line));
+        const entry = JSON.parse(line);
+        if (validLogEntry(entry)) {
+          entries.push(entry);
+        }
       } catch {
         // A damaged line is skipped; the rest of the record stays readable.
       }
@@ -781,6 +798,7 @@ class QueueDispatcher {
     if (this.log.length > 1000) {
       this.log.shift();
     }
+    this.chainsCache = null;
     return entry;
   }
 
@@ -788,8 +806,16 @@ class QueueDispatcher {
     return this.log.slice();
   }
 
+  // Built once per log change: windows read it on every state event.
   rotationChains() {
-    return rotationChains(this.log);
+    if (!this.chainsCache) {
+      try {
+        this.chainsCache = rotationChains(this.log);
+      } catch {
+        this.chainsCache = [];
+      }
+    }
+    return this.chainsCache;
   }
 
   // Space record text: names with the short ids that make the chain searchable.

@@ -847,3 +847,29 @@ test('chains follow several rotations of one conversation in order', () => {
   }
   assert.deepEqual(summary, [['a', 'na', null], ['b', 'nb', 'done'], ['c', 'nc', 'kept']]);
 });
+
+test('a kept session rotated again keeps both successors visible; malformed log lines are ignored', t => {
+  const entries = [
+    { time: 1, event: 'kept', spaces: ['s'], old: { id: 'a', nativeId: 'na', name: 'A' }, new: { id: 'b', nativeId: 'nb', name: 'A · 续' } },
+    { time: 2, event: 'done', spaces: ['s'], old: { id: 'a', nativeId: 'na', name: 'A' }, new: { id: 'c', nativeId: 'nc', name: 'A · 续2' } },
+    null,
+    { time: 3, event: 'done', spaces: 'not-a-list', old: { id: 'x' }, new: null },
+  ];
+  const chains = rules.rotationChains(entries);
+  const paths = [];
+  for (const chain of chains) {
+    const ids = [];
+    for (const link of chain.sessions) {
+      ids.push(link.id);
+    }
+    paths.push(ids.join('>'));
+  }
+  assert.deepEqual(paths.sort(), ['a>b', 'a>c']);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-rotation-log-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'rotation-log.jsonl'), 'null\n{"event":"done","spaces":"x"}\nnot json\n' + JSON.stringify(entries[0]) + '\n', { mode: 0o600 });
+  const dispatcher = new rules.QueueDispatcher({ roomState: new RoomState(dir), dataDir: dir, connect: async () => null });
+  assert.equal(dispatcher.rotationEntries().length, 1);
+  assert.equal(dispatcher.rotationChains().length, 1);
+  assert.equal(dispatcher.rotationChains(), dispatcher.rotationChains(), 'cached until the log changes');
+});
