@@ -213,10 +213,11 @@ test('a member older than the rotation age is rotated before it receives its nex
   assert.deepEqual(plan(rooms, [old], { rotations: failed }), [
     { kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' },
   ]);
-  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [] }], [old]), []);
+  // With no queue the member is still rotated: it has been quiet since it was created a day ago.
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [] }], [old]), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
 });
 
-test('an old, quiet member of a queue space is rotated even with no work queued; a recent conversation is not cut off', () => {
+test('an old, quiet space member is rotated even with no work queued; a recent conversation is not cut off', () => {
   const finished = item('1', { status: 'done', sentTo: 'a', sentAt: NOW - 2 * HOUR, tag: 't1' });
   const rooms = [{ id: 'shared', name: 'Team', queue: [finished] }];
   const quiet = member('a', { createdAt: NOW - 25 * HOUR, lastActivityAt: NOW - 40 * 60000 });
@@ -225,7 +226,7 @@ test('an old, quiet member of a queue space is rotated even with no work queued;
   assert.deepEqual(plan(rooms, [talking]), []);
   const young = member('a', { createdAt: NOW - 2 * HOUR, lastActivityAt: NOW - 40 * 60000 });
   assert.deepEqual(plan(rooms, [young]), []);
-  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [] }], [quiet]), []);
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [] }], [quiet]), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
   const waiting = item('2', { status: 'waiting', sentTo: 'a', sentAt: NOW - 2 * HOUR, tag: 't2' });
   assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [waiting] }], [quiet]), []);
 });
@@ -890,18 +891,43 @@ test('memory or age, whichever comes first, makes a member due; machine pressure
   assert.deepEqual(plan(finished, [quiet], { memory: big }), [{ kind: 'rotate', sessionId: 'a', reason: 'memory' }]);
   const busyPerson = member('a', { lastActivityAt: NOW - 5 * 60000 });
   assert.deepEqual(plan(finished, [busyPerson], { memory: big }), []);
+  // Under an hour old, a large session is not replaced: its successor would start as large.
+  const newborn = member('a', { createdAt: NOW - 30 * 60000 });
+  assert.deepEqual(plan(rooms, [newborn], { memory: big }), [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' }]);
 });
 
-test('a session\'s memory includes its child processes; swap usage is read from sysctl', () => {
-  const ps = ['  10   1  100000', '  11  10   50000', '  12  11   25000', '  20   1  300000', '  99   1  999999'].join('\n');
-  const memory = rules.processMemory([{ id: 'a', pid: 10 }, { id: 'b', pid: 20 }, { id: 'c', pid: 404 }], ps);
-  assert.equal(memory.get('a'), (100000 + 50000 + 25000) * 1024);
-  assert.equal(memory.get('b'), 300000 * 1024);
+test('members of every space are rotated once quiet; a session without a creation time uses its earliest message', () => {
+  const plain = [{ id: 'shared', name: 'Team' }];
+  const old = member('a', { createdAt: NOW - 25 * HOUR, lastActivityAt: NOW - 40 * 60000 });
+  assert.deepEqual(plan(plain, [old]), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
+  const recent = member('a', { createdAt: NOW - 25 * HOUR, lastActivityAt: NOW - 10 * 60000 });
+  assert.deepEqual(plan(plain, [recent]), []);
+  const archived = [{ id: 'shared', name: 'Team', archived: true }];
+  assert.deepEqual(plan(archived, [old]), []);
+  const messages = [{ role: 'system', text: 'x' }, { role: 'user', text: 'y', time: NOW - 340 * HOUR }, { role: 'assistant', text: 'z', time: NOW - 2 * HOUR }];
+  const unrecorded = member('a', { createdAt: undefined, lastActivityAt: NOW - 40 * 60000, messages });
+  assert.equal(rules.sessionStart(unrecorded, NOW), NOW - 340 * HOUR);
+  assert.deepEqual(plan(plain, [unrecorded]), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
+  const unknown = member('a', { createdAt: undefined, lastActivityAt: NOW - 40 * 60000, messages: [{ role: 'user', text: 'y' }, { role: 'user', text: 'w', time: 1234 }] });
+  assert.equal(rules.sessionStart(unknown, NOW), null);
+  assert.deepEqual(plan(plain, [unknown], { memory: new Map([['a', 4 * 1024 ** 3]]) }), []);
+});
+
+test('a session\'s memory footprint includes its child processes; pressure is macOS\'s own level', () => {
+  const top = ['Processes: 812 total', 'PID    PPID   MEM', '10     1      97M', '11     10     48M+', '12     11     2048K-', '20     1      1.5G', '99     1      976M'].join('\n');
+  const memory = rules.processMemory([{ id: 'a', pid: 10 }, { id: 'b', pid: 20 }, { id: 'c', pid: 404 }], top);
+  assert.equal(memory.get('a'), (97 + 48 + 2) * 1024 * 1024);
+  assert.equal(memory.get('b'), 1.5 * 1024 ** 3);
   assert.equal(memory.has('c'), false);
-  assert.equal(rules.swapRatio('total = 31232.00M  used = 30043.50M  free = 1188.50M  (encrypted)').toFixed(2), '0.96');
-  assert.equal(rules.swapRatio('nonsense'), 0);
-  const real = rules.processMemory([{ id: 'self', pid: process.pid }], require('node:child_process').execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,rss='], { encoding: 'utf8' }));
-  assert.ok(real.get('self') > 0, 'measures a real process tree');
+  assert.equal(rules.memoryPressure('1\n'), false);
+  assert.equal(rules.memoryPressure('2\n'), true);
+  assert.equal(rules.memoryPressure('4'), true);
+  assert.equal(rules.memoryPressure('nonsense'), false);
+  const listing = require('node:child_process').execFileSync('/usr/bin/top', ['-l', '1', '-stats', 'pid,ppid,mem'], { encoding: 'utf8' });
+  const real = rules.processMemory([{ id: 'self', pid: process.pid }], listing);
+  assert.ok(real.get('self') > 1024 * 1024, 'measures a real process footprint with top');
+  const level = require('node:child_process').execFileSync('/usr/sbin/sysctl', ['-n', 'kern.memorystatus_vm_pressure_level'], { encoding: 'utf8' });
+  assert.match(level.trim(), /^[124]$/, 'macOS reports a pressure level');
 });
 
 test('with no queued work, a quiet oversized member of a queue space is still rotated through an open window', async t => {
@@ -920,8 +946,8 @@ test('with no queued work, a quiet oversized member of a queue space is still ro
     now: () => NOW,
     settleMs: 0,
     tickMs: 3600000,
-    sampleProcesses: async () => '4242 1 1700000\n',
-    sampleSwap: async () => 'total = 1000.00M  used = 100.00M  free = 900.00M',
+    sampleProcesses: async () => '4242 1 1660M\n',
+    samplePressure: async () => '1\n',
   });
   t.after(() => dispatcher.close());
   await dispatcher.start();
@@ -948,8 +974,8 @@ test('with the default settle time and no queued work, a quiet oversized member 
     connect: async () => null,
     now: () => now,
     tickMs: 3600000,
-    sampleProcesses: async () => '4242 1 1700000\n',
-    sampleSwap: async () => 'total = 1000.00M  used = 100.00M  free = 900.00M',
+    sampleProcesses: async () => '4242 1 1660M\n',
+    samplePressure: async () => '1\n',
   });
   t.after(() => dispatcher.close());
   await dispatcher.start();
@@ -961,7 +987,7 @@ test('with the default settle time and no queued work, a quiet oversized member 
 });
 
 test('a process shared by two sessions is not charged to either', () => {
-  const memory = rules.processMemory([{ id: 'a', pid: 10 }, { id: 'b', pid: 10 }, { id: 'c', pid: 20 }], '10 1 900000\n20 1 1000\n');
+  const memory = rules.processMemory([{ id: 'a', pid: 10 }, { id: 'b', pid: 10 }, { id: 'c', pid: 20 }], '10 1 879M\n20 1 1000K\n');
   assert.equal(memory.has('a'), false);
   assert.equal(memory.has('b'), false);
   assert.equal(memory.get('c'), 1000 * 1024);
@@ -983,8 +1009,8 @@ test('idle times seen by a minute check are not reused: work added later still w
     connect: async () => null,
     now: () => now,
     tickMs: 3600000,
-    sampleProcesses: async () => '4242 1 1000\n',
-    sampleSwap: async () => 'total = 1000.00M  used = 100.00M  free = 900.00M',
+    sampleProcesses: async () => '4242 1 1M\n',
+    samplePressure: async () => '1\n',
   });
   t.after(() => dispatcher.close());
   await dispatcher.start();

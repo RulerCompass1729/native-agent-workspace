@@ -26,6 +26,9 @@ for (const dir of [profile, cwd, config]) {
 }
 // NAW_TEST_QUEUE_PROVIDER=codex runs the same checks against a real Codex CLI.
 const PROVIDER = process.env.NAW_TEST_QUEUE_PROVIDER || 'claude';
+// NAW_TEST_QUEUE_TRIGGER=memory rotates because the real process tree is above a lowered
+// 100 MB memory limit, instead of because the session is older than a shortened age.
+const TRIGGER = process.env.NAW_TEST_QUEUE_TRIGGER || 'age';
 assert.ok(['claude', 'codex'].includes(PROVIDER), 'claude or codex');
 const codexHome = path.join(base, 'codex');
 fs.mkdirSync(codexHome, { mode: 0o700 });
@@ -375,13 +378,23 @@ async function cleanup() {
   await openSpace();
 
   // 3) Rotation: the old session writes a handoff, a new session continues, the old process exits.
+  // A memory rotation needs a session at least three minutes old here: the old one is, while
+  // the new one gets its first item well inside that, so it is not replaced again.
+  let minimumAge = 61000;
+  if (TRIGGER === 'memory') {
+    minimumAge = 181000;
+  }
   const age = Date.now() - first.createdAt;
-  if (age < 61000) {
-    await sleep(61000 - age);
+  if (age < minimumAge) {
+    await sleep(minimumAge - age);
   }
   await application.close();
   application = null;
-  await launch({ NAW_TEST_QUEUE_ROTATE_MS: '60000' });
+  if (TRIGGER === 'memory') {
+    await launch({ NAW_TEST_QUEUE_MEMORY_MB: '100', NAW_TEST_QUEUE_MEMORY_MIN_AGE_MS: '180000' });
+  } else {
+    await launch({ NAW_TEST_QUEUE_ROTATE_MS: '60000' });
+  }
   await openSpace();
   const old = (await snapshot()).sessions.find(s => s.id === first.id);
   const oldPid = old.pid;
@@ -397,6 +410,18 @@ async function cleanup() {
   }
   const fresh = (await snapshot()).sessions.find(s => s.name === '实测甲 · 续');
   assert.ok(fresh.messages.some(m => m.role === 'user' && typeof m.text === 'string' && m.text.includes('feature-x 分支')), 'The handoff reached the new native session');
+  const ended = (await snapshot()).sessions.find(s => s.id === first.id);
+  const request = ended.messages.find(m => m.role === 'user' && typeof m.text === 'string' && m.text.startsWith('【NAW 换会话】'));
+  assert.ok(request, 'The old session received the handoff request');
+  const log = fs.readFileSync(path.join(profile, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const requested = log.find(entry => entry.event === 'requested' && entry.old.id === first.id);
+  assert.ok(requested, 'The rotation log records the request');
+  assert.equal(requested.reason, TRIGGER);
+  if (TRIGGER === 'memory') {
+    const measured = /已占用约 ([\d.]+) GB 内存/u.exec(request.text);
+    assert.ok(measured && Number(measured[1]) >= 0.1, 'The request names the measured footprint of the real process tree');
+    checks.push(`Memory trigger: the real ${PROVIDER} process tree measured about ${measured[1]} GB against a 100 MB test limit`);
+  }
   await until(async () => (await itemByText('QUEUE_TASK_3 请只回复完成标记')).status === 'done', 'Third item done by the new session', 120000);
   const done = await itemByText('QUEUE_TASK_3 请只回复完成标记');
   assert.equal(done.sentTo, fresh.id);

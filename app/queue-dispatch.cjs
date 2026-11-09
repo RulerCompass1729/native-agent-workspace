@@ -25,15 +25,19 @@ const UNCONFIRMED_SEND_MS = 120000;
 // A refusal before anything was sent returns the item to the queue at most this often.
 const NOT_SENT_ATTEMPTS = 5;
 const ROTATE_AFTER_MS = 24 * 60 * 60 * 1000;
-// A session (with its child processes) this large is rotated too; whichever comes first.
-// A fresh Claude session starts near 300 MB and a fresh Codex one near 60-125 MB.
-const MEMORY_LIMIT_BYTES = 1536 * 1024 * 1024;
-// When the machine is short of memory (swap more than half used), grown sessions go first.
-const PRESSURE_LIMIT_BYTES = 800 * 1024 * 1024;
-const PRESSURE_SWAP_RATIO = 0.5;
+// A session whose memory footprint (with its child processes) reaches this is rotated too;
+// whichever of age and memory comes first. Footprint, like Activity Monitor's Memory column,
+// counts compressed and swapped memory that resident size misses. Measured 2026-11-08: a fresh
+// Claude session uses about 0.3-0.4 GB, a fresh Codex one about 0.05 GB (0.3 GB on a long thread).
+const MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024;
+// While macOS reports memory pressure (warning or critical), sessions twice a fresh one's size go.
+const PRESSURE_LIMIT_BYTES = 600 * 1024 * 1024;
+// A younger session is not rotated for memory: a new session would start as large, and a
+// successor that starts above the limit must not be replaced again and again.
+const MEMORY_MIN_AGE_MS = 60 * 60 * 1000;
 // A memory-triggered rotation waits for this much quiet instead of the 30 minutes for age.
 const QUIET_MEMORY_MS = 10 * 60 * 1000;
-// With no queued work, quiet members of queue spaces are still checked this often.
+// With no queued work, quiet members of every space are still checked this often.
 const MAINTENANCE_MS = 60 * 1000;
 const MEMORY_SAMPLE_MS = 30 * 1000;
 // An idle old member with no work is rotated only after this long without activity.
@@ -327,19 +331,45 @@ function memberIds(room, sessions) {
   return ordered;
 }
 
+// When a session began: its creation time or, for sessions recorded before NAW kept one, its
+// earliest timed message (so its age is never overstated). Null when neither is known.
+function sessionStart(session, now) {
+  if (Number.isFinite(session.createdAt)) {
+    return session.createdAt;
+  }
+  let earliest = null;
+  for (const message of session.messages || []) {
+    const time = message ? message.time : undefined;
+    if (!Number.isFinite(time) || time < 1e12 || time > now) {
+      continue;
+    }
+    if (earliest === null || time < earliest) {
+      earliest = time;
+    }
+  }
+  return earliest;
+}
+
 // Why a member is due for rotation now: 'age', 'memory' or null.
 function rotationReason(session, now, options, rotations) {
   if (!['claude', 'codex'].includes(session.provider) || rotations[session.id]) {
     return null;
   }
-  if (options.rotateAfterMs && Number.isFinite(session.createdAt) && now - session.createdAt >= options.rotateAfterMs) {
+  const start = sessionStart(session, now);
+  if (start === null) {
+    return null;
+  }
+  if (options.rotateAfterMs && now - start >= options.rotateAfterMs) {
     return 'age';
   }
   const used = options.memory ? options.memory.get(session.id) : undefined;
-  if (Number.isFinite(used) && options.memoryLimit && used >= options.memoryLimit) {
-    return 'memory';
+  if (!Number.isFinite(used) || !options.memoryLimit || used < options.memoryLimit) {
+    return null;
   }
-  return null;
+  if (now - start < options.memoryMinAgeMs) {
+    return null;
+  }
+  return 'memory';
 }
 
 // One pass over every space. Returns the actions in the order to run them.
@@ -351,7 +381,12 @@ function planDispatch(input) {
   const rotateAfterMs = input.rotateAfterMs ?? ROTATE_AFTER_MS;
   const quietMs = input.quietMs ?? QUIET_BEFORE_ROTATE_MS;
   const quietMemoryMs = input.quietMemoryMs ?? QUIET_MEMORY_MS;
-  const rotationOptions = { rotateAfterMs, memory: input.memory, memoryLimit: input.memoryLimit ?? MEMORY_LIMIT_BYTES };
+  const rotationOptions = {
+    rotateAfterMs,
+    memory: input.memory,
+    memoryLimit: input.memoryLimit ?? MEMORY_LIMIT_BYTES,
+    memoryMinAgeMs: input.memoryMinAgeMs ?? MEMORY_MIN_AGE_MS,
+  };
   const humanQuietMs = input.humanQuietMs ?? HUMAN_QUIET_MS;
   const rotations = input.rotations || {};
   const idleSince = input.idleSince || new Map();
@@ -481,9 +516,10 @@ function planDispatch(input) {
       }
     }
   }
-  // 3) Old members of queue spaces with no work are rotated too, once they have been quiet.
+  // 3) Old or oversized members of every space are rotated too, once they have been quiet,
+  // whether or not the space keeps a queue (the person asked for all long sessions, 2026-11-08).
   for (const room of rooms) {
-    if (room.archived || !Array.isArray(room.queue) || !room.queue.length) {
+    if (room.archived) {
       continue;
     }
     for (const id of memberIds(room, sessions)) {
@@ -497,7 +533,7 @@ function planDispatch(input) {
       if (!reason) {
         continue;
       }
-      let lastActivity = session.createdAt;
+      let lastActivity = sessionStart(session, now);
       if (Number.isFinite(session.lastActivityAt)) {
         lastActivity = session.lastActivityAt;
       }
@@ -681,22 +717,32 @@ function rotationChains(entries) {
   return chains;
 }
 
-// Resident memory of each session's process and its children, from one ps listing.
-function processMemory(sessions, psOutput) {
+const UNIT_BYTES = { B: 1, K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4 };
+
+// One line of `top -l 1 -stats pid,ppid,mem`, such as '4325  4300  347M+': pid, parent, bytes.
+function footprintLine(line) {
+  const match = line.trim().match(/^(\d+)\s+(\d+)\s+([\d.]+)([BKMGT])[+-]?$/);
+  if (!match) {
+    return null;
+  }
+  return { pid: Number(match[1]), parent: Number(match[2]), bytes: Math.round(Number(match[3]) * UNIT_BYTES[match[4]]) };
+}
+
+// Memory footprint of each session's process and its children, from one top listing.
+// A process shared by two sessions is charged to neither.
+function processMemory(sessions, topOutput) {
   const children = new Map();
-  const rss = new Map();
-  for (const line of psOutput.split('\n')) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)$/);
-    if (!match) {
+  const footprint = new Map();
+  for (const line of topOutput.split('\n')) {
+    const row = footprintLine(line);
+    if (!row) {
       continue;
     }
-    const pid = Number(match[1]);
-    const parent = Number(match[2]);
-    rss.set(pid, Number(match[3]) * 1024);
-    if (!children.has(parent)) {
-      children.set(parent, []);
+    footprint.set(row.pid, row.bytes);
+    if (!children.has(row.parent)) {
+      children.set(row.parent, []);
     }
-    children.get(parent).push(pid);
+    children.get(row.parent).push(row.pid);
   }
   const owners = new Map();
   for (const session of sessions) {
@@ -706,7 +752,7 @@ function processMemory(sessions, psOutput) {
   }
   const result = new Map();
   for (const session of sessions) {
-    if (!Number.isSafeInteger(session.pid) || !rss.has(session.pid) || owners.get(session.pid) > 1) {
+    if (!Number.isSafeInteger(session.pid) || !footprint.has(session.pid) || owners.get(session.pid) > 1) {
       continue;
     }
     let total = 0;
@@ -718,7 +764,7 @@ function processMemory(sessions, psOutput) {
         continue;
       }
       seen.add(pid);
-      total += rss.get(pid) || 0;
+      total += footprint.get(pid) || 0;
       for (const child of children.get(pid) || []) {
         stack.push(child);
       }
@@ -728,14 +774,11 @@ function processMemory(sessions, psOutput) {
   return result;
 }
 
-// 'total = 31232.00M  used = 30043.50M  free = ...' -> used / total, or 0 when unknown.
-function swapRatio(text) {
-  const total = /total = ([\d.]+)M/.exec(text || '');
-  const used = /used = ([\d.]+)M/.exec(text || '');
-  if (!total || !used || Number(total[1]) <= 0) {
-    return 0;
-  }
-  return Number(used[1]) / Number(total[1]);
+// `sysctl -n kern.memorystatus_vm_pressure_level` is macOS's own judgment: 1 normal, 2 warning,
+// 4 critical. Swap usage is not used: it stays high long after the pressure has passed.
+function memoryPressure(text) {
+  const level = Number(String(text || '').trim());
+  return Number.isInteger(level) && level >= 2;
 }
 
 function execText(file, args) {
@@ -832,8 +875,9 @@ class QueueDispatcher {
     this.tickMs = options.tickMs ?? TICK_MS;
     this.memoryLimit = options.memoryLimit ?? MEMORY_LIMIT_BYTES;
     this.pressureLimit = options.pressureLimit ?? PRESSURE_LIMIT_BYTES;
-    this.sampleProcesses = options.sampleProcesses || (() => execText('/bin/ps', ['-axo', 'pid=,ppid=,rss=']));
-    this.sampleSwap = options.sampleSwap || (() => execText('/usr/sbin/sysctl', ['-n', 'vm.swapusage']));
+    this.memoryMinAgeMs = options.memoryMinAgeMs ?? MEMORY_MIN_AGE_MS;
+    this.sampleProcesses = options.sampleProcesses || (() => execText('/usr/bin/top', ['-l', '1', '-stats', 'pid,ppid,mem']));
+    this.samplePressure = options.samplePressure || (() => execText('/usr/sbin/sysctl', ['-n', 'kern.memorystatus_vm_pressure_level']));
     this.memorySample = null;
     this.lastMaintenance = 0;
     this.owner = options.owner || randomUUID();
@@ -1111,7 +1155,7 @@ class QueueDispatcher {
     return session.name || session.id;
   }
 
-  // Session memory and swap pressure, sampled at most twice a minute.
+  // Session memory footprints and macOS memory pressure, sampled at most twice a minute.
   async memory(sessions, now) {
     if (this.memorySample && now - this.memorySample.at < MEMORY_SAMPLE_MS) {
       return this.memorySample;
@@ -1120,7 +1164,7 @@ class QueueDispatcher {
     let limit = this.memoryLimit;
     try {
       memory = processMemory(sessions, await this.sampleProcesses());
-      if (swapRatio(await this.sampleSwap()) >= PRESSURE_SWAP_RATIO) {
+      if (memoryPressure(await this.samplePressure())) {
         limit = this.pressureLimit;
       }
     } catch {
@@ -1130,25 +1174,14 @@ class QueueDispatcher {
     return this.memorySample;
   }
 
-  // Metadata only: does any space keep a queue whose members may need rotation?
-  queueSpaces() {
-    const rooms = [this.roomState.value, ...this.roomState.spaces.rooms];
-    for (const room of rooms) {
-      if (!room.archived && Array.isArray(room.queue) && room.queue.length) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   async tick() {
     this.pruneRotations(this.now());
     const now = this.now();
     if (!this.hasOpenWork()) {
-      // No queued work: still check quiet members for rotation once a minute, through a window only.
+      // No queued work: still check quiet space members for rotation once a minute, through a window only.
       const windowClient = this.clients();
       this.dropOwnClient();
-      const watching = Boolean(windowClient) && this.queueSpaces();
+      const watching = Boolean(windowClient);
       if (!watching || now - this.lastMaintenance < MAINTENANCE_MS) {
         if (!watching) {
           this.listen(null);
@@ -1190,6 +1223,7 @@ class QueueDispatcher {
       quietMs: this.quietMs,
       memory: sample.memory,
       memoryLimit: sample.limit,
+      memoryMinAgeMs: this.memoryMinAgeMs,
       rotations: this.rotations,
     });
     for (const action of actions) {
@@ -1314,7 +1348,11 @@ class QueueDispatcher {
       return;
     }
     const session = current.session;
-    const hours = Math.floor((current.now - session.createdAt) / 3600000);
+    const start = sessionStart(session, current.now);
+    let hours = 0;
+    if (start !== null) {
+      hours = Math.floor((current.now - start) / 3600000);
+    }
     const reason = action.reason || 'age';
     const why = rotationWhy(reason, hours, bytes || 0);
     const record = {
@@ -1574,9 +1612,11 @@ module.exports = {
   notSent,
   readRotations,
   processMemory,
-  swapRatio,
+  memoryPressure,
+  sessionStart,
   MEMORY_LIMIT_BYTES,
   PRESSURE_LIMIT_BYTES,
+  MEMORY_MIN_AGE_MS,
   terminalReplyOnly,
   nextName,
   rotationChains,
