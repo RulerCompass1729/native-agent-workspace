@@ -277,7 +277,8 @@ test('dispatch and decision outcomes are written once to the space record with t
   assert.equal(events[2].text, 'Claude 2 需要你决定：改一下按钮');
   room.queueResolve(id);
   assert.equal(room.value.queue[0].status, 'done');
-  assert.equal(room.value.events.length, 3);
+  assert.equal(room.value.events.length, 4);
+  assert.equal(room.value.events[3].text, '已处理：改一下按钮');
 });
 
 test('a refusal before sending returns the item to the queue, and fails it after five tries', t => {
@@ -647,4 +648,70 @@ test('a rotation file that is not private or well formed is ignored', t => {
   assert.equal(rules.readRotations(file, NOW).a.phase, 'handed');
   fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: { phase: 'stop-everything' } } }), { mode: 0o600 });
   assert.deepEqual(rules.readRotations(file, NOW), {});
+});
+
+test('messages from a space handoff or NAW\'s own text are not read as the person stepping in', () => {
+  const rooms = [{ id: 'shared', name: 'Team', queue: [sentItem()] }];
+  const handoff = [
+    { id: 't1', role: 'user', text: 'NAW task', origin: 'naw-dispatch' },
+    { id: 'x1', role: 'user', text: 'handoff from a teammate', origin: 'room' },
+    { id: 'r1', role: 'assistant', text: 'done' },
+  ];
+  assert.equal(plan(rooms, [member('a', { messages: handoff })])[0].status, 'done');
+  const replaced = [
+    { id: 'native-user', role: 'user', text: '【NAW 派活】task', time: NOW - 29000 },
+    { id: 'r1', role: 'assistant', text: 'finished', time: NOW - 20000 },
+  ];
+  assert.equal(plan(rooms, [member('a', { messages: replaced })])[0].status, 'done');
+});
+
+test('a kept old session is not asked to hand off again for a day', () => {
+  const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
+  const old = member('a', { createdAt: NOW - 30 * HOUR });
+  const kept = { a: { phase: 'kept', keptAt: NOW - 1000, oldNativeId: 'native-a', name: 'A', roomIds: ['shared'] } };
+  assert.deepEqual(plan(rooms, [old], { rotations: kept }), [
+    { kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' },
+  ]);
+});
+
+test('a kept record expires after a day and a failed one after a week', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-queue-rotations-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'queue-dispatch.json');
+  const base = { oldNativeId: 'native-a', name: 'A', roomIds: ['shared'] };
+  const rotations = {
+    a: { ...base, phase: 'kept', keptAt: NOW - 25 * HOUR },
+    b: { ...base, phase: 'kept', keptAt: NOW - HOUR },
+    c: { ...base, phase: 'failed', failedAt: NOW - 8 * 24 * HOUR },
+  };
+  fs.writeFileSync(file, JSON.stringify({ version: 1, rotations }), { mode: 0o600 });
+  assert.deepEqual(Object.keys(rules.readRotations(file, NOW)), ['b']);
+});
+
+test('a connection being updated refuses the dispatch and the item goes back to the queue', async t => {
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a')]);
+  client.operationGuard = () => () => {
+    throw Object.assign(Error('updating'), { uiMessage: { key: 'error.client.connectionUpdatingNoInput' } });
+  };
+  room.queueAdd('only task', null);
+  await dispatcher.start();
+  assert.equal(room.value.queue[0].status, 'queued');
+  assert.equal(room.value.queue[0].attempts, 1);
+  assert.equal(client.sends().length, 0);
+});
+
+test('the old session is not stopped while a space collaboration is running', async t => {
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })]);
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  client.reply('a', '交接：分支 abc。');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  client.state.rooms[0].run = { status: 'running', ids: ['someone-else', 'another'] };
+  await dispatcher.schedule();
+  assert.equal(client.calls.filter(call => call[0] === 'stop').length, 0, 'waits while a collaboration runs');
+  client.state.rooms[0].run = null;
+  await dispatcher.schedule();
+  assert.deepEqual(client.calls.filter(call => call[0] === 'stop'), [['stop', 'a']]);
 });

@@ -37,7 +37,7 @@ const TICK_MS = 3000;
 const FULL_PASS_MS = 30000;
 const DECISION_MARKERS = ['需要你决定：', '需要你决定:', 'Needs your decision:'];
 // Input written by NAW or another agent, not by the person.
-const AUTOMATIC_ORIGINS = ['naw-dispatch', 'agent-wake', 'capacity-recovery', 'agent-control'];
+const AUTOMATIC_ORIGINS = ['naw-dispatch', 'agent-wake', 'capacity-recovery', 'agent-control', 'room'];
 // Refusals raised before the backend wrote anything: the item is still unsent.
 const NOT_SENT_KEYS = [
   'error.workspace.sessionNotReady',
@@ -47,13 +47,17 @@ const NOT_SENT_KEYS = [
   'error.workspace.claudeSubmitDisconnected',
   'error.workspace.nativeFirstMessageRequired',
   'error.nativeInterruptPending',
-  'error.workspace.nativeContextChanged',
+  'error.client.nativeContextChanged',
+  'error.client.connectionUpdatingNoInput',
+  'error.client.connectionChangedNoReplay',
   'error.room.sessionArchived',
   'error.room.workspaceArchived',
   'error.room.mergeStepsUnconfirmed',
   'error.room.updatingDraftRetained',
 ];
-const ROTATION_PHASES = ['requested', 'creating', 'joining', 'created', 'handed', 'failed'];
+const ROTATION_PHASES = ['requested', 'creating', 'joining', 'created', 'handed', 'failed', 'kept'];
+// Records that only stop a member from being rotated again for a while.
+const RESTING_PHASES = ['failed', 'kept'];
 
 function validText(value, limit) {
   if (typeof value !== 'string') {
@@ -255,7 +259,8 @@ function replyAfter(session, tag, sentAt) {
     if (!after) {
       continue;
     }
-    if (message.role === 'user' && !AUTOMATIC_ORIGINS.includes(message.origin)) {
+    const nawText = typeof message.text === 'string' && message.text.startsWith('【NAW ');
+    if (message.role === 'user' && !AUTOMATIC_ORIGINS.includes(message.origin) && !nawText) {
       humanAfter = true;
     }
     if (message.role === 'assistant' && typeof message.text === 'string' && message.text.trim()) {
@@ -346,7 +351,7 @@ function planDispatch(input) {
   const busy = new Set();
   for (const id of Object.keys(rotations)) {
     const record = rotations[id];
-    if (record && record.phase !== 'failed') {
+    if (record && !RESTING_PHASES.includes(record.phase)) {
       busy.add(id);
       if (record.newId) {
         busy.add(record.newId);
@@ -576,6 +581,9 @@ function readRotations(file, now) {
     if (record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS) {
       continue;
     }
+    if (record.phase === 'kept' && now - (record.keptAt || 0) > ROTATE_AFTER_MS) {
+      continue;
+    }
     result[oldId] = record;
   }
   return result;
@@ -699,7 +707,7 @@ class QueueDispatcher {
   activeRotations() {
     const ids = [];
     for (const id of Object.keys(this.rotations)) {
-      if (this.rotations[id] && this.rotations[id].phase !== 'failed') {
+      if (this.rotations[id] && !RESTING_PHASES.includes(this.rotations[id].phase)) {
         ids.push(id);
       }
     }
@@ -859,6 +867,10 @@ class QueueDispatcher {
     const entry = this.client.route(session.id);
     if (!entry.state.capabilities || !entry.state.capabilities.includes(CAPABILITY)) {
       throw Object.assign(Error('backend-update-needed'), { notSent: true });
+    }
+    // Refuse while this connection is being updated or replaced, as the person's input is.
+    if (this.client.operationGuard) {
+      this.client.operationGuard(entry)();
     }
     const call = entry.client.call('dispatch', session.id, text, session.nativeId, itemId);
     const result = await withTimeout(call, CALL_TIMEOUT_MS, 'send-timeout');
@@ -1097,6 +1109,12 @@ class QueueDispatcher {
       }
       record.handoffConfirmed = true;
       this.save();
+      // Ending a session pauses running collaborations; wait until none is running.
+      for (const room of snapshot.rooms || []) {
+        if (room.run && room.run.status === 'running') {
+          return;
+        }
+      }
       const live = old && !['ended', 'background'].includes(old.state);
       let inUse = false;
       if (live) {
@@ -1118,7 +1136,11 @@ class QueueDispatcher {
       } else {
         this.roomState.rotationEvent(record.roomIds, 'done', record.name, `${record.name} · 续`);
       }
-      delete this.rotations[oldId];
+      if (inUse) {
+        this.rotations[oldId] = { phase: 'kept', keptAt: now, oldNativeId: record.oldNativeId, name: record.name, roomIds: record.roomIds };
+      } else {
+        delete this.rotations[oldId];
+      }
       this.save();
       await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
       await this.broadcast();

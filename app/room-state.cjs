@@ -486,7 +486,8 @@ class RoomState {
     if (item.status !== 'waiting') {
       throw uiError("error.queue.notWaiting");
     }
-    this.queueReplace(id, itemId, { ...item, status: 'done', finishedAt: Date.now() });
+    const event = { kind: 'queue', ...uiNotice('notice.queue.resolved', { text: queueRules.shortText(item.text) }) };
+    this.queueReplace(id, itemId, { ...item, status: 'done', finishedAt: Date.now() }, event);
   }
   queueMarkSent(id, itemId, sessionId, name, now) {
     const item = this.queueFind(id, itemId);

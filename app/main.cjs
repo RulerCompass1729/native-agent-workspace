@@ -742,7 +742,10 @@ async function boot() {
       try { return await roomState[action === 'archive' ? 'archiveRoom' : 'restoreRoom'](c.client, sessionLabels.labels, roomId); }
       finally { await broadcastRoom(); }
     } else if (action === 'removeFile') roomState.removeFile(args[0], args[1], roomId);
-    else if (action === 'queueAdd') {
+    else if (['queueAdd', 'queueCancel', 'queueResolve'].includes(action) && c.background) {
+      // Only the person changes a queue until they decide agents may (2026-11-08 review).
+      throw uiError("error.queue.personOnly");
+    } else if (action === 'queueAdd') {
       const itemId = roomState.queueAdd(args[0], args[1] ?? null, roomId);
       await broadcastRoom();
       queueDispatcher?.schedule();

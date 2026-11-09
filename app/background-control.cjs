@@ -19,7 +19,7 @@ const parameters = {
   join: ['sessionId', 'join: boolean'], roomRename: ['name'], roomNotes: ['text', 'expectedRevision'], roomMemberOrder: ['change'],
   archiveSession: ['sessionId'], restoreSession: ['sessionId'], archiveRoom: [], restoreRoom: [],
   spaceCreate: ['name'], spaceMerge: ['action: preview|status|commit|recover|discard|undo', 'value'],
-  spaceAction: ['roomId', 'action: join|rename|notes|memberOrder|archive|restore|stageImages|removeImage|acceptImages|removeFile|queueAdd|queueCancel|queueResolve|forward|queueShared|steerShared|run|pause|clearSharedHistory', 'arguments in the same order as the corresponding command'],
+  spaceAction: ['roomId', 'action: join|rename|notes|memberOrder|archive|restore|stageImages|removeImage|acceptImages|removeFile|forward|queueShared|steerShared|run|pause|clearSharedHistory', 'arguments in the same order as the corresponding command'],
   spaceFiles: ['roomId', 'fileId?; omit to import the explicit paths'], gitWorktreePreview: ['selected repository path', 'nonce', 'relative path'],
   create: ['options: {provider,cwd,name,view?,gitWorktree?}'], nativeHistory: ['options?'], importHistory: ['nativeId', 'options'],
   rename: ['sessionId', 'name'], sidebar: ['change'],
