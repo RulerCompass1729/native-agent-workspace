@@ -131,7 +131,7 @@ async function service(directory, state, { onStop } = {}) {
             // As a backend whose Claude terminal ended itself during the stop: ended, both revisions moved, its own receipt refused.
             record.state = 'ended';
             record.controlRevision += next.refuse.delta;
-            record.connectionRevision += next.refuse.connectionDelta ?? next.refuse.delta;
+            record.connectionRevision = (record.connectionRevision || 0) + (next.refuse.connectionDelta ?? next.refuse.delta);
             Object.assign(record, next.refuse.changes || {});
             error = '没有确认断开原生会话。'; uiMessage = { version: 1, key: 'error.backendSwitchDisconnectUnconfirmed', params: { name: record.name } };
           } else { record.state = next || (record.provider === 'codex' ? 'disconnected' : 'ended'); record.controlRevision = (record.controlRevision || 0) + 1; record.connectionRevision = (record.connectionRevision || 0) + 1; value = { stopped: true, expected: request.args[1], stoppedState: { ...request.args[1], controlRevision: record.controlRevision, connectionRevision: record.connectionRevision, state: record.state } }; } }
@@ -205,9 +205,10 @@ const oldWith = async (h, sessions, onStop) => {
   h.services.push(old);
   return old;
 };
-for (const delta of [1, 2]) test(`a Claude stop its backend refused after the native end (+${delta}) still moves the session and reconnects it as its owner`, async t => {
-  const h = harness(t, [daily()]);
-  const old = await oldWith(h, [daily()], refused({}, delta));
+// A session created and never reconnected has no connection revision yet (found by the real move test).
+for (const [delta, made] of [[1, daily], [2, daily], [2, () => daily({ connectionRevision: undefined })]]) test(`a Claude stop its backend refused after the native end (+${delta}${made().connectionRevision === undefined ? ', never reconnected' : ''}) still moves the session and reconnects it as its owner`, async t => {
+  const h = harness(t, [made()]);
+  const old = await oldWith(h, [made()], refused({}, delta));
   const result = await switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', ensure: h.ensure(), owner: 'window-default',
     applicationVersion: '0.1.0-alpha.158', commandLine: h.command(old), now: () => now, settleMs: 300 });
   assert.deepEqual(methods(old), ['maintenanceStop:c', 'maintenanceShutdown']);

@@ -190,7 +190,10 @@ async function waitGone(directory, pid, identity, ms = 15000) {
 // was still ended by this stop and nothing else when, once settled, it is ended with its process gone,
 // nothing else about it changed, and both revisions moved together by this stop and at most that end.
 async function endedByThisStop(client, session, wait) {
-  if (session.provider !== 'claude' || !Number.isSafeInteger(session.controlRevision) || !Number.isSafeInteger(session.connectionRevision)) {
+  // A session that never reconnected has no connection revision yet; the backend counts it from zero.
+  const control = session.controlRevision;
+  const connection = session.connectionRevision ?? 0;
+  if (session.provider !== 'claude' || !Number.isSafeInteger(control) || !Number.isSafeInteger(connection)) {
     return null;
   }
   const started = Date.now();
@@ -201,8 +204,8 @@ async function endedByThisStop(client, session, wait) {
       return null;
     }
     if (record.state === 'ended' && !processMayBeAlive(record.processIdentity)) {
-      const delta = record.controlRevision - session.controlRevision;
-      const advanced = { ...session, controlRevision: session.controlRevision + delta, connectionRevision: session.connectionRevision + delta };
+      const delta = record.controlRevision - control;
+      const advanced = { ...session, controlRevision: control + delta, connectionRevision: connection + delta };
       if (![1, 2].includes(delta) || record.nativeContextPending || !sameStop(record, advanced)) {
         return null;
       }
