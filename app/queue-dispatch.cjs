@@ -27,8 +27,9 @@ const NOT_SENT_ATTEMPTS = 5;
 const ROTATE_AFTER_MS = 24 * 60 * 60 * 1000;
 // A session whose memory footprint (with its child processes) reaches this is rotated too;
 // whichever of age and memory comes first. Footprint, like Activity Monitor's Memory column,
-// counts compressed and swapped memory that resident size misses. Measured 2026-11-08: a fresh
-// Claude session uses about 0.3-0.4 GB, a fresh Codex one about 0.05 GB (0.3 GB on a long thread).
+// counts compressed and swapped memory that resident size misses. Footprints measured 2026-11-08:
+// Claude about 0.2 GB fresh and 0.35-0.4 GB on a long conversation; Codex 0.05 GB fresh and
+// 0.2-0.3 GB on a long thread.
 const MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024;
 // While macOS reports memory pressure (warning or critical), sessions twice a fresh one's size go.
 const PRESSURE_LIMIT_BYTES = 600 * 1024 * 1024;
@@ -76,6 +77,9 @@ const NOT_SENT_KEYS = [
 const ROTATION_PHASES = ['requested', 'creating', 'joining', 'created', 'handed', 'failed', 'kept'];
 // Records that only stop a member from being rotated again for a while.
 const RESTING_PHASES = ['failed', 'kept'];
+// One rotation at a time: each starts a new native session, and several at once would raise
+// memory just when the machine may be short of it.
+const MAX_ACTIVE_ROTATIONS = 1;
 
 function validText(value, limit) {
   if (typeof value !== 'string') {
@@ -406,9 +410,11 @@ function planDispatch(input) {
   }
   const actions = [];
   const busy = new Set();
+  let rotationSlots = MAX_ACTIVE_ROTATIONS;
   for (const id of Object.keys(rotations)) {
     const record = rotations[id];
     if (record && !RESTING_PHASES.includes(record.phase)) {
+      rotationSlots -= 1;
       busy.add(id);
       if (record.newId && !record.handoffConfirmed) {
         busy.add(record.newId);
@@ -509,15 +515,25 @@ function planDispatch(input) {
       }
       busy.add(target.id);
       const reason = rotationReason(target, now, rotationOptions, rotations);
-      if (reason) {
+      if (reason && rotationSlots > 0) {
+        rotationSlots -= 1;
         actions.push({ kind: 'rotate', sessionId: target.id, reason });
       } else {
+        // Due but another rotation is running: it keeps working and is rotated later.
         actions.push({ kind: 'dispatch', roomId: room.id, itemId: item.id, sessionId: target.id });
       }
     }
   }
   // 3) Old or oversized members of every space are rotated too, once they have been quiet,
   // whether or not the space keeps a queue (the person asked for all long sessions, 2026-11-08).
+  const quietCandidates = [];
+  function memoryOf(id) {
+    const used = input.memory ? input.memory.get(id) : undefined;
+    if (Number.isFinite(used)) {
+      return used;
+    }
+    return 0;
+  }
   for (const room of rooms) {
     if (room.archived) {
       continue;
@@ -545,8 +561,13 @@ function planDispatch(input) {
         continue;
       }
       busy.add(id);
-      actions.push({ kind: 'rotate', sessionId: id, reason });
+      quietCandidates.push({ sessionId: id, reason, memory: memoryOf(id), start: sessionStart(session, now) });
     }
+  }
+  // The largest session goes first, then the oldest.
+  quietCandidates.sort((a, b) => b.memory - a.memory || a.start - b.start);
+  for (const candidate of quietCandidates.slice(0, Math.max(rotationSlots, 0))) {
+    actions.push({ kind: 'rotate', sessionId: candidate.sessionId, reason: candidate.reason });
   }
   return actions;
 }

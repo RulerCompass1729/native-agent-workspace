@@ -1024,3 +1024,19 @@ test('idle times seen by a minute check are not reused: work added later still w
   await dispatcher.schedule();
   assert.equal(windowClient.sends('a').length, 1, 'sent once the member has settled under observation');
 });
+
+test('only one rotation runs at a time; the largest quiet session goes first', () => {
+  const rooms = [{ id: 'shared', name: 'Team' }];
+  const quiet = { lastActivityAt: NOW - 40 * 60000 };
+  const a = member('a', { createdAt: NOW - 30 * HOUR, ...quiet });
+  const b = member('b', { createdAt: NOW - 26 * HOUR, ...quiet });
+  const c = member('c', { createdAt: NOW - 40 * HOUR, ...quiet });
+  const memory = new Map([['a', 200 * 1024 * 1024], ['b', 700 * 1024 * 1024], ['c', 300 * 1024 * 1024]]);
+  assert.deepEqual(plan(rooms, [a, b, c], { memory }), [{ kind: 'rotate', sessionId: 'b', reason: 'age' }]);
+  assert.deepEqual(plan(rooms, [a, b, c]), [{ kind: 'rotate', sessionId: 'c', reason: 'age' }], 'without a memory sample the oldest goes first');
+  const running = { x: { phase: 'requested', oldId: 'x' } };
+  assert.deepEqual(plan(rooms, [a, b, c], { memory, rotations: running }), []);
+  // A due member that gets work while another rotation runs keeps working.
+  const queued = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
+  assert.deepEqual(plan(queued, [a], { rotations: running }), [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' }]);
+});
