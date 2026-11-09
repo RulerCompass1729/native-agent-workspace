@@ -35,6 +35,21 @@ confirmed, the old session waits at most 30 minutes for running collaborations a
 kept, and capability and connection checks run before an item is marked sent. Known
 boundary: ending the old session pauses NAW's own goal continuations and peer leases, as
 ending any session by hand does.
+Rounds 4-8 (rotation notices, the append-only rotation log, conversation chains, terminal
+reply keys not read as the person) ended in APPROVE; see the commit messages up to 3a72dae.
+The separate install review then found `queue-dispatch.cjs` and
+`renderer/fleet-observation.js` missing from `scripts/package-mac.cjs`, so the signed app
+would have failed at startup; both are packaged and `app/tests/package-sources.test.cjs`
+walks the require graph from `main.cjs` against the list. The person then asked that memory,
+not only age, trigger rotation, whichever comes first: a session whose process tree uses
+1.5 GB is rotated, 800 MB when more than half of swap is used, after ten quiet minutes.
+Round 9 (CHANGES_NEEDED) found that with no queued work the minute check could never rotate
+anyone, because it required the 8-second idle timer that every tick cleared; the quiet
+minutes now count as settled, and the test uses the default settle time. Its notes moved
+`ps`/`sysctl` off the main process's synchronous path and stopped charging a shared process
+to two sessions. Round 10 (APPROVE_WITH_NOTES) noted that keeping idle times between minute
+checks let later work skip the settle time; they are cleared again, with a test that fails
+without the fix. Not verified: the memory trigger against a real oversized session.
 
 **Alpha.90 final scoped review, 2026-10-23:** the GUI's native Escape path
 caused Claude's post-Stop plugin-input pause. The actual supported 310 GUI now
