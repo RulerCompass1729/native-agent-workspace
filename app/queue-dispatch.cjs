@@ -42,6 +42,8 @@ const PRESSURE_LIMIT_BYTES = 600 * 1024 * 1024;
 // A younger session is not rotated for memory: a new session would start as large, and a
 // successor that starts above the limit must not be replaced again and again.
 const MEMORY_MIN_AGE_MS = 60 * 60 * 1000;
+// A backend NAW migrates without the person's click waits until its sessions were this quiet.
+const MIGRATE_QUIET_MS = 10 * 60 * 1000;
 // A memory-triggered rotation waits for this much quiet instead of the 30 minutes for age.
 const QUIET_MEMORY_MS = 10 * 60 * 1000;
 // With no queued work, quiet members of every space are still checked this often.
@@ -966,6 +968,81 @@ async function terminalText(snapshot) {
   }
 }
 
+// What a live native terminal shows, an unsent prompt included, saved as text in dir (owner-only).
+// Read through a separate connection that owns nothing: a terminal that is no longer open is never
+// reopened for this (only its owner could), and then nothing unsent remains (null).
+async function saveTerminalScreen(connect, owner, dir, sessionId, now) {
+  const connecting = Promise.resolve(connect(`${owner}-terminal`));
+  let probe;
+  try {
+    probe = await withTimeout(connecting, CALL_TIMEOUT_MS, 'connect-timeout');
+  } catch (error) {
+    // A connection that arrives after the timeout is closed when it does.
+    connecting.then(late => late.close()).catch(() => {});
+    throw error;
+  }
+  let snapshot;
+  try {
+    snapshot = await withTimeout(probe.call('terminalSnapshot', sessionId), CALL_TIMEOUT_MS, 'snapshot-timeout');
+  } catch (error) {
+    if (errorKey(error) === TERMINAL_CLOSED_KEY) {
+      return null;
+    }
+    throw error;
+  } finally {
+    try {
+      probe.close();
+    } catch {
+      // The probe holds no state.
+    }
+  }
+  if (!snapshot || typeof snapshot.buffer !== 'string') {
+    throw Error('terminal-snapshot-missing');
+  }
+  const text = await terminalText(snapshot);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const name = `${sessionId}-${now}.txt`;
+  fs.writeFileSync(path.join(dir, name), text, { mode: 0o600, flag: 'wx' });
+  return path.join(path.basename(dir), name);
+}
+
+// The next old backend NAW moves by itself. With automatic updates on, a move the runtime proved
+// safe; with migration on (the person's standing confirmation), also a move that needs it, once
+// every session it stops has been quiet for a while.
+function nextBackendMove(options, settings, sessions, humanAt, now, failed) {
+  for (const option of options) {
+    const plan = option.switch;
+    if (!plan || !plan.ready || failed.has(option.backendKey)) {
+      continue;
+    }
+    if (plan.auto && settings.auto) {
+      return option;
+    }
+    if (!settings.migrate) {
+      continue;
+    }
+    let quiet = true;
+    for (const stop of plan.stops || []) {
+      const session = sessions.find(s => s.id === stop.id);
+      if (!session) {
+        quiet = false;
+        continue;
+      }
+      const last = lastActivityOf(session, now);
+      if (last !== null && now - last < MIGRATE_QUIET_MS) {
+        quiet = false;
+      }
+      if (humanRecent(stop.id, humanAt, now, MIGRATE_QUIET_MS)) {
+        quiet = false;
+      }
+    }
+    if (quiet) {
+      return option;
+    }
+  }
+  return null;
+}
+
 function execText(file, args) {
   return new Promise((resolve, reject) => {
     cp.execFile(file, args, { encoding: 'utf8', timeout: 5000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
@@ -1548,39 +1625,8 @@ class QueueDispatcher {
   // separate connection that owns nothing: a terminal no longer open is then never reopened, and
   // with no open terminal nothing unsent remains (null).
   async saveTerminal(oldId) {
-    const connecting = Promise.resolve(this.connect(`${this.owner}-terminal`));
-    let probe;
-    try {
-      probe = await withTimeout(connecting, CALL_TIMEOUT_MS, 'connect-timeout');
-    } catch (error) {
-      // A connection that arrives after the timeout is closed when it does.
-      connecting.then(late => late.close()).catch(() => {});
-      throw error;
-    }
-    let snapshot;
-    try {
-      snapshot = await withTimeout(probe.call('terminalSnapshot', oldId), CALL_TIMEOUT_MS, 'snapshot-timeout');
-    } catch (error) {
-      if (errorKey(error) === TERMINAL_CLOSED_KEY) {
-        return null;
-      }
-      throw error;
-    } finally {
-      try {
-        probe.close();
-      } catch {
-        // The probe holds no state.
-      }
-    }
-    if (!snapshot || typeof snapshot.buffer !== 'string') {
-      throw Error('terminal-snapshot-missing');
-    }
-    const text = await terminalText(snapshot);
     const dir = path.join(path.dirname(this.logFile), 'rotation-terminals');
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const name = `${oldId}-${this.now()}.txt`;
-    fs.writeFileSync(path.join(dir, name), text, { mode: 0o600, flag: 'wx' });
-    return path.join('rotation-terminals', name);
+    return saveTerminalScreen(this.connect, this.owner, dir, oldId, this.now());
   }
 
   // Used since this step read it (a keystroke in its terminal, the person's window)? Read fresh
@@ -1965,6 +2011,9 @@ module.exports = {
   readRotations,
   processMemory,
   memoryPressure,
+  saveTerminalScreen,
+  nextBackendMove,
+  MIGRATE_QUIET_MS,
   sessionStart,
   lastActivityOf,
   reportedModel,

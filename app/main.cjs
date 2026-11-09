@@ -599,16 +599,43 @@ async function runBackendSwitch(c, option, requireAuto = false) {
     return result;
   } finally { finishMaintenance?.(); backendSwitching = null; switchRecords = backendSwitch.readRecords(dataDir); broadcastRoom().catch(() => {}); }
 }
-// Automatic moves run only for plans the runtime proved, one backend at a time.
+// Automatic moves run one backend at a time: plans the runtime proved, with automatic updates on;
+// with migration on (the person's standing confirmation), also plans that need that confirmation
+// once their sessions are quiet. Those first keep what each typed-into native terminal shows.
 async function autoBackendSwitch() {
-  if (quitting || backendSwitching || !backendSwitch.readSettings(dataDir).auto) return;
+  const settings = backendSwitch.readSettings(dataDir);
+  if (quitting || backendSwitching || !(settings.auto || settings.migrate)) return;
   const c = [...windows.values()].find(context => !context.background && !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed);
   if (!c) return;
   await c.client.refresh();
-  const option = connectionUpdateOptions(c.client, app.getVersion(), roomState).find(value => value.switch?.ready && value.switch.auto && !autoSwitchFailed.has(value.backendKey));
+  const sessions = roomState.apply(c.client.snapshot()).sessions;
+  let humanAt = new Map();
+  if (queueDispatcher) {
+    humanAt = queueDispatcher.humanAt;
+  }
+  const options = connectionUpdateOptions(c.client, app.getVersion(), roomState);
+  const option = queueRules.nextBackendMove(options, settings, sessions, humanAt, Date.now(), autoSwitchFailed);
   if (!option) return;
   let notice;
-  try { const result = await runBackendSwitch(c, option, true); notice = { resumed: result.resumed.length, left: result.left.length, reconnectFailed: result.reconnectFailed }; }
+  try {
+    const screens = [];
+    if (!option.switch.auto) {
+      for (const stop of option.switch.stops || []) {
+        const session = sessions.find(value => value.id === stop.id);
+        if (session && session.terminalInputPending === true) {
+          const file = await queueRules.saveTerminalScreen(owner => connect(dataDir, owner), 'naw-migration', path.join(dataDir, 'rotation-terminals'), stop.id, Date.now());
+          if (file) {
+            screens.push(file);
+          }
+        }
+      }
+    }
+    const result = await runBackendSwitch(c, option, option.switch.auto === true);
+    notice = { resumed: result.resumed.length, left: result.left.length, reconnectFailed: result.reconnectFailed };
+    if (!option.switch.auto) {
+      recordMigration(option, screens);
+    }
+  }
   // A failed automatic move is not retried in this app run; the person can still click.
   catch (error) { autoSwitchFailed.add(option.backendKey); notice = { error: error.message || '后台更新未完成。', errorUiMessage: error.message ? uiLocale.displayMessage(error.uiMessage) : uiError('error.backendAutoUpdateIncomplete').uiMessage }; }
   for (const context of windows.values()) if (!context.win.isDestroyed()) context.win.webContents.send('workspace:backend-switched', notice);
@@ -931,14 +958,21 @@ async function boot() {
     await c.client.refresh();
     return connectionUpdateOptions(c.client, app.getVersion(), roomState);
   });
-  register('backendSwitchSettings', async (c, auto) => {
-    const settings = typeof auto === 'boolean' ? backendSwitch.writeSettings(dataDir, auto) : backendSwitch.readSettings(dataDir);
+  register('backendSwitchSettings', async (c, auto, migrate) => {
+    let settings = backendSwitch.readSettings(dataDir);
+    if (typeof auto === 'boolean' || typeof migrate === 'boolean') {
+      let nextAuto = settings.auto;
+      if (typeof auto === 'boolean') {
+        nextAuto = auto;
+      }
+      settings = backendSwitch.writeSettings(dataDir, nextAuto, migrate);
+    }
     // A record not belonging to a move in progress names sessions a move ended, including after a quit
     // mid-move; a record whose sessions all run again is cleared.
     await c.client.refresh(); const snapshot = c.client.snapshot(), live = snapshot.sessions;
     for (const [key, record] of Object.entries(backendSwitch.readRecords(dataDir))) if (key !== backendSwitching && !record.sessions.some(value => notReconnected(live, value))) backendSwitch.clearRecord(dataDir, key);
     switchRecords = backendSwitch.readRecords(dataDir);
-    return { auto: settings.auto, interrupted: endedByMove(roomState.apply(snapshot).sessions).map(value => value.name) };
+    return { auto: settings.auto, migrate: settings.migrate, interrupted: endedByMove(roomState.apply(snapshot).sessions).map(value => value.name) };
   });
   register('switchBackend', async (c, expected) => {
     await c.client.refresh();
@@ -1261,5 +1295,32 @@ function notifyRotation(outcome, record) {
     notification.show();
   } catch {
     // The space record and the rotation log remain when OS delivery fails.
+  }
+}
+// Migrations NAW made without a click: an append-only private log and an OS notice.
+function recordMigration(option, screens) {
+  const stops = option.switch.stops || [];
+  const entry = { time: Date.now(), backend: option.backendKey, sessions: stops.map(stop => ({ id: stop.id, nativeId: stop.nativeId || null, name: stop.name })), screens };
+  try {
+    fs.appendFileSync(path.join(dataDir, 'backend-migrations.jsonl'), JSON.stringify(entry) + '\n', { mode: 0o600 });
+  } catch {
+    // The notice still goes out when the private log cannot be written.
+  }
+  if (!stops.length) {
+    return;
+  }
+  const migrationNotice = { key: 'os.migrationBody', params: { names: stops.map(stop => stop.name).join('、') } };
+  if (screens.length) {
+    migrationNotice.key = 'os.migrationSavedBody';
+  }
+  try {
+    if (!Notification.isSupported()) {
+      return;
+    }
+    const notification = new Notification({ title: displayText('os.migrationTitle'), body: displayText(migrationNotice.key, migrationNotice.params) });
+    notification.once('click', () => focusOrOpen());
+    notification.show();
+  } catch {
+    // The private log remains when OS delivery fails.
   }
 }

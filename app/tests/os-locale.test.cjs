@@ -67,10 +67,14 @@ function osOptions(language, codex = true) {
     textExtensions: ['txt', 'md'], record: { cwd: raw }, snapshot: { defaultWorkspace: '/unused' },
     preview: { name: 'RAW 中文.txt' }, ext: '.txt', path,
     notice: { key: 'os.rotationDoneBody', params: { old: 'RAW 中文 old', new: 'RAW 中文 new', reason: '' } },
+    migrationNotice: { key: 'os.migrationSavedBody', params: { names: 'RAW 中文 session' } },
   })) }));
 }
 test('all existing OS option groups use the chosen language while raw names, picker scope and cancel safeguards stay intact', () => {
-  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 15);
+  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 16);
+  // The sixteenth surface is the notice for a backend NAW migrated by itself (automatic migration).
+  assert.deepEqual(en[15].value, { title: 'NAW · Backend migration', body: 'Moved “RAW 中文 session” to the new backend; the conversations continue, and typed-into terminals were saved first.' });
+  assert.deepEqual(zh[15].value, { title: 'NAW · 迁移旧后台', body: '已把「RAW 中文 session」挪到新后台，对话原样继续；终端里打过字的先存下了画面。' });
   // The fifteenth surface is the session-rotation notice (queue-dispatch.cjs).
   assert.deepEqual(en[14].value, { title: 'NAW · Session rotation', body: '“RAW 中文 old” handed its work to the new session “RAW 中文 new”; the old session ended and its record is kept.' });
   assert.deepEqual(zh[14].value, { title: 'NAW · 换会话', body: '「RAW 中文 old」的工作已交给新会话「RAW 中文 new」，旧会话已结束，记录保留。' });

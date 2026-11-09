@@ -110,15 +110,28 @@ const sameStop = (a, b) => Boolean(a && b) && ['id', 'nativeId', 'provider', 'ow
 const samePlan = (a, b) => Array.isArray(a?.stops) && Array.isArray(b?.stops) && a.stops.length === b.stops.length && a.stops.every((s, i) => sameStop(s, b.stops[i]));
 const maintenanceProof = record => Object.fromEntries(['id', 'nativeId', 'provider', 'owner', 'view', 'controlRevision', 'connectionRevision', 'draftRevision', 'peerRevision', 'state'].map(key => [key, record[key] ?? null]));
 
+// auto: move proven backends by themselves. migrate: the person's standing confirmation that NAW may
+// also move backends it cannot prove idle, after saving typed-into terminals (off unless turned on).
 function readSettings(dataDir) {
-  try { const value = JSON.parse(fs.readFileSync(path.join(dataDir, SETTINGS), 'utf8')); return { auto: value?.auto !== false }; }
-  catch { return { auto: true }; }
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(dataDir, SETTINGS), 'utf8'));
+    return { auto: value?.auto !== false, migrate: value?.migrate === true };
+  } catch {
+    return { auto: true, migrate: false };
+  }
 }
 function atomicWrite(file, value) {
   const temp = `${file}.${process.pid}.tmp`;
   fs.rmSync(temp, { force: true }); fs.writeFileSync(temp, JSON.stringify(value), { mode: 0o600, flag: 'wx' }); fs.renameSync(temp, file);
 }
-function writeSettings(dataDir, auto) { atomicWrite(path.join(dataDir, SETTINGS), { format: 1, auto: auto === true }); return readSettings(dataDir); }
+function writeSettings(dataDir, auto, migrate) {
+  let nextMigrate = migrate;
+  if (typeof nextMigrate !== 'boolean') {
+    nextMigrate = readSettings(dataDir).migrate;
+  }
+  atomicWrite(path.join(dataDir, SETTINGS), { format: 1, auto: auto === true, migrate: nextMigrate === true });
+  return readSettings(dataDir);
+}
 // One record per backend: the sessions a move ended that are not reconnected yet.
 function readRecords(dataDir) {
   try {

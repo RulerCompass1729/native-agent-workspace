@@ -2228,13 +2228,15 @@ async function openBackendVersions() {
     backendVersionMenu = ui.menu({
       items: [...options.map((option, index) => ({ id: String(index), labelRead: () => backendOptionLabel(option) })),
         ...(interrupted ? [{ id: 'interrupted', labelRead: interrupted }] : []),
-        { id: 'auto', label: uiText(settings.auto ? 'version.autoOn' : 'version.autoOff'), labelKey: settings.auto ? 'version.autoOn' : 'version.autoOff' }],
+        { id: 'auto', label: uiText(settings.auto ? 'version.autoOn' : 'version.autoOff'), labelKey: settings.auto ? 'version.autoOn' : 'version.autoOff' },
+        { id: 'migrate', label: uiText(settings.migrate ? 'version.migrateOn' : 'version.migrateOff'), labelKey: settings.migrate ? 'version.migrateOn' : 'version.migrateOff' }],
       getAnchorRect: () => control.getBoundingClientRect(),
       onClose: () => { backendVersionMenu = null; if (revision === selectionRevision && control.isConnected && !control.hidden) control.focus({ preventScroll: true }); },
       onSelect: key => {
         if (ticket !== backendVersionTicket) return;
         if (key === 'interrupted') return toastMessage('version.interruptedSessions', { names: settings.interrupted.join('、') });
         if (key === 'auto') return attempt(async () => { const next = await api.backendSwitchSettings(!settings.auto); toastMessage(next.auto ? 'toast.autoBackendOn' : 'toast.autoBackendOff'); });
+        if (key === 'migrate') return attempt(async () => { const next = await api.backendSwitchSettings(undefined, !settings.migrate); toastMessage(next.migrate ? 'toast.migrateOn' : 'toast.migrateOff'); });
         const option = options[Number(key)];
         if (option) return runBackendOption(option);
       },

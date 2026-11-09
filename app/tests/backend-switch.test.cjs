@@ -99,10 +99,14 @@ test('busy, pending, relaying, child-running or possibly running sessions block 
   assert.equal(backendPlan({ servicePid: 4242, capabilities: caps, storageWarning: 'x', sessions: [claudeNew()] }).ready, false);
   assert.equal(backend([{ ...claudeNew(), state: 'ended' }]).auto, false, 'Nothing to stop is never an automatic move');
 });
-test('the automatic setting defaults on and is one stored boolean', t => {
+test('automatic updates default on, automatic migration defaults off, and each is one stored boolean', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-switch-settings-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  assert.deepEqual(readSettings(dir), { auto: true });
-  assert.deepEqual(writeSettings(dir, false), { auto: false }); assert.deepEqual(writeSettings(dir, true), { auto: true });
+  assert.deepEqual(readSettings(dir), { auto: true, migrate: false });
+  assert.deepEqual(writeSettings(dir, false), { auto: false, migrate: false }); assert.deepEqual(writeSettings(dir, true), { auto: true, migrate: false });
+  // Migration is the person's standing confirmation; changing automatic updates keeps it as it was.
+  assert.deepEqual(writeSettings(dir, false, true), { auto: false, migrate: true });
+  assert.deepEqual(writeSettings(dir, true), { auto: true, migrate: true });
+  assert.deepEqual(writeSettings(dir, true, false), { auto: true, migrate: false });
   assert.equal((fs.statSync(path.join(dir, 'backend-switch-settings.json')).mode & 0o777), 0o600);
 });
 

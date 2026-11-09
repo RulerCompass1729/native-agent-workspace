@@ -1325,3 +1325,23 @@ test('a prompt left unsent keeps an assigned item waiting instead of failing it'
   await dispatcher.schedule();
   assert.equal(room.value.queue[0].status, 'sent', 'sent once the prompt is clear');
 });
+
+test('NAW moves an old backend by itself only as the person set it: proven with updates on, any once quiet with migration on', () => {
+  const proven = { backendKey: 'b1', switch: { ready: true, auto: true, stops: [{ id: 'p' }] } };
+  const unproven = { backendKey: 'b2', switch: { ready: true, auto: false, stops: [{ id: 'a' }] } };
+  const blocked = { backendKey: 'b3', switch: { ready: false, auto: false, stops: [{ id: 'c' }] } };
+  const quietSession = id => member(id, { lastActivityAt: NOW - 15 * 60000 });
+  const sessions = [quietSession('p'), quietSession('a'), quietSession('c')];
+  const none = new Map();
+  const move = (options, settings, list = sessions, humanAt = none, failed = new Set()) => rules.nextBackendMove(options, settings, list, humanAt, NOW, failed);
+  assert.equal(move([proven, unproven], { auto: false, migrate: false }), null);
+  assert.equal(move([unproven, proven], { auto: true, migrate: false }), proven, 'updates alone never move a move that needs confirmation');
+  assert.equal(move([unproven, blocked], { auto: false, migrate: true }), unproven);
+  assert.equal(move([blocked], { auto: true, migrate: true }), null, 'a move that is not ready never runs');
+  const busy = [quietSession('p'), member('a', { lastActivityAt: NOW - 5 * 60000 })];
+  assert.equal(move([unproven], { auto: false, migrate: true }, busy), null, 'used five minutes ago: not yet');
+  assert.equal(move([unproven], { auto: false, migrate: true }, sessions, new Map([['a', NOW - 60000]])), null, 'the person just used it');
+  assert.equal(move([unproven], { auto: false, migrate: true }, sessions, none, new Set(['b2'])), null, 'a failed move is not retried in this run');
+  assert.equal(move([unproven], { auto: false, migrate: true }, [quietSession('p')]), null, 'a session that cannot be read is not moved');
+  assert.equal(rules.MIGRATE_QUIET_MS, 10 * 60000);
+});

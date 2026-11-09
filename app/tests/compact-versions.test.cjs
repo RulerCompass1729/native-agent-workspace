@@ -194,7 +194,7 @@ test('an idle old backend offers one explicit end-and-update, and the automatic 
   const stops = [{ id: 's', nativeId: 'native-s', provider: 'claude', name: 'Claude 2', owner: 'view' }];
   f.resolve([{ id: 's', backendKey: 'old', nativeId: 'native-s', version: '0.1.0-alpha.120', count: 1, ready: false, reason: 'Working connection retained',
     switch: { ready: true, auto: false, reason: 'Claude 2：这个后台的版本无法确认…', stops } }]); await opening;
-  assert.deepEqual(plain(f.menu.items.map(item => item.labelRead ? item.labelRead() : item.label)), ['α120 · 结束并更新… · 1 个会话', '空闲时自动更新：开（点此关闭）']);
+  assert.deepEqual(plain(f.menu.items.map(item => item.labelRead ? item.labelRead() : item.label)), ['α120 · 结束并更新… · 1 个会话', '空闲时自动更新：开（点此关闭）', '自动迁移需确认的旧后台：关（点此打开）']);
   await f.menu.onSelect('0');
   assert.deepEqual(plain(f.calls.switches), [{ backendKey: 'old', switch: { ready: true, auto: false, reason: 'Claude 2：这个后台的版本无法确认…', stops } }]);
   assert.equal(f.calls.updates.length, 0); assert.deepEqual(f.calls.toasts, ['']);
@@ -237,7 +237,7 @@ test('a legacy maintenance refusal reaches the actual menu instead of a generic 
 
 test('sessions ended by an unfinished update are named in the menu even with no old backend left', async () => {
   const f = menuFixture(); f.settings.interrupted = ['Claude 2', 'Codex 秘书']; const opening = f.c.open(); f.resolve([]); await opening;
-  assert.deepEqual(plain(f.menu.items.map(item => item.id)), ['interrupted', 'auto']);
+  assert.deepEqual(plain(f.menu.items.map(item => item.id)), ['interrupted', 'auto', 'migrate']);
   await f.menu.onSelect('interrupted'); assert.match(f.calls.toasts[0], /上次更新时结束了 Claude 2、Codex 秘书/);
   assert.equal(f.c.backendSwitchedText({ resumed: 1, left: 2 }), '后台已更新；2 个会话没能自动接回，请在会话里点“继续原生会话”。');
   assert.match(f.c.backendSwitchedText({ error: '旧后台尚未确认关闭' }), /没有完成：旧后台尚未确认关闭/);
