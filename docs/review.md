@@ -124,6 +124,16 @@ once no older backends run. Review (fresh session; turn limit, then a bounded ve
 APPROVE_WITH_NOTES. The failure notice now says a session may have stopped, since an unconfirmed
 stop's outcome is unknown. Follow-ups: a failed record write leaves nothing named, and a later
 attempt on the same backend replaces an earlier run's record (both predate this change).
+The alpha.225 daily install then stopped: rotation and the failed move left backends whose only
+session ended, and the operator refused any such backend. A fresh install reviewer found that
+letting startup restart one would also make that old store the active backend for new sessions
+(startup reuses an all-ended slot already on the new version) with no check noticing. The operator
+now stops only when startup would actually restart a backend holding session records, using the
+startup's own conditions, and keeps its strict after-install checks; backends whose native server
+still runs are left alone (APPROVE_WITH_NOTES). The secretary's backend still stops it until the
+person resumes the secretary. Known limit: after a Claude rotation the old backend becomes
+restartable, so the next install needs the restart path itself (predicted active backend, store
+backups, room record checks) before it can proceed.
 
 **Alpha.90 final scoped review, 2026-10-23:** the GUI's native Escape path
 caused Claude's post-Stop plugin-input pause. The actual supported 310 GUI now
