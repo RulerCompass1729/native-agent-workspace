@@ -5,6 +5,7 @@
 // are rotated into a new session with a written handoff (user 2026-11-08).
 // The policy functions are pure; QueueDispatcher runs them in the main process.
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
 const { randomUUID } = require('node:crypto');
@@ -57,6 +58,8 @@ const HANDOFF_ACCEPT_MS = 2 * 60 * 1000;
 // The old session waits at most this long for running collaborations before it is kept instead.
 const STOP_WAIT_MS = 30 * 60 * 1000;
 const FAILED_ROTATION_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+// A session whose model is known nowhere is asked again after this, without a failure record.
+const UNKNOWN_MODEL_RETRY_MS = 10 * 60 * 1000;
 const CALL_TIMEOUT_MS = 60000;
 const CREATE_TIMEOUT_MS = 120000;
 const TICK_MS = 3000;
@@ -407,6 +410,52 @@ function reportedModel(session) {
   return null;
 }
 
+// The model a Claude session's own transcript last recorded. A resumed Claude session reports its model only
+// with its next turn (SessionStart on --resume carries none), while --resume restores this one; a moved
+// session is always resumed. The transcript is ~/.claude/projects/<cwd with every character other than a
+// letter or digit as "-">/<native id>.jsonl; only its end is read.
+const TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024;
+const NATIVE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function transcriptModel(session, root, maxBytes = TRANSCRIPT_TAIL_BYTES) {
+  if (session.provider !== 'claude' || typeof session.cwd !== 'string' || !NATIVE_ID_PATTERN.test(session.nativeId || '')) {
+    return null;
+  }
+  const file = path.join(root, session.cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${session.nativeId}.jsonl`);
+  let text = '';
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      const length = Math.min(size, maxBytes);
+      const buffer = Buffer.alloc(length);
+      fs.readSync(fd, buffer, 0, length, size - length);
+      text = buffer.toString('utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+  // From the end: the first line may be cut off, and synthetic entries carry no real model.
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!lines[i].includes('"assistant"')) {
+      continue;
+    }
+    let entry;
+    try {
+      entry = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    const model = entry && entry.type === 'assistant' && entry.message ? entry.message.model : null;
+    if (typeof model === 'string' && MODEL_PATTERN.test(model)) {
+      return model;
+    }
+  }
+  return null;
+}
+
 // What a successor must start with to continue like the old session: its model, effort,
 // permission mode and view. { reason } when a new session could not match it.
 function carrySettings(session) {
@@ -510,6 +559,10 @@ function rotationReason(session, now, options, rotations) {
   if (options.handedOff && options.handedOff.has(session.id)) {
     return null;
   }
+  // Its model is known nowhere yet (see transcriptModel); the next session in line goes first.
+  if (options.waitingModel && options.waitingModel.has(session.id)) {
+    return null;
+  }
   const limit = options.contentLimits ? options.contentLimits[session.provider] : undefined;
   if (Number.isFinite(limit) && recordCount(session) >= limit) {
     return 'content';
@@ -540,6 +593,7 @@ function planDispatch(input) {
   const rotationOptions = {
     contentLimits,
     handedOff: input.handedOff,
+    waitingModel: input.waitingModel,
     memory: input.memory,
     memoryLimit: input.memoryLimit ?? MEMORY_LIMIT_BYTES,
     memoryMinAgeMs: input.memoryMinAgeMs ?? MEMORY_MIN_AGE_MS,
@@ -1145,6 +1199,10 @@ function readRotations(file, now) {
     if (record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS) {
       continue;
     }
+    // Recorded before a resumed Claude session's model was read from its transcript; not a reason to rest.
+    if (record.phase === 'failed' && record.reason === 'cannot-carry:model-unknown') {
+      continue;
+    }
     if (record.phase === 'kept' && now - (record.keptAt || 0) > ROTATE_AFTER_MS) {
       continue;
     }
@@ -1169,6 +1227,9 @@ class QueueDispatcher {
     this.contentLimits = options.contentLimits ?? CONTENT_LIMITS;
     this.quietMs = options.quietMs ?? QUIET_BEFORE_ROTATE_MS;
     this.tickMs = options.tickMs ?? TICK_MS;
+    this.transcriptRoot = options.transcriptRoot || path.join(os.homedir(), '.claude', 'projects');
+    // Sessions whose model is known nowhere yet: asked again after a while, never rested for a week.
+    this.unknownModelAt = new Map();
     this.memoryLimit = options.memoryLimit ?? MEMORY_LIMIT_BYTES;
     this.pressureLimit = options.pressureLimit ?? PRESSURE_LIMIT_BYTES;
     this.memoryMinAgeMs = options.memoryMinAgeMs ?? MEMORY_MIN_AGE_MS;
@@ -1259,6 +1320,18 @@ class QueueDispatcher {
     for (const entry of this.log) {
       if (['done', 'kept'].includes(entry.event) && entry.old && entry.old.id) {
         ids.add(entry.old.id);
+      }
+    }
+    return ids;
+  }
+
+  waitingModel(now) {
+    const ids = new Set();
+    for (const [id, at] of this.unknownModelAt) {
+      if (now - at < UNKNOWN_MODEL_RETRY_MS) {
+        ids.add(id);
+      } else {
+        this.unknownModelAt.delete(id);
       }
     }
     return ids;
@@ -1528,6 +1601,7 @@ class QueueDispatcher {
       humanQuietMs: this.humanQuietMs,
       contentLimits: this.contentLimits,
       handedOff: this.handedOff(),
+      waitingModel: this.waitingModel(current.now),
       quietMs: this.quietMs,
       memory: sample.memory,
       memoryLimit: sample.limit,
@@ -1719,7 +1793,18 @@ class QueueDispatcher {
     const reason = action.reason || 'content';
     const why = rotationWhy(reason, recordCount(session), bytes || 0);
     // Decided before the old session is asked anything: a successor must match it.
-    const carry = carrySettings(session);
+    let carry = carrySettings(session);
+    if (carry.reason === 'model-unknown') {
+      const model = transcriptModel(session, this.transcriptRoot);
+      if (model) {
+        carry = carrySettings({ ...session, model });
+      }
+    }
+    if (carry.reason === 'model-unknown') {
+      // Its next turn reports the model; until then the session simply keeps working.
+      this.unknownModelAt.set(session.id, current.now);
+      return;
+    }
     let refusal = carry.reason;
     if (!refusal && !(current.snapshot.capabilities || []).includes(CREATE_SETTINGS_CAPABILITY)) {
       refusal = 'backend-cannot-carry-settings';
@@ -2058,6 +2143,7 @@ module.exports = {
   lastActivityOf,
   reportedModel,
   carrySettings,
+  transcriptModel,
   settingsMismatch,
   CREATE_SETTINGS_CAPABILITY,
   CLAUDE_PERMISSION_MODES,
