@@ -531,6 +531,112 @@ function shortText(text, limit = 60) {
   return line.slice(0, limit - 1) + '…';
 }
 
+// The same rules as workspace.cjs isTerminalResponse (a unit test keeps them equal),
+// plus focus reports: a terminal's own replies are not the person typing.
+function isPointerHover(data) {
+  if (!/^(?:\x1b\[<\d+;\d+;\d+M)+$/.test(data)) {
+    return false;
+  }
+  for (const match of data.matchAll(/\x1b\[<(\d+);/g)) {
+    if ((Number(match[1]) & 35) !== 35) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isTerminalResponse(data) {
+  if (/^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\[\??\d+;[0-4]\$y$/.test(data)) {
+    return true;
+  }
+  return /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data) || isPointerHover(data);
+}
+
+function terminalReplyOnly(data) {
+  if (typeof data !== 'string' || !data) {
+    return false;
+  }
+  return isTerminalResponse(data) || /^\x1b\[[IO]$/.test(data);
+}
+
+// 「名字」→「名字 · 续」→「名字 · 续2」→「名字 · 续3」…
+function nextName(name) {
+  const match = /^(.*) · 续(\d*)$/u.exec(name);
+  if (!match) {
+    return `${name} · 续`;
+  }
+  let generation = 2;
+  if (match[2]) {
+    generation = Number(match[2]) + 1;
+  }
+  return `${match[1]} · 续${generation}`;
+}
+
+function shortId(id) {
+  if (typeof id !== 'string') {
+    return '';
+  }
+  return id.slice(0, 6);
+}
+
+// Rotation log entries joined into chains: the sessions behind one continuing conversation.
+function rotationChains(entries) {
+  const nextOf = new Map();
+  const previousOf = new Map();
+  const sessionInfo = new Map();
+  for (const entry of entries) {
+    if (entry.old && entry.old.id) {
+      sessionInfo.set(entry.old.id, { ...sessionInfo.get(entry.old.id), ...entry.old });
+    }
+    if (entry.new && entry.new.id) {
+      sessionInfo.set(entry.new.id, { ...sessionInfo.get(entry.new.id), ...entry.new });
+    }
+    if (['done', 'kept'].includes(entry.event) && entry.old && entry.new) {
+      nextOf.set(entry.old.id, { id: entry.new.id, time: entry.time, event: entry.event });
+      previousOf.set(entry.new.id, entry.old.id);
+    }
+  }
+  const chains = [];
+  for (const id of nextOf.keys()) {
+    if (previousOf.has(id)) {
+      continue;
+    }
+    const links = [];
+    let current = id;
+    let handedAt = null;
+    let outcome = null;
+    const seen = new Set();
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      links.push({ ...sessionInfo.get(current), id: current, handedAt, outcome });
+      const next = nextOf.get(current);
+      if (!next) {
+        break;
+      }
+      handedAt = next.time;
+      outcome = next.event;
+      current = next.id;
+    }
+    chains.push({ spaces: [], sessions: links });
+  }
+  for (const chain of chains) {
+    const spaces = new Set();
+    for (const entry of entries) {
+      const ids = new Set();
+      for (const link of chain.sessions) {
+        ids.add(link.id);
+      }
+      if (entry.old && ids.has(entry.old.id)) {
+        for (const space of entry.spaces || []) {
+          spaces.add(space);
+        }
+      }
+    }
+    chain.spaces = [...spaces];
+  }
+  return chains;
+}
+
 function notSent(error) {
   if (error && error.notSent === true) {
     return true;
@@ -627,6 +733,68 @@ class QueueDispatcher {
       this.dirty = true;
     };
     this.rotations = readRotations(this.file, this.now());
+    this.notify = options.notify || (() => {});
+    this.logFile = path.join(options.dataDir, 'rotation-log.jsonl');
+    this.log = this.loadLog();
+  }
+
+  // The append-only rotation record: every session id and native id involved.
+  loadLog() {
+    const entries = [];
+    let text = '';
+    try {
+      text = fs.readFileSync(this.logFile, 'utf8');
+    } catch {
+      return entries;
+    }
+    for (const line of text.split('\n')) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        entries.push(JSON.parse(line));
+      } catch {
+        // A damaged line is skipped; the rest of the record stays readable.
+      }
+    }
+    return entries.slice(-1000);
+  }
+
+  appendLog(event, record, extra = {}) {
+    const entry = {
+      time: this.now(),
+      event,
+      spaces: record.roomIds || [],
+      old: { id: record.oldId, nativeId: record.oldNativeId || null, name: record.name },
+      new: null,
+      ...extra,
+    };
+    if (record.newId) {
+      entry.new = { id: record.newId, nativeId: record.newNativeId || null, name: record.newName || null };
+    }
+    try {
+      fs.appendFileSync(this.logFile, JSON.stringify(entry) + '\n', { mode: 0o600 });
+    } catch {
+      // The space record still carries the event when the private log cannot be written.
+    }
+    this.log.push(entry);
+    if (this.log.length > 1000) {
+      this.log.shift();
+    }
+    return entry;
+  }
+
+  rotationEntries() {
+    return this.log.slice();
+  }
+
+  rotationChains() {
+    return rotationChains(this.log);
+  }
+
+  // Space record text: names with the short ids that make the chain searchable.
+  label(id, name) {
+    return `${name}（${shortId(id)}）`;
   }
 
   save() {
@@ -975,6 +1143,7 @@ class QueueDispatcher {
       phase: 'requested',
       requestedAt: current.now,
       tag: null,
+      oldId: session.id,
       oldNativeId: session.nativeId,
       oldControl: session.controlRevision || 0,
       provider: session.provider,
@@ -983,12 +1152,14 @@ class QueueDispatcher {
       skipPermissions: session.skipPermissions === true,
       roomIds: roomIds(session),
     };
+    record.newName = nextName(record.name);
     this.rotations[session.id] = record;
     this.save();
     try {
       record.tag = await this.send(session, handoffRequestText(hours), `rotation:${session.id}`);
       this.save();
-      this.roomState.rotationEvent(record.roomIds, 'requested', record.name, '');
+      this.appendLog('requested', record);
+      this.roomState.rotationEvent(record.roomIds, 'requested', this.label(session.id, record.name), '');
     } catch (error) {
       if (notSent(error)) {
         delete this.rotations[session.id];
@@ -996,7 +1167,9 @@ class QueueDispatcher {
         record.phase = 'failed';
         record.failedAt = current.now;
         record.reason = error.message || 'handoff-request-failed';
-        this.roomState.rotationEvent(record.roomIds, 'failed', record.name, record.reason);
+        this.appendLog('failed', record, { reason: record.reason });
+        this.roomState.rotationEvent(record.roomIds, 'failed', this.label(session.id, record.name), record.reason);
+        this.notify('failed', record);
       }
       this.save();
     }
@@ -1029,7 +1202,7 @@ class QueueDispatcher {
           // The space may be gone; the failure record still stands.
         }
         try {
-          await withTimeout(this.roomState.membership(this.client, record.newId, false, `${record.name} · 续`, roomId), CALL_TIMEOUT_MS, 'leave-timeout');
+          await withTimeout(this.roomState.membership(this.client, record.newId, false, record.newName || record.name, roomId), CALL_TIMEOUT_MS, 'leave-timeout');
         } catch {
           // Leaving is cosmetic; stopping the unused session is what frees memory.
         }
@@ -1040,7 +1213,12 @@ class QueueDispatcher {
         // Left for the person; it holds no handoff and no queued work.
       }
     }
-    this.roomState.rotationEvent(record.roomIds, 'failed', record.name, reason);
+    if (!record.oldId) {
+      record.oldId = oldId;
+    }
+    this.appendLog('failed', record, { reason });
+    this.roomState.rotationEvent(record.roomIds, 'failed', this.label(oldId, record.name), reason);
+    this.notify('failed', record);
     await this.broadcast();
   }
 
@@ -1072,7 +1250,10 @@ class QueueDispatcher {
       this.save();
     }
     if (record.phase === 'creating') {
-      const name = `${record.name} · 续`;
+      if (!record.newName) {
+        record.newName = nextName(record.name);
+      }
+      const name = record.newName;
       // After a restart, adopt a session this rotation already created.
       let existing = null;
       for (const session of snapshot.sessions) {
@@ -1097,7 +1278,7 @@ class QueueDispatcher {
     }
     if (record.phase === 'joining') {
       for (const roomId of record.roomIds) {
-        await withTimeout(this.roomState.membership(this.client, record.newId, true, `${record.name} · 续`, roomId), CALL_TIMEOUT_MS, 'join-timeout');
+        await withTimeout(this.roomState.membership(this.client, record.newId, true, record.newName, roomId), CALL_TIMEOUT_MS, 'join-timeout');
         this.roomState.queueReassign(roomId, oldId, record.newId);
       }
       record.phase = 'created';
@@ -1139,6 +1320,9 @@ class QueueDispatcher {
         return;
       }
       record.handoffConfirmed = true;
+      if (fresh && fresh.nativeId) {
+        record.newNativeId = fresh.nativeId;
+      }
       this.save();
       // Ending a session pauses running collaborations; wait until none is running, but not forever.
       let collaborating = false;
@@ -1166,12 +1350,16 @@ class QueueDispatcher {
           }
         }
         await withTimeout(this.client.call('stop', oldId), CALL_TIMEOUT_MS, 'stop-timeout');
-        this.roomState.rotationEvent(record.roomIds, 'done', record.name, `${record.name} · 续`);
-      } else if (inUse) {
-        this.roomState.rotationEvent(record.roomIds, 'oldKept', record.name, `${record.name} · 续`);
-      } else {
-        this.roomState.rotationEvent(record.roomIds, 'done', record.name, `${record.name} · 续`);
       }
+      if (!record.oldId) {
+        record.oldId = oldId;
+      }
+      const outcome = inUse ? 'kept' : 'done';
+      const oldLabel = this.label(oldId, record.name);
+      const newLabel = this.label(record.newId, record.newName || record.name);
+      this.appendLog(outcome, record);
+      this.roomState.rotationEvent(record.roomIds, inUse ? 'oldKept' : 'done', oldLabel, newLabel);
+      this.notify(outcome, record);
       if (inUse) {
         this.rotations[oldId] = { phase: 'kept', keptAt: now, oldNativeId: record.oldNativeId, name: record.name, roomIds: record.roomIds };
       } else {
@@ -1205,5 +1393,8 @@ module.exports = {
   shortText,
   notSent,
   readRotations,
+  terminalReplyOnly,
+  nextName,
+  rotationChains,
   QueueDispatcher,
 };

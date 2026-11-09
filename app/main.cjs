@@ -26,7 +26,8 @@ const { bindOriginalOutbox, bindClaudeOutbox, bindOriginalControl, bindClaudeCon
 const { createStockOutboxView } = require('./computer-use-outbox-view.cjs');
 const background = require('./background-control.cjs');
 const backgroundOperation = require('./background-operation.cjs');
-const { QueueDispatcher } = require('./queue-dispatch.cjs');
+const queueRules = require('./queue-dispatch.cjs');
+const { QueueDispatcher } = queueRules;
 const applicationHandlers = new Map();
 let backgroundControl, backgroundUnavailable = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
@@ -233,7 +234,7 @@ function displayState(snapshot, context) {
   const outboxWarning = backgroundUnavailable ? 'Background control is unavailable; existing native sessions and ordinary controls remain available.' : outboxQuitFailed ? 'Outbox cleanup could not be confirmed. Quit again to close the app; native sessions keep running.'
     : outboxUnavailable ? 'The independent space outbox is unavailable; new delivery cannot be confirmed.' : '';
   return { ...display, ...(outboxWarning ? { storageWarning: [display.storageWarning, outboxWarning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
-    switchEnded: endedByMove(display.sessions) };
+    switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [] };
 }
 function reportViewStorage(warning, uiMessage = null) {
   if (viewStorageWarning === warning) return;
@@ -245,10 +246,7 @@ let queueDispatcher = null;
 const HUMAN_SESSION_METHODS = new Set(['prepareInput', 'input', 'draft', 'send', 'queue', 'steer', 'claim', 'terminal', 'interrupt', 'approve', 'answer', 'forward', 'queueShared', 'steerShared']);
 // A terminal's own replies (focus, cursor reports) are not the person typing.
 function terminalReplyOnly(method, args) {
-  if (method !== 'input' || typeof args[1] !== 'string' || !args[1]) {
-    return false;
-  }
-  return /^(?:\x1b\[[0-9;?<>=]*[A-Za-z~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\))+$/u.test(args[1]);
+  return method === 'input' && queueRules.terminalReplyOnly(args[1]);
 }
 async function startQueueDispatcher() {
   if (queueDispatcher || process.env.NAW_QUEUE_DISPATCH === 'off') {
@@ -271,6 +269,7 @@ async function startQueueDispatcher() {
       connect: owner => connect(dataDir, owner),
       labels: sessionLabels.labels,
       broadcast: broadcastRoom,
+      notify: notifyRotation,
     };
     // Only a verified isolated test run may shorten the rotation age or the quiet time after the person's input.
     const testRotation = Number(process.env.NAW_TEST_QUEUE_ROTATE_MS);
@@ -1239,3 +1238,18 @@ app.on('before-quit', event => {
 });
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.
 app.on('will-quit', () => { queueDispatcher?.close(); });
+// A session rotation is announced to the person; the space record and log keep the ids.
+function notifyRotation(outcome, record) {
+  const keys = { done: 'os.rotationDoneBody', kept: 'os.rotationKeptBody', failed: 'os.rotationFailedBody' };
+  const notice = { key: keys[outcome], params: { old: record.name, new: record.newName || record.name, reason: record.reason || '' } };
+  try {
+    if (!Notification.isSupported()) {
+      return;
+    }
+    const notification = new Notification({ title: displayText('os.rotationTitle'), body: displayText(notice.key, notice.params) });
+    notification.once('click', () => focusOrOpen());
+    notification.show();
+  } catch {
+    // The space record and the rotation log remain when OS delivery fails.
+  }
+}

@@ -4463,6 +4463,7 @@ function renderQueue() {
       select.value = chosen;
     }
   }
+  renderRotationChains();
   const items = queueShownItems(room);
   const list = $('queue-list');
   const signature = JSON.stringify([items, memberSignature, needUpdate]);
@@ -4476,6 +4477,40 @@ function renderQueue() {
   if (!rows.length) {
     list.append(uiNode('p', 'queue.empty', undefined, 'quiet'));
   }
+}
+// The sessions behind one continuing conversation, oldest first, with their ids.
+function renderRotationChains() {
+  const host = $('queue-rotations');
+  const list = $('queue-rotation-list');
+  const chains = [];
+  for (const chain of state.rotationChains || []) {
+    if ((chain.spaces || []).includes(queueSpace)) {
+      chains.push(chain);
+    }
+  }
+  host.hidden = chains.length === 0;
+  const signature = JSON.stringify(chains);
+  if (list.dataset.signature === signature) return;
+  list.dataset.signature = signature;
+  const blocks = [];
+  for (const chain of chains) {
+    const block = node('ol', undefined, 'rotation-chain');
+    for (const link of chain.sessions) {
+      const row = node('li');
+      if (link.handedAt) {
+        const time = new Date(link.handedAt).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+        let key = 'queue.chainHanded';
+        if (link.outcome === 'kept') {
+          key = 'queue.chainKept';
+        }
+        row.append(uiNode('span', key, { time }, 'quiet'), node('br'));
+      }
+      row.append(uiNode('span', 'queue.chainSession', { name: link.name || '', id: link.id || '', native: link.nativeId || '—' }));
+      block.append(row);
+    }
+    blocks.push(block);
+  }
+  list.replaceChildren(...blocks);
 }
 $('room-queue').onclick = openQueue;
 $('close-queue').onclick = () => $('queue-dialog').close();

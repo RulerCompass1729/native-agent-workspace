@@ -774,3 +774,76 @@ test('a rotation whose old session already ended finishes at once even while a c
   assert.equal(dispatcher.rotations.a, undefined, 'record finished without waiting');
   assert.equal(client.calls.filter(call => call[0] === 'stop').length, 0, 'nothing left to stop');
 });
+
+test('only a terminal\'s own replies are ignored; every key the person presses counts', () => {
+  const { isTerminalResponse } = require('../workspace.cjs');
+  const replies = ['\x1b[12;40R', '\x1b[?1;2c', '\x1b[>0;95;0c', '\x1b[0n', '\x1b[?2004;1$y', '\x1b]11;rgb:0000/0000/0000\x07', '\x1b[<35;10;5M'];
+  for (const reply of replies) {
+    assert.equal(isTerminalResponse(reply), true, JSON.stringify(reply));
+    assert.equal(rules.terminalReplyOnly(reply), true, JSON.stringify(reply));
+  }
+  assert.equal(rules.terminalReplyOnly('\x1b[I'), true, 'focus in');
+  assert.equal(rules.terminalReplyOnly('\x1b[O'), true, 'focus out');
+  const keys = ['a', '\r', '\x03', '\x7f', '\x1b[A', '\x1bOA', '\x1b[Z', '\x1b[3~', '\x1b[5~', '\x1b[1;5C', '\x1b[15~', '\x1b[<0;10;5M', 'hi\x1b[I'];
+  for (const key of keys) {
+    assert.equal(isTerminalResponse(key), false, JSON.stringify(key));
+    assert.equal(rules.terminalReplyOnly(key), false, JSON.stringify(key));
+  }
+});
+
+test('rotated names count up instead of piling suffixes', () => {
+  assert.equal(rules.nextName('队员甲'), '队员甲 · 续');
+  assert.equal(rules.nextName('队员甲 · 续'), '队员甲 · 续2');
+  assert.equal(rules.nextName('队员甲 · 续9'), '队员甲 · 续10');
+});
+
+test('a rotation is announced and logged with every session id and native id, and chains show the sessions behind one conversation', async t => {
+  const notices = [];
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })], {
+    notify: (outcome, record) => notices.push([outcome, record.name, record.newName]),
+  });
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  client.reply('a', '交接：分支 abc。');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  const newId = client.state.sessions[1].id;
+  assert.deepEqual(notices, [['done', 'Agent a', 'Agent a · 续']]);
+  const lines = fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const events = [];
+  for (const line of lines) {
+    events.push(line.event);
+  }
+  assert.deepEqual(events, ['requested', 'done']);
+  assert.deepEqual(lines[1].old, { id: 'a', nativeId: 'native-a', name: 'Agent a' });
+  assert.equal(lines[1].new.id, newId);
+  assert.equal(lines[1].new.nativeId, `native-${newId}`);
+  assert.deepEqual(lines[1].spaces, ['shared']);
+  const chains = dispatcher.rotationChains();
+  assert.equal(chains.length, 1);
+  const ids = [];
+  for (const link of chains[0].sessions) {
+    ids.push(link.id);
+  }
+  assert.deepEqual(ids, ['a', newId]);
+  assert.deepEqual(chains[0].spaces, ['shared']);
+  const doneEvent = room.value.events.find(event => event.uiMessage.key === 'notice.rotation.done');
+  assert.match(doneEvent.text, /「Agent a（a）」的工作已交给「Agent a · 续（[^）]+）」/);
+});
+
+test('chains follow several rotations of one conversation in order', () => {
+  const entries = [
+    { time: 1, event: 'done', spaces: ['s'], old: { id: 'a', nativeId: 'na', name: 'A' }, new: { id: 'b', nativeId: 'nb', name: 'A · 续' } },
+    { time: 2, event: 'failed', spaces: ['s'], old: { id: 'b', nativeId: 'nb', name: 'A · 续' }, new: null },
+    { time: 3, event: 'kept', spaces: ['s'], old: { id: 'b', nativeId: 'nb', name: 'A · 续' }, new: { id: 'c', nativeId: 'nc', name: 'A · 续2' } },
+  ];
+  const chains = rules.rotationChains(entries);
+  assert.equal(chains.length, 1);
+  const summary = [];
+  for (const link of chains[0].sessions) {
+    summary.push([link.id, link.nativeId, link.outcome]);
+  }
+  assert.deepEqual(summary, [['a', 'na', null], ['b', 'nb', 'done'], ['c', 'nc', 'kept']]);
+});

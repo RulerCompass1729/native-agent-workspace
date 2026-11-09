@@ -253,8 +253,18 @@ async function run() {
   await expectSend(8, fresh, /你接手「队员甲」[\s\S]*feature-x 分支/, 'handoff to the new member');
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).state === 'ended', 'Old member ended');
   assert.equal((await itemByText('任务七')).assignee, fresh, 'The queue follows the new member');
-  const rotated = (await events()).some(text => text.startsWith('NAW 换会话：「队员甲」的工作已交给「队员甲 · 续」'));
-  assert.ok(rotated, 'rotation record in the space');
+  const rotated = (await events()).some(text => /^NAW 换会话：「队员甲（[0-9a-f]{6}）」的工作已交给「队员甲 · 续（[0-9a-f]{6}）」/.test(text));
+  assert.ok(rotated, 'rotation record in the space names both sessions with their ids');
+  // The queue dialog lists the sessions behind this conversation, oldest first, with full ids.
+  if (!(await page.locator('#queue-dialog').isVisible())) {
+    await page.locator('#room-queue').click();
+  }
+  await page.locator('#queue-rotations').waitFor();
+  await page.locator('#queue-rotations summary').click();
+  const chain = await page.locator('#queue-rotation-list .rotation-chain li').allInnerTexts();
+  assert.equal(chain.length, 2);
+  assert.ok(chain[0].includes(a) && chain[1].includes(fresh), 'old then new session ids');
+  await capture('rotation-chain');
   await release(fresh, '已核对交接。');
   await expectSend(9, fresh, /任务七/, 'queued item to the new member');
   await capture('rotated');

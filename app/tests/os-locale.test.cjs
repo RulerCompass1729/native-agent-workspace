@@ -66,10 +66,14 @@ function osOptions(language, codex = true) {
     names: 'RAW 中文 backend names', option: { switch: { stops: [{ name: 'RAW 中文 session' }], endsCodex: codex, reason: 'RAW 中文 background detail' } },
     textExtensions: ['txt', 'md'], record: { cwd: raw }, snapshot: { defaultWorkspace: '/unused' },
     preview: { name: 'RAW 中文.txt' }, ext: '.txt', path,
+    notice: { key: 'os.rotationDoneBody', params: { old: 'RAW 中文 old', new: 'RAW 中文 new', reason: '' } },
   })) }));
 }
 test('all existing OS option groups use the chosen language while raw names, picker scope and cancel safeguards stay intact', () => {
-  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 14);
+  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 15);
+  // The fifteenth surface is the session-rotation notice (queue-dispatch.cjs).
+  assert.deepEqual(en[14].value, { title: 'NAW · Session rotation', body: '“RAW 中文 old” handed its work to the new session “RAW 中文 new”; the old session ended and its record is kept.' });
+  assert.deepEqual(zh[14].value, { title: 'NAW · 换会话', body: '「RAW 中文 old」的工作已交给新会话「RAW 中文 new」，旧会话已结束，记录保留。' });
   assert.deepEqual(en.map(row => row.type), zh.map(row => row.type));
   const [notice, capacity, space, files, program, shared, backend, hold, update, forget, stop, material, save, folder] = en.map(row => row.value);
   assert.equal(notice.title, 'NAW · Tool wait reminder'); assert.ok(notice.body.includes('not been resent automatically'));

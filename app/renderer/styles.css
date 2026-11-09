@@ -598,6 +598,9 @@ header h1, header p { overflow-wrap: anywhere; }
 .queue-text{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
 .queue-actions{display:flex;gap:6px}
 #queue-form{display:grid;gap:6px;margin-top:12px}
+#queue-rotations{margin-top:12px}
+.rotation-chain{margin:8px 0;padding-left:20px;overflow-wrap:anywhere;user-select:text}
+.rotation-chain li{margin:4px 0}
 #space-create-name{width:100%;margin:8px 0 16px}
 &[data-native-surface="sidebar"][data-collapsed="true"] .session-view-switch,&[data-native-surface="sidebar"][data-collapsed="true"] .session-space-badges,&[data-native-surface="sidebar"][data-collapsed="true"] .session-space-group h3,&[data-native-surface="sidebar"][data-collapsed="true"] #new-space{display:none}
 /* The narrow rail has no group headings to unfold from, so a folded group's sessions stay listed there (T-132). */
