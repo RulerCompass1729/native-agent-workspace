@@ -127,6 +127,7 @@ async function service(directory, state, { onStop } = {}) {
         const record = state.sessions.find(s => s.id === request.args?.[0]);
         if (request.method === 'initial') value = state;
         else if (request.method === 'maintenanceStop') { const next = onStop?.(record, state); if (next === 'reject') { record.state = 'error'; error = '原生未确认结束状态。'; } else { record.state = next || (record.provider === 'codex' ? 'disconnected' : 'ended'); record.controlRevision = (record.controlRevision || 0) + 1; record.connectionRevision = (record.connectionRevision || 0) + 1; value = { stopped: true, expected: request.args[1], stoppedState: { ...request.args[1], controlRevision: record.controlRevision, connectionRevision: record.connectionRevision, state: record.state } }; } }
+        else if (request.method === 'terminalSnapshot') value = (state.screens || {})[request.args?.[0]] || { buffer: '', cols: 80, rows: 24 };
         else if (request.method === 'maintenanceResume') { // Same states the real resume accepts (ended/recoverable/error; disconnected Codex reconnects).
           if (!['ended', 'recoverable', 'error', 'disconnected'].includes(record.state)) error = '这个会话目前不能恢复。'; else record.state = 'idle'; }
         else if (['shutdown', 'maintenanceShutdown'].includes(request.method)) {
@@ -227,6 +228,16 @@ test('a move under the migration setting re-checks each session on fresh state a
   await assert.rejects(switchBackend({ dataDir: h2.dataDir, key: h2.key, executablePath: 'unused', ensure: () => assert.fail(), applicationVersion: '0.1.0-alpha.158', guard: noTeam,
     commandLine: h2.command(old2), signal: () => assert.fail(), now: () => now }), /没有结束任何会话/);
   assert.deepEqual(methods(old2), []);
+});
+test('a migration reads a terminal screen through the old backend itself, so the window\'s maintenance never blocks it', async t => {
+  const h = harness(t, [claudeNew()]); const old = await h.old();
+  old.state.screens = { c: { buffer: 'Claude Code\r\n> UNSENT_TEXT', cols: 80, rows: 24 } };
+  const { saveTerminalScreen } = require('../queue-dispatch.cjs');
+  const { connectService } = require('../service-client.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-screen-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = await saveTerminalScreen(owner => connectService(h.directory, owner), 'naw-migration', path.join(dir, 'rotation-terminals'), 'c', now);
+  assert.match(fs.readFileSync(path.join(dir, file), 'utf8'), /> UNSENT_TEXT/);
+  assert.deepEqual(methods(old), ['terminalSnapshot:c'], 'only a read; nothing stopped or claimed');
 });
 test('a service process that cannot be proven is never signalled and no session is stopped', async t => {
   const h = harness(t, [claudeNew(), codexNew()]); const old = await h.old();

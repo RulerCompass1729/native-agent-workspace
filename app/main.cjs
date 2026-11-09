@@ -646,7 +646,8 @@ async function autoBackendSwitchOnce() {
           if (session && session.terminalInputPending !== false) {
             let file = null;
             try {
-              file = await queueRules.saveTerminalScreen(owner => connect(dataDir, owner), 'naw-migration', path.join(dataDir, 'rotation-terminals'), stop.id, Date.now());
+              // Through the old backend's own connection: the window's client refuses input under maintenance.
+              file = await queueRules.saveTerminalScreen(owner => connectService(path.join(dataDir, option.backendKey), owner), 'naw-migration', path.join(dataDir, 'rotation-terminals'), stop.id, Date.now());
             } catch {
               throw uiError('error.migrationScreenUnsaved', { name: stop.name });
             }
