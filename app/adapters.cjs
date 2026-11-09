@@ -513,9 +513,11 @@ class Claude extends EventEmitter {
     // The hook waits for that answer; anything else lets native ask as usual.
     hooks.PreToolUse.push({ matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: `${command} --ask`, timeout: 3600 }] });
     const settings = path.join(host.privateDir, `${record.id}.settings.json`);
-    // Automatic session recap and prompt suggestions are background model requests
-    // the person did not ask for; /recap stays available on request.
-    fs.writeFileSync(settings, JSON.stringify({ teammateMode: 'in-process', awaySummaryEnabled: false, promptSuggestionEnabled: false, hooks }), { mode: 0o600 });
+    // Automatic session recap, prompt suggestions, background memory consolidation (auto-dream) and a compaction
+    // summary precomputed before it is needed are background model requests the person did not ask for (CL-X03).
+    // /recap and compaction itself stay available; auto mode's classifier keeps its native behavior.
+    fs.writeFileSync(settings, JSON.stringify({ teammateMode: 'in-process', awaySummaryEnabled: false, promptSuggestionEnabled: false,
+      autoDreamEnabled: false, precomputeCompactionEnabled: false, hooks }), { mode: 0o600 });
     const mcp = JSON.stringify({ mcpServers: { native_workspace: { command: process.execPath,
       args: ['--disable-sigusr1', path.join(__dirname, 'claude-message-tool.cjs')], env: { ELECTRON_RUN_AS_NODE: '1' } },
       peekaboo: computerUseMcpServer() } });

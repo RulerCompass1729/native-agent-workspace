@@ -449,3 +449,19 @@ test('strict external inspection refuses a failed process query; existing recove
  isolated.require=name=>name==='node:child_process'?{...require('node:child_process'),execFileSync(){throw Error('Controlled unavailable process query');}}:original(name);
  isolated._compile(fs.readFileSync(file,'utf8'),file);const {claudeHolder}=isolated.exports,id=randomUUID();assert.equal(claudeHolder(id),null);assert.throws(()=>claudeHolder(id,true),e=>e.nativeImportRefused);
 });
+// CL-X03 (the person, 2026-10-25 and 2026-11-08): Claude's own background model requests the person did not
+// ask for stay off in NAW's launch settings; /recap and compaction itself stay available, and auto mode's
+// classifier keeps its native behavior.
+test('Claude launches with its unrequested background model requests turned off', async t => {
+ const { Claude: Adapter } = require('../adapters.cjs');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-background-requests-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const argvFile=path.join(dir,'argv.txt'),binary=path.join(dir,'claude');
+ fs.writeFileSync(binary,`#!/bin/sh\nprintf '%s\\n' "$@" > '${argvFile}'\n`,{mode:0o700});
+ const host={binaries:{claude:binary},privateDir:dir,hookTargets:new Map(),hookSocket:path.join(dir,'hook.sock'),submitSocket:path.join(dir,'submit.sock')};
+ const r=new Adapter({id:randomUUID(),nativeId:randomUUID(),name:'Background',cwd:dir},host);
+ await new Promise(resolve=>r.terminal.once('closed',resolve));r.submission.close();
+ const argv=fs.readFileSync(argvFile,'utf8').trim().split('\n'),settings=JSON.parse(fs.readFileSync(argv[argv.indexOf('--settings')+1],'utf8'));
+ for(const key of ['awaySummaryEnabled','promptSuggestionEnabled','autoDreamEnabled','precomputeCompactionEnabled'])assert.equal(settings[key],false,key);
+ assert.equal(argv[argv.indexOf('--prompt-suggestions')+1],'false');
+ for(const key of ['autoCompactEnabled','autoMemoryEnabled','permissions','defaultMode'])assert.equal(Object.hasOwn(settings,key),false,key+' stays native');
+});
