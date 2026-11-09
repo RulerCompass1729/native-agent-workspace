@@ -134,6 +134,15 @@ still runs are left alone (APPROVE_WITH_NOTES). The secretary's backend still st
 person resumes the secretary. Known limit: after a Claude rotation the old backend becomes
 restartable, so the next install needs the restart path itself (predicted active backend, store
 backups, room record checks) before it can proceed.
+With alpha.225 installed and automatic migration on, the secretary moved by itself
+(confirmedByState names it), and its rotation then failed with an unknown model and rested a week:
+a resumed Claude session reports its model only with its next turn, and every move resumes. The
+dispatcher now reads the last model of the session's own main conversation from the end of its
+transcript (filtered as NAW's Claude reader filters, after a fresh reviewer found a subagent's or
+another session's row could hand the successor a smaller model); a session whose model is known
+nowhere waits ten minutes, logged once, without a week's rest or holding back others
+(APPROVE_WITH_NOTES). Limits: a context suffix such as [1m] or a usage-fallback model in the last
+turn would be carried as written.
 
 **Alpha.90 final scoped review, 2026-10-23:** the GUI's native Escape path
 caused Claude's post-Stop plugin-input pause. The actual supported 310 GUI now
