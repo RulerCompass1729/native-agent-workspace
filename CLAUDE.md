@@ -21,10 +21,14 @@ or start paid model runs as a side effect of editing documents.
   such as secretary, researcher, tester and integrator describe the current work,
   not permanent limits. Within existing authorization, any agent may claim a
   ready, unowned complete user outcome without waiting for a new dispatch,
-  except as a member of a space whose NAW queue the person uses: there it takes
-  work only as NAW sends it (【NAW 派活】, one item to one member) and does not
-  claim board tasks itself (the person, 2026-11-08: agents claiming the same
-  task by themselves).
+  except as a member of a space whose NAW queue the person uses (automatic
+  messages on): there it works on NAW dispatches (【NAW 派活】, one item to one
+  member) and on what the person or another agent asks it directly through NAW,
+  and does not claim board tasks itself (the person, 2026-11-08: agents
+  claiming the same task by themselves). A session is such a member once a
+  【NAW 派活】 has reached it, or once the person or the secretary says so
+  through NAW. The secretary and the designated integrator stay outside queue
+  spaces, since their work starts on its own.
 - Keep one owner responsible for each outcome through reproduction, necessary
   implementation, relevant checks and usable delivery. A helper may claim and
   finish an independent dependency; the outcome owner keeps responsibility for
@@ -199,11 +203,14 @@ local branch or main; not installed, pushed or published):
   Claude is unavailable, keep the checkpoint open rather than self-approving.
   Reuse relevant evidence and avoid frequent handoffs.
 - A member of a space whose NAW queue the person uses ends each turn idle once
-  its current item is done, with no background wait and no active native goal:
-  NAW sends idle members their next item and replaces long sessions with new
-  ones, and it does neither for a session with a background wait or an active
-  goal. A reply whose first line starts with 「需要你决定：」 holds the member
-  for the person.
+  its current item is done: no background command (it waits for reviewers or
+  tests inside the turn, with one long tool wait), no active native goal and no
+  running teammates. NAW sends idle members their next item and replaces long
+  sessions with new ones, and it does neither for a session with a background
+  command, an active goal or running teammates. A turn whose final message
+  starts with 「需要你决定：」 holds the member for the person. When the person
+  starts using a queue in a space, they or the secretary tell its members once,
+  through NAW, to end any background wait.
 - Otherwise, a Claude agent working from the private task board does not end a turn idle;
   nothing reliably wakes an idle session. Before ending a turn, either be
   working on the next item it can take, or leave exactly one background command
