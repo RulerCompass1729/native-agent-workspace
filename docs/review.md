@@ -4,6 +4,29 @@ As of 2026-10-24. This is a working acceptance record, not an independent securi
 certification. Private transcripts, screenshots, paths and account details stay
 outside the public repository. Use synthetic reproductions here.
 
+**Space task queues and session rotation, 2026-11-08 (independent review, first round CHANGES_NEEDED):**
+the person asked that NAW itself send each idle space member its next queued item, and
+that day-old sessions hand over to a new session to free memory. Findings reproduced and
+fixed: (1) an interrupted or silent turn was settled as done and the next item followed;
+now a turn with no reply, a later human message or a changed control revision holds the
+member as "needs your decision". (2) dispatch used the person's input path, so it counted
+as a takeover, paused unrelated collaborations and recorded NAW's text as the person's;
+the backend now has its own `dispatch` input (capability `queueDispatchV1`) that takes no
+control, pauses only that member's handoff, is refused while the person has a draft or
+automatic messages are off, and records `origin: naw-dispatch`. (3) dispatch could take a
+session out of the person's terminal view or another window; it no longer claims, and a
+session the person touched in the last two minutes is skipped. (4) rotation could stop the
+old session while the person used it; the old session is rechecked before the handoff and
+before it is stopped, a failed rotation stops only the unused new session and returns the
+work, a restart adopts an already created session, and the rotation file must be private
+and well formed. Also: refusals before sending return the item to the queue (at most five
+times), every call has a timeout, and unchanged state is not reread every tick. Checks:
+`app/tests/queue-dispatch.test.cjs` and `app/tests/workspace-queue-dispatch.test.cjs`;
+isolated GUI `scripts/test-queue-dispatch.cjs` (synthetic transport) and
+`scripts/test-queue-native.cjs` (real Claude CLI against loopback replies, no paid
+inference). Not verified: Codex rotation with a real Codex app-server, and the memory
+saving of rotating a long-lived session (a fresh native process starts near 300 MB).
+
 **Alpha.90 final scoped review, 2026-10-23:** the GUI's native Escape path
 caused Claude's post-Stop plugin-input pause. The actual supported 310 GUI now
 uses the native exact-turn API and continues without native typing. Independent

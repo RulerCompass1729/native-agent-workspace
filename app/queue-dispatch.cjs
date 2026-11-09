@@ -1,8 +1,8 @@
 'use strict';
 // Space task queues (board top 2026-11-08 16:12): when a member is truly idle,
-// NAW itself sends that member's next queued item through the same send path as
-// the person's input box. Long-lived members are rotated into a new session
-// with a written handoff before their next item (user 2026-11-08).
+// NAW itself sends that member's next queued item through the backend's own
+// "dispatch" input, which is never a takeover or human input. Long-lived members
+// are rotated into a new session with a written handoff (user 2026-11-08).
 // The policy functions are pure; QueueDispatcher runs them in the main process.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -10,22 +10,50 @@ const { randomUUID } = require('node:crypto');
 const { roomIds } = require('./collaboration-spaces.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 
+const CAPABILITY = 'queueDispatchV1';
 const ITEM_TEXT_LIMIT = 6000;
 const QUEUE_LIMIT = 300;
 const ITEM_STATUSES = ['queued', 'sent', 'done', 'waiting', 'cancelled', 'failed'];
 const OPEN_STATUSES = ['queued', 'sent', 'waiting'];
 // A member must stay idle this long before NAW sends, so a turn-end report can settle.
 const IDLE_SETTLE_MS = 8000;
+// The person's own activity in a session keeps NAW out of it for this long.
+const HUMAN_QUIET_MS = 2 * 60 * 1000;
 // A sent item whose send never returned a tag is not resent (no silent replay).
 const UNCONFIRMED_SEND_MS = 120000;
+// A refusal before anything was sent returns the item to the queue at most this often.
+const NOT_SENT_ATTEMPTS = 5;
 const ROTATE_AFTER_MS = 24 * 60 * 60 * 1000;
-// An idle old member with no work is rotated only after this long without activity,
-// so a conversation the person is having is never cut off.
+// An idle old member with no work is rotated only after this long without activity.
 const QUIET_BEFORE_ROTATE_MS = 30 * 60 * 1000;
 // A new member that never becomes ready (for example a startup prompt) ends the rotation.
 const NEW_SESSION_READY_MS = 10 * 60 * 1000;
+const HANDOFF_ACCEPT_MS = 2 * 60 * 1000;
+const FAILED_ROTATION_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+const CALL_TIMEOUT_MS = 60000;
+const CREATE_TIMEOUT_MS = 120000;
 const TICK_MS = 3000;
+// Without any state change, look again at least this often.
+const FULL_PASS_MS = 30000;
 const DECISION_MARKERS = ['需要你决定：', '需要你决定:', 'Needs your decision:'];
+// Input written by NAW or another agent, not by the person.
+const AUTOMATIC_ORIGINS = ['naw-dispatch', 'agent-wake', 'capacity-recovery', 'agent-control'];
+// Refusals raised before the backend wrote anything: the item is still unsent.
+const NOT_SENT_KEYS = [
+  'error.workspace.sessionNotReady',
+  'error.workspace.handoffExpired',
+  'error.backgroundMessagesDisabled',
+  'error.queue.personTyping',
+  'error.workspace.claudeSubmitDisconnected',
+  'error.workspace.nativeFirstMessageRequired',
+  'error.nativeInterruptPending',
+  'error.workspace.nativeContextChanged',
+  'error.room.sessionArchived',
+  'error.room.workspaceArchived',
+  'error.room.mergeStepsUnconfirmed',
+  'error.room.updatingDraftRetained',
+];
+const ROTATION_PHASES = ['requested', 'creating', 'joining', 'created', 'handed', 'failed'];
 
 function validText(value, limit) {
   if (typeof value !== 'string') {
@@ -67,6 +95,11 @@ function validateItem(item) {
   for (const key of ['sentTo', 'tag']) {
     if (item[key] !== undefined && item[key] !== null && !validId(item[key])) {
       throw Error('Invalid queue delivery');
+    }
+  }
+  for (const key of ['control', 'attempts']) {
+    if (item[key] !== undefined && !(Number.isSafeInteger(item[key]) && item[key] >= 0)) {
+      throw Error('Invalid queue counter');
     }
   }
   if (item.reason !== undefined && typeof item.reason !== 'string') {
@@ -129,6 +162,9 @@ function sessionReady(session, wakePolicy) {
   if (session.archived) {
     return { ready: false, reason: 'archived' };
   }
+  if (!Array.isArray(session.serviceCapabilities) || !session.serviceCapabilities.includes(CAPABILITY)) {
+    return { ready: false, reason: 'backend-update-needed' };
+  }
   if (!wakePolicy || wakePolicy.enabled !== true) {
     return { ready: false, reason: 'automatic-messages-off' };
   }
@@ -175,6 +211,11 @@ function settled(sessionId, idleSince, now, settleMs) {
   return Number.isFinite(since) && now - since >= settleMs;
 }
 
+function humanRecent(sessionId, humanAt, now, quietMs) {
+  const at = humanAt.get(sessionId);
+  return Number.isFinite(at) && now - at < quietMs;
+}
+
 function startsWithDecision(text) {
   const trimmed = text.trimStart();
   for (const marker of DECISION_MARKERS) {
@@ -185,8 +226,8 @@ function startsWithDecision(text) {
   return false;
 }
 
-// The assistant reply that followed a NAW message, or null when it is absent.
-// When a native record replaced NAW's copy of the message, use the send time.
+// What followed a NAW message: the assistant replies and whether the person wrote
+// in between. When a native record replaced NAW's copy, use the send time.
 function replyAfter(session, tag, sentAt) {
   let messages = [];
   if (Array.isArray(session.messages)) {
@@ -199,9 +240,10 @@ function replyAfter(session, tag, sentAt) {
     }
   }
   const parts = [];
+  let humanAfter = false;
   for (let i = 0; i < messages.length; i += 1) {
     const message = messages[i];
-    if (!message || message.role !== 'assistant' || typeof message.text !== 'string' || !message.text.trim()) {
+    if (!message) {
       continue;
     }
     let after = false;
@@ -210,7 +252,13 @@ function replyAfter(session, tag, sentAt) {
     } else if (Number.isFinite(sentAt) && Number.isFinite(message.time)) {
       after = message.time >= sentAt;
     }
-    if (after) {
+    if (!after) {
+      continue;
+    }
+    if (message.role === 'user' && !AUTOMATIC_ORIGINS.includes(message.origin)) {
+      humanAfter = true;
+    }
+    if (message.role === 'assistant' && typeof message.text === 'string' && message.text.trim()) {
       parts.push(message.text);
     }
   }
@@ -221,7 +269,7 @@ function replyAfter(session, tag, sentAt) {
   if (parts.length) {
     last = parts[parts.length - 1];
   }
-  return { found: true, text: parts.join('\n\n'), last };
+  return { found: true, text: parts.join('\n\n'), last, humanAfter };
 }
 
 function memberIds(room, sessions) {
@@ -239,7 +287,11 @@ function memberIds(room, sessions) {
   }
   // Prefer the person's member order, then the remaining members.
   const ordered = [];
-  for (const id of Array.isArray(room.memberOrder) ? room.memberOrder : []) {
+  let order = [];
+  if (Array.isArray(room.memberOrder)) {
+    order = room.memberOrder;
+  }
+  for (const id of order) {
     if (ids.includes(id) && !ordered.includes(id)) {
       ordered.push(id);
     }
@@ -259,8 +311,7 @@ function rotationDue(session, now, rotateAfterMs, rotations) {
   if (!['claude', 'codex'].includes(session.provider)) {
     return false;
   }
-  const record = rotations[session.id];
-  if (record) {
+  if (rotations[session.id]) {
     return false;
   }
   return now - session.createdAt >= rotateAfterMs;
@@ -273,19 +324,40 @@ function planDispatch(input) {
   const now = input.now;
   const settleMs = input.settleMs ?? IDLE_SETTLE_MS;
   const rotateAfterMs = input.rotateAfterMs ?? ROTATE_AFTER_MS;
+  const quietMs = input.quietMs ?? QUIET_BEFORE_ROTATE_MS;
+  const humanQuietMs = input.humanQuietMs ?? HUMAN_QUIET_MS;
   const rotations = input.rotations || {};
   const idleSince = input.idleSince || new Map();
+  const humanAt = input.humanAt || new Map();
   const byId = new Map();
   for (const session of sessions) {
     byId.set(session.id, session);
   }
+  function available(session) {
+    if (!sessionReady(session, input.wakePolicy).ready) {
+      return false;
+    }
+    if (!settled(session.id, idleSince, now, settleMs)) {
+      return false;
+    }
+    return !humanRecent(session.id, humanAt, now, humanQuietMs);
+  }
   const actions = [];
   const busy = new Set();
   for (const id of Object.keys(rotations)) {
-    if (rotations[id] && rotations[id].phase !== 'failed') {
+    const record = rotations[id];
+    if (record && record.phase !== 'failed') {
       busy.add(id);
-      if (rotations[id].newId) {
-        busy.add(rotations[id].newId);
+      if (record.newId) {
+        busy.add(record.newId);
+      }
+    }
+  }
+  // A member in a running space collaboration is taking part in that exchange.
+  for (const room of rooms) {
+    if (room.run && room.run.status === 'running' && Array.isArray(room.run.ids)) {
+      for (const id of room.run.ids) {
+        busy.add(id);
       }
     }
   }
@@ -311,19 +383,33 @@ function planDispatch(input) {
         actions.push({ kind: 'settle', roomId: room.id, itemId: item.id, status: 'failed', reason: 'member-missing', sessionId: item.sentTo });
         continue;
       }
-      const ready = sessionReady(member, input.wakePolicy).ready;
-      if (!ready || !settled(member.id, idleSince, now, settleMs)) {
+      if (member.state !== 'idle' || member.pendingTag || !settled(member.id, idleSince, now, settleMs)) {
         busy.add(member.id);
         continue;
       }
       const reply = replyAfter(member, item.tag, item.sentAt);
+      const controlChanged = Number.isSafeInteger(item.control) && (member.controlRevision || 0) !== item.control;
+      let status = 'done';
+      let reason = '';
       if (!reply) {
-        actions.push({ kind: 'settle', roomId: room.id, itemId: item.id, status: 'failed', reason: 'record-missing', sessionId: member.id });
+        status = 'failed';
+        reason = 'record-missing';
+      } else if (reply.humanAfter || controlChanged) {
+        status = 'waiting';
+        reason = 'person-intervened';
+      } else if (!reply.last.trim()) {
+        status = 'waiting';
+        reason = 'no-reply';
       } else if (startsWithDecision(reply.last)) {
-        actions.push({ kind: 'settle', roomId: room.id, itemId: item.id, status: 'waiting', sessionId: member.id });
+        status = 'waiting';
+      }
+      const action = { kind: 'settle', roomId: room.id, itemId: item.id, status, sessionId: member.id };
+      if (reason) {
+        action.reason = reason;
+      }
+      actions.push(action);
+      if (status !== 'done') {
         busy.add(member.id);
-      } else {
-        actions.push({ kind: 'settle', roomId: room.id, itemId: item.id, status: 'done', sessionId: member.id });
       }
     }
   }
@@ -339,7 +425,10 @@ function planDispatch(input) {
       }
       let candidates = members;
       if (item.assignee) {
-        candidates = members.includes(item.assignee) ? [item.assignee] : [];
+        candidates = [];
+        if (members.includes(item.assignee)) {
+          candidates = [item.assignee];
+        }
       }
       let target = null;
       for (const id of candidates) {
@@ -347,7 +436,7 @@ function planDispatch(input) {
           continue;
         }
         const session = byId.get(id);
-        if (!sessionReady(session, input.wakePolicy).ready || !settled(id, idleSince, now, settleMs)) {
+        if (!available(session)) {
           continue;
         }
         target = session;
@@ -365,7 +454,6 @@ function planDispatch(input) {
     }
   }
   // 3) Old members of queue spaces with no work are rotated too, once they have been quiet.
-  const quietMs = input.quietMs ?? QUIET_BEFORE_ROTATE_MS;
   for (const room of rooms) {
     if (room.archived || !Array.isArray(room.queue) || !room.queue.length) {
       continue;
@@ -375,13 +463,13 @@ function planDispatch(input) {
         continue;
       }
       const session = byId.get(id);
-      if (!sessionReady(session, input.wakePolicy).ready || !settled(id, idleSince, now, settleMs)) {
+      if (!available(session) || !rotationDue(session, now, rotateAfterMs, rotations)) {
         continue;
       }
-      if (!rotationDue(session, now, rotateAfterMs, rotations)) {
-        continue;
+      let lastActivity = session.createdAt;
+      if (Number.isFinite(session.lastActivityAt)) {
+        lastActivity = session.lastActivityAt;
       }
-      const lastActivity = Number.isFinite(session.lastActivityAt) ? session.lastActivityAt : session.createdAt;
       if (now - lastActivity < quietMs) {
         continue;
       }
@@ -432,6 +520,67 @@ function shortText(text, limit = 60) {
   return line.slice(0, limit - 1) + '…';
 }
 
+function notSent(error) {
+  if (error && error.notSent === true) {
+    return true;
+  }
+  const key = error && error.uiMessage && error.uiMessage.key;
+  return typeof key === 'string' && NOT_SENT_KEYS.includes(key);
+}
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Error(label)), ms);
+    if (timer.unref) {
+      timer.unref();
+    }
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// A private, owner-only file with well-formed records; anything else is ignored.
+function readRotations(file, now) {
+  let stat;
+  try {
+    stat = fs.lstatSync(file);
+  } catch {
+    return {};
+  }
+  const ownerOnly = (stat.mode & 0o077) === 0;
+  const mine = !process.getuid || stat.uid === process.getuid();
+  if (!stat.isFile() || !ownerOnly || !mine) {
+    return {};
+  }
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return {};
+  }
+  if (!data || data.version !== 1 || !data.rotations || typeof data.rotations !== 'object' || Array.isArray(data.rotations)) {
+    return {};
+  }
+  const result = {};
+  for (const oldId of Object.keys(data.rotations)) {
+    const record = data.rotations[oldId];
+    if (!validId(oldId) || !record || typeof record !== 'object' || !ROTATION_PHASES.includes(record.phase)) {
+      continue;
+    }
+    if (!validId(record.oldNativeId || '') || !Array.isArray(record.roomIds) || typeof record.name !== 'string') {
+      continue;
+    }
+    if (record.newId !== undefined && !validId(record.newId)) {
+      continue;
+    }
+    if (record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS) {
+      continue;
+    }
+    result[oldId] = record;
+  }
+  return result;
+}
+
 // Reads the state a window already holds; opens its own connection only when no
 // window is open and queued work is waiting. Refreshes only right before it sends.
 class QueueDispatcher {
@@ -444,30 +593,26 @@ class QueueDispatcher {
     this.file = path.join(options.dataDir, 'queue-dispatch.json');
     this.now = options.now || Date.now;
     this.settleMs = options.settleMs ?? IDLE_SETTLE_MS;
+    this.humanQuietMs = options.humanQuietMs ?? HUMAN_QUIET_MS;
     this.rotateAfterMs = options.rotateAfterMs ?? ROTATE_AFTER_MS;
     this.quietMs = options.quietMs ?? QUIET_BEFORE_ROTATE_MS;
     this.tickMs = options.tickMs ?? TICK_MS;
     this.owner = options.owner || randomUUID();
     this.idleSince = new Map();
+    this.humanAt = new Map();
     this.pending = null;
     this.again = false;
     this.closed = false;
     this.client = null;
+    this.listening = null;
     this.own = null;
     this.timer = null;
-    this.rotations = this.load();
-  }
-
-  load() {
-    try {
-      const data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      if (data && data.version === 1 && data.rotations && typeof data.rotations === 'object') {
-        return data.rotations;
-      }
-    } catch {
-      // Missing or damaged: no rotation is in progress.
-    }
-    return {};
+    this.dirty = true;
+    this.lastFullPass = 0;
+    this.onState = () => {
+      this.dirty = true;
+    };
+    this.rotations = readRotations(this.file, this.now());
   }
 
   save() {
@@ -488,11 +633,36 @@ class QueueDispatcher {
   close() {
     this.closed = true;
     clearInterval(this.timer);
+    this.listen(null);
     this.dropOwnClient();
+  }
+
+  // The person's own input, takeover or view of a session (main.cjs IPC).
+  noteHuman(sessionId) {
+    if (typeof sessionId === 'string' && sessionId) {
+      this.humanAt.set(sessionId, this.now());
+      this.dirty = true;
+    }
+  }
+
+  listen(client) {
+    if (this.listening === client) {
+      return;
+    }
+    if (this.listening && this.listening.off) {
+      this.listening.off('state', this.onState);
+    }
+    this.listening = client;
+    if (client && client.on) {
+      client.on('state', this.onState);
+    }
   }
 
   dropOwnClient() {
     if (this.own) {
+      if (this.listening === this.own) {
+        this.listen(null);
+      }
       this.own.close();
       this.own = null;
     }
@@ -526,12 +696,20 @@ class QueueDispatcher {
     }
   }
 
-  // Metadata only, no session state: is there anything to send, settle or rotate?
-  hasOpenWork() {
+  activeRotations() {
+    const ids = [];
     for (const id of Object.keys(this.rotations)) {
       if (this.rotations[id] && this.rotations[id].phase !== 'failed') {
-        return true;
+        ids.push(id);
       }
+    }
+    return ids;
+  }
+
+  // Metadata only, no session state: is there anything to send, settle or rotate?
+  hasOpenWork() {
+    if (this.activeRotations().length) {
+      return true;
     }
     const rooms = [this.roomState.value];
     for (const room of this.roomState.spaces.rooms) {
@@ -542,7 +720,7 @@ class QueueDispatcher {
         continue;
       }
       for (const item of room.queue) {
-        if (item.status === 'queued' || item.status === 'sent') {
+        if (OPEN_STATUSES.includes(item.status)) {
           return true;
         }
       }
@@ -557,9 +735,26 @@ class QueueDispatcher {
       return windowClient;
     }
     if (!this.own) {
-      this.own = await this.connect(this.owner);
+      this.own = await withTimeout(this.connect(this.owner), CALL_TIMEOUT_MS, 'connect-timeout');
+      this.dirty = true;
     }
     return this.own;
+  }
+
+  // Someone just became idle or stopped typing: their time arrives without a new state event.
+  settlingSoon(now) {
+    for (const since of this.idleSince.values()) {
+      if (now - since <= this.settleMs + this.tickMs * 2) {
+        return true;
+      }
+    }
+    for (const at of this.humanAt.values()) {
+      const end = at + this.humanQuietMs;
+      if (now <= end + this.tickMs * 2 && now >= end - this.tickMs) {
+        return true;
+      }
+    }
+    return false;
   }
 
   view() {
@@ -588,12 +783,23 @@ class QueueDispatcher {
   async tick() {
     if (!this.hasOpenWork()) {
       this.dropOwnClient();
+      this.listen(null);
       this.idleSince.clear();
+      this.dirty = true;
       return;
     }
     this.client = await this.source();
+    this.listen(this.client);
+    const now = this.now();
+    const rotating = this.activeRotations().length > 0;
+    const due = this.dirty || rotating || now - this.lastFullPass >= FULL_PASS_MS || this.settlingSoon(now);
+    if (!due) {
+      return;
+    }
+    this.dirty = false;
+    this.lastFullPass = now;
     let current = this.view();
-    if (Object.keys(this.rotations).length) {
+    if (rotating) {
       await this.advanceRotations(current.snapshot, current.now);
       current = this.view();
     }
@@ -602,8 +808,10 @@ class QueueDispatcher {
       sessions: current.snapshot.sessions,
       wakePolicy: current.snapshot.wakePolicy,
       idleSince: this.idleSince,
+      humanAt: this.humanAt,
       now: current.now,
       settleMs: this.settleMs,
+      humanQuietMs: this.humanQuietMs,
       rotateAfterMs: this.rotateAfterMs,
       quietMs: this.quietMs,
       rotations: this.rotations,
@@ -634,20 +842,26 @@ class QueueDispatcher {
 
   // Read fresh state once, right before sending; skip quietly if the member moved on.
   async freshReady(sessionId) {
-    await this.client.refresh();
+    await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
     const current = this.view();
     const session = current.snapshot.sessions.find(s => s.id === sessionId);
     if (!session || !sessionReady(session, current.snapshot.wakePolicy).ready) {
       return null;
     }
-    return current;
+    if (humanRecent(sessionId, this.humanAt, current.now, this.humanQuietMs)) {
+      return null;
+    }
+    return { ...current, session };
   }
 
-  // Claim then send, exactly as the person's input box would.
-  async send(session, text, roomId) {
-    this.roomState.assertAvailable(session.id, Boolean(roomId), roomId);
-    await this.client.call('claim', session.id, 'chat');
-    const result = await this.client.call('send', session.id, text, session.nativeId);
+  // The backend's own NAW input: no takeover, no human-input semantics.
+  async send(session, text, itemId) {
+    const entry = this.client.route(session.id);
+    if (!entry.state.capabilities || !entry.state.capabilities.includes(CAPABILITY)) {
+      throw Object.assign(Error('backend-update-needed'), { notSent: true });
+    }
+    const call = entry.client.call('dispatch', session.id, text, session.nativeId, itemId);
+    const result = await withTimeout(call, CALL_TIMEOUT_MS, 'send-timeout');
     this.idleSince.delete(session.id);
     if (typeof result === 'string') {
       return result;
@@ -664,7 +878,7 @@ class QueueDispatcher {
       return;
     }
     const room = current.snapshot.rooms.find(r => r.id === action.roomId);
-    const session = current.snapshot.sessions.find(s => s.id === action.sessionId);
+    const session = current.session;
     let item = null;
     if (room) {
       item = (room.queue || []).find(i => i.id === action.itemId);
@@ -672,17 +886,39 @@ class QueueDispatcher {
     if (!room || !item || item.status !== 'queued') {
       return;
     }
+    try {
+      this.roomState.assertAvailable(session.id, true, room.id);
+    } catch {
+      return;
+    }
     const name = this.name(session);
     // Record before sending: a crash after this point is never resent silently.
     this.roomState.queueMarkSent(room.id, item.id, session.id, name, this.now());
-    await this.broadcast();
     try {
-      const tag = await this.send(session, dispatchText(room.name || '', item), room.id);
-      this.roomState.queueSetTag(room.id, item.id, tag);
+      const tag = await this.send(session, dispatchText(room.name || '', item), item.id);
+      this.roomState.queueSetDelivery(room.id, item.id, tag, session.controlRevision || 0);
     } catch (error) {
-      this.roomState.queueSettle(room.id, item.id, 'failed', error.message || 'send-failed', name);
+      if (notSent(error)) {
+        this.roomState.queueRequeue(room.id, item.id, error.message || 'not-sent', NOT_SENT_ATTEMPTS, name);
+      } else {
+        this.roomState.queueSettle(room.id, item.id, 'failed', error.message || 'send-failed', name);
+      }
     }
     await this.broadcast();
+  }
+
+  untouched(old, record, reply) {
+    if (!old || old.nativeId !== record.oldNativeId) {
+      return false;
+    }
+    if ((old.controlRevision || 0) !== record.oldControl) {
+      return false;
+    }
+    const at = this.humanAt.get(old.id);
+    if (Number.isFinite(at) && at >= record.requestedAt) {
+      return false;
+    }
+    return !(reply && reply.humanAfter);
   }
 
   async requestHandoff(action) {
@@ -690,12 +926,14 @@ class QueueDispatcher {
     if (!current) {
       return;
     }
-    const session = current.snapshot.sessions.find(s => s.id === action.sessionId);
+    const session = current.session;
     const hours = Math.floor((current.now - session.createdAt) / 3600000);
     const record = {
       phase: 'requested',
       requestedAt: current.now,
       tag: null,
+      oldNativeId: session.nativeId,
+      oldControl: session.controlRevision || 0,
       provider: session.provider,
       cwd: session.cwd,
       name: this.name(session),
@@ -705,45 +943,62 @@ class QueueDispatcher {
     this.rotations[session.id] = record;
     this.save();
     try {
-      record.tag = await this.send(session, handoffRequestText(hours));
+      record.tag = await this.send(session, handoffRequestText(hours), `rotation:${session.id}`);
       this.save();
       this.roomState.rotationEvent(record.roomIds, 'requested', record.name, '');
     } catch (error) {
-      record.phase = 'failed';
-      record.reason = error.message || 'handoff-request-failed';
+      if (notSent(error)) {
+        delete this.rotations[session.id];
+      } else {
+        record.phase = 'failed';
+        record.failedAt = current.now;
+        record.reason = error.message || 'handoff-request-failed';
+        this.roomState.rotationEvent(record.roomIds, 'failed', record.name, record.reason);
+      }
       this.save();
-      this.roomState.rotationEvent(record.roomIds, 'failed', record.name, record.reason);
     }
     await this.broadcast();
   }
 
   async advanceRotations(snapshot, now) {
-    for (const oldId of Object.keys(this.rotations)) {
+    for (const oldId of this.activeRotations()) {
       const record = this.rotations[oldId];
-      if (!record || record.phase === 'failed') {
-        continue;
-      }
       try {
         await this.advanceRotation(oldId, record, snapshot, now);
       } catch (error) {
-        const handedOver = record.phase === 'handed';
-        record.phase = 'failed';
-        record.reason = error.message || 'rotation-failed';
-        this.save();
-        // Before the handoff was sent the old member still owns its work: give it back.
-        if (record.newId && !handedOver) {
-          for (const roomId of record.roomIds) {
-            try {
-              this.roomState.queueReassign(roomId, record.newId, oldId);
-            } catch {
-              // The space may be gone; the record of the failure still stands.
-            }
-          }
-        }
-        this.roomState.rotationEvent(record.roomIds, 'failed', record.name, record.reason);
-        await this.broadcast();
+        await this.failRotation(oldId, record, error.message || 'rotation-failed', now);
       }
     }
+  }
+
+  // Undo what a failed rotation started; the old member keeps its session and work.
+  async failRotation(oldId, record, reason, now) {
+    const phase = record.phase;
+    record.phase = 'failed';
+    record.failedAt = now;
+    record.reason = reason;
+    this.save();
+    if (record.newId && !record.handoffConfirmed && ['joining', 'created', 'handed'].includes(phase)) {
+      for (const roomId of record.roomIds) {
+        try {
+          this.roomState.queueReassign(roomId, record.newId, oldId);
+        } catch {
+          // The space may be gone; the failure record still stands.
+        }
+        try {
+          await withTimeout(this.roomState.membership(this.client, record.newId, false, `${record.name} · 续`, roomId), CALL_TIMEOUT_MS, 'leave-timeout');
+        } catch {
+          // Leaving is cosmetic; stopping the unused session is what frees memory.
+        }
+      }
+      try {
+        await withTimeout(this.client.call('stop', record.newId), CALL_TIMEOUT_MS, 'stop-timeout');
+      } catch {
+        // Left for the person; it holds no handoff and no queued work.
+      }
+    }
+    this.roomState.rotationEvent(record.roomIds, 'failed', record.name, reason);
+    await this.broadcast();
   }
 
   async advanceRotation(oldId, record, snapshot, now) {
@@ -758,31 +1013,48 @@ class QueueDispatcher {
       if (!old) {
         throw Error('old-session-missing');
       }
-      if (!sessionReady(old, snapshot.wakePolicy).ready || !settled(oldId, this.idleSince, now, this.settleMs)) {
+      if (old.state !== 'idle' || old.pendingTag || !settled(oldId, this.idleSince, now, this.settleMs)) {
         return;
       }
       const reply = replyAfter(old, record.tag, record.requestedAt);
+      if (!this.untouched(old, record, reply)) {
+        throw Error('person-active');
+      }
       if (!reply || !reply.text.trim()) {
         throw Error('handoff-missing');
       }
       record.handoff = reply.text.slice(0, ITEM_TEXT_LIMIT * 2);
       record.phase = 'creating';
+      record.creatingAt = now;
       this.save();
     }
     if (record.phase === 'creating') {
-      const options = { provider: record.provider, cwd: record.cwd, name: `${record.name} · 续`, view: 'chat' };
-      if (record.skipPermissions) {
-        options.skipPermissions = true;
+      const name = `${record.name} · 续`;
+      // After a restart, adopt a session this rotation already created.
+      let existing = null;
+      for (const session of snapshot.sessions) {
+        const recent = Number.isFinite(session.createdAt) && session.createdAt >= (record.creatingAt || 0) - 5000;
+        if (session.name === name && session.cwd === record.cwd && recent) {
+          existing = session;
+        }
       }
-      record.newId = await this.client.call('create', options);
+      if (existing) {
+        record.newId = existing.id;
+      } else {
+        const options = { provider: record.provider, cwd: record.cwd, name, view: 'chat' };
+        if (record.skipPermissions) {
+          options.skipPermissions = true;
+        }
+        record.newId = await withTimeout(this.client.call('create', options), CREATE_TIMEOUT_MS, 'create-timeout');
+      }
       record.createdNewAt = now;
       record.phase = 'joining';
       this.save();
-      await this.client.refresh();
+      await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
     }
     if (record.phase === 'joining') {
       for (const roomId of record.roomIds) {
-        await this.roomState.membership(this.client, record.newId, true, `${record.name} · 续`, roomId);
+        await withTimeout(this.roomState.membership(this.client, record.newId, true, `${record.name} · 续`, roomId), CALL_TIMEOUT_MS, 'join-timeout');
         this.roomState.queueReassign(roomId, oldId, record.newId);
       }
       record.phase = 'created';
@@ -801,36 +1073,68 @@ class QueueDispatcher {
         }
         return;
       }
-      record.handoffTag = await this.send(fresh, handoffText(record.name, record.handoff));
+      if (old && !this.untouched(old, record, replyAfter(old, record.tag, record.requestedAt))) {
+        throw Error('person-active');
+      }
+      record.handoffTag = await this.send(fresh, handoffText(record.name, record.handoff), `rotation-handoff:${oldId}`);
+      record.handedAt = now;
       record.phase = 'handed';
       this.save();
+      return;
     }
     if (record.phase === 'handed') {
-      for (const roomId of record.roomIds) {
-        try {
-          await this.roomState.membership(this.client, oldId, false, record.name, roomId);
-        } catch {
-          // Leaving is cosmetic; ending the old process is what frees memory.
+      const fresh = snapshot.sessions.find(s => s.id === record.newId);
+      let accepted = false;
+      if (fresh) {
+        const message = (fresh.messages || []).find(m => m.id === record.handoffTag);
+        accepted = Boolean(message && message.status === 'submitted') || fresh.state === 'working';
+      }
+      if (!accepted) {
+        if (now - (record.handedAt || now) > HANDOFF_ACCEPT_MS) {
+          throw Error('handoff-unconfirmed');
         }
+        return;
       }
-      if (old && !['ended', 'background'].includes(old.state)) {
-        await this.client.call('stop', oldId);
+      record.handoffConfirmed = true;
+      this.save();
+      const live = old && !['ended', 'background'].includes(old.state);
+      let inUse = false;
+      if (live) {
+        const quiet = old.state === 'idle' && !old.pendingTag;
+        inUse = !quiet || !this.untouched(old, record, replyAfter(old, record.tag, record.requestedAt));
       }
-      this.roomState.rotationEvent(record.roomIds, 'done', record.name, `${record.name} · 续`);
+      if (live && !inUse) {
+        for (const roomId of record.roomIds) {
+          try {
+            await withTimeout(this.roomState.membership(this.client, oldId, false, record.name, roomId), CALL_TIMEOUT_MS, 'leave-timeout');
+          } catch {
+            // Leaving is cosmetic; ending the old process is what frees memory.
+          }
+        }
+        await withTimeout(this.client.call('stop', oldId), CALL_TIMEOUT_MS, 'stop-timeout');
+        this.roomState.rotationEvent(record.roomIds, 'done', record.name, `${record.name} · 续`);
+      } else if (inUse) {
+        this.roomState.rotationEvent(record.roomIds, 'oldKept', record.name, `${record.name} · 续`);
+      } else {
+        this.roomState.rotationEvent(record.roomIds, 'done', record.name, `${record.name} · 续`);
+      }
       delete this.rotations[oldId];
       this.save();
-      await this.client.refresh();
+      await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
       await this.broadcast();
     }
   }
 }
 
 module.exports = {
+  CAPABILITY,
   ITEM_TEXT_LIMIT,
   QUEUE_LIMIT,
   IDLE_SETTLE_MS,
+  HUMAN_QUIET_MS,
   ROTATE_AFTER_MS,
   QUIET_BEFORE_ROTATE_MS,
+  NOT_SENT_ATTEMPTS,
   validateQueue,
   newItem,
   trimQueue,
@@ -841,5 +1145,7 @@ module.exports = {
   handoffRequestText,
   handoffText,
   shortText,
+  notSent,
+  readRotations,
   QueueDispatcher,
 };

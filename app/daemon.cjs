@@ -55,7 +55,7 @@ async function main() {
     if (shuttingDown) throw uiError("error.backendClosingActionNotExecuted");
     if (method === 'scopedOutbox') return dispatchScopedOutbox(workspace, client, args, send);
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [background.CAPABILITY, ...mobileCapabilities, ...(fs.existsSync(path.join(__dirname, 'scoped-outbox-runtime.cjs')) ? ['scopedNativeOutboxV1'] : []), ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'agentAddressedHandoffs', 'agentWakeV1', require('./session-wake.cjs').PREFLIGHT, 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'conditionalMaintenanceStopV1', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [background.CAPABILITY, ...mobileCapabilities, ...(fs.existsSync(path.join(__dirname, 'scoped-outbox-runtime.cjs')) ? ['scopedNativeOutboxV1'] : []), ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'queueDispatchV1', 'agentAddressedHandoffs', 'agentWakeV1', require('./session-wake.cjs').PREFLIGHT, 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'conditionalMaintenanceStopV1', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'mergeSnapshot': {
         if (roomId !== 'shared' || args.length !== 1) throw uiError("error.invalidSnapshotImport");
         return workspace.mergeSnapshot(args[0]);
@@ -118,6 +118,17 @@ async function main() {
         if (/^\/[a-z-]+(?:\s|$)/i.test(args[1])) throw uiError("error.nativeCommandUseTerminal");
         const nativeId = workspace.get(args[0]).nativeId;
         const tag = await workspace.send(args[0], args[1], owner);
+        const current = workspace.get(args[0]);
+        return current.nativeId !== nativeId || current.nativeContextPending ? { tag, contextChanged: true } : tag;
+      }
+      case 'dispatch': {
+        // A NAW queue item (queue-dispatch.cjs): sent under the person's automatic-message
+        // switches, never as a takeover. Native commands stay terminal-only.
+        if (typeof args[3] !== 'string' || !args[3] || args[3].length > 200) throw uiError("error.queue.invalid");
+        workspace.assertNativeContext(args[0], args[2]);
+        if (typeof args[1] !== 'string' || /^\/[a-z-]+(?:\s|$)/i.test(args[1])) throw uiError("error.nativeCommandUseTerminal");
+        const nativeId = workspace.get(args[0]).nativeId;
+        const tag = await workspace.send(args[0], args[1], owner, null, null, null, null, null, null, null, { itemId: args[3] });
         const current = workspace.get(args[0]);
         return current.nativeId !== nativeId || current.nativeContextPending ? { tag, contextChanged: true } : tag;
       }

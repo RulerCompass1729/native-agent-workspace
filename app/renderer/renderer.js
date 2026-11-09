@@ -4370,7 +4370,7 @@ function queueShownItems(room) {
   }
   return open.concat(finished.slice(-QUEUE_FINISHED_SHOWN));
 }
-function queueRow(item) {
+function queueRow(item, memberIds) {
   const row = node('div', undefined, 'queue-row');
   let text = item.text;
   if (text.length > 300) {
@@ -4383,7 +4383,15 @@ function queueRow(item) {
   } else if (item.assignee) {
     name = queueMemberName(item.assignee);
   }
-  const status = uiNode('span', 'queue.status.' + item.status, () => ({ name }), 'queue-status');
+  let statusKey = 'queue.status.' + item.status;
+  if (item.status === 'queued' && item.assignee && !memberIds.has(item.assignee)) {
+    statusKey = 'queue.status.orphan';
+  }
+  let statusParams;
+  if (statusKey !== 'queue.status.orphan' && statusKey !== 'queue.status.queued' && statusKey !== 'queue.status.cancelled') {
+    statusParams = () => ({ name });
+  }
+  const status = uiNode('span', statusKey, statusParams, 'queue-status');
   if (item.status === 'queued' && item.assignee) {
     status.title = name;
   }
@@ -4415,10 +4423,21 @@ function renderQueue() {
   $('queue-off').hidden = state.wakePolicy?.enabled === true;
   $('add-queue').disabled = disconnected || room.archived;
   const members = [];
+  const memberIds = new Set();
+  const needUpdate = [];
   for (const record of state.sessions) {
     if (inSpace(record, queueSpace) && !record.archived) {
       members.push({ id: record.id, name: record.name });
+      memberIds.add(record.id);
+      if (!(record.serviceCapabilities || []).includes('queueDispatchV1')) {
+        needUpdate.push(record.name);
+      }
     }
+  }
+  const update = $('queue-update');
+  update.hidden = needUpdate.length === 0;
+  if (needUpdate.length) {
+    ui.display.text(update, 'queue.needsUpdate', () => ({ names: needUpdate.join('、') }));
   }
   const select = $('queue-assignee');
   const memberSignature = JSON.stringify(members);
@@ -4446,12 +4465,12 @@ function renderQueue() {
   }
   const items = queueShownItems(room);
   const list = $('queue-list');
-  const signature = JSON.stringify([items, memberSignature]);
+  const signature = JSON.stringify([items, memberSignature, needUpdate]);
   if (list.dataset.signature === signature) return;
   list.dataset.signature = signature;
   const rows = [];
   for (const item of items) {
-    rows.push(queueRow(item));
+    rows.push(queueRow(item, memberIds));
   }
   list.replaceChildren(...rows);
   if (!rows.length) {

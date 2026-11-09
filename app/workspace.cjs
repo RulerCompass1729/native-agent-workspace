@@ -1022,7 +1022,7 @@ class Workspace extends EventEmitter {
       this.changed(); this.persist(); throw error;
     }
   }
-  async send(id, text, owner, route = null, forward = null, sourceMessage = null, recovery = null, wakeTicket = null, mobile = null, images = null) {
+  async send(id, text, owner, route = null, forward = null, sourceMessage = null, recovery = null, wakeTicket = null, mobile = null, images = null, dispatch = null) {
     const backgroundValid = backgroundOperation.inputGuard(this, [id], backgroundOperation.current() || route?.agentControl);
     const originalText = text; text = images && typeof text === 'string' && text.length <= 16000 && !text.trim() ? '' : cleanText(text); if (wakeTicket || mobile || backgroundOperation.current()) text = originalText;
     const mobileSession = mobile && require('./mobile-session.cjs');
@@ -1034,8 +1034,16 @@ class Workspace extends EventEmitter {
     const imageSubmission = images && new media.SpaceImageSubmission(media.spaceImageRoot(this.dataDir), forward.roomId || 'shared', images.version, images.refs, s.nativeId, imageTag);
     if (runtime.nativeAbortRequest) throw uiError("error.nativeInterruptPending");
     if (forward && !wakeTicket && text) text = originalText;
+    // A NAW queue item sent under the person's automatic-message switches: never a
+    // takeover, never human input, refused while the person has a draft (queue-dispatch.cjs).
+    const dispatchAllowed = () => { try { return wake.enabled(this) && !s.wakeDisabled && !(this.drafts.get(id) || '').trim(); } catch { return false; } };
+    if (dispatch && (route || forward || sourceMessage || recovery || wakeTicket || mobile || images)) throw uiError("error.queue.invalid");
     if (mobile) mobile.human();
-    else if (wakeTicket) {
+    else if (dispatch) {
+      if ((this.drafts.get(id) || '').trim()) throw uiError("error.queue.personTyping");
+      if (!dispatchAllowed()) throw uiError("error.backgroundMessagesDisabled");
+      this.pauseParticipant(id, 'NAW 派活；原协作交接保持暂停', true, uiActivity('notice.run.queueDispatch')[1]);
+    } else if (wakeTicket) {
       if (!wakeTicket.valid()) throw uiError("error.workspace.automaticAuthorizationExpired");
       this.pauseParticipant(id, '原会话收到自动消息；旧协作交接已撤销', true, uiActivity('notice.run.automaticInputBoundary')[1]);
     } else if (!route) {
@@ -1044,14 +1052,14 @@ class Workspace extends EventEmitter {
       if (recovery) this.pauseParticipant(id, `${recovery.reason === 'routing' ? '路由发现超时' : '模型满载'}自动继续；原协作交接保持暂停`, true, uiActivity(recovery.reason === 'routing' ? 'notice.run.automaticRouting' : 'notice.run.automaticCapacity')[1]);
       else { if (!backgroundOperation.current()) wake.human(this, id); if (forward) { this.pauseParticipant(id, '真人输入优先', false, uiActivity('notice.run.humanPriority')[1]); this.pauseRoom(forward.roomId || 'shared', '真人输入优先', uiActivity('notice.run.humanPriority')[1]); } else this.pause('真人输入优先', undefined, false, uiActivity('notice.run.humanPriority')[1]); }
     }
-    const failedTurn = !route && s.state === 'error' ? runtime.failedTurnInputId : null;
+    const failedTurn = !route && !dispatch && s.state === 'error' ? runtime.failedTurnInputId : null;
     if ((s.state !== 'idle' && !failedTurn && !(recovery && s.state === 'error')) || s.pendingTag || runtime.pendingQueue || s.approval || runtime.nativeInputRequired) throw uiError("error.workspace.sessionNotReady");
     if (runtime.chatAvailable === false) throw uiError(s.provider === 'claude' ? 'error.workspace.claudeSubmitDisconnected' : 'error.workspace.nativeFirstMessageRequired');
     const roomId = route?.roomId || forward?.roomId || 'shared', room = this.roomFor(roomId);
     const control = s.controlRevision; const member = spaces.membershipRevision(s, roomId); const connection = s.connectionRevision;
     const guard = () => {
       this.expireRun(route);
-      return backgroundValid() && (!mobile || mobileSession.valid(mobile)) && (!wakeTicket || wakeTicket.valid(wakeTicket.tag)) && (!recovery || this.capacityValid(s, recovery)) && !runtime.nativeInputRequired && s.state !== 'ended' && s.controlRevision === control &&
+      return backgroundValid() && (!dispatch || dispatchAllowed()) && (!mobile || mobileSession.valid(mobile)) && (!wakeTicket || wakeTicket.valid(wakeTicket.tag)) && (!recovery || this.capacityValid(s, recovery)) && !runtime.nativeInputRequired && s.state !== 'ended' && s.controlRevision === control &&
         (!failedTurn || runtime.submission?.pending?.authorized || runtime.pending?.accepted || runtime.failedTurnInputMatches(failedTurn)) &&
         (!(route || forward) || (spaces.isMember(s, roomId) && spaces.membershipRevision(s, roomId) === member)) && (!route || (this.routeValid(route))) && (roomId === 'shared' || !this.storageWarning);
     };
@@ -1061,8 +1069,8 @@ class Workspace extends EventEmitter {
     if (recovery) recovery.tag = tag;
     if (wakeTicket) wakeTicket.tag = tag;
     const draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
-    const clearedDraft = !backgroundOperation.current() && !mobile && !wakeTicket && !route && !forward && typeof draft === 'string' && draft.trim() === text;
-    s.messages.push({ id: tag, role: 'user', text, time: Date.now(), ...(mobile ? { origin: 'human-mobile' } : wakeTicket ? { name: `来自 ${wakeTicket.intent.senderName}`, uiNameMessage: displayMessage({ version: 1, key: 'notice.wake.from', params: { name: wakeTicket.intent.senderName } }, 'notice.') || undefined, origin: 'agent-wake', wakeSource: { id: wakeTicket.intent.id, senderId: wakeTicket.intent.senderId, nativeId: wakeTicket.intent.nativeId, turnId: wakeTicket.intent.turnId, time: wakeTicket.intent.time } } : recovery ? { name: 'NAW', origin: 'capacity-recovery' } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native', ...backgroundOperation.message() });
+    const clearedDraft = !backgroundOperation.current() && !mobile && !wakeTicket && !dispatch && !route && !forward && typeof draft === 'string' && draft.trim() === text;
+    s.messages.push({ id: tag, role: 'user', text, time: Date.now(), ...(mobile ? { origin: 'human-mobile' } : wakeTicket ? { name: `来自 ${wakeTicket.intent.senderName}`, uiNameMessage: displayMessage({ version: 1, key: 'notice.wake.from', params: { name: wakeTicket.intent.senderName } }, 'notice.') || undefined, origin: 'agent-wake', wakeSource: { id: wakeTicket.intent.id, senderId: wakeTicket.intent.senderId, nativeId: wakeTicket.intent.nativeId, turnId: wakeTicket.intent.turnId, time: wakeTicket.intent.time } } : recovery ? { name: 'NAW', origin: 'capacity-recovery' } : dispatch ? { name: 'NAW 派活', uiNameMessage: displayMessage({ version: 1, key: 'notice.queue.senderName', params: {} }, 'notice.') || undefined, origin: 'naw-dispatch', dispatchItem: dispatch.itemId } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native', ...backgroundOperation.message() });
     if (images) s.messages.at(-1).spaceUploads = images.refs.map(ref => ({ ...ref }));
     if (forward) {
       this.forwards.set(tag, { ...forward, roomId, control });

@@ -203,6 +203,8 @@ function bindClient(context) {
   // A task already accepted natively is not retroactively cancelled.
   client.authorizeOperation = (method, args, roomId = 'shared') => {
     if (context.background) backgroundOperation.assertDeliveryPolicy(client.snapshot(), method, args);
+    // The person working in a session keeps queued NAW work out of it for a while.
+    else if (HUMAN_SESSION_METHODS.has(method) && typeof args[0] === 'string') queueDispatcher?.noteHuman(args[0]);
     if (['send', 'queue', 'queueShared', 'steerShared', 'steer', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'answer', 'draft', 'resume'].includes(method)) {
       for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'queueShared', 'steerShared', 'run'].includes(method), roomId);
     }
@@ -240,6 +242,7 @@ function reportViewStorage(warning, uiMessage = null) {
 }
 // Space task queues: NAW sends each idle member its next item (queue-dispatch.cjs).
 let queueDispatcher = null;
+const HUMAN_SESSION_METHODS = new Set(['prepareInput', 'input', 'draft', 'send', 'queue', 'steer', 'claim', 'terminal', 'interrupt', 'approve', 'answer', 'forward', 'queueShared', 'steerShared']);
 async function startQueueDispatcher() {
   if (queueDispatcher || process.env.NAW_QUEUE_DISPATCH === 'off') {
     return;
@@ -262,10 +265,14 @@ async function startQueueDispatcher() {
       labels: sessionLabels.labels,
       broadcast: broadcastRoom,
     };
-    // Only a verified isolated test run may shorten the 24-hour rotation age.
+    // Only a verified isolated test run may shorten the rotation age or the quiet time after the person's input.
     const testRotation = Number(process.env.NAW_TEST_QUEUE_ROTATE_MS);
     if (backgroundTest && Number.isSafeInteger(testRotation) && testRotation > 0) {
       options.rotateAfterMs = testRotation;
+    }
+    const testQuiet = Number(process.env.NAW_TEST_QUEUE_HUMAN_QUIET_MS);
+    if (backgroundTest && Number.isSafeInteger(testQuiet) && testQuiet >= 0) {
+      options.humanQuietMs = testQuiet;
     }
     queueDispatcher = await new QueueDispatcher(options).start();
   } catch {

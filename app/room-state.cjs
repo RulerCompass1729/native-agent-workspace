@@ -498,9 +498,28 @@ class RoomState {
     const event = { kind: 'queue', sessionId, ...uiNotice('notice.queue.dispatched', params) };
     this.queueReplace(id, itemId, next, event);
   }
-  queueSetTag(id, itemId, tag) {
+  // The backend's delivery tag and the member's control revision when NAW sent it.
+  queueSetDelivery(id, itemId, tag, control) {
     const item = this.queueFind(id, itemId);
-    this.queueReplace(id, itemId, { ...item, tag });
+    this.queueReplace(id, itemId, { ...item, tag, control });
+  }
+  // Refused before anything was sent: back to the queue, a bounded number of times.
+  queueRequeue(id, itemId, reason, maxAttempts, name) {
+    const item = this.queueFind(id, itemId);
+    if (item.status !== 'sent') {
+      throw uiError("error.queue.notSent");
+    }
+    const attempts = (item.attempts || 0) + 1;
+    if (attempts >= maxAttempts) {
+      this.queueSettle(id, itemId, 'failed', `not-sent: ${reason}`, name);
+      return;
+    }
+    const next = { ...item, status: 'queued', attempts, reason };
+    delete next.sentTo;
+    delete next.sentAt;
+    delete next.tag;
+    delete next.control;
+    this.queueReplace(id, itemId, next);
   }
   queueSettle(id, itemId, status, reason, name) {
     const item = this.queueFind(id, itemId);
@@ -539,7 +558,7 @@ class RoomState {
     }
   }
   rotationEvent(ids, phase, oldName, detail) {
-    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', failed: 'notice.rotation.failed' };
+    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed' };
     for (const id of ids) {
       try {
         this.metadata(id);

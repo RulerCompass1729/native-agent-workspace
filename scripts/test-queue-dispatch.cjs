@@ -101,7 +101,7 @@ async function capture(name) {
 
 async function launch(extraEnv = {}) {
   assert.ok(!app, 'One test UI at a time');
-  const env = { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid), ...extraEnv };
+  const env = { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid), NAW_TEST_QUEUE_HUMAN_QUIET_MS: '3000', ...extraEnv };
   let executablePath = require('electron');
   let args = [root];
   if (process.env.NAW_APP_EXECUTABLE) {

@@ -175,7 +175,7 @@ async function launch(extraEnv = {}) {
     executablePath = process.env.NAW_APP_EXECUTABLE;
     args = [];
   }
-  const env = { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid), ...extraEnv };
+  const env = { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid), NAW_TEST_QUEUE_HUMAN_QUIET_MS: '3000', ...extraEnv };
   application = await _electron.launch({ executablePath, args, env, timeout: 70000 });
   page = await application.firstWindow();
   page.setDefaultTimeout(15000);
