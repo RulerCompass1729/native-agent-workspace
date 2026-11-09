@@ -920,8 +920,8 @@ test('with no queued work, a quiet oversized member of a queue space is still ro
     now: () => NOW,
     settleMs: 0,
     tickMs: 3600000,
-    sampleProcesses: () => '4242 1 1700000\n',
-    sampleSwap: () => 'total = 1000.00M  used = 100.00M  free = 900.00M',
+    sampleProcesses: async () => '4242 1 1700000\n',
+    sampleSwap: async () => 'total = 1000.00M  used = 100.00M  free = 900.00M',
   });
   t.after(() => dispatcher.close());
   await dispatcher.start();
@@ -930,4 +930,39 @@ test('with no queued work, a quiet oversized member of a queue space is still ro
   assert.match(sends[0][2], /【NAW 换会话】这个会话（连同它的子进程）已占用约 1\.6 GB 内存/);
   const requested = room.value.events.find(event => event.uiMessage.key === 'notice.rotation.requested');
   assert.match(requested.text, /NAW 换会话（这个会话（连同它的子进程）已占用约 1\.6 GB 内存）/);
+});
+
+test('with the default settle time and no queued work, a quiet oversized member is rotated on the minute check', async t => {
+  const { dir, room } = roomSetup(t);
+  const windowClient = new FakeClient([member('a', { pid: 4242, cwd: '/tmp', lastActivityAt: NOW - 20 * 60000 })]);
+  fakeMembership(room, windowClient);
+  const id = room.queueAdd('old task', null);
+  room.queueMarkSent('shared', id, 'a', 'A', NOW - 3600000);
+  room.queueSetDelivery('shared', id, 'tag-0', 0);
+  room.queueSettle('shared', id, 'done', '', 'A');
+  let now = NOW;
+  const dispatcher = new rules.QueueDispatcher({
+    roomState: room,
+    dataDir: dir,
+    clients: () => windowClient,
+    connect: async () => null,
+    now: () => now,
+    tickMs: 3600000,
+    sampleProcesses: async () => '4242 1 1700000\n',
+    sampleSwap: async () => 'total = 1000.00M  used = 100.00M  free = 900.00M',
+  });
+  t.after(() => dispatcher.close());
+  await dispatcher.start();
+  for (let second = 0; second < 70; second += 3) {
+    now += 3000;
+    await dispatcher.schedule();
+  }
+  assert.equal(windowClient.sends('a').length, 1, 'rotated within a minute without any queued work');
+});
+
+test('a process shared by two sessions is not charged to either', () => {
+  const memory = rules.processMemory([{ id: 'a', pid: 10 }, { id: 'b', pid: 10 }, { id: 'c', pid: 20 }], '10 1 900000\n20 1 1000\n');
+  assert.equal(memory.has('a'), false);
+  assert.equal(memory.has('b'), false);
+  assert.equal(memory.get('c'), 1000 * 1024);
 });

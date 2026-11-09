@@ -491,7 +491,9 @@ function planDispatch(input) {
         continue;
       }
       const session = byId.get(id);
-      const reason = available(session) ? rotationReason(session, now, rotationOptions, rotations) : null;
+      // Ten or thirty quiet minutes already settle the member; the 8-second idle timer is not needed.
+      const ready = sessionReady(session, input.wakePolicy).ready && !humanRecent(id, humanAt, now, humanQuietMs);
+      const reason = ready ? rotationReason(session, now, rotationOptions, rotations) : null;
       if (!reason) {
         continue;
       }
@@ -696,9 +698,15 @@ function processMemory(sessions, psOutput) {
     }
     children.get(parent).push(pid);
   }
+  const owners = new Map();
+  for (const session of sessions) {
+    if (Number.isSafeInteger(session.pid)) {
+      owners.set(session.pid, (owners.get(session.pid) || 0) + 1);
+    }
+  }
   const result = new Map();
   for (const session of sessions) {
-    if (!Number.isSafeInteger(session.pid) || !rss.has(session.pid)) {
+    if (!Number.isSafeInteger(session.pid) || !rss.has(session.pid) || owners.get(session.pid) > 1) {
       continue;
     }
     let total = 0;
@@ -728,6 +736,18 @@ function swapRatio(text) {
     return 0;
   }
   return Number(used[1]) / Number(total[1]);
+}
+
+function execText(file, args) {
+  return new Promise((resolve, reject) => {
+    cp.execFile(file, args, { encoding: 'utf8', timeout: 5000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(stdout);
+      }
+    });
+  });
 }
 
 function notSent(error) {
@@ -812,8 +832,8 @@ class QueueDispatcher {
     this.tickMs = options.tickMs ?? TICK_MS;
     this.memoryLimit = options.memoryLimit ?? MEMORY_LIMIT_BYTES;
     this.pressureLimit = options.pressureLimit ?? PRESSURE_LIMIT_BYTES;
-    this.sampleProcesses = options.sampleProcesses || (() => cp.execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,rss='], { encoding: 'utf8', timeout: 5000 }));
-    this.sampleSwap = options.sampleSwap || (() => cp.execFileSync('/usr/sbin/sysctl', ['-n', 'vm.swapusage'], { encoding: 'utf8', timeout: 5000 }));
+    this.sampleProcesses = options.sampleProcesses || (() => execText('/bin/ps', ['-axo', 'pid=,ppid=,rss=']));
+    this.sampleSwap = options.sampleSwap || (() => execText('/usr/sbin/sysctl', ['-n', 'vm.swapusage']));
     this.memorySample = null;
     this.lastMaintenance = 0;
     this.owner = options.owner || randomUUID();
@@ -1092,15 +1112,15 @@ class QueueDispatcher {
   }
 
   // Session memory and swap pressure, sampled at most twice a minute.
-  memory(sessions, now) {
+  async memory(sessions, now) {
     if (this.memorySample && now - this.memorySample.at < MEMORY_SAMPLE_MS) {
       return this.memorySample;
     }
     let memory = new Map();
     let limit = this.memoryLimit;
     try {
-      memory = processMemory(sessions, this.sampleProcesses());
-      if (swapRatio(this.sampleSwap()) >= PRESSURE_SWAP_RATIO) {
+      memory = processMemory(sessions, await this.sampleProcesses());
+      if (swapRatio(await this.sampleSwap()) >= PRESSURE_SWAP_RATIO) {
         limit = this.pressureLimit;
       }
     } catch {
@@ -1128,11 +1148,12 @@ class QueueDispatcher {
       // No queued work: still check quiet members for rotation once a minute, through a window only.
       const windowClient = this.clients();
       this.dropOwnClient();
-      if (!windowClient || !this.queueSpaces() || now - this.lastMaintenance < MAINTENANCE_MS) {
-        if (!windowClient) {
+      const watching = Boolean(windowClient) && this.queueSpaces();
+      if (!watching || now - this.lastMaintenance < MAINTENANCE_MS) {
+        if (!watching) {
           this.listen(null);
+          this.idleSince.clear();
         }
-        this.idleSince.clear();
         this.dirty = true;
         return;
       }
@@ -1154,7 +1175,7 @@ class QueueDispatcher {
       await this.advanceRotations(current.snapshot, current.now);
       current = this.view();
     }
-    const sample = this.memory(current.snapshot.sessions, current.now);
+    const sample = await this.memory(current.snapshot.sessions, current.now);
     const actions = planDispatch({
       rooms: current.snapshot.rooms,
       sessions: current.snapshot.sessions,
