@@ -506,6 +506,10 @@ function rotationReason(session, now, options, rotations) {
   if (!['claude', 'codex'].includes(session.provider) || rotations[session.id]) {
     return null;
   }
+  // A kept old session already has a successor carrying its work; the person ends it when done.
+  if (options.handedOff && options.handedOff.has(session.id)) {
+    return null;
+  }
   const limit = options.contentLimits ? options.contentLimits[session.provider] : undefined;
   if (Number.isFinite(limit) && recordCount(session) >= limit) {
     return 'content';
@@ -535,6 +539,7 @@ function planDispatch(input) {
   const quietMemoryMs = input.quietMemoryMs ?? QUIET_MEMORY_MS;
   const rotationOptions = {
     contentLimits,
+    handedOff: input.handedOff,
     memory: input.memory,
     memoryLimit: input.memoryLimit ?? MEMORY_LIMIT_BYTES,
     memoryMinAgeMs: input.memoryMinAgeMs ?? MEMORY_MIN_AGE_MS,
@@ -726,7 +731,7 @@ function dispatchText(roomName, item) {
     '',
     item.text,
     '',
-    '做完这一件就结束本轮：不留后台等待、不开 goal，也不要自己去任务板认领别的任务，NAW 会接着派下一件。需要人来决定时，回复第一行写「需要你决定：」，NAW 会停派并提醒。',
+    '做完这一件就结束本轮：不留后台命令（要等审查或测试，就在本轮里用一次长等待）、不开 goal，也不要自己去任务板认领别的任务，NAW 会接着派下一件。需要人来决定时，本轮最后一条回复的第一行写「需要你决定：」，NAW 会停派并提醒。',
   ].join('\n');
 }
 
@@ -1019,6 +1024,15 @@ async function saveTerminalScreen(connect, owner, dir, sessionId, now) {
   return path.join(path.basename(dir), name);
 }
 
+// Provably quiet: a known last activity at least ms ago and no recent use from the person's window.
+function quietFor(session, humanAt, now, ms) {
+  const last = lastActivityOf(session, now);
+  if (last === null || now - last < ms) {
+    return false;
+  }
+  return !humanRecent(session.id, humanAt, now, ms);
+}
+
 // The next old backend NAW moves by itself. With automatic updates on, a move the runtime proved
 // safe; with migration on (the person's standing confirmation), also a move that needs it, once
 // every session it stops has been quiet for a while.
@@ -1045,11 +1059,7 @@ function nextBackendMove(options, settings, sessions, humanAt, now, failed) {
       if (!plan.auto && !backendSwitch.migrationSafe(session)) {
         allowed = false;
       }
-      const last = lastActivityOf(session, now);
-      if (last === null || now - last < MIGRATE_QUIET_MS) {
-        allowed = false;
-      }
-      if (humanRecent(stop.id, humanAt, now, MIGRATE_QUIET_MS)) {
+      if (!quietFor(session, humanAt, now, MIGRATE_QUIET_MS)) {
         allowed = false;
       }
     }
@@ -1243,6 +1253,17 @@ class QueueDispatcher {
   }
 
   // Built once per log change: windows read it on every state event.
+  // Old sessions that already handed their work to a successor (done or kept), from the log.
+  handedOff() {
+    const ids = new Set();
+    for (const entry of this.log) {
+      if (['done', 'kept'].includes(entry.event) && entry.old && entry.old.id) {
+        ids.add(entry.old.id);
+      }
+    }
+    return ids;
+  }
+
   rotationChains() {
     if (!this.chainsCache) {
       try {
@@ -1506,6 +1527,7 @@ class QueueDispatcher {
       settleMs: this.settleMs,
       humanQuietMs: this.humanQuietMs,
       contentLimits: this.contentLimits,
+      handedOff: this.handedOff(),
       quietMs: this.quietMs,
       memory: sample.memory,
       memoryLimit: sample.limit,
@@ -2030,6 +2052,7 @@ module.exports = {
   memoryPressure,
   saveTerminalScreen,
   nextBackendMove,
+  quietFor,
   MIGRATE_QUIET_MS,
   sessionStart,
   lastActivityOf,

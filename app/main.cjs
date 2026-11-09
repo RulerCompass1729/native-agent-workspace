@@ -586,14 +586,19 @@ function endedByMove(sessions) {
   return Object.entries(switchRecords).filter(([key]) => key !== backendSwitching).flatMap(([, record]) => record.sessions
     .filter(value => notReconnected(sessions, value)).map(value => ({ id: value.id, name: value.name })));
 }
-async function runBackendSwitch(c, option, requireAuto = false) {
+// extra.beforeStops runs once the backend is under maintenance (no NAW input reaches it), before any
+// stop; extra.guard re-checks each session on fresh state right before its stop.
+async function runBackendSwitch(c, option, requireAuto = false, extra = {}) {
   if (backendSwitching) throw uiError("error.backendUpdateBusy");
   backendSwitching = option.backendKey;
   let finishMaintenance;
   try {
     finishMaintenance = c.client.maintainService(option.backendKey);
+    if (extra.beforeStops) {
+      await extra.beforeStops();
+    }
     const result = await backendSwitch.switchBackend({ dataDir, key: option.backendKey, executablePath: process.execPath, expected: option.switch, requireAuto,
-      ensure: ensureService, owner: c.view.owner, sessionState: value => c.client.sessionState?.(value) || value.state, running: () => runningRelays(c.client) });
+      ensure: ensureService, owner: c.view.owner, sessionState: value => c.client.sessionState?.(value) || value.state, running: () => runningRelays(c.client), guard: extra.guard || null });
     // The move itself is done; a window that cannot reconnect is a separate problem.
     try { await replaceBackendSockets(option.backendKey); } catch { result.reconnectFailed = true; }
     return result;
@@ -631,24 +636,30 @@ async function autoBackendSwitchOnce() {
   let notice;
   try {
     const screens = [];
+    const extra = {};
     if (!option.switch.auto) {
-      for (const stop of option.switch.stops || []) {
-        const session = sessions.find(value => value.id === stop.id);
-        // Typed into, or unreported: keep what the terminal shows before the process ends.
-        if (session && session.terminalInputPending !== false) {
-          let file = null;
-          try {
-            file = await queueRules.saveTerminalScreen(owner => connect(dataDir, owner), 'naw-migration', path.join(dataDir, 'rotation-terminals'), stop.id, Date.now());
-          } catch {
-            throw uiError('error.migrationScreenUnsaved', { name: stop.name });
-          }
-          if (file) {
-            screens.push(file);
+      // Under maintenance first, so no NAW input starts a turn while the screens are saved.
+      extra.beforeStops = async () => {
+        for (const stop of option.switch.stops || []) {
+          const session = sessions.find(value => value.id === stop.id);
+          // Typed into, or unreported: keep what the terminal shows before the process ends.
+          if (session && session.terminalInputPending !== false) {
+            let file = null;
+            try {
+              file = await queueRules.saveTerminalScreen(owner => connect(dataDir, owner), 'naw-migration', path.join(dataDir, 'rotation-terminals'), stop.id, Date.now());
+            } catch {
+              throw uiError('error.migrationScreenUnsaved', { name: stop.name });
+            }
+            if (file) {
+              screens.push(file);
+            }
           }
         }
-      }
+      };
+      // Teammates, children, background work or a goal that started meanwhile stop the move.
+      extra.guard = record => backendSwitch.migrationSafe(record) && queueRules.quietFor(record, humanAt, Date.now(), queueRules.MIGRATE_QUIET_MS);
     }
-    const result = await runBackendSwitch(c, option, option.switch.auto === true);
+    const result = await runBackendSwitch(c, option, option.switch.auto === true, extra);
     notice = { resumed: result.resumed.length, left: result.left.length, reconnectFailed: result.reconnectFailed };
     if (viaMigration) {
       recordMigration(option, screens, result);

@@ -214,6 +214,20 @@ test('an automatic move never stops a session that is not proven at the moment o
   assert.deepEqual(methods(old2), ['maintenanceStop:c', 'maintenanceResume:c'], 'Typing in the second session during the move stops it before its stop');
   assert.deepEqual(ownersOf(old2, 'maintenanceResume'), ['c:view-a'], 'Put back as its own owner'); assert.equal(record(h2.dataDir, h2.key), null);
 });
+test('a move under the migration setting re-checks each session on fresh state and stops before ending new teamwork', async t => {
+  const two = [claudeNew(), claudeNew({ id: 'c2', nativeId: 'native-c2', name: 'Claude 3', owner: 'view-c' })];
+  const noTeam = record => !(record.fleet || []).some(event => event.event === 'TeammateIdle');
+  const h = harness(t, two); const old = await service(h.directory, { runtimeVersion: '0.1.0-alpha.157', capabilities: caps, sessions: structuredClone(two), room: { messages: [] } },
+    { onStop: (r, state) => { if (r.id === 'c') state.sessions.find(s => s.id === 'c2').fleet = [{ event: 'TeammateIdle' }]; } }); h.services.push(old);
+  await assert.rejects(switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', ensure: () => assert.fail(), applicationVersion: '0.1.0-alpha.158', guard: noTeam,
+    commandLine: h.command(old), signal: () => assert.fail(), now: () => now }), /Claude 3 的状态已变化/);
+  assert.deepEqual(methods(old), ['maintenanceStop:c', 'maintenanceResume:c'], 'Teammates that started during the move stop it before that session ends');
+  // A guard that refuses on the fresh plan ends nothing at all.
+  const h2 = harness(t, [claudeNew({ fleet: [{ event: 'TeammateIdle' }] })]); const old2 = await h2.old();
+  await assert.rejects(switchBackend({ dataDir: h2.dataDir, key: h2.key, executablePath: 'unused', ensure: () => assert.fail(), applicationVersion: '0.1.0-alpha.158', guard: noTeam,
+    commandLine: h2.command(old2), signal: () => assert.fail(), now: () => now }), /没有结束任何会话/);
+  assert.deepEqual(methods(old2), []);
+});
 test('a service process that cannot be proven is never signalled and no session is stopped', async t => {
   const h = harness(t, [claudeNew(), codexNew()]); const old = await h.old();
   for (const commandLine of [() => '/usr/bin/other daemon.cjs', () => `/x ${h.dataDir}/runtimes/0/daemon.cjs`, () => undefined]) {

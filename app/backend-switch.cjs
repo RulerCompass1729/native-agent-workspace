@@ -185,7 +185,7 @@ async function waitGone(directory, pid, identity, ms = 15000) {
 }
 
 async function switchBackend({ dataDir, key, executablePath, expected, ensure, owner, applicationVersion = process.env.NAW_APP_VERSION,
-  sessionState, running = () => new Set(), requireAuto = false, commandLine = psCommand, now = Date.now }) {
+  sessionState, running = () => new Set(), requireAuto = false, commandLine = psCommand, now = Date.now, guard = null }) {
   const directory = path.join(dataDir, key), stopped = [];
   const effective = record => sessionState ? sessionState(record) : record.state;
   // Each session is reconnected as its own owner, so its window keeps control.
@@ -211,6 +211,13 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
     plan = backendPlan(state, effective, running());
     // What the person confirmed (or the tick selected) must still be exactly what is unproven now.
     if (!plan.ready || (requireAuto && !plan.auto) || (expected && (!samePlan(plan, expected) || plan.auto !== expected.auto || plan.reason !== expected.reason)) || state.runtimeVersion === applicationVersion) throw uiError("error.backendSwitchStateChanged");
+    // A move made under the person's migration setting checks what it accepts on fresh state too.
+    if (guard) {
+      for (const stop of plan.stops) {
+        const record = state.sessions.find(s => s.id === stop.id);
+        if (!record || !guard(record)) throw uiError("error.backendSwitchStateChanged");
+      }
+    }
     // Prove which process would be retired before ending anything.
     pid = state.servicePid; identity = serviceProcess(directory, pid, commandLine);
   } catch (error) { client.close(); throw error; }
@@ -218,7 +225,7 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
     for (const session of plan.stops) {
       const snapshot = await client.call('initial'), current = snapshot.sessions.find(s => s.id === session.id);
       const check = current && sessionPlan(current, effective(current), new Set([...running(), ...runningIn(snapshot)]));
-      if (!check?.stop || !sameStop(check.stop, session) || (requireAuto && !check.auto)) throw uiError("error.backendSwitchSessionChanged", { name: session.name });
+      if (!check?.stop || !sameStop(check.stop, session) || (requireAuto && !check.auto) || (guard && !guard(current))) throw uiError("error.backendSwitchSessionChanged", { name: session.name });
       // Persist an uncertain request for recovery, but rollback only a stop this
       // service acknowledged. A refused guard must never resume newer human work.
       writeRecord(dataDir, key, { phase: 'stopping', startedAt: now(), sessions: [...stopped, session] });

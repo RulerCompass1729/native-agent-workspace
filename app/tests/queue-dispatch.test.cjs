@@ -1381,6 +1381,15 @@ test('only the conversation since the last /clear counts toward the record limit
   const cleared = member('a', { lastActivityAt: NOW - 40 * 60000, messages: [...before, boundary, { id: 'n1', role: 'user', text: 'new' }] });
   assert.deepEqual(plan([{ id: 'shared', name: 'Team' }], [cleared]), [], 'a just-cleared conversation is short');
   const text = rules.dispatchText('Team', item('1'));
-  assert.match(text, /不留后台等待/);
+  assert.match(text, /不留后台命令/);
+  assert.match(text, /本轮最后一条回复的第一行/);
   assert.match(text, /不要自己去任务板认领/);
+});
+
+test('an old session that already handed off is not replaced again', () => {
+  const rooms = [{ id: 'shared', name: 'Team' }];
+  const kept = member('a', { lastActivityAt: NOW - 40 * 60000, messages: heavyMessages() });
+  assert.deepEqual(plan(rooms, [kept]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+  assert.deepEqual(plan(rooms, [kept], { handedOff: new Set(['a']) }), [], 'its successor already carries the work');
+  assert.deepEqual(plan(rooms, [kept], { handedOff: new Set(['a']), memory: new Map([['a', 4 * 1024 ** 3]]) }), [], 'not for memory either: a third session would follow');
 });
