@@ -39,11 +39,17 @@ class ScopedOutboxRuntime {
   }
   ready(scope) {
     const { s, runtime } = scope.actor, w = this.workspace;
+    // Native 0.167's held TUI RPC starts a separate task without submitting or
+    // clearing its edit line (qualified with an actual native command and draft).
+    // Keep the conservative marker for retirement and every unqualified route.
+    // New typing still changes controlRevision and invalidates stable(scope).
+    const preservesTerminalEdit = runtime.host?.rpc?.nativeVersion === '0.167.0' &&
+      runtime.terminalNotificationSource && runtime.terminalRpc === scope.rpc;
     return this.stable(scope) && wake.budgetAllows(s, scope.op) && runtime.scopedOutboxRpc?.() === scope.rpc &&
       (s.state === 'idle' || scope.sent && runtime.pending?.tag === scope.tag) &&
       (!s.pendingTag || scope.sent && s.pendingTag === scope.tag) && (!runtime.pending || scope.sent && runtime.pending.tag === scope.tag) &&
       !runtime.pendingQueue && !runtime.pendingSteer && !runtime.nativeAbortRequest && !runtime.nativeInputRequired &&
-      !s.approval && !s.nativeApproval && !s.terminalInputPending &&
+      !s.approval && !s.nativeApproval && (!s.terminalInputPending || preservesTerminalEdit) &&
       !w.roomFor('shared').run?.status?.includes('running') && !w.roomFor('shared').run?.pausePending && !w.roomFor('shared').run?.pauseUnconfirmed &&
       !w.peerLeases?.snapshot().some(p => p.status === 'running');
   }
