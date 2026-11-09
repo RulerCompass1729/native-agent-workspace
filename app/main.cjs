@@ -602,7 +602,17 @@ async function runBackendSwitch(c, option, requireAuto = false) {
 // Automatic moves run one backend at a time: plans the runtime proved, with automatic updates on;
 // with migration on (the person's standing confirmation), also plans that need that confirmation
 // once their sessions are quiet. Those first keep what each typed-into native terminal shows.
+let autoSwitchRunning = false;
 async function autoBackendSwitch() {
+  if (autoSwitchRunning) return;
+  autoSwitchRunning = true;
+  try {
+    await autoBackendSwitchOnce();
+  } finally {
+    autoSwitchRunning = false;
+  }
+}
+async function autoBackendSwitchOnce() {
   const settings = backendSwitch.readSettings(dataDir);
   if (quitting || backendSwitching || !(settings.auto || settings.migrate)) return;
   const c = [...windows.values()].find(context => !context.background && !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed);
@@ -616,14 +626,22 @@ async function autoBackendSwitch() {
   const options = connectionUpdateOptions(c.client, app.getVersion(), roomState);
   const option = queueRules.nextBackendMove(options, settings, sessions, humanAt, Date.now(), autoSwitchFailed);
   if (!option) return;
+  // A move made under the person's migration setting rather than proven automatic updates.
+  const viaMigration = !(settings.auto && option.switch.auto);
   let notice;
   try {
     const screens = [];
     if (!option.switch.auto) {
       for (const stop of option.switch.stops || []) {
         const session = sessions.find(value => value.id === stop.id);
-        if (session && session.terminalInputPending === true) {
-          const file = await queueRules.saveTerminalScreen(owner => connect(dataDir, owner), 'naw-migration', path.join(dataDir, 'rotation-terminals'), stop.id, Date.now());
+        // Typed into, or unreported: keep what the terminal shows before the process ends.
+        if (session && session.terminalInputPending !== false) {
+          let file = null;
+          try {
+            file = await queueRules.saveTerminalScreen(owner => connect(dataDir, owner), 'naw-migration', path.join(dataDir, 'rotation-terminals'), stop.id, Date.now());
+          } catch {
+            throw uiError('error.migrationScreenUnsaved', { name: stop.name });
+          }
           if (file) {
             screens.push(file);
           }
@@ -632,8 +650,8 @@ async function autoBackendSwitch() {
     }
     const result = await runBackendSwitch(c, option, option.switch.auto === true);
     notice = { resumed: result.resumed.length, left: result.left.length, reconnectFailed: result.reconnectFailed };
-    if (!option.switch.auto) {
-      recordMigration(option, screens);
+    if (viaMigration) {
+      recordMigration(option, screens, result);
     }
   }
   // A failed automatic move is not retried in this app run; the person can still click.
@@ -1298,9 +1316,11 @@ function notifyRotation(outcome, record) {
   }
 }
 // Migrations NAW made without a click: an append-only private log and an OS notice.
-function recordMigration(option, screens) {
+function recordMigration(option, screens, result) {
   const stops = option.switch.stops || [];
-  const entry = { time: Date.now(), backend: option.backendKey, sessions: stops.map(stop => ({ id: stop.id, nativeId: stop.nativeId || null, name: stop.name })), screens };
+  const left = (result && result.left) || [];
+  const partial = left.length > 0 || Boolean(result && result.reconnectFailed);
+  const entry = { time: Date.now(), backend: option.backendKey, sessions: stops.map(stop => ({ id: stop.id, nativeId: stop.nativeId || null, name: stop.name })), screens, left: left.length, reconnectFailed: Boolean(result && result.reconnectFailed) };
   try {
     fs.appendFileSync(path.join(dataDir, 'backend-migrations.jsonl'), JSON.stringify(entry) + '\n', { mode: 0o600 });
   } catch {
@@ -1312,6 +1332,9 @@ function recordMigration(option, screens) {
   const migrationNotice = { key: 'os.migrationBody', params: { names: stops.map(stop => stop.name).join('、') } };
   if (screens.length) {
     migrationNotice.key = 'os.migrationSavedBody';
+  }
+  if (partial) {
+    migrationNotice.key = 'os.migrationPartialBody';
   }
   try {
     if (!Notification.isSupported()) {

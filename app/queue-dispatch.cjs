@@ -484,11 +484,21 @@ function settingsMismatch(carry, fresh) {
   return null;
 }
 
+// Records of the current native conversation: those after the last /clear (or terminal switch)
+// boundary, which ends the conversation the native session carries.
 function recordCount(session) {
-  if (Array.isArray(session.messages)) {
-    return session.messages.length;
+  if (!Array.isArray(session.messages)) {
+    return 0;
   }
-  return 0;
+  let count = 0;
+  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+    const message = session.messages[index];
+    if (message && message.role === 'system' && message.kind === 'context') {
+      break;
+    }
+    count += 1;
+  }
+  return count;
 }
 
 // Why a member is due for rotation now: 'content', 'memory' or null.
@@ -688,6 +698,9 @@ function planDispatch(input) {
         continue;
       }
       const lastActivity = lastActivityOf(session, now);
+      if (lastActivity === null) {
+        continue;
+      }
       let quiet = quietMs;
       if (reason === 'memory') {
         quiet = quietMemoryMs;
@@ -713,7 +726,7 @@ function dispatchText(roomName, item) {
     '',
     item.text,
     '',
-    '做完这一件就结束本轮，NAW 会接着派下一件。需要人来决定时，回复第一行写「需要你决定：」，NAW 会停派并提醒。',
+    '做完这一件就结束本轮：不留后台等待、不开 goal，也不要自己去任务板认领别的任务，NAW 会接着派下一件。需要人来决定时，回复第一行写「需要你决定：」，NAW 会停派并提醒。',
   ].join('\n');
 }
 
@@ -742,7 +755,7 @@ function handoffText(oldName, handoff) {
     '',
     handoff,
     '',
-    '先按交接核对现状（只读即可），然后结束本轮。队列里的下一件，NAW 会接着派给你。',
+    '先按交接核对现状（只读即可），然后结束本轮，不留后台等待；这个空间有队列时，NAW 会接着派下一件。',
   ].join('\n');
 }
 
@@ -1021,22 +1034,26 @@ function nextBackendMove(options, settings, sessions, humanAt, now, failed) {
     if (!settings.migrate) {
       continue;
     }
-    let quiet = true;
+    const backendSwitch = require('./backend-switch.cjs');
+    let allowed = true;
     for (const stop of plan.stops || []) {
       const session = sessions.find(s => s.id === stop.id);
       if (!session) {
-        quiet = false;
+        allowed = false;
         continue;
       }
+      if (!plan.auto && !backendSwitch.migrationSafe(session)) {
+        allowed = false;
+      }
       const last = lastActivityOf(session, now);
-      if (last !== null && now - last < MIGRATE_QUIET_MS) {
-        quiet = false;
+      if (last === null || now - last < MIGRATE_QUIET_MS) {
+        allowed = false;
       }
       if (humanRecent(stop.id, humanAt, now, MIGRATE_QUIET_MS)) {
-        quiet = false;
+        allowed = false;
       }
     }
-    if (quiet) {
+    if (allowed) {
       return option;
     }
   }

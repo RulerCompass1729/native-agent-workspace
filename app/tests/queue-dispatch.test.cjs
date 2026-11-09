@@ -1345,3 +1345,42 @@ test('NAW moves an old backend by itself only as the person set it: proven with 
   assert.equal(move([unproven], { auto: false, migrate: true }, [quietSession('p')]), null, 'a session that cannot be read is not moved');
   assert.equal(rules.MIGRATE_QUIET_MS, 10 * 60000);
 });
+
+test('automatic migration accepts only typed-into terminals and Codex endings; teammates, children, unreported work and goals wait', () => {
+  const { migrationSafe } = require('../backend-switch.cjs');
+  const claude = extra => member('a', { backgroundStale: false, background: 0, scheduled: 0, terminalInputPending: true, ...extra });
+  assert.equal(migrationSafe(claude()), true, 'only text perhaps typed in the terminal, saved first');
+  assert.equal(migrationSafe(claude({ backgroundStale: false, background: null, scheduled: null })), true, 'nothing started since the process began');
+  assert.equal(migrationSafe(claude({ fleet: [{ event: 'TeammateIdle' }] })), false, 'Agent Teams teammates may still run');
+  assert.equal(migrationSafe(claude({ fleet: [{ event: 'SubagentStart', id: 'x', stale: true }] })), false, 'an earlier child may still run');
+  assert.equal(migrationSafe(claude({ backgroundStale: true })), false, 'background work not yet reported');
+  assert.equal(migrationSafe(claude({ background: null, scheduled: 0 })), false);
+  assert.equal(migrationSafe(claude({ state: 'working' })), false);
+  const codex = extra => member('c', { provider: 'codex', ...extra });
+  assert.equal(migrationSafe(codex()), true, 'its native program ends, as the person accepted');
+  assert.equal(migrationSafe(codex({ nativeGoal: { status: 'active' } })), false, 'an active goal is never ended by migration');
+  assert.equal(migrationSafe(codex({ nativeGoal: { status: 'paused' } })), true);
+});
+
+test('migration moves an unproven backend only when every session is safe and provably quiet', () => {
+  const plan = { backendKey: 'b', switch: { ready: true, auto: false, stops: [{ id: 'a' }] } };
+  const settings = { auto: false, migrate: true };
+  const safe = extra => member('a', { backgroundStale: false, background: 0, scheduled: 0, terminalInputPending: true, lastActivityAt: NOW - 15 * 60000, ...extra });
+  const move = session => rules.nextBackendMove([plan], settings, [session], new Map(), NOW, new Set());
+  assert.equal(move(safe()), plan);
+  assert.equal(move(safe({ fleet: [{ event: 'TaskCompleted' }] })), null);
+  assert.equal(move(safe({ provider: 'codex', nativeGoal: { status: 'active' } })), null);
+  assert.equal(move(safe({ lastActivityAt: undefined, createdAt: undefined, messages: [] })), null, 'unknown activity is not quiet');
+  const proven = { backendKey: 'p', switch: { ready: true, auto: true, stops: [{ id: 'a' }] } };
+  assert.equal(rules.nextBackendMove([proven], settings, [safe({ fleet: [{ event: 'TaskCompleted' }] })], new Map(), NOW, new Set()), proven, 'a proven plan was already checked by the runtime');
+});
+
+test('only the conversation since the last /clear counts toward the record limit; dispatches carry the queue rule', () => {
+  const before = heavyMessages();
+  const boundary = { id: 'boundary', role: 'system', kind: 'context', text: '原生上下文' };
+  const cleared = member('a', { lastActivityAt: NOW - 40 * 60000, messages: [...before, boundary, { id: 'n1', role: 'user', text: 'new' }] });
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team' }], [cleared]), [], 'a just-cleared conversation is short');
+  const text = rules.dispatchText('Team', item('1'));
+  assert.match(text, /不留后台等待/);
+  assert.match(text, /不要自己去任务板认领/);
+});

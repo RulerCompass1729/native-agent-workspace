@@ -37,6 +37,26 @@ function children(record) {
   const open = [...latest.values()];
   return { current: open.filter(v => v === 'current').length, earlier: open.filter(v => v === 'earlier').length, team };
 }
+// Whether NAW may move this session under the person's standing confirmation (automatic migration).
+// The only parts it accepts unproven are text perhaps typed in the native terminal (saved first) and,
+// for Codex, that its native program ends. Each condition is checked on its own: unproven() names
+// only the first reason. Teammates, child agents, unreported background work and an active Codex goal
+// still wait for the person's click.
+function migrationSafe(record) {
+  if (record.state !== 'idle' || waiting(record)) {
+    return false;
+  }
+  const fleet = children(record);
+  if (fleet.current || fleet.earlier || fleet.team) {
+    return false;
+  }
+  if (record.provider === 'codex') {
+    return !(record.nativeGoal && record.nativeGoal.status === 'active');
+  }
+  const fresh = record.backgroundStale === false && record.background === null && record.scheduled === null;
+  const reported = record.backgroundStale === false && record.background === 0 && record.scheduled === 0;
+  return fresh || reported;
+}
 // What would still be unknown if this idle session were stopped now. Empty
 // means the runtime proved it; otherwise only an explicit click may proceed.
 function unproven(record, fleet) {
@@ -262,4 +282,4 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
   return { key, resumed, left: left.map(s => s.id) };
 }
 
-module.exports = { backendPlan, sessionPlan, samePlan, sameStop, maintenanceProof, switchBackend, readSettings, writeSettings, readRecords, clearRecord, RECORD, SETTINGS };
+module.exports = { backendPlan, sessionPlan, samePlan, sameStop, maintenanceProof, switchBackend, readSettings, writeSettings, readRecords, clearRecord, migrationSafe, children, RECORD, SETTINGS };
