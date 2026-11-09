@@ -1724,6 +1724,11 @@ class QueueDispatcher {
         }
         return;
       }
+      // Effort and permission mode are often reported only with the first prompt: compare again.
+      const mismatch = settingsMismatch(record.carry, fresh);
+      if (mismatch && mismatch !== 'pending') {
+        throw Error(`settings-differ:${mismatch}`);
+      }
       record.handoffConfirmed = true;
       if (fresh && fresh.nativeId) {
         record.newNativeId = fresh.nativeId;

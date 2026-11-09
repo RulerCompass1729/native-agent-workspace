@@ -1141,3 +1141,29 @@ test('without the backend support for carried settings no rotation starts', asyn
   assert.deepEqual(notices, [['failed', 'cannot-carry:backend-cannot-carry-settings']]);
   assert.equal(client.sends('a').some(call => /【NAW 换会话】/.test(call[2])), false);
 });
+
+test('a successor that reports another permission mode with its first prompt does not keep the work', async t => {
+  const notices = [];
+  const old = member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp', nativePermissionMode: 'auto' });
+  const { room, client, dispatcher } = dispatcherSetup(t, [old], {
+    notify: (kind, record) => notices.push([kind, record.reason]),
+  });
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  client.reply('a', '交接：在 feature 分支。');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  const created = client.calls.find(call => call[0] === 'create');
+  assert.deepEqual(created[1].settings, { model: 'claude-test-model', permissionMode: 'auto' });
+  const fresh = client.state.sessions[1];
+  assert.equal(client.sends(fresh.id).length, 1, 'the handoff went out while the mode was still unreported');
+  // The native CLI reports the mode it actually runs with the first prompt.
+  fresh.nativePermissionMode = 'manual';
+  await dispatcher.schedule();
+  assert.deepEqual(notices, [['failed', 'settings-differ:permission-mode']]);
+  assert.ok(client.calls.some(call => call[0] === 'stop' && call[1] === fresh.id), 'the successor is stopped');
+  assert.equal(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), false, 'the old session keeps running');
+  assert.equal(room.value.queue[0].assignee, 'a', 'and gets its queued work back');
+});
