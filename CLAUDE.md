@@ -20,7 +20,11 @@ or start paid model runs as a side effect of editing documents.
 - Every agent keeps its full implementation and verification capabilities. Roles
   such as secretary, researcher, tester and integrator describe the current work,
   not permanent limits. Within existing authorization, any agent may claim a
-  ready, unowned complete user outcome without waiting for a new dispatch.
+  ready, unowned complete user outcome without waiting for a new dispatch,
+  except as a member of a space whose NAW queue the person uses: there it takes
+  work only as NAW sends it (【NAW 派活】, one item to one member) and does not
+  claim board tasks itself (the person, 2026-11-08: agents claiming the same
+  task by themselves).
 - Keep one owner responsible for each outcome through reproduction, necessary
   implementation, relevant checks and usable delivery. A helper may claim and
   finish an independent dependency; the outcome owner keeps responsibility for
@@ -194,7 +198,13 @@ local branch or main; not installed, pushed or published):
   `docs/review.md`, fix them, then send only the delta to the same session. If
   Claude is unavailable, keep the checkpoint open rather than self-approving.
   Reuse relevant evidence and avoid frequent handoffs.
-- A Claude agent working from the private task board does not end a turn idle;
+- A member of a space whose NAW queue the person uses ends each turn idle once
+  its current item is done, with no background wait and no active native goal:
+  NAW sends idle members their next item and replaces long sessions with new
+  ones, and it does neither for a session with a background wait or an active
+  goal. A reply whose first line starts with 「需要你决定：」 holds the member
+  for the person.
+- Otherwise, a Claude agent working from the private task board does not end a turn idle;
   nothing reliably wakes an idle session. Before ending a turn, either be
   working on the next item it can take, or leave exactly one background command
   that exits on a specific event: a newer READY entry in a lane log (for the
