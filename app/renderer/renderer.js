@@ -2359,6 +2359,9 @@ function renderSessions() {
           // As on the 协作空间 row: right-click or Shift+F10 on the space's name opens the same menu.
           title.addEventListener('contextmenu', event => { event.preventDefault(); event.stopPropagation(); if (!more.disabled) openRoomMenu({ x: event.clientX, y: event.clientY }, more, group.id); });
           title.addEventListener('keydown', event => { if ((event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') && !more.disabled) { event.preventDefault(); event.stopPropagation(); openRoomMenu(undefined, more, group.id); } });
+          // T-145 V3: a visible 进入 beside the name, for the mouse; the name button itself stays the keyboard and screen-reader entry.
+          const enter = node('span', undefined, 'session-space-enter'); enter.setAttribute('aria-hidden', 'true'); ui.display.text(enter, 'sidebar.enterSpace');
+          enter.addEventListener('click', () => attempt(() => selectSpace(group.id))); heading.insertBefore(enter, attention);
           heading.append(more); bindSpaceHighlight(element, group.id); dropTarget(element, true, group.id);
         } else dropTarget(heading, false);
         entry = { element, title, body, toggle, attention, more }; sidebarGroups.set(group.id, entry);

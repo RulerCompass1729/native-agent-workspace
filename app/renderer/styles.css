@@ -577,6 +577,17 @@ header h1, header p { overflow-wrap: anywhere; }
   .sidebar .session-space-group .session-link{min-height:40px;padding-top:3px;padding-bottom:3px}
   .sidebar .session-space-group .session-link .label{line-height:18px}
   .sidebar .session-space-group .session-link .session-metadata small{line-height:14px;margin-top:0;white-space:normal;overflow-wrap:anywhere}
+  /* T-145 V3: a space's heading is one light green band, as in the prototype (the name keeps its tone), replacing the name button's own box, drawn with shadows so no height or width is added;
+     the fold arrow keeps its own segment, the name shows a group icon with a visible 进入 beside it, and the members
+     hang from a guide line. 独立会话 keeps the plain heading. The name's text and accessible label are unchanged. */
+  .sidebar .session-space-group:not([data-session-group="independent"]) h3{background:color-mix(in srgb,var(--green) 9%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 28%,transparent);border-radius:6px;margin:1px 0;gap:0}
+  .sidebar .session-space-group:not([data-session-group="independent"]) .session-space-toggle{box-shadow:inset -1px 0 color-mix(in srgb,var(--green) 22%,transparent);border-radius:6px 0 0 6px}
+  .sidebar .session-space-group:not([data-session-group="independent"]) .session-space-heading{display:flex;align-items:center;gap:6px;border:0;align-self:stretch}
+  .sidebar .session-space-group:not([data-session-group="independent"]) .session-space-heading:not(.active){background:transparent}
+  .sidebar .session-space-group:not([data-session-group="independent"]) .session-space-heading::before{content:'';flex:none;width:16px;height:16px;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='9' cy='8' r='3.5'/%3E%3Cpath d='M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6'/%3E%3Cpath d='M16 4.5a3.5 3.5 0 0 1 0 7'/%3E%3Cpath d='M18 14.5c1.8.8 3 2.7 3 4.9'/%3E%3C/svg%3E") center/contain no-repeat}
+  .sidebar .session-space-enter{flex:none;align-self:stretch;display:flex;align-items:center;padding:0 4px;font-size:12px;font-weight:500;color:var(--green,var(--ink));white-space:nowrap;cursor:pointer;
+    body[data-ds-dark-theme] &{color:var(--dsw-alias-link,var(--ink))}}
+  .sidebar .session-space-group:not([data-session-group="independent"])>div{border-left:1px solid var(--border)}
 }
 #new-space{margin:2px 8px 6px;font-size:12px;text-align:left}
 .space-file-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:8px 0;border-bottom:1px solid var(--border)}
