@@ -66,6 +66,18 @@ a handoff whether a successor can match, and a successor that reports another mo
 stopped before it gets the handoff. Its other notes: sessions in several spaces are not
 rotated, a successor rests for a day so it cannot be replaced in a loop, and last activity
 falls back to the newest timed message.
+Round 13 (APPROVE_WITH_NOTES) confirmed no argument injection and no new permission through
+`create` settings. Real runs through NAW showed a new Codex native terminal never starting
+its thread (the TUI stops at native prompts after its trust read), so Codex successors start
+in chat view through `thread/start`; the terminal tab resumes the same thread. Its note 7 led
+to comparing effort and permission mode again when the successor accepts the handoff (round
+14, APPROVE). Installing alpha.222 then showed that every old backend needs the person's
+confirmation to move (a native terminal may hold text typed but not sent; Codex background
+work is not reported), and the same unseen text could be lost when a rotation ends an old
+session. Before ending an old session typed into since its process started, NAW now saves
+its terminal screen as text (`rotation-terminals/`, owner-only) and names it in the log and
+the notice; if the screen cannot be saved the old session is kept and the person is told. A
+unit test caught the first version writing to an undefined folder.
 
 **Alpha.90 final scoped review, 2026-10-23:** the GUI's native Escape path
 caused Claude's post-Stop plugin-input pause. The actual supported 310 GUI now

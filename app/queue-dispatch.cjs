@@ -58,6 +58,9 @@ const DECISION_MARKERS = ['需要你决定：', '需要你决定:', 'Needs your 
 // Input written by NAW or another agent, not by the person.
 const AUTOMATIC_ORIGINS = ['naw-dispatch', 'agent-wake', 'capacity-recovery', 'agent-control', 'room'];
 // Refusals raised before the backend wrote anything: the item is still unsent.
+const NATIVE_DRAFT_KEY = 'error.submission.nativeDraft';
+// A terminal that is no longer open: only its owner may reopen it, and nothing unsent remains.
+const TERMINAL_CLOSED_KEY = 'error.workspace.takeTerminalControlBeforeReconnect';
 const NOT_SENT_KEYS = [
   'error.workspace.sessionNotReady',
   'error.workspace.handoffExpired',
@@ -72,6 +75,8 @@ const NOT_SENT_KEYS = [
   'error.room.sessionArchived',
   'error.room.workspaceArchived',
   'error.room.mergeStepsUnconfirmed',
+  // Claude's native prompt holds text the person typed but did not send; nothing was submitted.
+  NATIVE_DRAFT_KEY,
   'error.room.updatingDraftRetained',
 ];
 const ROTATION_PHASES = ['requested', 'creating', 'joining', 'created', 'handed', 'failed', 'kept'];
@@ -916,6 +921,37 @@ function memoryPressure(text) {
   return Number.isInteger(level) && level >= 2;
 }
 
+// The text a native terminal snapshot shows, as the person would read it on screen.
+async function terminalText(snapshot) {
+  const { Terminal } = require('@xterm/headless');
+  let cols = 200;
+  if (Number.isSafeInteger(snapshot.cols) && snapshot.cols > 0) {
+    cols = snapshot.cols;
+  }
+  let rows = 60;
+  if (Number.isSafeInteger(snapshot.rows) && snapshot.rows > 0) {
+    rows = snapshot.rows;
+  }
+  const terminal = new Terminal({ cols, rows, scrollback: 5000, allowProposedApi: true });
+  try {
+    await new Promise(resolve => terminal.write(snapshot.buffer, resolve));
+    const lines = [];
+    const buffer = terminal.buffer.active;
+    for (let index = 0; index < buffer.length; index += 1) {
+      const line = buffer.getLine(index);
+      if (line) {
+        lines.push(line.translateToString(true));
+      }
+    }
+    while (lines.length && !lines[lines.length - 1].trim()) {
+      lines.pop();
+    }
+    return lines.join('\n') + '\n';
+  } finally {
+    terminal.dispose();
+  }
+}
+
 function execText(file, args) {
   return new Promise((resolve, reject) => {
     cp.execFile(file, args, { encoding: 'utf8', timeout: 5000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
@@ -926,6 +962,13 @@ function execText(file, args) {
       }
     });
   });
+}
+
+function errorKey(error) {
+  if (error && error.uiMessage && typeof error.uiMessage.key === 'string') {
+    return error.uiMessage.key;
+  }
+  return '';
 }
 
 function notSent(error) {
@@ -1454,6 +1497,10 @@ class QueueDispatcher {
       const tag = await this.send(session, dispatchText(room.name || '', item), item.id);
       this.roomState.queueSetDelivery(room.id, item.id, tag, session.controlRevision || 0);
     } catch (error) {
+      if (errorKey(error) === NATIVE_DRAFT_KEY) {
+        // Treated like the person typing: this member is left alone for a while.
+        this.humanAt.set(session.id, this.now());
+      }
       if (notSent(error)) {
         this.roomState.queueRequeue(room.id, item.id, error.message || 'not-sent', NOT_SENT_ATTEMPTS, name);
       } else {
@@ -1475,6 +1522,38 @@ class QueueDispatcher {
       return false;
     }
     return !(reply && reply.humanAfter);
+  }
+
+  // Before an old session typed into since its process started ends, keep what its live terminal
+  // shows, an unsent prompt included, in a private file beside the rotation log. Read through a
+  // separate connection that owns nothing: a terminal no longer open is then never reopened, and
+  // with no open terminal nothing unsent remains (null).
+  async saveTerminal(oldId) {
+    const probe = await withTimeout(this.connect(`${this.owner}-terminal`), CALL_TIMEOUT_MS, 'connect-timeout');
+    let snapshot;
+    try {
+      snapshot = await withTimeout(probe.call('terminalSnapshot', oldId), CALL_TIMEOUT_MS, 'snapshot-timeout');
+    } catch (error) {
+      if (errorKey(error) === TERMINAL_CLOSED_KEY) {
+        return null;
+      }
+      throw error;
+    } finally {
+      try {
+        probe.close();
+      } catch {
+        // The probe holds no state.
+      }
+    }
+    if (!snapshot || typeof snapshot.buffer !== 'string') {
+      throw Error('terminal-snapshot-missing');
+    }
+    const text = await terminalText(snapshot);
+    const dir = path.join(path.dirname(this.logFile), 'rotation-terminals');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const name = `${oldId}-${this.now()}.txt`;
+    fs.writeFileSync(path.join(dir, name), text, { mode: 0o600, flag: 'wx' });
+    return path.join('rotation-terminals', name);
   }
 
   // The old session is left as it is: one record, log line and notice, then a week's rest.
@@ -1552,6 +1631,10 @@ class QueueDispatcher {
       this.appendLog('requested', record, { reason, why });
       this.roomState.rotationEvent(record.roomIds, 'requested', this.label(session.id, record.name), why);
     } catch (error) {
+      if (errorKey(error) === NATIVE_DRAFT_KEY) {
+        // The person has an unsent prompt there: ask again later, record no failure.
+        this.humanAt.set(session.id, this.now());
+      }
       if (notSent(error)) {
         delete this.rotations[session.id];
       } else {
@@ -1751,6 +1834,17 @@ class QueueDispatcher {
         const quiet = old.state === 'idle' && !old.pendingTag;
         inUse = collaborating || !quiet || !this.untouched(old, record, replyAfter(old, record.tag, record.requestedAt));
       }
+      // NAW cannot see a prompt typed but not sent in the native terminal: keep the screen first,
+      // and keep the old session if its screen cannot be saved.
+      let unsaved = false;
+      if (live && !inUse && old.terminalInputPending === true) {
+        try {
+          record.terminalFile = await this.saveTerminal(oldId);
+        } catch {
+          inUse = true;
+          unsaved = true;
+        }
+      }
       if (live && !inUse) {
         for (const roomId of record.roomIds) {
           try {
@@ -1767,9 +1861,23 @@ class QueueDispatcher {
       const outcome = inUse ? 'kept' : 'done';
       const oldLabel = this.label(oldId, record.name);
       const newLabel = this.label(record.newId, record.newName || record.name);
-      this.appendLog(outcome, record);
+      const extra = {};
+      if (record.terminalFile) {
+        extra.terminal = record.terminalFile;
+      }
+      if (unsaved) {
+        extra.reason = 'terminal-unsaved';
+      }
+      this.appendLog(outcome, record, extra);
       this.roomState.rotationEvent(record.roomIds, inUse ? 'oldKept' : 'done', oldLabel, newLabel);
-      this.notify(outcome, record);
+      let notice = outcome;
+      if (record.terminalFile) {
+        notice = 'saved';
+      }
+      if (unsaved) {
+        notice = 'keptUnsaved';
+      }
+      this.notify(notice, record);
       if (inUse) {
         this.rotations[oldId] = { phase: 'kept', keptAt: now, oldNativeId: record.oldNativeId, name: record.name, roomIds: record.roomIds };
       } else {

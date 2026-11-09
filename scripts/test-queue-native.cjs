@@ -29,6 +29,7 @@ const PROVIDER = process.env.NAW_TEST_QUEUE_PROVIDER || 'claude';
 // NAW_TEST_QUEUE_TRIGGER=memory rotates because the real process tree is above a lowered
 // 100 MB memory limit, instead of because the session is older than a shortened age.
 const TRIGGER = process.env.NAW_TEST_QUEUE_TRIGGER || 'age';
+const UNSENT = 'UNSENT_DRAFT_NAW';
 assert.ok(['claude', 'codex'].includes(PROVIDER), 'claude or codex');
 const codexHome = path.join(base, 'codex');
 const defaultModelFile = path.join(base, 'default-model.txt');
@@ -400,6 +401,18 @@ async function cleanup() {
   await page.evaluate(text => workspace.spaceAction('shared', 'queueAdd', [text, null]), 'QUEUE_TASK_2 请只回复完成标记');
   timings.terminalOpenDoneMs = await until(async () => (await itemByText('QUEUE_TASK_2 请只回复完成标记')).status === 'done', 'Second item done with the terminal open');
   checks.push(`The next item followed with the member's native terminal open and idle (${timings.terminalOpenDoneMs} ms)`);
+  // The person types into the native prompt and leaves it unsent; NAW cannot see that text.
+  // A new session folder is not yet trusted by Codex: answer as the person would, like their daily folders.
+  await page.locator('#terminal-area .xterm-screen').click();
+  const screenText = () => page.locator('#terminal-area .xterm-rows').innerText();
+  if (/Trust this folder/u.test(await screenText())) {
+    await page.keyboard.press('Enter');
+    await until(async () => !/Trust this folder/u.test(await screenText()), 'Native folder trust answered', 30000);
+    await sleep(2000);
+  }
+  await page.keyboard.type(UNSENT, { delay: 30 });
+  await until(async () => (await screenText()).includes(UNSENT), 'Unsent text visible in the native prompt', 20000);
+  await until(async () => (await snapshot()).sessions.find(s => s.id === first.id).terminalInputPending === true, 'Terminal input recorded as possibly unsent', 20000);
   await openSpace();
 
   // 3) Rotation: the old session writes a handoff, a new session continues, the old process exits.
@@ -436,6 +449,28 @@ async function cleanup() {
     assert.ok(oldPid && pidAlive(oldPid), 'The old native process is running before rotation');
   }
   await addItem('QUEUE_TASK_3 请只回复完成标记', first.id);
+  const logPath = path.join(profile, 'rotation-log.jsonl');
+  const logEntries = () => (fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : []);
+  if (PROVIDER === 'claude') {
+    // Claude refuses NAW's request while its prompt holds the unsent text: nothing starts, nothing fails.
+    await sleep(15000);
+    assert.equal(logEntries().length, 0, 'No rotation starts or fails while the native prompt holds unsent text');
+    assert.equal((await snapshot()).sessions.some(s => s.name === '实测甲 · 续'), false);
+    checks.push('With text typed but not sent in the native prompt, no rotation started and none was recorded as failed');
+    // The person clears the prompt; the rotation then proceeds on its own.
+    if (await page.locator('#queue-dialog').isVisible()) {
+      await page.locator('#close-queue').click();
+      await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
+    }
+    await page.locator(`#session-list .session-link[data-session-id="${first.id}"]`).click();
+    await page.locator('#terminal-tab').click();
+    await page.locator('#terminal-area .xterm-screen').waitFor();
+    await page.locator('#terminal-area .xterm-screen').click();
+    for (let n = 0; n < UNSENT.length + 2; n += 1) {
+      await page.keyboard.press('Backspace');
+    }
+    await openSpace();
+  }
   await until(async () => (await snapshot()).sessions.some(s => s.name === '实测甲 · 续'), 'New native session created', 120000);
   await until(async () => (await snapshot()).sessions.find(s => s.id === first.id).state === 'ended', 'Old native session ended', 120000);
   if (PROVIDER === 'claude') {
@@ -450,6 +485,23 @@ async function cleanup() {
   const requested = log.find(entry => entry.event === 'requested' && entry.old.id === first.id);
   assert.ok(requested, 'The rotation log records the request');
   assert.equal(requested.reason, TRIGGER);
+  assert.equal(request.text.includes(UNSENT), false, 'NAW\'s handoff request does not carry the unsent text');
+  const finished = log.find(entry => entry.event === 'done' && entry.old.id === first.id);
+  assert.ok(finished, 'The rotation finished');
+  if (finished.terminal) {
+    // A live terminal was typed into: its last screen is kept before the session ends.
+    const savedScreen = fs.readFileSync(path.join(profile, finished.terminal), 'utf8');
+    if (PROVIDER === 'claude') {
+      assert.equal(savedScreen.includes(UNSENT), false, 'The cleared prompt is not in the saved screen');
+    } else {
+      assert.ok(savedScreen.includes(UNSENT), 'The saved screen holds the text typed but not sent');
+    }
+    assert.equal(/Trust this folder/u.test(savedScreen), false, 'No terminal was reopened to read it');
+    checks.push(`Last terminal screen kept before the old session ended: ${finished.terminal}`);
+  } else {
+    assert.equal(PROVIDER, 'codex', 'A live Claude terminal is always saved');
+    checks.push('The Codex terminal was no longer open: nothing unsent remained and none was reopened');
+  }
   if (TRIGGER === 'memory') {
     const measured = /已占用约 ([\d.]+) GB 内存/u.exec(request.text);
     assert.ok(measured && Number(measured[1]) >= 0.1, 'The request names the measured footprint of the real process tree');

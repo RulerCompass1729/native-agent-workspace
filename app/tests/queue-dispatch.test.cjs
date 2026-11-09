@@ -346,6 +346,17 @@ class FakeClient extends EventEmitter {
       session.state = 'ended';
       return { state: 'ended' };
     }
+    if (method === 'terminalSnapshot') {
+      if (this.snapshotFails) {
+        throw Error('terminal unavailable');
+      }
+      if (this.terminalClosed) {
+        // As the backend answers a connection that does not own a terminal that is not open.
+        throw Object.assign(Error('closed'), { uiMessage: { key: 'error.workspace.takeTerminalControlBeforeReconnect' } });
+      }
+      // A serialized native screen: the prompt box still holds text typed but not sent.
+      return { buffer: 'Claude Code\r\n> UNSENT_DRAFT_42', cols: 80, rows: 24 };
+    }
     throw Error(`unexpected ${method}`);
   }
   reply(id, text) {
@@ -1166,4 +1177,79 @@ test('a successor that reports another permission mode with its first prompt doe
   assert.ok(client.calls.some(call => call[0] === 'stop' && call[1] === fresh.id), 'the successor is stopped');
   assert.equal(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), false, 'the old session keeps running');
   assert.equal(room.value.queue[0].assignee, 'a', 'and gets its queued work back');
+});
+
+async function rotateTypedSession(t, snapshotFails, terminalClosed = false) {
+  const notices = [];
+  const old = member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp', terminalInputPending: true });
+  const setup = dispatcherSetup(t, [old], { notify: (kind, record) => notices.push(kind) });
+  const { room, client, dispatcher, dir } = setup;
+  fakeMembership(room, client);
+  client.snapshotFails = snapshotFails;
+  client.terminalClosed = terminalClosed;
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  client.reply('a', '交接：在 feature 分支。');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  return { client, notices, dir };
+}
+
+test('before ending a session typed into, its terminal screen (an unsent prompt included) is saved', async t => {
+  const { client, notices, dir } = await rotateTypedSession(t, false);
+  assert.ok(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), 'the old session ends');
+  assert.deepEqual(notices, ['saved']);
+  const files = fs.readdirSync(path.join(dir, 'rotation-terminals'));
+  assert.equal(files.length, 1);
+  const saved = fs.readFileSync(path.join(dir, 'rotation-terminals', files[0]), 'utf8');
+  assert.match(saved, /> UNSENT_DRAFT_42/);
+  assert.equal(fs.statSync(path.join(dir, 'rotation-terminals', files[0])).mode & 0o777, 0o600);
+  const log = fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const done = log.find(entry => entry.event === 'done');
+  assert.equal(done.terminal, path.join('rotation-terminals', files[0]));
+});
+
+test('when the typed-into terminal cannot be saved, the old session is kept and the person is told', async t => {
+  const { client, notices } = await rotateTypedSession(t, true);
+  assert.equal(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), false, 'nothing typed is lost');
+  assert.deepEqual(notices, ['keptUnsaved']);
+});
+
+test('a typed-into session whose terminal is no longer open is ended without reopening it', async t => {
+  const { client, notices, dir } = await rotateTypedSession(t, false, true);
+  assert.ok(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), 'nothing unsent remains, so it ends');
+  assert.deepEqual(notices, ['done']);
+  assert.equal(fs.existsSync(path.join(dir, 'rotation-terminals')), false, 'no screen was made up');
+});
+
+test('an unsent native prompt refuses the handoff request: no failure, no notice, asked again later', async t => {
+  const notices = [];
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })], {
+    notify: (kind, record) => notices.push([kind, record.reason]),
+  });
+  fakeMembership(room, client);
+  const original = client.call.bind(client);
+  let drafts = 1;
+  client.call = async (method, ...args) => {
+    if (method === 'dispatch' && drafts > 0) {
+      drafts -= 1;
+      client.calls.push([method, ...args]);
+      throw Object.assign(Error('原生终端里还有未发送的草稿。'), { uiMessage: { key: 'error.submission.nativeDraft' } });
+    }
+    return original(method, ...args);
+  };
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.deepEqual(notices, [], 'no failure is recorded or announced');
+  assert.equal(client.calls.filter(call => call[0] === 'dispatch').length, 1);
+  advance(60000);
+  await dispatcher.schedule();
+  assert.equal(client.calls.filter(call => call[0] === 'dispatch').length, 1, 'the person is left alone for a while');
+  advance(2 * 60000);
+  await dispatcher.schedule();
+  const sends = client.sends('a');
+  assert.match(sends[sends.length - 1][2], /【NAW 换会话】/, 'asked again once the person has been quiet');
 });
