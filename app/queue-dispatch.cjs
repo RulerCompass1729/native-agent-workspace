@@ -431,8 +431,11 @@ function carrySettings(session) {
       settings.effort = native.effort;
     }
   }
+  // A Codex successor starts in chat view: a new native Codex terminal starts its thread only
+  // after native prompts (trust, sign-in) that no one is there to answer, and chat view runs no
+  // terminal process. The person's terminal tab then resumes the same thread.
   let view = 'chat';
-  if (session.view === 'terminal') {
+  if (session.provider === 'claude' && session.view === 'terminal') {
     view = 'terminal';
   }
   return { settings, view };

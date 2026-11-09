@@ -45,6 +45,9 @@ function writeCodexConfig(model, effort) {
     `base_url = "${address}/v1"`,
     'wire_api = "responses"',
     'requires_openai_auth = false',
+    // Like the person's daily folders: trusted, so a new native terminal starts without asking.
+    `[projects."${fs.realpathSync(cwd)}"]`,
+    'trust_level = "trusted"',
     '',
   ].join('\n');
   fs.writeFileSync(path.join(codexHome, 'config.toml'), text, { mode: 0o600 });
@@ -461,7 +464,11 @@ async function cleanup() {
   const successor = (await snapshot()).sessions.find(s => s.id === fresh.id);
   const successorSettings = { model: successor.model, effort: successor.nativeSettings ? successor.nativeSettings.effort : successor.nativeEffort, view: successor.view };
   assert.equal(successorSettings.model, oldSettings.model, 'The successor runs the old model, not the changed default');
-  assert.equal(successorSettings.view, oldSettings.view, 'The successor opens in the old view');
+  let expectedView = oldSettings.view;
+  if (PROVIDER === 'codex') {
+    expectedView = 'chat';
+  }
+  assert.equal(successorSettings.view, expectedView, 'Claude keeps the old view; a Codex successor starts in chat view');
   if (PROVIDER === 'codex') {
     assert.equal(successorSettings.effort, oldSettings.effort, 'The successor keeps the old reasoning effort');
   }

@@ -1062,7 +1062,7 @@ test('a successor carries the old model, effort, permission mode and view; what 
   // Like the person's older Codex records: one space in roomId, no roomIds field.
   const codex = member('c', { provider: 'codex', model: 'gpt-6.1-sol', nativeSettings: { model: 'gpt-6.1-sol', effort: 'ultra', mode: null }, roomId: 'shared', view: 'terminal' });
   delete codex.roomIds;
-  assert.deepEqual(rules.carrySettings(codex), { settings: { model: 'gpt-6.1-sol', effort: 'ultra' }, view: 'terminal' });
+  assert.deepEqual(rules.carrySettings(codex), { settings: { model: 'gpt-6.1-sol', effort: 'ultra' }, view: 'chat' }, 'a Codex successor starts in chat view');
   const planning = member('c', { provider: 'codex', nativeSettings: { model: 'gpt-6.1-sol', effort: 'high', mode: 'plan' } });
   assert.deepEqual(rules.carrySettings(planning), { reason: 'collaboration-mode' });
   const twoSpaces = member('a', { roomIds: ['shared', '308f55b3-ec97-467c-a2b8-1ecc47562029'] });

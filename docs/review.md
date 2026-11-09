@@ -49,7 +49,23 @@ minutes now count as settled, and the test uses the default settle time. Its not
 `ps`/`sysctl` off the main process's synchronous path and stopped charging a shared process
 to two sessions. Round 10 (APPROVE_WITH_NOTES) noted that keeping idle times between minute
 checks let later work skip the settle time; they are cleared again, with a test that fails
-without the fix. Not verified: the memory trigger against a real oversized session.
+without the fix. A real Claude run with a lowered 100 MB test limit then measured the real
+process tree (0.2 GB) and rotated for memory.
+Measuring the person's sessions showed resident size missing swapped memory (96% of swap
+used while macOS reported normal pressure), three of the longest sessions without a creation
+time, and rotation limited to spaces with a queue while the person asked that most long
+sessions move on. Now: footprint from `top`, macOS's own pressure level, 1 GB or 600 MB under
+pressure, the earliest timed message as the start of an unrecorded session, every space's
+members eligible, one rotation at a time (largest first). Round 12 (APPROVE_WITH_NOTES) found
+that a successor started with the provider defaults: four daily Codex sessions would have
+moved from gpt-6.1-sol to the default model, two Claude sessions would have lost their
+bypass and auto permission modes, and terminal sessions would have opened in chat view.
+Successors now start with the old model, effort, permission mode and view (`create`
+settings, capability `createSettingsV1`; resume is unchanged). NAW decides before asking for
+a handoff whether a successor can match, and a successor that reports another model is
+stopped before it gets the handoff. Its other notes: sessions in several spaces are not
+rotated, a successor rests for a day so it cannot be replaced in a loop, and last activity
+falls back to the newest timed message.
 
 **Alpha.90 final scoped review, 2026-10-23:** the GUI's native Escape path
 caused Claude's post-Stop plugin-input pause. The actual supported 310 GUI now
