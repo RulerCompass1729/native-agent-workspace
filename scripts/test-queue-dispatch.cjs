@@ -227,23 +227,36 @@ async function run() {
   await expectQuiet(5, 'A cancelled item is not sent');
   passed.push('A cancelled item was not sent');
 
+  // 5b) A member whose chat view the person has open and leaves alone still receives work.
+  if (await page.locator('#queue-dialog').isVisible()) {
+    await page.locator('#close-queue').click();
+    await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
+  }
+  await page.locator(`#session-list .session-link[data-session-id="${b}"]`).click();
+  if (await page.locator('#chat-tab').isVisible()) {
+    await page.locator('#chat-tab').click();
+  }
+  await page.evaluate(([id, text]) => workspace.spaceAction('shared', 'queueAdd', [text, id]), [b, '任务九']);
+  await expectSend(6, b, /任务九/, 'item to a member whose view is open and idle');
+  passed.push('A member whose view the person had open, but left alone, still received its item');
+
   // 6) Session rotation: an old member writes a handoff, a new member continues, the old one ends.
   await release(a, '任务五完成');
   await relaunch({ NAW_TEST_QUEUE_ROTATE_MS: '60000' });
   await openSpace();
   await addItem('任务七', a);
-  await expectSend(6, a, /【NAW 换会话】[\s\S]*只写交接/, 'handoff request to the old member');
+  await expectSend(7, a, /【NAW 换会话】[\s\S]*只写交接/, 'handoff request to the old member');
   assert.equal((await itemByText('任务七')).status, 'queued', 'The old member does not get new work');
   await release(a, '交接：在 feature-x 分支，下一步跑全量测试。');
   await until(async () => (await snapshot()).sessions.some(s => s.name === '队员甲 · 续'), 'New member created', DISPATCH_LIMIT_MS);
   const fresh = (await snapshot()).sessions.find(s => s.name === '队员甲 · 续').id;
-  await expectSend(7, fresh, /你接手「队员甲」[\s\S]*feature-x 分支/, 'handoff to the new member');
+  await expectSend(8, fresh, /你接手「队员甲」[\s\S]*feature-x 分支/, 'handoff to the new member');
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).state === 'ended', 'Old member ended');
   assert.equal((await itemByText('任务七')).assignee, fresh, 'The queue follows the new member');
   const rotated = (await events()).some(text => text.startsWith('NAW 换会话：「队员甲」的工作已交给「队员甲 · 续」'));
   assert.ok(rotated, 'rotation record in the space');
   await release(fresh, '已核对交接。');
-  await expectSend(8, fresh, /任务七/, 'queued item to the new member');
+  await expectSend(9, fresh, /任务七/, 'queued item to the new member');
   await capture('rotated');
   passed.push('An old member wrote a handoff; a new member took over its queue; the old process ended');
 

@@ -204,7 +204,7 @@ function bindClient(context) {
   client.authorizeOperation = (method, args, roomId = 'shared') => {
     if (context.background) backgroundOperation.assertDeliveryPolicy(client.snapshot(), method, args);
     // The person working in a session keeps queued NAW work out of it for a while.
-    else if (HUMAN_SESSION_METHODS.has(method) && typeof args[0] === 'string') queueDispatcher?.noteHuman(args[0]);
+    else if (HUMAN_SESSION_METHODS.has(method) && typeof args[0] === 'string' && !terminalReplyOnly(method, args)) queueDispatcher?.noteHuman(args[0]);
     if (['send', 'queue', 'queueShared', 'steerShared', 'steer', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'answer', 'draft', 'resume'].includes(method)) {
       for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'queueShared', 'steerShared', 'run'].includes(method), roomId);
     }
@@ -243,6 +243,13 @@ function reportViewStorage(warning, uiMessage = null) {
 // Space task queues: NAW sends each idle member its next item (queue-dispatch.cjs).
 let queueDispatcher = null;
 const HUMAN_SESSION_METHODS = new Set(['prepareInput', 'input', 'draft', 'send', 'queue', 'steer', 'claim', 'terminal', 'interrupt', 'approve', 'answer', 'forward', 'queueShared', 'steerShared']);
+// A terminal's own replies (focus, cursor reports) are not the person typing.
+function terminalReplyOnly(method, args) {
+  if (method !== 'input' || typeof args[1] !== 'string' || !args[1]) {
+    return false;
+  }
+  return /^(?:\x1b\[[0-9;?<>=]*[A-Za-z~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\))+$/u.test(args[1]);
+}
 async function startQueueDispatcher() {
   if (queueDispatcher || process.env.NAW_QUEUE_DISPATCH === 'off') {
     return;

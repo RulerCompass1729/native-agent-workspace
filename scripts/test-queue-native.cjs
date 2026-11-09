@@ -24,12 +24,26 @@ const config = path.join(base, 'claude');
 for (const dir of [profile, cwd, config]) {
   fs.mkdirSync(dir, { mode: 0o700 });
 }
-const binary = process.env.NAW_CLAUDE_BIN || executable('claude');
+// NAW_TEST_QUEUE_PROVIDER=codex runs the same checks against a real Codex CLI.
+const PROVIDER = process.env.NAW_TEST_QUEUE_PROVIDER || 'claude';
+assert.ok(['claude', 'codex'].includes(PROVIDER), 'claude or codex');
+const codexHome = path.join(base, 'codex');
+fs.mkdirSync(codexHome, { mode: 0o700 });
+let binary;
+if (PROVIDER === 'codex') {
+  binary = fs.realpathSync(executable('codex'));
+} else {
+  binary = process.env.NAW_CLAUDE_BIN || executable('claude');
+}
 if (!binary) {
-  throw Error('Real Claude CLI required');
+  throw Error('Real native CLI required');
 }
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.(307|308|309|310|311|316|317|318|319)\b/, 'A native version with verified chat sending');
+if (PROVIDER === 'codex') {
+  assert.match(nativeVersion, /^codex-cli 0\.(164|165|166|167)\.\d+$/, 'A Codex version NAW supports');
+} else {
+  assert.match(nativeVersion, /^2\.1\.(307|308|309|310|311|316|317|318|319)\b/, 'A native version with verified chat sending');
+}
 const RESPONSE_LIMIT = 12;
 let application;
 let page;
@@ -58,6 +72,38 @@ async function until(check, label, timeout = 90000) {
 
 function event(res, type, body) {
   res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...body })}\n\n`);
+}
+
+function lastCodexText(request) {
+  const items = Array.isArray(request.input) ? request.input : [];
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const item = items[i];
+    if (item.role !== 'user') {
+      continue;
+    }
+    const parts = [];
+    for (const part of item.content || []) {
+      if (typeof part.text === 'string') {
+        parts.push(part.text);
+      }
+    }
+    return parts.join('\n');
+  }
+  return '';
+}
+
+function codexReply(res, request, number, reply) {
+  const response = { id: `resp_local_${number}`, object: 'response', status: 'in_progress', model: request.model, output: [], usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 } };
+  const item = { id: `msg_local_${number}`, type: 'message', role: 'assistant', status: 'completed', phase: 'final_answer', content: [{ type: 'output_text', text: reply, annotations: [] }] };
+  event(res, 'response.created', { response });
+  event(res, 'response.output_item.added', { output_index: 0, item: { ...item, status: 'in_progress', content: [] } });
+  event(res, 'response.content_part.added', { output_index: 0, item_id: item.id, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } });
+  event(res, 'response.output_text.delta', { output_index: 0, item_id: item.id, content_index: 0, delta: reply });
+  event(res, 'response.output_text.done', { output_index: 0, item_id: item.id, content_index: 0, text: reply });
+  event(res, 'response.content_part.done', { output_index: 0, item_id: item.id, content_index: 0, part: item.content[0] });
+  event(res, 'response.output_item.done', { output_index: 0, item });
+  event(res, 'response.completed', { response: { ...response, status: 'completed', output: [item] } });
+  res.end();
 }
 
 function lastUserText(request) {
@@ -101,6 +147,22 @@ const server = http.createServer((req, res) => {
     body += data;
   });
   req.on('end', () => {
+    if (req.url.endsWith('/responses') && req.method === 'POST') {
+      responses += 1;
+      if (responses > RESPONSE_LIMIT) {
+        unexpected = Error('Local response budget exceeded');
+        res.writeHead(429);
+        res.end();
+        return;
+      }
+      const request = JSON.parse(body);
+      const prompt = lastCodexText(request);
+      const reply = cannedReply(prompt);
+      prompts.push({ model: request.model, prompt: prompt.slice(0, 160), reply });
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      codexReply(res, request, responses, reply);
+      return;
+    }
     if (!req.url.startsWith('/v1/messages') || req.url.includes('count_tokens')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ input_tokens: 100, data: [] }));
@@ -228,18 +290,41 @@ async function cleanup() {
   trusted[fs.realpathSync(cwd)] = { hasTrustDialogAccepted: true };
   trusted[fs.realpathSync(cwd) + '-sessions'] = { hasTrustDialogAccepted: true };
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: trusted }), { mode: 0o600 });
-  fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim }), { mode: 0o600 });
+  const address = `http://127.0.0.1:${server.address().port}`;
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local fixture"\nbase_url = "${address}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
+  const codexShim = path.join(base, 'codex-local');
+  const codexShimSource = [
+    '#!/usr/bin/python3',
+    'import os,sys',
+    'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)',
+    `os.environ.update(CODEX_HOME=${JSON.stringify(codexHome)})`,
+    `os.execv(${JSON.stringify(binary)},["codex"]+sys.argv[1:])`,
+    '',
+  ].join('\n');
+  fs.writeFileSync(codexShim, codexShimSource, { mode: 0o700 });
+  const locations = {};
+  if (PROVIDER === 'codex') {
+    locations.codex = codexShim;
+  } else {
+    locations.claude = shim;
+  }
+  fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify(locations), { mode: 0o600 });
 
   await launch();
   client = await connectService(profile, 'queue-native-test');
   await revealDefaultSpace(page);
   await page.locator('#new-session').click();
-  await page.locator('input[name="provider"][value="claude"]').check();
+  await page.locator(`input[name="provider"][value="${PROVIDER}"]`).check();
   await page.locator('#session-name').fill('实测甲');
-  await createIn(page, 'terminal');
+  if (PROVIDER === 'codex') {
+    await createIn(page, 'chat');
+  } else {
+    await createIn(page, 'terminal');
+  }
   // A fresh test config asks once to trust the folder and once to use the local key.
   const terminalText = () => page.locator('#terminal-area').innerText();
   const ready = async () => (await snapshot()).sessions.some(s => s.name === '实测甲' && s.chatAvailable);
+  if (PROVIDER === 'claude') {
   await until(async () => /Yes, I trust this folder|Do you want to use this API key/.test(await terminalText()) || await ready(), 'Native startup');
   if ((await terminalText()).includes('Yes, I trust this folder')) {
     // The same keys test-native-blocks.cjs uses for this native dialog.
@@ -255,8 +340,11 @@ async function cleanup() {
     await sleep(200);
     await page.keyboard.press('Enter');
   }
-  await until(async () => (await snapshot()).sessions.some(s => s.name === '实测甲' && s.state === 'idle' && s.chatAvailable), 'Native session ready');
-  await page.locator('#chat-tab').click();
+  }
+  await until(async () => (await snapshot()).sessions.some(s => s.name === '实测甲' && s.state === 'idle' && s.chatAvailable), 'Native session ready', 120000);
+  if (await page.locator('#chat-tab').isVisible()) {
+    await page.locator('#chat-tab').click();
+  }
   await joinSpace(page);
   const first = (await snapshot()).sessions.find(s => s.name === '实测甲');
   await openSpace();
@@ -273,10 +361,18 @@ async function cleanup() {
   assert.ok(afterFirst.messages.some(m => m.role === 'assistant' && m.text === 'QUEUE_DONE_1'), 'The native reply is in the record');
   checks.push(`A real native session got the queued item and finished it (sent ${timings.firstDispatchMs} ms, done ${Date.now() - queuedAt} ms after queuing)`);
 
-  // 2) The next item follows after the native turn ends.
-  await addItem('QUEUE_TASK_2 请只回复完成标记');
-  await until(async () => (await itemByText('QUEUE_TASK_2 请只回复完成标记')).status === 'done', 'Second item done');
-  checks.push('The next item followed after the real native turn ended');
+  // 2) With the member's real terminal open and left alone, the next item still arrives.
+  if (await page.locator('#queue-dialog').isVisible()) {
+    await page.locator('#close-queue').click();
+    await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
+  }
+  await page.locator(`#session-list .session-link[data-session-id="${first.id}"]`).click();
+  await page.locator('#terminal-tab').click();
+  await page.locator('#terminal-area .xterm-screen').waitFor();
+  await page.evaluate(text => workspace.spaceAction('shared', 'queueAdd', [text, null]), 'QUEUE_TASK_2 请只回复完成标记');
+  timings.terminalOpenDoneMs = await until(async () => (await itemByText('QUEUE_TASK_2 请只回复完成标记')).status === 'done', 'Second item done with the terminal open');
+  checks.push(`The next item followed with the member's native terminal open and idle (${timings.terminalOpenDoneMs} ms)`);
+  await openSpace();
 
   // 3) Rotation: the old session writes a handoff, a new session continues, the old process exits.
   const age = Date.now() - first.createdAt;
@@ -290,11 +386,15 @@ async function cleanup() {
   const old = (await snapshot()).sessions.find(s => s.id === first.id);
   const oldPid = old.pid;
   const oldRss = rssKb(oldPid);
-  assert.ok(oldPid && pidAlive(oldPid), 'The old native process is running before rotation');
+  if (PROVIDER === 'claude') {
+    assert.ok(oldPid && pidAlive(oldPid), 'The old native process is running before rotation');
+  }
   await addItem('QUEUE_TASK_3 请只回复完成标记', first.id);
   await until(async () => (await snapshot()).sessions.some(s => s.name === '实测甲 · 续'), 'New native session created', 120000);
   await until(async () => (await snapshot()).sessions.find(s => s.id === first.id).state === 'ended', 'Old native session ended', 120000);
-  await until(() => !pidAlive(oldPid), 'Old native process exited', 30000);
+  if (PROVIDER === 'claude') {
+    await until(() => !pidAlive(oldPid), 'Old native process exited', 30000);
+  }
   const fresh = (await snapshot()).sessions.find(s => s.name === '实测甲 · 续');
   assert.ok(fresh.messages.some(m => m.role === 'user' && typeof m.text === 'string' && m.text.includes('feature-x 分支')), 'The handoff reached the new native session');
   await until(async () => (await itemByText('QUEUE_TASK_3 请只回复完成标记')).status === 'done', 'Third item done by the new session', 120000);
@@ -304,14 +404,16 @@ async function cleanup() {
   checks.push(`Rotation: handoff written, new session continued, old process ${oldPid} exited (old ${oldRss} KB, new ${freshRss} KB)`);
 
   for (const prompt of prompts) {
-    assert.match(prompt.model, /haiku/i);
+    if (PROVIDER === 'claude') {
+      assert.match(prompt.model, /haiku/i);
+    }
   }
   assert.deepEqual(errors, []);
   if (process.env.NAW_EVIDENCE_DIR) {
     fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
     await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'queue-native.png') });
   }
-  console.log(JSON.stringify({ checks, timings, nativeVersion, localResponses: responses, paidModelCalls: 0, prompts, errors, evidence: base }));
+  console.log(JSON.stringify({ provider: PROVIDER, oldPidAlive: oldPid ? pidAlive(oldPid) : null, checks, timings, nativeVersion, localResponses: responses, paidModelCalls: 0, prompts, errors, evidence: base }));
 })().catch(async error => {
   if (page && !page.isClosed()) {
     await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {});
