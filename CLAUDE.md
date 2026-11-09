@@ -24,8 +24,8 @@ or start paid model runs as a side effect of editing documents.
   except as a member of a space whose NAW queue the person uses (automatic
   messages on): there it works on NAW dispatches (【NAW 派活】, one item to one
   member) and on what the person asks it directly; another agent may ask it only
-  about its current item (questions, reviews, handoffs), and new tasks go to the
-  person's queue. It does not claim board tasks itself (the person, 2026-11-08:
+  about its current item (questions, reviews, handoffs), and the asking agent
+  leaves new tasks for the person to queue. It does not claim board tasks itself (the person, 2026-11-08:
   agents claiming the same task by themselves). A session is such a member once
   a 【NAW 派活】 has reached it, or once the person or the secretary says so
   through NAW. The secretary and the designated integrator stay outside queue

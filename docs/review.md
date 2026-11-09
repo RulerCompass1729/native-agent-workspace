@@ -89,6 +89,23 @@ unsent prompt before its old session ended. Installed as alpha.223 on 2026-11-08
 install review approved the operator (rounds 3-7). Not verified: a probe reading a Codex
 terminal that was never opened starts one (ended with the session); saved screens have no
 retention period yet.
+The person then asked that short sessions not be replaced for their age, that NAW move old
+backends itself (「比如我有 100 个 agent 该咋办？」) and that dispatch be done well. Rotation now
+triggers on records since the last /clear (1000 Claude, 5000 Codex) or memory; a new
+"automatic migration" setting (off by default) is their standing confirmation for moves that
+would ask them. A four-lens adversarial workflow, each serious finding checked by a skeptic,
+confirmed that migration also ended sessions whose teammates, child agents, unreported
+background work or active Codex goal NAW cannot see; `migrationSafe` now checks each
+condition on its own and accepts only possibly-unsent terminal text (saved first) and Codex
+without an active goal. Review round 18 found the check ran only when the move was chosen;
+`switchBackend` takes a guard applied on fresh state before each stop, and screens are saved
+under maintenance. Round 19 found the probe then shared the window's maintenance refusal; it
+now connects to the old backend directly (round 20 APPROVE). A kept old session is no longer
+rotated again. The queue rule went to a fresh rule reviewer (bounded verdict after a turn
+limit, then two deltas, APPROVE_WITH_NOTES): membership is checkable once a dispatch arrives,
+other agents may ask a member only about its item, the secretary and integrator stay outside
+queue spaces, decisions are the final message; NAW dispatches carry the same rule because
+lane worktrees read their own branch's CLAUDE.md.
 
 **Alpha.90 final scoped review, 2026-10-23:** the GUI's native Escape path
 caused Claude's post-Stop plugin-input pause. The actual supported 310 GUI now

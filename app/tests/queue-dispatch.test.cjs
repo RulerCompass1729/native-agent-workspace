@@ -1383,6 +1383,7 @@ test('only the conversation since the last /clear counts toward the record limit
   const text = rules.dispatchText('Team', item('1'));
   assert.match(text, /不留后台命令/);
   assert.match(text, /本轮最后一条回复的第一行/);
+  assert.match(text, /不留运行中的队友/);
   assert.match(text, /不要自己去任务板认领/);
 });
 
