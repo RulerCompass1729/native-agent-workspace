@@ -78,6 +78,17 @@ session. Before ending an old session typed into since its process started, NAW 
 its terminal screen as text (`rotation-terminals/`, owner-only) and names it in the log and
 the notice; if the screen cannot be saved the old session is kept and the person is told. A
 unit test caught the first version writing to an undefined folder.
+Claude itself refuses NAW input while its prompt holds such text (`error.submission.nativeDraft`),
+so that refusal now means "the person is typing": no failure, asked again later, and a queued
+item waits instead of failing. The screen is read through a separate connection that owns
+nothing, so a closed terminal is never reopened (a run had shown a reopened Codex terminal at
+its folder-trust prompt). Rounds 16 and 17 (APPROVE) added a fresh check for every old session
+before it leaves its spaces and again before the stop. Real runs through NAW: Claude with an
+unsent prompt started no rotation until it was cleared; Codex saved a screen showing the
+unsent prompt before its old session ended. Installed as alpha.223 on 2026-11-08 after the
+install review approved the operator (rounds 3-7). Not verified: a probe reading a Codex
+terminal that was never opened starts one (ended with the session); saved screens have no
+retention period yet.
 
 **Alpha.90 final scoped review, 2026-10-23:** the GUI's native Escape path
 caused Claude's post-Stop plugin-input pause. The actual supported 310 GUI now
