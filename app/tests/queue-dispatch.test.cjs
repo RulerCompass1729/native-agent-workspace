@@ -17,6 +17,7 @@ function member(id, extra = {}) {
     name: `Agent ${id}`,
     provider: 'claude',
     nativeId: `native-${id}`,
+    model: 'claude-test-model',
     state: 'idle',
     roomIds: ['shared'],
     roomId: 'shared',
@@ -300,7 +301,7 @@ test('a refusal before sending returns the item to the queue, and fails it after
 class FakeClient extends EventEmitter {
   constructor(sessions) {
     super();
-    this.state = { sessions, rooms: [{ id: 'shared', revision: 0, run: null, messages: [] }], wakePolicy: AWAKE };
+    this.state = { sessions, rooms: [{ id: 'shared', revision: 0, run: null, messages: [] }], wakePolicy: AWAKE, capabilities: [rules.CAPABILITY, rules.CREATE_SETTINGS_CAPABILITY] };
     this.calls = [];
     this.sequence = 0;
     this.reads = 0;
@@ -332,7 +333,12 @@ class FakeClient extends EventEmitter {
       return tag;
     }
     if (method === 'create') {
-      const created = member(`new-${this.sequence}`, { name: args[0].name, createdAt: NOW, roomIds: [], roomId: null, cwd: args[0].cwd });
+      // Like the native CLIs: the requested model, or the provider default (unlike the old session's).
+      let model = 'claude-default-model';
+      if (args[0].settings && args[0].settings.model && !this.ignoreSettings) {
+        model = args[0].settings.model;
+      }
+      const created = member(`new-${this.sequence}`, { name: args[0].name, createdAt: NOW, roomIds: [], roomId: null, cwd: args[0].cwd, model, view: args[0].view });
       this.state.sessions.push(created);
       return created.id;
     }
@@ -532,6 +538,8 @@ test('an old member writes a handoff, a new member takes its queue, and the old 
   const created = client.calls.find(call => call[0] === 'create');
   assert.equal(created[1].provider, 'claude');
   assert.equal(created[1].cwd, '/tmp');
+  assert.deepEqual(created[1].settings, { model: 'claude-test-model' }, 'the successor starts with the old model');
+  assert.equal(created[1].view, 'chat');
   const newId = client.state.sessions[1].id;
   assert.equal(room.value.queue[0].assignee, newId);
   await dispatcher.schedule();
@@ -542,7 +550,9 @@ test('an old member writes a handoff, a new member takes its queue, and the old 
   assert.deepEqual(client.calls.find(call => call[0] === 'stop'), ['stop', 'a']);
   assert.deepEqual(joins, [[newId, true, 'shared'], ['a', false, 'shared']]);
   const saved = JSON.parse(fs.readFileSync(path.join(dir, 'queue-dispatch.json'), 'utf8'));
-  assert.deepEqual(saved.rotations, {});
+  assert.deepEqual(Object.keys(saved.rotations), [newId], 'only the successor rests, for a day');
+  assert.equal(saved.rotations[newId].phase, 'kept');
+  assert.equal(saved.rotations[newId].successorOf, 'a');
   client.reply(newId, '已核对交接。');
   await dispatcher.schedule();
   await dispatcher.schedule();
@@ -1039,4 +1049,95 @@ test('only one rotation runs at a time; the largest quiet session goes first', (
   // A due member that gets work while another rotation runs keeps working.
   const queued = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
   assert.deepEqual(plan(queued, [a], { rotations: running }), [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' }]);
+});
+
+test('a successor carries the old model, effort, permission mode and view; what cannot be carried is named', () => {
+  const claude = member('a', { model: 'claude-opus-5-5', nativeEffort: 'xhigh', nativePermissionMode: 'auto', view: 'terminal', roomIds: ['shared'] });
+  assert.deepEqual(rules.carrySettings(claude), { settings: { model: 'claude-opus-5-5', effort: 'xhigh', permissionMode: 'auto' }, view: 'terminal' });
+  const plain = member('a', { model: 'claude-opus-5-5', nativePermissionMode: 'default' });
+  assert.deepEqual(rules.carrySettings(plain), { settings: { model: 'claude-opus-5-5' }, view: 'chat' });
+  assert.deepEqual(rules.carrySettings(member('a', { nativePermissionMode: 'somethingNew' })), { reason: 'permission-mode' });
+  assert.deepEqual(rules.carrySettings(member('a', { model: '原生默认' })), { reason: 'model-unknown' });
+  assert.deepEqual(rules.carrySettings(member('a', { model: '原生未报告' })), { reason: 'model-unknown' });
+  // Like the person's older Codex records: one space in roomId, no roomIds field.
+  const codex = member('c', { provider: 'codex', model: 'gpt-6.1-sol', nativeSettings: { model: 'gpt-6.1-sol', effort: 'ultra', mode: null }, roomId: 'shared', view: 'terminal' });
+  delete codex.roomIds;
+  assert.deepEqual(rules.carrySettings(codex), { settings: { model: 'gpt-6.1-sol', effort: 'ultra' }, view: 'terminal' });
+  const planning = member('c', { provider: 'codex', nativeSettings: { model: 'gpt-6.1-sol', effort: 'high', mode: 'plan' } });
+  assert.deepEqual(rules.carrySettings(planning), { reason: 'collaboration-mode' });
+  const twoSpaces = member('a', { roomIds: ['shared', '308f55b3-ec97-467c-a2b8-1ecc47562029'] });
+  assert.deepEqual(rules.carrySettings(twoSpaces), { reason: 'several-spaces' });
+  // The lists match what the backend accepts.
+  const workspace = require('../workspace.cjs');
+  assert.deepEqual(rules.CLAUDE_PERMISSION_MODES, workspace.CLAUDE_PERMISSION_MODES);
+  assert.deepEqual(rules.CLAUDE_EFFORTS, workspace.CLAUDE_EFFORTS);
+});
+
+test('a successor that reports other settings is caught; last activity falls back to the newest message', () => {
+  const carry = { model: 'claude-opus-5-5', effort: 'xhigh', permissionMode: 'auto' };
+  assert.equal(rules.settingsMismatch(carry, member('n', { model: '原生默认' })), 'pending');
+  assert.equal(rules.settingsMismatch(carry, member('n', { model: 'claude-sonnet-5-5' })), 'model');
+  assert.equal(rules.settingsMismatch(carry, member('n', { model: 'claude-opus-5-5', nativePermissionMode: 'manual' })), 'permission-mode');
+  assert.equal(rules.settingsMismatch(carry, member('n', { model: 'claude-opus-5-5', nativeEffort: 'low' })), 'effort');
+  assert.equal(rules.settingsMismatch(carry, member('n', { model: 'claude-opus-5-5' })), null, 'effort and mode not reported yet');
+  const codexCarry = { model: 'gpt-6.1-sol', effort: 'ultra' };
+  assert.equal(rules.settingsMismatch(codexCarry, member('n', { provider: 'codex', nativeSettings: { model: 'gpt-6-astra', effort: 'xhigh' } })), 'model');
+  assert.equal(rules.settingsMismatch(codexCarry, member('n', { provider: 'codex', nativeSettings: { model: 'gpt-6.1-sol', effort: 'xhigh' } })), 'effort');
+  assert.equal(rules.settingsMismatch(codexCarry, member('n', { provider: 'codex', nativeSettings: { model: 'gpt-6.1-sol', effort: 'ultra' } })), null);
+  const messages = [{ role: 'user', text: 'a', time: NOW - 340 * HOUR }, { role: 'assistant', text: 'b', time: NOW - 3 * HOUR }];
+  assert.equal(rules.lastActivityOf(member('a', { lastActivityAt: NOW - HOUR, messages }), NOW), NOW - HOUR);
+  assert.equal(rules.lastActivityOf(member('a', { lastActivityAt: undefined, messages }), NOW), NOW - 3 * HOUR);
+});
+
+test('a session whose settings cannot be carried is not asked for a handoff; it keeps working and is told once', async t => {
+  const notices = [];
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp', model: '原生默认' })], {
+    notify: (kind, record) => notices.push([kind, record.reason]),
+  });
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.deepEqual(notices, [['failed', 'cannot-carry:model-unknown']]);
+  assert.equal(client.calls.some(call => call[0] === 'create'), false);
+  await dispatcher.schedule();
+  const sends = client.sends('a');
+  assert.equal(sends.length, 1);
+  assert.match(sends[0][2], /【NAW 派活】[\s\S]*next task/, 'the member simply gets its next item');
+  assert.equal(notices.length, 1);
+});
+
+test('a backend that ignores the settings gives a successor with another model: it is stopped, the old session stays', async t => {
+  const notices = [];
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })], {
+    notify: (kind, record) => notices.push([kind, record.reason]),
+  });
+  fakeMembership(room, client);
+  client.ignoreSettings = true;
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  client.reply('a', '交接：在 feature 分支。');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  const newId = client.state.sessions[1].id;
+  assert.equal(client.sends(newId).length, 0, 'no handoff reaches a successor with another model');
+  assert.deepEqual(client.calls.filter(call => call[0] === 'stop'), [['stop', newId]]);
+  assert.deepEqual(notices, [['failed', 'settings-differ:model']]);
+  assert.notEqual(client.state.sessions[0].state, 'ended', 'the old session keeps running');
+  assert.ok(client.sends('a').some(call => /【NAW 派活】[\s\S]*next task/.test(call[2])), 'and gets its queued item back');
+});
+
+test('without the backend support for carried settings no rotation starts', async t => {
+  const notices = [];
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })], {
+    notify: (kind, record) => notices.push([kind, record.reason]),
+  });
+  fakeMembership(room, client);
+  client.state.capabilities = [rules.CAPABILITY];
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.deepEqual(notices, [['failed', 'cannot-carry:backend-cannot-carry-settings']]);
+  assert.equal(client.sends('a').some(call => /【NAW 换会话】/.test(call[2])), false);
 });

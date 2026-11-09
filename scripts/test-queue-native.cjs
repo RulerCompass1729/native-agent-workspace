@@ -31,6 +31,24 @@ const PROVIDER = process.env.NAW_TEST_QUEUE_PROVIDER || 'claude';
 const TRIGGER = process.env.NAW_TEST_QUEUE_TRIGGER || 'age';
 assert.ok(['claude', 'codex'].includes(PROVIDER), 'claude or codex');
 const codexHome = path.join(base, 'codex');
+const defaultModelFile = path.join(base, 'default-model.txt');
+
+// The Codex fixture's defaults; the test changes them before rotating.
+function writeCodexConfig(model, effort) {
+  const address = `http://127.0.0.1:${server.address().port}`;
+  const text = [
+    `model = "${model}"`,
+    'model_provider = "local_fixture"',
+    `model_reasoning_effort = "${effort}"`,
+    '[model_providers.local_fixture]',
+    'name = "Local fixture"',
+    `base_url = "${address}/v1"`,
+    'wire_api = "responses"',
+    'requires_openai_auth = false',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), text, { mode: 0o600 });
+}
 fs.mkdirSync(codexHome, { mode: 0o700 });
 let binary;
 if (PROVIDER === 'codex') {
@@ -279,13 +297,18 @@ async function cleanup() {
   const fakeBin = path.join(base, 'bin');
   fs.mkdirSync(fakeBin, { mode: 0o700 });
   fs.writeFileSync(path.join(fakeBin, 'pbcopy'), `#!/bin/sh\ncat > "${base}/pbcopy-$$.txt"\n`, { mode: 0o700 });
+  fs.writeFileSync(defaultModelFile, 'haiku\n', { mode: 0o600 });
   const shimSource = [
     '#!/usr/bin/python3',
     'import os,sys',
     'os.environ.pop("ANTHROPIC_AUTH_TOKEN",None)',
     'os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN",None)',
     `os.environ.update(ANTHROPIC_BASE_URL=${JSON.stringify(`http://127.0.0.1:${server.address().port}`)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",PATH=${JSON.stringify(fakeBin)}+":"+os.environ.get("PATH",""))`,
-    `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku"])`,
+    // The default model comes from a file the test changes before rotating; NAW's own --model wins.
+    `default_model=open(${JSON.stringify(defaultModelFile)}).read().strip()`,
+    'args=sys.argv[1:]',
+    'args=args if "--model" in args else args+["--model",default_model]',
+    `os.execv(${JSON.stringify(binary)},["claude"]+args)`,
     '',
   ].join('\n');
   fs.writeFileSync(shim, shimSource, { mode: 0o700 });
@@ -293,8 +316,7 @@ async function cleanup() {
   trusted[fs.realpathSync(cwd)] = { hasTrustDialogAccepted: true };
   trusted[fs.realpathSync(cwd) + '-sessions'] = { hasTrustDialogAccepted: true };
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: trusted }), { mode: 0o600 });
-  const address = `http://127.0.0.1:${server.address().port}`;
-  fs.writeFileSync(path.join(codexHome, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local fixture"\nbase_url = "${address}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
+  writeCodexConfig('gpt-6-luna', 'low');
   const codexShim = path.join(base, 'codex-local');
   const codexShimSource = [
     '#!/usr/bin/python3',
@@ -390,6 +412,13 @@ async function cleanup() {
   }
   await application.close();
   application = null;
+  // From here the providers' defaults differ from what the old session started with, so the
+  // successor matches the old session only if NAW carried its settings.
+  if (PROVIDER === 'claude') {
+    fs.writeFileSync(defaultModelFile, 'sonnet\n');
+  } else {
+    writeCodexConfig('gpt-6-nova', 'medium');
+  }
   if (TRIGGER === 'memory') {
     await launch({ NAW_TEST_QUEUE_MEMORY_MB: '100', NAW_TEST_QUEUE_MEMORY_MIN_AGE_MS: '180000' });
   } else {
@@ -397,6 +426,7 @@ async function cleanup() {
   }
   await openSpace();
   const old = (await snapshot()).sessions.find(s => s.id === first.id);
+  const oldSettings = { model: old.model, effort: old.nativeSettings ? old.nativeSettings.effort : old.nativeEffort, view: old.view };
   const oldPid = old.pid;
   const oldRss = rssKb(oldPid);
   if (PROVIDER === 'claude') {
@@ -428,9 +458,19 @@ async function cleanup() {
   const freshRss = rssKb((await snapshot()).sessions.find(s => s.id === fresh.id).pid);
   checks.push(`Rotation: handoff written, new session continued, old process ${oldPid} exited (old ${oldRss} KB, new ${freshRss} KB)`);
 
+  const successor = (await snapshot()).sessions.find(s => s.id === fresh.id);
+  const successorSettings = { model: successor.model, effort: successor.nativeSettings ? successor.nativeSettings.effort : successor.nativeEffort, view: successor.view };
+  assert.equal(successorSettings.model, oldSettings.model, 'The successor runs the old model, not the changed default');
+  assert.equal(successorSettings.view, oldSettings.view, 'The successor opens in the old view');
+  if (PROVIDER === 'codex') {
+    assert.equal(successorSettings.effort, oldSettings.effort, 'The successor keeps the old reasoning effort');
+  }
+  checks.push(`Successor settings carried against a changed default: old ${JSON.stringify(oldSettings)}, new ${JSON.stringify(successorSettings)}`);
   for (const prompt of prompts) {
     if (PROVIDER === 'claude') {
       assert.match(prompt.model, /haiku/i);
+    } else {
+      assert.equal(prompt.model, 'gpt-6-luna', 'Every request, the successor\'s too, used the old model');
     }
   }
   assert.deepEqual(errors, []);

@@ -18,6 +18,12 @@ NativeHost.prototype.create = function (record) {
   const runtime = new EventEmitter();
   runtime.chatAvailable = true;
   runtime.start = async () => {
+    // Like a native CLI: it reports the model it was started with, else its default.
+    let model = 'fixture-model';
+    if (record.requestedSettings && record.requestedSettings.model) {
+      model = record.requestedSettings.model;
+    }
+    runtime.emit('model', model);
     runtime.emit('state', 'idle');
   };
   runtime.stop = async () => {

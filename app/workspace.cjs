@@ -35,6 +35,54 @@ const { GoalContinuation } = require('./goal-continuation-runner.cjs');
 const isPointerHover = data => /^(?:\x1b\[<\d+;\d+;\d+M)+$/.test(data) && [...data.matchAll(/\x1b\[<(\d+);/g)].every(m => (Number(m[1]) & 35) === 35);
 const isTerminalResponse = data => /^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\[\??\d+;[0-4]\$y$/.test(data) || /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data) || isPointerHover(data);
 
+// Settings a new session starts with instead of the provider defaults; NAW's session rotation
+// carries the old session's. Absent fields keep the native defaults. queue-dispatch.cjs decides
+// what it can carry from the same lists (CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS).
+const CLAUDE_PERMISSION_MODES = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
+const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,119}$/;
+const CODEX_EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
+function createSettings(provider, settings) {
+  if (settings === undefined || settings === null) {
+    return null;
+  }
+  if (typeof settings !== 'object' || Array.isArray(settings)) {
+    throw uiError("error.workspace.invalidSettings");
+  }
+  for (const key of Object.keys(settings)) {
+    if (!['model', 'effort', 'permissionMode'].includes(key)) {
+      throw uiError("error.workspace.invalidSettings");
+    }
+  }
+  const result = {};
+  if (settings.model !== undefined) {
+    if (typeof settings.model !== 'string' || !MODEL_PATTERN.test(settings.model)) {
+      throw uiError("error.workspace.invalidSettings");
+    }
+    result.model = settings.model;
+  }
+  if (settings.effort !== undefined) {
+    let valid = typeof settings.effort === 'string' && CODEX_EFFORT_PATTERN.test(settings.effort);
+    if (provider === 'claude') {
+      valid = CLAUDE_EFFORTS.includes(settings.effort);
+    }
+    if (!valid) {
+      throw uiError("error.workspace.invalidSettings");
+    }
+    result.effort = settings.effort;
+  }
+  if (settings.permissionMode !== undefined) {
+    if (provider !== 'claude' || !CLAUDE_PERMISSION_MODES.includes(settings.permissionMode)) {
+      throw uiError("error.workspace.invalidSettings");
+    }
+    result.permissionMode = settings.permissionMode;
+  }
+  if (!Object.keys(result).length) {
+    return null;
+  }
+  return result;
+}
+
 class Workspace extends EventEmitter {
   constructor(host, dataDir, newWorkspaceRoot = path.join(dataDir, 'session-workspaces')) {
     super(); this.host = host; this.dataDir = dataDir; this.newWorkspaceRoot = newWorkspaceRoot; this.sessions = new Map(); this.runtimes = new Map(); this.drafts = new Map(); this.draftRevisions = new Map();
@@ -208,8 +256,9 @@ class Workspace extends EventEmitter {
     throw Error('Unknown operator action');
   }
   operatorHuman(id) { try { this.operator.human(id); } catch { /* A failed operator journal must never block the person's input. */ } }
-  async create(provider, cwd, owner, name, view = 'chat', { fork, skipPermissions, newDirectory, gitWorktree: worktreePlan } = {}, reserve = null) {
+  async create(provider, cwd, owner, name, view = 'chat', { fork, skipPermissions, newDirectory, gitWorktree: worktreePlan, settings } = {}, reserve = null) {
     if (!['chat', 'terminal'].includes(view)) throw uiError("error.workspace.unknownView");
+    const requestedSettings = createSettings(provider, settings);
     if (skipPermissions != null && skipPermissions !== true) throw uiError("error.workspace.invalidPermissions");
     if (fork != null && (fork !== 'picker' || provider !== 'claude')) throw uiError("error.workspace.invalidBranch");
     if (newDirectory != null && newDirectory !== true) throw uiError("error.workspace.invalidNewDirectory");
@@ -245,7 +294,7 @@ class Workspace extends EventEmitter {
     }
     const id = randomUUID();
     const now = Date.now();
-    const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: sessionName, createdAt: now, lastActivityAt: now, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', modelUiMessage: uiNotice('notice.model.nativeDefault').uiMessage, usage: null, pendingTag: null, activity: '', approval: null, pid: null };
+    const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: sessionName, createdAt: now, lastActivityAt: now, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', modelUiMessage: uiNotice('notice.model.nativeDefault').uiMessage, usage: null, pendingTag: null, activity: '', approval: null, pid: null, ...(requestedSettings ? { requestedSettings } : {}) };
     if (fork) record.forkPicker = true;
     if (worktreePlan) {
       record.worktreePreparation = { ...worktreePlan, status: 'preparing' };
@@ -1666,4 +1715,4 @@ class Workspace extends EventEmitter {
   close() { this.closed = true; clearTimeout(this.saveTimer); clearInterval(this.deadlineTimer); this.persist(); this.host.close(); }
 }
 
-module.exports = { Workspace, cleanText, isTerminalResponse };
+module.exports = { Workspace, cleanText, isTerminalResponse, createSettings, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS };

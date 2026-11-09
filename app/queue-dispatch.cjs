@@ -77,6 +77,13 @@ const NOT_SENT_KEYS = [
 const ROTATION_PHASES = ['requested', 'creating', 'joining', 'created', 'handed', 'failed', 'kept'];
 // Records that only stop a member from being rotated again for a while.
 const RESTING_PHASES = ['failed', 'kept'];
+// The active backend can start a session with given settings (workspace.cjs createSettings).
+const CREATE_SETTINGS_CAPABILITY = 'createSettingsV1';
+// What a new session can be started with; must match workspace.cjs (a test compares them).
+const CLAUDE_PERMISSION_MODES = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
+const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,119}$/;
+const CODEX_EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
 // One rotation at a time: each starts a new native session, and several at once would raise
 // memory just when the machine may be short of it.
 const MAX_ACTIVE_ROTATIONS = 1;
@@ -354,6 +361,113 @@ function sessionStart(session, now) {
   return earliest;
 }
 
+// The latest sign of use: the recorded last activity, else the newest timed message.
+function lastActivityOf(session, now) {
+  if (Number.isFinite(session.lastActivityAt)) {
+    return session.lastActivityAt;
+  }
+  let latest = null;
+  for (const message of session.messages || []) {
+    const time = message ? message.time : undefined;
+    if (!Number.isFinite(time) || time < 1e12 || time > now) {
+      continue;
+    }
+    if (latest === null || time > latest) {
+      latest = time;
+    }
+  }
+  if (latest !== null) {
+    return latest;
+  }
+  return sessionStart(session, now);
+}
+
+// The model a session last reported, or null while it has reported none.
+function reportedModel(session) {
+  let model = session.model;
+  if (session.provider === 'codex' && session.nativeSettings && typeof session.nativeSettings.model === 'string') {
+    model = session.nativeSettings.model;
+  }
+  if (typeof model === 'string' && MODEL_PATTERN.test(model)) {
+    return model;
+  }
+  return null;
+}
+
+// What a successor must start with to continue like the old session: its model, effort,
+// permission mode and view. { reason } when a new session could not match it.
+function carrySettings(session) {
+  let spaces = [];
+  try {
+    spaces = roomIds(session);
+  } catch {
+    return { reason: 'spaces-unreadable' };
+  }
+  if (spaces.length > 1) {
+    return { reason: 'several-spaces' };
+  }
+  const model = reportedModel(session);
+  if (!model) {
+    return { reason: 'model-unknown' };
+  }
+  const settings = { model };
+  if (session.provider === 'claude') {
+    if (CLAUDE_EFFORTS.includes(session.nativeEffort)) {
+      settings.effort = session.nativeEffort;
+    }
+    const mode = session.nativePermissionMode;
+    if (mode && mode !== 'default') {
+      if (!CLAUDE_PERMISSION_MODES.includes(mode)) {
+        return { reason: 'permission-mode' };
+      }
+      settings.permissionMode = mode;
+    }
+  } else {
+    const native = session.nativeSettings || {};
+    if (native.mode) {
+      return { reason: 'collaboration-mode' };
+    }
+    if (typeof native.effort === 'string' && CODEX_EFFORT_PATTERN.test(native.effort)) {
+      settings.effort = native.effort;
+    }
+  }
+  let view = 'chat';
+  if (session.view === 'terminal') {
+    view = 'terminal';
+  }
+  return { settings, view };
+}
+
+// Does the new session report what it was started with? 'pending' until it reports a model.
+function settingsMismatch(carry, fresh) {
+  if (!carry) {
+    return null;
+  }
+  if (carry.model) {
+    const model = reportedModel(fresh);
+    if (!model) {
+      return 'pending';
+    }
+    if (model !== carry.model) {
+      return 'model';
+    }
+  }
+  if (fresh.provider === 'claude') {
+    if (carry.permissionMode && fresh.nativePermissionMode && fresh.nativePermissionMode !== carry.permissionMode) {
+      return 'permission-mode';
+    }
+    if (carry.effort && fresh.nativeEffort && fresh.nativeEffort !== carry.effort) {
+      return 'effort';
+    }
+  } else {
+    const native = fresh.nativeSettings || {};
+    if (carry.effort && native.effort && native.effort !== carry.effort) {
+      return 'effort';
+    }
+  }
+  return null;
+}
+
 // Why a member is due for rotation now: 'age', 'memory' or null.
 function rotationReason(session, now, options, rotations) {
   if (!['claude', 'codex'].includes(session.provider) || rotations[session.id]) {
@@ -549,10 +663,7 @@ function planDispatch(input) {
       if (!reason) {
         continue;
       }
-      let lastActivity = sessionStart(session, now);
-      if (Number.isFinite(session.lastActivityAt)) {
-        lastActivity = session.lastActivityAt;
-      }
+      const lastActivity = lastActivityOf(session, now);
       let quiet = quietMs;
       if (reason === 'memory') {
         quiet = quietMemoryMs;
@@ -1363,6 +1474,31 @@ class QueueDispatcher {
     return !(reply && reply.humanAfter);
   }
 
+  // The old session is left as it is: one record, log line and notice, then a week's rest.
+  skipRotation(session, now, reason) {
+    const record = {
+      phase: 'failed',
+      failedAt: now,
+      reason: `cannot-carry:${reason}`,
+      oldId: session.id,
+      oldNativeId: session.nativeId,
+      provider: session.provider,
+      cwd: session.cwd,
+      name: this.name(session),
+      roomIds: [],
+    };
+    try {
+      record.roomIds = roomIds(session);
+    } catch {
+      // A record that cannot be read still gets its rest.
+    }
+    this.rotations[session.id] = record;
+    this.save();
+    this.appendLog('failed', record, { reason: record.reason });
+    this.roomState.rotationEvent(record.roomIds, 'failed', this.label(session.id, record.name), record.reason);
+    this.notify('failed', record);
+  }
+
   async requestHandoff(action, bytes) {
     const current = await this.freshReady(action.sessionId);
     if (!current) {
@@ -1376,9 +1512,22 @@ class QueueDispatcher {
     }
     const reason = action.reason || 'age';
     const why = rotationWhy(reason, hours, bytes || 0);
+    // Decided before the old session is asked anything: a successor must match it.
+    const carry = carrySettings(session);
+    let refusal = carry.reason;
+    if (!refusal && !(current.snapshot.capabilities || []).includes(CREATE_SETTINGS_CAPABILITY)) {
+      refusal = 'backend-cannot-carry-settings';
+    }
+    if (refusal) {
+      this.skipRotation(session, current.now, refusal);
+      await this.broadcast();
+      return;
+    }
     const record = {
       reason,
       why,
+      carry: carry.settings,
+      view: carry.view,
       phase: 'requested',
       requestedAt: current.now,
       tag: null,
@@ -1504,9 +1653,12 @@ class QueueDispatcher {
       if (existing) {
         record.newId = existing.id;
       } else {
-        const options = { provider: record.provider, cwd: record.cwd, name, view: 'chat' };
+        const options = { provider: record.provider, cwd: record.cwd, name, view: record.view || 'chat' };
         if (record.skipPermissions) {
           options.skipPermissions = true;
+        }
+        if (record.carry) {
+          options.settings = record.carry;
         }
         record.newId = await withTimeout(this.client.call('create', options), CREATE_TIMEOUT_MS, 'create-timeout');
       }
@@ -1538,6 +1690,17 @@ class QueueDispatcher {
       }
       if (old && !this.untouched(old, record, replyAfter(old, record.tag, record.requestedAt))) {
         throw Error('person-active');
+      }
+      // The new session must report the old one's model (and, once reported, effort and mode).
+      const mismatch = settingsMismatch(record.carry, fresh);
+      if (mismatch === 'pending') {
+        if (now - (record.createdNewAt || now) > NEW_SESSION_READY_MS) {
+          throw Error('new-session-model-unreported');
+        }
+        return;
+      }
+      if (mismatch) {
+        throw Error(`settings-differ:${mismatch}`);
       }
       record.handoffTag = await this.send(fresh, handoffText(record.name, record.handoff), `rotation-handoff:${oldId}`);
       record.handedAt = now;
@@ -1604,6 +1767,10 @@ class QueueDispatcher {
       } else {
         delete this.rotations[oldId];
       }
+      // The successor is not rotated again for a day, whatever its size: no replacement loop.
+      if (validId(record.newNativeId || '')) {
+        this.rotations[record.newId] = { phase: 'kept', keptAt: now, oldNativeId: record.newNativeId, name: record.newName || record.name, roomIds: record.roomIds, successorOf: oldId };
+      }
       this.save();
       await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
       await this.broadcast();
@@ -1635,6 +1802,13 @@ module.exports = {
   processMemory,
   memoryPressure,
   sessionStart,
+  lastActivityOf,
+  reportedModel,
+  carrySettings,
+  settingsMismatch,
+  CREATE_SETTINGS_CAPABILITY,
+  CLAUDE_PERMISSION_MODES,
+  CLAUDE_EFFORTS,
   MEMORY_LIMIT_BYTES,
   PRESSURE_LIMIT_BYTES,
   MEMORY_MIN_AGE_MS,

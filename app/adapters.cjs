@@ -377,6 +377,32 @@ class Terminal extends EventEmitter {
 // Claude Code's PermissionMode values and effort levels, as hook inputs report them.
 const PERMISSION_MODES = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'];
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+// A Codex session NAW's rotation created starts with the old session's model and reasoning
+// effort: as thread/start parameters in chat view, as command options for the native terminal.
+function codexRequestedParams(record) {
+  const requested = record.requestedSettings || {};
+  const params = {};
+  if (requested.model) {
+    params.model = requested.model;
+  }
+  if (requested.effort) {
+    params.config = { model_reasoning_effort: requested.effort };
+  }
+  return params;
+}
+
+function codexRequestedArgs(record) {
+  const requested = record.requestedSettings || {};
+  const args = [];
+  if (requested.model) {
+    args.push('-m', requested.model);
+  }
+  if (requested.effort) {
+    args.push('-c', `model_reasoning_effort=${JSON.stringify(requested.effort)}`);
+  }
+  return args;
+}
 const FOLLOWED_ROOT_TRANSITIONS = { clear: 'clear', resume: 'fork' };
 // Claude's generated title is native metadata with no API: scan a bounded
 // transcript tail and extract the newest matching ai-title row.
@@ -526,7 +552,13 @@ class Claude extends EventEmitter {
     // those two, as this session's own last native reports had them.
     // A new session starts in bypass only when the person chose it at creation;
     // later launches follow what the session last reported.
-    const posture = !record.recovering ? (record.skipPermissions ? ['--permission-mode', 'bypassPermissions'] : record.operatorCreation?.permission === 'default' ? ['--permission-mode', 'default'] : []) : [
+    // A session NAW's rotation created starts with the old session's model, effort and mode.
+    const posture = !record.recovering ? [
+      ...(record.skipPermissions ? ['--permission-mode', 'bypassPermissions']
+        : record.requestedSettings?.permissionMode ? ['--permission-mode', record.requestedSettings.permissionMode]
+          : record.operatorCreation?.permission === 'default' ? ['--permission-mode', 'default'] : []),
+      ...(record.requestedSettings?.model ? ['--model', record.requestedSettings.model] : []),
+      ...(record.requestedSettings?.effort ? ['--effort', record.requestedSettings.effort] : [])] : [
       ...(record.nativePermissionMode === 'bypassPermissions' ? ['--permission-mode', 'bypassPermissions'] : []),
       ...(EFFORT_LEVELS.includes(record.nativeEffort) ? ['--effort', record.nativeEffort] : [])];
     // A picker branch opens the native session picker once and forks the chosen
@@ -1385,7 +1417,7 @@ class Codex extends EventEmitter {
     const settings = this.nativeSettings;
     const r = await rpc.call('thread/start', { cwd: this.record.cwd, ephemeral: false, experimentalRawEvents: false, dynamicTools: [require('./addressed-handoffs.cjs').codexTool],
       ...(this.record.operatorCreation?.permission === 'default' ? { approvalPolicy: 'on-request', sandbox: 'read-only' } : {}),
-      ...(this.record.skipPermissions ? { approvalPolicy: 'never', sandbox: 'danger-full-access' } : {}) });
+      ...(this.record.skipPermissions ? { approvalPolicy: 'never', sandbox: 'danger-full-access' } : {}), ...codexRequestedParams(this.record) });
     if (!current()) throw uiError("error.backendChangedStartResultIgnored");
     this.record.addressedToolVersion = 1; this.addressedSendAvailable = true;
     this.record.nativeId = r.thread.id; this.nativeSessionId = r.thread.sessionId; this.emit('workspaceMcpProof');
@@ -1423,7 +1455,7 @@ class Codex extends EventEmitter {
       this.host.pendingCodexRuntime = this;
       this.initialTerminalThread = started;
       try {
-        this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false', '-c', 'notice.hide_rate_limit_model_nudge=true', ...(this.record.skipPermissions ? ['-a', 'never', '-s', 'danger-full-access'] : []), '--remote', `unix://${endpoint}`, '-C', this.record.cwd]).once('closed', closed);
+        this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false', '-c', 'notice.hide_rate_limit_model_nudge=true', ...(this.record.skipPermissions ? ['-a', 'never', '-s', 'danger-full-access'] : []), ...codexRequestedArgs(this.record), '--remote', `unix://${endpoint}`, '-C', this.record.cwd]).once('closed', closed);
       } catch (error) { cleanup(); reject(error); }
     });
   }
