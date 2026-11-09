@@ -76,8 +76,8 @@ test('all existing OS option groups use the chosen language while raw names, pic
   assert.deepEqual(en[16].value, { title: 'NAW · Backend migration', body: 'Moved “RAW 中文 session” to the new backend; the conversations continue, and typed-into terminals were saved first.' });
   assert.deepEqual(zh[16].value, { title: 'NAW · 迁移旧后台', body: '已把「RAW 中文 session」挪到新后台，对话原样继续；终端里打过字的先存下了画面。' });
   // The sixteenth names the sessions an automatic migration that did not finish left stopped.
-  assert.deepEqual(en[15].value, { title: 'NAW · Backend migration', body: '“RAW 中文 backend names” could not move to the new backend and stopped; the conversation is kept. Click Continue native session to pick it up.' });
-  assert.deepEqual(zh[15].value, { title: 'NAW · 迁移旧后台', body: '「RAW 中文 backend names」没能挪到新后台，已经停下；对话记录都在，点「继续原生会话」就能接着用。' });
+  assert.deepEqual(en[15].value, { title: 'NAW · Backend migration', body: '“RAW 中文 backend names” could not move to the new backend and may have stopped; the conversation is kept. If it stopped, click Continue native session to pick it up.' });
+  assert.deepEqual(zh[15].value, { title: 'NAW · 迁移旧后台', body: '「RAW 中文 backend names」没能挪到新后台，可能已经停下；对话记录都在，停下的点「继续原生会话」就能接着用。' });
   // The fifteenth surface is the session-rotation notice (queue-dispatch.cjs).
   assert.deepEqual(en[14].value, { title: 'NAW · Session rotation', body: '“RAW 中文 old” handed its work to the new session “RAW 中文 new”; the old session ended and its record is kept.' });
   assert.deepEqual(zh[14].value, { title: 'NAW · 换会话', body: '「RAW 中文 old」的工作已交给新会话「RAW 中文 new」，旧会话已结束，记录保留。' });

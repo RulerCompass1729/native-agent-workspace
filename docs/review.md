@@ -120,7 +120,10 @@ presents. Failed automatic moves are logged, with a notice naming sessions left 
 move (packaged alpha.224 backend, alpha.225 window, real Claude CLI on canned local replies,
 zero paid calls) then passed: screen saved, same native session idle on the new code, the member
 answered its next space item. The backend's own refusal remains; fixing it there is a follow-up
-once no older backends run.
+once no older backends run. Review (fresh session; turn limit, then a bounded verdict):
+APPROVE_WITH_NOTES. The failure notice now says a session may have stopped, since an unconfirmed
+stop's outcome is unknown. Follow-ups: a failed record write leaves nothing named, and a later
+attempt on the same backend replaces an earlier run's record (both predate this change).
 
 **Alpha.90 final scoped review, 2026-10-23:** the GUI's native Escape path
 caused Claude's post-Stop plugin-input pause. The actual supported 310 GUI now
