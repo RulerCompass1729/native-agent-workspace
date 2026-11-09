@@ -26,6 +26,15 @@ isolated GUI `scripts/test-queue-dispatch.cjs` (synthetic transport) and
 `scripts/test-queue-native.cjs` (real Claude CLI against loopback replies, no paid
 inference). Not verified: Codex rotation with a real Codex app-server, and the memory
 saving of rotating a long-lived session (a fresh native process starts near 300 MB).
+Round 2 added: agents working through background control cannot add, cancel or resolve
+queue items (the person decides whether they may), resolving a decision is recorded, a
+kept old session is not asked to hand off again for a day, dispatch respects a connection
+being updated, and space handoff rows are not read as the person. Round 3
+(APPROVE_WITH_NOTES) notes fixed: the new member takes work as soon as its handoff is
+confirmed, the old session waits at most 30 minutes for running collaborations and is then
+kept, and capability and connection checks run before an item is marked sent. Known
+boundary: ending the old session pauses NAW's own goal continuations and peer leases, as
+ending any session by hand does.
 
 **Alpha.90 final scoped review, 2026-10-23:** the GUI's native Escape path
 caused Claude's post-Stop plugin-input pause. The actual supported 310 GUI now

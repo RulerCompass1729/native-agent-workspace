@@ -659,7 +659,7 @@ test('messages from a space handoff or NAW\'s own text are not read as the perso
   ];
   assert.equal(plan(rooms, [member('a', { messages: handoff })])[0].status, 'done');
   const replaced = [
-    { id: 'native-user', role: 'user', text: '【NAW 派活】task', time: NOW - 29000 },
+    { id: 'native-user', role: 'user', text: '<system-reminder>native note</system-reminder>\n【NAW 派活】task', time: NOW - 29000 },
     { id: 'r1', role: 'assistant', text: 'finished', time: NOW - 20000 },
   ];
   assert.equal(plan(rooms, [member('a', { messages: replaced })])[0].status, 'done');
@@ -688,16 +688,27 @@ test('a kept record expires after a day and a failed one after a week', t => {
   assert.deepEqual(Object.keys(rules.readRotations(file, NOW)), ['b']);
 });
 
-test('a connection being updated refuses the dispatch and the item goes back to the queue', async t => {
+test('a connection being updated holds the item without recording a send or using up its retries', async t => {
   const { room, client, dispatcher } = dispatcherSetup(t, [member('a')]);
+  let updating = true;
   client.operationGuard = () => () => {
-    throw Object.assign(Error('updating'), { uiMessage: { key: 'error.client.connectionUpdatingNoInput' } });
+    if (updating) {
+      throw Object.assign(Error('updating'), { uiMessage: { key: 'error.client.connectionUpdatingNoInput' } });
+    }
   };
   room.queueAdd('only task', null);
   await dispatcher.start();
+  for (let i = 0; i < 6; i += 1) {
+    dispatcher.dirty = true;
+    await dispatcher.schedule();
+  }
   assert.equal(room.value.queue[0].status, 'queued');
-  assert.equal(room.value.queue[0].attempts, 1);
+  assert.equal(room.value.queue[0].attempts, undefined);
   assert.equal(client.sends().length, 0);
+  updating = false;
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  assert.equal(client.sends().length, 1);
 });
 
 test('the old session is not stopped while a space collaboration is running', async t => {
@@ -714,4 +725,26 @@ test('the old session is not stopped while a space collaboration is running', as
   client.state.rooms[0].run = null;
   await dispatcher.schedule();
   assert.deepEqual(client.calls.filter(call => call[0] === 'stop'), [['stop', 'a']]);
+});
+
+test('while the old session waits for a collaboration, the new member already takes work, and the wait is bounded', async t => {
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })]);
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  client.reply('a', '交接：分支 abc。');
+  await dispatcher.schedule();
+  const newId = client.state.sessions[1].id;
+  await dispatcher.schedule();
+  client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] };
+  client.reply(newId, '已核对交接。');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  assert.equal(client.sends(newId).length, 2, 'the new member got the queued item during the wait');
+  assert.equal(client.calls.filter(call => call[0] === 'stop').length, 0);
+  advance(31 * 60 * 1000);
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  assert.equal(client.calls.filter(call => call[0] === 'stop').length, 0, 'never stopped while a collaboration runs');
+  assert.equal(dispatcher.rotations.a.phase, 'kept');
 });

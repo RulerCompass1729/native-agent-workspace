@@ -29,6 +29,8 @@ const QUIET_BEFORE_ROTATE_MS = 30 * 60 * 1000;
 // A new member that never becomes ready (for example a startup prompt) ends the rotation.
 const NEW_SESSION_READY_MS = 10 * 60 * 1000;
 const HANDOFF_ACCEPT_MS = 2 * 60 * 1000;
+// The old session waits at most this long for running collaborations before it is kept instead.
+const STOP_WAIT_MS = 30 * 60 * 1000;
 const FAILED_ROTATION_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 const CALL_TIMEOUT_MS = 60000;
 const CREATE_TIMEOUT_MS = 120000;
@@ -259,7 +261,7 @@ function replyAfter(session, tag, sentAt) {
     if (!after) {
       continue;
     }
-    const nawText = typeof message.text === 'string' && message.text.startsWith('【NAW ');
+    const nawText = typeof message.text === 'string' && (message.text.includes('【NAW 派活】') || message.text.includes('【NAW 换会话】'));
     if (message.role === 'user' && !AUTOMATIC_ORIGINS.includes(message.origin) && !nawText) {
       humanAfter = true;
     }
@@ -353,7 +355,7 @@ function planDispatch(input) {
     const record = rotations[id];
     if (record && !RESTING_PHASES.includes(record.phase)) {
       busy.add(id);
-      if (record.newId) {
+      if (record.newId && !record.handoffConfirmed) {
         busy.add(record.newId);
       }
     }
@@ -704,6 +706,23 @@ class QueueDispatcher {
     }
   }
 
+  // Kept records rest for a day and failed ones for a week, then the member may rotate again.
+  pruneRotations(now) {
+    let changed = false;
+    for (const id of Object.keys(this.rotations)) {
+      const record = this.rotations[id];
+      const keptOver = record.phase === 'kept' && now - (record.keptAt || 0) > ROTATE_AFTER_MS;
+      const failedOver = record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS;
+      if (keptOver || failedOver) {
+        delete this.rotations[id];
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.save();
+    }
+  }
+
   activeRotations() {
     const ids = [];
     for (const id of Object.keys(this.rotations)) {
@@ -789,6 +808,7 @@ class QueueDispatcher {
   }
 
   async tick() {
+    this.pruneRotations(this.now());
     if (!this.hasOpenWork()) {
       this.dropOwnClient();
       this.listen(null);
@@ -862,16 +882,21 @@ class QueueDispatcher {
     return { ...current, session };
   }
 
-  // The backend's own NAW input: no takeover, no human-input semantics.
-  async send(session, text, itemId) {
+  // The member's backend can take a NAW input and its connection is not being replaced.
+  preflight(session) {
     const entry = this.client.route(session.id);
     if (!entry.state.capabilities || !entry.state.capabilities.includes(CAPABILITY)) {
       throw Object.assign(Error('backend-update-needed'), { notSent: true });
     }
-    // Refuse while this connection is being updated or replaced, as the person's input is.
     if (this.client.operationGuard) {
       this.client.operationGuard(entry)();
     }
+    return entry;
+  }
+
+  // The backend's own NAW input: no takeover, no human-input semantics.
+  async send(session, text, itemId) {
+    const entry = this.preflight(session);
     const call = entry.client.call('dispatch', session.id, text, session.nativeId, itemId);
     const result = await withTimeout(call, CALL_TIMEOUT_MS, 'send-timeout');
     this.idleSince.delete(session.id);
@@ -900,7 +925,9 @@ class QueueDispatcher {
     }
     try {
       this.roomState.assertAvailable(session.id, true, room.id);
+      this.preflight(session);
     } catch {
+      // Nothing was recorded or sent; the next pass looks again.
       return;
     }
     const name = this.name(session);
@@ -1109,17 +1136,22 @@ class QueueDispatcher {
       }
       record.handoffConfirmed = true;
       this.save();
-      // Ending a session pauses running collaborations; wait until none is running.
+      // Ending a session pauses running collaborations; wait until none is running, but not forever.
+      let collaborating = false;
       for (const room of snapshot.rooms || []) {
         if (room.run && room.run.status === 'running') {
-          return;
+          collaborating = true;
         }
+      }
+      const waitedTooLong = now - (record.handedAt || now) > STOP_WAIT_MS;
+      if (collaborating && !waitedTooLong) {
+        return;
       }
       const live = old && !['ended', 'background'].includes(old.state);
       let inUse = false;
       if (live) {
         const quiet = old.state === 'idle' && !old.pendingTag;
-        inUse = !quiet || !this.untouched(old, record, replyAfter(old, record.tag, record.requestedAt));
+        inUse = collaborating || !quiet || !this.untouched(old, record, replyAfter(old, record.tag, record.requestedAt));
       }
       if (live && !inUse) {
         for (const roomId of record.roomIds) {
