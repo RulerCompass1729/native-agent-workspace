@@ -106,6 +106,21 @@ limit, then two deltas, APPROVE_WITH_NOTES): membership is checkable once a disp
 other agents may ask a member only about its item, the secretary and integrator stay outside
 queue spaces, decisions are the final message; NAW dispatches carry the same rule because
 lane worktrees read their own branch's CLAUDE.md.
+Daily use of alpha.224 with automatic migration on moved four Codex backends and left the
+Claude secretary stopped with nothing put back. Reproduced from source and live state: in the
+old backend a Claude terminal ends itself during a maintenance stop. The terminal's close reaches
+the runtime's own listener first (ended, runtime dropped) and SessionEnd revokes control once more
+(`endNativeContext`), so `stop()` refuses its own receipt; the record lacked a stopped state and
+the secretary showed 286/20 against the planned 284/18 with the native end's activity. No test
+had run the real Claude stop through the workspace. The window now accepts that refusal only for
+Claude once the session settles ended with its process gone, no new context, nothing else
+changed and both revisions moved together by one or two (a missing connection revision counts
+from zero, which the first real run found); the settled state is the proof a later put-back
+presents. Failed automatic moves are logged, with a notice naming sessions left stopped. A real
+move (packaged alpha.224 backend, alpha.225 window, real Claude CLI on canned local replies,
+zero paid calls) then passed: screen saved, same native session idle on the new code, the member
+answered its next space item. The backend's own refusal remains; fixing it there is a follow-up
+once no older backends run.
 
 **Alpha.90 final scoped review, 2026-10-23:** the GUI's native Escape path
 caused Claude's post-Stop plugin-input pause. The actual supported 310 GUI now
