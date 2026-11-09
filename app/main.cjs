@@ -271,11 +271,11 @@ async function startQueueDispatcher() {
       broadcast: broadcastRoom,
       notify: notifyRotation,
     };
-    // Only a verified isolated test run may shorten the rotation age, lower the memory limit
+    // Only a verified isolated test run may lower the record limit, the memory limit
     // (and the age a session needs before a memory rotation) or the quiet time after the person's input.
-    const testRotation = Number(process.env.NAW_TEST_QUEUE_ROTATE_MS);
-    if (backgroundTest && Number.isSafeInteger(testRotation) && testRotation > 0) {
-      options.rotateAfterMs = testRotation;
+    const testContent = Number(process.env.NAW_TEST_QUEUE_CONTENT_LIMIT);
+    if (backgroundTest && Number.isSafeInteger(testContent) && testContent > 0) {
+      options.contentLimits = { claude: testContent, codex: testContent };
     }
     const testMemory = Number(process.env.NAW_TEST_QUEUE_MEMORY_MB);
     if (backgroundTest && Number.isSafeInteger(testMemory) && testMemory > 0) {

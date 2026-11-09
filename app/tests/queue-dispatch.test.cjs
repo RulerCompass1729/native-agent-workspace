@@ -35,6 +35,15 @@ function member(id, extra = {}) {
   };
 }
 
+// A conversation with enough records to be due for a new session (rules.CONTENT_LIMITS).
+function heavyMessages(provider = 'claude') {
+  const messages = [];
+  for (let index = 0; index < rules.CONTENT_LIMITS[provider]; index += 1) {
+    messages.push({ id: `old-${index}`, role: 'assistant', text: 'earlier work' });
+  }
+  return messages;
+}
+
 function item(id, extra = {}) {
   return { id, text: `task ${id}`, assignee: null, status: 'queued', createdAt: NOW - 1000, ...extra };
 }
@@ -208,26 +217,26 @@ test('a still-working member keeps its item in flight; an unconfirmed send is fa
 
 test('a member older than the rotation age is rotated before it receives its next item', () => {
   const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
-  const old = member('a', { createdAt: NOW - 25 * HOUR });
-  assert.deepEqual(plan(rooms, [old]), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
+  const old = member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages() });
+  assert.deepEqual(plan(rooms, [old]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
   const failed = { a: { phase: 'failed' } };
   assert.deepEqual(plan(rooms, [old], { rotations: failed }), [
     { kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' },
   ]);
   // With no queue the member is still rotated: it has been quiet since it was created a day ago.
-  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [] }], [old]), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [] }], [old]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
 });
 
 test('an old, quiet space member is rotated even with no work queued; a recent conversation is not cut off', () => {
   const finished = item('1', { status: 'done', sentTo: 'a', sentAt: NOW - 2 * HOUR, tag: 't1' });
   const rooms = [{ id: 'shared', name: 'Team', queue: [finished] }];
-  const quiet = member('a', { createdAt: NOW - 25 * HOUR, lastActivityAt: NOW - 40 * 60000 });
-  assert.deepEqual(plan(rooms, [quiet]), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
-  const talking = member('a', { createdAt: NOW - 25 * HOUR, lastActivityAt: NOW - 10 * 60000 });
+  const quiet = member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages(), lastActivityAt: NOW - 40 * 60000 });
+  assert.deepEqual(plan(rooms, [quiet]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+  const talking = member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages(), lastActivityAt: NOW - 10 * 60000 });
   assert.deepEqual(plan(rooms, [talking]), []);
   const young = member('a', { createdAt: NOW - 2 * HOUR, lastActivityAt: NOW - 40 * 60000 });
   assert.deepEqual(plan(rooms, [young]), []);
-  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [] }], [quiet]), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [] }], [quiet]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
   const waiting = item('2', { status: 'waiting', sentTo: 'a', sentAt: NOW - 2 * HOUR, tag: 't2' });
   assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [waiting] }], [quiet]), []);
 });
@@ -545,7 +554,7 @@ test('an open window client is used instead of a second connection', async t => 
 });
 
 test('an old member writes a handoff, a new member takes its queue, and the old process is stopped', async t => {
-  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })]);
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
   const joins = fakeMembership(room, client);
   room.queueAdd('next task', 'a');
   await dispatcher.start();
@@ -582,7 +591,7 @@ test('an old member writes a handoff, a new member takes its queue, and the old 
 });
 
 test('the person using the old member during the handoff stops the rotation before a new session exists', async t => {
-  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })]);
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
   fakeMembership(room, client);
   room.queueAdd('next task', 'a');
   await dispatcher.start();
@@ -601,7 +610,7 @@ test('the person using the old member during the handoff stops the rotation befo
 });
 
 test('if the old member is in use when the handoff lands, it is kept running', async t => {
-  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })]);
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
   fakeMembership(room, client);
   room.queueAdd('next task', 'a');
   await dispatcher.start();
@@ -623,7 +632,7 @@ test('if the old member is in use when the handoff lands, it is kept running', a
 });
 
 test('a new member that never gets ready ends the rotation, is stopped, and the old member keeps its work', async t => {
-  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })]);
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
   fakeMembership(room, client);
   const original = client.call.bind(client);
   client.call = async (method, ...args) => {
@@ -657,7 +666,7 @@ test('a new member that never gets ready ends the rotation, is stopped, and the 
 test('after a restart mid-creation, the session already created is adopted instead of a second one', async t => {
   const { dir, room } = roomSetup(t);
   const existing = member('made', { name: 'Agent a · 续', cwd: '/tmp', createdAt: NOW - 1000, roomIds: [], roomId: null });
-  const client = new FakeClient([member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' }), existing]);
+  const client = new FakeClient([member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' }), existing]);
   fakeMembership(room, client);
   const record = { phase: 'creating', requestedAt: NOW - 60000, creatingAt: NOW - 2000, tag: 'tag-0', oldNativeId: 'native-a', oldControl: 0, provider: 'claude', cwd: '/tmp', name: 'Agent a', roomIds: ['shared'], handoff: '交接：x' };
   fs.writeFileSync(path.join(dir, 'queue-dispatch.json'), JSON.stringify({ version: 1, rotations: { a: record } }), { mode: 0o600 });
@@ -698,7 +707,7 @@ test('messages from a space handoff or NAW\'s own text are not read as the perso
 
 test('a kept old session is not asked to hand off again for a day', () => {
   const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
-  const old = member('a', { createdAt: NOW - 30 * HOUR });
+  const old = member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages() });
   const kept = { a: { phase: 'kept', keptAt: NOW - 1000, oldNativeId: 'native-a', name: 'A', roomIds: ['shared'] } };
   assert.deepEqual(plan(rooms, [old], { rotations: kept }), [
     { kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' },
@@ -743,7 +752,7 @@ test('a connection being updated holds the item without recording a send or usin
 });
 
 test('the old session is not stopped while a space collaboration is running', async t => {
-  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })]);
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
   fakeMembership(room, client);
   room.queueAdd('next task', 'a');
   await dispatcher.start();
@@ -759,7 +768,7 @@ test('the old session is not stopped while a space collaboration is running', as
 });
 
 test('while the old session waits for a collaboration, the new member already takes work, and the wait is bounded', async t => {
-  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })]);
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
   fakeMembership(room, client);
   room.queueAdd('next task', 'a');
   await dispatcher.start();
@@ -791,7 +800,7 @@ test('the person quoting NAW text is still the person; an ended old session need
 });
 
 test('a rotation whose old session already ended finishes at once even while a collaboration runs', async t => {
-  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })]);
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
   fakeMembership(room, client);
   room.queueAdd('next task', 'a');
   await dispatcher.start();
@@ -830,7 +839,7 @@ test('rotated names count up instead of piling suffixes', () => {
 
 test('a rotation is announced and logged with every session id and native id, and chains show the sessions behind one conversation', async t => {
   const notices = [];
-  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })], {
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })], {
     notify: (outcome, record) => notices.push([outcome, record.name, record.newName]),
   });
   fakeMembership(room, client);
@@ -913,8 +922,8 @@ test('memory or age, whichever comes first, makes a member due; machine pressure
   const grown = new Map([['a', 900 * 1024 * 1024]]);
   assert.deepEqual(plan(rooms, [young], { memory: grown }), [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' }]);
   assert.deepEqual(plan(rooms, [young], { memory: grown, memoryLimit: rules.PRESSURE_LIMIT_BYTES }), [{ kind: 'rotate', sessionId: 'a', reason: 'memory' }]);
-  const old = member('a', { createdAt: NOW - 25 * HOUR });
-  assert.deepEqual(plan(rooms, [old], { memory: new Map() }), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
+  const old = member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages() });
+  assert.deepEqual(plan(rooms, [old], { memory: new Map() }), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
   // A quiet member with no work is rotated for memory after 10 quiet minutes, not 30.
   const finished = [{ id: 'shared', name: 'Team', queue: [item('2', { status: 'done' })] }];
   const quiet = member('a', { lastActivityAt: NOW - 15 * 60000 });
@@ -926,18 +935,22 @@ test('memory or age, whichever comes first, makes a member due; machine pressure
   assert.deepEqual(plan(rooms, [newborn], { memory: big }), [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' }]);
 });
 
-test('members of every space are rotated once quiet; a session without a creation time uses its earliest message', () => {
+test('members of every space with a long conversation are rotated once quiet; a short one is not, however old', () => {
   const plain = [{ id: 'shared', name: 'Team' }];
-  const old = member('a', { createdAt: NOW - 25 * HOUR, lastActivityAt: NOW - 40 * 60000 });
-  assert.deepEqual(plan(plain, [old]), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
-  const recent = member('a', { createdAt: NOW - 25 * HOUR, lastActivityAt: NOW - 10 * 60000 });
+  const old = member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages(), lastActivityAt: NOW - 40 * 60000 });
+  assert.deepEqual(plan(plain, [old]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+  const recent = member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages(), lastActivityAt: NOW - 10 * 60000 });
   assert.deepEqual(plan(plain, [recent]), []);
   const archived = [{ id: 'shared', name: 'Team', archived: true }];
   assert.deepEqual(plan(archived, [old]), []);
   const messages = [{ role: 'system', text: 'x' }, { role: 'user', text: 'y', time: NOW - 340 * HOUR }, { role: 'assistant', text: 'z', time: NOW - 2 * HOUR }];
   const unrecorded = member('a', { createdAt: undefined, lastActivityAt: NOW - 40 * 60000, messages });
   assert.equal(rules.sessionStart(unrecorded, NOW), NOW - 340 * HOUR);
-  assert.deepEqual(plan(plain, [unrecorded]), [{ kind: 'rotate', sessionId: 'a', reason: 'age' }]);
+  assert.deepEqual(plan(plain, [unrecorded]), [], 'three records, two weeks old: not replaced');
+  const codexShort = member('c', { provider: 'codex', lastActivityAt: NOW - 40 * 60000, messages: heavyMessages('claude') });
+  assert.deepEqual(plan(plain, [codexShort]), [], 'Codex records every step, so 1000 records is still short for it');
+  const codexLong = member('c', { provider: 'codex', lastActivityAt: NOW - 40 * 60000, messages: heavyMessages('codex') });
+  assert.deepEqual(plan(plain, [codexLong]), [{ kind: 'rotate', sessionId: 'c', reason: 'content' }]);
   const unknown = member('a', { createdAt: undefined, lastActivityAt: NOW - 40 * 60000, messages: [{ role: 'user', text: 'y' }, { role: 'user', text: 'w', time: 1234 }] });
   assert.equal(rules.sessionStart(unknown, NOW), null);
   assert.deepEqual(plan(plain, [unknown], { memory: new Map([['a', 4 * 1024 ** 3]]) }), []);
@@ -1058,12 +1071,12 @@ test('idle times seen by a minute check are not reused: work added later still w
 test('only one rotation runs at a time; the largest quiet session goes first', () => {
   const rooms = [{ id: 'shared', name: 'Team' }];
   const quiet = { lastActivityAt: NOW - 40 * 60000 };
-  const a = member('a', { createdAt: NOW - 30 * HOUR, ...quiet });
-  const b = member('b', { createdAt: NOW - 26 * HOUR, ...quiet });
-  const c = member('c', { createdAt: NOW - 40 * HOUR, ...quiet });
+  const a = member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), ...quiet });
+  const b = member('b', { createdAt: NOW - 26 * HOUR, messages: heavyMessages(), ...quiet });
+  const c = member('c', { createdAt: NOW - 40 * HOUR, messages: heavyMessages(), ...quiet });
   const memory = new Map([['a', 200 * 1024 * 1024], ['b', 700 * 1024 * 1024], ['c', 300 * 1024 * 1024]]);
-  assert.deepEqual(plan(rooms, [a, b, c], { memory }), [{ kind: 'rotate', sessionId: 'b', reason: 'age' }]);
-  assert.deepEqual(plan(rooms, [a, b, c]), [{ kind: 'rotate', sessionId: 'c', reason: 'age' }], 'without a memory sample the oldest goes first');
+  assert.deepEqual(plan(rooms, [a, b, c], { memory }), [{ kind: 'rotate', sessionId: 'b', reason: 'content' }]);
+  assert.deepEqual(plan(rooms, [a, b, c]), [{ kind: 'rotate', sessionId: 'c', reason: 'content' }], 'without a memory sample the oldest goes first');
   const running = { x: { phase: 'requested', oldId: 'x' } };
   assert.deepEqual(plan(rooms, [a, b, c], { memory, rotations: running }), []);
   // A due member that gets work while another rotation runs keeps working.
@@ -1111,7 +1124,7 @@ test('a successor that reports other settings is caught; last activity falls bac
 
 test('a session whose settings cannot be carried is not asked for a handoff; it keeps working and is told once', async t => {
   const notices = [];
-  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp', model: '原生默认' })], {
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp', model: '原生默认' })], {
     notify: (kind, record) => notices.push([kind, record.reason]),
   });
   fakeMembership(room, client);
@@ -1129,7 +1142,7 @@ test('a session whose settings cannot be carried is not asked for a handoff; it 
 
 test('a backend that ignores the settings gives a successor with another model: it is stopped, the old session stays', async t => {
   const notices = [];
-  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })], {
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })], {
     notify: (kind, record) => notices.push([kind, record.reason]),
   });
   fakeMembership(room, client);
@@ -1150,7 +1163,7 @@ test('a backend that ignores the settings gives a successor with another model: 
 
 test('without the backend support for carried settings no rotation starts', async t => {
   const notices = [];
-  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })], {
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })], {
     notify: (kind, record) => notices.push([kind, record.reason]),
   });
   fakeMembership(room, client);
@@ -1164,7 +1177,7 @@ test('without the backend support for carried settings no rotation starts', asyn
 
 test('a successor that reports another permission mode with its first prompt does not keep the work', async t => {
   const notices = [];
-  const old = member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp', nativePermissionMode: 'auto' });
+  const old = member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp', nativePermissionMode: 'auto' });
   const { room, client, dispatcher } = dispatcherSetup(t, [old], {
     notify: (kind, record) => notices.push([kind, record.reason]),
   });
@@ -1190,7 +1203,7 @@ test('a successor that reports another permission mode with its first prompt doe
 
 async function rotateTypedSession(t, snapshotFails, terminalClosed = false, typeAfterSnapshot = false) {
   const notices = [];
-  const old = member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp', terminalInputPending: true });
+  const old = member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp', terminalInputPending: true });
   const setup = dispatcherSetup(t, [old], { notify: (kind, record) => notices.push(kind) });
   const { room, client, dispatcher, dir } = setup;
   fakeMembership(room, client);
@@ -1236,7 +1249,7 @@ test('a typed-into session whose terminal is no longer open is ended without reo
 
 test('an unsent native prompt refuses the handoff request: no failure, no notice, asked again later', async t => {
   const notices = [];
-  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })], {
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })], {
     notify: (kind, record) => notices.push([kind, record.reason]),
   });
   fakeMembership(room, client);
@@ -1272,7 +1285,7 @@ test('typing into the old terminal after its screen was saved keeps the old sess
 
 test('a session the person starts using just before the stop keeps its spaces and process', async t => {
   const notices = [];
-  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp' })], {
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })], {
     notify: (kind, record) => notices.push(kind),
   });
   const joins = fakeMembership(room, client);

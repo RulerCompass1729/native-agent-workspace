@@ -27,8 +27,8 @@ for (const dir of [profile, cwd, config]) {
 // NAW_TEST_QUEUE_PROVIDER=codex runs the same checks against a real Codex CLI.
 const PROVIDER = process.env.NAW_TEST_QUEUE_PROVIDER || 'claude';
 // NAW_TEST_QUEUE_TRIGGER=memory rotates because the real process tree is above a lowered
-// 100 MB memory limit, instead of because the session is older than a shortened age.
-const TRIGGER = process.env.NAW_TEST_QUEUE_TRIGGER || 'age';
+// 100 MB memory limit, instead of because the conversation is above a lowered record limit.
+const TRIGGER = process.env.NAW_TEST_QUEUE_TRIGGER || 'content';
 const UNSENT = 'UNSENT_DRAFT_NAW';
 assert.ok(['claude', 'codex'].includes(PROVIDER), 'claude or codex');
 const codexHome = path.join(base, 'codex');
@@ -418,7 +418,7 @@ async function cleanup() {
   // 3) Rotation: the old session writes a handoff, a new session continues, the old process exits.
   // A memory rotation needs a session at least three minutes old here: the old one is, while
   // the new one gets its first item well inside that, so it is not replaced again.
-  let minimumAge = 61000;
+  let minimumAge = 0;
   if (TRIGGER === 'memory') {
     minimumAge = 181000;
   }
@@ -438,7 +438,7 @@ async function cleanup() {
   if (TRIGGER === 'memory') {
     await launch({ NAW_TEST_QUEUE_MEMORY_MB: '100', NAW_TEST_QUEUE_MEMORY_MIN_AGE_MS: '180000' });
   } else {
-    await launch({ NAW_TEST_QUEUE_ROTATE_MS: '60000' });
+    await launch({ NAW_TEST_QUEUE_CONTENT_LIMIT: '2' });
   }
   await openSpace();
   const old = (await snapshot()).sessions.find(s => s.id === first.id);

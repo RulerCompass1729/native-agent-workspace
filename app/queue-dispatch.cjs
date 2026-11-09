@@ -24,7 +24,13 @@ const HUMAN_QUIET_MS = 2 * 60 * 1000;
 const UNCONFIRMED_SEND_MS = 120000;
 // A refusal before anything was sent returns the item to the queue at most this often.
 const NOT_SENT_ATTEMPTS = 5;
+// Kept and successor records rest this long before the session may be rotated again.
 const ROTATE_AFTER_MS = 24 * 60 * 60 * 1000;
+// A session is due for a new one when its conversation holds this many records: the person asked
+// (2026-11-08) that short sessions not be replaced just for their age. Codex records every tool step,
+// so its bar is higher. Daily sessions measured that day: heavy ones held 1768-1901 (Claude) and
+// 17k-32k (Codex) records, light ones 309-466 (Claude) and 367-1501 (Codex).
+const CONTENT_LIMITS = { claude: 1000, codex: 5000 };
 // A session whose memory footprint (with its child processes) reaches this is rotated too;
 // whichever of age and memory comes first. Footprint, like Activity Monitor's Memory column,
 // counts compressed and swapped memory that resident size misses. Footprints measured 2026-11-08:
@@ -476,17 +482,25 @@ function settingsMismatch(carry, fresh) {
   return null;
 }
 
-// Why a member is due for rotation now: 'age', 'memory' or null.
+function recordCount(session) {
+  if (Array.isArray(session.messages)) {
+    return session.messages.length;
+  }
+  return 0;
+}
+
+// Why a member is due for rotation now: 'content', 'memory' or null.
 function rotationReason(session, now, options, rotations) {
   if (!['claude', 'codex'].includes(session.provider) || rotations[session.id]) {
     return null;
   }
+  const limit = options.contentLimits ? options.contentLimits[session.provider] : undefined;
+  if (Number.isFinite(limit) && recordCount(session) >= limit) {
+    return 'content';
+  }
   const start = sessionStart(session, now);
   if (start === null) {
     return null;
-  }
-  if (options.rotateAfterMs && now - start >= options.rotateAfterMs) {
-    return 'age';
   }
   const used = options.memory ? options.memory.get(session.id) : undefined;
   if (!Number.isFinite(used) || !options.memoryLimit || used < options.memoryLimit) {
@@ -504,11 +518,11 @@ function planDispatch(input) {
   const sessions = input.sessions || [];
   const now = input.now;
   const settleMs = input.settleMs ?? IDLE_SETTLE_MS;
-  const rotateAfterMs = input.rotateAfterMs ?? ROTATE_AFTER_MS;
+  const contentLimits = input.contentLimits ?? CONTENT_LIMITS;
   const quietMs = input.quietMs ?? QUIET_BEFORE_ROTATE_MS;
   const quietMemoryMs = input.quietMemoryMs ?? QUIET_MEMORY_MS;
   const rotationOptions = {
-    rotateAfterMs,
+    contentLimits,
     memory: input.memory,
     memoryLimit: input.memoryLimit ?? MEMORY_LIMIT_BYTES,
     memoryMinAgeMs: input.memoryMinAgeMs ?? MEMORY_MIN_AGE_MS,
@@ -701,11 +715,11 @@ function dispatchText(roomName, item) {
   ].join('\n');
 }
 
-function rotationWhy(reason, hours, bytes) {
+function rotationWhy(reason, records, bytes) {
   if (reason === 'memory') {
     return `这个会话（连同它的子进程）已占用约 ${(bytes / 1073741824).toFixed(1)} GB 内存`;
   }
-  return `这个会话已经开了 ${hours} 小时以上`;
+  return `这个会话已有 ${records} 条记录，内容很多`;
 }
 
 function handoffRequestText(why) {
@@ -1048,7 +1062,7 @@ class QueueDispatcher {
     this.now = options.now || Date.now;
     this.settleMs = options.settleMs ?? IDLE_SETTLE_MS;
     this.humanQuietMs = options.humanQuietMs ?? HUMAN_QUIET_MS;
-    this.rotateAfterMs = options.rotateAfterMs ?? ROTATE_AFTER_MS;
+    this.contentLimits = options.contentLimits ?? CONTENT_LIMITS;
     this.quietMs = options.quietMs ?? QUIET_BEFORE_ROTATE_MS;
     this.tickMs = options.tickMs ?? TICK_MS;
     this.memoryLimit = options.memoryLimit ?? MEMORY_LIMIT_BYTES;
@@ -1397,7 +1411,7 @@ class QueueDispatcher {
       now: current.now,
       settleMs: this.settleMs,
       humanQuietMs: this.humanQuietMs,
-      rotateAfterMs: this.rotateAfterMs,
+      contentLimits: this.contentLimits,
       quietMs: this.quietMs,
       memory: sample.memory,
       memoryLimit: sample.limit,
@@ -1617,13 +1631,8 @@ class QueueDispatcher {
       return;
     }
     const session = current.session;
-    const start = sessionStart(session, current.now);
-    let hours = 0;
-    if (start !== null) {
-      hours = Math.floor((current.now - start) / 3600000);
-    }
-    const reason = action.reason || 'age';
-    const why = rotationWhy(reason, hours, bytes || 0);
+    const reason = action.reason || 'content';
+    const why = rotationWhy(reason, recordCount(session), bytes || 0);
     // Decided before the old session is asked anything: a successor must match it.
     const carry = carrySettings(session);
     let refusal = carry.reason;
@@ -1939,6 +1948,7 @@ module.exports = {
   IDLE_SETTLE_MS,
   HUMAN_QUIET_MS,
   ROTATE_AFTER_MS,
+  CONTENT_LIMITS,
   QUIET_BEFORE_ROTATE_MS,
   NOT_SENT_ATTEMPTS,
   validateQueue,

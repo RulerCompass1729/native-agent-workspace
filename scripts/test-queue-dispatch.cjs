@@ -242,7 +242,7 @@ async function run() {
 
   // 6) Session rotation: an old member writes a handoff, a new member continues, the old one ends.
   await release(a, '任务五完成');
-  await relaunch({ NAW_TEST_QUEUE_ROTATE_MS: '60000' });
+  await relaunch({ NAW_TEST_QUEUE_CONTENT_LIMIT: '2' });
   await openSpace();
   await addItem('任务七', a);
   await expectSend(7, a, /【NAW 换会话】[\s\S]*只写交接/, 'handoff request to the old member');
