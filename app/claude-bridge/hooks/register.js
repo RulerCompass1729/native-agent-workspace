@@ -654,8 +654,8 @@ async function bindRoot($, ownGeneration) {
     // 2.1.316 and 2.1.317: turn.abort is qualified (T-133), and so is capacity recovery, which reads the native
     // transcript and continues the session (T-32): their bundles build the same API-error row (isApiErrorMessage,
     // apiErrorStatus) and StopFailure input (prompt, session, agent, transcript) as 2.1.312, by read-only comparison;
-    // no real 529 was reproduced. 2.1.318 and 2.1.319 match too, but capacity needs abort and native blocks, which
-    // they do not have yet (they bind model-only, T-160).
+    // no real 529 was reproduced. 2.1.318 and 2.1.319 match too, but capacity needs abort, which they do not have
+    // yet (T-160 bound them model-only; T-171 added native blocks).
     nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(version),
     nativeCapacity: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(version),
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302',
@@ -1161,7 +1161,11 @@ export function register(on) {
     nativeUsageSupported = ['2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(nativeVersion);
     nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319'].includes(nativeVersion);
     nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308', '2.1.309', '2.1.310'].includes(nativeVersion)
-      : ['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(nativeVersion);
+      : ['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319'].includes(nativeVersion);
+    // 2.1.318 and 2.1.319 (T-171): native blocks too, so workspace messages have their turn identity. Their
+    // declarations differ from 2.1.317's only in declarations this mod does not use (model.fork effort, the
+    // backdrop/theme API, command results, turn attribution); their other capabilities stay as T-160 qualified
+    // them (model metadata and root binding).
     // 2.1.316 and 2.1.317 (2.1.317's engine API only adds to 2.1.316's, T-133): root binding, native
     // blocks (turn identity for workspace messages), abort, usage, model and media; queue and inline input stay off.
     contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(nativeVersion);

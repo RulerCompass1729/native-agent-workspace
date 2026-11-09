@@ -7302,3 +7302,30 @@ checks prompted the real MCP round trip and rejection cases above, and a bounded
 owned-daemon teardown. This does not qualify a provider model consuming that
 snapshot or safe recovery after a hard-killed GUI runner; unknown outcomes and
 uncertain cleanup retain their gates. Signed installed acceptance remains open.
+
+## Workspace messages from Claude Code 2.1.318 and 2.1.319 (T-171) — 2026-11-08
+
+The secretary on Claude Code 2.1.318, and every session on this machine's
+2.1.319, had workspace_message refused: native blocks, which give a workspace
+message its turn identity, listed 2.1.307 to 2.1.317 only. Both versions now
+have native blocks; T-160 had qualified them for model metadata and root
+binding only. Abort, capacity, queue, input, media, usage, turn records,
+narration and context transitions keep their own version lists and stay off.
+The engine declarations from 2.1.317 to 2.1.319 change only what this mod does
+not use. The compatibility plugin recognises main's current hook copy, so an
+existing copy upgrades.
+
+Real runs, local endpoints only, no paid calls (author-run): with main's hook,
+2.1.319 still reported workspace messaging unavailable after 15 seconds; with
+the change it was available within a second. test-native-blocks, cut off after
+its native-block checks, passed those checks on 2.1.317, 2.1.318 and 2.1.319
+alike. Its join step was stale, waiting for the old joined-space notice, and
+now uses the catalog text. A fresh headless reviewer passed the change after one
+check the author then ran: the new hook hash is main's current hook as the
+compatibility copy. Its non-blocking notes led to a usage-reading test for
+2.1.318 and 2.1.319 and a narrower comment.
+
+Unverified: a real 2.1.318 or 2.1.319 turn sending a workspace message, which
+only the unit tests and the availability run cover; prompts typed during a
+turn on these versions, measured on 2.1.316 and 2.1.317 only.
+

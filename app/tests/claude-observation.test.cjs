@@ -328,7 +328,7 @@ test('native 2.1.316: a prompt a settings hook stopped never authorizes a later 
     assert.equal(f.staged.length, 0, label);
   }
 });
-for (const version of ['2.1.316', '2.1.312']) test(`native ${version}: a prompt delivered into a running turn never heads a later turn without its own prompt`, async () => {
+for (const version of ['2.1.316', '2.1.312', '2.1.318', '2.1.319']) test(`native ${version}: a prompt delivered into a running turn never heads a later turn without its own prompt`, async () => {
   // T-100 (integration review I141 L1): a mid-turn prompt goes on but starts no turn of its own.
   const f = await addressedMod(version), first = randomUUID(), midTurn = randomUUID(), later = randomUUID();
   await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: first, prompt: 'Look at the board.' });
@@ -498,6 +498,17 @@ test('native 2.1.317 binds and stages like 2.1.316: blocks, transitions, abort, 
   await f.invoke('turn.start', { turnId: 'turn-317' });
   assert.equal((await wakeCall(f, 'call-317')).deny, undefined);
   assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['turn-317', promptId]]);
+});
+// T-171: 2.1.318 and 2.1.319 add native blocks, so a turn's workspace message has its identity. Their other
+// capabilities stay as T-160 qualified them: model metadata and root binding, no abort, capacity, queue or media.
+for (const version of ['2.1.318', '2.1.319']) test(`native ${version}: native blocks let a typed turn stage a workspace message; other capabilities stay off (T-171)`, async () => {
+  const f = await addressedMod(version), promptId = randomUUID();
+  assert.equal(f.r.nativeBlocks, true); assert.equal(f.r.addressedSendAvailable, true);
+  for (const flag of ['nativeAbortAvailable', 'nativeCapacityAvailable', 'nativeQueue', 'nativeMedia', 'nativeTurnRecords', 'nativeNarration', 'nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: 'Wake the idle peer.' });
+  await f.invoke('turn.start', { turnId: 'turn-' + version });
+  assert.equal((await wakeCall(f, 'call-' + version)).deny, undefined);
+  assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['turn-' + version, promptId]]);
 });
 test('a compat copy defers workspace_message to the mod NAW launched and still refuses in a retained process', async () => {
   // T-100: the daily shared folder kept a compat copy; Claude loads it beside
@@ -1343,7 +1354,8 @@ for (const version of ['2.1.310', '2.1.312']) test('usage metadata is read after
   assert.equal(usage[1].context.window, 200000); assert.equal(usage[1].context.tokens, undefined);
 });
 
-for (const [version, read] of [['2.1.316', true], ['2.1.317', true], ['2.1.313', false]]) test(`native ${version} ${read ? 'reads' : 'does not read'} the free status-line usage (T-133)`, async () => {
+// 2.1.318 and 2.1.319 have native blocks (T-171) but not the usage reading, which only its version list gates.
+for (const [version, read] of [['2.1.316', true], ['2.1.317', true], ['2.1.313', false], ['2.1.318', false], ['2.1.319', false]]) test(`native ${version} ${read ? 'reads' : 'does not read'} the free status-line usage (T-133)`, async () => {
   let reads = 0;
   const f = await mod({ version, usageReader: async args => { reads++; assert.equal(args, undefined, 'Only the free plain read'); return { context: { window: 200000, tokens: 1234, percent: 1 } }; } });
   const blocks = []; f.r.on('nativeBlock', row => blocks.push(row));
@@ -1724,28 +1736,29 @@ for (const version of ['2.1.316', '2.1.317']) test(`native ${version}: only a cr
 });
 
 
-// A model-only observer must not qualify any other untested native capabilities.
-for (const version of ['2.1.318', '2.1.319']) test(`${version} model-only binding updates metadata without enabling content, input, usage or control`, async () => {
+// 2.1.318 and 2.1.319 bind model metadata (T-160) and native blocks (T-171), and no other untested native capability.
+for (const version of ['2.1.318', '2.1.319']) test(`${version} binding adds native blocks to model metadata without enabling input, usage or control`, async () => {
   let binding, toolReads = 0;
   const f = await mod({ version, toolReader: async () => { toolReads++; return [{ name: 'mcp__native_workspace__workspace_message' }]; }, requestHandler: async (url, options, body) => { if (url.endsWith('/root-bind')) binding = body; } });
   assert.ok(f.poll, 'Existing input listener reaches its next poll');
-  assert.equal(toolReads, 0, 'Metadata-only binding cannot discover directed-send capability');
-  assert.equal(binding.addressedTool, false);
-  for (const key of ['nativeBlocks', 'nativeQueue', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia', 'nativeAbort', 'nativeCapacity', 'nativeSharedDisplay', 'nativeTurnRecords', 'nativeNarration']) assert.equal(binding[key], false, key);
-  assert.equal(f.r.nativeBlocks, false); assert.equal(f.r.nativeQueue, false); assert.equal(f.r.nativeAbortAvailable, false);
+  assert.ok(toolReads > 0, 'Native blocks discover the directed-send capability');
+  assert.equal(binding.nativeBlocks, true);
+  for (const key of ['nativeQueue', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia', 'nativeAbort', 'nativeCapacity', 'nativeSharedDisplay', 'nativeTurnRecords', 'nativeNarration']) assert.equal(binding[key], false, key);
+  assert.equal(f.r.nativeBlocks, true); assert.equal(f.r.nativeQueue, false); assert.equal(f.r.nativeAbortAvailable, false);
   const models = []; f.r.on('model', value => models.push(value));
   const turn = { id: 'unchanged', status: 'working' }; f.r.rootTurn = turn; f.r.nativeInputRequired = true;
   await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, to_model: 'claude-sonnet-test' });
   await new Promise(r => setImmediate(r)); await f.clock.shift()();
   assert.deepEqual(models, ['claude-sonnet-test']); assert.equal(f.r.rootTurn, turn); assert.equal(f.r.nativeInputRequired, true);
   const row = f.requests[0]; assert.equal(row.id, 'control:model');
+  // Tool rows and the heartbeat are native blocks' own content and protocol, accepted as on 2.1.317; each row
+  // below uses the next sequence, so it is refused for its own content, not for an old sequence.
   for (const change of [
-    { id: 'control:usage' }, { id: 'control:heartbeat' }, { id: 'control:turn-start', turnId: 'fake' },
-    { id: 'tool:fake', kind: 'tool', text: 'not qualified' }, { id: 'display:fake', kind: 'text', text: 'not qualified' },
+    { id: 'control:usage' }, { id: 'control:turn-start', turnId: 'fake' }, { id: 'display:fake', kind: 'text', text: 'not qualified' },
     { kind: 'input', id: 'prompt:fake', text: 'not qualified' }, { model: 'bad\nmodel' }, { status: 'running' },
     { epoch: 'old' }, { lease: 'old' }, { sessionId: randomUUID() },
-  ]) assert.throws(() => f.r.observeBlock({ ...row, sequence: 2, ...change }), /Invalid/);
-  f.r.observeBlock({ ...row, sequence: 2, model: 'claude-old', replayed: true });
+  ]) assert.throws(() => f.r.observeBlock({ ...row, sequence: f.r.rootObservation.sequence + 1, ...change }), /Invalid/);
+  f.r.observeBlock({ ...row, sequence: f.r.rootObservation.sequence + 1, model: 'claude-old', replayed: true });
   f.r.hook({ hook_event_name: 'SessionStart', session_id: f.r.record.nativeId, model: 'old-startup' });
   assert.deepEqual(models, ['claude-sonnet-test']);
   await f.invoke('classic.PostModelSwitch', { session_id: randomUUID(), to_model: 'child-model' });

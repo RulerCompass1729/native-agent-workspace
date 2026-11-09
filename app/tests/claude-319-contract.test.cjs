@@ -45,7 +45,8 @@ test('T160 diagnostic: qualified 318 model-only cold start still binds and reads
   const f = await startup('2.1.318');
   assert.equal(f.calls[0]?.route, '/root-bind');
   assert.equal(f.modelReads.length, 1);
-  assert.equal(f.calls.find(c => c.route === '/root-bind').body.nativeBlocks, false);
+  // T-171: native blocks too, so workspace messages have their turn identity.
+  assert.equal(f.calls.find(c => c.route === '/root-bind').body.nativeBlocks, true);
   assert.ok(f.calls.some(c => c.route === '/next'));
   assert.ok(f.calls.every(c => ['/root-bind', '/next', '/observe'].includes(c.route)));
   t.diagnostic(JSON.stringify({ version: '2.1.318', observedMockRoutes: f.calls.map(c => c.route), modelMetadataReads: f.modelReads.length, realProviderCalls: false }));
@@ -56,7 +57,8 @@ test('qualified 319 model-only cold start binds and reads its initial native mod
   assert.equal(f.calls[0]?.route, '/root-bind');
   assert.equal(f.modelReads.length, 1);
   const binding = f.calls[0].body;
-  for (const key of ['nativeBlocks', 'nativeQueue', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia', 'nativeAbort', 'nativeCapacity', 'nativeSharedDisplay', 'nativeTurnRecords', 'nativeNarration']) assert.equal(binding[key], false, key);
+  assert.equal(binding.nativeBlocks, true, 'T-171: native blocks for workspace message turn identity');
+  for (const key of ['nativeQueue', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia', 'nativeAbort', 'nativeCapacity', 'nativeSharedDisplay', 'nativeTurnRecords', 'nativeNarration']) assert.equal(binding[key], false, key);
   t.diagnostic(JSON.stringify({ version: '2.1.319', observedMockRoutes: f.calls.map(c => c.route), modelMetadataReads: f.modelReads.length, realProviderCalls: false }));
 });
 

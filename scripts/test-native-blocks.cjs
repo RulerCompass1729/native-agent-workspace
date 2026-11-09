@@ -1,5 +1,6 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
+const { textPattern } = require('./fixtures/ui-text.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real Electron + real Claude CLI; canned responses are served on loopback.
 // No paid inference, user profile edits, global keyboard input, or foregrounding.
@@ -342,7 +343,7 @@ async function cleanup() {
   }
   // Joining is 加入此空间 in the session's ⋯ menu; close its 撤销加入 notice as a person would.
   await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入此空间', exact: true }).click();
-  await page.locator('#toast-text', { hasText: '已加入' }).waitFor(); await page.locator('#toast-close').click();
+  await page.locator('#toast-text', { hasText: textPattern('toast.joinedSpace') }).waitFor(); await page.locator('#toast-close').click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await inlineRecipient(page, before.id);
   await fillRoomMessage(page, 'Run the local check.'); await page.locator('#forward-button').click();
