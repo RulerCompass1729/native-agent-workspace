@@ -1152,8 +1152,9 @@ class QueueDispatcher {
       if (!watching || now - this.lastMaintenance < MAINTENANCE_MS) {
         if (!watching) {
           this.listen(null);
-          this.idleSince.clear();
         }
+        // Idle times seen by the minute check go stale until the next one; queued work starts fresh.
+        this.idleSince.clear();
         this.dirty = true;
         return;
       }
