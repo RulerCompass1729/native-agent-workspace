@@ -436,7 +436,9 @@ function transcriptModel(session, root, maxBytes = TRANSCRIPT_TAIL_BYTES) {
   } catch {
     return null;
   }
-  // From the end: the first line may be cut off, and synthetic entries carry no real model.
+  // From the end: the first line may be cut off, and synthetic entries carry no real model. Only the
+  // session's own main conversation counts, as NAW's Claude reader filters (adapters.cjs): not a
+  // subagent's row or another session's.
   const lines = text.split('\n');
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     if (!lines[i].includes('"assistant"')) {
@@ -448,7 +450,8 @@ function transcriptModel(session, root, maxBytes = TRANSCRIPT_TAIL_BYTES) {
     } catch {
       continue;
     }
-    const model = entry && entry.type === 'assistant' && entry.message ? entry.message.model : null;
+    const own = entry && entry.type === 'assistant' && entry.sessionId === session.nativeId && entry.isSidechain === false;
+    const model = own && entry.message ? entry.message.model : null;
     if (typeof model === 'string' && MODEL_PATTERN.test(model)) {
       return model;
     }
@@ -1230,6 +1233,8 @@ class QueueDispatcher {
     this.transcriptRoot = options.transcriptRoot || path.join(os.homedir(), '.claude', 'projects');
     // Sessions whose model is known nowhere yet: asked again after a while, never rested for a week.
     this.unknownModelAt = new Map();
+    // Each waits once in the log per app run, so a session that never reports is still traceable.
+    this.loggedWaiting = new Set();
     this.memoryLimit = options.memoryLimit ?? MEMORY_LIMIT_BYTES;
     this.pressureLimit = options.pressureLimit ?? PRESSURE_LIMIT_BYTES;
     this.memoryMinAgeMs = options.memoryMinAgeMs ?? MEMORY_MIN_AGE_MS;
@@ -1803,6 +1808,16 @@ class QueueDispatcher {
     if (carry.reason === 'model-unknown') {
       // Its next turn reports the model; until then the session simply keeps working.
       this.unknownModelAt.set(session.id, current.now);
+      if (!this.loggedWaiting.has(session.id)) {
+        this.loggedWaiting.add(session.id);
+        let spaces = [];
+        try {
+          spaces = roomIds(session);
+        } catch {
+          // The line is still written without its spaces.
+        }
+        this.appendLog('waiting', { oldId: session.id, oldNativeId: session.nativeId, name: this.name(session), roomIds: spaces }, { reason: 'model-unknown' });
+      }
       return;
     }
     let refusal = carry.reason;

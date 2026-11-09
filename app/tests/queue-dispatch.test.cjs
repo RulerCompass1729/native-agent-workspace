@@ -1140,6 +1140,9 @@ test('a session whose model is known nowhere is not asked for a handoff or told;
   assert.equal(sends.length, 1);
   assert.match(sends[0][2], /【NAW 派活】[\s\S]*next task/, 'the member simply gets its next item');
   assert.ok(dispatcher.waitingModel(NOW).has('a'), 'passed over while waiting');
+  const waits = dispatcher.rotationEntries().filter(entry => entry.event === 'waiting');
+  assert.equal(waits.length, 1, 'one log line, however often it is asked');
+  assert.deepEqual([waits[0].old.id, waits[0].reason], ['a', 'model-unknown']);
   advance(11 * 60 * 1000);
   assert.equal(dispatcher.waitingModel(NOW + 11 * 60 * 1000).has('a'), false, 'considered again after ten minutes');
 });
@@ -1156,14 +1159,18 @@ test('a Claude transcript gives the model its session last used, read from the e
   const cwd = '/tmp/Native Agent Workspace/work_1';
   const session = { provider: 'claude', nativeId: TRANSCRIPT_ID, cwd };
   assert.equal(rules.transcriptModel(session, root), null, 'no transcript');
+  const own = { sessionId: TRANSCRIPT_ID, isSidechain: false };
   transcriptAt(root, cwd, [
+    { type: 'assistant', ...own, message: { model: 'claude-sonnet-5-5', content: [] } },
+    { type: 'user', ...own, message: { content: 'x' } },
+    { type: 'assistant', ...own, message: { model: 'claude-opus-5-5', content: [] } },
+    { type: 'assistant', ...own, message: { model: '<synthetic>', content: [] } },
+    { type: 'assistant', sessionId: TRANSCRIPT_ID, isSidechain: true, message: { model: 'claude-haiku-5-5', content: [] } },
+    { type: 'assistant', sessionId: '00000000-0000-4000-8000-000000000000', isSidechain: false, message: { model: 'claude-sonnet-5-5', content: [] } },
     { type: 'assistant', message: { model: 'claude-sonnet-5-5', content: [] } },
-    { type: 'user', message: { content: 'x' } },
-    { type: 'assistant', message: { model: 'claude-opus-5-5', content: [] } },
-    { type: 'assistant', message: { model: '<synthetic>', content: [] } },
     '{"type":"assistant","message":{"model":"cut off',
   ]);
-  assert.equal(rules.transcriptModel(session, root), 'claude-opus-5-5', 'the last real model; synthetic and broken lines are skipped');
+  assert.equal(rules.transcriptModel(session, root), 'claude-opus-5-5', 'the last model of its own main conversation; subagent, other-session, unmarked, synthetic and broken lines are skipped');
   assert.equal(rules.transcriptModel(session, root, 120), null, 'only the end is read');
   assert.equal(rules.transcriptModel({ ...session, provider: 'codex' }, root), null);
   assert.equal(rules.transcriptModel({ ...session, nativeId: '../escape' }, root), null);
@@ -1171,7 +1178,7 @@ test('a Claude transcript gives the model its session last used, read from the e
 test('a resumed Claude session whose model is unreported continues with the model its transcript last used', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-transcripts-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  transcriptAt(root, '/tmp', [{ type: 'assistant', message: { model: 'claude-opus-5-5', content: [] } }]);
+  transcriptAt(root, '/tmp', [{ type: 'assistant', sessionId: TRANSCRIPT_ID, isSidechain: false, message: { model: 'claude-opus-5-5', content: [] } }]);
   const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { nativeId: TRANSCRIPT_ID, createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp', model: '原生未报告' })], {
     transcriptRoot: root,
   });
@@ -1207,6 +1214,24 @@ test('a larger session waiting for its model does not hold back the next one in 
   assert.equal(client.sends('a').length, 0, 'the one without a known model is not asked');
   assert.match((client.sends('b')[0] || [])[2] || '', /【NAW 换会话】[\s\S]*只写交接/, 'the next one is asked for its handoff');
 });
+test('a session asked again after its ten minutes, its model still unknown, is logged as waiting only once', async t => {
+  const holder = {};
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, lastActivityAt: NOW - 2 * HOUR, messages: heavyMessages(), cwd: '/tmp', model: '原生默认' })], {
+    clients: () => holder.client,
+    sampleProcesses: async () => '',
+    samplePressure: async () => '1\n',
+    transcriptRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'naw-transcripts-')),
+  });
+  holder.client = client;
+  fakeMembership(room, client);
+  await dispatcher.start();
+  await dispatcher.schedule();
+  advance(11 * 60 * 1000);
+  await dispatcher.schedule();
+  assert.equal(dispatcher.unknownModelAt.get('a'), NOW + 11 * 60 * 1000, 'asked again once its ten minutes passed');
+  assert.equal(dispatcher.rotationEntries().filter(entry => entry.event === 'waiting').length, 1);
+  assert.equal(client.sends('a').length, 0);
+});
 test('the planner passes over a session waiting for its model and takes the next one', () => {
   const rooms = [{ id: 'shared', name: 'Team', queue: [] }];
   const big = member('a', { createdAt: NOW - 30 * HOUR, lastActivityAt: NOW - 2 * HOUR, messages: heavyMessages() });
@@ -1219,7 +1244,7 @@ test('a week of rest recorded for an unknown model before this fix is dropped, s
   const { dir, room } = roomSetup(t);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-transcripts-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  transcriptAt(root, '/tmp', [{ type: 'assistant', message: { model: 'claude-opus-5-5', content: [] } }]);
+  transcriptAt(root, '/tmp', [{ type: 'assistant', sessionId: TRANSCRIPT_ID, isSidechain: false, message: { model: 'claude-opus-5-5', content: [] } }]);
   const client = new FakeClient([member('a', { nativeId: TRANSCRIPT_ID, createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp', model: '原生未报告' })]);
   fakeMembership(room, client);
   const resting = { phase: 'failed', failedAt: NOW - HOUR, reason: 'cannot-carry:model-unknown', oldId: 'a', oldNativeId: TRANSCRIPT_ID, provider: 'claude', cwd: '/tmp', name: 'Agent a', roomIds: ['shared'] };
