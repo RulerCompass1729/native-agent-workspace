@@ -545,6 +545,10 @@ async function cleanup() {
   const first = (await snapshot()).sessions[0];
   const sharedFinal = (await snapshot()).room.messages.filter(m => m.role === 'assistant' && m.text.includes('NATIVE_FINAL:'));
   assert.equal(sharedFinal.length, 1); assert.equal(sharedFinal[0].finalReply, true);
+  // The reply NAW shows is the native reply to the exact message NAW forwarded, not blank (display proof path).
+  const forwarded = (await snapshot()).room.messages.filter(m => m.role === 'human' && m.text === 'Run the local check.');
+  assert.equal(forwarded.length, 1); assert.equal(sharedFinal[0].replyTo, forwarded[0].id);
+  assert.ok(sharedFinal[0].text.replace('NATIVE_FINAL:', '').trim().length > 0, 'The shared final reply carries its text');
   assert.equal(first.messages.filter(m => m.text.includes('NATIVE_FINAL:')).length, 1);
   assert.equal(first.messages.filter(m => m.text.includes('NATIVE_FIRST:')).length, 1);
   assert.equal(first.nativeId, before.nativeId); assert.equal(first.pid, before.pid);
