@@ -617,6 +617,14 @@ async function autoBackendSwitch() {
     autoSwitchRunning = false;
   }
 }
+// Only a verified isolated test run may shorten how long sessions stay quiet before a migration.
+function migrateQuietMs() {
+  const test = Number(process.env.NAW_TEST_MIGRATE_QUIET_MS);
+  if (backgroundTest && Number.isSafeInteger(test) && test >= 0) {
+    return test;
+  }
+  return queueRules.MIGRATE_QUIET_MS;
+}
 async function autoBackendSwitchOnce() {
   const settings = backendSwitch.readSettings(dataDir);
   if (quitting || backendSwitching || !(settings.auto || settings.migrate)) return;
@@ -629,13 +637,14 @@ async function autoBackendSwitchOnce() {
     humanAt = queueDispatcher.humanAt;
   }
   const options = connectionUpdateOptions(c.client, app.getVersion(), roomState);
-  const option = queueRules.nextBackendMove(options, settings, sessions, humanAt, Date.now(), autoSwitchFailed);
+  const option = queueRules.nextBackendMove(options, settings, sessions, humanAt, Date.now(), autoSwitchFailed, migrateQuietMs());
   if (!option) return;
   // A move made under the person's migration setting rather than proven automatic updates.
   const viaMigration = !(settings.auto && option.switch.auto);
   let notice;
+  const screens = [];
+  const startedAt = Date.now();
   try {
-    const screens = [];
     const extra = {};
     if (!option.switch.auto) {
       // Under maintenance first, so no NAW input starts a turn while the screens are saved.
@@ -658,7 +667,7 @@ async function autoBackendSwitchOnce() {
         }
       };
       // Teammates, children, background work or a goal that started meanwhile stop the move.
-      extra.guard = record => backendSwitch.migrationSafe(record) && queueRules.quietFor(record, humanAt, Date.now(), queueRules.MIGRATE_QUIET_MS);
+      extra.guard = record => backendSwitch.migrationSafe(record) && queueRules.quietFor(record, humanAt, Date.now(), migrateQuietMs());
     }
     const result = await runBackendSwitch(c, option, option.switch.auto === true, extra);
     notice = { resumed: result.resumed.length, left: result.left.length, reconnectFailed: result.reconnectFailed };
@@ -667,7 +676,11 @@ async function autoBackendSwitchOnce() {
     }
   }
   // A failed automatic move is not retried in this app run; the person can still click.
-  catch (error) { autoSwitchFailed.add(option.backendKey); notice = { error: error.message || '后台更新未完成。', errorUiMessage: error.message ? uiLocale.displayMessage(error.uiMessage) : uiError('error.backendAutoUpdateIncomplete').uiMessage }; }
+  catch (error) {
+    autoSwitchFailed.add(option.backendKey);
+    notice = { error: error.message || '后台更新未完成。', errorUiMessage: error.message ? uiLocale.displayMessage(error.uiMessage) : uiError('error.backendAutoUpdateIncomplete').uiMessage };
+    recordMigrationFailure(option, screens, error, startedAt);
+  }
   for (const context of windows.values()) if (!context.win.isDestroyed()) context.win.webContents.send('workspace:backend-switched', notice);
 }
 let backendSwitchTimer;
@@ -1327,12 +1340,44 @@ function notifyRotation(outcome, record) {
     // The space record and the rotation log remain when OS delivery fails.
   }
 }
+// An automatic move that did not finish goes to the same log. Sessions this attempt left stopped are
+// named there and in an OS notice, since only the person's click continues them.
+function recordMigrationFailure(option, screens, error, startedAt) {
+  const stops = option.switch.stops || [];
+  const record = backendSwitch.readRecords(dataDir)[option.backendKey];
+  let stopped = [];
+  if (record && record.phase === 'stopped' && record.failedAt >= startedAt) {
+    stopped = record.sessions.map(value => ({ id: value.id, nativeId: value.nativeId || null, name: value.name }));
+  }
+  const failed = (error && error.uiMessage && error.uiMessage.key) || 'unknown';
+  const entry = { time: Date.now(), backend: option.backendKey, sessions: stops.map(stop => ({ id: stop.id, nativeId: stop.nativeId || null, name: stop.name })), screens, failed, stopped };
+  try {
+    fs.appendFileSync(path.join(dataDir, 'backend-migrations.jsonl'), JSON.stringify(entry) + '\n', { mode: 0o600 });
+  } catch {
+    // The notice still goes out when the private log cannot be written.
+  }
+  if (!stopped.length) {
+    return;
+  }
+  try {
+    if (!Notification.isSupported()) {
+      return;
+    }
+    const names = stopped.map(value => value.name).join('、');
+    const notification = new Notification({ title: displayText('os.migrationTitle'), body: displayText('os.migrationStoppedBody', { names }) });
+    notification.once('click', () => focusOrOpen());
+    notification.show();
+  } catch {
+    // The private log remains when OS delivery fails.
+  }
+}
 // Migrations NAW made without a click: an append-only private log and an OS notice.
 function recordMigration(option, screens, result) {
   const stops = option.switch.stops || [];
   const left = (result && result.left) || [];
   const partial = left.length > 0 || Boolean(result && result.reconnectFailed);
-  const entry = { time: Date.now(), backend: option.backendKey, sessions: stops.map(stop => ({ id: stop.id, nativeId: stop.nativeId || null, name: stop.name })), screens, left: left.length, reconnectFailed: Boolean(result && result.reconnectFailed) };
+  const confirmedByState = (result && result.confirmedByState) || [];
+  const entry = { time: Date.now(), backend: option.backendKey, sessions: stops.map(stop => ({ id: stop.id, nativeId: stop.nativeId || null, name: stop.name })), screens, left: left.length, reconnectFailed: Boolean(result && result.reconnectFailed), confirmedByState };
   try {
     fs.appendFileSync(path.join(dataDir, 'backend-migrations.jsonl'), JSON.stringify(entry) + '\n', { mode: 0o600 });
   } catch {

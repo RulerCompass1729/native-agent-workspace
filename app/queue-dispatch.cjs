@@ -1036,7 +1036,7 @@ function quietFor(session, humanAt, now, ms) {
 // The next old backend NAW moves by itself. With automatic updates on, a move the runtime proved
 // safe; with migration on (the person's standing confirmation), also a move that needs it, once
 // every session it stops has been quiet for a while.
-function nextBackendMove(options, settings, sessions, humanAt, now, failed) {
+function nextBackendMove(options, settings, sessions, humanAt, now, failed, quietMs = MIGRATE_QUIET_MS) {
   for (const option of options) {
     const plan = option.switch;
     if (!plan || !plan.ready || failed.has(option.backendKey)) {
@@ -1059,7 +1059,7 @@ function nextBackendMove(options, settings, sessions, humanAt, now, failed) {
       if (!plan.auto && !backendSwitch.migrationSafe(session)) {
         allowed = false;
       }
-      if (!quietFor(session, humanAt, now, MIGRATE_QUIET_MS)) {
+      if (!quietFor(session, humanAt, now, quietMs)) {
         allowed = false;
       }
     }

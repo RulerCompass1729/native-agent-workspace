@@ -183,10 +183,41 @@ async function waitGone(directory, pid, identity, ms = 15000) {
   }
   throw uiError("error.backendSwitchOldPending");
 }
+// A backend refuses its own receipt when a Claude terminal stops (seen on alpha.220, same code since):
+// the terminal's close reaches the runtime's own listener first, which ends the session and drops the
+// runtime, and Claude's SessionEnd hook revokes control once more (adapters.cjs terminalClosed and
+// workspace.cjs endNativeContext), so stop() no longer finds its runtime and revisions. The session
+// was still ended by this stop and nothing else when, once settled, it is ended with its process gone,
+// nothing else about it changed, and both revisions moved together by this stop and at most that end.
+async function endedByThisStop(client, session, wait) {
+  if (session.provider !== 'claude' || !Number.isSafeInteger(session.controlRevision) || !Number.isSafeInteger(session.connectionRevision)) {
+    return null;
+  }
+  const started = Date.now();
+  for (;;) {
+    const record = (await client.call('initial')).sessions.find(s => s.id === session.id);
+    // Only stopping on its way to ended; a /background handoff or anything else is not this stop.
+    if (!record || !['stopping', 'ended'].includes(record.state)) {
+      return null;
+    }
+    if (record.state === 'ended' && !processMayBeAlive(record.processIdentity)) {
+      const delta = record.controlRevision - session.controlRevision;
+      const advanced = { ...session, controlRevision: session.controlRevision + delta, connectionRevision: session.connectionRevision + delta };
+      if (![1, 2].includes(delta) || record.nativeContextPending || !sameStop(record, advanced)) {
+        return null;
+      }
+      return { ...maintenanceProof(record), state: record.state };
+    }
+    if (Date.now() - started >= wait) {
+      return null;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
 
 async function switchBackend({ dataDir, key, executablePath, expected, ensure, owner, applicationVersion = process.env.NAW_APP_VERSION,
-  sessionState, running = () => new Set(), requireAuto = false, commandLine = psCommand, now = Date.now, guard = null }) {
-  const directory = path.join(dataDir, key), stopped = [];
+  sessionState, running = () => new Set(), requireAuto = false, commandLine = psCommand, now = Date.now, guard = null, settleMs = 10000 }) {
+  const directory = path.join(dataDir, key), stopped = [], confirmedByState = [];
   const effective = record => sessionState ? sessionState(record) : record.state;
   // Each session is reconnected as its own owner, so its window keeps control.
   const resumeAs = async (session, fresh = false) => {
@@ -230,12 +261,28 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
       // service acknowledged. A refused guard must never resume newer human work.
       writeRecord(dataDir, key, { phase: 'stopping', startedAt: now(), sessions: [...stopped, session] });
       let receipt;
+      let settled = null;
       try { receipt = await client.call('maintenanceStop', session.id, session, requireAuto); }
       catch (error) {
-        if (!error.uiMessage || error.uiMessage.key !== 'error.backendSwitchSessionChanged') error.maintenanceUnconfirmed = session;
-        throw error;
+        // The backend refused its own receipt; the settled session can still prove this stop (see endedByThisStop).
+        if (error.uiMessage?.key === 'error.backendSwitchDisconnectUnconfirmed') {
+          try {
+            settled = await endedByThisStop(client, session, settleMs);
+          } catch {
+            settled = null;
+          }
+        }
+        if (!settled) {
+          if (!error.uiMessage || error.uiMessage.key !== 'error.backendSwitchSessionChanged') error.maintenanceUnconfirmed = session;
+          throw error;
+        }
+        // The proof a later put-back presents is the settled state, so an old-service resume matches it.
+        receipt = { stopped: true, expected: session, stoppedState: settled };
+        confirmedByState.push(session.id);
       }
-      if (receipt?.stopped !== true || !sameStop(receipt.expected, session) || !receipt.stoppedState || !sameStop(receipt.stoppedState, { ...session, controlRevision: (session.controlRevision || 0) + 1, connectionRevision: (session.connectionRevision || 0) + 1 })) { const error = uiError('error.backendSwitchDisconnectUnconfirmed', { name: session.name }); error.maintenanceUnconfirmed = session; throw error; }
+      const receiptMatches = receipt?.stopped === true && sameStop(receipt.expected, session) && Boolean(receipt.stoppedState) &&
+        sameStop(receipt.stoppedState, { ...session, controlRevision: (session.controlRevision || 0) + 1, connectionRevision: (session.connectionRevision || 0) + 1 });
+      if (!settled && !receiptMatches) { const error = uiError('error.backendSwitchDisconnectUnconfirmed', { name: session.name }); error.maintenanceUnconfirmed = session; throw error; }
       stopped.push({ ...session, stoppedState: receipt.stoppedState });
       const after = (await client.call('initial')).sessions.find(s => s.id === session.id);
       if (!['ended', 'disconnected'].includes(after?.state) || after.nativeId !== session.nativeId) throw uiError("error.backendSwitchDisconnectUnconfirmed", { name: session.name });
@@ -286,7 +333,7 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
   const resumed = [], left = [];
   for (const session of stopped) { try { await resumeAs(session, true); resumed.push(session.id); } catch { left.push(session); } }
   if (left.length) keep(left); else clearRecord(dataDir, key);
-  return { key, resumed, left: left.map(s => s.id) };
+  return { key, resumed, left: left.map(s => s.id), confirmedByState };
 }
 
 module.exports = { backendPlan, sessionPlan, samePlan, sameStop, maintenanceProof, switchBackend, readSettings, writeSettings, readRecords, clearRecord, migrationSafe, children, RECORD, SETTINGS };

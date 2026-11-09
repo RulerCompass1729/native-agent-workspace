@@ -123,10 +123,18 @@ async function service(directory, state, { onStop } = {}) {
     readFrames(socket, REQUEST_BYTES, request => {
         if (owner === undefined) { owner = request.owner; socket.write(JSON.stringify({ ready: true }) + '\n'); return; }
         calls.push([request.method, request.args?.[0], owner, request.args?.[1]]);
-        let value = true, error = null;
+        let value = true, error = null, uiMessage = null;
         const record = state.sessions.find(s => s.id === request.args?.[0]);
         if (request.method === 'initial') value = state;
-        else if (request.method === 'maintenanceStop') { const next = onStop?.(record, state); if (next === 'reject') { record.state = 'error'; error = '原生未确认结束状态。'; } else { record.state = next || (record.provider === 'codex' ? 'disconnected' : 'ended'); record.controlRevision = (record.controlRevision || 0) + 1; record.connectionRevision = (record.connectionRevision || 0) + 1; value = { stopped: true, expected: request.args[1], stoppedState: { ...request.args[1], controlRevision: record.controlRevision, connectionRevision: record.connectionRevision, state: record.state } }; } }
+        else if (request.method === 'maintenanceStop') { const next = onStop?.(record, state); if (next === 'reject') { record.state = 'error'; error = '原生未确认结束状态。'; }
+          else if (next?.refuse) {
+            // As a backend whose Claude terminal ended itself during the stop: ended, both revisions moved, its own receipt refused.
+            record.state = 'ended';
+            record.controlRevision += next.refuse.delta;
+            record.connectionRevision += next.refuse.connectionDelta ?? next.refuse.delta;
+            Object.assign(record, next.refuse.changes || {});
+            error = '没有确认断开原生会话。'; uiMessage = { version: 1, key: 'error.backendSwitchDisconnectUnconfirmed', params: { name: record.name } };
+          } else { record.state = next || (record.provider === 'codex' ? 'disconnected' : 'ended'); record.controlRevision = (record.controlRevision || 0) + 1; record.connectionRevision = (record.connectionRevision || 0) + 1; value = { stopped: true, expected: request.args[1], stoppedState: { ...request.args[1], controlRevision: record.controlRevision, connectionRevision: record.connectionRevision, state: record.state } }; } }
         else if (request.method === 'terminalSnapshot') value = (state.screens || {})[request.args?.[0]] || { buffer: '', cols: 80, rows: 24 };
         else if (request.method === 'maintenanceResume') { // Same states the real resume accepts (ended/recoverable/error; disconnected Codex reconnects).
           if (!['ended', 'recoverable', 'error', 'disconnected'].includes(record.state)) error = '这个会话目前不能恢复。'; else record.state = 'idle'; }
@@ -139,7 +147,7 @@ async function service(directory, state, { onStop } = {}) {
           } else if (state.sessions.some(s => !['ended', 'background'].includes(s.state))) error = '请先结束各原生会话，再关闭运行服务。';
           if (!error) setTimeout(() => api.die(), 10);
         }
-        socket.write(JSON.stringify({ id: request.id, ok: !error, error, value }) + '\n');
+        socket.write(JSON.stringify({ id: request.id, ok: !error, error, value, ...(uiMessage ? { uiMessage } : {}) }) + '\n');
     });
   });
   fs.writeFileSync(path.join(directory, 'connection.json'), JSON.stringify({ protocol: 1, endpoint, token: 'synthetic' }), { mode: 0o600 });
@@ -180,7 +188,7 @@ test('a Claude and a Codex session are stopped, the proven old service is retire
   assert.deepEqual(methods(next), ['maintenanceResume:c', 'maintenanceResume:x'], 'The already-ended session is not reconnected');
   assert.deepEqual(ownersOf(next, 'maintenanceResume'), ['c:view-a', 'x:view-b'], 'Each session keeps its previous owner');
   assert.ok(!next.calls.some(([m]) => ['send', 'queue', 'steer', 'run', 'input'].includes(m)), 'NAW sends nothing');
-  assert.deepEqual(result, { key: h.key, resumed: ['c', 'x'], left: [] }); assert.equal(record(h.dataDir, h.key), null);
+  assert.deepEqual(result, { key: h.key, resumed: ['c', 'x'], left: [], confirmedByState: [] }); assert.equal(record(h.dataDir, h.key), null);
 });
 test('an all-Claude backend is retired with its own shutdown call, never a signal', async t => {
   const h = harness(t, [claudeNew()]); const old = await h.old();
@@ -188,13 +196,64 @@ test('an all-Claude backend is retired with its own shutdown call, never a signa
     commandLine: h.command(old), signal: () => assert.fail('No signal when shutdown is allowed'), now: () => now });
   assert.deepEqual(methods(old), ['maintenanceStop:c', 'maintenanceShutdown']); assert.deepEqual(methods(h.services[1]), ['maintenanceResume:c']);
 });
+// The daily failure (2026-11-08, alpha.220 backend): a Claude terminal ended itself during the stop, so the
+// backend refused its own receipt. Daily values: planned 284/18, settled 286/20.
+const daily = extra => claudeNew({ controlRevision: 284, connectionRevision: 18, peerRevision: 4694, ...extra });
+const refused = (changes = {}, delta = 2, connectionDelta = delta) => record => record.provider === 'claude' || changes.codex ? { refuse: { delta, connectionDelta, changes } } : null;
+const oldWith = async (h, sessions, onStop) => {
+  const old = await service(h.directory, { runtimeVersion: '0.1.0-alpha.157', capabilities: caps, sessions: structuredClone(sessions), room: { messages: [] } }, { onStop });
+  h.services.push(old);
+  return old;
+};
+for (const delta of [1, 2]) test(`a Claude stop its backend refused after the native end (+${delta}) still moves the session and reconnects it as its owner`, async t => {
+  const h = harness(t, [daily()]);
+  const old = await oldWith(h, [daily()], refused({}, delta));
+  const result = await switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', ensure: h.ensure(), owner: 'window-default',
+    applicationVersion: '0.1.0-alpha.158', commandLine: h.command(old), now: () => now, settleMs: 300 });
+  assert.deepEqual(methods(old), ['maintenanceStop:c', 'maintenanceShutdown']);
+  assert.deepEqual(methods(h.services[1]), ['maintenanceResume:c']);
+  assert.deepEqual(ownersOf(h.services[1], 'maintenanceResume'), ['c:view-a']);
+  assert.deepEqual(result, { key: h.key, resumed: ['c'], left: [], confirmedByState: ['c'] });
+  assert.equal(record(h.dataDir, h.key), null);
+});
+for (const [label, sessions, onStop] of [
+  ['another owner took control', [daily()], refused({ owner: 'view-z' })],
+  ['three revisions moved', [daily()], refused({}, 3)],
+  ['the two revisions moved apart', [daily()], refused({}, 2, 1)],
+  ['its process may still run', [daily()], refused({ processIdentity: { pid: process.pid } })],
+  ['it went to the background', [daily()], refused({ state: 'background' })],
+  ['a new native context is pending', [daily()], refused({ nativeContextPending: { nativeId: 'native-c', reason: 'clear' } })],
+  ['a draft changed', [daily()], refused({ draftRevision: 1 })],
+  ['it is a Codex session', [codexNew({ controlRevision: 9, connectionRevision: 4 })], refused({ codex: true })],
+]) test(`a refused receipt is not taken as this stop when ${label}`, async t => {
+  const h = harness(t, sessions);
+  const old = await oldWith(h, sessions, onStop);
+  await assert.rejects(switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', ensure: () => assert.fail('No new backend'), owner: 'window-default',
+    applicationVersion: '0.1.0-alpha.158', commandLine: h.command(old), now: () => now, settleMs: 300 }), error => error.uiMessage?.key === 'error.backendSwitchDisconnectUnconfirmed');
+  const id = sessions[0].id;
+  assert.deepEqual(methods(old), [`maintenanceStop:${id}`], 'Nothing is put back on an unproven end, and the old service keeps running');
+  assert.deepEqual(record(h.dataDir, h.key).sessions.map(s => s.id), [id], 'The session is named for the person to continue');
+});
+test('a refused Claude receipt taken as this stop is put back with its settled proof when a later stop fails', async t => {
+  const two = [daily(), claudeNew({ id: 'c2', nativeId: 'native-c2', name: 'Claude 3', owner: 'view-c', controlRevision: 5, connectionRevision: 2 })];
+  const h = harness(t, two);
+  const old = await oldWith(h, two, record => record.id === 'c' ? { refuse: { delta: 2 } } : 'reject');
+  await assert.rejects(switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', ensure: () => assert.fail('No new backend'), owner: 'window-default',
+    applicationVersion: '0.1.0-alpha.158', commandLine: h.command(old), now: () => now, settleMs: 300 }));
+  assert.deepEqual(methods(old), ['maintenanceStop:c', 'maintenanceStop:c2', 'maintenanceResume:c']);
+  assert.deepEqual(ownersOf(old, 'maintenanceResume'), ['c:view-a'], 'Put back as its own owner');
+  const proof = old.calls.find(([method, id]) => method === 'maintenanceResume' && id === 'c')[3];
+  assert.deepEqual(proof, { id: 'c', nativeId: 'native-c', provider: 'claude', owner: 'view-a', view: null,
+    controlRevision: 286, connectionRevision: 20, draftRevision: 0, peerRevision: 4694, state: 'ended' }, 'The settled state is what an old service compares');
+  assert.deepEqual(record(h.dataDir, h.key).sessions.map(s => s.id), ['c2'], 'Only the unconfirmed second stop is left for the person');
+});
 test('a restored session with history larger than the request limit resumes using only bounded identity proof', async t => {
   const messages = [{ role: 'assistant', text: 'Synthetic retained history. '.repeat(250000) }];
   assert.ok(Buffer.byteLength(JSON.stringify(messages)) > REQUEST_BYTES, 'The response may contain more history than a request may carry');
   const h = harness(t, [codexNew({ messages, peerRevision: 7, connectionRevision: 4, controlRevision: 3 })]), old = await h.old();
   const result = await switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', expected: backendPlan(old.state),
     ensure: h.ensure(), owner: 'view-default', applicationVersion: '0.1.0-alpha.158', commandLine: h.command(old), now: () => now });
-  assert.deepEqual(result, { key: h.key, resumed: ['x'], left: [] }, 'Large response history must not disconnect the resume request');
+  assert.deepEqual(result, { key: h.key, resumed: ['x'], left: [], confirmedByState: [] }, 'Large response history must not disconnect the resume request');
   const next = h.services[1], proof = next.calls.find(([method]) => method === 'maintenanceResume')?.[3];
   assert.deepEqual(proof, { id: 'x', nativeId: 'native-x', provider: 'codex', owner: null, view: null,
     controlRevision: 0, connectionRevision: 5, draftRevision: 0, peerRevision: 7, state: 'recoverable' });

@@ -4,7 +4,7 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { Workspace } = require('../workspace.cjs');
 const { Codex, Claude } = require('../adapters.cjs');
-const { sessionPlan, backendPlan, maintenanceProof } = require('../backend-switch.cjs');
+const { sessionPlan, backendPlan, maintenanceProof, sameStop } = require('../backend-switch.cjs');
 
 function fixture() {
   const s = { id: 'local', name: 'Synthetic', nativeId: 'saved-thread', provider: 'codex', state: 'idle',
@@ -72,6 +72,30 @@ test('an explicit manual stop still interrupts current work', async () => {
   assert.equal(f.calls.filter(([method]) => method === 'thread/unsubscribe').length, 1);
 });
 
+// How the daily alpha.220 backend (same code since) answered a Claude maintenance stop on 2026-11-08: the real
+// stop() and endNativeContext(); the runtime stand-in keeps the native order, SessionEnd's context end first,
+// then the terminal close reaching the runtime's own listener (ended, runtime dropped), then stop() resolving.
+test('a Claude terminal that ends itself during a maintenance stop makes the backend refuse its own receipt', async () => {
+  const s = { id: 'local', name: 'Synthetic', nativeId: 'saved-session', provider: 'claude', state: 'idle', owner: 'original-view', view: 'terminal',
+    controlRevision: 284, connectionRevision: 18, draftRevision: 0, peerRevision: 4694, memberRevision: 3, messages: [], fleet: [],
+    terminalInputPending: false, backgroundStale: false, background: 0, scheduled: 0 };
+  const r = Object.create(Claude.prototype); EventEmitter.call(r);
+  const w = Object.create(Workspace.prototype); EventEmitter.call(w);
+  Object.assign(w, { sessions: new Map([[s.id, s]]), runtimes: new Map([[s.id, r]]), draftRevisions: new Map(), drafts: new Map(), pendingDrafts: new Map(),
+    stops: new Map(), rooms: new Map([['shared', { run: null }]]), approvalRoutes: new Map(),
+    pause: () => {}, pauseParticipant: () => {}, changed: () => {}, persist: () => {} });
+  r.stop = async () => {
+    w.endNativeContext(s, r, { nativeId: s.nativeId, reason: 'other' });
+    s.state = 'ended';
+    w.runtimes.delete(s.id);
+    return { state: 'ended' };
+  };
+  const expected = structuredClone(sessionPlan(s, s.state).stop);
+  await assert.rejects(w.maintenanceStop(s.id, expected), error => error.uiMessage?.key === 'error.backendSwitchDisconnectUnconfirmed');
+  assert.equal(s.state, 'ended'); assert.equal(w.runtimes.has(s.id), false); assert.equal(w.stops.size, 0); assert.equal(s.nativeContextPending, null);
+  // What the window then accepts as this stop (backend-switch.cjs endedByThisStop): all as planned, both revisions +2.
+  assert.ok(sameStop(s, { ...expected, controlRevision: 286, connectionRevision: 20 }));
+});
 test('the Claude maintenance wrapper checks before any ordinary stop side effect', async () => {
   let stops = 0; const runtime = Object.create(Claude.prototype); runtime.stop = () => { stops++; };
   assert.throws(() => runtime.stopForMaintenance(() => { throw Error('new human input'); }), /new human input/);
