@@ -354,6 +354,10 @@ class FakeClient extends EventEmitter {
         // As the backend answers a connection that does not own a terminal that is not open.
         throw Object.assign(Error('closed'), { uiMessage: { key: 'error.workspace.takeTerminalControlBeforeReconnect' } });
       }
+      if (this.typeAfterSnapshot) {
+        // The person types into the old terminal right after its screen was read.
+        session.controlRevision = (session.controlRevision || 0) + 1;
+      }
       // A serialized native screen: the prompt box still holds text typed but not sent.
       return { buffer: 'Claude Code\r\n> UNSENT_DRAFT_42', cols: 80, rows: 24 };
     }
@@ -1179,7 +1183,7 @@ test('a successor that reports another permission mode with its first prompt doe
   assert.equal(room.value.queue[0].assignee, 'a', 'and gets its queued work back');
 });
 
-async function rotateTypedSession(t, snapshotFails, terminalClosed = false) {
+async function rotateTypedSession(t, snapshotFails, terminalClosed = false, typeAfterSnapshot = false) {
   const notices = [];
   const old = member('a', { createdAt: NOW - 30 * HOUR, cwd: '/tmp', terminalInputPending: true });
   const setup = dispatcherSetup(t, [old], { notify: (kind, record) => notices.push(kind) });
@@ -1187,6 +1191,7 @@ async function rotateTypedSession(t, snapshotFails, terminalClosed = false) {
   fakeMembership(room, client);
   client.snapshotFails = snapshotFails;
   client.terminalClosed = terminalClosed;
+  client.typeAfterSnapshot = typeAfterSnapshot;
   room.queueAdd('next task', 'a');
   await dispatcher.start();
   await dispatcher.schedule();
@@ -1252,4 +1257,33 @@ test('an unsent native prompt refuses the handoff request: no failure, no notice
   await dispatcher.schedule();
   const sends = client.sends('a');
   assert.match(sends[sends.length - 1][2], /【NAW 换会话】/, 'asked again once the person has been quiet');
+});
+
+test('typing into the old terminal after its screen was saved keeps the old session', async t => {
+  const { client, notices } = await rotateTypedSession(t, false, false, true);
+  assert.equal(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), false);
+  assert.deepEqual(notices, ['kept']);
+});
+
+test('a prompt left unsent keeps an assigned item waiting instead of failing it', async t => {
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a')]);
+  const original = client.call.bind(client);
+  let drafts = rules.NOT_SENT_ATTEMPTS + 2;
+  client.call = async (method, ...args) => {
+    if (method === 'dispatch' && drafts > 0) {
+      drafts -= 1;
+      client.calls.push([method, ...args]);
+      throw Object.assign(Error('原生终端里还有未发送的草稿。'), { uiMessage: { key: 'error.submission.nativeDraft' } });
+    }
+    return original(method, ...args);
+  };
+  room.queueAdd('assigned task', 'a');
+  await dispatcher.start();
+  for (let attempt = 0; attempt < rules.NOT_SENT_ATTEMPTS + 2; attempt += 1) {
+    await dispatcher.schedule();
+    assert.notEqual(room.value.queue[0].status, 'failed', 'the item waits while the prompt holds text');
+    advance(3 * 60000);
+  }
+  await dispatcher.schedule();
+  assert.equal(room.value.queue[0].status, 'sent', 'sent once the prompt is clear');
 });

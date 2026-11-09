@@ -1502,7 +1502,12 @@ class QueueDispatcher {
         this.humanAt.set(session.id, this.now());
       }
       if (notSent(error)) {
-        this.roomState.queueRequeue(room.id, item.id, error.message || 'not-sent', NOT_SENT_ATTEMPTS, name);
+        // A prompt the person left unsent there does not use up the item's attempts: it waits.
+        let attempts = NOT_SENT_ATTEMPTS;
+        if (errorKey(error) === NATIVE_DRAFT_KEY) {
+          attempts = Infinity;
+        }
+        this.roomState.queueRequeue(room.id, item.id, error.message || 'not-sent', attempts, name);
       } else {
         this.roomState.queueSettle(room.id, item.id, 'failed', error.message || 'send-failed', name);
       }
@@ -1529,7 +1534,15 @@ class QueueDispatcher {
   // separate connection that owns nothing: a terminal no longer open is then never reopened, and
   // with no open terminal nothing unsent remains (null).
   async saveTerminal(oldId) {
-    const probe = await withTimeout(this.connect(`${this.owner}-terminal`), CALL_TIMEOUT_MS, 'connect-timeout');
+    const connecting = Promise.resolve(this.connect(`${this.owner}-terminal`));
+    let probe;
+    try {
+      probe = await withTimeout(connecting, CALL_TIMEOUT_MS, 'connect-timeout');
+    } catch (error) {
+      // A connection that arrives after the timeout is closed when it does.
+      connecting.then(late => late.close()).catch(() => {});
+      throw error;
+    }
     let snapshot;
     try {
       snapshot = await withTimeout(probe.call('terminalSnapshot', oldId), CALL_TIMEOUT_MS, 'snapshot-timeout');
@@ -1554,6 +1567,20 @@ class QueueDispatcher {
     const name = `${oldId}-${this.now()}.txt`;
     fs.writeFileSync(path.join(dir, name), text, { mode: 0o600, flag: 'wx' });
     return path.join('rotation-terminals', name);
+  }
+
+  // Used since this step read it (a keystroke in its terminal, the person's window)? Read fresh
+  // state right before ending it.
+  async touchedSince(oldId, old) {
+    await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
+    const latest = this.view().snapshot.sessions.find(s => s.id === oldId);
+    if (!latest) {
+      return false;
+    }
+    if ((latest.controlRevision || 0) !== (old.controlRevision || 0)) {
+      return true;
+    }
+    return humanRecent(oldId, this.humanAt, this.now(), this.humanQuietMs);
   }
 
   // The old session is left as it is: one record, log line and notice, then a week's rest.
@@ -1853,7 +1880,11 @@ class QueueDispatcher {
             // Leaving is cosmetic; ending the old process is what frees memory.
           }
         }
-        await withTimeout(this.client.call('stop', oldId), CALL_TIMEOUT_MS, 'stop-timeout');
+        if (old.terminalInputPending === true && await this.touchedSince(oldId, old)) {
+          inUse = true;
+        } else {
+          await withTimeout(this.client.call('stop', oldId), CALL_TIMEOUT_MS, 'stop-timeout');
+        }
       }
       if (!record.oldId) {
         record.oldId = oldId;
@@ -1871,7 +1902,7 @@ class QueueDispatcher {
       this.appendLog(outcome, record, extra);
       this.roomState.rotationEvent(record.roomIds, inUse ? 'oldKept' : 'done', oldLabel, newLabel);
       let notice = outcome;
-      if (record.terminalFile) {
+      if (outcome === 'done' && record.terminalFile) {
         notice = 'saved';
       }
       if (unsaved) {
