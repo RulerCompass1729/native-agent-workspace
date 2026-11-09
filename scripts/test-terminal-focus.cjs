@@ -5,9 +5,14 @@ const { createIn } = require('./fixtures/create-view.cjs');
 // No native provider processes or model tasks are started.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
-const { _electron } = testScratch.playwright(require('playwright')), { connect } = require('../app/service-client.cjs');
-const root = path.resolve(__dirname, '..'), profile = testScratch.directory(path.join(os.tmpdir(), 'naw-terminal-focus-'));
-const child = fork(path.join(root, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')], env: { ...process.env, NAW_APP_VERSION: require('../package.json').version, NAW_WORKSPACE: profile }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+const { _electron } = testScratch.playwright(process.env.NAW_APP_EXECUTABLE ? { _electron: require('./fixtures/installed-renderer.cjs') } : require('playwright')), { connect } = require('../app/service-client.cjs');
+const root = path.resolve(__dirname, '..');
+const common = require('node:child_process').execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
+const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = require('node:crypto').randomUUID();
+try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('GUI slot occupied; no profile or GUI launched.'); process.exit(75); }
+fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'CodexMain', task: 'Terminal focus and observer mode reports', token, pid: process.pid, at: new Date().toISOString() }));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-terminal-focus-'));
+const child = fork(path.join(root, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')], env: { ...process.env, NAW_APP_VERSION: process.env.NAW_APP_VERSION || require('../package.json').version, NAW_WORKSPACE: profile }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 let app, page, client, sequence = 0; const errors = [], passed = [];
 const delay = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, label) { for (let i = 0; i < 100; i++) { if (await fn()) return; await delay(50); } throw Error(label); }
@@ -21,18 +26,17 @@ const focused = id => input(id).evaluate(el => el === document.activeElement);
 const text = async id => (await fixture('stats')).inputs.filter(x => x.id === id).map(x => x.data).join('');
 async function capture(name) { if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, name + '.png') }); } }
 async function chooseRoom(id) {
-  // T-147: a member opens from its card in 成员概览 (the member tabs were replaced in alpha.117, T-53);
-  // its terminal is the open member's 原生终端 view.
+  // The current member tabs select an individual session; selecting the active
+  // card name again returns to the overview rather than keeping that member open.
   if (!(await page.locator('#room-view').isVisible())) await page.locator('#room-nav').click();
-  if (!(await page.locator('#collaboration-overview').isVisible())) await page.locator('#room-overview').click();
-  const name = page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${id}"] .collaboration-member-name`);
-  if (await name.getAttribute('aria-pressed') !== 'true') await name.click();
+  const tab = page.locator(`#room-member-tabs [data-room-session="${id}"]`);
+  if (await tab.getAttribute('aria-pressed') !== 'true') await tab.click();
   await page.locator('#terminal-tab').click();
 }
 async function toChat(id) { await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#chat-tab').click(); await page.locator('#message-input').waitFor(); }
 async function holdAndChoose(id) { await fixture('hold-claim', id); await chooseRoom(id); await until(async () => (await fixture('stats')).claims.includes(id), 'Claim held'); }
 async function run() {
-  console.log('Fixture profile:', profile); await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service'); client = await connect(profile, 'focus-test');
+  console.log('Fixture profile:', profile, 'owned daemon PID:', child.pid); await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service'); client = await connect(profile, 'focus-test');
   app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
   for (const provider of ['claude', 'codex']) {
@@ -98,6 +102,19 @@ async function run() {
   assert.equal((await snapshot()).diagnostics.dispatches, 0); assert.equal(app.windows().length, 1); assert.deepEqual(errors, []); await capture('focus-complete');
   console.log(JSON.stringify({ passed, errors, nativeProviderProcesses: 0, nativeModelCalls: 0, oneWindow: true }));
 }
-run().catch(async e => { console.error(e.stack); if (page) await capture('failed'); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
-  if (app) await app.close(); if (client) { const s = await client.call('initial'); for (const x of s.sessions) await client.call('stop', x.id); await client.call('shutdown'); client.close(); } if (child.connected) child.disconnect();
-}));
+const cleanup = testScratch.cleanup(async () => {
+  try { if (app) await app.close(); }
+  finally {
+    client?.close(); if (child.connected) child.disconnect();
+    if (child.exitCode === null && !child.signalCode) {
+      const exited = require('node:events').once(child, 'exit'); child.kill('SIGTERM');
+      await Promise.race([exited, delay(2000)]);
+      if (child.exitCode === null && !child.signalCode) { child.kill('SIGKILL'); await Promise.race([exited, delay(2000)]); }
+      assert.ok(child.exitCode !== null || child.signalCode, 'Owned fixture daemon exited');
+    }
+  }
+});
+run().catch(async e => { console.error(e.stack); if (page && !page.isClosed()) await capture('failed'); process.exitCode = 1; }).finally(async () => {
+  try { await cleanup(); assert.equal(JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))).token, token); fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot); console.log('Owned fixture cleaned; exact GUI slot released.'); }
+  catch (error) { console.error('Cleanup unconfirmed; own GUI slot retained:', error.stack); process.exitCode = 1; }
+});

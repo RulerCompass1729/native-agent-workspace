@@ -7274,3 +7274,31 @@ review approves this exact repair; its eight reads find no blocker. The prepared
 Electron probe did not launch because the shared GUI slot remained occupied in
 a bounded wait. Installed/original-native acceptance remains open; this source
 result is not evidence that the historical cancellation cause has been proven.
+
+
+## Long-thread background control and observer acceptance (2026-11-08)
+
+A native background-control catalog worked, but its independent snapshot returned
+an unconfirmed transport result. The existing workspace snapshot exceeded 18 MiB;
+the control client imposed a separate 4 MiB response limit. A synthetic Unicode
+snapshot above that limit reproduces the same error without model calls. The
+client now reuses the local service’s bounded JSON-line reader and 64 MiB response
+limit; ordinary outbox receipts retain their 100,000-byte bound. No operation is
+retried. This client step no longer refuses replies merely for exceeding 4 MiB.
+Broker/failure/transport checks: 27/0/0, including a real MCP stdio round trip
+of 19 MiB plus a Unicode suffix and prompt malformed/oversized-receipt rejection.
+
+The installed alpha.220 observer actually echoed both DECRPM replies into native
+input. The repaired source GUI passes all eight focus/control cases, including
+mode queries that retain input and control revision. The signed repaired GUI is
+still pending. The shared provider-construction test also reproduces a missing
+VM helper when run inside NAW; it now supplies the real outbox argument helper
+and an explicit synthetic descriptor, independent of the caller environment.
+Relevant integration checks: 121/0/0. These facts do not prove original-native
+message delivery or automatic continuation, and old UNKNOWN results remain final.
+
+Independent batch source review approves the integration. Its bounded follow-up
+checks prompted the real MCP round trip and rejection cases above, and a bounded
+owned-daemon teardown. This does not qualify a provider model consuming that
+snapshot or safe recovery after a hard-killed GUI runner; unknown outcomes and
+uncertain cleanup retain their gates. Signed installed acceptance remains open.

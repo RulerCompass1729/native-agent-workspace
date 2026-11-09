@@ -8,7 +8,7 @@ const identity = { nativeId: 'sender-native', sessionId: 'session', turnId: 'tur
 const meta = { threadId: identity.nativeId, sessionId: identity.sessionId, callId: identity.callId,
   'x-codex-turn-metadata': { thread_id: identity.nativeId, turn_id: identity.turnId } };
 const args = { recipient_id: 'receiver', message: '  One task\n\twith context.  ' };
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'outbox-broker-')); fs.chmodSync(dir, 0o700);
   const descriptorFile = path.join(dir, 'owner.json');
   let forwards = 0, rendered, closeCount = 0, proofCount = 0;
@@ -32,6 +32,7 @@ async function fixture(t) {
         if (name === 'browser_snapshot') return { content: [{ type: 'text', text: '### Snapshot\n```yaml\n- button "发送" [ref=e1]\n```' }] };
         assert.equal(name, 'browser_click'); await actions.send(); return { content: [{ type: 'text', text: 'clicked' }] };
       }, showReceipt: async value => { rendered = value; }, close: async () => { closeCount++; } }),
+    ...options,
   });
   t.after(async () => { await broker.close(); fs.rmSync(dir, { recursive: true }); });
   return { broker, descriptorFile, state: () => ({ forwards, rendered, closeCount, proofCount }) };
@@ -42,6 +43,40 @@ test('scoped broker drives the leased UI once and returns native receipt rather 
   assert.equal(result.firstCommand.command, 'git status --short'); assert.equal(result.text, args.message);
   assert.equal(f.state().forwards, 1); assert.equal(f.state().closeCount, 1); assert.equal(f.state().rendered.status, 'working');
 });
+test('background control receives a full long-thread snapshot above the old four-MiB reply limit', async t => {
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'outbox-control-size-'));
+  fs.chmodSync(dir, 0o700);
+  const descriptorFile = path.join(dir, 'owner.json'), command = { action: 'snapshot' };
+  const value = { state: 'complete', value: { messages: [{ text: '界'.repeat(2 * 1024 * 1024) }] } };
+  let calls = 0;
+  const broker = await createOutboxBroker({ descriptorFile,
+    bind: async () => { throw Error('No message send allowed'); },
+    createView: async () => { throw Error('No desktop view allowed'); },
+    bindControl: async (caller, args) => { assert.deepEqual(caller, identity); assert.deepEqual(args, command); return { args }; },
+    control: async () => { calls++; return value; },
+  });
+  t.after(async () => { await broker.close(); fs.rmSync(dir, { recursive: true }); });
+  const result = await requestOutbox(descriptorFile, identity, command, undefined, true);
+  assert.deepEqual(result, value, 'Native history is not truncated or translated');
+  assert.equal(calls, 1, 'Reading a large result does not retry the operation');
+});
+for (const [name, reply] of [['oversized ordinary receipt', JSON.stringify({ text: 'x'.repeat(100001) }) + '\n'], ['malformed reply', '{not JSON}\n']]) {
+  test(`native control transport promptly rejects ${name} without replay`, { timeout: 3000 }, async t => {
+    const net = require('node:net'), dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'outbox-invalid-frame-'));
+    fs.chmodSync(dir, 0o700);
+    const descriptorFile = path.join(dir, 'owner.json'), socketPath = path.join(dir, 'reply.sock'), sockets = new Set(), abort = new AbortController();
+    let calls = 0;
+    const server = net.createServer(socket => {
+      sockets.add(socket); socket.on('close', () => sockets.delete(socket)); socket.on('error', () => {});
+      socket.once('data', () => { calls++; socket.write(reply); });
+    });
+    t.after(async () => { abort.abort(); for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve)); fs.rmSync(dir, { recursive: true }); });
+    await new Promise(resolve => server.listen(socketPath, resolve)); fs.chmodSync(socketPath, 0o600);
+    fs.writeFileSync(descriptorFile, JSON.stringify({ version: 1, capability: 'a'.repeat(64), socketPath }), { mode: 0o600 });
+    await assert.rejects(requestOutbox(descriptorFile, identity, args, abort.signal), /Outbox delivery is unconfirmed/);
+    assert.equal(calls, 1);
+  });
+}
 test('real stdio registration exposes only the scoped tool and requires native metadata before forwarding', async t => {
   const f = await fixture(t), config = outboxMcpServer(f.descriptorFile);
   const child = spawn(config.command, config.args, { env: { ...process.env, ...config.env }, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -55,6 +90,24 @@ test('real stdio registration exposes only the scoped tool and requires native m
   await assert.rejects(call('tools/call', { name: 'browser_evaluate', arguments: {} })); assert.equal(f.state().forwards, 0);
   const result = await call('tools/call', { name: 'workspace_outbox', arguments: args, _meta: meta });
   assert.equal(result.isError, false); assert.equal(JSON.parse(result.content[0].text).status, 'working');
+});
+test('real workspace-control MCP stdio returns a nineteen-MiB snapshot intact without a provider or retry', { timeout: 15000 }, async t => {
+  const text = 'x'.repeat(19 * 1024 * 1024) + '尾', command = { action: 'snapshot' };
+  let calls = 0;
+  const f = await fixture(t, {
+    bindControl: async (caller, args) => { assert.deepEqual(caller, identity); assert.deepEqual(args, command); return { args }; },
+    control: async () => { calls++; return { state: 'complete', value: { messages: [{ text }] } }; },
+  });
+  const child = spawn(process.execPath, [path.resolve(__dirname, '../claude-message-tool.cjs'), '--codex'], {
+    env: { ...process.env, NAW_CONTROL_DESCRIPTOR: f.descriptorFile }, stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stderr = ''; child.stderr.on('data', part => { stderr += part; });
+  const { JsonRpcLineTransport } = await import('@deepseek-ai/dsh-sdk-protocol');
+  const transport = new JsonRpcLineTransport(child.stdout, child.stdin); transport.start();
+  t.after(async () => { child.stdin.end(); await once(child, 'exit'); transport.close(); assert.equal(stderr, ''); });
+  const result = await transport.request('tools/call', { name: 'workspace_control', arguments: command, _meta: meta }, t.signal);
+  assert.equal(result.isError, false); assert.equal(JSON.parse(result.content[0].text).value.messages[0].text, text);
+  assert.equal(calls, 1); assert.equal(f.state().forwards, 0);
 });
 test('original-host adoption writes exactly one reviewed MCP key and labels catalog registration as untested delivery', async t => {
   const f = await fixture(t), calls = [], rpc = { async call(method, params) {

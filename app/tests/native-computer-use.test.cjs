@@ -235,11 +235,13 @@ test('actual provider MCP construction preserves workspace messaging and injects
   assert.ok(a >= 0 && b > a);
   let captured;
   const host = { codexBinary: '/tmp/naw-test-codex', codexSocket: '/tmp/naw-test-codex.sock', hookSocket: '/tmp/naw-test-hook.sock', codexMessageToken: 'test-only' };
+  const descriptor = '/tmp/naw-test-outbox.json', { codexOutboxMcpArgs } = require('../computer-use-outbox-tool.cjs');
   vm.runInNewContext('(function(){let child;' + source.slice(a, b) + '\n}).call(host)', {
-    host, path, process, __dirname: path.resolve(__dirname, '..'), codexComputerUseMcpArgs,
+    host, path, process: { execPath: process.execPath, env: { NAW_OUTBOX_DESCRIPTOR: descriptor } }, __dirname: path.resolve(__dirname, '..'), codexComputerUseMcpArgs, codexOutboxMcpArgs,
     nativeEnvironment: () => ({}), spawn: (command, args) => { captured = args; return {}; }
   });
   for (const value of codexComputerUseMcpArgs().filter(x => x !== '-c')) assert.ok(captured.includes(value));
+  for (const value of codexOutboxMcpArgs(descriptor).filter(x => x !== '-c')) assert.ok(captured.includes(value));
   assert.ok(captured.some(x => x.startsWith('mcp_servers.native_workspace.command=')));
   assert.deepEqual(Array.from(captured).slice(-3), ['app-server', '--listen', 'unix:///tmp/naw-test-codex.sock']);
   // Only the three explicitly approved operator tools join the existing message allowance; Peekaboo remains subject to native permission.

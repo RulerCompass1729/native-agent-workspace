@@ -2,6 +2,7 @@
 const fs = require('node:fs'), net = require('node:net'), path = require('node:path');
 const { metadataIdentity } = require('./claude-message-tool.cjs');
 const { validateOutboxArgs } = require('./computer-use-outbox-native.cjs');
+const { readFrames, RESPONSE_BYTES } = require('./service-transport.cjs');
 const FAIL = 'Outbox delivery is unconfirmed; retain the task and do not resend automatically.';
 const outboxTool = { name: 'workspace_outbox', description: 'Send this one task to a specified existing idle NAW agent in the shared space, using an independent outbox without changing the current page. Success requires native receipt and the first actual command. Unknown delivery must not be retried.',
   inputSchema: { type: 'object', additionalProperties: false, properties: {
@@ -24,19 +25,18 @@ function requestOutbox(filename, identity, args, signal, control = false) {
       fs.realpathSync(info.socketPath) !== info.socketPath || !endpoint.isSocket() || endpoint.uid !== process.getuid() || (endpoint.mode & 0o777) !== 0o600 ||
       !dir.isDirectory() || dir.uid !== process.getuid() || (dir.mode & 0o777) !== 0o700) throw Error(FAIL);
   return new Promise((resolve, reject) => {
-    const socket = net.connect(info.socketPath); let data = '', settled = false;
+    const socket = net.connect(info.socketPath); let settled = false;
     const aborted = () => finish(true);
     const finish = (error, value) => { if (settled) return; settled = true; clearTimeout(timer); signal?.removeEventListener('abort', aborted); socket.destroy(); error ? reject(Error(FAIL)) : resolve(value); };
     const timer = setTimeout(() => finish(true), 110000);
     if (signal?.aborted) { finish(true); return; }
     signal?.addEventListener('abort', aborted, { once: true });
     socket.on('error', () => finish(true)); socket.on('end', () => { if (!settled) finish(true); });
+    socket.on('close', () => { if (!settled) finish(true); });
     socket.on('connect', () => socket.write(JSON.stringify({ capability: info.capability, identity, arguments: args, ...(control ? { kind: 'control' } : {}) }) + '\n'));
-    socket.setEncoding('utf8'); socket.on('data', part => {
-      data += part; if (Buffer.byteLength(data) > (control ? 4 * 1024 * 1024 : 100000)) return finish(true);
-      const end = data.indexOf('\n'); if (end < 0) return;
-      try { finish(false, JSON.parse(data.slice(0, end))); } catch { finish(true); }
-    });
+    // A control snapshot carries the same full history as the local service.
+    // Reuse its bounded framing; ordinary task-send receipts keep their limit.
+    readFrames(socket, control ? RESPONSE_BYTES : 100000, value => finish(false, value));
   });
 }
 function outboxMcpServer(descriptorFile) {
