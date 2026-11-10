@@ -2273,9 +2273,11 @@ async function updateSessionBackend(id) {
   return runBackendOption(option);
 }
 function backendSwitchedText(result) {
-  if (result.error) return uiText('version.autoFailed', { error: ui.displayText(result.error, result.errorUiMessage) });
+  const backend = result.backend ? { version: result.backend.version, names: result.backend.sessions.map(s => state.sessions?.find(record => record.id === s.id)?.name || s.name || s.id).join('、') } : null;
+  if (result.error) return uiText(backend ? 'version.endedBackendFailed' : 'version.autoFailed', { ...backend, error: ui.displayText(result.error, result.errorUiMessage) });
   const left = Array.isArray(result.left) ? result.left.length : Number(result.left) || 0;
   const reconnect = result.reconnectFailed ? uiText('version.reconnectWindowFailed') : '';
+  if (backend) return uiText('version.updatedEndedBackend', backend) + reconnect;
   return uiText(left ? 'version.updatedSomeLeft' : 'version.updatedAll', { count: left }) + reconnect;
 }
 $('backend-version-summary').onclick = () => attempt(openBackendVersions);

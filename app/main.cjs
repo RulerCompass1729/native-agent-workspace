@@ -604,6 +604,27 @@ async function runBackendSwitch(c, option, requireAuto = false, extra = {}) {
     return result;
   } finally { finishMaintenance?.(); backendSwitching = null; switchRecords = backendSwitch.readRecords(dataDir); broadcastRoom().catch(() => {}); }
 }
+// Both an explicit confirmation and automatic all-ended continuation keep the
+// original identity/transport checkpoint through the final refreshed check.
+async function runConnectionContinuation(c, id, checkpoint) {
+  if (backendSwitching) throw uiError('error.backendUpdateBusy');
+  const { target, guard, nativeId, version, expected } = checkpoint;
+  const matches = value => value && value.backendKey === target.key && value.nativeId === nativeId && value.version === version;
+  backendSwitching = target.key;
+  try {
+    guard(); await c.client.refresh(); guard();
+    const current = c.client.route(id), record = current.state.sessions.find(value => value.id === id), fresh = continuationStatus(current.state, id);
+    if (current !== target || current.state.runtimeVersion !== version || record?.nativeId !== nativeId || !fresh.ready ||
+        expected !== undefined && !connectionUpdateOptions(c.client, app.getVersion(), roomState).some(option => option.id === id && option.ready && matches(option))) throw uiError('error.main.backendChangedDuringCheck');
+    const finishMaintenance = c.client.maintainService(target.key);
+    try {
+      const { key } = await continueService(dataDir, process.execPath, id);
+      try { await replaceBackendSockets(key); }
+      catch (error) { error.continuationReconnectFailed = true; throw error; }
+      return true;
+    } finally { finishMaintenance(); }
+  } finally { backendSwitching = null; broadcastRoom().catch(() => {}); }
+}
 // Automatic moves run one backend at a time: plans the runtime proved, with automatic updates on;
 // with migration on (the person's standing confirmation), also plans that need that confirmation
 // once their sessions are quiet. Those first keep what each typed-into native terminal shows.
@@ -644,6 +665,22 @@ async function autoBackendSwitchOnce() {
     humanAt = queueDispatcher.humanAt;
   }
   const options = connectionUpdateOptions(c.client, app.getVersion(), roomState);
+  const ready = options.find(option => option.ready && !autoSwitchFailed.has(option.backendKey));
+  if (ready) {
+    const backend = { version: ready.version, sessions: ready.sessions };
+    let notice;
+    try {
+      const target = c.client.route(ready.id), guard = c.client.operationGuard(target);
+      await runConnectionContinuation(c, ready.id, { target, guard, nativeId: ready.nativeId, version: ready.version, expected: ready });
+      notice = { backend };
+    } catch (error) {
+      autoSwitchFailed.add(ready.backendKey);
+      notice = error.continuationReconnectFailed ? { backend, reconnectFailed: true }
+        : { backend, error: error.message || '后台更新未完成。', errorUiMessage: error.message ? uiLocale.displayMessage(error.uiMessage) : uiError('error.backendAutoUpdateIncomplete').uiMessage };
+    }
+    for (const context of windows.values()) if (!context.win.isDestroyed()) context.win.webContents.send('workspace:backend-switched', notice);
+    return;
+  }
   const option = queueRules.nextBackendMove(options, settings, sessions, humanAt, Date.now(), autoSwitchFailed, migrateQuietMs(), migrateUnprovenQuietMs());
   if (!option) return;
   // A move made under the person's migration setting rather than proven automatic updates.
@@ -1056,16 +1093,7 @@ async function boot() {
       buttons: [displayText('os.keepConnection'), displayText('os.confirmUpdate')], defaultId: 0, cancelId: 0,
     });
     if (answer.response !== 1) return false;
-    guard(); await c.client.refresh(); guard();
-    const current = c.client.route(id), record = current.state.sessions.find(value => value.id === id), fresh = continuationStatus(current.state, id);
-    if (current !== target || current.state.runtimeVersion !== version || record?.nativeId !== nativeId || !fresh.ready ||
-        expected !== undefined && !connectionUpdateOptions(c.client, app.getVersion(), roomState).some(option => option.id === id && option.ready && matches(option))) throw uiError("error.main.backendChangedDuringCheck");
-    const finishMaintenance = c.client.maintainService(target.key);
-    try {
-    const { key } = await continueService(dataDir, process.execPath, id);
-    await replaceBackendSockets(key);
-    return true;
-    } finally { finishMaintenance(); }
+    return runConnectionContinuation(c, id, { target, guard, nativeId, version, expected });
   });
   for (const action of ['resume', 'forget']) register(action, async (c, id) => {
     const snapshot = await c.client.call('initial');

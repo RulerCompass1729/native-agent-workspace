@@ -96,8 +96,9 @@ function handlers(client, answer, events) {
     dialog: { async showMessageBox() { events.dialog++; return answer(); } },
     showDialog(c, kind, options) { return require('../background-control.cjs').dialog(c, kind, options, () => { events.dialog++; return answer(); }); },
     async continueService() { events.update++; throw Error('Unexpected backend write'); },
-    dataDir: 'synthetic-profile', process: { execPath: 'synthetic-node' } };
-  vm.runInNewContext(main.slice(start, end), scope); return registered;
+    backendSwitching: null, async broadcastRoom() {}, dataDir: 'synthetic-profile', process: { execPath: 'synthetic-node' } };
+  const helper = main.slice(main.indexOf('async function runConnectionContinuation('), main.indexOf('// Automatic moves run one backend'));
+  vm.runInNewContext(helper + main.slice(start, end), scope); return registered;
 }
 function clientFixture() {
   const entry = { key: 'old', state: { runtimeVersion: '0.1.0-alpha.120', sessions: [{ id: 's', nativeId: 'native-s', state: 'ended' }], capabilities: ['atomicShutdown'] } };
@@ -241,6 +242,18 @@ test('sessions ended by an unfinished update are named in the menu even with no 
   await f.menu.onSelect('interrupted'); assert.match(f.calls.toasts[0], /上次更新时结束了 Claude 2、Codex 秘书/);
   assert.equal(f.c.backendSwitchedText({ resumed: 1, left: 2 }), '后台已更新；2 个会话没能自动接回，请在会话里点“继续原生会话”。');
   assert.match(f.c.backendSwitchedText({ error: '旧后台尚未确认关闭' }), /没有完成：旧后台尚未确认关闭/);
+});
+
+test('an automatic all-ended continuation names its backend in the existing localized notice without claiming a session resumed', () => {
+  const f = menuFixture(), backend = { version: '0.1.0-alpha.226', sessions: [{ id: 'ended', name: 'RAW <task>' }] };
+  f.c.state.sessions = [{ id: 'ended', name: 'Renamed <task>' }];
+  assert.equal(f.c.backendSwitchedText({ backend }), '已更新 0.1.0-alpha.226 后台（Renamed <task>）；已结束的会话未重启。');
+  assert.equal(f.c.backendSwitchedText({ backend, error: 'RAW connection error' }), '自动更新 0.1.0-alpha.226 后台（Renamed <task>）未完成：RAW connection error');
+  assert.match(f.c.backendSwitchedText({ backend, reconnectFailed: true }), /已更新.*窗口没能自动重新连接/);
+  f.switch('en');
+  assert.equal(f.c.backendSwitchedText({ backend }), 'Updated the 0.1.0-alpha.226 backend (Renamed <task>); ended sessions were not restarted.');
+  assert.equal(f.c.backendSwitchedText({ backend, error: 'RAW connection error' }), 'Automatic update of the 0.1.0-alpha.226 backend (Renamed <task>) did not complete: RAW connection error');
+  assert.match(f.c.backendSwitchedText({ backend, reconnectFailed: true }), /Updated.*window could not reconnect/);
 });
 
 test('sessions an unfinished move ended keep the old-sessions control visible after every old backend is gone', () => {
