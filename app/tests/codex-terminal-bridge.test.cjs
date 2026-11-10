@@ -118,3 +118,82 @@ test('held native goal reads preserve only the exact disabled-feature flag witho
  assert.equal(display.length,1,'Private scoped responses are never forwarded to the native display');
  assert.equal(native.clients.size,1,'No new original native connection or engine');
 });
+
+async function versionFixture(t) {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-tui-version-'));
+ const endpoint=path.join(dir,'display.sock'),upstream=path.join(dir,'native.sock');
+ const server=http.createServer(),native=new WebSocket.Server({server}),observed=[],requests=[];let remote;
+ native.on('connection',socket=>{remote=socket;socket.on('message',data=>{
+  const m=JSON.parse(data);requests.push(m);
+  if(m.method==='thread/start')socket.send(JSON.stringify({id:m.id,result:{thread:{id:'original'}}}));
+ });});
+ await new Promise(r=>server.listen(upstream,r));
+ const bridge=await new CodexTerminalBridge(endpoint,upstream,e=>observed.push(e)).start();
+ const clients=[];
+ t.after(async()=>{for(const c of clients)c.terminate();bridge.close();for(const c of native.clients)c.terminate();await new Promise(r=>native.close(r));await new Promise(r=>server.close(r));fs.rmSync(dir,{recursive:true,force:true});});
+ async function connect() {
+  const client=new WebSocket('ws://localhost',{createConnection:()=>net.connect(endpoint)});clients.push(client);
+  await once(client,'open');const reply=once(client,'message');
+  client.send(JSON.stringify({id:'thread',method:'thread/start',params:{}}));await reply;
+  const rpc=observed.filter(e=>e.kind==='response').at(-1).rpc;
+  return {client,rpc};
+ }
+ const current=await connect();
+ const send=async(client,frame)=>{const received=once(remote,'message');client.send(JSON.stringify(frame));assert.deepEqual(JSON.parse((await received)[0]),frame);};
+ const reply=async(client,frame)=>{const received=once(client,'message');remote.send(JSON.stringify(frame));assert.deepEqual(JSON.parse((await received)[0]),frame);};
+ return {...current,connect,send,reply,observed,requests};
+}
+
+const initialize=(version,id='init')=>({id,method:'initialize',params:{clientInfo:{name:'codex-tui',version},capabilities:{experimentalApi:true}}});
+
+test('actual TUI initialize version is pinned only after its successful response; all frames pass unchanged', async t=>{
+ const f=await versionFixture(t);
+ assert.equal(f.rpc.nativeClientVersion,null);
+ await f.send(f.client,initialize('0.167.0'));
+ assert.equal(f.rpc.nativeClientVersion,null,'Unacknowledged initialize cannot qualify a draft');
+ await f.reply(f.client,{id:'other',result:{userAgent:'codex/0.167.0'}});
+ assert.equal(f.rpc.nativeClientVersion,null,'Unrelated response cannot confirm initialize');
+ await f.reply(f.client,{id:'init',result:{userAgent:'codex/0.168.0'}});
+ assert.equal(f.rpc.nativeClientVersion,'0.167.0','Use the TUI client version, never the server response version');
+ assert.equal(Object.getOwnPropertyDescriptor(f.rpc,'nativeClientVersion').set,undefined);
+ assert.deepEqual(f.requests[1],initialize('0.167.0'));
+});
+
+test('missing, malformed or failed TUI initialization never qualifies the terminal', async t=>{
+ for(const [request,response] of [
+  [initialize(undefined),{id:'init',result:{}}],
+  [initialize({version:'0.167.0'}),{id:'init',result:{}}],
+  [{method:'initialize',params:{clientInfo:{version:'0.167.0'}}},{result:{}}],
+  [initialize('0.167.0'),{id:'init',error:{code:-32600,message:'Rejected'}}],
+  [initialize('0.167.0'),{id:'init'}],
+ ]) {
+  const f=await versionFixture(t);await f.send(f.client,JSON.parse(JSON.stringify(request)));await f.reply(f.client,response);
+  assert.equal(f.rpc.nativeClientVersion,null);
+ }
+});
+
+test('duplicate initialize invalidates qualification even before the first response', async t=>{
+ for(const acknowledgeFirst of [true,false]) {
+  const f=await versionFixture(t);
+  await f.send(f.client,initialize('0.167.0'));
+  if(acknowledgeFirst)await f.reply(f.client,{id:'init',result:{}});
+  await f.send(f.client,initialize('0.168.0','again'));
+  if(!acknowledgeFirst)await f.reply(f.client,{id:'init',result:{}});
+  await f.reply(f.client,{id:'again',result:{}});
+  assert.equal(f.rpc.nativeClientVersion,null,'Do not silently replace an ambiguous client identity');
+  await f.send(f.client,initialize('0.167.0','third'));await f.reply(f.client,{id:'third',result:{}});
+  assert.equal(f.rpc.nativeClientVersion,null,'A duplicate handshake cannot requalify the connection');
+ }
+});
+
+test('a reconnected TUI cannot inherit the old connection version', async t=>{
+ const f=await versionFixture(t);
+ await f.send(f.client,initialize('0.167.0'));await f.reply(f.client,{id:'init',result:{}});
+ assert.equal(f.rpc.nativeClientVersion,'0.167.0');
+ const closed=once(f.client,'close');f.client.close();await closed;
+ assert.equal(f.rpc.connected,false);assert.equal(f.rpc.nativeClientVersion,null);
+ const next=await f.connect();assert.notEqual(next.rpc,f.rpc);assert.equal(next.rpc.nativeClientVersion,null);
+ await f.send(next.client,initialize('0.168.0'));await f.reply(next.client,{id:'init',result:{}});
+ assert.equal(next.rpc.nativeClientVersion,'0.168.0');
+ assert.equal(f.rpc.nativeClientVersion,null);
+});

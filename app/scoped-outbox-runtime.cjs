@@ -43,7 +43,7 @@ class ScopedOutboxRuntime {
     // clearing its edit line (qualified with an actual native command and draft).
     // Keep the conservative marker for retirement and every unqualified route.
     // New typing still changes controlRevision and invalidates stable(scope).
-    const preservesTerminalEdit = runtime.host?.rpc?.nativeVersion === '0.167.0' &&
+    const preservesTerminalEdit = runtime.host?.rpc?.nativeVersion === '0.167.0' && scope.rpc?.nativeClientVersion === '0.167.0' &&
       runtime.terminalNotificationSource && runtime.terminalRpc === scope.rpc;
     return this.stable(scope) && wake.budgetAllows(s, scope.op) && runtime.scopedOutboxRpc?.() === scope.rpc &&
       (s.state === 'idle' || scope.sent && runtime.pending?.tag === scope.tag) &&
