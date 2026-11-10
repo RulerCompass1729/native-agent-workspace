@@ -7656,3 +7656,23 @@ Compat refresh adds only the exact transformed main 88e8678 hook hash. Its regre
 Author-run verification: `node --test app/tests/claude-observation.test.cjs app/tests/claude-319-contract.test.cjs app/tests/claude-native-media.test.cjs app/tests/claude-context.test.cjs app/tests/claude-event-message.test.cjs app/tests/native-usage.test.cjs app/tests/legacy-input.test.cjs`: 455 passed, zero failures or skips. `npm test`: 3906 passed, zero failures, cancellations or skips. The new observation checks reproduce 14 failures against the unchanged base; the cold-start checks reproduce two. All qualification tests use synthetic local APIs with no provider model calls or paid test inference.
 
 Independent review: separate read-only headless checkpoint APPROVE_SCOPED, followed by an approved test-only delta that restores explicit bind-time no-argument usage assertions. The strengthened cold-start group passes 12/12; a private synthetic source mutation requesting a full breakdown fails all four qualified-version assertions (8 pass, 4 fail), without making any provider call. Product source is unchanged after the 455-related/3906-full passes. Both reviewer invocations exposed only Read/Grep/Glob with no MCP; HEAD, index and tracked worktree were unchanged across each invocation. Approval covers the inspected source and author-run fixtures, with no independent native rerun or daily-app acceptance. No blockers remain for source handoff.
+
+## Scheduled continuation cancellation notice; background-control self-activation check — 2026-11-09
+
+From independent review 0a2298c6 of main `88e8678` (non-blocking items). `2f7cbe8`: when the person's own change ends a continuation scheduled after a model-capacity or routing failure, the conversation now gets one notice saying so and telling them to send the message or "继续", in Chinese and English. The changes covered are an edit of the message box (`setDraft`) and a takeover or membership change. The request also named a rebind; that was narrowed deliberately. Every path that changes the native connection either shows its own state (starting, disconnect, exit), is a new native context (where an existing test forbids appending old notices), or adds the existing gap row (a Claude reload on the same thread). So a rebind notice could only name the wrong cause. Nothing is added for a state the session already shows, after the limit is reached, for a draft the app restored, or in a new native context. `298512f` (test only): `scripts/test-background-control.cjs` now asserts that the frontmost application is never the app's own process. Before, it checked only for hidden, unfocused windows.
+
+Author-run evidence:
+- The notice cases fail on `88e8678`.
+- The first version (`b1bff70`) named the wrong cause on the real disconnect, backend exit, stop and context-switch paths, and the tests that drive those paths fail on it.
+- Each guard and class is mutation-checked. Overlapping guards are kept as an explicit list of shown states.
+- After each notified cause, the advised manual "继续" is accepted on the Codex fixture.
+- Full suite 3913 passed, 0 failed.
+- The own-process desktop case is pinned in `background-control-desktop`; removing the assertion is caught.
+
+Independent read-only review: CHANGES on `b1bff70`, with three blocking misclassifications (disconnect and backend exit named as a rebind; context switch and stop named as a control change). PASS on `2f7cbe8`.
+
+Open non-blocking items:
+- There is no Claude fixture for the manual-continue advice. A send in the error state relies on `failedTurnInputId`.
+- The shown-state list in `capacityCancelled` repeats `capacityValid`. A shared predicate would prevent drift; trigger: the next change to `capacityValid`.
+- Typing within one tick after a takeover gets the draft notice instead of the control notice. The advice is still true.
+- The Codex terminal-switch and Claude `contextEnding` paths are covered by guards, not by tests.

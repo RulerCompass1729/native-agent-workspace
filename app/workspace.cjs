@@ -427,8 +427,9 @@ class Workspace extends EventEmitter {
   // A scheduled automatic continuation that the person's own change ended says why and how to go on: an edit of the
   // message box, or a takeover or membership change. Nothing is added when the session already shows why it cannot
   // continue (stopping, disconnect, backend exit, approval, a new turn or send, archive, save failure), when its native
-  // connection changed, after the limit was reached, or once it is in or moving to a new native context. Every rebind
-  // path shows its own state (starting, disconnect, exit) or is a new native context, so a rebind adds nothing either.
+  // connection changed, after the limit was reached, or once it is in or moving to a new native context. A rebind adds
+  // nothing either: each path shows its own state (starting, disconnect, exit), is a new native context, or, for a
+  // Claude reload on the same thread, adds the existing gap row (adapters.cjs observeRootGap).
   capacityCancelled(s, r, why) {
     const keys = { draft: 'notice.capacityCancelledDraft', control: 'notice.capacityCancelledControl' };
     const runtime = s && this.runtimes.get(s.id);
