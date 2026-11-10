@@ -2,7 +2,8 @@ const testScratch = require('./fixtures/test-scratch.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 // T-61: punctuation-heavy Chinese rows lost their last glyph at the native terminal's right edge.
 // Fill each row exactly to the grid with a synthetic native frame and check that the last glyph, the
-// xterm screen and the grid all end inside the visible client area, at the 13px default and at 14px.
+// xterm screen and the grid all end inside the visible client area, at the 13px default and at 14px, for a Codex and a
+// Claude session (the renderer path is the same for both; the native side is the synthetic fixture).
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
 const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
@@ -33,11 +34,11 @@ async function run() {
   await app.context().addInitScript(() => { window.edgeTerms = new Map(); let constructor; Object.defineProperty(window, 'Terminal', { configurable: true, get: () => constructor, set: value => { constructor = value; const open = value.prototype.open; value.prototype.open = function (element, ...args) { window.edgeTerms.set(element.closest('[data-terminal-id]').dataset.terminalId, this); return open.call(this, element, ...args); }; } }); });
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
   const win = await app.browserWindow(page), seen = new Set();
-  for (const fontSize of [13, 14]) {
+  for (const provider of ['codex', 'claude']) for (const fontSize of [13, 14]) {
     await page.evaluate(fontSize => workspace.viewState({ selected: '', mode: 'chat', terminalDisplay: { fontSize, palette: 'dark' } }), fontSize); await page.reload(); await page.locator('#new-session').waitFor();
-    await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check(); await page.locator('#session-name').fill(`Right edge ${fontSize}`); await createIn(page, 'chat');
+    await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check(); await page.locator('#session-name').fill(`Right edge ${provider} ${fontSize}`); await createIn(page, 'chat');
     const id = (await snapshot()).sessions.map(s => s.id).find(s => !seen.has(s)); seen.add(id);
-    await until(async () => (await fixture()).pending.includes(id), 'Native snapshot'); await fixture('release', id); await page.locator('.terminal-surface').first().waitFor();
+    await until(async () => (await fixture()).pending.includes(id), 'Native snapshot'); await fixture('release', id); await page.locator(`[data-terminal-id="${id}"] .terminal-surface`).waitFor();
     await fixture('terminal', id, { sequence: ++sequence, data: '\x1b[?1049h' });
     await until(() => page.evaluate(id => window.edgeTerms.get(id)?.buffer.active.type === 'alternate', id), 'Actual alternate buffer');
     for (const [width, height] of [[1250, 850], [1000, 800], [820, 760]]) for (const maximized of [false, true]) {
@@ -68,8 +69,10 @@ async function run() {
         return { cols: t.cols, rows: t.rows, fontSize: t.options.fontSize, cell, screenRight: screen.right, clipRight, clipper, surfaceClass: surface.className,
           scrollbarGutter: surface.offsetWidth - surface.clientWidth - surface.clientLeft * 2, overflowY: surface.scrollHeight > surface.clientHeight + 1, overflowX: surface.scrollWidth > surface.clientWidth + 1, lines };
       }, id);
-      const stage = { fontSize, width, height, maximized, ...detail }; observations.push(stage); await capture(`f${fontSize}-${width}${maximized ? '-max' : ''}`, stage);
-      const label = `${fontSize}px ${width}x${height}${maximized ? ' maximized' : ''} (${detail.cols} cols)`;
+      const stage = { provider, fontSize, width, height, maximized, ...detail }; observations.push(stage); await capture(`${provider}-f${fontSize}-${width}${maximized ? '-max' : ''}`, stage);
+      const label = `${provider} ${fontSize}px ${width}x${height}${maximized ? ' maximized' : ''} (${detail.cols} cols)`;
+      // The pixels on screen in the terminal area, so a person can see the right edge at the widest and the narrowest window, split and maximized.
+      if (process.env.NAW_SCREENSHOTS_DIR && width !== 1000) { fs.mkdirSync(process.env.NAW_SCREENSHOTS_DIR, { recursive: true, mode: 0o700 }); await page.screenshot({ path: path.join(process.env.NAW_SCREENSHOTS_DIR, `${provider}-f${fontSize}-${width}${maximized ? '-max' : ''}.png`), clip: await page.locator('#terminal-area').boundingBox() }); }
       console.log(JSON.stringify({ label, clipRight: detail.clipRight, screenRight: detail.screenRight, lastRight: detail.lines.map(l => l.lastRight), drift: detail.lines.map(l => l.drift), gutter: detail.scrollbarGutter, overflowY: detail.overflowY }));
       assert.equal(detail.fontSize, fontSize, `${label}: the chosen terminal font size is applied`);
       for (const [index, line] of detail.lines.entries()) {
@@ -84,10 +87,11 @@ async function run() {
       if (maximized) await page.locator('#terminal-maximize').click();
     }
   }
+  assert.deepEqual([...new Set(observations.map(o => o.provider))], ['codex', 'claude'], 'Both providers were measured');
   const stats = await fixture(); assert.deepEqual(stats.sends, []); assert.deepEqual(stats.inputs, [], 'The synthetic native session receives no input');
   await capture('observations');
   const latinDrift = Math.max(...observations.map(o => o.lines[1].drift)), margin = Math.min(...observations.map(o => o.clipRight - Math.max(...o.lines.map(l => l.lastRight))));
-  console.log(JSON.stringify({ checks: ['Punctuation-heavy Chinese and Latin rows that fill the grid end inside the visible edge at 13px and 14px, split and maximized, at three window sizes'], stages: observations.length, latinDrift, smallestEdgeMargin: margin, errors, modelTasks: 0, nativeProviders: 0, scriptSha256: require('node:crypto').createHash('sha256').update(fs.readFileSync(__filename)).digest('hex') }));
+  console.log(JSON.stringify({ checks: ['Punctuation-heavy Chinese and Latin rows that fill the grid end inside the visible edge for Codex and Claude sessions at 13px and 14px, split and maximized, at three window sizes'], stages: observations.length, latinDrift, smallestEdgeMargin: margin, errors, modelTasks: 0, nativeProviders: 0, scriptSha256: require('node:crypto').createHash('sha256').update(fs.readFileSync(__filename)).digest('hex') }));
   assert.deepEqual(errors, []);
 }
 run().catch(async error => { console.error(error.stack); if (page) await capture('failed'); process.exitCode = 1; }).finally(testScratch.cleanup(async () => { try { if (app) await app.close(); if (client) { for (const s of (await client.call('initial')).sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); } } finally { if (child.connected) child.disconnect(); if (child.exitCode === null) child.kill('SIGTERM'); } }));
