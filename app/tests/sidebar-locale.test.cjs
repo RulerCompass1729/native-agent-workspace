@@ -133,6 +133,39 @@ test('the independent group disclosure keeps its localized name in both accessib
   f.refresh('zh'); assert.equal(toggle.getAttribute('aria-label'), '展开独立会话'); assert.equal(toggle.getAttribute('title'), '展开独立会话'); assert.deepEqual(f.calls, []);
 });
 
+// The grouped view names the untouched default space in the interface language right after a language switch, with no
+// re-render: its heading, the heading's open-space name, ⋯, the fold toggle and its members' row labels (11-09).
+for (const [stored, zh, en] of [[spaces.DEFAULT_ROOM_NAME, '共同工作', 'Shared work'], ['学习小组', '学习小组', '学习小组']]) test(`grouped sidebar repaints the space named ${JSON.stringify(stored)} in place: ${zh} / ${en}`, () => {
+  const f = fixture(), other = { id: '11111111-1111-4111-8111-111111111111', name: 'Team 中文', archived: false };
+  f.state.room.name = stored; f.state.rooms.push(other); f.people[0].roomIds = ['shared', other.id];
+  f.context.crypto = require('node:crypto'); f.$('session-list').closest = () => null; f.context.sidebarCollapsedGroups = new Set();
+  f.run("sidebarView = 'grouped'; renderSessions()");
+  const before = structuredClone(f.state), group = f.context.sidebarGroups.get('shared'), row = f.context.sessionRows.get('group:shared:' + f.people[0].id);
+  const elements = [group.element, group.title, group.more, group.toggle, row.element, row.link], layout = f.layoutWrites.length;
+  // Everything the sidebar shows or names, including a plain title property.
+  const strings = element => [element.content, element.title, ...element.attrs.values(), ...element.children.flatMap(strings)].filter(value => typeof value === 'string');
+  const expect = (name, language) => {
+    assert.equal(group.title.textContent, `${name} · 1`, language);
+    assert.equal(group.title.getAttribute('aria-label'), locale.format(language, 'sidebar.openSpace', { name }));
+    for (const slot of ['aria-label', 'title']) {
+      assert.equal(group.more.getAttribute(slot), locale.format(language, 'sidebar.spaceActions', { name }), slot);
+      assert.equal(group.toggle.getAttribute(slot), locale.format(language, 'sidebar.collapse', { name }), slot);
+      assert.ok(row.link.getAttribute(slot).includes(locale.format(language, 'sidebar.memberships', { names: `${name}、Team 中文` })), slot);
+      assert.ok(row.more.getAttribute(slot).endsWith(' · ' + name), slot);
+    }
+    assert.equal(row.more.getAttribute('aria-description'), f.run("sidebarDetails(state.sessions[0]).join(' · ')"), 'The row details follow the language');
+    assert.ok(strings(row.badges).includes(`${name}、Team 中文`), 'The +1 badge lists both spaces');
+  };
+  expect(zh, 'zh');
+  f.refresh('en'); expect(en, 'en');
+  if (zh !== en) assert.deepEqual(strings(f.$('session-list')).filter(value => value.includes(zh)), [], 'No Chinese default name is left in the English sidebar');
+  f.refresh('zh'); expect(zh, 'zh');
+  const after = f.context.sidebarGroups.get('shared'), rowAfter = f.context.sessionRows.get('group:shared:' + f.people[0].id);
+  assert.deepEqual([after.element, after.title, after.more, after.toggle, rowAfter.element, rowAfter.link], elements, 'Repainted in place, not rebuilt');
+  assert.equal(f.layoutWrites.length, layout); assert.deepEqual(f.calls, []); assert.deepEqual(f.state, before);
+  assert.equal(f.state.room.name, stored, 'Display never changes the stored name');
+});
+
 test('archived rows repaint without reopening a process or replacing focused restore controls', () => {
   const f = fixture(); f.people[0].archived = true; f.people[0].state = 'recoverable'; f.$('archive-group-body').hidden = false;
   f.run('renderArchives()'); const row = f.$('archive-list').children[0], restore = row.children.at(-1); f.document.activeElement = restore;

@@ -2342,11 +2342,13 @@ function renderSessions() {
   const list = $('session-list');
   $('sessions-flat').setAttribute('aria-pressed', String(!grouped)); $('sessions-grouped').setAttribute('aria-pressed', String(grouped));
   if (grouped) {
-    const groups = allSpaces().filter(r => !r.archived).map(r => ({ id: r.id, name: spaceName(r), people: orderedMembers(r.id).filter(s => visible.includes(s)) }));
+    const groups = allSpaces().filter(r => !r.archived).map(r => ({ id: r.id, room: r, people: orderedMembers(r.id).filter(s => visible.includes(s)) }));
     // Every listed session appears at least once: a session left only in an archived or unknown space counts as independent.
     const independent = visible.filter(s => !groups.some(group => inSpace(s, group.id)));
-    groups.push({ id: '', name: null, people: independent });
+    groups.push({ id: '', room: null, people: independent });
     groups.forEach((group, index) => {
+      // Read when painted, so a language switch repaints the default space's name without a re-render.
+      const groupName = () => group.room ? spaceName(group.room) : uiText('sidebar.independent');
       let entry = sidebarGroups.get(group.id);
       if (!entry) {
         const element = node('section', undefined, 'session-space-group'), heading = node('h3'), body = node('div');
@@ -2373,14 +2375,14 @@ function renderSessions() {
       entry.element.classList.toggle('empty-independent', !group.id && !group.people.length);
       // Group spaces are never archived (archived ones get no group), as on the 协作空间 row's ⋯.
       if (entry.more) {
-        ui.display.attribute(entry.more, 'aria-label', 'sidebar.spaceActions', { name: group.name }); ui.display.attribute(entry.more, 'title', 'sidebar.spaceActions', { name: group.name });
+        ui.display.attribute(entry.more, 'aria-label', 'sidebar.spaceActions', () => ({ name: groupName() })); ui.display.attribute(entry.more, 'title', 'sidebar.spaceActions', () => ({ name: groupName() }));
         entry.more.disabled = disconnected || renameTarget?.id === 'room' && renameTarget.roomId === group.id;
       }
-      ui.display.text(entry.title, 'sidebar.groupCount', () => ({ name: group.name ?? uiText('sidebar.independent'), count: group.people.length })); entry.title.className = group.id ? `session-space-heading ${roomTone(group.id)}` : 'session-space-heading';
+      ui.display.text(entry.title, 'sidebar.groupCount', () => ({ name: groupName(), count: group.people.length })); entry.title.className = group.id ? `session-space-heading ${roomTone(group.id)}` : 'session-space-heading';
       // The open space is marked on its heading, as on its 协作空间 row (hidden in this view).
       const open = Boolean(group.id) && selected === 'room' && spaceId === group.id;
       entry.title.classList.toggle('active', open); if (open) entry.title.setAttribute('aria-current', 'page'); else entry.title.removeAttribute('aria-current');
-      if (group.id) ui.display.attribute(entry.title, 'aria-label', 'sidebar.openSpace', { name: group.name });
+      if (group.id) ui.display.attribute(entry.title, 'aria-label', 'sidebar.openSpace', () => ({ name: groupName() }));
       // A folded group hides only its own rows; its name, count and any rows needing attention stay visible.
       const closed = sidebarCollapsedGroups.has(group.id || 'independent');
       // The narrow rail still lists a folded group's rows (T-132), so an open menu or focus there stays put.
@@ -2389,7 +2391,7 @@ function renderSessions() {
       const closeMenu = rowsHidden && sessionMenu?.kind === 'session' && entry.body.contains(menuRow?.element || sessionMenu.anchor);
       const hiddenFocus = rowsHidden && (entry.body.contains(document.activeElement) || closeMenu);
       entry.body.hidden = closed; entry.toggle.setAttribute('aria-expanded', String(!closed));
-      const groupLabel = () => ({ name: group.name ?? uiText('sidebar.independent') });
+      const groupLabel = () => ({ name: groupName() });
       ui.display.attribute(entry.toggle, 'aria-label', closed ? 'sidebar.expand' : 'sidebar.collapse', groupLabel); ui.display.attribute(entry.toggle, 'title', closed ? 'sidebar.expand' : 'sidebar.collapse', groupLabel);
       const attention = group.people.map(record => ({ record, presentation: sidebarPresentation(record) })).filter(item => item.presentation.marker === '!');
       entry.attention.hidden = !closed || !attention.length; entry.attention.textContent = attention.length ? `!${attention.length}` : '';
@@ -2430,10 +2432,10 @@ function renderSessions() {
       element.addEventListener('keydown', event => { if (event.target.closest('#rename-editor')) return; if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); openSessionMenu(record.id, undefined, key); } });
       element.append(link, more); row = { element, link, more, name, shortId, badges, status, dot, marker, time, version, sessionId: record.id, spaceId: group }; sessionRows.set(key, row);
     }
-    const memberships = allSpaces().filter(r => !r.archived && inSpace(record, r.id)), membershipNames = memberships.map(r => spaceName(r)).join('、');
+    const memberships = allSpaces().filter(r => !r.archived && inSpace(record, r.id)), membershipNames = () => memberships.map(r => spaceName(r)).join('、');
     const presentation = sidebarPresentation(record);
     const label = () => `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${sidebarPresentation(record).full}`;
-    const association = () => memberships.length ? uiText('sidebar.memberships', { names: membershipNames }) : uiText('sidebar.independent');
+    const association = () => memberships.length ? uiText('sidebar.memberships', { names: membershipNames() }) : uiText('sidebar.independent');
     const occurrence = () => grouped && memberships.length > 1 ? uiText('sidebar.sameIdentity') : '';
     const version = () => backendVersionNotice(record, state.appVersion);
     row.link.disabled = false; ui.display.computed(row.link, 'aria-label', () => `${label()} · ${association()}${occurrence()} · ${sessionTimes(record)}${version() ? ' · ' + version().title : ''}`); ui.display.computed(row.link, 'title', () => `${label()}\n${association()}${occurrence()}\n${sessionTimes(record)}${version() ? '\n' + version().title : ''}`);
@@ -2443,7 +2445,7 @@ function renderSessions() {
       // One badge plus a count keeps membership on its line; the badge shows the space's whole name and CSS
       // shortens it only by the width it has (T-144). The full list is in the title and details.
       row.badges.replaceChildren(...memberships.slice(0, 1).map(r => { const badge = node('span', undefined, `space-badge ${roomTone(r.id)}`); ui.display.computed(badge, 'text', () => spaceName(r)); ui.display.attribute(badge, 'title', 'sidebar.spaceBadge', () => ({ name: spaceName(r) })); return badge; }));
-      if (memberships.length > 1) { const more = node('span', `+${memberships.length - 1}`, 'space-badge space-badge-more'); more.title = membershipNames; row.badges.append(more); }
+      if (memberships.length > 1) { const more = node('span', `+${memberships.length - 1}`, 'space-badge space-badge-more'); ui.display.computed(more, 'title', membershipNames); row.badges.append(more); }
       row.badgeKey = badgeKey;
     }
     ui.display.computed(row.badges, 'aria-label', association);
@@ -2452,8 +2454,8 @@ function renderSessions() {
     row.version.textContent = versionMark; row.version.dataset.marker = versionMark; ui.display.computed(row.version, 'title', () => version()?.title || ''); row.version.hidden = !notice;
     row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
     if (record.id === selected) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
-    const moreParams = { name: record.name, id: sessionShortId(record.id), space: group ? ` · ${spaceRecord(group)?.name}` : '' }; ui.display.attribute(row.more, 'aria-label', 'sidebar.sessionActions', moreParams); ui.display.attribute(row.more, 'title', 'sidebar.sessionActions', moreParams); row.more.disabled = renameTarget?.id === record.id;
-    row.more.setAttribute('aria-description', sidebarDetails(record).join(' · '));
+    const moreParams = () => ({ name: record.name, id: sessionShortId(record.id), space: group ? ` · ${spaceName(spaceRecord(group))}` : '' }); ui.display.attribute(row.more, 'aria-label', 'sidebar.sessionActions', moreParams); ui.display.attribute(row.more, 'title', 'sidebar.sessionActions', moreParams); row.more.disabled = renameTarget?.id === record.id;
+    ui.display.computed(row.more, 'aria-description', () => sidebarDetails(record).join(' · '));
     row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); ui.display.computed(row.status, 'text', () => sidebarPresentation(record).compact);
     row.time.textContent = sessionActivityTime(record); row.time.title = sessionTimes(record);
     row.dot.className = `state-dot ${presentation.tone}${presentation.workTone ? ' ' + presentation.workTone : ''}`; ui.display.computed(row.dot, 'title', () => sidebarPresentation(record).full); row.dot.dataset.nativeState = record.state;
