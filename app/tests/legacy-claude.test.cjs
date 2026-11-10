@@ -65,6 +65,7 @@ test('unsafe or corrupt projection does not fall back to raw private content', t
 });
 
 test('retained queue waits without timeout or retry and reconciles only its exact native input tag', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() }); // the 15 ms probe below
   const { EventEmitter } = require('node:events');
   const f = fixture(t);
   const b = { sessionId: f.record.nativeId, ...await f.r.bindRoot({ sessionId: f.record.nativeId, nativeBlocks: true, nativeQueue: true }) };
@@ -74,7 +75,7 @@ test('retained queue waits without timeout or retry and reconciles only its exac
   const done = f.r.queue(text, tag, () => true);
   assert.equal(f.r.pendingQueue, tag); assert.equal(wire.length, 1);
   assert.equal(f.r.submission.authorize({ id: tag, text }), true);
-  await new Promise(r => setTimeout(r, 45));
+  t.mock.timers.tick(45); await new Promise(r => setImmediate(r));
   assert.equal(f.r.pendingQueue, tag);
   await assert.rejects(f.r.queue('duplicate', crypto.randomUUID(), () => true));
   block(f, b, 1, { id: 'prompt:foreign', kind: 'input', turnId: undefined, index: undefined, delta: undefined, text, status: 'complete' });
@@ -124,7 +125,9 @@ async function queueRouter(t) {
   const router = new WorkspaceClient([{ key: '.', state: structuredClone(state), client }], '.'); router.control.legacyInput = bridge;
   t.after(() => { router.close(); bridge.close(); });
   const wire = [], response = new EventEmitter(); response.end = body => wire.push(JSON.parse(body));
-  f.r.submission.timeout = 15; f.r.submission.receive(response);
+  // A normal bounded ACK window: under parallel load real scheduling can pass a
+  // few milliseconds. Timeout probes shorten it only under a fake clock.
+  f.r.submission.timeout = 5000; f.r.submission.receive(response);
   t.after(() => response.emit('close'));
   let sequence = 0;
   const event = extra => f.r.observeRoot({ ...binding, epoch: binding.observationEpoch, sequence: ++sequence, block: true,
@@ -134,9 +137,6 @@ async function queueRouter(t) {
 const settle = () => new Promise(resolve => setImmediate(resolve));
 for (const boundary of ['working', 'permission', 'gap', 'leave']) test(`retained explicit recovery preserves exact new shared grant until ${boundary}`, async t => {
   const f = await queueRouter(t), sharing = f.bridge.sharedReplies, text = 'explicit recovery task';
-  // This fixture's 15 ms queue-timeout probe is unrelated to ordinary sends.
-  // Keep a bounded normal ACK window when the suite runs concurrently.
-  f.r.submission.timeout = 5000;
   f.record.state = 'error'; f.r.rootTurn = { id: 'failed-A', promptId: crypto.randomUUID(), status: 'error' };
   await f.router.refresh();
   const done = f.router.call('forward', f.record.id, text, f.record.nativeId); done.catch(() => {});
@@ -202,12 +202,15 @@ test('retained shared waiting input preserves the running public reply until its
   assert.equal(next.replyTo, nextTag); assert.equal(old.replyTo, oldTag); assert.equal(f.record.liveDraft, 'PRIVATE DRAFT');
 });
 for (const order of ['input-first', 'ack-first']) test(`retained shared queue uses original native waiting path; ${order}; old work and drafts stay private`, async t => {
+  // Fake clock: the 15 ms probe passes its deadline only by tick(), never by load.
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
   const f = await queueRouter(t), text = 'queued room instruction';
+  f.r.submission.timeout = 15;
   const done = f.router.call('queueShared', f.record.id, text, f.record.nativeId);
   await settle(); const tag = f.r.pendingQueue; assert.ok(tag);
   assert.equal(f.router.snapshot().sessions[0].legacySharedQueue, true);
   assert.equal(f.r.submission.authorize({ id: tag, text }), true);
-  await new Promise(resolve => setTimeout(resolve, 45));
+  t.mock.timers.tick(45); await settle();
   assert.equal(f.wire.filter(row => row.id === tag).length, 1);
   assert.equal(f.r.pendingQueue, tag);
   assert.equal(f.bridge.sharedMessages().find(m => m.id === tag).status, 'awaiting-native');
