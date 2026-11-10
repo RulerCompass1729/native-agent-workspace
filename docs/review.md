@@ -54,6 +54,24 @@ pinned old output, missing proof and capability boundaries. Independent
 review applies to this source delivery; merge, installation and daily-use
 acceptance remain separate.
 
+**Decision notifications, 2026-11-09 (B1; independent review PASS_SCOPED):**
+Queue outcomes that ask for a decision or fail now notify once per persisted event,
+with localized bounded text, and clicking reveals that exact space record after a
+workspace renderer is ready. Other waits stay silent. Notification failures cannot
+undo the record or trigger retries; active objects and remembered ids are bounded.
+Owner: B1 author. Initial reproduction: 13 of 14 new checks failed on the prior code.
+Review counterexamples reproduced four failures: a recorded name equal to a session
+id, non-LF line separators, a flattened-reply fallback, and a different loading
+window being foregrounded. All four were fixed; 125 related checks pass without skips.
+Chinese and English isolated source GUI trials verify deduplication, exact record
+focus, retained unsent drafts, failure notices and unchanged clipboard counts using
+synthetic provider transports and captured notifications. Final Chinese trial passed
+again after the fixes. Independent review closed all five findings (the fifth
+clarified that zero model calls follow from fixture construction).
+Scope excludes real OS banners, lock-screen previews, cold-start old notifications
+and the signed installed app; those remain installation acceptance. A future direct
+caller of the notification callback must retain the first-line question contract.
+
 **Space task queues and session rotation, 2026-11-08 (independent review, first round CHANGES_NEEDED):**
 the person asked that NAW itself send each idle space member its next queued item, and
 that day-old sessions hand over to a new session to free memory. Findings reproduced and

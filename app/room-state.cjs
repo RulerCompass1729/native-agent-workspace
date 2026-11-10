@@ -387,8 +387,10 @@ class RoomState {
   update(fields, event, id = DEFAULT_ROOM_ID) {
     const value = this.metadata(id);
     if (value.revision === Number.MAX_SAFE_INTEGER) throw uiError("error.room.dataVersionLimit");
-    const events = event ? [...value.events, { id: randomUUID(), role: 'system', time: Date.now(), ...event }] : (fields.events || value.events);
+    const record = event ? { id: randomUUID(), role: 'system', time: Date.now(), ...event } : null;
+    const events = record ? [...value.events, record] : (fields.events || value.events);
     this.commit({ ...value, ...fields, revision: value.revision + 1, events }, id);
+    return record?.id || null;
   }
   rename(name, id = DEFAULT_ROOM_ID) {
     this.writable(id);
@@ -444,7 +446,7 @@ class RoomState {
         queue.push(item);
       }
     }
-    this.update({ queue: queueRules.validateQueue(queue) }, event, id);
+    return this.update({ queue: queueRules.validateQueue(queue) }, event, id);
   }
   queueAdd(text, assignee, id = DEFAULT_ROOM_ID, creator) {
     this.writable(id);
@@ -532,7 +534,7 @@ class RoomState {
     this.queueReplace(id, itemId, next);
   }
   // reply is the member's own answer, kept so the queue row can show what came back.
-  queueSettle(id, itemId, status, reason, name, reply = '') {
+  queueSettle(id, itemId, status, reason, name, reply = '', question) {
     const item = this.queueFind(id, itemId);
     if (item.status !== 'sent') {
       throw uiError("error.queue.notSent");
@@ -553,7 +555,14 @@ class RoomState {
       const params = { text, name, reason: reason || '' };
       event = { kind: 'queue', sessionId: item.sentTo, ...uiNotice('notice.queue.failed', params) };
     }
-    this.queueReplace(id, itemId, next, event);
+    const eventId = this.queueReplace(id, itemId, next, event);
+    if (eventId && (status === 'failed' || status === 'waiting' && !reason)) {
+      try {
+        this.onQueueOutcome?.({ roomId: id, itemId, eventId, status, reason, memberId: item.sentTo,
+          memberName: name, task: queueRules.shortText(item.text, 40), reply,
+          question: question ?? queueRules.shortText(item.text) });
+      } catch { /* Notification failure cannot undo the persisted space record. */ }
+    }
   }
   queueReassign(id, fromId, toId) {
     this.writable(id);

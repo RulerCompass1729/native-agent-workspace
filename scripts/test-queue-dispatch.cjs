@@ -33,7 +33,17 @@ try {
   process.exit(75);
 }
 slotOwned = true;
-fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'terminal-claude', task: 'queue dialog layout and outcome', token, pid: process.pid, time: new Date().toISOString() }));
+fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'queue-dispatch-test', task: 'queue outcomes and decision notifications', token, pid: process.pid, time: new Date().toISOString() }));
+function releaseSlot() {
+  if (!slotOwned) return;
+  try {
+    if (JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'), 'utf8')).token === token) {
+      fs.rmSync(slot, { recursive: true }); slotOwned = false;
+    }
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+// A failed Electron close must not strand our lease after scratch cleanup exits.
+process.once('exit', releaseSlot);
 const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-queue-dispatch-'));
 const version = require(path.join(code, 'package.json')).version;
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
@@ -115,7 +125,7 @@ async function capture(name) {
     return;
   }
   fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
-  await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, name + '.png') });
+  await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, name + '.png'), timeout: 5000 });
 }
 
 async function launch(extraEnv = {}) {
@@ -123,6 +133,13 @@ async function launch(extraEnv = {}) {
   const env = { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid), NAW_TEST_QUEUE_HUMAN_QUIET_MS: '3000', ...extraEnv };
   let executablePath = require('electron');
   let args = [root];
+  if (process.env.NAW_TEST_DECISION_NOTICE === '1') {
+    assert.ok(!process.env.NAW_APP_EXECUTABLE, 'Decision notification fixture is source-only');
+    const source = path.join(profile, 'source-app'); fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'naw-decision-test', version, main: 'entry.cjs' }));
+    fs.writeFileSync(path.join(source, 'entry.cjs'), `require(${JSON.stringify(path.join(__dirname, 'fixtures/decision-notification.cjs'))});\nrequire(${JSON.stringify(path.join(code, 'app/main.cjs'))});\n`);
+    args = [source];
+  }
   if (process.env.NAW_APP_EXECUTABLE) {
     executablePath = process.env.NAW_APP_EXECUTABLE;
     args = [];
@@ -131,7 +148,11 @@ async function launch(extraEnv = {}) {
   page = await app.firstWindow();
   page.setDefaultTimeout(10000);
   page.on('pageerror', error => errors.push(error.message));
-  await page.locator('#new-session').waitFor();
+  if (process.env.NAW_TEST_DECISION_NOTICE === '1') {
+    page.on('console', message => { if (message.type() === 'error') console.error('Renderer:', message.text()); });
+    page.on('requestfailed', request => console.error('Request failed:', new URL(request.url()).pathname, request.failure()?.errorText));
+  }
+  await page.locator('#new-session').waitFor({ timeout: 60000 });
 }
 
 async function relaunch(extraEnv) {
@@ -146,7 +167,12 @@ async function createMember(name) {
   await page.locator('#session-name').fill(name);
   await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name), `Created ${name}`);
-  await joinSpace(page);
+  if (process.env.NAW_TEST_UI_LANGUAGE === 'en') {
+    await page.locator('#session-header-more').click();
+    await page.getByRole('menuitem', { name: 'Join this space', exact: true }).click();
+    await page.locator('#header-actions').getByRole('button', { name: 'Leave this space', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
+    await page.locator('#toast-close').click();
+  } else await joinSpace(page);
   return (await snapshot()).sessions.find(s => s.name === name).id;
 }
 
@@ -388,6 +414,50 @@ function assertReadable(fact, label) {
   assert.ok(fact.insideWindow, `${label}: its centre is outside the window`);
 }
 
+async function decisionNoticeScenario(a, b) {
+  const english = process.env.NAW_TEST_UI_LANGUAGE === 'en';
+  const title = english ? 'NAW · Needs your decision' : 'NAW · 需要你决定';
+  const question = english ? 'Merge the branch?' : '要不要合并分支？';
+  const notices = () => app.evaluate(() => globalThis.decisionNotifications.map(n => n.options));
+  const clipboardCount = () => execFileSync('osascript', ['-l', 'JavaScript', '-e', "ObjC.import('AppKit'); String($.NSPasteboard.generalPasteboard.changeCount)"], { encoding: 'utf8' }).trim();
+  const beforeClipboard = clipboardCount();
+  await addItem('Decision task', a);
+  await expectSend(1, a, /Decision task/, 'decision task dispatched');
+  await release(a, (english ? 'Needs your decision: ' : '需要你决定：') + question + '\nPRIVATE second line');
+  await until(async () => (await itemByText('Decision task')).status === 'waiting', 'Decision settled');
+  const decision = (await snapshot()).rooms.find(r => r.id === 'shared').events.findLast(e => e.uiMessage?.key === 'notice.queue.waiting');
+  assert.ok(decision?.id);
+  await until(async () => (await notices()).length === 1, 'One decision notification', 5000);
+  assert.deepEqual((await notices())[0], { title, body: english ? `队员甲 · Shared work: ${question}` : `队员甲 · 共同工作：${question}` });
+  await page.locator('#close-queue').click();
+  await page.locator(`#session-list .session-link[data-session-id="${b}"]`).click();
+  // Preserve a real user draft while the notification navigates away.
+  if (await page.locator('#chat-tab').isVisible()) await page.locator('#chat-tab').click();
+  await page.locator('#message-input').fill('Unsent B1 draft');
+  await page.reload(); await page.locator('#new-session').waitFor(); await delay(3500);
+  assert.equal((await notices()).length, 1, 'No repeat after refresh and another dispatcher tick');
+  await app.evaluate(() => globalThis.decisionNotifications[0].emit('click'));
+  await page.waitForFunction(id => {
+    const row = document.querySelector('[data-search-target="true"]');
+    return row?.dataset.messageId === id && document.activeElement === row;
+  }, decision.id);
+  await capture('decision-record-' + (english ? 'en' : 'zh'));
+  await page.locator(`#session-list .session-link[data-session-id="${b}"]`).click();
+  assert.equal(await page.locator('#message-input').inputValue(), 'Unsent B1 draft');
+  await page.locator('#message-input').fill('');
+  await openSpace();
+  await fixture('fail-next-send', b);
+  await addItem('Failure task', b);
+  await until(async () => (await itemByText('Failure task')).status === 'failed', 'Synthetic send error settles failed');
+  await until(async () => (await notices()).length === 2, 'One failure notification', 5000);
+  const failure = (await notices())[1];
+  assert.equal(failure.title, english ? 'NAW · Task not delivered' : 'NAW · 派活没有完成');
+  assert.ok(failure.body.includes('Failure task')); assert.ok(!failure.body.includes('Synthetic send failure'));
+  assert.equal(clipboardCount(), beforeClipboard, 'Clipboard change count unchanged');
+  assert.deepEqual(errors, []);
+  console.log(JSON.stringify({ decisionNotification: (await notices())[0], failure, eventId: decision.id, dedup: true, exactRowFocused: true, draftPreserved: true, clipboardUnchanged: true, nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
+}
+
 async function run() {
   console.log('Fixture profile:', profile);
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon');
@@ -397,6 +467,7 @@ async function run() {
   const a = await createMember('队员甲');
   const b = await createMember('队员乙');
   await openSpace();
+  if (process.env.NAW_TEST_DECISION_NOTICE === '1') return decisionNoticeScenario(a, b);
 
   // 1) Two idle members each get exactly one item; NAW, not the person, sends them.
   await addItem('任务一');
@@ -674,7 +745,7 @@ async function run() {
 run().catch(async error => {
   console.error(error.stack);
   if (page) {
-    await capture('failed');
+    await capture('failed').catch(failure => console.error('Screenshot:', failure.message));
   }
   process.exitCode = 1;
 }).finally(testScratch.cleanup(async () => {
@@ -694,15 +765,5 @@ run().catch(async error => {
   if (child.connected) {
     child.disconnect();
   }
-  if (slotOwned) {
-    let owner = {};
-    try {
-      owner = JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'), 'utf8'));
-    } catch {
-      owner = {};
-    }
-    if (owner.token === token) {
-      fs.rmSync(slot, { recursive: true, force: true });
-    }
-  }
+  releaseSlot();
 }));

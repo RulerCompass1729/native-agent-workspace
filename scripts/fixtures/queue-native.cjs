@@ -8,6 +8,7 @@ const { NativeHost } = require(path.join(appRoot, 'app/adapters.cjs'));
 
 const sends = [];
 const turns = new Map();
+const failNext = new Set();
 const runtimes = new Map();
 
 NativeHost.prototype.start = async function () {
@@ -31,6 +32,7 @@ NativeHost.prototype.create = function (record) {
     return { state: 'ended' };
   };
   runtime.send = (text, tag, guard) => new Promise((resolve, reject) => {
+    if (failNext.delete(record.id)) { reject(Error('Synthetic send failure')); return; }
     if (!guard()) {
       reject(new Error('Synthetic acceptance refused'));
       return;
@@ -59,6 +61,7 @@ function release(id, reply) {
 }
 
 process.on('message', request => {
+  if (request.method === 'fail-next-send') failNext.add(request.session);
   let released = null;
   if (request.method === 'release') {
     released = release(request.session, request.reply);
