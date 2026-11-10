@@ -33,7 +33,7 @@ function fixture() {
     contains: el => el != null && (el === toast || el === text || el === close || el === action),
     querySelector: () => action, insertBefore: el => { action = el; } });
   const button = (label, run) => { const el = new Element('toast-action', true); Object.assign(el, { label, isConnected: true, setAttribute() {}, remove() { el.isConnected = false; if (action === el) action = null; }, click: run }); return el; };
-  const context = vm.createContext({ ...localeUI(), document, button, Element,
+  const context = vm.createContext({ ...localeUI(), document, button, Element, mobileSetup: { dispose() {} },
     $: id => ({ toast, 'toast-text': text, 'toast-close': close })[id],
     setTimeout: (fn, ms) => { const id = ++seq; timers.push({ id, at: now + ms, fn }); return id; },
     clearTimeout: id => { timers = timers.filter(t => t.id !== id); } });

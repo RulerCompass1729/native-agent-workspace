@@ -83,7 +83,8 @@ test('a late original read cannot overwrite another selected session', async () 
 });
 test('text with a native terminal prefix is refused on the phone without a pending row or request', async () => {
   const f = fixture(); await f.client.start(); await f.client.select('a'); const before = f.values.get(KEY);
-  for (const text of ['!x', ' !x', '\n!x', '#x', '/x']) {
+  // 11-09: also after invisible characters trim() keeps, and in full-width form.
+  for (const text of ['!x', ' !x', '\n!x', '#x', '/x', '\u200B!x', '\u2060!x', '\u00AD!x', '\uFEFF#x', '！x', '＃x', '／x', '\u200B\u3000！x']) {
     f.client.setDraft(text); const saved = f.values.get(KEY); await f.client.send();
     assert.equal(f.client.state.pending.length, 0); assert.equal(f.client.state.draft, text); assert.equal(f.client.state.busy, false);
     assert.match(f.client.state.notice, /不发送以 !、# 或 \/ 开头/); assert.equal(f.values.get(KEY), saved, 'no pending row saved for ' + JSON.stringify(text));

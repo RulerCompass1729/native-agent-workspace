@@ -11,8 +11,9 @@
     unconfirmed: '结果未确认，请查原回执，勿重复发送', 'not-sent': '未发送，草稿保留', 'reply-written': '回答已写入；原生处理仍待确认',
   };
   const failure = code => Object.assign(new Error(code), { code });
-  // Same rule as the broker: these prefixes have native terminal meaning.
-  const nativePrefix = value => /^[!#/]/.test(value.trim());
+  // Same rule as the broker (mobile-broker.cjs): these prefixes have native terminal meaning, also after leading
+  // invisible characters or in full-width form.
+  const nativePrefix = value => /^[!#/]/.test(value.normalize('NFKC').replace(/^[\s\p{Default_Ignorable_Code_Point}]+/u, ''));
   function createMobileClient({ request, storage, newId, onChange = () => {} }) {
     const state = { session: null, selected: null, row: null, draft: '', revision: 0, busy: false, notice: '', storageError: false, drafts: [], pending: [] };
     let readEpoch = 0, unreadableStorage = false;

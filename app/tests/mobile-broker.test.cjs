@@ -62,7 +62,7 @@ function fixture(t, { requestLimit, holdConnect = false } = {}) {
       if (name === './mobile-session.cjs' && requestLimit !== undefined) return { MAX_REQUESTS: requestLimit };
       return requireFromBroker(name);
     } }, { filename });
-  const broker = new module.exports.MobileBroker(root, { exclusive: () => exclusive });
+  const changes = [], broker = new module.exports.MobileBroker(root, { exclusive: () => exclusive, changed: () => changes.push('changed') });
   const selection = [{ sessionId: record.id, actions: ['read', 'send', 'answer'] }];
   async function pair(actions = selection[0].actions, replace = false) {
     const challenge = await broker.beginPairing({ actor, origin, selection: [{ sessionId: record.id, actions }], replace });
@@ -71,7 +71,7 @@ function fixture(t, { requestLimit, holdConnect = false } = {}) {
     auth.csrf = broker.session(auth).csrf; return { challenge, device, auth };
   }
   t.after(() => { failRevoke = false; broker.revoke(); assert.equal(fs.statSync(root).ino, original.ino); fs.rmSync(root, { recursive: true }); });
-  return { root, broker, record, selection, pair, calls, clients, sent, answered, receipts,
+  return { root, broker, record, selection, pair, calls, changes, clients, sent, answered, receipts,
     exclusive(value) { exclusive = value; }, wrongRoot(value) { wrongRoot = value; }, failRevoke(value) { failRevoke = value; },
     holdRead(value) { holdRead = value; }, holdSend(value) { holdSend = value; }, loseAck(value) { loseAck = value; }, releaseRead: () => releaseRead(), releaseSend: () => releaseSend(), releaseConnect: () => releaseConnect() };
 }
@@ -130,7 +130,8 @@ test('malformed Unicode in human text is rejected before native delegation', asy
 });
 test('text with a native terminal prefix is refused before any request record or client call', async t => {
   const f = fixture(t), { auth } = await f.pair(), row = await f.broker.read(auth, f.record.id);
-  for (const text of ['!x', ' !x', '\n\t!x', '\u3000!x', '#x', ' #x', '/x', ' /x']) {
+  // 11-09: also after invisible characters trim() keeps, and in full-width form.
+  for (const text of ['!x', ' !x', '\n\t!x', '\u3000!x', '#x', ' #x', '/x', ' /x', '\u200B!x', '\u2060!x', '\u00AD!x', '\uFEFF#x', '！x', '＃x', '／x', '\u200B\u3000！x']) {
     const requestId = randomUUID();
     await assert.rejects(f.broker.send(auth, { contextId: row.contextId, requestId, text }), { code: 'MOBILE_BROKER_DENIED' }, JSON.stringify(text));
     await assert.rejects(f.broker.receipt(auth, requestId), { code: 'MOBILE_RECEIPT_UNKNOWN' }, 'no request record for ' + JSON.stringify(text));
@@ -350,4 +351,16 @@ test('an aliased app profile retains the same desktop human boundary during a he
   assert.equal((await sending).status, 'not-sent');
   assert.equal((await f.stats()).length, 0);
   assert.equal((await f.desktop.call('initial')).sessions.find(row => row.id === f.first).liveDraft, 'PRIVATE_DESKTOP_FIRST');
+});
+
+// 11-09: the app keeps its listener only while something is open (main.cjs watchAppMobile).
+test('openUntil follows the pairing link and then the paired device; pairing and logout report a change', async t => {
+  const f = fixture(t); assert.equal(f.broker.openUntil(), 0, 'Nothing open before pairing');
+  const challenge = await f.broker.beginPairing({ actor, origin, selection: f.selection });
+  assert.equal(f.broker.openUntil(), challenge.expiresAt); assert.deepEqual(f.changes, [], 'Preparing a link is the desktop\'s own action');
+  const device = f.broker.pair({ secret: challenge.secret, actor, origin });
+  assert.equal(f.broker.openUntil(), device.expiresAt); assert.deepEqual(f.changes, ['changed']);
+  const auth = { token: device.cookieValue, actor, origin }; auth.csrf = f.broker.session(auth).csrf;
+  assert.equal(f.broker.logout(auth).authorizationRevoked, true);
+  assert.equal(f.broker.openUntil(), 0); assert.deepEqual(f.changes, ['changed', 'changed']);
 });

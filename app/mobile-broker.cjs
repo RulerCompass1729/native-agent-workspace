@@ -14,8 +14,10 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const fingerprint = value => digest(JSON.stringify(stable(value)));
 // A leading ! (shell), # (memory) or / (command) has meaning in a native terminal.
-// Phone text is plain prompt text, so it is refused before any record or call.
-const nativePrefix = text => /^[!#/]/.test(text.trim());
+// Phone text is plain prompt text, so it is refused before any record or call. The check looks past leading
+// whitespace and invisible characters (U+200B and other default-ignorables, which trim() keeps) and folds
+// compatibility forms, so full-width ！＃／ count too. The same rule is in mobile-web/client.js and mobile-session.cjs.
+const nativePrefix = text => /^[!#/]/.test(text.normalize('NFKC').replace(/^[\s\p{Default_Ignorable_Code_Point}]+/u, ''));
 const receipt = (value, ticket, requestId, action) => {
   if (!value || value.requestId !== requestId || value.sessionId !== ticket.sessionId || value.nativeId !== ticket.nativeId || value.action !== action ||
       !['prepared', 'awaiting-native', 'submitted', 'unconfirmed', 'not-sent', 'reply-written'].includes(value.status)) throw denied('MOBILE_RECEIPT_UNKNOWN');
@@ -24,10 +26,12 @@ const receipt = (value, ticket, requestId, action) => {
 };
 
 class MobileBroker {
-  #access; #root; #scope; #client = null; #epoch = 0; #csrf = null;
+  #access; #root; #scope; #client = null; #epoch = 0; #csrf = null; #changed;
   #contexts = new Map(); #requests = new Map();
-  constructor(root, { exclusive } = {}) {
+  // changed() runs after the phone pairs or logs out, so the app can close its listener when nothing stays open.
+  constructor(root, { exclusive, changed } = {}) {
     this.#access = new MobileAccess(root, { exclusive });
+    this.#changed = typeof changed === 'function' ? changed : () => {};
     this.#root = this.#access.root;
     // WorkspaceClient shares human boundaries by the exact app scope string.
     // Keep that spelling while separately verifying its canonical authority.
@@ -105,6 +109,7 @@ class MobileBroker {
     // adapter may put it in Set-Cookie only, never JSON or a URL.
     const result = { deviceId: paired.deviceId, expiresAt: paired.expiresAt };
     Object.defineProperty(result, 'cookieValue', { value: paired.cookieValue });
+    this.#changed();
     return Object.freeze(result);
   }
   session(auth) {
@@ -186,7 +191,19 @@ class MobileBroker {
     // Logging out a read-only device must not require send permission. It
     // still requires an explicit same-origin, session-bound CSRF token.
     this.#writeState(auth);
-    return this.revoke();
+    const result = this.revoke();
+    this.#changed();
+    return result;
+  }
+  // Until when the app's listener is needed: an unexpired pairing link or paired device. 0 when nothing is open,
+  // including when the stored state cannot be read.
+  openUntil() {
+    try {
+      if (!this.#access.initialized) return 0;
+      const s = this.#access.load(), time = this.#access.time();
+      const until = Math.max(s.pairing ? s.pairing.until : 0, s.enabled && s.device ? s.device.until : 0);
+      return until > time ? until : 0;
+    } catch { return 0; }
   }
   revoke() {
     this.#forget();

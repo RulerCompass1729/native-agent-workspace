@@ -3,9 +3,11 @@ const fs = require('node:fs'), vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const source = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
 function fixture() {
-  const calls = [], handlers = new Map(), servers = []; let quit, releasePair;
+  const calls = [], handlers = new Map(), servers = [], timers = new Map(); let quit, releasePair, timerSeq = 0;
   class Broker {
-    constructor(root, options) { calls.push({ method: 'construct', root }); this.options = options; }
+    constructor(root, options) { calls.push({ method: 'construct', root }); this.options = options; context.broker = this; }
+    // Until when a pairing link or paired device is open (the real one reads mobile-access state).
+    openUntil() { return context.openUntil === undefined ? context.now + 120000 : context.openUntil; }
     async beginPairing(selection) {
       calls.push({ method: 'pair', selection });
       if (context.replaceRequired && !selection.replace) throw Error('Synthetic explicit replacement required');
@@ -32,7 +34,9 @@ function fixture() {
     close(callback) { calls.push({ method: 'closeHTTP' }); this.listening = false; queueMicrotask(() => { this.emit('close'); callback?.(context.closeFailure ? Error('Synthetic close failure') : undefined); }); }
     closeAllConnections() { calls.push({ method: 'closeOwnHTTPConnections' }); if (context.closeAllFailure) throw Error('Synthetic close connections failure'); }
   }
-  const context = vm.createContext({ primary: true, quitting: false, dataDir: '/synthetic/profile', Error, AbortController,
+  // Main state the current register() and before-quit read; no outbox broker in this fixture.
+  const context = vm.createContext({ primary: true, quitting: false, dataDir: '/synthetic/profile', Error, AbortController, now: 1000, setTimeout(fn, ms) { const id = ++timerSeq; timers.set(id, { fn, ms }); return id; }, clearTimeout(id) { timers.delete(id); },
+    applicationHandlers: new Map(), uiLocale: require('../ui-locale.js'), uiError: require('../ui-errors.cjs').uiError, outboxClosing: false, outboxQuitFailed: false, outboxBroker: null, backgroundControl: null,
     require(name) {
       if (name === './mobile-broker.cjs') return { MobileBroker: Broker };
       if (name === './mobile-http.cjs') return { createMobileHandler(value) { calls.push({ method: 'fixedHandler', origin: value.origin, actor: value.actor }); return () => {}; } };
@@ -50,7 +54,9 @@ function fixture() {
   vm.runInContext(source.slice(source.lastIndexOf("app.on('before-quit'"), source.indexOf('// Deliberately no native shutdown')), context);
   const frame = { url: 'https://ui.invalid/' }, sender = { id: 7, mainFrame: frame }; context.windows.set(7, { win: { isDestroyed: () => false, getBounds: () => ({}) }, view: {} });
   const selection = { actor: 'synthetic-human', origin: 'https://mobile.invalid', selection: [{ sessionId: 'a', actions: ['read'] }], replace: false, port: 0, carrierConfirmed: true };
-  return { context, calls, handlers, servers, selection, releasePair: () => releasePair(), quit: event => quit(event), event: { sender, senderFrame: frame } };
+  context.Date = { now: () => context.now };
+  const fire = () => { const due = [...timers]; timers.clear(); for (const [, timer] of due) timer.fn(); };
+  return { context, calls, handlers, servers, timers, fire, selection, releasePair: () => releasePair(), quit: event => quit(event), event: { sender, senderFrame: frame } };
 }
 test('boot registration is lazy and stopping an unused mobile entry creates neither broker nor authorization', () => {
   const f = fixture(); assert.deepEqual(f.calls, []);
@@ -134,8 +140,9 @@ test('an unconfirmed mobile revoke is returned honestly without crashing or clos
 test('preload exposes only local pairing and revoke among the mobile methods', async () => {
   const preload = fs.readFileSync(require.resolve('../preload.cjs'), 'utf8'), calls = []; let api;
   vm.runInNewContext(preload, { require(name) { assert.equal(name, 'electron'); return {
-    contextBridge: { exposeInMainWorld(key, value) { assert.equal(key, 'workspace'); api = value; } },
-    ipcRenderer: { invoke: async (...args) => { calls.push(args); return { ok: true, value: 'synthetic-result' }; } },
+    // The preload also exposes the DSH locale bridge; only the workspace API is under test.
+    contextBridge: { exposeInMainWorld(key, value) { assert.ok(['workspace', '__DSH_LOCALE__'].includes(key), key); if (key === 'workspace') api = value; } },
+    ipcRenderer: { on() {}, invoke: async (...args) => { calls.push(args); return { ok: true, value: 'synthetic-result' }; } },
   }; } });
   assert.deepEqual(Object.keys(api).filter(key => key.startsWith('mobile')).sort(), ['mobilePairing', 'mobileRevoke']);
   assert.equal(await api.mobileRevoke(), 'synthetic-result'); assert.deepEqual(calls, [['workspace:mobileRevoke']]);
@@ -148,4 +155,34 @@ test('the existing GUI payload list includes the app-local broker and its existi
   for (const name of ['mobile-broker.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-http.cjs', 'mobile-web/index.html', 'mobile-web/client.js', 'mobile-web/style.css']) {
     assert.equal(names.filter(value => value === name).length, 1); assert.ok(fs.statSync(require.resolve('../' + name)).isFile());
   }
+});
+
+// 11-09 (T-19/B10, user: the phone entry may open a local port): the listener stays open only while a pairing link or a
+// paired device is unexpired. Logout from the phone, or expiry of either, revokes and closes it.
+async function opened() {
+  const f = fixture(); const r = await f.handlers.get('workspace:mobilePairing')(f.event, f.selection); assert.equal(r.ok, true);
+  return { f, server: f.servers[0], revokes: () => f.calls.filter(c => c.method === 'revoke').length };
+}
+test('an unpaired link closes the listener when it expires', async () => {
+  const { f, server, revokes } = await opened(); assert.equal(server.listening, true); assert.equal(f.timers.size, 1);
+  assert.equal([...f.timers.values()][0].ms, 120001, 'Checked right after the link expires');
+  const before = revokes(); f.context.now += 120001; f.context.openUntil = 0; f.fire(); f.fire();
+  assert.equal(revokes(), before + 1); assert.equal(server.options.signal.aborted, true); assert.equal(server.listening, false);
+});
+test('pairing moves the deadline to the device expiry, and the device expiry closes the listener', async () => {
+  const { f, server, revokes } = await opened();
+  f.context.openUntil = f.context.now + 3600000; f.context.broker.options.changed();
+  assert.equal(f.timers.size, 1); assert.equal([...f.timers.values()][0].ms, 3600001);
+  f.context.now += 3600001; f.context.openUntil = 0; const before = revokes(); f.fire(); f.fire();
+  assert.equal(revokes(), before + 1); assert.equal(server.listening, false);
+});
+test('a phone logout closes the listener after the short response grace, not before', async () => {
+  const { f, server, revokes } = await opened();
+  f.context.openUntil = 0; f.context.broker.options.changed();
+  assert.equal(server.listening, true, 'The logout response can still leave'); assert.equal([...f.timers.values()][0].ms, 1000);
+  const before = revokes(); f.fire(); assert.equal(revokes(), before + 1); assert.equal(server.listening, false);
+});
+test('a desktop revoke cancels the pending expiry check; a new pairing after it is unaffected', async () => {
+  const { f, server } = await opened(); assert.equal(f.timers.size, 1);
+  await f.handlers.get('workspace:mobileRevoke')(f.event); assert.equal(f.timers.size, 0); assert.equal(server.listening, false);
 });
