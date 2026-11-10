@@ -67,7 +67,7 @@ test('changed pixels, RPC connection or native lifecycle invalidate the image re
   }
 });
 test('unqualified native versions, disconnected transport and forged media refuse before dispatch', async t => {
-  for (const change of ['0.165.0', '0.167.0', null, 'disconnected', 'forged']) {
+  for (const change of ['0.165.0', '0.168.0', '0.167.0-beta', null, 'disconnected', 'forged']) {
     const f = fixture(t); if (change === 'disconnected') f.runtime.host.rpc.ws.readyState = 3;
     else if (change !== 'forged') f.runtime.host.rpc.nativeVersion = change;
     await assert.rejects(f.runtime.send('caption', 'owned-tag', () => true, change === 'forged' ? {} : f.submission));

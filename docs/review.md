@@ -7589,3 +7589,19 @@ The existing `77be5bd` preview is ported as its four relevant files, with receip
 Author-run evidence: `facts-after-final.log` has 71 focused reading checks; `related-final.log` has 22 checks; `full-suite-layout-final.log` is the final all-tests output. A first all-tests run found the existing Markdown extraction fixture omitted the new noncommunication `spaceBody=null` local; only its fixture was corrected (`full-suite.log`). The misleadingly named `facts-final.log` is an earlier failed English-phrase assertion (70 pass/1 fail); `facts-after-final.log` and the final all-tests log supersede it. Initial GUI failures are retained: one expected the wrong localized unknown label, and the next incorrectly counted a receiver-only anonymous peer row in the sender's preview. The corrected GUI proved four full-ledger rows, then current-page preview, receipt refresh without losing body selection, 850px bounds, Escape/focus, both drafts and unchanged native-input/send counters. Screenshot inspection found the system-notice layout squeezed body text; the scoped block layout and a GUI width assertion address it. `gui-layout-final.log` is the final qualifier; earlier `gui-complete.log` is before that style correction. GUI runs use a private profile, the actual app/service/renderer and synthetic NativeHost, no native providers/models, and an atomic event wait for the existing test slot. Owned app, daemon, profile and exact token are cleaned; no daily app is touched. Independent source review APPROVE_SCOPED for the exact staged source and author-run evidence, after 11 scoped read/search calls including both screenshots. Only Read/Grep/Glob were exposed, with no MCP, and HEAD/index/worktree stayed unchanged throughout. Final all-tests result is 3728 pass/0 fail/0 cancelled/0 skipped. The reviewer did not rerun tests or independently verify the T-151 audit. Installed/daily acceptance and real-provider/peer qualification stay with the person and integrator; narrower header overflow beyond the measured panel bounds remains unverified.
 
 Related T-151 audit: old `cadad82` is already covered on main by `9492f3a`, followed by `1a4cf29` service-state waits and `22a6f33` tab-toggle adaptation. Three files match the old delta; the launcher retains its flow and adds the shared-space setup. The current five precondition checks pass, including deliberate no-UI-action rejection cases. No old commit is cherry-picked, no claim of a new T-151 GUI run is made, and the T19 phone branch remains untouched.
+
+
+**Codex 0.167 protocol qualification (source and synthetic fixtures, 2026-11-09):**
+The running 0.167 server was excluded from the shared history/steer list and the
+space-image list. Its generated experimental declarations retain the active-turn
+precondition, bounded metadata/item/turn pages, localImage input and client-tagged
+user-message envelope. Add only 0.167 to those two capability gates and update
+the bilingual unsupported-history message. Five old-code failures become six
+passing focused checks; 339 related checks pass with no skips and no model calls.
+Coverage includes exact-turn steering, history discovery and metadata pagination,
+the first-terminal one-turn probe, and image forwarding that remains unconfirmed
+until its exact source/tag/turn/path echo. Unknown/future/prerelease versions stay
+closed; 0.166 history/steer remains unqualified. Scoped outbox and other native
+capability gates are unchanged. Actual model execution, image understanding and
+installed daily use are unverified; a missing or changed image echo still cannot
+be recorded as acceptance.
