@@ -75,13 +75,15 @@ header { min-height: 74px; padding: 14px 24px; }
 #room-tabs button[aria-pressed="true"] { background: var(--selected); border-color: var(--muted); }
 #room-member-tabs { overflow-x: auto; min-width: 0; }
 #room-member-tabs button { max-width: 200px; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
-/* Stable member navigation reuses the full session; status never lives only
-   inside a collapsed reader. Wrap complete state text instead of clipping it. */
+/* Stable member navigation reuses the full session. Wide tabs wrap complete
+   state; narrow member focus keeps full state in its visible status dialog. */
 #room-tabs { flex-wrap: wrap; }
 #room-member-tabs { flex: 1 1 360px; flex-wrap: wrap; overflow: visible; gap: 3px; }
 #room-member-tabs button { display: flex; flex-direction: column; align-items: flex-start; flex: 1 1 135px; min-width: 120px; max-width: none; white-space: normal; text-align: left; overflow: visible; padding: 5px 7px; border-radius: 4px; }
 .room-member-name { font-size: 13px; line-height: 19px; overflow-wrap: anywhere; }
 .room-member-state { font-size: 11px; line-height: 16px; color: var(--muted); overflow-wrap: anywhere; }
+.room-member-heading { display: flex; align-items: baseline; gap: 4px; min-width: 0; max-width: 100%; }
+.room-member-id { flex: none; font-size: 13px; line-height: 19px; white-space: nowrap; color: var(--muted); }
 #room-member-tabs [aria-pressed="true"] { box-shadow: inset 0 -2px var(--green); }
 #room-member-tabs .needs-attention .room-member-state { color: var(--ink); }
 .room-record-context { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 9px; padding: 5px 20px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border); }
@@ -821,3 +823,38 @@ header h1, header p { overflow-wrap: anywhere; }
 .space-message-preview summary small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
 .space-message-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.6; margin: 8px 0 0; user-select: text; }
 .space-message-preview .space-message-preview-notice { white-space: pre-wrap; color: var(--muted); user-select: text; }
+
+/* Focused member: preserve type sizes and all existing actions, using less
+   padding and one scrollable member strip. Full peer state remains one click away. */
+.room-invite-compact, #header.focused-member #session-header-more { display: none; }
+#room-member-status-dialog { width: 490px; max-height: 75vh; overflow: auto; padding: 20px; }
+#room-member-status-list { display: grid; gap: 6px; }
+#room-member-status-list > button { display: grid; gap: 3px; width: 100%; padding: 8px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+#room-member-status-list .room-member-name, #room-member-status-list .room-member-state { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+#room-member-status-list [aria-pressed="true"] { background: var(--selected); }
+#room-member-status-list .needs-attention .room-member-state { color: var(--ink); }
+@media(max-width:1050px) {
+  #header.focused-member { min-height: 0; padding: 6px 14px; gap: 8px; }
+  .focused-member .header-identity { min-width: 0; flex: 1; }
+  .focused-member h1, .focused-member #subtitle { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .focused-member #subtitle { margin-top: 2px; line-height: 18px; }
+  .focused-member.reveal-room-title h1, .focused-member.reveal-room-title #subtitle { overflow: visible; white-space: normal; overflow-wrap: anywhere; }
+  .focused-member h1:focus-visible, .focused-member #subtitle:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+  .focused-member #header-actions { flex: none; gap: 4px; }
+  .focused-member #header-actions button { padding: 4px 7px; min-height: 28px; }
+  .focused-member #header-actions > .header-secondary:not(#usage-button) { display: none; }
+  #header.focused-member #session-header-more { display: block; }
+  .focused-member-surface #room-tabs { flex-wrap: wrap; gap: 4px; min-width: 0; padding: 4px 10px; }
+  .focused-member-surface #room-tabs > button { flex: none; padding: 4px 6px; min-height: 28px; }
+  .focused-member-surface #room-member-status { max-width: 210px; white-space: normal; }
+  .focused-member-surface #room-member-tabs { flex: 1 1 120px; min-width: 120px; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; padding: 1px; scrollbar-width: thin; }
+  .focused-member-surface #room-member-tabs button { flex: 1 0 120px; min-width: 120px; max-width: 180px; overflow: hidden; padding: 3px 6px; }
+  .focused-member-surface .room-member-heading { width: 100%; }
+  .focused-member-surface .room-member-name { flex: 1; min-width: 0; }
+  .focused-member-surface .room-member-name, .focused-member-surface .room-member-state { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; overflow-wrap: normal; }
+  .focused-member-surface .room-invite-full { display: none; }
+  .focused-member-surface .room-invite-compact { display: inline; }
+  .focused-member-surface #session-toolbar { padding: 3px 12px; gap: 6px; }
+  .focused-member-surface #session-toolbar button { padding: 3px 7px; min-height: 26px; }
+  .focused-member-surface #session-status { min-width: 0; flex: 1 1 45px; }
+}

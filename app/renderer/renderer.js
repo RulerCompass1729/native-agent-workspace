@@ -607,11 +607,14 @@ function memberTabClick(id, event) {
 }
 function refreshRoomMemberTabs(people = orderedMembers()) {
   const tabs = $('room-member-tabs');
+  let attention = 0;
   for (const tab of tabs.children) {
     const member = people.find(m => m.id === tab.dataset.roomSession);
     if (!member) continue;
     const count = member.nativeApproval?.requests?.length || member.approvals?.length || (member.approval || member.approvalOverflow ? 1 : 0);
-    ui.display.computed(tab.querySelector('.room-member-name'), 'text', () => participantLabel(member, people));
+    if (count) attention++;
+    ui.display.computed(tab.querySelector('.room-member-name'), 'text', () => tab.querySelector('.room-member-id') ? member.name : participantLabel(member, people));
+    if (tab.querySelector('.room-member-id')) ui.display.computed(tab.querySelector('.room-member-id'), 'text', () => sessionShortId(member.id));
     ui.display.computed(tab.querySelector('.room-member-state'), 'text', () => {
       const facts = window.nativeWorkspaceCollaboration.statusFacts(member, !disconnected, Date.now(), ui.language.getSnapshot().active);
       return [facts.state, facts.compactChild, facts.freshnessReported ? facts.freshness : ''].filter(Boolean).join(' · ');
@@ -620,6 +623,54 @@ function refreshRoomMemberTabs(people = orderedMembers()) {
     ui.display.computed(tab, 'aria-label', () => `${member.name} · ${sessionShortId(member.id)} · ${tab.querySelector('.room-member-state').textContent}`);
     tab.classList.toggle('needs-attention', Boolean(count));
   }
+  ui.display.text($('room-member-status'), attention ? 'room.memberStatesAttention' : 'room.memberStatesCount', { count: people.length, attention });
+  if ($('room-member-status-dialog').open) refreshRoomMemberStatus(people);
+}
+let roomMemberStatusContext = null;
+function roomMemberStatusKey() {
+  return focusedRoomMember() ? JSON.stringify([spaceId, selectionRevision, roomSession, current()?.nativeId]) : null;
+}
+function refreshRoomMemberStatus(people = orderedMembers()) {
+  const dialog = $('room-member-status-dialog'), context = roomMemberStatusContext;
+  if (!dialog.open || !context) return;
+  if (context.key !== roomMemberStatusKey()) { dialog.close(); return; }
+  const list = $('room-member-status-list'), retained = new Map(context.rows);
+  for (const [index, member] of people.entries()) {
+    const identity = JSON.stringify([member.nativeId, pairRevision(member)]);
+    let row = context.rows.get(member.id); retained.delete(member.id);
+    if (row && row.dataset.identity !== identity) {
+      if (row.contains(document.activeElement)) $('close-room-member-status').focus({ preventScroll: true });
+      row.remove(); context.rows.delete(member.id); row = null;
+    }
+    if (!row) {
+      row = node('button'); row.type = 'button'; row.dataset.roomStatusMember = member.id; row.dataset.identity = identity;
+      row.append(node('span', undefined, 'room-member-name'), node('span', undefined, 'room-member-state'));
+      row.addEventListener('click', event => {
+        const latest = members().find(s => s.id === member.id);
+        if (roomMemberStatusContext !== context || context.key !== roomMemberStatusKey() || !latest || JSON.stringify([latest.nativeId, pairRevision(latest)]) !== identity) return;
+        dialog.close(); attempt(() => memberTabClick(member.id, event));
+      });
+      context.rows.set(member.id, row);
+    }
+    const tab = [...$('room-member-tabs').children].find(el => el.dataset.roomSession === member.id);
+    ui.display.computed(row.querySelector('.room-member-name'), 'text', () => `${member.name} · ${member.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(member.id)}`);
+    ui.display.computed(row.querySelector('.room-member-state'), 'text', () => tab?.querySelector('.room-member-state').textContent || '');
+    row.setAttribute('aria-pressed', String(roomSession === member.id));
+    row.classList.toggle('needs-attention', Boolean(tab?.classList.contains('needs-attention')));
+    if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
+  }
+  for (const [id, row] of retained) {
+    if (row.contains(document.activeElement)) $('close-room-member-status').focus({ preventScroll: true });
+    row.remove(); context.rows.delete(id);
+  }
+}
+function openRoomMemberStatus() {
+  const key = roomMemberStatusKey(); if (!key) return;
+  roomMemberStatusContext = { key, rows: new Map() };
+  $('room-member-status-list').replaceChildren();
+  openTransientDialog('room-member-status-dialog');
+  $('room-member-status').setAttribute('aria-expanded', 'true');
+  refreshRoomMemberStatus();
 }
 function renderRoomMemberTabs(people = orderedMembers()) {
   const tabs = $('room-member-tabs'), retained = new Map([...tabs.children].map(tab => [tab.dataset.roomSession, tab]));
@@ -627,7 +678,9 @@ function renderRoomMemberTabs(people = orderedMembers()) {
     let tab = retained.get(member.id); retained.delete(member.id);
     if (!tab) {
       tab = node('button'); tab.type = 'button'; tab.addEventListener('click', event => attempt(() => memberTabClick(member.id, event))); tab.dataset.roomSession = member.id;
-      tab.append(node('span', undefined, 'room-member-name'), node('span', undefined, 'room-member-state'));
+      const heading = node('span', undefined, 'room-member-heading');
+      heading.append(node('span', undefined, 'room-member-name'), node('span', undefined, 'room-member-id'));
+      tab.append(heading, node('span', undefined, 'room-member-state'));
       draggableSession(tab, member.id);
     }
     tab.setAttribute('aria-pressed', String(roomSurface === 'overview' && roomSession === member.id));
@@ -3245,11 +3298,16 @@ function openHeaderMenu(anchor, terminal = false) {
 }
 function renderHeaderLayout(s, inRoom) {
   const compact = Boolean(s && !inRoom), toolbar = $('session-toolbar');
+  const focusedMember = Boolean(inRoom && s);
   const compactRoom = Boolean(inRoom && !s), header = $('header'), tabs = $('room-tabs'), band = $('run-status').parentElement;
   const moving = compactRoom !== header.classList.contains('compact-room') || roomOverview && (roomOverview.toolbar.parentElement === tabs) !== compactRoom;
   if (moving) { captureReadingViews(); restoreOverviewReading(); }
   header.classList.toggle('compact-room', compactRoom);
+  header.classList.toggle('focused-member', focusedMember);
   $('room-view').classList.toggle('compact-room-surface', inRoom);
+  $('room-view').classList.toggle('focused-member-surface', focusedMember);
+  $('room-member-status').hidden = !focusedMember;
+  if ($('room-member-status-dialog').open && roomMemberStatusContext?.key !== roomMemberStatusKey()) $('room-member-status-dialog').close();
   const relocate = (element, parent, before = null) => {
     if (element.parentElement === parent) return;
     const active = element.contains(document.activeElement) ? document.activeElement : null;
@@ -3274,11 +3332,14 @@ function renderHeaderLayout(s, inRoom) {
   }
   $('conversation-pane-toolbar').hidden = !compact;
   $('terminal-more').hidden = !compact;
-  $('title').tabIndex = compact || compactRoom ? 0 : -1;
-  ui.display.computed($('title'), 'title', () => compact ? s.name : compactRoom ? state.room.unavailable ? uiText('space.unavailable') : spaceName(state.room) : '');
-  $('title').onfocus = () => { if (header.classList.contains('compact-room')) { captureReadingViews(); restoreOverviewReading(); header.classList.add('reveal-room-title'); } };
+  $('title').tabIndex = compact || compactRoom || focusedMember ? 0 : -1;
+  ui.display.computed($('title'), 'title', () => compact ? s.name : compactRoom || focusedMember ? state.room.unavailable ? uiText('space.unavailable') : spaceName(state.room) : '');
+  $('title').onfocus = () => { if (header.classList.contains('compact-room') || header.classList.contains('focused-member')) { captureReadingViews(); restoreOverviewReading(); header.classList.add('reveal-room-title'); } };
   $('title').onblur = () => { if (header.classList.contains('reveal-room-title')) { captureReadingViews(); restoreOverviewReading(); header.classList.remove('reveal-room-title'); } };
-  if (!compactRoom) header.classList.remove('reveal-room-title');
+  if (!compactRoom && !focusedMember) header.classList.remove('reveal-room-title');
+  $('subtitle').tabIndex = focusedMember ? 0 : -1;
+  $('subtitle').onfocus = focusedMember ? $('title').onfocus : null;
+  $('subtitle').onblur = focusedMember ? $('title').onblur : null;
   const settings = s?.nativeSettings?.nativeId === s?.nativeId ? [s?.nativeSettings?.mode === 'plan' ? 'Plan' : '', s?.nativeSettings?.effort].filter(Boolean) : [];
   const values = s ? [s.provider === 'claude' ? 'Claude Code' : 'Codex', sessionShortId(s.id), s.model, ...settings, window.nativeWorkspaceSpaces.roomIds(s).length ? 'header.collaborating' : 'header.independent'] : [];
   const subtitle = $('subtitle'), signature = JSON.stringify([compact, compactRoom, inRoom, values, s?.modelUiMessage, compactRoom && members().length]);
@@ -3416,7 +3477,7 @@ function renderHeader(s, inRoom) {
   h.restore.hidden = !s?.archived;
   h.more.hidden = !inRoom || !!s;
   h.more.disabled = disconnected || state.room.archived || renameTarget?.id === 'room' && renameTarget.roomId === spaceId;
-  h.compactMore.hidden = !s || inRoom;
+  h.compactMore.hidden = !s;
   renderSpaceMessagePreview(s);
   renderHeaderLayout(s, inRoom);
 }
@@ -4491,6 +4552,15 @@ $('room-record-return').onclick = () => attempt(returnRoomRecordMember);
 $('room-record-clear').onclick = () => attempt(clearRoomRecordFilter);
 $('room-record-restore').onclick = () => attempt(restoreRoomRecordFilter);
 $('manage-members').onclick = () => openInvite($('manage-members'));
+$('room-member-status').onclick = openRoomMemberStatus;
+$('close-room-member-status').onclick = () => $('room-member-status-dialog').close();
+$('room-member-status-dialog').addEventListener('close', () => {
+  if ($('room-member-status-dialog').open) return;
+  const restoreFocus = roomMemberStatusContext?.key === roomMemberStatusKey();
+  roomMemberStatusContext = null;
+  $('room-member-status').setAttribute('aria-expanded', 'false');
+  if (restoreFocus && $('room-member-status').getClientRects().length) $('room-member-status').focus({ preventScroll: true });
+});
 dropTarget($('room-nav'), true, 'shared'); dropTarget($('solo-drop'), false); dropTarget($('session-list'), false);
 for (const [section, id] of [['sessions', 'solo-drop'], ['workspace', 'workspace-toggle'], ['archive', 'archive-button']]) {
   const toggle = $(id);
