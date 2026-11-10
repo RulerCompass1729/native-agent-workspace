@@ -1,0 +1,178 @@
+// The part of the Codex app-server protocol NAW uses, and how a new version's
+// schema is compared with it (B3). Only the closure of what NAW sends or reads
+// is extracted; union types keep only the variants NAW sends or reads.
+// Rules (b3-spec.md 1.4): in what NAW sends, a new optional field or value is
+// safe; in what NAW reads, a new optional field is safe but a new variant
+// counts as touched; any other difference counts as touched. The permission
+// surface (requests NAW relays to the person) never opens or closes a gate:
+// any change there becomes a record for a person to look at.
+const fs = require('node:fs'), path = require('node:path');
+
+const VARIANTS = Object.freeze({
+  // NAW sends text and localImage (space-images.cjs), reads text, image and localImage (native-images.cjs).
+  UserInput: ['text', 'image', 'localImage'],
+  // NAW reads only text parts of content items (codex-tool-content.cjs).
+  ContentItem: ['input_text', 'output_text'],
+});
+const request = method => ({ schema: 'ClientRequest', method });
+const notice = method => ({ schema: 'ServerNotification', method });
+const turnEvents = ['turn/started', 'turn/completed', 'item/started', 'item/completed', 'item/agentMessage/delta'].map(notice);
+const MANIFEST = Object.freeze({
+  history: [request('thread/list'), request('thread/read'), request('thread/items/list'), request('thread/turns/list')],
+  steer: [request('turn/steer'), ...turnEvents],
+  terminalBridge: [request('initialize'), request('thread/start'), request('thread/resume'), notice('thread/started'), notice('thread/status/changed')],
+  spaceImages: [request('turn/start'), notice('item/started'), notice('item/completed')],
+  addressedTool: [{ schema: 'ServerRequest', method: 'item/tool/call' }],
+  capacity: [request('turn/start'), notice('turn/completed'), notice('thread/status/changed')],
+});
+// NAW relays every server request to the person (adapters.cjs: anything ending in
+// /requestUserInput waits for input, everything else is an approval).
+const PERMISSION = Object.freeze(['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval',
+  'applyPatchApproval', 'execCommandApproval', 'item/tool/requestUserInput', 'mcpServer/elicitation/request']);
+
+const tag = alt => alt?.properties?.type?.enum?.[0] ?? alt?.title ?? JSON.stringify(alt);
+function loadSchema(dir, name) {
+  const doc = JSON.parse(fs.readFileSync(path.join(dir, `${name}.json`), 'utf8'));
+  const entries = Object.create(null);
+  for (const alt of doc.oneOf || []) { const m = alt?.properties?.method?.enum?.[0]; if (m) entries[m] = alt; }
+  return { entries, definitions: doc.definitions || {} };
+}
+function responses(dir) {
+  const out = Object.create(null);
+  const walk = d => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (e.name.endsWith('Response.json')) out[e.name.slice(0, -5)] = JSON.parse(fs.readFileSync(p, 'utf8')); } };
+  walk(dir); return out;
+}
+// The definitions reachable from node, with filtered unions; refs keep their names.
+function closure(node, definitions) {
+  const out = Object.create(null);
+  const visit = n => {
+    if (Array.isArray(n)) { n.forEach(visit); return; }
+    if (!n || typeof n !== 'object') return;
+    const ref = typeof n.$ref === 'string' && n.$ref.startsWith('#/definitions/') ? n.$ref.slice(14) : null;
+    if (ref && !(ref in out)) {
+      let def = definitions[ref];
+      if (def && VARIANTS[ref]) for (const key of ['oneOf', 'anyOf']) if (Array.isArray(def[key])) def = { ...def, [key]: def[key].filter(a => VARIANTS[ref].includes(tag(a))) };
+      out[ref] = def ?? null; visit(def);
+    }
+    for (const v of Object.values(n)) visit(v);
+  };
+  visit(node); return out;
+}
+function entrySurface(dir, schemas, replies, { schema, method }) {
+  const s = schemas[schema], root = s.entries[method];
+  if (!root) return null;
+  const surface = { root, definitions: closure(root, s.definitions) };
+  // A method's reply schema is named after its params definition: ThreadListParams -> ThreadListResponse.
+  const params = root.properties?.params?.$ref?.replace(/^#\/definitions\//, '');
+  const reply = params && params.endsWith('Params') ? replies[params.slice(0, -6) + 'Response'] : undefined;
+  // A reply file embeds its whole definitions table; only the referenced closure is part of the surface.
+  if (reply) { const { definitions = {}, ...replyRoot } = reply; surface.response = { root: replyRoot, definitions: closure(replyRoot, definitions) }; }
+  return surface;
+}
+// Only the surface NAW uses, from a bundle written by `codex app-server generate-json-schema`.
+function extract(dir, version) {
+  const schemas = { ClientRequest: loadSchema(dir, 'ClientRequest'), ServerNotification: loadSchema(dir, 'ServerNotification'), ServerRequest: loadSchema(dir, 'ServerRequest') };
+  const replies = responses(dir), entries = Object.create(null);
+  const add = item => { const key = `${item.schema}:${item.method}`; if (!(key in entries)) entries[key] = entrySurface(dir, schemas, replies, item); };
+  for (const items of Object.values(MANIFEST)) items.forEach(add);
+  for (const method of PERMISSION) add({ schema: 'ServerRequest', method });
+  // NAW relays every server request, so a new request type is a permission-surface change.
+  const serverRequests = Object.keys(schemas.ServerRequest.entries).sort();
+  return { version, serverRequests, entries: JSON.parse(JSON.stringify(entries)) };
+}
+
+const IGNORED = new Set(['description', 'title', '$schema', 'examples', 'default']);
+const strip = n => Array.isArray(n) ? n.map(strip) : n && typeof n === 'object'
+  ? Object.fromEntries(Object.entries(n).filter(([k]) => !IGNORED.has(k)).sort(([a], [b]) => a < b ? -1 : 1).map(([k, v]) => [k, strip(v)])) : n;
+const same = (a, b) => JSON.stringify(strip(a)) === JSON.stringify(strip(b));
+// 'same' < 'field' (new optional property or relaxed value set) < 'variant' (new alternative) < 'breaking'.
+const RANK = { same: 0, field: 1, variant: 2, breaking: 3 };
+const worst = (...k) => k.reduce((x, y) => RANK[y] > RANK[x] ? y : x, 'same');
+function classify(a, b) {
+  if (same(a, b)) return 'same';
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return 'breaking';
+  let kind = 'same';
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)].filter(k => !IGNORED.has(k)));
+  for (const key of keys) {
+    const x = a[key], y = b[key];
+    if (same(x, y)) continue;
+    if (key === 'properties') {
+      for (const p of new Set([...Object.keys(x || {}), ...Object.keys(y || {})])) {
+        if (!(p in (y || {}))) return 'breaking';
+        if (!(p in (x || {}))) kind = worst(kind, (b.required || []).includes(p) ? 'breaking' : 'field');
+        else kind = worst(kind, classify(x[p], y[p]));
+      }
+    } else if (key === 'required') {
+      if ((y || []).some(r => !(x || []).includes(r) && (a.properties || {})[r] !== undefined)) return 'breaking';
+      if ((x || []).some(r => !(y || []).includes(r))) return 'breaking';
+    } else if (key === 'enum') {
+      if (!(x || []).every(v => (y || []).includes(v))) return 'breaking';
+      kind = worst(kind, 'variant');
+    } else if (key === 'oneOf' || key === 'anyOf') {
+      const old = new Map((x || []).map(alt => [tag(alt), alt])), now = new Map((y || []).map(alt => [tag(alt), alt]));
+      for (const [t, alt] of old) { if (!now.has(t)) return 'breaking'; kind = worst(kind, classify(alt, now.get(t))); }
+      if ([...now.keys()].some(t => !old.has(t))) kind = worst(kind, 'variant');
+    } else if (key === 'items' || key === 'additionalProperties') kind = worst(kind, classify(x, y));
+    else return 'breaking';
+  }
+  return kind;
+}
+// One entry's change. NAW sends its own requests' params and server requests' replies; it reads the rest.
+function compareEntry(a, b, schema) {
+  if (!a && !b) return 'same';
+  if (!a || !b) return 'breaking';
+  const part = (x, y, reading) => {
+    // A definition that only the new closure reaches is judged where it is referenced.
+    let k = classify(x?.root, y?.root);
+    for (const d of Object.keys(x?.definitions || {})) k = worst(k, d in (y?.definitions || {}) ? classify(x.definitions[d], y.definitions[d]) : 'breaking');
+    return reading && k === 'variant' ? 'breaking' : k === 'variant' ? 'field' : k;
+  };
+  const own = schema === 'ClientRequest';
+  const params = part(a, b, !own), response = a.response || b.response ? part(a.response, b.response, own) : 'same';
+  return worst(params, response);
+}
+// Per capability: open if nothing NAW uses changed beyond safe additions; plus permission records.
+function decide(baseline, candidate) {
+  const capabilities = {}, touched = {}, records = [];
+  for (const [capability, items] of Object.entries(MANIFEST)) {
+    touched[capability] = [];
+    for (const item of items) {
+      const key = `${item.schema}:${item.method}`;
+      const kind = compareEntry(baseline.entries[key], candidate.entries[key], item.schema);
+      if (kind === 'breaking') touched[capability].push(key);
+    }
+    capabilities[capability] = touched[capability].length === 0;
+  }
+  for (const method of PERMISSION) {
+    const key = `ServerRequest:${method}`;
+    if (!same(baseline.entries[key], candidate.entries[key])) records.push({ kind: 'permission-surface-changed', entry: key });
+  }
+  const known = new Set(baseline.serverRequests || []);
+  for (const method of candidate.serverRequests || []) if (!known.has(method)) records.push({ kind: 'permission-surface-changed', entry: `ServerRequest:${method}`, added: true });
+  for (const [capability, keys] of Object.entries(touched)) if (keys.length) records.push({ kind: 'capability-held', capability, entries: keys });
+  return { basis: baseline.version, version: candidate.version, capabilities, records };
+}
+
+// Stored form: descriptions dropped (comparison ignores them), each definition kept once.
+const DROPPED = new Set(['description', 'examples', '$schema']);
+const lean = n => Array.isArray(n) ? n.map(lean) : n && typeof n === 'object' ? Object.fromEntries(Object.entries(n).filter(([k]) => !DROPPED.has(k)).map(([k, v]) => [k, lean(v)])) : n;
+function pack(surface, provenance) {
+  const definitions = Object.create(null);
+  const part = x => {
+    if (!x) return x;
+    for (const [name, def] of Object.entries(x.definitions)) {
+      const kept = lean(def);
+      if (name in definitions && JSON.stringify(definitions[name]) !== JSON.stringify(kept)) throw Error(`Two different definitions named ${name}; snapshot not written`);
+      definitions[name] = kept;
+    }
+    return { root: lean(x.root), definitions: Object.keys(x.definitions) };
+  };
+  const entries = Object.fromEntries(Object.entries(surface.entries).map(([key, e]) => [key, e && { ...part(e), ...(e.response ? { response: part(e.response) } : {}) }]));
+  return { version: surface.version, provenance, serverRequests: surface.serverRequests, definitions, entries };
+}
+function unpack(stored) {
+  const part = x => x && { root: x.root, definitions: Object.fromEntries(x.definitions.map(n => [n, stored.definitions[n]])) };
+  return { version: stored.version, serverRequests: stored.serverRequests, entries: Object.fromEntries(Object.entries(stored.entries).map(([key, e]) => [key, e && { ...part(e), ...(e.response ? { response: part(e.response) } : {}) }])) };
+}
+
+module.exports = { VARIANTS, MANIFEST, PERMISSION, extract, classify, compareEntry, decide, pack, unpack };
