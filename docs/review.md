@@ -143,6 +143,19 @@ another session's row could hand the successor a smaller model); a session whose
 nowhere waits ten minutes, logged once, without a week's rest or holding back others
 (APPROVE_WITH_NOTES). Limits: a context suffix such as [1m] or a usage-fallback model in the last
 turn would be carried as written.
+In daily use the person added the first queue item; it was dispatched and answered in ten
+seconds, but the dialog painted the item over its status line (a long member name in a capped
+nowrap grid track), ran the form past the dialog (a select's widest option sizing the implicit
+column), showed full ids for rotation links, showed no recipient or reply, and hid the queue
+button on the overview tab. A workflow traced each cause; rows now stack status, task and outcome,
+the form column has a zero minimum, a settled item keeps one bounded line of the reply, links are
+short, and the button sits in the tab bar. An isolated GUI check measured no overlap or overflow at
+60 and 126 character names and 850x600; reviews APPROVE_WITH_NOTES. The person also asked that
+older backends move without per-backend clicks: with migration on, backends with teammates, earlier
+children or unreported background work now move after 30 quiet minutes (teammate reports count as
+activity), and the setting says what then ends (APPROVE after a wording fix). The daily operator
+now predicts which all-ended backends startup restarts and which becomes active, backs up their
+stores and checks their records afterwards (APPROVE_WITH_NOTES).
 
 **Alpha.90 final scoped review, 2026-10-23:** the GUI's native Escape path
 caused Claude's post-Stop plugin-input pause. The actual supported 310 GUI now
