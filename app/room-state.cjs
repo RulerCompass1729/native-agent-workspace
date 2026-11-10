@@ -53,7 +53,7 @@ function copyQueue(queue) {
     return copy;
   }
   for (const item of queue) {
-    copy.push({ ...item });
+    copy.push({ ...item, ...(item.creator ? { creator: { ...item.creator } } : {}) });
   }
   return copy;
 }
@@ -418,7 +418,7 @@ class RoomState {
     if (revision !== value.revision) throw uiError("error.room.fileListChanged");
     if (value.files.some(f => f.id === fileId)) this.update({ files: value.files.filter(f => f.id !== fileId) }, { kind: 'files', ...uiNotice('notice.room.fileRemoved') }, id);
   }
-  // Task queue (queue-dispatch.cjs). The person adds and cancels; NAW sends.
+  // Task queue (queue-dispatch.cjs). The person or designated secretary adds; NAW sends.
   queueItems(id) {
     const value = this.metadata(id);
     if (Array.isArray(value.queue)) {
@@ -446,14 +446,14 @@ class RoomState {
     }
     this.update({ queue: queueRules.validateQueue(queue) }, event, id);
   }
-  queueAdd(text, assignee, id = DEFAULT_ROOM_ID) {
+  queueAdd(text, assignee, id = DEFAULT_ROOM_ID, creator) {
     this.writable(id);
     if (this.metadata(id).archived) {
       throw uiError("error.queue.archived");
     }
     let item;
     try {
-      item = queueRules.newItem(text, assignee ?? null);
+      item = queueRules.newItem(text, assignee ?? null, Date.now(), creator);
     } catch {
       throw uiError("error.queue.invalid");
     }
@@ -468,13 +468,22 @@ class RoomState {
       throw uiError("error.queue.full");
     }
     const queue = queueRules.trimQueue([...items, item]);
-    const event = { kind: 'queue', ...uiNotice('notice.queue.added', { text: queueRules.shortText(text) }) };
+    const params = { text: queueRules.shortText(text) };
+    let notice = 'notice.queue.added';
+    if (item.creator) {
+      if (item.creator.kind === 'secretary') {
+        notice = 'notice.queue.addedBySecretary';
+        params.name = item.creator.name;
+        params.sessionId = item.creator.sessionId;
+      } else notice = 'notice.queue.addedByPerson';
+    }
+    const event = { kind: 'queue', ...uiNotice(notice, params) };
     this.update({ queue }, event, id);
     return item.id;
   }
   queueCancel(itemId, id = DEFAULT_ROOM_ID) {
     const item = this.queueFind(id, itemId);
-    if (!['queued', 'waiting'].includes(item.status)) {
+    if (item.status !== 'queued') {
       throw uiError("error.queue.notCancellable");
     }
     const next = { ...item, status: 'cancelled', finishedAt: Date.now() };

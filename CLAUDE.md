@@ -19,13 +19,18 @@ or start paid model runs as a side effect of editing documents.
 
 - Every agent keeps its full implementation and verification capabilities. Roles
   such as secretary, researcher, tester and integrator describe the current work,
-  not permanent limits. Within existing authorization, any agent may claim a
+  not permanent limits. The queue-secretary role neither adds nor removes native
+  tools; a V12 default secretary keeps its default tool limits. Within existing
+  authorization, any agent may claim a
   ready, unowned complete user outcome without waiting for a new dispatch,
   except as a member of a space whose NAW queue the person uses (automatic
   messages on): there it works on NAW dispatches (【NAW 派活】, one item to one
   member) and on what the person asks it directly; another agent may ask it only
   about its current item (questions, reviews, handoffs), and the asking agent
-  leaves new tasks for the person to queue. It does not claim board tasks itself (the person, 2026-11-08:
+  leaves new tasks for the person. New tasks enter the queue only through the
+  person or the one person-designated secretary. That secretary may queue only
+  the person's own requests; other agents cannot add items. Cancelling and marking items complete remain
+  person-only. It does not claim board tasks itself (the person, 2026-11-08:
   agents claiming the same task by themselves). A session is such a member once
   a 【NAW 派活】 has reached it, or once the person or the secretary says so
   through NAW. The secretary and the designated integrator stay outside queue
@@ -70,6 +75,21 @@ or start paid model runs as a side effect of editing documents.
   treat idle/working labels as task eligibility or accomplishment. Measure useful
   work left waiting, time to a usable result, and avoidable handoffs/rework from
   existing records instead of creating polling/model activity to look busy.
+- For queue intake, the person designates one secretary session through its
+  existing session menu and can replace or revoke it. This role grants only
+  queue addition, not execution tools, model calls, or other queue controls;
+  the separately metered native-session, consent and cost conditions in
+  product V12 remain in force. To place the person's request, use only NAW
+  records already available to the secretary: spaces, members and queues, not
+  other sessions' private conversations. Choose a space whose recorded work
+  clearly matches the request, normally omit the assignee and let NAW select
+  an idle member. Use the existing `workspace_control` command catalog:
+  invoke `spaceAction` with `[roomId, "queueAdd", [text, null]]`. If the space
+  or request is unclear, ask the person in the
+  secretary's own conversation before adding it. Do not route new work from
+  another agent. A secretary's role follows a single unambiguous handoff only
+  when its rotation log says `event=done`; `kept` and branching successors do
+  not transfer the role. No automatic heartbeat or routing model is added.
 - NAW-owned collaboration tools and provider-native execution tools remain
   separate. Task ownership does not grant native session control, permission,
   model/budget changes, publication, spending or access to another user's draft.

@@ -127,6 +127,19 @@ function validTime(value) {
   return Number.isFinite(value) && value >= 0;
 }
 
+function validateCreator(creator) {
+  if (!creator || typeof creator !== 'object' || Array.isArray(creator) ||
+      Object.keys(creator).length !== 3 || !['kind', 'name', 'sessionId'].every(key => Object.hasOwn(creator, key)) ||
+      !['person', 'secretary'].includes(creator.kind) ||
+      typeof creator.name !== 'string' || !creator.name.trim() || creator.name.length > 100 ||
+      /[\u0000-\u001f\u007f]/u.test(creator.name) ||
+      (creator.kind === 'person' ? creator.sessionId !== null :
+        !validId(creator.sessionId) || !creator.sessionId.trim() || /\u007f/u.test(creator.sessionId))) {
+    throw Error('Invalid queue creator');
+  }
+  return { kind: creator.kind, name: creator.name, sessionId: creator.sessionId };
+}
+
 function validateItem(item) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
     throw Error('Invalid queue item');
@@ -161,7 +174,7 @@ function validateItem(item) {
   if (item.reply !== undefined && !validText(item.reply, ITEM_REPLY_LIMIT)) {
     throw Error('Invalid queue reply');
   }
-  return { ...item };
+  return { ...item, ...(Object.hasOwn(item, 'creator') ? { creator: validateCreator(item.creator) } : {}) };
 }
 
 function validateQueue(queue) {
@@ -184,14 +197,15 @@ function validateQueue(queue) {
   return result;
 }
 
-function newItem(text, assignee, now = Date.now()) {
+function newItem(text, assignee, now = Date.now(), creator) {
   if (!validText(text, ITEM_TEXT_LIMIT)) {
     throw Error('Invalid queue text');
   }
   if (assignee !== null && !validId(assignee)) {
     throw Error('Invalid queue assignee');
   }
-  return { id: randomUUID(), text, assignee, status: 'queued', createdAt: now };
+  return validateItem({ id: randomUUID(), text, assignee, status: 'queued', createdAt: now,
+    ...(creator === undefined ? {} : { creator }) });
 }
 
 // Keep every open item; drop the oldest finished ones when the list is full.

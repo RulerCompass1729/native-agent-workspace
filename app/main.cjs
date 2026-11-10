@@ -15,6 +15,7 @@ const { readPreview, saveCopy, extensions: textExtensions, openMessageFile } = r
 const { ImagePreviews, imageSource } = require('./native-images.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
+const { QueueSecretary } = require('./queue-secretary.cjs');
 const { readingState } = require('./reading-state.cjs');
 const { ViewStore, validViews, dropRetiredViewFields } = require('./view-store.cjs');
 const { roomId: validRoomId } = require('./collaboration-spaces.cjs');
@@ -79,7 +80,7 @@ const toolWaitNotifications = new Map();
 const capacityNotifications = new Map();
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
-let dataDir, sessionLabels, roomState, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
+let dataDir, sessionLabels, roomState, queueSecretary, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
 let applicationBuild, applicationMenu;
 const startupFile = path.join(__dirname, 'startup.html');
@@ -233,7 +234,10 @@ function displayState(snapshot, context) {
   }
   const outboxWarning = backgroundUnavailable ? 'Background control is unavailable; existing native sessions and ordinary controls remain available.' : outboxQuitFailed ? 'Outbox cleanup could not be confirmed. Quit again to close the app; native sessions keep running.'
     : outboxUnavailable ? 'The independent space outbox is unavailable; new delivery cannot be confirmed.' : '';
-  return { ...display, ...(outboxWarning ? { storageWarning: [display.storageWarning, outboxWarning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
+  let secretary = null, secretaryWarning = '';
+  try { secretary = queueSecretary?.current() || null; } catch { secretaryWarning = displayText('error.queue.secretaryState'); }
+  const warning = [outboxWarning, secretaryWarning].filter(Boolean).join('\n');
+  return { ...display, queueSecretary: secretary, ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [] };
 }
 function reportViewStorage(warning, uiMessage = null) {
@@ -546,7 +550,11 @@ function register(name, handler) {
       // Never silently fall back to an old backend that cannot retain actor
       // attribution or preserve the person's draft for these input paths.
       const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom']);
-      if (!local.has(name)) {
+      // Queue metadata lives in this desktop profile, not a retained backend.
+      // Its first argument is task text, never a target native session. The
+      // handler below still authenticates the secretary and person-only actions.
+      const localQueue = name === 'queueSecretary' || name === 'spaceAction' && ['queueAdd', 'queueCancel', 'queueResolve'].includes(args[1]);
+      if (!local.has(name) && !localQueue) {
         const targetIds = (name === 'spaceAction' ? [args[2]?.[0]].flat() : [args[0]].flat()).filter(id => typeof id === 'string');
         const targets = c.client.entries.filter(e => !targetIds.length || e.state.sessions.some(s => targetIds.includes(s.id)));
         for (const entry of targets.length ? targets : c.client.entries) if (!entry.state.capabilities?.includes(backgroundOperation.CAPABILITY)) throw Error('This backend must adopt background-control support before this operation');
@@ -744,6 +752,7 @@ async function boot() {
   }
   sessionLabels = new SessionLabels(dataDir);
   roomState = new RoomState(dataDir);
+  queueSecretary = new QueueSecretary(dataDir);
   viewStore = new ViewStore(dataDir);
   const loaded = dropRetiredViewFields(viewStore.load());
   views = loaded.views;
@@ -872,11 +881,13 @@ async function boot() {
       try { return await roomState[action === 'archive' ? 'archiveRoom' : 'restoreRoom'](c.client, sessionLabels.labels, roomId); }
       finally { await broadcastRoom(); }
     } else if (action === 'removeFile') roomState.removeFile(args[0], args[1], roomId);
-    else if (['queueAdd', 'queueCancel', 'queueResolve'].includes(action) && c.background) {
-      // Only the person changes a queue until they decide agents may (2026-11-08 review).
+    else if (['queueCancel', 'queueResolve'].includes(action) && c.background) {
       throw uiError("error.queue.personOnly");
     } else if (action === 'queueAdd') {
-      const itemId = roomState.queueAdd(args[0], args[1] ?? null, roomId);
+      const creator = c.background
+        ? queueSecretary.creator(backgroundOperation.current(), (await c.client.call('initial')).sessions, sessionLabels.labels)
+        : { kind: 'person', name: 'You', sessionId: null };
+      const itemId = roomState.queueAdd(args[0], args[1] ?? null, roomId, creator);
       await broadcastRoom();
       queueDispatcher?.schedule();
       return itemId;
@@ -952,6 +963,16 @@ async function boot() {
   });
   register('nativeHistory', (c, options) => c.client.call('nativeHistory', options));
   register('importHistory', (c, nativeId, options) => c.client.call('importHistory', nativeId, options));
+  register('queueSecretary', async (c, id) => {
+    if (c.background) throw uiError('error.queue.personOnly');
+    if (id === null) queueSecretary.set(null);
+    else {
+      const record = (await c.client.call('initial')).sessions.find(record => record.id === id);
+      if (!record || !record.nativeId || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) throw uiError('error.queue.secretaryInvalid');
+      queueSecretary.set({ sessionId: record.id, nativeId: record.nativeId });
+    }
+    await broadcastRoom();
+  });
   register('rename', async (c, id, name) => {
     const snapshot = await c.client.call('initial');
     if (!snapshot.sessions.some(s => s.id === id)) throw uiError("error.main.renameSessionMissing");
