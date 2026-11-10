@@ -18,7 +18,7 @@ async function startup(version) {
       id: async () => id,
       version: async () => ({ version }),
       model: async () => { modelReads.push(version); return 'fixture-model'; },
-      usage: async () => { usageReads.push(version); return null; }
+      usage: async (...args) => { usageReads.push(args); return null; }
     },
     env: { get: async key => ({ NAW_SUBMIT_SOCKET: '/fixture/no-real-socket', NAW_HOOK_TOKEN: 'fixture-token' })[key] },
     clock: { after: (delay, callback) => { clock.push({ delay, callback }); return { cancel() {} }; } },
@@ -45,7 +45,7 @@ test('qualified 318 cold start binds and reads metadata without submitting a mod
   const f = await startup('2.1.318');
   assert.equal(f.calls[0]?.route, '/root-bind');
   assert.equal(f.modelReads.length, 1);
-  assert.equal(f.usageReads.length, 1, 'The qualified free usage read runs at bind');
+  assert.deepEqual(f.usageReads, [[]], 'The bind-time usage read must be free and take no arguments');
   // T-171: native blocks too, so workspace messages have their turn identity.
   assert.equal(f.calls.find(c => c.route === '/root-bind').body.nativeBlocks, true);
   assert.ok(f.calls.some(c => c.route === '/next'));
@@ -57,7 +57,7 @@ test('qualified 319 cold start enables display metadata while keeping native inp
   const f = await startup('2.1.319');
   assert.equal(f.calls[0]?.route, '/root-bind');
   assert.equal(f.modelReads.length, 1);
-  assert.equal(f.usageReads.length, 1);
+  assert.deepEqual(f.usageReads, [[]], 'The bind-time usage read must be free and take no arguments');
   const binding = f.calls[0].body;
   assert.equal(binding.nativeCapacity, true, 'T-32 capacity recovery does not require abort');
   assert.equal(binding.nativeBlocks, true, 'T-171: native blocks for workspace message turn identity');
@@ -80,14 +80,15 @@ test('319 uses the native post-switch model without changing unrelated control c
   assert.ok(rows.every(row => row.kind === 'control' && row.id === 'control:model'));
 });
 
-for (const version of ['2.1.321', '2.1.322']) test(`${version} cold start combines qualified blocks, model, root, queue and capacity without display`, async () => {
+for (const version of ['2.1.321', '2.1.322']) test(`${version} cold start combines qualified display metadata with blocks, model, root, queue and capacity`, async () => {
   const f = await startup(version);
   assert.equal(f.calls[0]?.route, '/root-bind');
   assert.equal(f.modelReads.length, 1);
   assert.equal(f.calls[0].body.nativeBlocks, true);
   for (const key of ['nativeQueue', 'nativeCapacity']) assert.equal(f.calls[0].body[key], true, key);
-  assert.equal(f.usageReads.length, 0, 'Free usage remains unqualified on this version');
-  for (const key of ['nativeInlineInput', 'nativePromptInput', 'nativeMedia', 'nativeAbort', 'nativeSharedDisplay', 'nativeTurnRecords', 'nativeNarration']) assert.equal(f.calls[0].body[key], false, key);
+  assert.deepEqual(f.usageReads, [[]], 'The bind-time usage read must be free and take no arguments');
+  for (const key of ['nativeTurnRecords', 'nativeNarration']) assert.equal(f.calls[0].body[key], true, key);
+  for (const key of ['nativeInlineInput', 'nativePromptInput', 'nativeMedia', 'nativeAbort', 'nativeSharedDisplay']) assert.equal(f.calls[0].body[key], false, key);
   assert.ok(f.calls.some(c => c.route === '/next'));
 });
 

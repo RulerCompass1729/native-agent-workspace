@@ -502,13 +502,15 @@ test('native 2.1.317 binds and stages like 2.1.316: blocks, transitions, abort, 
   assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['turn-317', promptId]]);
 });
 // The combined qualification preserves typed-message identity, adds queue/capacity on all four
-// exact versions and adds display only on 318/319. Abort and direct input remain closed.
+// exact versions. Narration and turn records have their own display qualification;
+// media stays within its separate version scope. Abort and direct input remain closed.
 for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`native ${version}: typed-message identity and independently qualified capabilities coexist`, async () => {
   const f = await addressedMod(version), promptId = randomUUID();
   assert.equal(f.r.nativeBlocks, true); assert.equal(f.r.addressedSendAvailable, true);
   assert.equal(f.r.nativeQueue, true); assert.equal(f.r.nativeCapacityAvailable, true);
   for (const flag of ['nativeAbortAvailable', 'nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
-  for (const flag of ['nativeMedia', 'nativeTurnRecords', 'nativeNarration']) assert.equal(f.r[flag], ['2.1.318', '2.1.319'].includes(version), flag);
+  for (const flag of ['nativeTurnRecords', 'nativeNarration']) assert.equal(f.r[flag], true, flag);
+  assert.equal(f.r.nativeMedia, ['2.1.318', '2.1.319'].includes(version));
   await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: 'Wake the idle peer.' });
   await f.invoke('turn.start', { turnId: 'turn-' + version });
   assert.equal((await wakeCall(f, 'call-' + version)).deny, undefined);
@@ -772,7 +774,7 @@ test('private hidden attachments, prompts, children, denied/changed rows and thi
 });
 // A 1x1 PNG. The mod's own binding must carry media, not only the flag sent to NAW (T-133).
 const onePixelPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
-for (const [version, on] of [['2.1.312', true], ['2.1.316', true], ['2.1.317', true], ['2.1.318', true], ['2.1.319', true], ['2.1.311', false]]) test(`native ${version} ${on ? 'sends' : 'does not send'} a Read image with its tool row (T-133)`, async () => {
+for (const [version, on] of [['2.1.312', true], ['2.1.316', true], ['2.1.317', true], ['2.1.318', true], ['2.1.319', true], ['2.1.321', false], ['2.1.322', false], ['2.1.311', false]]) test(`native ${version} ${on ? 'sends' : 'does not send'} a Read image with its tool row (T-133)`, async () => {
   const f = await mod({ version }), e = response();
   e.door = 'tool-result'; e.origin = { kind: 'tool', tool: 'Read' };
   e.message = { type: 'user', role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_img', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: onePixelPng } }] }] };
@@ -787,7 +789,7 @@ for (const [version, on] of [['2.1.312', true], ['2.1.316', true], ['2.1.317', t
 const imagePrompt = (text, data = onePixelPng) => ({ uuid: randomUUID(), door: 'prompt', origin: { kind: 'composer' },
   message: { type: 'user', role: 'user', content: [{ type: 'text', text }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data } }] } });
 const flushZero = async f => { for (let i = 0; i < 8 && f.clock.some(fn => fn.delay === 0); i++) { const fn = f.clock.find(x => x.delay === 0); f.clock.splice(f.clock.indexOf(fn), 1); await fn(); } };
-for (const [version, on] of [['2.1.316', true], ['2.1.317', true], ['2.1.318', true], ['2.1.319', true], ['2.1.312', false]]) test(`native ${version} ${on ? 'sends' : 'does not send'} a terminal prompt's image for its settings-hook row (T-133)`, async () => {
+for (const [version, on] of [['2.1.316', true], ['2.1.317', true], ['2.1.318', true], ['2.1.319', true], ['2.1.321', false], ['2.1.322', false], ['2.1.312', false]]) test(`native ${version} ${on ? 'sends' : 'does not send'} a terminal prompt's image for its settings-hook row (T-133)`, async () => {
   const f = await mod({ version }), images = [], promptId = randomUUID(), text = 'Describe this image.';
   f.r.on('nativePromptImage', event => images.push(event));
   await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: text });
@@ -848,19 +850,22 @@ test('a held old-root observation times out and new-root text proceeds without o
   assert.equal(f.requests.length, 2); assert.equal(f.requests[1].sessionId, next); assert.equal(seen.at(-1).text, 'new');
   release({ observed: true }); await new Promise(r => setImmediate(r)); assert.equal(seen.length, 1);
 });
-for (const version of ['2.1.321', '2.1.322']) test(`native ${version}: root binding does not enable an unqualified context transition`, async () => {
-  const transitions = [];
+for (const version of ['2.1.321-beta', '2.1.322+unqualified', '2.1.323']) test(`native ${version}: an unqualified clear cannot rebind the root`, async () => {
+  const transitions = []; let binding, polls = 0;
   const f = await mod({ version, requestHandler: async (url, _options, body) => {
+    if (url.endsWith('/root-bind')) binding = body;
+    if (url.endsWith('/next')) polls++;
     if (url.endsWith('/root-clear')) transitions.push(body);
   } });
-  assert.equal(f.r.nativeBlocks, true);
+  assert.ok(polls > 0, 'The actual bridge boot reaches its input listener');
+  assert.equal(binding, undefined, 'An unqualified version never requests root display capabilities');
   const previous = f.r.record.nativeId, next = randomUUID();
   await f.invoke('session.end', { sessionId: previous, reason: 'clear' });
   f.setNativeId(next); await f.invoke('classic.SessionStart', { session_id: next, source: 'clear' }); await flushZero(f);
   assert.deepEqual(transitions, [], 'Context transitions need their separate qualification');
   assert.equal(f.r.record.nativeId, previous, 'An unqualified transition cannot rebind the root');
 });
-for (const version of ['2.1.318', '2.1.319']) test(`native ${version}: clear changes the bound root and a late old display cannot enter the new conversation`, async () => {
+for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`native ${version}: clear changes the bound root and a late old display cannot enter the new conversation`, async () => {
   const transitions = [];
   const f = await mod({ version, requestHandler: async (url, _options, body) => {
     if (url.endsWith('/root-clear')) transitions.push(body);
@@ -1407,13 +1412,14 @@ for (const version of ['2.1.310', '2.1.312']) test('usage metadata is read after
   assert.equal(usage[1].context.window, 200000); assert.equal(usage[1].context.tokens, undefined);
 });
 
-// Only 318/319 gain the free usage read; 321/322 remain unqualified for usage.
-for (const [version, read] of [['2.1.316', true], ['2.1.317', true], ['2.1.313', false], ['2.1.318', true], ['2.1.319', true], ['2.1.321', false], ['2.1.322', false]]) test(`native ${version} ${read ? 'reads' : 'does not read'} the free status-line usage (T-133)`, async () => {
-  let reads = 0;
-  const f = await mod({ version, usageReader: async args => { reads++; assert.equal(args, undefined, 'Only the free plain read'); return { context: { window: 200000, tokens: 1234, percent: 1 } }; } });
-  const blocks = []; f.r.on('nativeBlock', row => blocks.push(row));
-  await f.readUsage(); await new Promise(r => setImmediate(r));
-  assert.equal(reads > 0, read, version); // bind already reads once; an explicit read may add one
+for (const [version, read] of [['2.1.316', true], ['2.1.317', true], ['2.1.313', false], ['2.1.318', true], ['2.1.319', true], ['2.1.321', true], ['2.1.322', true]]) test(`native ${version} ${read ? 'reads' : 'does not read'} the free status-line usage (T-133)`, async () => {
+  let reads = 0; const f = await mod({ version }), usage = [], blocks = [];
+  f.r.on('usage', row => usage.push(row)); f.r.on('nativeBlock', row => blocks.push(row));
+  f.setUsageReader(async (...args) => { reads++; assert.equal(args.length, 0, 'Only the free plain read'); return { context: { window: 200000, tokens: 1234, percent: 1 } }; });
+  await f.readUsage(); await new Promise(r => setImmediate(r)); await flushZero(f);
+  assert.equal(reads, Number(read), version);
+  assert.deepEqual(usage.map(row => row.context), read ? [{ window: 200000, tokens: 1234, percent: 1 }] : []);
+  assert.deepEqual(blocks, [], 'Usage is metadata, not a conversation row');
 });
 test('held usage metadata never blocks binding/input and coalesces reads', async () => {
   let reads = 0, release;
@@ -1574,7 +1580,7 @@ test('replayed native display content stays readable without acquiring a current
 // T-99. Rows as Claude Code 2.1.316 builds them: processBashCommand appends the
 // input and then its output, and its append classifier files both on door `command`.
 const shellRow = (value, extra = {}) => ({ uuid: randomUUID(), door: 'command', origin: { kind: 'composer' }, message: { type: 'user', role: 'user', content: [{ type: 'text', text: value }] }, ...extra });
-for (const version of ['2.1.316', '2.1.318', '2.1.319']) test(`native ${version} shows a ! command, heads each turn with its inputs and keeps the turn clock`, async () => {
+for (const version of ['2.1.316', '2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`native ${version} shows a ! command, heads each turn with its inputs and keeps the turn clock`, async () => {
   const ended = Date.UTC(2026, 10, 2, 5, 27), f = await mod({ version, now: async () => ended }), rows = [], links = [];
   assert.equal(f.r.nativeTurnRecords, true);
   f.r.on('nativeBlock', row => rows.push(row)); f.r.on('nativeTurnTriggers', info => links.push(info));
@@ -1653,7 +1659,7 @@ async function narrationFixture(options = {}) {
   const session = () => { const s = { nativeId: f.r.record.nativeId, messages: [] }; for (const row of rows) require('../native-blocks.cjs').applyNativeBlock(s, row); return s; };
   return { ...f, rows, flush, session, narrations: () => rows.filter(row => row.id.startsWith('narration:')) };
 }
-for (const version of ['2.1.316', '2.1.318', '2.1.319']) test(`native ${version} shows the explanation the terminal drew, in its place, as the turn's commentary`, async () => {
+for (const version of ['2.1.316', '2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`native ${version} shows the explanation the terminal drew, in its place, as the turn's commentary`, async () => {
   const f = await narrationFixture({ version });
   assert.equal(f.r.nativeNarration, true);
   await f.invoke('turn.start', { turnId: 'work-turn' });
@@ -1695,18 +1701,26 @@ test('only the terminal\'s own narration drawing of a root row from a running tu
   assert.deepEqual(f.narrations(), []);
   assert.equal(f.requests.some(row => row.kind === 'narration'), false, 'nothing was even sent');
 });
-test('an adapter that did not agree to narration gets no narration frames and no gap', async () => {
-  const f = await narrationFixture({ requestHandler: async (url, options, body, r) => {
+for (const version of ['2.1.316', '2.1.321', '2.1.322']) test(`native ${version}: an adapter that declined narration and turn records receives neither extension and no gap`, async () => {
+  let binding;
+  const f = await narrationFixture({ version, requestHandler: async (url, options, body, r) => {
     if (!url.endsWith('/root-bind')) return;
-    const result = await r.bindRoot({ ...body, nativeNarration: undefined });
+    binding = body;
+    const result = await r.bindRoot({ ...body, nativeNarration: false, nativeTurnRecords: false });
     return { ok: true, text: JSON.stringify(result) };
   } });
+  assert.equal(binding.nativeNarration, true); assert.equal(binding.nativeTurnRecords, true);
   assert.notEqual(f.r.nativeNarration, true);
+  assert.notEqual(f.r.nativeTurnRecords, true);
   await f.invoke('turn.start', { turnId: 'work-turn' });
   const said = thinkingRow('x'); await f.append(said);
-  await f.invoke('ui.render', drawn(said.uuid, 'explanation'), engineDraw); await f.flush();
+  await f.invoke('ui.render', drawn(said.uuid, 'explanation'), engineDraw);
+  await f.append(shellRow('<bash-input>pwd</bash-input>'));
+  await f.append(shellRow('<bash-stdout>/fixture</bash-stdout><bash-stderr></bash-stderr>'));
+  await f.invoke('turn.complete', { turnId: 'work-turn', reason: 'answer', answer: '', durationMs: 10 }); await f.flush();
   assert.deepEqual(f.narrations(), []); assert.equal(f.requests.some(row => row.gap), false);
   assert.equal(f.requests.some(row => row.kind === 'narration'), false, 'the bridge sends nothing the adapter did not agree to');
+  assert.equal(f.requests.some(row => row.id.startsWith('tool:shell-') || row.triggers || row.nativeDurationMs !== undefined || row.nativeCompletedAt !== undefined), false);
 });
 test('the adapter accepts a narration frame only as agreed and in its exact shape', () => {
   const make = narration => { const r = Object.create(Claude.prototype); EventEmitter.call(r); r.record = { nativeId: randomUUID() }; r.terminal = { alive: true }; r.submission = new SubmissionChannel();
@@ -1800,7 +1814,8 @@ for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`${vers
   assert.equal(binding.nativeBlocks, true); assert.equal(binding.nativeCapacity, true);
   assert.equal(binding.nativeQueue, true);
   for (const key of ['nativeInlineInput', 'nativePromptInput', 'nativeAbort', 'nativeSharedDisplay']) assert.equal(binding[key], false, key);
-  for (const key of ['nativeMedia', 'nativeTurnRecords', 'nativeNarration']) assert.equal(binding[key], ['2.1.318', '2.1.319'].includes(version), key);
+  for (const key of ['nativeTurnRecords', 'nativeNarration']) assert.equal(binding[key], true, key);
+  assert.equal(binding.nativeMedia, ['2.1.318', '2.1.319'].includes(version));
   assert.equal(f.r.nativeBlocks, true); assert.equal(f.r.nativeQueue, true); assert.equal(f.r.nativeCapacityAvailable, true); assert.equal(f.r.nativeAbortAvailable, false);
   const models = []; f.r.on('model', value => models.push(value));
   const turn = { id: 'unchanged', status: 'working' }; f.r.rootTurn = turn; f.r.nativeInputRequired = true;
@@ -1823,9 +1838,12 @@ for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`${vers
   assert.equal(f.requests.length, 1); assert.equal(f.clock.length, 0);
 });
 
-for (const version of ['2.1.319-beta', '2.1.320', '2.1.321', '2.1.322']) test(`unqualified display version ${version} reads no usage and enables no narration, turn records or media`, async () => {
-  let reads = 0;
-  const f = await mod({ version, usageReader: async () => { reads++; return { context: { window: 200000, tokens: 1 } }; } });
+for (const version of ['2.1.319-beta', '2.1.320', '2.1.321-beta', '2.1.322+unqualified', '2.1.323']) test(`unqualified display version ${version} reads no usage and enables no narration, turn records or media`, async () => {
+  let reads = 0, binding, polls = 0;
+  const f = await mod({ version, usageReader: async () => { reads++; return { context: { window: 200000, tokens: 1 } }; },
+    requestHandler: async (url, _options, body) => { if (url.endsWith('/root-bind')) binding = body; if (url.endsWith('/next')) polls++; } });
+  assert.ok(polls > 0, 'The actual bridge boot reaches its input listener');
+  assert.equal(binding, undefined, 'An unqualified version never requests root display capabilities');
   await f.readUsage();
   assert.equal(reads, 0);
   for (const flag of ['nativeMedia', 'nativeTurnRecords', 'nativeNarration']) assert.notEqual(f.r[flag], true, flag);

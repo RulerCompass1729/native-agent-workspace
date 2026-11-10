@@ -94,7 +94,8 @@ function nativeImagePart(part) {
     typeof source.data === 'string' && source.data.length > 0 && source.data.length <= nativeImageEncodedLimit;
 }
 // One list for every bind path (first bind, observer rebind), so they cannot disagree (T-133).
-// 2.1.316 and 2.1.317: the session-append, content-block and image types are as on 2.1.312.
+// 2.1.321/322 stay off: their declarations leave Read tool_response unknown;
+// the exact-version image producer shape has not been qualified.
 const nativeMediaVersion = version => ['2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319'].includes(version);
 function mediaIncomplete(parts, binding, complete = true) {
   return Array.isArray(parts) && parts.some(part => part?.type !== 'text' && !(complete && binding?.nativeMedia && nativeImagePart(part)));
@@ -659,15 +660,15 @@ async function bindRoot($, ownGeneration) {
     nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(version),
     nativeCapacity: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version),
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302',
-    nativeTurnRecords: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319'].includes(version),
-    nativeNarration: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319'].includes(version) }, binding);
+    nativeTurnRecords: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version),
+    nativeNarration: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version) }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
     nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
     nativeMedia: nativeBlocks && nativeMediaVersion(version) && result.nativeMedia === true,
-    nativeTurnRecords: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319'].includes(version) && result.nativeTurnRecords === true,
-    nativeNarration: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319'].includes(version) && result.nativeNarration === true };
+    nativeTurnRecords: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version) && result.nativeTurnRecords === true,
+    nativeNarration: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version) && result.nativeNarration === true };
   nativeReadImages.clear();
   heartbeat($, rootBinding, ownGeneration);
   // Native MCP connection may finish just after session.start. One early
@@ -1158,19 +1159,20 @@ export function register(on) {
     const nativeVersion = (await $.session.version()).version;
     // 2.1.316 and 2.1.317: the free status-line usage read, session.model() and the
     // PostModelSwitch event are declared as on 2.1.312 (T-133).
-    nativeUsageSupported = ['2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319'].includes(nativeVersion);
+    nativeUsageSupported = ['2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(nativeVersion);
     nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(nativeVersion);
     nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308', '2.1.309', '2.1.310'].includes(nativeVersion)
       : ['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(nativeVersion);
-    // 2.1.321/322: root binding, native blocks and model metadata are qualified;
-    // queue and capacity have separate gates above. Display and direct input remain off.
+    // 2.1.321/322: narration, terminal turn records, free usage and context transitions
+    // match 2.1.319 declarations and pass the same guarded fixtures. Media stays off
+    // pending its producer contract; queue, capacity and direct input have separate gates.
     // 2.1.318 and 2.1.319 (T-171): native blocks too, so workspace messages have their turn identity. Their
     // declarations differ from 2.1.317's only in declarations this mod does not use (model.fork effort, the
     // backdrop/theme API, command results, turn attribution). Their display/usage/transition contracts also
     // match 2.1.317; input, queue, abort and capacity keep their separate qualification gates.
     // 2.1.316 and 2.1.317 (2.1.317's engine API only adds to 2.1.316's, T-133): root binding, native
     // blocks (turn identity for workspace messages), abort, usage, model and media; queue and inline input stay off.
-    contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319'].includes(nativeVersion);
+    contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(nativeVersion);
     const version = nativeVersion.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));
     stopped = !supported;
