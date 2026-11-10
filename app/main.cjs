@@ -625,6 +625,13 @@ function migrateQuietMs() {
   }
   return queueRules.MIGRATE_QUIET_MS;
 }
+function migrateUnprovenQuietMs() {
+  const test = Number(process.env.NAW_TEST_MIGRATE_UNPROVEN_QUIET_MS);
+  if (backgroundTest && Number.isSafeInteger(test) && test >= 0) {
+    return test;
+  }
+  return queueRules.MIGRATE_UNPROVEN_QUIET_MS;
+}
 async function autoBackendSwitchOnce() {
   const settings = backendSwitch.readSettings(dataDir);
   if (quitting || backendSwitching || !(settings.auto || settings.migrate)) return;
@@ -637,7 +644,7 @@ async function autoBackendSwitchOnce() {
     humanAt = queueDispatcher.humanAt;
   }
   const options = connectionUpdateOptions(c.client, app.getVersion(), roomState);
-  const option = queueRules.nextBackendMove(options, settings, sessions, humanAt, Date.now(), autoSwitchFailed, migrateQuietMs());
+  const option = queueRules.nextBackendMove(options, settings, sessions, humanAt, Date.now(), autoSwitchFailed, migrateQuietMs(), migrateUnprovenQuietMs());
   if (!option) return;
   // A move made under the person's migration setting rather than proven automatic updates.
   const viaMigration = !(settings.auto && option.switch.auto);
@@ -666,8 +673,8 @@ async function autoBackendSwitchOnce() {
           }
         }
       };
-      // Teammates, children, background work or a goal that started meanwhile stop the move.
-      extra.guard = record => backendSwitch.migrationSafe(record) && queueRules.quietFor(record, humanAt, Date.now(), migrateQuietMs());
+      // Work that started meanwhile (a turn, a running child, a goal) stops the move.
+      extra.guard = record => queueRules.migrationReady(record, humanAt, Date.now(), migrateQuietMs(), migrateUnprovenQuietMs());
     }
     const result = await runBackendSwitch(c, option, option.switch.auto === true, extra);
     notice = { resumed: result.resumed.length, left: result.left.length, reconnectFailed: result.reconnectFailed };
@@ -1377,7 +1384,8 @@ function recordMigration(option, screens, result) {
   const left = (result && result.left) || [];
   const partial = left.length > 0 || Boolean(result && result.reconnectFailed);
   const confirmedByState = (result && result.confirmedByState) || [];
-  const entry = { time: Date.now(), backend: option.backendKey, sessions: stops.map(stop => ({ id: stop.id, nativeId: stop.nativeId || null, name: stop.name })), screens, left: left.length, reconnectFailed: Boolean(result && result.reconnectFailed), confirmedByState };
+  const unprovenReason = option.switch.reason || '';
+  const entry = { time: Date.now(), backend: option.backendKey, sessions: stops.map(stop => ({ id: stop.id, nativeId: stop.nativeId || null, name: stop.name })), screens, left: left.length, reconnectFailed: Boolean(result && result.reconnectFailed), confirmedByState, unproven: unprovenReason };
   try {
     fs.appendFileSync(path.join(dataDir, 'backend-migrations.jsonl'), JSON.stringify(entry) + '\n', { mode: 0o600 });
   } catch {

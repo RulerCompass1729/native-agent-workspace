@@ -1522,6 +1522,43 @@ test('migration moves an unproven backend only when every session is safe and pr
   assert.equal(rules.nextBackendMove([proven], settings, [safe({ fleet: [{ event: 'TaskCompleted' }] })], new Map(), NOW, new Set()), proven, 'a proven plan was already checked by the runtime');
 });
 
+// The person, 2026-11-09: 「那么多更新应该自动更新才对，避免问题，我一个个搞肯定来不及」.
+test('with migration on, a backend whose teammates, earlier children or background NAW cannot see end moves after 30 quiet minutes', () => {
+  const { migrationAcceptable } = require('../backend-switch.cjs');
+  const claude = extra => member('a', { backgroundStale: false, background: 0, scheduled: 0, terminalInputPending: true, ...extra });
+  assert.equal(migrationAcceptable(claude({ fleet: [{ event: 'TeammateIdle' }] })), true, 'teammates whose end is not reported');
+  assert.equal(migrationAcceptable(claude({ fleet: [{ event: 'SubagentStart', id: 'x', stale: true }] })), true, 'a child seen before the process restarted');
+  assert.equal(migrationAcceptable(claude({ backgroundStale: true, background: null, scheduled: null })), true, 'background work not reported');
+  assert.equal(migrationAcceptable(claude({ fleet: [{ event: 'SubagentStart', id: 'x', stale: false }] })), false, 'a child running now');
+  assert.equal(migrationAcceptable(claude({ background: 2 })), false, 'background work reported running');
+  assert.equal(migrationAcceptable(claude({ backgroundStale: true, background: 2 })), false, 'even when that report is from before the last turn');
+  assert.equal(migrationAcceptable(claude({ scheduled: 1 })), false, 'scheduled work reported');
+  assert.equal(migrationAcceptable(claude({ state: 'working' })), false);
+  assert.equal(migrationAcceptable(claude({ pendingTag: 'p' })), false, 'something waiting');
+  assert.equal(migrationAcceptable(member('c', { provider: 'codex', nativeGoal: { status: 'active' } })), false, 'an active goal is never ended');
+  assert.equal(migrationAcceptable(member('c', { provider: 'codex', fleet: [{ event: 'thread/started', id: 't', stale: true }] })), true);
+
+  const plan = { backendKey: 'b', switch: { ready: true, auto: false, stops: [{ id: 'a' }] } };
+  const settings = { auto: false, migrate: true };
+  const team = minutes => claude({ fleet: [{ event: 'TeammateIdle' }], lastActivityAt: NOW - minutes * 60000 });
+  const move = session => rules.nextBackendMove([plan], settings, [session], new Map(), NOW, new Set());
+  assert.equal(move(team(15)), null, 'quiet 15 minutes: not yet');
+  assert.equal(move(team(31)), plan, 'quiet 31 minutes: moved');
+  const reporting = claude({ fleet: [{ event: 'TeammateIdle', time: NOW - 60000 }], lastActivityAt: NOW - 60 * 60000 });
+  assert.equal(move(reporting), null, 'a teammate reported a minute ago: that is activity too');
+  const reportedLongAgo = claude({ fleet: [{ event: 'TeammateIdle', time: NOW - 31 * 60000 }], lastActivityAt: NOW - 60 * 60000 });
+  assert.equal(move(reportedLongAgo), plan);
+  assert.equal(move(member('c', { provider: 'codex', nativeGoal: { status: 'active' }, lastActivityAt: NOW - 60 * 60000 })), null);
+  assert.equal(rules.nextBackendMove([plan], { auto: false, migrate: false }, [team(60)], new Map(), NOW, new Set()), null, 'never without the person\'s setting');
+  assert.equal(rules.nextBackendMove([plan], settings, [team(31)], new Map([['a', NOW - 60000]]), NOW, new Set()), null, 'the person just used it');
+  assert.equal(rules.MIGRATE_UNPROVEN_QUIET_MS, 30 * 60000);
+  // The re-check right before each stop uses the same rule.
+  assert.equal(rules.migrationReady(team(31), new Map(), NOW), true);
+  assert.equal(rules.migrationReady(team(15), new Map(), NOW), false);
+  assert.equal(rules.migrationReady(claude({ lastActivityAt: NOW - 11 * 60000 }), new Map(), NOW), true, 'a proven-safe session still needs only 10 minutes');
+  assert.equal(rules.migrationReady(claude({ state: 'working', lastActivityAt: NOW - 60 * 60000 }), new Map(), NOW), false);
+});
+
 test('only the conversation since the last /clear counts toward the record limit; dispatches carry the queue rule', () => {
   const before = heavyMessages();
   const boundary = { id: 'boundary', role: 'system', kind: 'context', text: '原生上下文' };

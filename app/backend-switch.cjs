@@ -57,6 +57,28 @@ function migrationSafe(record) {
   const reported = record.backgroundStale === false && record.background === 0 && record.scheduled === 0;
   return fresh || reported;
 }
+// What the person's standing confirmation also covers once a session has been quiet for longer
+// (the person, 2026-11-09: 「那么多更新应该自动更新才对，避免问题，我一个个搞肯定来不及」):
+// teammates, earlier child agents and background work whose end NAW cannot see. Still never moved:
+// anything waiting, a child agent running now, Claude background work reported running, or an
+// active Codex goal.
+function migrationAcceptable(record) {
+  if (record.state !== 'idle' || waiting(record)) {
+    return false;
+  }
+  if (children(record).current) {
+    return false;
+  }
+  if (record.provider === 'codex') {
+    return !(record.nativeGoal && record.nativeGoal.status === 'active');
+  }
+  for (const count of [record.background, record.scheduled]) {
+    if (Number.isSafeInteger(count) && count > 0) {
+      return false;
+    }
+  }
+  return true;
+}
 // What would still be unknown if this idle session were stopped now. Empty
 // means the runtime proved it; otherwise only an explicit click may proceed.
 function unproven(record, fleet) {
@@ -339,4 +361,4 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
   return { key, resumed, left: left.map(s => s.id), confirmedByState };
 }
 
-module.exports = { backendPlan, sessionPlan, samePlan, sameStop, maintenanceProof, switchBackend, readSettings, writeSettings, readRecords, clearRecord, migrationSafe, children, RECORD, SETTINGS };
+module.exports = { backendPlan, sessionPlan, samePlan, sameStop, maintenanceProof, switchBackend, readSettings, writeSettings, readRecords, clearRecord, migrationSafe, migrationAcceptable, children, RECORD, SETTINGS };
