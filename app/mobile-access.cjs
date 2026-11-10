@@ -115,6 +115,9 @@ class MobileAccess {
       try { const stat = this.io.lstatSync(temp); if (own && stat.dev === own.dev && stat.ino === own.ino && privateFile(stat)) this.io.unlinkSync(temp); } catch { /* Only our temporary file is eligible for cleanup. */ }
     }
   }
+  // Whether the OFF marker exists. Normal while a pairing link waits (pair() removes it); beside an enabled device it
+  // marks a revocation whose save failed, and authenticate() already refuses that device. Throws if unreadable.
+  disabledMarker() { return disabled(this.root, this.io); }
   invalidate() {
     this.closed = true;
     try {

@@ -131,7 +131,7 @@ test('malformed Unicode in human text is rejected before native delegation', asy
 test('text with a native terminal prefix is refused before any request record or client call', async t => {
   const f = fixture(t), { auth } = await f.pair(), row = await f.broker.read(auth, f.record.id);
   // 11-09: also after invisible characters trim() keeps, and in full-width form.
-  for (const text of ['!x', ' !x', '\n\t!x', '\u3000!x', '#x', ' #x', '/x', ' /x', '\u200B!x', '\u2060!x', '\u00AD!x', '\uFEFF#x', '！x', '＃x', '／x', '\u200B\u3000！x']) {
+  for (const text of ['!x', ' !x', '\n\t!x', '\u3000!x', '#x', ' #x', '/x', ' /x', '\u200B!x', '\u2060!x', '\u00AD!x', '\uFEFF#x', '！x', '＃x', '／x', '\u200B\u3000！x', '\u0085!x', '\u009F#x']) {
     const requestId = randomUUID();
     await assert.rejects(f.broker.send(auth, { contextId: row.contextId, requestId, text }), { code: 'MOBILE_BROKER_DENIED' }, JSON.stringify(text));
     await assert.rejects(f.broker.receipt(auth, requestId), { code: 'MOBILE_RECEIPT_UNKNOWN' }, 'no request record for ' + JSON.stringify(text));
@@ -363,4 +363,10 @@ test('openUntil follows the pairing link and then the paired device; pairing and
   const auth = { token: device.cookieValue, actor, origin }; auth.csrf = f.broker.session(auth).csrf;
   assert.equal(f.broker.logout(auth).authorizationRevoked, true);
   assert.equal(f.broker.openUntil(), 0); assert.deepEqual(f.changes, ['changed', 'changed']);
+});
+
+test('a device whose revocation could not be saved no longer keeps the listener open', async t => {
+  const f = fixture(t), { auth, device } = await f.pair(); assert.equal(f.broker.openUntil(), device.expiresAt);
+  f.failRevoke(true); f.broker.logout(auth); f.failRevoke(false);
+  assert.equal(f.broker.openUntil(), 0, 'Closed access, or the OFF marker beside an enabled device, is not open');
 });

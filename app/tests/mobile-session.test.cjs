@@ -371,7 +371,7 @@ for (const provider of ['claude', 'codex']) {
       receipts: f.w.mobileRequests, room: f.w.room.messages, draft: f.w.drafts.get(f.id) });
     const before = snapshot();
     // 11-09: also a leading / (as on the phone and in the broker), after invisible characters, and in full-width form.
-    for (const text of ['!synthetic', ' \n\t!synthetic', '#synthetic', ' \t#synthetic', '/synthetic', '\u200B!synthetic', '\u2060#synthetic', '！synthetic', '＃synthetic', '／synthetic']) {
+    for (const text of ['!synthetic', ' \n\t!synthetic', '#synthetic', ' \t#synthetic', '/synthetic', '\u200B!synthetic', '\u2060#synthetic', '！synthetic', '＃synthetic', '／synthetic', '\u0085!synthetic']) {
       const ticket = f.ticket('send'), spec = f.spec(text);
       if (method === 'prepare') assert.throws(() => f.w.mobilePrepare(ticket, spec, 'send', {}));
       else await assert.rejects(f.w.mobileSend(ticket, spec));

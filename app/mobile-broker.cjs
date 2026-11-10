@@ -15,9 +15,10 @@ const stable = value => Array.isArray(value) ? value.map(stable) : value && type
 const fingerprint = value => digest(JSON.stringify(stable(value)));
 // A leading ! (shell), # (memory) or / (command) has meaning in a native terminal.
 // Phone text is plain prompt text, so it is refused before any record or call. The check looks past leading
-// whitespace and invisible characters (U+200B and other default-ignorables, which trim() keeps) and folds
+// whitespace, control characters and invisible characters (U+0085, U+200B and other default-ignorables, which trim()
+// keeps) and folds
 // compatibility forms, so full-width ！＃／ count too. The same rule is in mobile-web/client.js and mobile-session.cjs.
-const nativePrefix = text => /^[!#/]/.test(text.normalize('NFKC').replace(/^[\s\p{Default_Ignorable_Code_Point}]+/u, ''));
+const nativePrefix = text => /^[!#/]/.test(text.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''));
 const receipt = (value, ticket, requestId, action) => {
   if (!value || value.requestId !== requestId || value.sessionId !== ticket.sessionId || value.nativeId !== ticket.nativeId || value.action !== action ||
       !['prepared', 'awaiting-native', 'submitted', 'unconfirmed', 'not-sent', 'reply-written'].includes(value.status)) throw denied('MOBILE_RECEIPT_UNKNOWN');
@@ -196,12 +197,15 @@ class MobileBroker {
     return result;
   }
   // Until when the app's listener is needed: an unexpired pairing link or paired device. 0 when nothing is open,
-  // including when the stored state cannot be read.
+  // including when access is closed or the state is unreadable. The OFF marker is normal while a link waits (pair()
+  // removes it); with a device it means a revocation whose save failed, and authentication already refuses that device.
   openUntil() {
     try {
-      if (!this.#access.initialized) return 0;
+      if (!this.#access.initialized || this.#access.closed) return 0;
+      let off = true;
+      try { off = this.#access.disabledMarker(); } catch { off = true; }
       const s = this.#access.load(), time = this.#access.time();
-      const until = Math.max(s.pairing ? s.pairing.until : 0, s.enabled && s.device ? s.device.until : 0);
+      const until = Math.max(s.pairing ? s.pairing.until : 0, s.enabled && s.device && !off ? s.device.until : 0);
       return until > time ? until : 0;
     } catch { return 0; }
   }

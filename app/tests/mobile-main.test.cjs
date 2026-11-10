@@ -12,6 +12,8 @@ function fixture() {
       calls.push({ method: 'pair', selection });
       if (context.replaceRequired && !selection.replace) throw Error('Synthetic explicit replacement required');
       if (context.holdPair) await new Promise(resolve => { releasePair = resolve; });
+      // The real broker revokes the old grant before connecting; a later failure leaves nothing open.
+      if (context.failAfterRevoke) { context.openUntil = 0; throw Error('Synthetic connect failure after revoke'); }
       return { expiresAt: Date.now() + 120000, secret: 's'.repeat(43) };
     }
     revoke() {
@@ -158,31 +160,57 @@ test('the existing GUI payload list includes the app-local broker and its existi
 });
 
 // 11-09 (T-19/B10, user: the phone entry may open a local port): the listener stays open only while a pairing link or a
-// paired device is unexpired. Logout from the phone, or expiry of either, revokes and closes it.
+// paired device is unexpired. Logout from the phone, or expiry of either, revokes and closes it. Checks are at most a
+// minute apart and re-read the state, so a sleeping Mac or a clock change delays closing by at most that minute.
 async function opened() {
   const f = fixture(); const r = await f.handlers.get('workspace:mobilePairing')(f.event, f.selection); assert.equal(r.ok, true);
+  f.context.openUntil = f.context.now + 120000;
   return { f, server: f.servers[0], revokes: () => f.calls.filter(c => c.method === 'revoke').length };
 }
-test('an unpaired link closes the listener when it expires', async () => {
-  const { f, server, revokes } = await opened(); assert.equal(server.listening, true); assert.equal(f.timers.size, 1);
-  assert.equal([...f.timers.values()][0].ms, 120001, 'Checked right after the link expires');
-  const before = revokes(); f.context.now += 120001; f.context.openUntil = 0; f.fire(); f.fire();
+const only = f => { assert.equal(f.timers.size, 1); return [...f.timers.values()][0]; };
+test('an unpaired link closes the listener when it expires, checking at least once a minute', async () => {
+  const { f, server, revokes } = await opened(); assert.equal(server.listening, true); assert.equal(only(f).ms, 60000);
+  f.context.now += 60000; f.fire(); assert.equal(only(f).ms, 60000, 'Still open: checked again within a minute');
+  f.context.now += 59999; f.fire(); assert.equal(only(f).ms, 2, 'The last check lands right after the expiry');
+  const before = revokes(); f.context.now += 2; f.context.openUntil = 0; f.fire(); f.fire();
   assert.equal(revokes(), before + 1); assert.equal(server.options.signal.aborted, true); assert.equal(server.listening, false);
 });
-test('pairing moves the deadline to the device expiry, and the device expiry closes the listener', async () => {
+test('a paired device keeps the listener until it expires, even when the Mac slept past that time', async () => {
   const { f, server, revokes } = await opened();
-  f.context.openUntil = f.context.now + 3600000; f.context.broker.options.changed();
-  assert.equal(f.timers.size, 1); assert.equal([...f.timers.values()][0].ms, 3600001);
-  f.context.now += 3600001; f.context.openUntil = 0; const before = revokes(); f.fire(); f.fire();
-  assert.equal(revokes(), before + 1); assert.equal(server.listening, false);
+  f.context.openUntil = f.context.now + 12 * 3600000; f.context.broker.options.changed(); assert.equal(only(f).ms, 60000);
+  f.context.now += 13 * 3600000; f.context.openUntil = 0; const before = revokes();
+  f.fire(); f.fire(); assert.equal(revokes(), before + 1); assert.equal(server.listening, false);
 });
 test('a phone logout closes the listener after the short response grace, not before', async () => {
   const { f, server, revokes } = await opened();
   f.context.openUntil = 0; f.context.broker.options.changed();
-  assert.equal(server.listening, true, 'The logout response can still leave'); assert.equal([...f.timers.values()][0].ms, 1000);
+  assert.equal(server.listening, true, 'The logout response can still leave'); assert.equal(only(f).ms, 1000);
   const before = revokes(); f.fire(); assert.equal(revokes(), before + 1); assert.equal(server.listening, false);
 });
-test('a desktop revoke cancels the pending expiry check; a new pairing after it is unaffected', async () => {
+test('a desktop revoke cancels the pending check', async () => {
   const { f, server } = await opened(); assert.equal(f.timers.size, 1);
   await f.handlers.get('workspace:mobileRevoke')(f.event); assert.equal(f.timers.size, 0); assert.equal(server.listening, false);
+});
+test('a re-pairing that fails after the old grant was revoked closes the old listener', async () => {
+  const { f, server, revokes } = await opened(); f.context.failAfterRevoke = true;
+  const r = await f.handlers.get('workspace:mobilePairing')(f.event, { ...f.selection, replace: true }); assert.equal(r.ok, false);
+  assert.equal(f.servers.length, 1, 'No new listener'); const before = revokes(); f.fire();
+  assert.equal(revokes(), before + 1); assert.equal(server.listening, false);
+});
+test('a refused re-pairing that revoked nothing keeps the paired listener and its check', async () => {
+  const { f, server, revokes } = await opened(); f.context.replaceRequired = true; const before = revokes();
+  assert.equal((await f.handlers.get('workspace:mobilePairing')(f.event, f.selection)).ok, false);
+  assert.equal(server.listening, true); assert.equal(revokes(), before); assert.equal(only(f).ms, 60000);
+});
+test('a check left from an earlier pairing cannot cancel a newer pairing in progress', async () => {
+  const { f, revokes } = await opened(); f.context.openUntil = 0; f.context.broker.options.changed();
+  f.context.holdPair = true; const pending = f.handlers.get('workspace:mobilePairing')(f.event, { ...f.selection, replace: true });
+  await new Promise(resolve => setImmediate(resolve)); const before = revokes(); f.fire(); assert.equal(revokes(), before, 'The stale logout check is a no-op');
+  f.context.holdPair = false; f.context.openUntil = f.context.now + 120000; f.releasePair(); assert.equal((await pending).ok, true);
+});
+test('quitting with an open listener revokes access and closes the listener before the frontend stops', async () => {
+  const { f, server } = await opened(); f.quit({ preventDefault() { assert.fail('Valid view save must not cancel quit'); } });
+  assert.equal(server.listening, false); assert.equal(f.timers.size, 0);
+  const order = f.calls.map(call => call.method).filter(m => ['saveViews', 'revoke', 'stopUI'].includes(m)).slice(-3);
+  assert.deepEqual(order, ['saveViews', 'revoke', 'stopUI']);
 });

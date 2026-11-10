@@ -13,7 +13,7 @@
   const failure = code => Object.assign(new Error(code), { code });
   // Same rule as the broker (mobile-broker.cjs): these prefixes have native terminal meaning, also after leading
   // invisible characters or in full-width form.
-  const nativePrefix = value => /^[!#/]/.test(value.normalize('NFKC').replace(/^[\s\p{Default_Ignorable_Code_Point}]+/u, ''));
+  const nativePrefix = value => /^[!#/]/.test(value.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''));
   function createMobileClient({ request, storage, newId, onChange = () => {} }) {
     const state = { session: null, selected: null, row: null, draft: '', revision: 0, busy: false, notice: '', storageError: false, drafts: [], pending: [] };
     let readEpoch = 0, unreadableStorage = false;

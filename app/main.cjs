@@ -92,13 +92,16 @@ function appMobileBroker() {
 }
 // The listener stays open only while a pairing link or paired device is unexpired. When the phone logs out, or the link
 // or device expires, NAW revokes and closes it. A logout closes it only after its own response has had time to leave.
-const MOBILE_RESPONSE_GRACE_MS = 1000, MOBILE_TIMER_LIMIT_MS = 2 ** 31 - 1;
+// Waits are at most a minute and each check re-reads the stored state, so sleep or a clock change delays closing by
+// at most that minute. A check belongs to the pairing it was set for: a newer pairing or revoke makes it a no-op.
+const MOBILE_RESPONSE_GRACE_MS = 1000, MOBILE_CHECK_MS = 60000;
 function watchAppMobile(grace = 0) {
   clearTimeout(mobileExpiry); mobileExpiry = undefined;
   if (!mobileListener || !mobileBroker) return;
+  const generation = mobileGeneration, current = () => generation === mobileGeneration && !mobileOpening && mobileListener;
   const until = mobileBroker.openUntil();
-  if (!until) { mobileExpiry = setTimeout(() => { mobileExpiry = undefined; if (mobileListener && !mobileBroker.openUntil()) revokeAppMobile(); }, grace); return; }
-  mobileExpiry = setTimeout(() => { mobileExpiry = undefined; watchAppMobile(); }, Math.min(MOBILE_TIMER_LIMIT_MS, Math.max(0, until - Date.now()) + 1));
+  if (!until) { mobileExpiry = setTimeout(() => { mobileExpiry = undefined; if (current() && !mobileBroker.openUntil()) revokeAppMobile(); }, grace); return; }
+  mobileExpiry = setTimeout(() => { mobileExpiry = undefined; if (current()) watchAppMobile(); }, Math.min(MOBILE_CHECK_MS, Math.max(0, until - Date.now()) + 1));
 }
 function stopAppMobileListener() {
   const entry = mobileListener; mobileListener = null;
@@ -144,6 +147,8 @@ async function beginAppMobile(options) {
   } catch {
     // A newer explicit revoke owns the newer state; never revoke its successor.
     if (authorityChanged && generation === mobileGeneration) revokeAppMobile();
+    // A refused or failed re-pairing may already have revoked the old grant: close the old listener if nothing is open.
+    else if (generation === mobileGeneration) watchAppMobile();
     throw Error('Mobile pairing was not confirmed. Check the private carrier and revoke access if necessary.');
   } finally { mobileOpening = false; }
 }
