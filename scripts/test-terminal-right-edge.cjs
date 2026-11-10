@@ -35,10 +35,16 @@ async function run() {
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
   const win = await app.browserWindow(page), seen = new Set();
   for (const provider of ['codex', 'claude']) for (const fontSize of [13, 14]) {
-    await page.evaluate(fontSize => workspace.viewState({ selected: '', mode: 'chat', terminalDisplay: { fontSize, palette: 'dark' } }), fontSize); await page.reload(); await page.locator('#new-session').waitFor();
     await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check(); await page.locator('#session-name').fill(`Right edge ${provider} ${fontSize}`); await createIn(page, 'chat');
     const id = (await snapshot()).sessions.map(s => s.id).find(s => !seen.has(s)); seen.add(id);
     await until(async () => (await fixture()).pending.includes(id), 'Native snapshot'); await fixture('release', id); await page.locator(`[data-terminal-id="${id}"] .terminal-surface`).waitFor();
+    // Use the person's settings path: a raw viewState write races the old
+    // renderer's later persistence and can inherit the previous 14px value.
+    if (await page.locator('#terminal-more').isVisible()) { await page.locator('#terminal-more').click(); await page.getByRole('menuitem', { name: '显示…', exact: true }).click(); }
+    else await page.locator('#terminal-display').click();
+    await page.locator('#terminal-font-size').fill(String(fontSize)); await page.locator('#terminal-font-size').press('Tab');
+    await page.locator('#terminal-palette').selectOption('dark'); await page.locator('#close-terminal-display').click();
+    await until(() => page.evaluate(({ id, fontSize }) => window.edgeTerms.get(id)?.options.fontSize === fontSize, { id, fontSize }), 'Font applied through the actual settings control');
     await fixture('terminal', id, { sequence: ++sequence, data: '\x1b[?1049h' });
     await until(() => page.evaluate(id => window.edgeTerms.get(id)?.buffer.active.type === 'alternate', id), 'Actual alternate buffer');
     for (const [width, height] of [[1250, 850], [1000, 800], [820, 760]]) for (const maximized of [false, true]) {
