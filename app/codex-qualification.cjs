@@ -34,7 +34,7 @@ function setAutomatic(table) { automatic = Object.assign(Object.create(null), ta
 // Automatic qualification (b3-spec.md section 1). A version newer than the baseline,
 // the newest version qualified for every capability, is compared with the baseline's
 // stored used surface. Zero model: the release's own schema generator runs under an
-// empty private CODEX_HOME with a minimal environment and a timeout. Anything that
+// empty private CODEX_HOME with a minimal environment, no network and a timeout. Anything that
 // fails is undecidable and leaves that version's gates closed, as before B3.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
@@ -47,9 +47,11 @@ const semver = v => typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v);
 const newer = (v, than) => { const a = v.split('.').map(Number), b = than.split('.').map(Number); for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return false; };
 const needsCheck = version => semver(version) && newer(version, BASELINE) && !(version in automatic);
 
+// The generator needs no network; the OS denies it all network so the check cannot reach anything.
+const NO_NETWORK = '(version 1)(allow default)(deny network*)';
 function run(binary, args, env, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, { env, stdio: ['ignore', 'pipe', 'ignore'], detached: true });
+    const child = spawn('/usr/bin/sandbox-exec', ['-p', NO_NETWORK, binary, ...args], { env, stdio: ['ignore', 'pipe', 'ignore'], detached: true });
     let out = '';
     child.stdout.on('data', chunk => { if (out.length < 4096) out += chunk; });
     const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} reject(Error('schema generator timed out')); }, timeoutMs);
