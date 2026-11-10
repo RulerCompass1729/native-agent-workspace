@@ -7556,3 +7556,25 @@ A shared executable path does not prove the already-running host and a later TUI
 The transparent terminal bridge now retains only the client version from that connection's first successful initialize exchange. Missing, failed or duplicate initialization leaves it unqualified; disconnection clears it and a new connection starts unqualified. The draft-preserving exception requires both the host and this exact TUI RPC to report 0.167. Native frames pass unchanged. Subsequent human typing, authority changes, existing goal checks and retirement protection retain their gates.
 
 Author verification: 424 related checks passed with zero failures or skips; UI build and diff checks passed. An isolated actual 0.167 TUI/host pair reported both versions, received the exact task once, ran its first command with exit code zero, and retained the editable unsent draft and the same native processes. This used the actual PTY and canonical terminal screen, two fixed local response fixtures, no model inference, no GUI windows and no paid calls; owned processes were cleaned up. The prior GUI evidence is not a new GUI acceptance run. Independent review of this delta remains pending for the integration batch under the lightweight workflow. No daily installation, existing-agent adoption or full communication acceptance is claimed.
+## T-159 orphaned test recovery — 2026-11-09
+
+At main 9401ba0, six of the seven orphaned test commits already have equivalent
+or stronger coverage. The outbox page tests and merge-dismiss GUI driver are
+byte-identical to 567ed22 and efffec1. Only a357c6c remains absent: its eight
+staging-transport cases cover fragmented replies, timeout/error/truncated or
+malformed replies, the size limit, late replies and no reconnect/repeated write.
+This checkpoint replays that original 81-line test without changing product code.
+The existing stageNative implementation is exercised directly in a VM; no real
+socket or provider is used by this restored test.
+
+Author-run baseline: 44 related local tests pass. With the restored test, 52 pass,
+zero failures or skips. The unchanged main dialog-lifecycle GUI driver passes all
+13 checks, including its named-dialog inventory: T-159① no longer fails. The
+unchanged merge-dismiss driver also passes all four preview-dismissal/late-result
+cases. Both GUI trials use hidden isolated instances and synthetic transports,
+with zero product model calls, native sends or clipboard use; owned profiles are
+removed. This result does not cover T-159②, installation or daily-app acceptance.
+The independent read-only reviewer approved this test-only source delivery after
+reading the exact diff, current transport, per-commit report and raw local test
+output. The normal npm test command matches app/tests/*.test.cjs, so the restored
+file is included. Reported review cost for this checkpoint: USD 0.6766.
