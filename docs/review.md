@@ -4,6 +4,56 @@ As of 2026-10-24. This is a working acceptance record, not an independent securi
 certification. Private transcripts, screenshots, paths and account details stay
 outside the public repository. Use synthetic reproductions here.
 
+## Queued terminal questions retain their reply group (T-138, 2026-11-09)
+
+On exact Claude 2.1.321 and 2.1.322, a question entered while Claude works
+raises `UserPromptSubmit` with the previous question's id. Its later reply
+has a new classic prompt id, distinct from the engine turn id, display turn
+id and accepted message UUID. Treating the nearest answer as its reply would
+misplace late output from an older turn.
+
+The native journal records the accepted user UUID and its new classic
+`promptId` together. That exact UUID connects the display to the existing,
+limited queued-turn recognition, which still requires the first queued
+composer prompt and its exact accepted text. Unknown, ambiguous, child,
+foreign-session and stale-observer identities stay unlinked. The bridge
+does not independently prove the older queued-turn recognition rule.
+
+Only the authenticated current root can request the unique UUID from its
+already observed journal path. Reads require an owned regular file with the
+exact session filename, reject final symlinks, and inspect at most 256 KiB
+per read. Native may flush the user row after drawing begins: this one
+metadata request permits five reads with 25 ms gaps, rechecking the
+lease and observer before each. No history or prose is returned. A bounded
+miss remains a separate display turn rather than retagging published text.
+Overlapping display callbacks also re-read the pinned link after the lookup:
+the first published namespace wins even if a later lookup obtains a UUID.
+Overlapping chunks share one in-flight lookup, preserving their text order
+and avoiding duplicate journal requests; live lookups are not evicted.
+When the identified reply is drawn after its own completed footer, native
+record insertion keeps it before that footer, within its question's group.
+It does not move interrupted boundaries or narration, or attach old output
+to a newer question.
+
+A separate reading-only capability permits one queued `-q` input trigger
+on these two versions when whole turn records are unavailable. This bit
+itself does not enable shell records, ordinary input triggers, narration,
+abort or whole turn records; the combined-gates main independently qualifies
+whole turn records and narration on both versions. Both negotiation modes
+have regression coverage. Display aliases do not enter the prompt authority
+map or certify a shared final reply. Earlier unprovable saved rows are not
+backfilled.
+
+The original base and the later combined-gates main reproduce the defect.
+Two actual native composer trials with loopback canned responses verify
+the fixed question/reply turn identity on 321 and 322; each uses two local
+responses and zero paid inference. These are native producer checks, not
+physical iTerm acceptance or daily-app installation. Related tests cover
+delayed journal writes, replaced observers, duplicate/foreign identities,
+pinned old output, missing proof and capability boundaries. Independent
+review applies to this source delivery; merge, installation and daily-use
+acceptance remain separate.
+
 **Space task queues and session rotation, 2026-11-08 (independent review, first round CHANGES_NEEDED):**
 the person asked that NAW itself send each idle space member its next queued item, and
 that day-old sessions hand over to a new session to free memory. Findings reproduced and

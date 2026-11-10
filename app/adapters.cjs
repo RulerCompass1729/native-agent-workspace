@@ -410,12 +410,13 @@ const FOLLOWED_ROOT_TRANSITIONS = { clear: 'clear', resume: 'fork' };
 // `!` command rows, both taken while no root turn ran. Bounded, exact shapes.
 // The mod's promptTextTag, verbatim (register.js cannot require; a test pins the two equal).
 const promptTextTag = text => { let h = 0x811c9dc5; for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0; return h.toString(16).padStart(8, '0'); };
-function nativeTurnTriggers(value) {
+function nativeTurnTriggers(value, queuedOnly = false) {
   const uuid = '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
   return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(k => ['prompts', 'rows'].includes(k)) &&
     Array.isArray(value.prompts) && Array.isArray(value.rows) && value.prompts.length + value.rows.length > 0 && value.prompts.length + value.rows.length <= 8 &&
     value.prompts.every(id => typeof id === 'string' && new RegExp(`^${uuid}(?:-q[0-9a-f]{8})?$`, 'i').test(id)) &&
-    value.rows.every(id => typeof id === 'string' && new RegExp(`^tool:shell-${uuid}$`, 'i').test(id)));
+    value.rows.every(id => typeof id === 'string' && new RegExp(`^tool:shell-${uuid}$`, 'i').test(id)) &&
+    (!queuedOnly || value.rows.length === 0 && value.prompts.length === 1 && /-q[0-9a-f]{8}$/.test(value.prompts[0])));
 }
 function claudeGeneratedTitle(file, nativeId) {
   if (typeof file !== 'string' || !path.isAbsolute(file) || path.basename(file) !== `${nativeId}.jsonl`) return null;
@@ -457,6 +458,29 @@ function claudeOverloaded(file, nativeId, messageId) {
   } catch (error) { return error.code === 'ENOENT' ? null : false; }
   finally { if (fd !== undefined) fs.closeSync(fd); }
   return null; // Native may flush the identified row just after its hooks.
+}
+// Native's accepted prompt UUID and its classic promptId are recorded together.
+// Read only the current session's bounded journal tail; return no prose/history.
+function claudePromptIdentity(file, nativeId, promptId) {
+  const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+  if (!uuid.test(nativeId || '') || !uuid.test(promptId || '') || typeof file !== 'string' || !path.isAbsolute(file) || path.basename(file) !== `${nativeId}.jsonl`) return null;
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.uid !== process.getuid()) return null;
+    const length = Math.min(stat.size, 262144), buffer = Buffer.alloc(length), found = new Set();
+    fs.readSync(fd, buffer, 0, length, stat.size - length);
+    for (const line of buffer.toString('utf8').split('\n')) {
+      if (!line.includes(promptId)) continue;
+      try {
+        const row = JSON.parse(line);
+        if (row.type === 'user' && row.sessionId === nativeId && row.isSidechain === false && row.promptId === promptId && uuid.test(row.uuid || '')) found.add(row.uuid);
+      } catch { /* a torn line carries no identity */ }
+    }
+    return found.size === 1 ? [...found][0] : null;
+  } catch { return null; }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 // A running claude process whose arguments name this native session ID.
 function claudeHolder(nativeId, strict = false) {
@@ -626,13 +650,27 @@ class Claude extends EventEmitter {
     this.nativeSharedDisplay = this.retainedReader && message.nativeSharedDisplay === true;
     // Native `!` commands, turn-start inputs and the turn's own clock (T-99).
     this.nativeTurnRecords = this.nativeBlocks && message.nativeTurnRecords === true && !this.retainedReader;
+    this.nativeQueuedPromptLinks = this.nativeBlocks && message.nativeQueuedPromptLinks === true && !this.retainedReader;
     // The model's running explanation, as the native terminal drew it (T-130).
     this.nativeNarration = this.nativeBlocks && message.nativeNarration === true && !this.retainedReader;
     this.displayProofs = new Map(); this.displayGap = false;
-    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia, nativeTurnRecords: this.nativeTurnRecords, nativeNarration: this.nativeNarration };
+    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia, nativeTurnRecords: this.nativeTurnRecords, nativeQueuedPromptLinks: this.nativeQueuedPromptLinks, nativeNarration: this.nativeNarration };
   }
   validRootBinding(message) {
     return Boolean(this.rootLease && !this.rootEnding && message.lease === this.rootLease && message.sessionId === this.record.nativeId);
+  }
+  async promptIdentity(message) {
+    // Native can flush the accepted user row just after the first display
+    // hook. Bound this one metadata request to five reads with 25ms gaps,
+    // rechecking
+    // the original observer before every read; no standing watcher or send.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (!this.validRootBinding(message) || message.epoch !== this.observationEpoch || this.disposed || !this.terminal?.alive || !this.nativeBlocks || !this.nativeQueuedPromptLinks || this.retainedReader) throw Error('Root unavailable');
+      const uuid = claudePromptIdentity(this.nativeTranscript, this.record.nativeId, message.promptId);
+      if (uuid) return { uuid };
+      if (attempt < 4) await delay(25);
+    }
+    return { uuid: null };
   }
   observeRoot(message) {
     if (message.block === true) return this.observeBlock(message);
@@ -716,7 +754,7 @@ class Claude extends EventEmitter {
       ['nativeDurationMs', 'nativeCompletedAt'].some(k => message[k] !== undefined) && (!this.nativeTurnRecords || message.kind !== 'turn' ||
         message.nativeDurationMs !== undefined && !(Number.isSafeInteger(message.nativeDurationMs) && message.nativeDurationMs >= 0) ||
         message.nativeCompletedAt !== undefined && !(Number.isFinite(message.nativeCompletedAt) && Math.abs(message.nativeCompletedAt) <= 8640000000000000)) ||
-      message.triggers !== undefined && (!this.nativeTurnRecords || message.id !== 'control:turn-start' || !nativeTurnTriggers(message.triggers))) throw Error('Invalid native block');
+      message.triggers !== undefined && (!(this.nativeTurnRecords || this.nativeQueuedPromptLinks) || message.id !== 'control:turn-start' || !nativeTurnTriggers(message.triggers, !this.nativeTurnRecords))) throw Error('Invalid native block');
     const usage = message.id === 'control:usage' ? claudeUsage(message.usage) : null;
     if (message.id === 'control:usage' && (!usage || message.kind !== 'control' || message.status !== 'complete')) throw Error('Invalid native usage');
     this.rootObservation = { lease: message.lease, sequence: message.sequence };
@@ -1051,6 +1089,10 @@ class Claude extends EventEmitter {
       nameUiMessage: event.teammate_name || event.agent_type || event.task_subject ? null : uiNotice('notice.fleet.nativeTeamActivity').uiMessage,
     });
     if (isChild) return;
+    // Only an authenticated root settings event selects the journal. The
+    // identity lookup route never accepts a caller-supplied filesystem path.
+    if (event.session_id === this.record.nativeId && typeof event.transcript_path === 'string' &&
+      path.isAbsolute(event.transcript_path) && path.basename(event.transcript_path) === `${this.record.nativeId}.jsonl`) this.nativeTranscript = event.transcript_path;
     // The branch exists once its own session starts; later launches resume it.
     if (this.record.forkPicker && event.hook_event_name === 'SessionStart') { this.record.forkPicker = false; this.emit('capability'); }
     const mode = PERMISSION_MODES.includes(event.permission_mode) ? event.permission_mode : this.record.nativePermissionMode;

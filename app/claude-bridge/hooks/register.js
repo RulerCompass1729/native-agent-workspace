@@ -161,6 +161,23 @@ let rootPrompt = null;
 // turn.start's text is the prompt verbatim. Only that exact match with the first prompt still in
 // line lets the new turn act on it; anything else leaves the turn ambiguous, as before.
 let queuedPrompts = [];
+const queuedPromptIdentities = new Map();
+const queuedDisplayLookups = new Map();
+// The journal's accepted user UUID bridges classic's new prompt id to the
+// existing, qualified queued-turn link. This is for reading, never authority.
+async function queuedDisplayLink($, e, binding) {
+  if (legacyOnly || !binding.nativeQueuedPromptLinks || !queuedPromptIdentities.size) return null;
+  let result;
+  try {
+    const version = (await $.session.version()).version;
+    if (!['2.1.321', '2.1.322'].includes(version)) return null;
+    result = await request($, '/prompt-identity', { promptId: e.prompt_id, epoch: binding.observationEpoch }, binding);
+  }
+  catch { return null; }
+  const linked = queuedPromptIdentities.get(result?.uuid);
+  if (rootBinding !== binding || linked?.binding !== binding || stopped) return null;
+  return { binding, turnId: linked.turnId, promptId: e.prompt_id, displayOnly: true };
+}
 // T-138 display: a prompt typed during a turn shares that turn's prompt id on 2.1.316/2.1.317. NAW's
 // adapter stores it as `claude-prompt-<id>-q<tag>`, the tag made from its text by this same function
 // (adapters.cjs promptTextTag; a test pins the two equal), so a turn it starts can name its row with
@@ -316,6 +333,15 @@ function observeAppend($, e, result, binding, turnId, candidate, nativeApiError)
   if (!message || message.isMeta || !Array.isArray(message.content)) return;
   const text = blocks => typeof blocks === 'string' ? blocks : Array.isArray(blocks)
     ? blocks.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') : '';
+  // The engine keeps a queued composer's accepted row before its own turn
+  // starts. Attach only to the same already tracked head; never an automatic
+  // input, a child, an injected delivery or a guessed assistant message.
+  const queued = queuedPrompts[0];
+  if (rootIdle && queued?.binding === binding && e.door === 'prompt' && e.origin?.kind === 'composer' &&
+    message?.type === 'user' && text(message.content) === queued.text) {
+    if (queued.nativeUuid && queued.nativeUuid !== result.uuid) queued.identityAmbiguous = true;
+    queued.nativeUuid = result.uuid;
+  }
   if (nativeBlocks) {
     // A queue record is virtual; only the accepted conversation attachment is
     // a display row. Its UUID and final content come from the native engine.
@@ -660,6 +686,7 @@ async function bindRoot($, ownGeneration) {
     nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(version),
     nativeCapacity: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version),
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302',
+    nativeQueuedPromptLinks: !legacyOnly && ['2.1.321', '2.1.322'].includes(version),
     nativeTurnRecords: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version),
     nativeNarration: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version) }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
@@ -667,6 +694,7 @@ async function bindRoot($, ownGeneration) {
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
     nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
     nativeMedia: nativeBlocks && nativeMediaVersion(version) && result.nativeMedia === true,
+    nativeQueuedPromptLinks: nativeBlocks && !legacyOnly && result.nativeQueuedPromptLinks === true,
     nativeTurnRecords: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version) && result.nativeTurnRecords === true,
     nativeNarration: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version) && result.nativeNarration === true };
   nativeReadImages.clear();
@@ -941,6 +969,22 @@ export function register(on) {
         if (!link && prompt?.binding === binding && !prompt.ambiguous) {
           link = prompt; displayTurnLinks.set(key, link); trimLinks(displayTurnLinks);
         }
+        if (!link) {
+          let lookup = queuedDisplayLookups.get(key);
+          if (lookup?.binding !== binding) {
+            lookup = queuedDisplayLookups.size < 64 ? { binding, promise: queuedDisplayLink($, e, binding) } : null;
+            if (lookup) queuedDisplayLookups.set(key, lookup);
+          }
+          // Overlapping chunks wait on the same promise in arrival order.
+          // Never evict a live lookup: overflow simply has no identity proof.
+          const resolved = lookup ? await lookup.promise : null;
+          if (lookup && queuedDisplayLookups.get(key) === lookup) queuedDisplayLookups.delete(key);
+          if (binding !== rootBinding) return result;
+          // Another display callback may have published while the journal
+          // request was pending. Its pinned namespace always wins.
+          link = displayTurnLinks.get(key) || resolved;
+          if (link) { displayTurnLinks.set(key, link); trimLinks(displayTurnLinks); }
+        }
         // A `!` command's turn raises no UserPromptSubmit, so its display names
         // an unknown prompt. Only while that root turn runs (shellTurn clears at
         // its end) is the text read as its own, for reading; it never proves a
@@ -948,9 +992,15 @@ export function register(on) {
         if (!link && !prompt && shellTurn?.binding === binding && shellTurn.turnId === activeTurn) {
           link = { binding, turnId: activeTurn, promptId: e.prompt_id, shell: true }; displayTurnLinks.set(key, link); trimLinks(displayTurnLinks);
         }
+        // A missing bounded journal proof stays unknown for this whole drawn
+        // turn. Never retag a row already published in another namespace.
+        if (!link && binding.nativeQueuedPromptLinks) {
+          link = { binding, turnId: `display:${e.turn_id}`, promptId: e.prompt_id, displayOnly: true };
+          displayTurnLinks.set(key, link); trimLinks(displayTurnLinks);
+        }
         const turnId = link?.turnId || `display:${e.turn_id}`;
         const turn = displayTurn(turnId, binding);
-        if (!link || link.promptId !== e.prompt_id || link.shell) turn.incomplete = true;
+        if (!link || link.promptId !== e.prompt_id || link.shell || link.displayOnly) turn.incomplete = true;
         let block = turn.blocks.get(e.message_id);
         if (!block) { block = { raw: '', index: -1 }; turn.blocks.set(e.message_id, block); }
         if (block.index + 1 !== e.index || turn.ended) turn.incomplete = true;
@@ -969,7 +1019,7 @@ export function register(on) {
     if (!e.agentId) {
       // A new root turn after idle, with no newer UserPromptSubmit and not this mod's own
       // submission, is a queued prompt's own turn only if its text is the first one in line.
-      let queuedTurn = false, queuedRow = null;
+      let queuedTurn = false, queuedRow = null, queuedIdentityRow = false;
       if (rootIdle && queuedPrompts.length) {
         const first = queuedPrompts[0];
         queuedTurn = !collecting && rootPrompt?.binding === rootBinding && !rootPrompt.pending && first.binding === rootBinding &&
@@ -977,12 +1027,21 @@ export function register(on) {
         queuedPrompts = queuedTurn ? queuedPrompts.slice(1) : [];
         // The queued prompt's own row heads this turn (T-138 display).
         if (queuedTurn && first.text !== rootPrompt.firstText) queuedRow = `${first.promptId}-q${promptTextTag(first.text)}`;
+        // Reuse that limited queued-turn proof; the UUID bridge does not make
+        // identical pending rows or a hash collision distinguishable.
+        if (queuedRow && first.nativeUuid && !first.identityAmbiguous &&
+          !queuedPrompts.some(q => q.binding === rootBinding && `${q.promptId}-q${promptTextTag(q.text)}` === queuedRow)) {
+          queuedPromptIdentities.set(first.nativeUuid, { binding: rootBinding, turnId: e.turnId });
+          queuedIdentityRow = true;
+          trimLinks(queuedPromptIdentities);
+        }
       }
       activeTurn = e.turnId;
       lastPhase = null;
       flushShell($);
-      const triggers = rootIdle && !collecting && rootBinding?.nativeTurnRecords
-        ? [...turnTriggers.filter(t => t.binding === rootBinding), ...(queuedRow ? [{ prompt: queuedRow, binding: rootBinding }] : [])].slice(-8) : [];
+      const triggers = rootIdle && !collecting
+        ? [...(rootBinding?.nativeTurnRecords ? turnTriggers.filter(t => t.binding === rootBinding) : []),
+          ...(queuedRow && (rootBinding?.nativeTurnRecords || rootBinding?.nativeQueuedPromptLinks && queuedIdentityRow) ? [{ prompt: queuedRow, binding: rootBinding }] : [])].slice(-8) : [];
       turnTriggers = []; rootIdle = false; expectPrompt = null;
       shellTurn = triggers.length && !triggers.some(t => t.prompt) ? { binding: rootBinding, turnId: e.turnId } : null;
       enqueueBlock($, { id: 'control:turn-start', kind: 'control', turnId: e.turnId, promptId: rootPrompt?.id, status: 'running',
@@ -1155,6 +1214,8 @@ export function register(on) {
   on('session.start', async ($, e, next) => {
     if (collecting) collecting.invalid = true;
     rootIdle = true; turnTriggers = []; shellInput = null; shellTurn = null; expectPrompt = null; pendingDrawings.clear(); queuedPrompts = [];
+    queuedPromptIdentities.clear();
+    queuedDisplayLookups.clear();
     const ownGeneration = ++generation;
     const nativeVersion = (await $.session.version()).version;
     // 2.1.316 and 2.1.317: the free status-line usage read, session.model() and the

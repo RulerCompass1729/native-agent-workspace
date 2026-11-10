@@ -80,6 +80,20 @@ test('a linked terminal prompt or ! command heads its turn; an unlinked one keep
   const unlinked = r.readingTurnMarks([native('before'),native('before-end',{role:'system',kind:'turn',turnId:'S',text:''}),{...typed,nativeId:undefined,turnId:undefined},...turn]);
   assert.equal(unlinked.has('claude-prompt-p'),false); assert.equal(unlinked.get('bash').start,true);
 });
+test('a completed queued turn keeps its delayed reply before its own footer, inside the question group', () => {
+  const r = reader(), { applyNativeBlock } = require('../native-blocks.cjs');
+  const question = native('queued-question', { role: 'user', kind: 'input', origin: 'native', turnId: 'queued' });
+  const next = native('later-question', { role: 'user', kind: 'input', turnId: 'later' });
+  const s = { nativeId: 'N', messages: [question] };
+  applyNativeBlock(s, { nativeId: 'N', id: 'turn:queued', kind: 'turn', turnId: 'queued', status: 'complete', text: '' });
+  s.messages.push(next);
+  applyNativeBlock(s, { nativeId: 'N', id: 'display:late-answer', kind: 'response', turnId: 'queued', status: 'complete', index: 0, delta: 'Actual queued reply' });
+  const reply = s.messages.find(m => m.id === 'native:N:display:late-answer'), marks = r.readingTurnMarks(s.messages);
+  assert.equal(marks.get(reply.id).start, false, 'The native completion marker cannot split the question from its late-drawn reply');
+  assert.ok(s.messages.indexOf(question) < s.messages.indexOf(reply));
+  assert.ok(s.messages.indexOf(reply) < s.messages.findIndex(m => m.kind === 'turn'));
+  assert.equal(s.messages.at(-1), next, 'A newer question never acquires the older answer');
+});
 test('Claude\'s drawn explanation stays visible between tool groups, inside its turn, without a heading clock', () => {
   const r = reader();
   const say = (id, text) => native(id, { phase: 'commentary', text });
