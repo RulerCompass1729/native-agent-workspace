@@ -7,7 +7,7 @@ function actual(name){const start=source.indexOf(`function ${name}(`);assert.ok(
 function harness(){
  const nodes=new Map(),document={activeElement:null,getSelection:()=>({rangeCount:0,isCollapsed:true}),querySelectorAll:()=>[]},calls={native:[],persisted:0};
  class Element{
-  constructor(tag='div'){this.tag=tag;this.children=[];this.attributes={};this.dataset={};this.hidden=false;this.disabled=false;this._value='';this._text='';this.classList={toggle(){}}}
+  constructor(tag='div'){this.tag=tag;this.children=[];this.attributes={};this.dataset={};this.hidden=false;this.disabled=false;this._value='';this._text='';this.classes=new Set();this.classList={toggle:(c,on)=>on?this.classes.add(c):this.classes.delete(c),contains:c=>this.classes.has(c)}}
   get firstChild(){return this.children[0]}get lastChild(){return this.children.at(-1)}get childElementCount(){return this.children.length}
   get textContent(){return this.children.length?this.children.map(x=>x.textContent).join(''):this._text}set textContent(x){this._text=x;this.children=[]}
   get value(){return this.tag==='select'&&!this.children.some(x=>x.value===this._value)?'':this._value}set value(x){this._value=x}
@@ -16,7 +16,8 @@ function harness(){
   append(...items){for(const x of items)this.insertBefore(x,null)}insertBefore(x,before){x.remove();const i=before?this.children.indexOf(before):this.children.length;this.children.splice(i,0,x);x.parentElement=this}
   replaceChildren(...items){for(const c of this.children)c.parentElement=null;this.children=[];this.append(...items)}remove(){if(!this.parentElement)return;const p=this.parentElement;p.children.splice(p.children.indexOf(this),1);this.parentElement=null}
   addEventListener(k,fn){this[k]=fn}focus(){document.activeElement=this}scrollIntoView(){}contains(x){return x===this||this.children.some(c=>c.contains(x))}
-  querySelector(s){return this.children.find(c=>s.startsWith('.')&&c.className?.split(' ').includes(s.slice(1)))||null}
+  querySelector(s){for(const c of this.children){if(s.startsWith('.')&&c.className?.split(' ').includes(s.slice(1)))return c;const nested=c.querySelector(s);if(nested)return nested}return null}
+  showModal(){this.open=true}close(){this.open=false}
  }
  const $=id=>{if(!nodes.has(id))nodes.set(id,new Element(id==='room-filter'?'select':'div'));return nodes.get(id)};
  const bound=localeUI('en'),node=(tag,text,cls)=>{const el=new Element(tag);if(text!==undefined)el.textContent=text;el.className=cls||'';return el};
@@ -30,12 +31,12 @@ function harness(){
   current:()=>ctx.state.sessions.find(s=>s.id===ctx.roomSession),activeSessionId:()=>ctx.selected==='room'?ctx.roomSession:ctx.selected,
   members:()=>ctx.state.sessions.filter(s=>spaces.isMember(s,ctx.spaceId)&&!s.archived),orderedMembers:()=>ctx.members(),focusedRoomMember:()=>ctx.selected==='room'&&ctx.roomSurface==='overview'&&Boolean(ctx.roomSession),
   participantLabel:s=>s.name,sessionShortId:id=>id,disconnected:false,exhaustedRecovery:()=>null,recoveryStatusSuffix:()=>'',
-  captureReadingViews(){},suspendColumnInputs(){},cancelViewInput(){},activateSoloComposer(){},render(){},persistView(){calls.persisted++;return ctx.captureRoomView()},attempt:fn=>fn(),toastMessage(){},normalizeRoomMention(){},populateSelect(){},roomRecipient:()=>$('recipient').value,
+  pairRevision:s=>spaces.membershipRevision(s,'shared'),openTransientDialog:id=>$(id).showModal(),captureReadingViews(){},suspendColumnInputs(){},cancelViewInput(){},activateSoloComposer(){},render(){},persistView(){calls.persisted++;return ctx.captureRoomView()},attempt:fn=>fn(),toastMessage(){},normalizeRoomMention(){},populateSelect(){},roomRecipient:()=>$('recipient').value,
   nativeWorkspaceMentions:{editHistory:()=>({})},messageList(){},api:new Proxy({},{get:(_,name)=>(...args)=>{calls.native.push([name,args]);throw Error('Navigation reached native API')}})
  });
  $('shared-input').value='@Agent a UNSENT';$('recipient').value='a';
  const fields=source.match(/const roomViewFields = (\[[^;]+\]);/);assert.ok(fields);vm.runInContext(`const roomViewFields=${fields[1]};`,ctx);
- const names=['focusRoomMember','rememberRoomMemberView','restoreRoomMemberView','openRoomMember','timeline','timelineParticipants','filteredTimeline','showRoomRecords','returnRoomRecordMember','clearRoomRecordFilter','restoreRoomRecordFilter','renderTimeline','refreshRoomMemberTabs','captureRoomView','persistedRoomViews'];
+ const names=['focusRoomMember','rememberRoomMemberView','restoreRoomMemberView','openRoomMember','timeline','timelineParticipants','filteredTimeline','showRoomRecords','returnRoomRecordMember','clearRoomRecordFilter','restoreRoomRecordFilter','renderTimeline','refreshRoomMemberTabs','roomMemberStatusKey','refreshRoomMemberStatus','openRoomMemberStatus','captureRoomView','persistedRoomViews'];
  for(const name of ['roomRecentPreview','roomNavigationKey','memberTabClick','renderRoomMemberTabs'])if(source.includes('function '+name+'('))names.push(name);
  vm.runInContext(names.map(actual).join('\n'),ctx);vm.runInContext(source.split('\n').find(l=>l.startsWith('const roomReadingKey =')),ctx);ctx.renderSnapshotMaterials=()=>{};
  if(!ctx.renderRoomMemberTabs){const from=source.indexOf("      const tabs = $('room-member-tabs');",source.indexOf('function render()'));const tail='      refreshRoomMemberTabs(people);';const to=source.indexOf(tail,from);assert.ok(from>=0&&to>from);vm.runInContext('function renderRoomMemberTabs(){const people=orderedMembers();\n'+source.slice(from,to+tail.length)+'\n}',ctx)}
@@ -104,4 +105,17 @@ test('clicking the open member tab returns to all members, but not on a double-c
  a.click();assert.equal(ctx.roomSession,'a','The tab listener opens a member');
  ctx.memberTabClick('a',{detail:1});ctx.memberTabClick('a',{detail:2});assert.equal(ctx.roomSession,'','A double-click on the open tab returns once and does not reopen');
  ctx.memberTabClick('b',{detail:1});ctx.memberTabClick('b',{detail:2});assert.equal(ctx.roomSession,'b','A double-click on another tab opens it once');
+});
+
+test('full member status keeps focused rows on updates and rejects stale identity, membership or space actions',()=>{
+ const {ctx,$,document,calls}=harness();ctx.renderRoomMemberTabs();ctx.openRoomMemberStatus();
+ const list=$('room-member-status-list'),row=list.children.find(r=>r.dataset.roomStatusMember==='b');row.focus();
+ ctx.state.sessions[1].nativeApproval={requests:[{id:'one'},{id:'two'}]};ctx.refreshRoomMemberTabs();
+ assert.equal(list.children.find(r=>r.dataset.roomStatusMember==='b'),row);assert.equal(document.activeElement,row);
+ assert.match($('room-member-status').textContent,/1 awaiting approval/);assert.match(row.querySelector('.room-member-name').textContent,/Agent b.*Codex.*b/);
+ const before=ctx.roomSession;ctx.state.sessions[1].nativeId='replacement-native';row.click({});assert.equal(ctx.roomSession,before);
+ ctx.refreshRoomMemberTabs();const replacement=list.children.find(r=>r.dataset.roomStatusMember==='b');assert.notEqual(replacement,row);
+ ctx.state.sessions[1]=spaces.withMembership(ctx.state.sessions[1],'shared',false);replacement.click({});assert.equal(ctx.roomSession,before);
+ ctx.spaceId='00000000-0000-4000-8000-000000000001';ctx.refreshRoomMemberStatus();assert.equal($('room-member-status-dialog').open,false);replacement.click({});assert.equal(ctx.roomSession,before);
+ assert.deepEqual(calls.native,[]);assert.equal(ctx.state.sessions[0].liveDraft,'PRIVATE a');
 });

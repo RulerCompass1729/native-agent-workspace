@@ -17,7 +17,7 @@ if (evidence) {
 const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
 try { fs.mkdirSync(slot); } catch (e) { if (e.code !== 'EEXIST') throw e; console.error('GUI slot occupied; nothing started.'); process.exit(75); }
-fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex4', task: 'T85 compact room', token, pid: process.pid, time: new Date().toISOString() }));
+fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex6', task: 'T163 compact member header', token, pid: process.pid, time: new Date().toISOString() }));
 const profile = scratch.directory(path.join(os.tmpdir(), 'naw-compact-room-'));
 const workspacePath = path.join(profile, 'workspace'); fs.mkdirSync(workspacePath, { recursive: true, mode: 0o700 });
 const child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [profile], {
@@ -86,6 +86,30 @@ async function geometry(label) {
       readers:[...document.querySelectorAll('.collaboration-member-reader')].map(rect)};
   });measurements.push({label,...m});return m;
 }
+async function memberGeometry(label) {
+  const value=await page.evaluate(()=>{
+    const rect=e=>e.getBoundingClientRect().toJSON(), visible=e=>e?.getClientRects().length&&getComputedStyle(e).visibility!=='hidden';
+    const parts=['#header','#room-tabs','#session-toolbar'].map(selector=>({selector,element:document.querySelector(selector)})).filter(x=>visible(x.element)).map(x=>({selector:x.selector,box:rect(x.element)}));
+    return {parts,chromeHeight:Math.max(...parts.map(x=>x.box.bottom))-Math.min(...parts.map(x=>x.box.top)),reader:rect(document.querySelector('#messages')),
+      titleSize:parseFloat(getComputedStyle(document.querySelector('#title')).fontSize),overflow:document.documentElement.scrollWidth>innerWidth,viewport:[innerWidth,innerHeight]};
+  });measurements.push({label,...value});return value;
+}
+// Exercise the real preload state channel for identity/membership invalidation.
+// The synthetic snapshot never changes the daemon or adds a fixture capability.
+async function displaySnapshot(value) {
+  const receipt=randomUUID();
+  await page.evaluate(id=>{globalThis.compactStateReceipt='';globalThis.compactStateOff=workspace.onState(next=>{if(next.compactTestReceipt===id)globalThis.compactStateReceipt=id;});},receipt);
+  try {
+    await (await app.browserWindow(page)).evaluate((win,next)=>win.webContents.send('workspace:state',next),{...value,compactTestReceipt:receipt});
+    await until(()=>page.evaluate(id=>globalThis.compactStateReceipt===id,receipt),'The actual preload received the synthetic renderer snapshot');
+  } finally { await page.evaluate(()=>{globalThis.compactStateOff();delete globalThis.compactStateOff;delete globalThis.compactStateReceipt;}); }
+}
+async function interfaceLanguage(value) {
+  await page.locator('#setup-button').click();await page.locator('#ui-language').selectOption(value);
+  await until(async()=>await page.locator('#ui-language').getAttribute('aria-busy')==='false'&&await page.locator('#setup-title').innerText()===(value==='en'?'Settings':'设置'),'The actual interface language control accepts the requested language');
+  assert.equal(await page.locator('#ui-language-status').isHidden(),true,'The interface language is saved without a warning');
+  await page.locator('#close-setup').click();await page.locator('#setup-dialog').waitFor({state:'hidden'});
+}
 async function run() {
   await until(()=>fs.existsSync(path.join(profile,'connection.json')),'Own fixture ready');await launch();
   const ownedRoot=fs.realpathSync(profile);assert.ok(fs.realpathSync((await snapshot()).defaultWorkspace).startsWith(ownedRoot+path.sep),'Containment before automatic directories');
@@ -120,6 +144,104 @@ async function run() {
     }
   }
   check('At 850×600 with the actual sidebar collapsed and expanded, root tools fit two rows and List keeps four readable originals; partial child uncertainty remains visible');
+  // T-163: opening a member must leave useful reading space at the same size.
+  await name(a).click();
+  const status=page.locator('#room-member-status'),statusDialog=page.locator('#room-member-status-dialog'),statusRows=page.locator('#room-member-status-list button[data-room-status-member]');
+  const memberTab=id=>page.locator(`#room-member-tabs [data-room-session="${id}"]`),statusRow=id=>page.locator(`#room-member-status-list button[data-room-status-member="${id}"]`);
+  const memberOpen=async id=>until(async()=>{const view=(await snapshot()).viewState;return view.selected==='room'&&view.roomSession===id;},'The expected member opens passively');
+  await memberOpen(a);
+  for(const expanded of [false,true]){
+    await sidebar(expanded);await status.focus();
+    const member=await memberGeometry(`member850-${expanded?'expanded':'collapsed'}`);
+    assert.deepEqual(member.viewport,[850,600]);assert.equal(member.overflow,false);assert.equal(member.titleSize,19,'Compact member title keeps its 19px type');
+    assert.ok(member.chromeHeight<=(expanded?190:160),'Header/navigation/view union leaves room for the member transcript');
+    assert.ok(member.reader.height>=180,'The original transcript grows substantially beyond the 113px baseline');
+    assert.ok(member.parts.every(x=>x.box.left>=0&&x.box.right<=850&&x.box.bottom<=600),'Member chrome stays inside the small window');
+    for(const id of ids){
+      const short=memberTab(id).locator('.room-member-id');await short.scrollIntoViewIfNeeded();
+      assert.ok((await short.innerText()).length>=6,'Every member keeps a visible distinguishing short ID');
+      assert.equal(await short.evaluate(el=>parseFloat(getComputedStyle(el).fontSize)),13,'The short ID retains the original member-label size');
+      assert.equal(await short.evaluate(el=>{const r=el.getBoundingClientRect(),p=el.closest('button').getBoundingClientRect();return el.clientWidth>=el.scrollWidth&&r.left>=p.left&&r.right<=p.right;}),true,'A short ID is never clipped inside its member tab');
+      assert.equal(await memberTab(id).locator('.room-member-name').evaluate(el=>parseFloat(getComputedStyle(el).fontSize)),13);
+    }
+    assert.notEqual(await memberTab(a).locator('.room-member-id').innerText(),await memberTab(b).locator('.room-member-id').innerText());
+    await memberTab(a).scrollIntoViewIfNeeded();await status.focus();await status.press('Enter');await statusDialog.waitFor();
+    assert.equal(await statusRows.count(),4);
+    const box=await statusDialog.boundingBox();assert.ok(box.x>=0&&box.y>=0&&box.x+box.width<=850&&box.y+box.height<=600,'All member states have a dialog inside the viewport');
+    for(let i=0;i<ids.length;i++){
+      const row=statusRow(ids[i]);await row.scrollIntoViewIfNeeded();
+      const label=await row.locator('.room-member-name').innerText();assert.ok(label.includes(labels[i])&&label.includes('Codex')&&label.includes(await memberTab(ids[i]).locator('.room-member-id').innerText()),'The status row exposes the full name, provider and short ID');
+      assert.equal(await row.locator('.room-member-state').evaluate(el=>{const c=getComputedStyle(el);return parseFloat(c.fontSize)===11&&el.scrollWidth<=el.clientWidth+1&&el.scrollHeight<=el.clientHeight+1&&c.textOverflow!=='ellipsis'&&(!c.webkitLineClamp||c.webkitLineClamp==='none');}),true,'Full status wraps without clipping or smaller type');
+    }
+    assert.ok((await statusRow(a).innerText()).includes('3 个子任务状态未知'),'The entry preserves other members’ complete child uncertainty');
+    await capture(`01d-member850-${expanded?'expanded':'collapsed'}-states`);
+    await page.keyboard.press('Escape');await statusDialog.waitFor({state:'hidden'});assert.equal(await status.evaluate(el=>document.activeElement===el),true,'Escape restores the status entry focus');
+  }
+  // Ordinary progress changes update the open list; identity changes invalidate it.
+  await status.click();await fixture('state',b,'approval');
+  await until(()=>statusRow(b).innerText().then(text=>text.includes('等待确认')),'The open status list updates a member’s current state');
+  await fixture('state',b,'idle');await fixture('connection',c,'disconnected');
+  await until(()=>statusRow(c).innerText().then(text=>/已断开|连接状态待核对/.test(text)),'An open status list retains explicit disconnect information');
+  await fixture('connection',c,'idle');await page.keyboard.press('Escape');
+  const pending=await snapshot(),pendingMember=pending.sessions.find(s=>s.id===b);pendingMember.nativeApproval={...(pendingMember.nativeApproval||{}),requests:[{id:'compact-pending-1'},{id:'compact-pending-2'}]};
+  await displaySnapshot(pending);
+  assert.match(await status.innerText(),/1.*待审批|待审批.*1/,'The entry counts members needing approval, rather than requests');
+  await displaySnapshot(await snapshot());await until(()=>status.innerText().then(text=>!text.includes('待审批')),'Zero pending members removes the pending text');
+  await status.click();await statusRow(b).click();await memberOpen(b);
+  await status.click();await statusRow(b).click();await until(async()=>!(await snapshot()).viewState.roomSession,'Choosing the current member follows its tab back to overview');
+  await name(a).click();await memberOpen(a);
+  assert.equal(await page.evaluate(()=>globalThis.compactOriginalNodes.every(([r,m])=>r.isConnected&&r.querySelector('.messages')===m)),true,'Passive status navigation retains the existing original readers');
+  for(const change of ['native identity','membership']){
+    await status.click();const stale=await statusRow(b).elementHandle(),originalState=await snapshot(),next=structuredClone(originalState),record=next.sessions.find(s=>s.id===b);
+    if(change==='native identity')record.nativeId='synthetic-replaced-'+b;
+    else Object.assign(record,require(path.join(code,'app/collaboration-spaces.cjs')).withMembership(record,'shared',false));
+    try {
+      await displaySnapshot(next);await stale.evaluate(el=>el.click());await delay(100);
+      assert.equal((await snapshot()).viewState.roomSession,a,`A retained status row cannot reopen a member after its ${change} changes`);
+    } finally {await stale.dispose();await displaySnapshot(originalState);if(await statusDialog.isVisible())await page.keyboard.press('Escape');}
+  }
+  await status.click();const staleOutside=await statusRow(b).elementHandle();await page.keyboard.press('Escape');
+  await sidebar(true);await page.locator(`[data-session-id="${d}"].session-link`).click();await until(async()=>(await snapshot()).viewState.selected===d,'Actual solo navigation leaves the member context');
+  await staleOutside.evaluate(el=>el.click());await delay(100);assert.equal((await snapshot()).viewState.selected,d,'A retained room status row cannot navigate from a solo context');await staleOutside.dispose();
+  await page.locator('#room-nav').click();await memberOpen(a);
+  await memberTab(c).click();await memberOpen(c);
+  const originalRoomName=(await snapshot()).room.name,memberRoomTitle='FocusedMemberWorkspaceTitle'.repeat(3).slice(0,60);
+  await page.evaluate(value=>workspace.roomRename(value),memberRoomTitle);await until(()=>page.locator('#title').innerText().then(text=>text===memberRoomTitle),'The focused member still identifies its actual workspace');
+  await page.locator('#messages').hover();await page.mouse.wheel(0,-350);await delay(180);
+  const memberAnchor=await readingAnchor();assert.ok(memberAnchor&&await page.locator('#messages').evaluate(el=>el.scrollTop>100),'The focused member has an older reading anchor before title reveal');
+  const memberAnchorKept=async()=>{const now=await readingAnchor();return now?.id===memberAnchor.id&&Math.abs(now.offset-memberAnchor.offset)<=2;};
+  await page.locator('#title').focus();await until(memberAnchorKept,'The old member reading anchor survives title reveal');
+  assert.equal(await page.locator('#title').evaluate(el=>el.clientWidth>=el.scrollWidth&&el.clientHeight>=el.scrollHeight),true,'The long workspace title expands fully on focus');
+  await page.locator('#title').press('Tab');assert.equal(await page.locator('#subtitle').evaluate(el=>el.contains(document.activeElement)),true,'Keyboard navigation reaches the full member identity');
+  const subtitle=page.locator('#subtitle'),focusedRecord=(await snapshot()).sessions.find(s=>s.id===c),focusedShortId=await memberTab(c).locator('.room-member-id').innerText();
+  await subtitle.focus();const identityText=await subtitle.innerText();assert.ok(identityText.includes('Codex')&&identityText.includes(focusedShortId)&&(!focusedRecord.model||identityText.includes(focusedRecord.model)),'The original subtitle retains provider, short ID and any recorded model');
+  assert.equal(await subtitle.evaluate(el=>el.clientWidth>=el.scrollWidth&&el.clientHeight>=el.scrollHeight),true,'The focused subtitle reveals the complete original identity line');
+  await status.focus();await until(memberAnchorKept,'The old member reading anchor survives subtitle reveal and focus return');await page.evaluate(value=>workspace.roomRename(value),originalRoomName);await sidebar(true);
+  try {
+    await interfaceLanguage('en');await until(()=>status.innerText().then(text=>text==='Member status · 4'),'The actual English member entry updates');await status.focus();
+    const englishMember=await memberGeometry('member850-expanded-English');assert.equal(englishMember.overflow,false);assert.ok(englishMember.chromeHeight<=190&&englishMember.reader.height>=180,'Real English labels retain useful member reading space with the sidebar expanded');
+    const entryBox=await status.boundingBox();assert.ok(entryBox.x>=0&&entryBox.y>=0&&entryBox.x+entryBox.width<=850&&entryBox.y+entryBox.height<=600,'The English status entry remains visible');
+    const strip=page.locator('#room-member-tabs');assert.equal(await strip.isVisible(),true);
+    const stripState=await strip.evaluate(el=>({overflow:getComputedStyle(el).overflowX,scrollWidth:el.scrollWidth,clientWidth:el.clientWidth}));
+    assert.ok(stripState.scrollWidth<=stripState.clientWidth+1||['auto','scroll'].includes(stripState.overflow),'Any English member-strip overflow is scrollable');
+    await memberTab(c).focus();await memberTab(c).press('End');assert.equal(await memberTab(d).evaluate(el=>document.activeElement===el),true,'Keyboard navigation scrolls to the final member without opening it');
+    assert.equal(await memberTab(d).evaluate(el=>{const r=el.getBoundingClientRect(),p=el.parentElement.getBoundingClientRect();return r.left>=p.left-2&&r.right<=p.right+2;}),true,'The final English member tab can be completely revealed');
+    const englishPending=await snapshot();englishPending.sessions.find(s=>s.id===b).nativeApproval={requests:[{id:'compact-English-pending'}]};
+    await displaySnapshot(englishPending);await until(()=>status.innerText().then(text=>text==='Member status · 4 · 1 awaiting approval'),'Off-screen approval stays explicit in the real English entry');
+    const englishApproval=await memberGeometry('member850-expanded-English-pending');assert.equal(englishApproval.overflow,false);assert.ok(englishApproval.chromeHeight<=190&&englishApproval.reader.height>=180,'The longer live English approval entry still leaves useful reading space');
+    await capture('01f-member850-expanded-English-pending');await displaySnapshot(await snapshot());await until(()=>status.innerText().then(text=>text==='Member status · 4'),'The ordinary English entry is restored');
+    await status.click();await statusDialog.waitFor();assert.equal(await statusRows.count(),4);await capture('01e-member850-expanded-English-states');await page.keyboard.press('Escape');
+  } finally {if(await statusDialog.isVisible())await page.keyboard.press('Escape');await interfaceLanguage('zh');}
+  await until(()=>status.innerText().then(text=>text==='成员状态 · 4'),'Chinese is restored before the original compact-room checks');
+  await memberTab(c).click();await until(async()=>!(await snapshot()).viewState.roomSession,'The original overview is restored');
+  await page.getByRole('button',{name:'列表',exact:true}).click();
+  // A deliberate native identity invalidation may correctly replace that reader.
+  // Start the following unchanged-identity reading tests from the restored view.
+  await page.evaluate(()=>{globalThis.compactOriginalNodes=[...document.querySelectorAll('.collaboration-member-reader')].map(r=>[r,r.querySelector('.messages')]);});
+  assert.deepEqual(identity(await snapshot()),original);assert.equal(await page.locator('#shared-input').inputValue(),shared);assert.equal(await page.locator('#recipient').inputValue(),recipient);
+  const memberCalls=await fixture('stats');assert.equal(memberCalls.stats.inputs,0);assert.equal(memberCalls.stats.sends,0);
+  for(const key of ['claim','input','send','queue','steer','forward','approve','answer','run','resume'])assert.equal(memberCalls.overviewCalls[key],beforeCalls.overviewCalls[key]);
+  check('Focused members at 850×600 keep 19/13/11px type, useful reading space, visible IDs and live full states; keyboard identities and stale rows remain safe without sending, claiming or changing drafts');
   await sidebar(false);await page.getByRole('button',{name:'网格',exact:true}).click();
   const suffixes=await Promise.all([a,b].map(id=>header(id).locator('.collaboration-name-suffix').innerText()));assert.notEqual(suffixes[0],suffixes[1]);
   for(const id of [a,b])assert.equal(await header(id).locator('.collaboration-name-suffix').evaluate(el=>el.clientWidth>=el.scrollWidth&&el.getBoundingClientRect().right<=el.closest('button').getBoundingClientRect().right),true);
