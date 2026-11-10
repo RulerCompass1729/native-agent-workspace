@@ -28,6 +28,24 @@ const cleanText = (value, max = 16000) => {
 // tool progress) are display only and must not change saved state.
 const activityMark = s => { const last = (s.messages || []).findLast(m => !m.volatile); return `${last?.id}:${last?.status}`; };
 const wake = require('./session-wake.cjs');
+// An interrupt the native side has not confirmed. When observed background work keeps the turn running (11-09: a
+// sub-agent held an interrupted Claude turn for 45 minutes behind a generic notice), say what, since when NAW saw
+// it, and where it can be stopped. Only what NAW observed: agent names from hook events, counts from the last report.
+// Running = a SubagentStart in this run with no later SubagentStop, as in renderer/fleet-observation.js (the backend
+// runtime does not carry renderer files).
+function interruptActivity(s) {
+  const children = new Map();
+  for (const event of s.fleet || []) if (['SubagentStart', 'SubagentStop'].includes(event.event) && event.id) {
+    children.delete(event.id);
+    if (event.event === 'SubagentStart' && event.stale === false) children.set(event.id, event);
+  }
+  const running = [...children.values()], named = running.filter(event => !event.nameUiMessage && event.name && Number.isFinite(event.time));
+  const first = named.sort((x, y) => x.time - y.time)[0];
+  if (first) return uiActivity('notice.activity.interruptWaitsForSubagent', { name: first.name, since: new Date(first.time).toTimeString().slice(0, 5), count: running.length });
+  const reported = !s.backgroundStale && Number.isSafeInteger(s.background) && s.background > 0 ? s.background : 0;
+  if (running.length || reported) return uiActivity('notice.activity.interruptWaitsForBackground', { count: running.length || reported });
+  return uiActivity('notice.activity.interruptRequested');
+}
 const { OperatorControl } = require('./operator-control.cjs');
 const { GoalContinuation } = require('./goal-continuation-runner.cjs');
 // Pointer motion with no button held (SGR any-event mouse tracking, e.g. fullscreen Claude)
@@ -662,6 +680,8 @@ class Workspace extends EventEmitter {
     on('accountUsage', () => this.changed());
     on('fleet', item => {
       s.fleet.push({ ...item, time: Date.now(), stale: false }); s.fleet = s.fleet.slice(-80);
+      // A notice naming background work follows it while the interrupt waits.
+      if (['notice.activity.interruptWaitsForSubagent', 'notice.activity.interruptWaitsForBackground'].includes(s.activityUiMessage?.key)) setActivity(s, ...interruptActivity(s));
       if (item.active === true || ['SubagentStart', 'thread/started', 'collabAgentSpawnToolCall'].includes(item.event)) this.nativeWorkObserved(s.id, '观察到原生团队活动，后续转交已暂停；原生团队继续保留。', uiActivity('notice.run.teamObserved')[1]);
       this.changed();
     });
@@ -1325,7 +1345,7 @@ class Workspace extends EventEmitter {
     if (this.claudeAsks.get(id)) this.releaseQuestion(s, null, { stop: true });
     if (runtime.nativeAbortRequest && runtime.nativeAbortCurrent?.(runtime.nativeAbortRequest)) return runtime.nativeAbortRequest.done;
     s.controlRevision++; this.pause('真人中断当前回复', undefined, false, uiActivity('notice.run.humanInterrupt')[1]); const result = await runtime.interrupt();
-    setActivity(s, ...(result?.interrupted ? ['', null] : uiActivity('notice.activity.interruptRequested'))); this.changed();
+    setActivity(s, ...(result?.interrupted ? ['', null] : interruptActivity(s))); this.changed();
   }
   expireRun(run = this.activeRun()) {
     // The interval is only a wake-up aid. Native delivery/completion must also
