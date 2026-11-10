@@ -312,7 +312,7 @@ test('the session menu offers the update right under its version fact, only for 
   const start = source.indexOf('function sessionMenuModel('), end = source.indexOf('function openSessionMenu(');
   const c = vm.createContext({ ...localeUI(), api: {}, state: { appVersion: current, sessions: [], capabilities: [] }, disconnected: false, allSpaces: () => [], inSpace: () => false,
     orderedMembers: () => [], sidebarSessions: () => [], sidebarDetails: record => ['fact ' + record.id] });
-  vm.runInContext(source.slice(source.indexOf('function versionValue('), source.indexOf('function backendVersionSummary(')) + source.slice(start, end), c);
+  vm.runInContext(source.slice(source.indexOf('function versionValue('), source.indexOf('function backendVersionSummary(')) + source.slice(source.indexOf('// Only recorded NAW handoffs'), source.indexOf('function renderDraftRecovery(')) + source.slice(start, end), c);
   const ids = record => { c.state.sessions = [record]; return c.sessionMenuModel(record.id, { spaceId: null }).items.map(item => item.id); };
   assert.deepEqual(plain(ids({ id: 'old', runtimeVersion: '0.1.0-alpha.120' }).slice(0, 4)), ['session-fact-0', 'session-facts-actions', 'update-backend', 'rename']);
   for (const record of [{ id: 'same', runtimeVersion: current }, { id: 'newer', runtimeVersion: '0.1.0-alpha.140' }, { id: 'unknown' }, { id: 'archived', runtimeVersion: '0.1.0-alpha.120', archived: true }])

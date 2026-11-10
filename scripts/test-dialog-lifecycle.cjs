@@ -118,7 +118,7 @@ async function run() {
  const initial = await snapshot(); assert.ok(fs.realpathSync(initial.defaultWorkspace).startsWith(owned + path.sep));
  // T-159: every light-dismiss dialog by name, so a new one fails here by name. Its cancellation belongs below; the space
  // dialogs added on 10-30 (c9800cc, 3305174): space-create and space-files are checked below, space-merge is not yet.
- assert.deepEqual(await page.locator('dialog[closedby="any"]').evaluateAll(dialogs => dialogs.map(d => d.id).sort()), ['context-dialog', 'create-dialog', 'file-dialog', 'invite-dialog', 'native-history-dialog', 'notes-dialog', 'privacy-dialog', 'queue-dialog', 'run-dialog', 'search-dialog', 'setup-dialog', 'share-dialog', 'space-create-dialog', 'space-files-dialog', 'space-merge-dialog', 'terminal-display-dialog']);
+ assert.deepEqual(await page.locator('dialog[closedby="any"]').evaluateAll(dialogs => dialogs.map(d => d.id).sort()), ['context-dialog', 'create-dialog', 'file-dialog', 'invite-dialog', 'native-history-dialog', 'notes-dialog', 'privacy-dialog', 'queue-dialog', 'run-dialog', 'search-dialog', 'session-chain-dialog', 'setup-dialog', 'share-dialog', 'space-create-dialog', 'space-files-dialog', 'space-merge-dialog', 'terminal-display-dialog']);
  // All three ordinary cancellation paths discard inputs; no create or permissions.
  const count = initial.sessions.length;
  for (const kind of ['outside', 'escape', 'button']) {

@@ -7504,3 +7504,44 @@ Evidence: private `.local/work/secretary-queue/authorization-before.log` reprodu
 Independent review: separate headless read-only checkpoint read actual source/direct callers and raw logs. Initial 12-turn limit is INCOMPLETE; same-session bounded closeout reported CHANGES_NEEDED: the shared rule could let another agent launder a task through the secretary, and the human-added Chinese notice showed an English name. Both fixed: only the person's own requests may be queued; human notice is localized without a name parameter. V12 tool limits are explicit, the old disconnected usage control remains usable, and the unavailable-setting message no longer promises an ineffective retry. Added source/locale/UI regressions pass 52/0/0 in private `review-fixes.log`; final pre-delta union passed 210/0/0 in `final-related.log`. Same checkpoint delta re-review: APPROVE_SCOPED with no open blockers. Each invocation exposed only Read/Grep/Glob and no MCP; HEAD, index and worktree were verified unchanged across review. This verdict covers source delivery only. Daily acceptance remains the person's own menu/intake/cancel/refusal check after integration; no install, merge, push, provider setup or queued-text editing is included. Next owner: Claude terminal integrator.
 
 Integration feedback (same checkpoint, 2026-11-09): the integrator found eight failures missed by the earlier related-only run. Actual `59e9154` reproduction of `node --test app/tests/terminal-display.test.cjs app/tests/compact-versions.test.cjs` was 26 pass/8 fail (`integration-before.log`): one missing `api` in the extracted session-menu VM and seven missing `state` failures in the terminal-display VM. The real renderer binds `api` from the preload bridge and loads `state` through `api.initial()` before normal rendering; these were incomplete test fixtures, so production behavior was not changed. Rebasing onto main `9401ba0` retained both review sections verbatim; `git range-diff` shows only review-record context changed in the already-approved secretary feature patch. The correction supplies `api: {}` to the version-menu fixture and `state: { queueSecretary: null }` to the display fixture, preserving all assertions. The same two test files now pass 35/0/0 (the new main adds one test). Full `node --test app/tests/*.test.cjs` passes 3734/0/0 in 43.52 seconds; raw output is in private `integration-full-suite.log`. Owner: Codex 3; same-session incremental review APPROVE_SCOPED after reading the exact fixture diff, raw failure/fixed/full-suite output and complete range-diff. Its first four-turn result was incomplete; the bounded same-session closeout provides the verdict. Tool inventory stayed Read/Grep/Glob with no MCP, and HEAD/index/worktree stayed unchanged across review. The original source approval remains applicable. No model-backed tests, daily-app operations, merge, install or push.
+## Conversation chains: navigation and use after handoff — 2026-11-09
+
+The requested outcome is to see every segment of an automatically rotated
+conversation, open its earlier records, and identify messages sent after a
+handoff. The session menu and archive rows open the same dialog. Earlier
+segments show their successor above the composer, with direct navigation.
+Archiving a segment names the other segments and archives only that segment.
+Only the existing rotation log projection establishes links; matching names,
+manual session creation, unsent drafts and native resume actions do not.
+The successor's `handedAt` is the previous segment's handoff time.
+
+Author-run local checks use the production renderer, display bindings and chain
+producer with synthetic records, without native engines or model calls. They
+cover branching, missing and archived records, strict message timestamps,
+language changes, draft/selection preservation, keyboard focus after updates,
+and navigation without restoring or resuming a session. The UI build retains
+the chain dialog. Queue dispatch and the queue's rotation-chain renderer are
+unchanged.
+
+Findings reproduced and fixed by the author: a missing first record sorted
+after its successors; live message updates removed the focused segment button;
+and a dialog placed after the first script tag was omitted from the built UI.
+Regression checks now cover each failure. The first full unit run was
+3,718 pass / 1 fail / 0 skipped: an older menu-only VM fixture omitted the new
+production helper. That fixture now loads the helper; all 131 related checks
+pass. The full rerun passes 3,720 / 0 / 0; the UI build passes.
+
+The independent read-only reviewer requested proof that both real composer
+bindings expose their form. Two additional tests now run the production
+composer binding and renderer paths for solo and column views, including an
+ended segment's resume button, notice, late-message marker, language change,
+draft, selection, focus and IME preservation. Related checks pass 133 / 0 / 0.
+No product source changed after the full run. The same reviewer read the binding
+contract and both callers, then approved this source delivery and test delta.
+The first investigation reached its time budget without a verdict and remains
+recorded as incomplete; only the later explicit approval closes the checkpoint.
+Reported cumulative review cost for this checkpoint: USD 0.9464.
+
+Scope: source delivery only. Installation, the person's daily-app acceptance
+checklist and publishing remain outside this checkpoint.
+

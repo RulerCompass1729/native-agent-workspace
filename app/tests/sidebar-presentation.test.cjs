@@ -70,6 +70,17 @@ test('an unrecognized native state remains unknown rather than inheriting the de
   const p = harness(row({ state: 'future-native-state' })).present();
   assert.equal(p.tone, 'disconnected'); assert.equal(p.marker, '!'); assert.ok(p.compact.includes('状态未报告'));
 });
+test('the existing session menu offers the whole recorded chain only for linked sessions', () => {
+  const h = harness(row()), calls = [];
+  h.ctx.state.rotationChains = [{ sessions: [{ id: 'earlier', handedAt: null }, { id: h.record.id, handedAt: 100 }] }];
+  h.ctx.openSessionChain = id => calls.push(id);
+  h.ctx.openSessionMenu(h.record.id);
+  const menu = h.menus.at(-1), chain = menu.items.find(item => item.id === 'session-chain');
+  assert.equal(chain.label, '这串会话（2 段）');
+  menu.onSelect('session-chain'); assert.deepEqual(calls, [h.record.id]);
+  const unrelated = h.ctx.sessionMenuModel('later', { spaceId: undefined });
+  assert.equal(unrelated.items.some(item => item.id === 'session-chain'), false);
+});
 test('a nonblocking native question preserves working status rather than claiming the root awaits an answer', () => {
   const p = harness(row({ state: 'working', approval: { method: 'item/tool/requestUserInput', params: { isBlocking: false } } })).present();
   assert.ok(p.compact.includes('正在工作 · 有待回答问题')); assert.ok(!p.compact.startsWith('等待回答'));
