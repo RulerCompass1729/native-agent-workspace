@@ -1,5 +1,4 @@
-// Historical multi-membership fixture coverage; not I182 one-home GUI acceptance.
-// T69/T108: seven synthetic sessions, one original plus two new spaces.
+// Single-home space journeys: seven synthetic sessions, one original plus two new spaces.
 // Run only after Main's precise GUI handoff; this recipe never tests the daily app.
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const assert = require('node:assert/strict'), { randomUUID, createHash } = require('node:crypto');
@@ -42,6 +41,7 @@ async function flow(name, run) {
   assert.ok(checks.length < 16, "Bounded flow count (15 + the T-136 space-row check)"); assert.ok(Date.now() - started < 600000, 'Finite source GUI budget');
   await run(); const state = await snapshot();
   assert.equal(state.sessions.length, 7); assert.deepEqual(state.sessions.map(s => [s.id, s.nativeId]), originals);
+  for (const session of state.sessions) assert.ok((session.roomIds || []).length <= 1, 'Each session has at most one home');
   assert.deepEqual(state.sessions.map(s => s.liveDraft), ids.map((_, i) => `Private draft ${i}`));
   assert.equal(hash(JSON.stringify(state.room.messages)), originalHistory);
   const stats = await fixture('stats'); assert.equal(stats.stats.inputs, 0);
@@ -57,6 +57,7 @@ async function launch() {
   const connected = await page.evaluate(() => workspace.initial());
   assert.equal(connected.servicePid, child.pid, 'The GUI must use the exact owned synthetic daemon');
   launchProofs.push({ guiPid: app.process().pid, servicePid: connected.servicePid, expectedServicePid: child.pid, runtimeVersion: connected.runtimeVersion });
+  assert.ok((await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), focusable: win.isFocusable() })))).every(win => !win.visible && !win.focusable), 'Owned windows stay hidden and unfocusable');
   await app.evaluate(({ clipboard, dialog, shell }, file) => {
     globalThis.t69 = { clipboard: 0, filePickers: 0, external: 0 };
     for (const name of ['writeText', 'readText', 'readImage', 'writeImage', 'read', 'write', 'readBuffer', 'writeBuffer', 'clear']) clipboard[name] = () => { globalThis.t69.clipboard++; throw Error('OS clipboard prohibited'); };
@@ -108,14 +109,21 @@ async function run() {
   assert.equal(process.env.NAW_T69_GUI_AUTHORIZED, '1', 'A fresh exact Main source GUI handoff is required');
   assert.ok(evidence && path.isAbsolute(evidence), 'Explicit private screenshot/evidence path required');
   try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('OCCUPIED: no own profile or GUI started'); process.exitCode = 75; return; }
-  lease = true; started = Date.now(); fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 3', task: 'T69/T108 bounded source GUI', token, pid: process.pid, time: new Date().toISOString() }));
+  lease = true; started = Date.now(); fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 2', task: 'Single-home multispace source GUI', token, pid: process.pid, time: new Date().toISOString() }));
   fs.mkdirSync(evidence, { recursive: true, mode: 0o700 }); frozen = sourceHashes(); await seed(); await launch();
   await flow('01 original space, identities, native drafts and saved shared draft', async () => { assert.equal(await page.locator('#shared-input').inputValue(), 'Original shared unsent'); assert.ok((await snapshot()).room.messages.some(m => m.text === 'Original shared response')); });
   await flow('02 visible plus creates second space without native creation', async () => { a = await newSpace('Research A'); await roomRow(a).waitFor(); });
   await flow('03 keyboard menu creates third space and right click exposes same creation action', async () => { b = await newSpace('Delivery B', true); await page.locator('#workspace-toggle').click({ button: 'right' }); await page.getByRole('menuitem', { name: '新建协作空间…', exact: true }).waitFor(); await page.keyboard.press('Escape'); });
-  await flow('04 invite accepts sessions already in another space', async () => {
-    for (const destination of [a, b]) { await open(destination); for (const id of ids.slice(0, 3)) { await page.locator('#manage-members').click(); await page.locator(`[data-invite-session="${id}"]`).click(); await page.locator('#invite-dialog').waitFor({ state: 'hidden' }); await until(async () => members(await snapshot(), destination).some(s => s.id === id), 'Invite membership acknowledged'); } }
-    const s = await snapshot(); assert.equal(members(s, a).length, 3); assert.equal(members(s, b).length, 3); assert.equal(members(s, 'shared').length, 4);
+  await flow('04 inviting from another space moves each session into exactly one home', async () => {
+    const invite = async (destination, roster) => { await open(destination); for (const id of roster) {
+      await page.locator('#manage-members').click(); await page.locator(`[data-invite-session="${id}"]`).click(); await page.locator('#invite-dialog').waitFor({ state: 'hidden' });
+      await until(async () => members(await snapshot(), destination).some(s => s.id === id), 'Move membership acknowledged');
+      assert.deepEqual((await snapshot()).sessions.find(s => s.id === id).roomIds, [destination], 'The previous home is removed');
+    } };
+    await invite(a, ids.slice(0, 3)); assert.equal(members(await snapshot(), 'shared').length, 1);
+    await invite(b, ids.slice(0, 3)); assert.equal(members(await snapshot(), a).length, 0);
+    await invite(a, ids.slice(0, 3)); await invite(b, ids.slice(4, 6));
+    const s = await snapshot(); assert.equal(members(s, a).length, 3); assert.equal(members(s, b).length, 2); assert.equal(members(s, 'shared').length, 1);
   });
   await flow('05 rename captures target space', async () => { await roomRow(b).locator('.session-more').click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click(); await page.locator('#rename-name').fill('Delivery renamed'); await page.locator('#confirm-rename').click(); await until(() => fs.readFileSync(path.join(profile, 'collaboration-spaces.json'), 'utf8').includes('Delivery renamed'), 'Rename persisted'); });
   await flow('05b every space row has the same shape, and the drop hint sits below the list (T-136)', async () => {
@@ -149,13 +157,21 @@ async function run() {
   await flow('06 independent unsent shared drafts survive switching', async () => { await open(a); await page.locator('#shared-input').fill('A independent unsent'); await open(b); await page.locator('#shared-input').fill('B independent unsent'); await open(a); assert.equal(await page.locator('#shared-input').inputValue(), 'A independent unsent'); });
   await flow('07 notes are scoped and first notes remain intact', async () => { await roomAction('共享笔记'); await page.locator('#room-notes-text').fill('A local note'); await page.locator('#save-notes').click(); await open(b); await roomAction('共享笔记'); assert.equal(await page.locator('#room-notes-text').inputValue(), ''); await page.locator('#cancel-notes').click(); assert.equal(new RoomState(profile).value.notes, 'Original shared note'); });
   await flow('08 file references and original preview stay local to one space', async () => { await open(a); await roomAction('空间文件…'); await page.locator('#add-space-files').click(); await page.getByRole('button', { name: 'synthetic-result.md', exact: true }).click(); assert.equal(await page.locator('#file-content').innerText(), 'LOCAL SYNTHETIC RESULT'); await page.locator('#close-file').click(); await open(b); await roomAction('空间文件…'); assert.equal(await page.locator('.space-file-row').count(), 0); await page.locator('#close-space-files').click(); });
-  await flow('09 flat badges include overflow, full accessible names, and native status', async () => { await page.locator('#sessions-flat').click(); const row = page.locator(`[data-session-row="${ids[0]}"]`); assert.equal(await row.locator('.space-badge-more').innerText(), '+2', 'One badge plus the remaining count (T114 two-line rows)'); const badgeBounds = await row.locator('.space-badge-more').evaluate(el => { const badge = el.getBoundingClientRect(), wrap = el.parentElement.getBoundingClientRect(), link = el.closest('.session-link').getBoundingClientRect(); return { visible: badge.width > 0 && badge.height > 0, inside: [wrap, link].every(box => badge.left >= box.left && badge.right <= box.right + 1 && badge.top >= box.top && badge.bottom <= box.bottom + 1), exposed: document.elementFromPoint(badge.left + badge.width / 2, badge.top + badge.height / 2) === el }; }); assert.deepEqual(badgeBounds, { visible: true, inside: true, exposed: true }, 'The +N badge must actually fit inside its visible row'); const label = await row.locator('.session-link').getAttribute('aria-label'); assert.ok(label.includes('Research A') && label.includes('Delivery renamed')); assert.ok(!(await row.locator('small').first().innerText()).includes('协作中')); });
+  await flow('09 flat badges and accessible names show only the current home and native status', async () => {
+    await page.locator('#sessions-flat').click(); const row = page.locator(`[data-session-row="${ids[0]}"]`);
+    assert.equal(await row.locator('.space-badge-more').count(), 0, 'One home has no multiple-space overflow');
+    const badge = row.locator('.space-badge'); assert.equal(await badge.count(), 1); assert.equal(await badge.innerText(), 'Research A');
+    const bounds = await badge.evaluate(el => { const badge = el.getBoundingClientRect(), wrap = el.parentElement.getBoundingClientRect(), link = el.closest('.session-link').getBoundingClientRect(); return { visible: badge.width > 0 && badge.height > 0, inside: [wrap, link].every(box => badge.left >= box.left && badge.right <= box.right + 1 && badge.top >= box.top && badge.bottom <= box.bottom + 1), exposed: document.elementFromPoint(badge.left + badge.width / 2, badge.top + badge.height / 2) === el }; });
+    assert.deepEqual(bounds, { visible: true, inside: true, exposed: true }, 'The sole home badge remains visible and fits inside its row');
+    const label = await row.locator('.session-link').getAttribute('aria-label'); assert.ok(label.includes('Research A')); assert.ok(!label.includes('Delivery renamed'));
+    assert.ok(!(await row.locator('small').first().innerText()).includes('协作中'));
+  });
   await flow('10 hover and keyboard focus highlight member relationships', async () => { await roomRow(a).locator('.room-nav').hover(); assert.equal(await page.locator('.session-row.space-highlight').count(), 3); assert.equal(await page.locator('.session-row.space-dim').count(), 4); await roomRow(a).locator('.room-nav').focus(); await page.locator('#sessions-flat').focus(); assert.equal(await page.locator('.session-row.space-dim').count(), 0); });
-  await flow('11 opening a space keeps every session listed in both views, with no hidden filter (T-132)', async () => { await open(a); assert.equal(await page.locator('.session-row').count(), 7); await open(b); await open(a); assert.equal(await page.locator('.session-row').count(), 7); await page.locator('#sessions-grouped').click(); assert.equal(await page.locator('.session-row').evaluateAll(rows => new Set(rows.map(row => row.dataset.sessionRow)).size), 7); assert.equal((await page.locator('#session-group-summary').innerText()).split(' ')[0], '7'); assert.equal(await page.locator('.session-view-switch button').count(), 2); await page.locator('#sessions-flat').click(); assert.equal(await page.locator('.session-row').count(), 7); });
-  await flow('12 both orders, grouped same-session references and independent second-window draft', async () => {
+  await flow('11 opening a space keeps every session listed in both views, with no hidden filter (T-132)', async () => { await open(a); assert.equal(await page.locator('.session-row').count(), 7); await open(b); await open(a); assert.equal(await page.locator('.session-row').count(), 7); await page.locator('#sessions-grouped').click(); assert.equal(await page.locator('.session-row').evaluateAll(rows => new Set(rows.map(row => row.dataset.sessionRow)).size), 7); assert.equal(await page.locator('#session-group-summary').innerText(), String((await snapshot()).rooms.filter(room => !room.archived).length), 'Grouped summary counts spaces; all seven unique session rows remain above'); assert.equal(await page.locator('.session-view-switch button').count(), 2); await page.locator('#sessions-flat').click(); assert.equal(await page.locator('.session-row').count(), 7); });
+  await flow('12 both orders, one grouped row per session and independent second-window draft', async () => {
     await page.locator('#sessions-flat').click(); await page.locator(`[data-session-row="${ids[0]}"] .session-more`).click(); await page.getByRole('menuitem', { name: '下移', exact: true }).click();
     await until(async () => (await page.evaluate(() => workspace.initial())).sidebar.order.indexOf(ids[0]) > (await page.evaluate(() => workspace.initial())).sidebar.order.indexOf(ids[1]), 'Flat order persisted');
-    await page.locator('#sessions-grouped').click(); assert.equal(await page.locator(`[data-session-row="${ids[0]}"]`).count(), 3); assert.equal(await page.locator('[data-session-group="independent"] .session-row').count(), 3);
+    await page.locator('#sessions-grouped').click(); assert.equal(await page.locator(`[data-session-row="${ids[0]}"]`).count(), 1); assert.equal(await page.locator('[data-session-group="independent"] .session-row').count(), 1);
     const bOrder = (await page.evaluate(() => workspace.initial())).rooms.find(r => r.id === b).memberOrder;
     await page.locator(`[data-session-group="${a}"] [data-session-row="${ids[1]}"] .session-more`).click(); await page.getByRole('menuitem', { name: '上移', exact: true }).click();
     await until(async () => (await page.evaluate(() => workspace.initial())).rooms.find(r => r.id === a).memberOrder[0] === ids[1], 'Group A order persisted');
@@ -172,7 +188,8 @@ async function run() {
   });
   await flow('14 late A acceptance cannot clear an equal B draft or retarget original reply', async () => {
     await open(a); await fixture('bindSends', ids[1]); await choose(ids[1], 'Same unsent body'); const raw = await page.locator('#shared-input').inputValue(); await fixture('holdSend', ids[1], undefined, 't69'); await page.locator('#forward-button').click(); await until(async () => (await fixture('pending', undefined, undefined, 't69')).pending.includes(ids[1]), 'Held A ACK');
-    await open(b); await choose(ids[1], 'Same unsent body'); assert.equal(await page.locator('#shared-input').inputValue(), raw); await fixture('releaseSend', ids[1], undefined, 't69'); await until(async () => (await page.evaluate(() => workspace.initial())).viewState.roomViews?.[a]?.sharedDraft === '', 'A acceptance has cleared the original A draft in the actual view'); assert.equal(await page.locator('#shared-input').inputValue(), raw);
+    // The equal B draft is deliberately unsent: A's recipient belongs only to A.
+    await open(b); await page.locator('#shared-input').fill(raw); assert.equal(await page.locator('#shared-input').inputValue(), raw); await fixture('releaseSend', ids[1], undefined, 't69'); await until(async () => (await page.evaluate(() => workspace.initial())).viewState.roomViews?.[a]?.sharedDraft === '', 'A acceptance has cleared the original A draft in the actual view'); assert.equal(await page.locator('#shared-input').inputValue(), raw);
     const sent = await fixture('stats', ids[1]); await fixture('nativeBlock', ids[1], { id: 'display:a-only', turnId: sent.lastSend.turnId, promptId: sent.lastSend.promptId, kind: 'response', text: 'Original A answer only', status: 'complete' }); await fixture('complete', ids[1], { text: 'Original A answer only', messageId: 'display:a-only' });
     const s = await snapshot(); assert.ok(s.rooms.find(r => r.id === a).messages.some(m => m.text === 'Original A answer only')); assert.ok(!JSON.stringify(s.rooms.find(r => r.id === b)).includes('Original A answer only'));
     await page.evaluate(async ({ a, b, ids }) => {

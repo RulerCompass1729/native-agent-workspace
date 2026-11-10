@@ -1,4 +1,4 @@
-// T69 merge: existing owned source launcher, eight finite zero-model GUI groups.
+// Nonempty single-home merges: eight finite zero-model GUI groups.
 // Run only after Main's precise GUI handoff; this recipe never tests the daily app.
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const assert = require('node:assert/strict'), { randomUUID, createHash } = require('node:crypto');
@@ -10,7 +10,7 @@ const { _electron } = scratch.playwright(require('playwright'));
 const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.resolve(common, '..', '.local/gui-test-slot.lock'), token = randomUUID(), owner = randomUUID();
 const evidence = process.env.NAW_T69_MERGE_EVIDENCE_DIR, checks = [], errors = [], launches = [], launchProofs = [], delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-let profile, guiEntry, child, client, app, page, sequence = 0, lease = false, started, ids, originals, originalHistory, a, b, localFile, failure, c, d, secondary;
+let profile, guiEntry, child, client, app, page, sequence = 0, lease = false, started, ids, originals, originalHistory, sourceMessages, a, b, localFile, failure, c, d, secondary;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const sourceHashes = () => Object.fromEntries(Buffer.concat([execFileSync('git', ['ls-files', '-z'], { cwd: root }), execFileSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root }), Buffer.from('app/dsh/client.js\0')]).toString().split('\0').filter(f => f && /^(app|scripts)\//.test(f)).map(f => [f, hash(fs.readFileSync(path.join(root, f)))]));
 if (process.argv.includes('--plan')) { console.log(JSON.stringify({ task: 'T69 merge source GUI', groups: 8, maxElectronStarts: 2, sameProfileReopen: true, intentionalSecondWindow: true, syntheticClearConfirmation: 1, realOSConfirmations: 0, syntheticLogicalSessions: 3, syntheticSeedSends: 2, maxMs: 900000, osClipboard: 0, productModels: 0, requiresNewMainGrant: true }, null, 2)); process.exit(0); }
@@ -27,7 +27,7 @@ const snapshot = () => client.call('initial');
 const members = (s, id) => s.sessions.filter(r => r.roomIds ? r.roomIds.includes(id) : id === 'shared' && r.roomId === id);
 const roomRow = id => page.locator(`[data-space-id="${id}"]`);
 async function open(id, click = true) {
-  if (click) await roomRow(id).locator('.room-nav').click();
+  if (click) await (await page.locator('#sessions-grouped').getAttribute('aria-pressed') === 'true' ? page.locator(`#session-list [data-session-group="${id}"] .session-space-heading`) : roomRow(id).locator('.room-nav')).click();
   else await page.evaluate(id => workspace.viewState({ selected: 'room', mode: 'chat', spaceId: id }), id);
   await until(async () => (await page.evaluate(() => workspace.initial())).viewState.spaceId === id, 'Window space selection persisted');
 }
@@ -38,6 +38,16 @@ function isolatedEnv(additions) {
 }
 const metadata = () => new RoomState(profile);
 const target = name => metadata().spaces.rooms.find(room => room.name === name);
+async function restoreSourceMembers() {
+  // Each later merge needs nonempty sources again; use the guarded GUI API.
+  await page.evaluate(async ({ a, b, ids }) => {
+    for (const [space, roster] of [[a, ids.slice(0, 2)], [b, ids.slice(2)]])
+      for (const id of roster) await workspace.spaceAction(space, 'join', [id, true]);
+  }, { a, b, ids });
+  const state = await snapshot();
+  assert.deepEqual(members(state, a).map(s => s.id), ids.slice(0, 2));
+  assert.deepEqual(members(state, b).map(s => s.id), ids.slice(2));
+}
 async function capture(name) {
   await page.screenshot({ path: path.join(evidence, name + '.png') });
   fs.writeFileSync(path.join(evidence, name + '.json'), JSON.stringify({ backend: await snapshot(), spaces: metadata().spaces }, null, 2));
@@ -46,9 +56,14 @@ async function flow(name, run) {
   assert.ok(checks.length < 8); assert.ok(Date.now() - started < 900000, 'Finite fifteen-minute source GUI budget');
   await run(); const state = await snapshot();
   assert.equal(state.sessions.length, 3); assert.deepEqual(state.sessions.map(s => [s.id, s.nativeId]), originals);
+  for (const session of state.sessions) assert.ok((session.roomIds || []).length <= 1, 'Each native session has at most one home');
   assert.deepEqual(state.sessions.map(s => s.liveDraft), ids.map((_, i) => `Private draft ${i}`));
   assert.equal(hash(JSON.stringify(state.room.messages)), originalHistory);
-  const stats = await fixture('stats'); assert.deepEqual(stats.stats, { inputs: 0, opens: 0, resizes: 0, sends: 2 });
+  const stats = await fixture('stats');
+  // Column views attach readers to existing synthetic terminals. They must
+  // neither create another session (checked above) nor type/replay a send.
+  const { opens, ...effects } = stats.stats;
+  assert.deepEqual(effects, { inputs: 0, resizes: 0, sends: 2 });
   const metrics = await app.evaluate(() => globalThis.t69Merge);
   assert.equal(metrics.osClipboard, 0); assert.equal(metrics.external, 0);
   checks.push({ name, stats: stats.stats, copyRequests: metrics.copyPayloads.length, faults: (await fixture('stats', null, null, 't69merge')).faults });
@@ -63,6 +78,7 @@ async function launch() {
   await page.locator('#new-space').waitFor(); const current = await page.evaluate(() => workspace.initial());
   assert.equal(current.servicePid, child.pid, 'No replacement or unowned service');
   launchProofs.push({ guiPid: app.process().pid, servicePid: current.servicePid, expectedServicePid: child.pid, runtimeVersion: current.runtimeVersion });
+  assert.ok((await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), focusable: win.isFocusable() })))).every(win => !win.visible && !win.focusable), 'Owned windows stay hidden and unfocusable');
 }
 async function roomAction(name) { await page.locator('#room-header-more').click(); await page.getByRole('menuitem', { name, exact: true }).click(); }
 async function form(name, disposition = 'keep') {
@@ -83,7 +99,18 @@ async function seed() {
   fs.writeFileSync(path.join(guiEntry, 'package.json'), JSON.stringify({ name: 'naw-owned-merge-source-gui', version: require('../package.json').version, main: 'main.cjs' }), { mode: 0o600 });
   fs.writeFileSync(path.join(guiEntry, 'main.cjs'), `const cp=require('node:child_process'),path=require('node:path'),electron=require('electron');
 const spawn=cp.spawn;cp.spawn=function(executable,args,options){if(Array.isArray(args)&&args.some(arg=>typeof arg==='string'&&path.basename(arg)==='daemon.cjs'))throw Error('Replacement backend prohibited');return spawn.call(this,executable,args,options);};
-globalThis.t69Merge={osClipboard:0,external:0,copyPayloads:[]};
+globalThis.t69Merge={osClipboard:0,external:0,copyPayloads:[],sourceArchiveWrites:0};
+globalThis.t69ArmArchiveFailure=roomId=>{
+  const {RoomState}=require(${JSON.stringify(path.join(root, 'app/room-state.cjs'))});
+  const write=RoomState.prototype.write;
+  RoomState.prototype.write=function(file,next){
+    if(file===this.spacesFile&&next.rooms?.some(room=>room.id===roomId&&room.archived)){
+      RoomState.prototype.write=write;globalThis.t69Merge.sourceArchiveWrites++;
+      throw Error('Synthetic owned source archive write failure');
+    }
+    return write.call(this,file,next);
+  };
+};
 electron.clipboard.writeText=text=>{globalThis.t69Merge.copyPayloads.push(text);};
 for(const name of ['readText','readImage','writeImage','read','write','readBuffer','writeBuffer','clear'])electron.clipboard[name]=()=>{globalThis.t69Merge.osClipboard++;throw Error('OS clipboard prohibited');};
 electron.shell.openPath=electron.shell.openExternal=async()=>{globalThis.t69Merge.external++;throw Error('External viewer prohibited');};
@@ -97,26 +124,27 @@ require(${JSON.stringify(path.join(root, 'app/main.cjs'))});
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Owned synthetic daemon ready'); client = await connectService(profile, owner);
   ids = []; for (let i = 0; i < 3; i++) { const id = await client.call('create', { provider: i % 2 ? 'claude' : 'codex', cwd: profile, name: i ? 'Same name' : 'Jun', view: 'chat' }); ids.push(id); await client.call('draft', id, `Private draft ${i}`); }
   const room = new RoomState(profile); a = room.create('Source A'); b = room.create('Source B');
-  for (const [space, roster] of [[a, [ids[0], ids[1]]], [b, [ids[0], ids[2]]]]) for (const id of roster) await client.call('spaceAction', space, 'join', [id, true], {});
-  await fixture('bindSends', ids[0]);
-  for (const [space, name, file] of [[a, 'A', localFile], [b, 'B', localB]]) {
-    const record = (await snapshot()).sessions[0];
-    await client.call('spaceAction', space, 'forward', [ids[0], `${name} original shared request`, record.nativeId], { [ids[0]]: require('../app/collaboration-spaces.cjs').membershipRevision(record, space) });
-    const sent = await fixture('stats', ids[0]);
-    await fixture('nativeBlock', ids[0], { id: `tool:${name}`, turnId: sent.lastSend.turnId, kind: 'tool', text: `${name} exact original tool`, status: 'complete' });
-    await fixture('complete', ids[0], { text: `${name} complete original [material](${file})` });
+  for (const [space, roster] of [[a, ids.slice(0, 2)], [b, ids.slice(2)]]) for (const id of roster) await room.changeMember(client, id, true, '', space);
+  for (const [space, name, file, id] of [[a, 'A', localFile, ids[0]], [b, 'B', localB, ids[2]]]) {
+    await fixture('bindSends', id);
+    const record = (await snapshot()).sessions.find(s => s.id === id);
+    await client.call('spaceAction', space, 'forward', [id, `${name} original shared request`, record.nativeId], { [id]: require('../app/collaboration-spaces.cjs').membershipRevision(record, space) });
+    const sent = await fixture('stats', id);
+    await fixture('nativeBlock', id, { id: `tool:${name}`, turnId: sent.lastSend.turnId, kind: 'tool', text: `${name} exact original tool`, status: 'complete' });
+    await fixture('complete', id, { text: `${name} complete original [material](${file})` });
     room.notes(`${name} original note`, room.metadata(space).revision, space); room.addFiles([file], space);
   }
   room.notes('Original shared note', 0);
   fs.writeFileSync(path.join(profile, 'views.json'), JSON.stringify([{ owner, selected: 'room', mode: 'chat', active: true, spaceId: a, sharedDraft: 'Source A unsent', roomViews: { shared: { sharedDraft: 'Original shared unsent' }, [a]: { sharedDraft: 'Source A unsent' }, [b]: { sharedDraft: 'Source B unsent' } } }]), { mode: 0o600 });
   const initial = await snapshot(); originals = initial.sessions.map(s => [s.id, s.nativeId]); originalHistory = hash(JSON.stringify(initial.room.messages));
+  sourceMessages = Object.fromEntries([a, b].map(id => [id, structuredClone(initial.rooms.find(room => room.id === id).messages)]));
   assert.equal(initial.runtimeVersion, require('../package.json').version);
 }
 async function run() {
   assert.equal(process.env.NAW_T69_MERGE_GUI_AUTHORIZED, '1', 'A NEW exact Main merge GUI handoff is required; old I95 is exhausted');
   assert.ok(evidence && path.isAbsolute(evidence));
   try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('OCCUPIED: no own profile or GUI started'); process.exitCode = 75; return; }
-  lease = true; started = Date.now(); fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 3', task: 'T69 merge source GUI eight groups', token, pid: process.pid, time: new Date().toISOString() }));
+  lease = true; started = Date.now(); fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 2', task: 'Nonempty single-home merge source GUI', token, pid: process.pid, time: new Date().toISOString() }));
   fs.mkdirSync(evidence, { recursive: true, mode: 0o700 }); process.env.NAW_EVIDENCE_DIR = path.join(evidence, 'scratch'); frozen = sourceHashes();
   await seed(); await launch();
   await flow('01 ordinary merge menu, cancel and native-alias refusal', async () => {
@@ -134,6 +162,28 @@ async function run() {
     assert.equal(metadata().metadata(a).archived, false); assert.equal(metadata().metadata(b).archived, false);
     assert.equal(members(await snapshot(), c).length, 3); assert.equal(metadata().metadata(c).files.length, 2);
     assert.notEqual(metadata().metadata(c).files[0].path, metadata().metadata(c).files[1].path);
+    const state = await snapshot(), imported = state.rooms.find(room => room.id === c);
+    for (const session of state.sessions) assert.deepEqual(session.roomIds, [c], 'Merging moves each original session to the target');
+    assert.equal(members(state, a).length, 0); assert.equal(members(state, b).length, 0);
+    for (const [space, name] of [[a, 'A'], [b, 'B']]) {
+      assert.ok(sourceMessages[space].length >= 3, 'Each nonempty source has a request, tool result and response');
+      for (const original of sourceMessages[space]) assert.equal(state.rooms.find(room => room.id === space).messages.find(row => row.id === original.id)?.text, original.text, 'Source content is retained');
+      for (const text of [`${name} original shared request`, `${name} exact original tool`])
+        assert.ok(imported.messages.some(row => row.snapshotOrigin?.roomId === space && row.text === text), 'Both sources contribute their request and tool content');
+      assert.ok(imported.messages.some(row => row.snapshotOrigin?.roomId === space && row.text.startsWith(`${name} complete original [material](`)), 'Both source responses retain their original material link');
+      assert.equal(metadata().metadata(space).notes, `${name} original note`); assert.equal(metadata().metadata(space).files.length, 1);
+    }
+    const batch = metadata().metadata(c).merge.batch;
+    for (const entry of batch.blocks.flatMap(block => block.entries)) {
+      const row = imported.messages.find(row => row.snapshotHash === entry.hash && row.snapshotOrigin?.roomId === entry.origin.roomId && row.snapshotOrigin?.messageId === entry.origin.messageId);
+      assert.ok(row, 'Every source entry has an exact provenance-bearing imported row');
+      assert.notEqual(row.id, entry.origin.messageId); assert.equal(row.text, entry.payload.text);
+      if (row.replyTo) {
+        const original = imported.messages.find(target => target.snapshotSource?.roomId === row.snapshotSource.roomId && target.snapshotSource?.messageId === row.replyTo);
+        if (original) assert.equal(row.snapshotReplyTo, original.id, 'Imported replies point to the new imported request ID');
+      }
+    }
+    assert.equal(imported.snapshotBatches.length, 1);
   });
   await flow('03 original reading, disclosure, virtual copy, selection and source navigation survive another stream', async () => {
     await page.locator('#room-record').click();
@@ -156,6 +206,7 @@ async function run() {
     assert.equal((await snapshot()).rooms.find(room => room.id === c).messages.some(m => m.text === 'LATE PRIVATE ORIGINAL'), false);
   });
   await flow('04 second-window source edit rejects a stale preview without creating a room or discarding drafts', async () => {
+    await restoreSourceMembers();
     await open(a); await form('Stale rejected'); const before = metadata().spaces.rooms.length;
     const created = app.waitForEvent('window'); await page.evaluate(() => workspace.newWindow()); secondary = await created; secondary.setDefaultTimeout(7000); await secondary.locator('#new-space').waitFor();
     await secondary.locator(`[data-space-id="${a}"] .room-nav`).click(); await secondary.locator('#shared-input').fill('OTHER WINDOW A UNSENT');
@@ -182,9 +233,12 @@ async function run() {
     await page.locator('#close-privacy').click();
   });
   await flow('06 partial source archive is visible and explicit recovery does not re-import or replay', async () => {
-    await open(a); await form('Archived D', 'archive'); await fixture('failArchive', a, 1, 't69merge'); await page.locator('#confirm-space-merge').click();
+    await restoreSourceMembers();
+    await open(a); await form('Archived D', 'archive'); await app.evaluate((_, id) => globalThis.t69ArmArchiveFailure(id), a); await page.locator('#confirm-space-merge').click();
     await until(() => target('Archived D')?.merge.stage === 'partial', 'Partial source archive recorded'); d = target('Archived D').id;
     assert.equal(metadata().metadata(a).archived, false); assert.equal(metadata().metadata(b).archived, true); await capture('06-partial-archive');
+    assert.equal(await app.evaluate(() => globalThis.t69Merge.sourceArchiveWrites), 1, 'Exactly one real archive metadata write is refused');
+    assert.deepEqual(members(await snapshot(), d).map(s => s.id), ids, 'Members have moved before source archiving');
     await page.locator('#recover-space-merge').waitFor(); await page.locator('#recover-space-merge').click(); await until(() => metadata().metadata(d).merge.stage === 'ready', 'Explicit remaining archive completed');
     assert.equal(metadata().metadata(a).archived, true); assert.equal(metadata().metadata(b).archived, true);
     assert.equal((await snapshot()).rooms.find(room => room.id === d).snapshotBatches.length, 1); await page.locator('#open-space-merge-target').click();
@@ -194,6 +248,9 @@ async function run() {
     await until(async () => (await page.evaluate(() => workspace.initial())).viewState.roomViews[d].sharedDraft === 'D POSITIVE UNSENT LATER', 'Positive D draft stored');
     await roomAction('合并详情…'); await page.locator('#undo-space-merge').click(); await until(() => metadata().metadata(d).merge.stage === 'undone', 'Organization undone');
     assert.equal(metadata().metadata(d).archived, false); assert.equal(metadata().metadata(a).archived, false); assert.equal(metadata().metadata(b).archived, false);
+    const state = await snapshot(); assert.deepEqual(members(state, d).map(s => s.id), ids);
+    assert.equal(members(state, a).length, 0); assert.equal(members(state, b).length, 0);
+    assert.equal(metadata().metadata(d).merge.undoKeptTarget, true, 'New target work preserves the target and its member placement');
     assert.equal((await page.evaluate(() => workspace.initial())).viewState.roomViews[d].sharedDraft, 'D POSITIVE UNSENT LATER');
     await page.locator('#close-space-merge').click();
   });
