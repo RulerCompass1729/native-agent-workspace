@@ -137,6 +137,9 @@ async function build() {
     fs.writeFileSync(`${archive}.sha256`, `${digest}  ${path.basename(archive)}\n`);
     require('./package-dmg.cjs').buildDmg(app);
     reportArtifactRetention(path.join(root, 'dist'), manifest.version);
+    // T-167 (user 2026-11-08): old daily release worktrees go after a successful whole build only. A retention
+    // problem is reported and leaves the build successful; it never runs on a failed build.
+    try { require('./release-worktree-retention.cjs').retainReleaseWorktrees({ root }); } catch (error) { console.error(`Release worktree retention skipped: ${error.message}`); }
     console.log(`Built ${path.basename(archive)} from ${revision}; ${inventory.length} production packages. Not notarized; publication requires artifact review.`);
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 }
