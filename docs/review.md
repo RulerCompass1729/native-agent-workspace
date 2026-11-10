@@ -7545,3 +7545,14 @@ Reported cumulative review cost for this checkpoint: USD 0.9464.
 Scope: source delivery only. Installation, the person's daily-app acceptance
 checklist and publishing remain outside this checkpoint.
 
+### Scoped outbox and existing native edit lines
+
+The conservative terminal-input marker survives completed prompts and formerly blocked every later scoped outbox task. A real Codex 0.167 TUI check confirms its held RPC can receive a separate task, execute a command, and preserve the editable unsent line and original processes. Only that qualified route may retain the marker while sending; new typing still revokes the pinned authority. Retirement and unqualified versions/routes retain their existing gate. Managed service regression: old code 31 pass/2 fail; changed code and related guards 208 pass/0 fail/0 skip. Original installed agents and desktop input isolation require separate adoption acceptance.
+
+### Scoped outbox: actual TUI version qualification
+
+A shared executable path does not prove the already-running host and a later TUI have the same version. On the current main baseline, the new checks reproduced missing client-version evidence and the conservative draft refusal (36 pass, 6 fail). Reapplying the earlier draft-preserving candidate reproduced the unsafe exception: a 0.167 host with a 0.166 TUI was accepted instead of rejected.
+
+The transparent terminal bridge now retains only the client version from that connection's first successful initialize exchange. Missing, failed or duplicate initialization leaves it unqualified; disconnection clears it and a new connection starts unqualified. The draft-preserving exception requires both the host and this exact TUI RPC to report 0.167. Native frames pass unchanged. Subsequent human typing, authority changes, existing goal checks and retirement protection retain their gates.
+
+Author verification: 424 related checks passed with zero failures or skips; UI build and diff checks passed. An isolated actual 0.167 TUI/host pair reported both versions, received the exact task once, ran its first command with exit code zero, and retained the editable unsent draft and the same native processes. This used the actual PTY and canonical terminal screen, two fixed local response fixtures, no model inference, no GUI windows and no paid calls; owned processes were cleaned up. The prior GUI evidence is not a new GUI acceptance run. Independent review of this delta remains pending for the integration batch under the lightweight workflow. No daily installation, existing-agent adoption or full communication acceptance is claimed.

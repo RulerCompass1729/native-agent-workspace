@@ -32,7 +32,8 @@ class CodexTerminalBridge {
     const upstream = new WebSocket('ws://localhost', {
       createConnection: () => net.connect(this.upstream), maxPayload: CODEX_WEBSOCKET_MAX_PAYLOAD, handshakeTimeout: 10000,
     });
-    const state = { client, upstream, pending: new Map(), queue: [], queuedBytes: 0, appPending: new Map(), threadId: null };
+    const state = { client, upstream, pending: new Map(), queue: [], queuedBytes: 0, appPending: new Map(), threadId: null,
+      initializeSeen: false, initialize: null, clientVersion: null };
     const appPrefix = `naw-outbox:${randomUUID()}:`; let appSequence = 0;
     const rpc = { reply(id, result) {
       if (upstream.readyState !== WebSocket.OPEN || client.readyState !== WebSocket.OPEN) throw uiError("error.terminalConnectionChangedNoDecision");
@@ -57,10 +58,12 @@ class CodexTerminalBridge {
         timer.unref(); state.appPending.set(id, { resolve, reject, timer });
         upstream.send(JSON.stringify({ id, method, params }));
       });
-    }, get connected() { return upstream.readyState === WebSocket.OPEN && client.readyState === WebSocket.OPEN; } };
+    }, get connected() { return upstream.readyState === WebSocket.OPEN && client.readyState === WebSocket.OPEN; },
+    get nativeClientVersion() { return state.clientVersion; } };
     this.connections.add(state);
     const close = () => {
       if (!this.connections.delete(state)) return;
+      state.initialize = null; state.clientVersion = null;
       for (const request of state.appPending.values()) { clearTimeout(request.timer); request.reject(uiError('error.nativeDisconnectedNoReplay')); }
       state.appPending.clear();
       client.terminate(); upstream.terminate();
@@ -72,6 +75,18 @@ class CodexTerminalBridge {
     client.on('message', (data, binary) => {
       let request;
       try { request = JSON.parse(data.toString()); } catch {}
+      if (request?.method === 'initialize') {
+        // The host's server version cannot qualify the TUI: its executable may
+        // have changed since the host started. Pin only this socket's successful
+        // initialize exchange, retaining no other client metadata. A repeated
+        // initialize makes the identity ambiguous for the rest of this socket.
+        const version = request.params?.clientInfo?.version;
+        state.initialize = !state.initializeSeen &&
+          (typeof request.id === 'string' || Number.isFinite(request.id)) &&
+          typeof version === 'string' && version.length > 0 && version.length <= 64
+          ? { id: request.id, version } : null;
+        state.initializeSeen = true; state.clientVersion = null;
+      }
       if (request && ['thread/start', 'thread/resume', 'thread/fork'].includes(request.method) && request.id !== undefined) {
         if (state.pending.size >= 64 || state.pending.has(request.id)) { this.observe({ kind: 'uncertain' }); close(); return; }
         // Retain only routing metadata, never prompts, credentials or history.
@@ -97,6 +112,11 @@ class CodexTerminalBridge {
       if (client.readyState !== WebSocket.OPEN) { close(); return; }
       let response;
       try { response = JSON.parse(data.toString()); } catch {}
+      if (response && !response.method && state.initialize && state.initialize.id === response.id) {
+        if (!response.error && response.result && typeof response.result === 'object' && !Array.isArray(response.result))
+          state.clientVersion = state.initialize.version;
+        state.initialize = null;
+      }
       if (response && !response.method && typeof response.id === 'string' && response.id.startsWith(appPrefix)) {
         const request = state.appPending.get(response.id); state.appPending.delete(response.id);
         if (request) {

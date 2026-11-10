@@ -54,7 +54,7 @@ async function fixture(t, options = {}) {
     workspace.drafts.set(record.id, 'PRIVATE_DRAFT_UNCHANGED');
     const emit = (method, p, rpc = runtime.terminalNotificationSource ? runtime.terminalRpc : host.rpc) =>
       runtime.event({ method, params: { threadId: record.nativeId, ...p } }, rpc);
-    const nativeRpc = { connected: true, async call(method, params) {
+    const nativeRpc = { connected: true, nativeVersion: options.nativeVersion, async call(method, params) {
       if (method === 'thread/goal/get') {
         assert.deepEqual(params, { threadId: record.nativeId }); goalReads.push({ actor: record.id, rpc: this });
         await options.beforeGoal?.({ nativeRecord, workspace, runtime });
@@ -76,7 +76,7 @@ async function fixture(t, options = {}) {
     } };
     host.rpc = nativeRpc;
     if (options.terminal) {
-      runtime.terminalNotificationSource = 'original-tui'; runtime.terminalRpc = { connected: true, call: nativeRpc.call };
+      runtime.terminalNotificationSource = 'original-tui'; runtime.terminalRpc = { connected: true, nativeClientVersion: options.terminalVersion, call: nativeRpc.call };
       runtime.needsSubscription = true; runtime.chatAvailable = false;
     }
     const sockets = new Set(), token = randomUUID(), endpoint = path.join(root, 'service.sock');
@@ -144,6 +144,50 @@ test('held original TUI connection can supply provenance and send without Native
   const tag = await binding.forwardOnce(); let receipt; binding.watchReceipt({ messageId: tag }, r => { receipt = r; });
   assert.equal(receipt.firstCommand.exitCode, 0); assert.equal(f.nativeCalls[0].rpc, f.backends[1].runtime.terminalRpc);
   assert.equal(f.nativeCalls.length, 1); await binding.close();
+});
+test('qualified original TUI sends independently of a pre-existing edit without clearing its protection marker', async t => {
+  const f = await fixture(t, { terminal: true, nativeVersion: '0.167.0', terminalVersion: '0.167.0' });
+  const b = f.backends[1]; b.nativeRecord.terminalInputPending = true; f.start();
+  const binding = await f.bind(), tag = await binding.forwardOnce(); let receipt;
+  binding.watchReceipt({ messageId: tag }, value => { receipt = value; });
+  assert.equal(receipt.firstCommand.exitCode, 0); assert.equal(receipt.inputTag, tag);
+  assert.equal(f.nativeCalls.length, 1); assert.equal(f.nativeCalls[0].rpc, b.runtime.terminalRpc);
+  assert.equal(b.nativeRecord.terminalInputPending, true);
+  assert.equal(b.nativeRecord.controlRevision, 7);
+  assert.equal(b.workspace.drafts.get('recipient'), 'PRIVATE_DRAFT_UNCHANGED');
+  await binding.close();
+});
+test('unqualified host or actual TUI versions retain the terminal edit gate before any native write', async t => {
+  for (const options of [{ terminal: true }, { terminal: true, terminalVersion: '0.167.0' },
+    { terminal: true, nativeVersion: '0.166.0', terminalVersion: '0.167.0' },
+    { terminal: true, nativeVersion: '0.168.0', terminalVersion: '0.167.0' },
+    { terminal: true, nativeVersion: '0.167.0', terminalVersion: '0.166.0' },
+    { terminal: true, nativeVersion: '0.167.0', terminalVersion: '0.168.0' },
+    { terminal: true, nativeVersion: '0.167.0' },
+    { nativeVersion: '0.167.0', terminalVersion: '0.167.0' }]) {
+    const f = await fixture(t, options); const b = f.backends[1]; b.nativeRecord.terminalInputPending = true; f.start();
+    await assert.rejects(f.bind(), undefined, JSON.stringify(options));
+    assert.equal(f.nativeCalls.length, 0); assert.equal(f.goalReads.length, 0);
+    assert.equal(b.nativeRecord.terminalInputPending, true);
+    assert.equal(b.workspace.drafts.get('recipient'), 'PRIVATE_DRAFT_UNCHANGED');
+  }
+});
+test('loss of the actual TUI qualification after binding refuses before turn/start', async t => {
+  const f = await fixture(t, { terminal: true, nativeVersion: '0.167.0', terminalVersion: '0.167.0' });
+  const b = f.backends[1]; b.nativeRecord.terminalInputPending = true; f.start();
+  const binding = await f.bind(); b.runtime.terminalRpc.nativeClientVersion = null;
+  await assert.rejects(binding.forwardOnce()); assert.equal(f.nativeCalls.length, 0);
+  assert.equal(b.nativeRecord.terminalInputPending, true); await binding.close();
+});
+test('a new real keystroke after a draft-preserving binding still withdraws the send', async t => {
+  const f = await fixture(t, { terminal: true, nativeVersion: '0.167.0', terminalVersion: '0.167.0' });
+  const b = f.backends[1], input = []; b.nativeRecord.terminalInputPending = true;
+  b.nativeRecord.view = 'terminal'; b.runtime.terminal = { alive: true, input: data => input.push(data) };
+  f.start(); const binding = await f.bind();
+  b.workspace.input('recipient', 'new human edit', b.nativeRecord.owner);
+  assert.deepEqual(input, ['new human edit']); assert.equal(b.nativeRecord.controlRevision, 8);
+  await assert.rejects(binding.forwardOnce()); assert.equal(f.nativeCalls.length, 0);
+  assert.equal(b.nativeRecord.terminalInputPending, true); await binding.close();
 });
 test('managed source/receipt through actual broker/private socket/leased Core view remains working only after native command completion', async t => {
   const f = await fixture(t); f.start(); let binding, clicks = 0, closed = 0;
