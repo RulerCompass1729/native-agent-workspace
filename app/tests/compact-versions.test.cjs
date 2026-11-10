@@ -310,7 +310,7 @@ test('a session\'s own menu runs the update of the backend that holds it, or say
 });
 test('the session menu offers the update right under its version fact, only for an older backend', () => {
   const start = source.indexOf('function sessionMenuModel('), end = source.indexOf('function openSessionMenu(');
-  const c = vm.createContext({ ...localeUI(), state: { appVersion: current, sessions: [], capabilities: [] }, disconnected: false, allSpaces: () => [], inSpace: () => false,
+  const c = vm.createContext({ ...localeUI(), api: {}, state: { appVersion: current, sessions: [], capabilities: [] }, disconnected: false, allSpaces: () => [], inSpace: () => false,
     orderedMembers: () => [], sidebarSessions: () => [], sidebarDetails: record => ['fact ' + record.id] });
   vm.runInContext(source.slice(source.indexOf('function versionValue('), source.indexOf('function backendVersionSummary(')) + source.slice(start, end), c);
   const ids = record => { c.state.sessions = [record]; return c.sessionMenuModel(record.id, { spaceId: null }).items.map(item => item.id); };

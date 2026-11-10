@@ -15,7 +15,7 @@ function fixture() {
     });
     return elements.get(id);
   };
-  const context = vm.createContext({ $, selected: 'a', spaceId: 'shared', selectionRevision: 1, disconnected: false,
+  const context = vm.createContext({ $, state: { queueSecretary: null }, selected: 'a', spaceId: 'shared', selectionRevision: 1, disconnected: false,
     window: { nativeWorkspaceSpaces: spaces }, uiError,
     sessionMenu: null, roomMenu: null, contentMenu: null, renameTarget: null, disposers: [],
     document: { addEventListener(type, listener, capture) { listeners.set(type, { listener, capture }); }, removeEventListener(type, listener, capture) { const entry = listeners.get(type); if (entry?.listener === listener && entry.capture === capture) listeners.delete(type); }, querySelector() { return $('terminal-display-dialog').open ? $('terminal-display-dialog') : null; } },
