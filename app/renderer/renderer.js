@@ -1789,7 +1789,7 @@ function openRename(id, origin, roomId = spaceId) {
   if (renaming) return toastMessage("toast.nameSaving");
   if (renameTarget) {
     if (renameTarget.id === id && (id !== 'room' || renameTarget.roomId === roomId) || $('rename-name').value !== renameTarget.originalName) {
-      ui.revealSidebar(); $('rename-name').focus(); return toastMessage("toast.finishRename");
+      revealRenameRow(renameTarget.row); $('rename-name').focus(); return toastMessage("toast.finishRename");
     }
     closeRename(false);
   }
@@ -1811,8 +1811,13 @@ function openRename(id, origin, roomId = spaceId) {
   ui.display.text($('rename-label'), id === 'room' ? 'rename.workspace' : 'rename.session');
   $('rename-error').hidden = true; ui.display.unbind($('rename-error')); $('rename-error').textContent = '';
   row.classList.add('is-renaming'); renameTarget.label.hidden = true;
-  row.append($('rename-editor')); $('rename-editor').hidden = false; ui.revealSidebar();
+  row.append($('rename-editor')); $('rename-editor').hidden = false; revealRenameRow(row);
   render(); $('rename-name').focus(); $('rename-name').select();
+}
+function revealRenameRow(row) {
+  const group = row.closest('.session-space-group');
+  if (group && sidebarCollapsedGroups.has(group.dataset.sessionGroup)) toggleSidebarGroup(group.dataset.sessionGroup);
+  ui.revealSidebar();
 }
 function renameProblem(target = renameTarget) {
   if (!target) return '';

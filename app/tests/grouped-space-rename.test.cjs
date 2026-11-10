@@ -12,6 +12,7 @@ function fixture(view = 'grouped') {
     insertBefore(child) { this.append(child); }
     contains(child) { return this === child || this.children.some(c => c.contains(child)); }
     querySelector(selector) { return $(this.id + selector); }
+    closest() { return null; }
     setAttribute() {}
     focus() { document.activeElement = this; }
     select() {}

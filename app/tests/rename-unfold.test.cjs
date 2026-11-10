@@ -16,6 +16,7 @@ function fixture() {
       value: '', hidden: false, textContent: '', dataset: {},
       classList: { add() {}, remove() {} }, append() {}, focus() {}, select() {},
       getClientRects() { return [{}]; },
+      closest() { return null; },
     });
     return nodes.get(id);
   };
