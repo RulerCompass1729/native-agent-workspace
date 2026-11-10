@@ -1645,7 +1645,9 @@ function openCreate(provider = 'claude') {
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
   $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = false;
   $('create-space-kind').value = 'independent'; $('create-space-existing').value = ''; $('create-space-name').value = ''; delete $('create-space-name').dataset.edited;
-  resetCreateDirectory(); ui.display.unbind($('create-error')); $('create-error').textContent = ''; openTransientDialog('create-dialog'); createReadiness();
+  resetCreateDirectory(); ui.display.unbind($('create-error')); $('create-error').textContent = '';
+  const ticket = openTransientDialog('create-dialog'); ticket.directoryDefaults = {}; createReadiness();
+  return loadCreateDirectory(ticket);
 }
 // T-115: 开始一个会话 can also put the new session in a collaboration space. The order is session, then the space if it
 // is new, then the join. Each finished step stays on this opening's receipt, so 仅继续加入 runs only the steps left and
@@ -1742,7 +1744,27 @@ function resetCreateDirectory() {
   folder = newDirectory ? `${state.newWorkspaceRoot}/${crypto.randomUUID()}` : state.defaultWorkspace;
   $('chosen-folder').textContent = folder;
 }
+async function loadCreateDirectory(ticket) {
+  const request = ticket.directoryDefaults;
+  try {
+    const defaults = await api.createDefaults();
+    if (!currentDialogTicket(ticket) || ticket.directoryDefaults !== request) return;
+    delete ticket.directoryDefaults;
+    if (defaults?.repository && state.capabilities?.includes('gitWorktreeV1')) {
+      folder = defaults.repository; newDirectory = false; $('git-worktree').checked = true;
+      invalidateGitPreview(true); $('git-worktree-relative').value = ''; $('chosen-folder').textContent = folder;
+      await refreshGitPreview();
+    } else if (defaults?.directory) {
+      folder = defaults.directory; newDirectory = false; $('chosen-folder').textContent = folder;
+    }
+  } catch (error) {
+    // A failed read must not silently create in the temporary empty folder.
+    // Choosing a folder or requesting a new empty one cancels this opening's read.
+    if (currentDialogTicket(ticket) && ticket.directoryDefaults === request) ui.showError($('create-error'), error);
+  } finally { if (currentDialogTicket(ticket)) createReadiness(); }
+}
 function invalidateGitPreview(newNonce = false) {
+  const ticket = dialogTickets.get($('create-dialog')); if (ticket) delete ticket.directoryDefaults;
   clearTimeout(gitPreviewTimer); gitPreviewTimer = null; gitPreviewRevision++;
   gitWorktreePlan = null; gitPreviewLoading = false;
   if (newNonce) gitWorktreeNonce = crypto.randomUUID();
@@ -2670,7 +2692,7 @@ function createReadiness() {
     ui.display.text($('git-worktree-preview'), 'create.gitUnsupported');
   }
   ui.display.text($('open-native-history'), historyProvider === 'codex' ? 'create.codexHistory' : takeover ? 'create.claudeTakeover' : 'create.claudeFork');
-  $('open-native-history').disabled = creatingSession || gitSelected || (historyProvider === 'claude' && newDirectory);
+  $('open-native-history').disabled = creatingSession || Boolean(createTicket?.directoryDefaults) || gitSelected || (historyProvider === 'claude' && newDirectory);
   if (historyProvider === 'claude' && newDirectory) ui.display.text($('open-native-history'), 'create.chooseOriginal');
   $('new-folder').hidden = !state.capabilities?.includes('newSessionDirectory');
   $('new-folder').disabled = $('choose-folder').disabled = creatingSession;
@@ -2692,7 +2714,7 @@ function createReadiness() {
   }
   const provider = document.querySelector('input[name="provider"]:checked').value;
   const ready = state.preflight?.python && state.preflight?.[provider];
-  $('confirm-create').disabled = creatingSession || !ready || Boolean(takeover && (newDirectory || gitSelected)) || (gitSelected && (newDirectory || !gitSupported || gitPreviewLoading || !gitWorktreePlan));
+  $('confirm-create').disabled = creatingSession || Boolean(createTicket?.directoryDefaults) || !ready || Boolean(takeover && (newDirectory || gitSelected)) || (gitSelected && (newDirectory || !gitSupported || gitPreviewLoading || !gitWorktreePlan));
   const readinessKey = takeover && (newDirectory || gitSelected) ? 'create.takeoverDirectory' : ready ? null : 'create.missingPrograms';
   ui.display.computed($('create-readiness'), 'text', () => readinessKey ? uiText(readinessKey) : '');
   createSpaceReadiness(true);
@@ -4403,13 +4425,13 @@ $('rename-form').onsubmit = async event => {
   } catch (error) { if (renameTarget === target) { showRenameError(error.message ? error : uiError('error.renameSave')); if (mayRestoreFocus()) $('rename-name').focus({ preventScroll: true }); } }
   finally { renaming = false; if (renameTarget === target) renderRename(); }
 };
-$('choose-folder').onclick = () => attempt(async () => { const ticket = dialogTickets.get($('create-dialog')); const value = await api.chooseFolder(); if (value && currentDialogTicket(ticket)) { folder = value; newDirectory = false; invalidateGitPreview(true); $('git-worktree-relative').value = ''; $('chosen-folder').textContent = folder; if ($('git-worktree').checked) await refreshGitPreview(); else createReadiness(); } });
+$('choose-folder').onclick = () => attempt(async () => { const ticket = dialogTickets.get($('create-dialog')); if (ticket) delete ticket.directoryDefaults; const value = await api.chooseFolder(); if (value && currentDialogTicket(ticket)) { folder = value; newDirectory = false; invalidateGitPreview(true); $('git-worktree-relative').value = ''; $('chosen-folder').textContent = folder; if ($('git-worktree').checked) await refreshGitPreview(); else createReadiness(); } });
 $('git-worktree').onchange = () => { invalidateGitPreview(true); $('git-worktree-relative').value = ''; $('chosen-folder').textContent = folder; if ($('git-worktree').checked) refreshGitPreview(); else createReadiness(); };
 $('git-worktree-relative').oninput = scheduleGitPreview;
 $('new-folder').onclick = () => { if (!creatingSession) { resetCreateDirectory(); createReadiness(); } };
 $('create-form').onsubmit = event => { event.preventDefault();
   const ticket = dialogTickets.get($('create-dialog')), revision = selectionRevision;
-  if (creatingSession || !currentDialogTicket(ticket)) return;
+  if (creatingSession || !currentDialogTicket(ticket) || ticket.directoryDefaults) return;
   if (ticket.created) return; // T-115: this opening already created its session
   if (ticket.creation) { attempt(() => finishCreateSpace(ticket, revision)); return; }
   if (document.querySelector('input[name="provider"]:checked').value === 'claude' && $('claude-history-id').value.trim()) { $('open-native-history').click(); return; }

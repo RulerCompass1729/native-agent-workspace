@@ -706,6 +706,140 @@ test('after a restart mid-creation, the session already created is adopted inste
   assert.equal(dispatcher.rotations.a.newId, 'made');
 });
 
+function projectPlan(nonce = 'aabbccdd-1122-4333-8444-556677889900') {
+  return { nonce, source: '/synthetic/repo', repository: '/synthetic/repo', revision: 'a'.repeat(40), relativeDirectory: '', target: `/synthetic/repo-lanes/${nonce}`, cwd: `/synthetic/repo-lanes/${nonce}`, branch: `naw/session-${nonce}` };
+}
+async function projectRotation(t, extra = {}) {
+  const { dir, room } = roomSetup(t), automatic = path.join(dir, 'workspace');
+  const oldCwd = extra.oldKind === 'uuid' ? path.join(dir, 'workspace-sessions', projectPlan().nonce) : extra.oldCwd || automatic;
+  fs.mkdirSync(automatic); fs.mkdirSync(path.join(dir, 'workspace-sessions'));
+  if (extra.oldKind === 'uuid') fs.mkdirSync(oldCwd);
+  const old = member('a', { cwd: oldCwd, createdAt: NOW - 30 * HOUR, messages: heavyMessages() });
+  const client = new FakeClient([old, ...(extra.sessions || [])]);
+  Object.assign(client.state, { defaultWorkspace: automatic, newWorkspaceRoot: path.join(dir, 'workspace-sessions') });
+  fakeMembership(room, client);
+  const record = { phase: 'creating', requestedAt: NOW - 60000, creatingAt: NOW - 2000, tag: 'tag-0', oldNativeId: 'native-a', oldControl: 0, provider: 'claude', cwd: oldCwd, name: 'Agent a', roomIds: ['shared'], handoff: 'Saved handoff', ...extra.record };
+  fs.writeFileSync(path.join(dir, 'queue-dispatch.json'), JSON.stringify({ version: 1, rotations: { a: record } }), { mode: 0o600 });
+  const original = client.call.bind(client);
+  client.call = async (method, ...args) => {
+    if (method === 'gitWorktreePreview') { client.calls.push([method, ...args]); return projectPlan(args[1]); }
+    if (method === 'create') {
+      const saved = JSON.parse(fs.readFileSync(path.join(dir, 'queue-dispatch.json'))).rotations.a;
+      extra.beforeCreate?.(saved, args[0]);
+    }
+    return original(method, ...args);
+  };
+  const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now: () => NOW, settleMs: 0, tickMs: 3600000, creationDefaults: () => extra.defaults || { repository: '/synthetic/repo', directory: null }, migrateDirectories: extra.enabled !== false });
+  t.after(() => dispatcher.close());
+  await dispatcher.start(); await dispatcher.schedule();
+  return { client, dispatcher, dir, record: dispatcher.rotations.a, automatic };
+}
+test('B2: creating restart adopts the saved worktree nonce despite a different real cwd, never previews or creates', async t => {
+  const plan = projectPlan();
+  const made = member('made', { name: 'Agent a · 续', cwd: '/real/location/for/worktree', worktreePreparation: { ...plan, status: 'preparing' }, createdAt: NOW - 1000, roomIds: [], roomId: null });
+  const { client, record } = await projectRotation(t, { record: { newCwd: plan.cwd, newWorktree: plan }, sessions: [made] });
+  assert.equal(record.newId, 'made');
+  assert.equal(client.calls.filter(c => ['create', 'gitWorktreePreview'].includes(c[0])).length, 0);
+});
+test('B2: persist the successor directory and exact worktree plan before create', async t => {
+  let checked = false;
+  const { record } = await projectRotation(t, { beforeCreate(saved, options) {
+    assert.ok(saved.newWorktree); assert.equal(saved.newCwd, saved.newWorktree.cwd);
+    assert.deepEqual(options.gitWorktree, saved.newWorktree); assert.equal(options.cwd, saved.newWorktree.source); checked = true;
+  } });
+  assert.notEqual(record.phase, 'failed'); assert.equal(checked, true);
+});
+test('B2: old creating records adopt their old-directory successor before planning any move', async t => {
+  const { dir, room } = roomSetup(t), cwd = path.join(dir, 'workspace');
+  const made = member('made', { name: 'Agent a · 续', cwd, createdAt: NOW - 1000, roomIds: [], roomId: null });
+  const client = new FakeClient([member('a', { cwd }), made]); client.state.defaultWorkspace = cwd; fakeMembership(room, client);
+  fs.writeFileSync(path.join(dir, 'queue-dispatch.json'), JSON.stringify({ version: 1, rotations: { a: { phase: 'creating', oldNativeId: 'native-a', provider: 'claude', cwd, name: 'Agent a', roomIds: ['shared'], creatingAt: NOW - 2000 } } }), { mode: 0o600 });
+  const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now: () => NOW, settleMs: 0, tickMs: 3600000, creationDefaults: () => ({ repository: '/synthetic/repo' }), migrateDirectories: true }); t.after(() => dispatcher.close());
+  await dispatcher.start(); await dispatcher.schedule();
+  assert.equal(dispatcher.rotations.a.newId, 'made'); assert.equal(client.calls.some(c => ['create', 'gitWorktreePreview'].includes(c[0])), false);
+});
+test('B2: NAW directories are only the shared path or one direct UUID child', () => {
+  const root = '/synthetic/workspace-sessions', id = projectPlan().nonce;
+  assert.equal(rules.nawMadeDirectory('/synthetic/workspace', '/synthetic/workspace', root), true);
+  assert.equal(rules.nawMadeDirectory(`${root}/${id}`, '/synthetic/workspace', root), true);
+  for (const cwd of [root, `${root}/ordinary`, `${root}/nested/${id}`, `/synthetic/repo-lanes/${id}`, '/another/project', 'relative']) assert.equal(rules.nawMadeDirectory(cwd, '/synthetic/workspace', root), false, cwd);
+});
+for (const entry of [
+  { name: 'ordinary selected directory', oldCwd: '/synthetic/project', expected: '/synthetic/project' },
+  { name: 'lane', oldCwd: '/synthetic/repo-lanes/another', expected: '/synthetic/repo-lanes/another' },
+  { name: 'directory fallback', defaults: { directory: '/synthetic/last-directory' }, expected: '/synthetic/last-directory' },
+  { name: 'no defaults', defaults: {}, unchanged: true },
+  { name: 'trust gate closed', enabled: false, unchanged: true },
+]) test(`B2: directory planning preserves ${entry.name}`, async t => {
+  const { client, record, automatic, dir } = await projectRotation(t, entry);
+  assert.equal(record.newCwd, entry.unchanged ? automatic : entry.expected);
+  assert.equal(record.newWorktree, undefined);
+  assert.equal(client.calls.some(c => c[0] === 'gitWorktreePreview'), false);
+  if (entry.name === 'no defaults') assert.match(fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8'), /no-default-directory/);
+});
+test('B2: a direct automatic UUID directory receives the saved default repository worktree', async t => {
+  const { record, client } = await projectRotation(t, { oldKind: 'uuid' });
+  assert.ok(record.newWorktree); assert.equal(record.newCwd, record.newWorktree.cwd);
+  assert.equal(client.calls.filter(c => c[0] === 'create').length, 1);
+});
+test('B2: a persisted plan resumes creation once without generating a new nonce or preview', async t => {
+  const plan = projectPlan();
+  const { record, client } = await projectRotation(t, { enabled: false, record: { newCwd: plan.cwd, newWorktree: plan } });
+  assert.deepEqual(record.newWorktree, plan); assert.equal(client.calls.some(c => c[0] === 'gitWorktreePreview'), false);
+  assert.equal(client.calls.filter(c => c[0] === 'create').length, 1);
+});
+for (const outcome of ['reject', 'resolve']) test(`B2: closing the app during create retains the creating receipt on ${outcome}`, async t => {
+  const { dir, room } = roomSetup(t), plan = projectPlan(), file = path.join(dir, 'queue-dispatch.json');
+  const record = { phase: 'creating', oldNativeId: 'native-a', provider: 'claude', cwd: '/old', name: 'Agent a', roomIds: [], creatingAt: NOW, newCwd: plan.cwd, newWorktree: plan };
+  fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: record } }), { mode: 0o600 });
+  const client = new FakeClient([]), dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: dir, now: () => NOW }); dispatcher.client = client;
+  client.call = async method => { assert.equal(method, 'create'); dispatcher.close(); if (outcome === 'reject') throw Error('Owned window connection closed during create'); return 'made'; };
+  await dispatcher.advanceRotations(client.snapshot(), NOW);
+  const saved = JSON.parse(fs.readFileSync(file)).rotations.a;
+  assert.equal(saved.phase, 'creating'); assert.deepEqual(saved.newWorktree, plan); assert.equal(saved.newCwd, plan.cwd);
+});
+for (const during of ['defaults', 'preview']) test(`B2: closing during ${during} cannot persist half a directory plan`, async t => {
+  const { dir, room } = roomSetup(t), file = path.join(dir, 'queue-dispatch.json');
+  const record = { phase: 'creating', oldNativeId: 'native-a', provider: 'claude', cwd: '/synthetic/automatic', name: 'Agent a', roomIds: [], creatingAt: NOW };
+  fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: record } }), { mode: 0o600 });
+  const client = new FakeClient([]);
+  const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: dir, now: () => NOW, migrateDirectories: true, creationDefaults: async () => {
+    if (during === 'defaults') dispatcher.close(); return { repository: '/synthetic/repo' };
+  } }); dispatcher.client = client;
+  client.call = async method => { assert.equal(method, 'gitWorktreePreview'); dispatcher.close(); return projectPlan(); };
+  await dispatcher.advanceRotations({ ...client.snapshot(), defaultWorkspace: record.cwd }, NOW);
+  dispatcher.save(); // Another already-started callback may flush state after close.
+  const saved = JSON.parse(fs.readFileSync(file)).rotations.a;
+  assert.equal(saved.phase, 'creating'); assert.equal(saved.newCwd, undefined); assert.equal(saved.newWorktree, undefined);
+});
+test('B2: saved plans are adopted even when the migration gate is later closed', async t => {
+  const plan = projectPlan(), made = member('made', { name: 'Agent a · 续', cwd: '/real/worktree', worktreePreparation: { ...plan, status: 'ready' }, createdAt: NOW - 1000, roomIds: [], roomId: null });
+  const { client, record } = await projectRotation(t, { enabled: false, record: { newCwd: plan.cwd, newWorktree: plan }, sessions: [made] });
+  assert.equal(record.newId, made.id); assert.equal(client.calls.some(c => ['create', 'gitWorktreePreview'].includes(c[0])), false);
+});
+test('B2: recovery rejects malformed successor paths and exact plan shapes', t => {
+  const { dir } = roomSetup(t), file = path.join(dir, 'queue-dispatch.json'), plan = projectPlan();
+  const valid = { phase: 'creating', oldNativeId: 'native-a', name: 'A', roomIds: [], newCwd: plan.cwd, newWorktree: plan };
+  for (const extra of [{ newCwd: 'relative' }, { newCwd: '/different' }, { newWorktree: { ...plan, extra: 'bad' } }, { newWorktree: { ...plan, nonce: 7 } }, { newCwd: undefined }, { newWorktree: null }]) {
+    fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: { ...valid, ...extra } } }), { mode: 0o600 });
+    assert.deepEqual(rules.readRotations(file, NOW), {}, JSON.stringify(extra));
+  }
+  fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: valid } }), { mode: 0o600 });
+  assert.deepEqual(rules.readRotations(file, NOW).a.newWorktree, plan);
+});
+test('B2: migrated handoff lists names including hidden files, never reads their contents or changes the old folder', t => {
+  const { dir } = roomSetup(t), old = path.join(dir, 'workspace');fs.mkdirSync(old);
+  for (const name of ['.local', 'a', 'b', 'c']) fs.writeFileSync(path.join(old, name), 'PRIVATE_CONTENT_MUST_NOT_APPEAR');
+  const record = { cwd: old, newCwd: projectPlan().cwd, newWorktree: projectPlan() }, snapshot = { defaultWorkspace: old };
+  let note = rules.directoryHandoff(record, snapshot);
+  for (const name of ['.local', 'a', 'b', 'c']) assert.ok(note.includes(JSON.stringify(name)));
+  assert.equal(note.includes('PRIVATE_CONTENT'), false);assert.match(note, /CLAUDE\.md/);assert.equal(fs.readdirSync(old).length, 4);
+  for (let i = 0; i < 21; i++) fs.writeFileSync(path.join(old, `extra-${i}`), 'not read');
+  note = rules.directoryHandoff(record, snapshot);assert.match(note, /等 25 项/);assert.equal((note.match(/"/g) || []).length, 40);
+  assert.equal(rules.directoryHandoff({ ...record, newCwd: old }, snapshot), '');
+  assert.equal(rules.directoryHandoff(record, { defaultWorkspace: '/different' }), '');
+});
+
 test('a rotation file that is not private or well formed is ignored', t => {
   const { dir } = roomSetup(t);
   const file = path.join(dir, 'queue-dispatch.json');

@@ -72,6 +72,38 @@ Scope excludes real OS banners, lock-screen previews, cold-start old notificatio
 and the signed installed app; those remain installation acceptance. A future direct
 caller of the notification callback must retain the first-line question contract.
 
+## New sessions retain the selected project directory (B2, 2026-11-09)
+
+New sessions previously defaulted to another empty automatic directory. The
+desktop now remembers successful human creation choices in one private record
+across backends: the last selected worktree repository, then the last selected
+ordinary directory. A repository defaults to a fresh isolated worktree using the
+existing preview and creation path. Its tracked project instructions come from
+checkout; NAW writes no instruction files and adds no native directory flags.
+Uncommitted source changes are not part of that checkout.
+
+Only main's stored repository or the person's explicit folder selection can
+authorize a preview. Defaults loading blocks creation and stale responses cannot
+overwrite later selections. Failed, background and automatic-directory creates
+do not change the preference; a save failure retains the created session.
+
+Rotation records can save the successor path and exact worktree plan before
+creation and recover by nonce even when the prepared path is canonicalized.
+Legacy creating records first adopt any already-created old-directory successor.
+A pending create rejected or completed as the GUI closes leaves that recovery
+receipt intact, rather than recording a shutdown failure or advancing its phase.
+Migration applies only to NAW's shared directory or direct automatic UUID child;
+handoffs list at most twenty old-directory names, including hidden entries,
+without reading their contents or removing anything. Malformed plans are ignored.
+Unattended directory migration remains disabled until native first-directory
+trust is qualified; the isolated synthetic test override cannot enable it in an
+ordinary app launch. Saved plans still resume when that gate is off. Source and
+synthetic checks do not prove native rule loading, daily acceptance or installation.
+Before enabling migration, native trust remains unqualified. A missing saved
+repository or failed preview currently fails the rotation and retains the old
+session; there is no implicit fallback to an empty directory. Interrupted planning
+keeps its temporary choices local until the complete plan can be saved together.
+
 **Space task queues and session rotation, 2026-11-08 (independent review, first round CHANGES_NEEDED):**
 the person asked that NAW itself send each idle space member its next queued item, and
 that day-old sessions hand over to a new session to free memory. Findings reproduced and
