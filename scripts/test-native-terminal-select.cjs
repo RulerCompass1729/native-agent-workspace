@@ -25,7 +25,7 @@ for (const dir of [profile, cwd, config, fakeBin, copiesDir]) fs.mkdirSync(dir, 
 // NAW_CLAUDE_BIN: run a specific installed Claude Code (for example ~/.local/share/claude/versions/2.1.316).
 const binary = fs.realpathSync(process.env.NAW_CLAUDE_BIN || executable('claude'));
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.31[67]\b/, 'Qualified on Claude Code 2.1.316 and 2.1.317 only; verify the fullscreen mouse contract before extending');
+assert.match(nativeVersion, /^2\.1\.31[679]\b/, 'Qualified on Claude Code 2.1.316, 2.1.317 and 2.1.319 only; verify the fullscreen mouse contract before extending');
 // NAW_TEST_LEGACY_SNAPSHOT=1: run with a backend whose snapshot lacks the SGR encoding (an older
 // running backend); the rebuilt view must then select locally instead of dropping the drag.
 // The flag does not fake that backend: it changes case g's expected results and adds a Cmd+C after it.
