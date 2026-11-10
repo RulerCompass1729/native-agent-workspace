@@ -28,6 +28,7 @@ test('the fixture binds 127.0.0.1 on a random port, proves the sandbox, and coun
   assert.equal(summary.requests, 1); assert.deepEqual(summary.paths, ['/v1/messages']);
   assert.equal(summary.credentialViolations, 2);
   assert.ok(!JSON.stringify(fixture.violations).includes('something-else'), 'Rejected credential values are not stored');
+  assert.throws(() => fixture.assertClean(), /2 credential violation/);
 
   const shim = fixture.wrapper('/usr/bin/true', { file: path.join(directory, 'claude-local'), env: { CLAUDE_CONFIG_DIR: directory }, args: ['--model', 'haiku'] });
   const text = fs.readFileSync(shim, 'utf8');
@@ -36,7 +37,8 @@ test('the fixture binds 127.0.0.1 on a random port, proves the sandbox, and coun
   assert.match(text, /"ANTHROPIC_API_KEY":"local-fixture"/);
   assert.throws(() => fixture.wrapper('/usr/bin/true', { file: path.join(directory, 'bad'), env: { OPENAI_API_KEY: 'x' } }), /not configurable/);
   assert.throws(() => fixture.wrapper('/usr/bin/true', { file: path.join(directory, 'bad'), env: { https_proxy: 'x' } }), /not configurable/);
-  const codex = create({ directory, provider: 'codex', respond: (req, res) => res.end() }); await codex.start(); t.after(() => codex.stop()); await codex.preflight();
+  const codex = create({ directory, provider: 'codex', respond: (req) => { if (JSON.parse('{}').model !== 'expected') throw Error('unexpected model'); } }); await codex.start(); t.after(() => codex.stop()); await codex.preflight();
+  assert.equal(await post(codex.port, {}), 500); assert.equal(codex.summary().handlerErrors, 1); assert.throws(() => codex.assertClean(), /1 failed fixed response/);
   assert.match(fs.readFileSync(codex.wrapper('/usr/bin/true', { file: path.join(directory, 'codex-local') }), 'utf8'), /"analytics\.enabled=false","-c","feedback\.enabled=false","-c","check_for_update_on_startup=false"/);
 
   await fixture.stop();

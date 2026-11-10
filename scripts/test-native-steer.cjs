@@ -169,7 +169,7 @@ async function answerTrust() {
   }
   if (retained) assert.equal((await snapshot()).sessions[0].pid, before.pid);
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-steering.png') }); }
-  assert.equal(fixture.summary().credentialViolations, 0, 'Only the fixture credential reached the loopback server');
+  fixture.assertClean();
   console.log(JSON.stringify({ version, shared, retained, fixture: fixture.summary(), checks: ['GUI working input uses the existing native turn', 'ACK does not terminate streamed output', 'One visible input and one final native boundary', 'GUI and native TUI retain identity and both inputs/results', ...(shared ? ['Shared reply excludes prior private blocks and draft', 'Room reload preserves streaming item and draft without dispatch'] : [])], taskResponses: calls, nativeTitleResponses: titleCalls, localResponses: calls + titleCalls, paidModelCalls: 0, requests, evidence: base }));
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }

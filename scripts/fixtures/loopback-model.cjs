@@ -23,7 +23,7 @@ const policy = port => {
   '(version 1)', '(allow default)',
   // Last matching rule wins: deny every IP destination, then allow only this fixture's loopback port.
   '(deny network-outbound (remote ip "*:*"))', `(allow network-outbound (remote ip "localhost:${port}"))`,
-  // The system resolver's socket is unreachable, so the CLI cannot ask it to resolve a name.
+  // The system resolver's socket is unreachable (probed); its mach service is denied too (not probed).
   '(deny mach-lookup (global-name "com.apple.mDNSResponder"))',
   '(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))',
   // The keychain holds the person's real logins.
@@ -44,7 +44,7 @@ const PROBE = `const net=require('net'),dns=require('dns'),cp=require('child_pro
 const tcp=(h,p)=>new Promise(r=>{const s=net.connect({host:h,port:+p});const t=setTimeout(()=>{s.destroy();r('timeout')},1500);s.on('connect',()=>{clearTimeout(t);s.destroy();r('connected')});s.on('error',e=>{clearTimeout(t);r(e.code)})});
 const unix=p=>new Promise(r=>{const s=net.connect(p);s.on('connect',()=>{s.destroy();r('connected')});s.on('error',e=>r(e.code))});
 (async()=>{const o={};o.loopback=await tcp('127.0.0.1',port);o.loopbackV6=await tcp('::1',port);o.otherLoopbackPort=await tcp('127.0.0.1',other);
-o.proxyPorts=(await Promise.all([1080,7890,8118].map(p=>tcp('127.0.0.1',p)))).every(c=>c==='EPERM')?'EPERM':'reachable';
+o.proxyPorts=(await Promise.all([1080,6152,6153,7890,7891,7897,8118,10808,10809].map(p=>tcp('127.0.0.1',p)))).every(c=>c==='EPERM')?'EPERM':'reachable';
 o.unixSocket=await unix(sock);o.testNet=await tcp('192.0.2.1',443);o.testNetV6=await tcp('2001:db8::1',443);
 o.resolverSocket=await unix('/private/var/run/mDNSResponder');
 o.dns=await new Promise(r=>new dns.Resolver({timeout:1500,tries:1}).resolve4('naw-preflight.example',e=>r(e?e.code:'answered')));
@@ -75,7 +75,7 @@ function create({ directory, provider, respond }) {
           const row = { method: req.method, path: req.url.split('?')[0] };
           if (!credentialOk(req)) { violations.push(row); res.writeHead(403); res.end(); return; }
           requests.push(row);
-          Promise.resolve(respond(req, res, body)).catch(error => { if (!res.headersSent) res.writeHead(500); res.end(); handlerErrors.push({ ...row, error: error.message }); });
+          Promise.resolve().then(() => respond(req, res, body)).catch(error => { if (!res.headersSent) res.writeHead(500); res.end(); handlerErrors.push({ ...row, error: error.message }); });
         });
       });
       await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
@@ -129,6 +129,10 @@ function create({ directory, provider, respond }) {
         `os.environ.update(${JSON.stringify({ ...env, ...fixed })})\n` +
         `os.execv(${JSON.stringify(SANDBOX)},["sandbox-exec","-p",${JSON.stringify(fixture.policy)},${JSON.stringify(binary)}]+${JSON.stringify(args)}+sys.argv[1:])\n`, { mode: 0o700 });
       return file;
+    },
+    // Every script ends with this: any non-fixture credential or failed fixed response fails the run.
+    assertClean() {
+      if (violations.length || handlerErrors.length) throw Error(`Loopback fixture saw ${violations.length} credential violation(s) and ${handlerErrors.length} failed fixed response(s): ${JSON.stringify(handlerErrors.map(e => e.error))}`);
     },
     summary() {
       return { bind: '127.0.0.1', randomPort: true, port: fixture.port, portAttempts, sandbox: SANDBOX, preflight: preflightResult,
