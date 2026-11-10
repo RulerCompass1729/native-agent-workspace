@@ -249,6 +249,7 @@ function captureReading(view) {
   const top = el.getBoundingClientRect().top;
   const anchor = [...el.querySelectorAll(':scope > [data-message-id]')].find(row => row.getBoundingClientRect().bottom > top);
   saveReading(view, { top: el.scrollTop, follow: readingFollow(view.pageRange?.tail, el.scrollHeight - el.scrollTop - el.clientHeight < 80, selecting), anchor: anchor?.dataset.messageId || '', offset: anchor ? anchor.getBoundingClientRect().top - top : 0 });
+  view.lastTop = el.scrollTop;
 }
 // Like the native terminal's "Jump to bottom": shown once the reader leaves the latest output.
 // Its bar has no height, so showing it never moves the scroll position.
@@ -291,6 +292,23 @@ function revealProcessAncestors(view, entry) {
     if (enclosing) enclosing.expectedOpen = true; parent.open = true;
   }
 }
+// Rows laid out above the reading place (an older page, then its Markdown mounting) move the text under
+// the pointer until the frame corrects it, and a press in between lands on another record (reading:107).
+// The same anchor correction also runs when the current task ends, before any input is handled, but only
+// while the reader is where it last captured or placed it (lastTop). Moved by other code since (a column
+// reorder restores its own scroll), it is left to the scroll event and the frame, as before.
+function keepReadingAnchorSoon(view) {
+  if (view.anchorQueued) return;
+  view.anchorQueued = true;
+  Promise.resolve().then(() => {
+    view.anchorQueued = false;
+    const p = view.intent?.position, el = view.el, anchor = p && !p.follow && readingEntry(view, p.anchor)?.item;
+    if (!anchor || el.scrollTop !== view.lastTop || !el.clientHeight || !el.getClientRects().length || !anchor.getClientRects().length) return;
+    const top = el.scrollTop + anchor.getBoundingClientRect().top - el.getBoundingClientRect().top - p.offset;
+    if (Math.abs(top - el.scrollTop) >= 1) { el.scrollTop = top; view.assignedTop = el.scrollTop; }
+    view.lastTop = el.scrollTop;
+  });
+}
 function scheduleReading(view, intent = view.intent) {
   if (!intent || view.intent !== intent || view.loadingPage) return;
   // Load synchronously, before the frame: explicit search intent and its query
@@ -308,6 +326,7 @@ function scheduleReading(view, intent = view.intent) {
   // ancestors now, without turning that reveal into a saved manual choice.
   const target = readingEntry(view, intent.position.anchor);
   if (target && !intent.position.follow) revealProcessAncestors(view, target);
+  if (target && !intent.position.follow) keepReadingAnchorSoon(view);
   if (view.frame) return;
   view.frame = requestAnimationFrame(() => {
     view.frame = 0;
@@ -333,7 +352,7 @@ function scheduleReading(view, intent = view.intent) {
       }
     }
     el.scrollTop = p.follow ? el.scrollHeight : anchor ? el.scrollTop + anchor.getBoundingClientRect().top - el.getBoundingClientRect().top - p.offset : p.top;
-    view.assignedTop = el.scrollTop; view.pageChanging = false; updateJump(view); fillShortReadingPage(view);
+    view.assignedTop = view.lastTop = el.scrollTop; view.pageChanging = false; updateJump(view); fillShortReadingPage(view);
   });
 }
 function readingView(el, key) {
@@ -362,7 +381,13 @@ function readingView(el, key) {
     // survives a click. The strip covers classic and overlay scrollbars alike. The
     // press only records where it was: reading the box here would force a layout
     // before the browser handles the scrollbar press, and could move the thumb.
-    const press = event => { interact(); view.pointerHeld = event.target === el; view.pressX = event.clientX; };
+    // A press on a row or button does not move the reader. While it is still where the reader last captured or
+    // placed it (lastTop), the press keeps a non-follow anchor whose rows above may still be laying out, such as an older
+    // page mounting its Markdown; dropping it shifts the text under the pointer (reading:107).
+    const press = event => {
+      if (event.target === el || !view.intent || view.intent.position.follow || el.scrollTop !== view.lastTop) interact();
+      view.pointerHeld = event.target === el; view.pressX = event.clientX;
+    };
     view.onScrollbar = () => Boolean(view.pointerHeld && view.pressX >= el.getBoundingClientRect().right - 16);
     // A scrollbar drag let go at the end starts following, like the wheel at the end.
     const release = () => {
@@ -423,7 +448,7 @@ function readingView(el, key) {
     // The new list is empty until Markdown mounts; never capture that temporary
     // zero as this session's saved reading position.
     view.intent = { position: readingPositions[key] || { top: 0, follow: true, anchor: '', offset: 0 } };
-    el.scrollTop = 0; view.assignedTop = 0;
+    el.scrollTop = 0; view.assignedTop = 0; view.lastTop = undefined;
   }
   return view;
 }
