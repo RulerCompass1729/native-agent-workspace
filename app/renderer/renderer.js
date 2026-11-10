@@ -3159,6 +3159,83 @@ function renderHeaderLayout(s, inRoom) {
   if (roomMenu?.key && roomMenu.key !== roomMenuKey(roomMenu.roomId)) roomMenu();
   if (moving) restoreOverviewReading();
 }
+// Read the existing space ledger without changing the active conversation or drafts.
+let spaceMessagePreview;
+function spaceMessagePreviewRows(id) {
+  if (!id) return [];
+  return storedSpaces().filter(room => !room.unavailable).flatMap(room => (room.messages || [])
+    .filter(message => typeof message.text === 'string' && (message.wake || message.peerMessage || message.agentControl) &&
+      [...timelineParticipants(message), message.agentControl?.id].includes(id))
+    .map(message => ({ room, message })))
+    .sort((a, b) => (Number.isFinite(b.message.time) ? b.message.time : -Infinity) - (Number.isFinite(a.message.time) ? a.message.time : -Infinity))
+    .slice(0, 20);
+}
+function spaceMessagePreviewStatus(message) {
+  if (message.wake) return uiText(readingWakeStatus({ status: message.wakeStatus }));
+  if (message.peerMessage) return uiText('spacePreview.recorded');
+  const receipts = (Array.isArray(message.deliveries) ? message.deliveries : []).filter(delivery => delivery?.recipientId === message.recipientId);
+  return uiText(receipts.length === 1 ? readingDeliveryStatusKey(message, receipts[0]) : 'delivery.unknown');
+}
+function spaceMessagePreviewText(message) {
+  const text = ui.displayText(message.text, message.uiMessage), body = message.wake?.body;
+  // Separate only an exact recorded suffix: a receipt/reason update must not
+  // replace the selected original body. Unexpected legacy text stays intact.
+  return typeof body === 'string' && body && text.endsWith(body)
+    ? { body, notice: text.slice(0, text.length - body.length) } : { body: text, notice: '' };
+}
+function createSpaceMessagePreview() {
+  const panel = node('section', undefined, 'space-message-preview');
+  panel.id = 'space-message-preview'; panel.setAttribute('popover', 'auto'); panel.setAttribute('role', 'region');
+  ui.display.attribute(panel, 'aria-label', 'spacePreview.open');
+  const trigger = uiButton('spacePreview.open', () => {
+    renderSpaceMessagePreview(current(), true);
+    panel.togglePopover();
+    if (panel.matches(':popover-open')) close.focus({ preventScroll: true });
+  });
+  trigger.id = 'space-message-preview-button'; trigger.setAttribute('aria-controls', panel.id); trigger.setAttribute('aria-expanded', 'false');
+  const close = uiButton('common.close', () => { panel.hidePopover(); trigger.focus({ preventScroll: true }); }, 'small');
+  const heading = node('div', undefined, 'space-message-preview-heading');
+  heading.append(uiNode('strong', 'spacePreview.open'), close);
+  const list = node('div'), empty = uiNode('p', 'spacePreview.empty');
+  panel.append(heading, uiNode('p', 'spacePreview.limit', undefined, 'quiet'), empty, list);
+  panel.addEventListener('toggle', () => trigger.setAttribute('aria-expanded', String(panel.matches(':popover-open'))));
+  panel.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault(); event.stopPropagation(); panel.hidePopover(); trigger.focus({ preventScroll: true });
+  });
+  return { panel, trigger, list, empty, rows: new Map(), key: '' };
+}
+function renderSpaceMessagePreview(record, force = false) {
+  const view = spaceMessagePreview;
+  if (!view) return;
+  const key = record ? JSON.stringify([record.id, record.nativeId]) : '';
+  view.trigger.hidden = !record;
+  if (key !== view.key) {
+    if (view.panel.matches(':popover-open')) view.panel.hidePopover();
+    view.list.replaceChildren(); view.rows.clear(); view.key = key;
+  }
+  if (!record || !force && !view.panel.matches(':popover-open')) return;
+  const rows = spaceMessagePreviewRows(record.id), keep = new Set();
+  view.empty.hidden = rows.length > 0;
+  rows.forEach(({ room, message }, index) => {
+    const id = JSON.stringify([room.id, message.id]); keep.add(id);
+    let entry = view.rows.get(id);
+    if (!entry) {
+      const item = node('details'), summary = node('summary'), who = node('strong'), status = node('span'), meta = node('small'), body = node('pre'), notice = node('p', undefined, 'space-message-preview-notice');
+      summary.append(who, status, meta); item.append(summary, notice, body); item.open = index === 0;
+      entry = { item, who, status, meta, body, notice }; view.rows.set(id, entry);
+    }
+    // Keep each row and its chosen fold/selection during unrelated output updates.
+    ui.display.computed(entry.who, 'text', () => roomMessageLabel(message));
+    ui.display.computed(entry.status, 'text', () => spaceMessagePreviewStatus(message));
+    ui.display.computed(entry.meta, 'text', () => `${spaceName(room)} · ${Number.isFinite(message.time) && Math.abs(message.time) <= 8640000000000000 ? new Date(message.time).toLocaleString(ui.language.getSnapshot().active) : uiText('reading.unknownTime')}`);
+    ui.display.computed(entry.body, 'text', () => spaceMessagePreviewText(message).body);
+    ui.display.computed(entry.notice, 'text', () => spaceMessagePreviewText(message).notice);
+    entry.notice.hidden = !spaceMessagePreviewText(message).notice;
+    if (view.list.children[index] !== entry.item) view.list.insertBefore(entry.item, view.list.children[index] || null);
+  });
+  for (const [id, entry] of view.rows) if (!keep.has(id)) { entry.item.remove(); view.rows.delete(id); }
+}
 function renderHeader(s, inRoom) {
   if (!headerControls) {
     const resume = uiButton('header.resume', () => { const s = current(); if (s && canResume(s)) return api.resume(s.id); }, 'primary');
@@ -3182,8 +3259,9 @@ function renderHeader(s, inRoom) {
     compactMore.id = 'session-header-more'; ui.display.attribute(compactMore, 'aria-label', 'header.sessionMenu'); compactMore.setAttribute('aria-haspopup', 'menu'); compactMore.setAttribute('aria-expanded', 'false');
     compactMore.onpointerdown = event => { if (sessionMenu?.anchor === compactMore) event.stopPropagation(); };
     for (const control of [membership, selectedText, usage]) control.classList.add('header-secondary');
+    spaceMessagePreview = createSpaceMessagePreview();
     headerControls = { resume, membership, selectedText, restore, more, usage, compactMore };
-    $('header-actions').append(resume, membership, selectedText, usage, restore, more, compactMore);
+    $('header-actions').append(resume, membership, selectedText, spaceMessagePreview.trigger, spaceMessagePreview.panel, usage, restore, more, compactMore);
   }
   const h = headerControls;
   const membershipAction = JSON.stringify([spaceId, s?.id, s ? inSpace(s) : false, !!s?.archived]);
@@ -3199,6 +3277,7 @@ function renderHeader(s, inRoom) {
   h.more.hidden = !inRoom || !!s;
   h.more.disabled = disconnected || state.room.archived || renameTarget?.id === 'room' && renameTarget.roomId === spaceId;
   h.compactMore.hidden = !s || inRoom;
+  renderSpaceMessagePreview(s);
   renderHeaderLayout(s, inRoom);
 }
 function appendNativeQuestions(parent, questions) {

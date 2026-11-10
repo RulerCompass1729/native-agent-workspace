@@ -800,3 +800,17 @@ header h1, header p { overflow-wrap: anywhere; }
 #privacy-dialog[data-mode="usage"] [data-usage-session] h4 { margin:0 0 4px; }
 
 #privacy-dialog[data-mode="privacy"] { padding-block:20px; }
+
+/* Current-page space ledger preview; no reader or composer layout changes. */
+.message.system.space-message { display: block; }
+.message.space-message > .message-heading { flex-wrap: wrap; }
+.space-message-preview { position: fixed; inset: 100px 20px auto auto; margin: 0; width: min(420px, calc(100vw - 40px)); max-height: min(65vh, 620px); overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--ink); box-shadow: 0 8px 28px #0002; font-size: 13px; }
+.space-message-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.space-message-preview p { margin: 8px 0; font-size: 12px; }
+.space-message-preview details { padding: 8px 0; border-top: 1px solid var(--border); }
+.space-message-preview summary { cursor: pointer; overflow-wrap: anywhere; }
+.space-message-preview summary strong { font-weight: 550; }
+.space-message-preview summary span { margin-left: 8px; color: var(--muted); font-size: 12px; }
+.space-message-preview summary small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+.space-message-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.6; margin: 8px 0 0; user-select: text; }
+.space-message-preview .space-message-preview-notice { white-space: pre-wrap; color: var(--muted); user-select: text; }
