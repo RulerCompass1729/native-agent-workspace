@@ -328,7 +328,7 @@ test('native 2.1.316: a prompt a settings hook stopped never authorizes a later 
     assert.equal(f.staged.length, 0, label);
   }
 });
-for (const version of ['2.1.316', '2.1.312', '2.1.318', '2.1.319']) test(`native ${version}: a prompt delivered into a running turn never heads a later turn without its own prompt`, async () => {
+for (const version of ['2.1.316', '2.1.312', '2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`native ${version}: a prompt delivered into a running turn never heads a later turn without its own prompt`, async () => {
   // T-100 (integration review I141 L1): a mid-turn prompt goes on but starts no turn of its own.
   const f = await addressedMod(version), first = randomUUID(), midTurn = randomUUID(), later = randomUUID();
   await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: first, prompt: 'Look at the board.' });
@@ -501,7 +501,7 @@ test('native 2.1.317 binds and stages like 2.1.316: blocks, transitions, abort, 
 });
 // T-171: 2.1.318 and 2.1.319 add native blocks, so a turn's workspace message has its identity. Their other
 // capabilities stay as T-160 qualified them: model metadata and root binding, no abort, capacity, queue or media.
-for (const version of ['2.1.318', '2.1.319']) test(`native ${version}: native blocks let a typed turn stage a workspace message; other capabilities stay off (T-171)`, async () => {
+for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`native ${version}: native blocks let a typed turn stage a workspace message; other capabilities stay off (T-171)`, async () => {
   const f = await addressedMod(version), promptId = randomUUID();
   assert.equal(f.r.nativeBlocks, true); assert.equal(f.r.addressedSendAvailable, true);
   for (const flag of ['nativeAbortAvailable', 'nativeCapacityAvailable', 'nativeQueue', 'nativeMedia', 'nativeTurnRecords', 'nativeNarration', 'nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
@@ -1222,7 +1222,7 @@ async function capacityThroughBridge(t, version, row = {}, order = 'relay-last')
   return { f, ends, turn };
 }
 for (const order of ['relay-last', 'relay-before-delivery'])
-for (const version of ['2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319']) test(`Claude capacity recovery is armed only on qualified versions, through the real bridge: ${version} ${order}`, async t => {
+for (const version of ['2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`Claude capacity recovery is armed only on qualified versions, through the real bridge: ${version} ${order}`, async t => {
   const { f, ends, turn } = await capacityThroughBridge(t, version, {}, order), armed = ['2.1.312', '2.1.316', '2.1.317'].includes(version);
   assert.equal(f.r.nativeCapacityAvailable === true, armed);
   if (armed) assert.deepEqual(ends, [{ nativeId: f.r.record.nativeId, turnId: turn, status: 'failed', errorInfo: 'serverOverloaded' }]);
@@ -1355,7 +1355,7 @@ for (const version of ['2.1.310', '2.1.312']) test('usage metadata is read after
 });
 
 // 2.1.318 and 2.1.319 have native blocks (T-171) but not the usage reading, which only its version list gates.
-for (const [version, read] of [['2.1.316', true], ['2.1.317', true], ['2.1.313', false], ['2.1.318', false], ['2.1.319', false]]) test(`native ${version} ${read ? 'reads' : 'does not read'} the free status-line usage (T-133)`, async () => {
+for (const [version, read] of [['2.1.316', true], ['2.1.317', true], ['2.1.313', false], ['2.1.318', false], ['2.1.319', false], ['2.1.321', false], ['2.1.322', false]]) test(`native ${version} ${read ? 'reads' : 'does not read'} the free status-line usage (T-133)`, async () => {
   let reads = 0;
   const f = await mod({ version, usageReader: async args => { reads++; assert.equal(args, undefined, 'Only the free plain read'); return { context: { window: 200000, tokens: 1234, percent: 1 } }; } });
   const blocks = []; f.r.on('nativeBlock', row => blocks.push(row));
@@ -1737,7 +1737,7 @@ for (const version of ['2.1.316', '2.1.317']) test(`native ${version}: only a cr
 
 
 // 2.1.318 and 2.1.319 bind model metadata (T-160) and native blocks (T-171), and no other untested native capability.
-for (const version of ['2.1.318', '2.1.319']) test(`${version} binding adds native blocks to model metadata without enabling input, usage or control`, async () => {
+for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`${version} binding adds native blocks to model metadata without enabling input, usage or control`, async () => {
   let binding, toolReads = 0;
   const f = await mod({ version, toolReader: async () => { toolReads++; return [{ name: 'mcp__native_workspace__workspace_message' }]; }, requestHandler: async (url, options, body) => { if (url.endsWith('/root-bind')) binding = body; } });
   assert.ok(f.poll, 'Existing input listener reaches its next poll');
