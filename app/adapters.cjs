@@ -15,6 +15,7 @@ const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.c
 const { installPlugin: refreshCompatPlugin } = require('./claude-compat-plugin.cjs');
 const { TerminalJournal } = require('./observation.cjs');
 const { serverVersion, verifiedCodexProtocol } = require('./native-history.cjs');
+const codexQualification = require('./codex-qualification.cjs');
 const { toolContent, toolStatus, toolTypes, fileChanges, nativeTextContent, nativeTextItemId } = require('./codex-tool-content.cjs');
 const { codexTurnBlock } = require('./native-blocks.cjs');
 const { computerUseMcpServer, codexComputerUseMcpArgs } = require('./native-computer-use.cjs');
@@ -1604,7 +1605,7 @@ class Codex extends EventEmitter {
     // Native 0.166/0.167 use the same transparent terminal event stream. Observe it
     // from the first turn so native MCP provenance is not lost before a later
     // history attachment. This does not qualify unrelated history/steer APIs.
-    if (!verifiedCodexProtocol(this.host.rpc) && !['0.166.0', '0.167.0'].includes(this.host.rpc?.nativeVersion)) return this.host.codexSocket;
+    if (!codexQualification.allows('terminalBridge', this.host.rpc?.nativeVersion)) return this.host.codexSocket;
     if (!this.terminalBridge) {
       const { CodexTerminalBridge } = require('./codex-terminal-bridge.cjs');
       const bridge = new CodexTerminalBridge(path.join(this.host.privateDir, `tui-${crypto.randomUUID()}.sock`), this.host.codexSocket, event => this.observeTerminalContext(event));
@@ -2259,7 +2260,7 @@ class Codex extends EventEmitter {
     else this.emit('complete', { tag: pending?.tag, supersededTag: pending?.supersededTag, messageId: turn.messageId, inputTag: turn.itemInputs.get(turn.messageId) || '', text: turn.text, background: null, scheduled: null, fleetPending: null, stopHookActive: null });
     if (live) this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId: id, status: turn.completed.status, errorInfo: turn.completed.error?.codexErrorInfo, errorMessage: turn.completed.error?.message });
   }
-  get steerAvailable() { return verifiedCodexProtocol(this.host.rpc) && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
+  get steerAvailable() { return codexQualification.allows('steer', this.host.rpc?.nativeVersion) && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
   async steer(text, tag, expectedTurnId, guard, shared = false, acceptedGuard = guard) {
     if (!this.steerAvailable || !expectedTurnId || this.turnId !== expectedTurnId || this.nativeRequests.size || this.steering || !guard()) throw uiError("error.nativeTurnChangedSteerNotSent");
     this.ownInputs.add(tag);
@@ -2280,7 +2281,7 @@ class Codex extends EventEmitter {
       this.finishTurn(expectedTurnId);
     }
   }
-  get spaceImagesAvailable() { return ['0.166.0', '0.167.0'].includes(this.host.rpc?.nativeVersion) && this.host.rpc?.ws?.readyState === WebSocket.OPEN && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
+  get spaceImagesAvailable() { return codexQualification.allows('spaceImages', this.host.rpc?.nativeVersion) && this.host.rpc?.ws?.readyState === WebSocket.OPEN && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
   scopedOutboxRpc() {
     const rpc = this.terminalNotificationSource ? this.terminalRpc : this.host.rpc;
     if (this.stopped || this.transportDisconnected || this.record.nativeContextPending || !this.currentRpc(rpc) ||
@@ -2615,7 +2616,7 @@ class NativeHost {
           Promise.resolve().then(async () => {
             const identity = event.identity, runtime = this.codexTargets.get(identity?.nativeId);
             const args = event.arguments;
-            if (event.token !== this.codexMessageToken || !['0.164.0', '0.165.0', '0.166.0', '0.167.0'].includes(this.rpc?.nativeVersion) || !runtime || !runtime.addressedCall) throw uiError("error.nativeToolOriginUnconfirmed");
+            if (event.token !== this.codexMessageToken || !codexQualification.allows('addressedTool', this.rpc?.nativeVersion) || !runtime || !runtime.addressedCall) throw uiError("error.nativeToolOriginUnconfirmed");
             const call = await workspaceMcpProof(runtime, identity, args, socket);
             const valid = () => currentWorkspaceMcpProof(runtime, identity, args, socket, call);
             if (!valid()) throw uiError("error.nativeToolOriginUnconfirmed");

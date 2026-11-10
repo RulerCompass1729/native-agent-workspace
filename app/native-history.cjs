@@ -3,7 +3,9 @@ const { uiError, uiNotice } = require('./ui-errors.cjs');
 const path = require('node:path');
 const { executable } = require('./platform.cjs');
 const serverVersion = result => typeof result?.userAgent === 'string' ? result.userAgent.match(/^[^/\s]+\/(\d+\.\d+\.\d+)(?:\s|$)/)?.[1] || null : null;
-const verifiedCodexProtocol = rpc => ['0.163.0', '0.164.0', '0.165.0', '0.167.0'].includes(rpc?.nativeVersion);
+const codexQualification = require('./codex-qualification.cjs');
+// History is the protocol capability the version status reports.
+const verifiedCodexProtocol = rpc => codexQualification.allows('history', rpc?.nativeVersion);
 function codexVersionInfo(rpc, connected = true) {
   const version = typeof rpc?.nativeVersion === 'string' && /^\d+\.\d+\.\d+$/.test(rpc.nativeVersion) ? rpc.nativeVersion : null;
   const current = connected && rpc?.ws?.readyState === 1 && Object.hasOwn(rpc, 'nativeVersion');
