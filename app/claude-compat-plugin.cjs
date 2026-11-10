@@ -33,6 +33,8 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
   }
   // Upgrade only our byte-exact previous hook. Edited copies remain untouched.
   const previousHooks = new Set([
+    // Exact main 116120e compatibility copy before the bootstrap comment cleanup.
+    'bbe4f6f476717b75f5911c3b7a801afd7ce8e8bdf727306175486bf4b636496e',
     // Exact main 88e8678 compatibility copy before 2.1.321/322 display qualification.
     '8f4c079ce060344bdd9838e94a5aea867d7ef3a95626925ab7337b599eb48fd8',
     // Exact committed capacity hook compatibility copy before background control (194ce71).

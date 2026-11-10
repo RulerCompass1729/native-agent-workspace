@@ -1171,13 +1171,15 @@ export function register(on) {
     // backdrop/theme API, command results, turn attribution). Their display/usage/transition contracts also
     // match 2.1.317; input, queue, abort and capacity keep their separate qualification gates.
     // 2.1.316 and 2.1.317 (2.1.317's engine API only adds to 2.1.316's, T-133): root binding, native
-    // blocks (turn identity for workspace messages), abort, usage, model and media; queue and inline input stay off.
+    // blocks (turn identity for workspace messages), abort, usage, model, media and queue; inline input stays off.
     contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(nativeVersion);
     const version = nativeVersion.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));
     stopped = !supported;
     addressedTool = false;
     operatorTools = [];
+    // The explicit versions also allow transitions, but this deferred callback reads
+    // mutable transition state; keep bootstrap qualification separate.
     if (supported && await $.env.get('NAW_HOOK_TOKEN') && !(legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET'))) $.clock.after(0, () => (contextTransitions || (!legacyOnly && ['2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(nativeVersion))) ? bindRoot($, ownGeneration).catch(() => {}) : listen($, ownGeneration));
     return next(e);
   });
