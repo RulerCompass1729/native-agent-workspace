@@ -60,7 +60,7 @@ for (const nativeVersion of ['0.166.0', '0.167.0']) test(`native ${nativeVersion
   assert.equal(proof.valid(), true);
   assert.equal(r.chatAvailable, true); assert.equal(fallback, 0);
   assert.notEqual(r.terminalRpc, host.rpc); assert.equal(native.clients.size, 1);
-  assert.equal(verifiedCodexProtocol(host.rpc), false, 'Qualifying the terminal observer must not qualify unrelated history/steer APIs');
+  assert.equal(verifiedCodexProtocol(host.rpc), nativeVersion === '0.167.0', 'Only independently qualified history/steer versions pass this separate capability gate');
   const completed = receive('item/completed');
   remote.send(JSON.stringify({ method: 'item/completed', params: { threadId: identity.nativeId, turnId: identity.turnId, item: { ...item, status: 'completed' } } }));
   await completed; assert.equal(proof.valid(), false, 'Completion still retires the exact call; it cannot be replayed');

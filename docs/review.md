@@ -7598,3 +7598,19 @@ Fix (`36091f1`): startup retries only `ECONNREFUSED`, up to 50 times at 100 ms, 
 Author-run evidence: both new tests fail on unmodified main `d080c6d` (raw `ECONNREFUSED` at about 365 ms; missing start-failure key); with the fix the file passes 24/24 and the full suite 3792/0. Removing the child-exit check makes the second test fail after 5.4 s. Zero model calls in tests.
 
 Independent read-only review (Read/Grep/Glob, no MCP; 11 turns, reported USD 1.50): PASS, no blocking finding. Its non-blocking item 1, a non-atomic control-file write in the fixture that could crash the synthetic server and cause the same symptom, is fixed by replacing the file whole; that test-only delta is author-verified, not re-reviewed. Accepted as not new or not blocking: no `closed` check inside the retry (the existing socket-file wait has the same gap), the deprecated `process.binding` in the fixture (the first test would fail loudly if it disappeared), and a second caller in `native-history.cjs` that only waits up to about five seconds longer against a refusing server.
+
+
+**Codex 0.167 protocol qualification (source and synthetic fixtures, 2026-11-09):**
+The running 0.167 server was excluded from the shared history/steer list and the
+space-image list. Its generated experimental declarations retain the active-turn
+precondition, bounded metadata/item/turn pages, localImage input and client-tagged
+user-message envelope. Add only 0.167 to those two capability gates and update
+the bilingual unsupported-history message. Five old-code failures become six
+passing focused checks; 339 related checks pass with no skips and no model calls.
+Coverage includes exact-turn steering, history discovery and metadata pagination,
+the first-terminal one-turn probe, and image forwarding that remains unconfirmed
+until its exact source/tag/turn/path echo. Unknown/future/prerelease versions stay
+closed; 0.166 history/steer remains unqualified. Scoped outbox and other native
+capability gates are unchanged. Actual model execution, image understanding and
+installed daily use are unverified; a missing or changed image echo still cannot
+be recorded as acceptance.

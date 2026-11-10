@@ -2236,7 +2236,7 @@ class Codex extends EventEmitter {
       this.finishTurn(expectedTurnId);
     }
   }
-  get spaceImagesAvailable() { return this.host.rpc?.nativeVersion === '0.166.0' && this.host.rpc?.ws?.readyState === WebSocket.OPEN && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
+  get spaceImagesAvailable() { return ['0.166.0', '0.167.0'].includes(this.host.rpc?.nativeVersion) && this.host.rpc?.ws?.readyState === WebSocket.OPEN && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
   scopedOutboxRpc() {
     const rpc = this.terminalNotificationSource ? this.terminalRpc : this.host.rpc;
     if (this.stopped || this.transportDisconnected || this.record.nativeContextPending || !this.currentRpc(rpc) ||
