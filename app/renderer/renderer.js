@@ -4286,6 +4286,7 @@ const disposers = [
   api.onReconnected(next => { for (const s of state?.sessions || []) freezeLegacyProgress(s); disconnected = false; updateState(next); render(); }),
   api.onBackendSwitched(notice => { toast(''); ui.display.computed($('toast-text'), 'text', () => backendSwitchedText(notice)); }),
   api.onNew(() => openCreate()),
+  api.onRevealRecord(target => attempt(() => showRoomRecord(target?.roomId, target?.eventId))),
 ];
 sidebarLayout = window.nativeWorkspaceSidebar.bind({ navigation: document.querySelector('.sidebar-navigation'), groups: ['sessions-group', 'workspace-group', 'archive-group'].map($), sashes: ['sidebar-session-sash', 'sidebar-workspace-sash'].map($), onCommit: weights => api.sidebar({ type: 'resize', weights }), displayTitle: (element, params) => ui.display.attribute(element, 'title', 'sidebar.resizeHelp', params), onError: toastError });
 disposers.push(() => sidebarLayout.dispose());

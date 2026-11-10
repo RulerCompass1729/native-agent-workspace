@@ -18,7 +18,7 @@ const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary } = require('./queue-secretary.cjs');
 const { readingState } = require('./reading-state.cjs');
 const { ViewStore, validViews, dropRetiredViewFields } = require('./view-store.cjs');
-const { roomId: validRoomId } = require('./collaboration-spaces.cjs');
+const { roomId: validRoomId, untouchedDefault } = require('./collaboration-spaces.cjs');
 const { identity: roomPeerIdentity } = require('./peer-handoffs.cjs');
 const { windowPlacement } = require('./window-placement.cjs');
 const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
@@ -78,6 +78,8 @@ if (!primary) app.quit();
 const windows = new Map();
 const toolWaitNotifications = new Map();
 const capacityNotifications = new Map();
+const queueOutcomeSeen = new Set(), queueOutcomeNotifications = new Map();
+let pendingReveal = null;
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
 let dataDir, sessionLabels, roomState, queueSecretary, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
@@ -271,6 +273,47 @@ function notifyCapacity(snapshot, win) {
     }
   }
 }
+function notifyQueueOutcome(outcome) {
+  const { roomId, eventId, status, reason, memberId, memberName, task, reply, question } = outcome;
+  if (!eventId || queueOutcomeSeen.has(eventId) || !(status === 'failed' || status === 'waiting' && !reason)) return;
+  queueOutcomeSeen.add(eventId);
+  if (queueOutcomeSeen.size > 200) queueOutcomeSeen.delete(queueOutcomeSeen.values().next().value);
+  let notification;
+  try {
+    if (!Notification.isSupported()) return;
+    const room = { ...roomState.metadata(roomId), id: roomId };
+    const recordedName = room.events?.findLast(e => e.sessionId === memberId && e.uiMessage?.key === 'notice.queue.dispatched')?.uiMessage?.params?.name;
+    const name = [memberName, recordedName].find(value => value && value !== memberId) || displayText('identity.historicalMember');
+    const space = untouchedDefault(room) ? displayText('space.defaultName') : room.name;
+    const prefix = status === 'failed' ? 'os.queueFailed' : 'os.decision';
+    notification = new Notification({ title: displayText(prefix + 'Title'),
+      body: displayText(prefix + 'Body', { name, space, task, question: question ?? queueRules.decisionLine(reply, task) }) });
+    queueOutcomeNotifications.set(eventId, notification);
+    if (queueOutcomeNotifications.size > 50) queueOutcomeNotifications.delete(queueOutcomeNotifications.keys().next().value);
+    notification.once('close', () => queueOutcomeNotifications.delete(eventId));
+    notification.once('click', () => { queueOutcomeNotifications.delete(eventId); revealRecord({ roomId, eventId }); });
+    notification.show();
+  } catch { queueOutcomeNotifications.delete(eventId); }
+}
+function revealRecord(target) {
+  if (quitting) return;
+  pendingReveal = target;
+  focusOrOpen();
+  flushReveal();
+}
+function flushReveal() {
+  if (quitting) { pendingReveal = null; return; }
+  if (!pendingReveal) return;
+  const ready = [...windows.values()].filter(c => !c.background && c.uiReady && !c.win.isDestroyed());
+  const context = ready.find(c => c.win.isFocused()) || ready[0];
+  if (!context) return;
+  const target = pendingReveal; pendingReveal = null;
+  if (!backgroundTest) { if (context.win.isMinimized()) context.win.restore(); context.win.show(); context.win.focus(); }
+  context.win.webContents.send('workspace:reveal-record', target);
+}
+function discardReveal(context) {
+  if (!context.uiReady) pendingReveal = null;
+}
 function bindClient(context) {
   const { win, client } = context;
   if (client.control?.legacyInput) client.control.legacyInput.restrictedOutboxCall = (proof, signal) => {
@@ -428,10 +471,11 @@ async function openWindow(saved) {
     win.setMinimumSize(Math.min(850, view.bounds.width), Math.min(600, view.bounds.height));
     win.setBounds(view.bounds);
   }
-  const context = { win, client, view, failed: false };
+  const context = { win, client, view, failed: false, uiReady: false };
   windows.set(win.webContents.id, context); bindClient(context);
   const ready = new Promise((resolve, reject) => { context.ready = resolve; context.readyTimer = setTimeout(() => reject(new Error('UI did not become ready')), 25000); });
   ready.catch(() => {}); // loadURL may fail before the readiness timer fires.
+  win.webContents.on('did-start-loading', () => { context.uiReady = false; });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('page-title-updated', event => { event.preventDefault(); win.setTitle('Native Agent Workspace'); });
   win.webContents.on('will-navigate', (event, url) => { if (!trusted(url)) event.preventDefault(); });
@@ -444,6 +488,7 @@ async function openWindow(saved) {
     catch { view.active = wasActive; event.preventDefault(); }
   });
   win.on('closed', () => {
+    discardReveal(context);
     // A renderer/webContents shutdown can bypass the cancellable close event.
     if (!quitting && !context.failed && view.active !== false) {
       view.active = false;
@@ -452,7 +497,7 @@ async function openWindow(saved) {
     windows.delete(id); context.imagePreviews?.close(); context.client.close();
   });
   try { await win.loadURL(entry); await ready; }
-  catch (error) { if (quitting || win.isDestroyed()) return; throw new Error(startupMessage(error, displayLanguage())); }
+  catch (error) { discardReveal(context); if (quitting || win.isDestroyed()) return; throw new Error(startupMessage(error, displayLanguage())); }
   finally { clearTimeout(context.readyTimer); }
   return win;
 }
@@ -832,6 +877,7 @@ async function boot() {
   }
   sessionLabels = new SessionLabels(dataDir);
   roomState = new RoomState(dataDir);
+  roomState.onQueueOutcome = notifyQueueOutcome;
   queueSecretary = new QueueSecretary(dataDir);
   viewStore = new ViewStore(dataDir);
   const loaded = dropRetiredViewFields(viewStore.load());
@@ -1084,7 +1130,7 @@ async function boot() {
     }
     return submit(c, method, ...args);
   });
-  register('uiReady', c => c.ready?.());
+  register('uiReady', c => { c.ready?.(); c.uiReady = true; flushReveal(); });
   for (const method of ['send', 'queue', 'steer']) register(method, async (c, id, text, nativeId, turnId) => {
     const draft = backups(c.view)[id];
     const result = await submit(c, method, id, text, nativeId, ...(method === 'steer' ? [turnId] : []));
@@ -1411,6 +1457,7 @@ async function start() {
     if (!backendSwitchTimer) { backendSwitchTimer = setInterval(() => autoBackendSwitch().catch(() => {}), (testRequested && Number(process.env.NAW_TEST_BACKEND_SWITCH_MS)) || 60000); backendSwitchTimer.unref?.(); }
   }
   catch (error) {
+    pendingReveal = null;
     dsh?.stop();
     await backgroundControl?.close(); backgroundControl = null;
     for (const c of [...windows.values()]) { c.failed = true; c.client.close(); c.win.destroy(); }
@@ -1439,6 +1486,7 @@ app.on('second-instance', (_event, argv) => { if (!argv?.includes('--background'
 if (primary) app.whenReady().then(start);
 app.on('window-all-closed', () => {});
 app.on('before-quit', event => {
+  pendingReveal = null;
   if (outboxClosing) { event.preventDefault(); return; }
   if (quitting) return;
   try {

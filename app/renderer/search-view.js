@@ -115,12 +115,7 @@ async function openSearchResult(result) {
   searchNavigating = true;
   $('search-dialog').close();
   if (result.kind === 'shared' || result.kind === 'room') {
-    await selectSpace(result.roomId || 'shared');
-    roomRecordScope = ''; roomRecordReturn = null;
-    $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = ''; roomThread = '';
-    roomSurface = 'records';
-    await selectRoom();
-    if (result.messageId) pointToMessage($('room-messages'), roomReadingKey(), result.messageId, query);
+    await showRoomRecord(result.roomId || 'shared', result.messageId || '', query);
   } else if (origin.selected === 'room' && members().some(s => s.id === result.sessionId)) {
     roomSurface = 'overview';
     await select('room', 'chat', result.sessionId);
@@ -132,6 +127,20 @@ async function openSearchResult(result) {
   searchReturn = origin;
   $('return-reading').hidden = false;
   await persistView();
+}
+async function showRoomRecord(roomId, messageId, query = '') {
+  const room = typeof roomId === 'string' && spaceRecord(roomId);
+  const records = room ? [...(room.messages || []), ...(room.events || [])] : [];
+  if (!room || room.archived || typeof messageId !== 'string' || messageId && !records.some(m => m.id === messageId)) {
+    toast(uiText('search.sharedRemoved')); return false;
+  }
+  await selectSpace(roomId);
+  roomRecordScope = ''; roomRecordReturn = null;
+  $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = ''; roomThread = '';
+  roomSurface = 'records';
+  await selectRoom();
+  if (messageId) pointToMessage($('room-messages'), roomReadingKey(), messageId, query);
+  return true;
 }
 async function returnToReading() {
   const target = searchReturn; if (!target) return;

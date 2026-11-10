@@ -16,7 +16,7 @@ function visit(node) {
   if (dialog || routed || notification) {
     const object = node.arguments.find(arg => arg.type === 'ObjectExpression');
     assert.ok(object); const source = main.slice(object.start, object.end);
-    // The original fourteen OS surfaces remain the contract below. Background
+    // OS surfaces are evaluated with explicit synthetic lexical bindings below. Background
     // permission cards are covered separately and never open native dialogs.
     if (!source.includes("displayText('background.confirm')")) options.push({ type: notification ? 'notification' : routed ? ({ message: 'showMessageBox', open: 'showOpenDialog', save: 'showSaveDialog' })[node.arguments[1].value] : callee.property.name, source });
   }
@@ -58,7 +58,7 @@ test('the actual backend-switch handler translates its confirmation reason and p
   }
 });
 
-function osOptions(language, codex = true) {
+function osOptions(language, codex = true, prefix = 'os.decision') {
   const raw = '/synthetic/RAW 中文 {name}';
   return options.map(option => ({ type: option.type, value: plain(vm.runInNewContext('(' + option.source + ')', {
     displayText: (key, params) => locale.format(language, key, params), displayLanguage: () => language, uiLocale: locale,
@@ -66,26 +66,31 @@ function osOptions(language, codex = true) {
     names: 'RAW 中文 backend names', option: { switch: { stops: [{ name: 'RAW 中文 session' }], endsCodex: codex, reason: 'RAW 中文 background detail' } },
     textExtensions: ['txt', 'md'], record: { cwd: raw }, snapshot: { defaultWorkspace: '/unused' },
     preview: { name: 'RAW 中文.txt' }, ext: '.txt', path,
+    prefix, name: 'RAW 中文 member', space: 'RAW 中文 space', task: 'RAW 中文 task', question: 'RAW 中文 question',
     notice: { key: 'os.rotationDoneBody', params: { old: 'RAW 中文 old', new: 'RAW 中文 new', reason: '' } },
     migrationNotice: { key: 'os.migrationSavedBody', params: { names: 'RAW 中文 session' } },
   })) }));
 }
 test('all existing OS option groups use the chosen language while raw names, picker scope and cancel safeguards stay intact', () => {
-  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 17);
-  // The seventeenth surface is the notice for a backend NAW migrated by itself (automatic migration).
-  assert.deepEqual(en[16].value, { title: 'NAW · Backend migration', body: 'Moved “RAW 中文 session” to the new backend; the conversations continue, and typed-into terminals were saved first.' });
-  assert.deepEqual(zh[16].value, { title: 'NAW · 迁移旧后台', body: '已把「RAW 中文 session」挪到新后台，对话原样继续；终端里打过字的先存下了画面。' });
-  // The sixteenth names the sessions an automatic migration that did not finish left stopped.
-  assert.deepEqual(en[15].value, { title: 'NAW · Backend migration', body: '“RAW 中文 backend names” could not move to the new backend and may have stopped; the conversation is kept. If it stopped, click Continue native session to pick it up.' });
-  assert.deepEqual(zh[15].value, { title: 'NAW · 迁移旧后台', body: '「RAW 中文 backend names」没能挪到新后台，可能已经停下；对话记录都在，停下的点「继续原生会话」就能接着用。' });
-  // The fifteenth surface is the session-rotation notice (queue-dispatch.cjs).
-  assert.deepEqual(en[14].value, { title: 'NAW · Session rotation', body: '“RAW 中文 old” handed its work to the new session “RAW 中文 new”; the old session ended and its record is kept.' });
-  assert.deepEqual(zh[14].value, { title: 'NAW · 换会话', body: '「RAW 中文 old」的工作已交给新会话「RAW 中文 new」，旧会话已结束，记录保留。' });
+  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 18);
+  // The eighteenth surface is the notice for a backend NAW migrated by itself (automatic migration).
+  assert.deepEqual(en[17].value, { title: 'NAW · Backend migration', body: 'Moved “RAW 中文 session” to the new backend; the conversations continue, and typed-into terminals were saved first.' });
+  assert.deepEqual(zh[17].value, { title: 'NAW · 迁移旧后台', body: '已把「RAW 中文 session」挪到新后台，对话原样继续；终端里打过字的先存下了画面。' });
+  // The seventeenth names the sessions an automatic migration that did not finish left stopped.
+  assert.deepEqual(en[16].value, { title: 'NAW · Backend migration', body: '“RAW 中文 backend names” could not move to the new backend and may have stopped; the conversation is kept. If it stopped, click Continue native session to pick it up.' });
+  assert.deepEqual(zh[16].value, { title: 'NAW · 迁移旧后台', body: '「RAW 中文 backend names」没能挪到新后台，可能已经停下；对话记录都在，停下的点「继续原生会话」就能接着用。' });
+  // The sixteenth surface is the session-rotation notice (queue-dispatch.cjs).
+  assert.deepEqual(en[15].value, { title: 'NAW · Session rotation', body: '“RAW 中文 old” handed its work to the new session “RAW 中文 new”; the old session ended and its record is kept.' });
+  assert.deepEqual(zh[15].value, { title: 'NAW · 换会话', body: '「RAW 中文 old」的工作已交给新会话「RAW 中文 new」，旧会话已结束，记录保留。' });
   assert.deepEqual(en.map(row => row.type), zh.map(row => row.type));
-  const [notice, capacity, space, files, program, shared, backend, hold, update, forget, stop, material, save, folder] = en.map(row => row.value);
+  const [notice, capacity, decision, space, files, program, shared, backend, hold, update, forget, stop, material, save, folder] = en.map(row => row.value);
   assert.equal(notice.title, 'NAW · Tool wait reminder'); assert.ok(notice.body.includes('not been resent automatically'));
   assert.equal(capacity.title, 'NAW · Automatic continuation limit reached'); assert.ok(capacity.body.includes('3 times'));
   assert.equal(zh[1].value.title, 'NAW · 自动继续已达上限'); assert.equal(zh[1].value.body, '会话已自动继续 3 次，仍需处理。请在侧栏检查标记的会话。');
+  assert.deepEqual(decision, { title: 'NAW · Needs your decision', body: 'RAW 中文 member · RAW 中文 space: RAW 中文 question' });
+  assert.deepEqual(zh[2].value, { title: 'NAW · 需要你决定', body: 'RAW 中文 member · RAW 中文 space：RAW 中文 question' });
+  assert.deepEqual(osOptions('en', true, 'os.queueFailed')[2].value, { title: 'NAW · Task not delivered', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space; not resent automatically' });
+  assert.deepEqual(osOptions('zh', true, 'os.queueFailed')[2].value, { title: 'NAW · 派活没有完成', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space；不会自动重发' });
   assert.equal(space.message, 'Clear shared records for “RAW 中文 {space}”?'); assert.deepEqual(space.buttons, ['Cancel', 'Clear shared records']);
   assert.equal(files.title, 'Local files for “RAW 中文 {space}”'); assert.deepEqual(files.filters, [{ name: 'Text files', extensions: ['txt', 'md'] }]);
   assert.equal(program.buttonLabel, 'Use this program'); assert.equal(shared.message, 'Clear shared workspace records?');
@@ -93,12 +98,12 @@ test('all existing OS option groups use the chosen language while raw names, pic
   assert.deepEqual(update.buttons, ['Keep current connection', 'Checked; update connection']); assert.ok(update.detail.includes('background or child tasks'));
   assert.deepEqual(forget.buttons, ['Cancel', 'Remove record']); assert.ok(forget.detail.includes('drafts'));
   assert.equal(stop.message, 'Disconnect this Codex session?'); assert.deepEqual(stop.buttons, ['Keep session', 'Disconnect']);
-  const claude = osOptions('en', false)[10].value; assert.equal(claude.message, 'End this native session?'); assert.deepEqual(claude.buttons, ['Keep session', 'End session']); assert.notEqual(stop.detail, claude.detail);
+  const claude = osOptions('en', false)[11].value; assert.equal(claude.message, 'End this native session?'); assert.deepEqual(claude.buttons, ['Keep session', 'End session']); assert.notEqual(stop.detail, claude.detail);
   assert.equal(material.defaultPath, '/synthetic/RAW 中文 {name}'); assert.equal(save.defaultPath, 'RAW 中文-copy.txt'); assert.equal(folder.title, 'Choose a working directory for this session');
   const nativeFacts = row => { const { title, body, message, detail, buttons, buttonLabel, filters, ...other } = row.value; return { ...other, ...(filters ? { filterExtensions: filters.map(filter => filter.extensions) } : {}) }; };
   assert.deepEqual(en.map(nativeFacts), zh.map(nativeFacts));
   assert.equal(backend.message, 'End and update this backend? Sessions affected: 1'); assert.ok(backend.detail.includes('RAW 中文 backend names')); assert.ok(backend.detail.includes('RAW 中文 background detail')); assert.deepEqual(backend.buttons, ['Keep current connection', 'Checked; end and update']);
-  for (const index of [2, 5, 6, 8, 9, 10]) { assert.equal(en[index].value.defaultId, 0); assert.equal(en[index].value.cancelId, 0); }
+  for (const index of [3, 6, 7, 9, 10, 11]) { assert.equal(en[index].value.defaultId, 0); assert.equal(en[index].value.cancelId, 0); }
 });
 
 test('connection refusal metadata translates known facts while preserving exact original reasons, names and readiness guards', () => {

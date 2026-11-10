@@ -709,6 +709,8 @@ function planDispatch(input) {
       let line = '';
       if (reply) {
         line = replyLine(reply.last);
+        // Capture the question before replyLine flattens the remaining reply.
+        if (status === 'waiting' && !reason) action.question = decisionLine(reply.last, item.text);
       }
       if (line) {
         action.reply = line;
@@ -855,6 +857,14 @@ function shortText(text, limit = 60) {
     return line;
   }
   return line.slice(0, limit - 1) + '…';
+}
+
+function decisionLine(reply, task = '') {
+  // Normalize terminal escapes while retaining the first-line privacy boundary.
+  const first = replyLine((typeof reply === 'string' ? reply : '').trimStart().split(/\r\n|[\n\r\u2028\u2029]/u)[0]);
+  const marker = DECISION_MARKERS.find(value => first.startsWith(value));
+  const question = (marker ? first.slice(marker.length) : first).trim();
+  return shortText(question || task, 60);
 }
 
 // One storable line of a member's reply. A terminal reply can carry escape sequences, which the
@@ -1701,7 +1711,7 @@ class QueueDispatcher {
     if (session) {
       name = this.name(session);
     }
-    this.roomState.queueSettle(action.roomId, action.itemId, action.status, action.reason || '', name, action.reply || '');
+    this.roomState.queueSettle(action.roomId, action.itemId, action.status, action.reason || '', name, action.reply || '', action.question);
     this.broadcast().catch(() => {});
   }
 
@@ -2214,6 +2224,7 @@ module.exports = {
   handoffRequestText,
   handoffText,
   shortText,
+  decisionLine,
   notSent,
   readRotations,
   processMemory,

@@ -52,7 +52,7 @@ for (const name of ['previewImage', 'expandImage', 'copyImage', 'releaseImage', 
 }
 api.retryStartup = () => ipcRenderer.invoke('workspace:retry-startup');
 api.startupData = () => ipcRenderer.invoke('workspace:startup-data');
-for (const [name, channel] of [['onLocale', 'workspace:locale'], ['onState', 'workspace:state'], ['onViewStorage', 'workspace:view-storage'], ['onReconnected', 'workspace:reconnected'], ['onBackendSwitched', 'workspace:backend-switched'], ['onSessionName', 'workspace:session-name'], ['onTerminal', 'workspace:terminal'], ['onProgress', 'workspace:progress'], ['onNew', 'workspace:new'], ['onDisconnected', 'workspace:disconnected'], ['onStartup', 'workspace:startup']]) {
+for (const [name, channel] of [['onRevealRecord', 'workspace:reveal-record'], ['onLocale', 'workspace:locale'], ['onState', 'workspace:state'], ['onViewStorage', 'workspace:view-storage'], ['onReconnected', 'workspace:reconnected'], ['onBackendSwitched', 'workspace:backend-switched'], ['onSessionName', 'workspace:session-name'], ['onTerminal', 'workspace:terminal'], ['onProgress', 'workspace:progress'], ['onNew', 'workspace:new'], ['onDisconnected', 'workspace:disconnected'], ['onStartup', 'workspace:startup']]) {
   api[name] = callback => { const listener = (_event, ...data) => callback(...data); ipcRenderer.on(channel, listener); return () => ipcRenderer.removeListener(channel, listener); };
 }
 contextBridge.exposeInMainWorld('workspace', Object.freeze(api));

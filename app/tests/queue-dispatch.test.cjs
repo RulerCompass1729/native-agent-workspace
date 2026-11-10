@@ -184,7 +184,7 @@ test('a reply that asks for a decision stops dispatch to that member until the p
   ];
   const rooms = [{ id: 'shared', name: 'Team', queue: [sentItem(), item('2', { assignee: 'a' })] }];
   assert.deepEqual(plan(rooms, [member('a', { messages })]), [
-    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'waiting', sessionId: 'a', reply: '需要你决定：要不要删旧分支？' },
+    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'waiting', sessionId: 'a', question: '要不要删旧分支？', reply: '需要你决定：要不要删旧分支？' },
   ]);
   const later = [{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'waiting' }), item('2', { assignee: 'a' })] }];
   assert.deepEqual(plan(later, [member('a', { messages })]), []);
@@ -1577,4 +1577,12 @@ test('an old session that already handed off is not replaced again', () => {
   assert.deepEqual(plan(rooms, [kept]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
   assert.deepEqual(plan(rooms, [kept], { handedOff: new Set(['a']) }), [], 'its successor already carries the work');
   assert.deepEqual(plan(rooms, [kept], { handedOff: new Set(['a']), memory: new Map([['a', 4 * 1024 ** 3]]) }), [], 'not for memory either: a third session would follow');
+});
+
+test('decision notification keeps only the first line before the queue summary flattens it', () => {
+  const messages = [{id:'t1',role:'user',text:'NAW task',origin:'naw-dispatch'},
+    {id:'r1',role:'assistant',text:'Needs your decision: Proceed?\nPrivate remainder'}];
+  const actions = plan([{id:'shared',queue:[sentItem()]}],[member('a',{messages})]);
+  assert.equal(actions[0].question, 'Proceed?');
+  assert.ok(actions[0].reply.includes('Private remainder'), 'Existing in-app summary is retained');
 });
