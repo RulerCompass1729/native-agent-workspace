@@ -8,7 +8,7 @@ assert.ok(a >= 0 && b > a);
 const createBindings = vm.runInNewContext('(' + bootstrap.slice(a, b).trim() + ')');
 
 class Element {
-  constructor(document, tag = 'div') { this.ownerDocument = document; this.tagName = tag; this.children = []; this.attributes = new Map(); this.listeners = new Map(); this.value = ''; this.content = ''; }
+  constructor(document, tag = 'div') { this.ownerDocument = document; this.tagName = tag; this.children = []; this.attributes = new Map(); this.listeners = new Map(); this.dataset = {}; this.value = ''; this.content = ''; }
   get childElementCount() { return this.children.length; }
   get textContent() { return this.content; }
   set textContent(value) { this.content = String(value ?? ''); this.children = []; }
@@ -19,6 +19,8 @@ class Element {
   hasAttribute(name) { return this.attributes.has(name); }
   removeAttribute(name) { this.attributes.delete(name); }
   append(...children) { for (const child of children) { child.parentElement = this; this.children.push(child); } }
+  prepend(...children) { for (const child of children) child.parentElement = this; this.children.unshift(...children); }
+  replaceChildren(...children) { this.children = []; this.append(...children); }
   before(child) { const siblings = this.parentElement.children; child.parentElement = this.parentElement; siblings.splice(siblings.indexOf(this), 0, child); }
   contains(child) { return child === this || this.children.some(value => value.contains(child)); }
   querySelectorAll(selector) { assert.equal(selector, '[data-naw-i18n-bound]'); return this.children.flatMap(child => [...(child.hasAttribute('data-naw-i18n-bound') ? [child] : []), ...child.querySelectorAll(selector)]); }
@@ -63,6 +65,35 @@ test('language-only repaint preserves the actual composer input, IME state, sele
   assert.deepEqual([input.readOnly, f.send.disabled, f.send.type, f.ui.native.hidden], flags);
   input.event('keydown', { key: 'Enter', isComposing: true });
   assert.equal(JSON.stringify(f.record), original); assert.deepEqual(f.actorCalls, []);
+});
+
+for (const column of [false, true]) test(`an ended rotated segment keeps its handoff notice in the real ${column ? 'column' : 'solo'} composer binding`, () => {
+  const f = fixture({ state: 'ended', transportDisconnected: true }), now = Date.now();
+  const next = { id: 'next-session', name: 'Successor · 续', state: 'idle' };
+  f.context.state.sessions.push(next);
+  f.context.state.rotationChains = [{ sessions: [{ id: f.record.id, handedAt: null }, { id: next.id, handedAt: now }] }];
+  const node = tag => f.document.createElement(tag);
+  Object.assign(f.context, { document: f.document, node,
+    uiButton(key, action, cls, params) { const button = node('button'); f.context.ui.display.text(button, key, params); button.addEventListener('click', action); return button; },
+    renderDraftRecovery() {}, activateSoloComposer: id => { assert.equal(id, f.record.id); return f.binding; },
+  });
+  vm.runInContext(renderer.slice(renderer.indexOf('// Only recorded NAW handoffs'), renderer.indexOf('function renderDraftRecovery(')), f.context);
+  vm.runInContext(renderer.slice(renderer.indexOf('function sessionChainTime('), renderer.indexOf('function sessionMenuModel(')), f.context);
+  const paint = () => column ? f.paint(true) : f.context.renderComposer(f.record);
+  assert.equal(f.binding.ui.form, f.form, 'session-composer.create exposes the actual input form');
+  f.input.event('compositionstart'); paint();
+  assert.equal(f.form.children[0], f.binding.chainNotice);
+  assert.match(f.binding.chainNotice.children[0].textContent, /已交给「Successor · 续」/);
+  assert.equal(f.input.readOnly, true); assert.equal(f.send.type, 'button');
+  assert.match(f.send.textContent, /继续原生会话/);
+  f.record.messages = [{ role: 'user', time: now + 1, text: 'After handoff' }]; paint();
+  assert.match(f.binding.chainNotice.children[0].textContent, /交接后仍有对话/);
+  f.switch('en');
+  assert.match(f.binding.chainNotice.children[0].textContent, /Conversation after handoff/);
+  assert.equal(f.input, f.ui.input); assert.equal(f.input.value, f.record.liveDraft);
+  assert.equal(f.input.selectionStart, 2); assert.equal(f.input.selectionEnd, 7);
+  assert.equal(f.document.activeElement, f.input); assert.equal(f.ui.composing, true);
+  assert.deepEqual(f.actorCalls, []);
 });
 
 test('moving from a column to solo clears the earlier recipient aria binding and keeps the same input', () => {

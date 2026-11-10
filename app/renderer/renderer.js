@@ -818,6 +818,42 @@ function sessionActivityTime(s) {
   return latest === null ? uiText('time.unknown') : uiText('time.estimated', { time: sessionTime(latest) });
 }
 const sessionTimes = s => uiText('time.session', { created: sessionTime(s.createdAt) || uiText('time.unrecorded'), activity: sessionActivityTime(s) });
+// Only recorded NAW handoffs connect sessions. Names and native resume actions do not.
+function sessionChainModel(id) {
+  const chains = state.rotationChains || [], ids = new Set([id]), included = new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const chain of chains) {
+      if (included.has(chain) || !chain.sessions?.some(link => ids.has(link.id))) continue;
+      included.add(chain); changed = true;
+      for (const link of chain.sessions) ids.add(link.id);
+    }
+  }
+  if (!included.size) return null;
+  const links = new Map();
+  for (const chain of included) for (const [index, link] of chain.sessions.entries()) {
+    if (!links.has(link.id)) links.set(link.id, { ...link, successors: [], incoming: [] });
+    const item = links.get(link.id), next = chain.sessions[index + 1];
+    if (index && Number.isFinite(link.handedAt)) item.incoming.push(link.handedAt);
+    // handedAt belongs to the receiving link, not the old segment.
+    if (next && Number.isFinite(next.handedAt) && !item.successors.some(edge => edge.id === next.id && edge.time === next.handedAt)) {
+      item.successors.push({ id: next.id, time: next.handedAt });
+    }
+  }
+  const sessions = [...links.values()].map(link => {
+    const record = state.sessions.find(s => s.id === link.id);
+    const messages = (record?.messages || []).filter(m => !m.volatile && m.kind !== 'gap' && ['user', 'assistant'].includes(m.role) && Number.isFinite(m.time));
+    const handedAt = link.successors.length ? Math.min(...link.successors.map(edge => edge.time)) : null;
+    const after = handedAt === null ? [] : messages.filter(m => m.time > handedAt);
+    const starts = [...link.incoming, ...messages.map(m => m.time)];
+    return { id: link.id, name: record?.name || link.name || link.id, record,
+      startedAt: Number.isFinite(record?.createdAt) ? record.createdAt : starts.length ? Math.min(...starts) : null,
+      successors: link.successors.sort((a, b) => a.time - b.time),
+      continuedAt: after.length ? Math.max(...after.map(m => m.time)) : null };
+  }).sort((a, b) => (a.startedAt ?? -Infinity) - (b.startedAt ?? -Infinity) || a.id.localeCompare(b.id));
+  return { sessions, currentIds: sessions.filter(link => !link.successors.length).map(link => link.id) };
+}
 function renderDraftRecovery(id) {
   const copies = draftRecoveries.get(id) || [], list = $('draft-recovery-list');
   $('draft-recovery').hidden = !copies.length;
@@ -911,6 +947,7 @@ function renderComposer(s) {
   if (s) updateSessionComposer(activateSoloComposer(s.id), s, false);
 }
 function updateSessionComposer(binding, s, column) {
+  if (state.rotationChains?.length || binding.chainNotice) renderSessionHandoff(binding, s);
   const action = soloAction(s, { column, mode: column ? 'chat' : mode });
   const legacyDraft = (s?.legacyInputEligible || s?.nativeInputRequired) && s.owner === owner && !disconnected && !s.archived && ['connect', 'terminal'].includes(action.kind);
   const disabled = action.kind === 'none' || (action.kind === 'send' && (interruptPending(s) || s.pendingQueue || (s.state === 'working' && s.queueAvailable ? false : (s.state === 'working' && s.steerAvailable && s.activeTurnId ? s.pendingSteer : (s.state !== 'idle' && !(s.state === 'error' && s.failedTurnInputAvailable)) || s.pendingTag)) || s.approval || !binding.ui.input.value.trim() || pendingMode?.id === s.id || binding.changing || inputRecoveries.get(s.id)?.text.value));
@@ -2008,12 +2045,82 @@ function openRoomMenu(point, anchor, id = spaceId) {
 }
 // Facts refresh in place while the menu is open; a changed action list or order closes it, because
 // onSelect acts on the neighbours and memberships captured when it opened.
+function sessionChainTime(time) {
+  return Number.isFinite(time) ? new Date(time).toLocaleString(ui.language.getSnapshot().active, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : uiText('time.unrecorded');
+}
+let sessionChainId = null;
+function openSessionChain(id) {
+  if (!sessionChainModel(id)) return;
+  sessionChainId = id;
+  $('session-chain-list').dataset.signature = '';
+  renderSessionChain(); openTransientDialog('session-chain-dialog');
+}
+async function openSessionChainSegment(id) {
+  if (!state.sessions.some(s => s.id === id)) return;
+  $('session-chain-dialog').close();
+  // Same read-only navigation as search: an archive is not restored or resumed.
+  await select(id, 'chat');
+}
+function renderSessionChain() {
+  if (!sessionChainId) return;
+  const model = sessionChainModel(sessionChainId), list = $('session-chain-list');
+  const signature = JSON.stringify(model && [model.currentIds, model.sessions.map(link => [link.id, link.name, link.startedAt, link.successors, link.continuedAt, link.record?.state, link.record?.archived])]);
+  if (list.dataset.signature === signature) return;
+  list.dataset.signature = signature;
+  const focusedId = list.contains(document.activeElement) ? document.activeElement.closest('[data-session-id]')?.dataset.sessionId : null;
+  const rows = (model?.sessions || []).map(link => {
+    const row = node('li', undefined, 'session-chain-row'); row.dataset.sessionId = link.id;
+    const name = button(link.name, () => openSessionChainSegment(link.id), 'session-chain-name'); name.disabled = !link.record;
+    if (model.currentIds.includes(link.id)) name.setAttribute('aria-current', 'true');
+    const detail = node('small');
+    ui.display.computed(detail, 'text', () => [
+      uiText('chain.range', { start: sessionChainTime(link.startedAt), end: link.successors.length ? link.successors.map(edge => sessionChainTime(edge.time)).join(' / ') : uiText('chain.present') }),
+      link.record ? [link.record.archived ? uiText('chain.archived') : '', stateText(link.record)].filter(Boolean).join(' · ') : uiText('state.unknown'),
+      model.currentIds.includes(link.id) ? uiText('chain.current') : '',
+      link.continuedAt === null ? '' : uiText('chain.continued', { time: sessionChainTime(link.continuedAt) }),
+    ].filter(Boolean).join(' · '));
+    row.append(name, detail); return row;
+  });
+  list.replaceChildren(...rows);
+  if (focusedId) rows.find(row => row.dataset.sessionId === focusedId)?.querySelector('button')?.focus({ preventScroll: true });
+}
+function renderSessionHandoff(binding, s) {
+  const model = s && sessionChainModel(s.id), link = model?.sessions.find(link => link.id === s.id);
+  if (!link?.successors.length) { if (binding.chainNotice) binding.chainNotice.hidden = true; return; }
+  if (!binding.chainNotice) {
+    binding.chainNotice = node('div', undefined, 'session-chain-notice');
+    binding.ui.form.prepend(binding.chainNotice);
+  }
+  const notice = binding.chainNotice; notice.hidden = false;
+  const signature = JSON.stringify([link.continuedAt, link.successors, model.sessions.map(s => [s.id, s.name, Boolean(s.record)])]);
+  if (notice.dataset.signature === signature) return;
+  notice.dataset.signature = signature;
+  const text = node('span');
+  ui.display.computed(text, 'text', () => uiText('chain.handedTo', { name: link.successors.map(edge => model.sessions.find(s => s.id === edge.id)?.name || edge.id).join(' / ') }) +
+    (link.continuedAt === null ? '' : ' · ' + uiText('chain.continued', { time: sessionChainTime(link.continuedAt) })));
+  const jumps = link.successors.map(edge => {
+    const next = model.sessions.find(s => s.id === edge.id);
+    const jump = uiButton('chain.openNext', () => openSessionChainSegment(edge.id), 'small', { name: next?.name || edge.id });
+    jump.disabled = !next?.record; return jump;
+  });
+  const focused = notice.contains(document.activeElement) ? [...notice.children].indexOf(document.activeElement) : -1;
+  notice.replaceChildren(text, ...jumps);
+  if (focused > 0) notice.children[focused]?.focus({ preventScroll: true });
+}
+async function archiveChainSession(id) {
+  const others = sessionChainModel(id)?.sessions.filter(link => link.id !== id).map(link => link.name) || [];
+  await api.archiveSession(id);
+  if (others.length) toastMessage('chain.archiveNotice', { names: others.join(' / ') });
+  else toastMessage('toast.sessionArchived');
+}
 function sessionMenuModel(id, row) {
   const record = state.sessions.find(s => s.id === id), group = row.spaceId;
   const visible = group ? orderedMembers(group) : sidebarSessions(), index = visible.findIndex(s => s.id === id);
   const roomItems = allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: uiText(inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', { name: spaceName(r) }), labelKey: inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', labelParams: { name: spaceName(r) } }));
   // Right under the version fact that says this backend is older (T-131).
   const update = backendVersionNotice(record, state.appVersion)?.kind === 'old' && !record.archived ? [{ id: 'update-backend', label: uiText('menu.updateThisBackend'), labelKey: 'menu.updateThisBackend' }] : [];
+  const chain = sessionChainModel(id);
+  if (chain) update.push({ id: 'session-chain', label: uiText('chain.menu', { count: chain.sessions.length }), labelKey: 'chain.menu', labelParams: { count: chain.sessions.length } });
   const actions = [...update, { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }, { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
   return { record, group, visible, index, actionsKey: JSON.stringify([actions.map(({ label, ...action }) => action.labelKey ? action : { ...action, label }), visible.map(s => s.id)]),
     items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text, labelRead: () => sidebarDetails(record)[index] })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
@@ -2046,7 +2153,8 @@ function openSessionMenu(id, point, rowKey = id) {
       else if (action === 'rename') openRename(id, row.more);
       else if (action === 'continue') attempt(() => api.continueConnection(id));
       else if (action === 'window') attempt(() => api.newWindow(id));
-      else if (action === 'archive') attempt(async () => { await api.archiveSession(id); toastMessage("toast.sessionArchived"); });
+      else if (action === 'session-chain') openSessionChain(id);
+      else if (action === 'archive') attempt(() => archiveChainSession(id));
     },
   });
   sessionMenu = { id, rowKey, row, close, kind: 'session', factsKey: sidebarFactsKey(record), actionsKey: model.actionsKey };
@@ -2548,7 +2656,7 @@ function renderArchives() {
   if ($('archive-group-body').hidden) return;
   const list = $('archive-list');
   const origin = document.activeElement, oldRow = origin?.closest('.archive-item'), oldIndex = oldRow ? [...list.children].indexOf(oldRow) : -1;
-  const signature = JSON.stringify([archivedRooms.map(r => [r.id, r.name, spaceName(r)]), records.map(s => [s.id, s.name, s.state, sessionTimes(s)]), state.sessions.map(s => [s.id, s.name])]);
+  const signature = JSON.stringify([archivedRooms.map(r => [r.id, r.name, spaceName(r)]), records.map(s => [s.id, s.name, s.state, sessionTimes(s)]), state.sessions.map(s => [s.id, s.name]), state.rotationChains]);
   if (list.dataset.signature === signature) return; list.dataset.signature = signature; list.replaceChildren();
   for (const room of archivedRooms) {
     const row = node('div', undefined, 'archive-item'); row.dataset.archivedRoom = room.id; row.append(node('strong', spaceName(room)), uiNode('small', 'archive.roomInfo'), uiButton('archive.restoreRoom', () => restoreArchivedRoom(room.id))); list.append(row);
@@ -2556,7 +2664,11 @@ function renderArchives() {
   for (const s of records) {
     const row = node('div', undefined, 'archive-item'); row.dataset.archivedSession = s.id;
     const info = node('small'); ui.display.computed(info, 'text', () => `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${stateText(s)}${uiText(['ended', 'recoverable'].includes(s.state) ? 'archive.continueHistory' : 'archive.processRetained')} · ${sessionTimes(s)}`);
-    row.append(node('strong', participantLabel(s, state.sessions)), info, uiButton('archive.restoreSession', () => restoreArchivedSession(s.id))); list.append(row);
+    row.append(node('strong', participantLabel(s, state.sessions)), info);
+    const actions = node('div', undefined, 'archive-session-actions');
+    if (sessionChainModel(s.id)) actions.append(uiButton('chain.title', () => openSessionChain(s.id)));
+    actions.append(uiButton('archive.restoreSession', () => restoreArchivedSession(s.id)));
+    row.append(actions); list.append(row);
   }
   if (!count) list.append(uiNode('p', 'archive.empty'));
   if (oldRow) {
@@ -3509,6 +3621,7 @@ function render() {
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
     renderSessions(); renderCreateSpaces();
     renderArchives(); renderSpaceNavigation(); renderSpaceFiles(); renderQueue();
+    if ($('session-chain-dialog').open) renderSessionChain();
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
       const record = state.sessions.find(s => s.id === entry.dataset.inviteSession);
@@ -5034,6 +5147,11 @@ $('retry-save').onclick = () => attempt(async () => {
   finally { $('retry-save').disabled = false; }
 });
 $('search-button').onclick = () => openSearch();
+$('close-session-chain').onclick = () => $('session-chain-dialog').close();
+$('session-chain-dialog').addEventListener('close', () => {
+  if ($('session-chain-dialog').open) return;
+  sessionChainId = null; $('session-chain-list').replaceChildren();
+});
 $('close-search').onclick = () => $('search-dialog').close();
 $('search-preview-back').onclick = renderSearch;
 $('search-dialog').addEventListener('close', finishSearch);

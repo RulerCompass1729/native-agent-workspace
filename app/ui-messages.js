@@ -2,6 +2,16 @@
 (function (root) {
   const messages = {
   "zh": {
+    "chain.title": "这串会话",
+    "chain.menu": "这串会话（{count} 段）",
+    "chain.range": "{start} — {end}",
+    "chain.present": "至今",
+    "chain.archived": "已归档",
+    "chain.current": "正在用的段",
+    "chain.handedTo": "这段已交给「{name}」",
+    "chain.openNext": "前往「{name}」",
+    "chain.continued": "交接后仍有对话 · {time}",
+    "chain.archiveNotice": "此段已归档。这串还有：{names}",
     "background.confirm": "确认此操作",
     "error.backgroundMessagesDisabled": "自动 agent 消息已关闭或接收者不可用；未发送。",
     "notice.run.agentControl": "{name} 接管会话",
@@ -2294,6 +2304,16 @@
     "native.terminalUnclaimed": " \u00b7 \u7ec8\u7aef\u672a\u63a5\u901a\uff0c\u53ef\u70b9\u300c\u539f\u751f\u7ec8\u7aef\u300d\u91cd\u8bd5"
   },
   "en": {
+    "chain.title": "Conversation chain",
+    "chain.menu": "Conversation chain ({count} segments)",
+    "chain.range": "{start} — {end}",
+    "chain.present": "present",
+    "chain.archived": "Archived",
+    "chain.current": "Current segment",
+    "chain.handedTo": "This segment was handed over to “{name}”",
+    "chain.openNext": "Go to “{name}”",
+    "chain.continued": "Conversation after handoff · {time}",
+    "chain.archiveNotice": "This segment is archived. Other segments: {names}",
     "background.confirm": "Confirm this action",
     "error.backgroundMessagesDisabled": "Automatic agent messages are disabled or the recipient is unavailable; nothing was sent.",
     "notice.run.agentControl": "{name} took control of the session",

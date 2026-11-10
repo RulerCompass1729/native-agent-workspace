@@ -135,9 +135,24 @@ test('the independent group disclosure keeps its localized name in both accessib
 
 test('archived rows repaint without reopening a process or replacing focused restore controls', () => {
   const f = fixture(); f.people[0].archived = true; f.people[0].state = 'recoverable'; f.$('archive-group-body').hidden = false;
-  f.run('renderArchives()'); const row = f.$('archive-list').children[0], restore = row.children.at(-1); f.document.activeElement = restore;
+  f.run('renderArchives()'); const row = f.$('archive-list').children[0], restore = row.children.at(-1).querySelector('button'); f.document.activeElement = restore;
   f.refresh('en'); assert.equal(f.$('archive-list').children[0], row); assert.equal(f.document.activeElement, restore); assert.equal(restore.textContent, 'Restore session');
   assert.equal(row.children[0].textContent, 'RAW NAME 中文'); assert.match(row.children[1].textContent, /Awaiting recovery.*Resume native history/); assert.deepEqual(f.calls, []);
+});
+test('archive rows offer the same chain list beside restore without adding a menu or restoring on inspection', () => {
+  const f = fixture(), opened = [];
+  f.people[0].archived = true;
+  f.state.rotationChains = [{ sessions: [{ id: f.people[0].id, handedAt: null }, { id: 'new', handedAt: 100 }] }];
+  f.context.openSessionChain = id => opened.push(id);
+  f.run('renderArchives()');
+  const actions = f.$('archive-list').children[0].children.at(-1);
+  assert.deepEqual(actions.children.map(button => button.textContent), ['这串会话', '恢复会话']);
+  actions.children[0].onclick(); assert.deepEqual(opened, [f.people[0].id]);
+  f.refresh('en');
+  assert.deepEqual(actions.children.map(button => button.textContent), ['Conversation chain', 'Restore session']);
+  assert.deepEqual(f.calls, []);
+  f.state.rotationChains = []; f.run('renderArchives()');
+  assert.equal(f.$('archive-list').children[0].children.at(-1).children.length, 1);
 });
 
 test('subtitle native fields remain raw while the last own membership label repaints in place', () => {

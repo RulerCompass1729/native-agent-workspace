@@ -7482,3 +7482,44 @@ Unverified: a real 2.1.318 or 2.1.319 turn sending a workspace message, which
 only the unit tests and the availability run cover; prompts typed during a
 turn on these versions, measured on 2.1.316 and 2.1.317 only.
 
+## Conversation chains: navigation and use after handoff — 2026-11-09
+
+The requested outcome is to see every segment of an automatically rotated
+conversation, open its earlier records, and identify messages sent after a
+handoff. The session menu and archive rows open the same dialog. Earlier
+segments show their successor above the composer, with direct navigation.
+Archiving a segment names the other segments and archives only that segment.
+Only the existing rotation log projection establishes links; matching names,
+manual session creation, unsent drafts and native resume actions do not.
+The successor's `handedAt` is the previous segment's handoff time.
+
+Author-run local checks use the production renderer, display bindings and chain
+producer with synthetic records, without native engines or model calls. They
+cover branching, missing and archived records, strict message timestamps,
+language changes, draft/selection preservation, keyboard focus after updates,
+and navigation without restoring or resuming a session. The UI build retains
+the chain dialog. Queue dispatch and the queue's rotation-chain renderer are
+unchanged.
+
+Findings reproduced and fixed by the author: a missing first record sorted
+after its successors; live message updates removed the focused segment button;
+and a dialog placed after the first script tag was omitted from the built UI.
+Regression checks now cover each failure. The first full unit run was
+3,718 pass / 1 fail / 0 skipped: an older menu-only VM fixture omitted the new
+production helper. That fixture now loads the helper; all 131 related checks
+pass. The full rerun passes 3,720 / 0 / 0; the UI build passes.
+
+The independent read-only reviewer requested proof that both real composer
+bindings expose their form. Two additional tests now run the production
+composer binding and renderer paths for solo and column views, including an
+ended segment's resume button, notice, late-message marker, language change,
+draft, selection, focus and IME preservation. Related checks pass 133 / 0 / 0.
+No product source changed after the full run. The same reviewer read the binding
+contract and both callers, then approved this source delivery and test delta.
+The first investigation reached its time budget without a verdict and remains
+recorded as incomplete; only the later explicit approval closes the checkpoint.
+Reported cumulative review cost for this checkpoint: USD 0.9464.
+
+Scope: source delivery only. Installation, the person's daily-app acceptance
+checklist and publishing remain outside this checkpoint.
+
