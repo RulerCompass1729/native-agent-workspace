@@ -214,3 +214,8 @@ test('quitting with an open listener revokes access and closes the listener befo
   const order = f.calls.map(call => call.method).filter(m => ['saveViews', 'revoke', 'stopUI'].includes(m)).slice(-3);
   assert.deepEqual(order, ['saveViews', 'revoke', 'stopUI']);
 });
+test('a logout grace check that finds access open again keeps watching instead of stopping', async () => {
+  const { f, server, revokes } = await opened(); f.context.openUntil = 0; f.context.broker.options.changed();
+  f.context.openUntil = f.context.now + 120000; const before = revokes(); f.fire();
+  assert.equal(revokes(), before); assert.equal(server.listening, true); assert.equal(only(f).ms, 60000);
+});

@@ -13,11 +13,10 @@ const token = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(v
 const digest = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const fingerprint = value => digest(JSON.stringify(stable(value)));
-// A leading ! (shell), # (memory) or / (command) has meaning in a native terminal.
-// Phone text is plain prompt text, so it is refused before any record or call. The check looks past leading
-// whitespace, control characters and invisible characters (U+0085, U+200B and other default-ignorables, which trim()
-// keeps) and folds
-// compatibility forms, so full-width ！＃／ count too. The same rule is in mobile-web/client.js and mobile-session.cjs.
+// A leading ! (shell), # (memory) or / (command) has meaning in a native terminal. Phone text is plain prompt text, so
+// it is refused before any record or call. The check folds compatibility forms (so full-width ！＃／ count) and looks
+// past leading whitespace, control characters and invisible characters that trim() keeps (U+0085, U+200B and other
+// default-ignorables). The same rule is in mobile-web/client.js and mobile-session.cjs.
 const nativePrefix = text => /^[!#/]/.test(text.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''));
 const receipt = (value, ticket, requestId, action) => {
   if (!value || value.requestId !== requestId || value.sessionId !== ticket.sessionId || value.nativeId !== ticket.nativeId || value.action !== action ||
@@ -197,8 +196,8 @@ class MobileBroker {
     return result;
   }
   // Until when the app's listener is needed: an unexpired pairing link or paired device. 0 when nothing is open,
-  // including when access is closed or the state is unreadable. The OFF marker is normal while a link waits (pair()
-  // removes it); with a device it means a revocation whose save failed, and authentication already refuses that device.
+  // including when access is closed or the state is unreadable. The OFF marker is written only when a revocation could
+  // not be saved (which also closes access); it voids a device here too, as authentication already does.
   openUntil() {
     try {
       if (!this.#access.initialized || this.#access.closed) return 0;

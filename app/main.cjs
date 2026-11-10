@@ -100,7 +100,7 @@ function watchAppMobile(grace = 0) {
   if (!mobileListener || !mobileBroker) return;
   const generation = mobileGeneration, current = () => generation === mobileGeneration && !mobileOpening && mobileListener;
   const until = mobileBroker.openUntil();
-  if (!until) { mobileExpiry = setTimeout(() => { mobileExpiry = undefined; if (current() && !mobileBroker.openUntil()) revokeAppMobile(); }, grace); return; }
+  if (!until) { mobileExpiry = setTimeout(() => { mobileExpiry = undefined; if (!current()) return; if (!mobileBroker.openUntil()) revokeAppMobile(); else watchAppMobile(); }, grace); return; }
   mobileExpiry = setTimeout(() => { mobileExpiry = undefined; if (current()) watchAppMobile(); }, Math.min(MOBILE_CHECK_MS, Math.max(0, until - Date.now()) + 1));
 }
 function stopAppMobileListener() {

@@ -365,8 +365,8 @@ test('openUntil follows the pairing link and then the paired device; pairing and
   assert.equal(f.broker.openUntil(), 0); assert.deepEqual(f.changes, ['changed', 'changed']);
 });
 
-test('a device whose revocation could not be saved no longer keeps the listener open', async t => {
+test('a device whose revocation could not be saved no longer keeps the listener open (closed access)', async t => {
   const f = fixture(t), { auth, device } = await f.pair(); assert.equal(f.broker.openUntil(), device.expiresAt);
   f.failRevoke(true); f.broker.logout(auth); f.failRevoke(false);
-  assert.equal(f.broker.openUntil(), 0, 'Closed access, or the OFF marker beside an enabled device, is not open');
+  assert.equal(f.broker.openUntil(), 0, 'A failed revocation save still closes access, so nothing is open');
 });
