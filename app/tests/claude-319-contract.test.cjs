@@ -11,14 +11,14 @@ const sourceFile = process.env.NAW_T160_REGISTER_FIXTURE || path.join(__dirname,
 const source = fs.readFileSync(sourceFile, 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function startup(version) {
-  const hooks = new Map(), clock = [], calls = [], modelReads = [];
+  const hooks = new Map(), clock = [], calls = [], modelReads = [], usageReads = [];
   const id = '11111111-1111-4111-8111-111111111111';
   const api = {
     session: {
       id: async () => id,
       version: async () => ({ version }),
       model: async () => { modelReads.push(version); return 'fixture-model'; },
-      usage: async () => { throw Error('Usage must remain outside this model-only check'); }
+      usage: async () => { usageReads.push(version); return null; }
     },
     env: { get: async key => ({ NAW_SUBMIT_SOCKET: '/fixture/no-real-socket', NAW_HOOK_TOKEN: 'fixture-token' })[key] },
     clock: { after: (delay, callback) => { clock.push({ delay, callback }); return { cancel() {} }; } },
@@ -38,13 +38,14 @@ async function startup(version) {
   const first = clock.shift();
   if (first) await first.callback();
   await tick(); await tick();
-  return { hooks, api, calls, modelReads, clock };
+  return { hooks, api, calls, modelReads, usageReads, clock };
 }
 
-test('T160 diagnostic: qualified 318 model-only cold start still binds and reads metadata', async t => {
+test('qualified 318 cold start binds and reads metadata without submitting a model task', async t => {
   const f = await startup('2.1.318');
   assert.equal(f.calls[0]?.route, '/root-bind');
   assert.equal(f.modelReads.length, 1);
+  assert.equal(f.usageReads.length, 1, 'The qualified free usage read runs at bind');
   // T-171: native blocks too, so workspace messages have their turn identity.
   assert.equal(f.calls.find(c => c.route === '/root-bind').body.nativeBlocks, true);
   assert.ok(f.calls.some(c => c.route === '/next'));
@@ -52,17 +53,21 @@ test('T160 diagnostic: qualified 318 model-only cold start still binds and reads
   t.diagnostic(JSON.stringify({ version: '2.1.318', observedMockRoutes: f.calls.map(c => c.route), modelMetadataReads: f.modelReads.length, realProviderCalls: false }));
 });
 
-test('qualified 319 model-only cold start binds and reads its initial native model', async t => {
+test('qualified 319 cold start enables display metadata while keeping native input controls off', async t => {
   const f = await startup('2.1.319');
   assert.equal(f.calls[0]?.route, '/root-bind');
   assert.equal(f.modelReads.length, 1);
+  assert.equal(f.usageReads.length, 1);
   const binding = f.calls[0].body;
+  assert.equal(binding.nativeCapacity, true, 'T-32 capacity recovery does not require abort');
   assert.equal(binding.nativeBlocks, true, 'T-171: native blocks for workspace message turn identity');
-  for (const key of ['nativeQueue', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia', 'nativeAbort', 'nativeCapacity', 'nativeSharedDisplay', 'nativeTurnRecords', 'nativeNarration']) assert.equal(binding[key], false, key);
+  assert.equal(binding.nativeQueue, true);
+  for (const key of ['nativeMedia', 'nativeTurnRecords', 'nativeNarration']) assert.equal(binding[key], true, key);
+  for (const key of ['nativeInlineInput', 'nativePromptInput', 'nativeAbort', 'nativeSharedDisplay']) assert.equal(binding[key], false, key);
   t.diagnostic(JSON.stringify({ version: '2.1.319', observedMockRoutes: f.calls.map(c => c.route), modelMetadataReads: f.modelReads.length, realProviderCalls: false }));
 });
 
-test('319 uses the native post-switch model while keeping all input and tool capabilities off', async () => {
+test('319 uses the native post-switch model without changing unrelated control capabilities', async () => {
   const f = await startup('2.1.319');
   await f.hooks.get('classic.PostModelSwitch')(f.api, { session_id: '11111111-1111-4111-8111-111111111111', to_model: 'claude-native-selected' }, async event => event);
   await tick();
@@ -75,12 +80,14 @@ test('319 uses the native post-switch model while keeping all input and tool cap
   assert.ok(rows.every(row => row.kind === 'control' && row.id === 'control:model'));
 });
 
-for (const version of ['2.1.321', '2.1.322']) test(`${version} qualifies exact native blocks, initial model metadata and root binding only`, async () => {
+for (const version of ['2.1.321', '2.1.322']) test(`${version} cold start combines qualified blocks, model, root, queue and capacity without display`, async () => {
   const f = await startup(version);
   assert.equal(f.calls[0]?.route, '/root-bind');
   assert.equal(f.modelReads.length, 1);
   assert.equal(f.calls[0].body.nativeBlocks, true);
-  for (const key of ['nativeQueue', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia', 'nativeAbort', 'nativeCapacity', 'nativeSharedDisplay', 'nativeTurnRecords', 'nativeNarration']) assert.equal(f.calls[0].body[key], false, key);
+  for (const key of ['nativeQueue', 'nativeCapacity']) assert.equal(f.calls[0].body[key], true, key);
+  assert.equal(f.usageReads.length, 0, 'Free usage remains unqualified on this version');
+  for (const key of ['nativeInlineInput', 'nativePromptInput', 'nativeMedia', 'nativeAbort', 'nativeSharedDisplay', 'nativeTurnRecords', 'nativeNarration']) assert.equal(f.calls[0].body[key], false, key);
   assert.ok(f.calls.some(c => c.route === '/next'));
 });
 

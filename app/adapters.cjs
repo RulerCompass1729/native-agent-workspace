@@ -618,8 +618,10 @@ class Claude extends EventEmitter {
     this.nativePromptInput = this.nativeBlocks && message.nativeInlineInput === true && message.nativePromptInput === true && !this.retainedReader;
     this.nativeInlineInput = this.nativeBlocks && message.nativeInlineInput === true && (this.retainedReader ? !this.nativeQueue : this.nativePromptInput);
     this.nativeAbortAvailable = message.nativeAbort === true && !this.retainedReader;
-    // A mod that predates nativeCapacity qualified capacity recovery together with abort.
-    this.nativeCapacityAvailable = this.nativeAbortAvailable && message.nativeCapacity !== false;
+    // Recovery submits a new task only after a failed turn; it never needs abort.
+    // Preserve the older mod contract only when the separate capability is absent.
+    this.nativeCapacityAvailable = !this.retainedReader && (message.nativeCapacity === true ||
+      message.nativeCapacity === undefined && this.nativeAbortAvailable);
     this.addressedSendAvailable = this.nativeBlocks && message.addressedTool === true && !this.retainedReader;
     this.nativeSharedDisplay = this.retainedReader && message.nativeSharedDisplay === true;
     // Native `!` commands, turn-start inputs and the turn's own clock (T-99).

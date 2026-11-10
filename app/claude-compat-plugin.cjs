@@ -78,7 +78,14 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
     // Exact committed hook from the background-control integration (f3bbae1), before 2.1.318/2.1.319 native blocks (T-171).
     '82b5a796d8d4f33019bdfda01886470d25611560688227675aad16101c773eb6',
     // Exact managed hook's compatibility copy before 2.1.321/2.1.322 qualification (T-171).
-    '81dbe64f666202928d788cc1865c9057dc19cdd7c5587829fed48bbbf6f9e535']);
+    '81dbe64f666202928d788cc1865c9057dc19cdd7c5587829fed48bbbf6f9e535',
+    // Exact committed compatibility copies from the combined qualification inputs.
+    // Main 2695aa8 (321/322 root, blocks and model).
+    '5b72930dc47d942a3b79c4396a90b72383afb2acf214009cc5b56438ec273a95',
+    // Display 7cbb1fd; queue 7f1a89f; capacity 3484233 (unchanged by 77fdf2e).
+    '9fc2e90042409250ba4b93cf6a546e0f0e9cdee28117f06f87dffe204a51b118',
+    '0e9022d2b59636154f9a6385e8f572250d959a41e0f0dba313b10191788a1585',
+    'ee87b99d944723a148cba0ffd8f16bdf24212d5586bf9a6c9024bb64274cb339']);
   const upgrades = new Set();
   for (const [name, content] of files) {
     const filename = path.join(directory, name);
