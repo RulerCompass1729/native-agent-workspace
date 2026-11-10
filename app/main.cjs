@@ -18,7 +18,7 @@ const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary } = require('./queue-secretary.cjs');
 const { readingState } = require('./reading-state.cjs');
 const { ViewStore, validViews, dropRetiredViewFields } = require('./view-store.cjs');
-const { roomId: validRoomId, untouchedDefault } = require('./collaboration-spaces.cjs');
+const { roomId: validRoomId, roomIds, untouchedDefault } = require('./collaboration-spaces.cjs');
 const { identity: roomPeerIdentity } = require('./peer-handoffs.cjs');
 const { windowPlacement } = require('./window-placement.cjs');
 const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
@@ -272,6 +272,31 @@ function notifyCapacity(snapshot, win) {
       // The original sidebar status remains available without OS delivery.
     }
   }
+}
+function auditBackgroundOperation(record) {
+  roomState.recordControlOperation(record, record.guard?.auditRooms || ['shared']);
+  // Consent depends on the durable event, never on every window completing a
+  // read. A disconnected or slow window cannot hold cancellation or execution.
+  broadcastRoom().catch(() => {});
+}
+function notifyBackgroundConfirmation(record) {
+  const key = `background:${record.actor.nativeId}:${record.id}`;
+  if (queueOutcomeSeen.has(key)) return;
+  queueOutcomeSeen.add(key);
+  if (queueOutcomeSeen.size > 200) queueOutcomeSeen.delete(queueOutcomeSeen.values().next().value);
+  try {
+    if (!Notification.isSupported()) return;
+    const action = backgroundOperation.maintenanceAction(record.command.method, record.command.arguments, record.actor);
+    const notification = new Notification({ title: displayText('os.decisionTitle'),
+      body: displayText('os.backgroundConfirmationBody', { name: record.actor.name,
+        command: action ? displayText('background.action.' + action) : record.command.method }) });
+    queueOutcomeNotifications.set(key, notification);
+    if (queueOutcomeNotifications.size > 50) queueOutcomeNotifications.delete(queueOutcomeNotifications.keys().next().value);
+    notification.once('close', () => queueOutcomeNotifications.delete(key));
+    notification.once('click', () => { queueOutcomeNotifications.delete(key);
+      revealRecord({ sessionId: record.actor.id, nativeId: record.actor.nativeId, messageId: key }); });
+    notification.show();
+  } catch { queueOutcomeNotifications.delete(key); }
 }
 function notifyQueueOutcome(outcome) {
   const { roomId, eventId, status, reason, memberId, memberName, task, reply, question } = outcome;
@@ -667,7 +692,7 @@ function register(name, handler) {
       }
       if (name === 'input') {
         const s = (await c.client.call('initial')).sessions.find(s => s.id === args[0]);
-        if (s?.approval || s?.nativeApproval || s?.nativeInputRequired) {
+        if ((s?.approval || s?.nativeApproval || s?.nativeInputRequired) && !backgroundOperation.request()?.maintenanceApproved) {
           const answer = await showDialog(c, 'message', { type: 'warning', message: name, detail: JSON.stringify(args), buttons: [displayText('common.cancel'), displayText('background.confirm')], cancelId: 0 });
           if (answer.response !== 1) return { cancelled: true };
         }
@@ -883,15 +908,22 @@ async function boot() {
   const loaded = dropRetiredViewFields(viewStore.load());
   views = loaded.views;
   try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: () => { broadcastRoom().catch(() => {}); },
+    confirmationPending: notifyBackgroundConfirmation,
+    confirmation: (actor, command, action) => ({ type: 'warning',
+      message: displayText('background.maintenanceTitle', { name: actor.name, command: displayText('background.action.' + action) }),
+      detail: JSON.stringify({ method: command.method, arguments: command.arguments, ...(command.paths ? { paths: command.paths } : {}) }, null, 2),
+      buttons: [displayText('common.cancel'), displayText('background.confirm')], defaultId: 0, cancelId: 0 }),
+    audit: auditBackgroundOperation,
     context: async (actor, saved) => {
       const view = saved || { owner: randomUUID(), selected: actor.id, mode: 'chat', preference: 'chat', active: false };
       backups(view);
       const client = await connect(dataDir, view.owner);
       const win = new BrowserWindow({ ...windowOptions(), show: false, focusable: false, skipTaskbar: true });
       const context = { background: true, actor, win, client, view, failed: false };
+      context.refresh = () => client.refresh();
       context.checkActor = async () => {
-        await client.refresh();
-        const record = client.snapshot().sessions.find(s => s.id === actor.id);
+        await context.refresh();
+        const record = roomState.apply(client.snapshot()).sessions.find(s => s.id === actor.id);
         if (!record || record.nativeId !== actor.nativeId || record.archived || record.nativeContextPending) throw Error('The originating native session changed');
       };
       context.fingerprint = command => {
@@ -899,6 +931,32 @@ async function boot() {
         const scan = v => { if (typeof v === 'string') strings.add(v); else if (Array.isArray(v)) v.forEach(scan); else if (v && typeof v === 'object') Object.values(v).forEach(scan); };
         scan(command.arguments);
         const state = client.snapshot();
+        if (backgroundOperation.maintenanceAction(command.method, command.arguments, actor)) {
+          const metadata = roomState.apply(state), auditRooms = new Set();
+          const controlTarget = ['interrupt', 'pause', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input'].includes(command.method) ? command.arguments[0] : null;
+          for (const s of state.sessions) if (s.id === actor.id || strings.has(s.id)) {
+            roomIds(s).forEach(id => auditRooms.add(id));
+            roomState.value.sessionArchives[s.id]?.rooms.forEach(r => auditRooms.add(r.id));
+          }
+          for (const r of metadata.rooms) if (strings.has(r.id)) auditRooms.add(r.id);
+          if (['archiveRoom', 'restoreRoom', 'join'].includes(command.method)) auditRooms.add('shared');
+          if (command.method === 'spaceMerge') {
+            const id = command.arguments[1]?.operationId;
+            const batch = roomState.mergePreviews.get(id)?.batch || roomState.mergeRecord(id)?.merge?.batch;
+            batch?.sources.forEach(r => auditRooms.add(r.id));
+          }
+          // Placement and archive state are consent targets. Background native
+          // progress and the audit event itself must not invalidate consent.
+          return { auditRooms: [...(auditRooms.size ? auditRooms : ['shared'])].sort(),
+            sessions: metadata.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, connectionRevision: s.connectionRevision,
+              nativeContextPending: s.nativeContextPending, archived: s.archived, roomIds: roomIds(s), placementRevision: s.placementRevision,
+              memberRevision: s.memberRevision, roomMembershipRevisions: s.roomMembershipRevisions,
+              ...(s.id === controlTarget && s.id !== actor.id ? { owner: s.owner, controlRevision: s.controlRevision, activeTurnId: s.activeTurnId,
+                approvalId: s.approval?.requestId, nativeApprovalIds: s.nativeApproval?.requests?.map(r => r.id), nativeInputRequired: s.nativeInputRequired } : {}) })),
+            rooms: metadata.rooms.map(r => ({ id: r.id, name: r.name, archived: r.archived, memberOrder: r.memberOrder,
+              restoreMembers: roomState.metadata(r.id).restoreMembers, restorePlacements: roomState.metadata(r.id).restorePlacements })),
+            sessionArchives: roomState.value.sessionArchives };
+        }
         const global = ['quitService', 'clearSharedHistory', 'archiveRoom', 'switchBackend', 'continueConnection'].includes(command.method);
         return { sessions: state.sessions.filter(s => global || strings.has(s.id)).map(s => ({ id: s.id, nativeId: s.nativeId, pid: s.pid, owner: s.owner, state: s.state, activeTurnId: s.activeTurnId, pendingTag: s.pendingTag, controlRevision: s.controlRevision,
           connectionRevision: s.connectionRevision, archived: s.archived, approval: s.approval, nativeApproval: s.nativeApproval })),
@@ -966,8 +1024,8 @@ async function boot() {
   });
   register('archiveSession', async (c, id) => { try { await roomState.archiveSession(c.client, id, sessionLabels.labels.get(id)); } finally { await broadcastRoom(); } });
   register('restoreSession', async (c, id) => {
-    const state = await c.client.call('initial'); if (!state.sessions.some(s => s.id === id)) throw uiError("error.main.nativeRecordsUnavailable");
-    roomState.restoreSession(id); await broadcastRoom();
+    try { return await roomState.restoreSession(c.client, id, sessionLabels.labels.get(id)); }
+    finally { await broadcastRoom(); }
   });
   register('archiveRoom', async c => { try { await roomState.archiveRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });
   register('restoreRoom', async c => { try { await roomState.restoreRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });

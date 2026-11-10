@@ -64,7 +64,7 @@ function osOptions(language, codex = true, prefix = 'os.decision') {
     displayText: (key, params) => locale.format(language, key, params), displayLanguage: () => language, uiLocale: locale,
     value: { name: 'RAW 中文 {space}' }, status: { reason: 'RAW 中文 native status' }, codex,
     names: 'RAW 中文 backend names', option: { switch: { stops: [{ name: 'RAW 中文 session' }], endsCodex: codex, reason: 'RAW 中文 background detail' } },
-    textExtensions: ['txt', 'md'], record: { cwd: raw }, snapshot: { defaultWorkspace: '/unused' },
+    textExtensions: ['txt', 'md'], record: { cwd: raw, actor: { name: 'RAW 中文 agent' }, command: { method: 'openLocalFile' } }, action: 'openLocalFile', snapshot: { defaultWorkspace: '/unused' },
     preview: { name: 'RAW 中文.txt' }, ext: '.txt', path,
     prefix, name: 'RAW 中文 member', space: 'RAW 中文 space', task: 'RAW 中文 task', question: 'RAW 中文 question',
     notice: { key: 'os.rotationDoneBody', params: { old: 'RAW 中文 old', new: 'RAW 中文 new', reason: '' } },
@@ -72,7 +72,10 @@ function osOptions(language, codex = true, prefix = 'os.decision') {
   })) }));
 }
 test('all existing OS option groups use the chosen language while raw names, picker scope and cancel safeguards stay intact', () => {
-  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 18);
+  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 19);
+  assert.deepEqual(en[2].value, { title: 'NAW · Needs your decision', body: 'RAW 中文 agent requests Read a local file; waiting for your confirmation' });
+  assert.deepEqual(zh[2].value, { title: 'NAW · 需要你决定', body: 'RAW 中文 agent 请求读取本机文件，等你确认' });
+  en.splice(2, 1); zh.splice(2, 1); // Keep the existing eighteen option-group checks below.
   // The eighteenth surface is the notice for a backend NAW migrated by itself (automatic migration).
   assert.deepEqual(en[17].value, { title: 'NAW · Backend migration', body: 'Moved “RAW 中文 session” to the new backend; the conversations continue, and typed-into terminals were saved first.' });
   assert.deepEqual(zh[17].value, { title: 'NAW · 迁移旧后台', body: '已把「RAW 中文 session」挪到新后台，对话原样继续；终端里打过字的先存下了画面。' });
@@ -89,8 +92,8 @@ test('all existing OS option groups use the chosen language while raw names, pic
   assert.equal(zh[1].value.title, 'NAW · 自动继续已达上限'); assert.equal(zh[1].value.body, '会话已自动继续 3 次，仍需处理。请在侧栏检查标记的会话。');
   assert.deepEqual(decision, { title: 'NAW · Needs your decision', body: 'RAW 中文 member · RAW 中文 space: RAW 中文 question' });
   assert.deepEqual(zh[2].value, { title: 'NAW · 需要你决定', body: 'RAW 中文 member · RAW 中文 space：RAW 中文 question' });
-  assert.deepEqual(osOptions('en', true, 'os.queueFailed')[2].value, { title: 'NAW · Task not delivered', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space; not resent automatically' });
-  assert.deepEqual(osOptions('zh', true, 'os.queueFailed')[2].value, { title: 'NAW · 派活没有完成', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space；不会自动重发' });
+  assert.deepEqual(osOptions('en', true, 'os.queueFailed')[3].value, { title: 'NAW · Task not delivered', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space; not resent automatically' });
+  assert.deepEqual(osOptions('zh', true, 'os.queueFailed')[3].value, { title: 'NAW · 派活没有完成', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space；不会自动重发' });
   assert.equal(space.message, 'Clear shared records for “RAW 中文 {space}”?'); assert.deepEqual(space.buttons, ['Cancel', 'Clear shared records']);
   assert.equal(files.title, 'Local files for “RAW 中文 {space}”'); assert.deepEqual(files.filters, [{ name: 'Text files', extensions: ['txt', 'md'] }]);
   assert.equal(program.buttonLabel, 'Use this program'); assert.equal(shared.message, 'Clear shared workspace records?');
@@ -98,7 +101,7 @@ test('all existing OS option groups use the chosen language while raw names, pic
   assert.deepEqual(update.buttons, ['Keep current connection', 'Checked; update connection']); assert.ok(update.detail.includes('background or child tasks'));
   assert.deepEqual(forget.buttons, ['Cancel', 'Remove record']); assert.ok(forget.detail.includes('drafts'));
   assert.equal(stop.message, 'Disconnect this Codex session?'); assert.deepEqual(stop.buttons, ['Keep session', 'Disconnect']);
-  const claude = osOptions('en', false)[11].value; assert.equal(claude.message, 'End this native session?'); assert.deepEqual(claude.buttons, ['Keep session', 'End session']); assert.notEqual(stop.detail, claude.detail);
+  const claude = osOptions('en', false)[12].value; assert.equal(claude.message, 'End this native session?'); assert.deepEqual(claude.buttons, ['Keep session', 'End session']); assert.notEqual(stop.detail, claude.detail);
   assert.equal(material.defaultPath, '/synthetic/RAW 中文 {name}'); assert.equal(save.defaultPath, 'RAW 中文-copy.txt'); assert.equal(folder.title, 'Choose a working directory for this session');
   const nativeFacts = row => { const { title, body, message, detail, buttons, buttonLabel, filters, ...other } = row.value; return { ...other, ...(filters ? { filterExtensions: filters.map(filter => filter.extensions) } : {}) }; };
   assert.deepEqual(en.map(nativeFacts), zh.map(nativeFacts));

@@ -1,5 +1,61 @@
 # Review and issue record
 
+**Managed maintenance recovery and expanded consent, 2026-11-09 (re-review pending):**
+review 42ea257f blocked the initial candidate: stopping an archived session changed
+its connection revision, and rejecting its old placement left it archived forever.
+Ambiguous legacy homes, missing spaces and uncertain joins had the same problem;
+a failed archive could also reserve a stale plan permanently. Restoration now
+separates releasing the local archive from attempting its saved home. A connection
+change alone does not change placement; unavailable or conflicting homes restore
+without stealing any later placement and show an explicit notice. Backend errors
+cannot prevent releasing the archive, while an actual metadata save failure is
+still reported. A new explicit archive discards an expired failed plan.
+The same review found unguarded program-location/file operations and controls of
+other sessions. These now use the same bound human confirmation and space audit;
+own-session controls retain their existing behavior, including input approval.
+The pause command remains global even when passed the actor's own ID, so both
+forms require consent; the ID does not restrict its affected backends.
+An internal approved-maintenance marker prevents two competing input dialogs.
+B1's human-window navigation now also opens the exact pending session row from
+a single system notification, without exposing arguments or file paths there.
+The independent view is refreshed before consent is pinned, preventing a stale
+view from rejecting a newly received operation. An actor's busy reservation is
+checked before that refresh, so a concurrent refusal does not wait behind the
+operation it must refuse. Durable audit storage gates execution; window broadcasts
+do not delay an already recorded human decision. If an original space has gone,
+the audit uses the shared space so its absence cannot block archive release.
+Local regression cases cover
+stop/restore, missing and overlapping homes, uncertain joins, stale plans, paths,
+own versus other controls, notification navigation and handled requests. Synthetic
+native GUI calls use real proof validation, broker and application handlers.
+Low-risk metadata such as names, notes and display order are deferred. This is
+author-run remediation, not the required same-reviewer approval or permission to
+install; the integrator must return it to 42ea257f before READY.
+
+**Initial managed-maintenance candidate db3c359, 2026-11-09 (blocked, superseded):**
+the person requested that managed sessions ask for human confirmation before
+creating, archiving, restoring or moving sessions/spaces, record attributed
+outcomes in space events, and restore archived sessions to their original place.
+The baseline allowed all twenty synthetic provider calls without confirmation and
+lost session placement. The repair uses the existing background confirmation
+channel, including native history/resume and mutating merge aliases. Human IPC
+keeps its existing path; there is no manager exemption. Consent fingerprints cover
+placement and archive metadata. Audit events exclude raw arguments and do not
+invalidate their own merge snapshots. Session archives save placement before
+detaching; prepared writer receipts reconcile cold retries without replaying moves.
+Conflicting native identities, connections or later placements retain the archive
+and refuse restoration. Legacy backends keep literal membership operations with
+local cut checks; they cannot provide atomic placement receipts. Old archives
+without saved locations restore standalone, and legacy overlaps are not recreated.
+Checks: `maintenance-confirmation.test.cjs`, `session-archive-placement.test.cjs`,
+existing room-state/legacy sharing checks, and isolated hidden GUI over both
+synthetic native control paths. Every one of the twenty GUI cases waits, cancels
+without effect, executes after a human button click and deduplicates a repeat;
+both providers restore the original space/order. No real model/provider calls.
+Owner: the integrator will include this security change in the existing independent
+integration review, as the person selected. This entry does not claim approval,
+installation or completion before that review.
+
 As of 2026-10-24. This is a working acceptance record, not an independent security
 certification. Private transcripts, screenshots, paths and account details stay
 outside the public repository. Use synthetic reproductions here.

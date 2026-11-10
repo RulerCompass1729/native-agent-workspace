@@ -137,7 +137,7 @@ test('archive and restore retain identities and notes; session archive detaches;
   await room.archiveSession(client, 'two'); assert.throws(() => room.assertAvailable('two'), /归档/);
   const cold = new RoomState(dir); assert.equal(cold.value.archived, true); assert.equal(cold.value.notes, 'Shared note');
   await cold.restoreRoom(client); assert.equal(records[0].roomId, 'shared'); assert.equal(records[1].roomId, null); assert.equal(cold.value.archived, false);
-  cold.restoreSession('two'); assert.doesNotThrow(() => cold.assertAvailable('two')); assert.equal(records[1].roomId, null, 'Solo restore does not silently rejoin');
+  await cold.restoreSession(client, 'two'); assert.doesNotThrow(() => cold.assertAvailable('two')); assert.equal(records[1].roomId, null, 'Solo restore does not silently rejoin');
   assert.equal(records[0].nativeId, 'native-one'); assert.equal(records[0].pid, 123); assert.equal(records[0].liveDraft, 'private');
   assert.ok(calls.every(([method]) => ['pause', 'initial', 'join'].includes(method)));
 });
@@ -219,7 +219,8 @@ test('legacy multi-home archive detaches explicitly and restore does not recreat
   await room.restoreRoom(client, null, a); assert.equal(isMember(record, a), false, 'Restore preserves the later/other homes instead of adding another');
   await room.archiveSession(client, 'one'); assert.deepEqual(roomIds(record), []);
   assert.equal(record.nativeId, 'original'); assert.equal(record.pid, 123); assert.equal(record.liveDraft, 'unsent');
-  room.restoreSession('one'); assert.deepEqual(roomIds(record), [], 'A session restore cannot silently rejoin any room');
+  const restored = await room.restoreSession(client, 'one'); assert.equal(restored.restored, true); assert.equal(restored.placement, 'unavailable');
+  assert.deepEqual(roomIds(record), [], 'A legacy overlap restores standalone rather than recreated'); assert.doesNotThrow(() => room.assertAvailable('one'));
   assert.ok(calls.every(([m]) => ['pause', 'pauseSpace', 'initial', 'join', 'joinSpace'].includes(m)));
   assert.equal(room.metadata(a).events.filter(e => e.kind === 'leave').length, 1);
   assert.equal(room.metadata(b).events.filter(e => e.kind === 'leave').length, 1);

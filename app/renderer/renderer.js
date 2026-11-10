@@ -1957,6 +1957,10 @@ function renderBackgroundControls(entry, message) {
   if (key === entry.backgroundKey) return;
   entry.backgroundKey = key;
   entry.backgroundControls?.remove(); entry.backgroundControls = null;
+  if (op?.resultNotice) {
+    const notice = node('p'); ui.display.text(notice, op.resultNotice.key, op.resultNotice.params);
+    entry.backgroundControls = notice; entry.actions.before(notice);
+  }
   if (question?.kind !== 'message' || !Array.isArray(question.options?.buttons)) return;
   const controls = node('div', undefined, 'operator-controls background-controls'); entry.backgroundControls = controls; entry.actions.before(controls);
   controls.append(node('strong', question.options.message), node('p', question.options.detail || ''));
@@ -2752,9 +2756,9 @@ function renderArchives() {
 }
 async function restoreArchivedSession(id) {
   const origin = document.activeElement, surface = JSON.stringify([selected, roomSession, roomSurface, mode]);
-  await api.restoreSession(id); updateState(await api.initial()); render();
+  const result = await api.restoreSession(id); updateState(await api.initial()); render();
   if (surface === JSON.stringify([selected, roomSession, roomSurface, mode])) focusAfterRemoval(origin, [$('session-header-more'), $('archive-button')]);
-  sessionNoticeMessage("toast.sessionRestored", undefined, id);
+  sessionNoticeMessage(result?.placement === 'unavailable' ? 'notice.room.sessionRestoreFallback' : 'toast.sessionRestored', undefined, id);
 }
 async function restoreArchivedRoom(id = spaceId) {
   await api.spaceAction(id, 'restore', []); updateState(await api.initial()); render();
@@ -4347,7 +4351,7 @@ const disposers = [
   api.onReconnected(next => { for (const s of state?.sessions || []) freezeLegacyProgress(s); disconnected = false; updateState(next); render(); }),
   api.onBackendSwitched(notice => { toast(''); ui.display.computed($('toast-text'), 'text', () => backendSwitchedText(notice)); }),
   api.onNew(() => openCreate()),
-  api.onRevealRecord(target => attempt(() => showRoomRecord(target?.roomId, target?.eventId))),
+  api.onRevealRecord(target => attempt(() => target?.sessionId ? showBackgroundConfirmation(target) : showRoomRecord(target?.roomId, target?.eventId))),
 ];
 sidebarLayout = window.nativeWorkspaceSidebar.bind({ navigation: document.querySelector('.sidebar-navigation'), groups: ['sessions-group', 'workspace-group', 'archive-group'].map($), sashes: ['sidebar-session-sash', 'sidebar-workspace-sash'].map($), onCommit: weights => api.sidebar({ type: 'resize', weights }), displayTitle: (element, params) => ui.display.attribute(element, 'title', 'sidebar.resizeHelp', params), onError: toastError });
 disposers.push(() => sidebarLayout.dispose());

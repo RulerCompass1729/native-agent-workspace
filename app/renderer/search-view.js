@@ -128,6 +128,13 @@ async function openSearchResult(result) {
   $('return-reading').hidden = false;
   await persistView();
 }
+async function showBackgroundConfirmation(target) {
+  const record = state.sessions.find(s => s.id === target.sessionId && s.nativeId === target.nativeId);
+  const row = record?.messages.find(m => m.id === target.messageId);
+  if (!row || row.backgroundOperation?.state !== 'confirmation-required') { toast(uiText('search.changed')); return false; }
+  await select(record.id, 'chat');
+  return pointToMessage($('messages'), record.id, row.id);
+}
 async function showRoomRecord(roomId, messageId, query = '') {
   const room = typeof roomId === 'string' && spaceRecord(roomId);
   const records = room ? [...(room.messages || []), ...(room.events || [])] : [];

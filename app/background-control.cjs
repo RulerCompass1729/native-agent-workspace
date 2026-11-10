@@ -62,9 +62,11 @@ class ConfirmationRequired extends Error {
   constructor(value) { super('This operation needs the existing human confirmation'); this.confirmation = clone(value); }
 }
 class BackgroundControl {
-  constructor({ dataDir, handlers, context, changed = () => {}, now = Date.now }) {
+  constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, changed = () => {}, now = Date.now }) {
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
     this.data = { version: 1, records: [], views: {} }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
+    this.confirmation = confirmation; this.audit = audit;
+    this.confirmationPending = confirmationPending;
     try {
       const st = fs.lstatSync(this.file);
       if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1 || st.uid !== process.getuid() || st.mode & 0o077 || st.size > 32 * 1024 * 1024) throw Error('Unsafe background operation record');
@@ -113,6 +115,22 @@ class BackgroundControl {
     const record = this.data.records.find(r => r.id === id && this.key(r.actor) === this.key(sender));
     return record ? clone(record) : null;
   }
+  async publish(record, context) {
+    if (!operation.maintenanceAction(record.command.method, record.command.arguments, record.actor)) return;
+    if (typeof this.audit !== 'function') throw Error('Maintenance event storage is unavailable');
+    await this.audit(clone(record), context);
+  }
+  async finishAudit(actor, id, context) {
+    const record = this.receipt(actor, id);
+    try { await this.publish(record, context); }
+    catch (error) {
+      // Never rerun a side effect because its display journal failed. Retain the
+      // actual result separately and make the incomplete audit visible.
+      this.commit(d => { const r = d.records.find(r => r.id === id && this.key(r.actor) === this.key(actor));
+        Object.assign(r, { resultState: r.state, state: 'unconfirmed', auditError: String(error.message).slice(0, 2048), error: 'The maintenance space event could not be saved; inspect the recorded result and do not repeat.' }); });
+    }
+    return this.receipt(actor, id);
+  }
   async call(binding, input) {
     if (this.closed) throw Error('Background control is closing');
     const args = validate(input), { sender, identity } = binding;
@@ -136,13 +154,23 @@ class BackgroundControl {
     const existing = this.receipt(sender, args.operation_id);
     if (existing) {
       if (!isDeepStrictEqual(existing.command, args)) throw Error('operation_id already belongs to a different command');
+      await this.publish(existing, context);
       return { ...existing, duplicate: true, retry: false };
     }
     const handler = !['backgroundDecision', 'uiReady'].includes(args.method) && this.handlers.get(args.method);
-    if (!handler) return { state: 'not-executed', reason: 'unknown-command', method: args.method, retry: false };
     const key = this.key(sender);
-    if (this.inflight.has(key)) return { state: 'not-executed', reason: 'another-operation-running', retry: false };
     const actor = operation.actor({ ...sender, callId: identity.callId, turnId: identity.turnId, operationId: args.operation_id });
+    const refuse = reason => {
+      const refusal = { state: 'not-executed', reason, method: args.method, retry: false };
+      if (!operation.maintenanceAction(args.method, args.arguments, actor)) return refusal;
+      this.commit(d => d.records.push({ id: args.operation_id, actor, command: args, guard: clone(context.fingerprint?.(args) || null), ...refusal, at: this.now() }));
+      return this.finishAudit(actor, args.operation_id, context);
+    };
+    if (!handler || this.inflight.has(key)) return refuse(handler ? 'another-operation-running' : 'unknown-command');
+    // Busy decisions reserve their actor before awaits. Refresh only an idle
+    // independent view, then check the reservation again before saving intent.
+    await context.refresh?.(); await valid();
+    if (this.inflight.has(key)) return refuse('another-operation-running');
     // Save intent before calling ANY mutation, including an independent draft.
     const guard = clone(context.fingerprint?.(args) || null);
     this.commit(d => d.records.push({ id: args.operation_id, actor, command: args, guard, state: 'running', at: this.now() }));
@@ -168,7 +196,18 @@ class BackgroundControl {
         const row = this.receipt(actor, args.operation_id);
         if (row.guard && !isDeepStrictEqual(row.guard, clone(context.fingerprint?.(args)))) throw Error('The operation target changed before execution');
         const request = { context, args, actor, valid, approved, dialogIndex: 0 };
-        value = await operation.run(actor, () => handler(context, ...args.arguments), request);
+        value = await operation.run(actor, async () => {
+          const action = operation.maintenanceAction(args.method, args.arguments, actor);
+          if (action) {
+            if (typeof this.confirmation !== 'function' || typeof this.audit !== 'function') throw Error('Human maintenance confirmation or event storage is unavailable');
+            const answer = await dialog(context, 'message', this.confirmation(actor, args, action));
+            if (answer.response !== 1) return { cancelled: true };
+            request.maintenanceApproved = true;
+            // If the event writer is broken, fail before an approved mutation.
+            await this.publish({ ...row, state: 'running' }, context);
+          }
+          return handler(context, ...args.arguments);
+        }, request);
         delivery = await context.delivery?.(args, value, actor, row.guard);
         state = delivery ? delivery.nativeReceived ? 'received' : 'awaiting-native' : 'complete';
       } catch (e) {
@@ -178,8 +217,14 @@ class BackgroundControl {
       this.commit(d => {
         const row = d.records.find(r => r.id === args.operation_id && this.key(r.actor) === key);
         d.views[key + ':' + (args.view_id || 'default')] = clone(context.view);
+        delete row.confirmation;
         Object.assign(row, { state, finishedAt: this.now(), ...(value === undefined ? {} : { value }), ...(delivery ? { delivery } : {}), ...(error ? { error } : {}), ...(confirmation ? { confirmation } : {}) });
       });
+      const result = await this.finishAudit(actor, args.operation_id, context);
+      if (result.state === 'confirmation-required' && result.confirmation?.kind === 'message' && !result.confirmationNotifiedAt && this.confirmationPending) {
+        this.commit(d => { d.records.find(r => r.id === result.id && this.key(r.actor) === key).confirmationNotifiedAt = this.now(); });
+        try { await this.confirmationPending(this.receipt(actor, result.id)); } catch { /* The durable confirmation remains available. */ }
+      }
       return { ...this.receipt(actor, args.operation_id), retry: false };
   }
   async decide(sessionId, nativeId, id, response) {
@@ -188,12 +233,18 @@ class BackgroundControl {
         !Number.isSafeInteger(response) || response < 0 || response >= row.confirmation.options.buttons.length || this.inflight.has(this.key(row.actor))) throw Error('This confirmation is no longer current');
     return this.exclusive(row.actor, async () => {
     const context = await this.view(row.actor, row.command.view_id);
-    await context.checkActor();
+    try { await context.checkActor(); }
+    catch (error) {
+      this.commit(d => { const r = d.records.find(r => r.id === id && this.key(r.actor) === this.key(row.actor));
+        delete r.confirmation;
+        Object.assign(r, { state: 'unconfirmed', error: String(error.message).slice(0, 2048), finishedAt: this.now() }); });
+      return this.finishAudit(row.actor, id, context);
+    }
     const current = this.receipt(row.actor, id);
     if (!current || current.state !== 'confirmation-required' || !isDeepStrictEqual(current.confirmation, row.confirmation)) throw Error('This confirmation was already handled');
     if (response === (row.confirmation.options.cancelId ?? 0)) {
       this.commit(d => { const r = d.records.find(r => r.id === id && r.actor.id === sessionId && r.actor.nativeId === nativeId); Object.assign(r, { state: 'cancelled', humanDecision: response, finishedAt: this.now() }); });
-      return this.receipt(row.actor, id);
+      return this.finishAudit(row.actor, id, context);
     }
     this.commit(d => { const r = d.records.find(r => r.id === id && r.actor.id === sessionId && r.actor.nativeId === nativeId); Object.assign(r, { state: 'running', humanDecision: response, humanDecisionAt: this.now() }); });
     return this.perform(row.actor, row.command, context, () => context.checkActor(), { operationId: id, confirmation: row.confirmation, response });
@@ -203,7 +254,8 @@ class BackgroundControl {
     return this.data.records.filter(r => r.actor.id === sessionId).map(r => ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
       name: r.actor.name, time: r.at, status: ['running', 'awaiting-native'].includes(r.state) ? 'working' : ['complete', 'received', 'cancelled'].includes(r.state) ? 'complete' : 'error',
       text: `${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`,
-      backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state, confirmation: r.confirmation || null } }));
+      backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state, confirmation: r.confirmation || null,
+        resultNotice: r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null } }));
   }
   async close() {
     this.closed = true;
