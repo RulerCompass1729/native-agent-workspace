@@ -148,7 +148,7 @@ test('a finished item settles as done and the same member gets the next item in 
   ];
   const rooms = [{ id: 'shared', name: 'Team', queue: [sentItem(), item('2')] }];
   assert.deepEqual(plan(rooms, [member('a', { messages })]), [
-    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'done', sessionId: 'a' },
+    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'done', sessionId: 'a', reply: 'Done: changed the file.' },
     { kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a' },
   ]);
 });
@@ -165,7 +165,7 @@ test('an interrupted or silent turn, or the person stepping in, holds the member
     { id: 'r1', role: 'assistant', text: 'OK, changed approach.' },
   ];
   assert.deepEqual(plan(rooms, [member('a', { messages: personWrote })]), [
-    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'waiting', reason: 'person-intervened', sessionId: 'a' },
+    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'waiting', reason: 'person-intervened', sessionId: 'a', reply: 'OK, changed approach.' },
   ]);
   // Interrupting from NAW or typing in the native terminal moves the control revision.
   const answered = [
@@ -173,7 +173,7 @@ test('an interrupted or silent turn, or the person stepping in, holds the member
     { id: 'r1', role: 'assistant', text: 'partial work' },
   ];
   assert.deepEqual(plan(rooms, [member('a', { messages: answered, controlRevision: 3 })]), [
-    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'waiting', reason: 'person-intervened', sessionId: 'a' },
+    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'waiting', reason: 'person-intervened', sessionId: 'a', reply: 'partial work' },
   ]);
 });
 
@@ -184,7 +184,7 @@ test('a reply that asks for a decision stops dispatch to that member until the p
   ];
   const rooms = [{ id: 'shared', name: 'Team', queue: [sentItem(), item('2', { assignee: 'a' })] }];
   assert.deepEqual(plan(rooms, [member('a', { messages })]), [
-    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'waiting', sessionId: 'a' },
+    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'waiting', sessionId: 'a', reply: '需要你决定：要不要删旧分支？' },
   ]);
   const later = [{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'waiting' }), item('2', { assignee: 'a' })] }];
   assert.deepEqual(plan(later, [member('a', { messages })]), []);
@@ -198,7 +198,7 @@ test('a reply is found by send time when a native record replaced the NAW messag
   ];
   const rooms = [{ id: 'shared', name: 'Team', queue: [sentItem()] }];
   assert.deepEqual(plan(rooms, [member('a', { messages })]), [
-    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'done', sessionId: 'a' },
+    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'done', sessionId: 'a', reply: 'finished' },
   ]);
   const silent = [{ id: 'old', role: 'assistant', text: 'earlier work', time: NOW - 90000 }];
   assert.deepEqual(plan(rooms, [member('a', { messages: silent })]), [
@@ -290,6 +290,34 @@ test('dispatch and decision outcomes are written once to the space record with t
   assert.equal(room.value.queue[0].status, 'done');
   assert.equal(room.value.events.length, 4);
   assert.equal(room.value.events[3].text, '已处理：改一下按钮');
+});
+
+test('a settled item keeps one bounded line of the reply, it survives a reload, and the space record does not repeat it', t => {
+  const { dir, room } = roomSetup(t);
+  const raw = `收到\n\u001b[32m好了\u001b[0m\u0007 ${'细节'.repeat(200)}`;
+  const messages = [
+    { id: 't1', role: 'user', text: 'NAW task', origin: 'naw-dispatch' },
+    { id: 'r1', role: 'assistant', text: raw },
+  ];
+  const rooms = [{ id: 'shared', name: 'Team', queue: [sentItem()] }];
+  const [action] = plan(rooms, [member('a', { messages })]);
+  assert.equal(action.status, 'done');
+  assert.equal(action.reply.length, 200);
+  assert.ok(action.reply.startsWith('收到 好了 细节'), action.reply);
+  assert.equal(/\[\d*m/.test(action.reply), false, 'no escape-sequence remains: ' + action.reply.slice(0, 40));
+  assert.ok(action.reply.endsWith('…'));
+  assert.equal(/[\u0000-\u001f\u007f]/u.test(action.reply), false, 'a terminal reply keeps no escape sequences');
+  const id = room.queueAdd('改一下按钮', null);
+  room.queueMarkSent('shared', id, 'agent-a', 'Claude 2', NOW);
+  room.queueSetDelivery('shared', id, 'tag-1', 0);
+  room.queueSettle('shared', id, 'waiting', '', 'Claude 2', action.reply);
+  const saved = new RoomState(dir);
+  assert.equal(saved.value.queue[0].reply, action.reply);
+  for (const event of saved.value.events) {
+    assert.equal(event.text.includes('细节'), false, 'the reply belongs to the item, not to the space record');
+  }
+  assert.throws(() => rules.validateQueue([item('x', { reply: 'bad\u0007line' })]), /reply/);
+  assert.throws(() => rules.validateQueue([item('x', { reply: 'x'.repeat(201) })]), /reply/);
 });
 
 test('a refusal before sending returns the item to the queue, and fails it after five tries', t => {

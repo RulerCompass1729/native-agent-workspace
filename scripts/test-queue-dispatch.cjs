@@ -9,12 +9,31 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 const { fork } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
 const { connect } = require('../app/service-client.cjs');
 
 const root = path.resolve(__dirname, '..');
 const code = process.env.NAW_TEST_APP_ROOT || root;
+// This script now measures real layout, which needs the shared single-GUI slot every other
+// desktop script takes (scripts/test-dialog-lifecycle.cjs): a second interface would move windows.
+const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
+const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock');
+const token = randomUUID();
+let slotOwned = false;
+try {
+  fs.mkdirSync(slot);
+} catch (error) {
+  if (error.code !== 'EEXIST') {
+    throw error;
+  }
+  console.error('GUI slot occupied; nothing started.');
+  process.exit(75);
+}
+slotOwned = true;
+fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'terminal-claude', task: 'queue dialog layout and outcome', token, pid: process.pid, time: new Date().toISOString() }));
 const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-queue-dispatch-'));
 const version = require(path.join(code, 'package.json')).version;
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
@@ -168,6 +187,207 @@ async function expectQuiet(count, label, ms = 14000) {
   assert.equal((await sends()).length, count, label);
 }
 
+// Every box and glyph the open queue dialog paints, measured once. Glyph rectangles, not element
+// boxes: the overlap the person reported was text leaving its own box (scripts/test-space-files-density.cjs
+// measures filenames the same way).
+function queueLayout() {
+  return page.evaluate(() => {
+    const dialog = document.getElementById('queue-dialog');
+    const outer = dialog.getBoundingClientRect();
+    const style = getComputedStyle(dialog);
+    const innerRight = outer.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight);
+    const label = element => element.id || element.className || element.tagName;
+    const glyphs = element => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const rects = [];
+      for (const rect of range.getClientRects()) {
+        rects.push({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom });
+      }
+      return rects;
+    };
+    const rows = [];
+    for (const row of dialog.querySelectorAll('.queue-row')) {
+      const parts = [];
+      for (const part of row.children) {
+        parts.push({ label: label(part), box: part.getBoundingClientRect().toJSON(), title: part.title || '', glyphs: glyphs(part) });
+      }
+      rows.push({ item: row.dataset.queueItem, status: row.dataset.status, text: row.innerText, parts });
+    }
+    const past = [];
+    for (const element of dialog.querySelectorAll('*')) {
+      const box = element.getBoundingClientRect();
+      if (!box.width && !box.height) {
+        continue;
+      }
+      let over = box.right - innerRight;
+      for (const glyph of glyphs(element)) {
+        over = Math.max(over, glyph.right - innerRight);
+      }
+      if (over > 1) {
+        past.push({ label: label(element), over: Math.round(over) });
+      }
+    }
+    const chain = [];
+    for (const link of dialog.querySelectorAll('#queue-rotation-list .rotation-chain li')) {
+      const tops = new Set();
+      for (const rect of glyphs(link)) {
+        tops.add(Math.round(rect.top));
+      }
+      chain.push({ text: link.innerText, title: link.title, lines: tops.size });
+    }
+    return { innerRight, rows, past, chain, scrollWidth: dialog.scrollWidth, clientWidth: dialog.clientWidth, viewport: [innerWidth, innerHeight] };
+  });
+}
+
+function overlapping(one, two) {
+  return one.left < two.right - 0.5 && two.left < one.right - 0.5 && one.top < two.bottom - 0.5 && two.top < one.bottom - 0.5;
+}
+
+function rowCollisions(rows) {
+  const found = [];
+  for (const row of rows) {
+    for (let i = 0; i < row.parts.length; i += 1) {
+      for (let j = i + 1; j < row.parts.length; j += 1) {
+        for (const one of row.parts[i].glyphs) {
+          for (const two of row.parts[j].glyphs) {
+            if (overlapping(one, two)) {
+              found.push(`${row.item}: ${row.parts[i].label} painted over ${row.parts[j].label}`);
+            }
+          }
+        }
+      }
+    }
+  }
+  return [...new Set(found)];
+}
+
+// Independent verification added 2026-11-09. Element boxes, not only glyphs: what was asked was
+// whether the status box and the task text box overlap at all, which short text can hide.
+function rowBoxCollisions(rows) {
+  const found = [];
+  for (const row of rows) {
+    for (let i = 0; i < row.parts.length; i += 1) {
+      for (let j = i + 1; j < row.parts.length; j += 1) {
+        if (overlapping(row.parts[i].box, row.parts[j].box)) {
+          found.push(`${row.status} ${row.item}: ${row.parts[i].label} box over ${row.parts[j].label} box`);
+        }
+      }
+    }
+  }
+  return [...new Set(found)];
+}
+
+// Whether one line of the dialog is really on screen and on top: its own box is what the viewer's
+// click would hit at its centre, and that centre is inside both the dialog and the window.
+function visibleFact(selector) {
+  return page.evaluate(target => {
+    const element = document.querySelector(target);
+    if (!element) {
+      return { found: false };
+    }
+    element.scrollIntoView({ block: 'nearest' });
+    const box = element.getBoundingClientRect();
+    const port = document.getElementById('queue-dialog').getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    let hitsSelf = false;
+    if (hit) {
+      hitsSelf = hit === element || element.contains(hit);
+    }
+    let hitLabel = 'nothing';
+    if (hit) {
+      hitLabel = hit.id || hit.className || hit.tagName;
+    }
+    const insideDialog = x >= port.left && x <= port.right && y >= port.top && y <= port.bottom;
+    const insideWindow = x >= 0 && x <= innerWidth && y >= 0 && y <= innerHeight;
+    return {
+      found: true,
+      text: element.innerText,
+      width: Math.round(box.width),
+      height: Math.round(box.height),
+      centre: [Math.round(x), Math.round(y)],
+      hitsSelf,
+      hitLabel,
+      insideDialog,
+      insideWindow,
+    };
+  }, selector);
+}
+
+// A name longer than the product's own 60-character limit cannot be stored (app/session-labels.cjs
+// validateName), and this evaluate world cannot reach the renderer's state, so the over-limit case
+// is written into the status lines and the member option of the render being measured. It runs as
+// the last measurement: the next render replaces those nodes.
+async function stretchQueueText(long) {
+  const touched = await page.evaluate(text => {
+    let count = 0;
+    for (const status of document.querySelectorAll('#queue-list .queue-status')) {
+      const head = status.textContent.split(' · ')[0];
+      status.textContent = head + ' · ' + text;
+      count += 1;
+    }
+    for (const option of document.querySelectorAll('#queue-assignee option')) {
+      if (option.value) {
+        option.textContent = text;
+      }
+    }
+    return count;
+  }, long);
+  assert.ok(touched > 0, 'the over-limit name reached the rows that were measured');
+}
+
+// What the product does with a name past its limit, measured rather than assumed.
+function renameOutcome(id, name) {
+  return page.evaluate(async ([session, value]) => {
+    try {
+      await workspace.rename(session, value);
+      return 'accepted';
+    } catch (error) {
+      let message = String(error);
+      if (error && error.message) {
+        message = error.message;
+      }
+      return 'refused: ' + message;
+    }
+  }, [id, name]);
+}
+
+// How the dialog fits the window, now that every settled row carries a third line.
+function dialogFit() {
+  return page.evaluate(() => {
+    const dialog = document.getElementById('queue-dialog');
+    const box = dialog.getBoundingClientRect();
+    const style = getComputedStyle(dialog);
+    const form = document.getElementById('queue-form').getBoundingClientRect();
+    return {
+      overflowY: style.overflowY,
+      scrollHeight: dialog.scrollHeight,
+      clientHeight: dialog.clientHeight,
+      dialogTop: Math.round(box.top),
+      dialogBottom: Math.round(box.bottom),
+      formHeight: Math.round(form.height),
+      viewport: [innerWidth, innerHeight],
+    };
+  });
+}
+
+function assertRowLayout(layout, label) {
+  assert.deepEqual(rowCollisions(layout.rows), [], `${label}: two pieces of text in one queue row are painted over each other`);
+  assert.deepEqual(rowBoxCollisions(layout.rows), [], `${label}: two boxes in one queue row overlap`);
+  assert.deepEqual(layout.past, [], `${label}: something in the queue dialog reaches past its right edge`);
+  assert.ok(layout.scrollWidth <= layout.clientWidth + 1, `${label}: the dialog scrolls sideways, ${layout.scrollWidth} vs ${layout.clientWidth}`);
+}
+
+function assertReadable(fact, label) {
+  assert.equal(fact.found, true, `${label}: the line is not in the dialog`);
+  assert.ok(fact.width > 0 && fact.height > 0, `${label}: the line has no box`);
+  assert.ok(fact.hitsSelf, `${label}: its centre hits ${fact.hitLabel} instead`);
+  assert.ok(fact.insideDialog, `${label}: its centre is outside the dialog`);
+  assert.ok(fact.insideWindow, `${label}: its centre is outside the window`);
+}
+
 async function run() {
   console.log('Fixture profile:', profile);
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon');
@@ -263,12 +483,188 @@ async function run() {
   await page.locator('#queue-rotations summary').click();
   const chain = await page.locator('#queue-rotation-list .rotation-chain li').allInnerTexts();
   assert.equal(chain.length, 2);
-  assert.ok(chain[0].includes(a) && chain[1].includes(fresh), 'old then new session ids');
+  const chainTitles = await page.locator('#queue-rotation-list .rotation-chain li').evaluateAll(links => links.map(link => link.title));
+  assert.ok(chainTitles[0].includes(a) && chainTitles[1].includes(fresh), 'old then new session ids, in full, on each link');
   await capture('rotation-chain');
   await release(fresh, '已核对交接。');
   await expectSend(9, fresh, /任务七/, 'queued item to the new member');
   await capture('rotated');
   passed.push('An old member wrote a handoff; a new member took over its queue; the old process ended');
+
+  // 7) The dialog the person reads. A member auto-named from its first request can be a whole
+  // 60-character sentence (app/workspace.cjs), which is what painted over the task text and pushed
+  // the form past the dialog edge on 2026-11-09.
+  await page.locator('#close-queue').click();
+  await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
+  const LONG_NAME = 'Codex · 你现在是这个协作空间的秘书,原来的秘书不称职,你接替它的位置赶快开始干活不要再问我任何问题谢谢配合不胜感';
+  assert.equal([...LONG_NAME].length, 60, 'the worst case is the product limit, not an arbitrary length');
+  await page.evaluate(([id, name]) => workspace.rename(id, name), [fresh, LONG_NAME]);
+  await until(async () => (await snapshot()).sessions.find(s => s.id === fresh).name === LONG_NAME, 'The member carries a 60-character name');
+
+  // V1) Independent verification: what the person photographed was an item still in progress
+  // (「进行中 · <60-character name>」). The author measured only after that item had settled, and
+  // with 「谁空闲谁做」 selected, which is the narrowest the form's select ever is.
+  await page.locator('#room-queue').click();
+  await page.locator('#queue-dialog').waitFor();
+  await page.locator('#queue-assignee').selectOption(fresh);
+  const sentId = (await itemByText('任务七')).id;
+  assert.equal((await itemByText('任务七')).status, 'sent', 'the measured item is still in progress');
+  const sentLayout = await queueLayout();
+  console.log(JSON.stringify({ verifierSentRowAt60: sentLayout }));
+  await capture('verifier-sent-60');
+  assertRowLayout(sentLayout, 'in progress at a 60-character name');
+  const sentRow = sentLayout.rows.find(row => row.item === sentId);
+  assert.ok(sentRow.text.includes(LONG_NAME), `the in-progress row names its recipient: ${sentRow.text}`);
+  const sentStatus = await visibleFact(`#queue-list [data-queue-item="${sentId}"] .queue-status`);
+  console.log(JSON.stringify({ verifierSentStatus: sentStatus }));
+  assertReadable(sentStatus, 'the in-progress status line');
+  assert.ok(sentStatus.text.includes(LONG_NAME), 'the recipient is in the status line itself, not only in the row');
+  passed.push('An item still in progress names its recipient readably at the 60-character limit, with that member selected in the form');
+  await page.locator('#close-queue').click();
+  await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
+
+  await release(fresh, '收到');
+  await until(async () => (await itemByText('任务七')).status === 'done', '任务七 finished', DISPATCH_LIMIT_MS);
+  assert.equal((await sends()).length, 9, 'settling the last item sends nothing new');
+  assert.equal((await itemByText('任务七')).reply, '收到', 'the reply is kept on the item');
+  await page.locator('#room-queue').click();
+  await page.locator('#queue-dialog').waitFor();
+  await page.locator('#queue-rotations').evaluate(element => { element.open = true; });
+  await page.locator('#queue-rotation-list .rotation-chain li').first().waitFor();
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const layout = await queueLayout();
+  console.log(JSON.stringify({ queueLayout: layout }));
+  await capture('queue-layout');
+  assert.deepEqual(rowCollisions(layout.rows), [], 'two pieces of text in one queue row are painted over each other');
+  assert.deepEqual(layout.past, [], 'something in the queue dialog reaches past its right edge');
+  assert.ok(layout.scrollWidth <= layout.clientWidth + 1, `the dialog scrolls sideways: ${layout.scrollWidth} vs ${layout.clientWidth}`);
+  const done = layout.rows.find(row => row.status === 'done' && row.text.includes('任务七'));
+  assert.ok(done, 'the finished item is listed');
+  assert.ok(done.text.includes(LONG_NAME), 'the finished row names the member that received it');
+  assert.ok(done.text.includes('收到'), 'the finished row shows what came back');
+  assert.equal(layout.chain.length, 2);
+  for (const link of layout.chain) {
+    assert.equal(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.test(link.text), false, `a rotation link still prints a whole id: ${link.text}`);
+  }
+  assert.equal(layout.chain[0].text.includes(a), false, 'the old link shows a short id');
+  assert.ok(layout.chain[0].text.includes(a.slice(0, 6)), `the old link shows the sidebar's short id: ${layout.chain[0].text}`);
+  assert.ok(layout.chain[0].lines <= 2, `a short-named rotation link wraps over ${layout.chain[0].lines} lines: ${layout.chain[0].text}`);
+  assert.ok(layout.chain[0].title.includes(a) && layout.chain[1].title.includes(fresh), 'the whole ids stay reachable on each link');
+  passed.push('At a 60-character member name no queue row overlaps, nothing leaves the dialog, the finished row names its member and its reply, and rotation links are short with full ids reachable');
+
+  // 7b) The person could not find the queue: its button was only in the 「记录」 tab's tools.
+  await page.locator('#close-queue').click();
+  await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
+  await page.locator('#room-overview').click();
+  await until(async () => await page.locator('#room-overview').getAttribute('aria-pressed') === 'true', 'The space is on its overview tab');
+  assert.equal(await page.locator('.timeline-tools').isVisible(), false, 'the record tools stay hidden on the overview tab');
+  await page.locator('#room-tabs').getByRole('button', { name: '队列', exact: true }).click();
+  await page.locator('#queue-dialog').waitFor();
+  await capture('queue-from-overview');
+  const nativeWindow = await app.browserWindow(page);
+  const bounds = await nativeWindow.evaluate(win => win.getBounds());
+  try {
+    await nativeWindow.evaluate(win => win.setSize(850, 600));
+    await until(async () => (await page.evaluate(() => innerWidth)) <= 860, 'The window narrowed to the supported minimum');
+    const tabs = await page.evaluate(() => {
+      const buttons = [];
+      for (const button of document.querySelectorAll('#room-tabs button')) {
+        if (button.hidden) {
+          continue;
+        }
+        const box = button.getBoundingClientRect();
+        buttons.push({ id: button.id || button.className, right: Math.round(box.right), bottom: Math.round(box.bottom) });
+      }
+      return { viewport: [innerWidth, innerHeight], buttons };
+    });
+    console.log(JSON.stringify({ roomTabsAtMinimumWindow: tabs }));
+    assert.ok(tabs.buttons.some(button => button.id === 'room-queue'), 'the queue button is one of the space tabs');
+    for (const button of tabs.buttons) {
+      assert.ok(button.right <= tabs.viewport[0] + 1 && button.bottom <= tabs.viewport[1] + 1, `${button.id} leaves the minimum window`);
+    }
+  } finally {
+    await nativeWindow.evaluate((win, size) => win.setBounds(size), bounds);
+  }
+  passed.push('The queue button is reachable from the overview tab and the whole tab bar still fits the minimum window');
+
+  // V2) Independent verification of what a settled row is read for: who received the item and what
+  // came back, each measured as its own visible line rather than as a substring of the row text.
+  const doneId = (await itemByText('任务七')).id;
+  const doneStatus = await visibleFact(`#queue-list [data-queue-item="${doneId}"] .queue-status`);
+  const doneOutcome = await visibleFact(`#queue-list [data-queue-item="${doneId}"] .queue-outcome`);
+  console.log(JSON.stringify({ verifierDoneStatus: doneStatus, verifierDoneOutcome: doneOutcome }));
+  assertReadable(doneStatus, 'the finished status line');
+  assertReadable(doneOutcome, 'the finished outcome line');
+  assert.ok(doneStatus.text.includes(LONG_NAME), 'the finished status line names the member that received the item');
+  assert.equal(doneOutcome.text.trim(), '收到', `the finished outcome line is the reply: ${doneOutcome.text}`);
+
+  // An item held for the person is the only row that carries both buttons beside its text, and the
+  // hardest name is one unbroken token: the 60-character sentence above may wrap anywhere.
+  const UNBROKEN_NAME = 'Codex-' + 'B'.repeat(54);
+  assert.equal(UNBROKEN_NAME.length, 60, 'the unbroken name is the product limit too');
+  await page.evaluate(([id, name]) => workspace.rename(id, name), [b, UNBROKEN_NAME]);
+  await until(async () => (await snapshot()).sessions.find(s => s.id === b).name === UNBROKEN_NAME, 'The other member carries an unbroken 60-character name');
+  await release(b, '需要你决定：这条还要继续吗？');
+  await until(async () => (await itemByText('任务九')).status === 'waiting', '任务九 waits for the person', DISPATCH_LIMIT_MS);
+  assert.equal((await sends()).length, 9, 'holding an item for the person sends nothing new');
+  const heldId = (await itemByText('任务九')).id;
+  await page.locator('#queue-assignee').selectOption(b);
+  const heldLayout = await queueLayout();
+  console.log(JSON.stringify({ verifierHeldAt60Unbroken: heldLayout }));
+  await capture('verifier-held-60-unbroken');
+  assertRowLayout(heldLayout, 'a held row at an unbroken 60-character name');
+  const heldRow = heldLayout.rows.find(row => row.item === heldId);
+  assert.equal(heldRow.status, 'waiting', 'the held item is listed as waiting');
+  assert.ok(heldRow.text.includes(UNBROKEN_NAME), `the held row names its recipient: ${heldRow.text}`);
+  const heldButtons = heldRow.parts.find(part => part.label === 'queue-actions');
+  assert.ok(heldButtons.box.width > 0, 'the held row carries its buttons');
+  const heldOutcome = await visibleFact(`#queue-list [data-queue-item="${heldId}"] .queue-outcome`);
+  console.log(JSON.stringify({ verifierHeldOutcome: heldOutcome }));
+  assertReadable(heldOutcome, 'the held outcome line');
+  assert.ok(heldOutcome.text.includes('这条还要继续吗'), `the held row shows what the member asked: ${heldOutcome.text}`);
+
+  // How tall the dialog is now, at this window and at the supported minimum.
+  const fitWide = await dialogFit();
+  const smallWindow = await app.browserWindow(page);
+  const wideBounds = await smallWindow.evaluate(win => win.getBounds());
+  let fitNarrow;
+  let narrowStatus;
+  let narrowOutcome;
+  let narrowAdd;
+  try {
+    await smallWindow.evaluate(win => win.setSize(850, 600));
+    await until(async () => (await page.evaluate(() => innerWidth)) <= 860, 'The window narrowed to the supported minimum');
+    fitNarrow = await dialogFit();
+    narrowStatus = await visibleFact(`#queue-list [data-queue-item="${doneId}"] .queue-status`);
+    narrowOutcome = await visibleFact(`#queue-list [data-queue-item="${doneId}"] .queue-outcome`);
+    narrowAdd = await visibleFact('#add-queue');
+    await capture('verifier-850x600');
+  } finally {
+    await smallWindow.evaluate((win, size) => win.setBounds(size), wideBounds);
+  }
+  console.log(JSON.stringify({ verifierDialogFit: { wide: fitWide, narrow: fitNarrow }, narrowStatus, narrowOutcome, narrowAdd }));
+  assertReadable(narrowStatus, 'the finished status line at the minimum window');
+  assertReadable(narrowOutcome, 'the finished outcome line at the minimum window');
+  assertReadable(narrowAdd, 'the add button at the minimum window');
+  for (const fit of [fitWide, fitNarrow]) {
+    assert.ok(fit.dialogBottom <= fit.viewport[1] + 1 && fit.dialogTop >= -1, `the dialog hangs outside the window: ${JSON.stringify(fit)}`);
+    assert.ok(fit.scrollHeight <= fit.clientHeight + 1 || fit.overflowY === 'auto' || fit.overflowY === 'scroll', `the dialog is taller than its box and does not scroll: ${JSON.stringify(fit)}`);
+  }
+  passed.push('A finished row shows its recipient and its reply as visible lines, a held row keeps both buttons beside an unbroken 60-character name, and both stay readable in a 850x600 window');
+
+  // V3) Past the product's own limit, as one unbroken token. The product refuses to store such a
+  // name, so it is written into the rows and the member option for this last measurement only.
+  const OVER_LIMIT = 'Codex-' + 'A'.repeat(120);
+  const refusal = await renameOutcome(b, OVER_LIMIT);
+  console.log(JSON.stringify({ productNameLimit: { length: OVER_LIMIT.length, refusal } }));
+  assert.notEqual(refusal, 'accepted', 'the product stored a name past its own limit; measure that stored name instead');
+  await stretchQueueText(OVER_LIMIT);
+  const overLayout = await queueLayout();
+  console.log(JSON.stringify({ verifierRowsAt126: overLayout }));
+  await capture('verifier-rows-126');
+  assert.ok(overLayout.rows.every(row => row.text.includes(OVER_LIMIT)), 'the measured rows are the stretched ones');
+  assertRowLayout(overLayout, 'every row at a 126-character name');
+  passed.push('At a 126-character name, past what the product accepts, no row overlaps and nothing leaves the dialog');
 
   assert.deepEqual(errors, []);
   assert.equal(app.windows().length, 1);
@@ -297,5 +693,16 @@ run().catch(async error => {
   }
   if (child.connected) {
     child.disconnect();
+  }
+  if (slotOwned) {
+    let owner = {};
+    try {
+      owner = JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'), 'utf8'));
+    } catch {
+      owner = {};
+    }
+    if (owner.token === token) {
+      fs.rmSync(slot, { recursive: true, force: true });
+    }
   }
 }));

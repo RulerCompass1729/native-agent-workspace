@@ -4360,6 +4360,35 @@ function queueMemberName(id) {
   }
   return sessionShortId(id);
 }
+// Why NAW stopped on an item. Unmapped reasons are internal slugs, so no line is drawn for them.
+const QUEUE_REASONS = {
+  'no-reply': 'queue.reason.noReply',
+  'person-intervened': 'queue.reason.personIntervened',
+  'record-missing': 'queue.reason.recordMissing',
+  'send-unconfirmed': 'queue.reason.sendUnconfirmed',
+  'member-missing': 'queue.reason.memberMissing',
+  'send-failed': 'queue.reason.sendFailed',
+};
+function queueReasonKey(reason) {
+  if (typeof reason !== 'string') {
+    return '';
+  }
+  if (reason.startsWith('not-sent: ')) {
+    return 'queue.reason.notSent';
+  }
+  return QUEUE_REASONS[reason] || '';
+}
+// What came back, or why it did not: the fact a settled row is read for.
+function queueOutcomeNode(item) {
+  const reasonKey = queueReasonKey(item.reason);
+  if (reasonKey) {
+    return uiNode('div', reasonKey, undefined, 'queue-outcome');
+  }
+  if (item.reply) {
+    return node('div', item.reply, 'queue-outcome');
+  }
+  return null;
+}
 function queueShownItems(room) {
   const open = [];
   const finished = [];
@@ -4394,8 +4423,12 @@ function queueRow(item, memberIds) {
     statusParams = () => ({ name });
   }
   const status = uiNode('span', statusKey, statusParams, 'queue-status');
-  if (item.status === 'queued' && item.assignee) {
+  if (name) {
     status.title = name;
+  }
+  // A reason without a plain line (a native error message, say) is still there to read or report.
+  if (item.reason && !queueReasonKey(item.reason)) {
+    status.title = [name, item.reason].filter(Boolean).join(' · ');
   }
   const actions = node('span', undefined, 'queue-actions');
   if (item.status === 'waiting') {
@@ -4415,6 +4448,10 @@ function queueRow(item, memberIds) {
   row.dataset.queueItem = item.id;
   row.dataset.status = item.status;
   row.append(status, body, actions);
+  const outcome = queueOutcomeNode(item);
+  if (outcome) {
+    row.append(outcome);
+  }
   return row;
 }
 function renderQueue() {
@@ -4499,15 +4536,27 @@ function renderRotationChains() {
     const block = node('ol', undefined, 'rotation-chain');
     for (const link of chain.sessions) {
       const row = node('li');
+      const id = link.id || '';
+      const shortId = id ? sessionShortId(id) : '';
+      let name = link.name || '';
+      if (!name) {
+        name = queueMemberName(id);
+      }
+      let native = '—';
+      if (link.nativeId) {
+        native = link.nativeId.slice(0, 8);
+      }
+      row.append(uiNode('span', 'queue.chainSession', { name, id: shortId, native }));
       if (link.handedAt) {
         const time = new Date(link.handedAt).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         let key = 'queue.chainHanded';
         if (link.outcome === 'kept') {
           key = 'queue.chainKept';
         }
-        row.append(uiNode('span', key, { time }, 'quiet'), node('br'));
+        row.append(document.createTextNode(' · '), uiNode('span', key, { time }, 'quiet'));
       }
-      row.append(uiNode('span', 'queue.chainSession', { name: link.name || '', id: link.id || '', native: link.nativeId || '—' }));
+      // The short ids read at a glance; the full ones stay here for anyone who needs to paste them.
+      row.title = [name, id, link.nativeId || ''].filter(Boolean).join(' · ');
       block.append(row);
     }
     blocks.push(block);

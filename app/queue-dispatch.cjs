@@ -14,6 +14,8 @@ const fleet = require('./renderer/fleet-observation.js');
 
 const CAPABILITY = 'queueDispatchV1';
 const ITEM_TEXT_LIMIT = 6000;
+// The member's own reply, kept on the item so a settled queue row can show what came back.
+const ITEM_REPLY_LIMIT = 200;
 const QUEUE_LIMIT = 300;
 const ITEM_STATUSES = ['queued', 'sent', 'done', 'waiting', 'cancelled', 'failed'];
 const OPEN_STATUSES = ['queued', 'sent', 'waiting'];
@@ -153,6 +155,9 @@ function validateItem(item) {
   }
   if (item.reason !== undefined && typeof item.reason !== 'string') {
     throw Error('Invalid queue reason');
+  }
+  if (item.reply !== undefined && !validText(item.reply, ITEM_REPLY_LIMIT)) {
+    throw Error('Invalid queue reply');
   }
   return { ...item };
 }
@@ -685,6 +690,13 @@ function planDispatch(input) {
       if (reason) {
         action.reason = reason;
       }
+      let line = '';
+      if (reply) {
+        line = replyLine(reply.last);
+      }
+      if (line) {
+        action.reply = line;
+      }
       actions.push(action);
       if (status !== 'done') {
         busy.add(member.id);
@@ -827,6 +839,19 @@ function shortText(text, limit = 60) {
     return line;
   }
   return line.slice(0, limit - 1) + '…';
+}
+
+// One storable line of a member's reply. A terminal reply can carry escape sequences, which the
+// queue item's own validation rejects, so they go before the length is cut.
+function replyLine(text) {
+  if (typeof text !== 'string') {
+    return '';
+  }
+  const plain = text
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/gu, ' ')
+    .replace(/\u001b\[[0-?]*[ -\/]*[@-~]/gu, ' ')
+    .replace(/\u001b[@-Z\\-_]/gu, ' ');
+  return shortText(plain.replace(/[\u0000-\u001f\u007f]+/gu, ' '), ITEM_REPLY_LIMIT);
 }
 
 // The same rules as workspace.cjs isTerminalResponse (a unit test keeps them equal),
@@ -1633,7 +1658,7 @@ class QueueDispatcher {
     if (session) {
       name = this.name(session);
     }
-    this.roomState.queueSettle(action.roomId, action.itemId, action.status, action.reason || '', name);
+    this.roomState.queueSettle(action.roomId, action.itemId, action.status, action.reason || '', name, action.reply || '');
     this.broadcast().catch(() => {});
   }
 

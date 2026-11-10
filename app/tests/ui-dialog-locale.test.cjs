@@ -316,3 +316,57 @@ test('existing merge event selection labels repaint only typed owned text and re
   const before = JSON.stringify(f.state); f.switch('en'); assert.ok(details.textContent.includes('Joined the workspace · No history sent or model notified')); assert.ok(details.textContent.includes(own.text));
   assert.deepEqual([...choice.events], selected); assert.equal(JSON.stringify(f.state), before); assert.deepEqual(f.calls, []);
 });
+
+// The person could not tell who had received a queued item or what came back (2026-11-09).
+test('a queue row names its recipient and shows what came back; rotation links stay short with the full ids reachable', () => {
+  const f = fixture();
+  const longName = 'Codex · ' + '秘'.repeat(52);
+  assert.equal([...longName].length, 60);
+  f.people[0].name = longName;
+  const load = (from, to) => {
+    const a = renderer.indexOf(from), b = renderer.indexOf(to, a + from.length);
+    assert.ok(a >= 0 && b > a, from);
+    vm.runInContext(renderer.slice(a, b), f.context);
+  };
+  load('let queueSpace = null;', "$('room-queue').onclick");
+  const oldLink = { id: f.people[1].id, nativeId: 'native-B-0001-0002', name: null, handedAt: Date.parse('2026-11-09T22:54:00Z'), outcome: 'done' };
+  const newLink = { id: 'c3b28d9a-12ba-585a-9d8b-6dacfa0ce5e6', nativeId: '12b28ccc-b9b7-8c22-cbcb-278cf34b4e4f', name: 'Codex 2 · 续' };
+  f.state.rotationChains = [{ spaces: ['shared'], sessions: [oldLink, newLink] }];
+  f.rooms[0].queue = [
+    { id: 'i1', text: '请只回复“收到”，', assignee: null, status: 'sent', createdAt: 1, sentTo: f.people[0].id },
+    { id: 'i2', text: '第二件', assignee: null, status: 'done', createdAt: 2, sentTo: f.people[0].id, reply: '收到' },
+    { id: 'i3', text: '第三件', assignee: null, status: 'waiting', createdAt: 3, sentTo: f.people[1].id, reason: 'no-reply' },
+    { id: 'i4', text: '第四件', assignee: null, status: 'failed', createdAt: 4, sentTo: f.people[1].id, reason: 'not-sent: error.queue.personTyping' },
+    { id: 'i5', text: '第五件', assignee: null, status: 'failed', createdAt: 5, sentTo: f.people[1].id, reason: 'synthetic-unmapped' },
+    { id: 'i6', text: '第六件', assignee: null, status: 'failed', createdAt: 6, sentTo: f.people[1].id, reason: 'send-failed' },
+  ];
+  f.context.openQueue();
+  const rows = f.$('queue-list').querySelectorAll('.queue-row');
+  const row = id => rows.find(el => el.dataset.queueItem === id);
+  const outcome = id => row(id).querySelectorAll('.queue-outcome').map(el => el.textContent);
+  const status = id => row(id).querySelectorAll('.queue-status')[0];
+  assert.equal(rows.length, 6);
+  assert.ok(status('i1').textContent.includes(longName), 'a sent row names the member that received it');
+  assert.equal(status('i1').title, longName, 'the whole name stays reachable however it is laid out');
+  assert.deepEqual(outcome('i2'), ['收到']);
+  assert.deepEqual(outcome('i3'), ['它没有回话']);
+  assert.deepEqual(outcome('i4'), ['没能发出']);
+  assert.deepEqual(outcome('i5'), [], 'an internal reason is not shown as an outcome');
+  assert.ok(status('i5').title.endsWith(' · synthetic-unmapped'), 'but it stays readable on the status line: ' + status('i5').title);
+  assert.deepEqual(outcome('i6'), ['发送失败，不会重发']);
+  const chains = f.$('queue-rotation-list').querySelectorAll('.rotation-chain');
+  assert.equal(chains.length, 1);
+  const links = chains[0].children;
+  assert.equal(links.length, 2);
+  assert.equal(links[0].textContent.startsWith('RAW 中文 B sessio · 原生 native-B'), true, links[0].textContent);
+  const handed = new Date(oldLink.handedAt).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  assert.ok(links[0].textContent.endsWith(` · ${handed} 交接`), 'the handoff time reads as its own part, not glued to the native id: ' + links[0].textContent);
+  assert.equal(links[0].title, `RAW 中文 B · ${f.people[1].id} · ${oldLink.nativeId}`);
+  assert.equal(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.test(links[1].textContent), false, links[1].textContent);
+  assert.equal(links[1].title, `Codex 2 · 续 · ${newLink.id} · ${newLink.nativeId}`);
+  f.switch('en');
+  assert.deepEqual(outcome('i3'), ['It did not reply']);
+  assert.deepEqual(outcome('i4'), ['It could not be sent']);
+  assert.ok(links[1].textContent.includes('native 12b28ccc'), links[1].textContent);
+  assert.deepEqual(f.calls, []);
+});

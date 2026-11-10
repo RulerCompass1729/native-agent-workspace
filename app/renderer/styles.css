@@ -593,11 +593,15 @@ header h1, header p { overflow-wrap: anywhere; }
 .space-file-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:8px 0;border-bottom:1px solid var(--border)}
 .space-file-row>button:first-child{min-width:0;overflow-wrap:anywhere;text-align:left}
 .space-file-row>button:last-child{white-space:nowrap;font-size:12px;color:var(--muted)}
-.queue-row{display:grid;grid-template-columns:minmax(7em,11em) 1fr auto;align-items:start;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)}
-.queue-status{white-space:nowrap;font-size:12px;color:var(--muted)}
-.queue-text{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
-.queue-actions{display:flex;gap:6px}
-#queue-form{display:grid;gap:6px;margin-top:12px}
+/* One content column with a definite 0 minimum, so a member name of any length wraps inside its own
+   line instead of painting over the task text or widening the dialog (the person, 2026-11-09). */
+.queue-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;column-gap:12px;row-gap:4px;padding:8px 0;border-bottom:1px solid var(--border)}
+.queue-status{grid-row:1;grid-column:1;overflow-wrap:anywhere;font-size:12px;color:var(--muted)}
+.queue-text{grid-row:2;grid-column:1/-1;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
+.queue-outcome{grid-row:3;grid-column:1/-1;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap;font-size:12px;color:var(--muted)}
+.queue-actions{grid-row:1;grid-column:2;display:flex;gap:6px}
+/* The one implicit column would otherwise take the member select's widest option as its minimum. */
+#queue-form{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;margin-top:12px}
 #queue-rotations{margin-top:12px}
 .rotation-chain{margin:8px 0;padding-left:20px;overflow-wrap:anywhere;user-select:text}
 .rotation-chain li{margin:4px 0}

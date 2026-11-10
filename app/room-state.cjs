@@ -522,7 +522,8 @@ class RoomState {
     delete next.control;
     this.queueReplace(id, itemId, next);
   }
-  queueSettle(id, itemId, status, reason, name) {
+  // reply is the member's own answer, kept so the queue row can show what came back.
+  queueSettle(id, itemId, status, reason, name, reply = '') {
     const item = this.queueFind(id, itemId);
     if (item.status !== 'sent') {
       throw uiError("error.queue.notSent");
@@ -530,6 +531,9 @@ class RoomState {
     const next = { ...item, status, finishedAt: Date.now() };
     if (reason) {
       next.reason = reason;
+    }
+    if (reply) {
+      next.reply = reply;
     }
     // Only outcomes that need the person are written to the space record.
     let event;
