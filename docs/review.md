@@ -7765,3 +7765,39 @@ Owner: renderer author; severity: medium usability regression. Author-run relate
 Implementation review approved the inspected source and author-run evidence, with no blocker. Its remaining layout note is now covered by the English expanded-sidebar case with a pending approval. Other-view scope: short IDs now appear on all member tabs; same-name provider labels remain in full-status rows, while tab screen-reader labels retain full names and IDs. The entry is also available in wide focused-member views; title/subtitle remain keyboard-readable there. Narrow focused-member More reuses its existing menu, including the queue-secretary action and its stale-context guard. Daily installed acceptance and native-provider event ordering are outside this checkpoint.
 
 Final incremental review approves the 13px ID correction, explicit Boolean attention class and English approval-layout regression. Review tools were limited to Read/Grep/Glob with no MCP; the author confirmed HEAD, index and tracked worktree were unchanged across each invocation. The reviewer did not rerun tests. A transient macOS overlay scrollbar is visible immediately after horizontal keyboard scrolling; complete state remains available in the dialog. Persistent obstruction in normal use would justify a separate padding adjustment.
+
+## Renderer history retention under continuing output (2026-11-09)
+
+Owner: renderer author. Severity: high memory pressure. Base: `dbe02b7`.
+In the isolated source GUI, a two-megabyte synthetic history and fifty mounted
+rows grew from 21.9 to 133.0 MiB of live renderer heap after fifty short new
+messages, measured after garbage collection. Synthetic heap snapshots identify
+two independent retainers: row event/Markdown callbacks share the complete
+history closure with the paging reload callback; each repaint also adds an async
+waiter for an unresolved terminal snapshot and retains that render's session.
+Fixing either path alone still fails the memory bound.
+
+The paging callback now has a separate closure; row labels capture only the
+session name/provider values they need. Passive terminal mounts share one wait
+per native connection and display entry. An explicit action still uses the
+existing awaitable operation; replacement connections bypass the old wait, and
+old completion cannot clear the new one. This changes no provider or input gate.
+
+Author-run synthetic GUI: fifty updates with a held terminal, then two hundred
+after recovery, keep live heap at 21.9 to 21.6 MiB, with the original history,
+draft and focus preserved. Sampled GUI working sets peak at 745.5 MiB. The
+regression uses the canonical GUI lease, an isolated profile, a synthetic provider
+and a three-minute deadline; it verifies the full history remains in the service,
+no prompts are sent, and the window stays hidden and unfocusable. Run with
+`node scripts/build-ui.cjs && node scripts/test-renderer-memory.cjs`.
+The identical regression script fails its memory bound on the unmodified base.
+All nine existing paging GUI checks pass, including original-source navigation,
+reopen, selection, copying, member readers and process groups. The full unit suite
+passes 4091/4091 with no skips at concurrency two; a prior higher-concurrency run
+had six process-probe, entry-resolution and timing failures, retained privately.
+
+Independent review is pending. This checkpoint does not establish the cause of
+all system compressor accounting differences, or pass the requested eight-hour
+daily-app acceptance. The daily app was measured read-only; it was not restarted
+or debug-attached. Adoption and that timed acceptance remain with the integrator
+after user approval.
