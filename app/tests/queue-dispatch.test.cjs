@@ -1503,6 +1503,7 @@ test('with migration on, a backend whose teammates, earlier children or backgrou
   assert.equal(migrationAcceptable(claude({ backgroundStale: true, background: null, scheduled: null })), true, 'background work not reported');
   assert.equal(migrationAcceptable(claude({ fleet: [{ event: 'SubagentStart', id: 'x', stale: false }] })), false, 'a child running now');
   assert.equal(migrationAcceptable(claude({ background: 2 })), false, 'background work reported running');
+  assert.equal(migrationAcceptable(claude({ backgroundStale: true, background: 2 })), false, 'even when that report is from before the last turn');
   assert.equal(migrationAcceptable(claude({ scheduled: 1 })), false, 'scheduled work reported');
   assert.equal(migrationAcceptable(claude({ state: 'working' })), false);
   assert.equal(migrationAcceptable(claude({ pendingTag: 'p' })), false, 'something waiting');
@@ -1515,7 +1516,10 @@ test('with migration on, a backend whose teammates, earlier children or backgrou
   const move = session => rules.nextBackendMove([plan], settings, [session], new Map(), NOW, new Set());
   assert.equal(move(team(15)), null, 'quiet 15 minutes: not yet');
   assert.equal(move(team(31)), plan, 'quiet 31 minutes: moved');
-  assert.equal(move(team(31)), plan);
+  const reporting = claude({ fleet: [{ event: 'TeammateIdle', time: NOW - 60000 }], lastActivityAt: NOW - 60 * 60000 });
+  assert.equal(move(reporting), null, 'a teammate reported a minute ago: that is activity too');
+  const reportedLongAgo = claude({ fleet: [{ event: 'TeammateIdle', time: NOW - 31 * 60000 }], lastActivityAt: NOW - 60 * 60000 });
+  assert.equal(move(reportedLongAgo), plan);
   assert.equal(move(member('c', { provider: 'codex', nativeGoal: { status: 'active' }, lastActivityAt: NOW - 60 * 60000 })), null);
   assert.equal(rules.nextBackendMove([plan], { auto: false, migrate: false }, [team(60)], new Map(), NOW, new Set()), null, 'never without the person\'s setting');
   assert.equal(rules.nextBackendMove([plan], settings, [team(31)], new Map([['a', NOW - 60000]]), NOW, new Set()), null, 'the person just used it');

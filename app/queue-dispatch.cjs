@@ -1095,6 +1095,17 @@ function quietFor(session, humanAt, now, ms) {
 // The next old backend NAW moves by itself. With automatic updates on, a move the runtime proved
 // safe; with migration on (the person's standing confirmation), also a move that needs it, once
 // every session it stops has been quiet for a while.
+// The newest teammate or child report: activity the longer wait must also cover.
+function lastFleetTime(session) {
+  let newest = null;
+  for (const item of session.fleet || []) {
+    if (Number.isFinite(item.time) && (newest === null || item.time > newest)) {
+      newest = item.time;
+    }
+  }
+  return newest;
+}
+
 // One rule for choosing a move and for re-checking each session right before its stop.
 function migrationReady(session, humanAt, now, quietMs = MIGRATE_QUIET_MS, unprovenQuietMs = MIGRATE_UNPROVEN_QUIET_MS) {
   const backendSwitch = require('./backend-switch.cjs');
@@ -1102,6 +1113,10 @@ function migrationReady(session, humanAt, now, quietMs = MIGRATE_QUIET_MS, unpro
     return quietFor(session, humanAt, now, quietMs);
   }
   if (backendSwitch.migrationAcceptable(session)) {
+    const fleetAt = lastFleetTime(session);
+    if (fleetAt !== null && now - fleetAt < unprovenQuietMs) {
+      return false;
+    }
     return quietFor(session, humanAt, now, unprovenQuietMs);
   }
   return false;
