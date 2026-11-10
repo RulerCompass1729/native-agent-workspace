@@ -42,7 +42,10 @@ server.listen(endpoint,()=>{if(${symlink})fs.symlinkSync(endpoint,requested);});
     fs.rmSync(dir, { recursive: true, force: true });
   });
   const id = await w.create('codex', dir, 'window', 'Synthetic continuity');
-  return { host, w, id, dir, configure: value => fs.writeFileSync(controlFile, JSON.stringify(value)), calls: () => fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(JSON.parse) };
+  // Replace the control file whole: the server may read it mid-write, and an
+  // empty read would crash it and leave its socket behind (T-156 review).
+  const configure = value => { fs.writeFileSync(controlFile + '.next', JSON.stringify(value)); fs.renameSync(controlFile + '.next', controlFile); };
+  return { host, w, id, dir, configure, calls: () => fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(JSON.parse) };
 }
 async function crash(host) {
   const child = host.codexProcess, exited = once(child, 'exit');
