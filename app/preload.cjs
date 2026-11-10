@@ -34,6 +34,9 @@ function apiFailure(result) {
   return new Error(message);
 }
 api.gitWorktreePreview = async (...args) => { const result = await ipcRenderer.invoke('workspace:gitWorktreePreview', ...args); if (!result.ok) throw apiFailure(result); return result.value; };
+for (const name of ['mobilePairing', 'mobileRevoke']) {
+  api[name] = async (...args) => { const result = await ipcRenderer.invoke(`workspace:${name}`, ...args); if (!result.ok) throw apiFailure(result); return result.value; };
+}
 for (const name of ['queueSecretary', 'connectionUpdates', 'backendSwitchSettings', 'switchBackend', 'spaceMerge', 'spaceCreate', 'spaceAction', 'spaceFiles', 'roomMemberOrder', 'sidebar', 'stageImages', 'pasteNativeContent', 'nativeHistory', 'importHistory', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'prepareInput', 'observe', 'unobserve', 'continueConnection', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'retainDraftRecovery', 'discardDraftRecovery', 'readingState', 'runtimeLocation', 'retrySave']) {
   api[name] = async (...args) => { const result = await ipcRenderer.invoke(`workspace:${name}`, ...args); if (!result.ok) throw apiFailure(result); return result.value; };
 }

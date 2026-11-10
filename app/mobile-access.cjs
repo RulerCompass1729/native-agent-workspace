@@ -115,6 +115,9 @@ class MobileAccess {
       try { const stat = this.io.lstatSync(temp); if (own && stat.dev === own.dev && stat.ino === own.ino && privateFile(stat)) this.io.unlinkSync(temp); } catch { /* Only our temporary file is eligible for cleanup. */ }
     }
   }
+  // Whether the OFF marker exists: written only by invalidate(), when a revocation could not be saved; pair() removes a
+  // stale one. authenticate() refuses a device while it exists. Throws if it cannot be read.
+  disabledMarker() { return disabled(this.root, this.io); }
   invalidate() {
     this.closed = true;
     try {

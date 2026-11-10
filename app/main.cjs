@@ -83,6 +83,86 @@ const trusted = url => { try { const parsed = new URL(url); return parsed.origin
 let dataDir, sessionLabels, roomState, queueSecretary, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
 let applicationBuild, applicationMenu;
+let mobileBroker;
+let mobileListener, mobileOpening = false, mobileGeneration = 0, mobileStopped = Promise.resolve(true), mobileExpiry;
+function appMobileBroker() {
+  if (!primary || quitting || !dataDir) throw Error('The local mobile entry is unavailable.');
+  if (!mobileBroker) mobileBroker = new (require('./mobile-broker.cjs').MobileBroker)(dataDir, { exclusive: () => primary && !quitting, changed: () => watchAppMobile(MOBILE_RESPONSE_GRACE_MS) });
+  return mobileBroker;
+}
+// The listener stays open only while a pairing link or paired device is unexpired. When the phone logs out, or the link
+// or device expires, NAW revokes and closes it. A logout closes it only after its own response has had time to leave.
+// Waits are at most a minute and each check re-reads the stored state, so sleep or a clock change delays closing by
+// at most that minute. A check belongs to the pairing it was set for: a newer pairing or revoke makes it a no-op.
+const MOBILE_RESPONSE_GRACE_MS = 1000, MOBILE_CHECK_MS = 60000;
+function watchAppMobile(grace = 0) {
+  clearTimeout(mobileExpiry); mobileExpiry = undefined;
+  if (!mobileListener || !mobileBroker) return;
+  const generation = mobileGeneration, current = () => generation === mobileGeneration && !mobileOpening && mobileListener;
+  const until = mobileBroker.openUntil();
+  if (!until) { mobileExpiry = setTimeout(() => { mobileExpiry = undefined; if (!current()) return; if (!mobileBroker.openUntil()) revokeAppMobile(); else watchAppMobile(); }, grace); return; }
+  mobileExpiry = setTimeout(() => { mobileExpiry = undefined; if (current()) watchAppMobile(); }, Math.min(MOBILE_CHECK_MS, Math.max(0, until - Date.now()) + 1));
+}
+function stopAppMobileListener() {
+  const entry = mobileListener; mobileListener = null;
+  if (!entry) return;
+  mobileStopped = new Promise(resolve => {
+    let clean = true;
+    try { entry.controller.abort(); } catch { clean = false; }
+    try { entry.server.close(error => resolve(clean && (!error || error.code === 'ERR_SERVER_NOT_RUNNING'))); }
+    catch { clean = false; resolve(false); }
+    // Only this explicitly enabled app-owned HTTP server is affected. Native
+    // services and work already committed through Unix are independent.
+    try { entry.server.closeAllConnections(); } catch { clean = false; resolve(false); }
+  });
+}
+async function beginAppMobile(options) {
+  const keys = ['actor', 'origin', 'selection', 'replace', 'port', 'carrierConfirmed'];
+  if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).length !== keys.length || keys.some(key => !Object.hasOwn(options, key)) ||
+      options.carrierConfirmed !== true || !Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535 || options.port !== 0 && options.port < 1024 || mobileOpening) throw Error('Mobile setup is unavailable or incomplete.');
+  const broker = appMobileBroker(), handler = require('./mobile-http.cjs').createMobileHandler({ broker, origin: options.origin, actor: options.actor });
+  const generation = ++mobileGeneration; mobileOpening = true; let authorityChanged = false;
+  try {
+    const challenge = await broker.beginPairing({ actor: options.actor, origin: options.origin, selection: options.selection, replace: options.replace });
+    authorityChanged = true;
+    if (generation !== mobileGeneration || quitting) throw Error('Mobile setup cancelled.');
+    stopAppMobileListener();
+    if (!await mobileStopped || generation !== mobileGeneration || quitting) throw Error('Previous mobile listener close is unconfirmed.');
+    const controller = new AbortController(), server = require('node:http').createServer({ maxHeaderSize: 8192 }, handler);
+    const entry = { server, controller, ready: false }; mobileListener = entry;
+    server.maxConnections = 8; server.maxRequestsPerSocket = 16;
+    server.headersTimeout = 5000; server.requestTimeout = 5000; server.keepAliveTimeout = 1000;
+    server.on('error', () => { if (entry.ready && mobileListener === entry) revokeAppMobile(); });
+    await new Promise((resolve, reject) => {
+      const failed = () => reject(Error('Mobile listener unavailable.')), closed = () => reject(Error('Mobile listener cancelled.'));
+      server.once('error', failed); server.once('close', closed);
+      try { server.listen({ host: '127.0.0.1', port: options.port, exclusive: true, signal: controller.signal }, resolve); }
+      catch (error) { reject(error); }
+    });
+    if (generation !== mobileGeneration || quitting || mobileListener !== entry || controller.signal.aborted) throw Error('Mobile setup cancelled.');
+    const address = server.address();
+    if (!address || address.address !== '127.0.0.1' || !Number.isSafeInteger(address.port)) throw Error('Mobile listener binding unconfirmed.');
+    entry.ready = true; watchAppMobile();
+    return { ...challenge, localAddress: `http://127.0.0.1:${address.port}/mobile/` };
+  } catch {
+    // A newer explicit revoke owns the newer state; never revoke its successor.
+    if (authorityChanged && generation === mobileGeneration) revokeAppMobile();
+    // A refused or failed re-pairing may already have revoked the old grant: close the old listener if nothing is open.
+    else if (generation === mobileGeneration) watchAppMobile();
+    throw Error('Mobile pairing was not confirmed. Check the private carrier and revoke access if necessary.');
+  } finally { mobileOpening = false; }
+}
+function revokeAppMobile() {
+  mobileGeneration++; clearTimeout(mobileExpiry); mobileExpiry = undefined;
+  let result = { authorizationRevoked: true, connectionClosed: true, committedWorkMayContinue: false };
+  if (mobileBroker) {
+    try { result = mobileBroker.revoke(); }
+    catch { result = { authorizationRevoked: false, connectionClosed: false, committedWorkMayContinue: true }; }
+  }
+  // A transport-close fault must never skip durable authorization revocation.
+  try { stopAppMobileListener(); } catch { mobileStopped = Promise.resolve(false); }
+  return result;
+}
 const startupFile = path.join(__dirname, 'startup.html');
 let localeSnapshot = uiLocale.snapshot({ languages: [], preference: null });
 let localeProvisional, localeWarning = null, localeHostGeneration = 0;
@@ -1171,6 +1251,8 @@ async function boot() {
     if (!c.background) notifyCapacity(display, c.win);
     return { ...display, viewState: c.view, appVersion: app.getVersion(), appBuild, localeWarning, preflight: preflight() };
   });
+  register('mobilePairing', (_c, selection) => beginAppMobile(selection));
+  register('mobileRevoke', () => revokeAppMobile());
   register('readingState', (c, positions, panorama) => {
     const checked = readingState(positions);
     if (panorama !== undefined && !validViews([{ owner: c.view.owner, panorama }])) throw uiError("error.panoramaReadingInvalid");
@@ -1365,6 +1447,8 @@ app.on('before-quit', event => {
       saveViews();
     }
   } catch { event.preventDefault(); return; }
+  // While this instance is still the exclusive owner, so the revocation is written durably.
+  revokeAppMobile();
   if (outboxQuitFailed) { quitting = true; dsh?.stop(); return; }
   if (outboxBroker) {
     event.preventDefault();

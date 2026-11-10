@@ -10,7 +10,7 @@ function fixture(close) {
   let listener, stops = 0, quits = 0, calls = 0; const scheduled = [];
   const context = vm.createContext({ setImmediate(callback) { scheduled.push(callback); }, app: { on(name, cb) { assert.equal(name, 'before-quit'); listener = cb; }, quit() { quits++; } },
     viewStore: undefined, windows: new Map(), saveViews() { throw Error('No GUI or view write in this test'); },
-    dsh: { stop() { stops++; } }, backgroundControl: undefined, outboxBroker: close && { close() { calls++; return close(); } }, outboxUnavailable: false });
+    dsh: { stop() { stops++; } }, revokeAppMobile() {}, backgroundControl: undefined, outboxBroker: close && { close() { calls++; return close(); } }, outboxUnavailable: false });
   vm.runInContext('let quitting=false, outboxClosing=false, outboxQuitFailed=false;\n' + source.slice(a, b), context);
   return { attempt() { let prevented = false; listener({ preventDefault() { prevented = true; } }); return prevented; }, facts: () => ({ stops, quits, calls }), advanceLoop() { for (const callback of scheduled.splice(0)) callback(); } };
 }

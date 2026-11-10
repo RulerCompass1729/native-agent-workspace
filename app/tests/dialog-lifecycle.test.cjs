@@ -30,7 +30,7 @@ function fixture() {
   ui.showError = vm.runInNewContext(bootstrap.slice(showStart, showEnd) + ';showError', { window: { nativeWorkspaceLocale: locale }, display: ui.display });
   const context = vm.createContext({ spaceName: room => room?.name, $, uiError: locale.createError, spaceId: 'shared', spaceRecord: () => context.state.room, state: { appVersion: 'fixture', room: { id: 'shared', name: 'Synthetic space', notes: 'Saved original', metadataRevision: 7 } }, notesRevision: 0,
     ui, uiText,
-    toast: text => messages.push(text), toastMessage: (key, params) => messages.push(locale.format('zh', key, typeof params === 'function' ? params() : params)), node: (_tag, text) => new Element(text), button: (text, onclick) => Object.assign(new Element(text), { onclick }), createReadiness() {},
+    toast: text => messages.push(text), mobileSetup: { open() {}, close() {} }, toastMessage: (key, params) => messages.push(locale.format('zh', key, typeof params === 'function' ? params() : params)), node: (_tag, text) => new Element(text), button: (text, onclick) => Object.assign(new Element(text), { onclick }), createReadiness() {},
     api: Object.fromEntries(['preflight', 'spaceAction', 'runtimeLocation'].map(method => [method, (...args) => { const request = pending(); calls.push({ method, args, ...request }); return request.promise; }])) });
   vm.runInContext(source.slice(source.indexOf('const dialogTickets ='), source.indexOf('let trustScope =')), context);
   vm.runInContext(source.slice(source.indexOf('// Language controls use the existing Host mirror;'), source.indexOf('// End language/settings display controls.')), context);
