@@ -116,7 +116,13 @@ async function run() {
   await image(a, { id: 'jpeg-image', path: jpegFile }, dirs[0]);
   const jpeg = page.locator(`#messages [data-message-id="native:${nativeId}:tool:jpeg-image"] .native-image`);
   await until(async () => await jpeg.locator('img').count() && await jpeg.locator('img').evaluate(el => el.complete), 'Real JPEG decode accepted after header check');
-  await jpeg.locator('.native-image-copy').click(); assert.equal((await app.evaluate(() => globalThis.imageCopies.at(-1))).hash, pixels[0].jpegHash);
+  const copiesBeforeJpeg = await app.evaluate(() => globalThis.imageCopies.length);
+  await jpeg.locator('.native-image-copy').click();
+  await until(async () => {
+    const copies = await app.evaluate(() => globalThis.imageCopies);
+    return copies.length > copiesBeforeJpeg && copies.at(-1)?.hash === pixels[0].jpegHash;
+  }, 'JPEG copy acknowledgement, not a late preceding PNG copy');
+  assert.equal((await app.evaluate(() => globalThis.imageCopies.at(-1))).hash, pixels[0].jpegHash);
   const hugeFile = path.join(dirs[0], 'oversized.png'), huge = Buffer.alloc(33); Buffer.from('89504e470d0a1a0a', 'hex').copy(huge); huge.writeUInt32BE(13, 8); huge.write('IHDR', 12); huge.writeUInt32BE(60000, 16); huge.writeUInt32BE(60000, 20); fs.writeFileSync(hugeFile, huge);
   await app.evaluate(({ nativeImage }) => { const original = nativeImage.createFromBuffer; globalThis.guardDecoderCalls = 0;
     nativeImage.createFromBuffer = (...args) => { globalThis.guardDecoderCalls++; return original.apply(nativeImage, args); };
