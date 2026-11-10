@@ -141,6 +141,9 @@ async function run() {
   await page.locator('#cancel-notes').click().catch(() => {});
   await visit('space-files', async () => { await page.locator('#room-files').click(); await page.locator('#space-files-dialog').waitFor(); });
   await page.locator('#close-space-files').click().catch(() => {});
+  // The space's queue (alpha.227), opened from the Queue button in the space header.
+  await visit('space-queue', async () => { await page.locator('#room-queue').click(); await page.locator('#queue-dialog').waitFor(); });
+  await page.locator('#close-queue').click().catch(() => {});
   await visit('privacy-usage', async () => { await page.locator('#privacy-button').click(); await page.locator('#privacy-dialog').waitFor(); });
   await page.locator('#close-privacy').click().catch(() => {});
   await visit('settings', async () => { await page.locator('#setup-button').click(); await page.locator('#setup-dialog').waitFor(); });
