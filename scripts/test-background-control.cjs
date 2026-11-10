@@ -19,6 +19,14 @@ const checks = [], trace = [], errors = [];
 let profile, child, client, app, page, helper, sequence = 0, source, recipient;
 const desktop = () => JSON.parse(execFileSync('osascript', ['-l', 'JavaScript', '-e', "ObjC.import('AppKit'); var p=$.NSEvent.mouseLocation; JSON.stringify({frontmostPid:$.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier,x:p.x,y:p.y})"], { encoding: 'utf8' }));
 const save = (name, value) => fs.writeFileSync(path.join(evidence, name + '.json'), JSON.stringify(value, null, 2), { mode: 0o600 });
+async function checkDesktopState(stage, minimumWindows = 1) {
+  const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focused: w.isFocused() })));
+  assert.ok(windows.length >= minimumWindows, 'Owned application windows remain observable');
+  assert.ok(windows.every(w => !w.visible && !w.focused), 'Owned application windows stay hidden and unfocused');
+  // The person can move the pointer or switch apps while this hidden test runs.
+  // Global samples cannot attribute such changes to this application.
+  save(stage, { ...desktop(), windows, attribution: 'unattributed', physicalPointerIsolation: 'unverified' });
+}
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label) { for (let n = 0; n < 150; n++) { if (await fn()) return; await wait(40); } throw Error(label); }
 function fixture(method, target, value) {
@@ -130,11 +138,9 @@ async function run() {
   assert.equal((await control(invoke('interfaceSettings', ['update', 'locale', { preference: 'zh' }, english.revision]))).state, 'complete');
   checks.push('Actual Host settings writer persists a language change and repaints the normal UI');
   await control(invoke('copy', ['AGENT CLIPBOARD'])); assert.equal((await control(invoke('pasteText', []))).value, 'AGENT CLIPBOARD');
-  const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focused: w.isFocused() })));
-  assert.ok(windows.length >= 2); assert.ok(windows.every(w => !w.visible && !w.focused));
-  const after = desktop(); save('desktop-after', after); assert.deepEqual(after, before);
+  await checkDesktopState('desktop-after', 2);
   assert.equal(await page.locator('#message-input').inputValue(), 'HUMAN ORIGINAL UNSENT DRAFT');
-  checks.push('File picker and clipboard independent; hidden windows; frontmost application and physical pointer unchanged');
+  checks.push('File picker and clipboard independent; owned windows hidden and unfocused; global desktop samples are unattributed');
   await page.screenshot({ path: path.join(pictures, 'background-receipts.png') });
   await app.close();
   app = await _electron.launch({ args: [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 30000 });
@@ -142,7 +148,7 @@ async function run() {
   const recovered = await control({ action: 'receipt', operation_id: args.operation_id }); assert.equal(recovered.receipt.state, 'received');
   assert.equal((await control(args)).duplicate, true); assert.equal((await fixture('stats')).sends.length, 1);
   assert.equal(await page.locator('#message-input').inputValue(), 'HUMAN ORIGINAL UNSENT DRAFT');
-  assert.deepEqual(desktop(), before); checks.push('Real GUI restart keeps audit, actor draft and human draft; old operation never resends');
+  await checkDesktopState('desktop-reopen'); checks.push('Real GUI restart keeps audit, actor draft and human draft; old operation never resends');
   // Inspect the ordinary shared record only after verifying the human draft and
   // selection were preserved. These test-local UI actions never use the mouse.
   await revealDefaultSpace(page);
@@ -151,7 +157,7 @@ async function run() {
   assert.equal(visibleLabel, 'Synthetic operator → Background renamed recipient');
   save('shared-message-label', { messageId: sharedRow.id, label: visibleLabel });
   await page.screenshot({ path: path.join(pictures, 'shared-agent-attribution.png') });
-  assert.deepEqual(desktop(), before);
+  await checkDesktopState('desktop-final');
   save('operations', JSON.parse(fs.readFileSync(path.join(profile, 'background-operations.json')))); save('final-state', await state());
   assert.deepEqual(errors, []); save('result', { passed: true, checks, sourceProducer: 'synthetic', nativeProviderCalls: 0, installed: false, pictures });
 }
