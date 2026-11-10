@@ -11,7 +11,7 @@ function adapter() {
   r.record = { nativeId: randomUUID() }; r.terminal = { alive: true }; r.submission = new SubmissionChannel();
   r.bindRoot({ sessionId: r.record.nativeId }); return r;
 }
-async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false, requestHandler, promptSubmit, modelReader, toolReader, usageReader, turnAbort, now } = {}) {
+async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false, requestHandler, promptSubmit, promptReader, modelReader, toolReader, usageReader, turnAbort, now } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8').replace('const legacyOnly = false;', `const legacyOnly = ${legacy};`);
   const { register, testObserveModel, testObserveUsage } = await import('data:text/javascript;base64,' + Buffer.from(source + '\nexport { observeModel as testObserveModel, observeUsage as testObserveUsage };\n//' + randomUUID()).toString('base64'));
   const r = runtime || adapter(), clock = [], hooks = new Map(), requests = [];
@@ -23,7 +23,7 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
     clock: { after: (delay, fn) => { fn.delay = delay; clock.push(fn); return { cancel() { const i = clock.indexOf(fn); if (i >= 0) clock.splice(i, 1); } }; }, ...(now ? { now } : {}) },
     tool: { list: toolReader || (async () => []) },
     turn: { abort: turnAbort || (async () => { throw Error('No native control requested'); }) },
-    prompt: { read: async () => ({ text: '' }), submit: promptSubmit || (async () => { throw Error('Observation must never submit'); }) },
+    prompt: { read: promptReader || (async () => ({ text: '' })), submit: promptSubmit || (async () => { throw Error('Observation must never submit'); }) },
     http: { fetch: async (url, options) => {
       const body = JSON.parse(options.body); let result;
       if (requestHandler) { const response = await requestHandler(url, options, body, r); if (response) return response; }
@@ -243,7 +243,9 @@ test('native 2.1.316 can abort its turn and arms capacity recovery (T-133, T-32)
   assert.equal(f.r.nativeAbortAvailable, true); assert.equal(f.r.nativeCapacityAvailable, true);
 });
 test('a mod that predates nativeCapacity keeps capacity recovery with abort, as before', () => {
-  for (const [fields, capacity] of [[{ nativeAbort: true }, true], [{ nativeAbort: true, nativeCapacity: false }, false], [{ nativeAbort: false }, false]]) {
+  for (const [fields, capacity] of [[{ nativeAbort: true }, true], [{ nativeAbort: true, nativeCapacity: false }, false], [{ nativeAbort: false }, false],
+    [{ nativeAbort: false, nativeCapacity: true }, true], [{ nativeCapacity: true }, true],
+    [{ nativeAbort: true, nativeCapacity: null }, false], [{ nativeAbort: true, nativeCapacity: 'true' }, false]]) {
     const r = Object.create(Claude.prototype); EventEmitter.call(r);
     r.record = { nativeId: randomUUID() }; r.terminal = { alive: true }; r.submission = new SubmissionChannel();
     r.bindRoot({ sessionId: r.record.nativeId, ...fields });
@@ -499,12 +501,14 @@ test('native 2.1.317 binds and stages like 2.1.316: blocks, transitions, abort, 
   assert.equal((await wakeCall(f, 'call-317')).deny, undefined);
   assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['turn-317', promptId]]);
 });
-// T-171: 2.1.318 and 2.1.319 add native blocks, so a turn's workspace message has its identity. Their other
-// capabilities stay as T-160 qualified them: model metadata and root binding, no abort, capacity, queue or media.
-for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`native ${version}: native blocks let a typed turn stage a workspace message; other capabilities stay off (T-171)`, async () => {
+// The combined qualification preserves typed-message identity, adds queue/capacity on all four
+// exact versions and adds display only on 318/319. Abort and direct input remain closed.
+for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`native ${version}: typed-message identity and independently qualified capabilities coexist`, async () => {
   const f = await addressedMod(version), promptId = randomUUID();
   assert.equal(f.r.nativeBlocks, true); assert.equal(f.r.addressedSendAvailable, true);
-  for (const flag of ['nativeAbortAvailable', 'nativeCapacityAvailable', 'nativeQueue', 'nativeMedia', 'nativeTurnRecords', 'nativeNarration', 'nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
+  assert.equal(f.r.nativeQueue, true); assert.equal(f.r.nativeCapacityAvailable, true);
+  for (const flag of ['nativeAbortAvailable', 'nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
+  for (const flag of ['nativeMedia', 'nativeTurnRecords', 'nativeNarration']) assert.equal(f.r[flag], ['2.1.318', '2.1.319'].includes(version), flag);
   await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: 'Wake the idle peer.' });
   await f.invoke('turn.start', { turnId: 'turn-' + version });
   assert.equal((await wakeCall(f, 'call-' + version)).deny, undefined);
@@ -768,7 +772,7 @@ test('private hidden attachments, prompts, children, denied/changed rows and thi
 });
 // A 1x1 PNG. The mod's own binding must carry media, not only the flag sent to NAW (T-133).
 const onePixelPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
-for (const [version, on] of [['2.1.312', true], ['2.1.316', true], ['2.1.317', true], ['2.1.311', false]]) test(`native ${version} ${on ? 'sends' : 'does not send'} a Read image with its tool row (T-133)`, async () => {
+for (const [version, on] of [['2.1.312', true], ['2.1.316', true], ['2.1.317', true], ['2.1.318', true], ['2.1.319', true], ['2.1.311', false]]) test(`native ${version} ${on ? 'sends' : 'does not send'} a Read image with its tool row (T-133)`, async () => {
   const f = await mod({ version }), e = response();
   e.door = 'tool-result'; e.origin = { kind: 'tool', tool: 'Read' };
   e.message = { type: 'user', role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_img', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: onePixelPng } }] }] };
@@ -783,7 +787,7 @@ for (const [version, on] of [['2.1.312', true], ['2.1.316', true], ['2.1.317', t
 const imagePrompt = (text, data = onePixelPng) => ({ uuid: randomUUID(), door: 'prompt', origin: { kind: 'composer' },
   message: { type: 'user', role: 'user', content: [{ type: 'text', text }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data } }] } });
 const flushZero = async f => { for (let i = 0; i < 8 && f.clock.some(fn => fn.delay === 0); i++) { const fn = f.clock.find(x => x.delay === 0); f.clock.splice(f.clock.indexOf(fn), 1); await fn(); } };
-for (const [version, on] of [['2.1.316', true], ['2.1.317', true], ['2.1.312', false]]) test(`native ${version} ${on ? 'sends' : 'does not send'} a terminal prompt's image for its settings-hook row (T-133)`, async () => {
+for (const [version, on] of [['2.1.316', true], ['2.1.317', true], ['2.1.318', true], ['2.1.319', true], ['2.1.312', false]]) test(`native ${version} ${on ? 'sends' : 'does not send'} a terminal prompt's image for its settings-hook row (T-133)`, async () => {
   const f = await mod({ version }), images = [], promptId = randomUUID(), text = 'Describe this image.';
   f.r.on('nativePromptImage', event => images.push(event));
   await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: text });
@@ -843,6 +847,51 @@ test('a held old-root observation times out and new-root text proceeds without o
   await f.append(response('new')); const timeout = f.clock.find(fn => fn.delay === 1500); assert.ok(timeout); timeout(); await flush;
   assert.equal(f.requests.length, 2); assert.equal(f.requests[1].sessionId, next); assert.equal(seen.at(-1).text, 'new');
   release({ observed: true }); await new Promise(r => setImmediate(r)); assert.equal(seen.length, 1);
+});
+for (const version of ['2.1.321', '2.1.322']) test(`native ${version}: root binding does not enable an unqualified context transition`, async () => {
+  const transitions = [];
+  const f = await mod({ version, requestHandler: async (url, _options, body) => {
+    if (url.endsWith('/root-clear')) transitions.push(body);
+  } });
+  assert.equal(f.r.nativeBlocks, true);
+  const previous = f.r.record.nativeId, next = randomUUID();
+  await f.invoke('session.end', { sessionId: previous, reason: 'clear' });
+  f.setNativeId(next); await f.invoke('classic.SessionStart', { session_id: next, source: 'clear' }); await flushZero(f);
+  assert.deepEqual(transitions, [], 'Context transitions need their separate qualification');
+  assert.equal(f.r.record.nativeId, previous, 'An unqualified transition cannot rebind the root');
+});
+for (const version of ['2.1.318', '2.1.319']) test(`native ${version}: clear changes the bound root and a late old display cannot enter the new conversation`, async () => {
+  const transitions = [];
+  const f = await mod({ version, requestHandler: async (url, _options, body) => {
+    if (url.endsWith('/root-clear')) transitions.push(body);
+  } }), rows = [];
+  assert.equal(f.r.nativeBlocks, true);
+  f.r.on('nativeBlock', row => rows.push(row));
+  const previous = f.r.record.nativeId, oldLease = f.r.rootLease, prompt = randomUUID();
+  await f.invoke('classic.UserPromptSubmit', { session_id: previous, prompt_id: prompt, prompt: 'Before clear' });
+  await f.invoke('turn.start', { turnId: 'old-turn' }); await flushZero(f);
+  let release;
+  const oldDisplay = f.invoke('classic.MessageDisplay', { session_id: previous, turn_id: randomUUID(), prompt_id: prompt,
+    message_id: randomUUID(), index: 0, final: true, delta: 'OLD DISPLAY MUST NOT LEAK' }, () => new Promise(resolve => { release = resolve; }));
+  assert.equal(typeof release, 'function');
+  // /clear follows the native turn boundary; its earlier UI draw may still finish late.
+  await f.invoke('turn.complete', { turnId: 'old-turn', reason: 'answer', answer: '', durationMs: 1 }); await flushZero(f);
+  const next = randomUUID();
+  await f.invoke('session.end', { sessionId: previous, reason: 'clear' });
+  f.setNativeId(next); await f.invoke('classic.SessionStart', { session_id: next, source: 'clear' }); await flushZero(f);
+  assert.equal(f.r.record.nativeId, next, 'The declared clear hooks must follow the newly current native identity');
+  assert.notEqual(f.r.rootLease, oldLease);
+  assert.deepEqual(transitions.map(row => [row.sessionId, row.nextSessionId, row.source]), [[previous, next, 'clear']]);
+  release({ displayContent: 'OLD DISPLAY MUST NOT LEAK' }); await oldDisplay; await flushZero(f);
+  assert.equal(rows.some(row => row.delta === 'OLD DISPLAY MUST NOT LEAK'), false);
+  const newPrompt = randomUUID();
+  await f.invoke('classic.UserPromptSubmit', { session_id: next, prompt_id: newPrompt, prompt: 'After clear' });
+  await f.invoke('turn.start', { turnId: 'new-turn' });
+  await f.invoke('classic.MessageDisplay', { session_id: next, turn_id: randomUUID(), prompt_id: newPrompt,
+    message_id: randomUUID(), index: 0, final: true, delta: 'NEW ROOT VISIBLE' }); await flushZero(f);
+  const visible = rows.filter(row => row.kind === 'response');
+  assert.deepEqual(visible.map(row => [row.nativeId, row.turnId, row.delta]), [[next, 'new-turn', 'NEW ROOT VISIBLE']]);
+  assert.equal(f.requests.some(row => row.delta === 'OLD DISPLAY MUST NOT LEAK'), false);
 });
 test('blocked local delivery never blocks the next native append', async () => {
   let release; const f = await mod({ fetchObservation: () => new Promise(resolve => { release = resolve; }) });
@@ -1195,7 +1244,7 @@ test(`native API failure uses only processed same-turn text: ${legacy ? 'retaine
 
 // T-32: capacity recovery per Claude version, through the real bridge and adapter. 2.1.316 and 2.1.317 build the same
 // API-error row and StopFailure input as the qualified 2.1.312 (read-only comparison of the installed bundles; no real
-// 529 was reproduced). 2.1.318 and 2.1.319 wait for their abort and native blocks (T-160).
+// 529 was reproduced there). Later versions qualify capacity separately from abort (T-32).
 async function capacityThroughBridge(t, version, row = {}, order = 'relay-last') {
   const f = await mod({ version }), prompt = randomUUID(), turn = randomUUID(), errorId = randomUUID(), text = 'API Error: Repeated 529 Overloaded errors';
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-claude-capacity-version-'));
@@ -1214,6 +1263,11 @@ async function capacityThroughBridge(t, version, row = {}, order = 'relay-last')
   // The adapter hears StopFailure from the classic hook relay, with the saved transcript: after the bridge's
   // failed-turn block reaches it, or after the bridge has seen the failure but before that block is delivered.
   const relay = () => f.r.hook({ hook_event_name: 'StopFailure', session_id: f.r.record.nativeId, prompt_id: prompt, transcript_path: file });
+  if (order === 'hook-before-end') {
+    relay(); await f.invoke('classic.StopFailure', { session_id: f.r.record.nativeId, prompt_id: prompt });
+    while (f.clock.length) await f.clock.shift()();
+    assert.deepEqual(ends, [], 'A failure hook cannot end a still-running native turn');
+  }
   await f.invoke('turn.complete', { turnId: turn, reason: 'error', answer: '', durationMs: 100 });
   await f.invoke('classic.StopFailure', { session_id: f.r.record.nativeId, prompt_id: prompt });
   if (order === 'relay-before-delivery') relay();
@@ -1221,12 +1275,11 @@ async function capacityThroughBridge(t, version, row = {}, order = 'relay-last')
   if (order === 'relay-last') relay();
   return { f, ends, turn };
 }
-for (const order of ['relay-last', 'relay-before-delivery'])
+for (const order of ['relay-last', 'relay-before-delivery', 'hook-before-end'])
 for (const version of ['2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`Claude capacity recovery is armed only on qualified versions, through the real bridge: ${version} ${order}`, async t => {
-  const { f, ends, turn } = await capacityThroughBridge(t, version, {}, order), armed = ['2.1.312', '2.1.316', '2.1.317'].includes(version);
-  assert.equal(f.r.nativeCapacityAvailable === true, armed);
-  if (armed) assert.deepEqual(ends, [{ nativeId: f.r.record.nativeId, turnId: turn, status: 'failed', errorInfo: 'serverOverloaded' }]);
-  else assert.ok(ends.every(e => e.errorInfo !== 'serverOverloaded'), JSON.stringify(ends));
+  const { f, ends, turn } = await capacityThroughBridge(t, version, {}, order);
+  assert.equal(f.r.nativeCapacityAvailable, true);
+  assert.deepEqual(ends, [{ nativeId: f.r.record.nativeId, turnId: turn, status: 'failed', errorInfo: 'serverOverloaded' }]);
 });
 for (const version of ['2.1.316', '2.1.317'])
   for (const [label, row] of [['500', { apiErrorStatus: 500 }], ['401', { apiErrorStatus: 401 }], ['no status (timeout)', { apiErrorStatus: null }],
@@ -1354,8 +1407,8 @@ for (const version of ['2.1.310', '2.1.312']) test('usage metadata is read after
   assert.equal(usage[1].context.window, 200000); assert.equal(usage[1].context.tokens, undefined);
 });
 
-// 2.1.318 and 2.1.319 have native blocks (T-171) but not the usage reading, which only its version list gates.
-for (const [version, read] of [['2.1.316', true], ['2.1.317', true], ['2.1.313', false], ['2.1.318', false], ['2.1.319', false], ['2.1.321', false], ['2.1.322', false]]) test(`native ${version} ${read ? 'reads' : 'does not read'} the free status-line usage (T-133)`, async () => {
+// Only 318/319 gain the free usage read; 321/322 remain unqualified for usage.
+for (const [version, read] of [['2.1.316', true], ['2.1.317', true], ['2.1.313', false], ['2.1.318', true], ['2.1.319', true], ['2.1.321', false], ['2.1.322', false]]) test(`native ${version} ${read ? 'reads' : 'does not read'} the free status-line usage (T-133)`, async () => {
   let reads = 0;
   const f = await mod({ version, usageReader: async args => { reads++; assert.equal(args, undefined, 'Only the free plain read'); return { context: { window: 200000, tokens: 1234, percent: 1 } }; } });
   const blocks = []; f.r.on('nativeBlock', row => blocks.push(row));
@@ -1374,10 +1427,11 @@ test('held usage metadata never blocks binding/input and coalesces reads', async
 
 // The final HTTP error is typed only in the saved native row. The bridge and
 // StopFailure must independently identify that same live root turn first.
-function capacityFailure(t, rowChange = {}) {
-  const r = adapter(), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-claude-capacity-'));
+function capacityFailure(t, rowChange = {}, runtime) {
+  const r = runtime || adapter(), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-claude-capacity-'));
   t.after(() => { r.submission.close(); fs.rmSync(dir, { recursive: true, force: true }); });
-  r.nativeBlocks = true; r.nativeAbortAvailable = true; r.nativeCapacityAvailable = true; r.submission.status(true);
+  if (!runtime) r.bindRoot({ sessionId: r.record.nativeId, nativeBlocks: true, nativeCapacity: true, nativeAbort: false });
+  r.submission.status(true);
   const prompt = r.lastPromptId = randomUUID(), turnId = randomUUID(), messageId = randomUUID();
   const file = path.join(dir, r.record.nativeId + '.jsonl');
   const row = { uuid: messageId, sessionId: r.record.nativeId, type: 'assistant', isSidechain: false,
@@ -1424,8 +1478,8 @@ test('Claude capacity cannot infer a fresh failure through ' + boundary, t => {
   assert.deepEqual(f.events.filter(e => e.errorInfo === 'serverOverloaded'), []);
 });
 
-function capacityWorkspace(t) {
-  const f = capacityFailure(t), host = { binaries: {}, close() {} }, w = new Workspace(host, f.dir);
+function capacityWorkspace(t, runtime) {
+  const f = capacityFailure(t, {}, runtime), host = { binaries: {}, close() {} }, w = new Workspace(host, f.dir);
   const s = Object.assign(f.r.record, { id: 'capacity-root', provider: 'claude', cwd: f.dir, messages: [], state: 'idle', owner: 'window', controlRevision: 0, memberRevision: 0 });
   f.r.host = host; f.r.ready = f.r.chatAvailable = true;
   w.sessions.set(s.id, s); w.runtimes.set(s.id, f.r); w.bind(s, f.r);
@@ -1455,7 +1509,7 @@ test('Claude scheduled continuation yields to ' + boundary, async t => {
 });
 
 test('repeated Claude overloads retain the shared 2/5/10-minute budget; another error cancels it', async t => {
-  const f = capacityWorkspace(t); f.fail(); f.stop();
+  const f = capacityWorkspace(t); assert.equal(f.r.nativeAbortAvailable, false); f.fail(); f.stop();
   const nextFailure = status => {
     const promptId = f.r.lastPromptId = randomUUID(), turnId = randomUUID(), errorMessageId = randomUUID();
     fs.writeFileSync(f.file, JSON.stringify({ ...f.row, uuid: errorMessageId, apiErrorStatus: status }) + '\n');
@@ -1470,6 +1524,7 @@ test('repeated Claude overloads retain the shared 2/5/10-minute budget; another 
     assert.equal(f.sent.length, n + 1); nextFailure(529);
   }
   assert.equal(f.w.capacityStatus(f.s.id).status, 'exhausted'); f.w.tickCapacity(Date.now() + 86400000); assert.equal(f.sent.length, 3);
+  assert.equal(f.s.messages.filter(m => m.uiMessage?.key === 'notice.capacityLimitCapacity').length, 1, 'The retry limit is visible in NAW');
   nextFailure(500); assert.equal(f.w.capacityStatus(f.s.id), null, 'A generic server error is not an overload');
 });
 
@@ -1519,8 +1574,8 @@ test('replayed native display content stays readable without acquiring a current
 // T-99. Rows as Claude Code 2.1.316 builds them: processBashCommand appends the
 // input and then its output, and its append classifier files both on door `command`.
 const shellRow = (value, extra = {}) => ({ uuid: randomUUID(), door: 'command', origin: { kind: 'composer' }, message: { type: 'user', role: 'user', content: [{ type: 'text', text: value }] }, ...extra });
-test('native 2.1.316 shows a ! command, heads each turn with its inputs and keeps the turn clock', async () => {
-  const ended = Date.UTC(2026, 10, 2, 5, 27), f = await mod({ version: '2.1.316', now: async () => ended }), rows = [], links = [];
+for (const version of ['2.1.316', '2.1.318', '2.1.319']) test(`native ${version} shows a ! command, heads each turn with its inputs and keeps the turn clock`, async () => {
+  const ended = Date.UTC(2026, 10, 2, 5, 27), f = await mod({ version, now: async () => ended }), rows = [], links = [];
   assert.equal(f.r.nativeTurnRecords, true);
   f.r.on('nativeBlock', row => rows.push(row)); f.r.on('nativeTurnTriggers', info => links.push(info));
   const input = shellRow('<bash-input>brew pin peekaboo</bash-input>');
@@ -1598,8 +1653,8 @@ async function narrationFixture(options = {}) {
   const session = () => { const s = { nativeId: f.r.record.nativeId, messages: [] }; for (const row of rows) require('../native-blocks.cjs').applyNativeBlock(s, row); return s; };
   return { ...f, rows, flush, session, narrations: () => rows.filter(row => row.id.startsWith('narration:')) };
 }
-test('native 2.1.316 shows the explanation the terminal drew, in its place, as the turn\'s commentary', async () => {
-  const f = await narrationFixture();
+for (const version of ['2.1.316', '2.1.318', '2.1.319']) test(`native ${version} shows the explanation the terminal drew, in its place, as the turn's commentary`, async () => {
+  const f = await narrationFixture({ version });
   assert.equal(f.r.nativeNarration, true);
   await f.invoke('turn.start', { turnId: 'work-turn' });
   const said = thinkingRow('stored text with <memory-tag>hidden</memory-tag>');
@@ -1736,15 +1791,17 @@ for (const version of ['2.1.316', '2.1.317']) test(`native ${version}: only a cr
 });
 
 
-// 2.1.318 and 2.1.319 bind model metadata (T-160) and native blocks (T-171), and no other untested native capability.
-for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`${version} binding adds native blocks to model metadata without enabling input, usage or control`, async () => {
+// Binding keeps each independently qualified capability within its exact-version scope.
+for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`${version} binding combines model, queue and capacity with the exact display scope; direct input and abort stay off`, async () => {
   let binding, toolReads = 0;
   const f = await mod({ version, toolReader: async () => { toolReads++; return [{ name: 'mcp__native_workspace__workspace_message' }]; }, requestHandler: async (url, options, body) => { if (url.endsWith('/root-bind')) binding = body; } });
   assert.ok(f.poll, 'Existing input listener reaches its next poll');
   assert.ok(toolReads > 0, 'Native blocks discover the directed-send capability');
-  assert.equal(binding.nativeBlocks, true);
-  for (const key of ['nativeQueue', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia', 'nativeAbort', 'nativeCapacity', 'nativeSharedDisplay', 'nativeTurnRecords', 'nativeNarration']) assert.equal(binding[key], false, key);
-  assert.equal(f.r.nativeBlocks, true); assert.equal(f.r.nativeQueue, false); assert.equal(f.r.nativeAbortAvailable, false);
+  assert.equal(binding.nativeBlocks, true); assert.equal(binding.nativeCapacity, true);
+  assert.equal(binding.nativeQueue, true);
+  for (const key of ['nativeInlineInput', 'nativePromptInput', 'nativeAbort', 'nativeSharedDisplay']) assert.equal(binding[key], false, key);
+  for (const key of ['nativeMedia', 'nativeTurnRecords', 'nativeNarration']) assert.equal(binding[key], ['2.1.318', '2.1.319'].includes(version), key);
+  assert.equal(f.r.nativeBlocks, true); assert.equal(f.r.nativeQueue, true); assert.equal(f.r.nativeCapacityAvailable, true); assert.equal(f.r.nativeAbortAvailable, false);
   const models = []; f.r.on('model', value => models.push(value));
   const turn = { id: 'unchanged', status: 'working' }; f.r.rootTurn = turn; f.r.nativeInputRequired = true;
   await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, to_model: 'claude-sonnet-test' });
@@ -1764,4 +1821,90 @@ for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322']) test(`${vers
   await f.invoke('classic.PostModelSwitch', { session_id: randomUUID(), to_model: 'child-model' });
   await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, agent_id: 'child', to_model: 'child-model' });
   assert.equal(f.requests.length, 1); assert.equal(f.clock.length, 0);
+});
+
+for (const version of ['2.1.319-beta', '2.1.320', '2.1.321', '2.1.322']) test(`unqualified display version ${version} reads no usage and enables no narration, turn records or media`, async () => {
+  let reads = 0;
+  const f = await mod({ version, usageReader: async () => { reads++; return { context: { window: 200000, tokens: 1 } }; } });
+  await f.readUsage();
+  assert.equal(reads, 0);
+  for (const flag of ['nativeMedia', 'nativeTurnRecords', 'nativeNarration']) assert.notEqual(f.r[flag], true, flag);
+  assert.equal(f.requests.some(row => row.id === 'control:usage'), false);
+});
+
+// T-32 current-version acceptance: this crosses the actual mod/adapter gates,
+// not a fixture that manually sets nativeCapacityAvailable=true.
+for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322'])
+test(`T32 current-version capacity admission: ${version}`, async t => {
+  const { f, ends, turn } = await capacityThroughBridge(t, version);
+  t.diagnostic(JSON.stringify({ version, nativeBlocks: f.r.nativeBlocks,
+    nativeAbortAvailable: f.r.nativeAbortAvailable, nativeCapacityAvailable: f.r.nativeCapacityAvailable, ends }));
+  assert.equal(f.r.nativeCapacityAvailable, true, 'An actual qualified overload must be able to arm recovery');
+  assert.deepEqual(ends, [{ nativeId: f.r.record.nativeId, turnId: turn, status: 'failed', errorInfo: 'serverOverloaded' }]);
+});
+
+// The actual mod supplies the capability. The workspace clock must not submit
+// until both independent failure boundaries have arrived, in either order.
+for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322'])
+for (const order of ['frame-first', 'hook-first'])
+test(`T32 without abort: bounded single continuation ${version} ${order}`, async t => {
+  const bridge = await mod({ version }), f = capacityWorkspace(t, bridge.r);
+  assert.equal(f.r.nativeCapacityAvailable, true);
+  assert.equal(f.r.nativeAbortAvailable, false);
+  f.r.interrupt = () => { throw Error('Capacity recovery must not abort a native turn'); };
+  const first = order === 'frame-first' ? f.fail : f.stop, last = order === 'frame-first' ? f.stop : f.fail;
+  first(); f.w.tickCapacity(Date.now() + 86400000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.w.capacityStatus(f.s.id), null); assert.deepEqual(f.sent, []);
+  last(); const due = f.w.capacityStatus(f.s.id).due;
+  f.stop(); f.fail(); assert.equal(f.w.capacityStatus(f.s.id).due, due);
+  assert.equal(f.events.length, 1);
+  f.w.tickCapacity(due); f.w.tickCapacity(due); f.stop(); f.fail();
+  await new Promise(resolve => setImmediate(resolve));
+  f.w.tickCapacity(due + 86400000);
+  assert.deepEqual(f.sent, ['继续']);
+  assert.equal(f.s.messages.filter(m => m.origin === 'capacity-recovery').length, 1);
+});
+test('retained roots cannot enable capacity even with an explicit qualified flag', () => {
+  const r = adapter(); r.retainedReader = true;
+  r.bindRoot({ sessionId: r.record.nativeId, nativeAbort: true, nativeCapacity: true });
+  assert.equal(r.nativeAbortAvailable, false); assert.equal(r.nativeCapacityAvailable, false);
+});
+
+// A terminal keystroke before the failure can predate the schedule's control
+// revision. Cross the real send/channel/mod path: the native draft checks, not
+// a mock send, must refuse the continuation and retain every typed character.
+for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322'])
+for (const when of ['before-failure', 'during-authorization'])
+test(`T32 native draft survives the complete continuation path: ${version} ${when}`, async t => {
+  const typed = 'half a thought 中文', entered = [], results = [];
+  let nativeDraft = '', reads = 0;
+  const bridge = await mod({ version, promptReader: async () => { reads++; return { text: nativeDraft }; },
+    promptSubmit: async args => { entered.push(args.text); throw Error('A draft must prevent native submit'); },
+    requestHandler: async (url, _options, body, r) => {
+      let result;
+      if (url.endsWith('/next') && r.submission.pending) {
+        const response = new EventEmitter();
+        response.end = value => { result = JSON.parse(value); response.emit('close'); };
+        r.submission.receive(response); assert.ok(result, 'Real pending submission reaches the poll');
+      } else if (url.endsWith('/authorize')) {
+        result = { allowed: r.submission.authorize(body) };
+        if (when === 'during-authorization') nativeDraft = typed;
+      } else if (url.endsWith('/result')) { results.push(body); result = { received: r.submission.result(body) }; }
+      if (result) return { ok: true, text: JSON.stringify(result) };
+    } });
+  const f = capacityWorkspace(t, bridge.r);
+  delete f.r.send; // Restore Claude.prototype.send -> deliver -> SubmissionChannel.
+  f.s.view = 'terminal'; f.r.terminal.input = data => { nativeDraft += data; };
+  if (when === 'before-failure') f.w.input(f.s.id, typed, 'window');
+  f.fail(); f.stop(); const due = f.w.capacityStatus(f.s.id).due;
+  f.w.tickCapacity(due); await bridge.poll();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(nativeDraft, typed); assert.deepEqual(entered, []);
+  assert.equal(reads, when === 'before-failure' ? 1 : 2);
+  assert.equal(results.length, 1); assert.equal(results[0].status, 'draft');
+  assert.equal(f.r.submission.pending, null); assert.equal(f.w.capacityStatus(f.s.id), null);
+  const recorded = f.s.messages.find(m => m.origin === 'capacity-recovery');
+  assert.equal(recorded.status, 'unconfirmed', 'The refused attempt stays visible in NAW');
+  f.w.tickCapacity(due + 86400000); assert.deepEqual(entered, []);
 });
