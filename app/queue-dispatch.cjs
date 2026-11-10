@@ -45,6 +45,8 @@ const PRESSURE_LIMIT_BYTES = 600 * 1024 * 1024;
 const MEMORY_MIN_AGE_MS = 60 * 60 * 1000;
 // A backend NAW migrates without the person's click waits until its sessions were this quiet.
 const MIGRATE_QUIET_MS = 10 * 60 * 1000;
+// Teammates, earlier child agents or unreported background work: quiet three times as long first.
+const MIGRATE_UNPROVEN_QUIET_MS = 30 * 60 * 1000;
 // A memory-triggered rotation waits for this much quiet instead of the 30 minutes for age.
 const QUIET_MEMORY_MS = 10 * 60 * 1000;
 // With no queued work, quiet members of every space are still checked this often.
@@ -1093,7 +1095,19 @@ function quietFor(session, humanAt, now, ms) {
 // The next old backend NAW moves by itself. With automatic updates on, a move the runtime proved
 // safe; with migration on (the person's standing confirmation), also a move that needs it, once
 // every session it stops has been quiet for a while.
-function nextBackendMove(options, settings, sessions, humanAt, now, failed, quietMs = MIGRATE_QUIET_MS) {
+// One rule for choosing a move and for re-checking each session right before its stop.
+function migrationReady(session, humanAt, now, quietMs = MIGRATE_QUIET_MS, unprovenQuietMs = MIGRATE_UNPROVEN_QUIET_MS) {
+  const backendSwitch = require('./backend-switch.cjs');
+  if (backendSwitch.migrationSafe(session)) {
+    return quietFor(session, humanAt, now, quietMs);
+  }
+  if (backendSwitch.migrationAcceptable(session)) {
+    return quietFor(session, humanAt, now, unprovenQuietMs);
+  }
+  return false;
+}
+
+function nextBackendMove(options, settings, sessions, humanAt, now, failed, quietMs = MIGRATE_QUIET_MS, unprovenQuietMs = MIGRATE_UNPROVEN_QUIET_MS) {
   for (const option of options) {
     const plan = option.switch;
     if (!plan || !plan.ready || failed.has(option.backendKey)) {
@@ -1105,7 +1119,6 @@ function nextBackendMove(options, settings, sessions, humanAt, now, failed, quie
     if (!settings.migrate) {
       continue;
     }
-    const backendSwitch = require('./backend-switch.cjs');
     let allowed = true;
     for (const stop of plan.stops || []) {
       const session = sessions.find(s => s.id === stop.id);
@@ -1113,10 +1126,11 @@ function nextBackendMove(options, settings, sessions, humanAt, now, failed, quie
         allowed = false;
         continue;
       }
-      if (!plan.auto && !backendSwitch.migrationSafe(session)) {
-        allowed = false;
-      }
-      if (!quietFor(session, humanAt, now, quietMs)) {
+      if (plan.auto) {
+        if (!quietFor(session, humanAt, now, quietMs)) {
+          allowed = false;
+        }
+      } else if (!migrationReady(session, humanAt, now, quietMs, unprovenQuietMs)) {
         allowed = false;
       }
     }
@@ -2154,6 +2168,8 @@ module.exports = {
   nextBackendMove,
   quietFor,
   MIGRATE_QUIET_MS,
+  MIGRATE_UNPROVEN_QUIET_MS,
+  migrationReady,
   sessionStart,
   lastActivityOf,
   reportedModel,
