@@ -2762,8 +2762,20 @@ class NativeHost {
         await delay(100);
       }
       const endpoint = this.readCodexEndpoint();
-      ws = new WebSocket('ws://localhost', { createConnection: () => net.connect(endpoint.resolved), maxPayload: CODEX_WEBSOCKET_MAX_PAYLOAD, handshakeTimeout: 10000 });
-      await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+      // The socket file appears at bind(), before the server listens. A loaded
+      // machine can refuse a connection in between: retry only that refusal,
+      // only while this child runs and the endpoint is unchanged.
+      for (let attempt = 0; ; attempt++) {
+        ws = new WebSocket('ws://localhost', { createConnection: () => net.connect(endpoint.resolved), maxPayload: CODEX_WEBSOCKET_MAX_PAYLOAD, handshakeTimeout: 10000 });
+        try { await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); }); break; }
+        catch (error) {
+          if (error.code !== 'ECONNREFUSED' || attempt >= 50) throw error;
+          await delay(100);
+          if (spawnError || child.exitCode !== null || child.signalCode !== null) throw uiError("error.codexBackendStartFailed");
+          const now = this.readCodexEndpoint();
+          if (Object.keys(endpoint).some(key => now[key] !== endpoint[key])) throw uiError("error.nativeInterfaceChangedDuringStart");
+        }
+      }
       rpc = new Rpc(ws);
       watcher = this.watchCodexConnection(rpc, child);
       rpc.nativeVersion = serverVersion(await rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace', version: '0.1.0' }, capabilities: { experimentalApi: true } }));

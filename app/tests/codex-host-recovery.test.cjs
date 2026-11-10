@@ -7,11 +7,15 @@ const { NativeHost, Codex } = require('../adapters.cjs');
 const { Workspace } = require('../workspace.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function until(fn) { for (let i = 0; i < 150; i++) { if (fn()) return; await new Promise(r => setTimeout(r, 20)); } throw Error('Expected state not reached'); }
-async function fixture(t, { symlink = false } = {}) {
+async function fixture(t, { symlink = false, beforeListen = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-server-recovery-'));
   const binary = path.join(dir, 'server'), callsFile = path.join(dir, 'calls.jsonl'), controlFile = path.join(dir, 'control.json');
   fs.writeFileSync(controlFile, '{}');
-  fs.writeFileSync(binary, `#!${process.execPath}\nconst fs=require('node:fs'),http=require('node:http');
+  // beforeListen holds the bound socket before listen(): its file exists but
+  // connections are refused, as when a loaded machine pauses the server there.
+  const hold = beforeListen ? `const {Pipe}=process.binding('pipe_wrap'),listen=Pipe.prototype.listen;
+Pipe.prototype.listen=function(backlog){Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,${beforeListen.delay});${beforeListen.exit ? 'process.exit(3);' : ''}return listen.call(this,backlog);};\n` : '';
+  fs.writeFileSync(binary, `#!${process.execPath}\n${hold}const fs=require('node:fs'),http=require('node:http');
 const {WebSocketServer}=require(${JSON.stringify(require.resolve('ws'))});
 const server=http.createServer(),wss=new WebSocketServer({server});let count=0;
 wss.on('connection',ws=>ws.on('message',async raw=>{const m=JSON.parse(raw);fs.appendFileSync(${JSON.stringify(callsFile)},JSON.stringify(m)+'\\n');
@@ -45,6 +49,16 @@ async function crash(host) {
   child.kill('SIGTERM'); await exited;
   await until(() => host.codexProcess === null);
 }
+test('startup connects once a native socket that exists before it listens starts accepting (T-156)', async t => {
+  const f = await fixture(t, { beforeListen: { delay: 300 } });
+  assert.equal(f.w.get(f.id).state, 'idle');
+  assert.equal(f.calls().filter(c => c.method === 'initialize').length, 1);
+  assert.equal(f.calls().filter(c => c.method === 'thread/start').length, 1);
+});
+test('a native server that exits before it listens fails startup without waiting out the retries (T-156)', async t => {
+  const error = await fixture(t, { beforeListen: { delay: 200, exit: true } }).then(() => null, e => e);
+  assert.equal(error?.uiMessage?.key, 'error.codexBackendStartFailed');
+});
 test('confirmed owned server exit preserves records and enables explicit same-ID recovery once', async t => {
   const {host,w,id,calls} = await fixture(t), old = w.runtime(id), rpc = host.rpc;
   const s = w.get(id), identity = s.nativeId;
