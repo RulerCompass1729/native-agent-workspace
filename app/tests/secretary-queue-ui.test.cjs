@@ -35,7 +35,7 @@ function fixture() {
     button: (text, action, cls) => { const el = new Element('button', text, cls); el.click = action; return el; },
     api: { queueSecretary: async id => calls.push(['secretary', id]), initial: async () => state, spaceAction: async (...args) => calls.push(args) },
     updateState: () => calls.push(['refresh']), render: () => calls.push(['render']), renderQueue() {},
-    allSpaces: () => [], sidebarSessions: () => [record], orderedMembers: () => [record], backendVersionNotice: () => null, sidebarDetails: () => [], sidebarFactsKey: () => '',
+    allSpaces: () => [], sidebarSessions: () => [record], orderedMembers: () => [record], backendVersionNotice: () => null, sessionChainModel: () => null, sidebarDetails: () => [], sidebarFactsKey: () => '',
     sessionRows: new Map([[record.id, row]]), sessionRow: () => row, contentMenu: null, roomMenu: null, sessionMenu: null, attempt: fn => fn(), focusSessionAction() {},
     ui: { ...l.ui, menu: options => { menus.push(options); return () => {}; } },
   });
