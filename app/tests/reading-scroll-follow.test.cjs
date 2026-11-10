@@ -182,3 +182,54 @@ test('capture leaves pending reading intent and its control unchanged until the 
   assert.equal(h.view.intent, original); assert.equal(h.view.jumpBar.hidden, true);
   assert.equal(h.frames.length, 0);
 });
+// reading:107: an older page loads when the reader reaches its top. Its rows mount above the anchor and their
+// Markdown lays out a task later; until corrected, the text under the pointer belongs to another record.
+function pageAnchor() {
+  const h = harness(), row = { top: 2677 };
+  h.view.entries.set('history-40', { item: { parentElement: null, getClientRects: () => [{}], getBoundingClientRect: () => ({ top: row.top - h.el.scrollTop }) } });
+  h.el.scrollTop = 0; h.view.intent = null; h.context.captureReading(h.view); // the older-page request captures the place at the top
+  h.view.intent = { position: { top: 0, follow: false, anchor: 'history-40', offset: 120 } };
+  h.context.scheduleReading(h.view);
+  return { ...h, row };
+}
+const tasksDone = () => new Promise(resolve => setImmediate(resolve));
+test('reading:107: rows laid out above a page anchor are corrected when the task ends, before the next input, not only at the frame', async () => {
+  const h = pageAnchor();
+  assert.equal(h.el.scrollTop, 0, 'nothing moves inside the render itself');
+  await tasksDone();
+  assert.equal(h.el.scrollTop, 2557, 'the anchor is back at its offset'); assert.equal(h.view.assignedTop, 2557, 'its scroll event is not the person');
+  assert.equal(h.frames.length, 1, 'before the frame');
+  h.row.top = 16276; h.context.scheduleReading(h.view); await tasksDone(); // Markdown above mounted
+  assert.equal(h.el.scrollTop, 16156);
+});
+test('reading:107: a press on a row keeps that anchor; a press on the reader itself, or after something else moved it, ends it as before', async () => {
+  const row = pageAnchor(); await tasksDone(); const anchored = row.view.intent;
+  row.listeners.pointerdown({ target: row.row, clientX: 100 });
+  assert.strictEqual(row.view.intent, anchored, 'a press on a row keeps the page anchor');
+  row.row.top = 16276; row.context.scheduleReading(row.view); await tasksDone();
+  assert.equal(row.el.scrollTop, 16156, 'Markdown mounting after the press is still corrected');
+  const bar = pageAnchor(); await tasksDone(); bar.listeners.pointerdown({ target: bar.el, clientX: 395 });
+  assert.equal(bar.view.intent, null, 'a press on the reader itself (its scrollbar or padding) ends it');
+  const moved = pageAnchor(); await tasksDone(); moved.el.scrollTop = 40; moved.listeners.pointerdown({ target: moved.row, clientX: 100 });
+  assert.equal(moved.view.intent, null, 'moved by something else since: the press ends it, so a page change reads the new place');
+  const reordered = pageAnchor(); reordered.el.scrollTop = 1800; await tasksDone(); // other code moved it in the same task
+  assert.equal(reordered.el.scrollTop, 1800, 'a column reorder that restores its own scroll keeps it; the scroll event and frame decide, as before');
+  const switched = harness(); vm.runInContext('readingPositions', switched.context)['session-b'] = { top: 0, follow: false, anchor: 'history-40', offset: 0 };
+  switched.context.readingView(switched.el, 'session-b'); switched.listeners.pointerdown({ target: switched.row, clientX: 100 });
+  assert.equal(switched.view.intent, null, 'a new list the reader has not placed yet: the press ends its restore, as before');
+  const following = harness(); following.view.lastTop = following.el.scrollTop; // placed at the end by its frame
+  following.listeners.pointerdown({ target: following.row, clientX: 100 });
+  assert.equal(following.view.intent, null, 'a following intent ends on a row press, as before');
+});
+test('reading:107: a settled reader moved without input (a screen reader, focus) keeps the move through a render; its scroll event ends the anchor', async () => {
+  const h = pageAnchor(); await tasksDone(); assert.equal(h.el.scrollTop, 2557);
+  h.el.scrollTop = 900; h.context.scheduleReading(h.view); await tasksDone(); // a streaming render before that move's scroll event
+  assert.equal(h.el.scrollTop, 900, 'the move is not undone');
+  h.listeners.scroll(); assert.equal(h.view.intent, null, 'its scroll event ends the anchor, as before'); assert.equal(h.el.scrollTop, 900);
+});
+test('reading:107: the frame records where it placed the reader, so a row press after it keeps the anchor', async () => {
+  const h = pageAnchor(); h.el.scrollTop = 1800; await tasksDone(); assert.equal(h.el.scrollTop, 1800, 'moved: left to the frame');
+  h.frames.shift()(); assert.equal(h.el.scrollTop, 2557);
+  const anchored = h.view.intent; h.listeners.pointerdown({ target: h.row, clientX: 100 });
+  assert.strictEqual(h.view.intent, anchored);
+});
