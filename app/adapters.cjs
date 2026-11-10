@@ -2776,6 +2776,8 @@ class NativeHost {
       .then(decision => {
         if (this.closed) return;
         codexQualification.record(this.codexQualificationFile, decision);
+        const held = codexQualification.held(version);
+        console.error(`[NAW] Codex ${version} checked against ${decision.basis}: ${held.length ? 'held ' + held.join(', ') : 'all capabilities open'}; ${decision.records.length} record(s)`);
         for (const target of this.codexTargets.values()) target.emit('capability');
       })
       .catch(() => {})

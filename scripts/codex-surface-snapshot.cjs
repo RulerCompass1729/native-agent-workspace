@@ -12,7 +12,9 @@ const work = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-codex-surface-'));
 try {
   const home = path.join(work, 'home'), schema = path.join(work, 'schema');
   fs.mkdirSync(home, { mode: 0o700 }); fs.mkdirSync(schema, { mode: 0o700 });
-  execFileSync(binary, ['app-server', 'generate-json-schema', '--experimental', '--out', schema], { env: { ...process.env, CODEX_HOME: home }, stdio: 'ignore', timeout: 60000 });
+  // Same conditions as the runtime check: minimal environment, private home, no network.
+  const env = { PATH: process.env.PATH, HOME: home, TMPDIR: work, LANG: 'C', CODEX_HOME: home };
+  execFileSync('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)(deny network*)', binary, 'app-server', 'generate-json-schema', '--experimental', '--out', schema], { env, stdio: 'ignore', timeout: 60000 });
   const provenance = { upstream: 'https://github.com/openai/codex', license: 'Apache-2.0', version,
     generatedBy: 'codex app-server generate-json-schema --experimental', binarySha256: crypto.createHash('sha256').update(fs.readFileSync(fs.realpathSync(binary))).digest('hex'),
     notice: 'Only the parts of the Codex app-server protocol schema that NAW uses (app/codex-surface.cjs), descriptions dropped. Codex is Apache-2.0 (docs/licensing.md).' };

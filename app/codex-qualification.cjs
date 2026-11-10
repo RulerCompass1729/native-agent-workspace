@@ -42,7 +42,8 @@ const surface = require('./codex-surface.cjs');
 const BASELINE = '0.167.0';
 const baselineFile = path.join(__dirname, 'codex-surface', `${BASELINE}.json`);
 // Stored decisions are valid only for the baseline and manifest they were made against.
-const basisSha = () => crypto.createHash('sha256').update(fs.readFileSync(baselineFile)).update(JSON.stringify([surface.MANIFEST, surface.VARIANTS, surface.PERMISSION])).digest('hex');
+// Stored decisions are valid only for the baseline, the manifest and the comparison rules they were made with.
+const basisSha = () => crypto.createHash('sha256').update(fs.readFileSync(baselineFile)).update(fs.readFileSync(path.join(__dirname, 'codex-surface.cjs'))).digest('hex');
 const semver = v => typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v);
 const newer = (v, than) => { const a = v.split('.').map(Number), b = than.split('.').map(Number); for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return false; };
 const needsCheck = version => semver(version) && newer(version, BASELINE) && !(version in automatic);
@@ -56,17 +57,19 @@ function run(binary, args, env, timeoutMs) {
     child.stdout.on('data', chunk => { if (out.length < 4096) out += chunk; });
     const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} reject(Error('schema generator timed out')); }, timeoutMs);
     child.on('error', error => { clearTimeout(timer); reject(error); });
-    child.on('exit', code => { clearTimeout(timer); code === 0 ? resolve(out) : reject(Error(`schema generator exited ${code}`)); });
+    // 'close' waits for stdout to end, so a short --version reply is never cut off.
+    child.on('close', code => { clearTimeout(timer); code === 0 ? resolve(out) : reject(Error(`schema generator exited ${code}`)); });
   });
 }
 async function qualify({ binary, version, privateDir, timeoutMs = 60000 }) {
   const decidedAt = new Date().toISOString();
   if (!needsCheck(version)) return { version, basis: BASELINE, capabilities: {}, records: [{ kind: 'undecidable', reason: 'not a newer exact version' }], decidedAt };
-  const work = fs.mkdtempSync(path.join(privateDir, 'codex-qualify-'));
+  let work;
   try {
+    work = fs.mkdtempSync(path.join(privateDir, 'codex-qualify-'));
     const home = path.join(work, 'home'), schema = path.join(work, 'schema');
     fs.mkdirSync(home, { mode: 0o700 }); fs.mkdirSync(schema, { mode: 0o700 });
-    const env = { PATH: process.env.PATH || '/usr/bin:/bin', HOME: process.env.HOME || home, TMPDIR: work, LANG: process.env.LANG || 'C', CODEX_HOME: home };
+    const env = { PATH: process.env.PATH || '/usr/bin:/bin', HOME: home, TMPDIR: work, LANG: process.env.LANG || 'C', CODEX_HOME: home };
     // The file at the server's path can be replaced by an updater; judge only the running version.
     const reported = (await run(binary, ['--version'], env, 15000)).trim().replace(/^codex-cli /, '');
     if (reported !== version) throw Error(`binary reports ${reported}, running server reports ${version}`);
@@ -75,7 +78,7 @@ async function qualify({ binary, version, privateDir, timeoutMs = 60000 }) {
     return { ...decision, method: 'schema', decidedAt };
   } catch (error) {
     return { version, basis: BASELINE, capabilities: {}, records: [{ kind: 'undecidable', reason: String(error.message).slice(0, 200) }], method: 'schema', decidedAt };
-  } finally { fs.rmSync(work, { recursive: true, force: true }); }
+  } finally { if (work) fs.rmSync(work, { recursive: true, force: true }); }
 }
 const decided = d => !d.records.some(r => r.kind === 'undecidable');
 // Load stored decisions for the current basis; returns them for inspection.
@@ -95,5 +98,7 @@ function record(file, decision) {
   fs.renameSync(temp, file);
 }
 const decision = version => automatic[version];
+// Capabilities an automatic decision kept closed for its version (none for hand-qualified versions).
+const held = version => automatic[version] ? CAPABILITIES.filter(c => !allows(c, version)) : [];
 
-module.exports = { STATIC, CAPABILITIES, BASELINE, allows, setAutomatic, needsCheck, qualify, load, record, decision };
+module.exports = { STATIC, CAPABILITIES, BASELINE, allows, setAutomatic, needsCheck, qualify, load, record, decision, held };
