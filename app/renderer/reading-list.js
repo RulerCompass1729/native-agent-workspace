@@ -18,6 +18,35 @@ function readingWakeStatus(wake) {
     submitted: 'delivery.submitted', unconfirmed: 'delivery.unconfirmed', cancelled: 'delivery.notSent', 'not-sent': 'delivery.notSent' };
   return typeof wake.status === 'string' && Object.hasOwn(labels, wake.status) ? labels[wake.status] : 'delivery.unknown';
 }
+// These are recorded communication shapes, not authentication of arbitrary text.
+// A peer row proves the receiving native session observed input; its claimed
+// sender remains independently marked unverified by roomMessageLabel.
+function readingSpaceMessageKind(message) {
+  const id = value => typeof value === 'string' && value.length > 0;
+  if (message.role === 'system' && message.kind === 'agent-wake' &&
+      id(message.wake?.id) && id(message.wake?.senderId) && id(message.wake?.recipientId)) return 'wake';
+  if (message.role === 'system' && message.kind === 'agent-peer' && id(message.peerMessage?.recipientId)) return 'peer';
+  if (['user', 'human'].includes(message.role) && id(message.agentControl?.id) && id(message.agentControl?.nativeId) && id(message.recipientId)) return 'control';
+  return null;
+}
+function readingSpaceMessageStatus(message, room = false) {
+  if (!room) return null;
+  const kind = readingSpaceMessageKind(message);
+  if (kind === 'wake') return readingWakeStatus({ status: message.wakeStatus });
+  if (kind === 'peer') return 'delivery.peerReceived';
+  if (kind !== 'control') return null;
+  const receipts = (Array.isArray(message.deliveries) ? message.deliveries : []).filter(delivery => delivery?.recipientId === message.recipientId);
+  const status = receipts.length === 1 ? readingDeliveryStatusKey(message, receipts[0]) : 'delivery.unknown';
+  return typeof status === 'string' ? status : 'delivery.unknown';
+}
+function readingSpaceMessageBody(message, room) {
+  if (!room || readingSpaceMessageKind(message) !== 'wake') return null;
+  const body = message.wake.body, text = ui.displayText(message.text, message.uiMessage);
+  // Only separate an exact original suffix. Unexpected legacy text and every
+  // recorded reason remain intact rather than being guessed from status.
+  return typeof body === 'string' && body && text.endsWith(body)
+    ? { body, notice: text.slice(0, text.length - body.length) } : null;
+}
 function cancelReadingWakeCollapse(entry) {
   if (entry.wakeTimer !== undefined) clearTimeout(entry.wakeTimer);
   delete entry.wakeTimer;
@@ -60,7 +89,7 @@ function updateReadingWake(view, entry, wake) {
   entry.wakeTimer = timer;
 }
 function readingMessageClock(message, now = Date.now(), language = []) {
-  const important = ['user', 'human'].includes(message.role) || message.role === 'assistant' &&
+  const important = Boolean(readingSpaceMessageKind(message)) || ['user', 'human'].includes(message.role) || message.role === 'assistant' &&
     (!message.kind || message.kind === 'response') && message.phase !== 'commentary' && message.status !== 'streaming';
   if (!important || !Number.isFinite(message.time) || Math.abs(message.time) > 8640000000000000) return null;
   const date = new Date(message.time), today = new Date(now);
@@ -743,7 +772,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       for (const field of ['disclosure', 'content', 'preview', 'tail', 'more', 'wakeDisclosure']) delete entry[field];
     }
     entry.message = m; entry.exploration = explorations.get(m.id); retained.add(m.id); rows.push(entry.item);
-    entry.item.className = `message ${m.role}${m.kind === 'turn' ? ' native-turn' : ''}${entry.disclosure ? ' process' : ''}`;
+    entry.item.className = `message ${m.role}${m.kind === 'turn' ? ' native-turn' : ''}${entry.disclosure ? ' process' : ''}${room && readingSpaceMessageKind(m) ? ' space-message' : ''}`;
     if (m.operator || entry.operatorControls) renderOperatorControls(entry, m, context);
     if (m.backgroundOperation || entry.backgroundControls) renderBackgroundControls(entry, m);
     entry.item.classList.toggle('native-notice', Boolean(m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && session?.nativeContexts?.some(c => c.boundaryId === m.id))));
@@ -761,10 +790,11 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     };
     const name = messageName();
     const messageTime = readingMessageClock(m);
+    const spaceStatus = readingSpaceMessageStatus(m, room);
     const snapshotSource = room && m.snapshotSource && state.room.merge?.sources.find(source => source.id === m.snapshotSource.roomId);
     const snapshotName = snapshotSource ? mergeSourceLabel(snapshotSource, state.room.merge.sources) : '';
     const ownGap = m.kind === 'gap' && m.role === 'system' && Boolean(readingOwnMessage(m));
-    const headingKey = JSON.stringify([ownGap, name, m.uiNameMessage, m.uiTitleMessage, m.legacyOriginalTitleUiMessage, m.status, messageTime, m.manualReply, nativeTitle, entry.exploration?.error, m.exitCode, m.incomplete, m.volatile, m.sharingStopped, m.sharingStoppedUiMessage, snapshotName]);
+    const headingKey = JSON.stringify([ownGap, name, m.uiNameMessage, m.uiTitleMessage, m.legacyOriginalTitleUiMessage, m.status, messageTime, spaceStatus, m.manualReply, nativeTitle, entry.exploration?.error, m.exitCode, m.incomplete, m.volatile, m.sharingStopped, m.sharingStoppedUiMessage, snapshotName]);
     if (entry.headingKey !== headingKey) {
       const authorId = room && (m.sessionId || m.recipientId);
       const author = authorId ? button(name, () => { $('room-filter').value = authorId; renderTimeline(); attempt(persistView); }, 'message-author') : node('strong', name);
@@ -795,7 +825,10 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         ui.display.computed(time, 'text', () => readingDisplayClock(m).text);
         const label = () => uiText('reading.recordedAt', { time: readingDisplayClock(m).full });
         ui.display.computed(time, 'title', label); ui.display.computed(time, 'aria-label', label); entry.heading.append(time);
+      } else if (spaceStatus) {
+        const unknown = node('span', undefined, 'quiet'); ui.display.text(unknown, 'reading.unknownTime'); entry.heading.append(unknown);
       }
+      if (spaceStatus) { const fact = node('span', undefined, 'space-message-status'); ui.display.text(fact, spaceStatus); entry.heading.append(fact); }
       // A stored fragment is not proof that its native turn is still running.
       // Current activity lives in the session/progress status, not this record.
       // Only Claude rows take queued input; native sends it once the agent is idle.
@@ -890,17 +923,23 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       entry.inputBody.textContent = m.input || ''; entry.inputBody.hidden = !m.input;
     }
     const wakeBody = wake && ['staged', 'sending', 'consumed', 'submitted'].includes(wake.status);
-    const displayText = wakeBody ? wake.body : nativeCompletionText(m);
+    const spaceBody = readingSpaceMessageBody(m, room);
+    const displayText = spaceBody ? spaceBody.body : wakeBody ? wake.body : nativeCompletionText(m);
+    if (spaceBody) {
+      if (!entry.spaceNotice) { entry.spaceNotice = node('p', undefined, 'quiet space-message-notice'); entry.body.before(entry.spaceNotice); }
+      ui.display.computed(entry.spaceNotice, 'text', () => readingSpaceMessageBody(entry.message, room)?.notice || '');
+      entry.spaceNotice.hidden = !spaceBody.notice;
+    } else if (entry.spaceNotice) { ui.display.unbind(entry.spaceNotice); entry.spaceNotice.remove(); delete entry.spaceNotice; }
     const ownNotice = readingOwnMessage(m);
     const noticeSignature = ownNotice ? JSON.stringify(ownNotice) : '';
     if (entry.noticeSignature !== noticeSignature) {
       // A generated delivery caption can change while the original body does not.
       // Keep its selected text nodes; copy metadata still follows the new notice.
-      if (!wakeBody) entry.text = undefined;
+      if (!wakeBody && !spaceBody) entry.text = undefined;
       entry.noticeSignature = noticeSignature;
     }
     entry.displayText = displayText;
-    entry.copyPayload = ownNotice ? () => readingOwnText(m, ownNotice) : null;
+    entry.copyPayload = ownNotice ? () => readingOwnText(m, ownNotice) : spaceBody ? () => nativeCompletionText(m) : null;
     const fileSession = room ? state.sessions.find(s => s.id === m.sessionId) : session;
     const fileCwdKnown = fileSession && !fileSession.nativeContextPending && (m.nativeId
       ? m.nativeId === fileSession.nativeId && !fileSession.nativeContexts?.some(c => c.nativeId === m.nativeId)
@@ -912,7 +951,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (entry.role && entry.role !== m.role) ui.clearMarkdown(entry.body);
       entry.text = displayText; entry.role = m.role; entry.streaming = m.status === 'streaming'; entry.fileSourceKey = fileSourceKey;
       if (m.role === 'assistant') ui.markdown(entry.body, m.text, entry.streaming, () => { if (view.key === key) scheduleReading(view); }, fileSource);
-      else if (ownNotice && !wakeBody) ui.display.computed(entry.body, 'text', () => readingOwnText(m, ownNotice));
+      else if (ownNotice && !wakeBody && !spaceBody) ui.display.computed(entry.body, 'text', () => readingOwnText(m, ownNotice));
       else { ui.display.unbind(entry.body); entry.body.textContent = displayText; }
     }
     const footer = readingTurnFooter(m);
