@@ -30,7 +30,11 @@ function applyNativeBlock(session, event, imageDataDir) {
     // A drawn explanation (T-130) takes the place of its row in the native
     // stream: before a later row that arrived first, and after any earlier
     // explanation of the same turn that was drawn after it.
-    let at = session.messages.length;
+    // Drawing may finish after the engine's completion event. An identified
+    // reply still belongs before its own completed footer, never beneath a
+    // newer question. Interrupted boundaries and narration keep their rules.
+    let at = event.kind === 'response' && event.phase !== 'commentary' && boundary?.status === 'complete'
+      ? session.messages.indexOf(boundary) : session.messages.length;
     if (event.kind === 'response' && event.phase === 'commentary' && event.id.startsWith('narration:') && Number.isSafeInteger(event.order)) {
       const before = typeof event.beforeId === 'string' ? session.messages.findIndex(m => m.id === `native:${event.nativeId}:${event.beforeId}`) : -1;
       if (before >= 0) at = before;

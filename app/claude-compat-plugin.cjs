@@ -33,6 +33,10 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
   }
   // Upgrade only our byte-exact previous hook. Edited copies remain untouched.
   const previousHooks = new Set([
+    // Exact previously reviewed queued-prompt identity hook before display gate integration (0007159).
+    '0ed4845ea7a36abdc9563522979c6c6c6e5fd2bcae31af919b47fb6bedd3a336',
+    // Exact current-main hook before rebasing queued-prompt identity (f4ede5c).
+    '0e4eb2d45edcf2c4eb676d2b6d577e79bab2e7a1f384cf52b3d3d4dfc304187d',
     // Exact main 116120e compatibility copy before the bootstrap comment cleanup.
     'bbe4f6f476717b75f5911c3b7a801afd7ce8e8bdf727306175486bf4b636496e',
     // Exact main 88e8678 compatibility copy before 2.1.321/322 display qualification.

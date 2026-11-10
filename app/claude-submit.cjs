@@ -117,6 +117,10 @@ function createSubmissionServer(filename, targets, { restrictedOutboxCall, backg
       }
       if (target.rootLease && !target.validRootBinding(message)) { res.writeHead(409); res.end('{}'); return; }
       if (message.sessionId !== target.record.nativeId) { res.writeHead(409); res.end('{}'); return; }
+      if (req.url === '/prompt-identity') {
+        try { return res.end(JSON.stringify(await target.promptIdentity(message))); }
+        catch { res.writeHead(409); res.end('{}'); return; }
+      }
       if (req.url === '/background-control') {
         const abort = new AbortController(), closed = () => abort.abort();
         res.once('close', closed);

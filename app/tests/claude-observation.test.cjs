@@ -45,7 +45,7 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
     const dispatch=(index,value)=>{if(index===selected.length)return next(value);const rest=v=>dispatch(index+1,v);rest.origin=next.origin;return selected[index].fn($,value,rest);};return dispatch(0,e);
   };
   await invoke('session.start', {}); await clock.shift()(); const poll = clock.find(fn => fn.delay === 0); clock.length = 0;
-  return { r, clock, requests, invoke, poll, readUsage() { return testObserveUsage($); }, setUsageReader(fn) { $.session.usage = fn; }, setModelReader(fn) { $.session.model = fn; }, readModel() { return testObserveModel($); }, setToken(value) { token = value; }, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
+  return { r, clock, requests, invoke, poll, setVersion(value) { version = value; }, readUsage() { return testObserveUsage($); }, setUsageReader(fn) { $.session.usage = fn; }, setModelReader(fn) { $.session.model = fn; }, readModel() { return testObserveModel($); }, setToken(value) { token = value; }, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
 }
 const response = (text = 'Intermediate native text', extra = {}) => ({ uuid: randomUUID(), door: 'response', origin: { kind: 'model', model: 'synthetic' }, message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] }, ...extra });
 
@@ -367,6 +367,119 @@ async function queuedTurn(version, { typed = 'Wake the idle peer.', started = ty
   return { f, first, later, result: await wakeCall(f, 'call-queued') };
 }
 const refusedWake = { deny: '没有本原生主会话的定向协作授权。' };
+// Exercise queued-only negotiation as well as the now-qualified whole-turn
+// reader; declining one capability must not change the advertised version gate.
+async function queuedIdentity({ version = '2.1.321', wholeTurnRecords = false, duplicate = false, accepted = true, origin = 'composer', returnedUuid, heldLookup } = {}) {
+  const uuid = randomUUID(), first = randomUUID(), freshPrompt = randomUUID(), requests = [];
+  const f = await mod({ version: ['2.1.321', '2.1.322'].includes(version) ? version : '2.1.319', requestHandler: async (url, options, body, r) => {
+    if (url.endsWith('/root-bind') && !wholeTurnRecords) {
+      return { ok: true, text: JSON.stringify(await r.bindRoot({ ...body, nativeTurnRecords: false })) };
+    }
+    if (url.endsWith('/prompt-identity')) {
+      requests.push(body); const ordinal = requests.length; if (heldLookup) await heldLookup;
+      return { ok: true, text: JSON.stringify({ uuid: typeof returnedUuid === 'function' ? await returnedUuid(uuid, ordinal) : returnedUuid === undefined ? uuid : returnedUuid }) };
+    }
+  } });
+  f.setVersion(version);
+  const sid = f.r.record.nativeId;
+  await f.invoke('classic.UserPromptSubmit', { session_id: sid, prompt_id: first, prompt: 'First question.' });
+  await f.invoke('turn.start', { turnId: 'first-turn', text: 'First question.' });
+  const firstDisplay = { session_id: sid, prompt_id: first, turn_id: 'first-display', message_id: 'first-answer', index: 0, final: true, delta: 'First answer.' };
+  await f.invoke('classic.MessageDisplay', firstDisplay);
+  await typedDuringTurn(f, first, 'Second question.');
+  if (duplicate) await typedDuringTurn(f, first, 'Second question.');
+  await f.invoke('turn.complete', { turnId: 'first-turn', reason: 'answer' });
+  if (accepted) await f.append({ uuid, door: 'prompt', origin: { kind: origin }, message: { type: 'user', role: 'user', content: [{ type: 'text', text: 'Second question.' }] } });
+  await f.invoke('turn.start', { turnId: 'queued-turn', text: 'Second question.' });
+  const display = { session_id: sid, prompt_id: freshPrompt, turn_id: 'queued-display', message_id: 'queued-answer', index: 0, final: true, delta: 'Second answer.' };
+  const flush = async () => { for (let n = 0; n < 20 && f.clock.some(fn => fn.delay === 0); n++) await f.clock.splice(f.clock.findIndex(fn => fn.delay === 0), 1)[0](); };
+  return { f, uuid, freshPrompt, requests, display, firstDisplay, flush };
+}
+for (const version of ['2.1.321', '2.1.322']) for (const wholeTurnRecords of [false, true]) test(`T138 identity: ${version} whole records ${wholeTurnRecords} links only the accepted UUID and keeps reading separate from reply authority`, async () => {
+  const { f, uuid, freshPrompt, requests, display, flush } = await queuedIdentity({ version, wholeTurnRecords });
+  assert.equal(f.r.nativeTurnRecords, wholeTurnRecords);
+  assert.equal(f.r.nativeQueuedPromptLinks, true);
+  await f.invoke('classic.MessageDisplay', display);
+  await f.invoke('turn.complete', { turnId: 'queued-turn', reason: 'answer', answer: 'Second answer.' });
+  await flush();
+  assert.equal(requests.length, 1); assert.equal(requests[0].promptId, freshPrompt);
+  const response = f.requests.find(row => row.id === 'display:queued-answer');
+  assert.equal(response.turnId, 'queued-turn');
+  assert.equal(f.requests.find(row => row.id === 'control:turn-start' && row.turnId === 'queued-turn').triggers.prompts.length, 1);
+  assert.equal(response.promptId, freshPrompt); assert.equal(response.displayTurnId, 'queued-display');
+  assert.equal(f.requests.find(row => row.id === 'turn:queued-turn').finalDisplayId, undefined, 'Display-only association never promotes a shared final');
+  assert.ok(uuid !== freshPrompt, 'The two actual native namespaces remain distinct');
+});
+for (const options of [{ duplicate: true }, { accepted: false }, { origin: 'engine' }]) test(`T138 identity: whole records keep their qualified trigger without inventing a UUID bridge ${JSON.stringify(options)}`, async () => {
+  const { f, display, flush } = await queuedIdentity({ ...options, wholeTurnRecords: true });
+  await f.invoke('classic.MessageDisplay', display); await flush();
+  assert.equal(f.r.nativeTurnRecords, true);
+  assert.equal(f.requests.find(row => row.id === 'control:turn-start' && row.turnId === 'queued-turn').triggers.prompts.length, 1);
+  assert.equal(f.requests.find(row => row.id === 'display:queued-answer').turnId, 'display:queued-display');
+});
+for (const options of [{ version: '2.1.319' }, { version: '2.1.323' }, { version: '2.1.322-beta' }, { duplicate: true }, { accepted: false }, { origin: 'engine' }, { returnedUuid: 'unrelated-row' }]) test(`T138 identity: unproved link stays a separate display turn ${JSON.stringify(options)}`, async () => {
+  const { f, display, flush } = await queuedIdentity(options);
+  await f.invoke('classic.MessageDisplay', display); await flush();
+  assert.equal(f.requests.find(row => row.id === 'display:queued-answer').turnId, 'display:queued-display');
+  if (options.duplicate || options.accepted === false || options.origin === 'engine') {
+    assert.equal(f.requests.find(row => row.id === 'control:turn-start' && row.turnId === 'queued-turn').triggers, undefined, 'An unproved accepted composer row cannot claim the question either');
+  }
+});
+test('T138 identity: a late pinned old display never moves into the queued turn', async () => {
+  const { f, display, firstDisplay, requests, flush } = await queuedIdentity();
+  await f.invoke('classic.MessageDisplay', display);
+  await f.invoke('classic.MessageDisplay', { ...firstDisplay, index: 1, delta: 'Old tail.' }); await flush();
+  assert.equal(requests.length, 1);
+  assert.ok(f.requests.filter(row => row.id === 'display:first-answer').every(row => row.turnId === 'first-turn'));
+});
+test('T138 identity: a published fallback never retags its later chunks from a delayed journal answer', async () => {
+  let attempts = 0;
+  const { f, display, requests, flush } = await queuedIdentity({ returnedUuid: uuid => ++attempts === 1 ? null : uuid });
+  await f.invoke('classic.MessageDisplay', { ...display, final: false });
+  await f.invoke('classic.MessageDisplay', { ...display, index: 1, delta: 'Later text.' }); await flush();
+  assert.equal(requests.length, 1, 'A bounded miss does not start repeated metadata waits');
+  assert.ok(f.requests.filter(row => row.id === 'display:queued-answer').every(row => row.turnId === 'display:queued-display'));
+});
+test('T138 identity: overlapping lookups preserve the first published namespace', async () => {
+  const releases = [];
+  const { f, display, flush } = await queuedIdentity({ returnedUuid: uuid => new Promise(resolve => releases.push(value => resolve(value ? uuid : null))) });
+  const a = f.invoke('classic.MessageDisplay', { ...display, final: false });
+  for (let n = 0; n < 20 && releases.length < 1; n++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(releases.length, 1);
+  const b = f.invoke('classic.MessageDisplay', { ...display, index: 1, delta: 'Second chunk.' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(releases.length, 1, 'Both callbacks share the pending identity lookup');
+  releases[0](false); await a; // publish the conservative fallback first
+  await b; await flush();
+  const rows = f.requests.filter(row => row.id === 'display:queued-answer');
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every(row => row.turnId === 'display:queued-display'));
+});
+test('T138 identity: overlapping chunks share one lookup and never drop the earlier text', async () => {
+  const releases = [];
+  const { f, display, requests, flush } = await queuedIdentity({ returnedUuid: uuid => new Promise(resolve => releases.push(() => resolve(uuid))) });
+  const a = f.invoke('classic.MessageDisplay', { ...display, final: false, delta: 'First chunk.' });
+  for (let n = 0; n < 20 && releases.length < 1; n++) await new Promise(resolve => setImmediate(resolve));
+  const b = f.invoke('classic.MessageDisplay', { ...display, index: 1, delta: 'Second chunk.' });
+  await new Promise(resolve => setImmediate(resolve));
+  if (releases[1]) releases[1](); // the later lookup would win without sharing
+  releases[0](); await Promise.all([a, b]); await flush();
+  const rows = f.requests.filter(row => row.id === 'display:queued-answer'), session = { nativeId: f.r.record.nativeId, messages: [] };
+  for (const row of rows) require('../native-blocks.cjs').applyNativeBlock(session, { ...row, nativeId: session.nativeId });
+  assert.equal(session.messages[0].text, 'First chunk.Second chunk.');
+  assert.equal(session.messages[0].incomplete, undefined);
+  assert.equal(requests.length, 1);
+  assert.deepEqual(rows.map(row => row.index), [0, 1]);
+});
+test('T138 identity: an identity answer after session end cannot populate the new reader', async () => {
+  let release; const heldLookup = new Promise(resolve => { release = resolve; });
+  const { f, display, requests, flush } = await queuedIdentity({ heldLookup });
+  const pending = f.invoke('classic.MessageDisplay', display);
+  for (let n = 0; n < 20 && !requests.length; n++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests.length, 1, 'The identity lookup must actually be in flight');
+  await f.invoke('session.end', {}); release(); await pending; await flush();
+  assert.ok(!f.requests.some(row => row.id === 'display:queued-answer'));
+});
 for (const version of ['2.1.316', '2.1.317']) {
   test(`native ${version}: a queued prompt's own turn, started with exactly its text, may wake a peer (T-138)`, async () => {
     const { f, first, result } = await queuedTurn(version);
