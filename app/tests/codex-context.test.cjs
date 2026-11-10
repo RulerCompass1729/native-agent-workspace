@@ -428,6 +428,63 @@ for(const [name,change] of [
 ])test('capacity recovery cancels on '+name,async t=>{
  const f=capacityFixture(t);f.fail();change(f);f.w.tickCapacity(Date.now()+86400000);await capacityTick();assert.equal(f.calls.length,0);assert.equal(f.w.capacityStatus(f.s.id),null);
 });
+// A scheduled continuation ended by the person's own change says why and how to go on, and that advice works. One
+// ended by a state the session already shows, a native connection change or a new native context adds nothing; the
+// real disconnect, backend exit, stop and context-switch paths are driven (independent review 0a2298c6).
+for(const [name,change,key,who] of [
+ ['draft',f=>f.w.setDraft(f.s.id,'new human draft','window'),'notice.capacityCancelledDraft','window'],
+ ['takeover',f=>f.w.claim(f.s.id,'another-window'),'notice.capacityCancelledControl','another-window'],
+ ['membership',f=>f.w.join(f.s.id,true),'notice.capacityCancelledControl','window'],
+ ['new native turn',f=>f.start('human-turn'),null],
+ ['approval',f=>f.r.emit('state','approval'),null],
+ ['archive',f=>f.s.archived=true,null],
+ ['connection flag',f=>f.r.transportDisconnected=true,null],
+ ['disconnect',f=>f.r.transportClosed(),null],
+ ['backend exit',f=>{f.r.backendExited();},null],
+ ['stop',f=>{f.w.stop(f.s.id).catch(()=>{});},null],
+ ['context switch',f=>f.w.endNativeContext(f.s,f.r,{nativeId:f.s.nativeId,reason:'clear'}),null],
+ ['runtime lifecycle',f=>f.r.lifecycleRevision++,null],
+ ['save failure',f=>f.w.storageWarning='disk full',null],
+ ['draft restored by the app',f=>{f.w.drafts.set(f.s.id,'restored');f.w.draftRevisions.set(f.s.id,(f.w.draftRevisions.get(f.s.id)||0)+1);},null],
+ ['new native context (another thread)',f=>f.s.nativeId=randomUUID(),null]
+])test('a scheduled continuation cancelled by '+name+(key?' says why, and the advised continue works':' adds no notice of its own'),async t=>{
+ const f=capacityFixture(t);f.fail();const before=f.s.messages.length;change(f);
+ for(let i=0;i<2;i++){f.w.tickCapacity(Date.now()+86400000*(i+1));await capacityTick();}
+ const added=f.s.messages.slice(before).filter(m=>m.name==='NAW'&&m.uiMessage?.key?.startsWith('notice.capacityCancelled'));
+ assert.deepEqual(f.calls.filter(c=>c.method==='turn/start'),[],'no automatic continue');assert.equal(f.w.capacityStatus(f.s.id),null);
+ if(!key){assert.deepEqual(added,[]);return;}
+ assert.equal(added.length,1,'once');assert.equal(added[0].uiMessage.key,key);assert.equal(added[0].kind,'notice');
+ const locale=require('../ui-locale.js');assert.match(locale.displayText('en',added[0].text,added[0].uiMessage),/continu/i);assert.match(added[0].text,/继续/);
+ if(name==='draft')f.w.setDraft(f.s.id,'','window');
+ await f.w.send(f.s.id,'继续',who);await capacityTick();assert.deepEqual(f.calls.map(c=>c.method),['turn/start'],'the advised manual continue is accepted');
+});
+test('typing while the session is disconnected adds no notice even before the next check',t=>{
+ const f=capacityFixture(t);f.fail();f.r.transportClosed();const before=f.s.messages.length;
+ f.w.setDraft(f.s.id,'typed while disconnected','window');assert.equal(f.w.capacityStatus(f.s.id),null);
+ assert.deepEqual(f.s.messages.slice(before).filter(m=>m.uiMessage?.key?.startsWith('notice.capacityCancelled')),[]);
+});
+for(const read of ['answered','failed'])test('a takeover while the goal is checked before continuing is reported once: goal read '+read,async t=>{
+ const f=capacityFixture(t);f.fail();const due=f.w.capacityStatus(f.s.id).due;let release,reject;
+ f.host.rpc.call=async()=>new Promise((resolve,fail)=>{release=resolve;reject=fail;});
+ f.w.tickCapacity(due);f.w.claim(f.s.id,'another-window');f.w.tickCapacity(due+1);
+ if(read==='answered')release({goal:null});else reject(Error('goal read failed'));
+ await capacityTick();assert.equal(f.w.capacityStatus(f.s.id),null);
+ assert.equal(f.s.messages.filter(m=>m.uiMessage?.key==='notice.capacityCancelledControl').length,1);
+ assert.equal(f.s.messages.filter(m=>m.uiMessage?.key==='notice.capacityGoalUnavailable').length,0);
+});
+test('typing after the session moved to a new native context appends nothing about the old continuation',t=>{
+ const f=capacityFixture(t);f.fail();f.s.nativeId=randomUUID();const before=f.s.messages.length;
+ f.w.setDraft(f.s.id,'draft in the new context','window');assert.equal(f.w.capacityStatus(f.s.id),null);assert.equal(f.s.messages.length,before);
+});
+test('typing with no continuation scheduled saves the draft and adds no notice',t=>{
+ const f=capacityFixture(t);const before=f.s.messages.length;f.w.setDraft(f.s.id,'just typing','window');
+ assert.equal(f.w.drafts.get(f.s.id),'just typing');assert.equal(f.s.messages.length,before);
+});
+test('a continuation that already stopped at its limit is not reported again when the person types',t=>{
+ const f=capacityFixture(t);f.fail();f.w.capacityRecoveries.get(f.s.id).status='exhausted';const before=f.s.messages.length;
+ f.w.setDraft(f.s.id,'new human draft','window');assert.equal(f.w.capacityStatus(f.s.id),null);
+ assert.deepEqual(f.s.messages.slice(before).filter(m=>m.uiMessage?.key?.startsWith('notice.capacityCancelled')),[]);
+});
 test('explicit cancel stops a scheduled recovery without sending a native interrupt',async t=>{
  const f=capacityFixture(t);f.fail();await f.w.interrupt(f.s.id,'window');assert.equal(f.calls.length,0);assert.equal(f.w.capacityStatus(f.s.id),null);
 });

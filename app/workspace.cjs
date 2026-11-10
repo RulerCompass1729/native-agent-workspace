@@ -424,6 +424,29 @@ class Workspace extends EventEmitter {
     // collaboration pause, input replay or new timer is created by the deadline.
     if (changed) this.emit('change');
   }
+  // A scheduled automatic continuation that the person's own change ended says why and how to go on: an edit of the
+  // message box, or a takeover or membership change. Nothing is added when the session already shows why it cannot
+  // continue (stopping, disconnect, backend exit, approval, a new turn or send, archive, save failure), when its native
+  // connection changed, after the limit was reached, or once it is in or moving to a new native context. Every rebind
+  // path shows its own state (starting, disconnect, exit) or is a new native context, so a rebind adds nothing either.
+  capacityCancelled(s, r, why) {
+    const keys = { draft: 'notice.capacityCancelledDraft', control: 'notice.capacityCancelledControl' };
+    const runtime = s && this.runtimes.get(s.id);
+    if (!s || !r || !keys[why] || this.capacityRecoveries.get(s.id) !== r || r.status !== 'scheduled') return;
+    if (!runtime || runtime !== r.runtime || runtime.host?.rpc !== r.rpc || runtime.lifecycleRevision !== r.lifecycle || runtime.rootLease !== r.lease ||
+      runtime.observationEpoch !== r.epoch || s.nativeId !== r.nativeId || s.nativeContextPending || this.closed || this.storageWarning || s.archived ||
+      this.stops.has(s.id) || !['idle', 'error'].includes(s.state) || (s.pendingTag && s.pendingTag !== r.tag) || s.approval || s.approvalOverflow ||
+      s.claudeQuestion || runtime.stopped || runtime.transportDisconnected || runtime.backendExitConfirmed || runtime.chatAvailable === false ||
+      runtime.turnId || runtime.pendingQueue || runtime.pendingSteer || runtime.nativeInputRequired || runtime.nativeAbortRequest) return;
+    s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', ...uiNotice(keys[why]), status: 'complete', time: Date.now() });
+  }
+  // The person's own edit reaches setDraft, which says so itself; a draft that changed any other way was restored by
+  // the app, so it adds nothing here. A takeover or membership change by the person is the remaining case.
+  dropCapacity(id, s, r) {
+    const why = !s || !r || this.draftRevisions.get(s.id) !== r.draft || this.drafts.get(s.id) ? null
+      : s.owner !== r.owner || s.controlRevision !== r.control || s.memberRevision !== r.member ? 'control' : null;
+    this.capacityCancelled(s, r, why); this.cancelCapacity(id);
+  }
   cancelCapacity(id) {
     const turn = this.runtimes.get(id)?.rootTurn;
     if (turn?.pendingFailure) { turn.pendingFailure = false; turn.failureCancelled = true; }
@@ -461,7 +484,7 @@ class Workspace extends EventEmitter {
     for (const [id, r] of this.capacityRecoveries) {
       if (r.status !== 'scheduled' || r.checking) continue;
       const s = this.sessions.get(id);
-      if (!s || !this.capacityValid(s, r)) { this.cancelCapacity(id); continue; }
+      if (!s || !this.capacityValid(s, r)) { this.dropCapacity(id, s, r); continue; }
       if (now < r.due) continue;
       // Keep the existing cancel action available during this metadata read.
       r.checking = true;
@@ -487,11 +510,11 @@ class Workspace extends EventEmitter {
         goal = result.goal;
       }
     } catch {
-      if (this.capacityRecoveries.get(s.id) === r && !this.capacityValid(s, r)) { this.cancelCapacity(s.id); return; }
+      if (this.capacityRecoveries.get(s.id) === r && !this.capacityValid(s, r)) { this.dropCapacity(s.id, s, r); return; }
       stop(...uiActivity('notice.capacityGoalUnavailable')); return;
     }
     if (this.capacityRecoveries.get(s.id) !== r) return;
-    if (!this.capacityValid(s, r)) { this.cancelCapacity(s.id); return; }
+    if (!this.capacityValid(s, r)) { this.dropCapacity(s.id, s, r); return; }
     // A new ordinary input does not reactivate a blocked native goal. Do not
     // overwrite a concurrent native pause through an unconditional goal/set.
     if (goal && !['active', 'complete'].includes(goal.status)) {
@@ -1043,7 +1066,7 @@ class Workspace extends EventEmitter {
     const s = this.get(id);
     if (owner !== undefined && s.owner !== owner) throw uiError("error.workspace.controlledElsewhere");
     if (typeof text !== 'string' || text.length > 16000) throw uiError("error.main.draftTooLong");
-    this.cancelCapacity(id);
+    this.capacityCancelled(s, this.capacityRecoveries.get(id), 'draft'); this.cancelCapacity(id);
     this.drafts.set(id, text); this.draftRevisions.set(id, (this.draftRevisions.get(id) || 0) + 1); this.changed();
   }
   assertNativeContext(id, expected) {
