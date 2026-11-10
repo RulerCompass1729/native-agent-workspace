@@ -23,9 +23,13 @@ async function checkDesktopState(stage, minimumWindows = 1) {
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focused: w.isFocused() })));
   assert.ok(windows.length >= minimumWindows, 'Owned application windows remain observable');
   assert.ok(windows.every(w => !w.visible && !w.focused), 'Owned application windows stay hidden and unfocused');
+  // Hidden, unfocused windows do not rule out this application activating itself without one (a native dialog,
+  // app.focus). Whatever the person does, the frontmost application is never this test's own app (review 0a2298c6).
+  const sample = desktop(), ownPid = app.process().pid;
+  assert.notEqual(sample.frontmostPid, ownPid, 'This application never makes itself the frontmost application');
   // The person can move the pointer or switch apps while this hidden test runs.
   // Global samples cannot attribute such changes to this application.
-  save(stage, { ...desktop(), windows, attribution: 'unattributed', physicalPointerIsolation: 'unverified' });
+  save(stage, { ...sample, ownPid, windows, attribution: 'unattributed', physicalPointerIsolation: 'unverified' });
 }
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label) { for (let n = 0; n < 150; n++) { if (await fn()) return; await wait(40); } throw Error(label); }

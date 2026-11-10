@@ -6,7 +6,7 @@ assert.ok(start >= 0 && end > start);
 
 function fixture(windows, current) {
   const saved = [], context = vm.createContext({ assert,
-    app: { evaluate: callback => callback({ BrowserWindow: { getAllWindows: () => windows.map(w => ({ isVisible: () => w.visible, isFocused: () => w.focused })) } }) },
+    app: { evaluate: callback => callback({ BrowserWindow: { getAllWindows: () => windows.map(w => ({ isVisible: () => w.visible, isFocused: () => w.focused })) } }), process: () => ({ pid: 999 }) },
     desktop: () => current, save: (stage, value) => saved.push({ stage, value }),
   });
   vm.runInContext(source.slice(start, end), context);
@@ -24,7 +24,13 @@ for (const [name, desktop] of [
   assert.equal(f.saved.length, 1); assert.equal(f.saved[0].stage, 'owned-stage');
   for (const key of ['frontmostPid', 'x', 'y']) assert.equal(f.saved[0].value[key], desktop[key]);
   assert.equal(f.saved[0].value.attribution, 'unattributed');
-  assert.equal(f.saved[0].value.physicalPointerIsolation, 'unverified');
+  assert.equal(f.saved[0].value.physicalPointerIsolation, 'unverified'); assert.equal(f.saved[0].value.ownPid, 999);
+});
+// Review 0a2298c6: hidden, unfocused windows do not show the application activating itself without one (a native dialog).
+test('the application itself frontmost fails, even with every window hidden and unfocused', async () => {
+  const f = fixture([hidden, hidden], { frontmostPid: 999, x: 10, y: 20 });
+  await assert.rejects(f.check('owned-stage', 2), /never makes itself the frontmost/);
+  assert.equal(f.saved.length, 0);
 });
 for (const [name, window] of [
   ['visible', { visible: true, focused: false }],
