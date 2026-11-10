@@ -12,13 +12,13 @@ const tool = 'mcp__native_workspace__workspace_message';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const body = 'Read README.md\nOriginal: \u4fdd\u7559\u6b63\u6587 `one` and @literal';
 
-async function fixture(t) {
+async function fixture(t, version = '2.1.317') {
   const sessionId = randomUUID(), hooks = new Map(), clock = [], requests = [];
   const state = { nativeCalls: 0, failStage: false };
   const api = {
     session: {
       id: async () => sessionId,
-      version: async () => ({ version: '2.1.317' }),
+      version: async () => ({ version }),
       model: async () => 'fixture-model',
       usage: async () => null
     },
@@ -170,4 +170,15 @@ test('an unconfirmed local stage is not replayed by scheduled metadata/reconnect
   await f.settle();
   assert.equal(f.staged().length, 1);
   assert.equal(f.state.nativeCalls, 1);
+});
+
+for (const version of ['2.1.321', '2.1.322']) test(`${version} actual hooks require the current root prompt and native approval before staging`, async t => {
+  const f = await fixture(t, version), promptId = randomUUID();
+  await f.prompt({ prompt_id: promptId }); await f.start('current-turn');
+  assert.equal(JSON.parse((await f.call()).result).status, 'staged');
+  const staged = f.staged().length;
+  const rejected = await f.call(() => ({ text: JSON.stringify({ approved: true, recipient_id: 'different-recipient', message: body }) }));
+  assert.ok(rejected.deny); assert.equal(f.staged().length, staged);
+  const child = await f.call(null, { agentId: 'child-agent', tool_use_id: 'child-call' });
+  assert.ok(child.deny); assert.equal(f.staged().length, staged);
 });

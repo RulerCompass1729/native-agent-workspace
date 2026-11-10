@@ -76,7 +76,9 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
     // Exact committed hook from the operator creation grants (9245065), before the exact model metadata update.
     '61cb4a0b9696072a12222c89dc4725070d92534ad32e2a69db701d36868f38d0',
     // Exact committed hook from the background-control integration (f3bbae1), before 2.1.318/2.1.319 native blocks (T-171).
-    '82b5a796d8d4f33019bdfda01886470d25611560688227675aad16101c773eb6']);
+    '82b5a796d8d4f33019bdfda01886470d25611560688227675aad16101c773eb6',
+    // Exact managed hook's compatibility copy before 2.1.321/2.1.322 qualification (T-171).
+    '81dbe64f666202928d788cc1865c9057dc19cdd7c5587829fed48bbbf6f9e535']);
   const upgrades = new Set();
   for (const [name, content] of files) {
     const filename = path.join(directory, name);

@@ -75,7 +75,16 @@ test('319 uses the native post-switch model while keeping all input and tool cap
   assert.ok(rows.every(row => row.kind === 'control' && row.id === 'control:model'));
 });
 
-for (const version of ['2.1.319-beta', '2.1.320']) test(`unqualified model metadata ${version} remains off`, async () => {
+for (const version of ['2.1.321', '2.1.322']) test(`${version} qualifies exact native blocks, initial model metadata and root binding only`, async () => {
+  const f = await startup(version);
+  assert.equal(f.calls[0]?.route, '/root-bind');
+  assert.equal(f.modelReads.length, 1);
+  assert.equal(f.calls[0].body.nativeBlocks, true);
+  for (const key of ['nativeQueue', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia', 'nativeAbort', 'nativeCapacity', 'nativeSharedDisplay', 'nativeTurnRecords', 'nativeNarration']) assert.equal(f.calls[0].body[key], false, key);
+  assert.ok(f.calls.some(c => c.route === '/next'));
+});
+
+for (const version of ['2.1.319-beta', '2.1.320', '2.1.321-beta', '2.1.322+unqualified', '2.1.323']) test(`unqualified model metadata ${version} remains off`, async () => {
   const f = await startup(version);
   assert.equal(f.calls.some(c => c.route === '/root-bind'), false);
   assert.equal(f.modelReads.length, 0);
