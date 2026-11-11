@@ -35,7 +35,7 @@ let folder = cwd;
 // journey the writes are bounded by the fixed responses: only the two tool calls below can happen (anything else
 // trips the response budget), both stay in the session folder, and that folder is checked to be inside the owned base.
 const approvalJourney = process.env.NAW_TOOLS_APPROVAL === '1';
-let application, page, calls = 0, titleCalls = 0, sequence = 0, budgetError;
+let application, page, calls = 0, titleCalls = 0, sequence = 0, budgetError, askedRows;
 const errors = [], requests = [], sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, label, timeout = 30000) {
   const start = Date.now(); while (Date.now() - start < timeout) { if (budgetError) throw budgetError; if (await fn()) return; await sleep(75); } throw Error(label);
@@ -116,7 +116,9 @@ async function revealTools(selector) {
     await page.locator('#terminal-tab').click();
     await until(async () => (await page.locator('#terminal-area').innerText()).includes('sample.txt'), 'Native approval is rendered', 45000);
     fs.writeFileSync(path.join(base, 'approval.txt'), await page.locator('#terminal-area').innerText());
-    fs.writeFileSync(path.join(base, 'approval.json'), JSON.stringify(await snapshot(), null, 2));
+    const asked = await snapshot(); fs.writeFileSync(path.join(base, 'approval.json'), JSON.stringify(asked, null, 2));
+    // The shared tool rows at the moment the person is asked: the one frozen diff. Nothing may change them later.
+    askedRows = asked.room.messages.filter(m => m.role === 'tool');
     await page.screenshot({ path: path.join(base, 'approval.png') });
     console.log('Native approval evidence:', base);
     const confirmation = await page.locator('#terminal-area').innerText();
@@ -137,11 +139,13 @@ async function revealTools(selector) {
   const reply = 'NATIVE_TOOL_DONE: created and read sample.txt.';
   // Approval journey: exactly the diff the person was asked about is shared, frozen; nothing after it is.
   const assertPrivateAfterApproval = (state, when) => {
-    const frozen = state.room.messages.filter(m => m.role === 'tool' && m.sharingStopped);
-    assert.equal(frozen.length, 1, 'Shared diff explicitly freezes when approval is requested: ' + when);
-    assert.equal(frozen[0].toolKind, 'fileChange'); assert.ok(frozen[0].text.includes('NATIVE_TOOL_FILE: hello 世界'));
+    const shared = state.room.messages.filter(m => m.role === 'tool');
+    assert.equal(shared.length, 1, 'Only the diff the person was asked about is shared: ' + when);
+    assert.ok(shared[0].sharingStopped, 'Shared diff explicitly freezes when approval is requested: ' + when);
+    assert.equal(shared[0].toolKind, 'fileChange'); assert.ok(shared[0].text.includes('NATIVE_TOOL_FILE: hello 世界'));
+    // The frozen row stays exactly as it was when the person was asked: the later outcome (here a failed write) does not reach it.
+    assert.deepEqual(shared, askedRows, 'The frozen shared row does not change after the approval: ' + when);
     assert.ok(!state.room.messages.some(m => m.text === reply || m.finalReply), 'Permission revocation keeps later native replies private: ' + when);
-    assert.ok(!JSON.stringify(state.room.messages).includes('Failed to write file'), 'The result after the approval stays private: ' + when);
   };
   if (approvalJourney) {
     assertPrivateAfterApproval(done, 'after the turn');
