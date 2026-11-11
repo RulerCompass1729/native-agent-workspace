@@ -1,17 +1,24 @@
-/* The butler's one sidebar row and its dialog. It draws the view the main process gives a person window and keeps
-   no butler state of its own. With no view, which is every window of this version, the row stays hidden. */
+/* The butler's one sidebar row and its dialog. It draws the entry the main process answers a person window with
+   and keeps no butler state of its own. The entry is asked for, never pushed: once when the window starts, when the
+   window comes back to the front, when the dialog opens and after each action. In an ordinary launch the main
+   process refuses the first question; the row then stays hidden and nothing is asked again. */
 (function (global) {
   'use strict';
   const STATE_KEYS = { empty: 'empty', ready: 'ready', recording: 'recording', held: 'held', 'blocked-build': 'blockedBuild', 'blocked-credential': 'blockedCredential', unknown: 'unknown' };
   const HOLD_KEYS = { 'daily-budget-reached': 'dailyBudgetReached', 'usage-cost-unknown': 'usageCostUnknown', 'next-batch-cost-unknown': 'nextBatchCostUnknown', other: 'other' };
   const FACTS = ['model', 'reads', 'never', 'sent', 'period', 'limit'];
+  // Every call this module makes, by what follows the action's name. These are the shapes the main process's
+  // `butler` call accepts (app/main.cjs); app/tests/butler-person-ipc.test.cjs puts each one through the real handler.
+  const CALLS = Object.freeze({ status: Object.freeze([]), recheck: Object.freeze(['revision']), designate: Object.freeze(['revision']), revoke: Object.freeze(['revision']) });
+  // The main process's answers that mean this window has no entry at all.
+  const CLOSED = Object.freeze(['error.butler.entryDisabled', 'error.butler.personOnly']);
   // Whole cents as cents, anything else at the fourth decimal, where one wake-up costs fractions of a cent. What
   // was spent is never shown lower than it is, and the line never higher.
   const amount = (micros, round) => '$' + (micros % 10000 === 0 ? (micros / 1e6).toFixed(2) : (round(micros / 100) / 10000).toFixed(4));
   const money = micros => amount(micros, Math.ceil), line = micros => amount(micros, Math.floor);
   // Text comes from the catalog (butler.*). The renderer passes its interface-language text and display bindings, so
   // a language switch repaints in place; without them (unit tests) the Chinese catalog text is used.
-  function bind({ row, dialog, document, api, text, display, showError, openReview, openReads }) {
+  function bind({ row, dialog, document, api, text, display, showError, openReview, openReads, front }) {
     const { entryView } = global.nativeWorkspaceButlerEntryView || require('../butler-entry-view.js');
     const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
     const format = text || ((key, params) => locale.format('zh', key, params));
@@ -40,7 +47,8 @@
     revokeActions.append(revokeCancel, revokeOk); revoke.append(make('p', 'butler-note', 'butler.revoke.text'), revokeActions);
     dialog.append(title, panel, confirm, revoke);
 
-    let view = { visible: false }, latest, page = 'panel', busy = false, calls = 0, drawn = '', asked = '', agreed = null, done = null;
+    let view = { visible: false }, latest, page = 'panel', busy = false, calls = 0, drawn = '', asked = '', done = null;
+    let started = false, settled = false, closed = false, answered = false, asking = 0;
     // An action is offered only when the main process names it and this window has the person-only entry to call.
     // Reading the log changes nothing and needs no butler: it is offered whenever this window was given a way to open it.
     const can = action => view.visible && (action === 'reads' ? typeof openReads === 'function' :
@@ -51,12 +59,13 @@
     function show(next) {
       page = next; panel.hidden = page !== 'panel'; confirm.hidden = page !== 'confirm'; revoke.hidden = page !== 'revoke';
       say(title, page === 'confirm' ? 'butler.confirm.title' : page === 'revoke' ? 'butler.revoke.title' : 'butler.name');
-      if (page === 'panel') { agreed = null; return; }
+      if (page === 'panel') return;
       asked = question();
       if (page !== 'confirm') return;
       const offer = view.offer;
-      // What the page states is what the call carries, so the main process can refuse anything else.
-      agreed = { profile: offer.profile, provider: offer.provider, model: offer.model, limitMicros: offer.limitMicros, dayBoundary: offer.dayBoundary, startable: view.startable };
+      // The call carries only the revision this page was drawn for: the one shape the main process accepts (CALLS).
+      // When designating becomes possible, the main process has to check what this page stated against what it
+      // would really select, and both sides change together.
       const params = { model: { name: offer.name, model: offer.model }, limit: { limit: line(offer.limitMicros) } };
       facts.replaceChildren(...FACTS.flatMap(key => [make('dt', '', `butler.confirm.${key}`), make('dd', '', `butler.confirm.${key}Value`, params[key])]));
       // Said before the person decides, not discovered afterwards.
@@ -71,7 +80,10 @@
       say(statusText, `butler.status.${key}`);
       // A paused butler says the core's own recorded reason; a reason without a sentence gets the general one.
       say(note, view.state === 'held' ? `butler.hold.${HOLD_KEYS[view.holdReason]}` : `butler.note.${key}`);
-      more.hidden = !view.alsoMissingKey; if (view.alsoMissingKey) say(more, 'butler.note.alsoMissingKey'); else quiet(more);
+      // A second line only where it changes what the person can do: a key that is missing as well, or that no
+      // designation can be made in this version (so no button for it is coming).
+      const second = view.alsoMissingKey ? 'butler.note.alsoMissingKey' : view.state === 'empty' && view.later ? 'butler.note.designateLater' : null;
+      more.hidden = !second; if (second) say(more, second); else quiet(more);
       const choice = view.choice, today = view.usage;
       model.hidden = usage.hidden = !choice;
       if (!choice) { quiet(model); quiet(usage); }
@@ -105,16 +117,49 @@
       paint();
       if (back) focusDone();
     }
-    async function run(action, confirmed) {
+    // Asks the main process what to show. Nothing is shown before an answer proves this window has an entry: a
+    // refusal that means "closed" ends the asking, and any other failure before a first answer shows nothing.
+    async function refresh() {
+      if (closed || typeof api?.butler !== 'function') return;
+      const ticket = ++asking;
+      let entry;
+      try { entry = await api.butler('status'); }
+      catch (error) {
+        if (ticket !== asking) return;
+        let key; try { key = error?.uiMessage?.key; } catch { /* No key: an unknown failure. */ }
+        if (CLOSED.includes(key)) { closed = true; answered = false; render(undefined); return; }
+        // "Cannot be verified now" is said by an open entry; it is shown as an unreadable state, never as none designated.
+        if (key === 'error.butler.unavailable') answered = true;
+        render(answered ? { version: 1, unavailable: true, actions: [] } : undefined);
+        return;
+      }
+      if (ticket !== asking) return;
+      answered = true; render(entry);
+    }
+    // The first question of this window. Later calls do nothing: the window asks again only on the events above,
+    // and only once this question has been answered or has failed, so a closed entry is asked exactly once.
+    function start() { if (started) return undefined; started = true; return refresh().finally(() => { settled = true; }); }
+    async function run(action) {
       if (!can(action)) return;
       const ticket = ++calls, revision = view.revision;
       busy = true; failure.hidden = true; quiet(failure); render(latest);
-      try { await (confirmed ? api.butler(action, revision, confirmed) : api.butler(action, revision)); }
+      let refused = null;
+      try {
+        const result = await api.butler(action, revision);
+        // The core answers a designation it cannot carry out with "blocked", not with an error.
+        if (action === 'designate' && result?.status === 'blocked') refused = 'butler.note.designateLater';
+      }
       catch (error) {
         if (ticket !== calls) return;
         failure.hidden = false;
         if (showError) showError(failure, error); else say(failure, 'error.operation');
-      } finally { if (ticket === calls) { busy = false; render(latest); focusDone(); } }
+      }
+      if (ticket !== calls) return;
+      if (refused) { failure.hidden = false; say(failure, refused); }
+      busy = false;
+      // What the action changed is read back from the main process, not assumed.
+      await refresh();
+      if (ticket === calls) { render(latest); focusDone(); }
     }
     function press(action) {
       if (action === 'done') { dialog.close(); return; }
@@ -122,9 +167,9 @@
       if (busy) return;
       // A confirmation counts only for the question still on the screen; render() takes a changed question away.
       if (action === 'confirmDesignate' || action === 'confirmRevoke') {
-        const wanted = action === 'confirmDesignate' ? 'designate' : 'revoke', current = page === (wanted === 'designate' ? 'confirm' : 'revoke'), confirmed = agreed;
+        const wanted = action === 'confirmDesignate' ? 'designate' : 'revoke', current = page === (wanted === 'designate' ? 'confirm' : 'revoke');
         show('panel'); focusDone();
-        return current ? run(wanted, wanted === 'designate' ? confirmed : undefined) : undefined;
+        return current ? run(wanted) : undefined;
       }
       if (!can(action)) return;
       if (action === 'designate') { show('confirm'); confirmCancel.focus(); return; }
@@ -139,17 +184,24 @@
       show('panel'); failure.hidden = true; quiet(failure);
       if (!dialog.open) dialog.showModal();
       focusDone();
+      // What is on the screen may be old (another window can change the designation): ask again as it opens.
+      if (!busy) refresh();
     }
-    const closed = () => { if (page !== 'panel') show('panel'); };
-    row.addEventListener('click', open); dialog.addEventListener('close', closed);
+    const shut = () => { if (page !== 'panel') show('panel'); };
+    row.addEventListener('click', open); dialog.addEventListener('close', shut);
     show('panel');
-    return { render, open, press, dispose() {
-      calls++; busy = false; row.removeEventListener('click', open); dialog.removeEventListener('close', closed);
+    // Before the window's first question has settled a refresh is not one: that question decides whether there is an entry.
+    const again = () => settled ? refresh() : undefined;
+    // `front` tells this module when the window comes back to the front, and returns how to stop being told.
+    const away = typeof front === 'function' ? front(() => { again(); }) : null;
+    return { render, start, refresh: again, open, press, dispose() {
+      if (typeof away === 'function') away();
+      calls++; asking++; closed = true; busy = false; row.removeEventListener('click', open); dialog.removeEventListener('close', shut);
       if (dialog.open) dialog.close();
       row.hidden = true; row.replaceChildren(); dialog.replaceChildren();
     } };
   }
-  const value = { bind, money, line, STATE_KEYS, HOLD_KEYS, FACTS };
+  const value = { bind, money, line, STATE_KEYS, HOLD_KEYS, FACTS, CALLS, CLOSED };
   if (typeof module === 'object' && module.exports) module.exports = value;
   else global.nativeWorkspaceButlerEntry = value;
 })(globalThis);

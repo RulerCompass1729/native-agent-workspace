@@ -1,12 +1,16 @@
-// What the person sees of the butler: one pure function over the view the main process gives a person window.
-// The renderer keeps no butler state and works nothing out from the ledger. A field the main process does not
-// give stays unknown here; it is never guessed, and a missing amount is never shown as zero.
+// What the person sees of the butler: one pure function over the entry the main process answers a person window
+// with (app/butler-entry-host.cjs builds it from the core's person view). The renderer keeps no butler state and
+// works nothing out from the ledger. A field the main process does not give stays unknown here; it is never
+// guessed, and a missing amount is never shown as zero.
 //
-// The closed switch: nothing in this version puts an `entry` into the window state, so `entryView` answers
-// `{ visible: false }` and the interface is unchanged.
+// The closed switch: in an ordinary launch the main process refuses the question, the window has no entry, and
+// `entryView` answers `{ visible: false }`: the interface is unchanged.
 //
 // entry = { version: 1,
-//   role:    ButlerRole.snapshot() fields: { revision, selected: null | { runner: { profile, provider, model }, budget: { limitMicros, dayBoundary } } }
+//   role:    { revision, selected: null | { runner: { profile, provider, model }, budget: null | { limitMicros, dayBoundary } } }
+//   reminder: the daily reminder line the person agreed to, { amountMicros, dayBoundary }; shown when the
+//            designation records no limit of its own
+//   uncertain: true when the core cannot establish the designated butler's state from its own records
 //   offer:   what a designation would select, same shape as `selected`; needed before the person is asked
 //   startable: true | false, whether this version can start a butler at all (its pre-start checks)
 //   backend: ButlerBackend.snapshot() fields: { state, ready, blocked[] }, or null
@@ -14,7 +18,8 @@
 //   hold:    the reason of the core's latest recorded refusal to wake it that is still in force, or null
 //   usage:   the shared reading app/butler-usage.cjs summarizeUsage() returns, or null while unverified
 //   reviewAvailable: whether a record table exists to open
-//   actions: the person-only actions the main process accepts now (designate, revoke, recheck) }
+//   actions: the person-only actions the main process accepts now (designate, revoke, recheck)
+//   unavailable: true when the designation record cannot be read; nothing else is then given }
 // Turning a butler off while keeping the designation is not here: the core has no such switch yet.
 (function (root, factory) { const api = factory(); if (typeof module === 'object' && module.exports) module.exports = api; else root.nativeWorkspaceButlerEntryView = api; })(typeof self !== 'undefined' ? self : globalThis, function () {
   // Reasons that mean "this version cannot start a butler", whatever the person does.
@@ -27,10 +32,13 @@
   const PROFILE_NAMES = Object.freeze({ 'deepseek-pro': 'DeepSeek pro' });
   const amount = value => Number.isSafeInteger(value) && value >= 0;
   const word = value => typeof value === 'string' && value.length > 0 && value.length <= 120;
-  function choice(value) {
+  // The line shown beside a designation is its own daily limit when it records one, else the reminder line the
+  // main process gives. A limit that is recorded but cannot be read is not replaced by the reminder.
+  function choice(value, reminder) {
     const runner = value && value.runner, budget = value && value.budget;
-    if (!runner || !budget || !word(runner.profile) || !word(runner.model) || runner.provider !== PROVIDER || !amount(budget.limitMicros) || budget.dayBoundary !== 'UTC') return null;
-    return { name: PROFILE_NAMES[runner.profile] || runner.profile, profile: runner.profile, provider: runner.provider, model: runner.model, limitMicros: budget.limitMicros, dayBoundary: budget.dayBoundary };
+    const line = budget ? { limitMicros: budget.limitMicros, dayBoundary: budget.dayBoundary } : reminder ? { limitMicros: reminder.amountMicros, dayBoundary: reminder.dayBoundary } : null;
+    if (!runner || !line || !word(runner.profile) || !word(runner.model) || runner.provider !== PROVIDER || !amount(line.limitMicros) || line.dayBoundary !== 'UTC') return null;
+    return { name: PROFILE_NAMES[runner.profile] || runner.profile, profile: runner.profile, provider: runner.provider, model: runner.model, limitMicros: line.limitMicros, dayBoundary: line.dayBoundary };
   }
   // The shared reading of today's recorded runs (app/butler-usage.cjs summarizeUsage). A run is a recorded wake-up,
   // not a provider request. Sums that leave runs out are lower bounds and are shown as such; a reading that cannot
@@ -46,18 +54,24 @@
     return { day: value.utcDay, runs: today.recordedRunCount, unknown, totalTokens: tokens.knownLowerBound, costMicros: cost.knownLowerBound };
   }
   function entryView(entry) {
-    if (!entry || typeof entry !== 'object' || entry.version !== 1 || !entry.role || !Number.isSafeInteger(entry.role.revision)) return { visible: false };
+    if (!entry || typeof entry !== 'object' || entry.version !== 1) return { visible: false };
+    // The designation record could not be read: that is not "none designated", and nothing can be done from here.
+    if (entry.unavailable === true) return { visible: true, state: 'unknown', revision: null, actions: [], choice: null, usage: null };
+    if (!entry.role || !Number.isSafeInteger(entry.role.revision)) return { visible: false };
     const offered = Array.isArray(entry.actions) ? entry.actions.filter(action => ACTIONS.includes(action)) : [];
-    const selected = entry.role.selected ? choice(entry.role.selected) : null;
+    const selected = entry.role.selected ? choice(entry.role.selected, entry.reminder) : null;
     const view = (state, possible, extra = {}) => ({ visible: true, state, revision: entry.role.revision, actions: possible.filter(action => action === 'review' || offered.includes(action)),
       choice: selected, usage: selected ? usageToday(entry.usage) : null, ...extra });
     if (!entry.role.selected) {
       // The person is asked only when the confirmation can be complete: which model, and whether it would start.
       const offer = choice(entry.offer), known = offer && typeof entry.startable === 'boolean';
-      return view('empty', known ? ['designate'] : [], { offer: known ? offer : null, startable: known ? entry.startable : null });
+      // `later`: the main process does not accept a designation now, so the person is told there is none to make.
+      return view('empty', known ? ['designate'] : [], { offer: known ? offer : null, startable: known ? entry.startable : null, later: !offered.includes('designate') });
     }
     // A designation this version cannot describe is shown as unknown and can only be revoked.
     if (!selected) return view('unknown', ['revoke']);
+    // The core says it cannot tell: that comes before anything this function could work out from the rest.
+    if (entry.uncertain === true) return view('unknown', ['recheck', 'revoke']);
     const backend = entry.backend && typeof entry.backend === 'object' ? entry.backend : null;
     const blocked = backend && Array.isArray(backend.blocked) ? backend.blocked : [];
     const review = entry.reviewAvailable === true ? ['review'] : [];

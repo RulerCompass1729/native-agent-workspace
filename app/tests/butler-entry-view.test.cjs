@@ -58,7 +58,9 @@ test('normal window state gives no entry view; the dedicated preload IPC remains
 
 test('with no butler designated the person is asked only when the confirmation can be complete', () => {
   const none = { version: 1, role: empty, actions: every };
-  assert.deepEqual(entryView(none), { visible: true, state: 'empty', revision: 0, actions: [], choice: null, usage: null, offer: null, startable: null });
+  assert.deepEqual(entryView(none), { visible: true, state: 'empty', revision: 0, actions: [], choice: null, usage: null, offer: null, startable: null, later: false });
+  // `later` says the main process accepts no designation now; it has nothing to do with whether an offer is complete.
+  assert.deepEqual([entryView({ ...none, actions: [] }).later, entryView({ ...none, actions: ['revoke', 'recheck'] }).later, entryView({ ...none, actions: undefined }).later, entryView({ ...none, offer: offer(), startable: false }).later], [true, true, true, false]);
   const asked = entryView({ ...none, offer: offer(), startable: false });
   assert.deepEqual(asked.actions, ['designate']); assert.equal(asked.startable, false);
   assert.deepEqual(asked.offer, { name: 'DeepSeek pro', profile: 'deepseek-pro', provider: 'deepseek', model: designated.selected.runner.model, limitMicros: LIMIT, dayBoundary: 'UTC' });
@@ -137,6 +139,36 @@ test('usage comes only from the core\'s shared reading; a missing or broken read
     today({ costMicros: { value: null, knownLowerBound: null, unknownRuns: 0, overflow: true } }), today({ costMicros: { ...good.today.costMicros, knownLowerBound: -1 } }), today({ costMicros: { ...good.today.costMicros, unknownRuns: 5 } }),
     { day: '2026-11-11', runs: 3, unknown: 0, totalTokens: 1, costMicros: 1 }]) assert.equal(usage(value), null);
   assert.equal(entryView({ version: 1, role: empty, usage: good }).usage, null, 'no butler, no usage line');
+});
+
+test('an unreadable record, the core\'s own uncertainty and the reminder line are shown as what they are', () => {
+  // The designation record cannot be read: unknown, with nothing to do, whatever else the entry carries.
+  const unreadable = { visible: true, state: 'unknown', revision: null, actions: [], choice: null, usage: null };
+  assert.deepEqual(entryView({ version: 1, unavailable: true, actions: [] }), unreadable);
+  assert.deepEqual(entryView({ version: 1, unavailable: true, role: { revision: 3, selected: designated.selected }, startable: true, backend: backends.ready, actions: every }), unreadable);
+  for (const value of [{ version: 1, unavailable: 'true' }, { version: 1, unavailable: 1 }, { version: 2, unavailable: true }]) assert.deepEqual(entryView(value), { visible: false });
+  // The core says it cannot establish the state: unknown, whatever the rest would add up to; it can still be revoked.
+  const base = { version: 1, role: { revision: 1, selected: designated.selected }, actions: every };
+  for (const rest of [{ startable: true, backend: backends.ready }, { startable: false, backend: backends.build }, { startable: true, backend: backends.nokey }, { startable: true, backend: backends.ready, hold: 'daily-budget-reached' }]) {
+    const view = entryView({ ...base, ...rest, uncertain: true });
+    assert.equal(view.state, 'unknown'); assert.deepEqual(view.actions, ['recheck', 'revoke']);
+    assert.notEqual(entryView({ ...base, ...rest, uncertain: false }).state, 'unknown'); assert.notEqual(entryView({ ...base, ...rest, uncertain: 'true' }).state, 'unknown');
+  }
+  assert.equal(entryView({ version: 1, role: empty, actions: every, uncertain: true }).state, 'empty', 'Nothing designated is not uncertain');
+  // A designation with no limit of its own shows the reminder line the main process gives, and is not "unknown" for it.
+  const runner = designated.selected.runner, reminder = { amountMicros: 2_000_000, dayBoundary: 'UTC' };
+  const bare = { version: 1, role: { revision: 1, selected: { runner, budget: null } }, startable: false, backend: backends.build, actions: every };
+  assert.equal(entryView(bare).state, 'unknown', 'With neither a limit nor a reminder line the designation cannot be described');
+  const lined = entryView({ ...bare, reminder });
+  assert.equal(lined.state, 'blocked-build'); assert.deepEqual([lined.choice.limitMicros, lined.choice.dayBoundary, lined.choice.model], [2_000_000, 'UTC', runner.model]);
+  // The designation's own limit comes first; one that is recorded but unreadable is not replaced by the reminder.
+  assert.equal(entryView({ ...bare, role: { revision: 1, selected: { runner, budget: { limitMicros: 500_000, dayBoundary: 'UTC' } } }, reminder }).choice.limitMicros, 500_000);
+  assert.equal(entryView({ ...bare, role: { revision: 1, selected: { runner, budget: { limitMicros: '2', dayBoundary: 'UTC' } } }, reminder }).state, 'unknown');
+  for (const broken of [{ amountMicros: -1, dayBoundary: 'UTC' }, { amountMicros: 2_000_000, dayBoundary: 'local' }, { amountMicros: '2000000', dayBoundary: 'UTC' }, 'two dollars'])
+    assert.equal(entryView({ ...bare, reminder: broken }).state, 'unknown');
+  // An offer is never completed from the reminder: what the person would confirm must be whole.
+  const open = structuredClone(offer()); delete open.budget;
+  assert.deepEqual(entryView({ version: 1, role: empty, actions: every, offer: open, startable: false, reminder }).actions, []);
 });
 
 test('only named, known actions are offered, and the record table only when one exists', () => {

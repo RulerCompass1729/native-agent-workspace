@@ -87,6 +87,7 @@ async function build() {
       'butler-dsh-privacy.cjs',
       'butler-dsh-read-budget.cjs',
       'butler-dsh-usage.cjs',
+      'butler-entry-host.cjs',
       'butler-ingress.cjs',
       'butler-ledger.cjs',
       'butler-person.cjs',

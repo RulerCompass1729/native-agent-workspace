@@ -2,7 +2,7 @@
 // `api.butler` here only records what the dialog would ask the main process to do.
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
-const { bind, money, line, STATE_KEYS, HOLD_KEYS, FACTS } = require('../renderer/butler-entry.js');
+const { bind, money, line, STATE_KEYS, HOLD_KEYS, FACTS, CALLS, CLOSED } = require('../renderer/butler-entry.js');
 const { buildInput } = require('../butler-policy.cjs');
 const { summarizeUsage } = require('../butler-usage.cjs');
 const os = require('node:os');
@@ -42,15 +42,23 @@ const none = { version: 1, role: { revision: 4, selected: null }, offer: selecte
 const designated = extra => ({ version: 1, role: { revision: 5, selected }, startable: false, backend: null, intake: { recordPeriod: 'off' }, actions: [...ACTIONS], ...extra });
 const ready = extra => designated({ startable: true, backend: { state: 'ready', ready: true, blocked: [] }, ...extra });
 const nokey = extra => designated({ startable: true, backend: { state: 'blocked', ready: false, blocked: ['credential-missing'] }, ...extra });
-function fixture({ entry = true, fail = false, pending = false, showError, openReview, openReads } = {}) {
+function fixture({ entry = true, fail = false, pending = false, showError, openReview, openReads, status, result } = {}) {
   const page = { activeElement: null, shown: 0, createElement: tag => new Element(tag, page) };
-  const row = new Element('button', page), dialog = new Element('dialog', page), calls = []; dialog.id = 'butler-dialog'; row.hidden = true;
-  let release; const api = entry ? { async butler(...args) { calls.push(args); if (pending) await new Promise(resolve => { release = resolve; }); if (fail) throw Error('/PRIVATE_IPC_PATH'); return { ok: true }; } } : {};
-  const entryUi = bind({ row, dialog, document: page, api, showError, openReview, openReads });
+  const row = new Element('button', page), dialog = new Element('dialog', page), calls = [], asks = []; dialog.id = 'butler-dialog'; row.hidden = true;
+  // `calls` are the actions; `asks` are the questions for the entry. Unless a test answers otherwise, the answer is
+  // what was last drawn, so a state drawn by a test stays as it is.
+  let release, current; const api = entry ? { async butler(...args) {
+    if (args[0] === 'status') { asks.push(args); return status ? status(asks.length) : current; }
+    calls.push(args); if (pending) await new Promise(resolve => { release = resolve; }); if (fail) throw Error('/PRIVATE_IPC_PATH'); return result ? result(args) : { ok: true }; } } : {};
+  const bound = bind({ row, dialog, document: page, api, showError, openReview, openReads });
+  const entryUi = { ...bound, render: value => { current = value; return bound.render(value); } };
   const buttons = () => dialog.all().filter(node => node.tag === 'button' && !dialog.all().some(parent => parent.hidden && parent.contains(node)));
   const button = action => buttons().find(node => node.dataset.action === action);
-  return { page, row, dialog, calls, entryUi, buttons, button, names: () => buttons().map(node => node.dataset.action), release: () => release() };
+  return { page, row, dialog, calls, asks, entryUi, buttons, button, names: () => buttons().map(node => node.dataset.action), release: () => release() };
 }
+// What a refused call looks like to the page (app/preload.cjs apiFailure).
+const refusal = key => ({ name: 'Error', message: 'refused', uiMessage: { version: 1, key } });
+const settle = () => new Promise(resolve => setImmediate(resolve));
 const zh = (key, params) => locale.format('zh', key, params);
 
 test('with no view the row stays hidden and nothing opens', () => {
@@ -78,8 +86,8 @@ test('the default is empty: one row, one sentence, and a designation only after 
   assert.ok(text.includes('会话正文')); assert.ok(text.includes(zh('butler.confirm.sentValue'))); assert.ok(text.includes('会调用 DeepSeek 并计费'));
   assert.ok(text.includes(zh('butler.confirm.notYet')), 'said before the person decides');
   await f.button('confirmDesignate').fire('click');
-  // The call carries what the page stated, so the main process can refuse a designation the person did not read.
-  assert.deepEqual(f.calls, [['designate', 4, { profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro', limitMicros: 2_000_000, dayBoundary: 'UTC', startable: false }]]); assert.deepEqual(f.names(), ['designate', 'done']); assert.equal(f.page.activeElement, f.button('done'));
+  // The call carries the revision the page was drawn for and nothing else: the one shape the main process accepts.
+  assert.deepEqual(f.calls, [['designate', 4]]); assert.deepEqual(f.names(), ['designate', 'done']); assert.equal(f.page.activeElement, f.button('done'));
   // A version that can start says nothing about not starting.
   const g = fixture(); g.entryUi.render({ ...none, startable: true }); g.entryUi.open(); g.button('designate').fire('click');
   assert.equal(g.dialog.text().includes(zh('butler.confirm.notYet')), false);
@@ -199,8 +207,9 @@ test('a language switch repaints the row and the dialog in place, also after the
   const page = { activeElement: null, shown: 0, createElement: tag => new Element(tag, page) }, row = new Element('button', page), dialog = new Element('dialog', page), body = new Element('body', page);
   body.append(row, dialog);
   const shown = [], showError = (element, error) => { shown.push(error.message); display.text(element, 'error.operation'); };
-  const entryUi = bind({ row, dialog, document: page, api: { butler: async () => { throw Error('refused'); } }, text: format, display, showError });
-  entryUi.render(nokey({ usage: reading(3, 0, 1234567, 6100) })); entryUi.open();
+  const drawn = nokey({ usage: reading(3, 0, 1234567, 6100) });
+  const entryUi = bind({ row, dialog, document: page, api: { butler: async action => { if (action === 'status') return drawn; throw Error('refused'); } }, text: format, display, showError });
+  entryUi.render(drawn); entryUi.open();
   assert.equal(row.attributes['aria-label'], '大管家：起不来'); assert.ok(dialog.text().includes('2026-11-11（UTC）：叫醒 3 次 · 1,234,567 token · $0.0061 · 提醒线 $2.00'));
   return dialog.all().find(node => node.dataset.action === 'recheck').fire('click').then(() => {
     assert.deepEqual(shown, ['refused']); assert.ok(dialog.text().includes('操作未完成。'));
@@ -216,6 +225,120 @@ test('a language switch repaints the row and the dialog in place, also after the
     entryUi.render(undefined); language = 'en'; assert.doesNotThrow(() => display.refresh(body)); assert.equal(row.hidden, true); assert.equal(dialog.open, false);
     entryUi.dispose(); assert.doesNotThrow(() => display.refresh(body));
   });
+});
+
+test('the window asks for the entry once when it starts; a closed entry shows nothing and is never asked again', async () => {
+  for (const key of CLOSED) {
+    const f = fixture({ status: () => { throw refusal(key); } });
+    await f.entryUi.start();
+    assert.equal(f.row.hidden, true); assert.deepEqual(f.asks, [['status']]);
+    await f.entryUi.start(); await f.entryUi.refresh(); f.row.fire('click'); f.entryUi.open(); await settle();
+    assert.deepEqual(f.asks, [['status']], 'A closed entry is asked once in the life of a window'); assert.equal(f.dialog.open, false); assert.equal(f.row.hidden, true);
+  }
+  assert.deepEqual([...CLOSED], ['error.butler.entryDisabled', 'error.butler.personOnly']);
+  // The answers that close it are the main process's own: its handler refuses with exactly these keys, in this order.
+  const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8'), handler = main.slice(main.indexOf("register('butler',"));
+  assert.ok(handler.indexOf("uiError('error.butler.personOnly')") > 0 && handler.indexOf("uiError('error.butler.personOnly')") < handler.indexOf("uiError('error.butler.entryDisabled')"));
+  // A refresh before the window's first question asks nothing, and a window without the person-only call never asks.
+  const early = fixture({ status: () => none }); await early.entryUi.refresh(); assert.deepEqual(early.asks, []); assert.equal(early.row.hidden, true);
+  await early.entryUi.start(); assert.equal(early.row.hidden, false); await early.entryUi.start(); assert.equal(early.asks.length, 1, 'Starting twice asks once');
+  const bare = fixture({ entry: false }); await bare.entryUi.start(); await bare.entryUi.refresh(); assert.equal(bare.row.hidden, true);
+});
+
+test('an answer shows the entry; a failure before any answer shows nothing, and after one it is an unreadable state', async () => {
+  // An unknown failure proves nothing about this window: nothing is shown, and the next event asks again.
+  let answer = () => { throw Error('/PRIVATE_IPC_PATH'); };
+  const f = fixture({ status: () => answer() });
+  await f.entryUi.start(); assert.equal(f.row.hidden, true);
+  answer = () => none; await f.entryUi.refresh();
+  assert.equal(f.row.hidden, false); assert.equal(f.row.attributes['aria-label'], '大管家：未指定'); assert.equal(f.asks.length, 2);
+  // Once the entry has been shown, a failed question is neither "none designated" nor nothing: the state is unknown.
+  answer = () => { throw Error('/PRIVATE_IPC_PATH'); }; await f.entryUi.refresh();
+  assert.equal(f.row.hidden, false); assert.equal(f.row.attributes['aria-label'], '大管家：状态不明');
+  f.entryUi.open(); await settle();
+  assert.deepEqual(f.names(), ['done']); assert.ok(f.dialog.text().includes(zh('butler.note.unknown'))); assert.equal(f.dialog.text().includes('PRIVATE'), false);
+  assert.equal(f.dialog.text().includes(zh('butler.note.empty')), false);
+  // It recovers with the next answer.
+  answer = () => designated(); await f.entryUi.refresh(); assert.equal(f.row.dataset.butlerState, 'blocked-build'); assert.deepEqual(f.names(), ['revoke', 'done']);
+  // An open entry's own "cannot be verified now" is shown as unknown from the first answer on, and the log stays readable.
+  const g = fixture({ status: () => { throw refusal('error.butler.unavailable'); }, openReads: () => {} });
+  await g.entryUi.start(); assert.equal(g.row.hidden, false); assert.equal(g.row.dataset.butlerState, 'unknown');
+  g.entryUi.open(); await settle(); assert.deepEqual(g.names(), ['reads', 'done']);
+});
+
+test('the entry is read again when the dialog opens and after each action, and an older answer never replaces a newer one', async () => {
+  let answer = () => designated();
+  const f = fixture({ status: () => answer() }); await f.entryUi.start();
+  assert.equal(f.row.dataset.butlerState, 'blocked-build'); assert.equal(f.asks.length, 1);
+  // Another window revoked meanwhile: opening asks, and the dialog follows the answer.
+  answer = () => none; f.row.fire('click'); assert.equal(f.asks.length, 2); await settle();
+  assert.equal(f.row.dataset.butlerState, 'empty'); assert.deepEqual(f.names(), ['designate', 'done']);
+  // After an action the result is read back from the main process, not assumed.
+  answer = () => designated(); await f.entryUi.refresh(); f.button('revoke').fire('click');
+  answer = () => ({ ...none, role: { revision: 6, selected: null } });
+  const before = f.asks.length; await f.button('confirmRevoke').fire('click');
+  assert.deepEqual(f.calls, [['revoke', 5]]); assert.equal(f.asks.length, before + 1);
+  assert.equal(f.row.dataset.butlerState, 'empty'); assert.equal(f.page.activeElement, f.button('done'));
+  // The same after an action that failed: what the main process now says is what is shown.
+  const k = fixture({ fail: true, status: count => count < 3 ? nokey() : none }); await k.entryUi.start(); k.entryUi.open(); await settle();
+  await k.button('recheck').fire('click');
+  assert.equal(k.row.dataset.butlerState, 'empty'); assert.ok(k.dialog.text().includes(zh('error.operation')), 'The failure is still said');
+  // Two questions in flight: the earlier one answers last and is dropped.
+  const waiting = []; const g = fixture({ status: () => new Promise(resolve => waiting.push(resolve)) });
+  const begun = g.entryUi.start(); waiting[0](nokey()); await begun; assert.equal(g.row.dataset.butlerState, 'blocked-credential');
+  const first = g.entryUi.refresh(), second = g.entryUi.refresh();
+  waiting[2](none); await second; assert.equal(g.row.dataset.butlerState, 'empty');
+  waiting[1](designated()); await first; assert.equal(g.row.dataset.butlerState, 'empty', 'The older answer does not replace the newer one');
+  // Coming back to the front asks again, once the window has asked its first question; after dispose it is no longer told.
+  const page = { activeElement: null, shown: 0, createElement: tag => new Element(tag, page) }, heard = []; let told = null, stopped = 0;
+  const w = bind({ row: new Element('button', page), dialog: new Element('dialog', page), document: page, api: { butler: async (...args) => { heard.push(args); return none; } },
+    front: listener => { told = listener; return () => { stopped++; told = null; }; } });
+  told(); await settle(); assert.deepEqual(heard, [], 'Not before the first question');
+  await w.start(); told(); await settle(); assert.deepEqual(heard, [['status'], ['status']]);
+  w.dispose(); assert.equal(stopped, 1); assert.equal(told, null);
+  // While the window's first question is unanswered nothing else is asked, so a closed entry is asked exactly once
+  // even if the window comes to the front in that moment; once it has failed for another reason, asking goes on.
+  for (const [failure, later] of [[refusal('error.butler.entryDisabled'), 1], [Error('/PRIVATE_IPC_PATH'), 2]]) {
+    let fail; const early = fixture({ status: count => count === 1 ? new Promise((resolve, reject) => { fail = reject; }) : none });
+    const first = early.entryUi.start(); await early.entryUi.refresh(); await early.entryUi.start(); await settle();
+    assert.equal(early.asks.length, 1, 'One question in flight'); fail(failure); await first;
+    assert.equal(early.row.hidden, true); await early.entryUi.refresh(); assert.equal(early.asks.length, later); assert.equal(early.row.hidden, later === 1);
+  }
+  // After dispose nothing is asked, and a late answer is not drawn.
+  const h = fixture({ status: () => new Promise(resolve => waiting.push(resolve)) }); const late = h.entryUi.start(); h.entryUi.dispose();
+  waiting[3](none); await late; assert.equal(h.row.hidden, true); await h.entryUi.refresh(); assert.equal(h.asks.length, 1);
+});
+
+test('every call the entry makes has a shape the main process accepts, and a designation it cannot carry out is said', async () => {
+  const f = fixture(); f.entryUi.render(none); f.entryUi.open(); f.button('designate').fire('click'); await f.button('confirmDesignate').fire('click');
+  f.entryUi.render(nokey()); await f.button('recheck').fire('click'); f.button('revoke').fire('click'); await f.button('confirmRevoke').fire('click');
+  // The action and the revision the page was drawn for; nothing else is sent, and a question carries nothing.
+  assert.deepEqual(f.calls, [['designate', 4], ['recheck', 5], ['revoke', 5]]); assert.ok(f.asks.length >= 3);
+  for (const [action, ...rest] of [...f.calls, ...f.asks]) assert.deepEqual(rest.map(value => Number.isSafeInteger(value) ? 'revision' : typeof value), [...CALLS[action]], action);
+  // The table is the whole of what this module calls; app/tests/butler-person-ipc.test.cjs puts each shape through the real handler.
+  assert.deepEqual(Object.keys(CALLS).sort(), ['designate', 'recheck', 'revoke', 'status']);
+  const source = fs.readFileSync(path.join(__dirname, '../renderer/butler-entry.js'), 'utf8');
+  assert.deepEqual(source.match(/api\.butler\([^)]*\)/g), ["api.butler('status')", 'api.butler(action, revision)']);
+  // The core answers a designation it cannot carry out with "blocked", not with an error: that is said, not passed over.
+  const g = fixture({ result: () => ({ activation: 'off', recordPeriod: 'off', status: 'blocked', reason: 'trusted-candidate-unavailable' }) });
+  g.entryUi.render(none); g.entryUi.open(); g.button('designate').fire('click'); await g.button('confirmDesignate').fire('click');
+  const alert = g.dialog.all().find(node => node.attributes.role === 'alert'); assert.equal(alert.hidden, false); assert.equal(alert.textContent, zh('butler.note.designateLater'));
+  g.dialog.close(); g.entryUi.open(); assert.equal(alert.hidden, true);
+  // Any other result of a designation is not called a refusal.
+  const h = fixture(); h.entryUi.render(none); h.entryUi.open(); h.button('designate').fire('click'); await h.button('confirmDesignate').fire('click');
+  assert.equal(h.dialog.all().find(node => node.attributes.role === 'alert').hidden, true);
+});
+
+test('with nothing designated and no designation accepted, the person is told none can be made in this version', () => {
+  const f = fixture(); f.entryUi.render({ ...none, offer: undefined, actions: ['recheck'] }); f.entryUi.open();
+  assert.deepEqual(f.names(), ['done']);
+  const text = f.dialog.text(), first = text.indexOf(zh('butler.note.empty')), second = text.indexOf(zh('butler.note.designateLater'));
+  assert.ok(first >= 0 && second > first, text); assert.equal(zh('butler.note.designateLater'), '这一版还不能指定大管家。');
+  // Where the main process accepts a designation the sentence is not there, and never beside a designated butler.
+  f.entryUi.render(none); assert.equal(f.dialog.text().includes(zh('butler.note.designateLater')), false);
+  f.entryUi.render(designated({ actions: ['revoke'] })); assert.equal(f.dialog.text().includes(zh('butler.note.designateLater')), false);
+  f.entryUi.render(designated({ actions: ['revoke'], backend: { state: 'blocked', ready: false, blocked: ['credential-missing', 'tools-unqualified'] } }));
+  assert.ok(f.dialog.text().includes(zh('butler.note.alsoMissingKey')));
 });
 
 test('what was spent is never shown lower than it is, and the line never higher', () => {
@@ -241,6 +364,7 @@ test('every sentence the entry can show is in the catalog in both languages, and
   const expected = new Set(['butler.name', 'butler.rowLabel', 'butler.model', 'butler.note.alsoMissingKey', 'butler.usage', 'butler.usage.partial', 'butler.usage.none', 'butler.usage.unverified',
     'butler.confirm.title', 'butler.confirm.confirm', 'butler.confirm.notYet', 'butler.revoke.title', 'butler.revoke.text', 'butler.revoke.confirm', 'butler.action.review']);
   for (const key of Object.values(STATE_KEYS)) { expected.add(`butler.row.${key}`); expected.add(`butler.status.${key}`); if (key !== 'held') expected.add(`butler.note.${key}`); }
+  expected.add('butler.note.designateLater');
   for (const key of Object.values(HOLD_KEYS)) expected.add(`butler.hold.${key}`);
   for (const key of FACTS) { expected.add(`butler.confirm.${key}`); expected.add(`butler.confirm.${key}Value`); }
   for (const action of ACTIONS) expected.add(`butler.action.${action}`);

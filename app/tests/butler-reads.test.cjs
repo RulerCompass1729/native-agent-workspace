@@ -271,7 +271,7 @@ test('the page loads the view before the dialog and the dialog before the render
     assert.ok(positions.every(value => value > 0) && positions[0] < positions[1] && positions[1] < positions[2]);
   assert.match(html, /<dialog closedby="any" id="butler-reads-dialog" class="butler-reads"><\/dialog>/);
   assert.match(renderer, /const butlerReads = window\.nativeWorkspaceButlerReads\.bind\(\{ dialog: \$\('butler-reads-dialog'\), document, api, text: \(key, params\) => uiText\(key, params\), display: ui\.display,\n\s*spaceName: id => \{ const room = spaceRecord\(id\); return room \? spaceName\(room\) : null; \} \}\);/);
-  assert.match(renderer, /openReads: \(\) => butlerReads\.open\(\) \}\);/); assert.match(renderer, /\(\) => butlerReads\.dispose\(\),/);
+  assert.match(renderer, /openReads: \(\) => butlerReads\.open\(\),\n/); assert.match(renderer, /\(\) => butlerReads\.dispose\(\),/);
   // The dialog asks the main process for nothing but the existing read of the log.
   const source = read('renderer/butler-reads.js');
   assert.deepEqual([...source.matchAll(/api\.(\w+)\(/g)].map(match => match[1]), ['butlerReview']); assert.ok(source.includes("api.butlerReview('reads', request)"));

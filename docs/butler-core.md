@@ -510,21 +510,38 @@ legacy automatic context or a real provider trial.
 The dedicated IPC is closed in normal runs. Only the existing verified isolated
 test profile together with `NAW_TEST_BUTLER_ENTRY=1` enables its source-phase
 handler, after the real person-window check. The flag does not enable a model,
-recording period, entry view or designation offer.
+recording period or designation offer. With it, a person window is answered
+with the entry it draws (below); without it every call is refused and the
+window shows nothing about a butler.
 
 The dedicated `workspace.butler(action, ...args)` IPC accepts only the current
 live person window. It is removed from the agent catalog and generic invoke
 map. Construction reuses the existing ingress ledger and never prepares a
 backend, checks credentials or starts a runner. Status is not added to ordinary
-window state.
+window state: a person window asks for it once as it starts, when it comes back
+to the front, when the entry opens and after each action. A refusal that means
+the entry is closed ends the asking for that window.
 
 | Action | Arguments | Source-phase result |
 | --- | --- | --- |
-| `status` | None | Current designation, bounded status/usage metadata, fixed closed phase |
-| `recheck` | Expected role revision | One presence-only probe after revision validation; literal boolean or unknown |
+| `status` | None | The entry a person window draws: designation configuration, reminder line, host answer, bounded usage, fixed closed phase |
+| `recheck` | Expected role revision | One presence-only probe after revision validation, then the same entry |
 | `designate` | Expected role revision | Blocked until a trusted actual DSH candidate exists; no inferred identity or budget |
 | `revoke` | Expected role revision | Persist revocation, preserve the ledger, then report cleanup separately |
 | `setActive` | Boolean, expected role revision | `true` refused; `false` requests only the selected target's cleanup |
+
+What leaves the main process is built by `app/butler-entry-host.cjs` from the
+core's person view, copying named fields only. The session identity, runner and
+backend references, batch ids and stop targets stay in the main process; the
+result of `designate`, `revoke` or `setActive` keeps its plain facts (status,
+reason, revision, stopped or not known) without the target it acted on. The
+core's `open` and `close` capabilities are not action names of this call and
+are not passed on. Whether this version can start a butler is a constant of the
+build (it cannot), never read from a host that reports ready. The window sends
+an action and the revision it was drawn for, and nothing else: a third argument
+is refused. When designation becomes possible, the main process must compare
+what the confirmation page stated with what it would really select, and both
+sides change together.
 
 Status uses only this object's explicit display-probe result. Legacy backend
 negative presence and its `credential-missing` reason cannot prove absence:
