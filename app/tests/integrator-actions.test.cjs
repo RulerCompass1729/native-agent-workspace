@@ -9,6 +9,7 @@ const backgroundOperation = require('../background-operation.cjs');
 const { IntegrationHandoffs, FILE } = require('../integrator-handoff.cjs');
 const { IntegrationRepository, FILE: REPOSITORY_FILE } = require('../integrator-repository.cjs');
 const integratorGit = require('../integrator-git.cjs');
+const { IntegratorEngine } = require('../integrator-engine.cjs');
 const { RoomState } = require('../room-state.cjs');
 const { roomId: validRoomId, roomIds } = require('../collaboration-spaces.cjs');
 const { execFileSync } = require('node:child_process');
@@ -32,6 +33,11 @@ function fixture(t, enabled = true, options = {}) {
   const handlers = new Map(), f = { directory, file: path.join(directory, FILE), handoffs, handlers, broadcasts: 0, schedules: 0 };
   // The dispatcher as the entry sees it: its schedule, and the engine fault it kept (none unless a test sets one).
   f.dispatcher = { schedule() { f.schedules += 1; }, integrationError: null };
+  // The engine as the dispatcher holds it, on the same record, with git and main's head as a test sets them.
+  f.git = { commit: async value => (value.length === 40 ? value : value.padEnd(40, '0')), isAncestor: async (a, b) => b === f.head, changes: async (base, tip) => [{ commit: tip, change: 'x1' }] };
+  f.head = HEAD2;
+  if (enabled) f.dispatcher.integration = new IntegratorEngine({ handoffs, now: () => NOW + 90000, designation: () => INTEGRATOR, mainHead: async () => f.head,
+    reader: { commit: (...args) => f.git.commit(...args), isAncestor: (...args) => f.git.isAncestor(...args), changes: (...args) => f.git.changes(...args) }, send: async () => ({ tag: 'tag-x', control: 0 }) });
   // The repository choice as the engine's builder makes it in main.cjs, on a real record and the real git reader.
   f.repository = new IntegrationRepository(directory); f.unblocked = 0;
   f.dialog = async () => { throw Error('No dialog was expected'); };
@@ -142,7 +148,7 @@ test('an agent can do none of this, whatever it names; without an originating op
   const id = f.waiting(['a']);
   f.handoffs.noteReady(ready('b'), NOW); f.handoffs.hold(key('b'), 'review-off', NOW);
   const before = f.bytes();
-  for (const args of [['list'], ['retryDelivery', key('b')], ['retryReason', 'review-off'], ['retryReason', 'no-reply'], ['resolve', id, true], ['resolve', id], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('b')], ['chooseRepository'], ['made-up'], []]) {
+  for (const args of [['list'], ['retryDelivery', key('b')], ['retryReason', 'review-off'], ['retryReason', 'no-reply'], ['resolve', id, true], ['resolve', id], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('b')], ['recheck', key('b')], ['chooseRepository'], ['made-up'], []]) {
     await assert.rejects(f.agent(...args), refused('error.handoff.personOnly'), JSON.stringify(args));
   }
   assert.equal(f.bytes(), before); assert.deepEqual([f.broadcasts, f.schedules], [0, 0]);
@@ -157,7 +163,7 @@ test('an agent can do none of this, whatever it names; without an originating op
 
 test('with the switch closed the person is told handoffs are not enabled, and nothing is created', async t => {
   const f = fixture(t, false);
-  for (const args of [['list'], ['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('a')], ['chooseRepository']]) {
+  for (const args of [['list'], ['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('a')], ['recheck', key('a')], ['chooseRepository']]) {
     await assert.rejects(f.person(...args), refused('error.handoff.unavailable'), JSON.stringify(args));
   }
   assert.equal(fs.existsSync(f.file), false); assert.deepEqual([f.broadcasts, f.schedules], [0, 0]);
@@ -183,7 +189,7 @@ test('a fault the dispatcher kept for the engine is shown to the person, also wh
   assert.deepEqual(plain(unstarted), { started: false, engineFault: { message: 'Synthetic build fault', at: NOW, count: 1 } });
   unstarted.engineFault.message = 'changed by the caller';
   assert.equal(g.dispatcher.integrationError.message, 'Synthetic build fault', 'A copy here too');
-  for (const args of [['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['redo', key('a')], ['chooseRepository'], ['made-up']]) {
+  for (const args of [['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['redo', key('a')], ['recheck', key('a')], ['chooseRepository'], ['made-up']]) {
     await assert.rejects(g.person(...args), refused('error.handoff.notStarted'), JSON.stringify(args));
   }
   // The queue panel looks through 'space': it is told the same, and what it draws from that says why, not "cannot be read".
@@ -277,7 +283,9 @@ test('an action that does not fit the record\'s state is refused in words, and n
   const stale = [['retryDelivery', key('a')], ['retryDelivery', key('b')], ['retryDelivery', key('zz')], ['retryDelivery', undefined], ['retryReason', 'made-up'], ['retryReason', undefined],
     ['resolve', 'H9-other', true], ['resolve', undefined], ['answer', 'review-off'], ['answer', 'installable:'], ['answer', 7], ['made-up', id], [undefined], ['constructor'], ['__proto__'],
     // Only a returned delivery is given back: not one that is handed, waits, or is unknown.
-    ['redo', key('a')], ['redo', key('b')], ['redo', key('zz')], ['redo', undefined], ['redo', 7], ['space', undefined], ['space', 7], ['space', ''], ['space', 'a/b'], ['space', ['shared']], ['space', { id: 'shared' }]];
+    ['redo', key('a')], ['redo', key('b')], ['redo', key('zz')], ['redo', undefined], ['redo', 7],
+    // Only a delivery held because git could not be read, with its claim, is checked again.
+    ['recheck', key('a')], ['recheck', key('b')], ['recheck', key('zz')], ['recheck', undefined], ['recheck', 7], ['space', undefined], ['space', 7], ['space', ''], ['space', 'a/b'], ['space', ['shared']], ['space', { id: 'shared' }]];
   for (const args of stale) await assert.rejects(f.person(...args), refused('error.handoff.invalid'), JSON.stringify(args));
   assert.equal(f.bytes(), before); assert.deepEqual([f.broadcasts, f.schedules], [0, 0]);
   // A handoff that was already dealt with (from another window, say) cannot be dealt with twice.
@@ -462,6 +470,67 @@ test('a task that cannot be added is not marked as given back, and a mark that c
   assert.equal(new IntegrationHandoffs(m.directory).spaceView('shared')[both.itemId].redone, undefined);
 });
 
+test('the person checks again a merge that could not be checked; while git still does not answer nothing changes and they are told', async t => {
+  const plain = value => JSON.parse(JSON.stringify(value));
+  // A delivery whose merge was reported while main could not be read: held, with what was reported.
+  const unchecked = f => {
+    f.handoffs.noteReady(ready('a'), NOW);
+    const view = { integrator: INTEGRATOR, session: integratorSession(), complete: true, wakePolicy: { enabled: true }, now: NOW, idleSince: new Map([['integrator', NOW - rules.IDLE_SETTLE_MS]]), humanAt: new Map(), mainHead: MAIN };
+    const opened = f.handoffs.advance(view, NOW);
+    f.handoffs.confirmSent(opened.handoffId, { tag: 'tag-1', control: 0 }, NOW);
+    const answered = { integrator: INTEGRATOR, complete: true, now: NOW + 60000, idleSince: new Map([['integrator', NOW + 60000 - rules.IDLE_SETTLE_MS]]),
+      session: integratorSession({ messages: [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW }, { id: 'r', role: 'assistant', text: `MERGED ${commitOf('a')} as ${HEAD2} tests 3/3`, time: NOW + 1 }] }) };
+    f.handoffs.settle(f.handoffs.plan(answered), { handoffId: opened.handoffId, mainUnreadable: true }, NOW + 60000);
+    assert.deepEqual(f.states(), { a: 'held:main-unreadable' });
+  };
+  const f = fixture(t);
+  unchecked(f);
+  // The panel is told that this row is checked again, not sent again, also with nobody designated.
+  const seen = plain(await f.person('space', 'shared'));
+  assert.equal(seen.items.a.recheck, true);
+  const { model } = require('../renderer/handoff-queue.js');
+  for (const integrator of [INTEGRATOR, null]) {
+    const row = model({ view: seen, integrator, generic: 'the integrator' }).rows.a;
+    assert.deepEqual(plain(row.action), { kind: 'recheck', key: key('a'), label: { key: 'queue.handoff.recheck', params: {} } }, String(Boolean(integrator)));
+    // Sending it again stays beside it while there is someone to send it to: a check that can never be answered must not be a dead end.
+    assert.deepEqual(plain(row.more), integrator ? { kind: 'send', key: key('a'), label: { key: 'queue.handoff.send', params: { who: 'the integrator' } } } : null);
+  }
+  // Main's head still cannot be read, or git still does not answer: said as that; nothing changes and nothing is announced.
+  const before = f.bytes();
+  f.head = null;
+  await assert.rejects(f.person('recheck', key('a')), refused('error.handoff.recheckUnanswered'));
+  // (When the head is read but git says nothing about the merge, the folder is not what is said to be the trouble.)
+  f.head = HEAD2; f.git.commit = async () => undefined;
+  await assert.rejects(f.person('recheck', key('a')), refused('error.handoff.recheckSilent'));
+  assert.deepEqual([f.bytes(), f.broadcasts, f.schedules, f.context.integrationFault], [before, 0, 0, null]);
+  // Git answers: merged, every window is told and the dispatcher looks again (its pass tells the space and asks about the install).
+  f.git.commit = async value => value;
+  assert.deepEqual(plain(await f.person('recheck', key('a'))), { outcome: 'merged' });
+  assert.deepEqual([f.states(), f.broadcasts, f.schedules], [{ a: 'merged' }, 1, 1]);
+  assert.equal(plain(await f.person('space', 'shared')).items.a.recheck, undefined);
+  await assert.rejects(f.person('recheck', key('a')), refused('error.handoff.invalid'));
+  // Git answers "no": an unverified claim from then on, sent again like any other hold.
+  const g = fixture(t);
+  unchecked(g);
+  g.git.isAncestor = async () => false;
+  assert.deepEqual(plain(await g.person('recheck', key('a'))), { outcome: 'unverified' });
+  assert.deepEqual([g.states(), g.broadcasts, g.schedules], [{ a: 'held:merge-unverified' }, 1, 1]);
+  assert.equal(plain(model({ view: plain(await g.person('space', 'shared')), integrator: INTEGRATOR, generic: 'the integrator' }).rows.a.action).kind, 'send');
+  // The record cannot be saved: a fault of the record, as for every other step.
+  const h = fixture(t);
+  unchecked(h);
+  fs.chmodSync(h.directory, 0o500);
+  try { await assert.rejects(h.person('recheck', key('a')), refused('error.handoff.record')); }
+  finally { fs.chmodSync(h.directory, 0o700); }
+  assert.deepEqual([h.broadcasts, h.schedules], [0, 0]);
+  // A dispatcher without an engine (it could not be built after the record was): nothing is checked.
+  const k = fixture(t);
+  unchecked(k);
+  delete k.dispatcher.integration;
+  await assert.rejects(k.person('recheck', key('a')), refused('error.handoff.notStarted'));
+  assert.deepEqual(k.states(), { a: 'held:main-unreadable' });
+});
+
 test('the entry is wired for the person\'s window, and its words exist in both languages', () => {
   const preload = fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8');
   assert.match(preload, /for \(const name of \['queueSecretary', 'integrator', 'handoff', /);
@@ -471,7 +540,7 @@ test('the entry is wired for the person\'s window, and its words exist in both l
   assert.match(source, /let integrationHandoffs = null;/);
   const builder = source.indexOf('function integrationEngine(dispatcher) {'), next = source.indexOf('\nfunction ', builder + 10), assigned = source.indexOf('  integrationHandoffs = handoffs;');
   assert.ok(assigned > builder && assigned < next);
-  for (const name of ['error.handoff.personOnly', 'error.handoff.unavailable', 'error.handoff.notStarted', 'error.handoff.invalid', 'error.handoff.record', 'error.handoff.redoKept']) {
+  for (const name of ['error.handoff.personOnly', 'error.handoff.unavailable', 'error.handoff.notStarted', 'error.handoff.invalid', 'error.handoff.record', 'error.handoff.redoKept', 'error.handoff.recheckUnanswered', 'error.handoff.recheckSilent']) {
     const zh = locale.format('zh', name), en = locale.format('en', name);
     assert.ok(zh && en && zh !== en && zh !== name && en !== name, name);
   }

@@ -313,6 +313,29 @@ class IntegratorEngine {
     return { kind: 'settled', handoffId: action.handoffId, ...result };
   }
 
+  // The person's "check again" on a delivery held because git could not be read: the claim kept with it
+  // is asked of git once more, against the main commit of the handoff it was merged in (so that a merge
+  // made then is still "new"), in one checked look at the repository. Returns { outcome: 'merged' |
+  // 'unverified' | 'unanswered', notify, install }; with no answer, `head` says whether main's head at
+  // least was read. The spaces and the person are told by the next pass.
+  async recheck(key) {
+    const handoffs = this.handoffs, began = this.now();
+    const claim = handoffs.claimOf(key);
+    // A claim whose tests did not all pass can never count: git is not asked.
+    if (claim.tests.total < 1 || claim.tests.passed !== claim.tests.total) return handoffs.recheck(claim, { verified: false, why: 'tests-not-all-passed' }, null, this.now());
+    let mainHead = null, reader = this.reader;
+    if (this.open) {
+      let repository = null;
+      try { repository = await this.open(); } catch { /* Cannot be read now. */ }
+      reader = repository ? repository.reader : null;
+      if (repository) { try { mainHead = await repository.mainHead(); } catch { /* Unknown: nothing is checked. */ } }
+    } else { try { mainHead = await this.mainHead(); } catch { /* Unknown: nothing is checked. */ } }
+    if (!reader || typeof mainHead !== 'string' || !FULL_ID.test(mainHead)) return { outcome: 'unanswered', head: false, notify: [], install: null };
+    const verdict = await handoffs.verifyClaim(reader, claim, mainHead);
+    const result = handoffs.recheck(claim, verdict, mainHead, this.now(), began);
+    return result.outcome === 'unanswered' ? { ...result, head: true } : result;
+  }
+
   // Tell where things stand: a space record for every delivery whose space does not say it yet,
   // and one notice for every reason the person has not been told about.
   // - A space record is written, then marked written. A crash in between writes it again; the

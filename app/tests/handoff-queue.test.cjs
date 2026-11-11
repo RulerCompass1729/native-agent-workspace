@@ -38,6 +38,17 @@ test('each delivered task says where it stands, in the name of whoever holds it'
   // A delivery on hold with nobody designated still waits for the person, but there is nobody to send it to again.
   const idle = draw(view({ d: items.d }), { integrator: null });
   assert.deepEqual([idle.rows.d.action, idle.rows.d.need, plain(idle.rows.d.why), idle.need], [null, true, { key: 'queue.handoff.why.unverified', params: { who: 'the integrator' } }, 1]);
+  // A hold that keeps the merge that was reported is checked again, with or without an integrator; it is not sent again.
+  const kept = item('d', 'held', { reason: 'main-unreadable', recheck: true, why: { key: 'queue.handoff.why.mainUnreadable', params: {} } });
+  for (const integrator of [INTEGRATOR, null]) {
+    const row = draw(view({ d: kept }), { integrator }).rows.d;
+    assert.deepEqual(plain([row.action, row.need, row.front]), [{ kind: 'recheck', key: 'ready:shared:d', label: { key: 'queue.handoff.recheck', params: {} } }, true, true], String(Boolean(integrator)));
+    // Sending stays beside it while there is an integrator: a check git can never answer must not leave the row without a step.
+    assert.deepEqual(plain(row.more), integrator ? { kind: 'send', key: 'ready:shared:d', label: { key: 'queue.handoff.send', params: { who: 'Riley' } } } : null, String(Boolean(integrator)));
+  }
+  const plainHold = draw(view({ d: { ...kept, recheck: undefined } })).rows.d;
+  assert.deepEqual([plainHold.action.kind, plainHold.more], ['send', null], 'A hold without a claim has the one step it always had');
+  for (const other of Object.values(draw(view(items, { summary: { handoff: sent } })).rows)) assert.equal(other.more, null);
   // A conflict's cause sends the person to the integrator's session and names the button; with nobody designated there is neither, and it says so.
   const clash = { key: 'queue.handoff.why.conflict', params: {} }, held = item('d', 'held', { reason: 'conflict:H1-00000000', why: clash });
   assert.deepEqual([plain(draw(view({ d: held })).rows.d.why), plain(draw(view({ d: held }), { integrator: null }).rows.d.why), clash], [{ key: 'queue.handoff.why.conflict', params: { who: 'Riley' } },
