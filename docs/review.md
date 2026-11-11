@@ -9808,3 +9808,44 @@ A directory change during a read may still construct a page in memory or count
 one approved page in Main's correct log; the recheck withholds its body. A
 failed audit now refuses binding and catalog access as well. No production
 factory injection or runtime transport qualification is established.
+
+## Business read-audit public-method overrides — 2026-11-11
+
+Independent reviewer finding 786: a genuine audit in the correct directory could
+override public `recordPage` in a subclass or on the instance, returning a valid-
+shaped fake receipt without a journal row or quota charge. The writable base
+static directory predicate also allowed a host override to accept a wrong root.
+These are blocking host-composition errors before activation; the B4 owner owns
+this bounded repair.
+
+The record implementation is now private. Business uses the base static record
+entry, without dispatching instance/subclass overrides, and the base constructor
+is frozen to fix both static entries. Public `recordPage` remains compatible.
+This is a host API misuse guard, not protection from arbitrary same-process code.
+Page/cursor/log schemas, callbacks, capacity, failed-write behavior and the fixed
+64-page allowance are unchanged. Main, renderer and DSH integration are untouched.
+
+New same-root subclass and own-method cases reproduce fake receipts before the
+repair, then verify that the overrides are never called, all 64 real rows reach
+the same person's readable journal, and page 65 is refused. Static assignment and
+redefinition cannot authorize a wrong root or replace the record entry. The
+bounded red run has 21 tests: 16 pass, 5 fail. Related strict credential-free
+checks pass 131/131, with zero failures or skips; the empty-environment source UI
+build exits zero (`audit-method-build.log` in the private lane). The complete
+author-run suite passes 5,801/5,801, with zero failures, cancellations or skips
+(`audit-method-full.log`). Fresh separate headless reviewerA4ABBAFF-DBE8-4D18-8DB1-CD950DDE0F57
+returns APPROVE_SCOPED for the exact source delta. Its tools were Read/Grep/Glob
+only, no MCP; HEAD, index and worktree matched the review snapshot. The reviewer
+read author-run raw evidence and did not rerun tests. No provider/model call,
+GUI or installed use is claimed here.
+
+Consistency is not correctness: runtime acceptance must show a trusted actual
+Main factory supplying its real `dataDir` and sole `butlerReadAudit`, also used
+by the person reader. Pairing an audit and directory in the same wrong root is
+not qualified. No production factory is added or proven by these synthetic
+composition checks. Activation and the recording period remain closed.
+
+Future factory acceptance must also establish the plain base instance, default
+clock and unoverridden human reader, and the single Main-owned object reused
+by both read paths. The module-local private-brand/physical-root checks do not
+authenticate an arbitrary caller-supplied reference as Main's actual directory.

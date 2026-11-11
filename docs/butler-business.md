@@ -52,7 +52,8 @@ The audit's private store brand and its actual directory device/inode must match
 that owned mode-700 directory before construction, binding and each read's
 authorization checks. JSON/prototype stand-ins and overridden instance checks
 cannot assert a different root. Physical aliases of the same directory remain
-valid; a different private folder cannot create a second invisible allowance.
+valid. With Main's real `dataDir` supplied, an audit in a different private folder
+is refused; the comparison alone cannot authenticate that supplied reference.
 
 There is no implicit store derived from `role.file`, and that path is not read
 to choose the audit. The role record may live in a nested instance directory;
@@ -138,6 +139,20 @@ preparation under valid authority, not proof that the model or provider received
 it. A final revocation or transport failure can leave a conservative extra record.
 
 The data capability rechecks identity before audit commit and before returning.
+Business calls the base `ButlerReadAudit.record(audit, page)` entry, which enters
+the audit's private implementation without dispatching a public `recordPage`
+override. The public method remains compatible for direct callers. The base
+constructor is frozen so host composition cannot replace its directory check or
+record entry with a fake receipt. This guards host misuse of these APIs; it does
+not isolate them from arbitrary code executing in the same process.
+
+Directory equality is a consistency check, not proof that the host chose the
+correct root. Runtime acceptance must show the actual Main factory passing its
+real `dataDir` and its single `butlerReadAudit` instance, shared with the verified
+person's metadata reader. An audit and a claimed directory that agree with each
+other but both point somewhere else are not qualified. This checkpoint does not
+add that production factory and does not claim that its injection is proven.
+
 Quota exhaustion, missing durability, lock contention, unsafe paths and damaged
 logs withhold the page. A failed write is never repaired by truncating old records.
 The journal is capped at 32 MiB and each metadata line at 128 KiB; old data is not
@@ -192,3 +207,9 @@ unchanged while the person decides. Production context/tool qualification,
 activation and the record period stay closed. The DSH transport still needs a
 separate proof that this is its only tool outlet, with no generic catalog or
 consent fallback.
+
+Factory acceptance must also use a plain base Audit instance with its default
+clock, with no host-supplied clock or overridden human `read` method. It must
+prove that the business capability and person reader close over Main's sole
+instance, rather than accepting a matching audit/directory pair from options.
+These are future runtime acceptance conditions, not proven by source fixtures.

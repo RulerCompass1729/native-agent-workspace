@@ -128,6 +128,10 @@ class ButlerReadAudit {
     } catch { return false; }
     finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { return false; } }
   }
+  static record(audit, input) {
+    if (!audit || typeof audit !== 'object' || isProxy(audit) || !(#directory in audit)) fail('INPUT');
+    return audit.#recordPage(input);
+  }
   constructor(directory, options = {}) {
     fields(options, ['authorizePerson', 'now', 'onCapacityWarning'], []);
     const { authorizePerson = () => false, now = Date.now, onCapacityWarning = () => {} } = options;
@@ -232,7 +236,8 @@ class ButlerReadAudit {
       return { sequence, days, records, identity: after };
     } finally { if (fd !== undefined) fs.closeSync(fd); }
   }
-  recordPage(input) {
+  recordPage(input) { return this.#recordPage(input); }
+  #recordPage(input) {
     const page = pageInput(input);
     const approved = this.#locked(({ directoryFd, owned }) => {
       const loaded = this.#load(), time = this.#now(), day = dayOf(time), pageOfDay = (loaded.days.get(day) || 0) + 1;
@@ -280,4 +285,7 @@ class ButlerReadAudit {
     this.#warnCapacity(result.storage); return result;
   }
 }
+// Prevent host composition from replacing the base checks or private-record
+// entry with an instance/subclass override. This is not a same-process RCE boundary.
+Object.freeze(ButlerReadAudit);
 module.exports = { ButlerReadAudit, MAX_PAGES_PER_UTC_DAY };
