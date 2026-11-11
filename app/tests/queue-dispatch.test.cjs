@@ -1726,6 +1726,24 @@ test('decision notification keeps only the first line before the queue summary f
   assert.ok(actions[0].reply.includes('Private remainder'), 'Existing in-app summary is retained');
 });
 
+for (const recordedDirectory of [false, true]) test(`B2: joining ${recordedDirectory ? 'the same directory' : 'a legacy record without a new directory'} never snapshots the client`, async t => {
+  const old = member('a', { cwd: '/synthetic/unchanged' });
+  const fresh = member('made', { cwd: old.cwd, roomIds: [], roomId: null });
+  const { client, dispatcher, room } = dispatcherSetup(t, [old, fresh]);
+  const joins = fakeMembership(room, client), next = room.queueAdd('ordinary queued work', old.id);
+  const record = { phase: 'joining', oldNativeId: old.nativeId, provider: old.provider, cwd: old.cwd, name: old.name, roomIds: ['shared'], newId: fresh.id, newName: fresh.name,
+    ...(recordedDirectory ? { newCwd: old.cwd } : {}) };
+  const snapshot = structuredClone(client.state);
+  dispatcher.client = client; dispatcher.rotations[old.id] = record;
+  let reads = 0;
+  client.snapshot = () => { reads++; throw Error('session ownership conflict'); };
+  await dispatcher.advanceRotation(old.id, record, snapshot, NOW);
+  assert.equal(reads, 0, 'same-directory joining must not add a fallible client read');
+  assert.equal(record.phase, 'created');
+  assert.deepEqual(joins, [[fresh.id, true, 'shared']]);
+  assert.equal(room.queueItems('shared').find(item => item.id === next).assignee, fresh.id);
+});
+
 const trustPrompt = provider => ({ kind: 'directory-trust', provider, source: 'native-terminal' });
 test('B2: a migrated successor asking directory trust pauses before joining, does not accept or send, and announces once', async t => {
   const notices = [];

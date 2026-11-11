@@ -2270,7 +2270,7 @@ class QueueDispatcher {
       await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
     }
     if (record.phase === 'joining') {
-      const latest = this.client.snapshot().sessions.find(session => session.id === record.newId);
+      const latest = record.newCwd && record.newCwd !== record.cwd ? this.client.snapshot().sessions.find(session => session.id === record.newId) : null;
       if (record.newCwd && record.newCwd !== record.cwd && latest?.nativeStartupPrompt?.kind === 'directory-trust' &&
           latest.nativeStartupPrompt.source === 'native-terminal' && latest.nativeStartupPrompt.provider === record.provider) {
         await this.waitForDirectoryTrust(oldId, record, now); return;
