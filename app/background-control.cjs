@@ -10,7 +10,7 @@ const token = v => typeof v === 'string' && v.length > 0 && v.length <= 160 && !
 // Parameters use the existing application's names and order. All values still
 // pass its normal validators. Snapshot supplies current native/turn identities.
 const parameters = {
-  initial: [], preflight: [], dataDirectory: [], retrySave: [], reconnect: [], connectionUpdates: [], quitService: [],
+  initial: ['Selected foreign conversation requires confirmation; read the resulting operation receipt after approval.'], preflight: [], dataDirectory: [], retrySave: [], reconnect: [], connectionUpdates: [], quitService: [],
   interfaceSettings: ['action: describe|update', 'namespace: locale|client-ui-theme (update only)', 'patch (update only)', 'current revision from describe (update only)'],
   prepareInput: ['sessionId'], observe: ['sessionId'], unobserve: ['sessionId'], claim: ['sessionId', 'mode: chat|terminal'],
   terminal: ['sessionId'], terminalSnapshot: ['sessionId'], input: ['sessionId', 'exact terminal input'], resize: ['sessionId', 'cols', 'rows'],
@@ -55,18 +55,20 @@ function validate(value) {
     if (value.paths !== undefined && (!Array.isArray(value.paths) || value.paths.length > 16 || value.paths.some(p => typeof p !== 'string' || p.length > 8192 || !path.isAbsolute(p) || p.includes('\0')))) throw Error('Invalid explicit file selection');
   } else if (value.action === 'receipt') {
     if (!token(value.operation_id) || Object.keys(value).some(k => !['action', 'operation_id'].includes(k))) throw Error('Invalid receipt request');
-  } else if (Object.keys(value).some(k => !['action', ...(value.action === 'snapshot' ? ['view_id'] : [])].includes(k))) throw Error('Read command does not accept mutation arguments');
+  } else if (Object.keys(value).some(k => !['action', ...(value.action === 'snapshot' ? ['view_id', 'operation_id'] : [])].includes(k)) ||
+    value.action === 'snapshot' && value.operation_id !== undefined && !token(value.operation_id)) throw Error('Read command does not accept mutation arguments');
   return clone(value);
 }
 class ConfirmationRequired extends Error {
   constructor(value) { super('This operation needs the existing human confirmation'); this.confirmation = clone(value); }
 }
 class BackgroundControl {
-  constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, changed = () => {}, now = Date.now }) {
+  constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now }) {
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
     this.data = { version: 1, records: [], views: {} }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
     this.confirmation = confirmation; this.audit = audit;
     this.confirmationPending = confirmationPending;
+    this.project = project;
     try {
       const st = fs.lstatSync(this.file);
       if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1 || st.uid !== process.getuid() || st.mode & 0o077 || st.size > 32 * 1024 * 1024) throw Error('Unsafe background operation record');
@@ -113,7 +115,7 @@ class BackgroundControl {
   }
   receipt(sender, id) {
     const record = this.data.records.find(r => r.id === id && this.key(r.actor) === this.key(sender));
-    return record ? clone(record) : null;
+    return record ? this.project(clone(record)) : null;
   }
   async publish(record, context) {
     if (!operation.maintenanceAction(record.command.method, record.command.arguments, record.actor)) return;
@@ -133,7 +135,7 @@ class BackgroundControl {
   }
   async call(binding, input) {
     if (this.closed) throw Error('Background control is closing');
-    const args = validate(input), { sender, identity } = binding;
+    let args = validate(input); const { sender, identity } = binding;
     const valid = async () => { await binding.refresh?.(); if (!binding.valid()) throw Error('The originating native call is no longer valid'); };
     await valid();
     if (args.action === 'catalog') return { state: 'complete', commands: this.catalog(), background: true };
@@ -147,10 +149,14 @@ class BackgroundControl {
       return { state: 'complete', receipt: this.receipt(sender, args.operation_id), retry: false };
     }
     const context = await this.view(sender, args.view_id); await valid();
-    if (args.action === 'snapshot') {
+    if (args.action === 'snapshot' && (!context.view.selected || context.view.selected === sender.id || context.metadataOnly?.())) {
       const actor = operation.actor({ ...sender, callId: identity.callId, turnId: identity.turnId, operationId: identity.callId });
       return operation.run(actor, async () => ({ state: 'complete', value: await this.handlers.get('initial')(context) }), { context, args, actor, valid });
     }
+    if (args.action === 'snapshot') args = { action: 'invoke', method: 'initial', arguments: [], operation_id: args.operation_id || randomUUID(), ...(args.view_id ? { view_id: args.view_id } : {}) };
+    // Selection is navigation, never authority. Pin the actual selected target,
+    // including for invoke initial, rather than trusting caller-supplied args.
+    if (args.method === 'initial') args = { ...args, arguments: [context.view.selected || sender.id] };
     const existing = this.receipt(sender, args.operation_id);
     if (existing) {
       if (!isDeepStrictEqual(existing.command, args)) throw Error('operation_id already belongs to a different command');
@@ -195,16 +201,22 @@ class BackgroundControl {
         if (this.closed) throw Error('Background control is closing');
         const row = this.receipt(actor, args.operation_id);
         if (row.guard && !isDeepStrictEqual(row.guard, clone(context.fingerprint?.(args)))) throw Error('The operation target changed before execution');
-        const request = { context, args, actor, valid, approved, dialogIndex: 0 };
+        const request = { context, args, actor, guard: row.guard, valid, approved, dialogIndex: 0 };
         value = await operation.run(actor, async () => {
           const action = operation.maintenanceAction(args.method, args.arguments, actor);
           if (action) {
             if (typeof this.confirmation !== 'function' || typeof this.audit !== 'function') throw Error('Human maintenance confirmation or event storage is unavailable');
-            const answer = await dialog(context, 'message', this.confirmation(actor, args, action));
+            const answer = await dialog(context, 'message', this.confirmation(actor, args, action, context));
             if (answer.response !== 1) return { cancelled: true };
             request.maintenanceApproved = true;
             // If the event writer is broken, fail before an approved mutation.
             await this.publish({ ...row, state: 'running' }, context);
+            if (action === 'readConversation') {
+              const targetId = operation.conversationTarget(args.method, args.arguments, actor);
+              const target = row.guard?.sessions?.find(s => s.id === targetId);
+              if (!target) throw Error('The conversation target is unavailable');
+              this.commit(data => { data.records.find(r => r.id === row.id && this.key(r.actor) === key).readAuthorization = { sessionId: target.id, nativeId: target.nativeId }; });
+            }
           }
           return handler(context, ...args.arguments);
         }, request);
@@ -218,7 +230,7 @@ class BackgroundControl {
         const row = d.records.find(r => r.id === args.operation_id && this.key(r.actor) === key);
         d.views[key + ':' + (args.view_id || 'default')] = clone(context.view);
         delete row.confirmation;
-        Object.assign(row, { state, finishedAt: this.now(), ...(value === undefined ? {} : { value }), ...(delivery ? { delivery } : {}), ...(error ? { error } : {}), ...(confirmation ? { confirmation } : {}) });
+        Object.assign(row, { state, finishedAt: this.now(), ...(value === undefined ? {} : { value: clone(value) }), ...(delivery ? { delivery } : {}), ...(error ? { error } : {}), ...(confirmation ? { confirmation } : {}) });
       });
       const result = await this.finishAudit(actor, args.operation_id, context);
       if (result.state === 'confirmation-required' && result.confirmation?.kind === 'message' && !result.confirmationNotifiedAt && this.confirmationPending) {
@@ -252,9 +264,10 @@ class BackgroundControl {
   }
   rows(sessionId) {
     return this.data.records.filter(r => r.actor.id === sessionId).map(r => ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
-      name: r.actor.name, time: r.at, status: ['running', 'awaiting-native'].includes(r.state) ? 'working' : ['complete', 'received', 'cancelled'].includes(r.state) ? 'complete' : 'error',
-      text: `${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`,
-      backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state, confirmation: r.confirmation || null,
+      name: operation.visibleText(r.actor.name), time: r.at, status: ['running', 'awaiting-native'].includes(r.state) ? 'working' : ['complete', 'received', 'cancelled'].includes(r.state) ? 'complete' : 'error',
+      text: operation.visibleText(`${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`),
+      backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state,
+        confirmation: r.confirmation ? { ...r.confirmation, options: visibleOptions(r.confirmation.options) } : null,
         resultNotice: r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null } }));
   }
   async close() {
@@ -268,8 +281,16 @@ class BackgroundControl {
     this.contexts.clear(); await Promise.allSettled([...this.inflight.values()]);
   }
 }
+function visibleOptions(options) {
+  if (!options || typeof options !== 'object') return options;
+  options = { ...options };
+  for (const key of ['title', 'message', 'detail']) if (typeof options[key] === 'string') options[key] = operation.visibleText(options[key]);
+  if (Array.isArray(options.buttons)) options.buttons = Array.from(options.buttons, text => operation.visibleText(text));
+  return options;
+}
 function dialog(context, kind, options, nativeDialog) {
   if (!context.background) return nativeDialog(context.win, options);
+  options = visibleOptions(options);
   const request = operation.request();
   if (!request || request.context !== context) throw Error('Background dialog has no originating operation');
   if (request.approved?.operationId === request.actor.operationId && isDeepStrictEqual(request.approved.confirmation, { kind, options }) && request.dialogIndex++ === 0)

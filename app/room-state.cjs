@@ -444,8 +444,9 @@ class RoomState {
     if (!state || !orderId(record.actor.id) || !['claude', 'codex'].includes(record.actor.provider)) throw Error('Invalid maintenance audit');
     const id = `control:${record.actor.provider}:${record.actor.nativeId}:${record.id}`;
     const command = record.command.method + (['spaceAction', 'spaceMerge'].includes(record.command.method) ? '.' + record.command.arguments[record.command.method === 'spaceAction' ? 1 : 0] : '');
-    const event = { id, role: 'system', kind: 'control-audit', sessionId: record.actor.id, name: record.actor.name,
-      time: record.at || Date.now(), ...uiNotice('notice.background.' + state, { name: record.actor.name, command }),
+    const name = require('./background-operation.cjs').visibleText(record.actor.name);
+    const event = { id, role: 'system', kind: 'control-audit', sessionId: record.actor.id, name,
+      time: record.at || Date.now(), ...uiNotice('notice.background.' + state, { name, command }),
       controlAudit: { operationId: record.id, actor: { id: record.actor.id, nativeId: record.actor.nativeId, name: record.actor.name, provider: record.actor.provider },
         method: record.command.method, action, state: record.state, ...(record.resultState ? { resultState: record.resultState } : {}) } };
     const available = rooms.filter(id => id === DEFAULT_ROOM_ID || this.spaces.rooms.some(r => r.id === id));
@@ -866,8 +867,11 @@ class RoomState {
           const snapshot = await client.call('initial'), ids = new Set(snapshot.sessions.map(s => s.id));
           const members = snapshot.sessions.filter(s => isMember(s, place.id) && (s.id === id || !this.value.archivedSessions.includes(s.id))).map(s => s.id);
           metadata = this.metadata(place.id);
-          const rest = [...metadata.memberOrder.filter(member => ids.has(member) && member !== id), ...members.filter(member => member !== id && !metadata.memberOrder.includes(member))];
-          const active = rest.filter(member => members.includes(member)), next = active[place.index];
+          // An absent backend is not evidence that its saved members vanished.
+          // Retain their slots and count unarchived unknowns when locating the
+          // saved active index, so a returning member keeps its relative order.
+          const rest = [...metadata.memberOrder.filter(member => member !== id), ...members.filter(member => member !== id && !metadata.memberOrder.includes(member))];
+          const active = rest.filter(member => members.includes(member) || !ids.has(member) && !this.value.archivedSessions.includes(member)), next = active[place.index];
           const offset = next ? rest.indexOf(next) : rest.length;
           this.commit({ ...metadata, memberOrder: [...rest.slice(0, offset), id, ...rest.slice(offset)] }, place.id);
         }

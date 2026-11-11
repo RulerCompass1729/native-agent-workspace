@@ -62,6 +62,7 @@ function osOptions(language, codex = true, prefix = 'os.decision') {
   const raw = '/synthetic/RAW 中文 {name}';
   return options.map(option => ({ type: option.type, value: plain(vm.runInNewContext('(' + option.source + ')', {
     displayText: (key, params) => locale.format(language, key, params), displayLanguage: () => language, uiLocale: locale,
+    backgroundOperation: require('../background-operation.cjs'),
     value: { name: 'RAW 中文 {space}' }, status: { reason: 'RAW 中文 native status' }, codex,
     names: 'RAW 中文 backend names', option: { switch: { stops: [{ name: 'RAW 中文 session' }], endsCodex: codex, reason: 'RAW 中文 background detail' } },
     textExtensions: ['txt', 'md'], record: { cwd: raw, actor: { name: 'RAW 中文 agent' }, command: { method: 'openLocalFile' } }, action: 'openLocalFile', snapshot: { defaultWorkspace: '/unused' },

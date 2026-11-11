@@ -117,6 +117,13 @@ for (const language of ['zh', 'en']) test(`background confirmation uses B1 one-s
   h.ready(); assert.equal(h.sent.length, 1);
   assert.equal(JSON.stringify(h.sent[0][1]), JSON.stringify({ sessionId: 'agent', nativeId: 'native-agent', messageId: 'background:native-agent:operation' }));
 });
+test('background notification renders format characters visibly in the actor name', () => {
+  const h = harness(), record = { id: 'operation', actor: { id: 'agent', nativeId: 'native', name: 'Agent\u202e\u200b\u2028' }, command: { method: 'input', arguments: ['target', 'not a notification payload'] } };
+  h.sandbox.notifyBackgroundConfirmation(record);
+  const body = h.notices[0].options.body;
+  assert.equal(/[\p{Cf}\p{Zl}\p{Zp}]/u.test(body), false); assert.match(body, /Agent\\u202e\\u200b\\u2028/);
+  assert.equal(body.includes('not a notification payload'), false);
+});
 test('session confirmation navigation rejects stale identities or handled requests before changing views', async () => {
   const source = fs.readFileSync(require.resolve('../renderer/search-view.js'), 'utf8'), calls = [];
   const row = { id: 'message', backgroundOperation: { state: 'confirmation-required' } }, record = { id: 'agent', nativeId: 'native-agent', messages: [row] };

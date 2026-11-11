@@ -64,6 +64,20 @@ test('archive then actual Workspace.stop still restores the same native identity
   assert.equal(result.placement, 'restored'); assert.deepEqual(spaces.roomIds(f.w.get(id)), [f.a]); assert.equal(f.w.get(id).nativeId, nativeId);
   const cold = new RoomState(f.dir); assert.equal(cold.value.archivedSessions.includes(id), false); assert.deepEqual(cold.metadata(f.a).memberOrder, order);
 });
+for (const middle of [false, true]) test(`restore preserves order entries of a temporarily absent backend: middle=${middle}`, async t => {
+  const f = await fixture(t), id = f.ids[1], absent = f.ids[0];
+  if (middle) f.state.moveMember({ id, target: f.ids[2], after: false }, f.w.snapshot().sessions, f.a);
+  const order = [...f.state.metadata(f.a).memberOrder];
+  await f.state.archiveSession(f.client, id);
+  const call = f.client.call;
+  f.client.call = async (method, ...args) => {
+    const value = await call(method, ...args);
+    return method === 'initial' ? { ...value, sessions: value.sessions.filter(s => s.id !== absent) } : value;
+  };
+  assert.equal((await f.state.restoreSession(f.client, id)).placement, 'restored');
+  assert.deepEqual(new RoomState(f.dir).metadata(f.a).memberOrder, order);
+  assert.deepEqual(spaces.roomIds(f.w.get(id)), [f.a]);
+});
 test('failed position persistence happens before detaching the session', async t => {
   const f = await fixture(t), id = f.ids[1], before = f.moves;
   t.mock.method(f.state, 'write', () => { throw Error('Synthetic disk full'); });

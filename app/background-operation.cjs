@@ -9,16 +9,63 @@ function actor(value) {
 }
 function current() { return scope.getStore()?.actor || null; }
 function request() { return scope.getStore()?.request || null; }
+// Foreign conversations expose roster/capability metadata until one exact read
+// is approved. Unknown future session fields are private by default.
+const rosterFields = ['id', 'nativeId', 'name', 'provider', 'model', 'state', 'owner', 'cwd', 'archived', 'roomId', 'roomIds',
+  'memberRevision', 'roomMembershipRevisions', 'placementRevision', 'connectionRevision', 'controlRevision', 'peerRevision',
+  'pid', 'processIdentity', 'serverIdentity', 'peerIdentity', 'serviceCapabilities', 'runtimeVersion', 'backendKey',
+  'nativeContextPending', 'wakeDisabled', 'terminalState', 'terminalAvailable', 'chatAvailable', 'spaceImagesAvailable',
+  'addressedSendAvailable', 'nativeInputRequired', 'interruptPending', 'queueAvailable', 'steerAvailable', 'activeTurnId',
+  'pendingTag', 'pendingQueue', 'pendingSteer', 'backendUnavailable', 'transportDisconnected', 'nativeBlockMapping',
+  'nativeVersion', 'nativeVersionStatus', 'legacySubmit', 'legacyShare', 'failedTurnInputAvailable'];
+function conversationTarget(method, args = [], actor) {
+  const id = method === 'initial' ? args[0] : method === 'previewImage' && args[0]?.kind === 'session' ? args[0].sessionId : null;
+  return actor && typeof id === 'string' && id && id !== actor.id ? id : null;
+}
+function conversationSnapshot(value, actor, read = null, selected = value?.viewState?.selected) {
+  if (!value || !Array.isArray(value.sessions)) return value;
+  return { ...value, sessions: value.sessions.map(s => {
+    const own = s.id === actor.id && s.nativeId === actor.nativeId;
+    const authorized = read?.sessionId === s.id && read.nativeId === s.nativeId;
+    if (own || authorized) return { ...s, messages: own && selected !== undefined && selected !== s.id ? [] : s.messages, liveDraft: '', draft: '' };
+    return { ...Object.fromEntries(rosterFields.filter(key => Object.hasOwn(s, key)).map(key => [key, s[key]])), messages: [], liveDraft: '', draft: '' };
+  }) };
+}
+// Display only: preserve the original command/name for identity and execution.
+// Escape UTF-16 code units so supplementary format characters are visible too.
+function visibleText(text) {
+  return text.replace(/[\p{Cf}\p{Zl}\p{Zp}]/gu, char => char.split('').map(unit => '\\u' + unit.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
+}
+function confirmationDetail(command, snapshot, context) {
+  const ids = new Set(), references = [];
+  const collect = value => {
+    if (typeof value === 'string') ids.add(value);
+    else if (Array.isArray(value)) value.forEach(collect);
+    else if (value && typeof value === 'object') Object.values(value).forEach(collect);
+  };
+  collect(command.arguments);
+  for (const s of snapshot.sessions || []) if (ids.has(s.id)) references.push({ kind: 'session', id: s.id, name: s.name, provider: s.provider });
+  for (const room of snapshot.rooms || []) {
+    if (ids.has(room.id)) references.push({ kind: 'space', id: room.id, name: room.name });
+    if (command.method === 'spaceFiles' && room.id === command.arguments[0]) for (const file of room.files || [])
+      if (ids.has(file.id)) references.push({ kind: 'file', id: file.id, name: file.name, roomId: room.id });
+  }
+  return visibleText(JSON.stringify({ method: command.method, arguments: command.arguments,
+    ...(command.paths ? { paths: command.paths } : {}), ...(references.length ? { references } : {}),
+    ...(command.method === 'pasteNativeContent' ? { clipboard: context?.clipboardImage && !context.clipboardImage.isEmpty()
+      ? { kind: 'image', ...context.clipboardImage.getSize() } : { kind: 'text', text: context?.clipboardText || '' } } : {}) }, null, 2));
+}
 // One policy point for workspace_control maintenance. Native tool permission is
 // not person consent for a new session, placement or archive. No role currently
 // bypasses this gate; a future metered manager policy must be added here.
 function maintenanceAction(method, args = [], actor) {
+  if (conversationTarget(method, args, actor)) return 'readConversation';
   if (['create', 'spaceCreate', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'resume', 'importHistory'].includes(method)) return method;
-  if (['runtimeLocation', 'openLocalFile', 'saveLocalFile', 'spaceFiles'].includes(method)) return method;
+  if (['runtimeLocation', 'openLocalFile', 'saveLocalFile', 'spaceFiles', 'openMessageFile'].includes(method)) return method;
   // WorkspaceClient.pause stops routing across backends even when passed an ID;
   // that ID only scopes manual-input invalidation, not the affected sessions.
   if (method === 'pause') return method;
-  if (actor && ['interrupt', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input'].includes(method) && args[0] !== actor.id) return method;
+  if (actor && ['interrupt', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent'].includes(method) && args[0] !== actor.id) return method;
   if (method === 'join') return args[1] === false ? 'leaveRoom' : 'joinRoom';
   if (method === 'spaceAction') {
     if (args[1] === 'join') return args[2]?.[1] === false ? 'leaveRoom' : 'joinRoom';
@@ -61,4 +108,4 @@ function inputGuard(workspace, ids, origin = current()) {
   if (!valid()) throw require('./ui-errors.cjs').uiError('error.backgroundMessagesDisabled');
   return valid;
 }
-module.exports = { actor, current, request, maintenanceAction, run, message, activity, deliveryTargets, assertDeliveryPolicy, inputGuard, CAPABILITY: 'backgroundControlV1' };
+module.exports = { actor, current, request, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, run, message, activity, deliveryTargets, assertDeliveryPolicy, inputGuard, CAPABILITY: 'backgroundControlV1' };
