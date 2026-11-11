@@ -90,6 +90,13 @@ function validate(value) {
 class ConfirmationRequired extends Error {
   constructor(value) { super('This operation needs the existing human confirmation'); this.confirmation = clone(value); }
 }
+function refusalDetails(reason) {
+  return { state: 'not-executed', reason, retry: false, ...(reason === 'originating-session-unavailable' ? {
+    retryWithNewOperationId: true,
+    retryHint: 'Refresh the originating session, then use a new operation_id. This refused operation_id will not execute.',
+  } : {}) };
+}
+const compactRefusal = row => { row.guard = { auditRooms: row.guard?.auditRooms || ['shared'] }; };
 class BackgroundControl {
   constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now, readCopyBytes = MAX_RECORD_BYTES }) {
     if (!Number.isSafeInteger(readCopyBytes) || readCopyBytes < 1 || readCopyBytes > MAX_RECORD_BYTES) throw Error('Invalid read copy budget');
@@ -203,6 +210,19 @@ class BackgroundControl {
     }
     return this.receipt(actor, id);
   }
+  confirmationRefusal(actor, args, context, guard) {
+    let sessions;
+    try { sessions = typeof context.confirmationActors === 'function' ? context.confirmationActors() : guard?.sessions; }
+    catch { return 'originating-session-unavailable'; }
+    const requester = Array.isArray(sessions) && sessions.find(s => s.id === actor.id);
+    if (!requester || requester.nativeId !== actor.nativeId || requester.archived || requester.nativeContextPending)
+      return 'originating-session-unavailable';
+    const key = this.key(actor), pending = this.data.records.filter(r =>
+      !(r.id === args.operation_id && this.key(r.actor) === key) &&
+      (r.state === 'confirmation-required' || r.state === 'running' && operation.maintenanceAction(r.command.method, r.command.arguments, r.actor)) &&
+      sessions.some(s => s.id === r.actor.id && s.nativeId === r.actor.nativeId && !s.archived && !s.nativeContextPending));
+    return pending.length >= MAX_PENDING || pending.filter(r => this.key(r.actor) === key).length >= MAX_PENDING_PER_ACTOR ? 'confirmation-limit' : null;
+  }
   async call(binding, input) {
     if (this.closed) throw Error('Background control is closing');
     let args = validate(input); const { sender, identity } = binding;
@@ -256,11 +276,14 @@ class BackgroundControl {
     const key = this.key(sender);
     const actor = operation.actor({ ...sender, callId: identity.callId, turnId: identity.turnId, operationId: args.operation_id });
     const refuse = reason => {
-      const refusal = { state: 'not-executed', reason, method: args.method, retry: false };
+      const refusal = { ...refusalDetails(reason), method: args.method };
       if (!operation.maintenanceAction(args.method, args.arguments, actor)) return refusal;
       const guard = controlGuard(context, args);
-      this.commit(d => d.records.push({ id: args.operation_id, actor, command: args,
-        guard: reason === 'confirmation-limit' ? { auditRooms: guard?.auditRooms || ['shared'] } : guard, ...refusal, at: this.now() }));
+      this.commit(d => {
+        const row = { id: args.operation_id, actor, command: args, guard, ...refusal, at: this.now() };
+        if (['confirmation-limit', 'originating-session-unavailable'].includes(reason)) compactRefusal(row);
+        d.records.push(row);
+      });
       return this.finishAudit(actor, args.operation_id, context);
     };
     if (!handler || this.inflight.has(key)) return refuse(handler ? 'another-operation-running' : 'unknown-command');
@@ -270,18 +293,8 @@ class BackgroundControl {
     if (this.inflight.has(key)) return refuse('another-operation-running');
     const guard = controlGuard(context, args);
     if (operation.maintenanceAction(args.method, args.arguments, actor)) {
-      const requester = Array.isArray(guard?.sessions) && guard.sessions.find(s => s.id === actor.id);
-      if (!requester || requester.nativeId !== actor.nativeId || requester.archived || requester.nativeContextPending)
-        return refuse('originating-session-unavailable');
-      // No timer or automatic decision: old confirmations remain answerable.
-      // Count intent already running too, so parallel actors cannot overbook.
-      // The refreshed roster excludes invisible requests from forgotten,
-      // replaced or archived actors without freeing their operation IDs.
-      const pending = this.data.records.filter(r => ['confirmation-required', 'running'].includes(r.state) &&
-        operation.maintenanceAction(r.command.method, r.command.arguments, r.actor) &&
-        (!Array.isArray(guard?.sessions) || guard.sessions.some(s => s.id === r.actor.id && s.nativeId === r.actor.nativeId && !s.archived && !s.nativeContextPending)));
-      if (pending.length >= MAX_PENDING || pending.filter(r => this.key(r.actor) === key).length >= MAX_PENDING_PER_ACTOR)
-        return refuse('confirmation-limit');
+      const reason = this.confirmationRefusal(actor, args, context, guard);
+      if (reason) return refuse(reason);
     }
     // Save intent before calling ANY mutation, including an independent draft.
     this.commit(d => d.records.push({ id: args.operation_id, actor, command: args, guard, state: 'running', at: this.now() }));
@@ -300,7 +313,7 @@ class BackgroundControl {
   }
   async perform(actor, args, context, valid, approved) {
     const key = this.key(actor), handler = this.handlers.get(args.method);
-      let state, value, error, confirmation, delivery;
+      let state, value, error, confirmation, delivery, refusal;
       try {
         await valid();
         if (this.closed) throw Error('Background control is closing');
@@ -337,7 +350,20 @@ class BackgroundControl {
         delivery = await context.delivery?.(args, value, actor, row.guard);
         state = delivery ? delivery.nativeReceived ? 'received' : 'awaiting-native' : 'complete';
       } catch (e) {
-        if (e instanceof ConfirmationRequired) { state = 'confirmation-required'; confirmation = e.confirmation; }
+        if (e instanceof ConfirmationRequired) {
+          // Refresh first; the quota decision and pending-row commit below have
+          // no await between them. Concurrent actors cannot both take slot128.
+          try {
+            await context.refresh?.(); await valid();
+            if (this.closed) throw Error('Background control is closing');
+            const reason = this.confirmationRefusal(actor, args, context, controlGuard(context, args));
+            if (reason) { refusal = refusalDetails(reason); state = refusal.state; }
+            else { state = 'confirmation-required'; confirmation = e.confirmation; }
+          } catch (refreshError) {
+            refusal = refusalDetails('originating-session-unavailable'); state = refusal.state;
+            error = String(refreshError.message || 'The originating session could not be refreshed').slice(0, 2048);
+          }
+        }
         else { state = 'unconfirmed'; error = typeof e.message === 'string' ? e.message.slice(0, 2048) : 'Operation outcome is unconfirmed'; }
       }
       const privateValue = value !== undefined && privateRead(args), readValue = privateValue ? clone(value) : null;
@@ -349,6 +375,7 @@ class BackgroundControl {
         Object.assign(row, { state, finishedAt: this.now(), ...(privateValue ? { readTarget: target, readState: row.readAuthorization ? 'pending' : 'consumed',
           ...(!row.readAuthorization ? { readConsumedAt: this.now() } : {}) } : value === undefined ? {} : { value: clone(value) }),
           ...(delivery ? { delivery } : {}), ...(error ? { error } : {}), ...(confirmation ? { confirmation } : {}) });
+        if (refusal) { Object.assign(row, refusal); compactRefusal(row); }
       });
       const result = await this.finishAudit(actor, args.operation_id, context);
       if (result.state === 'confirmation-required' && result.confirmation?.kind === 'message' && !Object.hasOwn(result, 'confirmationNotifiedAt') && this.confirmationPending) {

@@ -108,7 +108,10 @@ async function run() {
   }
   const commands = await control({ action: 'catalog' }); assert.equal(commands.state, 'complete'); assert.ok(commands.commands.length > 70);
   const publicCommands = await page.evaluate(() => Object.keys(window.workspace).filter(name => !name.startsWith('on') && !['backgroundDecision', 'retryStartup', 'startupData', 'uiReady'].includes(name)));
-  assert.deepEqual(publicCommands.filter(name => !commands.commands.some(c => c.method === name)), [], 'Every normal preload action has a background command');
+  assert.deepEqual(publicCommands.filter(name => name !== 'butlerReview' && !commands.commands.some(c => c.method === name)), [], 'Every shared preload action has a background command');
+  assert.equal(commands.commands.some(c => c.method === 'butlerReview'), false, 'Butler review remains exclusive to the person');
+  const reviewDenied = await control(invoke('butlerReview', ['availability']));
+  assert.equal(reviewDenied.state, 'not-executed'); assert.equal(reviewDenied.reason, 'unknown-command');
   assert.ok(commands.commands.every(c => Array.isArray(c.parameters))); checks.push('Actual stdio MCP catalog through original runtime proof');
   const rename = await control(invoke('rename', [recipient, 'Background renamed recipient']));
   assert.equal(rename.state, 'confirmation-required');

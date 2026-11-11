@@ -428,6 +428,10 @@ function conversationAccess(actor, snapshot) {
   }
   return access;
 }
+function controlRequestActors(client) {
+  return roomState.apply(client.snapshot()).sessions.map(s => ({ id: s.id, nativeId: s.nativeId,
+    archived: s.archived, nativeContextPending: s.nativeContextPending }));
+}
 function projectBackgroundRecord(record, context = null) {
   if (['terminalSnapshot', 'observe', 'terminal'].includes(record.command.method) && record.readAuthorization && record.value !== undefined) {
     try { if (conversationReaderAllowed(record.actor)) return record; } catch { /* Fail closed on an unknown role. */ }
@@ -1144,9 +1148,10 @@ async function boot() {
       const context = { background: true, actor, win, client, view, failed: false };
       context.metadataOnly = () => !conversationReaderAllowed(actor);
       context.refresh = () => client.refresh();
+      context.confirmationActors = () => controlRequestActors(client);
       context.checkActor = async () => {
         await context.refresh();
-        const record = roomState.apply(client.snapshot()).sessions.find(s => s.id === actor.id);
+        const record = context.confirmationActors().find(s => s.id === actor.id);
         if (!record || record.nativeId !== actor.nativeId || record.archived || record.nativeContextPending) throw Error('The originating native session changed');
       };
       context.fingerprint = command => {
