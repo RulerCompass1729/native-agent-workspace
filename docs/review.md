@@ -16,7 +16,12 @@ membership through their existing source resolver; the view's private image
 draft and human-confirmed local-file operations keep their existing paths.
 Own native conversation reads and human windows retain their content.
 
-Conversation and image read values no longer enter the durable operation file.
+Conversation, terminal and image read values no longer enter the durable operation
+file. This includes `terminalSnapshot`, `observe` and `terminal`: cross-session
+approval records an exact native target grant, so the agent receives the copy
+through its own first pickup. Approval in the person's window returns metadata.
+Own-session reads return directly without saving a body. An awaited terminal
+read rechecks the granted native identity before making its frozen result ready.
 An approved foreign read has one frozen, in-memory copy in a shared bounded cache
 (the existing 32 MiB limit); metadata records the target and pickup time. Pickup
 persists consumption before returning a body. A duplicate or later receipt gets
@@ -27,8 +32,9 @@ and no read body can accumulate against the durable file's size limit.
 Regression work also found native approval text in navigation consent guards.
 Those guards now bind its digest, preserving stale-question detection without
 returning or storing the question text. Existing guards migrate the same way.
-Raw execution parameters and native permissions remain unchanged. These are
-author checks pending the integrator's independent delta review.
+Raw execution parameters and native permissions remain unchanged. The initial
+scope was independently approved with notes; the additional terminal-read paths
+are author-tested and pending the integrator's incremental review before install.
 
 **S2 snapshot and consent follow-up, 2026-11-10 (source approved):**
 the person requested fixes for non-session selections, repeated read prompts,

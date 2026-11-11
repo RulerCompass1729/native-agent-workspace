@@ -287,3 +287,49 @@ test('published space images require current membership for every source check; 
   f.state.sessions[0].roomIds = [];
   assert.equal(await previews.options.snapshot({ kind: 'space-draft', roomId: 'shared' }), null);
 });
+const terminalReadBodies = {
+  terminalSnapshot: { buffer: 'TERMINAL_PRIVATE_SCREEN\r\n中文', sequence: 7, cols: 80, rows: 24 },
+  observe: { terminal: 'OBSERVE_PRIVATE_SCREEN', progress: { items: [{ text: 'OBSERVE_PRIVATE_PROGRESS' }], revision: 1 } },
+  terminal: '\u001b[31mTERMINAL_PRIVATE_SERIALIZED\u001b[0m',
+};
+for (const provider of ['claude', 'codex']) for (const [method, body] of Object.entries(terminalReadBodies)) test(`${provider} approved ${method}: person gets metadata, agent collects once, no durable body`, async t => {
+  const f = fixture(t, provider); let reads = 0;
+  f.config.handlers.set(method, (_c, id) => { assert.equal(id, 'other'); reads++; return body; });
+  const args = command(method, ['other']), pending = await f.controller.call(f.binding, args);
+  assert.equal(pending.state, 'confirmation-required'); assert.equal(reads, 0);
+  const approved = await f.controller.decide('agent', 'native-agent', pending.id, 1);
+  assert.equal(approved.state, 'complete'); assert.equal(approved.value, undefined); assert.equal(approved.readState, 'available');
+  assert.deepEqual(approved.readAuthorization, { sessionId: 'other', nativeId: 'native-other' });
+  assert.equal(approved.readTarget.name, 'Other 中文');
+  assert.ok(f.controller.data.records.every(r => !Object.hasOwn(r, 'value')));
+  assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('_PRIVATE_'), false);
+  const first = await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id }); assert.deepEqual(first.receipt.value, body);
+  assert.equal(first.receipt.readState, 'consumed');
+  assert.equal((await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt.value, undefined);
+  assert.equal((await f.controller.call(f.binding, args)).value, undefined); assert.equal(reads, 1);
+});
+for (const [method, body] of Object.entries(terminalReadBodies)) test(`own ${method} returns directly and never stores a terminal body`, async t => {
+  const f = fixture(t); f.config.handlers.set(method, () => body);
+  const args = command(method, ['agent']), first = await f.controller.call(f.binding, args);
+  assert.equal(first.state, 'complete'); assert.deepEqual(first.value, body); assert.equal(first.readState, 'consumed');
+  assert.equal((await f.controller.call(f.binding, { action: 'receipt', operation_id: args.operation_id })).receipt.value, undefined);
+  assert.equal((await f.controller.call(f.binding, args)).value, undefined);
+  assert.ok(f.controller.data.records.every(r => !Object.hasOwn(r, 'value')));
+  assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('_PRIVATE_'), false);
+});
+for (const [method, body] of Object.entries(terminalReadBodies)) test(`legacy ${method} copies are purged on load`, t => {
+  const f = fixture(t), args = command(method, ['other'], 'legacy-terminal-read');
+  fs.writeFileSync(f.controller.file, JSON.stringify({ version: 1, views: {}, records: [{ id: args.operation_id, actor: { ...f.actor, callId: 'old-call', turnId: 'old-turn', operationId: args.operation_id }, command: args, state: 'complete', value: body }] }), { mode: 0o600 });
+  const cold = new BackgroundControl(f.config);
+  assert.equal(cold.data.records[0].value, undefined); assert.equal(cold.data.records[0].readState, 'expired');
+  assert.equal(cold.data.records[0].readTarget.sessionId, 'other');
+  assert.equal(fs.readFileSync(cold.file, 'utf8').includes('_PRIVATE_'), false);
+});
+for (const method of Object.keys(terminalReadBodies)) test(`${method} refuses a native target replacement during its awaited read`, async t => {
+  const f = fixture(t); f.config.handlers.set(method, async () => { f.state.sessions[1].nativeId = 'replacement-during-terminal-read'; return terminalReadBodies[method]; });
+  const pending = await f.controller.call(f.binding, command(method, ['other']));
+  const approved = await f.controller.decide('agent', 'native-agent', pending.id, 1);
+  assert.equal(approved.state, 'unconfirmed'); assert.equal(approved.value, undefined);
+  assert.equal((await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt.value, undefined);
+  assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('_PRIVATE_'), false);
+});
