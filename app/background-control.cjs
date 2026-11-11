@@ -2,10 +2,33 @@
 // browser debugger, provider connection, synthetic keyboard or permission API.
 const fs = require('node:fs');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const operation = require('./background-operation.cjs');
 const clone = v => JSON.parse(JSON.stringify(v));
+const MAX_RECORD_BYTES = 32 * 1024 * 1024;
+const privateReads = new Set(['initial', 'previewImage', 'expandImage']);
+const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value) ? value : 'sha256:' + createHash('sha256').update(JSON.stringify(value)).digest('hex');
+function hideApprovalBodies(guard) {
+  for (const session of Array.isArray(guard?.sessions) ? guard.sessions : []) for (const key of ['approval', 'nativeApproval'])
+    if (session?.[key] != null) session[key] = digest(session[key]);
+  return guard;
+}
+const controlGuard = (context, command) => hideApprovalBodies(clone(context.fingerprint?.(command) || null));
+function compactRead(record) {
+  if (record.guard?.auditRooms) record.guard = { auditRooms: record.guard.auditRooms };
+  else delete record.guard;
+}
+function readTarget(record, value) {
+  const source = record.command.arguments?.[0];
+  const id = record.readAuthorization?.sessionId || (record.command.method === 'initial' ? source || value?.viewState?.selected || record.actor.id : source?.sessionId);
+  if (typeof id !== 'string' || !id) return typeof source?.roomId === 'string' ? { roomId: source.roomId } : null;
+  const session = value?.sessions?.find(s => s.id === id);
+  let name = session?.name;
+  if (!name) try { name = JSON.parse(record.confirmation?.options?.detail).references?.find(r => r.kind === 'session' && r.id === id)?.name; } catch { /* Legacy receipts may have no named reference. */ }
+  return { sessionId: id, nativeId: record.readAuthorization?.nativeId || session?.nativeId || (id === record.actor.id ? record.actor.nativeId : null),
+    ...(typeof name === 'string' ? { name: operation.visibleText(name) } : {}) };
+}
 const token = v => typeof v === 'string' && v.length > 0 && v.length <= 160 && !/[\x00-\x1f\x7f]/.test(v);
 // Parameters use the existing application's names and order. All values still
 // pass its normal validators. Snapshot supplies current native/turn identities.
@@ -63,27 +86,45 @@ class ConfirmationRequired extends Error {
   constructor(value) { super('This operation needs the existing human confirmation'); this.confirmation = clone(value); }
 }
 class BackgroundControl {
-  constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now }) {
+  constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now, readCopyBytes = MAX_RECORD_BYTES }) {
+    if (!Number.isSafeInteger(readCopyBytes) || readCopyBytes < 1 || readCopyBytes > MAX_RECORD_BYTES) throw Error('Invalid read copy budget');
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
     this.data = { version: 1, records: [], views: {} }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
     this.confirmation = confirmation; this.audit = audit;
     this.confirmationPending = confirmationPending;
     this.project = project;
+    this.readCopies = new Map(); this.readBytes = 0; this.readCopyBytes = readCopyBytes;
     try {
       const st = fs.lstatSync(this.file);
-      if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1 || st.uid !== process.getuid() || st.mode & 0o077 || st.size > 32 * 1024 * 1024) throw Error('Unsafe background operation record');
+      if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1 || st.uid !== process.getuid() || st.mode & 0o077 || st.size > MAX_RECORD_BYTES) throw Error('Unsafe background operation record');
       this.data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       if (this.data.version !== 1 || !Array.isArray(this.data.records) || this.data.records.some(r => !token(r.id) || !r.actor || !r.command || !token(r.state))) throw Error('Invalid background operation record');
       this.data.views ||= {};
       // A process died after recording intent. No automatic replay.
-      if (this.data.records.some(r => r.state === 'running')) this.commit(d => { for (const r of d.records) if (r.state === 'running') r.state = 'unconfirmed'; });
+      if (this.data.records.some(r => r.state === 'running' || ['available', 'pending'].includes(r.readState) || privateReads.has(r.command.method) && Object.hasOwn(r, 'value') ||
+          Array.isArray(r.guard?.sessions) && r.guard.sessions.some(s => ['approval', 'nativeApproval'].some(k => s?.[k] != null && s[k] !== digest(s[k]))))) this.commit(d => {
+        for (const r of d.records) {
+          if (r.state === 'running') r.state = 'unconfirmed';
+          if (['available', 'pending'].includes(r.readState)) { r.readState = 'expired'; r.readReason = 'restart'; }
+        }
+      });
     } catch (e) { if (e.code !== 'ENOENT') { this.failed = true; throw e; } }
   }
   commit(change) {
     if (this.failed) throw Error('Background operation storage is unavailable');
     const next = clone(this.data); change(next);
+    // Read bodies never belong to the durable operation log, including legacy
+    // values loaded from an earlier build. A bounded, one-use cache holds them.
+    for (const r of next.records) {
+      hideApprovalBodies(r.guard);
+      if (privateReads.has(r.command.method) && Object.hasOwn(r, 'value')) {
+        r.readTarget ||= readTarget(r, r.value); delete r.value;
+        r.readState = 'expired'; r.readReason = 'legacy-copy';
+      }
+      if (privateReads.has(r.command.method) && ['available', 'consumed', 'expired'].includes(r.readState) && !['running', 'confirmation-required'].includes(r.state)) compactRead(r);
+    }
     const text = JSON.stringify(next);
-    if (Buffer.byteLength(text) > 32 * 1024 * 1024) throw Error('Background operation record is full; existing records are retained');
+    if (Buffer.byteLength(text) > MAX_RECORD_BYTES) throw Error('Background operation record is full; existing records are retained');
     const temporary = `${this.file}.${randomUUID()}.tmp`; let renamed = false;
     try {
       const fd = fs.openSync(temporary, 'wx', 0o600);
@@ -113,9 +154,33 @@ class BackgroundControl {
     await this.view(sender, viewId);
     return { view_id: viewId, visible: false };
   }
-  receipt(sender, id) {
+  receipt(sender, id, context = null) {
     const record = this.data.records.find(r => r.id === id && this.key(r.actor) === this.key(sender));
-    return record ? this.project(clone(record)) : null;
+    return record ? this.project(clone(record), context) : null;
+  }
+  rememberRead(actor, id, value) {
+    const key = this.key(actor) + ':' + id, bytes = Buffer.byteLength(JSON.stringify(value)), expired = [];
+    let retained = this.readBytes;
+    for (const [oldKey, entry] of !this.closed && bytes <= this.readCopyBytes ? this.readCopies : []) {
+      if (retained + bytes <= this.readCopyBytes) break;
+      expired.push(oldKey); retained -= entry.bytes;
+    }
+    this.commit(d => {
+      for (const r of d.records) if (expired.includes(this.key(r.actor) + ':' + r.id)) { r.readState = 'expired'; r.readReason = 'copy-budget'; }
+      const r = d.records.find(r => r.id === id && this.key(r.actor) === this.key(actor));
+      r.readState = this.closed || bytes > this.readCopyBytes ? 'expired' : 'available';
+      if (r.readState === 'expired') r.readReason = this.closed ? 'closed' : 'copy-budget';
+    });
+    for (const oldKey of expired) { this.readBytes -= this.readCopies.get(oldKey).bytes; this.readCopies.delete(oldKey); }
+    if (!this.closed && bytes <= this.readCopyBytes) { this.readCopies.set(key, { value, bytes }); this.readBytes += bytes; }
+  }
+  takeReceipt(sender, id, context) {
+    const key = this.key(sender) + ':' + id, copy = this.readCopies.get(key);
+    if (!copy) return this.receipt(sender, id, context);
+    // Persist consumption before exposing any body. A crash cannot replay it.
+    this.commit(d => { const r = d.records.find(r => r.id === id && this.key(r.actor) === this.key(sender)); r.readState = 'consumed'; r.readConsumedAt = this.now(); });
+    this.readCopies.delete(key); this.readBytes -= copy.bytes;
+    return this.project({ ...this.receipt(sender, id), value: clone(copy.value) }, context);
   }
   async publish(record, context) {
     if (!operation.maintenanceAction(record.command.method, record.command.arguments, record.actor)) return;
@@ -141,12 +206,14 @@ class BackgroundControl {
     if (args.action === 'catalog') return { state: 'complete', commands: this.catalog(), background: true };
     if (args.action === 'receipt') {
       const saved = this.receipt(sender, args.operation_id);
+      let context = null;
       if (saved) {
-        const context = await this.view(sender, saved.command.view_id);
+        context = await this.view(sender, saved.command.view_id);
+        if (privateReads.has(saved.command.method)) { await context.refresh?.(); await valid(); }
         const delivery = await context.delivery?.(saved.command, saved.value, saved.actor, saved.guard);
         if (delivery) this.commit(d => { const r = d.records.find(r => r.id === saved.id && this.key(r.actor) === this.key(sender)); r.delivery = delivery; if (delivery.nativeReceived) r.state = 'received'; });
       }
-      return { state: 'complete', receipt: this.receipt(sender, args.operation_id), retry: false };
+      return { state: 'complete', receipt: this.takeReceipt(sender, args.operation_id, context), retry: false };
     }
     const context = await this.view(sender, args.view_id); await valid();
     const selected = args.action === 'snapshot' || args.method === 'initial' ? context.view.selected : null;
@@ -163,14 +230,15 @@ class BackgroundControl {
     if (implicitSnapshot) {
       const pending = this.data.records.findLast(r => this.key(r.actor) === this.key(sender) && r.state === 'confirmation-required' &&
         isDeepStrictEqual({ ...r.command, operation_id: args.operation_id }, args));
-      if (pending && isDeepStrictEqual(pending.guard, clone(context.fingerprint?.(args) || null)))
+      if (pending && isDeepStrictEqual(pending.guard, controlGuard(context, args)))
         return { ...this.receipt(sender, pending.id), duplicate: true, retry: false };
     }
     const existing = this.receipt(sender, args.operation_id);
     if (existing) {
       if (!isDeepStrictEqual(existing.command, args)) throw Error('operation_id already belongs to a different command');
       await this.publish(existing, context);
-      return { ...existing, duplicate: true, retry: false };
+      if (privateReads.has(args.method)) { await context.refresh?.(); await valid(); }
+      return { ...this.takeReceipt(sender, args.operation_id, context), duplicate: true, retry: false };
     }
     const handler = !['backgroundDecision', 'uiReady'].includes(args.method) && this.handlers.get(args.method);
     const key = this.key(sender);
@@ -178,7 +246,7 @@ class BackgroundControl {
     const refuse = reason => {
       const refusal = { state: 'not-executed', reason, method: args.method, retry: false };
       if (!operation.maintenanceAction(args.method, args.arguments, actor)) return refusal;
-      this.commit(d => d.records.push({ id: args.operation_id, actor, command: args, guard: clone(context.fingerprint?.(args) || null), ...refusal, at: this.now() }));
+      this.commit(d => d.records.push({ id: args.operation_id, actor, command: args, guard: controlGuard(context, args), ...refusal, at: this.now() }));
       return this.finishAudit(actor, args.operation_id, context);
     };
     if (!handler || this.inflight.has(key)) return refuse(handler ? 'another-operation-running' : 'unknown-command');
@@ -187,7 +255,7 @@ class BackgroundControl {
     await context.refresh?.(); await valid();
     if (this.inflight.has(key)) return refuse('another-operation-running');
     // Save intent before calling ANY mutation, including an independent draft.
-    const guard = clone(context.fingerprint?.(args) || null);
+    const guard = controlGuard(context, args);
     this.commit(d => d.records.push({ id: args.operation_id, actor, command: args, guard, state: 'running', at: this.now() }));
     return this.execute(actor, args, context, valid);
   }
@@ -209,7 +277,7 @@ class BackgroundControl {
         await valid();
         if (this.closed) throw Error('Background control is closing');
         const row = this.receipt(actor, args.operation_id);
-        if (row.guard && !isDeepStrictEqual(row.guard, clone(context.fingerprint?.(args)))) throw Error('The operation target changed before execution');
+        if (row.guard && !isDeepStrictEqual(row.guard, controlGuard(context, args))) throw Error('The operation target changed before execution');
         const request = { context, args, actor, guard: row.guard, valid, approved, dialogIndex: 0 };
         value = await operation.run(actor, async () => {
           const action = operation.maintenanceAction(args.method, args.arguments, actor);
@@ -235,18 +303,29 @@ class BackgroundControl {
         if (e instanceof ConfirmationRequired) { state = 'confirmation-required'; confirmation = e.confirmation; }
         else { state = 'unconfirmed'; error = typeof e.message === 'string' ? e.message.slice(0, 2048) : 'Operation outcome is unconfirmed'; }
       }
+      const privateValue = value !== undefined && privateReads.has(args.method), readValue = privateValue ? clone(value) : null;
+      const target = privateValue ? readTarget(this.data.records.find(r => r.id === args.operation_id && this.key(r.actor) === key), readValue) : null;
       this.commit(d => {
         const row = d.records.find(r => r.id === args.operation_id && this.key(r.actor) === key);
         d.views[key + ':' + (args.view_id || 'default')] = clone(context.view);
         delete row.confirmation;
-        Object.assign(row, { state, finishedAt: this.now(), ...(value === undefined ? {} : { value: clone(value) }), ...(delivery ? { delivery } : {}), ...(error ? { error } : {}), ...(confirmation ? { confirmation } : {}) });
+        Object.assign(row, { state, finishedAt: this.now(), ...(privateValue ? { readTarget: target, readState: row.readAuthorization ? 'pending' : 'consumed',
+          ...(!row.readAuthorization ? { readConsumedAt: this.now() } : {}) } : value === undefined ? {} : { value: clone(value) }),
+          ...(delivery ? { delivery } : {}), ...(error ? { error } : {}), ...(confirmation ? { confirmation } : {}) });
       });
       const result = await this.finishAudit(actor, args.operation_id, context);
       if (result.state === 'confirmation-required' && result.confirmation?.kind === 'message' && !result.confirmationNotifiedAt && this.confirmationPending) {
         this.commit(d => { d.records.find(r => r.id === result.id && this.key(r.actor) === key).confirmationNotifiedAt = this.now(); });
         try { await this.confirmationPending(this.receipt(actor, result.id)); } catch { /* The durable confirmation remains available. */ }
       }
-      return { ...this.receipt(actor, args.operation_id), retry: false };
+      if (privateValue && result.state === 'complete') {
+        if (result.readAuthorization) this.rememberRead(actor, args.operation_id, readValue);
+        else return { ...this.project({ ...this.receipt(actor, args.operation_id), value: readValue }, context), retry: false };
+      }
+      if (privateValue && result.state !== 'complete') this.commit(d => {
+        const r = d.records.find(r => r.id === args.operation_id && this.key(r.actor) === key); r.readState = 'expired'; r.readReason = 'audit-failed';
+      });
+      return { ...this.receipt(actor, args.operation_id, context), retry: false };
   }
   async decide(sessionId, nativeId, id, response) {
     const row = this.data.records.find(r => r.actor.id === sessionId && r.actor.nativeId === nativeId && r.id === id);
@@ -281,13 +360,14 @@ class BackgroundControl {
   }
   async close() {
     this.closed = true;
+    this.readCopies.clear(); this.readBytes = 0;
     // Close our connections first so a queued native wait cannot hold GUI quit.
     // The native session and any input already accepted by it remain untouched.
     const contexts = await Promise.allSettled([...this.contexts.values()]);
     for (const item of contexts) if (item.status === 'fulfilled') {
       const c = item.value; c.client.close(); if (!c.win.isDestroyed?.()) c.win.destroy();
     }
-    this.contexts.clear(); await Promise.allSettled([...this.inflight.values()]);
+    this.contexts.clear(); await Promise.allSettled([...this.inflight.values()]); this.readCopies.clear(); this.readBytes = 0;
   }
 }
 function visibleOptions(options) {
