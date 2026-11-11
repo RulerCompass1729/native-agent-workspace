@@ -104,8 +104,9 @@ function checkState(data) {
   if (handoff === null) { if (handed.length) throw fail('A handed delivery has no handoff'); }
   else if (!handoff || typeof handoff !== 'object' || !plain(handoff.id, 100) || !['sent', 'waiting'].includes(handoff.status) || !identity(handoff.integrator) ||
       !sha(handoff.mainHead) || !Number.isFinite(handoff.sentAt) || !(handoff.tag === null || plain(handoff.tag, 200)) ||
-      (handoff.reason !== undefined && (handoff.status !== 'waiting' || reasonKey(handoff.reason) === null)) || optional(handoff.question, 200) === null ||
-      !Array.isArray(handoff.keys) || !handoff.keys.length || new Set(handoff.keys).size !== handoff.keys.length ||
+      (handoff.status === 'waiting') !== (handoff.reason !== undefined) || (handoff.reason !== undefined && reasonKey(handoff.reason) === null) || optional(handoff.question, 200) === null ||
+      // A handoff that waits for the person keeps its place even when every delivery in it already has its outcome.
+      !Array.isArray(handoff.keys) || !handoff.keys.length && handoff.status !== 'waiting' || new Set(handoff.keys).size !== handoff.keys.length ||
       handoff.keys.length !== handed.length || handoff.keys.some(key => !handed.includes(key))) throw fail('Invalid open handoff');
   for (const [key, reason] of Object.entries(data.reasons)) {
     if (reasonKey(key) === null || !reason || typeof reason !== 'object' || typeof reason.open !== 'boolean' || !NOTICE_STATES.includes(reason.notice) ||
@@ -149,6 +150,7 @@ function handoffText(handoffId, entries, options = {}) {
     `node scripts/integrator-lock.cjs run --owner "<你的会话名>" --reason "integrate ${handoffId}" --delegation ${handoffId} --checkpoint <检查点文件> -- git merge --ff-only <提交号>`,
     '', '做完后每个 READY 回一行，用它自己的提交号：',
     'MERGED <READY 的提交号> as <main 上的提交号> tests <通过数/总数>（独审过再加 review <审查号>）',
+    '（as 写 main 上已经包含这一件全部改动的那个提交；一批一起合入时，可以都写合入后的 main 头。）',
     'RETURNED <READY 的提交号> <原因>（提交已经不在那个分支上，原因写 stale-commit）',
     'HELD <READY 的提交号> <原因>（原因只用：review-off、review-cap、checkpoint-invalid、lock-held:<占着锁的 owner>；多人冲突写 conflict）',
     '只有多人冲突要用户定的时候，回复的第一行写「需要你决定：」。');
@@ -159,16 +161,18 @@ function handoffText(handoffId, entries, options = {}) {
 //   MERGED <commit> as <main commit> tests <passed>/<total> [review <id>]
 //   RETURNED <commit> <reason>
 //   HELD <commit> <reason>
-// Backticks and asterisks around the parts, extra spaces and one final full stop are tolerated; a
-// line that starts with a list or quote mark is someone else's line and is not read. The last
-// line about a delivery counts. A commit that names none or several of the deliveries is ignored.
+// Backticks and asterisks around the parts, a list mark or a number in front, extra spaces and
+// one final full stop are tolerated; a quoted line (>) is someone else's line and is not read.
+// The last line about a delivery counts. A line that begins like a result but cannot be read,
+// or whose commit names none or several of the deliveries, is counted as ignored.
 function parseResults(text, entries) {
   const results = {};
   let ignored = 0;
   for (const raw of (typeof text === 'string' ? text : '').split(/\r\n|[\n\r]/u)) {
-    const line = raw.replace(/[`*]/gu, '').replace(/\s+/gu, ' ').trim().replace(/[.。]$/u, '');
+    const line = raw.replace(/[`*]/gu, '').replace(/\s+/gu, ' ').trim().replace(/^(?:[-•–—]|\d{1,3}[.)、）]) ?/u, '').replace(/[.。]$/u, '');
+    if (!/^(?:MERGED|RETURNED|HELD)(?: |$)/u.test(line)) continue;
     const match = /^(MERGED|RETURNED|HELD) ([0-9a-fA-F]{7,40})(?: (.*))?$/u.exec(line);
-    if (!match) continue;
+    if (!match) { ignored += 1; continue; }
     const commit = match[2].toLowerCase(), rest = (match[3] || '').trim();
     const named = entries.filter(entry => entry.commit.startsWith(commit) || commit.startsWith(entry.commit));
     if (named.length !== 1) { ignored += 1; continue; }
@@ -183,11 +187,29 @@ function parseResults(text, entries) {
   }
   return { results, ignored };
 }
+// The reason word of a HELD line: the first word, so a comment after it does not change what the
+// reason is. The owner of a held lock may contain spaces and ends at a bracket or a comma.
+function heldReason(text) {
+  const lock = /^lock-held:\s*([^（(，,；;。]+)/u.exec(text);
+  if (lock) return `lock-held:${lock[1].trim()}`;
+  return (/^[^\s（(，,；;。:：]+/u.exec(text) || [''])[0];
+}
+// A result as parseResults gives it. Anything else is refused before it is acted on.
+function validResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
+  if (result.kind === 'merged') {
+    return result.malformed === true || typeof result.as === 'string' && /^[0-9a-f]{7,40}$/u.test(result.as) &&
+      Number.isSafeInteger(result.tests?.passed) && Number.isSafeInteger(result.tests?.total) && (result.review === undefined || typeof result.review === 'string');
+  }
+  return ['returned', 'held'].includes(result.kind) && typeof result.reason === 'string' && result.reason.length > 0;
+}
 
 // Whether a reported merge is what it says, asked of git through the given reader (read-only):
 // 1. the named main commit is on main now;
 // 2. it was not on main when the handoff began, so it was merged during this handoff;
-// 3. every change the delivery holds relative to that earlier main is among the changes merged since.
+// 3. every commit the delivery holds relative to that earlier main is among what was merged up to
+//    the named commit: as the very same commit (a fast-forward) or as a commit with the same
+//    change (a cherry-pick). So the named commit is one that holds the whole delivery.
 // Anything git cannot answer counts as not verified.
 async function verifyMerged(read, claim) {
   const no = why => ({ verified: false, why });
@@ -196,24 +218,29 @@ async function verifyMerged(read, claim) {
   if (!as || !ready) return no('unknown-commit');
   if (await read.isAncestor(as, claim.mainHead) !== true) return no('not-on-main');
   if (await read.isAncestor(as, claim.startHead) !== false) return no('not-new');
-  const delivered = await read.changes(claim.startHead, ready), merged = await read.changes(claim.startHead, claim.mainHead);
+  const delivered = await read.changes(claim.startHead, ready), merged = await read.changes(claim.startHead, as);
   if (!delivered || !merged || !delivered.length) return no('no-changes');
-  const landed = new Set(merged.map(entry => entry.change).filter(Boolean));
-  if (!delivered.every(entry => entry.change && landed.has(entry.change))) return no('changes-differ');
+  const commits = new Set(merged.map(entry => entry.commit)), landed = new Set(merged.map(entry => entry.change).filter(Boolean));
+  if (!delivered.every(entry => commits.has(entry.commit) || Boolean(entry.change) && landed.has(entry.change))) return no('changes-differ');
   return { verified: true, as };
 }
-// The verdict for every MERGED line of a planned settlement, keyed by delivery.
+// The verdict for every MERGED line of a planned settlement, keyed by delivery, together with the
+// handoff and the main head they were checked for: settle() takes exactly this.
 async function verifyResults(read, state, action, mainHead) {
-  const verdicts = {};
-  if (!state.handoff || state.handoff.id !== action?.handoffId) return verdicts;
+  const checked = { handoffId: action?.handoffId, mainHead, verified: {} };
+  if (!state.handoff || state.handoff.id !== action?.handoffId) return checked;
+  // Each question is asked of git once, however many deliveries of the handoff need the answer.
+  const asked = new Map();
+  const once = name => (...args) => { const id = JSON.stringify([name, ...args]); if (!asked.has(id)) asked.set(id, read[name](...args)); return asked.get(id); };
+  const cached = { commit: once('commit'), isAncestor: once('isAncestor'), changes: once('changes') };
   for (const [key, result] of Object.entries(action.results?.results || {})) {
     const entry = state.ready.find(candidate => candidate.key === key);
-    if (!entry || result.kind !== 'merged') continue;
-    verdicts[key] = result.malformed ? { verified: false, why: 'unreadable-line' }
+    if (!entry || !validResult(result) || result.kind !== 'merged') continue;
+    checked.verified[key] = result.malformed ? { verified: false, why: 'unreadable-line' }
       : result.tests.total < 1 || result.tests.passed !== result.tests.total ? { verified: false, why: 'tests-not-all-passed' }
-      : await verifyMerged(read, { ready: entry.commit, as: result.as, startHead: state.handoff.mainHead, mainHead });
+      : await verifyMerged(cached, { ready: entry.commit, as: result.as, startHead: state.handoff.mainHead, mainHead });
   }
-  return verdicts;
+  return checked;
 }
 
 // When a handoff is open: whether it can be settled now, by the same times and fall-backs as a queue item.
@@ -228,6 +255,9 @@ function planSettle(state, seen) {
     return Number.isFinite(now) && now - handoff.sentAt > (seen.unconfirmedMs ?? UNCONFIRMED_SEND_MS) ? settle('failed', 'send-unconfirmed') : none('send-pending');
   }
   const integrator = identity(seen.integrator), session = seen.session, own = handoff.integrator;
+  // Only "nobody" (null) or another session says the designation was taken away. A designation
+  // that could not be read is not a revocation: nothing is decided from it.
+  if (seen.integrator !== null && !integrator) return none('designation-unknown');
   const designated = Boolean(integrator) && integrator.sessionId === own.sessionId && integrator.nativeId === own.nativeId;
   if (!designated) return settle('failed', `integrator-missing:${own.sessionId}`);
   if (!session || session.archived || session.id !== own.sessionId || session.nativeId !== own.nativeId) {
@@ -240,8 +270,10 @@ function planSettle(state, seen) {
   const controlChanged = Number.isSafeInteger(handoff.control) && (session.controlRevision || 0) !== handoff.control;
   if (reply.humanAfter || controlChanged) return settle('waiting', 'person-intervened');
   if (!reply.last.trim()) return settle('waiting', 'no-reply');
-  const results = parseResults(reply.last, state.ready.filter(entry => handoff.keys.includes(entry.key)));
-  // The first line decides the handoff's state; the lines about each delivery are read either way.
+  // The lines about each delivery are read from everything the integrator wrote after the handoff,
+  // so a closing remark after them loses nothing; the last line about a delivery counts.
+  const results = parseResults(reply.text, state.ready.filter(entry => handoff.keys.includes(entry.key)));
+  // The first line of the last message decides the handoff's state; the lines are read either way.
   return startsWithDecision(reply.last) ? settle('waiting', '', { decision: true, question: decisionLine(reply.last), results }) : settle('done', '', { results });
 }
 
@@ -255,7 +287,9 @@ function plan(state, input) {
   const deliverable = state.ready.filter(entry => entry.state === 'deliverable').slice(0, HANDOFF_LIMIT);
   if (!deliverable.length) return none('nothing-deliverable');
   const integrator = identity(seen.integrator);
-  if (!integrator) return state.reasons['integrator-unset']?.open ? none('integrator-asked') : { kind: 'ask-integrator', reason: 'integrator-unset' };
+  // "Nobody designated" is said with null. A designation that could not be read asks nothing.
+  if (seen.integrator === null) return state.reasons['integrator-unset']?.open ? none('integrator-asked') : { kind: 'ask-integrator', reason: 'integrator-unset' };
+  if (!integrator) return none('designation-unknown');
   const session = seen.session;
   if (!session || session.archived || session.id !== integrator.sessionId || session.nativeId !== integrator.nativeId) {
     // Only a complete session list can say the designated session is gone.
@@ -442,14 +476,17 @@ class IntegrationHandoffs {
   }
 
   // Carry out a planned settlement of the open handoff (plan's 'settle' action). `checked` is
-  // what git said about each MERGED line ({ verified: { [key]: { verified, as } }, mainHead }),
-  // from verifyResults. Returns what happened to each delivery, the reasons the person is to be
-  // told about, and the main commit that may now be installed.
-  // - A merge counts only when all three checks held and every test passed; otherwise the
-  //   delivery is held as merge-unverified and is not handed again by itself.
+  // what verifyResults returned: what git said about each MERGED line, for this handoff and the
+  // main head it was asked about ({ handoffId, mainHead, verified: { [key]: { verified, as } } }).
+  // Returns what happened to each delivery, the reasons the person is to be told about, the
+  // question the integrator asked, and the main commit that may now be installed.
+  // - A merge counts only when the checks were made for this handoff, all three held for the
+  //   commit the line names, and every test passed; otherwise the delivery is held as
+  //   merge-unverified and is not handed again by itself.
   // - A delivery without a result line is handed once more by itself, then held.
   // - A failed handoff holds all its deliveries under the failure; nothing is sent again.
-  // - A waiting handoff keeps the one place until the person resolves it.
+  // - A handoff whose reply asks the person to decide waits, whatever its lines say. A waiting
+  //   handoff keeps the one place until the person resolves it (resolveHandoff, or retry on its reason).
   settle(action, checked = {}, now = Date.now()) {
     const next = this.draft();
     const handoff = next.handoff;
@@ -459,7 +496,9 @@ class IntegrationHandoffs {
     const tell = intent => { if (intent) notify.push(intent.reason); };
     const fact = (entry, outcome, extra = {}) => facts.push({ key: entry.key, roomId: entry.roomId, itemId: entry.itemId, branch: entry.branch, commit: entry.commit, outcome, ...extra });
     const held = (entry, reason) => { tell(this.leave(next, entry, 'held', reason, now)); fact(entry, entry.state, entry.state === 'held' ? { reason } : {}); };
-    let install = null;
+    let install = null, question = null;
+    // The checks count only for the handoff and main head they were made for.
+    const bound = Boolean(checked) && checked.handoffId === handoff.id && sha(checked.mainHead);
     if (action.status === 'failed') {
       if (!['send-unconfirmed', 'record-missing', `integrator-missing:${handoff.integrator.sessionId}`].includes(action.reason)) throw fail('Unknown failure');
       next.handoff = null;
@@ -471,19 +510,23 @@ class IntegrationHandoffs {
       tell(this.occur(next, action.reason, now, action.reason === 'person-intervened'));
       for (const entry of entries) fact(entry, 'waiting', { reason: action.reason });
     } else if (action.status === 'done' || action.status === 'waiting') {
-      const results = action.results?.results || {}, conflict = `conflict:${handoff.id}`;
+      const results = action.results?.results || {}, conflict = `conflict:${handoff.id}`, asking = action.status === 'waiting';
       let merged = 0;
       for (const entry of entries) {
         const result = results[entry.key];
-        // With a decision asked, a delivery without a line stays inside the waiting handoff.
-        if (!result && action.status === 'waiting') { fact(entry, 'waiting', { reason: conflict }); continue; }
+        if (result !== undefined && !validResult(result)) throw fail('Unknown result');
+        const word = result?.kind === 'held' ? heldReason(result.reason) : '';
+        // With a decision asked, a delivery without a line, or one held for the conflict itself,
+        // stays inside the waiting handoff: it is the person's to release or to leave held.
+        if (asking && (!result || word === 'conflict')) { fact(entry, 'waiting', { reason: conflict }); continue; }
         handoff.keys = handoff.keys.filter(candidate => candidate !== entry.key);
         if (!result) {
           if (entry.resends === 1) held(entry, 'no-result');
           else { this.leave(next, entry, 'deliverable', null, now); if (entry.state === 'deliverable') entry.resends = 1; fact(entry, entry.state === 'deliverable' ? 'again' : entry.state); }
         } else if (result.kind === 'merged') {
-          const verdict = checked.verified?.[entry.key];
-          if (result.malformed !== true && verdict?.verified === true && sha(verdict.as) && sha(checked.mainHead) && result.tests.total > 0 && result.tests.passed === result.tests.total) {
+          const verdict = bound ? checked.verified?.[entry.key] : null;
+          // The commit git verified is the one the line names.
+          if (result.malformed !== true && verdict?.verified === true && sha(verdict.as) && verdict.as.startsWith(result.as) && result.tests.total > 0 && result.tests.passed === result.tests.total) {
             entry.state = 'merged'; entry.closedAt = now; entry.mergedAs = verdict.as; entry.tests = result.tests; delete entry.resends;
             if (result.review) entry.review = label(result.review, 100);
             merged += 1; fact(entry, 'merged', { as: verdict.as, tests: result.tests, ...(entry.review ? { review: entry.review } : {}) });
@@ -495,30 +538,44 @@ class IntegrationHandoffs {
           const task = `${entry.roomId}:${entry.branch}`;
           next.returns[task] = (next.returns[task] || 0) + 1;
           const over = next.returns[task] > RETURN_LIMIT;
-          if (over) tell(this.occur(next, `returned-limit:${entry.branch}`, now));
+          // The question is about the branch of that space, as the count is.
+          if (over) tell(this.occur(next, reasonKey(`returned-limit:${task}`) || `returned-limit:${entry.branch}`, now));
           fact(entry, 'returned', { reason: result.reason, suggestRequeue: !over });
         } else {
-          const word = result.reason;
           const reason = HELD_WORDS.includes(word) ? word : word === 'conflict' ? conflict : word.startsWith('lock-held:') && reasonKey(word) ? word : 'held-other';
-          if (reason === 'held-other') entry.note = word;
+          // Whatever the integrator wrote beyond the reason word is kept as a note.
+          if (reason === 'held-other' || result.reason !== word) entry.note = label(result.reason, 200);
           held(entry, reason);
         }
       }
-      if (action.status === 'waiting' && handoff.keys.length) {
+      if (asking) {
+        // The integrator asked the person: the handoff waits and keeps its place, whatever its lines said.
         handoff.status = 'waiting'; handoff.reason = conflict;
-        const asked = label(action.question, 200); if (asked) handoff.question = asked;
+        const asked = label(action.question, 200); if (asked) { handoff.question = asked; question = asked; }
         tell(this.occur(next, conflict, now));
       } else next.handoff = null;
       // One question per main commit: the head that holds what was just merged. An older one that is
       // still open is replaced, because main has moved on.
-      const key = `installable:${checked.mainHead}`;
-      if (merged && sha(checked.mainHead) && !next.reasons[key]) {
+      const key = `installable:${checked?.mainHead}`;
+      if (merged && bound && !next.reasons[key]) {
         for (const [other, reason] of Object.entries(next.reasons)) if (reason.open && other.startsWith('installable:')) reason.open = false;
         tell(this.occur(next, key, now)); install = { commit: checked.mainHead };
       }
     } else throw fail('Unknown settlement');
     this.commit(next);
-    return { status: action.status, facts, notify, install, ignored: action.results?.ignored || 0 };
+    return { status: action.status, facts, notify, install, question, ignored: action.results?.ignored || 0 };
+  }
+  // End the waiting handoff. With retry what is still inside it may be handed again; without, it
+  // is held under the reason the handoff waited on. Either way the place is free and the question is answered.
+  endWaiting(next, retry, now) {
+    const handoff = next.handoff, reason = handoff.reason, released = [], kept = [];
+    next.handoff = null;
+    for (const entry of next.ready.filter(candidate => handoff.keys.includes(candidate.key))) {
+      this.leave(next, entry, retry ? 'deliverable' : 'held', reason, now);
+      if (entry.state === 'deliverable') released.push(entry.key); else if (entry.state === 'held') kept.push(entry.key);
+    }
+    if (next.reasons[reason]?.open) next.reasons[reason].open = false;
+    return { released, held: kept };
   }
   // The person dealt with a waiting handoff (a decision, no reply, or their own typing). With
   // "retry" what is still inside it may be handed again; without, it stays held under that
@@ -527,15 +584,9 @@ class IntegrationHandoffs {
     const next = this.draft();
     const handoff = next.handoff;
     if (!handoff || handoff.id !== handoffId || handoff.status !== 'waiting') throw fail('No such waiting handoff');
-    const reason = handoff.reason, released = [], kept = [];
-    next.handoff = null;
-    for (const entry of next.ready.filter(candidate => handoff.keys.includes(candidate.key))) {
-      this.leave(next, entry, choice.retry === true ? 'deliverable' : 'held', reason, now);
-      if (entry.state === 'deliverable') released.push(entry.key); else if (entry.state === 'held') kept.push(entry.key);
-    }
-    if (next.reasons[reason]?.open) next.reasons[reason].open = false;
+    const outcome = this.endWaiting(next, choice?.retry === true, now);
     this.commit(next);
-    return { released, held: kept };
+    return outcome;
   }
   // The person answered a question that has no deliveries under it: a main commit to install, or
   // a branch returned too often.
@@ -548,17 +599,14 @@ class IntegrationHandoffs {
     return { answered: true };
   }
 
-  // Hold one delivery for a reason. Used when a handoff's outcome leaves it unprocessed.
+  // Hold one delivery that waits in the backlog for a reason. A delivery inside a handoff is that
+  // handoff's: it leaves only through the settlement, a refused send, or the person resolving it.
   hold(key, reason, now = Date.now()) {
     const next = this.draft();
     const entry = next.ready.find(candidate => candidate.key === key);
-    if (!entry || !['deliverable', 'handed'].includes(entry.state)) throw fail('This delivery cannot be held');
+    if (!entry || entry.state !== 'deliverable') throw fail('This delivery cannot be held');
     // Conditions and questions that have no deliveries under them cannot hold one.
     if (reasonKey(reason) === null || ['integrator-unset', 'backlog-full'].includes(reason) || question(reason)) throw fail('Unknown reason');
-    if (entry.state === 'handed') {
-      next.handoff.keys = next.handoff.keys.filter(candidate => candidate !== key);
-      if (!next.handoff.keys.length) next.handoff = null;
-    }
     const notify = this.leave(next, entry, 'held', reason, now);
     this.commit(next);
     return { notify, state: entry.state };
@@ -604,12 +652,16 @@ class IntegrationHandoffs {
     this.commit(next);
     return { released: [key] };
   }
-  // The person's "retry" on a reason: everything held under it may be handed again. For an
-  // event reason a new occurrence counts as new; a standing condition stays open until it changes.
-  retryReason(reason) {
+  // The person's "retry" on a reason: everything under it may be handed again. For a handoff
+  // that waits on this reason it is the same retry as in resolveHandoff: the handoff ends and
+  // what is inside it comes back too. For an event reason a new occurrence counts as new; a
+  // standing condition stays open until it changes.
+  retryReason(reason, now = Date.now()) {
     const next = this.draft();
     if (reasonKey(reason) === null) throw fail('Unknown reason');
-    const released = this.release(next, candidate => candidate === reason, !standing(reason));
+    const waits = next.handoff?.status === 'waiting' && next.handoff.reason === reason;
+    const released = waits ? this.endWaiting(next, true, now).released : [];
+    released.push(...this.release(next, candidate => candidate === reason, !standing(reason)));
     this.commit(next);
     return { released };
   }

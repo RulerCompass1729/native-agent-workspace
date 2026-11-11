@@ -36,6 +36,12 @@ function openHandoff(backlog, extra) {
   assert.equal(action.kind, 'open', JSON.stringify(action));
   return action;
 }
+// The integrator's reply settles the open handoff: one result for each named delivery.
+function settleLines(backlog, action, results) {
+  return backlog.settle({ kind: 'settle', handoffId: action.handoffId, status: 'done',
+    results: { ignored: 0, results: Object.fromEntries(Object.entries(results).map(([name, result]) => [key(name), result])) } }, {}, NOW);
+}
+const HELD_REVIEW_OFF = { kind: 'held', reason: 'review-off' };
 const emptyState = (extra = {}) => ({ version: 1, seq: 0, ready: [], handoff: null, reasons: {}, refusals: 0, seen: [], capDay: null, returns: {}, ...extra });
 
 test('a delivery is recorded once; an unusable one is refused, and a bad label never loses the delivery', t => {
@@ -83,13 +89,14 @@ test('a delivery inside a handoff that leaves it without an outcome after a newe
   assert.deepEqual(backlog.sendRefused(action.handoffId, NOW), { held: [], notify: null });
   assert.deepEqual(states(backlog), { a: 'superseded', a2: 'deliverable' });
   assert.deepEqual(openHandoff(backlog).keys, [key('a2')], 'Only the newer delivery is handed');
-  // It is held from inside the handoff: no hold, no reason, and its reason changing cannot bring it back.
+  // The integrator holds it from inside the handoff: no hold, no reason, and its reason changing cannot bring it back.
   ({ backlog } = fixture(t));
   backlog.noteReady(ready('a'), NOW); backlog.noteReady(ready('b'), NOW);
   action = openHandoff(backlog);
   backlog.noteReady(ready('a2', { branch: 'lane/a' }), NOW + 1);
-  assert.deepEqual(backlog.hold(key('a'), 'review-off', NOW), { notify: null, state: 'superseded' });
-  assert.deepEqual(backlog.hold(key('b'), 'review-off', NOW), { notify: { reason: 'review-off' }, state: 'held' });
+  const settled = settleLines(backlog, action, { a: HELD_REVIEW_OFF, b: HELD_REVIEW_OFF });
+  assert.deepEqual(settled.facts.map(fact => [fact.itemId, fact.outcome, fact.reason]), [['a', 'superseded', undefined], ['b', 'held', 'review-off']]);
+  assert.deepEqual(settled.notify, ['review-off']);
   assert.deepEqual(backlog.reasonCleared('review-opened'), { released: [key('b')] });
   assert.deepEqual(states(backlog), { a: 'superseded', b: 'deliverable', a2: 'deliverable' });
   // At the refusal limit too: the replaced one is void, the other is held.
@@ -164,7 +171,13 @@ test('an integrator that cannot take a message now gets none, and nothing is los
   const before = JSON.stringify(backlog.snapshot());
   for (const [change, why] of cases) assert.deepEqual(backlog.advance(observed(change), NOW), { kind: 'none', why }, why);
   assert.equal(JSON.stringify(backlog.snapshot()), before, 'Nothing is recorded while the integrator cannot take it');
-  assert.deepEqual(backlog.plan(), { kind: 'ask-integrator', reason: 'integrator-unset' }, 'No observation at all is no integrator');
+  // "Nobody designated" is said with null. A designation that was not read, or not understood, asks nothing.
+  assert.deepEqual(backlog.plan({ integrator: null }), { kind: 'ask-integrator', reason: 'integrator-unset' });
+  for (const unknown of [undefined, {}, 'integrator', { sessionId: 'integrator' }, [INTEGRATOR]]) {
+    assert.deepEqual(backlog.advance(observed({ integrator: unknown }), NOW), { kind: 'none', why: 'designation-unknown' }, JSON.stringify(unknown));
+  }
+  assert.deepEqual(backlog.plan(), { kind: 'none', why: 'designation-unknown' }, 'No observation at all says nothing about the designation');
+  assert.equal(JSON.stringify(backlog.snapshot()), before);
   // The same readiness rule as a queue dispatch decides it.
   assert.equal(rules.sessionReady(integratorSession(), { enabled: true }).ready, true);
   const action = backlog.advance(observed({ humanAt: new Map([[INTEGRATOR.sessionId, NOW - rules.HUMAN_QUIET_MS]]) }), NOW);
@@ -234,9 +247,9 @@ test('a decision is recorded in the step that makes it, so an old one cannot be 
   const second = openHandoff(backlog);
   assert.notEqual(second.handoffId, first.handoffId); assert.match(second.handoffId, /^H2-/);
   assert.deepEqual(second.keys, first.keys);
-  // Delivered, then every delivery held, then retried by the person: the next handoff is a new one.
+  // Delivered, then every delivery held by the integrator, then retried by the person: the next handoff is a new one.
   backlog.confirmSent(second.handoffId, { tag: 'tag-2' }, NOW);
-  backlog.hold(key('a'), 'review-off', NOW);
+  settleLines(backlog, second, { a: HELD_REVIEW_OFF });
   assert.equal(backlog.snapshot().handoff, null);
   backlog.retryReady(key('a'));
   const third = openHandoff(backlog);
@@ -419,13 +432,14 @@ test('a notice starts once, is confirmed after it was shown, and is not sent aga
   assert.deepEqual(restarted.pendingNotices(), ['lock-held:owner-1']);
 });
 
-test('holding a delivery that is inside the open handoff takes it out; the last one closes the handoff', t => {
+test('a delivery inside the open handoff cannot be held from outside; the integrator\'s lines take it out, and the last one ends the handoff', t => {
   const { backlog } = fixture(t);
   backlog.noteReady(ready('a'), NOW); backlog.noteReady(ready('b'), NOW);
   const action = openHandoff(backlog);
-  backlog.hold(key('a'), 'review-off', NOW);
-  assert.deepEqual(backlog.snapshot().handoff.keys, [key('b')]);
-  backlog.hold(key('b'), 'lock-held:owner-1', NOW);
+  const before = JSON.stringify(backlog.snapshot());
+  for (const name of ['a', 'b']) assert.throws(() => backlog.hold(key(name), 'review-off', NOW), { code: 'HANDOFF_STATE' }, name);
+  assert.equal(JSON.stringify(backlog.snapshot()), before, 'The handoff and what is inside it are as they were');
+  settleLines(backlog, action, { a: HELD_REVIEW_OFF, b: { kind: 'held', reason: 'lock-held:owner-1' } });
   assert.equal(backlog.snapshot().handoff, null);
   assert.deepEqual(states(backlog), { a: 'held:review-off', b: 'held:lock-held:owner-1' });
   assert.throws(() => backlog.confirmSent(action.handoffId, { tag: 'late' }, NOW), { code: 'HANDOFF_STATE' });

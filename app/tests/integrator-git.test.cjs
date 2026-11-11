@@ -21,6 +21,10 @@ function fixture(t) {
   return { temporary, repo, git, commit, base, read: reader(repo) };
 }
 
+function fixtureCommit(repo, git) {
+  fs.writeFileSync(path.join(repo, 'named.txt'), 'named\n'); git('add', '--', 'named.txt'); git('commit', '--quiet', '-m', 'Synthetic named change');
+  return git('rev-parse', 'HEAD');
+}
 test('a commit is named by hex digits only, and an unknown or unsafe name is not resolved', async t => {
   const { read, base, git, repo } = fixture(t);
   assert.equal(await read.commit(base), base);
@@ -31,6 +35,15 @@ test('a commit is named by hex digits only, and an unknown or unsafe name is not
   assert.equal(await read.commit(tree), null);
   assert.throws(() => reader('relative/path'));
   assert.equal(await reader(path.join(repo, 'missing')).commit(base), null, 'A folder git cannot read answers null');
+  // A branch or tag named like a short id is found by git before the commit. Such a name is not
+  // taken for the commit it imitates; the full id still names the commit.
+  const next = fixtureCommit(repo, git);
+  git('branch', next.slice(0, 7), base); git('tag', next.slice(0, 12), base);
+  assert.equal(git('rev-parse', '--verify', '--quiet', `${next.slice(0, 7)}^{commit}`), base, 'git itself resolves the name to the branch');
+  assert.equal(await read.commit(next.slice(0, 7)), null);
+  assert.equal(await read.commit(next.slice(0, 12)), null);
+  assert.equal(await read.commit(next.slice(0, 9)), next, 'A short id no ref imitates is still resolved');
+  assert.equal(await read.commit(next), next);
 });
 
 test('ancestry is answered yes, no, or not at all', async t => {
@@ -60,7 +73,7 @@ test('the changes of a range keep their ids across a fast-forward and a cherry-p
   assert.ok(!merged.some(entry => [first, second].includes(entry.commit)), 'The picked commits are new commits');
   const mergedChanges = new Set(merged.map(entry => entry.change));
   assert.ok(delivered.every(entry => mergedChanges.has(entry.change)), 'Every delivered change is found in what was merged');
-  assert.ok(!mergedChanges.has((await read.changes(base, moved))[0].change) === false);
+  assert.ok(mergedChanges.has((await read.changes(base, moved))[0].change), 'The unrelated commit main moved on by is among them too');
   // The same file with other content is another change.
   git('checkout', '--quiet', '-b', 'lane/other', base); const different = commit('one.txt', 'not one\n');
   assert.ok(!mergedChanges.has((await read.changes(base, different))[0].change));
@@ -72,6 +85,19 @@ test('the changes of a range keep their ids across a fast-forward and a cherry-p
   assert.equal(await read.changes(base, 'f'.repeat(40)), null);
   assert.equal(await read.changes(base.slice(0, 7), second), null);
   assert.equal(RANGE_LIMIT, 500);
+});
+
+test('changes that differ only in bytes that are not valid text are different changes', async t => {
+  const { read, base, git, repo } = fixture(t);
+  // The same line in two encodings of one letter: read as text, both would become the same replacement character.
+  const write = (branch, bytes) => { git('checkout', '--quiet', '-b', branch, base); fs.writeFileSync(path.join(repo, 'name.txt'), Buffer.from(bytes)); git('add', '--', 'name.txt'); git('commit', '--quiet', '-m', `Synthetic ${branch}`); return git('rev-parse', 'HEAD'); };
+  const one = write('lane/one', [0x63, 0x61, 0x66, 0xe9, 0x0a]), other = write('lane/other', [0x63, 0x61, 0x66, 0xe8, 0x0a]);
+  const [first] = await read.changes(base, one), [second] = await read.changes(base, other);
+  assert.match(first.change, /^[0-9a-f]{40}$/); assert.match(second.change, /^[0-9a-f]{40}$/);
+  assert.notEqual(first.change, second.change);
+  // The same bytes again are the same change.
+  git('checkout', '--quiet', '-b', 'lane/again', base); git('cherry-pick', one);
+  assert.equal((await read.changes(base, git('rev-parse', 'HEAD')))[0].change, first.change);
 });
 
 test('a merge commit has no single change, so a range holding one is not fully identified', async t => {
@@ -95,7 +121,16 @@ test('reading runs none of the repository\'s own programs and writes nothing', a
   fs.mkdirSync(path.join(repo, '.git/hooks'), { recursive: true });
   for (const hook of ['post-checkout', 'pre-commit', 'reference-transaction']) fs.writeFileSync(path.join(repo, '.git/hooks', hook), `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, { mode: 0o700 });
   commit('.gitattributes', '*.txt diff=evil\n');
-  const next = commit('data.txt', 'data\n');
+  // A repository that asks for signatures to be shown, and names the program that checks them.
+  const signed = path.join(temporary, 'signature-checked'), signer = path.join(temporary, 'signer.sh');
+  fs.writeFileSync(signer, ['#!/bin/sh', `touch ${JSON.stringify(signed)}`, 'case "$*" in *--verify*) echo "[GNUPG:] GOODSIG 0000000000000000 Synthetic"; exit 0 ;; esac',
+    'echo "[GNUPG:] SIG_CREATED D 1 8 00 0 0000000000000000000000000000000000000000" >&2', "printf -- '-----BEGIN PGP SIGNATURE-----\\n\\nc3ludGhldGlj\\n-----END PGP SIGNATURE-----\\n'", ''].join('\n'), { mode: 0o700 });
+  fs.writeFileSync(path.join(repo, 'data.txt'), 'data\n'); git('add', '--', 'data.txt');
+  git('-c', `gpg.program=${signer}`, 'commit', '--quiet', '-S', '-m', 'Synthetic signed change');
+  const next = git('rev-parse', 'HEAD');
+  assert.match(git('cat-file', 'commit', next), /^gpgsig /m, 'The fixture commit carries a signature');
+  git('config', 'log.showSignature', 'true'); git('config', 'gpg.program', signer);
+  fs.rmSync(signed, { force: true });
   const listing = () => JSON.stringify(fs.readdirSync(path.join(repo, '.git')).sort()) + fs.readFileSync(path.join(repo, '.git/HEAD'), 'utf8') +
     fs.readFileSync(path.join(repo, '.git/refs/heads/main'), 'utf8') + fs.statSync(path.join(repo, '.git/index')).mtimeMs;
   fs.rmSync(marker, { force: true });   // the fixture's own commits are not what is measured
@@ -105,13 +140,25 @@ test('reading runs none of the repository\'s own programs and writes nothing', a
   const range = await read.changes(base, next);
   assert.ok(range.length >= 1 && range.every(entry => entry.change));
   assert.equal(fs.existsSync(marker), false, 'No configured driver, pager, monitor or hook ran');
+  assert.equal(fs.existsSync(signed), false, 'The signature program did not run');
   assert.equal(listing(), before, 'The repository is as it was');
+  // Listing the same range the ordinary way does run the signature program: that trap is real too.
+  execFileSync(worktree.available(), ['log', '--format=%H', `${base}..${next}`], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  assert.equal(fs.existsSync(signed), true, 'An unprotected listing would have run it');
+  assert.equal(fs.existsSync(marker), false);
   // The same range read the ordinary way does run the configured program: the fixture is a real trap.
   execFileSync(worktree.available(), ['log', '--patch', '--textconv', `${base}..${next}`], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   assert.equal(fs.existsSync(marker), true, 'An unprotected read would have run it');
   // A GIT_DIR in the environment does not redirect the reader.
   const saved = process.env.GIT_DIR; process.env.GIT_DIR = path.join(temporary, 'elsewhere');
   try { assert.equal(await read.commit(next), next); } finally { if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved; }
+});
+
+test('the reader is not connected: no part of the app loads it or the handoff record yet', () => {
+  const app = path.join(__dirname, '..');
+  for (const file of fs.readdirSync(app).filter(name => /\.(?:c?js|mjs)$/.test(name) && !['integrator-git.cjs', 'integrator-handoff.cjs'].includes(name))) {
+    assert.ok(!/integrator-(?:git|handoff)/.test(fs.readFileSync(path.join(app, file), 'utf8')), file);
+  }
 });
 
 test('the reader only reads: its source has no writing git command', () => {

@@ -48,11 +48,12 @@ const ok = (names, as = MAIN2) => Object.fromEntries(names.map(name => [key(name
 function settleWith(backlog, tag, reply, checked = {}) {
   const action = backlog.plan(later(answered(tag, reply)));
   assert.equal(action.kind, 'settle', JSON.stringify(action));
-  return backlog.settle(action, checked, NOW + 60000);
+  // The checks are those made for this handoff, unless a test names another one.
+  return backlog.settle(action, { handoffId: action.handoffId, ...checked }, NOW + 60000);
 }
 const outcomes = result => Object.fromEntries(result.facts.map(fact => [fact.itemId, fact.outcome + (fact.reason ? ':' + fact.reason : '')]));
 
-test('the reply names each delivery by its own commit; decoration is tolerated, another line is not read', () => {
+test('the reply names each delivery by its own commit; decoration, list marks and numbers are tolerated, a quoted line is not read', () => {
   const entries = ['a', 'b', 'c', 'd'].map(name => ({ key: key(name), commit: commitOf(name) }));
   const text = ['需要你决定：两件冲突', `MERGED ${commitOf('a')} as ${MAIN2} tests 4830/4830 review 0a2298c6`,
     '`RETURNED` `' + commitOf('b').slice(0, 7) + '`   full   suite failed in queue-dispatch.',
@@ -62,7 +63,16 @@ test('the reply names each delivery by its own commit; decoration is tolerated, 
   assert.deepEqual(parseResults(text, entries), { ignored: 1, results: {
     [key('a')]: { kind: 'merged', as: MAIN2, tests: { passed: 4830, total: 4830 }, review: '0a2298c6' },
     [key('b')]: { kind: 'returned', reason: 'full suite failed in queue-dispatch' },
-    [key('c')]: { kind: 'held', reason: 'review-off' } } });
+    [key('c')]: { kind: 'held', reason: 'review-off' },
+    // The list line is the integrator's own; the quoted line and the lower-case one are not results.
+    [key('d')]: { kind: 'merged', as: MAIN2, tests: { passed: 1, total: 1 } } } });
+  // The handoff numbers its deliveries, so the answer often comes numbered.
+  const numbered = [`1. MERGED ${commitOf('a')} as ${MAIN2} tests 2/2`, `2) RETURNED ${commitOf('b')} needs a rebase`, `3、HELD ${commitOf('c')} review-off`, `- **HELD** \`${commitOf('d')}\` checkpoint-invalid.`].join('\n');
+  assert.deepEqual(parseResults(numbered, entries), { ignored: 0, results: {
+    [key('a')]: { kind: 'merged', as: MAIN2, tests: { passed: 2, total: 2 } }, [key('b')]: { kind: 'returned', reason: 'needs a rebase' },
+    [key('c')]: { kind: 'held', reason: 'review-off' }, [key('d')]: { kind: 'held', reason: 'checkpoint-invalid' } } });
+  // A line that begins like a result but cannot be read is counted, not passed over in silence.
+  assert.deepEqual(parseResults(`MERGED everything, all green\nHELD\n4. RETURNED abc short\nMERGED: ${commitOf('a')}\nMERGEDX ${commitOf('a')}`, entries), { ignored: 3, results: {} });
   // The last line about a delivery counts; a reason may be missing; a MERGED line that cannot be read stays a claim.
   assert.deepEqual(parseResults(`HELD ${commitOf('a')} review-off\nRETURNED ${commitOf('a')}\nMERGED ${commitOf('b')} as main tests ok\nHELD ${commitOf('c')} lock-held:Claude 终端 two`, entries).results, {
     [key('a')]: { kind: 'returned', reason: 'unspecified' }, [key('b')]: { kind: 'merged', malformed: true }, [key('c')]: { kind: 'held', reason: 'lock-held:Claude 终端 two' } });
@@ -70,7 +80,7 @@ test('the reply names each delivery by its own commit; decoration is tolerated, 
   const twins = [{ key: 'k1', commit: 'abcdef1' + '0'.repeat(33) }, { key: 'k2', commit: 'abcdef1' + '1'.repeat(33) }];
   assert.deepEqual(parseResults('RETURNED abcdef1 wrong\nRETURNED abcdef10 right', twins), { ignored: 1, results: { k1: { kind: 'returned', reason: 'right' } } });
   assert.deepEqual(parseResults(undefined, entries), { ignored: 0, results: {} });
-  assert.deepEqual(parseResults('RETURNED abc short', entries), { ignored: 0, results: {} });
+  assert.deepEqual(parseResults('The work is done.\nREADY lane/x abcdef1\nmerged all', entries), { ignored: 0, results: {} });
 });
 
 test('a handoff settles by the queue\'s own times and fall-backs', t => {
@@ -92,6 +102,8 @@ test('a handoff settles by the queue\'s own times and fall-backs', t => {
   for (const integrator of [null, { sessionId: 'another', nativeId: 'native-another' }, { ...INTEGRATOR, nativeId: 'rotated' }]) {
     assert.deepEqual(backlog.plan(later(answered('tag-1', reply), { integrator, complete: false })), settle('failed', 'integrator-missing:integrator'));
   }
+  // A designation that could not be read says nothing: the handoff is neither failed nor settled from it.
+  for (const integrator of [undefined, {}, 'integrator']) assert.deepEqual(backlog.plan(later(answered('tag-1', reply), { integrator })), { kind: 'none', why: 'designation-unknown' });
   for (const session of [undefined, answered('tag-1', reply, { archived: true }), answered('tag-1', reply, { nativeId: 'other' })]) {
     assert.deepEqual(backlog.plan(later(session, { complete: false })), { kind: 'none', why: 'sessions-incomplete' });
     assert.deepEqual(backlog.plan(later(session)), settle('failed', 'integrator-missing:integrator'));
@@ -106,6 +118,11 @@ test('a handoff settles by the queue\'s own times and fall-backs', t => {
   // A reply: its first line decides between done and a decision for the person; the result lines are read either way.
   assert.deepEqual(backlog.plan(later(answered('tag-1', reply))), settle('done', '', { results: parsed }));
   assert.deepEqual(backlog.plan(later(answered('tag-1', '需要你决定：两件冲突，建议交给一人合成一份\n' + reply))), settle('waiting', '', { decision: true, question: '两件冲突，建议交给一人合成一份', results: parsed }));
+  // The result lines are read from everything the integrator wrote after the handoff; the last message's first line decides.
+  const several = text => integratorSession({ messages: [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW }, { id: 'r1', role: 'assistant', text: reply, time: NOW + 1 }, { id: 'r2', role: 'assistant', text, time: NOW + 2 }] });
+  assert.deepEqual(backlog.plan(later(several('All done.'))), settle('done', '', { results: parsed }));
+  assert.deepEqual(backlog.plan(later(several(`RETURNED ${commitOf('a')} the suite failed after all`))), settle('done', '', { results: { ignored: 0, results: { [key('a')]: { kind: 'returned', reason: 'the suite failed after all' } } } }), 'The last line about a delivery counts');
+  assert.deepEqual(backlog.plan(later(several('需要你决定：先合哪一件'))), settle('waiting', '', { decision: true, question: '先合哪一件', results: parsed }));
   // Planning changed nothing, and advance does not settle by itself: git has to be asked first.
   assert.equal(backlog.snapshot().handoff.status, 'sent');
   assert.equal(backlog.advance(later(answered('tag-1', reply)), NOW).kind, 'settle');
@@ -152,6 +169,8 @@ test('a merge that is not verified is never recorded as merged and registers not
     ['not every test passed', `MERGED ${commitOf('a')} as ${MAIN2} tests 8/9`, { verified: ok(['a']), mainHead: MAIN2 }],
     ['no test ran', `MERGED ${commitOf('a')} as ${MAIN2} tests 0/0`, { verified: ok(['a']), mainHead: MAIN2 }],
     ['the line cannot be read', `MERGED ${commitOf('a')} into main, all green`, { verified: ok(['a']), mainHead: MAIN2 }],
+    ['the checks were made for another handoff', `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9`, { handoffId: 'H9-other', verified: ok(['a']), mainHead: MAIN2 }],
+    ['git verified another commit than the line names', `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9`, { verified: ok(['a'], MAIN3), mainHead: MAIN3 }],
   ];
   for (const [name, reply, checked] of cases) {
     const { backlog } = fixture(t);
@@ -178,7 +197,7 @@ test('returned work is recorded and suggested for a redo; after too many returns
   give('r9', 'tag-9');
   const over = settleWith(backlog, 'tag-9', `RETURNED ${commitOf('r')} stale-commit`);
   assert.deepEqual(over.facts.map(fact => [fact.outcome, fact.reason, fact.suggestRequeue]), [['returned', 'stale-commit', false]]);
-  assert.deepEqual(over.notify, ['returned-limit:lane/same']);
+  assert.deepEqual(over.notify, ['returned-limit:space-1:lane/same'], 'The question is about that branch of that space, as the count is');
   assert.equal(RETURN_LIMIT, 2);
   const state = backlog.snapshot();
   assert.deepEqual(state.returns, { 'space-1:lane/same': 3 });
@@ -186,9 +205,9 @@ test('returned work is recorded and suggested for a redo; after too many returns
   // Asked once: another return of that branch does not ask again until the person answered.
   give('ra', 'tag-a');
   assert.deepEqual(settleWith(backlog, 'tag-a', `RETURNED ${commitOf('r')} again`).notify, []);
-  assert.deepEqual(backlog.answer('returned-limit:lane/same'), { answered: true });
+  assert.deepEqual(backlog.answer('returned-limit:space-1:lane/same'), { answered: true });
   give('rb', 'tag-b');
-  assert.deepEqual(settleWith(backlog, 'tag-b', `RETURNED ${commitOf('r')} once more`).notify, ['returned-limit:lane/same']);
+  assert.deepEqual(settleWith(backlog, 'tag-b', `RETURNED ${commitOf('r')} once more`).notify, ['returned-limit:space-1:lane/same']);
   // Nothing was added to any queue: the module only reports.
   assert.equal(backlog.snapshot().handoff, null);
 });
@@ -213,6 +232,23 @@ test('held deliveries keep their reason; a standing condition does not take the 
   assert.deepEqual(settleWith(backlog, 'tag-2', `HELD ${commitOf('g')} review-off`).notify, []);
   // The lock being released brings back exactly what it held.
   assert.deepEqual(backlog.reasonCleared('lock-released', 'Claude 终端'), { released: [key('d')] });
+});
+
+test('a comment after the reason word does not change what the reason is', t => {
+  const { backlog } = fixture(t);
+  const action = handed(backlog, ['a', 'b', 'c', 'd', 'e']);
+  const conflict = `conflict:${action.handoffId}`;
+  const reply = [`HELD ${commitOf('a')} review-off（审查没开，等用户）`, `HELD ${commitOf('b')} conflict with lane/c, both change the same file`, `HELD ${commitOf('c')} lock-held:Claude 终端 (held since the morning)`,
+    `HELD ${commitOf('d')} review-cap: today's amount is used up`, `HELD ${commitOf('e')} reviewing-later`].join('\n');
+  const result = settleWith(backlog, 'tag-1', reply);
+  assert.deepEqual(outcomes(result), { a: 'held:review-off', b: 'held:' + conflict, c: 'held:lock-held:Claude 终端', d: 'held:review-cap', e: 'held:held-other' });
+  assert.deepEqual(result.notify, ['review-off', conflict, 'lock-held:Claude 终端', 'review-cap', 'held-other']);
+  // What the integrator wrote is kept beside the reason.
+  assert.deepEqual(backlog.snapshot().ready.map(entry => entry.note), ['review-off（审查没开，等用户）', 'conflict with lane/c, both change the same file', 'lock-held:Claude 终端 (held since the morning)', "review-cap: today's amount is used up", 'reviewing-later']);
+  // So the changes that end these conditions find their deliveries.
+  assert.deepEqual(backlog.reasonCleared('review-opened'), { released: [key('a')] });
+  assert.deepEqual(backlog.reasonCleared('lock-released', 'Claude 终端'), { released: [key('c')] });
+  assert.deepEqual(backlog.reasonCleared('review-cap-raised'), { released: [key('d')] });
 });
 
 test('a delivery without a result line is handed once more by itself, then held', t => {
@@ -262,7 +298,7 @@ test('a failed handoff holds its deliveries for the person and sends nothing aga
 });
 
 test('a handoff that waits for the person keeps the one place until the person resolves it', t => {
-  const { backlog, open } = fixture(t);
+  let { backlog, open } = fixture(t);
   const action = handed(backlog, ['a', 'b']);
   const result = backlog.settle(backlog.plan(later(answered('tag-1', null))), {}, NOW + 60000);
   assert.deepEqual(outcomes(result), { a: 'waiting:no-reply', b: 'waiting:no-reply' });
@@ -286,13 +322,27 @@ test('a handoff that waits for the person keeps the one place until the person r
   const typed = integratorSession({ messages: [{ id: 'tag-2', role: 'user', text: 'handoff', time: NOW }, { id: 'u', role: 'user', text: 'stop', time: NOW + 1 }] });
   const quiet = backlog.settle(backlog.plan(later(typed)), {}, NOW + 100000);
   assert.deepEqual(quiet.notify, []); assert.deepEqual(outcomes(quiet), { c: 'waiting:person-intervened' });
-  assert.deepEqual(backlog.pendingNotices(), ['no-reply'].filter(() => false));
+  assert.deepEqual(backlog.pendingNotices(), [], 'The person\'s own typing leaves no notice to send');
   assert.deepEqual(backlog.resolveHandoff(next.handoffId, { retry: true }, NOW + 110000), { released: [key('c')], held: [] });
   assert.deepEqual(backlog.retryReason('no-reply'), { released: [key('a'), key('b')] });
   // A later handoff without a reply is a new occurrence.
   const third = backlog.advance(later(integratorSession()), NOW + 120000);
   backlog.confirmSent(third.handoffId, { tag: 'tag-3', control: 0 }, NOW);
   assert.deepEqual(backlog.settle(backlog.plan(later(answered('tag-3', null))), {}, NOW + 130000).notify, ['no-reply']);
+  assert.deepEqual(states(backlog), { a: 'handed', b: 'handed', c: 'handed' });
+  // What is inside a waiting handoff cannot be held away from outside: the place would stay taken with no question open.
+  const waiting = JSON.stringify(backlog.snapshot());
+  for (const name of ['a', 'b', 'c']) assert.throws(() => backlog.hold(key(name), 'review-off', NOW), { code: 'HANDOFF_STATE' }, name);
+  assert.throws(() => backlog.retryReady(key('a')), { code: 'HANDOFF_STATE' });
+  assert.equal(JSON.stringify(backlog.snapshot()), waiting);
+  // The person's retry on the reason the handoff waits on is the same retry as in "handoff dealt with":
+  // the handoff ends, what was inside may be handed again, and the place is free.
+  assert.deepEqual(open().retryReason('no-reply', NOW + 140000), { released: [key('a'), key('b'), key('c')] });
+  const after = open().snapshot();
+  assert.equal(after.handoff, null); assert.equal(after.reasons['no-reply'].open, false);
+  assert.deepEqual(states(backlog = open()), { a: 'deliverable', b: 'deliverable', c: 'deliverable' });
+  assert.throws(() => backlog.resolveHandoff(third.handoffId, { retry: true }, NOW), { code: 'HANDOFF_STATE' }, 'It is already resolved');
+  assert.deepEqual(backlog.advance(later(integratorSession()), NOW + 150000).keys, [key('a'), key('b'), key('c')]);
 });
 
 test('a decision for the person: lines given are recorded, the rest stays inside the waiting handoff', t => {
@@ -303,6 +353,7 @@ test('a decision for the person: lines given are recorded, the rest stays inside
   const result = settleWith(backlog, 'tag-1', reply, { verified: ok(['a']), mainHead: MAIN2 });
   assert.deepEqual(outcomes(result), { a: 'merged', b: 'returned:needs a rebase', c: 'waiting:' + conflict, d: 'waiting:' + conflict });
   assert.deepEqual(result.notify, [conflict, `installable:${MAIN2}`]);
+  assert.equal(result.question, 'c 和 d 改了同一处，建议交给一人合成一份', 'The question is given to whoever writes the space record');
   const waiting = backlog.snapshot().handoff;
   assert.deepEqual([waiting.status, waiting.reason, waiting.keys, waiting.question], ['waiting', conflict, [key('c'), key('d')], 'c 和 d 改了同一处，建议交给一人合成一份']);
   assert.deepEqual(backlog.advance(later(integratorSession()), NOW + 70000), { kind: 'none', why: 'handoff-waiting' });
@@ -310,13 +361,66 @@ test('a decision for the person: lines given are recorded, the rest stays inside
   assert.deepEqual(backlog.resolveHandoff(action.handoffId, { retry: false }, NOW + 80000), { released: [], held: [key('c'), key('d')] });
   assert.deepEqual(backlog.advance(later(integratorSession()), NOW + 90000), { kind: 'none', why: 'nothing-deliverable' });
   assert.deepEqual(backlog.retryReason(conflict), { released: [key('c'), key('d')] });
-  // A decision line with a result for every delivery leaves nothing to wait for: the handoff is done.
+  // The usual conflict reply has a HELD line for every delivery. The deliveries in conflict stay inside
+  // the waiting handoff all the same: the question is the person's, and the place stays taken until then.
   const second = backlog.advance(later(integratorSession()), NOW + 100000);
   backlog.confirmSent(second.handoffId, { tag: 'tag-2', control: 0 }, NOW);
-  const done = settleWith(backlog, 'tag-2', `需要你决定：仍然冲突\nHELD ${commitOf('c')} conflict\nHELD ${commitOf('d')} conflict`);
-  assert.deepEqual(outcomes(done), { c: `held:conflict:${second.handoffId}`, d: `held:conflict:${second.handoffId}` });
-  assert.deepEqual(done.notify, [`conflict:${second.handoffId}`]);
-  assert.equal(backlog.snapshot().handoff, null);
+  const again = `conflict:${second.handoffId}`;
+  const asked = settleWith(backlog, 'tag-2', `需要你决定：仍然冲突\nHELD ${commitOf('c')} conflict\nHELD ${commitOf('d')} conflict with lane/c`);
+  assert.deepEqual(outcomes(asked), { c: 'waiting:' + again, d: 'waiting:' + again });
+  assert.deepEqual(asked.notify, [again]); assert.equal(asked.question, '仍然冲突');
+  const held = backlog.snapshot().handoff;
+  assert.deepEqual([held.status, held.reason, held.keys, held.question], ['waiting', again, [key('c'), key('d')], '仍然冲突']);
+  backlog.noteReady(ready('e'), NOW);
+  assert.deepEqual(backlog.advance(later(integratorSession()), NOW + 110000), { kind: 'none', why: 'handoff-waiting' });
+  // The person's retry on that conflict, from the list of open questions, ends the handoff as "handoff dealt with, retry" does.
+  assert.deepEqual(backlog.retryReason(again, NOW + 120000), { released: [key('c'), key('d')] });
+  assert.equal(backlog.snapshot().handoff, null); assert.equal(backlog.snapshot().reasons[again].open, false);
+  assert.deepEqual(backlog.advance(later(integratorSession()), NOW + 130000).keys, [key('c'), key('d'), key('e')]);
+});
+
+test('a reply that asks the person to decide waits even when every delivery has its line', t => {
+  const { backlog, open } = fixture(t);
+  const action = handed(backlog, ['a', 'b', 'c']);
+  const conflict = `conflict:${action.handoffId}`;
+  // No line says "conflict": the question is still the person's, and nothing may start behind their back.
+  const reply = `需要你决定：a 合了，b 和 c 要不要等新的检查点\nMERGED ${commitOf('a')} as ${MAIN2} tests 7/7\nRETURNED ${commitOf('b')} needs a rebase\nHELD ${commitOf('c')} checkpoint-invalid`;
+  const result = settleWith(backlog, 'tag-1', reply, { verified: ok(['a']), mainHead: MAIN2 });
+  assert.deepEqual(outcomes(result), { a: 'merged', b: 'returned:needs a rebase', c: 'held:checkpoint-invalid' });
+  assert.deepEqual(result.notify, ['checkpoint-invalid', conflict, `installable:${MAIN2}`], 'The person is told about the decision once');
+  assert.equal(result.question, 'a 合了，b 和 c 要不要等新的检查点');
+  // The record with a waiting handoff that holds nothing any more is one the next start accepts.
+  const waiting = open().snapshot().handoff;
+  assert.deepEqual([waiting.status, waiting.reason, waiting.keys, waiting.question], ['waiting', conflict, [], 'a 合了，b 和 c 要不要等新的检查点']);
+  assert.equal(open().snapshot().reasons[conflict].open, true, 'The question stays open although nothing is held under it');
+  backlog.noteReady(ready('d'), NOW);
+  assert.deepEqual(open().advance(later(integratorSession()), NOW + 70000), { kind: 'none', why: 'handoff-waiting' });
+  assert.deepEqual(backlog.resolveHandoff(action.handoffId, { retry: true }, NOW + 80000), { released: [], held: [] });
+  assert.equal(backlog.snapshot().handoff, null); assert.equal(backlog.snapshot().reasons[conflict].open, false);
+  assert.deepEqual(backlog.advance(later(integratorSession()), NOW + 90000).keys, [key('d')]);
+  // An open handoff that was sent and holds nothing is still a record no start accepts.
+  const { directory, file } = fixture(t);
+  const state = backlog.snapshot();
+  fs.writeFileSync(file, JSON.stringify({ ...state, handoff: { ...state.handoff, keys: [] }, ready: state.ready.filter(entry => entry.state !== 'handed') }), { mode: 0o600 });
+  assert.throws(() => new IntegrationHandoffs(directory).snapshot(), { code: 'HANDOFF_STATE' });
+  // A waiting handoff always says what it waits on.
+  fs.writeFileSync(file, JSON.stringify({ ...state, handoff: { ...state.handoff, status: 'waiting' } }), { mode: 0o600 });
+  assert.throws(() => new IntegrationHandoffs(directory).snapshot(), { code: 'HANDOFF_STATE' });
+});
+
+test('a result the reply reader could not have produced is refused, and nothing is recorded', t => {
+  const { backlog } = fixture(t);
+  const action = handed(backlog, ['a']);
+  const before = JSON.stringify(backlog.snapshot());
+  const crafted = [{ kind: 'held', reason: 7 }, { kind: 'held' }, { kind: 'returned', reason: '' }, { kind: 'merged', as: MAIN2 }, { kind: 'merged', as: 'main', tests: { passed: 1, total: 1 } },
+    { kind: 'merged', as: MAIN2, tests: { passed: '1', total: 1 } }, { kind: 'merged', as: MAIN2, tests: { passed: 1, total: 1 }, review: 7 }, { kind: 'pushed' }, 'merged', null, ['held']];
+  for (const result of crafted) {
+    for (const status of ['done', 'waiting']) {
+      const settlement = { kind: 'settle', handoffId: action.handoffId, status, ...(status === 'waiting' ? { decision: true } : {}), results: { ignored: 0, results: { [key('a')]: result } } };
+      assert.throws(() => backlog.settle(settlement, { handoffId: action.handoffId, verified: ok(['a']), mainHead: MAIN2 }, NOW), { code: 'HANDOFF_STATE' }, JSON.stringify(result));
+    }
+  }
+  assert.equal(JSON.stringify(backlog.snapshot()), before);
 });
 
 test('a delivery replaced while it was inside a handoff keeps its real outcome, and is void without one', t => {
@@ -362,6 +466,14 @@ test('a reported merge counts only when all three questions to git are answered 
     ['changes-differ', fake({ changes: (base, tip) => tip === MAIN2 ? [{ commit: MAIN2, change: 'x1' }] : [{ commit: tip, change: null }] }), claim],
   ];
   for (const [why, read, input] of cases) assert.deepEqual(await verifyMerged(read, input), { verified: false, why }, why);
+  // The very same commit on main counts although it has no single change (a merge commit that was fast-forwarded).
+  const same = fake({ changes: (base, tip) => tip === MAIN2 ? [{ commit: MAIN2, change: null }, { commit: commitOf('a'), change: null }] : [{ commit: tip, change: null }] });
+  assert.deepEqual(await verifyMerged(same, claim), { verified: true, as: MAIN2 });
+  // What was merged is read up to the named commit, not up to wherever main is now.
+  const asked = [];
+  const upTo = fake({ isAncestor: (a, b) => b === MAIN3, changes: (base, tip) => { asked.push([base, tip]); return [{ commit: tip, change: 'x1' }]; } });
+  assert.deepEqual(await verifyMerged(upTo, { ...claim, mainHead: MAIN3 }), { verified: true, as: MAIN2 });
+  assert.deepEqual(asked, [[START, commitOf('a')], [START, MAIN2]]);
 });
 
 // A real temporary repository for the same questions.
@@ -399,9 +511,45 @@ test('against a real repository: a fast-forward and a cherry-pick are verified; 
   // A different change under the same file name is not this delivery.
   git('checkout', '--quiet', '-b', 'lane/other', start); const different = commit('one.txt', 'not one\n');
   assert.deepEqual(await verifyMerged(read, { ready: different, as: picked, startHead: start, mainHead: picked }), { verified: false, why: 'changes-differ' });
+  // The named commit is on main and new, but it is not one that holds the delivery: the unrelated commit
+  // main moved on by, or the first of the two picks.
+  assert.deepEqual(await verifyMerged(read, { ready: second, as: moved, startHead: start, mainHead: picked }), { verified: false, why: 'changes-differ' });
+  assert.deepEqual(await verifyMerged(read, { ready: second, as: partial, startHead: start, mainHead: picked }), { verified: false, why: 'changes-differ' });
+  // A branch named like the short id of the pick points somewhere else: the name is not taken for the commit.
+  git('branch', picked.slice(0, 9), moved);
+  assert.deepEqual(await verifyMerged(read, { ready: second, as: picked.slice(0, 9), startHead: start, mainHead: picked }), { verified: false, why: 'unknown-commit' });
+  assert.deepEqual(await verifyMerged(read, { ready: second, as: picked, startHead: start, mainHead: picked }), { verified: true, as: picked });
   // A fast-forward: the delivery's own commits are main's new commits.
   git('checkout', '--quiet', '-b', 'main-ff', start); git('merge', '--quiet', '--ff-only', 'lane/work');
   assert.deepEqual(await verifyMerged(read, { ready: second, as: second, startHead: start, mainHead: second }), { verified: true, as: second });
+  // A delivery that holds a merge commit: fast-forwarded it is the same commits and counts; picked, the merge
+  // commit has no single change to find again and it does not.
+  git('checkout', '--quiet', '-b', 'lane/side', start); commit('side.txt', 'side\n');
+  git('checkout', '--quiet', '-b', 'lane/merged', start); commit('own.txt', 'own\n');
+  git('merge', '--quiet', '--no-ff', '-m', 'Synthetic merge', 'lane/side'); const withMerge = git('rev-parse', 'HEAD');
+  assert.deepEqual(await verifyMerged(read, { ready: withMerge, as: withMerge, startHead: start, mainHead: withMerge }), { verified: true, as: withMerge });
+  assert.deepEqual(await verifyMerged(read, { ready: withMerge, as: picked, startHead: start, mainHead: picked }), { verified: false, why: 'changes-differ' });
+});
+
+test('the real reader, the verdicts and the settlement together: what git confirms is merged, what it does not is held', async t => {
+  const { git, commit, start, read } = repository(t);
+  git('checkout', '--quiet', '-b', 'lane/a', start); const a = commit('a.txt', 'a\n');
+  git('checkout', '--quiet', '-b', 'lane/b', start); const b = commit('b.txt', 'b\n');
+  git('checkout', '--quiet', 'main'); commit('other.txt', 'other\n');
+  const { backlog } = fixture(t);
+  backlog.noteReady(ready('a', { commit: a }), NOW); backlog.noteReady(ready('b', { commit: b }), NOW);
+  // The handoff begins on the main head of that moment; the integrator then picks one of the two.
+  const opened = backlog.advance(observed({ mainHead: git('rev-parse', 'main') }), NOW);
+  backlog.confirmSent(opened.handoffId, { tag: 'tag-1', control: 0 }, NOW);
+  git('cherry-pick', a); const head = git('rev-parse', 'HEAD');
+  const reply = `1. MERGED ${a.slice(0, 9)} as ${head.slice(0, 9)} tests 12/12\n2. MERGED ${b.slice(0, 9)} as ${head.slice(0, 9)} tests 12/12`;
+  const action = backlog.plan(later(answered('tag-1', reply)));
+  const checked = await verifyResults(read, backlog.snapshot(), action, head);
+  assert.deepEqual(checked, { handoffId: opened.handoffId, mainHead: head, verified: { [key('a')]: { verified: true, as: head }, [key('b')]: { verified: false, why: 'changes-differ' } } });
+  const result = backlog.settle(action, checked, NOW + 60000);
+  assert.deepEqual(outcomes(result), { a: 'merged', b: 'held:merge-unverified' });
+  assert.deepEqual(result.install, { commit: head });
+  assert.equal(backlog.snapshot().ready[0].mergedAs, head, 'The full id of the commit git confirmed is what is recorded');
 });
 
 test('every MERGED line of a settlement gets its verdict; unreadable lines and failed tests are refused before git is asked', async t => {
@@ -411,13 +559,27 @@ test('every MERGED line of a settlement gets its verdict; unreadable lines and f
   const action = backlog.plan(later(answered('tag-1', reply)));
   const asked = [];
   const read = fake({ commit: value => { asked.push(value); return value; } });
-  const verdicts = await verifyResults(read, backlog.snapshot(), action, MAIN2);
-  assert.deepEqual(verdicts, { [key('a')]: { verified: true, as: MAIN2 }, [key('b')]: { verified: false, why: 'tests-not-all-passed' }, [key('c')]: { verified: false, why: 'unreadable-line' } });
+  const checked = await verifyResults(read, backlog.snapshot(), action, MAIN2);
+  // The verdicts come with the handoff and the main head they were made for: settle takes exactly this.
+  assert.deepEqual(checked, { handoffId: action.handoffId, mainHead: MAIN2,
+    verified: { [key('a')]: { verified: true, as: MAIN2 }, [key('b')]: { verified: false, why: 'tests-not-all-passed' }, [key('c')]: { verified: false, why: 'unreadable-line' } } });
   assert.deepEqual(asked, [MAIN2, commitOf('a')], 'git is asked only about the line that can count');
-  assert.deepEqual(await verifyResults(read, backlog.snapshot(), { ...action, handoffId: 'H9-other' }, MAIN2), {});
-  const result = backlog.settle(action, { verified: verdicts, mainHead: MAIN2 }, NOW + 60000);
+  assert.deepEqual(await verifyResults(read, backlog.snapshot(), { ...action, handoffId: 'H9-other' }, MAIN2), { handoffId: 'H9-other', mainHead: MAIN2, verified: {} });
+  const result = backlog.settle(action, checked, NOW + 60000);
   assert.deepEqual(outcomes(result), { a: 'merged', b: 'held:merge-unverified', c: 'held:merge-unverified', d: 'returned:no' });
   assert.deepEqual(result.install, { commit: MAIN2 });
+  // Several deliveries merged as one main commit: each question is put to git once.
+  const { backlog: batch } = fixture(t);
+  handed(batch, ['a', 'b', 'c']);
+  const lines = ['a', 'b', 'c'].map(name => `MERGED ${commitOf(name)} as ${MAIN2} tests 5/5`).join('\n');
+  const calls = [];
+  const counting = fake({ commit: value => { calls.push(`commit ${value}`); return value; }, isAncestor: (a, b) => { calls.push(`ancestor ${a} ${b}`); return b === MAIN2; },
+    changes: (base, tip) => { calls.push(`changes ${tip}`); return tip === MAIN2 ? ['a', 'b', 'c'].map(name => ({ commit: 'm' + name, change: 'x' + name })) : [{ commit: tip, change: 'x' + String.fromCharCode(parseInt(tip.slice(0, 2), 16)) }]; } });
+  const all = await verifyResults(counting, batch.snapshot(), batch.plan(later(answered('tag-1', lines))), MAIN2);
+  assert.deepEqual(Object.values(all.verified), [{ verified: true, as: MAIN2 }, { verified: true, as: MAIN2 }, { verified: true, as: MAIN2 }]);
+  assert.equal(calls.filter(call => call === `changes ${MAIN2}`).length, 1, 'What was merged is read once for the batch');
+  assert.equal(calls.filter(call => call === `commit ${MAIN2}`).length, 1);
+  assert.equal(new Set(calls).size, calls.length, 'No question is asked twice');
 });
 
 test('the module still runs nothing: git is asked through the reader it is given', () => {
