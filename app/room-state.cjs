@@ -812,6 +812,70 @@ class RoomState {
     }
     return wrote;
   }
+  // B6 E4, the version gate. A member whose native version NAW has not verified keeps working with
+  // fewer features. The session's own header says so; this records it once in each of its spaces,
+  // per session and version, and never again for that version. Records only. Because a record is
+  // permanent, a fact that may change a moment later is not written:
+  // - Codex: a check that has finished and kept capabilities closed (nativeVersionCheck.held). A
+  //   check still running reads as unverified too, and may open everything a moment later. A
+  //   check that failed also keeps them closed, for this backend run; it is tried again at the
+  //   next start, and the record stays even if that try passes.
+  // - Claude: the fallback of claude-pin.cjs. While it lasts the session runs the older verified
+  //   version; once its time is up the session runs the newer, unverified one. These are two facts.
+  // - Only a session that is running: a stopped one keeps the fields of its last launch.
+  versionGates() {
+    const seen = new Map();
+    for (const room of [{ ...this.value, id: DEFAULT_ROOM_ID }, ...this.spaces.rooms]) {
+      for (const event of room.events) {
+        const fact = event.monitor;
+        if (fact?.kind !== 'version-gate' || typeof fact.key !== 'string') continue;
+        if (!seen.has(fact.key)) seen.set(fact.key, new Set());
+        seen.get(fact.key).add(room.id);
+      }
+    }
+    return seen;
+  }
+  recordVersionGates(sessions, name = session => session.name) {
+    if (!Array.isArray(sessions) || this.warning || this.spacesWarning) return false;
+    const version = value => typeof value === 'string' && /^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(value);
+    let wrote = false;
+    for (const session of sessions) {
+      if (!session || !orderId(session.id)) continue;
+      if (!['idle', 'working', 'approval'].includes(session.state)) continue;
+      let gate = null;
+      const held = session.nativeVersionCheck?.held, pin = session.nativePin;
+      if (session.provider === 'codex' && session.nativeVersionStatus === 'unverified' && version(session.nativeVersion) && Array.isArray(held) && held.length > 0) {
+        gate = { provider: 'codex', version: session.nativeVersion, count: held.length };
+      } else if (session.provider === 'claude' && pin && typeof pin === 'object' && version(pin.requested) && version(pin.pinned) && [undefined, false, true].includes(pin.expired)) {
+        gate = { provider: 'claude', version: pin.requested, pinned: pin.pinned, expired: pin.expired === true };
+      }
+      if (!gate) continue;
+      // Rebuilt from the saved records once, so a restart of the desktop repeats nothing.
+      this.versionRecorded ||= this.versionGates();
+      const key = `version-gate:${session.id}:${gate.provider}:${gate.version}${gate.expired ? ':expired' : ''}`;
+      const rooms = this.versionRecorded.get(key) || new Set(), left = (this.versionLeft ||= new Map()).get(key) || new Set();
+      let member = [];
+      try { member = roomIds(session); } catch { /* Unreadable membership: nowhere to record. */ }
+      const todo = member.filter(room => !rooms.has(room) && !left.has(room));
+      if (!todo.length) continue;
+      const who = name(session) || session.id;
+      const notice = gate.provider === 'codex' ? uiNotice('notice.monitor.versionCodex', { name: who, version: gate.version, count: gate.count })
+        : uiNotice(gate.expired ? 'notice.monitor.versionClaudeExpired' : 'notice.monitor.versionClaude', { name: who, pinned: gate.pinned, requested: gate.version });
+      for (const room of todo) {
+        // An archived or missing space is left alone until the desktop starts again; a busy one is tried at the next state.
+        try { if (this.metadata(room).archived) { left.add(room); continue; } } catch { left.add(room); continue; }
+        try {
+          this.writable(room);
+          this.update({}, { kind: 'monitor', sessionId: session.id, ...notice,
+            monitor: { kind: 'version-gate', key, provider: gate.provider, version: gate.version, sessionId: session.id, ...(gate.expired ? { expired: true } : {}) } }, room);
+          rooms.add(room); wrote = true;
+        } catch { /* Busy now. */ }
+      }
+      if (rooms.size) this.versionRecorded.set(key, rooms);
+      if (left.size) this.versionLeft.set(key, left);
+    }
+    return wrote;
+  }
   moveMember(change, records, room = DEFAULT_ROOM_ID) {
     this.writable(room);
     if (!change || ![Object.prototype, null].includes(Object.getPrototypeOf(change)) || !orderId(change.id) || !orderId(change.target) || typeof change.after !== 'boolean') throw uiError("error.room.invalidMemberOrder");

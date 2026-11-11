@@ -598,6 +598,46 @@ async function stuckScenario(a) {
     notifications: (await notices()).length, syntheticDispatches: (await sends()).length, nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
 }
 
+// B6 step 1 (E4, the version gate): a member started on the last verified Claude version is recorded
+// in its space once. Records only: nothing is sent, restarted or notified.
+async function versionScenario(a, b) {
+  assert.equal(process.env.NAW_TEST_DECISION_NOTICE, '1', 'Runs with the notification fixture, so nothing reaches the OS');
+  const english = process.env.NAW_TEST_UI_LANGUAGE === 'en';
+  const notices = () => app.evaluate(() => globalThis.decisionNotifications.map(n => n.options));
+  const shared = async () => (await snapshot()).rooms.find(r => r.id === 'shared');
+  const facts = async () => (await shared()).events.filter(event => event.monitor?.kind === 'version-gate');
+  assert.equal((await facts()).length, 0, 'A member on a verified version records nothing');
+  assert.equal((await fixture('pin', a)).done, true);
+  await until(async () => (await facts()).length === 1, 'Version gate recorded');
+  const [record] = await facts();
+  assert.deepEqual(record.monitor, { kind: 'version-gate', key: `version-gate:${a}:claude:2.1.330`, provider: 'claude', version: '2.1.330', sessionId: a });
+  await page.waitForFunction(id => document.querySelector('#room-messages [data-message-id="' + id + '"]'), record.id);
+  const row = await page.evaluate(id => {
+    const element = document.querySelector('#room-messages [data-message-id="' + id + '"]');
+    element.scrollIntoView({ block: 'center' });
+    const box = element.getBoundingClientRect(), list = document.querySelector('#room-messages').getBoundingClientRect();
+    return { text: element.innerText, width: box.width, height: box.height, inside: box.top >= list.top - 1 && box.bottom <= list.bottom + 1 };
+  }, record.id);
+  const text = english ? '队员甲 runs the verified Claude 2.1.322 for now: the newer 2.1.330 is not verified yet' : '队员甲 暂用已核验的 Claude 2.1.322：新版 2.1.330 还没核验';
+  assert.ok(row.text.includes(text), `the row reads ${JSON.stringify(row.text)}, expected ${JSON.stringify(text)}`);
+  assert.ok(row.width > 0 && row.height > 0 && row.inside, `the row is not on screen: ${JSON.stringify(row)}`);
+  await capture('version-gate-' + (english ? 'en' : 'zh'));
+  // Later states, a reloaded page and another member's activity do not record it again.
+  await addItem('Other member works', b);
+  await expectSend(1, b, /Other member works/, 'work for the other member');
+  await page.reload(); await page.locator('#new-session').waitFor(); await delay(3500);
+  assert.equal((await facts()).length, 1);
+  await release(b, 'done');
+  await until(async () => (await itemByText('Other member works')).status === 'done', 'Other member settled');
+  assert.equal((await facts()).length, 1);
+  assert.equal((await notices()).length, 0, 'A version gate never notifies');
+  assert.equal((await sends()).length, 1, 'Nothing was sent to the gated member');
+  assert.deepEqual(errors, []);
+  passed.push('A member on the last verified Claude version was recorded once in its space');
+  console.log(JSON.stringify({ passed, facts: (await facts()).map(event => event.monitor.key.replace(a, '<member>')), notifications: (await notices()).length,
+    syntheticDispatches: (await sends()).length, nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
+}
+
 async function run() {
   console.log('Fixture profile:', profile);
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon');
@@ -609,6 +649,7 @@ async function run() {
   await openSpace();
   if (process.env.NAW_TEST_QUEUE_MONITOR === '1') return monitorScenario(a);
   if (process.env.NAW_TEST_STUCK_RECORD === '1') return stuckScenario(a);
+  if (process.env.NAW_TEST_VERSION_GATE === '1') return versionScenario(a, b);
   if (process.env.NAW_TEST_DECISION_NOTICE === '1') return decisionNoticeScenario(a, b);
 
   // 1) Two idle members each get exactly one item; NAW, not the person, sends them.

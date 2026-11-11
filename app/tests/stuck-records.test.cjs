@@ -346,9 +346,12 @@ test('E4 record: a space that is busy when the mark arrives, or when the wait en
 
 test('E4 wiring: the desktop records from every backend state and only then refreshes the space, and it does nothing else there', () => {
   const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
-  const line = main.split('\n').find(text => text.includes('roomState.recordStuck('));
-  assert.ok(line, 'The listener exists');
-  assert.match(line, /^\s*client\.on\('state', data => \{ try \{ if \(roomState\.recordStuck\(data\?\.sessions, s => sessionLabels\.labels\.get\(s\.id\) \|\| s\.name\)\) broadcastRoom\(\)\.catch\(\(\) => \{\}\); \} catch \{/);
-  assert.equal(main.split('recordStuck(').length, 2, 'One call site');
-  for (const forbidden of ['Notification', 'interrupt(', 'approve', 'send(', 'queueAdd']) assert.equal(line.includes(forbidden), false, forbidden);
+  const start = main.indexOf("// B6 E4: what the backend marks as stuck"), end = main.indexOf("client.on('terminal'", start);
+  assert.ok(start > 0 && end > start, 'The listener exists');
+  const block = main.slice(start, end);
+  assert.ok(block.includes("client.on('state', data => {"));
+  assert.ok(block.includes("const name = s => sessionLabels.labels.get(s.id) || s.name, wrote = ['recordStuck', 'recordVersionGates'].map(writer => { try { return roomState[writer](data?.sessions, name); } catch { return false; } });"));
+  assert.ok(block.includes('if (wrote.some(Boolean)) broadcastRoom().catch(() => {});'));
+  assert.equal(main.split("'recordStuck'").length, 2, 'One call site');
+  for (const forbidden of ['Notification', 'interrupt(', 'approve', 'send(', 'queueAdd']) assert.equal(block.includes(forbidden), false, forbidden);
 });
