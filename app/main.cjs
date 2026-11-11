@@ -357,7 +357,7 @@ function conversationAccess(actor, snapshot) {
   return access;
 }
 function projectBackgroundRecord(record, context = null) {
-  if (!['initial', 'previewImage'].includes(record.command.method) || record.value === undefined) return record;
+  if (!['initial', 'previewImage', 'spaceFiles'].includes(record.command.method) || record.value === undefined) return record;
   const target = backgroundOperation.conversationTarget(record.command.method, record.command.arguments, record.actor);
   const candidate = record.humanDecision === 1 && record.readAuthorization?.sessionId === target ? record.readAuthorization : null;
   let read = null;
@@ -366,6 +366,10 @@ function projectBackgroundRecord(record, context = null) {
     const { value: _privateValue, ...publicRecord } = record; return publicRecord;
   }
   const access = conversationAccess(record.actor, context?.client.snapshot?.());
+  if (record.command.method === 'spaceFiles' && record.command.arguments[1] !== undefined &&
+      (record.readAuthorization?.roomId !== record.command.arguments[0] || access.secretary || !access.roomIds.includes(record.command.arguments[0]))) {
+    const { value: _privateValue, ...publicRecord } = record; return publicRecord;
+  }
   const source = record.command.arguments[0];
   if (record.command.method === 'previewImage' && ['room', 'space-message'].includes(source?.kind) &&
       (access.secretary || !access.roomIds.includes(source.roomId || 'shared'))) {
@@ -373,6 +377,12 @@ function projectBackgroundRecord(record, context = null) {
   }
   if (record.command.method !== 'initial') return record;
   return { ...record, value: backgroundOperation.conversationSnapshot(record.value, record.actor, read, record.value?.viewState?.selected, access) };
+}
+async function assertSpaceFileReader(context, roomId) {
+  if (!context.background) return;
+  await context.refresh?.();
+  const access = conversationAccess(context.actor, context.client.snapshot());
+  if (access.secretary || !access.roomIds.includes(roomId)) throw uiError('error.background.spaceFileMembership');
 }
 // A background window owns an agent's connection and dialogs but never loads a document. Nothing can
 // receive what is sent to it, and the browser keeps every such message in memory for as long as the window
@@ -1053,7 +1063,7 @@ async function boot() {
             roomState.value.sessionArchives[s.id]?.rooms.forEach(r => auditRooms.add(r.id));
           }
           for (const r of metadata.rooms) if (strings.has(r.id)) auditRooms.add(r.id);
-          if (['archiveRoom', 'restoreRoom', 'join'].includes(command.method)) auditRooms.add('shared');
+          if (['archiveRoom', 'restoreRoom', 'join', 'roomRename'].includes(command.method)) auditRooms.add('shared');
           if (command.method === 'spaceMerge') {
             const id = command.arguments[1]?.operationId;
             const batch = roomState.mergePreviews.get(id)?.batch || roomState.mergeRecord(id)?.merge?.batch;
@@ -1228,8 +1238,10 @@ async function boot() {
     if (!validRoomId(roomId)) throw uiError("error.main.invalidSpace");
     const value = roomState.metadata(roomId);
     if (fileId !== undefined) {
+      await assertSpaceFileReader(c, roomId);
       const file = value.files.find(f => f.id === fileId); if (!file) throw uiError("error.main.fileReferenceChanged");
       const preview = await readPreview(file.path);
+      await assertSpaceFileReader(c, roomId);
       if (c.win.isDestroyed() || !roomState.metadata(roomId).files.some(f => f.id === fileId && f.path === file.path)) throw uiError("error.main.spaceFileListChanged");
       c.filePreview = preview;
       return { token: preview.token, name: preview.name, text: preview.text, size: preview.bytes.length };

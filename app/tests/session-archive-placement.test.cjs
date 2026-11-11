@@ -20,6 +20,35 @@ async function fixture(t) {
   state.moveMember({ id: ids[1], target: ids[2], after: true }, w.snapshot().sessions, a);
   return { dir, w, state, a, b, ids, client, get moves() { return moves; } };
 }
+for (const mode of ['prefix-archived', 'prefix-left', 'new-prefix', 'legacy-prefix-archived']) test(`restore stays before its saved successor when membership counts change: ${mode}`, async t => {
+  const f = await fixture(t), [first, id, next] = f.ids;
+  f.state.moveMember({ id, target: next, after: false }, f.w.snapshot().sessions, f.a);
+  await f.state.archiveSession(f.client, id);
+  let before = [first];
+  if (mode === 'prefix-left') await f.state.membership(f.client, first, false, null, f.a);
+  else if (mode === 'new-prefix') {
+    const newcomer = await f.w.create('codex', f.dir, 'owner', 'New earlier neighbour');
+    await f.state.membership(f.client, newcomer, true, null, f.a);
+    f.state.moveMember({ id: newcomer, target: first, after: false }, f.w.snapshot().sessions, f.a);
+    before = [newcomer, first];
+  } else await f.state.archiveSession(f.client, first);
+  if (mode === 'legacy-prefix-archived') {
+    const disk = JSON.parse(fs.readFileSync(f.state.file)); delete disk.sessionArchives[id].rooms[0].next;
+    fs.writeFileSync(f.state.file, JSON.stringify(disk), { mode: 0o600 });
+  }
+  const cold = new RoomState(f.dir);
+  assert.equal((await cold.restoreSession(f.client, id)).placement, 'restored');
+  const order = cold.metadata(f.a).memberOrder;
+  assert.deepEqual(order.filter(member => [...before, id, next].includes(member)), [...before, id, next]);
+});
+test('a saved tail slot stays ahead of a member added while it was archived', async t => {
+  const f = await fixture(t), id = f.ids[1], order = [...f.state.metadata(f.a).memberOrder];
+  await f.state.archiveSession(f.client, id);
+  const newcomer = await f.w.create('codex', f.dir, 'owner', 'New tail');
+  await f.state.membership(f.client, newcomer, true, null, f.a);
+  const cold = new RoomState(f.dir); await cold.restoreSession(f.client, id);
+  assert.deepEqual(cold.metadata(f.a).memberOrder, [...order, newcomer]);
+});
 test('session archive saves location before detaching and cold restore returns exact room and order', async t => {
   const f = await fixture(t), id = f.ids[1], original = f.w.get(id), nativeId = original.nativeId;
   const order = [...f.state.metadata(f.a).memberOrder], call = f.client.call;

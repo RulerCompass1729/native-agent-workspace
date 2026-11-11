@@ -1,5 +1,39 @@
 # Review and issue record
 
+**S2 consent follow-ups and space files, 2026-11-10 (delta review pending):**
+the person approved retaining a cancelled implicit conversation-read receipt
+until its selected target or consent fingerprint changes. Navigating away
+releases it; progress and display-mode changes do not. Explicit operation IDs
+can request a new decision. Matching pending operations keep independent cards
+but share one system notification for the same actor, view, exact command and
+consent target. A cohort remains notified while any matching card is pending.
+
+Unanswered confirmations are capped at 32 per native actor and 128 overall,
+including protected intents already running. A new request above that bound is
+recorded as not executed; existing confirmations remain answerable. Cancelling
+one releases a slot. Rejected operation IDs remain bound to their original
+arguments, so an old confirmation cannot approve a replacement command. This
+bounds pending cards; it does not promise unlimited durable metadata history.
+
+Hosted `roomRename` and `spaceAction(..., 'rename', ...)` now require the existing
+human confirmation. Space names identify other consent targets, so protecting
+them follows the same rule as renaming another session. Confirmation includes
+the original named space and a stale name cannot authorize a different rename.
+Display escaping additionally covers Default_Ignorable_Code_Point and U+2800;
+the actual Electron runtime supports that Unicode property. Execution keeps the
+original text. Session archive plans save the following neighbour; restore
+inserts before it even if the number of earlier active members changes. Legacy
+plans retain their raw slot when possible before using the numeric fallback.
+
+The person's later space-file decision applies to `spaceFiles(roomId, fileId)`:
+only a current non-secretary member can read it, checked before and after the
+file read and again on pickup. Human confirmation does not bypass membership.
+The approved body uses the same ephemeral one-use cache as conversation and
+terminal reads, and old durable file bodies are purged on load. Importing explicit
+paths and the person's own windows retain their existing paths. The manager's
+separate data source is unchanged; no exception is added to hosted snapshots.
+These are author checks pending incremental independent review.
+
 **S2 one-use conversation copies and space visibility, 2026-11-10 (delta review pending):**
 the person approved deleting a read copy after pickup, restricting space content
 to its current members, and showing the secretary queue metadata without bodies.

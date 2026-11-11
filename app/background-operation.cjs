@@ -64,7 +64,7 @@ function conversationSnapshot(value, actor, read = null, selected = value?.viewS
 // Display only: preserve the original command/name for identity and execution.
 // Escape UTF-16 code units so supplementary format characters are visible too.
 function visibleText(text) {
-  return text.replace(/[\p{Cf}\p{Zl}\p{Zp}\u115f\u2800\u3164]/gu, char => char.split('').map(unit => '\\u' + unit.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
+  return text.replace(/[\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800]/gu, char => char.split('').map(unit => '\\u' + unit.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
 }
 function confirmationDetail(command, snapshot, context) {
   const ids = new Set(), references = [];
@@ -74,6 +74,8 @@ function confirmationDetail(command, snapshot, context) {
     else if (value && typeof value === 'object') Object.values(value).forEach(collect);
   };
   collect(command.arguments);
+  // Legacy roomRename always targets the shared room, independent of view.
+  if (command.method === 'roomRename') ids.add('shared');
   for (const s of snapshot.sessions || []) if (ids.has(s.id)) references.push({ kind: 'session', id: s.id, name: s.name, provider: s.provider });
   for (const room of snapshot.rooms || []) {
     if (ids.has(room.id)) references.push({ kind: 'space', id: room.id, name: room.name });
@@ -90,6 +92,7 @@ function confirmationDetail(command, snapshot, context) {
 // bypasses this gate; a future metered manager policy must be added here.
 function maintenanceAction(method, args = [], actor) {
   if (conversationTarget(method, args, actor)) return 'readConversation';
+  if (method === 'roomRename' || method === 'spaceAction' && args[1] === 'rename') return 'renameRoom';
   if (['create', 'spaceCreate', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'resume', 'importHistory'].includes(method)) return method;
   if (['runtimeLocation', 'openLocalFile', 'saveLocalFile', 'spaceFiles', 'openMessageFile'].includes(method)) return method;
   // WorkspaceClient.pause stops routing across backends even when passed an ID;

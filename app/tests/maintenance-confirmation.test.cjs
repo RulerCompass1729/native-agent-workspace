@@ -13,6 +13,7 @@ const cases = [
   ...['runtimeLocation', 'openLocalFile', 'saveLocalFile', 'spaceFiles', 'openMessageFile'].map(method => [method, ['target']]),
   ...['interrupt', 'pause', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent', 'rename'].map(method => [method, ['target']]),
   ['pause', []], ['pause', ['agent']], ['spaceAction', ['shared', 'pause', []]],
+  ['roomRename', ['Replacement']], ['spaceAction', ['shared', 'rename', ['Replacement']]],
 ];
 function fixture(t, provider = 'codex') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-maintenance-'));
@@ -31,6 +32,24 @@ function fixture(t, provider = 'codex') {
   };
   return { dir, room, writes, context, binding, config, controller: new BackgroundControl(config) };
 }
+test('unanswered confirmations have per-actor and global bounds; cancellation releases a slot without replay', async t => {
+  const f = fixture(t), ask = (binding, id) => f.controller.call(binding, { action: 'invoke', method: 'spaceCreate', arguments: ['Synthetic space'], operation_id: id });
+  const bindings = Array.from({ length: 5 }, (_, n) => ({ ...f.binding, sender: { ...f.binding.sender, id: 'bounded-agent-' + n, nativeId: 'bounded-native-' + n } }));
+  for (let actor = 0; actor < 4; actor++) {
+    for (let n = 0; n < 32; n++) assert.equal((await ask(bindings[actor], `pending-${actor}-${n}`)).state, 'confirmation-required');
+    const limited = await ask(bindings[actor], `actor-limit-${actor}`);
+    assert.equal(limited.state, 'not-executed'); assert.equal(limited.reason, 'confirmation-limit');
+  }
+  const limited = await ask(bindings[4], 'global-limit');
+  assert.equal(limited.state, 'not-executed'); assert.equal(limited.reason, 'confirmation-limit');
+  assert.equal(f.controller.data.records.filter(r => r.state === 'confirmation-required').length, 128);
+  assert.equal(f.writes.length, 0); assert.equal(f.room.value.events.at(-1).controlAudit.state, 'not-executed');
+  await f.controller.decide('bounded-agent-0', 'bounded-native-0', 'pending-0-0', 0);
+  assert.equal((await ask(bindings[4], 'new-global-slot')).state, 'confirmation-required');
+  assert.equal((await ask(bindings[4], 'global-limit')).state, 'not-executed');
+  await assert.rejects(f.controller.call(bindings[4], { action: 'invoke', method: 'spaceCreate', arguments: ['Changed intent'], operation_id: 'global-limit' }), /different command/);
+  assert.equal(f.writes.length, 0);
+});
 for (const provider of ['claude', 'codex']) for (const [index, [method, args]] of cases.entries()) test(`${provider} ${method}[${index}]: pending and cancel have no effect, human approval executes once`, async t => {
   const f = fixture(t, provider), command = { action: 'invoke', operation_id: 'refuse', method, arguments: args };
   const pending = await f.controller.call(f.binding, command);

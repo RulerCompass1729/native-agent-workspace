@@ -67,7 +67,14 @@ for (const provider of ['claude', 'codex']) test(`${provider}: repeated snapshot
   const cold = new BackgroundControl(f.config); f.sandbox.backgroundControl = cold;
   assert.equal((await cold.call(f.binding, { action: 'snapshot' })).id, first.id); assert.equal(f.notices.length, 1);
   await cold.decide('agent', 'native-agent', first.id, 0);
-  const next = await cold.call(f.binding, { action: 'snapshot' }); assert.notEqual(next.id, first.id);
+  for (let n = 0; n < 3; n++) {
+    const cancelled = await cold.call(f.binding, { action: 'snapshot' });
+    assert.equal(cancelled.id, first.id); assert.equal(cancelled.state, 'cancelled');
+  }
+  const restarted = new BackgroundControl(f.config); f.sandbox.backgroundControl = restarted;
+  assert.equal((await restarted.call(f.binding, { action: 'snapshot' })).id, first.id);
+  assert.equal(f.notices.length, 1);
+  const next = await cold.call(f.binding, { action: 'snapshot', operation_id: 'ask-again-explicitly' }); assert.notEqual(next.id, first.id);
   assert.equal(next.state, 'confirmation-required'); assert.equal(f.notices.length, 2);
   await cold.call(f.binding, command('viewState', [{ selected: 'third', mode: 'chat' }]));
   const third = await cold.call(f.binding, { action: 'snapshot' }); assert.notEqual(third.id, next.id);
@@ -83,7 +90,67 @@ test('a replaced native target cannot reuse pending consent, and explicit operat
   await f.controller.decide('agent', 'native-agent', replacement.id, 1);
   // The remaining explicit read is current and may be reused; an approved copy alone never is.
   await f.controller.decide('agent', 'native-agent', explicit.id, 0);
-  const fresh = await f.controller.call(f.binding, { action: 'snapshot' }); assert.notEqual(fresh.id, replacement.id);
+  const fresh = await f.controller.call(f.binding, { action: 'snapshot' }); assert.equal(fresh.id, explicit.id); assert.equal(fresh.state, 'cancelled');
+});
+test('cancellation survives unrelated view edits, but a new selection or consent fingerprint releases it', async t => {
+  const f = fixture(t); await f.select('other');
+  const cancel = async () => {
+    const row = await f.controller.call(f.binding, { action: 'snapshot' });
+    assert.equal(row.state, 'confirmation-required');
+    await f.controller.decide('agent', 'native-agent', row.id, 0); return row.id;
+  };
+  const id = await cancel();
+  await f.controller.call(f.binding, command('viewState', [{ selected: 'other', mode: 'terminal' }]));
+  assert.equal((await f.controller.call(f.binding, { action: 'snapshot' })).id, id);
+  f.state.sessions[1].messages[0].text = 'NATIVE_PROGRESS_IS_NOT_NEW_CONSENT';
+  assert.equal((await f.controller.call(f.binding, { action: 'snapshot' })).id, id);
+  await f.select('third'); await f.select('other');
+  const next = await cancel(); assert.notEqual(next, id);
+  f.state.sessions[1].nativeId = 'new-native-target';
+  const replaced = await f.controller.call(f.binding, { action: 'snapshot' });
+  assert.equal(replaced.state, 'confirmation-required'); assert.notEqual(replaced.id, next);
+});
+test('a cancelled read does not suppress an independent view or another actor', async t => {
+  const f = fixture(t); await f.select('other');
+  const cancelled = await f.controller.call(f.binding, { action: 'snapshot' });
+  await f.controller.decide('agent', 'native-agent', cancelled.id, 0);
+  const opened = await f.controller.call(f.binding, command('newWindow', ['other']));
+  const independent = await f.controller.call(f.binding, { action: 'snapshot', view_id: opened.value.view_id });
+  assert.equal(independent.state, 'confirmation-required'); assert.notEqual(independent.id, cancelled.id);
+  const otherBinding = { ...f.binding, sender: { ...f.actor, nativeId: 'another-actor-native' } };
+  const c = await f.controller.view(otherBinding.sender); c.view.selected = 'other';
+  const other = await f.controller.call(otherBinding, { action: 'snapshot' });
+  assert.equal(other.state, 'confirmation-required'); assert.notEqual(other.id, cancelled.id);
+});
+for (const provider of ['claude', 'codex']) test(`${provider}: explicit read operations remain independent without repeating a pending notification`, async t => {
+  const f = fixture(t, provider); await f.select('other');
+  const a = await f.controller.call(f.binding, { action: 'snapshot', operation_id: 'explicit-a' });
+  const b = await f.controller.call(f.binding, command('initial', [], 'explicit-b'));
+  assert.notEqual(a.id, b.id); assert.equal(a.state, 'confirmation-required'); assert.equal(b.state, 'confirmation-required');
+  assert.equal(f.notices.length, 1);
+  await f.controller.decide('agent', 'native-agent', a.id, 0);
+  const c = await f.controller.call(f.binding, { action: 'snapshot', operation_id: 'explicit-c' });
+  assert.equal(c.state, 'confirmation-required'); assert.equal(f.notices.length, 1);
+  await f.controller.decide('agent', 'native-agent', b.id, 0);
+  await f.controller.decide('agent', 'native-agent', c.id, 0);
+  await f.controller.call(f.binding, { action: 'snapshot', operation_id: 'explicit-d' });
+  assert.equal(f.notices.length, 2);
+  const opened = await f.controller.call(f.binding, command('newWindow', ['other']));
+  await f.controller.call(f.binding, { action: 'snapshot', view_id: opened.value.view_id, operation_id: 'explicit-view' });
+  assert.equal(f.notices.length, 3);
+  await f.select('third'); await f.controller.call(f.binding, { action: 'snapshot', operation_id: 'explicit-third' });
+  assert.equal(f.notices.length, 4);
+});
+for (const method of ['roomRename', 'spaceAction']) test(`${method}: a hosted space rename is confirmed against its original named space`, async t => {
+  const f = fixture(t); let writes = 0;
+  f.config.handlers.set(method, () => { writes++; });
+  const args = command(method, method === 'roomRename' ? ['Replacement'] : ['shared', 'rename', ['Replacement']]);
+  const pending = await f.controller.call(f.binding, args);
+  assert.equal(pending.state, 'confirmation-required'); assert.equal(writes, 0);
+  assert.ok(pending.confirmation.options.detail.includes('Shared'));
+  f.state.rooms[0].name = 'Changed original space';
+  assert.equal((await f.controller.decide('agent', 'native-agent', pending.id, 1)).state, 'unconfirmed');
+  assert.equal(writes, 0);
 });
 for (const provider of ['claude', 'codex']) for (const kind of ['snapshot', 'initial']) test(`${provider} ${kind}: foreign conversation waits, cancels without a read, and one approval returns one bound snapshot`, async t => {
   const f = fixture(t, provider); await f.select('other');
@@ -95,13 +162,13 @@ for (const provider of ['claude', 'codex']) for (const kind of ['snapshot', 'ini
   const before = JSON.stringify(f.contexts[0].view);
   assert.equal((await f.controller.decide('agent', 'native-agent', pending.id, 0)).state, 'cancelled');
   assert.equal(JSON.stringify(f.contexts[0].view), before);
-  const second = await f.controller.call(f.binding, read());
+  const second = await f.controller.call(f.binding, kind === 'snapshot' ? { action: 'snapshot', operation_id: 'explicit-after-cancel' } : read());
   const approved = await f.controller.decide('agent', 'native-agent', second.id, 1);
   assert.equal(approved.state, 'complete'); assert.equal(approved.value, undefined);
   f.state.sessions[1].messages[0].text = 'NEW_UNREAD_CONTENT';
   const receipt = await f.controller.call(f.binding, { action: 'receipt', operation_id: second.id });
   assert.ok(JSON.stringify(receipt).includes(f.secret)); assert.equal(JSON.stringify(receipt).includes('NEW_UNREAD_CONTENT'), false); assert.equal(JSON.stringify(receipt).includes(f.third), false);
-  assert.equal((await f.controller.call(f.binding, read())).state, 'confirmation-required');
+  assert.equal((await f.controller.call(f.binding, read())).state, kind === 'snapshot' ? 'cancelled' : 'confirmation-required');
   assert.equal(JSON.stringify(f.sandbox.displayState(f.state, f.contexts[0])).includes(f.secret), false);
 });
 test('own snapshots and human windows keep their conversations; foreign unselected auxiliary fields are metadata-only', async t => {
@@ -292,6 +359,54 @@ const terminalReadBodies = {
   observe: { terminal: 'OBSERVE_PRIVATE_SCREEN', progress: { items: [{ text: 'OBSERVE_PRIVATE_PROGRESS' }], revision: 1 } },
   terminal: '\u001b[31mTERMINAL_PRIVATE_SERIALIZED\u001b[0m',
 };
+function spaceFileFixture(t, provider = 'codex') {
+  const f = fixture(t, provider); let reads = 0;
+  f.state.rooms[0].files = [{ id: 'space-file', name: 'Shared material.txt', path: '/synthetic/shared-material.txt' }];
+  f.sandbox.validRoomId = id => id === 'shared';
+  f.sandbox.roomState.metadata = id => { assert.equal(id, 'shared'); return f.state.rooms[0]; };
+  f.sandbox.readPreview = async () => {
+    reads++; await f.onFileRead?.();
+    return { token: 'preview-token', name: 'Shared material.txt', text: 'SPACE_FILE_PRIVATE_BODY', bytes: Buffer.from('SPACE_FILE_PRIVATE_BODY') };
+  };
+  vm.runInContext(part("  register('spaceFiles',", "  register('createDefaults',"), f.sandbox);
+  Object.defineProperty(f, 'fileReads', { get: () => reads }); return f;
+}
+for (const provider of ['claude', 'codex']) for (const role of ['member', 'nonmember', 'secretary']) test(`${provider} space file: ${role} cannot exceed current space authority after confirmation`, async t => {
+  const f = spaceFileFixture(t, provider);
+  if (role === 'nonmember') f.state.sessions[0].roomIds = [];
+  if (role === 'secretary') f.sandbox.secretary = { sessionId: 'agent', nativeId: 'native-agent' };
+  const args = command('spaceFiles', ['shared', 'space-file']), pending = await f.controller.call(f.binding, args);
+  assert.equal(pending.state, 'confirmation-required'); assert.equal(f.fileReads, 0);
+  const approved = await f.controller.decide('agent', 'native-agent', pending.id, 1);
+  assert.equal(approved.value, undefined);
+  if (role === 'member') {
+    assert.equal(approved.state, 'complete'); assert.equal(f.fileReads, 1);
+    assert.equal(approved.readAuthorization.roomId, 'shared');
+    const first = await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id });
+    assert.equal(first.receipt.value.text, 'SPACE_FILE_PRIVATE_BODY');
+    assert.equal((await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt.value, undefined);
+    assert.equal((await f.controller.call(f.binding, args)).value, undefined);
+  } else { assert.equal(approved.state, 'unconfirmed'); assert.equal(f.fileReads, 0); }
+  assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('SPACE_FILE_PRIVATE_BODY'), false);
+});
+for (const when of ['during-read', 'before-pickup']) test(`space file authority is rechecked ${when}`, async t => {
+  const f = spaceFileFixture(t);
+  if (when === 'during-read') f.onFileRead = () => { f.state.sessions[0].roomIds = []; };
+  const pending = await f.controller.call(f.binding, command('spaceFiles', ['shared', 'space-file']));
+  const approved = await f.controller.decide('agent', 'native-agent', pending.id, 1);
+  if (when === 'during-read') assert.equal(approved.state, 'unconfirmed');
+  else { assert.equal(approved.state, 'complete'); f.state.sessions[0].roomIds = []; }
+  assert.equal((await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt.value, undefined);
+  assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('SPACE_FILE_PRIVATE_BODY'), false);
+});
+test('legacy space file read bodies are purged on load', t => {
+  const f = fixture(t), args = command('spaceFiles', ['shared', 'space-file'], 'legacy-space-file');
+  fs.writeFileSync(f.controller.file, JSON.stringify({ version: 1, views: {}, records: [{ id: args.operation_id, actor: f.actor, command: args, state: 'complete', value: { text: 'SPACE_FILE_PRIVATE_BODY' } }] }), { mode: 0o600 });
+  const cold = new BackgroundControl(f.config);
+  assert.equal(cold.data.records[0].value, undefined); assert.equal(cold.data.records[0].readState, 'expired');
+  assert.equal(cold.data.records[0].readTarget.roomId, 'shared');
+  assert.equal(fs.readFileSync(cold.file, 'utf8').includes('SPACE_FILE_PRIVATE_BODY'), false);
+});
 for (const provider of ['claude', 'codex']) for (const [method, body] of Object.entries(terminalReadBodies)) test(`${provider} approved ${method}: person gets metadata, agent collects once, no durable body`, async t => {
   const f = fixture(t, provider); let reads = 0;
   f.config.handlers.set(method, (_c, id) => { assert.equal(id, 'other'); reads++; return body; });
