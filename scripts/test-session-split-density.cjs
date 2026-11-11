@@ -1,7 +1,9 @@
 // T-163: the single-session page's conversation/terminal boundary and input area. Source Electron in a hidden
 // window, the synthetic loading-terminal backend, no provider process and no model. Checks what the five
 // spacing rules do and, more importantly, what they must leave alone: text, states, the draft, who has the
-// input, the controls and their sizes, the type size and the height of the input box.
+// input, the controls and their sizes, the type size and the height of the input box. Also the row under the
+// input: in the Chinese interface the hint gives way before a button's label breaks, and nowhere does a
+// button, a label or the row come out worse than with the earlier styles.
 const scratch = require('./fixtures/test-scratch.cjs');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto'), { execFileSync } = require('node:child_process');
@@ -55,9 +57,18 @@ const sample = () => page.evaluate(() => {
     fonts: { input: getComputedStyle(q('#message-input')).fontSize, hint: getComputedStyle(q('#compose-hint')).fontSize, send: getComputedStyle(q('#send-button')).fontSize, summary: getComputedStyle(q('#advanced > summary')).fontSize,
       body: getComputedStyle(messages.querySelector('.message-body') || messages).fontSize },
     draft: q('#message-input').value, hintText: q('#compose-hint').textContent.trim(), layout: q('#session-layout').className,
+    row: (() => { const lines = e => { const r = document.createRange(); r.selectNodeContents(e); return new Set([...r.getClientRects()].filter(c => c.width > 0.5).map(c => Math.round(c.top))).size; };
+      const hint = q('#compose-hint'), stop = q('#interrupt'), wrap = q('#composer-wrap'), hs = getComputedStyle(hint);
+      return { send: lines(q('#send-button')), interrupt: shown(stop) ? lines(stop) : null, hint: lines(hint), basis: hs.flexBasis, grow: hs.flexGrow, sideways: wrap.scrollWidth - wrap.clientWidth, language: q('#ui-language').value }; })(),
   };
 });
 const clear = 'rgba(0, 0, 0, 0)';
+// T-163, the row under the input. In the Chinese interface, in a card of 320px or more, the hint asks for 16em
+// and takes what is left once the labels are whole; anywhere else it is sized as it always was. Checking the
+// computed values catches the rule being switched off silently, for instance by a change to the language selector.
+const hintGivesWay = (s, label) => assert.deepEqual([s.row.language, s.row.basis, s.row.grow], ['zh', '176px', '1'], `${label}: in Chinese the hint asks for 16em and takes what is left (${s.row.basis}, ${s.row.grow})`);
+const hintAsBefore = (s, label) => assert.deepEqual([s.row.basis, s.row.grow], ['auto', '0'], `${label}: the hint is sized as before (${s.row.basis}, ${s.row.grow})`);
+const wholeLabels = (s, label) => { assert.equal(s.row.send, 1, `${label}: the send control's label is on one line`); if (s.row.interrupt !== null) assert.equal(s.row.interrupt, 1, `${label}: the interrupt control's label is on one line`); };
 const inside = (inner, outer, label) => assert.ok(inner.x >= outer.x - 0.5 && inner.right <= outer.right + 0.5 && inner.y >= outer.y - 0.5 && inner.bottom <= outer.bottom + 0.5, label + ' stays inside its block');
 // What holds in every state of this surface.
 function invariants(s, label, draft, split = true) {
@@ -75,6 +86,61 @@ function invariants(s, label, draft, split = true) {
   if (split) assert.ok(Math.abs(s.advanced.x - (s.card.x - 16)) < 1 && Math.abs(s.summary.x - s.card.x) < 1, `${label}: the disclosure starts at the input card's left edge (${s.summary.x} vs ${s.card.x})`);
   else assert.ok(Math.abs(s.advanced.x - s.messages.x) < 1 && s.summary.x <= s.card.x + 0.5 && s.summary.x - s.messages.x <= 34, `${label}: the disclosure starts at the conversation's left edge (${s.summary.x}; conversation ${s.messages.x}, card ${s.card.x})`);
   assert.ok(s.advanced.y >= s.wrap.bottom - 0.5, label + ': the disclosure is below the input area, not over it');
+}
+// T-163: every label the send control can carry beside every hint in the catalog, with and without the interrupt
+// control, at card widths below, at and above the rule's 320px. Each is measured with the rule and with the hint
+// put back to how it was sized before, in one synchronous step so the program cannot redraw in between; the
+// width is set by narrowing the input area itself, as the divider does. The labels are read from the program's
+// own choice of label and hint (soloAction in the renderer) and the hints from the catalog, so one added later
+// is swept too.
+async function labelsSweep() {
+  const catalog = require('../app/ui-messages.js').zh;
+  const renderer = fs.readFileSync(path.join(root, 'app/renderer/renderer.js'), 'utf8'), from = renderer.indexOf('function soloAction('), to = renderer.indexOf('\nfunction ', from + 1);
+  assert.ok(from > 0 && to > from, 'The renderer still chooses the label and hint in soloAction');
+  const keys = [...new Set([...renderer.slice(from, to).matchAll(/'(composer\.\w+)'/g)].map(m => m[1]))], labelKeys = keys.filter(k => !/Hint$/.test(k));
+  assert.ok(labelKeys.length >= 13 && labelKeys.includes('composer.send') && labelKeys.includes('composer.steer') && labelKeys.includes('composer.claim'), `soloAction names the send control's labels (${labelKeys.join(', ')})`);
+  for (const k of keys) assert.ok(catalog[k], `${k} is in the catalog`);
+  const labels = labelKeys.map(k => catalog[k]);
+  const hints = Object.keys(catalog).filter(k => /^composer\..*Hint$/.test(k)).map(k => catalog[k]);
+  for (const k of keys.filter(k => /Hint$/.test(k))) assert.ok(hints.includes(catalog[k]), `${k} is among the hints swept`);
+  assert.ok(hints.length >= 20 && catalog['native.interrupt'], 'The catalog has the hints this row shows and the interrupt control\'s label');
+  const widths = [200, 260, 300, 315, 320, 325, 340, 360, 365, 400, 440, 448, 500, 600];
+  const measure = before => page.evaluate(({ labels, hints, widths, interrupt, before }) => {
+    const q = s => document.querySelector(s), card = q('#composer'), send = q('#send-button'), stop = q('#interrupt'), hint = q('#compose-hint'), wrap = q('#composer-wrap'), footer = q('#composer .composer-footer');
+    const keep = { send: send.textContent, stop: stop.textContent, stopHidden: stop.hidden, hint: hint.textContent, width: wrap.style.width, self: wrap.style.alignSelf };
+    const earlier = document.createElement('style'); earlier.textContent = '#composer .session-compose-hint{flex:0 1 auto !important;max-width:none !important}'; if (before) document.head.append(earlier);
+    const lines = e => { const r = document.createRange(); r.selectNodeContents(e); return new Set([...r.getClientRects()].filter(c => c.width > 0.5).map(c => Math.round(c.top))).size; };
+    const pad = parseFloat(getComputedStyle(wrap).paddingLeft) + parseFloat(getComputedStyle(wrap).paddingRight); wrap.style.alignSelf = 'flex-start';
+    const out = [];
+    try {
+      for (const w of widths) {
+        wrap.style.width = (w + pad) + 'px'; const row = []; if (Math.abs(card.getBoundingClientRect().width - w) > 0.6) throw Error('The card is not ' + w + 'px wide: ' + card.getBoundingClientRect().width);
+        for (let withStop = 0; withStop < 2; withStop++) { stop.hidden = !withStop; stop.textContent = interrupt;
+          for (const label of labels) { send.textContent = label;
+            for (const text of hints) { hint.textContent = text;
+              const c = card.getBoundingClientRect(), s = send.getBoundingClientRect(), t = withStop ? stop.getBoundingClientRect() : null;
+              row.push(Math.round(Math.max(0, s.right - c.right, t ? t.right - c.right : 0) * 10), lines(send), t ? lines(stop) : 0, Math.round(footer.getBoundingClientRect().height * 10), Math.round(wrap.scrollWidth - wrap.clientWidth));
+            } } }
+        out.push(row);
+      }
+    } finally { earlier.remove(); send.textContent = keep.send; stop.textContent = keep.stop; stop.hidden = keep.stopHidden; hint.textContent = keep.hint; wrap.style.width = keep.width; wrap.style.alignSelf = keep.self; }
+    return out;
+  }, { labels, hints, widths, interrupt: catalog['native.interrupt'], before });
+  const was = await measure(true), now = await measure(false), n = 5, tally = { compared: 0, changed: 0, wholeBefore: 0, wholeNow: 0, shorter: 0 };
+  const name = i => { const l = Math.floor(i / hints.length) % labels.length, withStop = Math.floor(i / hints.length / labels.length); return `${withStop ? catalog['native.interrupt'] + ' + ' : ''}${labels[l]} | ${hints[i % hints.length].slice(0, 24)}`; };
+  widths.forEach((w, wi) => { for (let i = 0; i < was[wi].length / n; i++) {
+    const a = was[wi].slice(i * n, i * n + n), b = now[wi].slice(i * n, i * n + n), at = `card ${w}px, ${name(i)}`; tally.compared++;
+    if (w < 320) { assert.deepEqual(b, a, `${at}: under 320px the row is as it was`); continue; }
+    if (a.some((v, k) => v !== b[k])) tally.changed++;
+    assert.ok(b[0] <= a[0] + 5, `${at}: no control sticks out of the card further than before (${a[0] / 10} to ${b[0] / 10}px)`);
+    assert.ok(b[4] <= a[4], `${at}: no more sideways scroll than before (${a[4]} to ${b[4]}px)`);
+    assert.ok(b[1] <= a[1] && b[2] <= a[2], `${at}: no label breaks into more lines than before (${a[1]}/${a[2]} to ${b[1]}/${b[2]})`);
+    assert.ok(b[3] <= a[3] + 5, `${at}: the row is not taller than before (${a[3] / 10} to ${b[3] / 10}px)`);
+    if (a[1] <= 1 && a[2] <= 1) tally.wholeBefore++; if (b[1] <= 1 && b[2] <= 1) tally.wholeNow++; if (b[3] < a[3] - 5) tally.shorter++;
+  } });
+  assert.ok(tally.wholeNow > tally.wholeBefore && tally.shorter > 0, `The rule keeps more labels whole and makes rows shorter (${tally.wholeBefore} to ${tally.wholeNow} whole, ${tally.shorter} shorter)`);
+  tally.labels = labels.length; tally.hints = hints.length;
+  return tally;
 }
 async function language(code) {
   await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption(code);
@@ -115,6 +181,7 @@ async function run() {
   let s = await sample();
   assert.ok(s.take, 'The run starts read-only, with the take-over control in the header'); invariants(s, 'read-only', draft);
   assert.match(s.hintText, /只读/, 'The input area says this window is read-only');
+  hintGivesWay(s, 'read-only'); wholeLabels(s, 'read-only');
   await capture('01-read-only-zh');
   check('Read-only: the draft, the read-only hint and the take-over control are there; the input area has the new spacing and nothing leaves the card');
 
@@ -128,6 +195,7 @@ async function run() {
   assert.deepEqual([s.turns[0].rule, s.turns[0].margin, s.turns[0].padding], [clear, '0px', '0px'], 'The first turn shown draws no rule and leaves no gap for one');
   assert.ok(s.firstShown.top - s.leftBar.bottom <= 13, `The first message starts right under the header (${s.firstShown.top - s.leftBar.bottom}px)`);
   assert.equal(s.fonts.body, '14px', 'The conversation\'s type size is unchanged');
+  hintGivesWay(s, 'idle'); wholeLabels(s, 'idle'); const idleCard = s.card.h;
   await capture('02-idle-zh');
   check('Idle: one header rule across both panes; the first turn has no rule of its own and starts under the header; the input box is ' + s.input.h + 'px high');
 
@@ -163,8 +231,11 @@ async function run() {
   s = await sample(); invariants(s, 'working', draft);
   assert.ok(s.interrupt, 'The interrupt control is shown'); inside(s.interrupt, s.card, 'working: the interrupt control');
   assert.ok(s.activity.bottom <= s.wrap.y + 0.5, 'The activity line is above the input area');
+  assert.match(s.hintText, /不能在回复中发送/, 'Working: the hint says why nothing can be sent now');
+  wholeLabels(s, 'working'); assert.ok(s.hint.w >= 175.5, `working: the hint keeps a readable width (${s.hint.w})`);
+  assert.ok(Math.abs(s.card.h - idleCard) < 0.6, `working: the input card is as tall as when idle (${s.card.h} and ${idleCard})`);
   await capture('04-working-zh');
-  check('Working: the activity line and the interrupt control are there and inside their blocks');
+  check('Working: the activity line and the interrupt control are there and inside their blocks; both labels are on one line and the card is as tall as when idle');
 
   // 6) Waiting for the person: the banner sits directly under the header, with no stray rule after it.
   child.send({ id: ++sequence, method: 'native-permission', target: id, value: { id: 'permission-1', kind: 'permission', title: 'Bash', detail: 'synthetic, nothing runs', options: [{ id: 'allow', label: '允许一次' }, { id: 'deny', label: '拒绝' }] } });
@@ -172,6 +243,7 @@ async function run() {
   s = await sample(); invariants(s, 'waiting', draft);
   assert.ok(Math.abs(s.approval.y - s.leftBar.bottom) < 1, 'The banner starts at the header rule');
   assert.ok(s.approval.h > 40 && s.messages.y >= s.approval.bottom - 0.5, 'The banner keeps its height and the conversation starts below it');
+  wholeLabels(s, 'waiting');
   await capture('05-waiting-for-you-zh');
   child.send({ id: ++sequence, method: 'native-permission', target: id, value: null }); child.send({ id: ++sequence, method: 'native-activity', target: id, value: null });
   await until(async () => { const now = await sample(); return now.approval === null && now.activity === null; }, 'Back to idle');
@@ -191,20 +263,41 @@ async function run() {
   await size(850, 600); s = await sample(); invariants(s, 'zh 850x600', draft);
   assert.ok(s.wrapScroll.scrollHeight <= s.wrapScroll.clientHeight + 1, `zh 850x600: the input area fits without scrolling (${s.wrapScroll.scrollHeight} in ${s.wrapScroll.clientHeight})`);
   await capture('07-small-zh');
+  // Working in the small window: the labels stay whole and the input area still fits.
+  const working = async on => { child.send({ id: ++sequence, method: 'native-activity', target: id, value: on ? { turnId: 'third', label: '正在运行 Bash' } : null }); await until(async () => ((await sample()).interrupt !== null) === on, on ? 'The interrupt control is shown' : 'The interrupt control is gone'); await settled(); };
+  await working(true); s = await sample(); invariants(s, 'zh 850x600 working', draft); hintGivesWay(s, 'zh 850x600 working'); wholeLabels(s, 'zh 850x600 working');
+  assert.ok(Math.abs(s.card.h - idleCard) < 0.6, `zh 850x600 working: the input card is as tall as when idle (${s.card.h})`);
+  assert.ok(s.wrapScroll.scrollHeight <= s.wrapScroll.clientHeight + 1, `zh 850x600 working: the input area fits without scrolling (${s.wrapScroll.scrollHeight} in ${s.wrapScroll.clientHeight})`);
+  await capture('07b-small-working-zh'); await working(false);
+  // English: the row is sized as it always was, idle and working, at both sizes.
   await size(1240, 850); await language('en'); s = await sample(); invariants(s, 'en 1240x850', draft);
-  assert.equal(s.hintText, 'Enter to send · Shift Enter for a new line');
+  assert.equal(s.hintText, 'Enter to send · Shift Enter for a new line'); hintAsBefore(s, 'en 1240x850');
   await capture('08-idle-en');
-  await size(850, 600); s = await sample(); invariants(s, 'en 850x600', draft);
+  await working(true); s = await sample(); invariants(s, 'en 1240x850 working', draft); hintAsBefore(s, 'en 1240x850 working'); inside(s.interrupt, s.card, 'en working: the interrupt control'); assert.equal(s.row.sideways, 0, 'en working: no sideways scroll'); await working(false);
+  await size(850, 600); s = await sample(); invariants(s, 'en 850x600', draft); hintAsBefore(s, 'en 850x600');
   assert.ok(s.wrapScroll.scrollHeight <= s.wrapScroll.clientHeight + 1, `en 850x600: the input area fits without scrolling (${s.wrapScroll.scrollHeight} in ${s.wrapScroll.clientHeight})`);
   await capture('09-small-en');
   await size(1240, 850); await language('zh');
-  check('Small window and English: the same spacing, nothing leaves the card, and the input area fits without scrolling');
+  check('Small window and English: the same spacing, nothing leaves the card, and the input area fits without scrolling; working in the small Chinese window keeps whole labels; in English the row is sized as before');
+
+  // 8b) The divider dragged to its stop: the card is far narrower than 320px and the row is sized as before.
+  const drag = async fraction => { const divider = page.locator('#session-layout > .split-divider'), d = await divider.boundingBox(), host = await page.locator('#session-layout').boundingBox(), from = d.x + d.width / 2, to = host.x + host.width * fraction;
+    await page.mouse.move(from, d.y + 120); await page.mouse.down(); for (let n = 1; n <= 6; n++) await page.mouse.move(from + (to - from) * n / 6, d.y + 120); await page.mouse.up(); await page.mouse.move(host.x + host.width - 40, host.y + 300); await settled();
+    return divider.getAttribute('aria-valuenow'); };
+  assert.equal(await drag(0.1), '20', 'The divider stops at 20%');
+  s = await sample(); assert.ok(s.card.w < 320, `With the divider at its stop the card is narrow (${s.card.w})`); hintAsBefore(s, 'narrow card'); assert.equal(s.row.sideways, 0, 'narrow card: no sideways scroll'); inside(s.send, s.card, 'narrow card: the send control');
+  await capture('09b-narrow-card-zh');
+  assert.equal(await drag(0.5), '50', 'The divider is back in the middle'); s = await sample(); hintGivesWay(s, 'divider back in the middle');
+  check('Divider at its 20% stop: the card is under 320px, the row is sized as before and nothing scrolls sideways; back in the middle the rule applies again');
 
   // 9) Conversation only: with the terminal pane closed the input area is the same.
   await page.locator('#close-native-terminal').click(); await until(() => page.locator('#session-layout').evaluate(e => !e.classList.contains('has-terminal')), 'The terminal pane is closed');
   s = await sample(); invariants(s, 'conversation only', draft, false);
   await capture('10-conversation-only-zh');
+  const swept = await labelsSweep();
   check('Conversation only: the input area has the same spacing; the disclosure starts at the conversation\'s left edge, the centred card being narrower as before');
+  s = await sample(); invariants(s, 'after the sweep', draft, false);
+  check(`Every label soloAction can choose (${swept.labels}) beside every hint in the catalog (${swept.hints}), with and without the interrupt control, at fourteen card widths (${swept.compared} comparisons with the earlier sizing): under 320px nothing differs; from 320px no control further out, no more sideways scroll, no label in more lines, no row taller; ${swept.wholeBefore} to ${swept.wholeNow} rows have whole labels and ${swept.shorter} are shorter`);
 
   // 10) An ended session: the input area offers to continue it, inside the same card.
   child.send({ id: ++sequence, method: 'set-state', target: id, value: 'ended' });
@@ -220,7 +313,7 @@ async function run() {
 }
 const cleanup = scratch.cleanup(async () => { if (app) await app.close(); client?.close(); if (child?.connected) child.disconnect(); if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); });
 let deadline;
-Promise.race([run(), new Promise((_, reject) => { deadline = setTimeout(() => reject(Error('180-second GUI budget exhausted')), 180000); })])
+Promise.race([run(), new Promise((_, reject) => { deadline = setTimeout(() => reject(Error('240-second GUI budget exhausted')), 240000); })])
   .catch(async error => { console.error(error.stack); fs.writeFileSync(path.join(evidence, 'failure.txt'), error.stack); try { if (page && !page.isClosed()) await capture('failure'); } catch { /* The page is gone. */ } process.exitCode = 1; })
   .finally(async () => {
     clearTimeout(deadline);
