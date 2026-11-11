@@ -65,7 +65,8 @@ for (const fault of ['append', 'eio', 'bad-tail']) test(`model authorization ref
     assert.throws(() => fault === 'bad-tail' ? invoke() : readFault(f.role.logFile, fault, invoke), { code: 'ERR_BUTLER_STATE' });
     assert.equal(f.role.snapshot().revision, 1); assert.notEqual(f.role.snapshot().selected, null);
   }
-  fs.writeFileSync(f.role.logFile, edge());
+  // Repair the unverified suffix without shrinking any safely observed history.
+  fs.writeFileSync(f.role.logFile, edge() + JSON.stringify({ event: 'repaired-note', padding: 'x'.repeat(160) }) + '\n');
   assert.throws(() => f.role.authorize(old, f.expected, records), { code: 'ERR_BUTLER_UNAUTHORIZED' });
   assert.deepEqual(f.role.authorize(successor, f.expected, records).identity, next);
 });
