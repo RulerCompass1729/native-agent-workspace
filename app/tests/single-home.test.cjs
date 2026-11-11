@@ -112,15 +112,87 @@ function metadataClient(f) {
   const client = {
     async call(method, ...args) {
       calls.push({ method, args });
-      if (method === 'initial') return { ...f.w.snapshot(), capabilities: ['collaborationSpacesV1', 'singleHomeMoveV1'] };
-      if (method === 'moveMembership') { const result = f.w.moveMembership(...args); if (controls.loseReply) { controls.loseReply = false; throw Error('Synthetic lost reply'); } return result; }
+      if (method === 'initial') return { ...f.w.snapshot(), capabilities: controls.capabilities || ['collaborationSpacesV1', 'singleHomeMoveV1', 'guardedSessionStopV1'] };
+      if (method === 'moveMembership') { controls.beforeMove?.(); const result = f.w.moveMembership(...args); if (controls.loseReply) { controls.loseReply = false; throw Error('Synthetic lost reply'); } return result; }
       throw Error('Unexpected metadata request');
     },
-    async callSpace(room, method) { assert.equal(method, 'pause'); f.w.pauseRoom(room); }
+    async callSpace(room, method) { assert.equal(method, 'pause'); calls.push({ method: 'pauseSpace', args: [room] }); f.w.pauseRoom(room); }
   };
   const state = new RoomState(f.dir), a = state.create('Source A'), b = state.create('Target B');
   return { state, client, a, b, controls, calls };
 }
+async function cleanupMember(t) {
+  const f = await backend(t), m = metadataClient(f);
+  await m.state.membership(m.client, f.id, true, 'Original', m.a);
+  f.s.state = 'disconnected'; m.calls.length = 0;
+  const pauses = [], pause = f.w.pauseRoom.bind(f.w);
+  f.w.pauseRoom = (...args) => { pauses.push(args[0]); return pause(...args); };
+  const expected = { nativeId: f.s.nativeId, placementRevision: spaces.placementRevision(f.s),
+    connectionRevision: f.s.connectionRevision, unusedSuccessor: true };
+  return { ...f, ...m, expected, pauses };
+}
+test('cleanup leave rejects a collaboration that starts after the desktop snapshot before move RPC', async t => {
+  const f = await cleanupMember(t), before = JSON.stringify(f.s), metadata = JSON.stringify(f.state.metadata(f.a));
+  assert.equal(f.w.rooms.get(f.a).run, null);
+  let run;
+  f.controls.beforeMove = () => { run = { status: 'running', ids: ['unrelated-member'] }; f.w.rooms.get(f.a).run = run; };
+  await assert.rejects(f.state.membership(f.client, f.id, false, 'Original', f.a, f.expected));
+  assert.deepEqual(f.pauses, []); assert.equal(JSON.stringify(f.s), before); assert.equal(JSON.stringify(f.state.metadata(f.a)), metadata);
+  assert.equal(f.w.rooms.get(f.a).run, run); assert.equal(run.status, 'running');
+  assert.equal(f.calls.filter(call => call.method === 'pauseSpace').length, 0);
+});
+for (const state of ['ended', 'recoverable', 'disconnected']) test(`cleanup leave passes the opt-in proof for an already ${state} unused member`, async t => {
+  const f = await cleanupMember(t); f.s.state = state;
+  const receipt = await f.state.membership(f.client, f.id, false, 'Original', f.a, f.expected);
+  assert.equal(receipt.changed, true); assert.deepEqual(spaces.roomIds(f.s), []);
+  assert.equal(f.calls.find(call => call.method === 'moveMembership').args[2].unusedSuccessor, true);
+  assert.equal(f.calls.filter(call => call.method === 'pauseSpace').length, 0);
+});
+for (const blocked of ['spaceGate', 'sessionGate', 'archived', 'merge', 'storeWarning', 'nativeWarning']) test(`cleanup leave retains ${blocked} validation without an eager pause`, async t => {
+  const f = await cleanupMember(t);
+  if (blocked === 'spaceGate') f.state.gates.add(`room:${f.a}`);
+  if (blocked === 'sessionGate') f.state.gates.add(f.id);
+  if (blocked === 'archived') f.state.metadata(f.a).archived = true;
+  if (blocked === 'merge') f.state.metadata(f.a).merge = { imported: false, stage: 'joining', joins: [], batch: { memberIds: [] } };
+  if (blocked === 'storeWarning') f.state.spacesWarning = 'Synthetic metadata warning';
+  if (blocked === 'nativeWarning') f.w.storageWarning = 'Synthetic native warning';
+  await assert.rejects(f.state.membership(f.client, f.id, false, 'Original', f.a, f.expected));
+  assert.deepEqual(spaces.roomIds(f.s), [f.a]); assert.deepEqual(f.pauses, []);
+  assert.deepEqual(f.calls.map(call => call.method), blocked === 'storeWarning' ? [] : ['initial']);
+});
+for (const capabilities of [[], ['singleHomeMoveV1'], ['guardedSessionStopV1']]) test(`cleanup leave refuses unsupported backend without legacy fallback ${capabilities}`, async t => {
+  const f = await cleanupMember(t); f.controls.capabilities = capabilities;
+  await assert.rejects(f.state.membership(f.client, f.id, false, 'Original', f.a, f.expected));
+  assert.deepEqual(spaces.roomIds(f.s), [f.a]); assert.deepEqual(f.pauses, []);
+  assert.deepEqual(f.calls.map(call => call.method), ['initial']);
+});
+for (const state of ['starting', 'idle', 'working']) test(`native cleanup leave refuses a successor that became ${state}`, async t => {
+  const f = await cleanupMember(t); f.controls.beforeMove = () => { f.s.state = state; };
+  await assert.rejects(f.state.membership(f.client, f.id, false, 'Original', f.a, f.expected));
+  assert.deepEqual(spaces.roomIds(f.s), [f.a]); assert.deepEqual(f.pauses, []); assert.equal(f.s.state, state);
+});
+test('native cleanup leave refuses an active source space without pausing', async t => {
+  const f = await cleanupMember(t);
+  f.w.rooms.get(f.a).run = { status: 'running', ids: ['unrelated-member'] };
+  assert.throws(() => f.w.moveMembership(f.id, null, { ...proofFor(f.s), unusedSuccessor: true }));
+  assert.deepEqual(spaces.roomIds(f.s), [f.a]); assert.deepEqual(f.pauses, []); assert.equal(f.w.rooms.get(f.a).run.status, 'running');
+});
+test('native cleanup flag cannot move a stopped session into another space', async t => {
+  const f = await cleanupMember(t);
+  assert.throws(() => f.w.moveMembership(f.id, f.b, { ...proofFor(f.s), unusedSuccessor: true }));
+  assert.deepEqual(spaces.roomIds(f.s), [f.a]); assert.deepEqual(f.pauses, []);
+});
+test('desktop cleanup flag cannot join a stopped session to another space', async t => {
+  const f = await cleanupMember(t);
+  await assert.rejects(f.state.membership(f.client, f.id, true, 'Original', f.b, f.expected));
+  assert.deepEqual(spaces.roomIds(f.s), [f.a]); assert.deepEqual(f.pauses, []); assert.deepEqual(f.calls, []);
+});
+test('ordinary membership still pauses an active space before leaving', async t => {
+  const f = await cleanupMember(t); f.w.rooms.get(f.a).run = { status: 'running', ids: ['unrelated-member'] };
+  await f.state.membership(f.client, f.id, false, 'Original', f.a);
+  assert.deepEqual(spaces.roomIds(f.s), []); assert.equal(f.w.rooms.get(f.a).run.status, 'paused');
+  assert.equal(f.calls.filter(call => call.method === 'pauseSpace').length, 1);
+});
 test('desktop membership uses one owning-backend move and undo restores the prior home', async t => {
   const f = await backend(t), m = metadataClient(f);
   await m.state.membership(m.client, f.id, true, 'Original', m.a);

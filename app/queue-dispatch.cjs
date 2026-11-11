@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
 const { randomUUID } = require('node:crypto');
-const { roomIds } = require('./collaboration-spaces.cjs');
+const { roomIds, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
 const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 
@@ -110,6 +110,61 @@ const CODEX_EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
 // One rotation at a time: each starts a new native session, and several at once would raise
 // memory just when the machine may be short of it.
 const MAX_ACTIVE_ROTATIONS = 1;
+const GUARDED_STOP_CAPABILITY = 'guardedSessionStopV1';
+const NOTICE_STATES = ['pending', 'attempted', 'unknown'];
+const CLEANUP_STATES = ['pending', 'started', 'confirmed', 'unknown'];
+
+function exactKeys(value, keys) {
+  return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
+}
+function trustProof(session) {
+  const proof = { nativeId: session?.nativeId, controlRevision: session?.controlRevision,
+    draftRevision: session?.draftRevision, placementRevision: session && placementRevision(session) };
+  return validTrustProof(proof, session?.provider) ? proof : null;
+}
+function validTrustProof(proof, provider) {
+  return exactKeys(proof, ['nativeId', 'controlRevision', 'draftRevision', 'placementRevision']) &&
+    (proof.nativeId === null ? provider === 'codex' : typeof proof.nativeId === 'string' && proof.nativeId.length > 0 && proof.nativeId.length <= 2000 && !/[\u0000-\u001f]/u.test(proof.nativeId)) &&
+    ['controlRevision', 'draftRevision', 'placementRevision'].every(key => Number.isSafeInteger(proof[key]) && proof[key] >= 0);
+}
+function noticeEffects(ids, state = 'pending') {
+  return { v: 1, log: state, rooms: Object.fromEntries(ids.map(id => [id, state])), os: state };
+}
+function validRoomStates(value, ids, states) {
+  return value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).sort().join('\0') === [...new Set(ids)].sort().join('\0') && Object.values(value).every(state => states.includes(state));
+}
+function validNoticeEffects(value, ids) {
+  return exactKeys(value, ['v', 'log', 'rooms', 'os']) && value.v === 1 && NOTICE_STATES.includes(value.log) &&
+    NOTICE_STATES.includes(value.os) && validRoomStates(value.rooms, ids, NOTICE_STATES);
+}
+function validTrustCleanup(value, record) {
+  const keys = ['v', 'id', 'proof', 'stop', 'rooms', 'notices'];
+  if (value && Object.hasOwn(value, 'outcome')) keys.push('outcome');
+  return exactKeys(value, keys) && value.v === 1 && validTrustReceipt(value.id) &&
+    (value.outcome === undefined || value.outcome === null || ['failed', 'trustTimedOut', 'trustTimeoutUnconfirmed', 'trustCleanupUnconfirmed'].includes(value.outcome)) &&
+    (value.proof === null || validTrustProof(value.proof, record.provider)) &&
+    exactKeys(value.stop, ['state', 'attempts']) && CLEANUP_STATES.includes(value.stop.state) &&
+    Number.isSafeInteger(value.stop.attempts) && value.stop.attempts >= 0 && value.stop.attempts <= 2 &&
+    (!['pending', 'started'].includes(value.stop.state) || value.proof !== null) &&
+    validRoomStates(value.rooms, record.roomIds, CLEANUP_STATES) && validNoticeEffects(value.notices, record.roomIds);
+}
+function trustFailure(record) {
+  return record?.phase === 'failed' && !record.handoffConfirmed && validTrustReceipt(record.trustNoticeId) &&
+    record.newId && record.newCwd && record.newCwd !== record.cwd;
+}
+function cleanupComplete(record) {
+  return record.trustCleanup?.stop.state === 'confirmed' && Object.values(record.trustCleanup.rooms).every(state => state === 'confirmed');
+}
+function noticesPending(effects) {
+  return effects && [effects.log, effects.os, ...Object.values(effects.rooms)].includes('pending');
+}
+function trustRecoveryPending(record) {
+  return trustFailure(record) && (!cleanupComplete(record) || noticesPending(record.trustCleanup?.notices));
+}
+function quarantinedSuccessor(record) {
+  return trustFailure(record) && !cleanupComplete(record);
+}
 
 function validText(value, limit) {
   if (typeof value !== 'string') {
@@ -620,6 +675,7 @@ function rotationReason(session, now, options, rotations) {
 function queueVacancies(input) {
   const busy = new Set((input.actions || []).filter(action => ['dispatch', 'rotate'].includes(action.kind)).map(action => action.sessionId));
   for (const [id, rotation] of Object.entries(input.rotations || {})) {
+    if (quarantinedSuccessor(rotation) && rotation.newId !== id) busy.add(rotation.newId);
     if (rotation && !RESTING_PHASES.includes(rotation.phase)) {
       busy.add(id);
       if (rotation.newId && !rotation.handoffConfirmed) busy.add(rotation.newId);
@@ -681,6 +737,7 @@ function planDispatch(input) {
   let rotationSlots = MAX_ACTIVE_ROTATIONS;
   for (const id of Object.keys(rotations)) {
     const record = rotations[id];
+    if (quarantinedSuccessor(record) && record.newId !== id) busy.add(record.newId);
     if (record && !RESTING_PHASES.includes(record.phase)) {
       rotationSlots -= 1;
       busy.add(id);
@@ -1368,6 +1425,15 @@ function readRotations(file, now) {
   const result = {};
   for (const oldId of Object.keys(data.rotations)) {
     const record = data.rotations[oldId];
+    // New durable state can describe a live, quarantined successor. Corruption
+    // must not silently drop that quarantine through the legacy skip rules.
+    if (record && typeof record === 'object' && ['trustOwner', 'trustEffects', 'trustCleanup'].some(key => Object.hasOwn(record, key)) &&
+        (!validId(oldId) || !ROTATION_PHASES.includes(record.phase) || !validId(record.oldNativeId) || !validId(record.newId) || record.newId === oldId ||
+          !['claude', 'codex'].includes(record.provider) || !Array.isArray(record.roomIds) || !record.roomIds.every(validId) ||
+          new Set(record.roomIds).size !== record.roomIds.length || typeof record.name !== 'string' || !validTrustReceipt(record.trustNoticeId) ||
+          !validTime(record.trustWaitingAt) || typeof record.newCwd !== 'string' || !path.isAbsolute(record.newCwd) || record.newCwd === record.cwd || record.newCwd.includes('\0') || record.newCwd.length > 4096)) {
+      throw Error('Invalid trust receipt state');
+    }
     if (!validId(oldId) || !record || typeof record !== 'object' || !ROTATION_PHASES.includes(record.phase)) {
       continue;
     }
@@ -1386,7 +1452,12 @@ function readRotations(file, now) {
       try { gitWorktree.planShape(record.newWorktree); } catch { continue; }
       if (record.newCwd !== record.newWorktree.cwd) continue;
     }
-    if (record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS) {
+    if ((record.trustOwner !== undefined && record.trustOwner !== null && !validTrustProof(record.trustOwner, record.provider)) ||
+        (record.trustEffects !== undefined && !validNoticeEffects(record.trustEffects, record.roomIds)) ||
+        (record.trustCleanup !== undefined && (!trustFailure(record) || record.newId === oldId || !validTrustCleanup(record.trustCleanup, record)))) {
+      throw Error('Invalid trust receipt state');
+    }
+    if (record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS && !trustRecoveryPending(record)) {
       continue;
     }
     // Recorded before a resumed Claude session's model was read from its transcript; not a reason to rest.
@@ -1660,7 +1731,7 @@ class QueueDispatcher {
     for (const id of Object.keys(this.rotations)) {
       const record = this.rotations[id];
       const keptOver = record.phase === 'kept' && now - (record.keptAt || 0) > ROTATE_AFTER_MS;
-      const failedOver = record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS;
+      const failedOver = record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS && !trustRecoveryPending(record);
       if (keptOver || failedOver) {
         delete this.rotations[id];
         changed = true;
@@ -1683,7 +1754,7 @@ class QueueDispatcher {
 
   // Metadata only, no session state: is there anything to send, settle or rotate?
   hasOpenWork() {
-    if (this.activeRotations().length) {
+    if (this.activeRotations().length || Object.values(this.rotations).some(trustRecoveryPending)) {
       return true;
     }
     // Integration work that can move without the person keeps the passes going: a space record
@@ -1829,14 +1900,15 @@ class QueueDispatcher {
     }
     this.listen(this.client);
     const rotating = this.activeRotations().length > 0;
-    const due = this.dirty || rotating || now - this.lastFullPass >= FULL_PASS_MS || this.settlingSoon(now) || now === this.lastMaintenance;
+    const recoveringTrust = Object.values(this.rotations).some(trustRecoveryPending);
+    const due = this.dirty || rotating || recoveringTrust || now - this.lastFullPass >= FULL_PASS_MS || this.settlingSoon(now) || now === this.lastMaintenance;
     if (!due) {
       return;
     }
     this.dirty = false;
     this.lastFullPass = now;
     let current = this.view();
-    if (rotating) {
+    if (rotating || recoveringTrust) {
       await this.advanceRotations(current.snapshot, current.now);
       current = this.view();
     }
@@ -1947,8 +2019,10 @@ class QueueDispatcher {
 
   // Read fresh state once, right before sending; skip quietly if the member moved on.
   async freshReady(sessionId) {
+    if (Object.values(this.rotations).some(record => quarantinedSuccessor(record) && record.newId === sessionId)) return null;
     await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
     const current = this.view();
+    if (Object.values(this.rotations).some(record => quarantinedSuccessor(record) && record.newId === sessionId)) return null;
     const session = current.snapshot.sessions.find(s => s.id === sessionId);
     if (!session || !sessionReady(session, current.snapshot.wakePolicy).ready) {
       return null;
@@ -2183,6 +2257,13 @@ class QueueDispatcher {
   }
 
   async advanceRotations(snapshot, now) {
+    for (const [oldId, record] of Object.entries(this.rotations)) {
+      if (this.closed) return;
+      if (trustRecoveryPending(record)) {
+        try { await this.resumeTrustCleanup(oldId, record, snapshot, now); }
+        catch (error) { if (!this.closed) throw error; }
+      }
+    }
     for (const oldId of this.activeRotations()) {
       if (this.closed) return;
       const record = this.rotations[oldId];
@@ -2191,18 +2272,30 @@ class QueueDispatcher {
       } catch (error) {
         // A closing window rejects its pending RPC; the next app must resume
         // the persisted creating receipt, not inherit a shutdown failure.
-        if (!this.closed) await this.failRotation(oldId, record, error.message || 'rotation-failed', now);
+        if (!this.closed) {
+          try { await this.failRotation(oldId, record, error.message || 'rotation-failed', now, snapshot); }
+          catch (cleanupError) { if (!this.closed) throw cleanupError; }
+        }
       }
     }
   }
 
   // Undo what a failed rotation started; the old member keeps its session and work.
-  async failRotation(oldId, record, reason, now) {
+  async failRotation(oldId, record, reason, now, snapshot) {
     const phase = record.phase;
     const trustTimedOut = phase === 'waiting-trust' && reason === 'native-directory-trust-timeout';
     record.phase = 'failed';
     record.failedAt = now;
     record.reason = reason;
+    if (trustFailure(record)) {
+      record.oldId ??= oldId;
+      record.trustCleanup = { v: 1, id: randomUUID(), proof: record.trustOwner ? { ...record.trustOwner } : null,
+        stop: { state: record.trustOwner ? 'pending' : 'unknown', attempts: 0 },
+        rooms: Object.fromEntries(record.roomIds.map(id => [id, 'pending'])), notices: noticeEffects(record.roomIds), outcome: null };
+      this.save(); // Intent and failure are one write; a restart can finish it.
+      if (!this.closed) await this.resumeTrustCleanup(oldId, record, snapshot, now);
+      return;
+    }
     this.save();
     if (record.newId && !record.handoffConfirmed && ['joining', 'created', 'handed', 'waiting-trust'].includes(phase)) {
       for (const roomId of record.roomIds) {
@@ -2237,24 +2330,136 @@ class QueueDispatcher {
     await this.broadcast();
   }
 
-  // One durable decision per successor. Never send an answer to native here.
-  async waitForDirectoryTrust(oldId, record, now) {
+  // One durable decision per visible wait. Never send an answer to native here.
+  async waitForDirectoryTrust(oldId, record, now, successor) {
+    const entering = record.phase !== 'waiting-trust';
+    record.oldId ??= oldId;
+    if (entering) {
+      record.trustWaitingAt = now;
+      record.trustNoticeId = randomUUID();
+      record.trustEffects = noticeEffects(record.roomIds);
+      record.trustOwner = trustProof(successor);
+    } else if (!record.trustEffects) {
+      // An old marker's absence after trim/clear proves nothing. Only its OS
+      // flag was written before that attempt; old log/room attempts are unknown.
+      record.trustEffects = noticeEffects(record.roomIds, 'unknown');
+      if (!record.trustNotified) record.trustEffects.os = 'pending';
+      record.trustOwner ??= null;
+    }
     record.phase = 'waiting-trust';
     record.trustWaitingAt ??= now;
     record.trustNoticeId ||= randomUUID();
     record.reason = 'native-directory-trust';
+    record.trustNotified = true; // Compatibility suppression, never delivery evidence.
     this.save();
     // No queued work belongs to a successor that has not received its handoff.
     for (const roomId of record.roomIds) this.roomState.queueReassign(roomId, record.newId, oldId);
-    if (!this.log.some(entry => entry.event === 'waiting' && entry.noticeId === record.trustNoticeId)) {
-      this.appendLog('waiting', record, { reason: record.reason, noticeId: record.trustNoticeId });
+    await this.trustNotices(oldId, record, record.trustEffects, 'needsTrust', 'waiting', record.trustNoticeId);
+    await this.broadcast();
+  }
+
+  saveTrustState(object, key, value) {
+    const prior = object[key]; object[key] = value;
+    try { this.save(); } catch (error) { object[key] = prior; throw error; }
+  }
+
+  async trustNotices(oldId, record, effects, outcome, event, receipt) {
+    const attempt = async (object, key, action) => {
+      if (this.closed || object[key] !== 'pending') return;
+      this.saveTrustState(object, key, 'attempted');
+      await action(); // At most one attempt, not an acknowledgement of delivery.
+    };
+    await attempt(effects, 'log', () => this.appendLog(event, record, { reason: record.reason, noticeId: receipt }));
+    for (const id of record.roomIds) {
+      await attempt(effects.rooms, id, () => this.roomState.rotationEvent([id], outcome, this.label(oldId, record.name),
+        outcome === 'failed' ? record.reason : this.label(record.newId, record.newName), receipt));
     }
-    this.roomState.rotationEvent(record.roomIds, 'needsTrust', this.label(oldId, record.name), this.label(record.newId, record.newName), record.trustNoticeId);
-    if (!record.trustNotified) {
-      record.trustNotified = true;
-      this.save(); // OS delivery is best effort; do not re-notify after a restart.
-      this.notify('needsTrust', record);
+    await attempt(effects, 'os', () => this.notify(outcome, record));
+  }
+
+  async resumeTrustCleanup(oldId, record, snapshot, now) {
+    if (this.closed) return;
+    if (!record.trustCleanup) {
+      // Older failed records do not reveal which calls ran before a crash.
+      // Preserve quarantine without manufacturing another stop or notification.
+      record.trustCleanup = { v: 1, id: randomUUID(), proof: record.trustOwner || null,
+        stop: { state: 'unknown', attempts: 0 }, rooms: Object.fromEntries(record.roomIds.map(id => [id, 'unknown'])),
+        notices: noticeEffects(record.roomIds, 'unknown'), outcome: null };
+      this.save();
     }
+    const cleanup = record.trustCleanup, proof = cleanup.proof;
+    let observed = snapshot;
+    let fresh = observed?.sessions.find(session => session.id === record.newId);
+    const inactive = () => fresh && proof && fresh.nativeId === proof.nativeId && ['ended', 'recoverable', 'disconnected'].includes(fresh.state);
+    const unchanged = () => fresh && proof && fresh.provider === record.provider && fresh.nativeId === proof.nativeId &&
+      fresh.controlRevision === proof.controlRevision && fresh.draftRevision === proof.draftRevision && placementRevision(fresh) === proof.placementRevision &&
+      ['starting', 'idle', 'error'].includes(fresh.state) && !fresh.pendingTag && !fresh.nativeContextPending && !fresh.liveDraft &&
+      !(fresh.messages || []).some(message => ['user', 'assistant'].includes(message.role)) &&
+      fresh.nativeGoal?.status !== 'active' && fresh.nativeGoal?.known !== false && !(fresh.background > 0) && !(fresh.scheduled > 0) && !fresh.fleet?.length;
+    for (const id of record.roomIds) {
+      try { this.roomState.queueReassign(id, record.newId, oldId); } catch { /* The space may have been removed or archived. */ }
+    }
+    if (inactive()) {
+      if (cleanup.stop.state !== 'confirmed') this.saveTrustState(cleanup.stop, 'state', 'confirmed');
+    } else if (['pending', 'started'].includes(cleanup.stop.state)) {
+      if (!unchanged() || cleanup.stop.attempts >= 2) this.saveTrustState(cleanup.stop, 'state', 'unknown');
+      else {
+        let target, guard;
+        try {
+          target = this.client.route(record.newId);
+          guard = typeof this.client.operationGuard === 'function' ? this.client.operationGuard(target) : () => {};
+          guard();
+          if (!target.state.capabilities?.includes(GUARDED_STOP_CAPABILITY)) throw Error('guarded-stop-unavailable');
+        } catch { this.saveTrustState(cleanup.stop, 'state', 'unknown'); }
+        if (cleanup.stop.state !== 'unknown') {
+          const prior = { ...cleanup.stop };
+          cleanup.stop.state = 'started'; cleanup.stop.attempts++;
+          try { this.save(); } catch (error) { Object.assign(cleanup.stop, prior); throw error; }
+          let result;
+          try {
+            guard();
+            result = await withTimeout(target.client.call('stopUnusedSuccessor', record.newId, proof), CALL_TIMEOUT_MS, 'stop-timeout');
+            guard();
+            if (!['ended', 'recoverable', 'disconnected'].includes(result?.state)) throw Error('native-stop-unconfirmed');
+          } catch { result = null; }
+          if (this.closed) return;
+          this.saveTrustState(cleanup.stop, 'state', result ? 'confirmed' : 'unknown');
+          try { await this.client.refresh(); observed = this.client.snapshot(); fresh = observed.sessions.find(session => session.id === record.newId); } catch { fresh = null; }
+        }
+      }
+    }
+    // The existing membership mutation can pause that space. Do not interrupt
+    // a collaboration that does not use this unused, now-stopped successor.
+    for (const id of record.roomIds) {
+      if (this.closed) return;
+      if (fresh && !roomIds(fresh).includes(id)) {
+        if (cleanup.rooms[id] !== 'confirmed') this.saveTrustState(cleanup.rooms, id, 'confirmed');
+      } else if (cleanup.rooms[id] === 'started') this.saveTrustState(cleanup.rooms, id, 'unknown');
+      else if (cleanup.rooms[id] === 'pending' && cleanup.stop.state === 'confirmed' && inactive() &&
+          !observed?.rooms?.some(room => room.id === id && room.run?.status === 'running')) {
+        const expected = { nativeId: fresh.nativeId, revision: membershipRevision(fresh, id),
+          placementRevision: placementRevision(fresh), connectionRevision: fresh.connectionRevision || 0, unusedSuccessor: true };
+        this.saveTrustState(cleanup.rooms, id, 'started');
+        let left = false;
+        try {
+          const target = this.client.route(record.newId), guard = typeof this.client.operationGuard === 'function' ? this.client.operationGuard(target) : () => {};
+          guard();
+          const scoped = { call: (method, ...args) => { guard(); return target.client.call(method, ...args); } };
+          await withTimeout(this.roomState.membership(scoped, record.newId, false, record.newName, id, expected), CALL_TIMEOUT_MS, 'leave-timeout');
+          guard(); await this.client.refresh(); fresh = this.client.snapshot().sessions.find(session => session.id === record.newId);
+          left = Boolean(fresh && !roomIds(fresh).includes(id));
+        } catch { /* An unconfirmed leave keeps this successor out of every queue. */ }
+        if (this.closed) return;
+        this.saveTrustState(cleanup.rooms, id, left ? 'confirmed' : 'unknown');
+      }
+    }
+    if (!cleanup.outcome && noticesPending(cleanup.notices)) {
+      const timedOut = record.reason.startsWith('native-directory-trust-timeout');
+      if (cleanup.stop.state !== 'confirmed' && timedOut) record.reason = 'native-directory-trust-timeout-stop-unconfirmed';
+      this.saveTrustState(cleanup, 'outcome', cleanupComplete(record) ? (timedOut ? 'trustTimedOut' : 'failed')
+        : (timedOut && cleanup.stop.state !== 'confirmed' ? 'trustTimeoutUnconfirmed' : 'trustCleanupUnconfirmed'));
+    }
+    await this.trustNotices(oldId, record, cleanup.notices, cleanup.outcome || 'trustCleanupUnconfirmed', 'failed', cleanup.id);
     await this.broadcast();
   }
 
@@ -2265,12 +2470,13 @@ class QueueDispatcher {
     if (record.phase === 'waiting-trust') {
       if (old && !this.untouched(old, record, replyAfter(old, record.tag, record.requestedAt))) throw Error('person-active');
       if (!successor || ['ended', 'background', 'recoverable', 'error'].includes(successor.state)) throw Error('new-session-directory-trust-unavailable');
-      if (now - record.trustWaitingAt >= this.directoryTrustTimeoutMs) throw Error('native-directory-trust-timeout');
-      if (successor.nativeStartupPrompt?.kind === 'directory-trust') {
-        if (!record.trustNotified) await this.waitForDirectoryTrust(oldId, record, now);
+      const prompt = successor.nativeStartupPrompt?.kind === 'directory-trust';
+      const ready = !prompt && sessionReady(successor, snapshot.wakePolicy).ready;
+      if (!ready) {
+        if (now - record.trustWaitingAt >= this.directoryTrustTimeoutMs) throw Error('native-directory-trust-timeout');
+        if (!record.trustEffects || noticesPending(record.trustEffects)) await this.waitForDirectoryTrust(oldId, record, now, successor);
         return;
       }
-      if (!sessionReady(successor, snapshot.wakePolicy).ready) return;
       // Native readiness, not a rendered line disappearing, resolves the wait.
       // Joining again is idempotent and reassigns queued items only at this point.
       record.phase = 'joining';
@@ -2279,7 +2485,7 @@ class QueueDispatcher {
     }
     if (record.newCwd && record.newCwd !== record.cwd && ['joining', 'created'].includes(record.phase) &&
         successor?.nativeStartupPrompt?.kind === 'directory-trust' && successor.nativeStartupPrompt.source === 'native-terminal' && successor.nativeStartupPrompt.provider === record.provider) {
-      await this.waitForDirectoryTrust(oldId, record, now);
+      await this.waitForDirectoryTrust(oldId, record, now, successor);
       return;
     }
     if (record.phase === 'requested') {
@@ -2364,7 +2570,7 @@ class QueueDispatcher {
       const latest = record.newCwd && record.newCwd !== record.cwd ? this.client.snapshot().sessions.find(session => session.id === record.newId) : null;
       if (record.newCwd && record.newCwd !== record.cwd && latest?.nativeStartupPrompt?.kind === 'directory-trust' &&
           latest.nativeStartupPrompt.source === 'native-terminal' && latest.nativeStartupPrompt.provider === record.provider) {
-        await this.waitForDirectoryTrust(oldId, record, now); return;
+        await this.waitForDirectoryTrust(oldId, record, now, latest); return;
       }
       for (const roomId of record.roomIds) {
         await withTimeout(this.roomState.membership(this.client, record.newId, true, record.newName, roomId), CALL_TIMEOUT_MS, 'join-timeout');

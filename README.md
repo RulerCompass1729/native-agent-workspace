@@ -183,6 +183,13 @@ before starting the app to change this limit; missing or invalid values use
 600000 ms. It is read at application startup and uses the saved wait start, so
 restarting does not restart the budget. Automatic directory migration remains
 disabled while its native trust checks are incomplete.
+Readiness observed without a trust prompt takes precedence over an elapsed
+deadline. A new prompt starts a separate wait. Notification attempts and failed
+successor cleanup are saved in the rotation record, independently of cleared
+space history or the retained log. Unconfirmed successors receive no queued
+work and keep their cleanup record beyond the usual seven-day failure retention;
+the original member can continue. Notifications are best effort, not delivery
+acknowledgements.
 
 ## Local macOS app build
 
