@@ -230,7 +230,15 @@ local branch or main; not installed, pushed or published):
   no running teammates. NAW sends idle members their next item and replaces long
   sessions with new ones, and it does neither for a session with a background
   command, an active goal or running teammates. A turn whose final message
-  starts with 「需要你决定：」 holds the member for the person. When the person
+  starts with 「需要你决定：」 holds the member for the person. When the work
+  on the item ends in commits, the turn's final message has, after its first
+  line, one line of its own with exactly three words separated by single
+  spaces: `READY <branch> <commit>` (the branch that holds the work and its
+  head commit, 7 to 40 hex characters; plain text, with no quotes, backticks,
+  bold, list marker or closing period). NAW keeps the line on the item and
+  records the delivery in the space; an item without commits has no such
+  line. The line only reports a delivery: it does not merge, install or ask
+  for anything. When the person
   starts using a queue in a space, they or the secretary tell its members once,
   through NAW, to end any background wait.
 - Otherwise, a Claude agent working from the private task board does not end a turn idle;
