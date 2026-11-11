@@ -10,6 +10,7 @@ const path = require('node:path');
 const cp = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { roomIds } = require('./collaboration-spaces.cjs');
+const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 
 const CAPABILITY = 'queueDispatchV1';
@@ -841,12 +842,33 @@ function handoffRequestText(why) {
   ].join('\n');
 }
 
-function handoffText(oldName, handoff) {
+function nawMadeDirectory(cwd, defaultWorkspace, newWorkspaceRoot) {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return false;
+  const selected = path.resolve(cwd);
+  if (typeof defaultWorkspace === 'string' && path.isAbsolute(defaultWorkspace) && selected === path.resolve(defaultWorkspace)) return true;
+  return typeof newWorkspaceRoot === 'string' && path.isAbsolute(newWorkspaceRoot) &&
+    path.dirname(selected) === path.resolve(newWorkspaceRoot) && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(path.basename(selected));
+}
+
+function directoryHandoff(record, snapshot) {
+  if (!record.newCwd || record.newCwd === record.cwd || !nawMadeDirectory(record.cwd, snapshot.defaultWorkspace, snapshot.newWorkspaceRoot)) return '';
+  let entries;
+  try {
+    if (!fs.lstatSync(record.cwd).isDirectory()) throw Error('Directory unavailable');
+    const names = fs.readdirSync(record.cwd).sort();
+    entries = names.length ? names.slice(0, 20).map(name => JSON.stringify(name)).join('、') + (names.length > 20 ? `，等 ${names.length} 项` : '') : '（空）';
+  } catch { entries = '（目录清单未能读取）'; }
+  const copy = record.newWorktree ? `（仓库 ${record.newWorktree.repository} 的 worktree，分支 ${record.newWorktree.branch}）` : '';
+  return `旧会话的工作目录 ${record.cwd} 是 NAW 自动建的，新会话改在 ${record.newCwd}${copy}，这样能读到项目的 CLAUDE.md。旧目录保留，没有删除，里面现有：${entries}。需要时按绝对路径读写。`;
+}
+
+function handoffText(oldName, handoff, directoryNote = '') {
   return [
     `【NAW 换会话】你接手「${oldName}」的工作。旧会话已经结束，它写的交接如下：`,
     '',
     handoff,
     '',
+    ...(directoryNote ? [directoryNote, ''] : []),
     '先按交接核对现状（只读即可），然后结束本轮，不留后台等待；这个空间有队列时，NAW 会接着派下一件。',
   ].join('\n');
 }
@@ -1277,6 +1299,11 @@ function readRotations(file, now) {
     if (record.newId !== undefined && !validId(record.newId)) {
       continue;
     }
+    if (record.newCwd !== undefined && (typeof record.newCwd !== 'string' || !path.isAbsolute(record.newCwd) || record.newCwd.includes('\0') || record.newCwd.length > 4096)) continue;
+    if (record.newWorktree !== undefined) {
+      try { gitWorktree.planShape(record.newWorktree); } catch { continue; }
+      if (record.newCwd !== record.newWorktree.cwd) continue;
+    }
     if (record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS) {
       continue;
     }
@@ -1300,6 +1327,9 @@ class QueueDispatcher {
     this.clients = options.clients || (() => null);
     this.connect = options.connect;
     this.labels = options.labels || new Map();
+    this.creationDefaults = options.creationDefaults || (() => ({}));
+    // Native first-directory trust must be qualified before unattended moves.
+    this.migrateDirectories = options.migrateDirectories === true;
     this.broadcast = options.broadcast || (async () => {});
     this.file = path.join(options.dataDir, 'queue-dispatch.json');
     this.now = options.now || Date.now;
@@ -1954,11 +1984,14 @@ class QueueDispatcher {
 
   async advanceRotations(snapshot, now) {
     for (const oldId of this.activeRotations()) {
+      if (this.closed) return;
       const record = this.rotations[oldId];
       try {
         await this.advanceRotation(oldId, record, snapshot, now);
       } catch (error) {
-        await this.failRotation(oldId, record, error.message || 'rotation-failed', now);
+        // A closing window rejects its pending RPC; the next app must resume
+        // the persisted creating receipt, not inherit a shutdown failure.
+        if (!this.closed) await this.failRotation(oldId, record, error.message || 'rotation-failed', now);
       }
     }
   }
@@ -1999,6 +2032,7 @@ class QueueDispatcher {
   }
 
   async advanceRotation(oldId, record, snapshot, now) {
+    if (this.closed) return;
     const old = snapshot.sessions.find(s => s.id === oldId);
     if (record.phase === 'requested') {
       if (!record.tag) {
@@ -2030,18 +2064,40 @@ class QueueDispatcher {
         record.newName = nextName(record.name);
       }
       const name = record.newName;
-      // After a restart, adopt a session this rotation already created.
-      let existing = null;
-      for (const session of snapshot.sessions) {
+      // Legacy creating records may already own a successor at the old cwd.
+      // Adopt it before selecting a different directory after an upgrade.
+      const candidates = snapshot.sessions.filter(session => {
         const recent = Number.isFinite(session.createdAt) && session.createdAt >= (record.creatingAt || 0) - 5000;
-        if (session.name === name && session.cwd === record.cwd && recent) {
-          existing = session;
-        }
-      }
+        const sameDirectory = record.newWorktree ? session.worktreePreparation?.nonce === record.newWorktree.nonce : session.cwd === (record.newCwd || record.cwd);
+        return session.id !== oldId && session.provider === record.provider && session.name === name && sameDirectory && recent;
+      });
+      if (candidates.length > 1) throw Error('new-session-ambiguous');
+      const existing = candidates[0];
       if (existing) {
         record.newId = existing.id;
       } else {
-        const options = { provider: record.provider, cwd: record.cwd, name, view: record.view || 'chat' };
+        if (!record.newCwd) {
+          let newCwd = record.cwd, newWorktree;
+          if (this.migrateDirectories && nawMadeDirectory(record.cwd, snapshot.defaultWorkspace, snapshot.newWorkspaceRoot)) {
+            const defaults = await this.creationDefaults(snapshot);
+            if (this.closed) return;
+            if (defaults?.repository) {
+              const plan = await withTimeout(this.client.call('gitWorktreePreview', defaults.repository, randomUUID(), ''), CALL_TIMEOUT_MS, 'worktree-preview-timeout');
+              if (this.closed) return;
+              gitWorktree.planShape(plan);
+              if (!path.isAbsolute(plan.cwd)) throw Error('invalid-worktree-directory');
+              newWorktree = plan; newCwd = plan.cwd;
+            } else if (typeof defaults?.directory === 'string' && path.isAbsolute(defaults.directory)) {
+              newCwd = defaults.directory;
+            } else this.appendLog('directory', record, { reason: 'no-default-directory' });
+          }
+          // This name, nonce and target are the recovery receipt, before create.
+          record.newCwd = newCwd;
+          if (newWorktree) record.newWorktree = newWorktree;
+          this.save();
+        }
+        const options = { provider: record.provider, cwd: record.newWorktree?.source || record.newCwd, name, view: record.view || 'chat' };
+        if (record.newWorktree) options.gitWorktree = record.newWorktree;
         if (record.skipPermissions) {
           options.skipPermissions = true;
         }
@@ -2050,6 +2106,7 @@ class QueueDispatcher {
         }
         record.newId = await withTimeout(this.client.call('create', options), CREATE_TIMEOUT_MS, 'create-timeout');
       }
+      if (this.closed) return;
       record.createdNewAt = now;
       record.phase = 'joining';
       this.save();
@@ -2090,7 +2147,7 @@ class QueueDispatcher {
       if (mismatch) {
         throw Error(`settings-differ:${mismatch}`);
       }
-      record.handoffTag = await this.send(fresh, handoffText(record.name, record.handoff), `rotation-handoff:${oldId}`);
+      record.handoffTag = await this.send(fresh, handoffText(record.name, record.handoff, directoryHandoff(record, snapshot)), `rotation-handoff:${oldId}`);
       record.handedAt = now;
       record.phase = 'handed';
       this.save();
@@ -2251,4 +2308,6 @@ module.exports = {
   nextName,
   rotationChains,
   QueueDispatcher,
+  nawMadeDirectory,
+  directoryHandoff,
 };

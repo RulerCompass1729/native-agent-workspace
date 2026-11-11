@@ -16,6 +16,7 @@ const { ImagePreviews, imageSource } = require('./native-images.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary } = require('./queue-secretary.cjs');
+const { CreationDefaults } = require('./creation-defaults.cjs');
 const { readingState } = require('./reading-state.cjs');
 const { ViewStore, validViews, dropRetiredViewFields } = require('./view-store.cjs');
 const { roomId: validRoomId, untouchedDefault } = require('./collaboration-spaces.cjs');
@@ -82,7 +83,7 @@ const queueOutcomeSeen = new Set(), queueOutcomeNotifications = new Map();
 let pendingReveal = null;
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
-let dataDir, sessionLabels, roomState, queueSecretary, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
+let dataDir, sessionLabels, roomState, queueSecretary, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
 let applicationBuild, applicationMenu;
 let mobileBroker;
@@ -397,7 +398,9 @@ async function startQueueDispatcher() {
       labels: sessionLabels.labels,
       broadcast: broadcastRoom,
       notify: notifyRotation,
+      creationDefaults: snapshot => creationDefaults.get(snapshot?.sessions || []),
     };
+    if (backgroundTest && process.env.NAW_TEST_QUEUE_DIRECTORY_MIGRATION === '1') options.migrateDirectories = true;
     // Only a verified isolated test run may lower the record limit, the memory limit
     // (and the age a session needs before a memory rotation) or the quiet time after the person's input.
     const testContent = Number(process.env.NAW_TEST_QUEUE_CONTENT_LIMIT);
@@ -879,6 +882,8 @@ async function boot() {
   roomState = new RoomState(dataDir);
   roomState.onQueueOutcome = notifyQueueOutcome;
   queueSecretary = new QueueSecretary(dataDir);
+  const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
+  creationDefaults = new CreationDefaults(dataDir, { defaultWorkspace, newWorkspaceRoot: `${path.resolve(defaultWorkspace)}-sessions` });
   viewStore = new ViewStore(dataDir);
   const loaded = dropRetiredViewFields(viewStore.load());
   views = loaded.views;
@@ -1070,6 +1075,13 @@ async function boot() {
       roomState.assertAvailable(null, true, roomId); roomState.addFiles(result.filePaths, roomId); await broadcastRoom(); return true;
     } finally { c.fileChoosing = false; }
   });
+  register('createDefaults', async c => {
+    const revision = c.worktreePreviewRevision = (c.worktreePreviewRevision || 0) + 1;
+    c.worktreePlan = null;
+    const snapshot = await c.client.call('initial'), defaults = creationDefaults.get(snapshot.sessions);
+    if (!c.win.isDestroyed() && c.worktreePreviewRevision === revision) c.worktreeSource = defaults.repository;
+    return defaults;
+  });
   register('gitWorktreePreview', async (c, selected, nonce, relative) => {
     if (selected !== c.worktreeSource) throw uiError("error.main.selectRepositoryFirst");
     const revision = c.worktreePreviewRevision = (c.worktreePreviewRevision || 0) + 1;
@@ -1080,12 +1092,16 @@ async function boot() {
   });
   register('create', async (c, ...args) => {
     assertNativeCreation(await c.client.call('initial'));
+    let defaults = args[0];
     if (args[0]?.gitWorktree != null) {
       const requested = args[0].gitWorktree, plan = c.worktreePlan;
       if (!plan || Object.keys(requested).length !== Object.keys(plan).length || Object.keys(plan).some(key => requested[key] !== plan[key])) throw uiError("error.main.worktreePreviewExpired");
       c.worktreePlan = null;
+      defaults = { ...args[0], gitWorktree: plan };
     }
-    return c.client.call('create', ...args);
+    const id = await c.client.call('create', ...args);
+    if (!c.background) { try { creationDefaults.remember(defaults); } catch { /* Creating a session succeeded even if optional defaults cannot be saved. */ } }
+    return id;
   });
   register('nativeHistory', (c, options) => c.client.call('nativeHistory', options));
   register('importHistory', (c, nativeId, options) => c.client.call('importHistory', nativeId, options));
