@@ -834,28 +834,34 @@ Codex 活动来自 [官方 app-server 的 turn/item/status 事件](https://learn
 实时计数或纯思考时长，因此本轮不模拟这些读数。完整 TUI 1:1 映射仍未验收。
 
 
-An existing backend may retain explicit native executable paths in its private
-`runtime-locations.json`. Pre-existing backend files are also adopted at the next
-cold bootstrap; deployment-only launchers must be explicitly replaced or removed.
-Normal bootstrap validates and reuses that file, including after app relaunch; other backends retain their normal discovery settings. The file
-is part of the backend profile, not disposable test evidence. An invalid backend override blocks cold workspace opening until that file is
-fixed or removed; the error identifies the backend file. The root backend keeps
-the global Settings recovery behavior, so Settings remain reachable.
-Removing the file explicitly restores ordinary discovery. No provider binary is
-installed or copied by this setting.
+A backend's private `runtime-locations.json` no longer selects its programs.
+Until 2026-11-10 an existing backend kept explicit native executable paths
+there and reused them at every bootstrap. Settings edits only the shared file,
+so nothing in the interface showed or could change such a path: one naming a
+version the vendor had removed left the backend unable to run that provider,
+and one naming a version that still existed kept the backend on it. On the
+person's question why the agents were not on the latest version, the choice was
+made for them, and is theirs to reverse, that backends follow the shared
+Settings file and discovery only.
 
-Settings edits only the shared file, so nothing in the interface can repair a
-backend's private entry. When a backend starts, a private entry whose program no
-longer exists (vendors remove old versions) is therefore dropped from that file,
-and what was dropped is kept beside it in `runtime-locations.removed.json` (the
-last twenty repairs); a private file left with no entry is no override, and the
-shared Settings file applies again. A private entry whose program still exists is
-kept, whatever its version. The shared file is never changed this way: a program
-the person selected in Settings stays selected and shows as not found. A private
-file that cannot be rewritten is used as it is. A running backend is not touched;
-its native Codex server cannot change program while it runs. So a private entry
-whose program disappears while its backend runs stays until that backend next
-starts: the alert below names the program, but Settings cannot change it.
+When a backend starts, every entry of its private file is therefore taken out:
+the entries are first added to `runtime-locations.removed.json` beside it (the
+last twenty removals, each entry with its path and whether its program still
+existed, so it can be put back), then the file is rewritten empty, and the
+backend reads the shared Settings file. If the record or the file cannot be
+written, nothing is taken out and the file is used as it is. An invalid private
+file still blocks cold workspace opening until it is fixed or removed; the
+error identifies the backend file. The shared file is never changed this way: a
+program the person selected in Settings stays selected and shows as not found.
+The root backend keeps the global Settings recovery behavior, so Settings remain
+reachable. A service started by hand with no Settings file known keeps using
+its own file. No provider binary is installed or copied by any of this.
+
+A running backend is not touched; its native Codex server cannot change program
+while it runs. A backend still running an earlier build keeps its private paths
+until it next starts on this one: if such a path's program disappears meanwhile,
+the alert below names the program once that backend reports it, but Settings
+cannot change it.
 
 A backend resolves its programs again whenever a client asks for its initial
 state and before each session starts (capability `programAvailabilityV1`), and
@@ -864,4 +870,5 @@ reports the result as `available.claude`, `available.codex` and
 them, the workspace's alert line says which, until it can. Before an update is
 installed, `node scripts/check-backend-programs.cjs <data directory> --backend
 <key>` answers the same question for the backend the update will activate,
-without writing anything or running a program.
+without writing anything or running a program; its `wouldDrop` lists the private
+entries that backend's next start will take out.

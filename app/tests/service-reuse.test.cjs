@@ -277,7 +277,9 @@ test('an ordinary legacy store without a dedicated manifest keeps its existing d
     assert.deepEqual(service.calls, ['initial']);
   } finally { await service?.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
-test('normal service bootstrap retains backend runtime paths across restarts without changing another profile', async () => {
+// Until 2026-11-10 a backend kept and reused its own runtime paths here. They are now taken out at its start and
+// kept in a record, and it uses the shared Settings file (runtime-locations.cjs; decided for the person, theirs to reverse).
+test('normal service bootstrap takes a backend\'s own runtime paths out into a record and uses the shared Settings file, without changing another profile', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-runtime-bootstrap-'));
   const key = 'backends/' + 'a'.repeat(20), retained = path.join(directory, key), ordinary = path.join(directory, 'ordinary');
   const old = { version: process.env.NAW_APP_VERSION, config: process.env.NAW_RUNTIME_CONFIG };
@@ -295,7 +297,10 @@ test('normal service bootstrap retains backend runtime paths across restarts wit
   try {
     for (let i = 0; i < 2; i++) {
       await ensureService(directory, launcher, key);
-      assert.equal(fs.readFileSync(receipt, 'utf8'), localFile);
+      assert.equal(fs.readFileSync(receipt, 'utf8'), globalFile);
+      assert.deepEqual(JSON.parse(fs.readFileSync(localFile)), {});
+      // Recorded once, with the program that still existed, so it can be put back.
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(retained, 'runtime-locations.removed.json'))).removals.map(entry => entry.removed), [[{ key: 'codex', path: '/usr/bin/false', existed: true }]]);
       const client = await connect(retained, 'runtime-path-test');
       try { const state = await client.call('initial'); assert.equal(state.sessions.length, 0); assert.equal(state.diagnostics.dispatches, 0); }
       finally { client.close(); }

@@ -1,6 +1,7 @@
-// A backend's own program locations (the person, 2026-11-10: 「为啥不把 agent 更新到最新」). An entry whose
-// program is gone must not leave the backend that takes new sessions unable to run a provider with nothing
-// shown. Fake programs only; nothing is started but NAW's own backend service.
+// A backend's own program locations (the person, 2026-11-10: 「为啥不把 agent 更新到最新」). A backend must not
+// be left unable to run a provider with nothing shown, nor kept on an older version by an entry nothing in the
+// interface shows: its own entries are taken out when it starts and kept in a record, and it uses the shared
+// Settings file. Fake programs only; nothing is started but NAW's own backend service.
 for (const key of ['NAW_WORKSPACE', 'NAW_APP_VERSION', 'NAW_RUNTIME_CONFIG']) delete process.env[key];
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -24,49 +25,51 @@ function fixture(t) {
 // Discovery as the installed app does it, but on the fixture's launchers first.
 function searchPath(t, value) { const before = process.env.PATH; process.env.PATH = value; t.after(() => { process.env.PATH = before; }); }
 
-test('an own entry whose program is gone is dropped at a start, recorded, and the rest of the file is kept', t => {
-  const f = fixture(t); f.write(f.own, { claude: path.join(f.base, 'versions', '2.1.312'), codex: f.old });
-  const before = fs.readFileSync(f.own, 'utf8');
+test('every own entry is taken out at a start, for a program that is gone and for an older version that still exists, and kept in the record', t => {
+  const f = fixture(t), goneClaude = path.join(f.base, 'versions', '2.1.312');
+  f.write(f.own, { claude: goneClaude, codex: f.old });
+  const before = fs.readFileSync(f.own, 'utf8'), removed = [{ key: 'claude', path: goneClaude, existed: false }, { key: 'codex', path: f.old, existed: true }];
   // Without repair nothing is written: the same answer, for a check before an update.
   const dry = locations.backendLocations(f.backend, f.shared);
-  assert.deepEqual(dry, { file: f.own, locations: { codex: f.old }, removed: [{ key: 'claude', path: path.join(f.base, 'versions', '2.1.312') }] });
+  assert.deepEqual(dry, { file: f.shared, locations: null, removed });
   assert.equal(fs.readFileSync(f.own, 'utf8'), before); assert.equal(fs.existsSync(f.record), false);
   assert.deepEqual(locations.backendLocations(f.backend, f.shared, { repair: true }), dry);
-  assert.deepEqual(f.read(f.own), { codex: f.old }); assert.equal(fs.statSync(f.own).mode & 0o777, 0o600);
+  assert.deepEqual(f.read(f.own), {}); assert.equal(fs.statSync(f.own).mode & 0o777, 0o600);
+  // What was taken out can be put back from the record: every entry, with whether its program still existed.
   const kept = f.read(f.record);
-  assert.deepEqual(kept.removals.map(entry => entry.removed), [dry.removed]); assert.ok(Date.parse(kept.removals[0].at) <= Date.now()); assert.equal(fs.statSync(f.record).mode & 0o777, 0o600);
+  assert.deepEqual(kept.removals.map(entry => entry.removed), [removed]); assert.ok(Date.parse(kept.removals[0].at) <= Date.now()); assert.equal(fs.statSync(f.record).mode & 0o777, 0o600);
+  assert.deepEqual(Object.fromEntries(kept.removals[0].removed.map(entry => [entry.key, entry.path])), JSON.parse(before));
   assert.deepEqual(fs.readdirSync(f.backend).sort(), ['runtime-locations.json', 'runtime-locations.removed.json'], 'No temporary file is left');
-  // The next start has nothing to drop and writes nothing.
+  // The next start has nothing to take out and writes nothing.
   const stamp = fs.statSync(f.own).mtimeMs, recorded = fs.readFileSync(f.record, 'utf8');
-  assert.deepEqual(locations.backendLocations(f.backend, f.shared, { repair: true }), { file: f.own, locations: { codex: f.old }, removed: [] });
+  assert.deepEqual(locations.backendLocations(f.backend, f.shared, { repair: true }), { file: f.shared, locations: null, removed: [] });
   assert.equal(fs.statSync(f.own).mtimeMs, stamp); assert.equal(fs.readFileSync(f.record, 'utf8'), recorded);
-  // A later repair is added to the record, which keeps the last twenty and stays private even if it was not.
+  // A file written again later is taken out again; the record keeps the last twenty and stays private even if it was not.
   fs.chmodSync(f.record, 0o644);
-  for (let i = 0; i < 21; i++) { f.write(f.own, { codex: f.old, python3: path.join(f.base, 'versions', `python-${i}`) }); locations.backendLocations(f.backend, f.shared, { repair: true }); }
+  for (let i = 0; i < 21; i++) { f.write(f.own, { python3: path.join(f.base, 'versions', `python-${i}`) }); locations.backendLocations(f.backend, f.shared, { repair: true }); }
   const later = f.read(f.record).removals;
-  assert.equal(later.length, 20); assert.deepEqual(later.at(-1).removed, [{ key: 'python3', path: path.join(f.base, 'versions', 'python-20') }]); assert.equal(later[0].removed[0].path, path.join(f.base, 'versions', 'python-1'));
+  assert.equal(later.length, 20); assert.deepEqual(later.at(-1).removed, [{ key: 'python3', path: path.join(f.base, 'versions', 'python-20'), existed: false }]); assert.equal(later[0].removed[0].path, path.join(f.base, 'versions', 'python-1'));
   assert.equal(fs.statSync(f.record).mode & 0o777, 0o600);
-  fs.writeFileSync(f.record, '{ not json'); f.write(f.own, { codex: f.gone });
-  assert.equal(locations.backendLocations(f.backend, f.shared, { repair: true }).file, f.shared, 'An unreadable record does not stop the repair');
-  assert.equal(f.read(f.record).removals.length, 1);
+  fs.writeFileSync(f.record, '{ not json'); f.write(f.own, { codex: f.old });
+  assert.equal(locations.backendLocations(f.backend, f.shared, { repair: true }).file, f.shared, 'An unreadable record is started again and does not stop the start');
+  assert.deepEqual(f.read(f.record).removals.map(entry => entry.removed), [[{ key: 'codex', path: f.old, existed: true }]]); assert.deepEqual(f.read(f.own), {});
 });
 
-test('an own file left with no entry is no override: the shared Settings file applies again', t => {
-  const f = fixture(t); f.write(f.own, { claude: path.join(f.base, 'versions', '2.1.312'), codex: f.gone }); f.write(f.shared, { codex: f.old });
-  const repaired = locations.backendLocations(f.backend, f.shared, { repair: true });
-  assert.deepEqual([repaired.file, repaired.locations, repaired.removed.map(entry => entry.key).sort()], [f.shared, null, ['claude', 'codex']]);
-  assert.deepEqual(f.read(f.own), {}); assert.deepEqual(f.read(f.shared), { codex: f.old }, 'The shared file is not touched');
+test('a backend uses the shared Settings file whether or not it has a file of its own, and that file is never touched', t => {
+  const f = fixture(t); f.write(f.shared, { codex: f.old });
+  const settings = fs.readFileSync(f.shared, 'utf8');
+  // No file of its own: nothing is created.
   assert.deepEqual(locations.backendLocations(f.backend, f.shared, { repair: true }), { file: f.shared, locations: null, removed: [] });
-});
-
-test('an own entry for an existing older version is kept, and a backend with no file of its own uses the shared one', t => {
-  const f = fixture(t); f.write(f.own, { codex: f.old });
-  const before = fs.readFileSync(f.own, 'utf8'), stamp = fs.statSync(f.own).mtimeMs;
-  assert.deepEqual(locations.backendLocations(f.backend, f.shared, { repair: true }), { file: f.own, locations: { codex: f.old }, removed: [] });
-  assert.equal(fs.readFileSync(f.own, 'utf8'), before); assert.equal(fs.statSync(f.own).mtimeMs, stamp); assert.equal(fs.existsSync(f.record), false);
-  fs.rmSync(f.own);
+  assert.deepEqual(fs.readdirSync(f.backend), []);
+  // An own entry for another existing program does not override the person's selection any more.
+  const other = path.join(f.base, 'versions', '0.167.0'); fs.writeFileSync(other, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  f.write(f.own, { codex: other });
+  assert.deepEqual(locations.backendLocations(f.backend, f.shared, { repair: true }), { file: f.shared, locations: null, removed: [{ key: 'codex', path: other, existed: true }] });
+  // An own file with no entry stays as it is.
+  const stamp = fs.statSync(f.own).mtimeMs;
   assert.deepEqual(locations.backendLocations(f.backend, f.shared, { repair: true }), { file: f.shared, locations: null, removed: [] });
-  assert.deepEqual(fs.readdirSync(f.backend), [], 'Nothing is created for a backend with no file');
+  assert.equal(fs.statSync(f.own).mtimeMs, stamp);
+  assert.equal(fs.readFileSync(f.shared, 'utf8'), settings);
 });
 
 test('the shared Settings file is never repaired, a hand-started service keeps its file as it is, and an unreadable file is an error', t => {
@@ -84,7 +87,7 @@ test('the shared Settings file is never repaired, a hand-started service keeps i
   assert.deepEqual(f.read(f.own), { codex: f.old });
 });
 
-test('a repair that cannot be written does not stop the backend: its file is used as it is', { skip: process.getuid?.() === 0 }, t => {
+test('when the record or the file cannot be written nothing is taken out, and the backend starts with its file as it is', { skip: process.getuid?.() === 0 }, t => {
   const f = fixture(t); f.write(f.own, { claude: path.join(f.base, 'versions', '2.1.312'), codex: f.old });
   const before = fs.readFileSync(f.own, 'utf8');
   fs.chmodSync(f.backend, 0o500);
@@ -92,6 +95,12 @@ test('a repair that cannot be written does not stop the backend: its file is use
   try { assert.deepEqual(locations.backendLocations(f.backend, f.shared, { repair: true }), { file: f.own, locations: { claude: path.join(f.base, 'versions', '2.1.312'), codex: f.old }, removed: [] }); }
   finally { fs.chmodSync(f.backend, 0o700); }
   assert.equal(fs.readFileSync(f.own, 'utf8'), before); assert.deepEqual(fs.readdirSync(f.backend), ['runtime-locations.json']);
+  // The record is written before the file: an entry never leaves the file without being kept. Here only the
+  // record cannot be written (its path is taken by a folder holding a file); the folder itself is writable.
+  const g = fixture(t); g.write(g.own, { codex: g.old });
+  fs.mkdirSync(g.record); fs.writeFileSync(path.join(g.record, 'in-the-way'), '');
+  assert.deepEqual(locations.backendLocations(g.backend, g.shared, { repair: true }), { file: g.own, locations: { codex: g.old }, removed: [] });
+  assert.deepEqual(g.read(g.own), { codex: g.old }, 'Without a record the entry stays in the file');
 });
 
 test('a backend whose own file cannot be read still refuses to start and names the file, as before this repair', async t => {
@@ -106,32 +115,30 @@ test('a backend whose own file cannot be read still refuses to start and names t
 
 test('the check before an update: a gone entry, an existing older version and no entry all leave both providers runnable', t => {
   const f = fixture(t); searchPath(t, f.bin);
-  const found = name => ({ available: true, path: f.launchers[name], source: 'found' });
+  const found = name => ({ available: true, path: f.launchers[name], source: 'found' }), all = { claude: found('claude'), codex: found('codex'), python3: found('python3') };
   // No file anywhere: everything is discovered.
-  assert.deepEqual(platform.backendPrograms(f.data, KEY), { backend: KEY, wouldDrop: [], programs: { claude: found('claude'), codex: found('codex'), python3: found('python3') }, ok: true });
-  assert.deepEqual(platform.backendPrograms(f.data, '.').programs, platform.backendPrograms(f.data, KEY).programs);
-  // Entries for a removed Claude and an existing older Codex: the first would be dropped and found again, the second is used.
-  f.write(f.own, { claude: path.join(f.base, 'versions', '2.1.312'), codex: f.old });
+  assert.deepEqual(platform.backendPrograms(f.data, KEY), { backend: KEY, wouldDrop: [], programs: all, ok: true });
+  assert.deepEqual(platform.backendPrograms(f.data, '.').programs, all);
+  // Entries for a removed Claude and an existing older Codex: both would be taken out, and the current programs are found.
+  const goneClaude = path.join(f.base, 'versions', '2.1.312');
+  f.write(f.own, { claude: goneClaude, codex: f.old });
   const before = fs.readFileSync(f.own, 'utf8');
-  assert.deepEqual(platform.backendPrograms(f.data, KEY), { backend: KEY, wouldDrop: [{ key: 'claude', path: path.join(f.base, 'versions', '2.1.312') }],
-    programs: { claude: found('claude'), codex: { available: true, path: f.old, source: 'own' }, python3: found('python3') }, ok: true });
+  assert.deepEqual(platform.backendPrograms(f.data, KEY), { backend: KEY, wouldDrop: [{ key: 'claude', path: goneClaude, existed: false }, { key: 'codex', path: f.old, existed: true }], programs: all, ok: true });
   assert.equal(fs.readFileSync(f.own, 'utf8'), before, 'The check changes nothing'); assert.equal(fs.existsSync(f.record), false);
-  // Every own entry gone: discovery again.
-  f.write(f.own, { claude: path.join(f.base, 'versions', '2.1.312'), codex: f.gone });
-  assert.deepEqual([platform.backendPrograms(f.data, KEY).ok, platform.backendPrograms(f.data, KEY).programs.codex, platform.backendPrograms(f.data, KEY).wouldDrop.length], [true, found('codex'), 2]);
 });
 
 test('the check fails when a provider cannot be run: a Settings selection that is gone, or nothing installed', t => {
   const f = fixture(t); searchPath(t, f.bin);
-  // The person's own selection is not replaced by discovery: the root backend and a backend without entries lose Codex.
-  f.write(f.shared, { codex: f.gone });
+  // The person's own selection is not replaced by discovery: every backend loses Codex, whatever its own file says.
+  f.write(f.shared, { codex: f.gone }); f.write(f.own, { codex: f.old });
   for (const key of ['.', KEY]) {
     const result = platform.backendPrograms(f.data, key);
-    assert.deepEqual([result.ok, result.programs.codex, result.programs.claude.available, result.wouldDrop], [false, { available: false, path: f.gone, source: 'settings' }, true, []], key);
+    assert.deepEqual([result.ok, result.programs.codex, result.programs.claude.available], [false, { available: false, path: f.gone, source: 'settings' }, true], key);
   }
-  // A backend's own existing entry still overrides it.
-  f.write(f.own, { codex: f.old });
-  assert.deepEqual([platform.backendPrograms(f.data, KEY).ok, platform.backendPrograms(f.data, KEY).programs.codex.source], [true, 'own']);
+  assert.deepEqual(platform.backendPrograms(f.data, KEY).wouldDrop, [{ key: 'codex', path: f.old, existed: true }]);
+  // A selection that exists is used by every backend.
+  f.write(f.shared, { codex: f.old });
+  assert.deepEqual([platform.backendPrograms(f.data, KEY).ok, platform.backendPrograms(f.data, KEY).programs.codex], [true, { available: true, path: f.old, source: 'settings' }]);
   assert.deepEqual(platform.executable('codex', undefined, { codex: f.gone }), undefined); assert.equal(platform.executable('codex', undefined, {}), f.launchers.codex);
   // Nothing to discover (only the conventional folders remain, which this machine may or may not have).
   fs.rmSync(f.shared); fs.rmSync(f.own); fs.rmSync(f.launchers.claude);
@@ -145,7 +152,8 @@ test('the check script prints one JSON object, changes nothing, and exits by the
   f.write(f.own, { claude: path.join(f.base, 'versions', '2.1.312'), codex: f.old });
   const before = fs.readFileSync(f.own, 'utf8');
   const good = run(f.data, '--backend', KEY, '--path', f.bin);
-  assert.deepEqual([good.status, good.out.ok, good.out.backend, good.out.pathAssumed, good.out.wouldDrop.map(entry => entry.key), good.out.programs.codex.source, good.out.programs.claude.path], [0, true, KEY, f.bin, ['claude'], 'own', f.launchers.claude]);
+  assert.deepEqual([good.status, good.out.ok, good.out.backend, good.out.pathAssumed, good.out.wouldDrop.map(entry => [entry.key, entry.existed]), good.out.programs.codex, good.out.programs.claude.path],
+    [0, true, KEY, f.bin, [['claude', false], ['codex', true]], { available: true, path: f.launchers.codex, source: 'found' }, f.launchers.claude]);
   assert.equal(fs.readFileSync(f.own, 'utf8'), before); assert.equal(fs.existsSync(f.record), false);
   // Without --backend the active backend of services.json is checked.
   f.write(path.join(f.data, 'services.json'), { format: 1, active: KEY, entries: ['.', KEY] });
@@ -180,10 +188,12 @@ test('the alert names what the backend that takes new sessions cannot run, and o
   assert.match(renderer, /warningText\(state\.programWarning, state\.programWarningUiMessage\)/, 'The alert line shows it');
 });
 
-test('a backend started with a gone entry runs both providers, and its initial state is resolved again each time', async t => {
+test('a backend started with entries of its own runs the current programs, and its initial state is resolved again each time', async t => {
   const { ensureServiceAt, connectService } = require('../service-client.cjs');
   const f = fixture(t); searchPath(t, f.bin);
-  f.write(f.own, { claude: path.join(f.base, 'versions', '2.1.312'), codex: f.gone });
+  // A Claude version that is gone, and a program that still exists and must not be the one the backend runs.
+  const stale = path.join(f.base, 'versions', 'python3'); fs.writeFileSync(stale, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  f.write(f.own, { claude: path.join(f.base, 'versions', '2.1.312'), codex: f.gone, python3: stale });
   process.env.NAW_RUNTIME_CONFIG = f.shared; t.after(() => { delete process.env.NAW_RUNTIME_CONFIG; });
   // The backend also searches ~/.local/bin: give it a home with nothing installed, so only the fixture's launchers count.
   const home = process.env.HOME; process.env.HOME = path.join(f.base, 'home'); fs.mkdirSync(process.env.HOME); t.after(() => { process.env.HOME = home; });
@@ -192,8 +202,8 @@ test('a backend started with a gone entry runs both providers, and its initial s
   try {
     const started = await ensureServiceAt(f.backend, process.execPath, path.join(f.base, 'workspace')); pid = started.servicePid;
     assert.ok(started.capabilities.includes('programAvailabilityV1'));
-    assert.deepEqual(started.available, { claude: true, codex: true, python: true }, 'The gone entries were dropped before the backend started');
-    assert.deepEqual(f.read(f.own), {}); assert.deepEqual(f.read(f.record).removals.map(entry => entry.removed.map(item => item.key).sort()), [['claude', 'codex']]);
+    assert.deepEqual(started.available, { claude: true, codex: true, python: true }, 'The entries were taken out before the backend started');
+    assert.deepEqual(f.read(f.own), {}); assert.deepEqual(f.read(f.record).removals.map(entry => entry.removed.map(item => [item.key, item.existed]).sort()), [[['claude', false], ['codex', false], ['python3', true]]]);
     // While it runs, a program that disappears or comes back is seen at the next initial state, not at the next restart.
     client = await connectService(f.backend, 'availability-check');
     fs.renameSync(f.launchers.codex, f.launchers.codex + '.away');
