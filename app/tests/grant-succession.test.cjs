@@ -173,6 +173,13 @@ test('the entry says what went on: the interface permission alone when no grant 
   h.w.operatorAction(h.id, 'enabled', true); h.grant(); h.grant();
   await h.carry(undefined, 31000);
   assert.deepEqual([h.records()[0].monitor.carried, h.records()[0].monitor.grants], [true, 1]);
+  // And when nothing but the interface permission had gone on, grants given to the old session since do not make the entry speak of grants.
+  const k = await fixture(t);
+  await k.replace(); k.failRecords(1); await k.carry();
+  k.w.operatorAction(k.id, 'enabled', true); k.grant(); k.grant();
+  await k.carry(undefined, 31000);
+  assert.deepEqual([k.records()[0].monitor.carried, k.records()[0].monitor.grants], [true, 0]);
+  assert.equal(k.records()[0].uiMessage.key, 'notice.monitor.interfaceCarried');
 });
 
 test('the person\'s own off switches win: a holder whose interface was turned off, or the interface turned off for everyone, carries nothing', async t => {

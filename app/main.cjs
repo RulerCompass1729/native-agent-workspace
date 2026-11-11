@@ -439,8 +439,10 @@ async function carryGrants(client, snapshot, now = Date.now()) {
       // grant is carried as it is, and the notice must not read as if a usable grant had moved.
       const grants = Array.isArray(snapshot.operatorPolicy?.domains) ? snapshot.operatorPolicy.domains : [];
       const moved = outcome.carried ? grants.filter(domain => domain?.carried?.some(c => c?.from?.id === holder.id && c.from.nativeId === holder.nativeId && c.to?.id === outcome.to.id)) : [];
-      // (A state from before the carry does not show the move yet: there they are still the old session's.)
-      const pool = moved.length || !outcome.carried ? moved : grants.filter(domain => domain?.initiators?.some(i => i?.id === holder.id && i.nativeId === holder.nativeId));
+      // A holder listed with its outcome was decided before this state was taken, so the state shows the move.
+      // One decided in this pass comes with a state from before the carry, where the grants are still the old
+      // session's. (Told apart this way, grants the old session was given since are never counted.)
+      const pool = !outcome.carried || holder.outcome ? moved : grants.filter(domain => domain?.initiators?.some(i => i?.id === holder.id && i.nativeId === holder.nativeId));
       const inForce = pool.filter(domain => !domain.revokedAt && domain.expiresAt > now).length;
       const carried = { oldId: holder.id, at: outcome.at, old: label(holder.id), carried: outcome.carried,
         ...(outcome.carried ? { newId: outcome.to.id, new: label(outcome.to.id), inForce } : { reason: String(outcome.reason || 'refused').slice(0, 60) }) };
