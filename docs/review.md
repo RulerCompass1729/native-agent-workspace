@@ -11428,3 +11428,65 @@ Independent review of the narrowing and of the two rebases onto main (2026-11-11
 Owner: the author of this change. Evidence: 29 unit tests in `app/tests/grant-succession.test.cjs` with a real backend journal and space store, the real log rule and the step from the main process, and one on the card in `app/tests/operator-ui.test.cjs`. The narrowing has its own test: four holders with no grant in force (never given one; the only one revoked; the only one run out; one revoked and one run out), for each of which the holder is not listed, the desktop asks nothing and does not read the log, the journal is byte for byte unchanged, the successor has no setting and cannot use the interface, nothing is written in any space, and a direct request to carry or to refuse is answered with no grant and saves nothing; a grant that runs out between the list and the step; and the control case, where a grant in force goes on with the interface. Five earlier tests that described the interface going on alone were rewritten for the narrower rule. Removing the check from the step turns one test red, removing it from the list three, removing both four. The rule about when the grant was given has its own test: a holder with the interface on and no grant, replaced an hour ago and given a grant only now (listed, asked once, journal byte for byte unchanged, the grant still with the old session, the successor without a setting and unable to use the interface, nothing written in any space, carry and refuse both answered with no grant); a grant given in the same millisecond as the replacement was logged, which counts; a holder whose earlier grant was revoked and whose grant in force was given afterwards; a grant with no time of its own, which does not count; a line with no time, refused and announced as before; and the control case, a holder with three earlier grants (one in force, one run out, one revoked) and two more that it was given after it was replaced or that have no time of their own: the three go on as they are and are the ones named in the audit line, the two stay in the old session's name and are not marked as having gone on, the entry counts one grant, the successor opens under the grant that went on, a request of the successor that names the grant that stayed creates nothing and waits for the person, and the person's revoke from the old session reaches the grant that stayed. Four deliberate breakages of the rule for following (the step ignoring the time, strictly-before instead of no-later-than, a grant without a time counting, a line without a time counting nothing) and five of the rule for what goes on (the step moving every grant that names the old session, the desktop counting every such grant, strictly-before, a grant without a time moving, a grant without a time counted by the desktop) each turn a test red. Before the narrowing: 46 deliberate breakages of the new code and three of the card change, each turning the tests red; full unit checks pass with no failures; in a hidden window with synthetic members and no model, the main-process dispatcher really replaced a member that held a grant, the grant was with the new member as soon as the old one had ended, the space said so in Chinese and English, the new member opened a session under the same grant without a new approval, the third open of the day stopped, the old member's card named the new holder, and a real click on the old member's menu revoked the grant (that step fails with the earlier menu code); the full queue journey, the open scenario and the operator journeys still pass. After the narrowing, the rule about when the grant was given, and the rebase onto main `db7846c`: the full unit suite passes, 6209 tests, none failed or skipped; and the same hidden journeys pass again, six runs with synthetic members and no model (the dispatcher really replacing a member that holds a grant, in Chinese and in English; the open scenario; the full queue journey; the operator journey with a space and without). Two of those runs were first started without the notification fixture, which the script refuses, so nothing ran; they were started again with it. With the last step (only what the holder had when it was replaced goes on): the full unit suite passes again, 6209 tests, none failed or skipped, and four of the hidden journeys pass again (the dispatcher replacing a member that holds a grant, in Chinese and in English; the open scenario; the operator journey with a space).
 
 Decided by the person on 2026-11-11: a grant follows a replacement, and the interface permission goes on only when the holder has at least one grant in force (the narrower rule suggested by the integrator's review). For the person to decide, with the cautious answer built: whether a grant given to a session after it was already replaced should go on to its successor. As built it does not; it stays with the old session, which has ended and cannot use it, and nothing is said. The likely case is a request the old session made before it was replaced and the person approved afterwards; the person can give the successor a grant of its own. The same holds when the old session also had an earlier grant in force: a grant given after the replacement and before the desktop's step stays with the old session too (as first built and reviewed it went on with the earlier one; that was closed on the integrator's instruction until the person answers, and is to be opened again if the person wants late grants to go on). The entry in the space does not mention a grant that stayed. Not carried: pending or unfinished opens of the old session. Known: a successor in another backend never receives the grant, because the journal and its counts live in the old backend. A holder whose interface was turned on before this change has no recorded time for it; it gets the time the journal is next loaded, and only a replacement logged after that is followed. The rotation log is a private file of the desktop; a process that can write it as the person can equally write the grant journal itself, which is the boundary the designations already have. What is refused is a line that does not match what is there: a holder still running, a successor with another native id, a log that others can write.
+
+## Butler read log: a page that fails says so (2026-11-11, behind the closed entry)
+
+Requested (the integrator's dispatch): when the read log page cannot be bound,
+the window shows nothing, and the person takes that for "no records". Show the
+failure and its reason on the page, never as "no records", and make this
+page's window check catch it. The entry's switch stays closed; only the read
+log page and its checks change.
+
+Reproduced first, in the product's own hidden window with the entry's test
+switch on and the page's program kept out of the window: the window started,
+and choosing "what it has read" from the entry showed a notice for a few
+seconds saying the log could not be read right now, and no page. That sentence
+is the one used when the log file itself cannot be read, so it also blamed the
+wrong thing. A second silent case was found on the way: a page that was set up
+and then threw as it was asked for showed nothing at all.
+
+What happens now:
+- A page that could not be set up opens, when asked for, as a page in the read
+  log's own place with one sentence that says which of three things happened
+  (its program is not in this window; its place in the page is missing;
+  setting it up failed), that this is a fault of the interface, that it does
+  not mean the butler read nothing, and what to do. If the page has no place
+  in the window, one is made for it.
+- A page that was set up and fails as it is asked for, at the call or later,
+  is torn down and replaced by the same view with a fourth reason.
+- A failure while drawing what was read says that the log was read and the
+  page could not show it. It used to say the log could not be read.
+- If the failure view itself cannot be shown, a notice says it is the page
+  that failed. Nothing in any of these reads as an empty or unreadable log,
+  and no error text reaches the screen; the error goes to the console.
+
+The sentences first said "the log file has not been touched". The window
+cannot know that, so it now says what the code supports: this page only
+displays the log, so its failing to open does not change the log file. That
+rests on three facts, each tested: the page's program makes one kind of call,
+the read; the main process answers it with the log's read and nothing else;
+and that read leaves the file byte for byte as it was, with no lock left.
+
+Checks (author-run, no model):
+- Unit tests run the window's own setup lines with each part missing, and
+  with pages that fail at the call, later, and at teardown. 49 deliberate
+  faults in the changed lines and sentences; a first run let one through (the
+  test's stand-in for a dialog accepted being shown twice) and showed that a
+  teardown that throws had no test. Both are fixed; all are caught.
+- The hidden-window check has a second launch that asks for the page from the
+  entry, as a person would, in four cases (the program missing and the place
+  in the page gone, each in both languages and at both widths), then opens
+  the real log with nothing broken. Five deliberate faults, each caught by
+  that check, the first being the reported one.
+- Counts for the full suite and the three hidden-window checks are in the
+  commit message.
+
+Not verified, or known:
+- Two of the four reasons are reached only in unit tests. In this window the
+  page is built and set up in one step, so the check cannot take the page's
+  place away before the setup, and a setup that throws with both parts present
+  has no way to be provoked from outside.
+- The entry's own setup failure is unchanged: the row is then absent, and
+  nothing says why. The dispatch limited this change to the read log page.
+- The sentences are new text the person has not seen. They are on the
+  screenshots kept with the private evidence.

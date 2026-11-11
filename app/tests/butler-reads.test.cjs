@@ -26,7 +26,8 @@ class Element {
   fire(name) { return (this.listeners[name] || []).map(callback => callback())[0]; }
   focus() { this.page.activeElement = this; }
   all() { return [this, ...this.children.flatMap(child => child.all())]; }
-  showModal() { this.open = true; }
+  // Stricter than the platform, which lets an already modal dialog through: a second call is an error here.
+  showModal() { if (this.open) throw Error('InvalidStateError: the dialog is already open'); this.open = true; }
   close() { if (!this.open) return; this.open = false; this.fire('close'); }
   text() { return this.hidden ? '' : [this.textContent, ...this.children.map(child => child.text())].filter(Boolean).join(' | '); }
 }
@@ -159,10 +160,14 @@ test('a log that cannot be read is said to be unreadable, with the rule and what
   assert.deepEqual([f.dialog.dataset.readsState, f.rows().length, f.notes(), f.button('refresh').textContent], ['records', 5, [], '刷新']);
 });
 
-test('whatever fails while drawing what was read, the dialog says the log could not be read and never stays on "reading"', async t => {
+test('whatever fails while drawing what was read, the dialog says the page could not show it, not that the log is unreadable or empty', async t => {
   let broken = true; const f = fixture(few(t), { breakTable: () => broken }); await f.reads.open();
-  assert.equal(f.dialog.dataset.readsState, 'unavailable'); assert.deepEqual(f.notes(), [zh('butler.reads.unavailable'), zh('butler.reads.unavailableHelp')]);
-  assert.deepEqual([f.rows().length, f.button('refresh').disabled, f.button('refresh').textContent, f.today().hidden], [0, false, '再读一次', true]);
+  // The log was read; what failed is the page. It never stays on "reading", and it is not the unreadable-log state.
+  assert.equal(f.dialog.dataset.readsState, 'broken');
+  assert.deepEqual(f.notes(), ['读取记录读到了，但这一页显示不出来。这是界面的问题，不表示记录读不到，也不表示大管家没读过东西。点「再读一次」重试；还是这样，就把这句话告诉帮你维护 NAW 的人。']);
+  assert.equal(f.notes()[0], zh('butler.reads.pageFailed.draw'));
+  for (const wrong of [zh('butler.reads.unavailable'), zh('butler.reads.unavailableHelp'), zh('butler.reads.empty'), '还没有读过']) assert.equal(f.dialog.text().includes(wrong), false, wrong);
+  assert.deepEqual([f.rows().length, f.button('refresh').disabled, f.button('refresh').textContent, f.today().hidden, f.full().hidden, f.listed().hidden], [0, false, '再读一次', true, true, true]);
   broken = false; await f.button('refresh').fire('click'); assert.deepEqual([f.dialog.dataset.readsState, f.rows().length], ['records', 5]);
   // The same for a clock that cannot be read when the log arrives.
   const g = fixture(few(t), { now: () => { throw Error('no clock'); } }); await g.reads.open(); assert.equal(g.dialog.dataset.readsState, 'unavailable');
@@ -274,9 +279,11 @@ test('every sentence is in the catalog in both languages, the catalog has no oth
   const atCap = () => ({ usedBytes: 32 * 1048576, maxBytes: 32 * 1048576, remainingBytes: 0, warningThresholdBytes: 24 * 1048576, warning: true });
   for (const [value, options, after] of [[log], [[]], [full], [plain], [log, { storage: nearlyFull }], [log, { storage: atCap }], [log, { fail: () => true }], [log.map(r => ({ ...r, version: 2 }))], [log.map((r, i) => i ? r : { ...r, version: 2 })],
     [long, { fail: count => count > 1 && { answer: { records: long.slice(40, 60), throughSequence: 96, nextAfterSequence: 60, truncated: true } } }],
-    [long, { fail: (count, options) => options.limit === 46 }, f => f.button('older').fire('click')]]) {
+    [long, { fail: (count, options) => options.limit === 46 }, f => f.button('older').fire('click')], [log, { breakTable: () => true }]]) {
     const f = fixture(value, { ...options, text: record('zh') }); const opening = f.reads.open(); asked.add('butler.reads.loading'); await opening; if (after) await after(f);
   }
+  // Three sentences are the window's own, said when this module could not be set up at all (tested below).
+  for (const reason of ['module', 'element', 'setup', 'open']) asked.add(`butler.reads.pageFailed.${reason}`);
   const expected = Object.keys(messages.zh).filter(key => key.startsWith('butler.reads.'));
   assert.deepEqual(Object.keys(messages.en).filter(key => key.startsWith('butler.reads.')), expected);
   assert.deepEqual([...asked].filter(key => key.startsWith('butler.reads.')).sort(), [...expected].sort());
@@ -341,37 +348,126 @@ test('what a line shows and does not show is on the page without a click, in eve
   assert.deepEqual([fresh.read(person, {}).throughSequence, fresh.read(person, {}).records.length], [0, 0]); assert.equal(page(fresh).pageOfDay, 1);
 });
 
-test('if the read log or the entry cannot be set up, the window still starts without it', () => {
+// The renderer's own lines that set the read log page and the entry up, as written, run where the window's other
+// parts are stand-ins. `parts` are the page's elements by id; a missing id is a missing element.
+function windowSetup(window, { parts = {}, showModal } = {}) {
   const renderer = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
-  // The renderer's own two statements, as written, run where the window's other parts are stand-ins.
-  const reads = renderer.slice(renderer.indexOf('let butlerReads = '), renderer.indexOf('// The existing butler view owns visibility and state;'));
+  const reads = renderer.slice(renderer.indexOf('function failedButlerReads(reason) {'), renderer.indexOf('// The existing butler view owns visibility and state;'));
+  assert.ok(reads.includes('\nfunction openButlerReads() {'), 'The slice holds the way the page is asked for');
   const entryStart = renderer.indexOf('let butlerEntry = '), entry = renderer.slice(entryStart, renderer.indexOf('catch (error) { console.error(error); }\n', entryStart) + 'catch (error) { console.error(error); }\n'.length);
-  assert.ok(reads.startsWith("let butlerReads = { open() { toastError(uiError('error.butler.readAuditUnavailable')); }, dispose() {} };\ntry {") && reads.trimEnd().endsWith('catch (error) { console.error(error); }'), reads);
+  assert.ok(reads.startsWith('function failedButlerReads(reason) {') && reads.includes('\nlet butlerReads;\ntry { butlerReads = window.nativeWorkspaceButlerReads.bind('), reads.slice(0, 80));
   assert.ok(entry.startsWith('let butlerEntry = { start() {}, refresh() {}, dispose() {} };\ntry {'), entry.slice(0, 120));
-  const run = window => {
-    const errors = [], said = [], sandbox = { window, errors, console: { error: error => errors.push(error) }, $: id => ({ id }), document: {}, api: {}, uiText() {}, ui: { display: {}, showError() {} },
-      spaceRecord: () => null, spaceName: () => '', openButlerReview() {}, uiError: key => ({ key }), toastError: error => said.push(error.key) };
-    require('node:vm').runInNewContext(reads + entry + '\nthis.result = { butlerReads, butlerEntry };', sandbox);
-    return { ...sandbox.result, errors, said };
-  };
+  const page = { activeElement: null, shown: 0, added: [] };
+  const make = (tag, id) => { const element = new Element(tag, page); element.id = id || ''; element.after = other => page.added.push(other); element.remove = () => { element.removed = true; };
+    if (tag === 'dialog' && showModal) element.showModal = showModal; return element; };
+  const elements = Object.fromEntries(Object.entries({ 'butler-dialog': 'dialog', 'butler-row': 'button', ...parts }).map(([id, tag]) => [id, tag ? make(tag, id) : null]));
+  const errors = [], said = [], bound = new Map(), display = { text: (element, key) => { bound.set(element, key); element.textContent = locale.format('zh', key); }, unbind: element => bound.delete(element) };
+  const sandbox = { window, errors, console: { error: error => errors.push(error) }, $: id => elements[id] ?? null, document: { body: make('body') }, api: {}, uiText() {}, ui: { display, showError() {} },
+    node: (tag, text, cls) => { const element = make(tag); if (text !== undefined) element.textContent = text; if (cls) element.className = cls; return element; },
+    spaceRecord: () => null, spaceName: () => '', openButlerReview() {}, uiError: key => ({ key }), toastError: error => said.push(error.key) };
+  require('node:vm').runInNewContext(reads + entry + '\nthis.result = { get butlerReads() { return butlerReads; }, butlerEntry };', sandbox);
+  return { get butlerReads() { return sandbox.result.butlerReads; }, butlerEntry: sandbox.result.butlerEntry, errors, said, page, elements, bound };
+}
+
+test('if the read log or the entry cannot be set up, the window still starts without it', () => {
   // A module that is not there (left out of the page or the bundle), or one whose bind fails (its element is missing).
   for (const window of [{}, { nativeWorkspaceButlerReads: null, nativeWorkspaceButlerEntry: undefined },
     { nativeWorkspaceButlerReads: { bind() { throw Error('no dialog element'); } }, nativeWorkspaceButlerEntry: { bind() { throw Error('no row element'); } } }]) {
-    const { butlerReads, butlerEntry, errors } = run(window);
+    const { butlerReads, butlerEntry, errors } = windowSetup(window);
     assert.equal(errors.length, 2, 'Both failures are written to the console, not swallowed without a trace');
     // What the rest of the window calls on them does not throw.
     assert.doesNotThrow(() => { butlerReads.dispose(); butlerEntry.start(); butlerEntry.refresh(); butlerEntry.dispose(); });
   }
-  // A read log that was not set up, asked for from an entry that was: the person is told it cannot be read; the
-  // button is not one that does nothing.
-  let lone; const alone = run({ nativeWorkspaceButlerEntry: { bind: options => { lone = options; return { start() {}, refresh() {}, dispose() {} }; } } });
-  assert.equal(alone.errors.length, 1); assert.deepEqual(alone.said, []); lone.openReads(); assert.deepEqual(alone.said, ['error.butler.readAuditUnavailable']);
-  assert.equal(messages.zh['error.butler.readAuditUnavailable'], '暂时无法读取大管家的读取记录。');
   // One failing does not take the other with it, and when both work they are what the window uses.
-  const bound = { open() { return 'opened'; }, dispose() {} }, row = { start() { return 'started'; }, refresh() {}, dispose() {} };
-  const half = run({ nativeWorkspaceButlerReads: { bind: () => bound } }); assert.equal(half.butlerReads.open(), 'opened'); assert.equal(half.errors.length, 1); assert.equal(half.butlerEntry.start(), undefined);
-  let given; const both = run({ nativeWorkspaceButlerReads: { bind: () => bound }, nativeWorkspaceButlerEntry: { bind: options => { given = options; return row; } } });
-  assert.equal(both.errors.length, 0); assert.equal(both.butlerEntry.start(), 'started'); assert.equal(given.openReads(), 'opened', 'The entry opens the read log that was set up');
+  let opens = 0; const bound = { open() { opens++; return 'opened'; }, dispose() {} }, row = { start() { return 'started'; }, refresh() {}, dispose() {} };
+  const half = windowSetup({ nativeWorkspaceButlerReads: { bind: () => bound } }); assert.equal(half.butlerReads.open(), 'opened'); assert.equal(half.errors.length, 1); assert.equal(half.butlerEntry.start(), undefined);
+  let given; const both = windowSetup({ nativeWorkspaceButlerReads: { bind: () => bound }, nativeWorkspaceButlerEntry: { bind: options => { given = options; return row; } } });
+  assert.equal(both.errors.length, 0); assert.equal(both.butlerReads.failed, undefined); assert.equal(both.butlerEntry.start(), 'started');
+  opens = 0; given.openReads(); assert.equal(opens, 1, 'The entry opens the read log that was set up'); assert.equal(both.errors.length, 0);
+});
+
+test('a read log page that could not be set up says so and why, in the page\'s own place, and never looks like an empty or unreadable log', async t => {
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  const tail = '这是界面的问题，不表示大管家没读过东西；这一页只是显示记录，打不开不会改动记录文件。重新打开 NAW 再试一次；还是打不开，就把这句话告诉帮你维护 NAW 的人。';
+  // It does not say that nobody touched the file: the window cannot know that.
+  assert.equal(/没有被动过|not been touched/.test(JSON.stringify(messages)), false);
+  // What "only displays" rests on. The page's program asks the window's interface for one thing, the read:
+  assert.deepEqual(fs.readFileSync(path.join(__dirname, '../renderer/butler-reads.js'), 'utf8').match(/\bapi\.\w+\([^)]*/g), ["api.butlerReview('reads', request"]);
+  // the main process answers it with the log's own read and nothing else:
+  const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8'), answer = main.slice(main.indexOf("    if (action === 'reads') {\n      if (!butlerReadAudit)"), main.indexOf('    const ledger = butlerIngress?.ledger;'));
+  assert.deepEqual(answer.match(/butlerReadAudit\.\w+/g), ['butlerReadAudit.read']);
+  // and that read leaves the file byte for byte as it was, with no lock left beside it.
+  { const { ButlerReadAudit } = require('../butler-read-audit.cjs'), person = {};
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-reads-page-')); fs.chmodSync(dir, 0o700); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const audit = new ButlerReadAudit(dir, { authorizePerson: actor => actor === person, now: () => NOW }), file = path.join(dir, 'butler-business-reads.jsonl');
+    for (let index = 0; index < 3; index++) audit.recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 1, runnerRef: 'butler-runner-synthetic' },
+      query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } });
+    const before = [fs.readFileSync(file, 'hex'), fs.statSync(file).mtimeMs, fs.readdirSync(dir).sort()];
+    assert.equal(audit.read(person, { limit: 50 }).records.length, 3); assert.equal(audit.read(person, { afterSequence: 1, limit: 1 }).records.length, 1);
+    assert.deepEqual([fs.readFileSync(file, 'hex'), fs.statSync(file).mtimeMs, fs.readdirSync(dir).sort()], before); assert.deepEqual(before[2], ['butler-business-reads.jsonl']); }
+  const sentences = { module: '这一页打不开：这个窗口里缺少显示读取记录的那部分程序。' + tail, element: '这一页打不开：页面里缺少放读取记录的位置。' + tail, setup: '这一页打不开：准备这一页的时候出了错。' + tail,
+    open: '这一页打不开：打开它的时候出了错。' + tail };
+  const tailEn = 'This is a fault of the interface. It does not mean the butler read nothing. This page only displays the log, so its failing to open does not change the log file. Reopen NAW and try once more; if it still does not open, pass this sentence to whoever maintains NAW for you.';
+  const english = { module: 'This page cannot open: the part of the program that shows the read log is missing from this window. ' + tailEn, element: 'This page cannot open: its place in the window is missing. ' + tailEn,
+    setup: 'This page cannot open: setting it up failed. ' + tailEn, open: 'This page cannot open: it failed as it was opening. ' + tailEn };
+  for (const [reason, sentence] of Object.entries(sentences)) { assert.equal(zh(`butler.reads.pageFailed.${reason}`), sentence); assert.equal(locale.format('en', `butler.reads.pageFailed.${reason}`), english[reason]); }
+  // Each reason has its own sentence: the person can tell the maintainer which one it was.
+  assert.equal(new Set(Object.values(sentences)).size, 4); assert.equal(new Set(Object.values(english)).size, 4);
+  const entry = { nativeWorkspaceButlerEntry: { bind: options => ({ start() {}, refresh() {}, dispose() {}, options }) } };
+  const cases = [
+    // The page's program is not in this window.
+    ['module', { ...entry }, { 'butler-reads-dialog': 'dialog' }],
+    // Its program is there, its place in the page is not.
+    ['element', { ...entry, nativeWorkspaceButlerReads: { bind({ dialog }) { return dialog.id; } } }, { 'butler-reads-dialog': null }],
+    // Both are there and setting the page up failed.
+    ['setup', { ...entry, nativeWorkspaceButlerReads: { bind() { throw Error('/PRIVATE/PATH in a stack'); } } }, { 'butler-reads-dialog': 'dialog' }]];
+  for (const [reason, window, parts] of cases) {
+    const w = windowSetup(window, { parts }), reads = w.butlerReads;
+    assert.equal(reads.failed, reason); assert.equal(w.errors.length, 1); assert.deepEqual(w.said, [], 'Nothing is said until the page is asked for');
+    // Asked for from the entry, as the person would.
+    w.butlerEntry.options.openReads();
+    const dialog = w.elements['butler-reads-dialog'] || w.page.added[0];
+    assert.ok(dialog, 'There is a page to say it in, made if the window has none'); assert.equal(dialog.open, true);
+    assert.deepEqual([dialog.dataset.readsState, dialog.dataset.readsFailure, dialog.className.includes('butler-reads') || Boolean(w.elements['butler-reads-dialog'])], ['page-failed', reason, true]);
+    const [title, text, actions] = dialog.children;
+    assert.deepEqual([title.tag, title.textContent, text.textContent, text.attributes.role, actions.children.map(button => [button.dataset.action, button.textContent])], ['h2', '大管家读过什么', sentences[reason], 'alert', [['done', '完成']]]);
+    assert.equal(dialog.attributes['aria-labelledby'], title.id); assert.equal(w.page.activeElement, actions.children[0], 'The focus is on Done');
+    // Not a toast that goes away, not an empty log, not "the log cannot be read", and no raw error text.
+    assert.deepEqual(w.said, []);
+    for (const wrong of [zh('butler.reads.empty'), zh('butler.reads.unavailable'), zh('error.butler.readAuditUnavailable'), '还没有读过', 'PRIVATE', 'Error']) assert.equal(dialog.text().includes(wrong), false, wrong);
+    // Asked for again it is the same page, not a second one; Done closes it; the window's teardown clears it.
+    reads.open(); assert.equal(dialog.children.length, 3); assert.equal(w.page.added.length, reason === 'element' ? 1 : 0); assert.deepEqual([dialog.open, w.said, w.errors.length], [true, [], 1], 'Asked for while it is open, it stays as it is');
+    actions.children[0].fire('click'); assert.equal(dialog.open, false);
+    reads.open(); assert.equal(dialog.open, true); reads.dispose();
+    assert.equal(dialog.open, false); assert.equal(w.bound.size, 0, 'No text binding is left behind'); assert.equal(reason === 'element' ? dialog.removed : dialog.children.length === 0, true);
+  }
+  // A page that was set up and then fails as it is asked for (its element gone from the window, an error before
+  // anything is drawn, or one that arrives later) ends in the same view, not in nothing; what was set up is torn down.
+  for (const failing of [() => { throw Error('The element is not in a Document'); }, () => Promise.reject(Error('nothing could be drawn')), async () => { throw Error('later'); }]) {
+    let disposed = 0;
+    const w = windowSetup({ ...entry, nativeWorkspaceButlerReads: { bind: () => ({ open: failing, dispose() { disposed++; } }) } }, { parts: { 'butler-reads-dialog': 'dialog' } });
+    assert.equal(w.errors.length, 0); assert.equal(w.butlerReads.failed, undefined);
+    w.butlerEntry.options.openReads(); await settle();
+    const dialog = w.elements['butler-reads-dialog'];
+    assert.deepEqual([dialog.open, dialog.dataset.readsState, dialog.dataset.readsFailure, dialog.children[1].textContent, disposed, w.errors.length, w.said], [true, 'page-failed', 'open', sentences.open, 1, 1, []]);
+    // From then on the page is the failure view: asking again shows it again and does not call the broken page.
+    dialog.children[2].children[0].fire('click'); w.butlerEntry.options.openReads(); await settle();
+    assert.deepEqual([dialog.open, dialog.children.length, disposed, w.errors.length], [true, 3, 1, 1]);
+  }
+  // Even when the page that failed cannot be torn down either, the failure view is shown.
+  { const w = windowSetup({ ...entry, nativeWorkspaceButlerReads: { bind: () => ({ open() { throw Error('cannot open'); }, dispose() { throw Error('cannot tear down'); } }) } }, { parts: { 'butler-reads-dialog': 'dialog' } });
+    w.butlerEntry.options.openReads(); const dialog = w.elements['butler-reads-dialog'];
+    assert.deepEqual([dialog.open, dialog.dataset.readsFailure, dialog.children[1].textContent, w.said, w.butlerReads.failed], [true, 'open', sentences.open, [], 'open']); }
+  // A page that opens is left alone, whatever it returns.
+  for (const value of [undefined, 'opened', Promise.resolve('read')]) { let opened = 0;
+    const w = windowSetup({ ...entry, nativeWorkspaceButlerReads: { bind: () => ({ open() { opened++; return value; }, dispose() {} }) } }, { parts: { 'butler-reads-dialog': 'dialog' } });
+    w.butlerEntry.options.openReads(); await settle(); assert.deepEqual([opened, w.errors.length, w.elements['butler-reads-dialog'].open, w.elements['butler-reads-dialog'].children.length], [1, 0, false, 0]); }
+  // If even that cannot be shown, the person is still told it is the page, in a notice.
+  const last = windowSetup({ ...entry }, { parts: { 'butler-reads-dialog': 'dialog' }, showModal() { throw Error('cannot show'); } });
+  last.butlerEntry.options.openReads();
+  assert.deepEqual(last.said, ['error.butler.readsPage']); assert.equal(last.errors.length, 2);
+  assert.equal(messages.zh['error.butler.readsPage'], '「它读过什么」这一页打不开，是界面的问题，不表示大管家没读过东西。重新打开 NAW 再试一次。');
+  assert.equal(/[一-鿿]/.test(messages.en['error.butler.readsPage']), false);
 });
 
 test('without the entry on screen the read log does not stay open', () => {
@@ -399,10 +495,10 @@ test('the page loads the view before the dialog and the dialog before the render
     assert.ok(positions.every(value => value > 0) && positions[0] < positions[1] && positions[1] < positions[2]);
   assert.match(html, /<dialog closedby="any" id="butler-reads-dialog" class="butler-reads"><\/dialog>/);
   // If the dialog cannot be set up the window still starts: a stand-in that does nothing takes its place.
-  assert.match(renderer, /let butlerReads = \{ open\(\) \{ toastError\(uiError\('error\.butler\.readAuditUnavailable'\)\); \}, dispose\(\) \{\} \};\ntry \{ butlerReads = window\.nativeWorkspaceButlerReads\.bind\(\{ dialog: \$\('butler-reads-dialog'\), document, api, text: \(key, params\) => uiText\(key, params\), display: ui\.display,\n\s*spaceName: id => \{ const room = spaceRecord\(id\); return room \? spaceName\(room\) : null; \} \}\); \}\ncatch \(error\) \{ console\.error\(error\); \}\n/);
+  assert.match(renderer, /let butlerReads;\ntry \{ butlerReads = window\.nativeWorkspaceButlerReads\.bind\(\{ dialog: \$\('butler-reads-dialog'\), document, api, text: \(key, params\) => uiText\(key, params\), display: ui\.display,\n\s*spaceName: id => \{ const room = spaceRecord\(id\); return room \? spaceName\(room\) : null; \} \}\); \}\ncatch \(error\) \{ console\.error\(error\); butlerReads = failedButlerReads\(!window\.nativeWorkspaceButlerReads \? 'module' : !\$\('butler-reads-dialog'\) \? 'element' : 'setup'\); \}\n/);
   // Without the entry on screen the read log does not stay open.
   assert.match(renderer, /if \(\$\('butler-row'\)\?\.hidden === true && \$\('butler-reads-dialog'\)\?\.open\) \$\('butler-reads-dialog'\)\.close\(\);/);
-  assert.match(renderer, /openReads: \(\) => butlerReads\.open\(\),\n/); assert.match(renderer, /\(\) => butlerReads\.dispose\(\),/);
+  assert.match(renderer, /openReads: \(\) => openButlerReads\(\),\n/); assert.match(renderer, /\(\) => butlerReads\.dispose\(\),/);
   // The dialog asks the main process for nothing but the existing read of the log.
   const source = read('renderer/butler-reads.js');
   assert.deepEqual([...source.matchAll(/api\.(\w+)\(/g)].map(match => match[1]), ['butlerReview']); assert.ok(source.includes("api.butlerReview('reads', request)"));
