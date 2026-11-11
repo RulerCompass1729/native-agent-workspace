@@ -11,7 +11,7 @@
   const money = micros => amount(micros, Math.ceil), line = micros => amount(micros, Math.floor);
   // Text comes from the catalog (butler.*). The renderer passes its interface-language text and display bindings, so
   // a language switch repaints in place; without them (unit tests) the Chinese catalog text is used.
-  function bind({ row, dialog, document, api, text, display, showError, openReview }) {
+  function bind({ row, dialog, document, api, text, display, showError, openReview, openReads }) {
     const { entryView } = global.nativeWorkspaceButlerEntryView || require('../butler-entry-view.js');
     const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
     const format = text || ((key, params) => locale.format('zh', key, params));
@@ -42,7 +42,9 @@
 
     let view = { visible: false }, latest, page = 'panel', busy = false, calls = 0, drawn = '', asked = '', agreed = null, done = null;
     // An action is offered only when the main process names it and this window has the person-only entry to call.
-    const can = action => view.visible && view.actions.includes(action) && (action === 'review' ? typeof openReview === 'function' : typeof api?.butler === 'function');
+    // Reading the log changes nothing and needs no butler: it is offered whenever this window was given a way to open it.
+    const can = action => view.visible && (action === 'reads' ? typeof openReads === 'function' :
+      view.actions.includes(action) && (action === 'review' ? typeof openReview === 'function' : typeof api?.butler === 'function'));
     // What a question was asked about. If it changes while the question is open, the person is taken back.
     const question = () => JSON.stringify([view.state, view.revision, view.offer ?? null, view.startable ?? null, view.choice ?? null, view.actions]);
     const focusDone = () => { if (dialog.open && page === 'panel' && done) done.focus(); };
@@ -85,7 +87,7 @@
       }
       const held = document.activeElement && typeof actions.contains === 'function' && actions.contains(document.activeElement);
       // Revoking sits apart, first in the row; the everyday actions follow and Done is last.
-      const offered = view.actions.filter(can).sort((a, b) => (b === 'revoke') - (a === 'revoke'));
+      const offered = [...view.actions, 'reads'].filter(can).sort((a, b) => (b === 'revoke') - (a === 'revoke'));
       const buttons = offered.map(action => control(`butler.action.${action}`, action, action === 'designate' ? 'primary' : action === 'revoke' ? 'subtle butler-apart' : ''));
       for (const button of buttons) button.disabled = busy;
       done = control('common.done', 'done');
@@ -95,7 +97,7 @@
     function render(entry) {
       latest = entry; view = entryView(entry); row.hidden = !view.visible;
       if (!view.visible) { drawn = ''; if (dialog.open) dialog.close(); if (page !== 'panel') show('panel'); return; }
-      const signature = JSON.stringify([view, busy, typeof api?.butler === 'function', typeof openReview === 'function']);
+      const signature = JSON.stringify([view, busy, typeof api?.butler === 'function', typeof openReview === 'function', typeof openReads === 'function']);
       if (signature === drawn) return;
       drawn = signature;
       const back = page !== 'panel' && asked !== question();
@@ -128,6 +130,7 @@
       if (action === 'designate') { show('confirm'); confirmCancel.focus(); return; }
       if (action === 'revoke') { show('revoke'); revokeCancel.focus(); return; }
       if (action === 'review') { dialog.close(); openReview(); return; }
+      if (action === 'reads') { dialog.close(); openReads(); return; }
       return run(action);
     }
     // Opening puts the focus on Done, never on an action that changes something.

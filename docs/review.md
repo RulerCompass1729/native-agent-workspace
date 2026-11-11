@@ -10080,3 +10080,166 @@ fixture's reserved headroom; all four live cases still pass. Product source and
 the full-suite tests are unchanged since that complete run. Unsupported pipeline
 failures or unbounded model output still rely on the final hard guard; the
 admission promise does not cover those paths.
+
+## Butler read log for the person: "what it has read" (2026-11-11, renderer only, behind the closed entry)
+
+Scope: a read-only dialog that shows the butler's read log to the person, reached
+from the butler entry by one more action. The entry stays closed in every
+ordinary launch, so nothing offers the dialog in this version. It uses only the
+existing person-only call `butlerReview('reads', …)`; no main, preload, daemon or
+core file changed, and no new call was added. Files: `app/butler-reads-view.js`
+(pure view), `app/renderer/butler-reads.js` (dialog), five lines in
+`app/renderer/butler-entry.js`, page markup, bundle list, styles and 35 catalog
+keys per language.
+
+What it shows is what a log record holds and nothing else: time, kind of lookup
+(list of spaces, queue, delivery records with the time window asked for), the
+space (the log stores an id; a name is the window's own, an id it cannot name is
+shown shortened with the whole id as the tooltip), how many records came back and
+whether more were left, and which designation asked. Session, native, runner ids
+and record references are never drawn. Above the list: pages read and left in
+the current counting day and when the count restarts. The core counts per UTC
+day; every time on the screen is local and each day header gives its local span.
+
+Prototype and stand-in review before implementation: every record in the
+prototype was written and read back by the real `ButlerReadAudit`. An independent
+session looking as the person returned `APPROVE_WITH_CHANGES` twice. First look,
+seven required changes, all applied: rows lost their date when scrolled (day
+header now pinned); nothing showed that more rows were below (scrollbar, fade and
+a line saying how much of the log is listed); the note about unreadable earlier
+records pointed the wrong way; the unreadable state lacked the rule and a next
+step; UTC times read as local (now local throughout); a "page" was never
+explained; refused reads after the limit are not listed and the screen did not
+say so. Second look, one required change, applied here: "today" no longer
+matched the person's day once times were local, so the summary names the span.
+Private evidence: `.local/evidence/butler-reads-20261111/standin/`.
+
+Found while implementing, and now said on the screen: a log found damaged stays
+unreadable in the running app even after the file is repaired, until NAW is
+reopened (a unit test shows this with the real module). A lock left behind does
+not stick, so the sentence says to reopen NAW only if the log still cannot be
+read after it was looked at. Two edge cases are
+handled rather than papered over: when the newest record is not on screen the
+dialog claims neither today's count nor "the newest N"; a log that reports
+records and returns none is shown as unreadable, not as empty.
+
+Author-run evidence, no model call: the read log's two test files and the
+entry's pass 46 of 46 together with the entry view's; the full suite passes with
+zero failures or skips (count in the commit message); 52 deliberate faults in
+the view, the dialog and the entry change are each caught. Hidden real-Electron
+check `scripts/test-butler-reads.cjs`: with the entry closed the dialog is in the
+page, shut and invisible; a real 64-page log over two UTC days, written into the
+isolated profile by the real module, is read through the window's real
+`workspace.butlerReview` and drawn by the product's module, stylesheet and
+catalog in both languages at 1280 and 860 wide (newest fifty, earlier on
+request, day header pinned, nothing clipped, only the list scrolls); a damaged
+log is said to be unreadable and stays so after the file is put back. Private
+evidence: `.local/evidence/butler-reads-20261111/impl/`.
+
+Limits of that evidence: the dialog in the Electron check is mounted beside the
+product's hidden one, because nothing can open the product's own while the entry
+is closed; the product's mapping of space ids to names is covered by a source
+check and a unit test of the lookup, not on screen; the dark theme was not
+looked at.
+
+Required before the butler is switched on (not part of this delivery):
+- A safe way to make room in a full log. None exists: nothing is rotated or
+  pruned. Removing the file with NAW closed starts an empty log, so the record
+  of what was read is gone and the day's count starts again; once the running
+  NAW has read or written the log, removing, shrinking or replacing the file
+  leaves the log unreadable until NAW is reopened.
+  The dialog says there is no way to clear it yet and tells the person not to
+  delete the file. By the module's own limits the worst case is about three
+  days to the core's prewarning and four to the cap. Owner: butler outcome
+  owner.
+- The person's decision on whether refused or failed reads are recorded at all.
+- Known interaction, as the core already works: the person's read takes the
+  same lock as the butler's page record and scans the file in the main process.
+  A butler page arriving during that moment is withheld as busy, and an
+  unexpected file error during the person's read stops all butler pages until
+  NAW is reopened. This dialog is the first caller of that read.
+
+Independent review by the checkpoint's reviewer session (its id is kept with the
+private evidence; Read, Grep, Glob only; tool
+inventory verified; worktree fingerprint unchanged after each invocation):
+- First verdict `APPROVE_WITH_CHANGES`. Blocking, fixed: a delivery lookup may
+  carry any safe non-negative time window, and one far beyond real dates made
+  the local-time conversion throw in zones east of UTC, leaving the dialog on
+  "reading" for good, since the log is append-only. Now a time that no calendar
+  can show makes its record one this version does not understand, a zone that
+  cannot be asked shows no time, and any failure while drawing is shown as an
+  unreadable log. Required wording, fixed: "or full" named a cause the module
+  cannot produce (see the first item above); the cause list now says in use,
+  damaged, or an earlier failed write. Suggestions taken: a page that does not
+  say where it ended is not trusted; an empty earlier page is said, not passed
+  over; the count line is true as of the moment of reading; "a space this
+  window does not know" instead of claiming it is gone; a space name that
+  follows the interface language is repainted. Not taken, with the reason: a
+  duplicate "reads" button if the main process ever named that action (the
+  entry view keeps only its own action names, so it cannot arrive); a refusal
+  shown as a file problem in a window that is not the person's (the entry is
+  drawn only for the person's window).
+- Second verdict, on those fixes, `APPROVE_WITH_CHANGES`: the blocking item is
+  closed for every path. Two changes, applied: a newest record that was read
+  but is not understood is no longer described as "not reached" with Refresh as
+  the cure (the view now tells reached from understood); the reviewer session
+  id is no longer in this document.
+- What the reviewer did not check, so the approval does not cover it: the
+  release path in `app/butler-business.cjs` ("a page that cannot be logged is
+  not released" rests on the docs), `isCurrentHumanContext` and with it the
+  fact that the entry is drawn only for the person's window, whether archived
+  spaces are in the window's list, the raw logs and screenshots, the dark
+  theme, and any secret or personal-data scan (it has no shell; the author runs
+  the publication guard before committing).
+- Third verdict, on those two changes: `APPROVE`, nothing more required before
+  delivery behind the closed entry. One suggestion is left for later: when the
+  newest record was read but is not understood, the count line disappears
+  without a sentence saying why. Do it when records of a newer format or with
+  such time windows can actually occur, at the latest before switch-on.
+- Rebase onto main `22b000e`, which had gained the record table opened from the
+  same entry and the person-only butler call. Conflicts were "both added" in
+  the page, the renderer wiring, the bundle list, two tests and this file; both
+  sides are kept. The entry now gets both ways out (`openReview` and
+  `openReads`). The read log's binding sits just above the record table's block
+  in `app/renderer/renderer.js`, so that block is still exactly what its own
+  test evaluates. None of the read log's own files changed in the rebase.
+  The entry's earlier GUI check expected no butler call in the page; with the
+  person-only call now in main it expects the call to exist and to be refused
+  in an ordinary launch.
+- Fourth verdict, on that integration: `APPROVE`. Known and left as is: when
+  the entry is withdrawn the record table is closed but an open read log stays
+  open (it is read-only and person-only); if the person chooses the read log
+  while the record table is still asking whether it has data, the record table
+  can open on top of it. Both are harmless and neither can occur in an ordinary
+  launch; align them when the entry is switched on.
+- The log file filling up (third commit of the branch). Main's `e920230` added
+  a report of the file's size and the core's own 75% prewarning to every read
+  of the log, which is what the first verdict's deferred item needed. The view
+  passes on the core's warning and has no threshold of its own; a report that
+  is missing or does not add up says nothing. From the prewarning on, the
+  dialog says beside the day's count how much of the file is used (to one
+  decimal, never rounded down), that at the limit the butler cannot read
+  whatever the day's count shows, and that old records are not deleted
+  automatically. Closer to the cap than the largest single record (the core's
+  own 128 KiB), or at the cap, a second sentence says instead that the
+  butler's reads can be refused from here, usually pages that return more
+  first, and that at the cap every page is: the core refuses a page when its
+  own record does not fit, and the log still reads for the person there, so
+  "nearly full" beside "pages left" would be false. The sentences
+  carry the three things the stand-in asked to be on the screen before
+  switch-on; they were not shown to the stand-in again.
+  The Electron check shows it with the real records and the real call, with
+  only the report replaced on its way to the dialog, because writing a real
+  24 MiB log is too slow for a check. Reviewer verdict on this commit:
+  `APPROVE_WITH_CHANGES`, one required change, applied: a file already at its
+  cap was still called "nearly full" (the second sentence above). Its
+  suggestions taken: the report that comes with earlier records is used too;
+  the sentence no longer tells the person to "deal with it" when no safe way is
+  defined (see the switch-on item). The author's first wording of the second
+  sentence said reads "are already being refused" from 128 KiB below the cap;
+  read against the core, that is only certain at the cap, and the sentence was
+  corrected before it went back to the reviewer. Verdict on that delta:
+  `APPROVE`; "can be refused" confirmed against the core's refusal rule. Its
+  two wording suggestions were applied as given and not sent back: "usually"
+  before "those that return more items", and the sentence above about the
+  file while NAW runs.

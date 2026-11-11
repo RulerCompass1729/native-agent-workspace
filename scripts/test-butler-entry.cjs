@@ -1,6 +1,6 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
 // Real Electron and NAW's own backend service. No native program is started, no model is called and nothing is
-// designated: this version has no person-only butler entry to call.
+// designated: in an ordinary launch the main process refuses every call of the person-only butler entry.
 // 1. The product as it is. The butler's row is in the page and hidden; nothing about a butler is on the screen.
 // 2. The same page with a view handed in by this script, because no main-process code gives one. The product's
 //    own module, stylesheet and catalog draw a row and a dialog placed beside the hidden ones, in both languages
@@ -49,7 +49,7 @@ const gallery = [
 (async () => {
   const serviceCwd = path.join(profile, 'workspace'); fs.mkdirSync(serviceCwd, { mode: 0o700 });
   const env = { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: serviceCwd, NAW_TEST_PARENT_PID: String(process.pid) };
-  for (const key of ['CLAUDE_CODE_CHILD_SESSION', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'NAW_RUNTIME_CONFIG', 'DEEPSEEK_API_KEY']) delete env[key];
+  for (const key of ['CLAUDE_CODE_CHILD_SESSION', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'NAW_RUNTIME_CONFIG', 'DEEPSEEK_API_KEY', 'NAW_TEST_BUTLER_ENTRY']) delete env[key];
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], env, timeout: 60000 });
   await until(async () => { for (const p of application.windows()) if (!p.isClosed() && await p.locator('#new-session').count().catch(() => 0)) { page = p; return true; } return false; }, 'Main window', 60000);
   page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
@@ -64,13 +64,16 @@ const gallery = [
     return { row: !!row && row.hidden && row.getClientRects().length === 0, rowBeforeNew: row.nextElementSibling === next, dialog: !!dialog && !dialog.open, entry: typeof window.workspace.butler,
       text: /大管家|Butler/.test(document.querySelector('.sidebar').innerText), module: typeof window.nativeWorkspaceButlerEntry?.bind, view: JSON.stringify(window.nativeWorkspaceButlerEntryView?.entryView(undefined)) };
   });
-  assert.deepEqual(await closed(), { row: true, rowBeforeNew: true, dialog: true, entry: 'undefined', text: false, module: 'function', view: '{"visible":false}' });
+  assert.deepEqual(await closed(), { row: true, rowBeforeNew: true, dialog: true, entry: 'function', text: false, module: 'function', view: '{"visible":false}' });
+  // The call exists, and the main process refuses it: the entry is closed in an ordinary launch.
+  for (const call of [['status'], ['revoke', 0], ['designate', 0]]) assert.equal(await page.evaluate(args => window.workspace.butler(...args).then(() => 'accepted', error => error.message), call), locale.format('zh', 'error.butler.entryDisabled'));
+  for (const name of ['butler.json', 'butler-native']) assert.equal(fs.existsSync(path.join(profile, name)), false, 'Nothing about a butler is written: ' + name);
   // The hidden row takes no room: "new session" sits where it sits without it.
   const gapWith = await page.evaluate(() => document.getElementById('new-session').getBoundingClientRect().top);
   const gapWithout = await page.evaluate(() => { const row = document.getElementById('butler-row'), parent = row.parentNode, next = row.nextSibling; row.remove(); const top = document.getElementById('new-session').getBoundingClientRect().top; parent.insertBefore(row, next); return top; });
   assert.equal(gapWith, gapWithout);
   await shot('closed-zh');
-  checks.push('With the switch closed (this version) the row is hidden, takes no room, no window has a butler entry to call, and the sidebar says nothing about a butler');
+  checks.push('With the entry closed (every ordinary launch) the row is hidden, takes no room, the main process refuses every butler call, and the sidebar says nothing about a butler');
 
   // 2. A view handed in by this script, drawn by the product's own module beside the hidden row and dialog.
   const mount = language => page.evaluate(lang => {
@@ -183,7 +186,7 @@ const gallery = [
     checks.push(`${tag}${rail ? ' (sidebar as a rail)' : ''}: empty, confirmation, this version's "cannot start", revoke, and the ${gallery.length - 1} other states are drawn`);
   }
   assert.deepEqual(problems, [], 'Nothing clipped, no dialog off the window, the actions on one line');
-  assert.deepEqual(await closed(), { row: true, rowBeforeNew: true, dialog: true, entry: 'undefined', text: false, module: 'function', view: '{"visible":false}' });
+  assert.deepEqual(await closed(), { row: true, rowBeforeNew: true, dialog: true, entry: 'function', text: false, module: 'function', view: '{"visible":false}' });
   assert.equal((await client.call('initial')).sessions.length, 0); assert.deepEqual(errors, []);
   console.log(JSON.stringify({ checks, screenshots: shots.length, nativeProgramsStarted: 0, sessions: 0, promptsSent: 0, paidModelCalls: 0, evidence }));
 })().catch(async error => {
