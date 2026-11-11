@@ -16,23 +16,36 @@ while not data.endswith(b'\\n'):
 size=struct.unpack('HHHH',fcntl.ioctl(0,termios.TIOCGWINSZ,b'\\0'*8))
 os.write(1,('RESULT:'+json.dumps({'text':data.decode('utf-8'),'rows':size[0],'cols':size[1]})+'\\n').encode())
 `;
-function boot(t, source = reader) {
+function boot(t, source = reader, startup) {
   const python = pythonExecutable(); assert.ok(python, 'A real Python runtime is required');
-  const child = spawn(python, [path.join(__dirname, '../pty_host.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
-  const records = [], decoder = new StringDecoder('utf8'); let pending = '', stderr = '', text = '';
+  const host = path.join(__dirname, '../pty_host.py');
+  const child = spawn(python, startup ? [path.join(__dirname, 'fixtures/pty-startup-barrier.py'), host, startup] : [host], { stdio: startup ? ['pipe', 'pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'] });
+  const records = [], phases = [], decoder = new StringDecoder('utf8'); let pending = '', stderr = '', text = '', released = false;
+  const release = () => { if (startup && !released) { released = true; child.stdio[3].end('ready'); } };
+  if (startup) {
+    let trace = ''; child.stdio[3].on('error', () => {}); child.stdio[4].setEncoding('utf8');
+    child.stdio[4].on('data', chunk => {
+      trace += chunk;
+      for (let at; (at = trace.indexOf('\n')) >= 0;) {
+        const phase = JSON.parse(trace.slice(0, at)); trace = trace.slice(at + 1); phases.push(phase);
+        if (['waiting-for-child', 'missing-group'].includes(phase.phase)) release();
+      }
+    });
+  }
   child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
   child.stderr.on('data', chunk => { stderr += chunk; });
   child.stdout.on('data', chunk => {
     pending += chunk;
     for (let at; (at = pending.indexOf('\n')) >= 0;) {
       const row = JSON.parse(pending.slice(0, at)); pending = pending.slice(at + 1); records.push(row);
+      if (startup === 'started-stop' && row.type === 'started') child.stdin.write(frame({ type: 'stop' }));
       if (row.type === 'data') text += decoder.write(Buffer.from(row.data, 'base64'));
     }
   });
   child.stdin.on('error', () => {});
   const closed = new Promise((resolve, reject) => { child.on('error', reject); child.on('close', code => resolve(code)); });
-  t.after(async () => { if (child.exitCode === null) child.stdin.end(); await closed; });
-  return { child, closed, records, text: () => text, stderr: () => stderr,
+  t.after(async () => { release(); if (child.exitCode === null) child.stdin.end(); await closed; });
+  return { child, closed, records, phases, text: () => text, stderr: () => stderr,
     config: frame({ argv: [python, '-c', source], cwd: path.resolve(__dirname, '../..'), env: { SYNTHETIC_LABEL: '启动边界' } }) };
 }
 async function result(p) {
@@ -77,4 +90,25 @@ test('EOF before a complete configuration never starts a native process', async 
   const p = boot(t); p.child.stdin.end('{"argv":');
   assert.notEqual(await p.closed, 0); assert.equal(p.records.length, 0);
   assert.match(p.stderr(), /Missing terminal configuration/);
+});
+for (const how of ['started-stop', 'queued-stop', 'eof']) test(`${how} cannot lose termination before the child establishes its PTY session`, { timeout: 15000 }, async t => {
+  // The alarm is cleanup insurance, never the asserted stop condition. The old
+  // host drops SIGTERM while the child is held before setsid, then reaps SIGALRM.
+  const p = boot(t, 'import signal,time;signal.alarm(6);print("NATIVE_READY",flush=True);time.sleep(60)', how);
+  if (how === 'eof') p.child.stdin.end(p.config);
+  else p.child.stdin.write(how === 'queued-stop' ? Buffer.concat([p.config, frame({ type: 'stop' })]) : p.config);
+  assert.equal(await p.closed, 0, p.stderr());
+  t.diagnostic(JSON.stringify({ how, phases: p.phases, records: p.records, text: p.text() }));
+  assert.ok(p.phases.some(p => p.phase === 'before-session'));
+  assert.equal(p.records.find(row => row.type === 'exit')?.code, -15, 'The requested group SIGTERM, not a later safety alarm, ends the child');
+  const pid = p.records.find(row => row.type === 'started').pid;
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'waitpid reaped the owned child');
+});
+test('a child failing before PTY readiness is reaped without leaving the host waiting for an acknowledgement', async t => {
+  const p = boot(t, reader, 'fail-setup'); p.child.stdin.write(p.config);
+  assert.equal(await p.closed, 0, p.stderr());
+  assert.equal(p.records.find(row => row.type === 'exit')?.code, 17);
+  assert.equal(p.text(), '');
+  const pid = p.records.find(row => row.type === 'started').pid;
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
 });
