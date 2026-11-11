@@ -62,7 +62,13 @@ records identify the actual host process and its start time; unknown/live
 foreign owners are preserved, never killed or replaced. Recovery does not attach
 to a foreign process. The owner closes through its private pipe, then terminates
 only its owned process group if graceful shutdown exceeds three seconds. EOF
-also closes the DSH context and its MCP client. `close()` is idempotent and
+also closes the DSH context and its MCP client. If disposal hangs, an unreferenced
+two-second host deadline kills its own detached process group, including MCP
+children. The isolated launcher checks the actual process-group ID before exec;
+a host without that proof refuses startup. This deadline still applies after the
+desktop dies. Desktop quit waits for this dedicated driver to stop; it preserves
+ordinary native sessions. Closing also cancels a start waiting on recovery, so a
+late startup cannot escape shutdown. `close()` is idempotent and
 returns a receipt; unknown/changed ownership is preserved and reported as
 `cleanupConfirmed: false`. A crash before a trustworthy owner identity was saved
 requires manual identity reconciliation; elapsed time never authorizes takeover.

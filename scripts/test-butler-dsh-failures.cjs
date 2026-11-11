@@ -24,7 +24,7 @@ function stream(tool) {
   return events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
 }
 (async () => {
-  for (const mode of ['partial-error', 'request-cap', 'forced-close', 'missing-tool', 'production-endpoint', 'unknown-price']) {
+  for (const mode of ['partial-error', 'request-cap', 'forced-close', 'parent-eof', 'host-sigterm', 'hung-dispose', 'hung-dispose-parent-eof', 'missing-tool', 'production-endpoint', 'unknown-price']) {
     const folder = path.join(evidence, mode); fs.mkdirSync(folder, { mode: 0o700 });
     let count = 0, fixtureError, controller, prices = 0;
     const server = http.createServer((req, res) => {
@@ -41,16 +41,21 @@ function stream(tool) {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const endpointProbe = path.join(folder, 'fetch-probe.cjs');
     fs.writeFileSync(endpointProbe, `const fs=require('fs');globalThis.fetch=async url=>{fs.appendFileSync(${JSON.stringify(path.join(folder, 'urls.jsonl'))},JSON.stringify({url:String(url)})+'\\n');throw Error('synthetic fetch stop')};`);
+    const hang = mode.startsWith('hung-dispose');
+    const injection = path.join(folder, 'hang-dispose.mjs');
+    fs.writeFileSync(injection, `import {registerHooks} from 'node:module';import {pathToFileURL} from 'node:url';
+const target=${JSON.stringify(require('node:url').pathToFileURL(path.join(root, 'app/butler-dsh-host.mjs')).href)};
+registerHooks({load(url,context,next){const loaded=next(url,context);if(url!==target)return loaded;let source=String(loaded.source);const marker='  await newSession();';if(source.split(marker).length!==2)throw Error('Fixture injection mismatch');return {...loaded,source:source.replace(marker,marker+' handle.dispose = () => new Promise(() => {});')};}});`);
     const port = server.address().port, wrapper = path.join(folder, 'sandboxed-node');
     const quote = s => "'" + s.replaceAll("'", "'\\''") + "'";
-    fs.writeFileSync(wrapper, '#!/bin/sh\nexec /usr/bin/sandbox-exec -p ' + quote(`(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:${port}"))`) + ' ' + quote(process.execPath) + (mode === 'production-endpoint' ? ' --require ' + quote(endpointProbe) : '') + ' "$@"\n', { mode: 0o700 });
+    fs.writeFileSync(wrapper, '#!/bin/sh\nexec /usr/bin/sandbox-exec -p ' + quote(`(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:${port}"))`) + ' ' + quote(process.execPath) + (mode === 'production-endpoint' ? ' --require ' + quote(endpointProbe) : hang ? ' --import ' + quote(injection) : '') + ' "$@"\n', { mode: 0o700 });
     process.env.DEEPSEEK_API_KEY = 'fixture-key'; process.env.DEEPSEEK_BASE_URL = 'https://inherited-endpoint.invalid';
     const directory = path.join(folder, 'backend');
     const backend = new ButlerBackend(directory, { runtimeVersion: 'fixture-dsh', configuration: { profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro' } });
     backend.prepare(); const proof = JSON.parse(fs.readFileSync(backend.file)).binding;
     const driver = new ButlerDshDriver(directory, { executablePath: wrapper, fixtureEndpoint: mode === 'production-endpoint' ? null : `http://127.0.0.1:${port}`,
       ...(mode !== 'unknown-price' ? { priceUsage: () => { prices++; return 0; } } : {}),
-      mcp: { command: process.execPath, args: [path.join(root, 'scripts/fixtures/butler-dsh-mcp.cjs'), path.join(folder, 'mcp.jsonl'), ...(mode === 'missing-tool' ? ['--empty'] : [])], tools: ['mcp__native_workspace__workspace_status'] } });
+      mcp: { command: process.execPath, args: [path.join(root, 'scripts/fixtures/butler-dsh-mcp.cjs'), path.join(folder, 'mcp.jsonl'), ...(mode === 'missing-tool' ? ['--empty'] : hang ? ['--ignore-eof'] : [])], tools: ['mcp__native_workspace__workspace_status'] } });
     try {
       if (mode === 'missing-tool') {
         await assert.rejects(driver.start(proof), e => e.code === 'mcp-unavailable');
@@ -63,6 +68,15 @@ function stream(tool) {
           process.kill(pid, 'SIGSTOP'); // The real host cannot process its close pipe.
           const start = Date.now(), closed = await driver.close();
           assert.ok(Date.now() - start >= 2900); assert.equal(closed.stopped, true); assert.equal(count, 0);
+        } else if (mode === 'parent-eof' || mode === 'host-sigterm' || hang) {
+          const exited = new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(Error('Host survived parent shutdown')), 4500);
+            driver.child.once('exit', () => { clearTimeout(timeout); resolve(); });
+          });
+          if (mode === 'parent-eof' || mode === 'hung-dispose-parent-eof') driver.child.stdin.end();
+          else if (hang) driver.close();
+          else process.kill(pid, 'SIGTERM');
+          await exited; assert.equal(count, 0);
         } else if (mode === 'unknown-price') {
           const roleDir = path.join(folder, 'role'), ledgerDir = path.join(folder, 'ledger');
           fs.mkdirSync(roleDir, { mode: 0o700 }); fs.mkdirSync(ledgerDir, { mode: 0o700 });
@@ -94,7 +108,14 @@ function stream(tool) {
       }
       assert.equal(fixtureError, undefined); outcomes.push({ mode, requests: count, priceCalls: prices, status: 'passed' });
     } finally {
-      await controller?.close(); await driver.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+      await controller?.close(); await driver.close();
+      // Test-owned stubborn MCP children must be cleaned even when a red assertion fails.
+      if (hang && fs.existsSync(path.join(folder, 'mcp.jsonl'))) {
+        for (const row of fs.readFileSync(path.join(folder, 'mcp.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(r => r.kind === 'started')) {
+          try { process.kill(row.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+        }
+      }
+      server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
       delete process.env.DEEPSEEK_API_KEY; delete process.env.DEEPSEEK_BASE_URL;
     }
   }

@@ -38,6 +38,7 @@ const queueRules = require('./queue-dispatch.cjs');
 const { QueueDispatcher } = queueRules;
 const applicationHandlers = new Map();
 let backgroundControl, backgroundUnavailable = false;
+let butlerClosing = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
 app.setName('Native Agent Workspace');
@@ -1870,7 +1871,7 @@ if (primary) app.whenReady().then(start);
 app.on('window-all-closed', () => {});
 app.on('before-quit', event => {
   pendingReveal = null;
-  if (outboxClosing) { event.preventDefault(); return; }
+  if (outboxClosing || butlerClosing) { event.preventDefault(); return; }
   if (quitting) return;
   try {
     if (viewStore?.loaded) {
@@ -1880,6 +1881,16 @@ app.on('before-quit', event => {
   } catch { event.preventDefault(); return; }
   // While this instance is still the exclusive owner, so the revocation is written durably.
   revokeAppMobile();
+  // The NAW-owned butler belongs to this desktop, unlike ordinary native sessions.
+  const driver = butlerBackend?.driver;
+  if (driver && (driver.child || driver.starting)) {
+    event.preventDefault(); butlerClosing = true; butlerBackend.confirmed = null;
+    Promise.resolve().then(() => driver.close()).then(receipt => {
+      butlerClosing = false;
+      if (receipt?.stopped === true) setImmediate(() => app.quit());
+    }, () => { butlerClosing = false; });
+    return;
+  }
   if (outboxQuitFailed) { quitting = true; dsh?.stop(); return; }
   if (outboxBroker) {
     event.preventDefault();

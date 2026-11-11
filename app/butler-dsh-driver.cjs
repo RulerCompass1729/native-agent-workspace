@@ -23,7 +23,7 @@ class ButlerDshDriver {
     if (fixtureEndpoint !== null && (typeof fixtureEndpoint !== 'string' || !/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(fixtureEndpoint) || Number(new URL(fixtureEndpoint).port) > 65535)) throw failure('endpoint-invalid');
     this.fixtureEndpoint = fixtureEndpoint;
     this.nativeId = null; this.pending = new Map(); this.starting = null; this.active = false;
-    this.closing = null; this.lastError = null;
+    this.closing = null; this.lastError = null; this.generation = 0;
   }
   readOwner() {
     let fd;
@@ -62,15 +62,17 @@ class ButlerDshDriver {
     return { status: 'absent' };
   }
   start(value) {
-    if (this.starting) return Promise.reject(failure('backend-busy'));
-    this.starting = this.launch(value).finally(() => { this.starting = null; });
+    if (this.starting || this.closing) return Promise.reject(failure('backend-busy'));
+    this.starting = this.launch(value, ++this.generation).finally(() => { this.starting = null; });
     return this.starting;
   }
-  async launch(value) {
+  async launch(value, generation) {
     const proof = dshBinding(value);
     if (!runner.dshCredentialPresent()) throw failure('credential-missing');
     if (!this.mcp) throw failure('mcp-unavailable');
-    if ((await this.recover(proof)).status === 'present') return { status: 'present', binding: proof };
+    const recovered = await this.recover(proof);
+    if (generation !== this.generation) throw failure('closed');
+    if (recovered.status === 'present') return { status: 'present', binding: proof };
     binding.reserveBinding(this.store, proof);
     const token = randomUUID();
     fs.writeFileSync(this.file, JSON.stringify({ format: 1, token, binding: proof, identity: null }), { flag: 'wx', mode: 0o600 });
@@ -150,6 +152,7 @@ class ButlerDshDriver {
     this.nativeId = next.nativeId; return { nativeId: this.nativeId };
   }
   close() {
+    ++this.generation; // Invalidate a start that has not spawned its child yet.
     if (!this.closing) this.closing = this.stop().then(() => ({ stopped: true, cleanupConfirmed: true }), () => {
       this.lastError = 'owner-unconfirmed';
       return { stopped: !this.child || this.child.exitCode !== null || this.child.signalCode !== null, cleanupConfirmed: false, errorCode: this.lastError };

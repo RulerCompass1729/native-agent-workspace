@@ -13,6 +13,10 @@ else:
     for name in list(os.environ):
         if name not in keep:
             del os.environ[name]
+    # Only a detached group leader may own group-wide shutdown. Check before exec.
+    if os.getpgrp() != os.getpid():
+        sys.exit(1)
+    os.environ['NAW_BUTLER_PROCESS_GROUP'] = str(os.getpid())
     os.environ['HOME'] = home
     os.environ['DSH_HOME'] = home
     os.environ['ELECTRON_RUN_AS_NODE'] = '1'

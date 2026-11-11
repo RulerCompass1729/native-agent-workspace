@@ -8960,3 +8960,30 @@ Integration review of 9dc699a required the temporary instruction to be scoped as
 The explicitly authorized public excerpts from the earlier approved decisions now supply the default/global count, the exact vision replacement, and the DeepSeek pro selection. No credential continuation is copied. The two layering questions and the existing tool, record-only and off gates are recorded without granting new authority. The earlier review record remains history; its quote-fidelity check alone did not establish suitability for permanent public documentation.
 
 The approval excerpt is retained with its date for all three product confirmations. V14 is now an implementation check outside the pending-person-decision table; the record-only boundary is stated in full.
+
+### B4 preactivation: bounded dedicated-host shutdown (2026-11-11)
+
+Scope: the person exits the desktop, its private parent pipe closes, or DSH
+cleanup hangs. The dedicated host must stop; ordinary native sessions stay alive.
+Default-off qualification and activation are unchanged.
+
+Initial regression: six failures covering the absent host deadline, desktop
+close wiring and close-versus-start race. Fixed-source targeted checks: 41/41.
+The first independent review (3b241828) found a blocker: a leader-only two-second
+exit cancelled the driver's three-second group kill, leaving an EOF-ignoring MCP
+child alive. An actual DSH host with a fixture-injected hanging dispose and a
+stubborn MCP process reproduced it. The launcher now verifies detached group
+ownership before exec, and the host deadline kills that group. Both driver-close
+and parent-EOF variants passed, with zero model requests and both child PIDs gone.
+Normal EOF/SIGTERM, SIGSTOP fallback, ownership preservation and pending-start
+cancellation also pass. Main's actual before-quit callback is exercised in a VM;
+this is not a daily-app or full GUI acceptance claim.
+
+The first full suite lacked the ignored UI build artifact; building UI resolved
+that packaging-copy failure (5115/5115 before the final group-ownership change).
+Final full rerun: 5116/5116, zero failures/skips. The same reviewer approved the
+delta conditional on that zero-failure result, now satisfied. Remaining scoped
+notes: an immediate dispose rejection (rather than a hang) can bypass later MCP
+disposal, and an unkillable owned process can leave close pending; production MCP
+connection/qualification must cover these before activation. No GUI or activation
+completion is claimed.

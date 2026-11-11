@@ -7,6 +7,9 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const home = process.argv[2];
 if (!home || !path.isAbsolute(home) || process.env.DSH_HOME !== home || process.env.HOME !== home) process.exit(1);
+// The isolated launcher checked getpgrp()==getpid() before exec, with inherited
+// markers removed. A host outside that owned group must never run or group-kill.
+if (process.env.NAW_BUTLER_PROCESS_GROUP !== String(process.pid)) process.exit(1);
 const emit = message => process.stdout.write(JSON.stringify(message) + '\n');
 const errorCode = code => ({ code, message: code === 'credential-missing'
   ? 'DEEPSEEK_API_KEY is missing from the butler launch environment.' : 'DSH butler: ' + code });
@@ -15,6 +18,12 @@ const fail = code => Object.assign(Error(code), { code });
 let ctx, handle, nativeId, allowedTools = [], requestCount = 0, consumed = false, initialized = false, closing = false;
 async function close() {
   if (closing) return; closing = true;
+  // Disposal may hang. This deadline must not itself keep an idle host alive.
+  setTimeout(() => {
+    // Include MCP descendants even after the desktop has died and closed stdin.
+    try { process.kill(-process.pid, 'SIGKILL'); } catch {}
+    process.exit(1);
+  }, 2000).unref();
   try { await handle?.dispose(); await ctx?.fiber.dispose(); } finally { process.exit(0); }
 }
 process.on('SIGTERM', close); process.stdin.on('end', close);
