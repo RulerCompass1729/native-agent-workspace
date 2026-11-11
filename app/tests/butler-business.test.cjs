@@ -42,7 +42,7 @@ function fixture(t) {
   const room = new RoomState(directory), records = [actor], expected = { selectionRevision: 1, runnerRef: runner.runnerRef };
   const view = () => ({ records });
   const readAudit = new ButlerReadAudit(directory, { authorizePerson: value => value === person, now: () => now });
-  const bind = () => new ButlerBusiness({ role, roomState: room, view, readAudit }).bind(actor, expected);
+  const bind = () => new ButlerBusiness({ role, roomState: room, view, readAudit, dataDir: directory }).bind(actor, expected);
   return { directory, person, role, actor, records, expected, room, view, bind, readAudit, at: value => { now = value; } };
 }
 function read(capability, query) { return capability.invoke('readBusiness', query); }
@@ -71,7 +71,7 @@ test('dedicated catalog and invoke expose only the read capability, with no appr
 });
 
 test('only an exact designated record binds, and each old closure rechecks native identity and designation', t => {
-  const f = fixture(t), business = new ButlerBusiness({ role: f.role, roomState: f.room, view: f.view, readAudit: f.readAudit });
+  const f = fixture(t), business = new ButlerBusiness({ role: f.role, roomState: f.room, view: f.view, readAudit: f.readAudit, dataDir: f.directory });
   assert.throws(() => business.bind({ ...f.actor }, f.expected), code('ERR_BUTLER_UNAUTHORIZED'));
   const other = { ...f.actor, id: 'other', nativeId: 'other-native' }; f.records.push(other);
   assert.throws(() => business.bind(other, f.expected), code('ERR_BUTLER_UNAUTHORIZED'));

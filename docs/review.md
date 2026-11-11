@@ -9734,3 +9734,34 @@ and review evidence remain in the private handoff named on the task board.
 - The reader still reads main in the integrator's own folder; which repository counts is the person's decision (H6b list).
 - The notices are read where the main process would show them; no real system notification is shown.
 - The person sees "handed out", "merged" and "returned" only under the space's shared-record tab; the member overview, which opens first, says nothing about a handoff. After a return nothing queues the task again or tells the member outside that record. Both belong to the screen that still needs a prototype.
+
+## Business read-audit physical root binding (2026-11-11)
+
+An actual audit object in a second private directory previously passed the
+Business constructor, allowing another page counter outside the human reader's
+root. Business now requires the trusted host's explicit Main `dataDir`. A base
+Audit static check uses the private store brand and real directory identity,
+ownership and mode; instance, prototype and JSON predicates cannot supply proof.
+The root is checked before binding and every authorization boundary. The obsolete
+role-file path check is removed; actual Role authorization remains unchanged.
+
+The old source had five failures in fourteen bounded checks, including the
+wrong-root acceptance, missing/unsafe trusted directory and aliased-root switch.
+Final targeted checks: 98 pass, 0 fail/skip. Coverage includes physical aliases,
+owner/mode changes, no body or append before rejection, descriptor cleanup error,
+and one quota across role, audit and Business reconstruction with a nested role.
+All actual source fixtures explicitly provide the trusted directory and shared
+Audit. Main and native/renderer paths are unchanged: production host injection
+is still unverified and not enabled here. Page/log schemas, the daily allowance,
+capacity callbacks and the unresolved retention/error policy are unchanged.
+
+A fresh separate headless Claude reviewer (51AE03C7-0583-4241-8805-F508FDEC89A0)
+returns APPROVE_SCOPED for this delta; tools were Read/Grep/Glob only with no
+MCP. HEAD, index and worktree matched the review snapshot. The reviewer read
+author-run evidence and did not rerun tests. The author-run complete suite
+passes 5,784/5,784 with zero failures, cancellations or skips; the empty-HOME
+UI build exits zero. Raw output remains in the private audit-root lane.
+A directory change during a read may still construct a page in memory or count
+one approved page in Main's correct log; the recheck withholds its body. A
+failed audit now refuses binding and catalog access as well. No production
+factory injection or runtime transport qualification is established.

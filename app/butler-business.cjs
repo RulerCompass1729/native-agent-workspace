@@ -3,7 +3,6 @@
 // native connection, file tool, model call or approval-based escape route.
 const { createHash } = require('node:crypto');
 const { types: { isProxy } } = require('node:util');
-const path = require('node:path');
 const { ButlerReadAudit, MAX_PAGES_PER_UTC_DAY } = require('./butler-read-audit.cjs');
 const { roomId, DEFAULT_ROOM_ID } = require('./collaboration-spaces.cjs');
 const { validReady, ITEM_TEXT_LIMIT, QUEUE_LIMIT } = require('./queue-dispatch.cjs');
@@ -69,12 +68,15 @@ function decodeCursor(cursor, scope, version, length) {
 const encodeCursor = (scope, version, position) => Buffer.from(JSON.stringify({ version: 1, scope, revision: version, position, afterRef: scanRef(scope, version, position) })).toString('base64url');
 
 class ButlerBusiness {
-  #role; #roomState; #view; #readAudit;
-  constructor({ role, roomState, view, readAudit }) {
+  #role; #roomState; #view; #readAudit; #dataDir;
+  constructor({ role, roomState, view, readAudit, dataDir }) {
     if (!role || typeof role.authorize !== 'function' || !roomState || typeof roomState.metadata !== 'function' || typeof view !== 'function') fail('ERR_BUTLER_BUSINESS_OPTIONS');
-    if (!(readAudit instanceof ButlerReadAudit) || typeof role.file !== 'string' || !path.isAbsolute(role.file)) fail('ERR_BUTLER_BUSINESS_OPTIONS');
+    if (!ButlerReadAudit.matchesDataDir(readAudit, dataDir)) fail('ERR_BUTLER_BUSINESS_OPTIONS');
     this.#role = role; this.#roomState = roomState; this.#view = view;
-    this.#readAudit = readAudit;
+    this.#readAudit = readAudit; this.#dataDir = dataDir;
+  }
+  #auditRoot() {
+    if (!ButlerReadAudit.matchesDataDir(this.#readAudit, this.#dataDir)) fail('ERR_BUTLER_BUSINESS_AUDIT');
   }
   #records() {
     const state = this.#view();
@@ -82,11 +84,13 @@ class ButlerBusiness {
     return state.records;
   }
   #authorize(binding) {
+    this.#auditRoot();
     const records = this.#records(), actor = records.find(record => record.id === binding.id && record.nativeId === binding.nativeId);
     if (!actor) fail('ERR_BUTLER_UNAUTHORIZED');
     return this.#role.authorize(actor, binding.expected, records);
   }
   bind(actualActorRecord, expected) {
+    this.#auditRoot();
     fields(expected, ['selectionRevision', 'runnerRef'], ['selectionRevision', 'runnerRef']);
     const records = this.#records(); this.#role.authorize(actualActorRecord, expected, records);
     const binding = { id: actualActorRecord.id, nativeId: actualActorRecord.nativeId,
