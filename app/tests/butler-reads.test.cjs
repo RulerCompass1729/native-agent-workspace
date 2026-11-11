@@ -351,23 +351,31 @@ test('what a line shows and does not show is on the page without a click, in eve
 
 // The renderer's own lines that set the read log page and the entry up, as written, run where the window's other
 // parts are stand-ins. `parts` are the page's elements by id; a missing id is a missing element.
-function windowSetup(window, { parts = {}, showModal } = {}) {
+function windowSetup(window, { parts = {}, showModal, api = {} } = {}) {
   const renderer = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
   const reads = renderer.slice(renderer.indexOf('function failedButlerReads(reason) {'), renderer.indexOf('// The existing butler view owns visibility and state;'));
   assert.ok(reads.includes('\nfunction openButlerReads() {'), 'The slice holds the way the page is asked for');
-  const entryStart = renderer.indexOf('let butlerEntry = '), entry = renderer.slice(entryStart, renderer.indexOf('catch (error) { console.error(error); }\n', entryStart) + 'catch (error) { console.error(error); }\n'.length);
+  const entry = renderer.slice(renderer.indexOf('function failedButlerEntry(reason) {'), renderer.indexOf('let newDirectory = false, creatingSession = false;'));
   assert.ok(reads.startsWith('function failedButlerReads(reason) {') && reads.includes('\nlet butlerReads;\ntry { butlerReads = window.nativeWorkspaceButlerReads.bind('), reads.slice(0, 80));
-  assert.ok(entry.startsWith('let butlerEntry = { start() {}, refresh() {}, dispose() {} };\ntry {'), entry.slice(0, 120));
+  assert.ok(entry.startsWith('function failedButlerEntry(reason) {') && entry.includes('\nlet butlerEntry;\ntry { butlerEntry = window.nativeWorkspaceButlerEntry.bind(') && entry.trimEnd().endsWith("'setup'); }"), entry.slice(0, 120));
   const page = { activeElement: null, shown: 0, added: [] };
-  const make = (tag, id) => { const element = new Element(tag, page); element.id = id || ''; element.after = other => page.added.push(other); element.remove = () => { element.removed = true; };
+  const make = (tag, id) => { const element = new Element(tag, page); element.id = id || ''; element.after = other => { other.placedAfter = element; page.added.push(other); }; element.before = other => { other.placedBefore = element; page.added.push(other); };
+    element.remove = () => { element.removed = true; };
     if (tag === 'dialog' && showModal) element.showModal = showModal; return element; };
-  const elements = Object.fromEntries(Object.entries({ 'butler-dialog': 'dialog', 'butler-row': 'button', ...parts }).map(([id, tag]) => [id, tag ? make(tag, id) : null]));
-  const errors = [], said = [], bound = new Map(), display = { text: (element, key) => { bound.set(element, key); element.textContent = locale.format('zh', key); }, unbind: element => bound.delete(element) };
-  const sandbox = { window, errors, console: { error: error => errors.push(error) }, $: id => elements[id] ?? null, document: { body: make('body') }, api: {}, uiText() {}, ui: { display, showError() {} },
+  const elements = Object.fromEntries(Object.entries({ 'butler-dialog': 'dialog', 'butler-row': 'button', 'new-session': 'button', 'butler-review-dialog': 'dialog', ...parts }).map(([id, tag]) => [id, tag ? make(tag, id) : null]));
+  // As the page has it: the row is there and hidden until an entry shows it.
+  if (elements['butler-row']) elements['butler-row'].hidden = true;
+  // What is bound, by element and by slot, as the window's own bindings keep it.
+  const errors = [], said = [], bound = new Map(), slots = element => bound.get(element) || bound.set(element, new Map()).get(element);
+  const display = { text: (element, key) => { slots(element).set('text', key); element.textContent = locale.format('zh', key); },
+    computed: (element, slot, read) => { slots(element).set(slot, read); element.setAttribute(slot, read()); },
+    unbind: (element, slot = 'text') => { const own = bound.get(element); if (own) { own.delete(slot); if (!own.size) bound.delete(element); } } };
+  const body = make('body');
+  const sandbox = { window, errors, console: { error: error => errors.push(error) }, $: id => elements[id] ?? null, document: { body }, api, uiText: (key, params) => locale.format('zh', key, params), ui: { display, showError() {} },
     node: (tag, text, cls) => { const element = make(tag); if (text !== undefined) element.textContent = text; if (cls) element.className = cls; return element; },
     spaceRecord: () => null, spaceName: () => '', openButlerReview() {}, uiError: key => ({ key }), toastError: error => said.push(error.key) };
   require('node:vm').runInNewContext(reads + entry + '\nthis.result = { get butlerReads() { return butlerReads; }, butlerEntry };', sandbox);
-  return { get butlerReads() { return sandbox.result.butlerReads; }, butlerEntry: sandbox.result.butlerEntry, errors, said, page, elements, bound };
+  return { get butlerReads() { return sandbox.result.butlerReads; }, butlerEntry: sandbox.result.butlerEntry, errors, said, page, elements, bound, body };
 }
 
 test('if the read log or the entry cannot be set up, the window still starts without it', () => {
@@ -381,7 +389,7 @@ test('if the read log or the entry cannot be set up, the window still starts wit
   }
   // One failing does not take the other with it, and when both work they are what the window uses.
   let opens = 0; const bound = { open() { opens++; return 'opened'; }, dispose() {} }, row = { start() { return 'started'; }, refresh() {}, dispose() {} };
-  const half = windowSetup({ nativeWorkspaceButlerReads: { bind: () => bound } }); assert.equal(half.butlerReads.open(), 'opened'); assert.equal(half.errors.length, 1); assert.equal(half.butlerEntry.start(), undefined);
+  const half = windowSetup({ nativeWorkspaceButlerReads: { bind: () => bound } }); assert.equal(half.butlerReads.open(), 'opened'); assert.equal(half.errors.length, 1); assert.equal(half.butlerEntry.failed, 'module');
   let given; const both = windowSetup({ nativeWorkspaceButlerReads: { bind: () => bound }, nativeWorkspaceButlerEntry: { bind: options => { given = options; return row; } } });
   assert.equal(both.errors.length, 0); assert.equal(both.butlerReads.failed, undefined); assert.equal(both.butlerEntry.start(), 'started');
   opens = 0; given.openReads(); assert.equal(opens, 1, 'The entry opens the read log that was set up'); assert.equal(both.errors.length, 0);
@@ -438,6 +446,7 @@ test('a read log page that could not be set up says so and why, in the page\'s o
     assert.deepEqual(w.said, []);
     for (const wrong of [zh('butler.reads.empty'), zh('butler.reads.unavailable'), zh('error.butler.readAuditUnavailable'), '还没有读过', 'PRIVATE', 'Error']) assert.equal(dialog.text().includes(wrong), false, wrong);
     // Asked for again it is the same page, not a second one; Done closes it; the window's teardown clears it.
+    if (reason === 'element') assert.deepEqual([dialog.placedAfter, w.body.children], [w.elements['butler-review-dialog'], []], 'Made where the page keeps this dialog, not in the body');
     reads.open(); assert.equal(dialog.children.length, 3); assert.equal(w.page.added.length, reason === 'element' ? 1 : 0); assert.deepEqual([dialog.open, w.said, w.errors.length], [true, [], 1], 'Asked for while it is open, it stays as it is');
     actions.children[0].fire('click'); assert.equal(dialog.open, false);
     reads.open(); assert.equal(dialog.open, true); reads.dispose();
@@ -470,6 +479,153 @@ test('a read log page that could not be set up says so and why, in the page\'s o
   assert.deepEqual(last.said, ['error.butler.readsPage']); assert.equal(last.errors.length, 2);
   assert.equal(messages.zh['error.butler.readsPage'], '「它读过什么」这一页打不开，是界面的问题，不表示大管家没读过东西。重新打开 NAW 再试一次。');
   assert.equal(/[一-鿿]/.test(messages.en['error.butler.readsPage']), false);
+});
+
+// The entry that could not be set up. `answer` is what the main process says to the window's one question.
+const entryWindows = () => {
+  const reads = { opened: 0 }, withReads = { nativeWorkspaceButlerReads: { bind: () => ({ open() { reads.opened++; }, dispose() {} }) } };
+  return { reads, cases: [
+    // The entry's program is not in this window.
+    ['module', { ...withReads }, {}],
+    // Its program is there; the row, or the row's dialog, is not in the page.
+    ['element', { ...withReads, nativeWorkspaceButlerEntry: { bind({ row }) { row.append('never'); } } }, { 'butler-row': null }],
+    ['element', { ...withReads, nativeWorkspaceButlerEntry: { bind({ row, dialog }) { row.append(new Element('span')); dialog.setAttribute('x', 'y'); } } }, { 'butler-dialog': null }],
+    // Both are there and setting it up failed half way, with something already put in the row and the dialog.
+    ['setup', { ...withReads, nativeWorkspaceButlerEntry: { bind({ row, dialog }) { row.append(new Element('span'), new Element('span')); dialog.append(new Element('h2')); throw Error('/PRIVATE/PATH in a stack'); } } }, {}]] };
+};
+const refusal = key => Object.assign(Error('refused'), { uiMessage: { key } });
+const asking = answer => { const calls = []; return { calls, api: { butler: (...args) => { calls.push(args); return answer(); } } }; };
+
+test('an entry that could not be set up shows nothing until the main process says this window has one: with the switch closed it asks once and the window is as it was', async () => {
+  const unreadable = Object.defineProperty(Error('refused'), 'uiMessage', { get() { throw Error('no key'); } });
+  for (const answer of [() => Promise.reject(refusal('error.butler.entryDisabled')), () => Promise.reject(refusal('error.butler.personOnly')), () => Promise.reject(Error('the call did not arrive')),
+    () => Promise.reject(unreadable), () => Promise.reject(refusal('error.butler.invalidRequest')), () => { throw refusal('error.butler.entryDisabled'); }]) {
+    for (const [reason, window, parts] of entryWindows().cases) {
+      const asked = asking(answer), w = windowSetup(window, { parts, api: asked.api }), entry = w.butlerEntry, row = w.elements['butler-row'], dialog = w.elements['butler-dialog'];
+      assert.equal(entry.failed, reason); assert.equal(w.errors.length, 1, 'The failure is on the console');
+      const before = [row?.children.length, dialog?.children.length];
+      // Nothing before the question is asked, and nothing after its refusal.
+      assert.deepEqual([asked.calls, row?.hidden], [[], row ? true : undefined]);
+      await entry.start();
+      assert.deepEqual(asked.calls, [['status']], 'One question, the one the entry itself asks');
+      assert.deepEqual([row?.hidden, row?.children.length, dialog?.children.length, dialog?.open, w.page.added, w.body.children, w.said, w.bound.size, w.errors.length], [row ? true : undefined, before[0], before[1], dialog ? false : undefined, [], [], [], 0, 1]);
+      assert.equal(row?.listeners.click?.length || 0, 0, 'Nothing listens for a click on a row that is not shown');
+      // The window calls start on every render of its state, and may ask to refresh: no second question.
+      assert.equal(entry.start(), undefined); entry.refresh(); await entry.start(); assert.deepEqual(asked.calls, [['status']]);
+      entry.dispose(); assert.deepEqual([row?.hidden, w.said, w.page.added], [row ? true : undefined, [], []]);
+    }
+  }
+  // A window without the person-only call at all: nothing is shown and nothing is said.
+  const w = windowSetup({}, {}); await w.butlerEntry.start(); assert.deepEqual([w.elements['butler-row'].hidden, w.said, w.page.added], [true, [], []]);
+  // The two refusals that mean "no entry" are the ones the entry's own program knows.
+  assert.deepEqual([...require('../renderer/butler-entry.js').CLOSED].sort(), ['error.butler.entryDisabled', 'error.butler.personOnly']);
+});
+
+test('with an entry in this window, a row that could not be set up stays in its place and says the interface failed; its dialog says why and still opens the read log', async t => {
+  const tail = '这是界面的问题，不表示没有指定大管家，也不会改动指定。修好之前，这个窗口里看不到大管家的状态，也不能指定或撤销。重新打开 NAW 再试一次；还是这样，就把这句话告诉帮你维护 NAW 的人。';
+  const sentences = { module: '大管家的状态显示不出来：这个窗口里缺少显示它的那部分程序。' + tail, element: '大管家的状态显示不出来：页面里缺少放这一行或它的对话框的位置。' + tail, setup: '大管家的状态显示不出来：准备这一行的时候出了错。' + tail };
+  const tailEn = 'This is a fault of the interface. It does not mean that no butler is designated, and it does not change the designation. Until it is fixed, this window cannot show the butler\'s state, and a butler cannot be designated or revoked here. Reopen NAW and try once more; if it stays like this, pass this sentence to whoever maintains NAW for you.';
+  const english = { module: 'The butler\'s state cannot be shown: the part of the program that shows it is missing from this window. ' + tailEn, element: 'The butler\'s state cannot be shown: the place for this row or for its dialog is missing from the window. ' + tailEn,
+    setup: 'The butler\'s state cannot be shown: setting this row up failed. ' + tailEn };
+  for (const reason of Object.keys(sentences)) { assert.equal(zh(`butler.entryFailed.${reason}`), sentences[reason]); assert.equal(locale.format('en', `butler.entryFailed.${reason}`), english[reason]); }
+  assert.equal(new Set(Object.values(sentences)).size, 3); assert.equal(new Set(Object.values(english)).size, 3);
+  assert.deepEqual([zh('butler.row.failed'), locale.format('en', 'butler.row.failed')], ['界面出错', 'Interface fault']);
+  const selected = { runner: { profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro' }, budget: null };
+  // Every answer that says "this window has an entry": nothing designated, a designation, a record that cannot be
+  // read, and the refusal an open entry gives when the state cannot be verified.
+  for (const answer of [() => Promise.resolve({ version: 1, role: { revision: 0, selected: null }, actions: ['recheck'] }), () => Promise.resolve({ version: 1, role: { revision: 4, selected }, actions: ['revoke', 'recheck'] }),
+    () => Promise.resolve({ version: 1, unavailable: true, actions: [] }), () => Promise.reject(refusal('error.butler.unavailable'))]) {
+    const windows = entryWindows();
+    for (const [reason, window, parts] of windows.cases) {
+      const asked = asking(answer), w = windowSetup(window, { parts, api: asked.api }), entry = w.butlerEntry, opened = windows.reads.opened;
+      await entry.start();
+      const row = w.elements['butler-row'] || w.page.added.find(element => element.id === 'butler-row');
+      assert.ok(row, 'There is a row, made if the page has none');
+      // In its place: the page's own row, or one made like it and put where it belongs, before "new session".
+      if (!w.elements['butler-row']) assert.deepEqual([row.tag, row.className, row.type, row.attributes['aria-haspopup'], row.placedBefore], ['button', 'butler-row', 'button', 'dialog', w.elements['new-session']]);
+      assert.deepEqual([row.hidden, row.dataset.butlerState, row.dataset.butlerFailure, row.attributes['aria-label'], row.attributes.title], [false, 'failed', reason, '大管家：界面出错', '大管家：界面出错']);
+      // Drawn as the entry's row is, so the same styles and the narrow rail apply; what a failed setup left is gone.
+      const [icon, name, state] = row.children;
+      assert.deepEqual(row.children.map(part => [part.tag, part.className]), [['span', 'rail-icon'], ['span', 'rail-label'], ['span', 'butler-state']]);
+      assert.deepEqual([icon.textContent, icon.attributes['aria-hidden'], name.textContent, state.children.map(part => [part.className, part.attributes['aria-hidden'] ?? null, part.textContent])], ['◆', 'true', '大管家', [['butler-dot', 'true', ''], ['', null, '界面出错']]]);
+      // It does not read as any state of a butler.
+      for (const key of ['empty', 'ready', 'recording', 'held', 'blockedBuild', 'unknown']) assert.equal(row.text().includes(zh(`butler.row.${key}`)), false, key);
+      assert.deepEqual([w.said, w.errors.length], [[], 1]);
+
+      // Chosen, it opens a dialog with the reason, what cannot be done from here, and two things to do.
+      row.fire('click');
+      const dialog = w.elements['butler-dialog'] || w.page.added.find(element => element.id === 'butler-dialog');
+      assert.ok(dialog, 'There is a dialog, made if the page has none');
+      // Made where the page keeps this dialog, among its own dialogs: the page's styles do not reach the body.
+      if (!w.elements['butler-dialog']) assert.deepEqual([dialog.tag, dialog.id, dialog.className, dialog.attributes.closedby, dialog.placedBefore], ['dialog', 'butler-dialog', 'butler-dialog', 'any', w.elements['butler-review-dialog']]);
+      assert.deepEqual(w.body.children, [], 'Nothing is put in the body');
+      const [title, text, actions] = dialog.children;
+      assert.deepEqual([dialog.open, dialog.children.length, dialog.dataset.butlerState, dialog.dataset.butlerFailure, title.tag, title.textContent, dialog.attributes['aria-labelledby'] === title.id, text.className, text.attributes.role, text.textContent],
+        [true, 3, 'failed', reason, 'h2', '大管家', true, 'butler-note', 'alert', sentences[reason]]);
+      assert.deepEqual(actions.children.map(button => [button.tag, button.type, button.dataset.action, button.textContent]), [['button', 'button', 'reads', '它读过什么'], ['button', 'button', 'done', '完成']], 'Nothing that changes a designation is offered');
+      assert.equal(w.page.activeElement, actions.children[1], 'The focus is on Done');
+      for (const wrong of [zh('butler.status.empty'), zh('butler.status.unknown'), zh('butler.note.unknown'), zh('butler.note.empty'), 'PRIVATE', 'Error', 'deepseek']) assert.equal(dialog.text().includes(wrong), false, wrong);
+      // Chosen again while it is open, it stays as it is; Done closes it; chosen again it is the same dialog.
+      row.fire('click'); assert.deepEqual([dialog.open, dialog.children.length, dialog.children[1] === text, w.said], [true, 3, true, []]);
+      actions.children[1].fire('click'); assert.equal(dialog.open, false);
+      row.fire('click'); assert.deepEqual([dialog.open, dialog.children[1] === text, w.page.added.filter(element => element.id === 'butler-dialog').length], [true, true, w.elements['butler-dialog'] ? 0 : 1]);
+      // The read log needs no entry: it opens from here, through the window's own way of asking for that page.
+      actions.children[0].fire('click'); assert.deepEqual([dialog.open, windows.reads.opened], [false, opened + 1]);
+      // All of it asked the main process one thing, once: the state.
+      entry.start(); entry.refresh(); assert.deepEqual(asked.calls, [['status']]);
+      // The window's teardown leaves nothing behind.
+      row.fire('click'); assert.equal(dialog.open, true); entry.dispose();
+      assert.deepEqual([row.hidden, row.children.length, dialog.open, dialog.children.length, row.listeners.click.length, w.bound.size], [true, 0, false, 0, 0, 0]);
+      assert.deepEqual([Boolean(row.removed), Boolean(dialog.removed)], [!w.elements['butler-row'], !w.elements['butler-dialog']], 'What was made is taken out; what the page had stays');
+    }
+  }
+  // A window torn down before the answer arrives shows nothing afterwards.
+  { let answer; const asked = asking(() => new Promise(resolve => { answer = resolve; })), w = windowSetup({}, { api: asked.api }), starting = w.butlerEntry.start();
+    w.butlerEntry.dispose(); answer({ version: 1, role: { revision: 0, selected: null }, actions: [] }); await starting;
+    assert.deepEqual([w.elements['butler-row'].hidden, w.elements['butler-row'].children.length, w.said], [true, 0, []]); }
+  // Asked for from here, a read log page that fails as it opens says so itself: the dialog asks for that page the
+  // window's own way, which catches the failure.
+  { const asked = asking(() => Promise.resolve({ version: 1, unavailable: true, actions: [] }));
+    const w = windowSetup({ nativeWorkspaceButlerReads: { bind: () => ({ open() { throw Error('cannot open'); }, dispose() {} }) } }, { parts: { 'butler-reads-dialog': 'dialog' }, api: asked.api });
+    await w.butlerEntry.start(); w.elements['butler-row'].fire('click'); w.elements['butler-dialog'].children[2].children[0].fire('click');
+    assert.deepEqual([w.elements['butler-dialog'].open, w.elements['butler-reads-dialog'].open, w.elements['butler-reads-dialog'].dataset.readsFailure, w.said], [false, true, 'open', []]); }
+
+  // What the sentence rests on. The stand-in asks the main process for the state and for nothing else:
+  const renderer = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8'), own = renderer.slice(renderer.indexOf('function failedButlerEntry(reason) {'), renderer.indexOf("// The butler's row is drawn only from a view"));
+  assert.deepEqual(own.match(/\bapi\.[\w.]+\([^)]*\)/g), ["api.butler('status')"]);
+  // the main process answers that with the core's own look at the state:
+  const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
+  assert.ok(main.includes("      if (action === 'status') return shown(butlerPerson.status(c));"));
+  // and that look leaves the designation record byte for byte as it was, designated or not.
+  { const { ButlerRole } = require('../butler-role.cjs'), { ButlerPerson } = require('../butler-person.cjs'), person = {};
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-entry-failed-')); fs.chmodSync(dir, 0o700); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const role = new ButlerRole(dir, { authorizePerson: actor => actor === person }), core = new ButlerPerson({ role, authorizePerson: actor => actor === person });
+    const listing = () => fs.readdirSync(dir).sort().map(name => [name, fs.readFileSync(path.join(dir, name), 'hex'), fs.statSync(path.join(dir, name)).mtimeMs]);
+    const empty = listing(); assert.equal(core.status(person).role.selected, null); assert.deepEqual(listing(), empty);
+    role.set(person, { identity: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic' }, runner: { runnerRef: 'butler-runner:synthetic', backendRef: 'butler-backend:synthetic', purpose: 'butler', profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro' } }, 0);
+    const designated = listing(); assert.ok(designated.length > 0);
+    assert.equal(core.status(person).role.revision, 1); core.status(person); assert.deepEqual(listing(), designated); }
+});
+
+test('if even the row or its dialog cannot be shown, a notice says it is the interface, never that no butler is designated', async () => {
+  assert.deepEqual([messages.zh['error.butler.entryRow'], messages.en['error.butler.entryRow']], ['大管家这一行显示不出来，是界面的问题，不表示没有指定大管家。重新打开 NAW 再试一次。',
+    'The butler\'s row cannot be shown. This is a fault of the interface and does not mean that no butler is designated. Reopen NAW and try once more.']);
+  const open = () => Promise.resolve({ version: 1, role: { revision: 0, selected: null }, actions: [] });
+  // The read log is set up in these windows; only the entry is not (its program is missing).
+  const only = () => entryWindows().cases[0][1];
+  // No row in the page and nowhere known to put one.
+  const nowhere = windowSetup(only(), { parts: { 'butler-row': null, 'new-session': null }, api: asking(open).api }); await nowhere.butlerEntry.start();
+  assert.deepEqual([nowhere.said, nowhere.errors.length, nowhere.page.added], [['error.butler.entryRow'], 2, []]);
+  // With the switch closed the same window says nothing.
+  const closed = windowSetup(only(), { parts: { 'butler-row': null, 'new-session': null }, api: asking(() => Promise.reject(refusal('error.butler.entryDisabled'))).api }); await closed.butlerEntry.start();
+  assert.deepEqual([closed.said, closed.errors.length], [[], 1]);
+  // The row is shown and its dialog cannot be: the notice is said each time the row is chosen, and the row stays.
+  const stuck = windowSetup(only(), { api: asking(open).api, showModal() { throw Error('cannot show'); } }); await stuck.butlerEntry.start();
+  const row = stuck.elements['butler-row']; assert.deepEqual([row.hidden, stuck.said], [false, []]);
+  row.fire('click'); row.fire('click'); assert.deepEqual([stuck.said, row.hidden, stuck.errors.length], [['error.butler.entryRow', 'error.butler.entryRow'], false, 3]);
+  // The same when the page has no dialog for it and no place to make one.
+  const placeless = windowSetup(only(), { parts: { 'butler-dialog': null, 'butler-review-dialog': null }, api: asking(open).api }); await placeless.butlerEntry.start();
+  placeless.elements['butler-row'].fire('click'); assert.deepEqual([placeless.said, placeless.page.added, placeless.body.children, placeless.elements['butler-row'].hidden], [['error.butler.entryRow'], [], [], false]);
 });
 
 test('without the entry on screen the read log does not stay open', () => {

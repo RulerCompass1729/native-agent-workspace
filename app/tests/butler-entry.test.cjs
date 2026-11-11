@@ -369,6 +369,8 @@ test('every sentence the entry can show is in the catalog in both languages, and
   for (const key of FACTS) { expected.add(`butler.confirm.${key}`); expected.add(`butler.confirm.${key}Value`); }
   for (const action of ACTIONS) expected.add(`butler.action.${action}`);
   expected.add('butler.action.reads');
+  // The window's own sentences for an entry that could not be set up (the renderer's stand-in; butler-reads.test.cjs).
+  for (const key of ['butler.row.failed', 'butler.entryFailed.module', 'butler.entryFailed.element', 'butler.entryFailed.setup']) expected.add(key);
   // The read log's own sentences (butler.reads.*) are checked with it, in butler-reads.test.cjs.
   for (const language of ['zh', 'en']) assert.deepEqual(Object.keys(messages[language]).filter(key => key.startsWith('butler.') && !key.startsWith('butler.reads.')).sort(), [...expected].sort());
   // Every state and hold reason the view can answer has its keys.

@@ -6,6 +6,8 @@ const testScratch = require('./fixtures/test-scratch.cjs');
 // core's person view -> the entry adapter -> the sidebar row and dialog -> the person's action -> the core's record.
 // A designation is written here by the core's own record store, because this version offers no way to designate
 // (a butler session's identity exists only after its host has started, and nothing starts it).
+// Last, the entry that cannot be set up: one of its parts is kept out of the window as it loads, and the window's
+// own code meets the failure. The row must stay, say that the interface failed, and still lead to the read log.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
 const { _electron } = testScratch.playwright(require('playwright'));
@@ -138,7 +140,80 @@ const selection = { identity: { sessionId: hidden[0], nativeId: hidden[1] },
   await dialog.locator('button[data-action="done"]').click(); await dialog.waitFor({ state: 'hidden' });
   checks.push('An unreadable designation record is shown as "state unknown" with nothing to do but read the log');
 
-  // 7. Nothing else happened.
+  // 7. The entry cannot be set up. The main process still says this window has an entry (the record is the
+  //    unreadable one from step 6), so the row must not vanish: it stays in its place and says the interface failed.
+  await page.addInitScript(() => {
+    const mode = sessionStorage.getItem('naw-test-entry-failure');
+    const hide = name => Object.defineProperty(window, name, { configurable: true, get() { return undefined; }, set() {} });
+    if (mode === 'module') hide('nativeWorkspaceButlerEntry');
+    if (mode === 'view') hide('nativeWorkspaceButlerEntryView');
+    // The element is taken out of the page the first time the window looks for it, which is at its setup.
+    if (mode === 'row' || mode === 'dialog') { const real = Document.prototype.getElementById, id = mode === 'row' ? 'butler-row' : 'butler-dialog'; let taken = false;
+      Document.prototype.getElementById = function (wanted) { const found = real.call(this, wanted); if (wanted !== id || taken || !found) return found; taken = true; found.remove(); return null; }; }
+  });
+  const load = async mode => {
+    await page.evaluate(value => sessionStorage.setItem('naw-test-entry-failure', value), mode); await page.reload();
+    await until(async () => await page.locator('#new-session').count().catch(() => 0), 'Main window after reload', 30000);
+  };
+  // What was kept out really is out: the program, the view it draws from, or the element as the setup found it.
+  const keptOut = () => page.evaluate(() => [typeof window.nativeWorkspaceButlerEntry?.bind, typeof window.nativeWorkspaceButlerEntryView?.entryView]);
+  const size = async (width, height) => { await application.evaluate(({ BrowserWindow }, [w, h]) => { for (const win of BrowserWindow.getAllWindows()) win.setContentSize(w, h); }, [width, height]); await until(async () => await page.evaluate(w => innerWidth === w, width), `Window ${width} wide`, 10000); };
+  const recordBytes = () => fs.readFileSync(path.join(profile, 'butler.json'), 'hex'), before = recordBytes();
+  const reads = page.locator('#butler-reads-dialog');
+  let spoken = 'zh';
+  // mode, the reason the window must give, what is then absent from it, language, window size
+  for (const [mode, reason, out, language, width, height] of [['module', 'module', ['undefined', 'function'], 'zh', 1280, 800], ['view', 'setup', ['function', 'undefined'], 'zh', 860, 600],
+    ['row', 'element', ['function', 'function'], 'en', 1280, 800], ['dialog', 'element', ['function', 'function'], 'en', 860, 600]]) {
+    const tell = (key, params) => locale.format(language, key, params), tag = `${mode}-${language}-${width}`, failed = tell('butler.rowLabel', { state: tell('butler.row.failed') });
+    await size(width, height); await load(mode);
+    await until(async () => await row.isVisible().catch(() => false), `${tag}: a row is on the screen`, 15000);
+    if (language !== spoken) {
+      await page.locator('#setup-button').click(); await page.locator('#setup-dialog').waitFor({ state: 'visible' });
+      await page.locator('#ui-language').selectOption(language);
+      await until(async () => await page.locator('#new-session').getAttribute('aria-label') === tell('sidebar.newSession'), 'The interface follows the language', 15000);
+      await page.keyboard.press('Escape'); await page.locator('#setup-dialog').waitFor({ state: 'hidden' }); spoken = language;
+    }
+    assert.deepEqual(await keptOut(), out, tag);
+    // One row, in the entry's place, saying it is the interface; not a notice, and not any state of a butler.
+    await until(async () => await row.getAttribute('aria-label') === failed, `${tag}: the row says the interface failed`, 15000);
+    const seen = await page.evaluate(() => { const rows = document.querySelectorAll('#butler-row'), row = rows[0], box = row.getBoundingClientRect(), dot = row.querySelector('.butler-dot').getBoundingClientRect(), text = row.querySelector('.butler-state > span:not(.butler-dot)');
+      return { rows: rows.length, dialogs: document.querySelectorAll('#butler-dialog').length, next: row.nextElementSibling.id, state: row.dataset.butlerState, failure: row.dataset.butlerFailure, title: row.title,
+        inside: box.left >= 0 && box.right <= innerWidth && box.height >= 24, dot: dot.width > 0 && getComputedStyle(row.querySelector('.butler-dot')).backgroundColor, stateShown: text.getClientRects().length > 0, stateText: text.textContent,
+        toast: document.getElementById('toast').hidden === false && document.getElementById('toast').getClientRects().length > 0 }; });
+    assert.deepEqual(seen, { rows: 1, dialogs: mode === 'dialog' ? 0 : 1, next: 'new-session', state: 'failed', failure: reason, title: failed, inside: true, dot: 'rgb(181, 101, 29)', stateShown: width > 900, stateText: tell('butler.row.failed'), toast: false }, tag);
+    // Chosen, it says why, what cannot be done from here, and offers the read log and Done; nothing that changes a designation.
+    await row.click(); await dialog.waitFor({ state: 'visible' });
+    assert.deepEqual([await dialog.getAttribute('data-butler-state'), await dialog.getAttribute('data-butler-failure'), (await dialog.locator('h2').innerText()).trim()], ['failed', reason, tell('butler.name')], tag);
+    assert.deepEqual((await dialog.locator('p').allInnerTexts()).map(value => value.trim()), [tell(`butler.entryFailed.${reason}`)], tag);
+    assert.equal(await dialog.locator('p[role="alert"]').count(), 1); assert.deepEqual(await actions(), ['reads', 'done'], tag);
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset?.action), 'done', 'The focus is on Done');
+    const text = (await dialog.innerText()).replace(/\s+/g, ' ');
+    for (const key of ['butler.status.empty', 'butler.status.unknown', 'butler.note.unknown', 'butler.note.empty', 'butler.note.designateLater']) assert.equal(text.includes(tell(key)), false, `${tag}: ${key}`);
+    // It fits its window: nothing cut, nothing to scroll sideways, the actions on one line.
+    // And it is the page's dialog, not a bare one: among the page's own dialogs, as wide as the entry's dialog is,
+    // drawn like the page's other dialogs and buttons (a dialog made outside that place gets none of the styles).
+    const fit = await page.evaluate(() => { const d = document.getElementById('butler-dialog'), box = d.getBoundingClientRect(), all = [...d.querySelectorAll('.dialog-actions button')], buttons = all.map(b => b.getBoundingClientRect());
+      const like = document.getElementById('butler-reads-dialog'), look = element => { const style = getComputedStyle(element); return [style.borderTopLeftRadius, style.paddingLeft, style.borderTopWidth, style.backgroundColor].join(' '); };
+      return { inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, level: d.scrollWidth <= d.clientWidth && d.scrollHeight <= d.clientHeight, oneLine: new Set(buttons.map(b => Math.round(b.top))).size === 1, shown: buttons.every(b => b.width > 0 && b.right <= box.right),
+        place: d.parentElement === document.getElementById('butler-review-dialog').parentElement && d.nextElementSibling.id === 'butler-review-dialog', width: Math.round(box.width) === Math.min(600, innerWidth - 48),
+        dialogLook: look(d) === look(like) && parseFloat(getComputedStyle(d).borderTopLeftRadius) > 0, buttonLook: all.every(b => getComputedStyle(b).fontSize === getComputedStyle(d).fontSize && parseFloat(getComputedStyle(b).borderTopLeftRadius) > 0), right: buttons.at(-1).right > box.right - 80 }; });
+    assert.deepEqual(fit, { inside: true, level: true, oneLine: true, shown: true, place: true, width: true, dialogLook: true, buttonLook: true, right: true }, tag);
+    await unseen(`failed ${tag}`); await shot(`entry-failed-${tag}`);
+    // The read log needs no entry: it opens from here and closes back to the row, which is still the failure row.
+    await dialog.locator('button[data-action="reads"]').click(); await reads.waitFor({ state: 'visible' }); assert.equal(await dialog.isVisible(), false);
+    assert.equal(await reads.getAttribute('data-reads-failure'), null, 'The read log itself is not what failed');
+    await reads.locator('button[data-action="done"]').click(); await reads.waitFor({ state: 'hidden' });
+    assert.equal(await row.getAttribute('aria-label'), failed); assert.equal(await row.isVisible(), true);
+    // Coming back to the front changes nothing, and nothing was written.
+    await front(); await sleep(200); assert.equal(await row.getAttribute('aria-label'), failed); assert.equal(recordBytes(), before, 'The designation record is as it was');
+  }
+  // With nothing kept out the entry itself is back, saying what the record says.
+  await load('none'); assert.deepEqual(await keptOut(), ['function', 'function']);
+  await until(async () => await row.isVisible().catch(() => false) && await row.getAttribute('aria-label') === locale.format('en', 'butler.rowLabel', { state: locale.format('en', 'butler.row.unknown') }), 'The entry itself is back');
+  assert.deepEqual(await page.evaluate(() => [document.getElementById('butler-row').dataset.butlerState, document.getElementById('butler-row').dataset.butlerFailure ?? null, document.querySelectorAll('#butler-row').length]), ['unknown', null, 1]);
+  checks.push('An entry that cannot be set up (its program missing, the view it draws from missing, its row or its dialog not in the page) leaves a row in the entry\'s place that says the interface failed; its dialog says why and what cannot be done from here, offers the read log and Done, and the read log opens from it; in both languages and at both widths; nothing is written');
+
+  // 8. Nothing else happened.
   assert.equal(fs.existsSync(path.join(profile, 'butler-native')), false, 'No butler host directory was prepared');
   assert.equal((await client.call('initial')).sessions.length, 0); assert.deepEqual(errors, []);
   console.log(JSON.stringify({ checks, screenshots: shots.length, nativeProgramsStarted: 0, butlerHostsPrepared: 0, sessions: 0, promptsSent: 0, paidModelCalls: 0, evidence }));
