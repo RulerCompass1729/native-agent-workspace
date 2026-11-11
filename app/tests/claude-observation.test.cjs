@@ -1360,6 +1360,65 @@ test(`native API failure uses only processed same-turn text: ${legacy ? 'retaine
   assert.equal(f.r.failedTurnInputId, null, 'A delayed failure update cannot grant another send');
 });
 
+for (const order of ['append-first', 'failure-first', 'end-first'])
+for (const errorText of ["You're out of usage credits. Run /usage-credits to continue.", 'Credit balance is too low'])
+test(`a confirmed native quota failure permits the next explicit input regardless of event order: ${order} ${errorText}`, async () => {
+  const f = await mod({ version: '2.1.322' }), prompt = randomUUID(), turn = randomUUID();
+  const activities = [], ends = [];
+  f.r.on('activity', (_text, message) => activities.push(message?.key));
+  f.r.on('nativeTurnEnd', e => ends.push(e));
+  f.r.lastPromptId = prompt; f.r.submission.status(true);
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: prompt });
+  await f.invoke('turn.start', { turnId: turn });
+  while (f.clock.length) await f.clock.shift()();
+  const append = () => f.append(response(errorText, { origin: { kind: 'model', model: '<synthetic>' } }));
+  const failure = async () => {
+    await f.invoke('classic.StopFailure', { session_id: f.r.record.nativeId, prompt_id: prompt });
+    f.r.hook({ hook_event_name: 'StopFailure', session_id: f.r.record.nativeId, prompt_id: prompt,
+      transcript_path: path.join(os.tmpdir(), f.r.record.nativeId + '.jsonl') });
+  };
+  const end = () => f.invoke('turn.complete', { turnId: turn, reason: 'error', answer: '', durationMs: 100 });
+  for (const fn of order === 'append-first' ? [append, end, failure] : order === 'failure-first' ? [failure, end, append] : [end, failure, append]) await fn();
+  while (f.clock.length) await f.clock.shift()();
+  assert.equal(f.r.failedTurnInputId, turn, 'A known failed root may accept a new human message without a recognized error body');
+  assert.equal(activities.at(-1), 'notice.failure.usageCreditsUnavailable');
+  for (let read = 0; read < 5; read++) f.r.reportCapacityFailure(true);
+  assert.ok(ends.every(e => e.errorInfo !== 'serverOverloaded'), 'Quota never arms an automatic capacity continuation');
+  f.r.claimFailedTurnInput(); assert.equal(f.r.failedTurnInputId, null);
+  await failure(); while (f.clock.length) await f.clock.shift()();
+  assert.equal(f.r.failedTurnInputId, null, 'A delayed failure cannot grant another input');
+});
+
+for (const kind of ['missing', 'child', 'wrong-prompt'])
+test(`quota prose alone cannot grant a new input without this root's failure: ${kind}`, async () => {
+  const f = await mod({ version: '2.1.322' }), prompt = randomUUID(), turn = randomUUID();
+  f.r.lastPromptId = prompt; f.r.submission.status(true);
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: prompt });
+  await f.invoke('turn.start', { turnId: turn });
+  await f.append(response("You're out of usage credits.", { origin: { kind: 'model', model: '<synthetic>' } }));
+  await f.invoke('turn.complete', { turnId: turn, reason: 'error', answer: '' });
+  if (kind !== 'missing') await f.invoke('classic.StopFailure', { session_id: f.r.record.nativeId,
+    prompt_id: kind === 'wrong-prompt' ? randomUUID() : prompt, ...(kind === 'child' ? { agent_id: 'child' } : {}) });
+  while (f.clock.length) await f.clock.shift()();
+  assert.equal(f.r.failedTurnInputId, null);
+});
+
+for (const kind of ['redacted', 'ordinary-model', 'unknown-format'])
+test(`quota notice respects native origin and processed text: ${kind}`, async () => {
+  const f = await mod({ version: '2.1.322' }), prompt = randomUUID(), turn = randomUUID();
+  f.r.lastPromptId = prompt; f.r.submission.status(true);
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: prompt });
+  await f.invoke('turn.start', { turnId: turn });
+  await f.append(response(kind === 'unknown-format' ? 'Unrecognized failure' : "You're out of usage credits.",
+    { origin: { kind: 'model', model: kind === 'ordinary-model' ? 'claude-haiku' : '<synthetic>' } }),
+    async e => ({ uuid: e.uuid, message: { type: 'assistant', content: [{ type: 'text', text: kind === 'redacted' ? '[redacted]' : e.message.content[0].text }] } }));
+  await f.invoke('turn.complete', { turnId: turn, reason: 'error', answer: '' });
+  await f.invoke('classic.StopFailure', { session_id: f.r.record.nativeId, prompt_id: prompt });
+  while (f.clock.length) await f.clock.shift()();
+  assert.equal(f.r.failedTurnInputId, turn, 'Input recovery does not depend on disclosing the failure body');
+  assert.notEqual(f.r.rootTurn.failureCause, 'usageCredits');
+});
+
 // T-32: capacity recovery per Claude version, through the real bridge and adapter. 2.1.316 and 2.1.317 build the same
 // API-error row and StopFailure input as the qualified 2.1.312 (read-only comparison of the installed bundles; no real
 // 529 was reproduced there). Later versions qualify capacity separately from abort (T-32).
@@ -1437,12 +1496,14 @@ for (const boundary of ['pending-send', 'ordered-start']) test(`late failed A ca
   }
 });
 
+for (const track of ['sharing-root', 'ended-root'])
 for (const boundary of ['input', 'permission', 'gap', 'rebind', 'end', 'stop', 'disconnect', 'dead-process'])
-test(`explicit failure recovery cannot outlive ${boundary}`, async () => {
+test(`explicit failure recovery cannot outlive ${boundary}: ${track}`, async () => {
   const r = new Claude({ nativeId: randomUUID() }, null, { attachOnly: true });
   r.terminal = { alive: true }; r.bindRoot({ sessionId: r.record.nativeId, nativeBlocks: true }); r.submission.status(true);
   const prompt = randomUUID(), turn = randomUUID(); r.lastPromptId = prompt;
-  r.rootTurn = { id: turn, promptId: prompt, status: 'error' };
+  if (track === 'sharing-root') r.rootTurn = { id: turn, promptId: prompt, status: 'error' };
+  else r.startedRootTurn = { id: turn, promptId: prompt, status: 'error', ended: true, failedInput: true, completed: false };
   assert.equal(r.failedTurnInputId, turn);
   if (['input', 'permission'].includes(boundary)) r.observeRoot({ block: true, sessionId: r.record.nativeId, lease: r.rootLease,
     epoch: r.observationEpoch, sequence: 1, id: `control:${boundary}`, kind: 'control', status: 'complete' });
@@ -1453,6 +1514,20 @@ test(`explicit failure recovery cannot outlive ${boundary}`, async () => {
   if (boundary === 'disconnect') { r.submission.status(false); r.submission.status(true); }
   if (boundary === 'dead-process') r.terminal.alive = false;
   assert.equal(r.failedTurnInputId, null); assert.equal(r.failedTurnInputMatches(turn), false);
+  r.submission.close();
+});
+test('consuming ended-root recovery preserves the pending input guard until a new control boundary', () => {
+  const r = adapter(), prompt = randomUUID(), turn = randomUUID();
+  r.bindRoot({ sessionId: r.record.nativeId, nativeBlocks: true });
+  r.submission.status(true); r.lastPromptId = prompt;
+  r.startedRootTurn = { id: turn, promptId: prompt, status: 'error', ended: true, failedInput: true, completed: false };
+  assert.equal(r.rootTurn, null, 'The old sharing authority stays revoked');
+  assert.equal(r.failedTurnInputId, turn); r.claimFailedTurnInput();
+  assert.equal(r.failedTurnInputId, null, 'Only one explicit input is offered');
+  assert.equal(r.failedTurnInputMatches(turn), true, 'Claiming the input must not revoke its authorization in flight');
+  r.observeRoot({ block: true, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch,
+    sequence: 1, id: 'control:input', kind: 'control', status: 'complete' });
+  assert.equal(r.failedTurnInputMatches(turn), false, 'A new native input revokes the in-flight old failure guard');
   r.submission.close();
 });
 for (const rejection of ['empty-transform', 'ordinary-model', 'unknown-shape', 'child', 'old-prompt', 'aborted', 'changed-uuid', 'reinitialized'])

@@ -15,6 +15,15 @@ test('native retry retains its exact notice, stays working and never fails a new
  event('error',{turnId:'b',willRetry:false,error:{message:'Current native failure'}});assert.equal(failures.length,1);
  event('warning',{message:'Native warning text'});assert.equal(notices.at(-1).text,'Native warning text');
 });
+test('a completed Codex failure releases normal input state without retrying it', () => {
+  const { r, event, start } = fixture(), states = [], failures = [];
+  r.on('state', state => states.push(state)); r.on('failed', (...args) => failures.push(args));
+  start('quota-turn'); r.pending = { turnId: 'quota-turn', tag: 'original-input' };
+  event('turn/completed', { turn: { id: 'quota-turn', status: 'failed', error: { message: 'Synthetic credits unavailable', codexErrorInfo: 'other' } } });
+  assert.equal(states.at(-1), 'idle'); assert.equal(r.turnId, null); assert.equal(r.pending, null);
+  assert.equal(failures.length, 1); assert.equal(r.failedTurnInputId, undefined, 'Codex uses ordinary idle input, not Claude failure recovery');
+  start('explicit-next-turn'); assert.equal(r.turnId, 'explicit-next-turn'); assert.equal(states.at(-1), 'working');
+});
 test('native working phases follow concurrent items and exact turn timestamps', () => {
   const { r, event, start } = fixture(); start('turn-a', 1234);
   assert.equal(r.nativeActivity.startedAt, 1234000);

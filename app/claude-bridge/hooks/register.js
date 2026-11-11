@@ -227,12 +227,18 @@ function displayTurn(id, binding) {
 function failureText(turn) {
   return turn.failedPrompt && !turn.failureAmbiguous && turn.failure?.text || '';
 }
+function creditFailureText(text) {
+  return /^(?:You're out of usage credits|Credit balance is too low)(?:[.\s]|$)/.test(text);
+}
 function publishFailure($, turnId, turn, binding) {
-  if (turn.ended && turn.endReason === 'error' && turn.failedPrompt && turn.failure) {
+  // A confirmed failed root permits the person's next input independently of
+  // whether native's error prose matched a known display format.
+  if (turn.ended && turn.endReason === 'error' && turn.failedPrompt) {
     const detail = failureText(turn);
     enqueueBlock($, { id: `turn:${turnId}`, turnId, kind: 'turn', status: 'failed',
       text: turn.endingText + (detail ? `\n${detail}` : ''), incomplete: Boolean(turn.failureAmbiguous), failedRequest: true, ...turn.clock,
-      ...(!turn.failureAmbiguous ? { errorMessageId: turn.failure.uuid } : {}) }, binding);
+      ...(!turn.failureAmbiguous && turn.failure ? { errorMessageId: turn.failure.uuid,
+        ...(turn.failure.credits ? { failureCause: 'usageCredits' } : {}) } : {}) }, binding);
   }
 }
 function rowText(content) {
@@ -322,7 +328,7 @@ function enqueueBlock($, row, binding = rootBinding) {
   if (!observing) { observing = true; $.clock.after(0, () => flushObservations($)); }
 }
 
-function observeAppend($, e, result, binding, turnId, candidate, nativeApiError) {
+function observeAppend($, e, result, binding, turnId, candidate, nativeApiError, nativeCreditError) {
   if ((!contextTransitions && !nativeBlocks) || !binding || stopped || rootBinding !== binding || e.agentId ||
     result?.deny || result?.uuid !== e.uuid || !/^[a-f0-9-]{36}$/i.test(result?.uuid || '')) return;
   const message = result.message;
@@ -398,7 +404,7 @@ function observeAppend($, e, result, binding, turnId, candidate, nativeApiError)
         const turn = displayTurn(turnId, binding), detail = text(message.content);
         if (detail.length <= 500000) {
           if (turn.failure && turn.failure.uuid !== result.uuid) turn.failureAmbiguous = true;
-          else turn.failure = { uuid: result.uuid, text: detail };
+          else turn.failure = { uuid: result.uuid, text: detail, credits: nativeCreditError && creditFailureText(detail) };
           publishFailure($, turnId, turn, binding);
         } else markObservationGap(binding);
       }
@@ -1099,7 +1105,8 @@ export function register(on) {
           text: turn.endingText + (e.reason === 'error' && failureText(turn) ? `\n${failureText(turn)}` : ''),
           status: e.reason === 'aborted' ? 'interrupted' : e.reason === 'answer' ? 'complete' : 'failed',
           failedRequest: e.reason === 'error' && turn.failedPrompt === true,
-          ...(e.reason === 'error' && turn.failedPrompt && turn.failure && !turn.failureAmbiguous ? { errorMessageId: turn.failure.uuid } : {}) }, binding);
+          ...(e.reason === 'error' && turn.failedPrompt && turn.failure && !turn.failureAmbiguous ? { errorMessageId: turn.failure.uuid,
+            ...(turn.failure.credits ? { failureCause: 'usageCredits' } : {}) } : {}) }, binding);
       }
     } catch { markObservationGap(binding); }
     return result;
@@ -1108,9 +1115,11 @@ export function register(on) {
     const observationBinding = rootBinding;
     const observationTurn = activeTurn, observationEpoch = observationBinding?.observationEpoch, observationGeneration = generation;
     const content = e.message?.content;
-    const nativeApiError = e.door === 'response' && e.origin?.kind === 'model' && e.origin.model === '<synthetic>' &&
+    const nativeFailureRow = e.door === 'response' && e.origin?.kind === 'model' && e.origin.model === '<synthetic>' &&
       e.message?.type === 'assistant' && content?.length === 1 && content[0]?.type === 'text' &&
-      typeof content[0].text === 'string' && /^API Error: /.test(content[0].text);
+      typeof content[0].text === 'string';
+    const nativeCreditError = nativeFailureRow && creditFailureText(content[0].text);
+    const nativeApiError = nativeFailureRow && (/^API Error: /.test(content[0].text) || nativeCreditError);
     if (collecting && e.door === 'prompt') {
       collecting.appends++;
       // The native engine pins origin. A previously queued foreign prompt also
@@ -1127,7 +1136,7 @@ export function register(on) {
     try {
       const result = await next(e);
       try {
-        if (observationGeneration === generation && observationBinding?.observationEpoch === observationEpoch) observeAppend($, e, result, observationBinding, observationTurn, candidate, nativeApiError);
+        if (observationGeneration === generation && observationBinding?.observationEpoch === observationEpoch) observeAppend($, e, result, observationBinding, observationTurn, candidate, nativeApiError, nativeCreditError);
         else markObservationGap(observationBinding);
         if (!e.agentId && e.door === 'response' && observationBinding === rootBinding) observeUsage($);
       }

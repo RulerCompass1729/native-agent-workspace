@@ -541,6 +541,7 @@ class Claude extends EventEmitter {
     this.submission.on('change', () => {
       this.chatAvailable = this.submission.connected;
       if (!this.chatAvailable && this.rootTurn?.status === 'error') this.rootTurn = null;
+      if (!this.chatAvailable && this.startedRootTurn) this.startedRootTurn.inputRevoked = true;
       this.emit('capability');
     });
     this.token = crypto.randomBytes(32).toString('hex');
@@ -645,6 +646,7 @@ class Claude extends EventEmitter {
     if (this.observationEpoch) this.observeRootGap({ sessionId: message.sessionId, lease: this.rootLease, epoch: this.observationEpoch });
     this.observationEpoch = crypto.randomBytes(16).toString('hex');
     this.rootObservation = null; this.rootTurn = null; this.liveTurn = null; this.livePermissions = new Map(); this.observationSeenAt = Date.now();
+    if (this.startedRootTurn) this.startedRootTurn.inputRevoked = true;
     this.nativeBlocks = message.nativeBlocks === true;
     this.nativeMedia = this.nativeBlocks && message.nativeMedia === true;
     this.nativeQueue = message.nativeQueue === true;
@@ -790,7 +792,7 @@ class Claude extends EventEmitter {
           this.rootTurn = message.replayed || message.gap ? null : { id: message.turnId, promptId: message.promptId, status: 'working' };
           // T-138: the started root turn, kept apart from rootTurn (permission and input boundaries clear
           // that sharing authority); `announced` is how many prompts UserPromptSubmit had announced by then.
-          this.startedRootTurn = message.replayed || message.gap ? null : { id: message.turnId, announced: this.announceCount || 0, completed: false };
+          this.startedRootTurn = message.replayed || message.gap ? null : { id: message.turnId, promptId: message.promptId, announced: this.announceCount || 0, completed: false };
           if (this.rootTurn) this.emit('nativeTurnStart', { nativeId: this.record.nativeId, turnId: message.turnId });
           if (message.triggers) this.emit('nativeTurnTriggers', { nativeId: this.record.nativeId, turnId: message.turnId, prompts: message.triggers.prompts, rows: message.triggers.rows });
           this.liveTurn = this.rootTurn ? { id: message.turnId, promptId: message.promptId, phase: 'requesting', label: 'requesting' } : null;
@@ -825,6 +827,7 @@ class Claude extends EventEmitter {
           if (message.title === 'AskUserQuestion' && this.liveTurn && this.liveTurn.question !== false) this.liveTurn.question = true;
         }
         if (this.liveTurn && (message.id === 'control:input' || message.boundaryOnly && (!message.promptId || message.promptId !== this.liveTurn.promptId || message.turnId !== this.liveTurn.id))) this.liveTurn.question = false;
+        if (this.startedRootTurn?.ended) this.startedRootTurn.inputRevoked = true;
         this.rootTurn = null;
         // Current sessions need this boundary too: the classic permission/state
         // event can arrive later or be coalesced before a peer sees a snapshot.
@@ -850,6 +853,7 @@ class Claude extends EventEmitter {
     const freshInline = inline && !message.replayed && !this.record.messages?.some(row => row.id === `native:${this.record.nativeId}:${id}`);
     if (freshInline) {
       this.rootTurn = null;
+      if (this.startedRootTurn?.ended) this.startedRootTurn.inputRevoked = true;
       this.emit('nativeControlBoundary', 'control:input');
       this.emit('sharingBoundary', 'control:input');
     }
@@ -881,6 +885,18 @@ class Claude extends EventEmitter {
       ...(message.imageCount !== undefined ? { imageCount: message.imageCount } : {}),
       ...(message.userShell === true ? { toolKind: 'commandExecution', commandSource: 'userShell' } : {}),
       ...(kind === 'turn' ? Object.fromEntries(['nativeDurationMs', 'nativeCompletedAt'].filter(k => message[k] !== undefined).map(k => [k, message[k]])) : {}) });
+    // A tool permission boundary revokes rootTurn's sharing authority. The
+    // independently observed root can still finish failed and accept a new
+    // explicit input; this never recreates sharing or automatic-retry proof.
+    if (kind === 'turn' && this.startedRootTurn?.id === turnId && !this.startedRootTurn.completed && !message.replayed && !message.gap) {
+      this.startedRootTurn.ended = true;
+      if (status === 'failed' && message.failedRequest === true) {
+        this.startedRootTurn.status = 'error'; this.startedRootTurn.failedInput = true;
+        this.startedRootTurn.failureCause = !incomplete && !turn.incomplete && message.failureCause === 'usageCredits' ? 'usageCredits' : null;
+      }
+      this.reportCreditFailure();
+      this.emit('capability');
+    }
     if (kind === 'turn' && this.rootTurn?.id === turnId && !this.rootTurn.completed && ['working', 'error', null].includes(this.rootTurn.status) && !message.replayed && !message.gap) {
       this.rootTurn.status = status === 'interrupted' ? 'idle' : status === 'failed' && message.failedRequest === true ? 'error' : null;
       this.rootTurn.completed = status === 'complete';
@@ -889,8 +905,10 @@ class Claude extends EventEmitter {
         this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId, status: 'completed' });
       }
       if (status === 'failed' && message.failedRequest === true && !incomplete && !turn.incomplete && /^[a-f0-9-]{36}$/i.test(message.errorMessageId || '')) this.rootTurn.errorMessageId = message.errorMessageId;
+      if (status === 'failed' && message.failedRequest === true && !incomplete && !turn.incomplete && message.failureCause === 'usageCredits') this.rootTurn.failureCause = 'usageCredits';
       if (incomplete || turn.incomplete) this.rootTurn.errorMessageId = null;
       this.reportCapacityFailure();
+      this.reportCreditFailure();
       if (status === 'interrupted') this.finishInterrupted(turnId);
       this.emit('capability');
     }
@@ -932,6 +950,13 @@ class Claude extends EventEmitter {
     turn.endReported = true;
     if (this.startedRootTurn?.id === turn.id) this.startedRootTurn.endReported = true; // never a second, boundary end (T-141)
     this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId: turn.id, status: 'failed', errorInfo: overloaded === true ? 'serverOverloaded' : null });
+  }
+  reportCreditFailure() {
+    const turn = this.failedInputTurn;
+    if (turn?.failureCause !== 'usageCredits' || turn.creditsReported || !turn.failedTranscript || !this.failedTurnInputMatches(turn.id)) return;
+    turn.creditsReported = true;
+    const notice = uiNotice('notice.failure.usageCreditsUnavailable');
+    this.emit('activity', notice.text, notice.uiMessage);
   }
   finishInterrupted(turnId) {
     if (this.rootTurn?.id !== turnId || this.rootTurn.status !== 'idle' || this.rootEnding ||
@@ -983,6 +1008,7 @@ class Claude extends EventEmitter {
   observeRootGap(message) {
     if (!this.validRootBinding(message) || !this.observationEpoch || message.epoch !== this.observationEpoch) throw Error('Invalid native observation');
     this.cancelNativeAbort(); this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear();
+    if (this.startedRootTurn) this.startedRootTurn.inputRevoked = true;
     this.displayGap = true; for (const turn of this.displayProofs?.values() || []) turn.incomplete = true;
     this.emit('progress', { id: `claude-observation-gap-${this.record.nativeId}`,
       source: 'claude-native-message', kind: 'gap', status: 'unknown', title: '部分原生消息未能同步', uiTitleMessage: uiNotice('notice.legacy.gapTitle').uiMessage,
@@ -1209,9 +1235,11 @@ class Claude extends EventEmitter {
         if (this.liveTurn) this.liveTurn.question = false;
         if (this.rootTurn?.promptId !== event.prompt_id) this.rootTurn = null;
         clearTimeout(this.pending?.displayTimer); this.pending = null;
-        this.emit('state', 'error'); { const notice = uiNotice("notice.failure.nativeRequestIncomplete"); this.emit('failed', notice.text, undefined, notice.uiMessage); }
+        this.emit('state', 'error'); { const notice = uiNotice(this.rootTurn?.failureCause === 'usageCredits' && this.failedTurnInputMatches(this.rootTurn.id)
+          ? 'notice.failure.usageCreditsUnavailable' : 'notice.failure.nativeRequestIncomplete'); this.emit('failed', notice.text, undefined, notice.uiMessage); }
         if (this.rootTurn) this.rootTurn.failedTranscript = event.transcript_path;
-        this.reportCapacityFailure(); break;
+        if (this.startedRootTurn && !this.startedRootTurn.completed && event.prompt_id === this.lastPromptId) this.startedRootTurn.failedTranscript = event.transcript_path;
+        this.reportCapacityFailure(); this.reportCreditFailure(); break;
       case 'SessionEnd': this.contextEnding(event.reason); break;
     }
   }
@@ -1288,19 +1316,25 @@ class Claude extends EventEmitter {
     if (this.nativeInputRequired) throw uiError("error.claudePluginInputPaused");
     if (!this.ready || this.pending || this.queued) throw uiError("error.claudeInputNotReady");
     if (!guard()) throw uiError("error.handoffRevoked");
-    const failedPromptId = this.failedTurnInputId ? this.rootTurn.promptId : null;
+    const failedPromptId = this.failedTurnInputId ? this.failedInputTurn.promptId : null;
     this.claimFailedTurnInput();
     const pending = this.pending = { tag, text, guard, nativeId: this.record.nativeId, failedPromptId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
     return this.deliver(pending);
   }
+  get failedInputTurn() { return this.rootTurn?.status === 'error' ? this.rootTurn : this.startedRootTurn?.failedInput && !this.startedRootTurn.completed ? this.startedRootTurn : null; }
   failedTurnInputMatches(id) {
-    return Boolean(id && this.rootTurn?.id === id && this.rootTurn.status === 'error' &&
+    const turn = this.failedInputTurn;
+    return Boolean(id && turn?.id === id && turn.status === 'error' && !turn.inputRevoked &&
       this.rootLease && !this.rootEnding && !this.disposed && this.terminal?.alive && this.submission.connected &&
-      !this.nativeInputRequired && (this.retainedReader || this.lastPromptId === this.rootTurn.promptId));
+      !this.nativeInputRequired && !this.livePermissions?.size && (this.retainedReader || this.lastPromptId === turn.promptId));
   }
-  get failedTurnInputId() { return !this.rootTurn?.inputUsed && this.failedTurnInputMatches(this.rootTurn?.id) ? this.rootTurn.id : null; }
+  get failedTurnInputId() { return !this.failedInputTurn?.inputUsed && this.failedTurnInputMatches(this.failedInputTurn?.id) ? this.failedInputTurn.id : null; }
   claimFailedTurnInput() {
-    if (this.failedTurnInputId) { this.rootTurn.inputUsed = true; this.emit('capability'); }
+    if (this.failedTurnInputId) {
+      const turn = this.failedInputTurn; turn.inputUsed = true;
+      if (this.startedRootTurn?.id === turn.id) this.startedRootTurn.inputUsed = true;
+      this.emit('capability');
+    }
   }
   get queueAvailable() { return Boolean(!this.nativeAbortRequest && !this.nativeInputRequired && this.nativeQueue && this.rootLease && !this.rootEnding && this.ready && this.chatAvailable); }
   async queue(text, tag, guard) {

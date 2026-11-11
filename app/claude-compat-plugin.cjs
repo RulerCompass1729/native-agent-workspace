@@ -93,7 +93,9 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
     // Display 7cbb1fd; queue 7f1a89f; capacity 3484233 (unchanged by 77fdf2e).
     '9fc2e90042409250ba4b93cf6a546e0f0e9cdee28117f06f87dffe204a51b118',
     '0e9022d2b59636154f9a6385e8f572250d959a41e0f0dba313b10191788a1585',
-    'ee87b99d944723a148cba0ffd8f16bdf24212d5586bf9a6c9024bb64274cb339']);
+    'ee87b99d944723a148cba0ffd8f16bdf24212d5586bf9a6c9024bb64274cb339',
+    // Exact managed copy before quota failure input recovery (main 464ae17).
+    '77ed9f675a75aa22126a135a4256ad875c42a1e568a17bb557049f0e44008ef5']);
   const upgrades = new Set();
   for (const [name, content] of files) {
     const filename = path.join(directory, name);
