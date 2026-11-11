@@ -1,0 +1,233 @@
+// T-163: the single-session page's conversation/terminal boundary and input area. Source Electron in a hidden
+// window, the synthetic loading-terminal backend, no provider process and no model. Checks what the five
+// spacing rules do and, more importantly, what they must leave alone: text, states, the draft, who has the
+// input, the controls and their sizes, the type size and the height of the input box.
+const scratch = require('./fixtures/test-scratch.cjs');
+const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto'), { execFileSync } = require('node:child_process');
+const { _electron } = scratch.playwright(require('playwright'));
+const { createSourceEntry } = require('./fixtures/synthetic-source-boot.cjs');
+const root = path.resolve(__dirname, '..');
+const evidence = process.env.NAW_EVIDENCE_DIR;
+if (!evidence || !path.isAbsolute(evidence)) throw Error('An explicit private evidence directory is required');
+if (path.resolve(evidence) === root || path.resolve(evidence).startsWith(root + path.sep)) throw Error('GUI evidence must be outside the repository');
+fs.mkdirSync(evidence, { recursive: true });
+const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
+const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
+try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('Canonical GUI slot occupied; zero allocation and no launch.'); process.exit(75); }
+fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token, owner: 'Claude3', task: 'T163 session split density', pid: process.pid, at: new Date().toISOString() }));
+const benign = new Set(['PATH', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'HOME', 'SHELL', 'USER', 'LOGNAME', 'TZ', 'TERM', 'COLORTERM', 'COMMAND_MODE', '__CF_USER_TEXT_ENCODING']);
+const env = extra => ({ ...Object.fromEntries(Object.entries(process.env).filter(([key]) => benign.has(key))), ...extra });
+let profile, child, client, app, page, sequence = 0;
+const checks = [], errors = [];
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(fn, label) { for (let n = 0; n < 300; n++) { if (await fn()) return; await delay(50); } throw Error(label); }
+function fixture(method, target, value) {
+  const id = ++sequence;
+  return new Promise((resolve, reject) => {
+    const receive = reply => { if (reply.requestId !== id) return; clearTimeout(timer); child.off('message', receive); resolve(reply); };
+    const timer = setTimeout(() => { child.off('message', receive); reject(Error('Synthetic fixture did not answer ' + method)); }, 8000);
+    child.on('message', receive); child.send({ id, method, target, value });
+  });
+}
+const settled = async () => { await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))); await delay(150); };
+const size = async (width, height) => { await app.evaluate(({ BrowserWindow }, s) => BrowserWindow.getAllWindows()[0].setContentSize(s.width, s.height), { width, height }); await settled(); };
+const capture = name => page.screenshot({ path: path.join(evidence, name + '.png') });
+function check(text) { checks.push(text); console.log('PASS:', text); }
+// The parts of this surface, as laid out now.
+const sample = () => page.evaluate(() => {
+  const q = s => document.querySelector(s), shown = e => Boolean(e && e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
+  const box = e => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, right: r.right, bottom: r.bottom }; };
+  const part = s => shown(q(s)) ? box(q(s)) : null, css = (s, keys) => { const cs = getComputedStyle(q(s)); return Object.fromEntries(keys.map(k => [k, cs[k]])); };
+  const messages = q('#messages'), turns = [...messages.querySelectorAll('.message.reading-turn-start')].filter(shown);
+  const first = [...messages.children].find(shown);
+  return {
+    leftBar: part('#conversation-pane-toolbar'), rightBar: part('#native-pane .native-pane-toolbar'), approval: part('#approval'), messages: part('#messages'), activity: part('#native-activity'),
+    wrap: part('#composer-wrap'), card: part('#composer'), input: part('#message-input'), send: part('#send-button'), interrupt: part('#interrupt'), hint: part('#compose-hint'), advanced: part('#advanced'), summary: part('#advanced > summary'),
+    advancedContent: part('#advanced-content'), take: part('#take-control'),
+    leftRule: shown(q('#conversation-pane-toolbar')) ? css('#conversation-pane-toolbar', ['borderBottomWidth', 'borderBottomStyle', 'borderBottomColor']) : null,
+    rightRule: css('#native-pane .native-pane-toolbar', ['borderBottomWidth', 'borderBottomStyle', 'borderBottomColor']),
+    wrapPadding: css('#composer-wrap', ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft']), cardPadding: css('#composer', ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'borderTopWidth', 'borderRadius']),
+    advancedPadding: css('#advanced', ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'borderTopWidth']),
+    wrapScroll: { scrollHeight: q('#composer-wrap').scrollHeight, clientHeight: q('#composer-wrap').clientHeight },
+    firstShown: first ? { turnStart: first.classList.contains('reading-turn-start'), earlier: first.classList.contains('reading-page'), top: box(first).y, text: first.textContent.trim().slice(0, 40) } : null,
+    turns: turns.map(e => { const cs = getComputedStyle(e); return { rule: cs.borderTopColor, width: cs.borderTopWidth, margin: cs.marginTop, padding: cs.paddingTop, top: box(e).y }; }),
+    fonts: { input: getComputedStyle(q('#message-input')).fontSize, hint: getComputedStyle(q('#compose-hint')).fontSize, send: getComputedStyle(q('#send-button')).fontSize, summary: getComputedStyle(q('#advanced > summary')).fontSize,
+      body: getComputedStyle(messages.querySelector('.message-body') || messages).fontSize },
+    draft: q('#message-input').value, hintText: q('#compose-hint').textContent.trim(), layout: q('#session-layout').className,
+  };
+});
+const clear = 'rgba(0, 0, 0, 0)';
+const inside = (inner, outer, label) => assert.ok(inner.x >= outer.x - 0.5 && inner.right <= outer.right + 0.5 && inner.y >= outer.y - 0.5 && inner.bottom <= outer.bottom + 0.5, label + ' stays inside its block');
+// What holds in every state of this surface.
+function invariants(s, label, draft, split = true) {
+  assert.equal(s.draft, draft, label + ': the private draft is in the input');
+  assert.ok(s.input.h >= 70, `${label}: the input box keeps its height (${s.input.h})`);
+  assert.deepEqual([s.fonts.input, s.fonts.hint, s.fonts.send, s.fonts.summary], ['14px', '11px', '12px', '11px'], label + ': no type in the input area is set smaller');
+  assert.deepEqual([s.wrapPadding.paddingTop, s.wrapPadding.paddingBottom, s.wrapPadding.paddingLeft], ['6px', '8px', '16px'], label + ': the input area\'s padding');
+  assert.deepEqual([s.cardPadding.paddingTop, s.cardPadding.paddingLeft, s.cardPadding.borderTopWidth], ['10px', '12px', '1px'], label + ': the input card keeps its border and has the smaller padding');
+  assert.deepEqual([s.advancedPadding.paddingTop, s.advancedPadding.paddingBottom, s.advancedPadding.paddingLeft, s.advancedPadding.borderTopWidth], ['5px', '7px', '16px', '1px'], label + ': the disclosure row');
+  inside(s.input, s.card, label + ': the input box'); inside(s.hint, s.card, label + ': the hint');
+  if (s.send) { inside(s.send, s.card, label + ': the send control'); assert.ok(s.send.h >= 30 && s.send.w >= 44, `${label}: the send control keeps a usable size (${s.send.w}x${s.send.h})`); }
+  // Beside the terminal the input card fills the pane, and the disclosure starts at its left edge. With the
+  // conversation alone the card is centred and narrower, as before; the disclosure then starts at the pane's
+  // own 16px edge, where the conversation starts, and never further in than the card.
+  if (split) assert.ok(Math.abs(s.advanced.x - (s.card.x - 16)) < 1 && Math.abs(s.summary.x - s.card.x) < 1, `${label}: the disclosure starts at the input card's left edge (${s.summary.x} vs ${s.card.x})`);
+  else assert.ok(Math.abs(s.advanced.x - s.messages.x) < 1 && s.summary.x <= s.card.x + 0.5 && s.summary.x - s.messages.x <= 34, `${label}: the disclosure starts at the conversation's left edge (${s.summary.x}; conversation ${s.messages.x}, card ${s.card.x})`);
+  assert.ok(s.advanced.y >= s.wrap.bottom - 0.5, label + ': the disclosure is below the input area, not over it');
+}
+async function language(code) {
+  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption(code);
+  await until(async () => (await page.locator('#setup-title').textContent()) === (code === 'en' ? 'Settings' : '设置'), 'The interface language changed'); await page.locator('#close-setup').click(); await settled();
+}
+async function run() {
+  profile = scratch.directory(path.join(os.tmpdir(), 'naw-split-density-')); const cwd = path.join(profile, 'workspace'); fs.mkdirSync(cwd, { mode: 0o700 });
+  child = scratch.childProcess.fork(path.join(root, 'app/daemon.cjs'), [profile], { cwd, execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')],
+    env: env({ NAW_TEST_APP_ROOT: root, NAW_WORKSPACE: cwd, NAW_APP_VERSION: require('../package.json').version }), stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+  await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Synthetic backend ready');
+  client = await require('../app/service-connection.cjs').connectService(profile, 'split-density-seed');
+  const id = await client.call('create', { provider: 'claude', cwd, name: '发布核对 · Release check', view: 'chat' });
+  const draft = 'UNSENT private draft · 尚未发送的草稿：先核对 release notes 第 3 节，再跑一次全量。';
+  await client.call('draft', id, draft);
+  const entry = createSourceEntry({ profile, code: root, fixturePid: child.pid }), entryFile = path.join(entry, 'entry.cjs');
+  fs.writeFileSync(entryFile, `const e=require('electron');e.Notification.isSupported=()=>false;globalThis.splitDensity={guards:[]};` +
+    `for(const key of ['showOpenDialog','showSaveDialog','showMessageBox','showOpenDialogSync','showSaveDialogSync','showMessageBoxSync'])e.dialog[key]=()=>{splitDensity.guards.push(key);throw Error('OS dialog outside this check');};\n` + fs.readFileSync(entryFile, 'utf8'));
+  app = await _electron.launch({ executablePath: require('electron'), args: [entry], env: env({ NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid), NAW_TEST_VISIBLE: '0', NAW_TEST_UI_LANGUAGE: 'zh' }), timeout: 60000 });
+  await until(async () => { for (const p of app.windows()) if (!p.isClosed() && await p.locator('#new-session').count()) { page = p; return true; } return false; }, 'The workspace page');
+  page.setDefaultTimeout(10000); page.on('pageerror', error => errors.push(error.message));
+  assert.deepEqual(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focusable: w.isFocusable() }))), [{ visible: false, focusable: false }], 'The window is hidden and cannot take focus');
+  await size(1240, 850);
+  await page.locator(`.session-link[data-session-id="${id}"]`).click();
+  const time = Date.now() - 600000;
+  const turn = (name, extra = {}) => [
+    { id: `${name}-input`, turnId: name, status: 'complete', time, kind: 'input', role: 'user', text: `核对发布说明（${name}），然后跑一次全量测试。` },
+    { id: `${name}-read`, turnId: name, status: 'complete', time, kind: 'tool', title: 'Read', input: 'docs/release-notes.md', text: '## 3 已知限制\n- 换会话后授权需要重新确认' },
+    { id: `${name}-bash`, turnId: name, status: 'failed', time, kind: 'tool', title: 'Bash', input: 'node --test app/tests/*.test.cjs', text: 'tests 5363\npass 5362\nfail 1' },
+    { id: `${name}-answer`, turnId: name, status: 'complete', time, kind: 'response', phase: 'final_answer', text: '全量 5362 通过、1 条失败。\n\n需要你决定：先修这条再发版，还是按已知问题记录后继续。', ...extra },
+  ];
+  for (const item of turn('first')) child.send({ id: ++sequence, method: 'nativeBlock', target: id, value: item });
+  await until(async () => (await page.locator('#messages [data-message-id]').count()) >= 3, 'The synthetic conversation is shown');
+  if (!(await page.locator('#session-layout').evaluate(e => e.classList.contains('has-terminal')))) await page.locator('#terminal-tab').click();
+  await until(() => page.locator('#session-layout').evaluate(e => e.classList.contains('has-terminal')), 'The native terminal pane is open');
+  await delay(300); child.send({ id: ++sequence, method: 'release', target: id }); await settled();
+
+  // 1) Read-only: another window has the input. The draft is kept and the take-over control is offered.
+  let s = await sample();
+  assert.ok(s.take, 'The run starts read-only, with the take-over control in the header'); invariants(s, 'read-only', draft);
+  assert.match(s.hintText, /只读/, 'The input area says this window is read-only');
+  await capture('01-read-only-zh');
+  check('Read-only: the draft, the read-only hint and the take-over control are there; the input area has the new spacing and nothing leaves the card');
+
+  // 2) This window has the input. One header rule; the first turn draws none of its own.
+  await page.locator('#take-control').click(); await until(async () => !(await page.locator('#take-control').isVisible()), 'This window has the input');
+  s = await sample(); invariants(s, 'idle', draft);
+  assert.deepEqual(s.leftRule, s.rightRule, 'The conversation pane\'s toolbar has the same bottom rule as the terminal pane\'s header');
+  assert.equal(s.leftRule.borderBottomWidth, '1px'); assert.notEqual(s.leftRule.borderBottomColor, clear);
+  assert.ok(Math.abs(s.leftBar.bottom - s.rightBar.bottom) < 1, `In Chinese at this width the two rules meet (${s.leftBar.bottom} and ${s.rightBar.bottom})`);
+  assert.equal(s.firstShown.turnStart, true, 'The first thing shown is the first turn');
+  assert.deepEqual([s.turns[0].rule, s.turns[0].margin, s.turns[0].padding], [clear, '0px', '0px'], 'The first turn shown draws no rule and leaves no gap for one');
+  assert.ok(s.firstShown.top - s.leftBar.bottom <= 13, `The first message starts right under the header (${s.firstShown.top - s.leftBar.bottom}px)`);
+  assert.equal(s.fonts.body, '14px', 'The conversation\'s type size is unchanged');
+  await capture('02-idle-zh');
+  check('Idle: one header rule across both panes; the first turn has no rule of its own and starts under the header; the input box is ' + s.input.h + 'px high');
+
+  // 3) A second turn keeps its rule: only the first one shown loses it.
+  for (const item of turn('second')) child.send({ id: ++sequence, method: 'nativeBlock', target: id, value: item });
+  await until(async () => (await sample()).turns.length === 2, 'The second turn is shown');
+  s = await sample();
+  assert.deepEqual([s.turns[0].rule, s.turns[0].margin], [clear, '0px']);
+  assert.notEqual(s.turns[1].rule, clear, 'A later turn keeps its rule'); assert.deepEqual([s.turns[1].width, s.turns[1].margin, s.turns[1].padding], ['1px', '18px', '16px']);
+  check('A later turn keeps its rule, margin and padding');
+
+  // 4) Reachability: the input, the send control and the disclosure are in the Tab order, in that order, and
+  // none is covered. (The window is hidden and cannot take focus, so no physical key is pressed here.)
+  const reach = await page.evaluate(() => ['#message-input', '#send-button', '#advanced > summary'].map(selector => {
+    const e = document.querySelector(selector), r = e.getBoundingClientRect(), top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return { selector, tab: e.tabIndex, disabled: e.disabled === true, inert: Boolean(e.closest('[inert]')), onTop: top === e || e.contains(top), order: [...document.querySelectorAll('#message-input, #send-button, #advanced > summary')].indexOf(e) };
+  }));
+  assert.deepEqual(reach, [{ selector: '#message-input', tab: 0, disabled: false, inert: false, onTop: true, order: 0 }, { selector: '#send-button', tab: 0, disabled: false, inert: false, onTop: true, order: 1 },
+    { selector: '#advanced > summary', tab: 0, disabled: false, inert: false, onTop: true, order: 2 }], 'The input, the send control and the disclosure are in the Tab order and not covered');
+  await page.locator('#advanced > summary').click(); await settled();
+  s = await sample(); invariants(s, 'disclosure open', draft);
+  // (Its content scrolls inside the row's own height limit, as before, so only its sides and its start are checked.)
+  assert.ok(s.advancedContent && s.advancedContent.h > 0, 'The disclosure opened');
+  assert.ok(s.advancedContent.x >= s.advanced.x - 0.5 && s.advancedContent.right <= s.advanced.right + 0.5 && s.advancedContent.y >= s.summary.bottom - 1, 'The disclosure\'s content is under its heading and within its sides');
+  assert.ok(Math.abs(s.advancedContent.x - s.card.x) < 1, 'Its content starts at the same left edge');
+  await capture('03-disclosure-open-zh');
+  await page.locator('#advanced > summary').click(); await settled();
+  check('Reachability: the input, the send control and the disclosure are in the Tab order and uncovered; the open disclosure lines up with the input card and overlaps nothing');
+
+  // 5) Working: the activity line and the interrupt control.
+  child.send({ id: ++sequence, method: 'native-activity', target: id, value: { turnId: 'third', label: '正在运行 Bash' } });
+  await until(async () => (await sample()).activity !== null, 'The activity line is shown');
+  s = await sample(); invariants(s, 'working', draft);
+  assert.ok(s.interrupt, 'The interrupt control is shown'); inside(s.interrupt, s.card, 'working: the interrupt control');
+  assert.ok(s.activity.bottom <= s.wrap.y + 0.5, 'The activity line is above the input area');
+  await capture('04-working-zh');
+  check('Working: the activity line and the interrupt control are there and inside their blocks');
+
+  // 6) Waiting for the person: the banner sits directly under the header, with no stray rule after it.
+  child.send({ id: ++sequence, method: 'native-permission', target: id, value: { id: 'permission-1', kind: 'permission', title: 'Bash', detail: 'synthetic, nothing runs', options: [{ id: 'allow', label: '允许一次' }, { id: 'deny', label: '拒绝' }] } });
+  await until(async () => (await sample()).approval !== null, 'The confirmation banner is shown');
+  s = await sample(); invariants(s, 'waiting', draft);
+  assert.ok(Math.abs(s.approval.y - s.leftBar.bottom) < 1, 'The banner starts at the header rule');
+  assert.ok(s.approval.h > 40 && s.messages.y >= s.approval.bottom - 0.5, 'The banner keeps its height and the conversation starts below it');
+  await capture('05-waiting-for-you-zh');
+  child.send({ id: ++sequence, method: 'native-permission', target: id, value: null }); child.send({ id: ++sequence, method: 'native-activity', target: id, value: null });
+  await until(async () => { const now = await sample(); return now.approval === null && now.activity === null; }, 'Back to idle');
+  check('Waiting for you: the banner is under the header rule and nothing else is between it and the conversation');
+
+  // 7) More than one page: the "show earlier records" button is shown first, and then the first turn on the page keeps its rule.
+  for (let n = 0; n < 13; n++) for (const item of turn('more-' + n)) child.send({ id: ++sequence, method: 'nativeBlock', target: id, value: item });
+  await until(async () => (await sample()).firstShown?.earlier === true, 'The earlier-records button is shown');
+  // (Not scrolled to the top: reaching it loads the earlier page, and the button goes away.)
+  s = await sample();
+  assert.equal(s.firstShown.earlier, true); assert.ok(s.turns.length >= 2);
+  assert.notEqual(s.turns[0].rule, clear, 'With earlier records to load, the first turn on the page keeps its rule'); assert.deepEqual([s.turns[0].margin, s.turns[0].padding], ['18px', '16px']);
+  await capture('06-earlier-records-zh');
+  check('With earlier records to load, the button comes first and the first turn on the page keeps its rule');
+
+  // 8) The small window and English: nothing leaves the card and the input area does not scroll.
+  await size(850, 600); s = await sample(); invariants(s, 'zh 850x600', draft);
+  assert.ok(s.wrapScroll.scrollHeight <= s.wrapScroll.clientHeight + 1, `zh 850x600: the input area fits without scrolling (${s.wrapScroll.scrollHeight} in ${s.wrapScroll.clientHeight})`);
+  await capture('07-small-zh');
+  await size(1240, 850); await language('en'); s = await sample(); invariants(s, 'en 1240x850', draft);
+  assert.equal(s.hintText, 'Enter to send · Shift Enter for a new line');
+  await capture('08-idle-en');
+  await size(850, 600); s = await sample(); invariants(s, 'en 850x600', draft);
+  assert.ok(s.wrapScroll.scrollHeight <= s.wrapScroll.clientHeight + 1, `en 850x600: the input area fits without scrolling (${s.wrapScroll.scrollHeight} in ${s.wrapScroll.clientHeight})`);
+  await capture('09-small-en');
+  await size(1240, 850); await language('zh');
+  check('Small window and English: the same spacing, nothing leaves the card, and the input area fits without scrolling');
+
+  // 9) Conversation only: with the terminal pane closed the input area is the same.
+  await page.locator('#close-native-terminal').click(); await until(() => page.locator('#session-layout').evaluate(e => !e.classList.contains('has-terminal')), 'The terminal pane is closed');
+  s = await sample(); invariants(s, 'conversation only', draft, false);
+  await capture('10-conversation-only-zh');
+  check('Conversation only: the input area has the same spacing; the disclosure starts at the conversation\'s left edge, the centred card being narrower as before');
+
+  // 10) An ended session: the input area offers to continue it, inside the same card.
+  child.send({ id: ++sequence, method: 'set-state', target: id, value: 'ended' });
+  await until(async () => /结束/.test(await page.locator('#header').innerText()), 'The session is shown as ended');
+  s = await sample(); invariants(s, 'ended', draft, false);
+  await capture('11-ended-zh');
+  check('Ended: the draft is kept and the input area has the same spacing');
+
+  const counters = await fixture('inspect');
+  assert.deepEqual(counters.sends, []); assert.deepEqual(counters.inputs, []);
+  assert.deepEqual(await app.evaluate(() => globalThis.splitDensity.guards), []); assert.deepEqual(errors, []);
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks, errors, sends: counters.sends.length, inputs: counters.inputs.length, modelCalls: 0 }, null, 2));
+}
+const cleanup = scratch.cleanup(async () => { if (app) await app.close(); client?.close(); if (child?.connected) child.disconnect(); if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); });
+let deadline;
+Promise.race([run(), new Promise((_, reject) => { deadline = setTimeout(() => reject(Error('180-second GUI budget exhausted')), 180000); })])
+  .catch(async error => { console.error(error.stack); fs.writeFileSync(path.join(evidence, 'failure.txt'), error.stack); try { if (page && !page.isClosed()) await capture('failure'); } catch { /* The page is gone. */ } process.exitCode = 1; })
+  .finally(async () => {
+    clearTimeout(deadline);
+    try {
+      await cleanup();
+      assert.equal(JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))).token, token); if (profile) assert.equal(fs.existsSync(profile), false);
+      fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot);
+      console.log(JSON.stringify({ checks, modelCalls: 0, realProviderProcesses: 0, slotReleased: true }));
+    } catch (error) { console.error('Owned cleanup/lease release unconfirmed:', error.stack); process.exitCode = 1; }
+  });

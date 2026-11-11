@@ -30,7 +30,9 @@ header { min-height: 74px; padding: 14px 24px; }
 .compact-session #header-actions { flex: none; gap: 5px; }
 .compact-session #header-actions button { padding: 4px 7px; min-height: 28px; }
 .compact-session #header-actions > .header-secondary { display: none; }
-.conversation-pane-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 3px 8px; min-height: 32px; }
+/* T-163: the same rule the terminal pane's header has, so each pane has a bounded header and, where the two
+   headers are the same height, the rules meet. */
+.conversation-pane-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 3px 8px; min-height: 32px; border-bottom: 1px solid var(--border); }
 .conversation-pane-toolbar button { padding: 3px 6px; min-height: 26px; font-size: 11px; }
 .compact-session-surface .native-pane-toolbar, .compact-room-surface .native-pane-toolbar { padding: 3px 8px; min-height: 32px; gap: 5px; }
 .compact-session-surface #terminal-controls { gap: 4px; }
@@ -215,6 +217,9 @@ header h1, header p { overflow-wrap: anywhere; }
 .message.process>details>summary>.message-heading:has(>.message-actions){flex-wrap:wrap;white-space:normal;overflow:visible}
 .message-body.copy-payload{outline:1px solid var(--green);outline-offset:3px;border-radius:4px;background:color-mix(in srgb,var(--green) 8%,transparent)}
 .message.reading-turn-start{border-top:1px solid var(--border);padding-top:16px;margin-top:18px}
+/* T-163: the first turn shown draws no rule of its own: there is nothing above it to separate it from. When
+   earlier records can be loaded, that button is shown first and this does not apply. */
+.messages>.reading-page[hidden]:first-child+.message.reading-turn-start{border-top-color:transparent;margin-top:0;padding-top:0}
 .message.user.reading-turn-start,.message.human.reading-turn-start{width:100%;max-width:1000px;margin-left:auto;margin-right:auto}
 .message.user.reading-turn-start>.message-heading,.message.human.reading-turn-start>.message-heading{justify-self:end;max-width:100%}
 .message.user.reading-turn-start>.message-body,.message.human.reading-turn-start>.message-body{justify-self:end;width:fit-content;max-width:min(84%,880px)}
@@ -433,7 +438,11 @@ header h1, header p { overflow-wrap: anywhere; }
 #room-messages{padding:12px 20px}
 .message{margin-bottom:12px;gap:4px}
 .message.native-turn{margin-top:-5px;margin-bottom:12px}
-#composer-wrap{padding:8px 16px 12px}
+/* T-163: the same input card, input box and controls with less padding around them; the disclosure under the
+   input starts at the card's left edge. */
+#composer-wrap{padding:6px 16px 8px}
+#composer-wrap .session-composer{padding:10px 12px}
+#advanced{padding:5px 16px 7px}
 #room-composer{padding:10px 16px}
 .message.process{display:block;margin-bottom:6px;border-left:1px solid var(--border);padding-left:10px}
 .message.process>.message-actions{position:static;justify-content:flex-end;width:fit-content;margin-left:auto}
