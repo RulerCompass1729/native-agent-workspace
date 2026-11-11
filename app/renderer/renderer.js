@@ -148,6 +148,8 @@ function failedButlerEntry(reason) {
   return { failed: reason,
     // The window's one question, asked once: is there an entry in this window at all? An answer, or the refusal an
     // open entry gives when the state cannot be verified, says there is. Any other refusal shows nothing.
+    // The answer itself is not looked at. The entry hides for an answer it does not understand, because it would
+    // have to draw from it; this row draws nothing from it, and a row that vanished is what it is here to prevent.
     start() {
       if (asked) return undefined;
       asked = true;

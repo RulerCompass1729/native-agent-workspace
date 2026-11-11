@@ -93,11 +93,13 @@ const gallery = [
   // What was kept out really is out: the program, the view it draws from, or the element as the setup found it.
   const keptOut = () => page.evaluate(() => [typeof window.nativeWorkspaceButlerEntry?.bind, typeof window.nativeWorkspaceButlerEntryView?.entryView]);
   for (const [mode, out] of [['module', ['undefined', 'function']], ['view', ['function', 'undefined']], ['row', ['function', 'function']], ['dialog', ['function', 'function']]]) {
-    await load(mode); await sleep(700);
+    await load(mode);
     assert.deepEqual(await keptOut(), out, mode);
+    // Looked at three times over a second and a half: the refusal has no sign of its own to wait for.
+    for (const wait of [400, 500, 600]) { await sleep(wait);
     const quiet = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#butler-row')].map(row => row.hidden && row.getClientRects().length === 0), dialogs: [...document.querySelectorAll('#butler-dialog')].map(dialog => dialog.open),
       text: /大管家|Butler/.test(document.querySelector('.sidebar').innerText), toast: document.getElementById('toast').hidden === false && document.getElementById('toast').getClientRects().length > 0, open: document.querySelectorAll('dialog[open]').length }));
-    assert.deepEqual(quiet, { rows: mode === 'row' ? [] : [true], dialogs: mode === 'dialog' ? [] : [false], text: false, toast: false, open: 0 }, `Closed switch, ${mode} kept out: the window is as it was`);
+    assert.deepEqual(quiet, { rows: mode === 'row' ? [] : [true], dialogs: mode === 'dialog' ? [] : [false], text: false, toast: false, open: 0 }, `Closed switch, ${mode} kept out: the window is as it was`); }
     await page.evaluate(() => { window.dispatchEvent(new Event('focus')); }); await sleep(200);
     assert.equal(await page.evaluate(() => /大管家|Butler/.test(document.querySelector('.sidebar').innerText) || document.querySelectorAll('#butler-row:not([hidden])').length > 0), false, mode);
   }

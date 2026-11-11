@@ -517,15 +517,18 @@ test('an entry that could not be set up shows nothing until the main process say
   }
   // A window without the person-only call at all: nothing is shown and nothing is said.
   const w = windowSetup({}, {}); await w.butlerEntry.start(); assert.deepEqual([w.elements['butler-row'].hidden, w.said, w.page.added], [true, [], []]);
-  // The two refusals that mean "no entry" are the ones the entry's own program knows.
-  assert.deepEqual([...require('../renderer/butler-entry.js').CLOSED].sort(), ['error.butler.entryDisabled', 'error.butler.personOnly']);
+  // The stand-in's rule and the entry's are the same rule, each in its own words: of all refusals only "cannot be
+  // verified now" says this window has an entry. If either line changes, the other has to be looked at.
+  const renderer = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8'), entry = fs.readFileSync(path.join(__dirname, '../renderer/butler-entry.js'), 'utf8');
+  assert.equal(renderer.split("if (key !== 'error.butler.unavailable') return; }").length, 2); assert.equal(entry.split("if (key === 'error.butler.unavailable') answered = true;").length, 2);
+  assert.equal(entry.split('render(answered ? { version: 1, unavailable: true, actions: [] } : undefined);').length, 2);
 });
 
 test('with an entry in this window, a row that could not be set up stays in its place and says the interface failed; its dialog says why and still opens the read log', async t => {
   const tail = '这是界面的问题，不表示没有指定大管家，也不会改动指定。修好之前，这个窗口里看不到大管家的状态，也不能指定或撤销。重新打开 NAW 再试一次；还是这样，就把这句话告诉帮你维护 NAW 的人。';
   const sentences = { module: '大管家的状态显示不出来：这个窗口里缺少显示它的那部分程序。' + tail, element: '大管家的状态显示不出来：页面里缺少放这一行或它的对话框的位置。' + tail, setup: '大管家的状态显示不出来：准备这一行的时候出了错。' + tail };
   const tailEn = 'This is a fault of the interface. It does not mean that no butler is designated, and it does not change the designation. Until it is fixed, this window cannot show the butler\'s state, and a butler cannot be designated or revoked here. Reopen NAW and try once more; if it stays like this, pass this sentence to whoever maintains NAW for you.';
-  const english = { module: 'The butler\'s state cannot be shown: the part of the program that shows it is missing from this window. ' + tailEn, element: 'The butler\'s state cannot be shown: the place for this row or for its dialog is missing from the window. ' + tailEn,
+  const english = { module: 'The butler\'s state cannot be shown: the part of the program that shows it is missing from this window. ' + tailEn, element: 'The butler\'s state cannot be shown: the place for this row or for its dialog is missing from the page. ' + tailEn,
     setup: 'The butler\'s state cannot be shown: setting this row up failed. ' + tailEn };
   for (const reason of Object.keys(sentences)) { assert.equal(zh(`butler.entryFailed.${reason}`), sentences[reason]); assert.equal(locale.format('en', `butler.entryFailed.${reason}`), english[reason]); }
   assert.equal(new Set(Object.values(sentences)).size, 3); assert.equal(new Set(Object.values(english)).size, 3);
@@ -534,7 +537,10 @@ test('with an entry in this window, a row that could not be set up stays in its 
   // Every answer that says "this window has an entry": nothing designated, a designation, a record that cannot be
   // read, and the refusal an open entry gives when the state cannot be verified.
   for (const answer of [() => Promise.resolve({ version: 1, role: { revision: 0, selected: null }, actions: ['recheck'] }), () => Promise.resolve({ version: 1, role: { revision: 4, selected }, actions: ['revoke', 'recheck'] }),
-    () => Promise.resolve({ version: 1, unavailable: true, actions: [] }), () => Promise.reject(refusal('error.butler.unavailable'))]) {
+    () => Promise.resolve({ version: 1, unavailable: true, actions: [] }), () => Promise.reject(refusal('error.butler.unavailable')),
+    // And an answer this window does not understand: the entry would hide for it; this row draws nothing from the
+    // answer and stays, since the main process answers only a window that has an entry.
+    () => Promise.resolve({ version: 2 }), () => Promise.resolve(undefined)]) {
     const windows = entryWindows();
     for (const [reason, window, parts] of windows.cases) {
       const asked = asking(answer), w = windowSetup(window, { parts, api: asked.api }), entry = w.butlerEntry, opened = windows.reads.opened;

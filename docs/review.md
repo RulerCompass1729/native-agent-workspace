@@ -11640,3 +11640,34 @@ Not verified, or known:
   Both were seen in the reproduction and are outside "cannot be set up".
 - The new sentences and the row's word are text the person has not seen.
   They are on the screenshots kept with the private evidence.
+- A failure dialog whose building fails half way is built again at each
+  choice of the row; what it bound is released at teardown.
+
+Independent read-only review (one fresh session, the commit as rebased onto
+main; the CLI reported the model as claude-opus-5-5): `PASS_WITH_NOTES`,
+nothing blocking. It followed the closed switch through every refusal and
+found the window as it was, apart from one question to the main process
+where the old code asked none after a failed setup: the same question a
+working entry asks at every start, refused before any core code runs. It
+followed each setup failure with an entry to a row and a dialog, found no
+effect on a window whose entry sets up normally, and checked the sentences
+against the stand-in's one call and the core's read.
+
+Its notes, and what was done:
+- The stand-in shows its row on any answer, where the entry hides for an
+  answer it does not understand. Not changed, on purpose: the main process
+  answers only a window that has an entry, the row draws nothing from the
+  answer, and a row that vanished is what it is there to prevent. The reason
+  is now in the code, and two such answers are in the unit test.
+- One unit check guarded a list the stand-in does not use. It now ties the
+  stand-in's rule to the entry's line for the same refusal.
+- The closed-switch window check looked once after a fixed wait. It now
+  looks three times over a second and a half.
+- The English sentence for a missing row or dialog said "from the window"
+  where the Chinese says the page. It says "from the page" now. With a row
+  made by the stand-in, the sentence says the row's place is missing while a
+  row is on the screen; that is true of the page and is left as it is.
+- The single question and the half-built dialog are in the list above.
+These edits were made after the review; none changes what the product does
+except the one English word. The full suite and the window checks were run
+again on the result.
