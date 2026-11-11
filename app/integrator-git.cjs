@@ -4,7 +4,9 @@
 // argument after --end-of-options, and git runs without the person's configuration and without
 // the repository's hooks, diff and text drivers, signature program, file monitor, grafts and
 // optional locks; a change of a submodule is read as its two commit ids, never by running git
-// inside the submodule. A question git cannot answer comes back as null: the caller treats that as "not verified".
+// inside the submodule. A question git answers with "no" comes back as null (or false); a question
+// git could not answer at all (it failed, timed out, was not found, or its output was too long)
+// comes back as undefined, so that the caller can tell "there is no such commit" from "git did not say".
 // The reader does not judge the repository it is pointed at (its includes, alternates or linked
 // metadata): whoever connects it chooses the repository and checks it first.
 const { execFile } = require('node:child_process');
@@ -38,14 +40,17 @@ const text = result => result.stdout.toString('utf8');
 
 function reader(repo) {
   if (typeof repo !== 'string' || !repo.startsWith('/') || repo.includes('\0')) throw Error('A repository folder is required');
-  // The full id of a commit named by 7 to 40 hex digits, or null.
+  // The full id of a commit named by 7 to 40 hex digits; null when there is no such commit;
+  // undefined when git did not answer.
   async function commit(revision) {
     if (typeof revision !== 'string' || !COMMIT.test(revision)) return null;
     const result = await run(repo, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${revision}^{commit}`]);
+    // Quietly asked, git ends with 1 for a name it does not know; anything else but 0 is git's own trouble.
+    if (result.code !== 0) return result.code === 1 ? null : undefined;
     const id = text(result).trim();
     // A branch or tag whose name looks like a short id is found before the commit: only an id
     // that begins with the given digits is the commit that was named.
-    return result.code === 0 && FULL.test(id) && id.startsWith(revision) ? id : null;
+    return FULL.test(id) && id.startsWith(revision) ? id : null;
   }
   // The commit a local branch points at, or null. The exact ref is asked for, with no name
   // lookup: a tag or another ref that only looks like the branch is not the branch.
@@ -55,27 +60,28 @@ function reader(repo) {
     const id = text(result).trim();
     return result.code === 0 && FULL.test(id) ? commit(id) : null;
   }
-  // Whether the first commit is the second or one of its ancestors; null when git cannot say.
+  // Whether the first commit is the second or one of its ancestors; null for names that are no
+  // full ids; undefined when git did not answer.
   async function isAncestor(ancestor, descendant) {
     if (!FULL.test(ancestor || '') || !FULL.test(descendant || '')) return null;
     const result = await run(repo, ['merge-base', '--is-ancestor', '--end-of-options', ancestor, descendant]);
-    return result.code === 0 ? true : result.code === 1 ? false : null;
+    return result.code === 0 ? true : result.code === 1 ? false : undefined;
   }
   // The commits reachable from tip and not from base, newest first, each with the id of its
   // change. Merge commits have no single change and are left out. Null when the range is too
-  // large or cannot be read.
+  // large; undefined when git did not answer.
   async function changes(base, tip) {
     if (!FULL.test(base || '') || !FULL.test(tip || '')) return null;
     const listed = await run(repo, ['rev-list', `--max-count=${RANGE_LIMIT + 1}`, '--end-of-options', `${base}..${tip}`]);
-    if (listed.code !== 0) return null;
+    if (listed.code !== 0) return undefined;
     const commits = text(listed).split('\n').filter(Boolean);
     if (commits.length > RANGE_LIMIT || commits.some(id => !FULL.test(id))) return null;
     if (!commits.length) return [];
     const patches = await run(repo, ['log', '--patch', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color', '--no-renames', '--full-index', '--format=commit %H',
       `--max-count=${RANGE_LIMIT}`, '--end-of-options', `${base}..${tip}`]);
-    if (patches.code !== 0) return null;
+    if (patches.code !== 0) return undefined;
     const ids = await run(repo, ['patch-id', '--stable'], { input: patches.stdout });
-    if (ids.code !== 0) return null;
+    if (ids.code !== 0) return undefined;
     const byCommit = new Map();
     for (const line of text(ids).split('\n').filter(Boolean)) {
       const [change, id] = line.split(' ');

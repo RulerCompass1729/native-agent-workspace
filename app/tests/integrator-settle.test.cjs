@@ -646,6 +646,22 @@ test('finished outcomes are trimmed by when they ended', t => {
   assert.deepEqual([backlog.knows(key('m-0')), backlog.knows(key('m-1')), backlog.knows(key('never'))], [true, true, false], 'A trimmed delivery is still known');
 });
 
+test('a merge git could not be asked about is held as "could not be checked", never as a merge that was not found', t => {
+  const { backlog } = fixture(t);
+  handed(backlog, ['a', 'b', 'c', 'd']);
+  // One line git did not answer for, one it answered "no" for, one it confirmed, and one that cannot be read at all.
+  const reply = `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9\nMERGED ${commitOf('b')} as ${MAIN2} tests 9/9\nMERGED ${commitOf('c')} as ${MAIN2} tests 9/9\nMERGED ${commitOf('d')} into main`;
+  const result = settleWith(backlog, 'tag-1', reply, { mainHead: MAIN2, verified: { [key('a')]: { verified: false, why: 'git-unanswered' }, [key('b')]: { verified: false, why: 'not-on-main' },
+    ...ok(['c']), [key('d')]: { verified: false, why: 'git-unanswered' } } });
+  assert.deepEqual(outcomes(result), { a: 'held:main-unreadable', b: 'held:merge-unverified', c: 'merged', d: 'held:merge-unverified' });
+  // The person is told of each cause, and that the confirmed merge can be installed.
+  assert.deepEqual([...result.notify].sort(), [`installable:${MAIN2}`, 'main-unreadable', 'merge-unverified']);
+  // The same verdict for another handoff or another main head does not count here: the line is then an unverified claim.
+  const other = fixture(t).backlog;
+  handed(other, ['a']);
+  assert.deepEqual(outcomes(settleWith(other, 'tag-1', `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9`, { handoffId: 'H9-other', mainHead: MAIN2, verified: { [key('a')]: { verified: false, why: 'git-unanswered' } } })), { a: 'held:merge-unverified' });
+});
+
 // A reader with fixed answers, to reach each check alone.
 function fake(overrides = {}) {
   const full = value => value.length === 40 ? value : value.padEnd(40, '0');
@@ -666,6 +682,24 @@ test('a reported merge counts only when all three questions to git are answered 
     ['changes-differ', fake({ changes: (base, tip) => tip === MAIN2 ? [{ commit: MAIN2, change: 'x1' }] : [{ commit: tip, change: null }] }), claim],
   ];
   for (const [why, read, input] of cases) assert.deepEqual(await verifyMerged(read, input), { verified: false, why }, why);
+  // A question git did not answer at all (the reader gives undefined) is told apart from every "no": it is NAW's own
+  // trouble with git, whichever of the questions it was.
+  const silent = [
+    fake({ commit: value => value === MAIN2 ? undefined : value }), fake({ commit: value => value === commitOf('a') ? undefined : value }), fake({ commit: () => undefined }),
+    fake({ isAncestor: () => undefined }), fake({ isAncestor: (a, b) => b === MAIN2 ? true : undefined }),
+    fake({ changes: () => undefined }), fake({ changes: (base, tip) => tip === MAIN2 ? undefined : [{ commit: tip, change: 'x1' }] }), fake({ changes: (base, tip) => tip === MAIN2 ? [{ commit: MAIN2, change: 'x1' }] : undefined }),
+  ];
+  for (const [index, read] of silent.entries()) assert.deepEqual(await verifyMerged(read, claim), { verified: false, why: 'git-unanswered' }, String(index));
+  // A "no" that git did answer stands, whatever went unanswered beside or after it.
+  for (const [why, read] of [
+    ['unknown-commit', fake({ commit: value => value === MAIN2 ? null : undefined })], ['unknown-commit', fake({ commit: value => value === MAIN2 ? undefined : null })],
+    ['not-on-main', fake({ isAncestor: () => false, changes: () => undefined })], ['not-new', fake({ isAncestor: () => true, changes: () => undefined })],
+    // Nothing delivered, or a range too large to read, on one side; no answer on the other.
+    ['no-changes', fake({ changes: (base, tip) => tip === MAIN2 ? undefined : [] })], ['no-changes', fake({ changes: (base, tip) => tip === MAIN2 ? undefined : null })],
+    ['no-changes', fake({ changes: (base, tip) => tip === MAIN2 ? null : undefined })],
+    // A reader that answers with something that is no commit at all is an answer too.
+    ['unknown-commit', fake({ commit: value => value === MAIN2 ? '' : undefined })], ['unknown-commit', fake({ commit: value => value === MAIN2 ? undefined : false })],
+  ]) assert.deepEqual(await verifyMerged(read, claim), { verified: false, why }, why);
   // The very same commit on main counts although it has no single change (a merge commit that was fast-forwarded).
   const same = fake({ changes: (base, tip) => tip === MAIN2 ? [{ commit: MAIN2, change: null }, { commit: commitOf('a'), change: null }] : [{ commit: tip, change: null }] });
   assert.deepEqual(await verifyMerged(same, claim), { verified: true, as: MAIN2 });
@@ -705,6 +739,9 @@ test('against a real repository: a fast-forward and a cherry-pick are verified; 
   assert.deepEqual(await verifyMerged(read, { ready: second, as: moved, startHead: moved, mainHead: picked }), { verified: false, why: 'not-new' });
   assert.deepEqual(await verifyMerged(read, { ready: second, as: second, startHead: start, mainHead: picked }), { verified: false, why: 'not-on-main' });
   assert.deepEqual(await verifyMerged(read, { ready: second, as: 'f'.repeat(40), startHead: start, mainHead: picked }), { verified: false, why: 'unknown-commit' });
+  // The repository is gone, or the main commit the handoff began on is no longer in it: git does not answer, which is not "no such merge".
+  assert.deepEqual(await verifyMerged(reader(path.join(os.tmpdir(), 'naw-synthetic-repository-that-is-gone')), { ready: second, as: picked, startHead: start, mainHead: picked }), { verified: false, why: 'git-unanswered' });
+  assert.deepEqual(await verifyMerged(read, { ready: second, as: picked, startHead: 'd'.repeat(40), mainHead: picked }), { verified: false, why: 'git-unanswered' });
   assert.deepEqual(await verifyMerged(read, { ready: 'e'.repeat(40), as: picked, startHead: start, mainHead: picked }), { verified: false, why: 'unknown-commit' });
   // The delivery has nothing that was not on main at the start: nothing can have been merged for it.
   assert.deepEqual(await verifyMerged(read, { ready: start, as: picked, startHead: start, mainHead: picked }), { verified: false, why: 'no-changes' });
