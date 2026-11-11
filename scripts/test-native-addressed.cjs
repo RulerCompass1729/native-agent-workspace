@@ -27,7 +27,7 @@ assert.match(versions.claude, /^2\.1\.(309|310|311|322(?=\s|$))\b/, 'Verify the 
 let app, page, ids = {}, held, release, sequence = 0;
 const counts = { claude: 0, codex: 0 }, errors = [], checks = [];
 let tokenCountRequests = 0;
-const trustPresses = [], startup = [];
+const trustPresses = [], startup = [], knownGaps = new Set();
 const deny = process.env.NAW_TEST_NATIVE_DENY === '1';
 const three = process.env.NAW_TEST_THREE_MEMBERS === '1';
 const peer = process.env.NAW_TEST_PEER_DIRECTED === '1';
@@ -104,7 +104,12 @@ const respond = owner => async (req, res, body) => {
   }
 };
 const fixtures = Object.fromEntries(['claude', 'codex'].map(p => [p, loopback.create({ directory: base, provider: p, respond: respond(p) })]));
-const clean = () => { for (const fixture of Object.values(fixtures)) fixture.assertClean(); };
+const clean = () => {
+  for (const fixture of Object.values(fixtures)) fixture.assertClean();
+  // Other paths get a small fixed answer above; none is expected, so one that appears fails the run.
+  assert.ok(fixtures.claude.summary().paths.every(p => p === '/v1/messages' || p.startsWith('/v1/messages/')), 'Claude asked only its messages paths');
+  assert.deepEqual(fixtures.codex.summary().paths.filter(p => p !== '/v1/responses'), [], 'Codex asked only /v1/responses');
+};
 const summaries = () => Object.fromEntries(Object.entries(fixtures).map(([p, fixture]) => [p, fixture.summary()]));
 async function launch() {
   app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root],
@@ -146,20 +151,22 @@ async function create(provider, key = provider) {
       await until(async () => !(await page.locator('#terminal-paste').isDisabled()), 'Native terminal input ready');
       await focusTerminal();
       const selectedTrust = async () => /[❯›>]\s*(?:\d+[.)]\s*)?Yes, I trust this folder/.test(await shown());
-      // The native default is "No, exit". Claude 2.1.322 redraws this question within about a second of showing it
-      // and forgets keys pressed before that (measured: an immediate key is lost, or Yes is selected and then reset;
-      // after 1.5 s one press and Enter are taken). So read it first, as a person does; then press, look, and press
-      // again only if nothing moved. Enter is pressed only while Yes is shown as selected, and the question must close.
+      // The native default is "No, exit". Claude 2.1.322 redraws this question about 150 ms after showing it and
+      // resets the choice to No (measured with Claude alone in a plain terminal: a key at 55 ms is undone at 153 ms;
+      // a key at 300 ms or later stays). So read it first, as a person does; then press, look, and press again only
+      // if nothing moved. Enter follows the look at once, only while Yes is shown selected, and the question must close.
       await sleep(1500);
       for (let round = 0; round < 3 && (await shown()).includes('Yes, I trust this folder'); round++) {
+        await focusTerminal();
         let presses = 0;
         for (; presses < 5 && !(await selectedTrust()); presses++) { await page.keyboard.press('ArrowDown'); await until(selectedTrust, 'moved', 3000).catch(() => {}); }
-        assert.ok(await selectedTrust(), 'Exact native trust choice selected'); trustPresses.push(presses);
-        note('trust answered', { round, presses, choice: (await shown()).split('\n').filter(line => /No, exit|Yes, I trust/.test(line)) });
+        assert.ok(await selectedTrust(), 'Exact native trust choice selected');
         await page.keyboard.press('Enter');
-        await until(async () => !(await shown()).includes('Yes, I trust this folder'), 'closed', 5000).catch(() => {});
+        trustPresses.push(presses); note('trust answered', { round, presses });
+        await until(async () => { const text = await shown(); return text.length > 0 && !text.includes('Yes, I trust this folder'); }, 'closed', 5000).catch(() => {});
       }
-      assert.ok(!(await shown()).includes('Yes, I trust this folder'), 'Native trust question closes after the answer');
+      const afterTrust = await shown();
+      assert.ok(afterTrust.length > 0 && !afterTrust.includes('Yes, I trust this folder'), 'Native trust question closes after the answer');
     }
     await until(async () => /Do you want to use this API key|Claude Code v2/.test(await shown()) || (await created())?.chatAvailable, 'Native key choice');
     note('key question or banner', { own: seen(await shown()) });
@@ -173,6 +180,7 @@ async function create(provider, key = provider) {
 async function openUsage() {
   if (await page.locator('#usage-button').isVisible()) await page.locator('#usage-button').click();
   else { await page.locator(await page.locator('#session-header-more').isVisible() ? '#session-header-more' : '#room-header-more').click(); await page.getByRole('menuitem', { name: '用量', exact: true }).click(); }
+  await page.locator('#privacy-dialog[data-mode="usage"]').waitFor();
 }
 async function start(first, text) {
   const previousRun = (await snapshot()).room.run?.id;
@@ -223,9 +231,12 @@ async function start(first, text) {
     const identities = [claude, codex, second].map(s => [s.id, s.nativeId, s.pid]);
     for (const member of [claude, codex, second]) {
       const link = page.locator(`[data-session-id="${member.id}"]`);
-      // Since the compact sidebar rows (2026-11-01) the row text shows the name only; the short id that tells
-      // same-name sessions apart is in the row's hover title, its accessible name and the session menu.
-      assert.ok((await link.getAttribute('title')).includes(member.id.slice(0, 6)), 'Same-name sidebar row identifies its exact session on hover');
+      // Requirement (issue U22 in docs/review.md): same-name sessions can be told apart in the sidebar. Since the
+      // compact rows (2026-11-01) the row text shows the name only, for every session, so this fails on the
+      // current product. Whether a same-name row shows its short id again is the person's decision
+      // (docs/product.md, row V13). Until then the requirement stands: the gap is reported in this run's output
+      // and the rest of the journey still runs.
+      if (!(await link.innerText()).includes(member.id.slice(0, 6))) knownGaps.add('Same-name sidebar rows do not show which session is which (requirement U22; awaiting the person, docs/product.md V13)');
       assert.ok((await link.getAttribute('aria-label')).includes(member.id.slice(0, 6)));
       assert.ok((await page.locator(`[data-session-menu="${member.id}"]`).getAttribute('aria-label')).includes(member.id.slice(0, 6)));
     }
@@ -306,6 +317,8 @@ async function start(first, text) {
     await page.locator(`[data-session-menu="${second.id}"]`).click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click();
     await page.locator('#rename-name').fill('材料核对'); await page.locator('#confirm-rename').click();
     await until(async () => (await page.locator(`[data-session-id="${second.id}"]`).getAttribute('aria-label')).includes('材料核对'), 'Rename propagates');
+    // The other half of U22. It cannot fail while no row shows a short id (see the known gap above); it means
+    // something again once same-name rows show theirs.
     assert.ok(!(await page.locator(`[data-session-id="${second.id}"]`).innerText()).includes(second.id.slice(0, 6)), 'Unique name stays compact');
     assert.deepEqual((await snapshot()).sessions.map(s => [s.id, s.nativeId, s.pid]), identities);
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
@@ -339,7 +352,8 @@ async function start(first, text) {
     for (const member of [claude, second]) assert.ok(historyCopy.includes(member.id.slice(0, 6)), 'Copied history preserves removed authors');
     fs.writeFileSync(path.join(base, 'three-forgotten.json'), JSON.stringify(await snapshot(), null, 2));
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'three-native-addressed.png') }); }
-    clean(); console.log(JSON.stringify({ versions, fixtures: summaries(), trustPresses, startup, crossService: peer, checks: [...checks, 'Three same-name native participants route by ID instead of roster order', 'Authorized handoffs continue while the interface is closed', 'Reopening restores native identities, history and unsent draft without replay', 'Member filtering and departure preserve the original terminal and shared records', 'Same-name sessions keep their exact identity in the sidebar row (hover title and accessible name), menus, member dialog, native notices, copied history and archive', 'Removing ended local session references preserves shared author and recipient identities'], counts, paidModelCalls: 0, evidence: base }, null, 2));
+    clean(); for (const gap of knownGaps) console.error('KNOWN GAP, not a pass for that requirement:', gap);
+    console.log(JSON.stringify({ versions, fixtures: summaries(), trustPresses, startup, crossService: peer, knownGaps: [...knownGaps], checks: [...checks, 'Three same-name native participants route by ID instead of roster order', 'Authorized handoffs continue while the interface is closed', 'Reopening restores native identities, history and unsent draft without replay', 'Member filtering and departure preserve the original terminal and shared records', 'Same-name sessions keep their exact identity in accessible names, menus, member dialog, native notices, copied history and archive', 'Removing ended local session references preserves shared author and recipient identities'], counts, paidModelCalls: 0, evidence: base }, null, 2));
     return;
   }
   const identities = [claude, codex].map(s => [s.id, s.nativeId, s.pid]);
