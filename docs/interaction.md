@@ -835,14 +835,13 @@ Codex 活动来自 [官方 app-server 的 turn/item/status 事件](https://learn
 
 
 A backend's private `runtime-locations.json` no longer selects its programs.
-Until 2026-11-10 an existing backend kept explicit native executable paths
+Until this change an existing backend kept explicit native executable paths
 there and reused them at every bootstrap. Settings edits only the shared file,
 so nothing in the interface showed or could change such a path: one naming a
 version the vendor had removed left the backend unable to run that provider,
-and one naming a version that still existed kept the backend on it. On the
-person's question why the agents were not on the latest version, the choice was
-made for them, and is theirs to reverse, that backends follow the shared
-Settings file and discovery only.
+and one naming a version that still existed kept the backend on it, which is
+what the person asked about (why the agents were not on the latest version).
+Backends now follow the shared Settings file and discovery only.
 
 When a backend starts, every entry of its private file is therefore taken out:
 the entries are first added to `runtime-locations.removed.json` beside it (the

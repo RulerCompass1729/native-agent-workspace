@@ -30,8 +30,8 @@ function setLocation(file, key, value) {
 // The locations a backend started in dataDir uses: the shared Settings file, and nothing else.
 // A backend's own file used to override it. Settings edits only the shared file, so nothing in the interface
 // showed or could change such an entry; one naming a version the vendor had removed left the backend unable
-// to run that provider, and one naming a version that still existed kept the backend on it (decided for the
-// person on 2026-11-10 after 「为啥不把 agent 更新到最新」, and theirs to reverse). So when a backend starts,
+// to run that provider, and one naming a version that still existed kept the backend on it, which is what
+// the person asked about on 2026-11-10 (「为啥不把 agent 更新到最新」). So when a backend starts,
 // every entry of its own file is taken out: with repair the entries are first added to the record beside the
 // file (the last twenty removals, each entry with whether its program still existed, so they can be put
 // back), then the file is rewritten empty; without repair nothing is written and only the result is

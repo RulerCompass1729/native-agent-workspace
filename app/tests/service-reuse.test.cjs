@@ -278,7 +278,7 @@ test('an ordinary legacy store without a dedicated manifest keeps its existing d
   } finally { await service?.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 // Until 2026-11-10 a backend kept and reused its own runtime paths here. They are now taken out at its start and
-// kept in a record, and it uses the shared Settings file (runtime-locations.cjs; decided for the person, theirs to reverse).
+// kept in a record, and it uses the shared Settings file (runtime-locations.cjs). The record is what lets this be undone.
 test('normal service bootstrap takes a backend\'s own runtime paths out into a record and uses the shared Settings file, without changing another profile', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-runtime-bootstrap-'));
   const key = 'backends/' + 'a'.repeat(20), retained = path.join(directory, key), ordinary = path.join(directory, 'ordinary');
