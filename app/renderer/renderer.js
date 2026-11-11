@@ -2087,9 +2087,22 @@ function renderOperatorControls(entry, message, context = {}) {
     controls.append(uiNode('p', 'operator.nativeDefault', () => ({ model: op.actual.model === 'unknown' ? uiText('operator.unknown') : op.actual.model })));
     controls.append(uiNode('p', 'operator.permission', () => ({ permission: uiText('operator.' + op.actual.permission) })));
     if (op.actual.message) controls.append(node('pre', op.actual.message));
+    // B5: a grant may name the one space its new sessions join. Names are read when painted, so they follow the language.
+    const spaceLabel = id => { const room = allSpaces().find(room => room.id === id); return !room ? uiText('operator.spaceGone') : room.archived ? uiText('operator.spaceArchived', { name: spaceName(room) }) : spaceName(room); };
+    // What the desktop did with the new session, as the journal that owns this action saved it.
+    if (op.actual.space && op.actual.placement) {
+      const placed = node('p'), reason = op.actual.placementError;
+      const reasons = { 'space-unavailable': 'Space', 'session-unavailable': 'Session', 'initiator-archived': 'Initiator', 'moved-elsewhere': 'Moved', 'join-refused': 'Refused', 'grant-ended': 'GrantEnded' };
+      ui.display.text(placed, op.actual.placement === 'pending' ? 'operator.placementPending' : op.actual.placement !== 'joined' ? 'operator.placementNotPlaced' : reason ? 'operator.placementJoinedUnrecorded' : 'operator.placementJoined',
+        () => ({ space: spaceLabel(op.actual.space), reason: uiText('operator.placementReason' + (Object.hasOwn(reasons, reason) ? reasons[reason] : 'Other')) }));
+      controls.append(placed);
+    }
     const domain = state.operatorPolicy?.domains.find(d => d.id === op.actual.domainId);
     if (domain) {
-      controls.append(uiNode('p', 'operator.grantSummary', { id: domain.id, daily: domain.daily, concurrent: domain.concurrent, expires: new Date(domain.expiresAt).toLocaleString() }));
+      const summary = node('p');
+      ui.display.text(summary, domain.space ? 'operator.grantSummarySpace' : 'operator.grantSummary',
+        () => ({ id: domain.id, daily: domain.daily, concurrent: domain.concurrent, expires: new Date(domain.expiresAt).toLocaleString(), ...(domain.space ? { space: spaceLabel(domain.space) } : {}) }));
+      controls.append(summary);
       // B5: after NAW replaced the session that held this grant, the card says which session holds it now.
       if (domain.carried?.length) {
         const holder = node('p');
@@ -2139,7 +2152,19 @@ function renderOperatorControls(entry, message, context = {}) {
     const permissions = node('select');
     for (const mode of ['default', 'bypass']) { const option = uiNode('option', 'operator.' + mode); option.value = mode; permissions.append(option); }
     permissions.value = op.args.permission; ui.display.attribute(permissions, 'aria-label', 'operator.permission', { permission: '' }); form.append(permissions);
-    const consentLabel = node('label'), consent = node('input'); consent.type = 'checkbox'; consent.required = true; consentLabel.append(consent, uiNode('span', 'operator.grantConsent')); form.append(consentLabel);
+    // B5: the one space sessions created under this grant join, chosen here by the person and by nobody else.
+    // "None" is what a grant has always been. The consent sentence names the space, and a different choice is a
+    // different consent, so it clears the tick.
+    const spaceField = node('label'), space = node('select'), none = uiNode('option', 'operator.spaceNone'); none.value = ''; space.append(none);
+    for (const room of allSpaces().filter(room => !room.archived)) {
+      const option = node('option'); option.value = room.id; ui.display.text(option, 'operator.spaceOption', () => ({ name: spaceName(room) })); space.append(option);
+    }
+    space.value = ''; spaceField.append(uiNode('span', 'operator.space'), space); form.append(spaceField);
+    const chosen = () => allSpaces().find(room => room.id === space.value && !room.archived);
+    const consentLabel = node('label'), consent = node('input'), consentText = node('span'); consent.type = 'checkbox'; consent.required = true;
+    const paintConsent = () => ui.display.text(consentText, space.value ? 'operator.grantConsentSpace' : 'operator.grantConsent', () => ({ space: chosen() ? spaceName(chosen()) : uiText('operator.spaceGone') }));
+    paintConsent(); space.addEventListener('change', () => { consent.checked = false; paintConsent(); });
+    consentLabel.append(consent, consentText); form.append(consentLabel);
     const submit = uiNode('button', 'operator.authorize'); submit.type = 'submit'; submit.disabled = !allowed; form.append(submit);
     const problem = node('p'); problem.setAttribute('role', 'alert'); form.append(problem);
     form.addEventListener('submit', event => {
@@ -2147,9 +2172,12 @@ function renderOperatorControls(entry, message, context = {}) {
       attempt(async () => {
         const count = Number(daily.value), live = Number(concurrent.value), until = new Date(expires.value).getTime();
         if (!consent.checked || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(live) || live < 1 || !Number.isSafeInteger(until) || until <= Date.now()) { ui.display.text(problem, 'operator.formInvalid'); return; }
+        // The space must still be there when the grant is saved; otherwise the person chooses again.
+        if (space.value && !chosen()) { consent.checked = false; ui.display.text(problem, 'operator.spaceUnavailable'); return; }
         if (!allowed) throw uiError('error.operator.stale'); submit.disabled = true;
         try {
-          const domainId = await act('grant', { providers: [op.args.provider], directories: [op.args.cwd], permission: permissions.value, daily: count, concurrent: live, expiresAt: until });
+          const domainId = await act('grant', { providers: [op.args.provider], directories: [op.args.cwd], permission: permissions.value, daily: count, concurrent: live, expiresAt: until,
+            ...(space.value ? { space: space.value } : {}) });
           await act('authorize', { key: op.actionKey, domainId });
         } catch (error) { problem.textContent = ui.errorText(error); submit.disabled = false; }
       });

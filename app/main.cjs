@@ -322,9 +322,13 @@ function notifyCapacity(snapshot, win) {
 // creates a session, widens a grant, queues a task or asks a model. Where the session goes is read from the
 // journal that owns the action, which refuses once the grant is no longer in force. Run only from a person's
 // window, never from an agent's hidden one. A space that is busy is tried again, a few times, seconds apart.
-const openPlacing = new Set(), openAttempts = new Map(), OPEN_RETRY_MS = [2000, 5000, 15000, 30000];
+const openPlacing = new Set(), openAttempts = new Map(), OPEN_RETRY_MS = [2000, 5000, 15000, 30000], OPEN_FORGET_MS = 60000;
 async function placeOpened(client, snapshot, now = Date.now()) {
   const placements = Array.isArray(snapshot?.operatorPolicy?.placements) ? snapshot.operatorPolicy.placements : [];
+  // A placement that is no longer listed is settled or its grant ended: its retry count is not kept. Only a
+  // minute after its last delay, so a state that lacks it for a moment (another window, a backend
+  // reconnecting) does not restart the tries.
+  for (const [key, tried] of [...openAttempts]) if (!openPlacing.has(key) && now - tried.next > OPEN_FORGET_MS && !placements.some(listed => listed?.key === key)) openAttempts.delete(key);
   for (const listed of placements) {
     const key = listed?.key, tried = openAttempts.get(key);
     if (typeof key !== 'string' || typeof listed.initiatorId !== 'string' || openPlacing.has(key) || tried && (tried.over || now < tried.next)) continue;

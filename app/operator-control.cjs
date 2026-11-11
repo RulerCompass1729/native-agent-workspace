@@ -78,7 +78,9 @@ function validateJournal(data) {
     if (domain?.id !== id || !Array.isArray(domain.initiators) || !domain.initiators.length || domain.initiators.some(i => !i || typeof i.id !== 'string' || typeof i.nativeId !== 'string') ||
       !Array.isArray(domain.providers) || !domain.providers.length || domain.providers.some(p => !['claude', 'codex'].includes(p)) ||
       !Array.isArray(domain.directories) || !domain.directories.length || domain.directories.some(d => typeof d !== 'string' || !path.isAbsolute(d)) ||
-      !['default', 'bypass'].includes(domain.permission) || !Number.isSafeInteger(domain.daily) || domain.daily < 1 || !Number.isSafeInteger(domain.concurrent) || domain.concurrent < 1 || !Number.isSafeInteger(domain.expiresAt)) fail('Invalid operator grant');
+      !['default', 'bypass'].includes(domain.permission) || !Number.isSafeInteger(domain.daily) || domain.daily < 1 || !Number.isSafeInteger(domain.concurrent) || domain.concurrent < 1 || !Number.isSafeInteger(domain.expiresAt) ||
+      // B5: the space a grant names is saved only as a space id; anything else in its place disables the interface.
+      Object.hasOwn(domain, 'space') && !spaces.roomId(domain.space)) fail('Invalid operator grant');
   }
   for (const [id, request] of Object.entries(data.requests)) if (request?.id !== id || !Object.hasOwn(data.domains, request.domainId) || typeof request.initiatorId !== 'string' || typeof request.initiatorNativeId !== 'string' || !Number.isSafeInteger(request.version) || request.version < 1 ||
     request.currentDispatchId && (!Object.hasOwn(data.dispatches, request.currentDispatchId) || data.dispatches[request.currentDispatchId].requestId !== id || data.dispatches[request.currentDispatchId].version !== request.version) ||
@@ -94,6 +96,12 @@ function validateJournal(data) {
     validate(names[1], action?.args);
     if (action.key !== key || key !== JSON.stringify([action.initiatorNativeId, action.id]) || action.args.action_id !== action.id || !['pending-authorization', 'authorized', 'creating', 'created', 'unconfirmed', 'not-created', 'cancelled'].includes(action.status) ||
       action.requestId && !Object.hasOwn(data.requests, action.requestId)) fail('Invalid saved operator action');
+    // B5: a saved placement result is exactly what placed() writes, for a created session, into the space its grant names.
+    const placement = action.placement;
+    if (Object.hasOwn(action, 'placement') && (!placement || typeof placement !== 'object' || Array.isArray(placement) || Object.keys(placement).some(k => !['space', 'at', 'joined', 'error'].includes(k)) ||
+      !spaces.roomId(placement.space) || !Number.isSafeInteger(placement.at) || typeof placement.joined !== 'boolean' ||
+      Object.hasOwn(placement, 'error') && (typeof placement.error !== 'string' || !/^[a-z-]{1,60}$/.test(placement.error)) || !placement.joined && !Object.hasOwn(placement, 'error') ||
+      action.status !== 'created' || typeof action.sessionId !== 'string' || data.domains[action.domainId]?.space !== placement.space)) fail('Invalid saved operator action');
   }
   for (const reportId of Object.values(data.calls)) if (!Object.hasOwn(data.reports, reportId)) fail('Invalid operator call receipt');
 }
