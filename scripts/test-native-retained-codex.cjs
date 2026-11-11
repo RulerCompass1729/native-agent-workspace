@@ -46,7 +46,9 @@ const fixture = loopback.create({ directory: base, provider: 'codex', respond: a
     if (number === 3) {
       // One command that needs the person's permission writes the file and reads it back. Inside the fixture's
       // sandbox Codex's own sandbox cannot start (macOS allows no nested one), so a sandboxed apply_patch would
-      // fail; a command the person approves runs outside Codex's sandbox and works.
+      // fail; a command approved with escalation runs and writes the file (probed on Codex 0.167.0 and the current
+      // host, 2026-11-10). Not verified on the retained host: before, the applied patch row was the shared tool row
+      // that froze when the permission was asked; a pending command may leave no shared row for that check.
       const code = `text(await tools.exec_command(${JSON.stringify({ cmd: "printf 'NATIVE_TOOL_FILE: hello 世界\\n' > sample.txt && cat sample.txt", workdir: cwd, max_output_tokens: 100, sandbox_permissions: 'require_escalated', justification: 'Write and read the isolated test file once for the native permission check' })}));`;
       const tool = { id: 'tool_local_1', type: 'custom_tool_call', call_id: 'call_local_1', namespace: 'functions', name: 'exec', input: code, status: 'completed' };
       event(res, 'response.output_item.added', { output_index: 0, item: { ...tool, input: '', status: 'in_progress' } });

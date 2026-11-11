@@ -25,12 +25,15 @@ let folder = cwd;
 // Two journeys, one per run. macOS lets no process inside a restricting sandbox start another, so inside the loopback
 // fixture's sandbox Codex's own seatbelt cannot run (probed 2026-11-10, recorded in docs/review.md): with Codex's sandbox on,
 // the file change asks for approval but the approved change is not applied; with it off, the tools run but nothing
-// asks. Codex 0.167 has no approval policy that asks while its sandbox is off (only on-request and never). So:
+// asks (both tried on 0.167.0). The approval journey keeps the file-change permission, which is what its sharing rule is about. So:
 // - default: Codex's sandbox off in this private config. The fixed tools really run; their results reach the solo and
 //   shared readers, the model, a reload and a service recovery.
 // - NAW_TOOLS_APPROVAL=1: Codex's read-only sandbox. A real native file permission is asked; the GUI shows it, the
-//   same-screen TUI answers it, and the shared diff freezes. The applied file is not checked in this journey.
-// The fixture's sandbox (no network, no keychain) is the boundary in both; the only tool calls are the two fixed ones.
+//   same-screen TUI approves it, and the shared diff freezes; what follows stays private, also after a reload and a
+//   service recovery. The approved change is attempted but its write fails, so the applied file is not checked here.
+// The fixture's sandbox keeps the CLI off the network and the keychain; it does not limit file writes. In the default
+// journey the writes are bounded by the fixed responses: only the two tool calls below can happen (anything else
+// trips the response budget), both stay in the session folder, and that folder is checked to be inside the owned base.
 const approvalJourney = process.env.NAW_TOOLS_APPROVAL === '1';
 let application, page, calls = 0, titleCalls = 0, sequence = 0, budgetError;
 const errors = [], requests = [], sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -82,8 +85,8 @@ async function revealTools(selector) {
 (async () => {
   await fixture.start(); await fixture.preflight();
   fs.writeFileSync(path.join(home, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\ncli_auth_credentials_store = "file"\nsandbox_mode = "${approvalJourney ? 'read-only' : 'danger-full-access'}"\napproval_policy = "on-request"\n[features]\ndaemon_auto_start = false\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "${fixture.endpoint}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
-  // Trust only the owned empty fixture folder. The actual file permission
-  // remains on-request and must still be answered in the real native UI.
+  // Trust only the owned empty fixture folder. In the approval journey the file permission is still asked and must
+  // be answered in the real native UI; in the default journey Codex asks nothing.
   for (const trusted of new Set([cwd, fs.realpathSync(cwd)])) fs.appendFileSync(path.join(home, 'config.toml'), `\n[projects.${JSON.stringify(trusted)}]\ntrust_level = "trusted"\n`);
   const shim = path.join(base, 'codex-local');
   fixture.wrapper(binary, { file: shim, env: { CODEX_HOME: home, HOME: userHome } });
@@ -131,36 +134,33 @@ async function revealTools(selector) {
   await until(async () => (await snapshot()).sessions[0].state === 'idle', 'Native turn ends');
   const done = await snapshot(); fs.writeFileSync(path.join(base, 'completed.json'), JSON.stringify(done, null, 2));
   assert.ok(done.room.messages.every(m => !m.nativeMessageId || m.sessionId === before.id), 'Shared rows retain agent identity');
-  if (approvalJourney) {
-    // The diff the person was asked about is in the shared reader and frozen there; what follows stays private.
-    const frozen = done.room.messages.filter(m => m.role === 'tool' && m.sharingStopped);
-    assert.equal(frozen.length, 1, 'Shared diff explicitly freezes when approval is requested');
+  const reply = 'NATIVE_TOOL_DONE: created and read sample.txt.';
+  // Approval journey: exactly the diff the person was asked about is shared, frozen; nothing after it is.
+  const assertPrivateAfterApproval = (state, when) => {
+    const frozen = state.room.messages.filter(m => m.role === 'tool' && m.sharingStopped);
+    assert.equal(frozen.length, 1, 'Shared diff explicitly freezes when approval is requested: ' + when);
     assert.equal(frozen[0].toolKind, 'fileChange'); assert.ok(frozen[0].text.includes('NATIVE_TOOL_FILE: hello 世界'));
-    assert.ok(!done.room.messages.some(m => m.text === 'NATIVE_TOOL_DONE: created and read sample.txt.'), 'Permission revocation keeps later native replies private');
-    assert.ok(!done.room.messages.some(m => m.finalReply), 'No final reply is published after the revocation');
+    assert.ok(!state.room.messages.some(m => m.text === reply || m.finalReply), 'Permission revocation keeps later native replies private: ' + when);
+    assert.ok(!JSON.stringify(state.room.messages).includes('Failed to write file'), 'The result after the approval stays private: ' + when);
+  };
+  if (approvalJourney) {
+    assertPrivateAfterApproval(done, 'after the turn');
     assert.equal(done.sessions[0].approval, null, 'The same-screen TUI answer resolved the original request');
-    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-    await revealTools('#room-messages');
-    assert.match(await page.locator('#room-messages').innerText(), /NATIVE_TOOL_FILE: hello 世界/);
-    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'shared-approval.png') }); }
-    assert.equal(calls, 2); assert.equal((await snapshot()).diagnostics.dispatches, 1); assert.deepEqual(errors, []);
-    assert.ok(titleCalls <= 1); assert.ok(!budgetError);
-    fixture.assertClean();
-    console.log(JSON.stringify({ version, journey: 'approval', fixture: fixture.summary(), checks: ['GUI shows the actual native approval state; its same-screen TUI resolves the original request', 'The file diff the person was asked about appears in the shared reader and freezes there; later output stays private'], notChecked: 'the applied file: Codex applies an approved change through its own sandbox, which cannot start inside the fixture sandbox', localResponses: calls, nativeTitleResponses: titleCalls, paidModelCalls: 0, requests, evidence: base }));
-    return;
+  } else {
+    assert.equal(fs.readFileSync(path.join(folder, 'sample.txt'), 'utf8'), 'NATIVE_TOOL_FILE: hello 世界\n');
+    const tools = done.sessions[0].messages.filter(m => m.role === 'tool');
+    assert.ok(tools.some(m => m.text.includes('NATIVE_TOOL_FILE: hello 世界')), 'Native tool body reaches solo reading list');
+    assert.ok(done.room.messages.some(m => m.role === 'tool' && m.text.includes('NATIVE_TOOL_FILE: hello 世界')), 'Explicitly routed tool result reaches shared reader');
+    // No permission was asked, so sharing was never revoked: nothing is frozen and the reply is published once.
+    assert.ok(!done.room.messages.some(m => m.sharingStopped), 'Nothing freezes without a permission request');
+    assert.equal(done.room.messages.filter(m => m.finalReply).length, 1); assert.equal(done.room.messages.find(m => m.finalReply).text, reply);
   }
-  assert.equal(fs.readFileSync(path.join(folder, 'sample.txt'), 'utf8'), 'NATIVE_TOOL_FILE: hello 世界\n');
-  const tools = done.sessions[0].messages.filter(m => m.role === 'tool');
-  assert.ok(tools.some(m => m.text.includes('NATIVE_TOOL_FILE: hello 世界')), 'Native tool body reaches solo reading list');
-  assert.ok(done.room.messages.some(m => m.role === 'tool' && m.text.includes('NATIVE_TOOL_FILE: hello 世界')), 'Explicitly routed tool result reaches shared reader');
-  // No permission was asked, so sharing was never revoked: nothing is frozen and the reply is published once.
-  assert.ok(!done.room.messages.some(m => m.sharingStopped), 'Nothing freezes without a permission request');
-  assert.equal(done.room.messages.filter(m => m.finalReply).length, 1); assert.equal(done.room.messages.find(m => m.finalReply).text, 'NATIVE_TOOL_DONE: created and read sample.txt.');
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await revealTools('#room-messages');
   const roomText = await page.locator('#room-messages').innerText(); fs.writeFileSync(path.join(base, 'shared-reader.txt'), roomText);
   assert.match(roomText, /NATIVE_TOOL_FILE: hello 世界/);
-  if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'shared-tools.png') }); }
+  if (approvalJourney) assert.ok(!roomText.includes(reply), 'The shared reader does not show the private reply');
+  if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, approvalJourney ? 'shared-approval.png' : 'shared-tools.png') }); }
   await page.locator(`[data-session-id="${before.id}"]`).click();
   await revealTools('#messages');
   assert.match(await page.locator('#messages').innerText(), /NATIVE_TOOL_FILE: hello 世界/);
@@ -168,9 +168,12 @@ async function revealTools(selector) {
   await until(async () => (await page.locator('#terminal-area').innerText()).includes('NATIVE_TOOL_DONE'), 'Native TUI shows the same result', 60000);
   fs.writeFileSync(path.join(base, 'native-terminal.txt'), await page.locator('#terminal-area').innerText());
   await page.locator('#chat-tab').click();
+  const roomBeforeReload = JSON.stringify((await snapshot()).room.messages);
   await page.reload(); await page.locator('#new-session').waitFor();
   await until(async () => (await snapshot()).sessions[0].nativeId === before.nativeId, 'Reader reload identity');
   assert.match(await page.locator('#messages').innerText(), /NATIVE_TOOL_FILE: hello 世界/);
+  assert.equal(JSON.stringify((await snapshot()).room.messages), roomBeforeReload, 'A reload adds nothing to the shared record');
+  if (approvalJourney) assertPrivateAfterApproval(await snapshot(), 'after a reload');
   assert.equal(calls, 2); assert.equal((await snapshot()).diagnostics.dispatches, 1); assert.deepEqual(errors, []);
   // Separate real service-protocol recovery check. The OS confirmation dialog
   // is not automated here; the existing GUI confirmation tests cover its route.
@@ -182,13 +185,30 @@ async function revealTools(selector) {
   const recovered = await snapshot(); fs.writeFileSync(path.join(base, 'recovered.json'), JSON.stringify(recovered, null, 2));
   assert.equal(recovered.sessions[0].nativeId, before.nativeId);
   assert.equal(JSON.stringify(recovered.room.messages), roomBeforeRecovery, 'Native history cannot add shared messages');
+  if (approvalJourney) assertPrivateAfterApproval(recovered, 'after a service recovery');
   assert.ok(recovered.sessions[0].messages.some(m => m.role === 'tool' && m.text.includes('NATIVE_TOOL_FILE: hello 世界')));
   assert.equal(calls, 2); assert.equal(recovered.diagnostics.dispatches, 1);
+  // What the tool call returned to the model: the output item itself, not the call's own input (which repeats the line).
   const request = JSON.parse(fs.readFileSync(path.join(base, 'request-2.json'), 'utf8'));
-  assert.ok(JSON.stringify(request.input).includes('NATIVE_TOOL_FILE: hello 世界'), 'Real tool result returned to the native model input');
+  const outputs = request.input.filter(item => item.type === 'custom_tool_call_output' && item.call_id === 'call_local_1');
+  assert.equal(outputs.length, 1); const returned = JSON.stringify(outputs[0].output);
+  const ran = returned.includes('Script completed') && returned.includes('NATIVE_TOOL_FILE: hello 世界');
+  let approvedChange;
+  if (!approvalJourney) assert.ok(ran, 'Real tool result returned to the native model input: ' + returned);
+  else {
+    // The answer was an approval, not a refusal: Codex went on to apply the change. Inside the fixture's sandbox the
+    // write then fails; if a later Codex or macOS lets it succeed, the file must be right and the two journeys can merge.
+    const failedWrite = returned.includes('Failed to write file') && returned.includes('sample.txt');
+    assert.ok(failedWrite || ran, 'The approved change was attempted: ' + returned);
+    if (ran) assert.equal(fs.readFileSync(path.join(folder, 'sample.txt'), 'utf8'), 'NATIVE_TOOL_FILE: hello 世界\n');
+    approvedChange = ran ? 'applied' : 'attempted; the write failed inside the fixture sandbox';
+  }
   assert.ok(titleCalls <= 1); assert.ok(!budgetError);
   fixture.assertClean();
-  console.log(JSON.stringify({ version, journey: 'execution', fixture: fixture.summary(), checks: ['Native tool really creates and reads the isolated file', 'Tool results reach the solo and shared readers and the native model input; the reply is published once', 'GUI and TUI retain same native identity', 'Reload neither loses tool text nor dispatches', 'Separate native service resubscription hydrates tool history without sharing or another response'], localResponses: calls, nativeTitleResponses: titleCalls, paidModelCalls: 0, requests, evidence: base }));
+  const shared = ['GUI and TUI retain same native identity', 'Reload neither loses tool text nor dispatches nor adds to the shared record', 'Separate native service resubscription hydrates tool history without sharing or another response'];
+  console.log(JSON.stringify(approvalJourney
+    ? { version, journey: 'approval', fixture: fixture.summary(), checks: ['GUI shows the actual native approval state; its same-screen TUI approves the original request', 'The file diff the person was asked about appears in the shared reader and freezes there; later output stays private, also after a reload and a service recovery', ...shared], approvedChange, localResponses: calls, nativeTitleResponses: titleCalls, paidModelCalls: 0, requests, evidence: base }
+    : { version, journey: 'execution', fixture: fixture.summary(), checks: ['Native tool really creates and reads the isolated file', 'Tool results reach the solo and shared readers and the native model input; the reply is published once', ...shared], localResponses: calls, nativeTitleResponses: titleCalls, paidModelCalls: 0, requests, evidence: base }));
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
