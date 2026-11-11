@@ -261,6 +261,35 @@ test('a persisted merge failure switches both source status and error without ch
   assert.equal(JSON.stringify(record), before); assert.ok(element.textContent.includes('RAW SPACE 中文 0')); assert.deepEqual(f.calls, []);
 });
 
+// Found porting test-native-summaries to Codex 0.167 (B11, 2026-11-10): the room status bar showed the native
+// state name itself ("Native summaries · inProgress") while the session header showed its text.
+test('the room status bar shows a working member\'s native state in the interface language, and native text as it is', () => {
+  const f = fixture(), member = f.people[0], other = f.people[1];
+  Object.assign(member, { state: 'working', nativeId: 'native-A', activeTurnId: 'turn-A', sharedActivity: { nativeId: 'native-A', turnId: 'turn-A', label: 'inProgress', observedAt: 1 } });
+  Object.assign(other, { state: 'working', nativeId: 'native-B', activeTurnId: 'turn-B', sharedActivity: { nativeId: 'native-B', turnId: 'turn-B', label: 'NATIVE permission title 中文', observedAt: 1 } });
+  f.state.room.run = null;
+  Object.assign(f.context, { roomSubmitting: null, roomPendingRecipients: new Map(), roomSession: '', roomSurface: 'overview', roomMention: null, roomReplyTo: '', roomThreads: { rows: new Map() },
+    roomViews: {}, roomImageRefs: () => [], renderRoomImageDraft() {},
+    nativeStatusFresh: value => value?.stale !== true, nativeUsable: () => true, nativeWorkspaceMentions: require('../room-mention.js'),
+    normalizeRoomMention() {}, roomRecipient: () => member.id, renderTimeline() {}, selectRoom() {}, draggableSession() {},
+    orderedMembers: () => f.people,
+  });
+  f.context.window.nativeWorkspaceCollaboration = require('../renderer/collaboration-overview.js');
+  const load = (from, to) => { const a = renderer.indexOf(from), b = renderer.indexOf(to, a + from.length); assert.ok(a >= 0 && b > a); vm.runInContext(renderer.slice(a, b), f.context); };
+  load('function populateSelect(', 'function participantLabel('); load('function roomSteerAvailable(', 'function renderRunChoices(');
+  load('function refreshRoomMemberTabs(', 'function activeReturnReadingKeys('); load('const nativeActivityLabels = ', 'const elapsedText');
+  const start = renderer.indexOf('      const run = state.room.run;', renderer.indexOf('function render()')), end = renderer.indexOf("      if (!$('mention-list').hidden", start); assert.ok(start > 0 && end > start);
+  vm.runInContext('function paintRoom() { ' + renderer.slice(start, end) + ' }', f.context);
+  f.$('recipient').value = member.id; f.context.paintRoom();
+  const zh = f.$('run-status').textContent;
+  assert.ok(zh.includes(`${member.name} · ${locale.format('zh', 'activity.inProgress')}`), zh); assert.ok(!zh.includes('inProgress'), 'no native state name is shown');
+  assert.ok(zh.includes(`${other.name} · NATIVE permission title 中文`), 'native text without an entry stays exact');
+  assert.equal(f.$('run-status').parentElement.hidden, false);
+  f.switch('en'); const en = f.$('run-status').textContent;
+  assert.ok(en.includes(`${member.name} · ${locale.format('en', 'activity.inProgress')}`), en); assert.ok(en.includes(`${other.name} · NATIVE permission title 中文`));
+  assert.deepEqual(f.calls, []);
+});
+
 test('shared queued/native-route labels repaint without changing recipient, pending submission or send guards', () => {
   const f = fixture(), recipient = f.people[0], effects = [];
   recipient.state = 'working'; recipient.queueAvailable = true; recipient.serviceCapabilities.push('nativeSharedQueue');

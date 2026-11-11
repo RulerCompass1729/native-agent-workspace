@@ -3891,7 +3891,7 @@ function render() {
         if (disconnected || person.transportDisconnected || !['working', 'approval'].includes(person.state) ||
           !activity || !nativeStatusFresh(activity) || activity.nativeId !== person.nativeId || activity.turnId !== person.activeTurnId) return false;
         return true;
-      }).map(person => `${participantLabel(person, people)} · ${person.sharedActivity.label}`);
+      }).map(person => ({ name: participantLabel(person, people), label: person.sharedActivity.label }));
       const mergePending = state.room.merge && !['ready', 'undone'].includes(state.room.merge.stage);
       if (active.length || mergePending) $('run-status').parentElement.hidden = false;
       ui.display.computed($('run-status'), 'text', () => {
@@ -3902,7 +3902,9 @@ function render() {
         if (pendingRun && roomSubmitting.cancelling) text = uiText('room.cancelling');
         else if (pendingRun && run?.status !== 'running') text = uiText('room.preparing');
         if (waiting && !pendingRun) text = uiText(waiting.queued ? 'room.queued' : 'room.sending', { name: waiting.recipientName });
-        if (active.length) text = [text, ...active].filter(Boolean).join(' · ');
+        // The native side reports a state name (inProgress, commandExecution); show its text in the person's language,
+        // as the session header does. A label with no entry is native text, such as a permission title, and stays as it is.
+        if (active.length) text = [text, ...active.map(member => `${member.name} · ${Object.hasOwn(nativeActivityLabels, member.label) ? uiText(nativeActivityLabels[member.label]) : member.label}`)].filter(Boolean).join(' · ');
         if (mergePending) text = [text, uiText('room.mergePending')].filter(Boolean).join(' · ');
         return text;
       });
