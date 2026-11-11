@@ -526,12 +526,12 @@ async function nativeCommand(command){
  await page.locator('#message-input').fill('An unsent draft survives native context changes.');
  const nativePid=(await snapshot()).sessions[0].pid;
  await nativeCommand('/new');await sleep(1200);fs.writeFileSync(path.join(base,'new-selection.txt'),await terminalText());
- if(process.env.NAW_CONTEXT_PICKER_PROBE==='1'){console.log(JSON.stringify({pickerProbe:true,text:await terminalText(),evidence:base}));return;}
+ if(process.env.NAW_CONTEXT_PICKER_PROBE==='1'){fixture.assertClean();console.log(JSON.stringify({pickerProbe:true,text:await terminalText(),evidence:base}));return;}
  await nativeCommand('/status');await until(async()=>/Session:/.test(await terminalText()),'New native status renders');
  const native=await terminalText(),after=await snapshot();fs.writeFileSync(path.join(base,'new-status.txt'),native);fs.writeFileSync(path.join(base,'after-new.json'),JSON.stringify(after,null,2));
  const ids=[...native.replace(/\s/g,'').matchAll(/Session:([a-f0-9-]{36})/g)].map(m=>m[1]);const current=ids.at(-1);assert.ok(current,'Real native status exposes current session identity');assert.notEqual(current,before.nativeId,'Native /new changes thread');
  if(process.env.NAW_REPRODUCE_CONTEXT==='1'){
-  assert.equal(after.sessions[0].nativeId,before.nativeId);console.log(JSON.stringify({reproduced:true,guiNativeId:before.nativeId,terminalNativeId:current,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  assert.equal(after.sessions[0].nativeId,before.nativeId);fixture.assertClean();console.log(JSON.stringify({reproduced:true,guiNativeId:before.nativeId,terminalNativeId:current,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  assert.equal(after.sessions.find(s=>s.id===before.id)?.nativeId,current,'GUI must follow its actual native terminal context');
  assert.equal(after.sessions[0].pid,nativePid,'A context switch never launches another native display');
