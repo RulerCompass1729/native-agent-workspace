@@ -165,7 +165,7 @@ test('directory permissions, symlinks and replacement are checked before authori
   const replaced = new ButlerRole(nested, options);replaced.set(person, designation(), 0);
   const retained = path.join(directory, 'retained-role');fs.renameSync(nested, retained);fs.mkdirSync(nested, { mode: 0o700 });
   assert.throws(() => replaced.snapshot(), code('ERR_BUTLER_STATE'));
-  assert.equal(fs.readFileSync(path.join(retained, 'butler.json'), 'utf8'), JSON.stringify({ version: 1, revision: 1, selected: designation({ budget: null }) }));
+  assert.equal(fs.readFileSync(path.join(retained, 'butler.json'), 'utf8'), JSON.stringify({ version: 2, revision: 1, selected: designation({ budget: null }) }));
   assert.equal(fs.existsSync(path.join(nested, 'butler.json')), false);
 });
 test('a missing or rolled-back record never resets an existing authority revision', t => {
@@ -184,5 +184,5 @@ test('another writer lock is neither stolen nor removed and a successful write l
   assert.throws(() => role.revoke(person, 1), code('ERR_BUTLER_BUSY'));
   assert.equal(fs.readFileSync(lock, 'utf8'), 'another writer');assert.equal(role.snapshot().revision, 1);
   fs.unlinkSync(lock);role.revoke(person, 1);
-  assert.deepEqual(fs.readdirSync(directory), ['butler.json']);
+  assert.deepEqual(fs.readdirSync(directory).sort(), ['butler-rotation-proof.json', 'butler.json']);
 });

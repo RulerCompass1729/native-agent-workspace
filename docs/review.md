@@ -10844,3 +10844,78 @@ honoring O_EXLOCK but dropping O_NONBLOCK: the synchronous same-stage probe
 could wait on itself. Packaged qualification must cover the exact flags; this
 source-only checkpoint makes no such runtime claim. No changed source or test
 behavior follows the review.
+
+
+## Butler verified rotation prefix across restart — 2026-11-11
+
+The integrator's review of cfe4d57 found that a fresh Role loses its in-memory
+prefix and can resolve original identity A after a previously accepted A-to-B
+handoff is deleted, shortened, rewritten or made ambiguous. The new checkpoint
+keeps B4 dormant and records only verified metadata before returning authority.
+It does not change capabilities, user-only gates or default recording/activation.
+
+On the old 4cff19d source, the original 25 new cases yield 5 passes and 20
+failures. Eight are actual cold reads returning A, including one isolated host
+Node process after log deletion; the other twelve assert the new proof protocol.
+These raw failures are retained privately in `.local/rotation-proof/red.log`.
+This is source/host evidence, not an installed Electron or DSH handoff test.
+
+The required private proof stores a canonical selection digest, monotonically
+advanced proof revision, verified raw log prefix length/hash and resolved ids.
+File-backed current() holds the existing Role lock across fresh selector/proof/
+log reads and durable proof advance. New selector disk version 2 is refused by
+the old strict reader; the new public snapshot remains version 1, and legacy
+version 1 is human-readable/revocable without model authorization. No automatic
+migration invents a trusted baseline. Bad proof never becomes authority and
+never blocks human revoke solely because that proof is bad. The proof and ledger
+are retained. Failed proof writes return no advanced identity; an unconfirmed
+directory sync cannot be reused as a durability acknowledgement. Already synced
+unchanged proof bytes/inode metadata may reuse that acknowledgement, but every
+call still reads proof and actual log. Trusted explicit-entry fixtures do not
+write or affect persistent authority.
+
+Author counterexamples cover seven cold rollback/ambiguity variants, one actual
+reaped host child, normal B-to-C growth, bad/missing/unsafe/mismatched proof with
+human revoke, legacy downgrade, exact metadata keys/privacy canary, serialized
+peer readers, initialization/advance faults, failed-sync retry and same-object
+proof revision/identity rollback. Three owned marker write/fsync/link faults
+also retain the former lock protocol's conservative failure behavior. Existing
+failure injection is corrected to hit the selector's directory fsync after its
+actual rename, rather than accidentally failing an earlier proof sync; physical
+file assertions include the new proof while public state remains version 1.
+
+Known boundaries: only verified observations persist. Unverified tail byte
+high-water remains process-local; restoring an older valid proof together with
+compatible log bytes, including joint rollback of all trust sources, is not
+detected. No cleanup of arbitrary files, legacy lock takeover, activation,
+model call, GUI trial or physical stop is added. Durable DSH handoff production,
+packaged flock qualification and human recovery from corrupt stores remain open.
+Relevant author logs, old-reader check, complete suite and independent review
+are retained in the owner lane before READY; zero-failure completion, review and
+clean staged/message scans are required before committing this checkpoint.
+
+Author validation now passes 93/93 across the proof, Role, selection-read and
+revoke-log cases (zero fail/cancel/skip), plus 196/196 in nine direct-authority
+files under the credential-empty, no-fork/no-network sandbox. The targeted real
+audit-fd sync fault passes 1/1; exact old-reader and guard-only mutation probes
+exit 0. Source build exits 0. The earlier broader sandbox run exceeded its
+120-second limit and is not counted as a pass. Whole-suite output remains in
+`.local/rotation-proof/full.log` and must finish with zero failures before handoff.
+
+Independent review 33BDEA95-787D-4D3C-AA04-D084A7554D6B cannot begin: the CLI
+returns authentication-expired, is_error=true, cost USD 0. Its initialization has
+only Glob/Grep/Read, no MCP; actual resolved model is claude-opus-5-5. HEAD, index,
+worktree and new source/test contents are unchanged after that invocation. This
+is not approval. The integrator is notified privately to restore login or supply
+a separate review; checkpoint remains REVIEW_PENDING, never READY meanwhile.
+
+The first whole-suite run exposes one author error in the packaging allowlist:
+the new module was inserted before butler-role.cjs instead of after it. The
+alphabetization assertion in package-sources.test.cjs catches it. Only the new
+entry's position is corrected; all existing entries remain. The four packaging
+source checks then pass 4/4, fail/cancel/skip 0. The failed whole run ends with 6,044 passes and one failure out of 6,045,
+zero cancellations or skips, exit 1; its raw output is retained as
+`.local/rotation-proof/full-before-package-order.log`. A fresh complete suite
+is required after this correction. The substantive
+Role/proof source and its tested authority behavior are unchanged. The earlier
+publication pass predates this correction and is not reused for final commit.
