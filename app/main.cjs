@@ -2201,8 +2201,9 @@ function handoffOverview(handoffs) {
   const snapshot = handoffs.snapshot(), open = snapshot.handoff;
   const brief = entry => ({ key: entry.key, roomId: entry.roomId, itemId: entry.itemId, branch: entry.branch, commit: entry.commit,
     ...(entry.text ? { text: entry.text } : {}), ...(entry.memberName ? { memberName: entry.memberName } : {}), ...(entry.note ? { note: entry.note } : {}) });
-  // engineFault is the dispatcher's last fault of the engine's own step ({ message, at, count }):
-  // the person may have missed its one notice, so it stays readable here.
+  // engineFault is the dispatcher's last fault of the engine's own step ({ message, at, count },
+  // and recoveredAt when a later step went through): the person may have missed its one notice,
+  // so it stays readable here.
   const engineFault = queueDispatcher?.integrationError;
   return { started: true, engineFault: engineFault ? { ...engineFault } : null, summary: handoffs.summary(),
     held: handoffs.held().map(group => ({ reason: group.reason, count: group.count, entries: group.entries.map(brief) })),

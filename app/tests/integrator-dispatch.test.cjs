@@ -180,15 +180,21 @@ test('a failure inside the engine\'s pass is kept and told once; the queue goes 
   assert.deepEqual(f.failed, ['Synthetic engine fault'], 'Told once, not on every pass');
   assert.deepEqual([f.dispatcher.integrationError.message, f.dispatcher.integrationError.count >= 2], ['Synthetic engine fault', true]);
   assert.equal(f.room.queueItems()[0].status, 'done', 'The queue item was settled all the same');
+  assert.equal(f.dispatcher.integrationError.recoveredAt, undefined, 'Not over while it keeps failing');
   // The fault is gone: the next pass takes the delivery in and hands it out.
   broken = false;
-  await f.pass(); await f.pass();
+  await f.pass();
+  const over = f.dispatcher.integrationError.recoveredAt;
+  await f.pass();
   assert.deepEqual(f.states(), { 'lane/a': 'handed' });
+  // The kept fault stays readable and says since when it is over; later good passes do not move that time.
+  assert.ok(Number.isFinite(over) && f.dispatcher.integrationError.recoveredAt === over && f.dispatcher.integrationError.message === 'Synthetic engine fault');
   // After the recovery the same fault is not told again, and another kind of fault is.
   let fault = 'Synthetic engine fault';
   f.dispatcher.integration.pass = async () => { throw Error(fault); };
   await f.pass(); await f.pass();
   assert.deepEqual(f.failed, ['Synthetic engine fault']);
+  assert.equal(f.dispatcher.integrationError.recoveredAt, undefined, 'A new failure is not marked as over');
   fault = 'Another synthetic fault';
   await f.pass(); await f.pass();
   assert.deepEqual(f.failed, ['Synthetic engine fault', 'Another synthetic fault']);
