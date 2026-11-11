@@ -8934,3 +8934,31 @@ notes: an immediate dispose rejection (rather than a hang) can bypass later MCP
 disposal, and an unkillable owned process can leave close pending; production MCP
 connection/qualification must cover these before activation. No GUI or activation
 completion is claimed.
+
+
+### B4 preactivation: package roots and request-boundary diagnostics (2026-11-11)
+
+The explicit package dependency walk now also starts at the independently
+loaded DSH host, Python launcher and privacy module. Removing any of the three
+from a candidate list fails the guard (red before the roots, green after). The
+historical fixture is a retention floor; new sources no longer require edits to
+it. Sorting, one-entry-per-line and duplicate rejection remain enforced.
+
+The DSH agent loop records stream-hook errors instead of rethrowing them to
+`run`. The host now retains only its own fixed request-boundary reason, returns
+that protocol error, and still exposes no provider diagnostic. The actual
+loopback's ninth request fails before sending, with eight received requests and
+zero pricing calls. The old host failed that expected-rejection assertion. Core
+failure wording is unchanged; this does not claim a new localized UI status.
+
+Direct read of the existing isolated 8a24081 packaged app found Electron44.9.0,
+Node24.22.0, `module.registerHooks` as a function, and rc.2 adapter SHA-256 equal
+to the packaged DIGEST. This explicitly supplements the prior packaged hook
+witness; it does not claim a new build of the shutdown patch. Documentation also
+names the product-only User-Agent, the currently unused compaction header, and
+the image Files retry/fallback counting limit before any image enablement.
+
+Targeted checks: 18/18; final full suite: 5117/5117, no skips. Independent
+review 3a61fbda-f4a6-4bd1-ae7d-c3c5abc40c84 approved after reading the raw
+red/green and packaged-runtime evidence. Remaining input-size/token-budget work
+is explicitly a separate preactivation item; this checkpoint does not close it.

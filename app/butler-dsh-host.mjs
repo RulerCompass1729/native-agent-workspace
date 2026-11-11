@@ -15,6 +15,7 @@ const errorCode = code => ({ code, message: code === 'credential-missing'
   ? 'DEEPSEEK_API_KEY is missing from the butler launch environment.' : 'DSH butler: ' + code });
 // Do not serialize provider errors: upstream errors can include response bodies.
 const fail = code => Object.assign(Error(code), { code });
+let boundaryFailure = null;
 let ctx, handle, nativeId, allowedTools = [], requestCount = 0, consumed = false, initialized = false, closing = false;
 async function close() {
   if (closing) return; closing = true;
@@ -29,7 +30,7 @@ async function close() {
 process.on('SIGTERM', close); process.stdin.on('end', close);
 async function newSession() {
   await handle?.dispose();
-  nativeId = 'dsh-' + randomUUID(); consumed = false; requestCount = 0;
+  nativeId = 'dsh-' + randomUUID(); consumed = false; requestCount = 0; boundaryFailure = null;
   handle = await ctx.agents.create({ sessionId: nativeId, meta: { cwd: home },
     agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-pro', maxTokens: 4096, reasoningEffort: 'off' } });
   await handle.agent.whenIdle();
@@ -65,7 +66,9 @@ async function initialize(config) {
   privacy.assertApplied();
   allowedTools = [...mcp.tools];
   ctx.on('llm/stream', async function* (options, next) {
-    if (requestCount >= 8 || options.provider !== 'deepseek-official' || options.model !== 'deepseek-v4-pro') throw fail('request-boundary');
+    if (requestCount >= 8 || options.provider !== 'deepseek-official' || options.model !== 'deepseek-v4-pro') {
+      boundaryFailure = 'request-boundary'; throw fail(boundaryFailure);
+    }
     requestCount++;
     yield* next();
   });
@@ -80,6 +83,9 @@ async function run(request) {
   const { createUserMessage } = await import('@deepseek-ai/dsh-llm');
   handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: JSON.stringify(request.input) }], source: { kind: 'user' } }));
   await handle.agent.whenIdle();
+  // The agent loop records hook failures as a failed turn instead of throwing.
+  // Preserve our fixed boundary reason without serializing any provider error.
+  if (boundaryFailure) throw fail(boundaryFailure);
   const events = handle.agent.session.snapshotEvents();
   const messages = handle.agent.session.deriveMessages().filter(m => m.role === 'assistant');
   const rows = events.filter(e => e.type === 'assistant/message').map(e => e.data.usage);
@@ -117,7 +123,7 @@ process.stdin.on('data', chunk => {
       if (request.method === 'rotate' && initialized) return { nativeId: await newSession() };
       throw fail('invalid-command');
     }).then(result => emit({ id: request.id, result }), error => emit({ id: request.id,
-      error: errorCode(['credential-missing', 'mcp-unavailable', 'session-unavailable', 'invalid-command', 'already-initialized', 'privacy-unconfirmed', 'endpoint-invalid'].includes(error.code) ? error.code : 'host-failed') }))
+      error: errorCode(['credential-missing', 'mcp-unavailable', 'session-unavailable', 'invalid-command', 'already-initialized', 'privacy-unconfirmed', 'endpoint-invalid', 'request-boundary'].includes(error.code) ? error.code : 'host-failed') }))
       .finally(() => { flight = false; });
   }
 });

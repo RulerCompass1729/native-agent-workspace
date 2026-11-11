@@ -89,6 +89,15 @@ unknown cost; production has no injected pricing function here. Existing core
 unknown-cost rules then stop another automatic batch. Fixture pricing is zero
 only because all responses are synthetic and local. Output is bounded to 4096
 tokens/request and eight model requests/batch; no provider retry is configured.
+Exceeding the local request/provider/model boundary returns the fixed
+`request-boundary` protocol error, including when the upstream loop records the
+failure instead of throwing it. The core still records a generic failed batch
+with unknown usage; this is not a new localized UI reason.
+
+This composition currently supplies text only. Before enabling images, count
+actual transport requests: upstream Files retries and inline fallback can issue
+multiple requests inside one `llm/stream` call (rc.2 adapter's RequestFiles path).
+The current stream count must not be treated as an image-request billing cap.
 
 ## Reproducible checks
 
@@ -135,7 +144,11 @@ the generated package inventory cover the complete production closure.
 Only the DeepSeek provider in the mounted plugin closure imports the anonymous-ID
 utility. That utility reads synchronously inside `getOrCreateAnonymousUserId`,
 which the provider's lazy resolver formerly called from the removed header
-expression. The product User-Agent remains. The network sandbox proves no
+expression. The remaining `user-agent` is exactly
+`deepseek-harness/0.2.1-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)`;
+it contains no machine or session identifier. Upstream would send
+`x-deepseek-harness-compact: 1` only for a compaction request. This composition
+has no compaction plugin and never sends such a request. The network sandbox proves no
 successful off-fixture connection during acceptance; it does not by itself prove
 that no denied connection was attempted.
 
