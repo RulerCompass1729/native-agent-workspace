@@ -26,6 +26,12 @@ before checking presence or qualification. A different configuration/runtime
 cannot reuse or rewrite an existing reservation. All four qualification defaults
 remain false. The old dormant native factory supplies its former values only at
 that legacy boundary; the DSH factory is a separate integration by its owner.
+The legacy runner rejects any different configuration triple before its spawn
+work. With explicit host configuration, backend `read()` and `snapshot()` throw
+`binding-mismatch` when a persisted reservation belongs to a different runtime or
+configuration. A future host/UI caller
+must catch that refusal and show a blocked state; upgrading never silently
+rewrites or reuses the old binding.
 
 - `butler-ingress.cjs` captures only structured queue decisions/failures and
   vacancy transitions. RoomState stores a compact source in the same commit as

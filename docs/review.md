@@ -8472,13 +8472,50 @@ reuse/start rather than selecting a fallback.
 
 Author-run before/after comparison loads the actual preceding Role/Policy source
 and current source. Old Codex and new DSH have the same five proposals, all with
-effect none, ten denied control kinds, record-only mode, default queue grant false,
-null assignee and zero adapter writes. Each rejects the opposite harness, another
-instance and forged person calls. Permanent regressions cover those boundaries
+effect none, ten denied control kinds in that private comparison, record-only
+mode, default queue grant false, null assignee and zero adapter writes. Each
+rejects the opposite harness, another instance and forged person calls. The
+permanent proposal regression lists thirteen denied control kinds. It locks the
+parser and recording behavior; by itself it is not evidence of caller authority.
+Permanent identity regressions cover those boundaries
 and model-authored grants/effects/identity fields. Backend configuration counter-
 examples failed before this change and pass after it. No native/model trial or
 runtime qualification is claimed. Related isolated checks: 414 pass; full unit
-suite: 4820 pass, zero fail or skip. Independent review approved this exact
-identity/configuration scope and explicitly confirmed unchanged available actions.
+suite: 4820 pass, zero fail or skip. Independent read-only review
+`1eb79fb9-a46a-408d-8ded-46f9e898a803` returned `APPROVE_SCOPED` for that patch
+(private evidence: the identity lane's `.local/instance-review/review.jsonl`).
+Its scope finding rests on the unchanged parser, queue and controller source and
+the author-run comparison, not on the proposal regression alone. The integrator's
+separate review `bdd28c09-3625-4c83-aee6-61f5fed17f4b` returned
+`APPROVE_WITH_NOTES` (canonical private evidence:
+`.local/evidence/reboot-20261110/review-butler-instance.json`).
 The live DSH record producer and its runtime permissions remain separate gates.
 Owner: butler outcome owner; the formal DSH host/driver integration remains separate.
+
+### B4 identity review follow-up (2026-11-11)
+
+The integrator's review identified a legacy launch gap: generic backend binding
+metadata could claim another model while the dormant Codex runner retained its
+fixed DeepSeek arguments. The runner now refuses a different profile, provider
+or model at its spawn boundary. The shared backend remains vendor independent;
+the DSH driver must validate its own actual configuration. This is not a new
+qualification, activation or recording path.
+
+The new permanent authenticated-action baseline was captured against the actual
+`a17baf9` Codex role and unchanged parser/queue implementation. It compares the
+selected DSH instance through the real role and queue entry: five proposals with
+no effects; only queue has a record-only receipt; all other queue-entry controls
+fail; eleven invalid caller/revision cases fail; no adapter writes. The original
+and current source runs pass the same frozen baseline. A private removal of the
+harness identity check makes that baseline fail. This supplements the earlier
+source comparison; it does not treat proposal parsing as authorization.
+
+Runtime/configuration mismatch still throws from backend `read` and `snapshot`.
+A later host/UI caller must handle that refusal as a blocked state on upgrade;
+this follow-up does not change reservation or recovery semantics. Related checks:
+115 pass; full isolated suite: 4831 pass, zero fail or skip. The same independent
+review session `1eb79fb9-a46a-408d-8ded-46f9e898a803` returned `APPROVE_SCOPED`
+for the follow-up source delta (private evidence:
+`.local/instance-review/followup.jsonl`). Its wording notes are reflected above.
+Owner: butler outcome owner; formal DSH integration and activation remain separate
+gates.

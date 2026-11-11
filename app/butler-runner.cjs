@@ -21,8 +21,11 @@ function checkProfile() {
   return true;
 }
 function credentialPresent() { try { return checkProfile(); } catch { return false; } }
-function spawnRunner(binary, args, binding, python = pythonExecutable()) {
-  butlerBinding(binding);
+function spawnRunner(binary, args, binding, python) {
+  binding = butlerBinding(binding);
+  // This legacy transport is pinned; the shared backend accepts other hosts.
+  if (binding.profile !== 'deepseek-pro' || binding.provider !== 'deepseek' || binding.model !== 'deepseek-v4-pro') throw failure('binding-mismatch');
+  if (python === undefined) python = pythonExecutable();
   const pinned = ['--profile', binding.profile, '-c', 'model="deepseek-v4-pro"', '-c', 'model_provider="deepseek"',
     '-c', 'model_providers.deepseek.env_key="DEEPSEEK_API_KEY"'];
   const child = spawn(python, [helper, binary, ...pinned, ...args], { stdio: ['ignore', 'ignore', 'pipe', 'pipe'], env: nativeEnvironment() });

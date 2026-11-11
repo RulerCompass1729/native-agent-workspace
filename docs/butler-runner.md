@@ -52,6 +52,11 @@ qualified or claimed disabled; that is a remaining activation gate.
 Before native launch and on recovery, a narrow helper checks these non-secret
 configuration names: profile `deepseek-pro`, model `deepseek-v4-pro`, provider
 `deepseek`, and provider credential environment name `DEEPSEEK_API_KEY`.
+`spawnRunner` also requires its supplied binding to match that exact three-name
+configuration before its own Python discovery, environment or child spawn. Other names
+fail rather than being recorded for a process that still uses fixed arguments.
+This guard belongs to the legacy runner; a DSH driver must check its own actual
+configuration instead of inheriting these legacy model pins.
 The profile must explicitly declare model and provider; its provider environment
 name may inherit from the base configuration. Missing, mismatched, duplicate or
 unsupported metadata blocks launch. The checker supports canonical simple TOML

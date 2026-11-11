@@ -83,3 +83,64 @@ test('model-supplied grants, execution effects and identity fields cannot expand
   assert.throws(() => f.role.set(f.person, { identity, runner, mode: 'queue-only' }, 1), { code: 'ERR_BUTLER_INVALID' });
   assert.equal(f.role.current().mode, 'record-only');
 });
+
+// Recorded against a17baf9's actual Codex Role, unchanged parser and queue bridge.
+// The baseline includes the authenticated execution surface, not just proposals.
+const recordOnlyBaseline = {
+  proposals: ['queue', 'open', 'archive', 'question', 'report'],
+  effects: ['none', 'none', 'none', 'none', 'none'],
+  queueEntry: ['recorded', ...Array(17).fill('ERR_BUTLER_QUEUE_ACTION')],
+  rejectedActors: Array(11).fill('ERR_BUTLER_UNAUTHORIZED'),
+  mode: 'record-only', writes: 0, queuedItems: 0,
+};
+test('the designated DSH instance matches the old authenticated Codex action baseline', async t => {
+  const selectedProvider = 'dsh';
+  const f = fixture(t);
+  // The old implementation required this triple. Use the same input on both sides.
+  const pinned = { ...runner, profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro' };
+  f.role.set(f.person, { identity, runner: pinned }, 0);
+  const actor = { ...f.record, provider: selectedProvider, runner: pinned };
+  const opposite = selectedProvider === 'dsh' ? 'codex' : 'dsh';
+  const allowed = ['queue', 'open', 'archive', 'question', 'report'];
+  const rejected = ['initial', 'nativeHistory', 'terminalSnapshot', 'approve', 'queueCancel', 'queueResolve',
+    'changeBudget', 'setRole', 'shell', 'file', 'send', 'stop', 'publish'];
+  const requested = [...allowed, ...rejected];
+  const normalized = interpretResult({ actions: requested.map(kind => ({ kind, sourceRef: source.sourceRef,
+    spaceId: 'shared', text: 'Synthetic proposal' })) }, { events: [source], catalog: spaces });
+  const ledger = new ButlerLedger(f.directory); ledger.ingest(source);
+  const selection = { selectionRevision: 1, identity, runnerRef: pinned.runnerRef };
+  const batch = ledger.beginBatch(selection), completed = ledger.completeBatch(batch.batchId, selection, normalized);
+  let writes = 0;
+  const bridge = new ButlerQueue({ role: f.role, ledger, view: () => ({ records: [actor], spaces }),
+    adapter: { transact() { writes++; throw Error('No execution granted'); } } });
+  async function outcome(record, expected, actionId) {
+    try { return (await bridge.add(record, expected, actionId)).status; }
+    catch (error) { return error.code || error.message; }
+  }
+  const queueEntry = [];
+  for (const kind of requested) {
+    const actionId = completed.actions.find(action => action.kind === kind)?.actionId || `unsupported:${kind}`;
+    queueEntry.push(await outcome(actor, f.expected, actionId));
+  }
+  const queueId = completed.actions.find(action => action.kind === 'queue')?.actionId || 'missing:queue';
+  const invalidActors = [
+    { ...actor }, { ...actor, provider: opposite }, { ...actor, provider: 'claude' },
+    { ...actor, id: 'other-instance' }, { ...actor, nativeId: 'other-native' },
+    { ...actor, runner: { ...pinned, runnerRef: 'other-runner' } },
+    { ...actor, roomIds: ['shared'] }, { ...actor, archived: true },
+    { ...actor, nativeContextPending: true }, { ...actor, state: 'ended' },
+  ];
+  // Each substitute is the actual host record except the first deliberate copy.
+  const rejectedActors = [];
+  for (const substitute of invalidActors) {
+    const guarded = new ButlerQueue({ role: f.role, ledger,
+      view: () => ({ records: [substitute === invalidActors[0] ? actor : substitute], spaces }) });
+    try { await guarded.add(substitute, f.expected, queueId); rejectedActors.push('accepted'); }
+    catch (error) { rejectedActors.push(error.code || error.message); }
+  }
+  rejectedActors.push(await outcome(actor, { ...f.expected, selectionRevision: 0 }, queueId));
+  const actual = { proposals: completed.actions.map(action => action.kind),
+    effects: completed.actions.map(action => action.effect), queueEntry, rejectedActors,
+    mode: f.role.current().mode, writes, queuedItems: spaces[0].queue.length };
+  assert.deepEqual(actual, recordOnlyBaseline);
+});
