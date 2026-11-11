@@ -110,7 +110,10 @@ test('the time limit ends the whole process group, and the result is not kept as
   assert.deepEqual([record.timedOut, record.exit, record.signal], [true, null, 'SIGKILL']);
   assert.equal(check.complete(record, record.mod), false); assert.equal(check.describe(record), 'stopped at the time limit');
   const child = Number(record.note.match(/^child=(\d+)$/)[1]); assert.ok(child > 1);
-  await sleep(200);
+  // The kill reaches the whole group at once, but a busy machine can take a while to let the child go: wait for
+  // that, bounded, instead of guessing how long it takes.
+  const gone = () => { try { process.kill(child, 0); return false; } catch (error) { return error.code === 'ESRCH'; } };
+  for (const deadline = Date.now() + 5000; !gone() && Date.now() < deadline;) await sleep(25);
   assert.throws(() => process.kill(child, 0), { code: 'ESRCH' }, 'The program\'s own child is gone too');
   assert.deepEqual(fs.readdirSync(f.privateDir), []);
 });
