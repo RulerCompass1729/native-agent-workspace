@@ -266,8 +266,9 @@ async function verifyResults(read, state, action, mainHead) {
 //   (a message's origin, or NAW's marker on a native row without one), with two differences:
 //   the handoff's own message (it begins with the marker and the handoff's id) is never the
 //   person's, also where a native row took the place of NAW's copy of it; and a message that
-//   reached the session through a space is the person's step too (they wrote to it there, or
-//   started the exchange that did).
+//   reached the session through a space counts as well. Such a message comes from the person or
+//   from another member (an exchange in the space, a member's outbox), and its origin does not
+//   say which, so the handoff waits for the person either way.
 // - own: how many of the integrator's messages came before the first automatic message from
 //   someone else (a queue item, another agent's wake or control message, a rotation request).
 //   A continuation after a limit is not from someone else: it resumes the same work.
