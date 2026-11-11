@@ -362,7 +362,7 @@ test('the daily review amount: a new day releases once and keeps the unanswered 
   // Only a later day counts: the same or an earlier day releases nothing, and something that is not a day is refused.
   assert.deepEqual(again.reasonCleared('review-cap-new-day', '2026-11-10'), { released: [] });
   assert.deepEqual(again.reasonCleared('review-cap-new-day', '2026-11-12'), { released: [] });
-  for (const bad of ['tomorrow', '2026-1-1', '20261113', 7]) assert.throws(() => again.reasonCleared('review-cap-new-day', bad), { code: 'HANDOFF_STATE' }, String(bad));
+  for (const bad of ['tomorrow', '2026-1-1', '20261113', '2026-13-45', '2026-02-30', 7]) assert.throws(() => again.reasonCleared('review-cap-new-day', bad), { code: 'HANDOFF_STATE' }, String(bad));
   assert.deepEqual(again.reasonCleared('review-cap-raised'), { released: [key('e')] });
   assert.deepEqual(again.hold(key('f'), 'review-cap', NOW + 3).notify, { reason: 'review-cap' });
 });
@@ -508,22 +508,33 @@ test('the backlog is bounded: a full one refuses new deliveries without dropping
   // A full backlog is a standing condition: a retry releases nothing and does not end it, so the person is not told twice.
   assert.deepEqual(backlog.retryReason('backlog-full'), { released: [] });
   assert.deepEqual(backlog.noteReady(ready('newest'), NOW), { stored: false, why: 'backlog-full', superseded: [], notify: null });
-  // A newer delivery of a branch already waiting replaces the old one, so it gets in even now. A stored delivery
-  // ends the condition; the next time the backlog is full is a new occurrence.
-  assert.deepEqual(backlog.noteReady({ ...ready('x'), key: key('replacement'), itemId: 'replacement', branch: 'lane/deliverable-7' }, NOW + 1), { stored: true, superseded: [key('deliverable-7')], notify: null });
+  // A newer delivery of a branch already waiting replaces the old one, so it gets in even now. The backlog is as
+  // full as before, so the condition stays and the next refusal tells nobody again.
+  assert.deepEqual(backlog.noteReady({ ...ready('x'), key: key('replacement'), itemId: 'replacement', branch: 'lane/deliverable-0' }, NOW + 5000), { stored: true, superseded: [key('deliverable-0')], notify: null });
   assert.equal(waitingCount(), OPEN_LIMIT);
-  assert.equal(backlog.snapshot().reasons['backlog-full'].open, false);
-  assert.deepEqual(backlog.noteReady(ready('new'), NOW + 2), { stored: false, why: 'backlog-full', superseded: [], notify: { reason: 'backlog-full' } });
-  // The oldest finished ones are trimmed, never one that still waits, and their keys are remembered.
+  assert.equal(backlog.snapshot().reasons['backlog-full'].open, true);
+  assert.deepEqual(backlog.noteReady(ready('new'), NOW + 5001), { stored: false, why: 'backlog-full', superseded: [], notify: null });
+  // The outcomes that ended longest ago are trimmed, never a delivery that still waits, and their keys are remembered.
+  // The delivery that was just replaced ended last, so its record is kept although it arrived before every other one.
   const kept = backlog.snapshot();
   const finished = kept.ready.filter(item => !['deliverable', 'held', 'handed'].includes(item.state));
   assert.equal(finished.length, CLOSED_KEPT);
-  // Oldest by arrival: three finished ones went with the first save, then the delivery that was just replaced,
-  // which had arrived before every finished one.
-  assert.deepEqual(finished.slice(0, 2).map(item => item.itemId), ['merged-3', 'merged-4']); assert.equal(finished.at(-1).itemId, `merged-${CLOSED_KEPT + 2}`);
-  assert.deepEqual(kept.seen, [...[0, 1, 2].map(index => key(`merged-${index}`)), key('deliverable-7')]);
+  assert.ok(finished.some(item => item.itemId === 'deliverable-0' && item.state === 'superseded' && item.closedAt === NOW + 5000));
+  assert.deepEqual(kept.seen, [0, 1, 2, 3].map(index => key(`merged-${index}`)));
   assert.deepEqual(backlog.noteReady({ ...ready('x'), key: key('merged-1'), itemId: 'merged-1', branch: 'lane/deliverable-9' }, NOW), { stored: false, why: 'known', superseded: [], notify: null }, 'A trimmed key again still changes nothing');
   assert.equal(SEEN_KEPT, 2000);
+});
+
+test('real room ends the full-backlog condition, and filling up again is a new occurrence', t => {
+  const { directory, file } = fixture(t);
+  const entry = index => ({ ...ready('x'), key: key(`w-${index}`), itemId: `w-${index}`, branch: `lane/w-${index}`, state: 'deliverable', notedAt: NOW + index });
+  // One place is free again, as after an outcome, while the person's question from the full backlog is still open.
+  fs.writeFileSync(file, JSON.stringify(emptyState({ ready: Array.from({ length: OPEN_LIMIT - 1 }, (_, index) => entry(index)),
+    reasons: { 'backlog-full': { open: true, notice: 'done', firstAt: NOW } } })), { mode: 0o600 });
+  const backlog = new IntegrationHandoffs(directory);
+  assert.deepEqual(backlog.noteReady(ready('fits'), NOW), { stored: true, superseded: [], notify: null });
+  assert.equal(backlog.snapshot().reasons['backlog-full'].open, false);
+  assert.deepEqual(backlog.noteReady(ready('too-many'), NOW + 1), { stored: false, why: 'backlog-full', superseded: [], notify: { reason: 'backlog-full' } });
 });
 
 test('deliveries that have waited more than four hours are listed apart', t => {

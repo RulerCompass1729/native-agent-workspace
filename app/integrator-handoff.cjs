@@ -57,19 +57,24 @@ function reasonKey(value) {
   return split > 0 && SUBJECT_REASONS.includes(value.slice(0, split)) && value.length > split + 1 && value.length - split - 1 <= 200 ? value : null;
 }
 
+// A real calendar day written YYYY-MM-DD.
+const calendarDay = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) &&
+  new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+
 function empty() { return { version: 1, seq: 0, ready: [], handoff: null, reasons: {}, refusals: 0, seen: [], capDay: null }; }
 
 function checkEntry(entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry) || !plain(entry.key, 300) || !plain(entry.roomId, 100) || !plain(entry.itemId, 100) ||
       !validReady({ branch: entry.branch, commit: entry.commit }) || !STATES.includes(entry.state) || !Number.isFinite(entry.notedAt) ||
       optional(entry.memberId, 100) === null || optional(entry.memberName, 200) === null || optional(entry.spaceName, 200) === null || optional(entry.text, 200) === null ||
-      (entry.state === 'held') !== (reasonKey(entry.reason) !== null) || (entry.state !== 'held' && entry.reason !== undefined)) throw fail('Invalid delivery record');
+      (entry.state === 'held') !== (reasonKey(entry.reason) !== null) || (entry.state !== 'held' && entry.reason !== undefined) ||
+      !(entry.closedAt === undefined || Number.isFinite(entry.closedAt) && !OPEN_STATES.includes(entry.state))) throw fail('Invalid delivery record');
 }
 function checkState(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data) || data.version !== 1 || !Number.isSafeInteger(data.seq) || data.seq < 0 ||
       !Array.isArray(data.ready) || !data.reasons || typeof data.reasons !== 'object' || Array.isArray(data.reasons) ||
       !Number.isSafeInteger(data.refusals) || data.refusals < 0 || !Array.isArray(data.seen) || data.seen.length > SEEN_KEPT || data.seen.some(key => !plain(key, 300)) ||
-      !(data.capDay === null || plain(data.capDay, 40))) throw fail('Invalid handoff record');
+      !(data.capDay === null || calendarDay(data.capDay))) throw fail('Invalid handoff record');
   const keys = new Set();
   for (const [index, entry] of data.ready.entries()) {
     checkEntry(entry);
@@ -206,7 +211,9 @@ class IntegrationHandoffs {
       const waiting = key.startsWith('conflict:') && next.handoff?.id === key.slice('conflict:'.length);
       if (reason.open && !standing(key) && !waiting && !next.ready.some(entry => entry.state === 'held' && entry.reason === key)) reason.open = false;
     }
-    const closed = next.ready.filter(entry => !OPEN_STATES.includes(entry.state));
+    // The outcomes that ended longest ago go first, whenever their deliveries arrived.
+    const ended = entry => entry.closedAt ?? entry.notedAt;
+    const closed = next.ready.filter(entry => !OPEN_STATES.includes(entry.state)).sort((a, b) => ended(a) - ended(b));
     if (closed.length > CLOSED_KEPT) {
       const drop = new Set(closed.slice(0, closed.length - CLOSED_KEPT).map(entry => entry.key));
       next.ready = next.ready.filter(entry => !drop.has(entry.key));
@@ -226,7 +233,7 @@ class IntegrationHandoffs {
   // arrived meanwhile it is void and is not handed again; otherwise it takes the given state.
   leave(next, entry, state, reason, now) {
     delete entry.reason;
-    if (newer(next, next.ready.indexOf(entry))) { entry.state = 'superseded'; return null; }
+    if (newer(next, next.ready.indexOf(entry))) { entry.state = 'superseded'; entry.closedAt = now; return null; }
     entry.state = state;
     if (state !== 'held') return null;
     entry.reason = reason;
@@ -247,16 +254,19 @@ class IntegrationHandoffs {
     // What this delivery replaces leaves the count of waiting deliveries, so a newer delivery of a branch
     // already in a full backlog still gets in.
     const replaced = next.ready.filter(existing => existing.roomId === entry.roomId && existing.branch === entry.branch && ['deliverable', 'held'].includes(existing.state));
-    if (next.ready.filter(existing => OPEN_STATES.includes(existing.state)).length - replaced.length >= OPEN_LIMIT) {
+    const before = next.ready.filter(existing => OPEN_STATES.includes(existing.state)).length;
+    if (before - replaced.length >= OPEN_LIMIT) {
       // Nothing is dropped to make room. The delivery stays recorded in its space; the person is told once.
       const notify = this.occur(next, 'backlog-full', now);
       if (notify) this.commit(next);
       return { stored: false, why: 'backlog-full', superseded: [], notify };
     }
     const superseded = [];
-    for (const existing of replaced) { existing.state = 'superseded'; delete existing.reason; superseded.push(existing.key); }
+    for (const existing of replaced) { existing.state = 'superseded'; existing.closedAt = now; delete existing.reason; superseded.push(existing.key); }
     next.ready.push(entry);
-    if (next.reasons['backlog-full']?.open) next.reasons['backlog-full'].open = false;
+    // Real room ends the full-backlog condition. A delivery that only took the place of the one it
+    // replaced leaves the backlog as full as it was, so the condition stays and nobody is told twice.
+    if (before < OPEN_LIMIT && next.reasons['backlog-full']?.open) next.reasons['backlog-full'].open = false;
     this.commit(next);
     return { stored: true, superseded, notify: null };
   }
@@ -400,7 +410,7 @@ class IntegrationHandoffs {
     let match, close = true;
     if (kind === 'review-opened') match = reason => reason === 'review-off';
     else if (kind === 'review-cap-raised') match = reason => reason === 'review-cap';
-    else if (kind === 'review-cap-new-day' && typeof subject === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(subject)) {
+    else if (kind === 'review-cap-new-day' && calendarDay(subject)) {
       // Only a later day than the last one released for counts; the same or an earlier day changes nothing.
       if (next.capDay !== null && subject <= next.capDay) return { released: [] };
       next.capDay = subject; match = reason => reason === 'review-cap'; close = false;
