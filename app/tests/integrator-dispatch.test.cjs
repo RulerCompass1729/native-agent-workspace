@@ -8,6 +8,8 @@ const { RoomState } = require('../room-state.cjs');
 const { QueueDispatcher, CAPABILITY, INTEGRATOR_ABSENT_MS, queueVacancies } = require('../queue-dispatch.cjs');
 const { IntegrationHandoffs, FILE } = require('../integrator-handoff.cjs');
 const { IntegratorEngine } = require('../integrator-engine.cjs');
+const locale = require('../ui-locale.js');
+const { uiError } = require('../ui-errors.cjs');
 
 // The integration handoff connected to the real dispatcher and the real space record (B6 E2b,
 // checkpoint H6b). The backend is a stand-in that records what it is sent; git is a stand-in with
@@ -46,7 +48,8 @@ function fixture(t, options = {}) {
     changes: async (base, tip) => (tip === HEAD2 ? [{ commit: 'm1', change: 'x-1' }] : [{ commit: tip, change: 'x-1' }]) };
   const engine = dispatcher => new IntegratorEngine({ handoffs: f.handoffs, now: () => Date.now() + f.skew, designation: () => { if (f.designated instanceof Error) throw f.designated; return f.designated; },
     mainHead: async () => { f.heads += 1; return f.head; }, reader: read, send: (target, text, handoffId) => dispatcher.send(target, text, handoffId), typing: id => dispatcher.noteHuman(id),
-    record: fact => room.recordHandoff(fact), notify: async info => { f.notices.push(info); } });
+    record: fact => room.recordHandoff(fact), notify: async info => { f.notices.push(info); },
+    holderRecord: fact => room.recordHandoffHolder(fact), nameOf: target => dispatcher.name(target) });
   f.dispatcher = new QueueDispatcher({ roomState: room, dataDir: directory, clients: () => client, now: () => Date.now() + f.skew, settleMs: 0, humanQuietMs: 0, broadcast: async () => { f.broadcasts += 1; },
     sampleProcesses: async () => '', samplePressure: async () => '', ...(options.observe ? { observeQueueState: options.observe } : {}), ...(options.plain ? {} : { integration: options.build || engine, integrationUnreadable: () => { f.unreadable += 1; }, integrationFailed: error => { f.failed.push(error.message); } }) });
   t.after(() => { f.dispatcher.close(); fs.rmSync(directory, { recursive: true, force: true }); });
@@ -407,7 +410,7 @@ test('the session that holds an open handoff is not listed as vacant for the spa
   for (const engaged of [undefined, null, [], 'member-a', { 'member-a': true }]) assert.deepEqual(queueVacancies(input({ engaged }))[0], plain, JSON.stringify(engaged));
 });
 
-test('what the integrator writes for another automatic message is not taken as the handoff\'s answer', async t => {
+test('a question the integrator writes after another agent\'s wake is put to the person; after they deal with it the deliveries go out again', async t => {
   const f = fixture(t);
   const itemId = f.room.queueAdd('Synthetic task', null);
   await f.pass();
@@ -415,22 +418,93 @@ test('what the integrator writes for another automatic message is not taken as t
   await f.pass();
   assert.deepEqual([f.calls.length, f.states()], [2, { 'lane/a': 'handed' }]);
   const first = f.handoffs.snapshot().handoff.id;
-  // Another agent wakes the integrator before it has answered; what it writes for that begins like a question for the person.
+  // Another agent wakes the integrator before it has answered; then it asks the person something.
   const integrator = f.client.state.sessions.find(candidate => candidate.id === 'integrator');
   integrator.messages.push({ id: 'wake-1', role: 'user', text: 'Synthetic wake from another agent', origin: 'agent-wake', time: Date.now() });
-  f.reply('integrator', '需要你决定：这件另外的事怎么办？');
+  f.reply('integrator', '需要你决定：这件事怎么办？');
+  await f.pass(); await f.pass();
+  // The handoff waits with that question; nothing is sent again by itself, and the person is told once.
+  const waiting = f.handoffs.snapshot().handoff;
+  assert.deepEqual([waiting.id, waiting.status, waiting.question, f.calls.length], [first, 'waiting', '这件事怎么办？', 2]);
+  assert.deepEqual(f.notices.map(info => info.reason), [`conflict:${first}`]);
+  // The person deals with it and lets the delivery go out again; the new answer is read and the merge is checked.
+  f.handoffs.resolveHandoff(first, { retry: true });
   await f.pass();
-  // The handoff does not wait on that question. The delivery has no result, so it is handed once more, in a new handoff.
   const second = f.handoffs.snapshot().handoff;
   assert.ok(second && second.id !== first && second.status === 'sent', JSON.stringify(second));
   assert.deepEqual(f.calls.map(call => [call.id, call.itemId]), [['member-a', itemId], ['integrator', first], ['integrator', second.id]]);
-  assert.deepEqual(f.notices.map(info => info.reason), [], 'The person is asked nothing');
-  // It answers the new handoff; that answer is read and the merge is checked.
   f.head = HEAD2;
   f.reply('integrator', `MERGED ${COMMIT.slice(0, 9)} as ${HEAD2.slice(0, 9)} tests 12/12`);
   await f.pass();
   assert.deepEqual([f.states(), f.handoffs.snapshot().handoff], [{ 'lane/a': 'merged' }, null]);
-  assert.deepEqual(f.notices.map(info => info.reason), [`installable:${HEAD2}`]);
+});
+
+test('a member that holds an open handoff: its space is told once that the queue leaves it alone, and once more when the handoff waits for the person', async t => {
+  const f = fixture(t);
+  f.room.queueAdd('Synthetic task', null);
+  await f.pass();
+  f.reply('member-a', `READY lane/a ${COMMIT}`);
+  await f.pass();
+  const handoffId = f.handoffs.snapshot().handoff.id;
+  const told = () => f.room.metadata('shared').events.filter(event => event.monitor?.kind === 'handoff-holder').map(event => [event.monitor.state, event.sessionId, event.text]);
+  // The integrator is in no space: there is no queue to keep it out of, and nothing is said.
+  await f.pass();
+  assert.deepEqual(told(), []);
+  // The person puts it into the space while it works on the handoff.
+  const integrator = f.client.state.sessions.find(candidate => candidate.id === 'integrator');
+  integrator.roomId = 'shared'; integrator.roomIds = ['shared'];
+  // A space that is being updated at that moment is told on a later pass; that is not a fault of the engine.
+  const write = f.room.recordHandoffHolder.bind(f.room);
+  f.room.recordHandoffHolder = () => { throw uiError('error.room.updatingDraftRetained'); };
+  await f.pass();
+  assert.deepEqual([told(), f.failed, f.dispatcher.integrationError], [[], [], null]);
+  // Any other failure of the writer is a fault: kept and told once, and the line is still written when it works again.
+  f.room.recordHandoffHolder = () => { throw Error('Synthetic writer fault'); };
+  await f.pass(); await f.pass();
+  assert.deepEqual([told(), f.failed, f.dispatcher.integrationError.message], [[], ['Synthetic writer fault'], 'Synthetic writer fault']);
+  f.room.recordHandoffHolder = write;
+  const announced = f.broadcasts;
+  await f.pass(); await f.pass(); await f.pass();
+  assert.deepEqual(told(), [['sent', 'integrator', 'Synthetic integrator 正在处理一份集成交接；交接结束前，这个空间不给它派新活，排给它的活先等着']]);
+  assert.ok(f.broadcasts > announced, 'The windows are told that the space record changed');
+  // The person types into its session. The handoff waits for them; no system notice is sent for one's own typing, so the space is where it is said.
+  integrator.messages.push({ id: 'typed', role: 'user', text: 'A word from the person', origin: 'human', time: Date.now() });
+  f.reply('integrator', 'Understood.');
+  await f.pass(); await f.pass(); await f.pass();
+  assert.deepEqual([f.handoffs.snapshot().handoff.status, f.handoffs.snapshot().handoff.reason, f.notices], ['waiting', 'person-intervened', []]);
+  assert.deepEqual(told().map(row => row[0]), ['sent', 'waiting']);
+  assert.equal(told()[1][2], 'Synthetic integrator 的集成交接在等你处理；你处理完之前，这个空间不给它派新活，排给它的活先等着');
+  // Said once each: the record and the writer refuse a repeat; a space that does not exist and a fact without its parts write nothing.
+  assert.deepEqual(f.room.recordHandoffHolder({ roomId: 'shared', sessionId: 'integrator', name: 'Synthetic integrator', handoffId, waiting: true }), { recorded: false, why: 'known' });
+  assert.deepEqual(f.room.recordHandoffHolder({ roomId: 'shared', sessionId: 'integrator', name: 'Synthetic integrator', handoffId, waiting: false }), { recorded: false, why: 'known' });
+  assert.equal(f.room.recordHandoffHolder({ roomId: 'abcdef01-2345-4678-9abc-def012345678', sessionId: 'integrator', handoffId, waiting: true }).why, 'space-missing');
+  for (const bad of [null, {}, { roomId: 'shared', sessionId: '', handoffId }, { roomId: 'shared', sessionId: 'integrator' }, { roomId: 'shared', sessionId: 'integrator', handoffId: 7 }]) {
+    assert.deepEqual(f.room.recordHandoffHolder(bad), { recorded: false, why: 'no-words' }, JSON.stringify(bad));
+  }
+  assert.equal(told().length, 2);
+  // The person deals with the handoff; another handoff later is told again, for that handoff.
+  f.handoffs.resolveHandoff(handoffId, { retry: false });
+  assert.equal(f.dispatcher.integration.holder(), null);
+  await f.pass(); await f.pass();
+  assert.equal(told().length, 2, 'Nothing is said while nothing is open');
+  // A record that cannot be read names nobody.
+  const g = fixture(t);
+  fs.writeFileSync(path.join(g.directory, FILE), '{', { mode: 0o600 });
+  g.dispatcher.integration.handoffs = new IntegrationHandoffs(g.directory);
+  assert.equal(g.dispatcher.integration.holder(), null);
+  // The main process gives the engine the space record's writer and the dispatcher's names.
+  assert.match(fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8'), /\n    holderRecord: fact => roomState\.recordHandoffHolder\(fact\), nameOf: session => dispatcher\.name\(session\) \}\);\n/);
+  // A name that is missing falls back to the session's id; the sentences exist in both languages.
+  assert.equal(f.room.recordHandoffHolder({ roomId: 'shared', sessionId: 'integrator', handoffId: 'H9-00000000' }).recorded, true);
+  assert.ok(told()[2][2].startsWith('integrator 正在处理一份集成交接'));
+  // An archived space has no queue at work and is told nothing.
+  f.room.value.archived = true;
+  assert.deepEqual(f.room.recordHandoffHolder({ roomId: 'shared', sessionId: 'integrator', handoffId: 'H10-00000000' }), { recorded: false, why: 'space-archived' });
+  f.room.value.archived = false;
+  for (const name of ['notice.handoff.holder.sent', 'notice.handoff.holder.waiting']) {
+    const zh = locale.format('zh', name, { name: 'Riley' }), en = locale.format('en', name, { name: 'Riley' });
+    assert.ok(zh.includes('Riley') && en.includes('Riley') && zh !== en && zh !== name && en !== name, name);
+  }
 });
 
 test('the engine is built only behind a switch that the daily app cannot open', () => {
