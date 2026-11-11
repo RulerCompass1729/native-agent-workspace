@@ -55,3 +55,17 @@ test('malformed host packets plus changed ownership cannot produce an unhandled 
   assert.equal(fs.readFileSync(f.driver.file, 'utf8'), 'unreadable-owner');
   assert.throws(() => process.kill(ownedChild.pid, 0), { code: 'ESRCH' });
 });
+
+test('close cancels a start waiting for ownership recovery before it can spawn', async t => {
+  const f = fixture(t), runner = require('../butler-runner.cjs');
+  t.mock.method(runner, 'dshCredentialPresent', () => true);
+  let release, spawns = 0;
+  t.mock.method(runner, 'spawnDshRunner', () => { spawns++; throw Error('Must not spawn after close'); });
+  f.driver.mcp = {};
+  t.mock.method(f.driver, 'recover', () => new Promise(resolve => { release = resolve; }));
+  const starting = f.driver.start(f.proof);
+  const result = assert.rejects(starting, /closed/);
+  assert.equal((await f.driver.close()).stopped, true);
+  release({ status: 'absent' }); await result;
+  assert.equal(spawns, 0); assert.equal(fs.existsSync(f.driver.file), false);
+});
