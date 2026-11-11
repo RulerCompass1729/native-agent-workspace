@@ -7859,7 +7859,8 @@ Owner: service lifecycle author. Severity: startup unavailable. Base: `6a92546`.
 After a reboot, a persisted PID can belong to a root helper or the newly launched
 GUI. Previously both service locks treated that PID as their live owner and
 refused startup. The two numeric-self-PID cold-boot reproductions fail on
-`dbe02b7` and pass with this repair.
+`dbe02b7`, the main revision when reproduction began, and pass with this repair.
+Later rebases brought the candidate to `6a92546`.
 
 New locks record PID, process start time, role, canonical data directory and an
 ownership token. Start time is read under a fixed locale and timezone. Numeric
@@ -7881,10 +7882,19 @@ passes 4306/4306 with no failures or skips at concurrency two. The UI build also
 passes. An earlier full run caught a missing packaging entry and an unbuilt UI;
 the repaired payload tests and subsequent full suites pass.
 
-Independent review is pending with the integrator; this is a local candidate,
-not an installation or a completed rollout. No paid model test or new paid
-review session was started. The daily application and native parents were not
-stopped or restarted. Legacy startup locks naming another GUI/Node launcher
-without a provable data directory remain conservative. The change does not
-claim to make file comparison plus unlink atomic against arbitrary same-user
-writers, or to solve the separate system memory-pressure investigation.
+Independent read-only review approves the lock implementation with no blocker.
+The source, real-process counterexamples and full-suite totals were inspected;
+the tests remain author-run. This is a local candidate, not an installation or a
+completed rollout. Product tests made no paid model requests. The daily
+application and native parents were not stopped or restarted.
+
+Legacy startup locks naming a GUI/Node process without a provable data directory
+remain conservative, including a helper of the newly launched GUI. Such a
+number-only record can still report that the service is connecting; new records
+use process birth identity. Releases predating this lock format cannot read a
+JSON lock left by an unclean exit, so rolling back to those releases can also
+refuse startup. Recovery requires a compatible version or explicit operator
+verification of a stale lock; the old release must not blindly remove it.
+A moved/deleted recorded directory keeps the lock held while its PID is alive.
+The change does not claim to make comparison plus unlink atomic against
+arbitrary same-user writers, or to solve the separate memory investigation.
