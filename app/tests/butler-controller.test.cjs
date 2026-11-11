@@ -387,10 +387,10 @@ test('secret-shaped business text is rejected before ingest, reservation or batc
   assert.equal(saved.includes(secret), false, 'Refusing to send must also avoid persisting the prohibited bytes');
 });
 
-for (const invalid of ['name', 'members', 'queue']) test(`an invalid ${invalid} catalog cannot create an active batch or wedge the next request`, async t => {
+for (const invalid of ['name', 'id', 'queue']) test(`an invalid ${invalid} catalog cannot create an active batch or wedge the next request`, async t => {
   const f = fixture(t), original = structuredClone(f.spaces[0]);
   if (invalid === 'name') f.spaces[0].name = 'x'.repeat(201);
-  if (invalid === 'members') f.spaces[0].members = Array.from({ length: 101 }, (_, i) => ({ id: 'member-' + i, name: 'Synthetic member', state: 'idle' }));
+  if (invalid === 'id') f.spaces[0].id = 'invalid space id';
   if (invalid === 'queue') f.spaces[0].queue = Array.from({ length: 301 }, (_, i) => ({ id: 'item-' + i, text: 'Finished synthetic item', status: 'done' }));
   const rejected = await f.controller.receive(f.event('bad-catalog'));
   assert.notEqual(rejected.status, 'recorded');
