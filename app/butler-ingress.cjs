@@ -76,16 +76,18 @@ class ButlerIngress {
     try {
       validateEvent(event);
       this.ledger.ingest(event);
+      let questionReceipt;
       if (event.kind === 'decision') {
         const reserved = this.ledger.reserveQuestion({ sourceRef: event.sourceRef, decisionKind: event.payload.decisionKind,
           text: event.payload.title || event.payload.text });
         // B1 owns the direct notification. An intake receipt cannot prove that
         // the operating system delivered it, and must never cause another ask.
         if (reserved.shouldNotify) this.ledger.ackDelivery(reserved.deliveryId, 'unknown');
+        questionReceipt = { questionId: reserved.question.questionId, deliveryId: reserved.deliveryId };
       }
       if (['decision', 'failure', 'blocked'].includes(event.kind)) this.ledger.consumeRecorded([event.eventId]);
       this.sourceStatus(event);
-      return { status: 'recorded', eventId: event.eventId };
+      return { status: 'recorded', eventId: event.eventId, ...questionReceipt };
     } catch { this.errors.set(scope, 'source-unavailable'); throw unavailable(); }
   }
   captureOutcome(roomId, eventId) {
@@ -138,8 +140,9 @@ function bindQueueOutcomes(roomState, ingress, notify) {
   // No controller or model is notified while the host remains dormant.
   roomState.onButlerReady = (roomId, eventId) => ingress?.captureOutcome(roomId, eventId);
   roomState.onQueueOutcome = outcome => {
-    try { ingress?.captureOutcome(outcome.roomId, outcome.eventId); }
-    finally { notify(outcome); }
+    let receipt;
+    try { receipt = ingress?.captureOutcome(outcome.roomId, outcome.eventId); }
+    finally { notify(outcome, receipt); }
   };
 }
 module.exports = { ButlerIngress, queueOutcomeSource, storedQueueSource, bindQueueOutcomes };

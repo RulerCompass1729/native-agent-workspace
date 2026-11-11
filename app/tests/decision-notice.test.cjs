@@ -55,7 +55,7 @@ function harness(language = 'zh') {
     show() { if (fail) throw Error('Synthetic delivery failure'); this.shown = true; }
   }
   const c = { uiReady: true, win: { isDestroyed: () => false, isFocused: () => false, webContents: { send: (...args) => sent.push(args) } } };
-  const sandbox = { Notification, queueRules: rules, untouchedDefault: require('../collaboration-spaces.cjs').untouchedDefault,
+  const sandbox = { Notification, butlerIngress: null, showQuestionNotification: require('../butler-question-notification.cjs').showQuestionNotification, queueRules: rules, untouchedDefault: require('../collaboration-spaces.cjs').untouchedDefault,
     queueOutcomeSeen: new Set(), queueOutcomeNotifications: new Map(), pendingReveal: null,
     windows: new Map([[1,c]]), quitting: false, backgroundTest: true, focusOrOpen: () => activations++,
     roomState: { metadata: () => ({ id: 'shared', name: '共同工作' }) }, backgroundOperation: require('../background-operation.cjs'),

@@ -1,7 +1,7 @@
 'use strict';
 // Dormant, event-only record-mode coordinator. Trusted host adapters are local
 // dependencies; there is no native, queue/lifecycle or model API implementation.
-const { createHash } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const { buildInput, interpretResult, validateEvent } = require('./butler-policy.cjs');
 const identityKey = s => JSON.stringify([s?.selectionRevision, s?.identity?.sessionId, s?.identity?.nativeId, s?.runnerRef || s?.runner?.runnerRef]);
 const selectionFor = s => ({ selectionRevision: s.selectionRevision, identity: s.identity, runnerRef: s.runner.runnerRef });
@@ -256,6 +256,13 @@ class ButlerController {
     if (reserved.shouldNotify) this.ledger.ackDelivery(reserved.deliveryId, 'unknown');
     return reserved.question;
   }
+  questionMetricGap(reason, selection, questionId) {
+    // Epoch ownership belongs to the host shared by B1 and this publisher. A
+    // failed append cannot authorize a send or turn unknown coverage into zero.
+    try { this.ledger.markQuestionMetricGap(reason); } catch { /* The writer retains its failed/open-epoch state. */ }
+    try { this.notice('question-metric-unavailable', selection, null, questionId); }
+    catch { this.notifyBlocked({ eventId: null, reason: 'question-metric-unavailable', questionId }); }
+  }
   async flushQuestions(selection) {
     if (!this.ask || this.closed) return;
     selection ||= this.authenticatedSelection(); if (!selection) return;
@@ -273,11 +280,35 @@ class ButlerController {
         continue;
       }
       if (!reserved.shouldNotify) continue;
+      const attemptId = randomUUID();
+      try {
+        this.ledger.beginQuestionSend({ attemptId, questionId: question.questionId, deliveryId: reserved.deliveryId,
+          sourceEventId: question.evidenceRevision, channel: 'butler-ask' });
+      } catch (error) {
+        this.questionMetricGap(error.code === 'BUTLER_QUESTION_METRIC_EPOCH' ? 'epoch-unavailable' : 'write-failed', selection, question.questionId);
+        this.ledger.ackDelivery(reserved.deliveryId, 'unknown');
+        continue;
+      }
+      let observed = false;
+      // This callback is passed only to the trusted host publisher, never to a
+      // model. A transport receipt is not evidence that the person saw it.
+      const observe = actual => {
+        if (!['shown', 'failed', 'unknown'].includes(actual)) {
+          this.questionMetricGap('unexpected-display', selection, question.questionId); return false;
+        }
+        observed = true;
+        try { this.ledger.ackQuestionSend(attemptId, actual); return true; }
+        catch (error) {
+          this.questionMetricGap(error.code === 'BUTLER_QUESTION_METRIC_EPOCH' ? 'epoch-unavailable' : 'write-failed', selection, question.questionId);
+          return false;
+        }
+      };
       let status = 'unknown';
       try {
-        const receipt = await this.ask({ ...question, deliveryId: reserved.deliveryId });
+        const receipt = await this.ask({ ...question, deliveryId: reserved.deliveryId }, observe);
         if (receipt?.deliveryId === reserved.deliveryId && receipt.status === 'sent') status = 'sent';
       } catch { /* Unknown delivery is durable, not retried. */ }
+      if (!observed) observe('unknown');
       this.ledger.ackDelivery(reserved.deliveryId, status);
     }
   }

@@ -8386,3 +8386,31 @@ findings. Browser loading and the canonical suggestion projection remain later
 work; damaged-monitor recovery is not a universal repair promise. Owner: butler
 outcome owner. Installed use remains pending integration and the separately
 authorized working-day trial.
+
+## B4 actual outward question delivery counter (2026-11-10)
+
+Requested outcome: the record table must distinguish actual repeated questions
+shown to the person from blocked model candidates; an unmeasured send cannot
+be certified as zero. The existing ledger now journals physical send intents,
+actual display receipts, measurement epochs and explicit frozen windows. B1
+notifications share the ingress writer; the dormant controller exposes a trusted
+observer for its future ask adapter. Generic sent receipts remain logical only.
+Passive measurement does not activate the butler or start its working-day period.
+
+Reproduced before fixing: the old ledger lacks all 26 measurement API cases; the
+old controller has no physical observation (9 of 10 cases fail); the old Main
+notifier has no show observation. Author-found counterexample: a later facts
+version could be attributed to the prior answered question. The canonical
+version boundary now rejects that mismatch before a successor is even reserved,
+while allowing another source for the same still-open question.
+
+Verification covers actual Main notification code with synthetic OS events,
+canonical source linkage, B1 continuity on write/intake failure, controller intent
+before outward send, no resend after restart, cross-channel repeats, idempotent
+ACKs, new facts, frozen prefixes and incomplete coverage after unclean restart.
+Related no-model sandbox checks: 399 pass, zero fail or skip; full isolated unit
+suite: 4692 pass, zero fail or skip. Independent review approved this scoped
+measurement checkpoint, with no blocking findings. Unresolved physical sends
+remain unknown and may prevent a future trial from certifying zero; synthetic
+checks do not qualify installed OS display. Owner: butler outcome owner. The real
+working day and production activation remain unqualified.
