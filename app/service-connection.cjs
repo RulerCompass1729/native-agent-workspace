@@ -34,7 +34,9 @@ class ServiceClient extends EventEmitter {
       // A native Claude queued input acknowledges when its next turn starts.
       // Its single pending operation is bounded by the native session/transport,
       // not an arbitrary timer that would suggest retrying accepted native work.
-      const timer = ['queue', 'queueShared'].includes(method) ? null : setTimeout(() => { this.pending.delete(id); reject(uiError('error.confirmationTimeout')); }, 40000);
+      // From a collaboration space the same input arrives as spaceAction(roomId, 'queueShared', …).
+      const queued = ['queue', 'queueShared'].includes(method) || method === 'spaceAction' && args[1] === 'queueShared';
+      const timer = queued ? null : setTimeout(() => { this.pending.delete(id); reject(uiError('error.confirmationTimeout')); }, 40000);
       this.pending.set(id, { resolve, reject, timer });
       this.socket.write(JSON.stringify({ id, method, args, ...(background.current() ? { backgroundActor: background.current() } : {}) }) + '\n');
     });
