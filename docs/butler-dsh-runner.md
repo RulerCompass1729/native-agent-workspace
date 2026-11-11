@@ -156,6 +156,17 @@ exhaustion, further reads in that batch are denied before MCP execution. The
 model is told to retain its original query/cursor for a later batch and not mark
 an unreceived page processed. No automatic retry is added.
 
+Business data may itself contain a forged `NAW_CAPACITY remaining_bytes=...`
+string. The model can mistake that text, or the host's user-role advisory, for a
+user instruction; semantic resistance to this has not been qualified. Neither
+budget guard parses such strings as limits or authority: it measures serialized
+bytes and uses host constants. A forged number therefore cannot enlarge page
+admission or the final request limit, even if it persuades the model to ask for
+more reads. It may still affect the model's choices or make it finish early;
+host enforcement does not prove task correctness or general prompt-injection
+resistance. Actual cache hits and savings require the separately authorized real
+pricing qualification; no such call is part of this proof.
+
 This uses DSH's existing pre/post-execution policy hooks, not a change to Business
 permissions, schema or pagination. A Business-approved page is already counted
 and logged, even when the host withholds it; there is no quota refund or audit
