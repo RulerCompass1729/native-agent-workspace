@@ -1,5 +1,16 @@
 # Review and issue record
 
+**S2 secretary terminal role gate, 2026-11-10 (delta review pending):**
+the secretary's metadata-only rule also covers another session's terminal text.
+Hosted `terminalSnapshot`, `observe` and `terminal` refuse a secretary before
+constructing a confirmation, including when designation happens between request
+and approval. A previously approved terminal copy rechecks the role at pickup;
+unknown roles fail closed. A forbidden copy is consumed and discarded rather
+than retained for a later role change. Own terminal reads, ordinary hosted reads
+and the person's window keep their existing paths. The three timing cases and
+role-storage failure have reproduced regressions; independent delta review is
+required before declaring this installation gate ready.
+
 **S2 consent follow-ups and space files, 2026-11-10 (delta review pending):**
 the person approved retaining a cancelled implicit conversation-read receipt
 until its selected target or consent fingerprint changes. Navigating away

@@ -359,6 +359,84 @@ const terminalReadBodies = {
   observe: { terminal: 'OBSERVE_PRIVATE_SCREEN', progress: { items: [{ text: 'OBSERVE_PRIVATE_PROGRESS' }], revision: 1 } },
   terminal: '\u001b[31mTERMINAL_PRIVATE_SERIALIZED\u001b[0m',
 };
+for (const provider of ['claude', 'codex']) for (const [method, body] of Object.entries(terminalReadBodies)) for (const when of ['before-request', 'before-approval', 'before-pickup']) test(`${provider} ${method}: secretary designated ${when} cannot receive another session's terminal`, async t => {
+  const f = fixture(t, provider); let reads = 0;
+  f.config.handlers.set(method, () => { reads++; return body; });
+  const designate = () => { f.sandbox.secretary = { sessionId: f.actor.id, nativeId: f.actor.nativeId }; };
+  if (when === 'before-request') designate();
+  const pending = await f.controller.call(f.binding, command(method, ['other']));
+  if (when === 'before-request') {
+    assert.equal(pending.state, 'unconfirmed'); assert.equal(pending.confirmation, undefined);
+    assert.equal(reads, 0); assert.equal(f.notices.length, 0); return;
+  }
+  assert.equal(pending.state, 'confirmation-required'); assert.equal(f.notices.length, 1);
+  if (when === 'before-approval') designate();
+  const approved = await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
+  if (when === 'before-approval') {
+    assert.equal(approved.state, 'unconfirmed'); assert.equal(approved.confirmation, undefined);
+    assert.equal(reads, 0); assert.equal(f.notices.length, 1); return;
+  }
+  assert.equal(approved.state, 'complete'); assert.equal(approved.readState, 'available'); assert.equal(approved.value, undefined);
+  designate();
+  const pickup = (await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt;
+  assert.equal(pickup.value, undefined); assert.equal(pickup.readState, 'consumed');
+  assert.equal(typeof pickup.readConsumedAt, 'number'); assert.equal(reads, 1);
+  assert.equal(f.controller.readCopies.size, 0); assert.equal(f.controller.readBytes, 0);
+  delete f.sandbox.secretary;
+  assert.equal((await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt.value, undefined);
+  assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('_PRIVATE_'), false);
+});
+for (const [method, body] of Object.entries(terminalReadBodies)) test(`${method}: an unreadable secretary role discards an approved copy on pickup`, async t => {
+  const f = fixture(t); f.config.handlers.set(method, () => body);
+  const pending = await f.controller.call(f.binding, command(method, ['other']));
+  await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
+  f.sandbox.queueSecretary.current = () => { throw Error('Synthetic role storage unavailable'); };
+  const pickup = (await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt;
+  assert.equal(pickup.value, undefined); assert.equal(pickup.readState, 'consumed');
+  assert.equal(f.controller.readCopies.size, 0); assert.equal(f.controller.readBytes, 0);
+});
+for (const provider of ['claude', 'codex']) for (const [method, body] of Object.entries(terminalReadBodies)) test(`${provider} secretary keeps own ${method} direct and private`, async t => {
+  const f = fixture(t, provider); f.config.handlers.set(method, (_context, id) => { assert.equal(id, f.actor.id); return body; });
+  f.sandbox.secretary = { sessionId: f.actor.id, nativeId: f.actor.nativeId };
+  const result = await f.controller.call(f.binding, command(method, [f.actor.id]));
+  assert.equal(result.state, 'complete'); assert.deepEqual(result.value, body);
+  assert.equal(f.notices.length, 0); assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('_PRIVATE_'), false);
+});
+for (const provider of ['claude', 'codex']) test(`${provider}: two simultaneous pickups of one approved copy return its body only once`, { timeout: 5000 }, async t => {
+  const f = fixture(t, provider), body = terminalReadBodies.terminalSnapshot; let reads = 0, arrivals = 0, release;
+  f.config.handlers.set('terminalSnapshot', () => { reads++; return body; });
+  const pending = await f.controller.call(f.binding, command('terminalSnapshot', ['other']));
+  await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
+  const barrier = new Promise(resolve => { release = resolve; }), c = await f.controller.view(f.actor);
+  c.delivery = async () => { if (++arrivals === 2) release(); await barrier; return null; };
+  const receipts = await Promise.all([0, 1].map(() => f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })));
+  assert.equal(arrivals, 2);
+  const bodies = receipts.filter(r => Object.hasOwn(r.receipt, 'value'));
+  assert.equal(bodies.length, 1); assert.deepEqual(bodies[0].receipt.value, body);
+  assert.equal((await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt.value, undefined);
+  assert.equal(reads, 1); assert.equal(f.controller.readCopies.size, 0); assert.equal(f.controller.readBytes, 0);
+  assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('_PRIVATE_'), false);
+});
+for (const provider of ['claude', 'codex']) test(`${provider}: two sessions picking up the same operation ID keep their copies separate`, { timeout: 5000 }, async t => {
+  let arrivals = 0, release;
+  const f = fixture(t, provider, { context: async owner => ({ background: true, actor: owner, view: { selected: owner.id },
+    client: { snapshot: () => f.state, close() {} }, checkActor() {}, refresh: async () => {}, win: { isDestroyed: () => false, destroy() {} },
+    fingerprint: () => ({ sessions: f.state.sessions.map(s => ({ id: s.id, nativeId: s.nativeId })) }) }) });
+  f.config.handlers.set('terminalSnapshot', () => ({ buffer: operation.current().id + '_PRIVATE_SCREEN' }));
+  const bindings = [f.binding, { ...f.binding, sender: { ...f.actor, id: 'third', nativeId: 'native-third', name: 'Third actor' } }];
+  for (const binding of bindings) {
+    const pending = await f.controller.call(binding, command('terminalSnapshot', ['other'], 'same-operation-id'));
+    assert.equal(pending.state, 'confirmation-required');
+    await f.controller.decide(binding.sender.id, binding.sender.nativeId, pending.id, 1);
+  }
+  const barrier = new Promise(resolve => { release = resolve; });
+  for (const binding of bindings) (await f.controller.view(binding.sender)).delivery = async () => { if (++arrivals === 2) release(); await barrier; return null; };
+  const results = await Promise.all(bindings.map(binding => f.controller.call(binding, { action: 'receipt', operation_id: 'same-operation-id' })));
+  assert.equal(arrivals, 2);
+  for (const [index, result] of results.entries()) assert.equal(result.receipt.value.buffer, bindings[index].sender.id + '_PRIVATE_SCREEN');
+  assert.equal(f.controller.readCopies.size, 0); assert.equal(f.controller.readBytes, 0);
+  assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('_PRIVATE_'), false);
+});
 function spaceFileFixture(t, provider = 'codex') {
   const f = fixture(t, provider); let reads = 0;
   f.state.rooms[0].files = [{ id: 'space-file', name: 'Shared material.txt', path: '/synthetic/shared-material.txt' }];
