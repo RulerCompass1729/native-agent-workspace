@@ -10600,3 +10600,36 @@ when argument checks moved out of exit polling. The same independent reviewer
 closed that note after the incremental diff; targeted checks passed 33/33. Final
 full-suite counts and unchanged source/index were verified by the author after
 review. Read-only review and approved fixture cleanup do not authorize daily use.
+
+
+## Installer: verified install with an occupied old bundle
+
+- Trigger/source: integration review predicted that real retained backends map
+  the displaced App binary, turning a verified install into recovery-required.
+  Owner: installer author. Severity: misleading failed update and retained old app.
+- Reproduction: a signed synthetic App runs the actual old release daemon from
+  its nested Node executable. A synthetic background record keeps that daemon
+  on old code without any native/model turn. Real upgrade checks passed; actual
+  lsof showed that same PID mapping previous.app, and the old operator returned
+  recovery-required. This confirms the inference with a running mapped binary.
+- Repair: previous.app is contained by rollback.noindex. Positive lsof PID/path
+  records retain it and report installed-cleanup-pending only after verification;
+  unknown inspections and other upgrade/cleanup errors remain failures. Status1
+  with mapped output is correctly treated as use, not as absence. No live backend
+  is stopped and no delayed deletion is scheduled.
+- Related quit-label repair: a real unchanged old GUI after termination refusal
+  returns unchanged, preserving receipt inode/mtime. Four regression assertions
+  failed before repair. A GUI that actually exited despite a quit error still
+  requires verified recovery; failed recovery remains recovery-required.
+- Verification: targeted 33/33; full 5962/5962, no failures/skips. Actual
+  bundled-backend and ordinary-success machine runs both exited 0; actual
+  NSApplication quit refusal returned unchanged and preserved receipt inode/mtime.
+  Checkpoint 2504039d incremental APPROVE_WITH_NOTES, no blockers for this diff.
+- Notes retained for real-package qualification: .noindex is not a LaunchServices
+  unregister operation; inspect and resolve any exact displaced-copy registration.
+  The refused-quit result certifies app/receipt/GUI identity, not every possible
+  side effect of cancelled Electron quit handlers. The actual-package trial must
+  check those flushes. Late in-use detection after archiving keeps both zip and
+  bundle; a cwd exactly at the bundle root remains an unknown-use refusal.
+- Policy choice and daily approval/installation remain separate gates. No daily
+  use qualification or approval is claimed by this checkpoint.

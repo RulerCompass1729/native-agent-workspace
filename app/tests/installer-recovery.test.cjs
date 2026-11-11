@@ -49,7 +49,7 @@ for (const fault of ['active-timeout', 'wrong-active', 'session', 'settings', 'd
     assert.equal(r.status, 'recovery-required'); assert.equal(r.exposure, true); assert.equal(f.opened(), 1);
     assert.equal(JSON.parse(fs.readFileSync(f.receipt)).version, f.c.newVersion);
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.c.app, 'Contents/Resources/app/package.json'))).version, f.c.newVersion);
-    assert.ok(!fs.existsSync(path.join(f.c.resultDir, 'previous.app')));
+    assert.ok(!fs.existsSync(path.join(f.c.resultDir, 'rollback.noindex/previous.app')));
     assert.equal(r.removal.removed, true); assert.ok(fs.existsSync(r.removal.archive));
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.c.resultDir, 'result.json'))), r);
     assert.match(r.recovery, /Do not launch the old archive/);
@@ -129,7 +129,7 @@ test('partial bundle removal failure never overwrites the already complete rollb
   f.platform.run = (file, args) => { if (file.endsWith('ditto')) archived++; return run(file, args); };
   const remove = fs.rmSync;
   fs.rmSync = (file, options) => {
-    if (file === path.join(f.c.resultDir, 'previous.app')) {
+    if (file === path.join(f.c.resultDir, 'rollback.noindex/previous.app')) {
       const binary = path.join(file, 'Contents/MacOS/app'); if (fs.existsSync(binary)) fs.unlinkSync(binary);
       throw Object.assign(Error('Partial removal fault'), { code: 'EIO' });
     }
@@ -147,10 +147,12 @@ test('result persistence failure carries the actual mutation/exposure status to 
   finally { fs.renameSync = rename; }
 });
 test('an in-use old bundle is retained and explicitly reported, never removed', async t => {
-  const f = fixture(t); f.platform.assertUnused = () => { throw Error('Bundle still mapped by a backend'); };
-  const r = await runInstall(f.c, { ...f, apply: true }); assert.equal(r.status, 'recovery-required');
-  assert.equal(r.launchableBackupNeedsAttention, true); assert.equal(r.observed.rollbackBundlePresent, true);
-  assert.match(r.errors[0].message, /still mapped/);
+  const f = fixture(t); f.platform.assertUnused = () => { throw Object.assign(Error('Bundle still mapped by a backend'), { code: 'bundle-in-use' }); };
+  const r = await runInstall(f.c, { ...f, apply: true }); assert.equal(r.status, 'installed-cleanup-pending');
+  assert.equal(r.verificationPassed, true); assert.equal(r.cleanup.reason, 'old-bundle-in-use');
+  assert.equal(r.cleanup.status, 'pending'); assert.equal(r.observed.rollbackBundlePresent, true);
+  assert.match(r.cleanup.path, /rollback\.noindex[/]previous\.app$/);
+  assert.equal(r.errors.length, 0);
 });
 test('candidate-written installation receipt is accepted by the actual appBuildInfo reader', async t => {
   const f = fixture(t); const result = await runInstall(f.c, { ...f, apply: true }); assert.equal(result.status, 'installed');
@@ -179,4 +181,55 @@ test('a stale NSWorkspace row during quit does not turn a normal update into rol
   };
   f.platform.assertOrdinaryLaunch = () => { if (quitting) throw Error('ps process already gone'); };
   const r = await runInstall(f.c, { ...f, apply: true }); assert.equal(r.status, 'installed');
+});
+
+
+test('unknown bundle use remains a recovery failure rather than a pending-cleanup success', async t => {
+  const f = fixture(t); f.platform.assertUnused = () => { throw Object.assign(Error('lsof timed out'), { code: 'bundle-use-unconfirmed' }); };
+  const result = await runInstall(f.c, { ...f, apply: true });
+  assert.equal(result.status, 'recovery-required'); assert.equal(result.verificationPassed, true);
+  assert.equal(result.launchableBackupNeedsAttention, true);
+});
+test('a failed upgrade remains recovery-required even when old bundle use is confirmed', async t => {
+  const f = fixture(t, 'draft'); f.platform.assertUnused = () => { throw Object.assign(Error('Still mapped'), { code: 'bundle-in-use' }); };
+  const result = await runInstall(f.c, { ...f, apply: true });
+  assert.equal(result.status, 'recovery-required'); assert.equal(result.verificationPassed, undefined);
+  assert.equal(result.cleanup.status, 'pending'); assert.equal(result.observed.rollbackBundlePresent, true);
+});
+test('production lsof distinguishes confirmed use from unknown inspection and confirmed absence', t => {
+  const cp = require('node:child_process'), { createPlatform } = require('../../scripts/install-platform.cjs');
+  let answer;
+  t.mock.method(cp, 'spawnSync', () => answer);
+  const platform = createPlatform({});
+  answer = { status: 0, stdout: 'p123\nn/synthetic/Old.app/Contents/MacOS/node\n', stderr: '' };
+  assert.throws(() => platform.assertUnused('/synthetic/Old.app'), { code: 'bundle-in-use' });
+  answer.status = 1; assert.throws(() => platform.assertUnused('/synthetic/Old.app'), { code: 'bundle-in-use' });
+  for (answer of [{ status: null, error: Error('timeout') }, { status: 1, stdout: '', stderr: 'permission denied' }, { status: 0, stdout: 'malformed', stderr: '' }])
+    assert.throws(() => platform.assertUnused('/synthetic/Old.app'), { code: 'bundle-use-unconfirmed' });
+  answer = { status: 1, stdout: '', stderr: '' }; assert.doesNotThrow(() => platform.assertUnused('/synthetic/Old.app'));
+});
+
+
+for (const refusal of ['dialog', 65, 66]) test(`refused quit (${refusal}) changes no application or receipt`, async t => {
+  const f = fixture(t), before = fs.statSync(f.receipt, { bigint: true });
+  f.platform.quit = () => { if (refusal !== 'dialog') throw Object.assign(Error('Swift quit refused'), { status: refusal }); };
+  const result = await runInstall(f.c, { ...f, apply: true });
+  assert.equal(result.status, 'unchanged'); assert.equal(result.exposure, false); assert.equal(f.opened(), 0);
+  assert.deepEqual(fs.readFileSync(f.receipt), f.original);
+  const after = fs.statSync(f.receipt, { bigint: true }); assert.equal(after.ino, before.ino); assert.equal(after.mtimeNs, before.mtimeNs);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.c.app, 'Contents/Resources/app/package.json'))).version, f.c.oldVersion);
+  assert.equal(result.receiptRestored, undefined); assert.equal(result.errors.length, 1);
+});
+test('receipt restore does not rewrite an already matching record', t => {
+  const f = fixture(t), before = fs.statSync(f.receipt, { bigint: true });
+  restoreReceipt(f.receipt, { bytes: f.original, mode: 0o600 }, null);
+  const after = fs.statSync(f.receipt, { bigint: true }); assert.equal(after.ino, before.ino); assert.equal(after.mtimeNs, before.mtimeNs);
+});
+
+for (const reopenFails of [false, true]) test(`a quit error after the old GUI exited still verifies recovery (${reopenFails})`, async t => {
+  const f = fixture(t, reopenFails ? 'old-reopen-fails' : undefined), quit = f.platform.quit;
+  f.platform.quit = () => { quit(); throw Object.assign(Error('Quit acknowledgement lost'), { status: 66 }); };
+  const result = await runInstall(f.c, { ...f, apply: true });
+  assert.equal(result.status, reopenFails ? 'recovery-required' : 'rolled-back');
+  assert.equal(f.opened(), 1); assert.deepEqual(fs.readFileSync(f.receipt), f.original);
 });

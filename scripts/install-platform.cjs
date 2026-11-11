@@ -19,7 +19,14 @@ function createPlatform(config) {
     },
     assertUnused: app => {
       const r = cp.spawnSync('/usr/sbin/lsof', ['-nP', '-F', 'pn', '+D', app], { encoding: 'utf8', timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
-      assert.ok(!r.error && r.status === 1 && !r.stdout.trim() && !r.stderr.trim(), 'Archived bundle is in use or its use could not be determined');
+      const output = r.stdout || '', diagnostic = r.stderr || '';
+      // macOS can return 1 while still reporting mapped files under +D. Those
+      // positive records prove use; an exit status alone does not prove absence.
+      const used = !r.error && [0, 1].includes(r.status) && /^p[1-9][0-9]*$/m.test(output) &&
+        output.split('\n').some(line => line.startsWith('n' + app + '/'));
+      if (used) throw Object.assign(Error('Old bundle is still in use'), { code: 'bundle-in-use' });
+      if (r.error || r.status !== 1 || output.trim() || diagnostic.trim())
+        throw Object.assign(Error('Old bundle use could not be determined'), { code: 'bundle-use-unconfirmed' });
     },
     signature: app => {
       const r = cp.spawnSync('/usr/bin/codesign', ['-d', '--verbose=4', '-r-', app], { encoding: 'utf8', timeout: 60000 });
