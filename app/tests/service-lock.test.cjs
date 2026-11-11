@@ -2,6 +2,54 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
 const locks = require('../service-lock.cjs');
 function store(t) { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-lock-unit-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true })); return dir; }
+for (const method of ['lstatSync', 'readFileSync']) test('a lock disappearing before ' + method + ' is absent, including release', t => {
+  const dir = store(t), file = path.join(dir, 'services.lock'), lock = locks.createLock(file, 'startup', dir);
+  const original = fs[method]; let removed = false;
+  assert.equal(fs.existsSync(file), true, 'The old caller has already observed the lock');
+  const mock = t.mock.method(fs, method, function (target, ...args) {
+    if (target === file && !removed) { fs.unlinkSync(file); removed = true; }
+    return original.call(this, target, ...args);
+  });
+  assert.equal(locks.readLock(file), undefined);
+  assert.equal(removed, true);
+  mock.mock.restore();
+  assert.equal(locks.releaseLock(file, lock), true, 'Already absent is a completed release');
+  fs.writeFileSync(file, String(process.pid));
+  assert.equal(locks.ownerMayBeAlive(locks.readLock(file), dir, 'startup'), false, 'Release also forgets this process\'s former ownership');
+});
+test('present invalid locks and I/O errors stay distinct from absence', t => {
+  const dir = store(t), file = path.join(dir, 'service.lock');
+  fs.writeFileSync(file, '{broken'); assert.equal(locks.readLock(file), null);
+  const folder = path.join(dir, 'folder'); fs.mkdirSync(folder); assert.equal(locks.readLock(folder), null);
+  const link = path.join(dir, 'dangling'); fs.symlinkSync(path.join(dir, 'missing'), link); assert.equal(locks.readLock(link), null);
+  const lstat = fs.lstatSync;
+  const foreign = t.mock.method(fs, 'lstatSync', function (target, ...args) {
+    const stat = lstat.call(this, target, ...args); if (target === file) stat.uid = process.getuid() + 1; return stat;
+  });
+  assert.equal(locks.readLock(file), null); foreign.mock.restore();
+  for (const method of ['lstatSync', 'readFileSync']) {
+    const original = fs[method], denied = Object.assign(Error('fixture denied'), { code: 'EACCES' });
+    const mock = t.mock.method(fs, method, function (target, ...args) { if (target === file) throw denied; return original.call(this, target, ...args); });
+    assert.throws(() => locks.readLock(file), error => error === denied); mock.mock.restore();
+  }
+});
+test('acquisition cannot report success if its newly written record disappeared or was replaced', t => {
+  const dir = store(t), original = fs.lstatSync;
+  for (const replacement of [false, true]) {
+    const file = path.join(dir, replacement ? 'services.lock' : 'service.lock'); let changed = false;
+    const mock = t.mock.method(fs, 'lstatSync', function (target, ...args) {
+      if (target === file && !changed) {
+        changed = true;
+        if (replacement) { const row = JSON.parse(fs.readFileSync(file, 'utf8')); fs.writeFileSync(file, JSON.stringify({ ...row, token: 'another-owner' })); }
+        else fs.unlinkSync(file);
+      }
+      return original.call(this, target, ...args);
+    });
+    assert.throws(() => locks.createLock(file, replacement ? 'startup' : 'service', dir), error => error.code === 'EAGAIN');
+    assert.equal(changed, true); mock.mock.restore();
+    if (replacement) assert.equal(locks.readLock(file).token, 'another-owner', 'Never remove another acquisition');
+  }
+});
 test('the same process keeps its lock identity across launcher language and timezone choices', () => {
   const before = { TZ: process.env.TZ, LC_ALL: process.env.LC_ALL }, identity = locks.lockIdentity(process.pid);
   try { process.env.TZ = 'Asia/Shanghai'; process.env.LC_ALL = 'fr_FR.UTF-8'; assert.deepEqual(locks.lockIdentity(process.pid), identity); }
@@ -58,6 +106,7 @@ test('shutdown waiting ignores a reused PID but still requires socket closure an
   vm.runInContext(source.slice(start, end), c);
   const replaced = { pid: process.pid, started: 'not this process lifetime' };
   await c.waitForShutdown({ socket: { destroyed: true } }, dir, replaced);
+  await assert.rejects(c.waitForShutdown({ socket: { destroyed: true } }, dir, locks.lockIdentity(process.pid)), /backendCloseUnconfirmed/, 'A missing lock does not certify the old process has stopped');
   await assert.rejects(c.waitForShutdown({ socket: { destroyed: false } }, dir, replaced), /backendCloseUnconfirmed/);
   fs.writeFileSync(path.join(dir, 'service.lock'), String(process.pid));
   await assert.rejects(c.waitForShutdown({ socket: { destroyed: true } }, dir, replaced), /backendCloseUnconfirmed/);

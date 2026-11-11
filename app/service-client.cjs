@@ -58,8 +58,8 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
     } finally { c.close(); }
   } catch (error) { if (stopping || error.code === 'binding-mismatch') throw error; }
   const lock = path.join(dataDir, 'service.lock');
-  if (fs.existsSync(lock)) {
-    const record = readLock(lock);
+  const record = readLock(lock);
+  if (record !== undefined) {
     if (!record) throw uiError("error.service.recordCorrupted");
     if (ownerMayBeAlive(record, dataDir, 'service') || !releaseLock(lock, record)) throw uiError("error.service.existingBackendUnreachable");
   }
@@ -115,8 +115,8 @@ function emptyStore(directory) {
 async function ensureService(dataDir, executablePath, endedServiceKey = null) {
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const lockFile = path.join(dataDir, 'services.lock');
-  if (fs.existsSync(lockFile)) {
-    const record = readLock(lockFile);
+  const record = readLock(lockFile);
+  if (record !== undefined) {
     if (!record) throw uiError("error.service.invalidStartupRecord");
     if (ownerMayBeAlive(record, dataDir, 'startup') || !releaseLock(lockFile, record)) throw uiError("error.service.connecting");
   }

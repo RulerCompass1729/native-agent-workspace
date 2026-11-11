@@ -9452,3 +9452,44 @@ fix output and exact review evidence paths remain in the private lane handoff.
 **Checks.** One unit test on the real entries and the real space record: a secretary is designated and adds an item; the person archives it the real way, and the backend's record still carries no "archived"; the archived secretary's next addition is refused and nothing is added; it cannot be designated again while archived; the person can revoke it and add items themselves; restored, it can be designated and add again. Reverting either line turns the test red. The full unit suite passes on the delivered head, and the real app boots and passes the session-menu journey.
 
 **Independent review (passed).** The reviewer confirmed that for these two callers only the `archived` field differs from the backend's list, that nothing new can fail, and that a session being archived at that moment still counts as not archived until the archive finishes. It found two more places in the main process that read `archived` from the backend's own list and are not changed here: the fingerprint of an ordinary background command (archiving the target between an agent's request and its execution does not change the fingerprint), and the fallback that chooses which connection-update options are offered when no profile is passed.
+
+## Service locks disappearing during startup — 2026-11-11
+
+A previous daemon can remove its lock between the launcher's existence check and
+the lock reader's lstat/read. The reported startup then failed with ENOENT.
+The shared reader now returns undefined only for ENOENT, null for a present
+invalid record, and throws other I/O errors. Both ordinary bootstrap paths and
+dedicated recovery/start use that distinction without a separate existence check.
+Release treats absence as success and forgets its own held entry. Acquisition
+still requires its newly written token to be present before claiming ownership.
+
+Deterministic tests remove each of service.lock and services.lock immediately
+before lstat and before reading the contents. All four actual isolated bootstrap
+cases fail with ENOENT on the base and pass with the fix. Reader tests distinguish
+invalid files, foreign ownership and permission errors; startup counterexamples
+reject corrupt/nonregular/foreign/unreadable locks without allocating a runtime.
+Real unresponsive daemon tests retain both old and versioned locks. Dedicated
+recovery and startup use only a synthetic provider executable, with no inference.
+The waitForShutdown and waitGone loops have absence checks without subsequent
+reads; their socket/process identity safeguards remain unchanged. The separate
+backend-switch serviceProcess pre-maintenance identity check reads the lock
+directly and already fails closed if it disappears; that reader is unchanged.
+The test-scratch ownership probe also reads directly and already catches ENOENT.
+The separate desktop test-driver lock uses a different protocol and is outside
+this repair.
+
+The first independent review approved the product diff without code blockers,
+conditional on a green full suite and the audit wording correction above (R1).
+The first full run had one distinct failure: the existing service-reuse fixture
+returned on socket close while its daemon still held the lock. The live-owner
+guard correctly refused its second bootstrap. A deterministic fixture test fails
+before the fix; cleanup now waits for both lock removal and owner exit before
+rebooting or removing its owned profile. No production safeguard is relaxed.
+The same independent reviewer approved the incremental fixture/doc diff with no
+blockers and closed R1. Its final prerequisite is met: the full suite with test
+concurrency four passed 5,472 tests, zero failures/cancellations/skips; the whole
+service-reuse file separately passed 23 tests. Raw red, the first full failure,
+green outputs and both read-only reviews are retained privately. Product sources
+were unchanged during both reviews; only the test cleanup and audit wording
+needed the second review. This source checkpoint neither installs nor restarts
+the daily app.
