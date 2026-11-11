@@ -37,6 +37,8 @@ function setLocation(file, key, value) {
 // back), then the file is rewritten empty; without repair nothing is written and only the result is
 // computed. If the record or the file cannot be written, nothing is taken out and the file is used as it
 // is, as before, so this never stops a backend that started before it existed and never loses an entry.
+// A record that exists but cannot be read is not written over: it is moved aside under a dated name and a
+// new one is started; if it cannot be moved, nothing is taken out.
 // An own file that cannot be read is an error, as it was before. The shared file is never changed here: a
 // program the person selected in Settings stays selected and shows as missing. A service started by hand,
 // with no Settings file known, keeps using its own file.
@@ -45,7 +47,10 @@ function setLocation(file, key, value) {
 function backendLocations(dataDir, shared, { repair = false } = {}) {
   const own = path.join(dataDir, 'runtime-locations.json');
   let present = false;
-  if (!shared || path.resolve(own) !== path.resolve(shared)) { try { fs.lstatSync(own); present = true; } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+  try { fs.lstatSync(own); present = true; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  // The root backend's own file is the Settings file itself, whatever the two paths are spelled like (a linked
+  // folder, another letter case): the same file is never treated as a backend's own.
+  if (present && shared) { try { const a = fs.statSync(own), b = fs.statSync(shared); if (a.dev === b.dev && a.ino === b.ino) present = false; } catch { /* one of them is not there: not the same file */ } }
   if (!present) return { file: shared || undefined, locations: null, removed: [] };
   const entries = readLocations(own);
   if (!shared) return { file: own, locations: entries, removed: [] };
@@ -53,8 +58,14 @@ function backendLocations(dataDir, shared, { repair = false } = {}) {
   if (repair && removed.length) {
     const record = path.join(dataDir, 'runtime-locations.removed.json');
     try {
-      let earlier = [];
-      try { const kept = JSON.parse(fs.readFileSync(record, 'utf8')); if (Array.isArray(kept?.removals)) earlier = kept.removals; } catch { /* none yet, or unreadable: start again */ }
+      let earlier = [], text = null;
+      try { text = fs.readFileSync(record, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') text = undefined; }
+      if (text !== null) {
+        let kept; try { kept = JSON.parse(text); } catch { /* unreadable */ }
+        if (Array.isArray(kept?.removals)) earlier = kept.removals;
+        // Earlier removals exist only here: a record that cannot be used is kept under another name, never written over.
+        else fs.renameSync(record, `${record}.${new Date().toISOString().replace(/[:.]/g, '-')}.unreadable`);
+      }
       // The record first: an entry is never taken out of the file without being kept here.
       save(record, { removals: [...earlier, { at: new Date().toISOString(), removed }].slice(-20) });
       save(own, {});

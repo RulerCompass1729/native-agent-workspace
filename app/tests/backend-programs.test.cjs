@@ -50,9 +50,20 @@ test('every own entry is taken out at a start, for a program that is gone and fo
   const later = f.read(f.record).removals;
   assert.equal(later.length, 20); assert.deepEqual(later.at(-1).removed, [{ key: 'python3', path: path.join(f.base, 'versions', 'python-20'), existed: false }]); assert.equal(later[0].removed[0].path, path.join(f.base, 'versions', 'python-1'));
   assert.equal(fs.statSync(f.record).mode & 0o777, 0o600);
-  fs.writeFileSync(f.record, '{ not json'); f.write(f.own, { codex: f.old });
-  assert.equal(locations.backendLocations(f.backend, f.shared, { repair: true }).file, f.shared, 'An unreadable record is started again and does not stop the start');
-  assert.deepEqual(f.read(f.record).removals.map(entry => entry.removed), [[{ key: 'codex', path: f.old, existed: true }]]); assert.deepEqual(f.read(f.own), {});
+  // A record that cannot be used holds the only copy of earlier removals: it is kept under another name, never written over.
+  const asides = () => fs.readdirSync(f.backend).filter(name => name.startsWith('runtime-locations.removed.json.') && name.endsWith('.unreadable'));
+  for (const damaged of ['{ not json', JSON.stringify({ removed: 'an older shape' })]) {
+    for (const name of asides()) fs.rmSync(path.join(f.backend, name), { recursive: true });
+    fs.writeFileSync(f.record, damaged); f.write(f.own, { codex: f.old });
+    assert.equal(locations.backendLocations(f.backend, f.shared, { repair: true }).file, f.shared, 'It does not stop the start');
+    assert.equal(asides().length, 1); assert.equal(fs.readFileSync(path.join(f.backend, asides()[0]), 'utf8'), damaged);
+    assert.deepEqual(f.read(f.record).removals.map(entry => entry.removed), [[{ key: 'codex', path: f.old, existed: true }]]); assert.deepEqual(f.read(f.own), {});
+  }
+  // The same for something at the record's path that cannot be read as a file at all (here a folder with a file in it).
+  for (const name of asides()) fs.rmSync(path.join(f.backend, name), { recursive: true });
+  fs.rmSync(f.record); fs.mkdirSync(f.record); fs.writeFileSync(path.join(f.record, 'kept'), 'earlier'); f.write(f.own, { codex: f.old });
+  assert.equal(locations.backendLocations(f.backend, f.shared, { repair: true }).file, f.shared);
+  assert.equal(asides().length, 1); assert.equal(fs.readFileSync(path.join(f.backend, asides()[0], 'kept'), 'utf8'), 'earlier'); assert.equal(f.read(f.record).removals.length, 1);
 });
 
 test('a backend uses the shared Settings file whether or not it has a file of its own, and that file is never touched', t => {
@@ -76,6 +87,10 @@ test('the shared Settings file is never repaired, a hand-started service keeps i
   const f = fixture(t); f.write(f.shared, { codex: f.gone });
   // The root backend's own file is the Settings file: a program the person selected stays selected.
   assert.deepEqual(locations.backendLocations(f.data, f.shared, { repair: true }), { file: f.shared, locations: null, removed: [] });
+  // Also when the two paths spell the same file differently, here through a linked folder.
+  const link = path.join(f.base, 'data-link'); fs.symlinkSync(f.data, link);
+  assert.deepEqual(locations.backendLocations(link, f.shared, { repair: true }), { file: f.shared, locations: null, removed: [] });
+  assert.deepEqual(locations.backendLocations(f.data, path.join(link, 'runtime-locations.json'), { repair: true }).removed, []);
   assert.deepEqual(f.read(f.shared), { codex: f.gone }); assert.equal(fs.existsSync(path.join(f.data, 'runtime-locations.removed.json')), false);
   // No Settings file is known: the own file is used unchanged, as before.
   f.write(f.own, { codex: f.gone });
@@ -95,12 +110,24 @@ test('when the record or the file cannot be written nothing is taken out, and th
   try { assert.deepEqual(locations.backendLocations(f.backend, f.shared, { repair: true }), { file: f.own, locations: { claude: path.join(f.base, 'versions', '2.1.312'), codex: f.old }, removed: [] }); }
   finally { fs.chmodSync(f.backend, 0o700); }
   assert.equal(fs.readFileSync(f.own, 'utf8'), before); assert.deepEqual(fs.readdirSync(f.backend), ['runtime-locations.json']);
-  // The record is written before the file: an entry never leaves the file without being kept. Here only the
-  // record cannot be written (its path is taken by a folder holding a file); the folder itself is writable.
-  const g = fixture(t); g.write(g.own, { codex: g.old });
-  fs.mkdirSync(g.record); fs.writeFileSync(path.join(g.record, 'in-the-way'), '');
-  assert.deepEqual(locations.backendLocations(g.backend, g.shared, { repair: true }), { file: g.own, locations: { codex: g.old }, removed: [] });
-  assert.deepEqual(g.read(g.own), { codex: g.old }, 'Without a record the entry stays in the file');
+  // A record that can neither be read nor moved aside (here: a damaged record in a folder that cannot be changed):
+  // nothing is taken out, and the damaged record is still there.
+  const g = fixture(t); g.write(g.own, { codex: g.old }); fs.writeFileSync(g.record, '{ not json');
+  fs.chmodSync(g.backend, 0o500);
+  try { assert.deepEqual(locations.backendLocations(g.backend, g.shared, { repair: true }), { file: g.own, locations: { codex: g.old }, removed: [] }); }
+  finally { fs.chmodSync(g.backend, 0o700); }
+  assert.deepEqual(g.read(g.own), { codex: g.old }, 'Without a record the entry stays in the file'); assert.equal(fs.readFileSync(g.record, 'utf8'), '{ not json');
+});
+
+test('the record is written before the file: when only the record cannot be written, the entry stays in the file', { skip: process.platform !== 'darwin' || process.getuid?.() === 0 }, t => {
+  // A record the system refuses to replace (marked unchangeable), in a folder where the locations file itself can be rewritten.
+  const f = fixture(t); f.write(f.own, { codex: f.old }); f.write(f.record, { removals: [] });
+  const flag = value => require('node:child_process').execFileSync('/usr/bin/chflags', [value, f.record]);
+  flag('uchg');
+  try { assert.deepEqual(locations.backendLocations(f.backend, f.shared, { repair: true }), { file: f.own, locations: { codex: f.old }, removed: [] }); }
+  finally { flag('nouchg'); }
+  assert.deepEqual(f.read(f.own), { codex: f.old }); assert.deepEqual(f.read(f.record), { removals: [] });
+  assert.deepEqual(fs.readdirSync(f.backend).sort(), ['runtime-locations.json', 'runtime-locations.removed.json'], 'No temporary file is left');
 });
 
 test('a backend whose own file cannot be read still refuses to start and names the file, as before this repair', async t => {
