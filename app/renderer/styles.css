@@ -530,6 +530,10 @@ header h1, header p { overflow-wrap: anywhere; }
 .column-terminal-sash{height:8px;flex:none;position:relative;cursor:row-resize;touch-action:none;user-select:none;outline-offset:-2px}
 .column-terminal-sash::before{content:'';position:absolute;left:8px;right:8px;top:3px;border-top:1px solid var(--border)}
 .column-terminal-sash:hover::before,.column-terminal-sash:focus-visible::before{border-color:var(--ink);border-top-width:2px}
+/* T-163: at rest the input block's top border is the only line above a column's terminal. The handle's own
+   line shows when it is pointed at or reached with the keyboard, as before, and the terminal sits right under it. */
+.collaboration-member-input>.column-terminal-sash:not(:hover):not(:focus-visible)::before{border-top-color:transparent}
+.collaboration-member-input>.column-terminal-sash{margin-bottom:-4px}
 .column-terminal-sash:focus-visible{outline:2px solid var(--ink)}
  .column-terminal-hint{box-sizing:border-box;position:fixed;z-index:9;width:max-content;max-width:238px;padding:6px 8px;background:rgba(37,57,45,.78);backdrop-filter:blur(2px);color:#fff;border:1px solid #ffffff28;border-radius:6px;box-shadow:0 3px 10px #0002;font-size:12px;line-height:1.45;white-space:pre;pointer-events:none}
 .column-terminal-guide{position:fixed;z-index:8;height:1px;background:var(--ink);opacity:.55;pointer-events:none}
