@@ -3,7 +3,8 @@ const { joinSpace, leaveSpace } = require('./fixtures/space-membership.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual alpha.2 backend + Claude 2.1.302 + current Electron. Three loopback
 // responses (four with NAW_RETAINED_QUEUE=1, five with NAW_RETAINED_SHARED=1), zero paid inference. No original profile or global keyboard access.
-const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const loopback = require('./fixtures/loopback-model.cjs');
 const assert = require('node:assert/strict'), { fork, execFileSync } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
@@ -38,8 +39,9 @@ function block(res, index, item) {
   event(res, 'content_block_delta', { index, delta: item.type === 'text' ? { type: 'text_delta', text: item.text } : { type: 'input_json_delta', partial_json: JSON.stringify(item.input) } });
   event(res, 'content_block_stop', { index });
 }
-const server = http.createServer((req, res) => {
-  let body = ''; req.on('data', b => body += b); req.on('end', () => {
+// The one B11 loopback fixture: 127.0.0.1, random port, sandboxed CLI, fixed responses below.
+const fixture = loopback.create({ directory: base, provider: 'claude', respond: (req, res, body) => {
+  {
     if (!req.url.startsWith('/v1/messages') || req.url.includes('count_tokens')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"input_tokens":100,"data":[]}'); return; }
     const number = ++calls; if (number > budget) { res.writeHead(429); res.end(); return; }
     const input = JSON.parse(body); fs.writeFileSync(path.join(base, `request-${number}.json`), body);
@@ -64,8 +66,8 @@ const server = http.createServer((req, res) => {
       event(res, 'content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'RETAINED_FINAL_PREFIX: checking the native result.\n' } });
       finishFinal = () => { event(res, 'content_block_delta', { index: 0, delta: { type: 'text_delta', text: '42.\n' } }); event(res, 'content_block_stop', { index: 0 }); finish('end_turn'); finishFinal = null; };
     }
-  });
-});
+  }
+} });
 const snapshot = () => page.evaluate(() => workspace.initial());
 async function launch() {
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root],
@@ -84,15 +86,14 @@ async function launch() {
   });
 }
 (async () => {
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  await fixture.start(); await fixture.preflight();
   installPlugin(cwd);
   // Boot with the already released compatibility hook, then exercise the
   // actual explicit reload upgrade in this same native process.
   fs.writeFileSync(path.join(cwd, '.claude/skills/native-workspace-compat/hooks/register.js'),
     execFileSync('git', ['show', (errorTrial ? 'b2c8b67' : quitQueueTrial ? '03c44d8' : '2fe9784') + ':app/claude-bridge/hooks/register.js'], { cwd: root, encoding: 'utf8' }).replace('const legacyOnly = false;', 'const legacyOnly = true;'), { mode: 0o600 });
-  fs.writeFileSync(path.join(bin, 'claude'), '#!/usr/bin/python3\nimport os,sys\nos.environ.pop("ANTHROPIC_AUTH_TOKEN",None)\nos.environ.pop("CLAUDE_CODE_OAUTH_TOKEN",None)\nos.environ.update(' +
-    `ANTHROPIC_BASE_URL=${JSON.stringify(`http://127.0.0.1:${server.address().port}`)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")\n` +
-    `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku","--debug-file",${JSON.stringify(path.join(base, 'native-debug.log'))},"--allowedTools","Bash(printf:*)"])\n`, { mode: 0o700 });
+  fixture.wrapper(binary, { file: path.join(bin, 'claude'), env: { CLAUDE_CONFIG_DIR: config },
+    args: ['--model', 'haiku', '--debug-file', path.join(base, 'native-debug.log'), '--allowedTools', 'Bash(printf:*)'] });
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
   child = fork(path.join(old, 'app/daemon.cjs'), [profile], { env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH,
     NAW_APP_VERSION: '0.1.0-alpha.2', NAW_WORKSPACE: cwd }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
@@ -175,14 +176,14 @@ async function launch() {
       fs.writeFileSync(path.join(base,'recovered-terminal.txt'),await page.locator('#terminal-area').innerText());
       fs.writeFileSync(path.join(base,'recovered-state.json'),JSON.stringify(recovered,null,2));
     }
-    console.log(JSON.stringify({ checks: ['Retained native API failure is readable in unified and terminal views, same identity/process', ...(recovering ? ['Explicit shared new task succeeds once with unchanged native identity; automatic run remains disabled'] : [])], nativeVersion: version, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
+    fixture.assertClean(); console.log(JSON.stringify({ fixture: fixture.summary(), checks: ['Retained native API failure is readable in unified and terminal views, same identity/process', ...(recovering ? ['Explicit shared new task succeeds once with unchanged native identity; automatic run remains disabled'] : [])], nativeVersion: version, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
   }
   if (modelOnly) {
     await require('./native-model-check.cjs')({ page, snapshot, base, reopen: async () => {
       await application.close(); application = null; await launch(); return page;
     } });
     assert.equal(calls, 0); assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ checks: ['Retained native model switches and whole-app reopen preserve identity/draft and match actual header'], nativeVersion: version, modelCalls: calls, errors, evidence: base })); return;
+    fixture.assertClean(); console.log(JSON.stringify({ fixture: fixture.summary(), checks: ['Retained native model switches and whole-app reopen preserve identity/draft and match actual header'], nativeVersion: version, modelCalls: calls, errors, evidence: base })); return;
   }
   assert.equal(await page.locator('#messages').getByText('RETAINED_HISTORY: original native answer.', { exact: true }).count(), 1);
   assert.equal(calls, 1); checks.push('Actual old backend and native TUI history retained on same-process input/reader attachment');
@@ -247,7 +248,7 @@ async function launch() {
     await page.locator('#close-privacy').click();
     assert.equal(calls, 3); assert.deepEqual(errors, []);
     checks.push('Whole-app exit retains exact private/shared tool input and result, same native process and draft, with no replay or restored sharing grant');
-    console.log(JSON.stringify({ checks, version, calls, paidModelCalls: 0, evidence: base })); return;
+    fixture.assertClean(); console.log(JSON.stringify({ fixture: fixture.summary(), checks, version, calls, paidModelCalls: 0, evidence: base })); return;
   }
   let queuedTag;
   if (queueTrial) {
@@ -328,7 +329,7 @@ async function launch() {
       await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'pending-receipt-success.png') });
     }
     checks.push('Whole-app reopen recovers output completed while closed, original pending work, draft and identity without replay, duplicate input or restored sharing grant');
-    console.log(JSON.stringify({ checks, version, calls, paidModelCalls: 0, evidence: base })); return;
+    fixture.assertClean(); console.log(JSON.stringify({ fixture: fixture.summary(), checks, version, calls, paidModelCalls: 0, evidence: base })); return;
   }
   await page.locator(`[data-session-menu="${id}"]`).click();
   const secondOpened = application.waitForEvent('window');
@@ -444,7 +445,7 @@ async function launch() {
   assert.equal(calls, budget);
   checks.push('Second window receives new output; native exit and ended-history reopen preserve reader without a new process or model turn');
   fs.writeFileSync(path.join(base, 'ended.json'), JSON.stringify(await snapshot(), null, 2));
-  assert.deepEqual(errors, []); console.log(JSON.stringify({ checks, nativeVersion: version, localResponses: calls, paidModelCalls: 0, errors, evidence: base }));
+  assert.deepEqual(errors, []); fixture.assertClean(); console.log(JSON.stringify({ fixture: fixture.summary(), checks, nativeVersion: version, localResponses: calls, paidModelCalls: 0, errors, evidence: base }));
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
   if (client) try { const s = (await client.call('initial')).sessions[0]; fs.writeFileSync(path.join(base, 'failure-native.json'), JSON.stringify(await client.call('snapshot', s.id))); } catch {}
@@ -453,5 +454,5 @@ async function launch() {
   finishFinal?.(); if (application) await application.close(); client?.close();
   try { const cleanup = await connect(profile, 'cleanup'); for (const s of (await cleanup.call('initial')).sessions) await cleanup.call('stop', s.id);
     for (const entry of cleanup.entries) await entry.client.call('shutdown'); cleanup.close(); } catch {}
-  if (child?.connected) child.disconnect(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+  if (child?.connected) child.disconnect(); await fixture.stop();
 }));
