@@ -74,3 +74,20 @@ test('disconnect removes an open cancellation confirmation instead of leaving st
  const f=fixture({recipientId:'s',requestId:'request',version:1,state:'processing',actionable:true});f.walk().find(el=>el.tagName==='button'&&el.textContent==='撤销请求…').onclick();
  const confirm=f.walk().find(el=>el.tagName==='button'&&el.textContent==='确认撤销请求');f.disconnect();assert.equal(f.walk().includes(confirm),false);
 });
+// After a language switch nothing in the card may keep the earlier language: every label is painted from its key, not from text taken when the card was drawn.
+const earlier=/[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]/;
+const leftovers=f=>f.walk().flatMap(el=>[...(el.children.length?[]:[el.textContent]),el.getAttribute('aria-label')]).filter(text=>text&&earlier.test(text));
+for(const [label,message,expected] of [
+ ['a pending grant',{initiatorId:'s',initiatorNativeId:'n',creation:'pending-authorization',actionKey:'key',args:{provider:'claude',permission:'default',cwd:'/synthetic'},actual:{actionId:'a',permission:'default',model:'unknown'}},
+  ['Native provider default; observed model: Unknown','New session permission: Confirmations required (Claude default / Codex read-only + on-request)']],
+ ['a report that needs attention',{recipientId:'s',requestId:'request',version:1,state:'attention',reportState:'blocked',actionable:true},['Needs your attention: Blocked']],
+ ['a cancelled request',{recipientId:'s',requestId:'request',version:1,state:'closed',closedReason:'cancelled',actionable:true},['Closed: Cancelled']],
+]) test('after a language switch the card of '+label+' keeps nothing in the earlier language',()=>{
+ const f=fixture(message);
+ assert.ok(leftovers(f).length>0,'It starts in Chinese');
+ f.refresh();
+ assert.deepEqual(leftovers(f),[]);
+ const texts=f.walk().map(el=>el.textContent);
+ for(const text of expected)assert.ok(texts.includes(text),text);
+ if(label==='a pending grant')assert.equal(f.walk().filter(el=>el.tagName==='select')[0].getAttribute('aria-label'),'New session permission: ');
+});

@@ -79,6 +79,13 @@ async function run() {
   await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('en');
   await until(() => card.getByRole('button', { name: 'Save grant and create this session', exact: true }).count(), 'Grant labels repaint to English');
   assert.equal(await card.locator('input[type=number]').nth(0).inputValue(), '2'); assert.equal(await card.locator('input[type=checkbox]').isChecked(), true);
+  // Nothing in the card keeps the earlier language: labels read their inner words when painted, not when the card was drawn.
+  const leftover = await card.evaluate(form => {
+    const box = form.closest('.operator-controls');
+    const texts = [...box.querySelectorAll('*')].filter(element => !element.childElementCount).map(element => element.textContent);
+    return texts.concat([...box.querySelectorAll('[aria-label]')].map(element => element.getAttribute('aria-label'))).filter(text => /[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]/.test(text));
+  });
+  assert.deepEqual(leftover, [], 'Nothing in the card stays in Chinese after the switch to English');
   await page.locator('#ui-language').selectOption('zh'); await page.locator('#close-setup').click();
   await card.getByRole('button', { name: '记录许可并建此会话', exact: true }).click();
   await until(async () => (await state()).sessions.length === 2, 'Exactly one executor created');

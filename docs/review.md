@@ -8703,3 +8703,9 @@ and versioned historical replay remain gates before a working-day trial or a
 future projection change. Native/GUI/provider behavior and the C2 renderer remain
 outside this source approval. Activation and record period stay off.
 Owner: butler outcome owner.
+
+## The operator card keeps nothing of the earlier language after a switch (2026-11-11)
+
+Found while checking the grant form in English. After a language switch four labels of the operator card kept words in the earlier language until the card was drawn again: the observed model, the new session's permission, the reason inside the status line, and the permission select's accessible name. Those words were taken when the card was drawn. They are now read when the label is painted, like the rest of the card.
+
+Owner: the author of this change. Checks: three unit tests, one per kind of card, that fail on the earlier code; the hidden operator journey asserts that nothing in the card stays in Chinese after the switch to English, and fails on the earlier code; full unit checks pass with no failures. Not independently reviewed: four labels in one function, reversible, each covered by a check that was red before and is green now.

@@ -2041,8 +2041,9 @@ function renderOperatorControls(entry, message, context = {}) {
   if (op.creation) {
     controls.append(uiNode('span', 'operator.action', { id: op.actual.actionId }));
     controls.append(uiNode('strong', op.creation === 'created' && op.state === 'closed' ? 'operator.createdVoided' : 'operator.' + op.creation));
-    controls.append(uiNode('p', 'operator.nativeDefault', { model: op.actual.model === 'unknown' ? uiText('operator.unknown') : op.actual.model }));
-    controls.append(uiNode('p', 'operator.permission', { permission: uiText('operator.' + op.actual.permission) }));
+    // Words inside a label are read when it is painted, not when the card is drawn, so they follow a language switch.
+    controls.append(uiNode('p', 'operator.nativeDefault', () => ({ model: op.actual.model === 'unknown' ? uiText('operator.unknown') : op.actual.model })));
+    controls.append(uiNode('p', 'operator.permission', () => ({ permission: uiText('operator.' + op.actual.permission) })));
     if (op.actual.message) controls.append(node('pre', op.actual.message));
     const domain = state.operatorPolicy?.domains.find(d => d.id === op.actual.domainId);
     if (domain) {
@@ -2052,7 +2053,7 @@ function renderOperatorControls(entry, message, context = {}) {
   }
   if (op.requestId && !op.old && (op.actionable || op.creation)) {
     controls.append(uiNode('span', 'operator.request', { id: op.requestId, version: op.version }));
-    const params = op.state === 'attention' ? { reason: uiText('operator.' + op.reportState) } : op.state === 'closed' ? { reason: uiText('operator.' + op.closedReason) } : undefined;
+    const params = op.state === 'attention' ? () => ({ reason: uiText('operator.' + op.reportState) }) : op.state === 'closed' ? () => ({ reason: uiText('operator.' + op.closedReason) }) : undefined;
     controls.append(uiNode('strong', 'operator.' + op.state, params));
     if (op.question) controls.append(node('p', op.question, 'operator-question'));
     if (op.cannotUpdate && op.state !== 'closed') controls.append(uiNode('p', 'operator.cannotUpdate'));
@@ -2089,7 +2090,7 @@ function renderOperatorControls(entry, message, context = {}) {
     for (const input of [daily, concurrent]) { input.min = '1'; input.step = '1'; }
     const permissions = node('select');
     for (const mode of ['default', 'bypass']) { const option = uiNode('option', 'operator.' + mode); option.value = mode; permissions.append(option); }
-    permissions.value = op.args.permission; permissions.setAttribute('aria-label', uiText('operator.permission', { permission: '' })); form.append(permissions);
+    permissions.value = op.args.permission; ui.display.attribute(permissions, 'aria-label', 'operator.permission', { permission: '' }); form.append(permissions);
     const consentLabel = node('label'), consent = node('input'); consent.type = 'checkbox'; consent.required = true; consentLabel.append(consent, uiNode('span', 'operator.grantConsent')); form.append(consentLabel);
     const submit = uiNode('button', 'operator.authorize'); submit.type = 'submit'; submit.disabled = !allowed; form.append(submit);
     const problem = node('p'); problem.setAttribute('role', 'alert'); form.append(problem);
