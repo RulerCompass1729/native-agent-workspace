@@ -18,6 +18,7 @@ const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary } = require('./queue-secretary.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
+const { createDedicatedBackend } = require('./butler-backend-host.cjs');
 const { CreationDefaults } = require('./creation-defaults.cjs');
 const { readingState } = require('./reading-state.cjs');
 const { ViewStore, validViews, dropRetiredViewFields } = require('./view-store.cjs');
@@ -85,7 +86,7 @@ const queueOutcomeSeen = new Set(), queueOutcomeNotifications = new Map();
 let pendingReveal = null;
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
-let dataDir, sessionLabels, roomState, queueSecretary, butlerIngress, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
+let dataDir, sessionLabels, roomState, queueSecretary, butlerIngress, butlerBackend = null, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
 let applicationBuild, applicationMenu;
 let mobileBroker;
@@ -981,6 +982,10 @@ async function boot() {
   try { butlerIngress = new ButlerIngress(dataDir, { roomState }); butlerIngress.recover(); }
   catch { /* Sources stay in the committed room events; status remains blocked. */ }
   bindQueueOutcomes(roomState, butlerIngress, notifyQueueOutcome);
+  try { butlerBackend = createDedicatedBackend(path.join(dataDir, 'butler-native'), {
+    runtimeVersion: app.getVersion(), executablePath: process.execPath }); }
+  catch { butlerBackend = null; } // Dedicated failure must not stop ordinary sessions.
+  // No prepare/ensure/controller here. Activation and the record period stay off.
   queueSecretary = new QueueSecretary(dataDir);
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
   creationDefaults = new CreationDefaults(dataDir, { defaultWorkspace, newWorkspaceRoot: `${path.resolve(defaultWorkspace)}-sessions` });
