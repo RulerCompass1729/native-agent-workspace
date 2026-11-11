@@ -8006,3 +8006,30 @@ Both pass on real Codex 0.167.0 with two `/v1/responses` requests each and no cr
 **native-retained-codex** is ported to the fixture but was not run to the end, and the committed script stops at its version check on any Codex but 0.163.0. The observations below come from one local run with that check relaxed: the retained alpha.2 host started with Codex 0.167.0 inside the sandbox, ran its terminal task and attached its history with the same native id and pid, then met a product gate: a retained host's Codex replies are shared to a space on Codex 0.163.0 only (`app/legacy-codex.cjs` `sharedReplyAvailable`). 0.163.0 is not installed. The script keeps the exact 0.163.0 check, with that reason. Its tool step now uses one command with escalation that writes and reads the file, because a sandboxed apply_patch cannot run inside the fixture. Unverified until 0.163.0 is available: the whole flow after the gate, and in particular the check that a shared tool row is frozen when the permission is asked (before, the applied patch row satisfied it; a pending command may leave no shared row).
 
 Not done in this batch: native-addressed and native-concurrent (real Claude and real Codex in one run: two fixtures, and a per-version decision for each assertion), native-retained-claude (needs Claude 2.1.302; 2.1.319, 321 and 322 are installed), native-history-existing (imports a history produced by test-native-codex-context.cjs, which is not ported, and reuses that script's unsandboxed shim and fixed port).
+
+
+### Dedicated butler runner dependency
+
+Scope: the dormant butler's isolated service/NativeHost binding and name-only
+credential presence. No model turn, main activation, native compatibility or
+working-day acceptance is claimed.
+
+- Reproduced: ordinary bootstrap accepted and paused a same-version synthetic
+  butler service. Purpose/binding checks now precede reuse, pause and shutdown.
+- Author-found regression: checking private-directory mode before looking for
+  an optional manifest rejected a legacy ordinary 0755 store. A red/green
+  synthetic-service regression now preserves ordinary behavior while dedicated
+  records and writes retain private-store checks.
+- Independent review approved this dependency only. Two non-blocking observations
+  were subsequently tightened: launch version must match the actual application
+  environment; unsupported dotted/inline provider metadata is explicitly rejected.
+- Verification: isolated real daemon bootstrap with a synthetic native WebSocket
+  server, caller-vs-daemon credential mismatch, binding changes, unknown launch
+  and live orphan protection. These checks issue no provider/model request.
+- Deferred activation gates: actual provider endpoint/wire compatibility, usage,
+  tool/context limits and S2 remain unqualified. An ambiguous pre-exec crash marker
+  stays blocked pending explicit recovery. Same-user path replacement is outside
+  this storage guard's threat model. A mismatch during post-spawn connection can
+  surface as a generic start failure; it still cannot admit another binding.
+- The live compatibility proposal is separately pending explicit approval and
+  enforceable request/fee limits. No installed application was changed.

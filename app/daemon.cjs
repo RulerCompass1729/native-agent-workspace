@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
 const crypto = require('node:crypto');
+const serviceBinding = require('./service-binding.cjs');
 const { NativeHost } = require('./adapters.cjs');
 const { Workspace } = require('./workspace.cjs');
 const { PeerLeases, PeerRunner, CAPABILITY, DIRECTED, identity: peerIdentity } = require('./peer-handoffs.cjs');
@@ -20,6 +21,8 @@ function dispatchScopedOutbox(workspace, client, args, send) {
 async function main() {
   const dataDir = process.argv[2];
   if (!dataDir || !path.isAbsolute(dataDir)) throw new Error('Data directory required');
+  const binding = serviceBinding.readBinding(dataDir);
+  if (binding && binding.runtimeVersion !== (process.env.NAW_APP_VERSION || 'development')) throw serviceBinding.failure('binding-mismatch');
   const lockPath = path.join(dataDir, 'service.lock');
   const lock = createLock(lockPath, 'service', dataDir);
   const privateDir = fs.mkdtempSync('/tmp/naw-service-');
@@ -31,7 +34,7 @@ async function main() {
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
   fs.mkdirSync(defaultWorkspace, { recursive: true, mode: 0o700 });
   // Version decisions and the fallback clock must outlive this process: they go to the data directory.
-  const host = new NativeHost(privateDir, dataDir); await host.start();
+  const host = new NativeHost(privateDir, dataDir, binding); await host.start();
   // A sibling, never inside the legacy shared cwd (including NAW_WORKSPACE).
   const workspace = new Workspace(host, dataDir, `${path.resolve(defaultWorkspace)}-sessions`); const clients = new Set(), writers = new Map();
   workspace.peerLeases = new PeerLeases(workspace);
@@ -54,10 +57,17 @@ async function main() {
   workspace.on('progress', data => broadcast('progress', data));
   let shuttingDown = false;
   const dispatch = async (owner, method, args, client, roomId = 'shared', scoped = false, inputProof = false) => {
+    if (binding && !['initial', 'ensureButlerRunner', 'shutdown'].includes(method)) throw serviceBinding.failure('butler-qualification-required');
     if (shuttingDown) throw uiError("error.backendClosingActionNotExecuted");
     if (method === 'scopedOutbox') return dispatchScopedOutbox(workspace, client, args, send);
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [background.CAPABILITY, ...mobileCapabilities, ...(fs.existsSync(path.join(__dirname, 'scoped-outbox-runtime.cjs')) ? ['scopedNativeOutboxV1'] : []), ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'queueDispatchV1', 'createSettingsV1', 'agentAddressedHandoffs', 'agentWakeV1', require('./session-wake.cjs').PREFLIGHT, 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'conditionalMaintenanceStopV1', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'ensureButlerRunner': {
+        if (!binding) throw serviceBinding.failure('binding-mismatch');
+        serviceBinding.assertBinding(args[0], binding);
+        await host.startCodex();
+        return { binding, nativeReady: Boolean(host.rpc), credentialPresent: host.butlerCredentialPresent === true };
+      }
+      case 'initial': return { ...(binding ? { serviceBinding: binding } : {}), ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [background.CAPABILITY, ...mobileCapabilities, ...(fs.existsSync(path.join(__dirname, 'scoped-outbox-runtime.cjs')) ? ['scopedNativeOutboxV1'] : []), ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'queueDispatchV1', 'createSettingsV1', 'agentAddressedHandoffs', 'agentWakeV1', require('./session-wake.cjs').PREFLIGHT, 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'conditionalMaintenanceStopV1', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'mergeSnapshot': {
         if (roomId !== 'shared' || args.length !== 1) throw uiError("error.invalidSnapshotImport");
         return workspace.mergeSnapshot(args[0]);
