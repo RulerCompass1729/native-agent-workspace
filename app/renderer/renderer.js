@@ -30,6 +30,9 @@ const sessionStatus = (record, recoveryBadge = false) => {
 };
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 const mobileSetup = window.nativeWorkspaceMobileSetup.bind({ container: $('mobile-setup'), document, api, getSessions: () => state?.sessions || [], text: (key, params) => uiText(key, params), display: ui.display });
+// The read log names a space by this window's own name for it; the log itself holds ids only.
+const butlerReads = window.nativeWorkspaceButlerReads.bind({ dialog: $('butler-reads-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display,
+  spaceName: id => { const room = spaceRecord(id); return room ? spaceName(room) : null; } });
 // The existing butler view owns visibility and state; the record table has no second sidebar entry.
 const butlerReviewAdapter = window.nativeWorkspaceButlerReviewAdapter.create({ api, text: uiText });
 const butlerReviewView = window.nativeWorkspaceButlerReview.create({ dialog: $('butler-review-dialog'),
@@ -57,7 +60,8 @@ function disposeButlerReview() {
 }
 $('butler-review-dialog').addEventListener('close', returnFromButlerReview);
 // The butler's row is drawn only from a view the main process gives this window; this version gives none.
-const butlerEntry = window.nativeWorkspaceButlerEntry.bind({ row: $('butler-row'), dialog: $('butler-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display, showError: ui.showError, openReview: openButlerReview });
+const butlerEntry = window.nativeWorkspaceButlerEntry.bind({ row: $('butler-row'), dialog: $('butler-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display, showError: ui.showError, openReview: openButlerReview,
+  openReads: () => butlerReads.open() });
 let newDirectory = false, creatingSession = false;
 let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
 let latestViewStorage, latestViewStorageUiMessage;
@@ -4453,6 +4457,7 @@ const disposers = [
   () => mobileSetup.dispose(),
   () => butlerEntry.dispose(),
   disposeButlerReview,
+  () => butlerReads.dispose(),
   disposeToastKeyboard,
   api.onProgress(updateLegacyProgress),
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),

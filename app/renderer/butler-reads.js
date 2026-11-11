@@ -1,0 +1,133 @@
+/* "What it has read": the butler's read log, for the person. Read-only, and only through the existing person-only
+   call butlerReview('reads', …). It shows what the log holds (when, which kind, which space, how many, which
+   designation) and nothing else; a log that cannot be read is said to be unreadable, not empty. */
+(function (global) {
+  'use strict';
+  const COLUMNS = ['time', 'what', 'space', 'count', 'revision'];
+  function bind({ dialog, document, api, text, display, now = Date.now, spaceName, zone }) {
+    const { readsView, tailRequest, olderRequest, PAGE, RECORDS_PER_PAGE } = global.nativeWorkspaceButlerReadsView || require('../butler-reads-view.js');
+    const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
+    const format = text || ((key, params) => locale.format('zh', key, params));
+    const say = (el, key, params) => { if (display) display.text(el, key, params); else el.textContent = format(key, params); return el; };
+    const quiet = el => { if (display) display.unbind(el); el.textContent = ''; return el; };
+    const make = (tag, cls, key, params) => { const el = document.createElement(tag); if (cls) el.className = cls; if (key) say(el, key, params); return el; };
+    const control = (key, action, handler) => { const el = make('button', '', key); el.type = 'button'; el.dataset.action = action; el.addEventListener('click', handler); return el; };
+
+    const title = make('h2', '', 'butler.reads.title'); title.id = (dialog.id || 'butler-reads-dialog') + '-title'; dialog.setAttribute('aria-labelledby', title.id);
+    const today = make('p', 'butler-reads-today'), listed = make('p', 'quiet'), note = make('p', 'butler-reads-note'), help = make('p', 'butler-reads-note');
+    const wrap = make('div', 'butler-reads-wrap'), list = make('div', 'butler-reads-list'), foot = make('p', 'butler-reads-note'), actions = make('div', 'dialog-actions');
+    today.setAttribute('role', 'status'); note.setAttribute('role', 'status'); foot.setAttribute('role', 'status'); wrap.append(list);
+    // Rows below the fold are announced by a fade; the list's own scrollbar stays visible.
+    const below = () => { wrap.dataset.more = String(list.scrollTop + list.clientHeight < list.scrollHeight - 1); };
+    list.addEventListener('scroll', below);
+    const older = control('butler.reads.older', 'older', () => loadOlder()), refresh = control('butler.reads.refresh', 'refresh', () => load()), done = control('common.done', 'done', () => dialog.close());
+    older.className = 'subtle butler-apart';
+    actions.append(older, refresh, done);
+    dialog.append(title, make('p', 'quiet', 'butler.reads.intro', { limit: RECORDS_PER_PAGE }), today, listed, note, help, wrap, foot, actions);
+
+    let records = [], through = null, state = 'idle', ticket = 0, olderFailed = false, readAt = 0;
+    const valid = page => page && Array.isArray(page.records) && Number.isSafeInteger(page.throughSequence) && page.throughSequence >= 0 && typeof page.truncated === 'boolean' &&
+      Number.isSafeInteger(page.nextAfterSequence) && page.nextAfterSequence >= 0;
+    const ask = async request => { const page = await api.butlerReview('reads', request); if (!valid(page)) throw Error('unreadable'); return page; };
+    // Whatever goes wrong while drawing what was read, the person is told the log could not be read: the dialog never
+    // stays on "reading".
+    function draw() { try { paint(); } catch (error) { if (state !== 'ready') throw error; state = 'unavailable'; paint(); } }
+    function paint() {
+      const loading = state === 'loading';
+      older.disabled = refresh.disabled = loading;
+      if (state !== 'ready') {
+        today.hidden = listed.hidden = foot.hidden = true; quiet(today); quiet(listed); quiet(foot); list.replaceChildren(); older.hidden = true; below();
+        note.hidden = false; say(note, state === 'unavailable' ? 'butler.reads.unavailable' : 'butler.reads.loading');
+        // The rule is general; a log this window cannot read does not prove the butler's own writes fail.
+        help.hidden = state !== 'unavailable'; if (state === 'unavailable') say(help, 'butler.reads.unavailableHelp'); else quiet(help);
+        say(refresh, state === 'unavailable' ? 'butler.reads.retry' : 'butler.reads.refresh');
+        dialog.dataset.readsState = state; return;
+      }
+      // The count line is true as of the moment the log was read; Refresh reads again.
+      const view = readsView({ records, through, now: readAt, spaceNames: spaceName, ...(zone ? { zone } : {}) });
+      help.hidden = true; quiet(help);
+      dialog.dataset.readsState = view.shown ? 'records' : 'empty'; dialog.dataset.readsLevel = view.today.level;
+      say(refresh, 'butler.reads.refresh');
+      // Today's count is given only when the newest record is on screen; it is the core's own running count.
+      today.hidden = view.today.pages === null;
+      if (view.today.pages === null) quiet(today);
+      else if (view.today.level === 'full') say(today, 'butler.reads.todayFull', { from: view.today.from, limit: view.today.limit, resets: view.today.resets });
+      else if (!view.today.pages) say(today, 'butler.reads.todayNone', { from: view.today.from, limit: view.today.limit, resets: view.today.resets });
+      else say(today, 'butler.reads.today', { from: view.today.from, pages: view.today.pages, left: view.today.left, limit: view.today.limit, resets: view.today.resets });
+      // How much of the log is listed, so a short list is not taken for the whole of it.
+      listed.hidden = !view.shown;
+      if (!view.shown) quiet(listed);
+      // When the log's newest record was not even read, "the newest N" would not be true: say how many are shown and how
+      // to get the rest. A newest record that was read but is not understood is not something Refresh can change.
+      else if (!view.reached) say(listed, 'butler.reads.listedPart', { total: view.total, shown: view.shown });
+      else if (view.unreadable) say(listed, 'butler.reads.listedSome', { total: view.total, shown: view.shown, count: view.unreadable });
+      else say(listed, view.shown === view.total ? 'butler.reads.listedAll' : 'butler.reads.listed', { total: view.total, shown: view.shown });
+      const notes = [];
+      if (!view.shown && !view.unreadable) notes.push(['butler.reads.empty']);
+      if (view.unreadable && (!view.shown || !view.reached)) notes.push(['butler.reads.unreadable', { count: view.unreadable }]);
+      note.hidden = !notes.length; if (notes.length) say(note, ...notes[notes.length - 1]); else quiet(note);
+      // Said where the earlier rows would have appeared: under the list.
+      foot.hidden = !olderFailed; if (olderFailed) say(foot, 'butler.reads.olderFailed'); else quiet(foot);
+      if (!view.shown) list.replaceChildren();
+      else {
+        const table = make('table', 'butler-reads-table'), head = make('thead'), headRow = make('tr');
+        for (const column of COLUMNS) { const cell = make('th', '', `butler.reads.column.${column}`); cell.setAttribute('scope', 'col'); headRow.append(cell); }
+        head.append(headRow); table.append(head);
+        for (const group of view.days) {
+          const body = make('tbody'), dayRow = make('tr', 'butler-reads-day'), dayCell = make('th', '', 'butler.reads.day', { from: group.from, through: group.through, day: group.day, pages: group.pages });
+          dayCell.setAttribute('colspan', String(COLUMNS.length)); dayCell.setAttribute('scope', 'rowgroup'); dayRow.append(dayCell); body.append(dayRow);
+          for (const row of group.rows) {
+            const line = make('tr');
+            const what = row.kind === 'deliveries' ? make('td', '', 'butler.reads.kind.deliveries', { from: row.window.from, through: row.window.through })
+              : make('td', '', `butler.reads.kind.${row.kind === 'spaces' && row.archived ? 'spacesArchived' : row.kind}`);
+            // The log holds a space id only. A name is this window's own; an id it cannot name is shown as the id.
+            const space = !row.space ? make('td', '', 'butler.reads.spaceNone') : row.space.name ? make('td') : make('td', '', 'butler.reads.spaceUnknown', { id: row.space.short });
+            // The name is the window's own and may follow the interface language (the untouched default space does).
+            const named = () => { try { const value = spaceName(row.space.id); return typeof value === 'string' && value ? value : row.space.name; } catch { return row.space.name; } };
+            if (row.space && row.space.name) { if (display) display.computed(space, 'text', named); else space.textContent = row.space.name; } else if (row.space) space.setAttribute('title', row.space.id);
+            line.append(make('td', 'butler-reads-time', 'butler.reads.time', { time: row.time }), what, space,
+              make('td', '', row.more ? 'butler.reads.countMore' : 'butler.reads.count', { count: row.count }), make('td', '', 'butler.reads.revision', { revision: row.revision }));
+            body.append(line);
+          }
+          table.append(body);
+        }
+        list.replaceChildren(table);
+      }
+      older.hidden = !view.hasOlder; below();
+    }
+    // The newest records first. The log pages forward only, so the tail is reached by position.
+    async function load() {
+      const mine = ++ticket; state = 'loading'; olderFailed = false; draw();
+      try {
+        let page = await ask({ afterSequence: 0, limit: PAGE }), got = page.records;
+        if (page.truncated) {
+          page = await ask(tailRequest(page.throughSequence)); got = page.records;
+          // Pages written between the two calls: follow them, a bounded number of times.
+          for (let round = 0; round < 2 && page.truncated; round++) { page = await ask({ afterSequence: page.nextAfterSequence, limit: PAGE }); got = got.concat(page.records); }
+        }
+        if (mine !== ticket) return;
+        // A log that says it has records and gives none was not read.
+        if (!got.length && page.throughSequence > 0) throw Error('unreadable');
+        records = got; through = page.throughSequence; readAt = now(); state = 'ready';
+      } catch { if (mine !== ticket) return; state = 'unavailable'; }
+      draw();
+    }
+    async function loadOlder() {
+      if (state !== 'ready' || !records.length) return;
+      const request = olderRequest(Math.min(...records.map(record => record.sequence)));
+      if (!request) return;
+      const mine = ++ticket; older.disabled = true; olderFailed = false;
+      // An earlier page that comes back empty was not read either.
+      try { const page = await ask(request); if (mine !== ticket) return; if (!page.records.length) throw Error('unreadable'); records = page.records.concat(records); }
+      catch { if (mine !== ticket) return; olderFailed = true; }
+      draw();
+    }
+    function open() { if (!dialog.open) dialog.showModal(); done.focus(); return load(); }
+    const closed = () => { ticket++; records = []; through = null; state = 'idle'; olderFailed = false; list.replaceChildren(); };
+    dialog.addEventListener('close', closed);
+    return { open, load, loadOlder, dispose() { ticket++; dialog.removeEventListener('close', closed); if (dialog.open) dialog.close(); dialog.replaceChildren(); } };
+  }
+  const value = { bind, COLUMNS };
+  if (typeof module === 'object' && module.exports) module.exports = value;
+  else global.nativeWorkspaceButlerReads = value;
+})(globalThis);

@@ -42,11 +42,11 @@ const none = { version: 1, role: { revision: 4, selected: null }, offer: selecte
 const designated = extra => ({ version: 1, role: { revision: 5, selected }, startable: false, backend: null, intake: { recordPeriod: 'off' }, actions: [...ACTIONS], ...extra });
 const ready = extra => designated({ startable: true, backend: { state: 'ready', ready: true, blocked: [] }, ...extra });
 const nokey = extra => designated({ startable: true, backend: { state: 'blocked', ready: false, blocked: ['credential-missing'] }, ...extra });
-function fixture({ entry = true, fail = false, pending = false, showError, openReview } = {}) {
+function fixture({ entry = true, fail = false, pending = false, showError, openReview, openReads } = {}) {
   const page = { activeElement: null, shown: 0, createElement: tag => new Element(tag, page) };
   const row = new Element('button', page), dialog = new Element('dialog', page), calls = []; dialog.id = 'butler-dialog'; row.hidden = true;
   let release; const api = entry ? { async butler(...args) { calls.push(args); if (pending) await new Promise(resolve => { release = resolve; }); if (fail) throw Error('/PRIVATE_IPC_PATH'); return { ok: true }; } } : {};
-  const entryUi = bind({ row, dialog, document: page, api, showError, openReview });
+  const entryUi = bind({ row, dialog, document: page, api, showError, openReview, openReads });
   const buttons = () => dialog.all().filter(node => node.tag === 'button' && !dialog.all().some(parent => parent.hidden && parent.contains(node)));
   const button = action => buttons().find(node => node.dataset.action === action);
   return { page, row, dialog, calls, entryUi, buttons, button, names: () => buttons().map(node => node.dataset.action), release: () => release() };
@@ -157,6 +157,21 @@ test('a window without the person-only entry can look and not act', () => {
   const h = fixture(); h.entryUi.render(ready({ actions: ['revoke'] })); h.entryUi.open(); assert.deepEqual(h.names(), ['revoke', 'done']);
 });
 
+test('the read log is offered wherever the entry is shown, changes nothing, and needs a way to open it', () => {
+  let opened = 0; const f = fixture({ openReads: () => { opened++; } });
+  for (const [entry, names] of [[none, ['designate', 'reads', 'done']], [designated(), ['revoke', 'reads', 'done']], [ready({ actions: [] }), ['reads', 'done']], [nokey(), ['revoke', 'recheck', 'reads', 'done']]]) {
+    f.entryUi.render(entry); if (!f.dialog.open) f.entryUi.open(); assert.deepEqual(f.names(), names);
+  }
+  assert.equal(f.button('reads').textContent, zh('butler.action.reads')); assert.equal(f.button('reads').className, '', 'An everyday action, not a primary one');
+  f.button('reads').fire('click');
+  assert.equal(opened, 1); assert.equal(f.dialog.open, false, 'The entry closes; the read log is its own dialog'); assert.deepEqual(f.calls, [], 'Opening the log asks the main process for nothing through the butler call');
+  // Without a way to open it, or with no view, it is not there.
+  const g = fixture(); g.entryUi.render(designated()); g.entryUi.open(); assert.deepEqual(g.names(), ['revoke', 'done']); assert.equal(g.entryUi.press('reads'), undefined);
+  f.entryUi.render(undefined); assert.equal(f.row.hidden, true); assert.equal(f.entryUi.press('reads'), undefined); assert.equal(opened, 1);
+  // A window that cannot act on the butler can still read the log.
+  let read = 0; const h = fixture({ entry: false, openReads: () => { read++; } }); h.entryUi.render(designated()); h.entryUi.open(); assert.deepEqual(h.names(), ['reads', 'done']); h.button('reads').fire('click'); assert.equal(read, 1);
+});
+
 test('each state says what the core reported, and usage only what was recorded', () => {
   const f = fixture(); f.entryUi.open();
   const shows = (entry, state, label, ...sentences) => {
@@ -229,7 +244,9 @@ test('every sentence the entry can show is in the catalog in both languages, and
   for (const key of Object.values(HOLD_KEYS)) expected.add(`butler.hold.${key}`);
   for (const key of FACTS) { expected.add(`butler.confirm.${key}`); expected.add(`butler.confirm.${key}Value`); }
   for (const action of ACTIONS) expected.add(`butler.action.${action}`);
-  for (const language of ['zh', 'en']) assert.deepEqual(Object.keys(messages[language]).filter(key => key.startsWith('butler.')).sort(), [...expected].sort());
+  expected.add('butler.action.reads');
+  // The read log's own sentences (butler.reads.*) are checked with it, in butler-reads.test.cjs.
+  for (const language of ['zh', 'en']) assert.deepEqual(Object.keys(messages[language]).filter(key => key.startsWith('butler.') && !key.startsWith('butler.reads.')).sort(), [...expected].sort());
   // Every state and hold reason the view can answer has its keys.
   const states = new Set(); const role = { revision: 1, selected };
   for (const entry of [none, designated(), ready(), ready({ intake: { recordPeriod: 'on' } }), ready({ hold: 'x' }), nokey(), designated({ startable: true })]) states.add(entryView({ ...entry, role: entry.role || role }).state);
