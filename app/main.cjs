@@ -362,6 +362,10 @@ function conversationAccess(actor, snapshot) {
   return access;
 }
 function projectBackgroundRecord(record, context = null) {
+  if (['terminalSnapshot', 'observe', 'terminal'].includes(record.command.method) && record.readAuthorization && record.value !== undefined) {
+    try { if (conversationReaderAllowed(record.actor)) return record; } catch { /* Fail closed on an unknown role. */ }
+    const { value: _privateValue, ...publicRecord } = record; return publicRecord;
+  }
   if (!['initial', 'previewImage', 'spaceFiles'].includes(record.command.method) || record.value === undefined) return record;
   const target = backgroundOperation.conversationTarget(record.command.method, record.command.arguments, record.actor);
   const candidate = record.humanDecision === 1 && record.readAuthorization?.sessionId === target ? record.readAuthorization : null;
@@ -1040,7 +1044,8 @@ async function boot() {
     confirmationPending: notifyBackgroundConfirmation,
     project: projectBackgroundRecord,
     confirmation: (actor, command, action, context) => {
-      if (action === 'readConversation' && !conversationReaderAllowed(actor)) throw uiError('error.background.secretaryConversation');
+      if ((action === 'readConversation' || ['terminalSnapshot', 'observe', 'terminal'].includes(command.method) && command.arguments[0] !== actor.id) &&
+          !conversationReaderAllowed(actor)) throw uiError('error.background.secretaryConversation');
       const state = sessionLabels.apply(roomState.apply(context.client.snapshot()));
       const target = state.sessions.find(s => s.id === backgroundOperation.conversationTarget(command.method, command.arguments, actor));
       if (action === 'readConversation' && !target) throw uiError('error.background.conversationChanged');
