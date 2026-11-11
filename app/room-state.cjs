@@ -514,7 +514,10 @@ class RoomState {
   }
   recordControlRefusal(record, rooms) {
     const summary = record.refusalSummary;
-    if (record.state !== 'not-executed' || !['confirmation-limit', 'originating-session-unavailable'].includes(summary.reason) || !orderId(record.actor.id) || !['claude', 'codex'].includes(record.actor.provider)) throw Error('Invalid refusal audit');
+    const notices = { 'confirmation-limit': 'refusalLimit', 'originating-session-unavailable': 'refusalActor', 'another-operation-running': 'refusalBusy',
+      'explicit-paths-required': 'refusalPaths', 'invalid-file-path-count': 'refusalPaths', 'file-preview-changed': 'refusalPreview',
+      'conversation-access-denied': 'refusalAccess', 'space-file-membership-required': 'refusalAccess', 'conversation-target-unavailable': 'refusalTarget' };
+    if (record.state !== 'not-executed' || !Object.hasOwn(notices, summary.reason) || !orderId(record.actor.id) || !['claude', 'codex'].includes(record.actor.provider)) throw Error('Invalid refusal audit');
     const id = `control-refusal:${record.actor.provider}:${record.actor.nativeId}:${record.id}`;
     const name = require('./background-operation.cjs').visibleText(record.actor.name);
     const available = rooms.filter(id => roomId(id) && (id === DEFAULT_ROOM_ID || this.spaces.rooms.some(r => r.id === id)));
@@ -525,7 +528,7 @@ class RoomState {
       const value = this.metadata(room), previous = value.events.find(e => e.id === id);
       if ((previous?.controlAudit?.refusalSummary?.sequence || 0) >= count.sequence) continue;
       const event = { id, role: 'system', kind: 'control-audit', sessionId: record.actor.id, name, time: previous?.time ?? record.at,
-        ...uiNotice(summary.reason === 'confirmation-limit' ? 'notice.background.refusalLimit' : 'notice.background.refusalActor', { name, count: count.count, command: count.lastMethod }),
+        ...uiNotice('notice.background.' + notices[summary.reason], { name, count: count.count, command: count.lastMethod }),
         controlAudit: { operationId: record.id, actor: { id: record.actor.id, nativeId: record.actor.nativeId, name, provider: record.actor.provider },
           method: 'backgroundRefusal', action: 'refusedRequests', state: 'not-executed',
           refusalSummary: { reason: summary.reason, count: count.count, sequence: count.sequence, lastMethod: count.lastMethod, windowStart: summary.windowStart, windowEnd: summary.windowEnd } } };

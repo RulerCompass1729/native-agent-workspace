@@ -1,6 +1,6 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), { randomUUID } = require('node:crypto');
-const { BackgroundControl, dialog } = require('../background-control.cjs');
+const { BackgroundControl, PreconditionRefused, dialog } = require('../background-control.cjs');
 const { RoomState } = require('../room-state.cjs');
 const request = (method, id = randomUUID(), args = []) => ({ action: 'invoke', method, arguments: args, operation_id: id });
 const nextId = () => randomUUID();
@@ -26,6 +26,145 @@ async function fill(f) {
   f.controller.commit(data => { for (let n = 1; n < 32; n++) { const copy = JSON.parse(JSON.stringify(row)); copy.id = 'seed-' + n; copy.command.operation_id = copy.id; copy.actor.operationId = copy.id; data.records.push(copy); } });
   f.notices.length = 0;
 }
+for (const provider of ['claude', 'codex']) for (const reason of ['another-operation-running', 'explicit-paths-required', 'invalid-file-path-count', 'file-preview-changed'])
+test(`${provider}: proven pre-handler ${reason} refusals have bounded storage and fresh consent after correction`, async t => {
+  const f = fixture(t, provider), marker = 'SYNTHETIC_REFUSED_ARGUMENT', body = marker + 'x'.repeat(4096);
+  const method = reason === 'another-operation-running' ? 'spaceCreate' : reason === 'explicit-paths-required' ? 'chooseFolder' : 'openLocalFile';
+  let invalid = true, entered = 0;
+  const confirm = f.config.confirmation;
+  f.config.confirmation = (...args) => {
+    if (invalid && ['invalid-file-path-count', 'file-preview-changed'].includes(reason)) throw new PreconditionRefused(Error('Synthetic file precondition'), reason);
+    return confirm(...args);
+  };
+  const controller = new BackgroundControl(f.config), key = controller.key(f.actor);
+  f.handlers.set(method, async c => {
+    entered++;
+    if (method === 'chooseFolder') return (await dialog(c, 'open', { properties: ['openDirectory'] })).filePaths[0];
+    return 'executed';
+  });
+  if (reason === 'another-operation-running') controller.inflight.set(key, Promise.resolve());
+  const before = fs.existsSync(controller.file) ? fs.statSync(controller.file).size : 0;
+  let first, last;
+  for (let n = 0; n < 40; n++) {
+    const args = request(method, 'refused-' + n, [body]); first ||= args;
+    last = await controller.call(f.binding, args);
+    assert.equal(last.state, 'not-executed'); assert.equal(last.reason, reason);
+  }
+  assert.equal(entered, 0, 'The handler has never started'); assert.equal(f.notices.length, 0);
+  const text = fs.readFileSync(controller.file, 'utf8');
+  t.diagnostic(JSON.stringify({ reason, calls: 40, beforeBytes: before, afterBytes: Buffer.byteLength(text), records: controller.data.records.length, summaries: controller.data.refusals.length }));
+  assert.equal(controller.data.records.length, 0); assert.equal(controller.data.refusals.length, 1);
+  assert.equal(controller.data.refusals[0].refusalSummary.count, 40);
+  assert.ok(Buffer.byteLength(text) < 24000); assert.equal(text.includes(marker), false);
+  assert.equal(f.room.value.events.length, 1); assert.equal(f.room.value.events[0].controlAudit.refusalSummary.count, 40);
+  assert.notEqual(f.room.value.events[0].uiMessage.key, 'notice.background.refusalActor');
+  assert.equal((await controller.call(f.binding, { action: 'receipt', operation_id: first.operation_id })).receipt.id, last.summaryId);
+  controller.inflight.delete(key); invalid = false;
+  const cold = new BackgroundControl(f.config);
+  const corrected = { ...first, arguments: [], ...(method === 'chooseFolder' ? { paths: [f.dir] } : {}) };
+  const result = await cold.call(f.binding, corrected);
+  assert.equal(result.state, method === 'chooseFolder' ? 'complete' : 'confirmation-required');
+  if (method !== 'chooseFolder') {
+    assert.equal(entered, 0); assert.equal((await cold.decide(f.actor.id, f.actor.nativeId, corrected.operation_id, 1)).state, 'complete');
+  }
+  assert.equal(entered, 1); assert.equal((await cold.call(f.binding, corrected)).duplicate, true); assert.equal(entered, 1);
+});
+test('ordinary completed operations retain their exact IDs, results and delivery guards instead of becoming refusal summaries', async t => {
+  const f = fixture(t), args = request('plain', 'executed', ['exact original arguments']);
+  const first = await f.controller.call(f.binding, args);
+  const cold = new BackgroundControl(f.config), again = await cold.call(f.binding, args);
+  assert.equal(again.duplicate, true); assert.equal(again.value, first.value); assert.deepEqual(again.guard, first.guard);
+  await assert.rejects(cold.call(f.binding, { ...args, arguments: ['changed'] }), /different command/);
+  assert.equal(f.writes, 1); assert.equal(cold.data.records.length, 1); assert.equal(cold.data.refusals.length, 0);
+});
+for (const state of ['complete', 'received', 'awaiting-native']) test(`a successfully audited ${state} retains identity and result without the whole consent snapshot`, async t => {
+  const f = fixture(t), marker = 'SYNTHETIC_OBSOLETE_CONSENT', previous = f.context.fingerprint;
+  f.context.fingerprint = () => ({ ...previous(), rooms: [{ id: 'shared', name: marker, memberOrder: Array.from({ length: 100 }, (_, n) => 'member-' + n) }],
+    sessions: f.snapshot.sessions.map(s => ({ ...s, state: marker, approval: { body: marker } })), sessionArchives: { old: marker } });
+  f.context.delivery = () => state === 'complete' ? null : { nativeReceived: state === 'received', status: state };
+  let beforeBytes = 0; const publish = f.controller.publish.bind(f.controller);
+  f.controller.publish = (row, context) => { beforeBytes = Buffer.byteLength(JSON.stringify(row.guard)); return publish(row, context); };
+  const args = request('plain', 'completed-record', ['PRESERVE_ARGUMENTS']);
+  const result = await f.controller.call(f.binding, args);
+  assert.equal(result.state, state); assert.equal(result.value, 1);
+  assert.ok(f.audits.every(r => !r.guard || r.guard.rooms));
+  assert.deepEqual(result.guard, { auditRooms: ['shared'], sessions: f.snapshot.sessions.map(s => ({ id: s.id, nativeId: s.nativeId })) });
+  const afterBytes = Buffer.byteLength(JSON.stringify(result.guard));
+  t.diagnostic(JSON.stringify({ state, consentBytes: beforeBytes, retainedGuardBytes: afterBytes })); assert.ok(afterBytes < beforeBytes / 2);
+  const text = fs.readFileSync(f.controller.file, 'utf8'); assert.equal(text.includes(marker), false); assert.ok(text.includes('PRESERVE_ARGUMENTS'));
+  const cold = new BackgroundControl(f.config), duplicate = await cold.call(f.binding, args);
+  assert.equal(duplicate.duplicate, true); assert.equal(duplicate.value, 1); assert.equal(f.writes, 1);
+  await assert.rejects(cold.call(f.binding, { ...args, arguments: ['DIFFERENT'] }), /different command/);
+});
+test('an audit failure keeps the complete consent snapshot with the unknown outcome', async t => {
+  const f = fixture(t), previous = f.context.fingerprint;
+  f.context.fingerprint = () => ({ ...previous(), rooms: [{ id: 'shared', name: 'PRESERVE_UNCONFIRMED_CONSENT' }] });
+  const controller = new BackgroundControl(f.config), args = request('spaceCreate', 'audit-failure', ['Space']);
+  // Fail the completion audit, after the existing pre-mutation running audit succeeded.
+  let audits = 0; controller.audit = row => { if (row.state === 'complete') throw Error('Synthetic audit failure'); audits++; };
+  const pending = await controller.call(f.binding, args);
+  const result = await controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
+  assert.equal(result.state, 'unconfirmed'); assert.equal(result.resultState, 'complete');
+  assert.equal(result.guard.rooms[0].name, 'PRESERVE_UNCONFIRMED_CONSENT'); assert.ok(audits > 0);
+  assert.equal((await controller.call(f.binding, args)).duplicate, true); assert.equal(f.writes, 1);
+});
+test('the real receipt delivery consumer still pins native identity after consent compaction and restart', async t => {
+  const f = fixture(t), args = request('send', 'real-delivery', ['target', 'Synthetic message', 'native-target']); let sends = 0;
+  const target = f.snapshot.sessions[1];
+  target.messages = [{ id: 'synthetic-message', status: 'queued', text: 'Synthetic message', agentControl: { operationId: args.operation_id, id: f.actor.id, nativeId: f.actor.nativeId } }];
+  f.handlers.set('send', () => { sends++; return { messageId: 'synthetic-message' }; });
+  f.context.client.refresh = async () => {};
+  const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8'), start = main.indexOf('      context.delivery = async (command'), end = main.indexOf('\n      const id = win.webContents.id;', start);
+  assert.ok(start >= 0 && end > start);
+  require('node:vm').runInNewContext(main.slice(start, end), { context: f.context, client: f.context.client });
+  const prior = f.context.fingerprint;
+  f.context.fingerprint = () => ({ ...prior(), sessions: f.snapshot.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, state: 'OBSOLETE_STATE', controlRevision: 100 })), rooms: [{ id: 'shared', memberIds: ['agent', 'target'] }] });
+  const sent = await f.controller.call(f.binding, args); assert.equal(sent.state, 'awaiting-native');
+  assert.deepEqual(sent.guard.sessions.find(s => s.id === 'target'), { id: 'target', nativeId: 'native-target' });
+  const cold = new BackgroundControl(f.config);
+  target.nativeId = 'replacement'; target.messages[0].status = 'submitted';
+  const changed = (await cold.call(f.binding, { action: 'receipt', operation_id: args.operation_id })).receipt;
+  assert.equal(changed.delivery.status, 'context-changed'); assert.equal(changed.delivery.nativeReceived, false);
+  target.nativeId = 'native-target';
+  const received = (await cold.call(f.binding, { action: 'receipt', operation_id: args.operation_id })).receipt;
+  assert.equal(received.state, 'received'); assert.equal(received.delivery.messageId, 'synthetic-message'); assert.equal(sends, 1);
+  assert.equal((await cold.call(f.binding, args)).duplicate, true); assert.equal(sends, 1);
+});
+test('an entered arbitrary selector keeps its original ID even when its file dialog cannot run', async t => {
+  const f = fixture(t); let effects = 0;
+  f.handlers.set('customSelector', async c => { effects++; return dialog(c, 'open', { properties: ['openDirectory'] }); });
+  const args = request('customSelector', 'entered-selector'), first = await f.controller.call(f.binding, args);
+  assert.equal(first.reason, 'explicit-paths-required'); assert.equal(f.controller.data.refusals.length, 0);
+  assert.ok(f.controller.receipt(f.actor, args.operation_id));
+  assert.equal((await new BackgroundControl(f.config).call(f.binding, args)).duplicate, true); assert.equal(effects, 1);
+});
+for (const changed of [false, true]) test(`a request waiting for refresh cannot summarize another call's running ID (${changed ? 'changed arguments' : 'same command'})`, async t => {
+  const f = fixture(t), args = request('spaceCreate', 'same-inflight-id', ['Original']);
+  let releaseRefresh, refreshEntered, releaseHandler, handlerEntered, effects = 0, reads = 0;
+  const refreshGate = new Promise(resolve => { releaseRefresh = resolve; }), refreshing = new Promise(resolve => { refreshEntered = resolve; });
+  const handlerGate = new Promise(resolve => { releaseHandler = resolve; }), started = new Promise(resolve => { handlerEntered = resolve; });
+  f.context.refresh = async () => { if (++reads === 1) { refreshEntered(); await refreshGate; } };
+  f.handlers.set('spaceCreate', async () => { effects++; handlerEntered(); await handlerGate; return 'done'; });
+  const waiting = f.controller.call(f.binding, changed ? { ...args, arguments: ['Changed'] } : args);
+  // Attach a rejection observer before releasing either deterministic barrier.
+  const outcome = waiting.then(value => ({ value }), error => ({ error }));
+  let decision;
+  try {
+    await refreshing;
+    assert.equal((await f.controller.call(f.binding, args)).state, 'confirmation-required');
+    decision = f.controller.decide(f.actor.id, f.actor.nativeId, args.operation_id, 1); decision.catch(() => {});
+    await started; releaseRefresh();
+    const result = await outcome;
+    if (changed) assert.match(result.error?.message || '', /different command/);
+    else { assert.equal(result.value.duplicate, true); assert.equal(result.value.state, 'running'); }
+    assert.equal(f.controller.data.records.find(r => r.id === args.operation_id)?.state, 'running');
+    assert.equal(f.controller.data.refusals.length, 0); assert.equal(effects, 1);
+  } finally {
+    releaseRefresh(); releaseHandler(); await outcome; if (decision) await decision;
+  }
+  const cold = new BackgroundControl(f.config);
+  assert.equal((await cold.call(f.binding, args)).duplicate, true); assert.equal(effects, 1);
+});
 for (const provider of ['claude', 'codex']) for (const reason of ['confirmation-limit', 'originating-session-unavailable']) test(`${provider}: repeated ${reason} requests store one small counted summary without arguments`, async t => {
   const f = fixture(t, provider); if (reason === 'confirmation-limit') await fill(f); else f.snapshot.sessions[0].archived = true;
   const before = fs.existsSync(f.controller.file) ? fs.statSync(f.controller.file).size : 0, marker = 'SYNTHETIC_LARGE_REFUSED_PAYLOAD', body = marker + 'x'.repeat(120 * 1024);

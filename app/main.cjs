@@ -1197,14 +1197,14 @@ async function boot() {
       if (onePath && command.paths?.length !== 1) throw new background.PreconditionRefused(uiError('error.background.oneFilePathRequired'), 'invalid-file-path-count');
       if (command.method === 'spaceFiles' && command.arguments[1] === undefined && !command.paths?.length) throw new background.PreconditionRefused(uiError('error.background.importPathsRequired'), 'invalid-file-path-count');
       if ((action === 'readConversation' || ['terminalSnapshot', 'observe', 'terminal'].includes(command.method) && command.arguments[0] !== actor.id) &&
-          !conversationReaderAllowed(actor)) throw uiError('error.background.secretaryConversation');
+          !conversationReaderAllowed(actor)) throw new background.PreconditionRefused(uiError('error.background.secretaryConversation'), 'conversation-access-denied');
       if (command.method === 'spaceFiles' && command.arguments[1] !== undefined) {
         const access = conversationAccess(actor, context.client.snapshot());
-        if (access.secretary || !access.roomIds.includes(command.arguments[0])) throw uiError('error.background.spaceFileMembership');
+        if (access.secretary || !access.roomIds.includes(command.arguments[0])) throw new background.PreconditionRefused(uiError('error.background.spaceFileMembership'), 'space-file-membership-required');
       }
       const state = sessionLabels.apply(roomState.apply(context.client.snapshot()));
       const target = state.sessions.find(s => s.id === backgroundOperation.conversationTarget(command.method, command.arguments, actor));
-      if (action === 'readConversation' && !target) throw uiError('error.background.conversationChanged');
+      if (action === 'readConversation' && !target) throw new background.PreconditionRefused(uiError('error.background.conversationChanged'), 'conversation-target-unavailable');
       return { type: 'warning',
       message: action === 'readConversation' ? displayText('background.readConversationTitle', { name: backgroundOperation.visibleText(actor.name), target: backgroundOperation.visibleText(target.name) })
         : displayText('background.maintenanceTitle', { name: backgroundOperation.visibleText(actor.name), command: displayText('background.action.' + action) }),

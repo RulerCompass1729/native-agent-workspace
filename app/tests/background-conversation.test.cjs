@@ -5,6 +5,34 @@ const { BackgroundControl } = require('../background-control.cjs'), operation = 
 const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
 function part(start, end) { const a = main.indexOf(start), b = main.indexOf(end, a + start.length); assert.ok(a >= 0 && b > a); return main.slice(a, b); }
 const command = (method, args = [], operation_id = randomUUID()) => ({ action: 'invoke', method, arguments: args, operation_id });
+
+for (const provider of ['claude', 'codex']) for (const reason of ['conversation-access-denied', 'space-file-membership-required', 'conversation-target-unavailable'])
+test(`${provider}: pre-consent ${reason} is explicitly not executed and summarized`, async t => {
+  const f = reason === 'space-file-membership-required' ? spaceFileFixture(t, provider) : fixture(t, provider);
+  f.controller.now = () => 60000;
+  const other = f.state.sessions.find(s => s.id === 'other'); let entered = 0;
+  const method = reason === 'conversation-access-denied' ? 'terminalSnapshot' : reason === 'space-file-membership-required' ? 'spaceFiles' : 'initial';
+  f.config.handlers.set(method, () => { entered++; throw Error('Denied handler must never run'); });
+  if (reason === 'conversation-access-denied') f.sandbox.secretary = { sessionId: f.actor.id, nativeId: f.actor.nativeId };
+  if (reason === 'space-file-membership-required') f.state.sessions[0].roomIds = [];
+  if (reason === 'conversation-target-unavailable') {
+    await f.select('other');
+    const confirmation = f.controller.confirmation;
+    f.controller.confirmation = (...args) => { f.state.sessions = f.state.sessions.filter(s => s.id !== 'other'); return confirmation(...args); };
+  }
+  const before = f.controller.data.records.length;
+  let result;
+  for (let n = 0; n < 12; n++) {
+    if (!f.state.sessions.includes(other)) f.state.sessions.push(other);
+    result = await f.controller.call(f.binding, command(method, method === 'spaceFiles' ? ['shared', 'space-file'] : method === 'terminalSnapshot' ? ['other'] : [], 'denied-' + n));
+    assert.equal(result.state, 'not-executed'); assert.equal(result.reason, reason);
+    assert.equal(result.confirmation, undefined);
+  }
+  assert.equal(entered, 0); assert.equal(f.notices.length, 0);
+  assert.equal(f.controller.data.records.length, before); assert.equal(f.controller.data.refusals.length, 1);
+  assert.equal(f.controller.data.refusals[0].refusalSummary.count, 12);
+  assert.equal((await f.controller.call(f.binding, { action: 'receipt', operation_id: result.id })).receipt.reason, reason);
+});
 function fixture(t, provider = 'codex', extra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-conversation-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const actor = { id: 'agent', nativeId: 'native-agent', provider, name: 'Agent' }, handlers = new Map(), contexts = [], audits = [], notices = [];
@@ -214,7 +242,7 @@ test('the secretary designation does not grant foreign conversation access', asy
   await f.select('other'); const metadata = await f.controller.call(f.binding, { action: 'snapshot' });
   assert.equal(metadata.state, 'complete'); assert.equal(JSON.stringify(metadata).includes(f.secret), false); assert.ok(JSON.stringify(metadata).includes('queued-task')); assert.equal(JSON.stringify(metadata).includes('SHARED_RECORD'), false);
   const denied = await f.controller.call(f.binding, command('initial'));
-  assert.equal(denied.state, 'unconfirmed'); assert.equal(JSON.stringify(denied).includes(f.secret), false);
+  assert.equal(denied.state, 'not-executed'); assert.equal(denied.reason, 'conversation-access-denied'); assert.equal(JSON.stringify(denied).includes(f.secret), false);
 });
 test('private-image preview is a conversation read; shared and own images retain their existing path', async t => {
   const f = fixture(t); let reads = 0;
@@ -309,10 +337,11 @@ test('the unread-copy budget evicts older copies without retaining them in the d
 test('navigation receipts do not expose native questions, while changed question content still invalidates consent', async t => {
   const f = fixture(t), selected = await f.select('other');
   assert.equal(JSON.stringify(selected).includes(f.secret), false);
-  assert.match(selected.guard.sessions[0].approval, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(selected.guard.sessions[0].approval, undefined);
   let writes = 0;
   f.config.handlers.set('input', c => require('../background-control.cjs').dialog(c, 'message', { buttons: ['Cancel', 'Confirm'], cancelId: 0 }).then(() => writes++));
   const pending = await f.controller.call(f.binding, command('input', ['agent', 'input'])); assert.equal(pending.state, 'confirmation-required');
+  assert.match(pending.guard.sessions[0].approval, /^sha256:[a-f0-9]{64}$/);
   f.state.sessions[0].approval.params.command = 'CHANGED_NATIVE_QUESTION';
   assert.equal((await f.controller.decide('agent', 'native-agent', pending.id, 1)).state, 'unconfirmed'); assert.equal(writes, 0);
   assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('CHANGED_NATIVE_QUESTION'), false);
@@ -366,14 +395,14 @@ for (const provider of ['claude', 'codex']) for (const [method, body] of Object.
   if (when === 'before-request') designate();
   const pending = await f.controller.call(f.binding, command(method, ['other']));
   if (when === 'before-request') {
-    assert.equal(pending.state, 'unconfirmed'); assert.equal(pending.confirmation, undefined);
+    assert.equal(pending.state, 'not-executed'); assert.equal(pending.reason, 'conversation-access-denied'); assert.equal(pending.confirmation, undefined);
     assert.equal(reads, 0); assert.equal(f.notices.length, 0); return;
   }
   assert.equal(pending.state, 'confirmation-required'); assert.equal(f.notices.length, 1);
   if (when === 'before-approval') designate();
   const approved = await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
   if (when === 'before-approval') {
-    assert.equal(approved.state, 'unconfirmed'); assert.equal(approved.confirmation, undefined);
+    assert.equal(approved.state, 'not-executed'); assert.equal(approved.reason, 'conversation-access-denied'); assert.equal(approved.confirmation, undefined);
     assert.equal(reads, 0); assert.equal(f.notices.length, 1); return;
   }
   assert.equal(approved.state, 'complete'); assert.equal(approved.readState, 'available'); assert.equal(approved.value, undefined);
@@ -467,8 +496,11 @@ for (const provider of ['claude', 'codex']) for (const [method, args] of [
   assert.equal(result.state, 'not-executed'); assert.equal(result.reason, 'invalid-file-path-count');
   assert.deepEqual(Object.keys(result.guard), ['auditRooms']);
   assert.equal(result.confirmation, undefined); assert.equal(f.notices.length, 0); assert.equal(f.fileReads, 0);
-  assert.ok(f.controller.rows(f.actor.id).at(-1).text.includes('未执行'));
-  assert.equal((await f.controller.call(f.binding, { ...command(method, args, result.id), paths })).duplicate, true);
+  assert.equal(f.controller.data.records.length, 0);
+  const receipt = (await f.controller.call(f.binding, { action: 'receipt', operation_id: result.id })).receipt;
+  assert.equal(receipt.id, result.summaryId); assert.equal(receipt.reason, result.reason);
+  const repeated = await f.controller.call(f.binding, { ...command(method, args, result.id), paths });
+  assert.equal(repeated.summaryId, result.summaryId); assert.equal(repeated.count, 2); assert.equal(f.notices.length, 0);
 });
 for (const provider of ['claude', 'codex']) test(`${provider}: an expired export token never asks for a decision`, async t => {
   const f = spaceExportFixture(t, provider);
@@ -522,6 +554,19 @@ for (const typed of [false, true]) test(`a ${typed ? 'typed precondition' : 'nor
   const pending = await f.controller.call(f.binding, args), result = await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
   assert.equal(result.state, 'unconfirmed'); assert.ok(result.guard.sessions); assert.equal(entered, 1);
   assert.equal((await f.controller.call(f.binding, args)).duplicate, true); assert.equal(entered, 1);
+});
+test('a policy refusal after a resumed handler has had effects retains its original unknown record', async t => {
+  const f = fixture(t); let effects = 0;
+  f.config.handlers.set('terminalSnapshot', async c => {
+    effects++; await f.sandbox.background.dialog(c, 'message', { message: 'Follow-up', buttons: ['Cancel', 'Continue'], cancelId: 0 });
+  });
+  const args = command('terminalSnapshot', ['other']);
+  const first = await f.controller.call(f.binding, args), second = await f.controller.decide(f.actor.id, f.actor.nativeId, first.id, 1);
+  assert.equal(second.state, 'confirmation-required'); assert.equal(effects, 1);
+  f.sandbox.secretary = { sessionId: f.actor.id, nativeId: f.actor.nativeId };
+  const denied = await f.controller.decide(f.actor.id, f.actor.nativeId, first.id, 1);
+  assert.equal(denied.state, 'unconfirmed'); assert.ok(denied.guard.sessions); assert.equal(denied.humanDecision, 1);
+  assert.equal(f.controller.data.refusals.length, 0); assert.equal((await f.controller.call(f.binding, args)).duplicate, true); assert.equal(effects, 1);
 });
 test('a precondition after a previously entered resumable handler cannot erase earlier effects', async t => {
   const f = spaceExportFixture(t, 'codex'), c = await f.controller.view(f.actor); let effects = 0;
@@ -579,7 +624,7 @@ for (const provider of ['claude', 'codex']) for (const role of ['member', 'nonme
   const args = command('spaceFiles', ['shared', 'space-file']), pending = await f.controller.call(f.binding, args);
   assert.equal(f.fileReads, 0);
   if (role !== 'member') {
-    assert.equal(pending.state, 'unconfirmed'); assert.equal(pending.confirmation, undefined); assert.equal(pending.value, undefined);
+    assert.equal(pending.state, 'not-executed'); assert.equal(pending.reason, 'space-file-membership-required'); assert.equal(pending.confirmation, undefined); assert.equal(pending.value, undefined);
     assert.equal(f.notices.length, 0); assert.equal(JSON.stringify(pending).includes('Shared material.txt'), false);
     await assert.rejects(f.controller.decide('agent', 'native-agent', pending.id, 1), /no longer current/);
     return;
