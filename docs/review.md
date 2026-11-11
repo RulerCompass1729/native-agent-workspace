@@ -8118,3 +8118,29 @@ rejection assertions, server-request/reply separation, and explicit wording abou
 the direct native sandbox probes and the fresh empty global-instruction home.
 Native version changes, inherited configuration/catalogs and production adoption
 remain explicit qualification gates; all automatic security flags stay false.
+
+### Dedicated butler runner dependency
+
+Scope: the dormant butler's isolated service/NativeHost binding and name-only
+credential presence. No model turn, main activation, native compatibility or
+working-day acceptance is claimed.
+
+- Reproduced: ordinary bootstrap accepted and paused a same-version synthetic
+  butler service. Purpose/binding checks now precede reuse, pause and shutdown.
+- Author-found regression: checking private-directory mode before looking for
+  an optional manifest rejected a legacy ordinary 0755 store. A red/green
+  synthetic-service regression now preserves ordinary behavior while dedicated
+  records and writes retain private-store checks.
+- Independent review approved this dependency only. Two non-blocking observations
+  were subsequently tightened: launch version must match the actual application
+  environment; unsupported dotted/inline provider metadata is explicitly rejected.
+- Verification: isolated real daemon bootstrap with a synthetic native WebSocket
+  server, caller-vs-daemon credential mismatch, binding changes, unknown launch
+  and live orphan protection. These checks issue no provider/model request.
+- Deferred activation gates: actual provider endpoint/wire compatibility, usage,
+  tool/context limits and S2 remain unqualified. An ambiguous pre-exec crash marker
+  stays blocked pending explicit recovery. Same-user path replacement is outside
+  this storage guard's threat model. A mismatch during post-spawn connection can
+  surface as a generic start failure; it still cannot admit another binding.
+- The live compatibility proposal is separately pending explicit approval and
+  enforceable request/fee limits. No installed application was changed.

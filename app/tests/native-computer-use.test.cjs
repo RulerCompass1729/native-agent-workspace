@@ -223,7 +223,7 @@ test('Claude and Codex get the same stdio launcher without foreground/clipboard 
   assert.equal(JSON.stringify(server).includes('--allow-foreground'), false);
   assert.equal(JSON.stringify(server).includes('--allow-temporary-clipboard'), false);
 });
-test('actual provider MCP construction preserves workspace messaging and injects computer use on both launch paths', () => {
+test('actual provider MCP construction preserves workspace messaging and injects computer use on both launch paths', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../adapters.cjs'), 'utf8');
   const begin = source.indexOf('    const mcp = JSON.stringify('), end = source.indexOf('\n    // Native --resume', begin);
   assert.ok(begin >= 0 && end > begin);
@@ -236,7 +236,7 @@ test('actual provider MCP construction preserves workspace messaging and injects
   let captured;
   const host = { codexBinary: '/tmp/naw-test-codex', codexSocket: '/tmp/naw-test-codex.sock', hookSocket: '/tmp/naw-test-hook.sock', codexMessageToken: 'test-only' };
   const descriptor = '/tmp/naw-test-outbox.json', { codexOutboxMcpArgs } = require('../computer-use-outbox-tool.cjs');
-  vm.runInNewContext('(function(){let child;' + source.slice(a, b) + '\n}).call(host)', {
+  await vm.runInNewContext('(async function(){let child;' + source.slice(a, b) + '\n}).call(host)', {
     host, path, process: { execPath: process.execPath, env: { NAW_OUTBOX_DESCRIPTOR: descriptor } }, __dirname: path.resolve(__dirname, '..'), codexComputerUseMcpArgs, codexOutboxMcpArgs,
     nativeEnvironment: () => ({}), spawn: (command, args) => { captured = args; return {}; }
   });

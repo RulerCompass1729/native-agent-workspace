@@ -234,4 +234,4 @@ class ButlerBackend {
   }
 }
 
-module.exports = { ButlerBackend };
+module.exports = { ButlerBackend, butlerBinding: binding };

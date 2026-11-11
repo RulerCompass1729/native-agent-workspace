@@ -223,6 +223,35 @@ async function stopOwnEmptyService(directory) {
   try { await client.call('shutdown'); if (!client.socket.destroyed) await new Promise(resolve => client.socket.once('close', resolve)); }
   finally { client.close(); }
 }
+test('same-version butler service cannot become an ordinary active backend or be paused', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-purpose-reuse-'));
+  const old = process.env.NAW_APP_VERSION;
+  let service;
+  try {
+    process.env.NAW_APP_VERSION = 'purpose-fixture';
+    service = await syntheticService(directory, { runtimeVersion: 'purpose-fixture',
+      serviceBinding: { purpose: 'butler' }, capabilities: [], sessions: [],
+      room: { messages: [], run: { status: 'running', ids: [] } } });
+    await assert.rejects(ensureService(directory, '/no-fixture-process'), /binding-mismatch/);
+    assert.deepEqual(service.calls, ['initial']);
+    assert.equal(readLayout(directory).active, '.');
+  } finally {
+    await service?.close();
+    if (old === undefined) delete process.env.NAW_APP_VERSION; else process.env.NAW_APP_VERSION = old;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+test('an ordinary legacy store without a dedicated manifest keeps its existing directory permission behavior', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-ordinary-mode-'));
+  let service;
+  try {
+    fs.chmodSync(directory, 0o755);
+    service = await syntheticService(directory, { runtimeVersion: process.env.NAW_APP_VERSION || 'ordinary-fixture',
+      sessions: [{ id: 'ordinary', state: 'idle' }], room: { messages: [], run: null } });
+    await ensureService(directory, '/no-fixture-process');
+    assert.deepEqual(service.calls, ['initial']);
+  } finally { await service?.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
 test('normal service bootstrap retains backend runtime paths across restarts without changing another profile', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-runtime-bootstrap-'));
   const key = 'backends/' + 'a'.repeat(20), retained = path.join(directory, key), ordinary = path.join(directory, 'ordinary');

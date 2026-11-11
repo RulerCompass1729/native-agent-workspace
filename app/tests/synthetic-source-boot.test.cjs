@@ -70,6 +70,7 @@ function failedFallback(spawn) {
   const context = vm.createContext({ fs: fakeFs, path, crypto: require('node:crypto'), connectService: async () => { throw Error('Synthetic connection failed'); },
     uiError: message => Error(message), process: { env: {}, kill() { throw Object.assign(Error('Fixture exited'), { code: 'ESRCH' }); } },
     readLock: () => ({ pid: 9876 }), ownerMayBeAlive: () => false, releaseLock: () => true,
+    serviceBinding: { readBinding: () => null, assertBinding() {} },
     processMayBeAlive: () => false, spawn, __dirname: '/synthetic/code/app', require: { resolve: name => '/synthetic/node_modules/' + name },
   });
   vm.runInContext(functionSource + ';globalThis.ensureServiceAt = ensureServiceAt;', context);

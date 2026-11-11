@@ -8,6 +8,7 @@ const { WorkspaceClient } = require('./workspace-client.cjs');
 const { processMayBeAlive } = require('./platform.cjs');
 const { lockIdentity, readLock, createLock, releaseLock, ownerMayBeAlive } = require('./service-lock.cjs');
 
+const serviceBinding = require('./service-binding.cjs');
 const { ServiceClient, connectService } = require('./service-connection.cjs');
 async function connect(dataDir, owner) {
   const layout = readLayout(dataDir);
@@ -15,7 +16,7 @@ async function connect(dataDir, owner) {
   try {
     for (const key of layout.entries) {
       const client = await connectService(path.join(dataDir, key), owner);
-      const entry = { key, client }; entries.push(entry); entry.state = await client.call('initial');
+      const entry = { key, client }; entries.push(entry); entry.state = await client.call('initial'); serviceBinding.assertBinding(entry.state.serviceBinding);
     }
     const client = new WorkspaceClient(entries, layout.active, dataDir); client.snapshot(); return client;
   } catch (error) { for (const e of entries) e.client.close(); throw error; }
@@ -29,12 +30,19 @@ async function waitForShutdown(client, dataDir, identity) {
   }
   throw uiError("error.service.backendCloseUnconfirmed");
 }
-async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowEndedServiceRestart = false) {
+async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowEndedServiceRestart = false, expectedBinding = null) {
+  if (expectedBinding && expectedBinding.runtimeVersion !== (process.env.NAW_APP_VERSION || 'development')) throw serviceBinding.failure('binding-mismatch');
+  serviceBinding.assertBinding(serviceBinding.readBinding(dataDir), expectedBinding);
   let stopping = false;
   try {
     const c = await connectService(dataDir, 'bootstrap');
     try {
       const state = await c.call('initial');
+      serviceBinding.assertBinding(state.serviceBinding, expectedBinding);
+      if (expectedBinding) {
+        if (state.runtimeVersion !== expectedBinding.runtimeVersion) throw serviceBinding.failure('binding-mismatch');
+        return state;
+      }
       if (state.room.run?.status === 'running' && (!state.capabilities?.includes('nativeInputIsolation') || !state.capabilities?.includes('verifiedHandoffs') || ((!state.capabilities?.includes('structuredClaudeSubmit') || !state.capabilities?.includes('claudePromptIdentity')) && state.sessions.some(s => s.provider === 'claude' && state.room.run.ids.includes(s.id))))) await c.call('pause');
       if (!process.env.NAW_APP_VERSION || state.runtimeVersion === process.env.NAW_APP_VERSION || state.sessions.some(s => s.state !== 'ended')) return state;
       if (state.sessions.length && !state.capabilities?.includes('atomicShutdown')) return state;
@@ -48,14 +56,15 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
       stopping = true; await c.call('shutdown');
       await waitForShutdown(c, dataDir, identity);
     } finally { c.close(); }
-  } catch (error) { if (stopping) throw error; }
+  } catch (error) { if (stopping || error.code === 'binding-mismatch') throw error; }
   const lock = path.join(dataDir, 'service.lock');
   if (fs.existsSync(lock)) {
     const record = readLock(lock);
     if (!record) throw uiError("error.service.recordCorrupted");
     if (ownerMayBeAlive(record, dataDir, 'service') || !releaseLock(lock, record)) throw uiError("error.service.existingBackendUnreachable");
   }
-  const names = ['service-lock.cjs', 'ui-errors.cjs', 'ui-locale.js', 'ui-messages.js', 'service-transport.cjs', 'daemon.cjs', 'adapters.cjs', 'native-computer-use.cjs', 'computer-use-outbox-native.cjs', 'scoped-outbox-runtime.cjs', 'background-control.cjs', 'background-operation.cjs', 'background-control-native.cjs', 'computer-use-outbox-tool.cjs', 'operator-control.cjs', 'terminal-keyboard.cjs', 'terminal-continuation.js', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'backend-switch.cjs', 'goal-continuation.cjs', 'goal-continuation-runner.cjs', 'git-worktree.cjs', 'collaboration-spaces.cjs', 'space-merge.cjs', 'session-labels.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'native-blocks.cjs', 'native-images.cjs', 'space-images.cjs', 'local-images.cjs', 'shared-replies.cjs', 'session-wake.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'codex-qualification.cjs', 'claude-pin.cjs', 'codex-surface.cjs', 'codex-surface/0.167.0.json', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs', 'claude-compat-plugin.cjs'];
+  if (expectedBinding && !serviceBinding.runnerAbsent(dataDir)) throw serviceBinding.failure('runner-exit-unconfirmed');
+  const names = ['service-binding.cjs', 'butler-backend.cjs', 'butler-runner.cjs', 'butler-runner.py', 'service-lock.cjs', 'ui-errors.cjs', 'ui-locale.js', 'ui-messages.js', 'service-transport.cjs', 'daemon.cjs', 'adapters.cjs', 'native-computer-use.cjs', 'computer-use-outbox-native.cjs', 'scoped-outbox-runtime.cjs', 'background-control.cjs', 'background-operation.cjs', 'background-control-native.cjs', 'computer-use-outbox-tool.cjs', 'operator-control.cjs', 'terminal-keyboard.cjs', 'terminal-continuation.js', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'backend-switch.cjs', 'goal-continuation.cjs', 'goal-continuation-runner.cjs', 'git-worktree.cjs', 'collaboration-spaces.cjs', 'space-merge.cjs', 'session-labels.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'native-blocks.cjs', 'native-images.cjs', 'space-images.cjs', 'local-images.cjs', 'shared-replies.cjs', 'session-wake.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'codex-qualification.cjs', 'claude-pin.cjs', 'codex-surface.cjs', 'codex-surface/0.167.0.json', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs', 'claude-compat-plugin.cjs'];
   const localLocations = path.join(dataDir, 'runtime-locations.json');
   let runtimeConfig = process.env.NAW_RUNTIME_CONFIG;
   // Keep Settings reachable when the root backend shares the global file.
@@ -83,7 +92,7 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
     }
   }
   const child = spawn(executablePath, ['--disable-sigusr1', path.join(runtime, 'daemon.cjs'), dataDir], { detached: true, stdio: 'ignore', env: { ...process.env, NAW_RUNTIME_CONFIG: runtimeConfig, NAW_WORKSPACE: defaultWorkspace, ELECTRON_RUN_AS_NODE: '1' } }); child.unref();
-  for (let i = 0; i < 100; i++) { try { const c = await connectService(dataDir, 'bootstrap'); try { return await c.call('initial'); } finally { c.close(); } } catch {} await new Promise(r => setTimeout(r, 100)); }
+  for (let i = 0; i < 100; i++) { try { const c = await connectService(dataDir, 'bootstrap'); try { const state = await c.call('initial'); serviceBinding.assertBinding(state.serviceBinding, expectedBinding); return state; } finally { c.close(); } } catch {} await new Promise(r => setTimeout(r, 100)); }
   throw uiError("error.service.startFailed");
 }
 function emptyService(state) {
@@ -180,4 +189,4 @@ async function continueService(dataDir, executablePath, id) {
     return { key };
   } finally { fresh.close(); }
 }
-module.exports = { ServiceClient, connect, connectService, ensureService, continuationStatus, continueService };
+module.exports = { ServiceClient, connect, connectService, ensureService, continuationStatus, continueService, ensureServiceAt };

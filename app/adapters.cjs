@@ -2605,7 +2605,8 @@ async function workspaceMcpProof(runtime, identity, args, socket) {
 }
 
 class NativeHost {
-  constructor(privateDir, dataDir = privateDir) {
+  constructor(privateDir, dataDir = privateDir, binding = null) {
+    this.serviceBinding = binding === null ? null : Object.freeze(require('./butler-backend.cjs').butlerBinding(binding));
     // privateDir is the per-start socket folder; dataDir persists across restarts.
     this.privateDir = privateDir; this.dataDir = dataDir; this.hookSocket = path.join(privateDir, 'hooks.sock');
     this.submitSocket = path.join(privateDir, 'submit.sock');
@@ -2731,7 +2732,7 @@ class NativeHost {
         this.rpc = rpc; this.disposeCodexConnection = dispose;
         this.codexAccountUsage = null;
         initialized = true; retire();
-        readAccount();
+        if (!this.serviceBinding) readAccount();
       },
       dispose,
     };
@@ -2783,6 +2784,7 @@ class NativeHost {
   // A Codex version newer than the qualified baseline is compared in the background (B3);
   // its gates stay closed until a decision opens them, and targets then recheck.
   qualifyCodexVersion(version) {
+    if (this.serviceBinding) return;
     if (this.closed || !this.codexBinary || !codexQualification.needsCheck(version) || this.codexQualifying?.version === version) return;
     const job = this.codexQualifying = { version };
     job.done = codexQualification.qualify({ binary: this.codexBinary, version, privateDir: this.privateDir })
@@ -2800,6 +2802,7 @@ class NativeHost {
   }
   async startCodex() {
     if (this.closed) throw uiError("error.nativeServiceClosed");
+    if (this.serviceBinding) require('./butler-runner.cjs').checkProfile();
     if (this.rpc) return;
     if (this.starting) return this.starting;
     this.starting = Promise.resolve().then(async () => {
@@ -2833,7 +2836,17 @@ class NativeHost {
         ...(process.env.NAW_OUTBOX_DESCRIPTOR ? [['env.NAW_CONTROL_DESCRIPTOR', process.env.NAW_OUTBOX_DESCRIPTOR]] : []),
       ].flatMap(([key, value]) => ['-c', `mcp_servers.native_workspace.${key}=${JSON.stringify(value)}`]);
       const outboxConfig = process.env.NAW_OUTBOX_DESCRIPTOR ? codexOutboxMcpArgs(process.env.NAW_OUTBOX_DESCRIPTOR) : [];
-      child = this.codexProcess = spawn(this.codexBinary, ['-c', 'analytics.enabled=false', ...mcpConfig, ...codexComputerUseMcpArgs(), ...outboxConfig, 'app-server', '--listen', `unix://${this.codexSocket}`], { stdio: ['ignore', 'ignore', 'pipe'], env: nativeEnvironment() });
+      if (this.serviceBinding) {
+        require('./service-binding.cjs').beginRunner(this.dataDir);
+        const launched = require('./butler-runner.cjs').spawnRunner(this.codexBinary,
+          ['-c', 'analytics.enabled=false', 'app-server', '--listen', `unix://${this.codexSocket}`], this.serviceBinding, this.binaries.python);
+        child = this.codexProcess = launched.child;
+        // Install listeners before awaiting the metadata-only child preflight.
+        child.stderr.on('data', () => {}); child.on('error', error => { spawnError = error; });
+        this.butlerCredentialPresent = await launched.preflight;
+      } else {
+        child = this.codexProcess = spawn(this.codexBinary, ['-c', 'analytics.enabled=false', ...mcpConfig, ...codexComputerUseMcpArgs(), ...outboxConfig, 'app-server', '--listen', `unix://${this.codexSocket}`], { stdio: ['ignore', 'ignore', 'pipe'], env: nativeEnvironment() });
+      }
       child.stderr.on('data', () => {});
       child.on('error', error => { spawnError = error; });
       for (let i = 0; i < 100 && !fs.existsSync(this.codexSocket); i++) {
@@ -2861,6 +2874,7 @@ class NativeHost {
       if (ws.readyState !== WebSocket.OPEN) throw uiError("error.nativeConnectionClosedDuringStart");
       const verifiedEndpoint = this.readCodexEndpoint();
       if (Object.keys(endpoint).some(key => verifiedEndpoint[key] !== endpoint[key])) throw uiError("error.nativeInterfaceChangedDuringStart");
+      if (this.serviceBinding) require('./service-binding.cjs').confirmRunner(this.dataDir, child.pid);
       this.codexEndpoint = endpoint;
       ws.send(JSON.stringify({ method: 'initialized', params: {} }));
       watcher.activate();
@@ -2886,6 +2900,7 @@ class NativeHost {
     return this.starting;
   }
   create(record) {
+    if (this.serviceBinding) throw require('./service-binding.cjs').failure('butler-qualification-required');
     this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() };
     if (!this.binaries[record.provider] || !this.binaries.python) throw uiError("error.nativeRuntimeMissing");
     if (record.provider === 'codex' && this.codexBinary && this.codexBinary !== this.binaries.codex) throw uiError("error.codexLocationChanged");
