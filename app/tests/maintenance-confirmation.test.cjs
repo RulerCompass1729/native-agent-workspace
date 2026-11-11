@@ -46,9 +46,9 @@ test('unanswered confirmations have per-actor and global bounds; cancellation re
   assert.equal(f.controller.data.records.filter(r => r.state === 'confirmation-required').length, 128);
   assert.equal(f.writes.length, 0); assert.equal(f.room.value.events.at(-1).controlAudit.state, 'not-executed');
   await f.controller.decide('bounded-agent-0', 'bounded-native-0', 'pending-0-0', 0);
-  assert.equal((await ask(bindings[4], limited.retryOperationIdPrefix + 'new-global-slot')).state, 'confirmation-required');
+  assert.equal((await ask(bindings[4], 'new-global-slot')).state, 'confirmation-required');
   assert.equal((await ask(bindings[4], 'global-limit')).state, 'not-executed');
-  assert.equal((await f.controller.call(bindings[4], { action: 'invoke', method: 'spaceCreate', arguments: ['Changed intent'], operation_id: 'global-limit' })).reason, 'new-operation-id-required');
+  assert.equal((await f.controller.call(bindings[4], { action: 'invoke', method: 'spaceCreate', arguments: ['Changed intent'], operation_id: 'global-limit' })).reason, 'confirmation-limit');
   assert.equal(f.writes.length, 0);
 });
 for (const mode of ['forgotten', 'native-replaced', 'archived', 'context-pending']) test(`unanswerable ${mode} actor confirmations cannot exhaust the global allowance`, async t => {
@@ -70,7 +70,7 @@ for (const mode of ['forgotten', 'native-replaced', 'archived', 'context-pending
   if (mode === 'native-replaced') prior.nativeId = 'replacement-native';
   if (mode === 'archived') prior.archived = true;
   if (mode === 'context-pending') prior.nativeContextPending = true;
-  const next = await ask(bindings[4], refused.retryOperationIdPrefix + 'after-orphan');
+  const next = await ask(bindings[4], 'after-orphan');
   assert.equal(next.state, 'confirmation-required'); assert.equal(f.writes.length, 0);
   assert.equal(f.controller.data.records.find(r => r.id === 'template-0').state, 'confirmation-required', 'History is retained and never replayed or silently approved');
 });
@@ -88,7 +88,7 @@ for (const provider of ['claude', 'codex']) for (const mode of ['missing', 'nati
   assert.equal(first.state, 'not-executed'); assert.equal(first.reason, 'originating-session-unavailable');
   assert.equal(first.confirmation, undefined); assert.equal(f.writes.length, 0); assert.equal(notices.length, 0);
   assert.equal(f.controller.data.records.filter(r => r.state === 'confirmation-required').length, 0);
-  assert.equal((await f.controller.call(f.binding, rejected)).reason, 'new-operation-id-required');
+  assert.equal((await f.controller.call(f.binding, rejected)).reason, 'originating-session-unavailable');
   for (let n = 0; n < 33; n++) {
     const next = await f.controller.call(f.binding, { ...rejected, operation_id: 'blocked-' + n });
     assert.equal(next.state, 'not-executed'); assert.equal(next.confirmation, undefined);
@@ -100,9 +100,10 @@ for (const provider of ['claude', 'codex']) for (const mode of ['missing', 'nati
   const restored = { ...self, nativeId: f.binding.sender.nativeId, archived: false, nativeContextPending: false };
   if (mode === 'missing') sessions.push(restored); else Object.assign(self, restored);
   f.context.fingerprint = fingerprint;
-  assert.equal((await f.controller.call(f.binding, rejected)).state, 'not-executed', 'Restoring the actor cannot replay an already refused ID');
-  const fresh = await f.controller.call(f.binding, { ...rejected, operation_id: first.retryOperationIdPrefix + 'fresh-after-restoration' });
-  assert.equal(fresh.state, 'confirmation-required'); assert.equal(notices.length, 1);
+  assert.equal((await f.controller.call(f.binding, rejected)).state, 'confirmation-required', 'A compacted refused ID becomes a new request and still needs consent');
+  assert.equal(f.writes.length, 0); assert.equal(notices.length, 1);
+  const fresh = await f.controller.call(f.binding, { ...rejected, operation_id: 'fresh-after-restoration' });
+  assert.equal(fresh.state, 'confirmation-required'); assert.equal(notices.length, 1, 'Equivalent waiting requests share one notification');
 });
 for (const provider of ['claude', 'codex']) for (const [index, [method, args]] of cases.entries()) test(`${provider} ${method}[${index}]: pending and cancel have no effect, human approval executes once`, async t => {
   const f = fixture(t, provider), command = { action: 'invoke', operation_id: 'refuse', method, arguments: args };

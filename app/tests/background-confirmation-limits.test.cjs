@@ -148,8 +148,8 @@ test('failed refresh while admitting a dialog leaves a refusal, not a running op
   assert.equal(result.state, 'not-executed'); assert.equal(result.reason, 'originating-session-unavailable'); assert.equal(result.retryWithNewOperationId, true);
   assert.equal(result.confirmation, undefined); assert.deepEqual(result.guard, { auditRooms: ['shared'] }); assert.equal(f.notices.length, 0);
   c.refresh = async () => {};
-  const duplicate = await f.controller.call(f.binding(), args); assert.equal(duplicate.reason, 'new-operation-id-required'); assert.equal(duplicate.retryWithNewOperationId, true);
-  assert.equal((await f.controller.call(f.binding(), { ...args, operation_id: result.retryOperationIdPrefix + 'fresh-after-refresh' })).state, 'confirmation-required');
+  assert.equal((await f.controller.call(f.binding(), args)).state, 'confirmation-required');
+  assert.equal((await f.controller.call(f.binding(), { ...args, operation_id: 'fresh-after-refresh' })).state, 'confirmation-required');
 });
 for (const provider of ['claude', 'codex']) test(`${provider}: 33 real chooseFolder calls without paths leave normal confirmations available`, async t => {
   const f = fixture(t, provider);

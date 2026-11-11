@@ -71,7 +71,7 @@ const parameters = {
   chooseFolder: [], newWindow: ['sessionId?; returns an independent hidden view_id'], copy: ['text; independent clipboard only'], pasteText: [],
   stageImages: ['sessionId', 'nativeId', 'files'], pasteNativeContent: ['sessionId', 'nativeId'], previewImage: ['source'], expandImage: ['token'], copyImage: ['token'], releaseImage: ['token'],
 };
-const tool = { name: 'workspace_control', description: 'Operate NAW in the background without moving the desktop pointer or changing the human window. Discover commands with catalog, inspect the independent view with snapshot, invoke an exact existing application command, and read durable receipts. Native permissions and human confirmations remain required. Never resend an uncertain operation. This tool does not authorize new work.',
+const tool = { name: 'workspace_control', description: 'Operate NAW in the background without moving the desktop pointer or changing the human window. Discover commands with catalog, inspect the independent view with snapshot, invoke an exact existing application command, and read durable receipts. Native permissions and human confirmations remain required. Refused invoke and snapshot requests may be summarized; reusing a summarized refused ID is a new request through current admission and any required human confirmation. Executed, uncertain and human-cancelled IDs never replay. Never resend an uncertain operation. This tool does not authorize new work.',
   inputSchema: { type: 'object', additionalProperties: false, properties: {
     action: { type: 'string', enum: ['catalog', 'snapshot', 'invoke', 'receipt'] },
     view_id: { type: 'string', maxLength: 160 },
@@ -120,7 +120,7 @@ class BackgroundControl {
       this.data.refusals ||= []; this.data.refusalActors ||= {};
       const object = v => v && typeof v === 'object' && !Array.isArray(v);
       const counter = v => object(v) && token(v.id) && positiveCount(v.count) && object(v.rooms) && Object.entries(v.rooms).every(([id, r]) => validRoomId(id) && object(r) && positiveCount(r.count) && positiveCount(r.sequence) && token(r.lastMethod));
-      if (!object(this.data.refusalActors) || Object.values(this.data.refusalActors).some(v => !object(v) || !/^retry:[a-f0-9-]{36}:$/.test(v.prefix) || !positiveCount(v.sequence) || !Number.isSafeInteger(v.windowStart) || v.windowStart < 0 || !object(v.counts) || Object.entries(v.counts).some(([reason, c]) => !summarizedReasons.has(reason) || !counter(c))) ||
+      if (!object(this.data.refusalActors) || Object.values(this.data.refusalActors).some(v => !object(v) || !positiveCount(v.sequence) || !Number.isSafeInteger(v.windowStart) || v.windowStart < 0 || !object(v.counts) || Object.entries(v.counts).some(([reason, c]) => !summarizedReasons.has(reason) || !counter(c))) ||
           !Array.isArray(this.data.refusals) || this.data.refusals.length > MAX_REFUSAL_SUMMARIES || this.data.refusals.some(r => !token(r.id) || !r.actor || r.state !== 'not-executed' || !r.command || !summarizedReasons.has(r.refusalSummary?.reason) || !counter(r.refusalSummary) || !this.data.refusalActors[this.key(r.actor)])) throw Error('Invalid refusal summaries');
       // A process died after recording intent. No automatic replay.
       if (this.data.records.some(r => r.state === 'running' || ['available', 'pending'].includes(r.readState) || privateRead(r.command) && Object.hasOwn(r, 'value') ||
@@ -221,17 +221,6 @@ class BackgroundControl {
     }
     return this.receipt(actor, id);
   }
-  retryIds(actor) {
-    if (this.failed) throw Error('Background operation storage is unavailable');
-    const prefix = this.data.refusalActors[this.key(actor)]?.prefix;
-    return prefix ? { retryWithNewOperationId: true, retryOperationIdPrefix: prefix, suggestedOperationId: prefix + randomUUID(),
-      retryHint: 'After refreshing the session or freeing a confirmation slot, each new operation_id for invoke must use retryOperationIdPrefix plus a unique suffix. IDs replaced by refusal summaries never execute.' } : {};
-  }
-  staleRefusalId(actor, args) {
-    const retry = this.retryIds(actor);
-    return retry.retryOperationIdPrefix && !args.operation_id.startsWith(retry.retryOperationIdPrefix)
-      ? { ...refusalDetails('new-operation-id-required'), ...retry, id: args.operation_id, method: args.method } : null;
-  }
   async recordRefusal(actor, args, context, reason) {
     const key = this.key(actor), now = this.now(); let guard, id;
     try { guard = controlGuard(context, args); } catch { /* A failed refresh must still refuse safely. */ }
@@ -243,7 +232,7 @@ class BackgroundControl {
       const state = d.refusalActors[key] ||= { sequence: 0, windowStart: start, counts: {} };
       if (state.windowStart !== start) { state.windowStart = start; state.counts = {}; }
       state.sequence = nextCount(state.sequence);
-      do { state.prefix = 'retry:' + randomUUID() + ':'; } while (args.operation_id.startsWith(state.prefix));
+      delete state.prefix; // The unpublished prefix-based candidate is no longer a protocol rule.
       if (!state.counts[reason]) {
         do { id = 'refusal:' + randomUUID(); } while (id === args.operation_id || [...d.records, ...d.refusals].some(r => r.id === id));
         state.counts[reason] = { id, count: 0, rooms: {} };
@@ -269,7 +258,9 @@ class BackgroundControl {
       auditError = 'The refusal summary space event could not be saved';
       this.commit(d => { const row = d.refusals.find(r => r.id === id); if (row) row.auditError = 'The refusal summary space event could not be saved'; });
     }
-    return { ...refusalDetails(reason), ...this.retryIds(actor), id: args.operation_id, actor, method: args.method,
+    return { ...refusalDetails(reason), retryWithNewOperationId: true,
+      retryHint: 'For invoke or snapshot, use a new operation_id after the source recovers or a confirmation slot is free. Reusing a compacted refused ID is a new request through current admission and any required confirmation.',
+      id: args.operation_id, actor, method: args.method,
       guard: { auditRooms: rooms }, summaryId: id, count: summary.refusalSummary.count,
       ...(auditError ? { auditError } : {}) };
   }
@@ -350,12 +341,10 @@ class BackgroundControl {
       });
       return this.finishAudit(actor, args.operation_id, context);
     };
-    const stale = this.staleRefusalId(actor, args); if (stale) return stale;
     if (!handler || this.inflight.has(key)) return refuse(handler ? 'another-operation-running' : 'unknown-command');
     // Busy decisions reserve their actor before awaits. Refresh only an idle
     // independent view, then check the reservation again before saving intent.
     await context.refresh?.(); await valid();
-    const refreshedStale = this.staleRefusalId(actor, args); if (refreshedStale) return refreshedStale;
     if (this.inflight.has(key)) return refuse('another-operation-running');
     const guard = controlGuard(context, args);
     if (operation.maintenanceAction(args.method, args.arguments, actor)) {
@@ -436,6 +425,12 @@ class BackgroundControl {
         }
         else { state = 'unconfirmed'; error = typeof e.message === 'string' ? e.message.slice(0, 2048) : 'Operation outcome is unconfirmed'; }
       }
+      // A prior approval may already have allowed effects. Keep that original
+      // operation and its unknown outcome instead of summarizing it as not run.
+      if (refusal && approved) {
+        refusal = { state: 'unconfirmed', reason: 'follow-up-confirmation-refused', confirmationRefusal: refusal.reason, retry: false };
+        state = 'unconfirmed'; error = 'A follow-up confirmation was refused after approval; inspect the original operation and do not repeat it.';
+      }
       if (refusal && summarizedReasons.has(refusal.reason)) return this.recordRefusal(actor, args, context, refusal.reason);
       const privateValue = value !== undefined && privateRead(args), readValue = privateValue ? clone(value) : null;
       const target = privateValue ? readTarget(this.data.records.find(r => r.id === args.operation_id && this.key(r.actor) === key), readValue) : null;
@@ -446,7 +441,7 @@ class BackgroundControl {
         Object.assign(row, { state, finishedAt: this.now(), ...(privateValue ? { readTarget: target, readState: row.readAuthorization ? 'pending' : 'consumed',
           ...(!row.readAuthorization ? { readConsumedAt: this.now() } : {}) } : value === undefined ? {} : { value: clone(value) }),
           ...(delivery ? { delivery } : {}), ...(error ? { error } : {}), ...(confirmation ? { confirmation } : {}) });
-        if (refusal) { Object.assign(row, refusal); compactRefusal(row); }
+        if (refusal) { Object.assign(row, refusal); if (!approved) compactRefusal(row); }
       });
       const result = await this.finishAudit(actor, args.operation_id, context);
       if (result.state === 'confirmation-required' && result.confirmation?.kind === 'message' && !Object.hasOwn(result, 'confirmationNotifiedAt') && this.confirmationPending) {
