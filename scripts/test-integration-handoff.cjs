@@ -135,15 +135,19 @@ async function run() {
   const second = await createSession('队员乙', true);
   const integrator = await createSession('集成者', false);
   assert.ok(integrator.nativeId && member.nativeId && second.nativeId, 'The synthetic sessions have native ids');
-  // The integrator works in a real repository: main, and each member's delivery on its own branch.
+  // "main" lives in a real repository of its own, beside this run's session folders: main, and each member's
+  // delivery on its own branch. The integrator's session folder holds no repository at all, so a merge that
+  // checks out can only have been read in the repository the person chose.
   // Git runs only in the folder this run's own profile gave the session, never anywhere else.
   const folder = integrator.cwd;
   assert.equal(path.dirname(folder), path.resolve(profile) + '-sessions', 'The integrator works in this run\'s own temporary folder');
   assert.ok(fs.statSync(folder).isDirectory() && !fs.existsSync(path.join(folder, '.git')));
+  const repo = path.join(path.dirname(folder), 'synthetic-main-repository');
+  fs.mkdirSync(repo);
   const gitEnv = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/.test(name))), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' };
   const git = (...args) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'user.name=Synthetic fixture', '-c', 'user.email=fixture@example.com', ...args],
-    { cwd: folder, env: gitEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  const commit = (file, text) => { fs.writeFileSync(path.join(folder, file), text); git('add', '--', file); git('commit', '--quiet', '-m', `Synthetic ${file}`); return git('rev-parse', 'HEAD'); };
+    { cwd: repo, env: gitEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const commit = (file, text) => { fs.writeFileSync(path.join(repo, file), text); git('add', '--', file); git('commit', '--quiet', '-m', `Synthetic ${file}`); return git('rev-parse', 'HEAD'); };
   git('init', '--quiet', '--initial-branch=main');
   commit('synthetic-base.txt', 'base\n');
   git('checkout', '--quiet', '-b', 'lane/a');
@@ -178,8 +182,11 @@ async function run() {
   assert.equal((await sends()).filter(send => send.text.includes('【NAW 集成交接】')).length, 0);
   assert.deepEqual(await page.evaluate(() => workspace.handoff('repository')), { root: null, problem: null });
   // The person chooses it from their own window: this run's temporary repository, by its real path (a path through a link is refused).
-  const main = fs.realpathSync(folder);
-  await assert.rejects(page.evaluate(inside => workspace.handoff('setRepository', inside), path.join(main, '.git')), /主仓库/);
+  const main = fs.realpathSync(repo);
+  // A folder inside the repository is refused in words, and so is the integrator's own session folder, which is no repository.
+  const refusal = target => page.evaluate(async value => { try { await workspace.handoff('setRepository', value); return null; } catch (error) { return String(error?.uiMessage?.key || error?.message || error); } }, target);
+  for (const [target, words] of [[path.join(main, '.git'), /repositoryNotMain|最上层文件夹/], [fs.realpathSync(folder), /repositoryUnsafe|不是一个 Git 仓库/]]) assert.match(String(await refusal(target)), words, target);
+  assert.deepEqual(await page.evaluate(() => workspace.handoff('repository')), { root: null, problem: null }, 'A refused folder is not recorded');
   assert.deepEqual(await page.evaluate(root => workspace.handoff('setRepository', root), main), { root: main });
   await until(async () => (await sends()).some(send => send.id === integrator.id && send.text.startsWith('【NAW 集成交接】')), 'The handoff reaches the integrator');
   const handoff = (await sends()).find(send => send.text.startsWith('【NAW 集成交接】'));
@@ -220,6 +227,7 @@ async function run() {
   assert.ok(!shown.some(text => text.includes('修好列表') || text.includes('补上说明')), 'No notice carries a task\'s text');
   passed.push('The install question was answered through the window\'s entry; one handoff and three notices in all, none with task text');
 
+  assert.equal(fs.existsSync(path.join(folder, '.git')), false, 'The integrator\'s own session folder never held a repository');
   assert.deepEqual(errors, []);
   assert.equal(app.windows().length, 1);
   console.log(JSON.stringify({ passed, errors, syntheticDispatches: all.length, notices: shown, nativeProviderProcesses: 0, nativeModelCalls: 0 }));

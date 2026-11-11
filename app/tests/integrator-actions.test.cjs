@@ -31,9 +31,9 @@ function fixture(t, enabled = true, options = {}) {
   // The dispatcher as the entry sees it: its schedule, and the engine fault it kept (none unless a test sets one).
   f.dispatcher = { schedule() { f.schedules += 1; }, integrationError: null };
   // The repository choice as the engine's builder makes it in main.cjs, on a real record and the real git reader.
-  f.repository = new IntegrationRepository(directory);
+  f.repository = new IntegrationRepository(directory); f.unblocked = 0;
   const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, ipcMain: { handle() {} }, integrationHandoffs: enabled ? handoffs : null, integrationFault: null, Date,
-    integrationRepository: null, repository: f.repository, integratorGit,
+    integrationRepository: null, repository: f.repository, integratorGit, handoffs, engine: { unblock() { f.unblocked += 1; } },
     broadcastRoom: async () => { f.broadcasts += 1; }, queueDispatcher: options.noDispatcher ? null : f.dispatcher });
   vm.runInContext(slice('function register(name, handler) {', 'async function replaceBackendSockets'), context);
   vm.runInContext(slice('function handoffOverview(handoffs) {', '\n// One notice for one reason of the integration handoff'), context);
@@ -205,9 +205,17 @@ test('the person chooses the main repository, sees it and clears it; an agent ca
   await assert.rejects(f.person('setRepository', base), refused('error.handoff.repositoryUnsafe'), 'A folder that is in no repository');
   for (const bad of [7, {}, 'relative', '']) await assert.rejects(f.person('setRepository', bad), refused('error.handoff.repositoryUnsafe'), JSON.stringify(bad));
   assert.deepEqual([fs.existsSync(path.join(f.directory, REPOSITORY_FILE)), f.broadcasts, f.schedules], [false, 0, 0]);
-  // The person's choice is recorded; every window is told and the dispatcher looks again.
+  // The person had been asked about the missing repository.
+  f.handoffs.noteReady(ready('a'), NOW);
+  const asking = { integrator: INTEGRATOR, session: integratorSession(), complete: true, wakePolicy: { enabled: true }, now: NOW, idleSince: new Map([['integrator', NOW - rules.IDLE_SETTLE_MS]]), humanAt: new Map(), mainHead: MAIN, repository: null };
+  assert.equal(f.handoffs.advance(asking, NOW).reason, 'repository-unset');
+  assert.equal(f.handoffs.snapshot().reasons['repository-unset'].open, true);
+  // The person's choice is recorded; the question is over, what waited for it is tried at once, every window is told and the dispatcher looks again.
   assert.deepEqual(plain(await f.person('setRepository', repo)), { root: repo });
-  assert.deepEqual([f.broadcasts, f.schedules], [1, 1]);
+  assert.deepEqual([f.broadcasts, f.schedules, f.unblocked, f.handoffs.snapshot().reasons['repository-unset'].open], [1, 1, 1, false]);
+  // Only an explicit null clears the choice: a call without a folder is refused and changes nothing.
+  await assert.rejects(f.person('setRepository'), refused('error.handoff.repositoryUnsafe'));
+  assert.deepEqual([new IntegrationRepository(f.directory).chosen(), f.broadcasts, f.unblocked], [repo, 1, 1]);
   assert.deepEqual(plain(await f.person('repository')), { root: repo, problem: null });
   assert.deepEqual(plain((await f.person('list')).repository), { root: repo, problem: null });
   assert.equal(new IntegrationRepository(f.directory).chosen(), repo);
@@ -217,7 +225,7 @@ test('the person chooses the main repository, sees it and clears it; an agent ca
   // Cleared with null (or nothing): none.
   assert.deepEqual(plain(await f.person('setRepository', null)), { root: null });
   assert.deepEqual(plain(await f.person('repository')), { root: null, problem: null });
-  assert.deepEqual([f.broadcasts, f.schedules], [2, 2]);
+  assert.deepEqual([f.broadcasts, f.schedules, f.unblocked], [2, 2, 1], 'Clearing unblocks nothing: there is nothing to try');
   // An agent can neither look nor choose, whatever it names.
   for (const args of [['repository'], ['setRepository', repo], ['setRepository', null]]) await assert.rejects(f.agent(...args), refused('error.handoff.personOnly'), JSON.stringify(args));
   assert.equal(new IntegrationRepository(f.directory).chosen(), null);

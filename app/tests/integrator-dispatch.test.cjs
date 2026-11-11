@@ -496,7 +496,7 @@ test('a member that holds an open handoff: its space is told once that the queue
   g.dispatcher.integration.handoffs = new IntegrationHandoffs(g.directory);
   assert.equal(g.dispatcher.integration.holder(), null);
   // The main process gives the engine the space record's writer and the dispatcher's names.
-  assert.match(fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8'), /\n    holderRecord: fact => roomState\.recordHandoffHolder\(fact\), nameOf: session => dispatcher\.name\(session\),\n    repository: \(\) => \(repository\.usable\(\) \? true : null\) \}\);\n/);
+  assert.match(fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8'), /\n    holderRecord: fact => roomState\.recordHandoffHolder\(fact\), nameOf: session => dispatcher\.name\(session\),\n    repository: \(\) => \(repository\.usable\(\) \? true : null\), open \}\);\n/);
   // A name that is missing falls back to the session's id; the sentences exist in both languages.
   assert.equal(f.room.recordHandoffHolder({ roomId: 'shared', sessionId: 'integrator', handoffId: 'H9-00000000' }).recorded, true);
   assert.ok(told()[2][2].startsWith('integrator 正在处理一份集成交接'));
@@ -525,9 +525,16 @@ test('with no main repository that can be read the deliveries wait and the perso
   f.dispatcher.lastMaintenance = 0;
   await f.pass();
   assert.deepEqual([f.calls.length, f.notices.length], [1, 1]);
-  // The person chooses one: the next pass hands the delivery out, and main is read there.
-  f.repository = true;
-  f.dispatcher.lastMaintenance = 0;
+  // The person chooses one, as the entry does it: the question is closed and the engine tries again at once.
+  const choose = () => { f.handoffs.reasonCleared('repository-chosen'); f.dispatcher.integration.unblock(); };
+  f.repository = true; choose();
+  assert.equal(f.dispatcher.hasOpenWork(), true, 'It is work again without waiting for another reason to pass');
+  // It is lost again before any handoff opened (the folder fails a check): the person is asked again.
+  f.repository = null;
+  await f.pass(); await f.pass();
+  assert.deepEqual([f.calls.length, f.notices.map(info => info.reason)], [1, ['repository-unset', 'repository-unset']]);
+  // Chosen again: the next pass hands the delivery out, and main is read there.
+  f.repository = true; choose();
   await f.pass();
   assert.deepEqual([f.calls.length, f.states(), f.handoffs.snapshot().reasons['repository-unset'].open], [2, { 'lane/a': 'handed' }, false]);
   assert.ok(f.heads > 0);

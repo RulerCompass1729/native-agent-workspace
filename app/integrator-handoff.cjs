@@ -841,6 +841,7 @@ class IntegrationHandoffs {
   //   the cap again does not ask twice.
   // - 'lock-released' with the owner whose lock was let go.
   // - 'integrator-designated': the person designated an integrator.
+  // - 'repository-chosen': the person chose a main repository.
   reasonCleared(kind, subject) {
     const next = this.draft();
     let match, close = true;
@@ -852,6 +853,8 @@ class IntegrationHandoffs {
       next.capDay = subject; match = reason => reason === 'review-cap'; close = false;
     } else if (kind === 'lock-released' && plain(subject, 200) && reasonKey(`lock-held:${subject}`)) match = reason => reason === `lock-held:${subject}`;
     else if (kind === 'integrator-designated') match = reason => reason === 'integrator-unset' || reason.startsWith('integrator-missing:');
+    // The person chose a main repository: the question about a missing one is over, so losing it later asks again.
+    else if (kind === 'repository-chosen') match = reason => reason === 'repository-unset';
     else throw fail('Unknown change');
     const released = this.release(next, match, close);
     this.commit(next);

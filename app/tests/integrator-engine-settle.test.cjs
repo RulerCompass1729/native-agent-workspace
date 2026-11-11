@@ -207,6 +207,32 @@ test('an answer with merges waits a bounded while for main\'s head, then is sett
   assert.deepEqual(await f.engine.settle(view, f.look(view)), { kind: 'none', why: 'main-unknown' }, 'The second handoff\'s wait starts when its own answer is first seen');
 });
 
+test('with one checked look at the repository per settlement, every git question goes to that look; a repository that cannot be read is an unreadable head, never an unknown commit', async t => {
+  const session = answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 3/3`);
+  // The look is taken once, and its reader and head are the only ones asked: the engine's general reader and head are not.
+  const asked = [], untouched = reader({ commit: async () => { throw Error('The general reader must not be asked'); } });
+  const one = reader(), counting = { commit: async (...args) => { asked.push('commit'); return one.commit(...args); }, isAncestor: async (...args) => { asked.push('isAncestor'); return one.isAncestor(...args); },
+    changes: async (...args) => { asked.push('changes'); return one.changes(...args); } };
+  let opened = 0;
+  const f = fixture(t, { reader: untouched, open: async () => { opened += 1; return { mainHead: async () => HEAD2, reader: counting }; } });
+  await f.handed(['a']);
+  f.head = Error('The general head must not be asked');
+  const settled = await f.settle(session);
+  assert.deepEqual([settled.kind, Object.fromEntries(settled.facts.map(fact => [fact.itemId, fact.outcome])), opened, f.heads], ['settled', { a: 'merged' }, 1, 0]);
+  assert.ok(asked.includes('commit') && asked.includes('isAncestor'));
+  // No repository that can be read now (none, a failed check, a throw): the answer waits the bounded while for main's head
+  // and is then settled as "main could not be read". The merge is never judged against a reader that answers "unknown".
+  for (const look of [async () => null, async () => { throw Error('Synthetic check failure'); }, async () => ({ mainHead: async () => null, reader: counting }), async () => ({ mainHead: async () => { throw Error('Synthetic'); }, reader: counting })]) {
+    const g = fixture(t, { open: look });
+    await g.handed(['a']);
+    asked.length = 0;
+    assert.deepEqual(await g.settle(session), { kind: 'none', why: 'main-unknown' });
+    g.clock = LATER + HEAD_WAIT_MS + 1;
+    const late = await g.engine.settle(at(g.clock, [session]), g.look(at(g.clock, [session])));
+    assert.deepEqual([late.kind, Object.fromEntries(late.facts.map(fact => [fact.itemId, fact.outcome + ':' + fact.reason])), asked], ['settled', { a: 'held:main-unreadable' }, []]);
+  }
+});
+
 test('each delivery\'s space is told once where the delivery stands, and again only when that changes', async t => {
   const f = fixture(t);
   f.engine.intake([space([fact('a'), fact('b'), fact('c')])]);

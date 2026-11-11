@@ -1598,7 +1598,7 @@ async function boot() {
     try {
       if (action === 'list') return handoffOverview(handoffs);
       if (action === 'repository') return integrationRepository.show();
-      if (action === 'setRepository') result = await integrationRepository.choose(value ?? null);
+      if (action === 'setRepository') result = await integrationRepository.choose(value);
       else if (action === 'retryDelivery') result = handoffs.retryReady(value);
       else if (action === 'retryReason') result = handoffs.retryReason(value);
       else if (action === 'resolve') result = handoffs.resolveHandoff(value, { retry: choice === true });
@@ -2196,6 +2196,8 @@ function integrationEngine(dispatcher) {
       return readers.get(folder);
     } catch { return null; }
   };
+  // One checked look for a whole settlement: every question of it goes to the same folder.
+  const open = () => { const read = reader(); return read ? { mainHead: () => read.branch('main'), reader: { commit: read.commit, isAncestor: read.isAncestor, changes: read.changes } } : null; };
   // A question git cannot be asked just now (no repository chosen, or it fails its checks) is answered "unknown".
   const ask = name => async (...args) => { const read = reader(); return read ? read[name](...args) : null; };
   const engine = new IntegratorEngine({ handoffs, designation: () => integratorRole.current(), mainHead: () => ask('branch')('main'),
@@ -2203,7 +2205,7 @@ function integrationEngine(dispatcher) {
     send: (session, text, handoffId) => dispatcher.send(session, text, handoffId), typing: sessionId => dispatcher.noteHuman(sessionId),
     record: fact => roomState.recordHandoff(fact), notify: info => notifyHandoff(info),
     holderRecord: fact => roomState.recordHandoffHolder(fact), nameOf: session => dispatcher.name(session),
-    repository: () => (repository.usable() ? true : null) });
+    repository: () => (repository.usable() ? true : null), open });
   // The person's own entry gets the record only when the engine exists: an engine that could not
   // be built leaves the entry answering "not enabled" instead of changing a record nothing reads.
   integrationHandoffs = handoffs;
@@ -2215,13 +2217,17 @@ function integrationEngine(dispatcher) {
       catch (error) { problem = error?.uiMessage?.key || 'error.handoff.repositoryState'; }
       return { root, problem };
     },
-    // The person's choice: null clears it; a folder is checked and must have a main branch.
+    // The person's choice: null, and only null, clears it; a folder is checked and must have a main branch.
     async choose(selected) {
       if (selected === null) return { root: repository.set(null) };
       if (typeof selected !== 'string') throw uiError('error.handoff.repositoryUnsafe');
       const root = repository.check(selected);
       if (!(await integratorGit.reader(root).branch('main'))) throw uiError('error.handoff.repositoryNoMain');
-      return { root: repository.set(root) };
+      const chosen = repository.set(root);
+      // The question about a missing repository is over (a later loss asks again), and what waited for it is tried at once.
+      try { handoffs.reasonCleared('repository-chosen'); } catch { /* A record that cannot be changed now says so by itself. */ }
+      engine.unblock();
+      return { root: chosen };
     },
   };
   return engine;

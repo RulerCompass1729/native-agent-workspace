@@ -129,10 +129,16 @@ test('with no main repository that can be read nothing is handed out, and the pe
   assert.deepEqual(backlog.noticeInfo('repository-unset'), { reason: 'repository-unset', count: 2, roomId: 'space-1', itemId: 'a' });
   // It is a condition, not something a delivery can be held under or the person can "retry".
   assert.throws(() => backlog.hold('ready:space-1:a', 'repository-unset', NOW), { code: 'HANDOFF_STATE' });
-  // The person chooses a repository: the next handoff opens, and the question is over (a later loss asks again).
-  const opened = backlog.advance(observed({ repository: true }), NOW + 2);
+  // The person chooses a repository: the question is over at once, before any handoff opens, so losing it again asks again.
+  assert.deepEqual(backlog.reasonCleared('repository-chosen'), { released: [] });
+  assert.equal(backlog.snapshot().reasons['repository-unset'].open, false);
+  assert.deepEqual(states(backlog), { a: 'deliverable', b: 'deliverable' });
+  assert.deepEqual(backlog.advance(observed({ repository: null }), NOW + 2), { kind: 'ask-integrator', reason: 'repository-unset', notify: { reason: 'repository-unset' } });
+  // With a repository the next handoff opens, and that ends the question as well.
+  const opened = backlog.advance(observed({ repository: true }), NOW + 3);
   assert.equal(opened.kind, 'open');
   assert.equal(backlog.snapshot().reasons['repository-unset'].open, false);
+  assert.throws(() => backlog.reasonCleared('repository-lost'), { code: 'HANDOFF_STATE' });
 });
 
 test('without a designated integrator the person is asked once; a session that is gone is asked about once too', t => {
