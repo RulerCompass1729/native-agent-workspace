@@ -194,7 +194,8 @@ class OperatorControl {
   // revoked or expired grant stays revoked or expired; each open still checks the holder's permission posture.
   // Narrowed on the person's decision of 2026-11-11: the interface setting follows only together with a grant
   // that is in force. A holder with the interface on and no grant, or only revoked or expired ones, is not
-  // followed at all: its successor gets nothing, nothing is decided and nothing is said.
+  // followed at all: its successor gets nothing, nothing is decided and nothing is said. The grant in force must
+  // be one the holder had when it was replaced; given one only afterwards, it is not followed either.
   successions() {
     if (this.error || !this.data.enabled) return [];
     const listed = [];
@@ -210,9 +211,12 @@ class OperatorControl {
   // decided is older than the person's turning its interface on again: that is a holder anew, and only a
   // replacement logged after that moment concerns it.
   undecided(setting) { return Boolean(setting?.enabled && (!setting.succession || Number.isSafeInteger(setting.enabledAt) && setting.succession.at < setting.enabledAt)); }
-  // Whether this holder has at least one grant the person gave it that is neither revoked nor expired.
-  inForce(id, nativeId, data = this.data, now = Date.now()) {
-    return Object.values(data.domains).some(domain => !domain.revokedAt && domain.expiresAt > now && domain.initiators.some(i => i.id === id && i.nativeId === nativeId));
+  // Whether this holder has at least one grant the person gave it that is neither revoked nor expired. With the
+  // time a replacement was logged, only a grant the person had given by then counts: a grant given to a session
+  // after it was replaced does not make that replacement one to follow.
+  inForce(id, nativeId, by = null) {
+    return Object.values(this.data.domains).some(domain => !domain.revokedAt && domain.expiresAt > Date.now() && (by === null || Number.isSafeInteger(domain.createdAt) && domain.createdAt <= by) &&
+      domain.initiators.some(i => i.id === id && i.nativeId === nativeId));
   }
   // Desktop only (workspace.cjs operatorAction), in three steps: 'carry' to the successor the log names,
   // 'refuse' for what only the desktop can see (an ambiguous log, an archived successor), and 'told' once the
@@ -245,8 +249,11 @@ class OperatorControl {
     if (!Number.isSafeInteger(setting.enabledAt) || Number.isSafeInteger(value.loggedAt) && value.loggedAt < setting.enabledAt) return undecided('not-replaced');
     // The interface does not go on by itself. With no grant in force there is nothing to carry and nothing to
     // refuse: the holder keeps its setting, its successor gets none, and no outcome is saved or announced.
-    // Checked here as well as in the list, because a grant can be revoked or run out between the two.
-    if (!this.inForce(oldId, value.nativeId)) return undecided('no-grant');
+    // Checked here as well as in the list, because a grant can be revoked or run out between the two, and
+    // because only here is the time of the replacement known: the list shows a holder with any grant in force,
+    // and a holder whose grants in force were all given after it was replaced is answered here. A line whose
+    // time is unknown can only be refused, which moves nothing; for it any grant in force counts.
+    if (!this.inForce(oldId, value.nativeId, Number.isSafeInteger(value.loggedAt) ? value.loggedAt : null)) return undecided('no-grant');
     const refuse = reason => this.commit(data => {
       data.sessions[oldId].succession = { at: Date.now(), carried: false, reason };
       this.audit(data, { id: oldId, nativeId: value.nativeId }, null, 'operator_succession', 'not-carried', { reason, ...(to ? { targetId: to.id } : {}), by: 'desktop' });

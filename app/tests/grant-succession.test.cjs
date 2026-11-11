@@ -198,6 +198,62 @@ test('the interface does not go on by itself: a holder with no grant in force is
   assert.equal((await h.open(follower)).status, 'created');
 });
 
+test('a grant given to a session after it was replaced does not make that replacement one to follow: it stays with the old session, and nothing is said', async t => {
+  // The interface on for two hours and no grant; replaced an hour ago; only now the person gives the old session a
+  // grant (one it had asked for before it was replaced, approved late).
+  const f = await fixture(t);
+  f.w.operator.data.sessions[f.id].enabledAt = Date.now() - 7200000;
+  const next = await f.successor(); await f.w.stop(f.id);
+  const at = Date.now() - 3600000; f.logged('done', f.w.get(f.id), f.w.get(next), at);
+  assert.deepEqual(listed(f), [], 'No grant: not listed');
+  const late = f.grant(), journal = JSON.stringify(f.w.operator.data);
+  assert.deepEqual(listed(f), [{ id: f.id, nativeId: f.w.get(f.id).nativeId }], 'Listed, having a grant in force: when it was replaced is known only at the step');
+  await f.carry(); await f.carry(undefined, 31000);
+  assert.deepEqual(f.calls, ['carry'], 'Asked once for this state of the log');
+  assert.equal(JSON.stringify(f.w.operator.data), journal, 'Nothing is decided or saved, and no audit line is written');
+  assert.deepEqual(f.w.operator.data.domains[late].initiators.map(i => i.id), [f.id], 'The grant stays with the session the person gave it to');
+  assert.equal(Object.hasOwn(f.w.operator.data.sessions, next), false, 'The successor has no interface setting');
+  await assert.rejects(f.open(next), /has not enabled this initiator interface/);
+  assert.equal(f.records().length + f.records('shared').length, 0, 'Nothing is said in any space');
+  assert.deepEqual(f.w.operatorAction(f.id, 'succession', pair(f, f.id, next, at)), { carried: false, reason: 'no-grant', saved: false });
+  assert.deepEqual(f.w.operatorAction(f.id, 'succession', { step: 'refuse', nativeId: f.w.get(f.id).nativeId, reason: 'ambiguous', loggedAt: at }), { carried: false, reason: 'no-grant', saved: false });
+  assert.equal(JSON.stringify(f.w.operator.data), journal);
+  // Given in the same millisecond as the replacement was logged, the grant was there: that replacement is followed.
+  assert.equal(f.w.operatorAction(f.id, 'succession', pair(f, f.id, next, f.w.operator.data.domains[late].createdAt)).carried, true);
+  // The grant it had when it was replaced has since been revoked, and the one in force was given afterwards: the same.
+  const g = await fixture(t), had = g.grant();
+  g.w.operator.data.sessions[g.id].enabledAt = Date.now() - 7200000; g.w.operator.data.domains[had].createdAt = Date.now() - 7000000;
+  const heir = await g.successor(); await g.w.stop(g.id);
+  g.logged('done', g.w.get(g.id), g.w.get(heir), Date.now() - 3600000);
+  g.w.operatorAction(g.id, 'revoke', had); const since = g.grant(), saved = JSON.stringify(g.w.operator.data);
+  await g.carry();
+  assert.deepEqual(g.calls, ['carry']); assert.equal(JSON.stringify(g.w.operator.data), saved);
+  assert.deepEqual([had, since].map(id => g.w.operator.data.domains[id].initiators.map(i => i.id)), [[g.id], [g.id]]);
+  assert.equal(Object.hasOwn(g.w.operator.data.sessions, heir), false); assert.equal(g.records().length, 0);
+  // A grant with no time of its own cannot be shown to have been there when the holder was replaced: it does not count.
+  const m = await fixture(t), timeless = m.grant(); delete m.w.operator.data.domains[timeless].createdAt;
+  const after = await m.replace(), unchanged = JSON.stringify(m.w.operator.data);
+  assert.deepEqual(m.w.operatorAction(m.id, 'succession', pair(m, m.id, after)), { carried: false, reason: 'no-grant', saved: false });
+  assert.equal(JSON.stringify(m.w.operator.data), unchanged);
+  // A line in the log with no time can only be refused, and a refusal moves nothing: there any grant in force
+  // counts, and the person is told that the grant stayed.
+  const k = await fixture(t); const untimed = await k.successor(); await k.w.stop(k.id);
+  k.logged('done', k.w.get(k.id), k.w.get(untimed), null); const stays = k.grant();
+  await k.carry();
+  assert.deepEqual(k.records().map(record => [record.monitor.carried, record.monitor.reason]), [[false, 'ambiguous']]);
+  assert.deepEqual(k.w.operator.data.domains[stays].initiators.map(i => i.id), [k.id]); assert.equal(Object.hasOwn(k.w.operator.data.sessions, untimed), false);
+  // With a grant in force that it had when it was replaced, the replacement is followed as before, and what moves is
+  // unchanged: every grant that names the old session at the step, one given in between included.
+  const h = await fixture(t), early = h.grant();
+  h.w.operator.data.sessions[h.id].enabledAt = Date.now() - 7200000; h.w.operator.data.domains[early].createdAt = Date.now() - 7000000;
+  const follower = await h.successor(); await h.w.stop(h.id);
+  h.logged('done', h.w.get(h.id), h.w.get(follower), Date.now() - 3600000);
+  const between = h.grant();
+  await h.carry();
+  assert.deepEqual([early, between].map(id => h.w.operator.data.domains[id].initiators.map(i => i.id)), [[follower], [follower]]);
+  assert.equal(h.w.operator.data.sessions[follower].enabled, true); assert.deepEqual([h.records()[0].monitor.carried, h.records()[0].monitor.grants], [true, 2]);
+});
+
 test('the entry says what went on: the grants that are in force, or the interface permission alone when the grant was revoked before the entry could be written', async t => {
   // One grant in force beside a revoked one: the entry speaks of grants, and counts the one that is in force.
   const g = await fixture(t), live = g.grant(), dead = g.grant(); g.w.operatorAction(g.id, 'revoke', dead);
