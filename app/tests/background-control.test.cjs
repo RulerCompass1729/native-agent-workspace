@@ -13,7 +13,7 @@ function setup(t, handlers = new Map()) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const contexts = [];
   const config = { dataDir: dir, handlers, context: async (actor, saved) => {
-    const c = { background: true, view: saved || { selected: actor.id, draft: '' }, checkActor: async () => {}, client: { close() {} }, win: { destroy() {} } };
+    const c = { background: true, view: saved || { selected: actor.id, draft: '' }, confirmationActors: () => [actor], checkActor: async () => {}, client: { close() {} }, win: { destroy() {} } };
     contexts.push(c); return c;
   } };
   return { controller: new BackgroundControl(config), contexts, config, dir, handlers };

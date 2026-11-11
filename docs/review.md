@@ -1,5 +1,42 @@
 # Review and issue record
 
+**S2 selector-card quota repair, 2026-11-11 (delta review pending):**
+only answerable message confirmations consume the 32/128 pending-card bound,
+along with existing maintenance intents already running. Legacy open/save
+selection records remain readable across restart but do not reserve slots.
+New background file selectors without explicit paths return not-executed with
+an explicit-paths-required reason and no confirmation or notification, since
+the inline human decision handler cannot answer a native picker. Explicit
+paths retain their existing validation and handler; human windows are unchanged.
+Both providers have regressions for 33 actual chooseFolder requests followed by
+a working message confirmation, legacy global/per-actor exhaustion after
+restart, and a missing save path. Existing admitted message cards still count.
+
+**S2 shared confirmation admission, 2026-11-11 (delta review pending):**
+all requests that reach a background human dialog now share the same native
+actor eligibility and 32-per-actor / 128-global pending-card bound. This also
+covers approve, operatorAction, wakePolicy, backendSwitchSettings, quitService,
+stop, forget, switchBackend, continueConnection and clearSharedHistory, whose
+dialogs were outside the maintenance classifier. Those ten handlers perform
+no requested business action before their first dialog; context creation,
+observation refresh and durable operation logging still occur. Ordinary running
+commands do not reserve a confirmation slot; maintenance intents do. The quota
+check and pending-state commit have no intervening await, including when two
+actors compete for the final global slot. Existing admitted cards remain
+answerable at the limit.
+
+Admission, counting and checkActor use one complete minimal identity roster
+from RoomState.apply(client.snapshot()). Backend session records do not contain
+the desktop's archived flag. The previous maintenance fingerprint and checkActor
+already applied RoomState; the scoped non-maintenance fingerprint is unsuitable
+as a caller roster. A regression uses the real Workspace snapshot and local
+RoomState archive, rather than adding an archived flag to a backend fixture.
+Missing, replaced, archived and context-pending callers receive no new card or
+notification. Eligibility refusals retain only audit-room metadata in their
+guard, preserve their refused operation ID, and explicitly permit retry using a
+new ID after refreshing the caller. A failed admission refresh leaves a refusal,
+not a permanently running operation. This checkpoint requires integration review.
+
 **S2 requester admission, 2026-11-11 (delta review pending):**
 the pending-count filter must not exempt an ineligible requester from its own
 limit. Before creating any new maintenance intent, the refreshed consent roster
