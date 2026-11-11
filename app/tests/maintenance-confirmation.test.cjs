@@ -11,7 +11,7 @@ const cases = [
   ['join', ['target', true]], ['join', ['target', false]], ['resume', ['target']], ['importHistory', ['native-target', {}]],
   ...['commit', 'recover', 'undo'].map(action => ['spaceMerge', [action, { operationId: 'merge', binding: 'binding' }]]),
   ...['runtimeLocation', 'openLocalFile', 'saveLocalFile', 'spaceFiles', 'openMessageFile'].map(method => [method, ['target']]),
-  ...['interrupt', 'pause', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent'].map(method => [method, ['target']]),
+  ...['interrupt', 'pause', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent', 'rename'].map(method => [method, ['target']]),
   ['pause', []], ['pause', ['agent']], ['spaceAction', ['shared', 'pause', []]],
 ];
 function fixture(t, provider = 'codex') {
@@ -81,7 +81,7 @@ test('a stale native actor cannot confirm and the space records the unconfirmed 
 test('a protected invocation refused by the busy actor gate is durably attributed', async t => {
   const f = fixture(t); let release;
   f.config.handlers.set('rename', () => new Promise(r => { release = r; }));
-  const running = f.controller.call(f.binding, { action: 'invoke', operation_id: 'busy', method: 'rename', arguments: [] });
+  const running = f.controller.call(f.binding, { action: 'invoke', operation_id: 'busy', method: 'rename', arguments: ['agent'] });
   while (!release) await new Promise(r => setImmediate(r));
   try {
     const refused = await f.controller.call(f.binding, { action: 'invoke', operation_id: 'refused', method: 'create', arguments: [] });
@@ -91,12 +91,12 @@ test('a protected invocation refused by the busy actor gate is durably attribute
 });
 test('own-session controls retain their ordinary path; pause remains global even with an own ID', async t => {
   const f = fixture(t);
-  for (const method of ['interrupt', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent']) {
+  for (const method of ['interrupt', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent', 'rename']) {
     const result = await f.controller.call(f.binding, { action: 'invoke', operation_id: method, method, arguments: ['agent'] });
     assert.equal(result.state, 'complete');
     assert.equal(operation.maintenanceAction(method, ['agent'], f.binding.sender), null);
   }
-  assert.equal(f.writes.length, 11);
+  assert.equal(f.writes.length, 12);
   assert.equal(operation.maintenanceAction('pause', [], f.binding.sender), 'pause');
   assert.equal(operation.maintenanceAction('pause', ['agent'], f.binding.sender), 'pause');
   for (const method of ['unobserve', 'nativeHistory', 'pasteText']) assert.equal(operation.maintenanceAction(method, ['target'], f.binding.sender), null);

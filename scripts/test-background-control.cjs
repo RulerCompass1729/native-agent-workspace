@@ -110,7 +110,10 @@ async function run() {
   const publicCommands = await page.evaluate(() => Object.keys(window.workspace).filter(name => !name.startsWith('on') && !['backgroundDecision', 'retryStartup', 'startupData', 'uiReady'].includes(name)));
   assert.deepEqual(publicCommands.filter(name => !commands.commands.some(c => c.method === name)), [], 'Every normal preload action has a background command');
   assert.ok(commands.commands.every(c => Array.isArray(c.parameters))); checks.push('Actual stdio MCP catalog through original runtime proof');
-  const renamed = await control(invoke('rename', [recipient, 'Background renamed recipient'])); assert.equal(renamed.state, 'complete');
+  const rename = await control(invoke('rename', [recipient, 'Background renamed recipient']));
+  assert.equal(rename.state, 'confirmation-required');
+  assert.equal(await page.evaluate(async id => (await workspace.initial()).sessions.find(s => s.id === id).name, recipient), 'Synthetic recipient');
+  const renamed = await decide(rename, 1); assert.equal(renamed.state, 'complete');
   await until(async () => await page.locator(`.session-link[data-session-id="${recipient}"]`).textContent().then(t => t.includes('Background renamed recipient')), 'Shared GUI sees actual rename');
   await control(invoke('draft', [source, 'AGENT PRIVATE DRAFT']));
   const snap = await control({ action: 'snapshot' }); assert.equal(snap.state, 'complete'); assert.equal(await page.locator('#message-input').inputValue(), 'HUMAN ORIGINAL UNSENT DRAFT');

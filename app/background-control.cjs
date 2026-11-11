@@ -149,14 +149,23 @@ class BackgroundControl {
       return { state: 'complete', receipt: this.receipt(sender, args.operation_id), retry: false };
     }
     const context = await this.view(sender, args.view_id); await valid();
-    if (args.action === 'snapshot' && (!context.view.selected || context.view.selected === sender.id || context.metadataOnly?.())) {
+    const selected = args.action === 'snapshot' || args.method === 'initial' ? context.view.selected : null;
+    const target = selected && selected !== sender.id && context.client.snapshot?.().sessions?.some(s => s.id === selected) ? selected : null;
+    const implicitSnapshot = args.action === 'snapshot' && args.operation_id === undefined;
+    if (args.action === 'snapshot' && (!target || context.metadataOnly?.())) {
       const actor = operation.actor({ ...sender, callId: identity.callId, turnId: identity.turnId, operationId: identity.callId });
       return operation.run(actor, async () => ({ state: 'complete', value: await this.handlers.get('initial')(context) }), { context, args, actor, valid });
     }
     if (args.action === 'snapshot') args = { action: 'invoke', method: 'initial', arguments: [], operation_id: args.operation_id || randomUUID(), ...(args.view_id ? { view_id: args.view_id } : {}) };
     // Selection is navigation, never authority. Pin the actual selected target,
     // including for invoke initial, rather than trusting caller-supplied args.
-    if (args.method === 'initial') args = { ...args, arguments: [context.view.selected || sender.id] };
+    if (args.method === 'initial') args = { ...args, arguments: [target || sender.id] };
+    if (implicitSnapshot) {
+      const pending = this.data.records.findLast(r => this.key(r.actor) === this.key(sender) && r.state === 'confirmation-required' &&
+        isDeepStrictEqual({ ...r.command, operation_id: args.operation_id }, args));
+      if (pending && isDeepStrictEqual(pending.guard, clone(context.fingerprint?.(args) || null)))
+        return { ...this.receipt(sender, pending.id), duplicate: true, retry: false };
+    }
     const existing = this.receipt(sender, args.operation_id);
     if (existing) {
       if (!isDeepStrictEqual(existing.command, args)) throw Error('operation_id already belongs to a different command');

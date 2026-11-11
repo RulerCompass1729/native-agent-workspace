@@ -7,7 +7,7 @@ function part(start, end) { const a = main.indexOf(start), b = main.indexOf(end,
 const command = (method, args = [], operation_id = randomUUID()) => ({ action: 'invoke', method, arguments: args, operation_id });
 function fixture(t, provider = 'codex') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-conversation-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const actor = { id: 'agent', nativeId: 'native-agent', provider, name: 'Agent' }, handlers = new Map(), contexts = [], audits = [];
+  const actor = { id: 'agent', nativeId: 'native-agent', provider, name: 'Agent' }, handlers = new Map(), contexts = [], audits = [], notices = [];
   const secret = 'OTHER_PRIVATE_BODY', own = 'OWN_BODY', third = 'THIRD_PRIVATE_BODY';
   const session = (id, nativeId, name, body) => ({ id, nativeId, name, provider, state: 'idle', roomIds: [], messages: [{ id: id + '-message', role: 'assistant', text: body, images: [{ path: body }] }],
     nativeActivity: { label: body }, activity: body, activityUiMessage: { params: { reason: body } }, claudeQuestion: { questions: [{ question: body }] }, approval: { params: { command: body } }, approvals: [{ params: { input: body } }], nativeApproval: { requests: [{ question: body }] }, fleet: [{ task: body }], futurePrivateField: body, liveDraft: body, draft: body });
@@ -25,7 +25,7 @@ function fixture(t, provider = 'codex') {
   vm.runInContext(part("  register('newWindow',", "  register('copy',"), sandbox);
   const a = main.indexOf('    confirmation: (actor, command, action'), b = main.indexOf('\n    audit:', a);
   const confirmation = vm.runInContext('(' + main.slice(a + '    confirmation: '.length, b).trim().replace(/,$/, '') + ')', sandbox);
-  const config = { dataDir: dir, handlers, confirmation, audit: record => audits.push(record),
+  const config = { dataDir: dir, handlers, confirmation, audit: record => audits.push(record), confirmationPending: record => notices.push(record),
     project: record => sandbox.projectBackgroundRecord ? sandbox.projectBackgroundRecord(record) : record,
     context: async (_actor, saved) => {
       const client = { snapshot: () => state, refresh: async () => {}, call: async method => { assert.equal(method, 'initial'); return state; }, close() {} };
@@ -36,9 +36,54 @@ function fixture(t, provider = 'codex') {
     } };
   const controller = new BackgroundControl(config); sandbox.backgroundControl = controller;
   const binding = { sender: actor, identity: { callId: randomUUID(), turnId: 'turn' }, valid: () => true };
-  return { dir, actor, state, contexts, config, controller, binding, sandbox, audits, secret, own, third,
+  return { dir, actor, state, contexts, config, controller, binding, sandbox, audits, notices, secret, own, third,
     select: id => controller.call(binding, command('viewState', [{ selected: id, mode: 'chat' }])) };
 }
+for (const provider of ['claude', 'codex']) for (const kind of ['snapshot', 'initial']) test(`${provider} ${kind}: a space or missing selection returns metadata without conversation consent or audit`, async t => {
+  const f = fixture(t, provider);
+  for (const selected of ['room', 'missing-session', '']) {
+    await f.select(selected);
+    const audits = f.audits.length, notices = f.notices.length;
+    const result = await f.controller.call(f.binding, kind === 'snapshot' ? { action: 'snapshot' } : command('initial', ['other']));
+    assert.equal(result.state, 'complete', JSON.stringify(result));
+    assert.equal(result.error, undefined);
+    assert.equal(JSON.stringify(result).includes(f.secret), false);
+    assert.ok(result.value.sessions.every(s => s.messages.length === 0));
+    assert.ok(JSON.stringify(result.value).includes('SHARED_RECORD'));
+    assert.equal(f.audits.length, audits); assert.equal(f.notices.length, notices);
+  }
+});
+for (const provider of ['claude', 'codex']) test(`${provider}: repeated snapshots reuse only a current pending read, including after restart`, async t => {
+  const f = fixture(t, provider); await f.select('other');
+  const first = await f.controller.call(f.binding, { action: 'snapshot' }); assert.equal(first.state, 'confirmation-required');
+  const audits = f.audits.length;
+  for (let n = 0; n < 3; n++) {
+    const again = await f.controller.call(f.binding, { action: 'snapshot' });
+    assert.equal(again.id, first.id); assert.equal(again.state, 'confirmation-required'); assert.equal(again.duplicate, true);
+    assert.equal(JSON.stringify(again).includes(f.secret), false);
+  }
+  assert.equal(f.audits.length, audits); assert.equal(f.notices.length, 1);
+  const cold = new BackgroundControl(f.config); f.sandbox.backgroundControl = cold;
+  assert.equal((await cold.call(f.binding, { action: 'snapshot' })).id, first.id); assert.equal(f.notices.length, 1);
+  await cold.decide('agent', 'native-agent', first.id, 0);
+  const next = await cold.call(f.binding, { action: 'snapshot' }); assert.notEqual(next.id, first.id);
+  assert.equal(next.state, 'confirmation-required'); assert.equal(f.notices.length, 2);
+  await cold.call(f.binding, command('viewState', [{ selected: 'third', mode: 'chat' }]));
+  const third = await cold.call(f.binding, { action: 'snapshot' }); assert.notEqual(third.id, next.id);
+  assert.ok(third.confirmation.options.detail.includes('Third'));
+});
+test('a replaced native target cannot reuse pending consent, and explicit operation IDs stay distinct', async t => {
+  const f = fixture(t); await f.select('other');
+  const first = await f.controller.call(f.binding, { action: 'snapshot' });
+  f.state.sessions[1].nativeId = 'replacement';
+  const replacement = await f.controller.call(f.binding, { action: 'snapshot' }); assert.notEqual(replacement.id, first.id);
+  const explicit = await f.controller.call(f.binding, { action: 'snapshot', operation_id: 'explicit-read' });
+  assert.equal(explicit.id, 'explicit-read'); assert.notEqual(explicit.id, replacement.id);
+  await f.controller.decide('agent', 'native-agent', replacement.id, 1);
+  // The remaining explicit read is current and may be reused; an approved copy alone never is.
+  await f.controller.decide('agent', 'native-agent', explicit.id, 0);
+  const fresh = await f.controller.call(f.binding, { action: 'snapshot' }); assert.notEqual(fresh.id, replacement.id);
+});
 for (const provider of ['claude', 'codex']) for (const kind of ['snapshot', 'initial']) test(`${provider} ${kind}: foreign conversation waits, cancels without a read, and one approval returns one bound snapshot`, async t => {
   const f = fixture(t, provider); await f.select('other');
   const read = () => kind === 'snapshot' ? { action: 'snapshot' } : command('initial');

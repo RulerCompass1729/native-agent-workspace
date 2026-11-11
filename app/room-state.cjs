@@ -58,7 +58,9 @@ function validSessionArchive(p) {
 function validControlAudit(a) {
   const token = v => typeof v === 'string' && v.length > 0 && v.length <= 160 && !/[\u0000-\u001f\u007f]/u.test(v);
   const state = v => ['confirmation-required', 'complete', 'cancelled', 'unconfirmed', 'running', 'not-executed'].includes(v);
-  return a && token(a.operationId) && a.actor && ['id', 'nativeId', 'name'].every(k => token(a.actor[k])) &&
+  // A 160-unit transport name may expand to six visible units per character.
+  const name = v => typeof v === 'string' && v.length > 0 && v.length <= 960 && !/[\u0000-\u001f\u007f]/u.test(v);
+  return a && token(a.operationId) && a.actor && ['id', 'nativeId'].every(k => token(a.actor[k])) && name(a.actor.name) &&
     ['claude', 'codex'].includes(a.actor.provider) && token(a.method) && token(a.action) && state(a.state) &&
     (a.resultState === undefined || state(a.resultState));
 }
@@ -97,8 +99,16 @@ function copyQueue(queue) {
 // records kept for recovery. They are not part of a renderer event projection.
 function displayEvents(events) {
   return events.map(event => {
-    if (!Object.hasOwn(event, 'butlerSource')) return event;
-    const display = { ...event }; delete display.butlerSource; return display;
+    if (!Object.hasOwn(event, 'butlerSource') && !event.controlAudit) return event;
+    const display = { ...event }; delete display.butlerSource;
+    if (event.controlAudit) {
+      const { visibleText } = require('./background-operation.cjs');
+      display.name = visibleText(event.name || event.controlAudit.actor.name);
+      display.text = visibleText(event.text);
+      display.controlAudit = { ...event.controlAudit, actor: { ...event.controlAudit.actor, name: visibleText(event.controlAudit.actor.name) } };
+      if (typeof event.uiMessage?.params?.name === 'string') display.uiMessage = { ...event.uiMessage, params: { ...event.uiMessage.params, name: visibleText(event.uiMessage.params.name) } };
+    }
+    return display;
   });
 }
 
@@ -447,7 +457,7 @@ class RoomState {
     const name = require('./background-operation.cjs').visibleText(record.actor.name);
     const event = { id, role: 'system', kind: 'control-audit', sessionId: record.actor.id, name,
       time: record.at || Date.now(), ...uiNotice('notice.background.' + state, { name, command }),
-      controlAudit: { operationId: record.id, actor: { id: record.actor.id, nativeId: record.actor.nativeId, name: record.actor.name, provider: record.actor.provider },
+      controlAudit: { operationId: record.id, actor: { id: record.actor.id, nativeId: record.actor.nativeId, name, provider: record.actor.provider },
         method: record.command.method, action, state: record.state, ...(record.resultState ? { resultState: record.resultState } : {}) } };
     const available = rooms.filter(id => id === DEFAULT_ROOM_ID || this.spaces.rooms.some(r => r.id === id));
     for (const room of new Set(available.length ? available : [DEFAULT_ROOM_ID])) {
@@ -802,7 +812,11 @@ class RoomState {
       if (!plan) {
         const rooms = roomIds(session).map(space => {
           const value = this.metadata(space), members = snapshot.sessions.filter(s => isMember(s, space) && !this.value.archivedSessions.includes(s.id)).map(s => s.id);
-          const order = [...value.memberOrder.filter(member => members.includes(member)), ...members.filter(member => !value.memberOrder.includes(member))];
+          const ids = new Set(snapshot.sessions.map(s => s.id));
+          // Save and restore count the same unknown slots. A forgotten member
+          // cannot be distinguished from an absent backend by this snapshot.
+          const order = [...value.memberOrder.filter(member => members.includes(member) || !ids.has(member) && !this.value.archivedSessions.includes(member)),
+            ...members.filter(member => !value.memberOrder.includes(member))];
           return { id: space, index: order.indexOf(id), expected: null, done: false };
         });
         plan = { nativeId: session.nativeId ?? null, rooms, checkpoint: restorePlacement(session), detached: null };

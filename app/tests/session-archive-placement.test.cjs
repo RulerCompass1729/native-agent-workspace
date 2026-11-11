@@ -131,3 +131,26 @@ test('legacy archives without saved placement restore standalone without inventi
   const cold = new RoomState(f.dir), result = await cold.restoreSession(f.client, id); assert.equal(result.restored, true); assert.equal(result.placement, 'unavailable');
   assert.deepEqual(spaces.roomIds(f.w.get(id)), []);
 });
+for (const mode of ['forgotten-before', 'absent-before', 'returns-before-restore', 'forgotten-after']) test(`restore keeps its neighbours despite a stored unknown slot: ${mode}`, async t => {
+  const f = await fixture(t), id = f.ids[1];
+  f.state.moveMember({ id, target: f.ids[2], after: false }, f.w.snapshot().sessions, f.a);
+  const ghost = await f.w.create('codex', f.dir, 'owner', 'Earlier member');
+  await f.state.membership(f.client, ghost, true, null, f.a);
+  f.state.moveMember({ id: ghost, target: f.ids[0], after: false }, f.w.snapshot().sessions, f.a);
+  const order = [...f.state.metadata(f.a).memberOrder], call = f.client.call;
+  const forget = async () => { await f.w.stop(ghost); f.w.forget(ghost); };
+  if (mode === 'forgotten-before') await forget();
+  let absent = ['absent-before', 'returns-before-restore'].includes(mode);
+  f.client.call = async (method, ...args) => {
+    const result = await call(method, ...args);
+    return method === 'initial' && absent ? { ...result, sessions: result.sessions.filter(s => s.id !== ghost) } : result;
+  };
+  await f.state.archiveSession(f.client, id);
+  if (mode === 'forgotten-after') await forget();
+  if (mode === 'returns-before-restore') absent = false;
+  assert.equal((await new RoomState(f.dir).restoreSession(f.client, id)).placement, 'restored');
+  const restored = new RoomState(f.dir).metadata(f.a).memberOrder;
+  assert.deepEqual(restored, order);
+  const visible = new Set(f.w.snapshot().sessions.map(s => s.id));
+  assert.deepEqual(restored.filter(s => visible.has(s)), order.filter(s => visible.has(s)));
+});

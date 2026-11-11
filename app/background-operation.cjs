@@ -34,7 +34,7 @@ function conversationSnapshot(value, actor, read = null, selected = value?.viewS
 // Display only: preserve the original command/name for identity and execution.
 // Escape UTF-16 code units so supplementary format characters are visible too.
 function visibleText(text) {
-  return text.replace(/[\p{Cf}\p{Zl}\p{Zp}]/gu, char => char.split('').map(unit => '\\u' + unit.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
+  return text.replace(/[\p{Cf}\p{Zl}\p{Zp}\u115f\u2800\u3164]/gu, char => char.split('').map(unit => '\\u' + unit.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
 }
 function confirmationDetail(command, snapshot, context) {
   const ids = new Set(), references = [];
@@ -65,7 +65,7 @@ function maintenanceAction(method, args = [], actor) {
   // WorkspaceClient.pause stops routing across backends even when passed an ID;
   // that ID only scopes manual-input invalidation, not the affected sessions.
   if (method === 'pause') return method;
-  if (actor && ['interrupt', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent'].includes(method) && args[0] !== actor.id) return method;
+  if (actor && ['interrupt', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent', 'rename'].includes(method) && args[0] !== actor.id) return method;
   if (method === 'join') return args[1] === false ? 'leaveRoom' : 'joinRoom';
   if (method === 'spaceAction') {
     if (args[1] === 'join') return args[2]?.[1] === false ? 'leaveRoom' : 'joinRoom';
