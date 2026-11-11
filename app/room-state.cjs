@@ -717,6 +717,90 @@ class RoomState {
       this.update({}, event, id);
     }
   }
+  // B6 E4. The backend marks a session stuck (workspace.cjs stuckFor): an interrupt that has
+  // not taken effect, or a permission prompt nobody answered. Each mark is recorded once in
+  // every space the session is a member of, and once more when it is gone. Records only: the
+  // session is not stopped, approved, messaged or notified about. Returns whether it wrote.
+  // A session that was deleted while marked keeps its mark open; nothing is written for it.
+  stuckOpen() {
+    const open = new Map();
+    for (const room of [{ ...this.value, id: DEFAULT_ROOM_ID }, ...this.spaces.rooms]) {
+      for (const event of room.events) {
+        const fact = event.monitor;
+        if (!fact || typeof fact.key !== 'string') continue;
+        if (fact.kind === 'stuck') {
+          const entry = open.get(fact.key) || { sessionId: fact.sessionId, cause: fact.cause, since: fact.since, rooms: new Set() };
+          entry.rooms.add(room.id); open.set(fact.key, entry);
+        } else if (fact.kind === 'stuck-ended') {
+          const entry = open.get(fact.key);
+          if (entry) { entry.rooms.delete(room.id); if (!entry.rooms.size) open.delete(fact.key); }
+        }
+      }
+    }
+    return open;
+  }
+  recordStuck(sessions, name = session => session.name, now = Date.now()) {
+    if (!Array.isArray(sessions) || this.warning || this.spacesWarning) return false;
+    const current = new Map();
+    for (const session of sessions) {
+      if (!session || !orderId(session.id) || !Array.isArray(session.stuck)) continue;
+      for (const mark of session.stuck) {
+        if (mark && ['interrupt', 'approval'].includes(mark.kind) && Number.isSafeInteger(mark.since) && mark.since > 0 &&
+            mark.key === `stuck:${session.id}:${mark.kind}:${mark.since}`) current.set(mark.key, { session, mark });
+      }
+    }
+    // Rebuilt from the saved records once, so a restart of the desktop repeats nothing.
+    this.stuckRecorded ||= this.stuckOpen();
+    if (!current.size && !this.stuckRecorded.size) return false;
+    const minutes = since => Math.max(1, Math.round((now - since) / 60000));
+    // true: written. null: no such space any more, or it is archived. false: busy now, try again later.
+    const write = (room, event) => {
+      try { if (this.metadata(room).archived) return null; } catch { return null; }
+      try { this.writable(room); this.update({}, event, room); return true; } catch { return false; }
+    };
+    let wrote = false;
+    for (const [key, { session, mark }] of current) {
+      const entry = this.stuckRecorded.get(key) || { sessionId: session.id, cause: mark.kind, since: mark.since, rooms: new Set(), left: new Set() };
+      let member = [];
+      try { member = roomIds(session); } catch { /* Unreadable membership: nowhere to record. */ }
+      // Spaces that were busy at the last state are tried again; archived or missing ones are left.
+      const todo = member.filter(room => !entry.rooms.has(room) && !entry.left?.has(room));
+      if (!todo.length) continue;
+      const who = { name: name(session) || session.id }, held = mark.kind === 'interrupt' && mark.held && typeof mark.held === 'object' ? mark.held : null;
+      const count = Number.isSafeInteger(held?.params?.count) && held.params.count > 0 ? held.params.count : 1;
+      let notice;
+      if (mark.kind === 'approval') {
+        notice = session.approvalOverflow === true ? uiNotice('notice.monitor.approvalOverflow', who) : uiNotice('notice.monitor.approvalWaiting', { ...who, minutes: minutes(mark.since) });
+      } else if (held?.key === 'notice.activity.interruptWaitsForSubagent' && typeof held.params?.name === 'string') {
+        // The sub-agent's name goes into a record other members can read: one bounded line of it.
+        notice = uiNotice('notice.monitor.interruptHeldSubagent', { ...who, minutes: minutes(mark.since), agent: queueRules.shortText(held.params.name, 80), count });
+      } else if (held?.key === 'notice.activity.interruptWaitsForBackground') {
+        notice = uiNotice('notice.monitor.interruptHeldBackground', { ...who, minutes: minutes(mark.since), count });
+      } else notice = uiNotice('notice.monitor.interruptHeld', { ...who, minutes: minutes(mark.since) });
+      for (const room of todo) {
+        const result = write(room, { kind: 'monitor', sessionId: session.id, ...notice,
+          monitor: { kind: 'stuck', key, cause: mark.kind, sessionId: session.id, since: mark.since } });
+        if (result) { entry.rooms.add(room); wrote = true; } else if (result === null) (entry.left ||= new Set()).add(room);
+      }
+      if (entry.rooms.size) this.stuckRecorded.set(key, entry);
+    }
+    const present = new Map(sessions.filter(session => session && orderId(session.id)).map(session => [session.id, session]));
+    for (const [key, entry] of this.stuckRecorded) {
+      const session = present.get(entry.sessionId);
+      // A session missing from this state may only be on a backend that is not connected now.
+      if (current.has(key) || !session) continue;
+      const notice = uiNotice(entry.cause === 'approval' ? 'notice.monitor.approvalEnded' : 'notice.monitor.interruptEnded',
+        { name: name(session) || session.id, minutes: minutes(entry.since) });
+      for (const room of [...entry.rooms]) {
+        const result = write(room, { kind: 'monitor', sessionId: entry.sessionId, ...notice,
+          monitor: { kind: 'stuck-ended', key, cause: entry.cause, sessionId: entry.sessionId, since: entry.since, ended: now } });
+        if (result !== false) entry.rooms.delete(room);
+        if (result) wrote = true;
+      }
+      if (!entry.rooms.size) this.stuckRecorded.delete(key);
+    }
+    return wrote;
+  }
   moveMember(change, records, room = DEFAULT_ROOM_ID) {
     this.writable(room);
     if (!change || ![Object.prototype, null].includes(Object.getPrototypeOf(change)) || !orderId(change.id) || !orderId(change.target) || typeof change.after !== 'boolean') throw uiError("error.room.invalidMemberOrder");
