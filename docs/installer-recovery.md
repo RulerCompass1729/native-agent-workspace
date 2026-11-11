@@ -8,7 +8,10 @@ approval files stay unchanged. A new daily use needs its own reviewed approval.
 The operator retains backend/native process, session, model/settings, flushed UI
 and native draft checks. It does not stop native sessions, restore their stores,
 change automatic backend switching, or deliberately restart services. Ordinary
-application startup remains responsible for eligible ended-session backends.
+application startup remains responsible for eligible ended-session backends. Unlike
+the older version-specific operators, restart eligibility also includes empty
+backends: they must expose atomic shutdown and have no live session/child process.
+Their stores are included in the pre-start backups and retention checks.
 
 ## Failure policy
 
@@ -32,7 +35,8 @@ and obtain approval for a compatible recovery. The operator never automatically
 opens the old archive. `restartBackups` contains only the workspace and room-record
 files of eligible backends, not a complete transactional store backup.
 
-Every caught JavaScript exception or terminal result writes a private `result.json`: phase, primary/recovery
+After approval validation and result-directory creation, every caught JavaScript
+exception or terminal result writes a private `result.json`: phase, primary/recovery
 errors, whether new code could have run, observed bundle/GUI/receipt state, and
 recovery instructions. `rolled-back` is still a failed update (nonzero exit).
 The private journal is updated before changing phases. A rejected quit request
@@ -40,10 +44,15 @@ returns `unchanged` when the same old GUI remains confirmed and no app/receipt
 was replaced; it neither reopens that GUI nor rewrites an identical receipt. If
 the GUI actually exited despite a quit error, verified pre-launch recovery still
 runs. Uncertain or failed old-GUI recovery never claims unchanged. Result records include the
-original receipt hash/absence, confirmed receipt restoration, and a separate
+original receipt hash/absence/version and observed receipt hash/version (unknown or
+malformed versions are null), confirmed receipt restoration, and a separate
 verification-passed marker when only old-bundle cleanup failed. A process kill, power loss
 or unwritable filesystem cannot promise a final receipt: inspect the journal;
-a result-write error is reported to stderr and is never treated as success.
+a result-write error is reported to stderr and is never treated as success. Invalid
+approval is reported only to stderr, without creating the unapproved destination.
+Failed atomic writes remove only their own temporary file; a failed cleanup names
+that path and its error while preserving the original write error. A failed lease
+owner write releases only the same empty directory, never foreign contents.
 
 The displaced bundle is inventoried (paths, bytes and file hashes), archived and
 checked with `unzip -t` before removing that exact copy. A targeted `lsof` check
@@ -64,7 +73,10 @@ identifiers and belongs outside Git.
 
 ## Preparing an approval
 
-Prepare a fresh private result parent and a clean committed release tree. The JSON
+Prepare a fresh private result parent under a `.noindex` ancestor and a clean
+committed release tree. The app, candidate, and result directory must be on the
+same volume; the operator checks their device identities before quitting or
+moving either app. `.noindex` does not itself clear LaunchServices registrations. The JSON
 approval has `format: 1`, `applyAllowed` (false until actual authorization), absolute
 `app`, `candidate`, `data`, `release`, `slot`, `resultDir`; `oldVersion`, `newVersion`,
 `commit`, `bundleId`, and `executableName`. `resultDir` must not already exist when

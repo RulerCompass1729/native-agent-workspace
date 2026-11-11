@@ -10633,3 +10633,9 @@ review. Read-only review and approved fixture cleanup do not authorize daily use
   bundle; a cwd exactly at the bundle root remains an unknown-use refusal.
 - Policy choice and daily approval/installation remain separate gates. No daily
   use qualification or approval is claimed by this checkpoint.
+
+### Installer: approval destination and failure-write guards
+
+- Source: integrator's isolated installer qualification followups 3–4. Prior CLI created a result directory before approval validation; receipt rename failures leaked their temporary file; failed owner creation left an empty installer slot; receipts exposed only hashes. Recovery-state comparison, per-use Swift rehash and direct runInstall approval checks existed without decisive regression coverage.
+- Changes: validate the whole approval and same-volume, private `.noindex` result destination before creation; clean only the owned temporary inode and empty owned slot, report cleanup errors without masking the cause; report receipt versions from the same bytes as their hash. No post-launch downgrade or daily activation added.
+- Verification: targeted baseline 39 pass / 4 fail, fixed 46/46. Removing the rollback comparison, direct apply approval or per-use Swift rehash causes respectively 2, 3 and 1 new tests to fail. Counterexamples preserve collision files/foreign slot contents and reject inaccessible/existing/cross-volume destinations. Full suite: 5975/5975, zero failures/skips. Incremental independent review did not start: the existing headless reviewer login expired before any source reads; review remains pending and this checkpoint is not READY. Actual packaged GUI qualification remains the next item; these checks do not claim it.
