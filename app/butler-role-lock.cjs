@@ -5,6 +5,7 @@ const ROLE_LOCK_NAME = 'butler.json.lock', PROTOCOL = 'naw-butler-role-lock-v1',
 // Darwin SDK sys/fcntl.h: O_EXLOCK = 0x20. Node does not export this constant.
 // open(2) combines it with O_NONBLOCK to obtain a cooperative flock at open.
 const EXLOCK = 0x20;
+let kernelLockUnavailable = false;
 const busy = () => { throw Object.assign(Error('ERR_BUTLER_BUSY'), { code: 'EEXIST' }); };
 const failed = () => { throw Object.assign(Error('ERR_BUTLER_STATE'), { code: 'ERR_BUTLER_STATE' }); };
 const same = (a, b) => a.dev === b.dev && a.ino === b.ino;
@@ -76,6 +77,24 @@ function removeOwn(file, identity) {
   if (!same(current, identity) || !privateFile(current, [1, 2])) failed();
   fs.unlinkSync(file);
 }
+function verifyKernelLock(stage, flags, identity) {
+  const present = named(stage);
+  if (!present || !privateFile(present, [1]) || !same(present, identity)) failed();
+  let probe;
+  try { probe = fs.openSync(stage, flags); }
+  catch (error) {
+    if (['EAGAIN', 'EWOULDBLOCK'].includes(error.code)) {
+      const after = named(stage);
+      if (!after || !privateFile(after, [1]) || !same(after, identity)) failed();
+      return;
+    }
+    kernelLockUnavailable = true; throw error;
+  }
+  // A second open must conflict with our still-held first descriptor. If the
+  // flag was ignored, no name may be published or reclaimed in this process.
+  kernelLockUnavailable = true;
+  fs.closeSync(probe); busy();
+}
 function acquireRoleLock(directory, directoryFd) {
   checkDirectory(directory, directoryFd);
   const lock = path.join(directory, ROLE_LOCK_NAME);
@@ -83,6 +102,7 @@ function acquireRoleLock(directory, directoryFd) {
     // Other platforms retain their previous no-recovery protocol.
     return fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o600);
   }
+  if (kernelLockUnavailable) busy();
   const flags = fs.constants.O_RDWR | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK | EXLOCK;
   const stage = path.join(directory, `.butler-role-lock-${randomUUID()}.tmp`);
   let fd, identity, published = false;
@@ -90,6 +110,7 @@ function acquireRoleLock(directory, directoryFd) {
     fd = fs.openSync(stage, flags | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
     identity = fs.fstatSync(fd);
     if (!privateFile(identity, [1])) failed();
+    verifyKernelLock(stage, flags, identity);
     fs.writeFileSync(fd, JSON.stringify({ protocol: PROTOCOL, stage: path.basename(stage) }));
     fs.fsyncSync(fd);
     checkDirectory(directory, directoryFd);

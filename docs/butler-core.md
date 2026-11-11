@@ -648,6 +648,16 @@ one link. Recovery removes only those known protocol names, then competes for
 the lock name atomically again. An old O_EXCL writer that wins that gap is kept.
 Other platforms retain the previous no-recovery protocol.
 
+Before publishing any Darwin marker, the holder opens its same private stage
+again with `O_EXLOCK|O_NONBLOCK`. Only EAGAIN/EWOULDBLOCK is accepted as actual
+contention. If the second descriptor succeeds, it is closed and that module's
+process lifetime refuses all further acquisition/recovery as busy, even if a
+later call restores the flags. No canonical lock is published or reclaimed.
+Unexpected probe I/O also marks that module unavailable until restart; this
+includes descriptor exhaustion and unexpected stage-open errors. This check guards against a runtime silently
+ignoring the flag; it does not replace the still-required packaged-runtime test.
+
+
 Empty, unknown, malformed, unsafe or still-held lock files remain busy; merely
 being old or obtaining a new kernel lock on a legacy file never authorizes its
 removal. An unpublished orphan stage is not searched for or swept. The protocol

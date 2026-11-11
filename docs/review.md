@@ -10784,3 +10784,63 @@ remain separate open conditions. No person permission or model action is added.
   sentence names the currently fixed 64-page limit; update it if that limit changes.
 - Integration acceptance and actual package activation remain separate; this
   repair performs no provider calls and adds no activation or recovery control.
+
+## Butler kernel-lock exclusion check — 2026-11-11
+
+The integrator's bdd28 review of aaf6828/4cff19d identifies a prerequisite before
+opening the entry: if a Darwin runtime silently ignores O_EXLOCK, acquiring a
+supposed recovery lock could succeed against a live holder. The B4 owner first
+reproduces that fault on main ab50a2f with a real held kernel descriptor and a
+fresh isolated copy of the actual helper/Role modules. A scoped fs.openSync shim
+removes only bit0x20. The old code unlinks the live held inode (nlink0), replaces
+its named lock and changes the selector; it remains willing to write after the
+shim is removed. This is real flag-removal counterevidence, not an embedded-
+Electron observation. The original raw failure is retained privately.
+
+New stage holders open the same unpublished stage a second time with the same
+exclusive/nonblocking flags. Only actual EAGAIN/EWOULDBLOCK is accepted after
+rechecking the stage's private inode. A successful second descriptor is closed,
+marks locking unavailable for that helper's process lifetime and returns busy;
+no marker is published and no existing lock is read or reclaimed. Further calls
+remain busy. Unexpected probe I/O also refuses. There are no PID/age decisions,
+new controls, actor/configuration changes, model calls or default-gate changes.
+
+Four new source tests fail before the patch. Only the first is the actual live-
+inode takeover fault; the others are missing new-protocol check assertions.
+Current tests pass, including a real healthy contention and the EWOULDBLOCK
+spelling of that actual conflict. Fresh module compilation isolates the bad-
+runtime lifetime and never replaces global require.cache or user environment.
+The original 19 lock tests retain their real child crash/live-holder checks.
+
+The existing Main VM test covers repeated construction only in its initializer.
+A new full-source invariant additionally checks one named ButlerRole constructor
+site in the complete main.cjs and that it uses lazy reuse. An author-run in-memory
+second-site mutation is rejected. This guards ordinary extra named constructors,
+not arbitrary aliases, dynamic code replacement or OS-level singleton behavior.
+Actual packaged-runtime flock, Session/singleton storage, legacy/unknown lock
+recovery and other persistent storage recovery remain open. The persistent
+rotation-proof WIP is saved separately while this lock dependency is delivered.
+The source build exits 0. The corrected new tests plus related strict checks
+pass 119/119 with zero failures, cancellations or skips; the original 19 real
+host lock cases also pass 19/19. The complete author-run suite is retained under
+`.local/lock-check/full.log` in the owner lane. Its zero-failure completion and
+clean publication scans are mandatory delivery conditions, checked separately
+before READY. No activation, recording-period start or real App/provider test
+is claimed.
+
+Fresh read-only reviewer FF39DC94-D7F3-41C2-BFF5-B1F3F2F22701 finds no blocking
+source findings for this scoped defense, using seven Read/Grep calls with no
+shell, MCP or writes. It confirms the live-inode fault and the refusal before
+publication/recovery; actual reported model is claude-opus-5-5 and reported list
+cost USD 0.6243408. The author verifies HEAD/index/worktree/newfiles unchanged
+by review; later edits only record results and clarify observed behavior.
+The reviewer does not rerun tests or qualify the embedded runtime.
+
+The availability cost is explicit: unexpected second-open I/O, including
+EMFILE/ENFILE, ENOENT or ELOOP, also marks that module unavailable until restart.
+If close of a successful probe descriptor fails, the operation still refuses and
+the unavailable flag was already set. A remaining untested runtime fault is
+honoring O_EXLOCK but dropping O_NONBLOCK: the synchronous same-stage probe
+could wait on itself. Packaged qualification must cover the exact flags; this
+source-only checkpoint makes no such runtime claim. No changed source or test
+behavior follows the review.
