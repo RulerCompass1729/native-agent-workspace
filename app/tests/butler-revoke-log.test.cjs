@@ -130,10 +130,11 @@ test('unsafe directory detected during log resolution remains sticky after its m
 });
 
 test('directory fsync failure after rename is never acknowledged as successful revoke or cleanup', async t => {
-  const f = fixture(t), sync = fs.fsyncSync; let fired = 0;
-  fs.fsyncSync = function(fd) { if (fs.fstatSync(fd).isDirectory()) { fired++; throw Object.assign(Error('Synthetic sync error'), { code: 'EIO' }); } return sync.call(this, fd); };
+  const f = fixture(t), sync = fs.fsyncSync, rename = fs.renameSync; let fired = 0, selectorRenamed = false;
+  fs.renameSync = function(from, to, ...args) { const result = rename.call(this, from, to, ...args); if (to === f.role.file) selectorRenamed = true; return result; };
+  fs.fsyncSync = function(fd) { if (selectorRenamed && fs.fstatSync(fd).isDirectory()) { fired++; throw Object.assign(Error('Synthetic sync error'), { code: 'EIO' }); } return sync.call(this, fd); };
   try { await assert.rejects(f.api.revoke(person, 1), { code: 'ERR_BUTLER_STATE' }); }
-  finally { fs.fsyncSync = sync; }
+  finally { fs.fsyncSync = sync; fs.renameSync = rename; }
   assert.equal(fired, 1); assert.equal(f.stops(), 0); assert.throws(() => f.role.snapshot(), { code: 'ERR_BUTLER_STATE' });
   assert.equal(f.open().snapshot().selected, null, 'Rename occurred, but its durability receipt failed and was not called successful');
 });

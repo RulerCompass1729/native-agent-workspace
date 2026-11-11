@@ -146,11 +146,12 @@ test('a real selection read failure other than EIO remains sticky', t => {
 });
 
 test('locked revoke preflight read EIO writes no designation, removes only its own lock, and permits an explicit retry', t => {
-  const f = fixture(t), before = fs.readFileSync(f.role.file), restore = oneReadFault(t, f.role.file, { beforeThrow() { assert.equal(fs.lstatSync(f.lock).isFile(), true); } });
+  const f = fixture(t), proof = path.join(f.directory, 'butler-rotation-proof.json'), proofBefore = fs.readFileSync(proof), before = fs.readFileSync(f.role.file), restore = oneReadFault(t, f.role.file, { beforeThrow() { assert.equal(fs.lstatSync(f.lock).isFile(), true); } });
   try { assert.throws(() => f.role.revoke(person, 1), stateError); } finally { restore(); }
   assert.deepEqual(fs.readFileSync(f.role.file), before);
   assert.equal(fs.existsSync(f.lock), false);
-  assert.deepEqual(fs.readdirSync(f.directory), ['butler.json']);
+  assert.deepEqual(fs.readdirSync(f.directory).sort(), ['butler-rotation-proof.json', 'butler.json']);
+  assert.deepEqual(fs.readFileSync(proof), proofBefore);
   assert.equal(f.role.revoke(person, 1).selected, null);
 });
 

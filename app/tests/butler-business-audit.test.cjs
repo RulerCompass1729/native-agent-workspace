@@ -58,10 +58,17 @@ test('unknown tools, ordinary consent and revoked identity return no data and cr
 });
 
 test('audit write failure withholds the business body and cannot expose a raw storage error', t => {
-  const f = fixture(t), cap = f.bind();
-  t.mock.method(fs, 'fsyncSync', () => { throw Error('Synthetic private storage detail'); });
+  const f = fixture(t), cap = f.bind(), sync = fs.fsyncSync;
+  const auditFile = path.join(f.directory, 'butler-business-reads.jsonl'); let fired = 0;
+  t.mock.method(fs, 'fsyncSync', fd => {
+    const opened = fs.fstatSync(fd); let audit;
+    try { audit = fs.lstatSync(auditFile); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (audit && opened.dev === audit.dev && opened.ino === audit.ino) { fired++; throw Error('Synthetic private storage detail'); }
+    return sync(fd);
+  });
   assert.throws(() => cap.invoke('readBusiness', query), error =>
     error.code === 'ERR_BUTLER_BUSINESS_AUDIT' && error.message === 'ERR_BUTLER_BUSINESS_AUDIT');
+  assert.equal(fired, 1, 'The injected failure must reach the actual audit fd, after Role proof checks');
   assert.equal(f.privateReads(), 0);
 });
 

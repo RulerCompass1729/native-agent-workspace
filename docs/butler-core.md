@@ -591,19 +591,53 @@ handoff cannot resolve back to an earlier identity: a fresh resolution from the
 original must agree with one from the last observed identity for that selection.
 That latter identity is only a comparison, never a fallback result. A branch,
 cycle or kept disagreement can keep this Role and selection revision unavailable.
-Changing the designation or restarting discards those observations; restarting
-can expose the original resolver boundary and is not a safe recovery procedure.
+The verified part now survives restart in `butler-rotation-proof.json`.
+This private bounded file contains only version, a hash of the canonical saved
+selection, proof revision, verified raw-byte prefix length/SHA-256, and resolved
+session/native ids. It contains no log lines, names, reasons, conversation text
+or credentials. Production `current()` takes the same cooperative Role lock used
+by human changes, reloads the latest selector and proof, then reads the actual
+log and verifies its accepted prefix and resolution. Before returning an advanced
+identity it atomically replaces and fsyncs the proof file and directory. A second
+reader cannot replace a newer proof using an observation made before that lock.
+A changed or shortened verified prefix, missing seen history, or an appended
+branch/cycle/kept disagreement therefore refuses in a fresh Role or process too.
+Within one object, proof revision rollback and changes at the same proof revision
+also refuse. No proof or last identity is returned as cached authority.
 
-The observations are process-local and never write a new store. A fresh Role or
-cold restart cannot detect changes made before its first observation; bytes never
-successfully validated have no trusted prefix hash. A missing log that has never
-been seen still resolves the original saved designation. Persistent handoff and
-transport proof therefore remain pre-activation work. Trusted explicit-entry
-fixtures retain their existing parser semantics; production Controller, Business
-and Queue authorizations all use the file-backed form and must keep doing so.
+A proof read confirms file and directory durability before accepting it. Only an
+unchanged inode/version and identical raw-byte hash that this object already
+successfully synced can omit that acknowledgement; fresh proof bytes and the
+real log are still read and checked every time. Failed directory sync is never
+remembered as an acknowledgement. This cache changes I/O cost, not authority.
+
+New on-disk selectors use version 2; the public set/snapshot shape stays version
+1. The previous strict reader refuses the new disk version instead of silently
+bypassing its required proof. Legacy version-1 selections remain visible and
+human-revocable in the new reader, but file-backed `current()` refuses them;
+there is no automatic proof creation from an untrusted existing log. A human
+set prepares the new proof durably before replacing the selector. An interrupted
+set can leave a mismatched proof and must refuse model authority. Missing,
+malformed, unsafe or mismatched proof blocks current identity without poisoning
+the readable saved selection or its revision-checked human revoke. Revoke neither
+reads nor deletes the proof, log or ledger. Recovery or re-designation after
+corrupt proof remains separate user-facing work.
+
+Only successfully verified prefix/identity advances are durable. Safely seen but
+unverified tail lengths remain process-local; restart cannot discard verified
+bytes but can forget that unverified high-water observation. Changes never seen
+or verified, and restoring an older valid proof together with compatible log
+bytes (including jointly rolling back all trust sources), are outside this
+protection. The proof file is not a tamper-proof external monotonic counter. A missing log never observed still resolves the saved identity
+only with a valid required proof. This is a local continuity guard, not a trusted
+DSH handoff producer or transport/physical-stop proof. Those activation gates,
+packaged-runtime qualification and default-off controls remain unchanged.
+Trusted explicit-entry fixtures retain their parser semantics, never write proof
+and never affect real-log observations; production Controller, Business and
+Queue authorizations all use the file-backed form and must keep doing so.
 The shared Main Role must be retained across bindings rather than reconstructed
-for each model call. Model reads,
-bindings and queue commits still fail closed on an unresolved rotation view.
+for each model call. Model reads, bindings and queue commits still fail closed
+on an unresolved rotation view.
 
 A readable saved designation remains human-revocable without resolving that
 view. Person verifies the expected saved revision, then the real Role writer
@@ -648,6 +682,16 @@ one link. Recovery removes only those known protocol names, then competes for
 the lock name atomically again. An old O_EXCL writer that wins that gap is kept.
 Other platforms retain the previous no-recovery protocol.
 
+Before publishing any Darwin marker, the holder opens its same private stage
+again with `O_EXLOCK|O_NONBLOCK`. Only EAGAIN/EWOULDBLOCK is accepted as actual
+contention. If the second descriptor succeeds, it is closed and that module's
+process lifetime refuses all further acquisition/recovery as busy, even if a
+later call restores the flags. No canonical lock is published or reclaimed.
+Unexpected probe I/O also marks that module unavailable until restart; this
+includes descriptor exhaustion and unexpected stage-open errors. This check guards against a runtime silently
+ignoring the flag; it does not replace the still-required packaged-runtime test.
+
+
 Empty, unknown, malformed, unsafe or still-held lock files remain busy; merely
 being old or obtaining a new kernel lock on a legacy file never authorizes its
 removal. An unpublished orphan stage is not searched for or swept. The protocol
@@ -664,8 +708,10 @@ durable success. Safe store recovery and reliable physical cleanup remain
 pre-activation work; restart alone does not repair persistent malformed data.
 No rollback, truncation or fresh Role instance hides uncertain storage.
 
-A complete recovery must retain the verified prefix and cannot shrink any safely
-observed history, including an unverified tail. A malformed suffix may be repaired
+In the same Role object, a complete recovery must retain the verified prefix
+and cannot shrink any safely observed history, including an unverified tail.
+Across restart the persisted verified prefix remains required; unverified tail
+length observations alone are not persisted. A malformed suffix may be repaired
 to complete valid data at least as long while preserving the verified bytes; a
 valid shorter prefix is not an automatic recovery. User revoke still needs only
 the readable designation and its locked revision check. Directory/designation

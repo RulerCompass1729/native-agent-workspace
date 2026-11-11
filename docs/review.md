@@ -10954,3 +10954,138 @@ worktree fingerprint unchanged after each invocation):
 - Source: integrator's isolated installer qualification followups 3–4. Prior CLI created a result directory before approval validation; receipt rename failures leaked their temporary file; failed owner creation left an empty installer slot; receipts exposed only hashes. Recovery-state comparison, per-use Swift rehash and direct runInstall approval checks existed without decisive regression coverage.
 - Changes: validate the whole approval and same-volume, private `.noindex` result destination before creation; clean only the owned temporary inode and empty owned slot, report cleanup errors without masking the cause; report receipt versions from the same bytes as their hash. No post-launch downgrade or daily activation added.
 - Verification: targeted baseline 39 pass / 4 fail, fixed 46/46. Removing the rollback comparison, direct apply approval or per-use Swift rehash causes respectively 2, 3 and 1 new tests to fail. Counterexamples preserve collision files/foreign slot contents and reject inaccessible/existing/cross-volume destinations. Full suite: 5975/5975, zero failures/skips. Incremental independent review did not start: the existing headless reviewer login expired before any source reads; review remains pending and this checkpoint is not READY. Actual packaged GUI qualification remains the next item; these checks do not claim it.
+
+## Butler kernel-lock exclusion check — 2026-11-11
+
+The integrator's bdd28 review of aaf6828/4cff19d identifies a prerequisite before
+opening the entry: if a Darwin runtime silently ignores O_EXLOCK, acquiring a
+supposed recovery lock could succeed against a live holder. The B4 owner first
+reproduces that fault on main ab50a2f with a real held kernel descriptor and a
+fresh isolated copy of the actual helper/Role modules. A scoped fs.openSync shim
+removes only bit0x20. The old code unlinks the live held inode (nlink0), replaces
+its named lock and changes the selector; it remains willing to write after the
+shim is removed. This is real flag-removal counterevidence, not an embedded-
+Electron observation. The original raw failure is retained privately.
+
+New stage holders open the same unpublished stage a second time with the same
+exclusive/nonblocking flags. Only actual EAGAIN/EWOULDBLOCK is accepted after
+rechecking the stage's private inode. A successful second descriptor is closed,
+marks locking unavailable for that helper's process lifetime and returns busy;
+no marker is published and no existing lock is read or reclaimed. Further calls
+remain busy. Unexpected probe I/O also refuses. There are no PID/age decisions,
+new controls, actor/configuration changes, model calls or default-gate changes.
+
+Four new source tests fail before the patch. Only the first is the actual live-
+inode takeover fault; the others are missing new-protocol check assertions.
+Current tests pass, including a real healthy contention and the EWOULDBLOCK
+spelling of that actual conflict. Fresh module compilation isolates the bad-
+runtime lifetime and never replaces global require.cache or user environment.
+The original 19 lock tests retain their real child crash/live-holder checks.
+
+The existing Main VM test covers repeated construction only in its initializer.
+A new full-source invariant additionally checks one named ButlerRole constructor
+site in the complete main.cjs and that it uses lazy reuse. An author-run in-memory
+second-site mutation is rejected. This guards ordinary extra named constructors,
+not arbitrary aliases, dynamic code replacement or OS-level singleton behavior.
+Actual packaged-runtime flock, Session/singleton storage, legacy/unknown lock
+recovery and other persistent storage recovery remain open. The persistent
+rotation-proof WIP is saved separately while this lock dependency is delivered.
+The source build exits 0. The corrected new tests plus related strict checks
+pass 119/119 with zero failures, cancellations or skips; the original 19 real
+host lock cases also pass 19/19. The complete author-run suite is retained under
+`.local/lock-check/full.log` in the owner lane. Its zero-failure completion and
+clean publication scans are mandatory delivery conditions, checked separately
+before READY. No activation, recording-period start or real App/provider test
+is claimed.
+
+Fresh read-only reviewer FF39DC94-D7F3-41C2-BFF5-B1F3F2F22701 finds no blocking
+source findings for this scoped defense, using seven Read/Grep calls with no
+shell, MCP or writes. It confirms the live-inode fault and the refusal before
+publication/recovery; actual reported model is claude-opus-5-5 and reported list
+cost USD 0.6243408. The author verifies HEAD/index/worktree/newfiles unchanged
+by review; later edits only record results and clarify observed behavior.
+The reviewer does not rerun tests or qualify the embedded runtime.
+
+The availability cost is explicit: unexpected second-open I/O, including
+EMFILE/ENFILE, ENOENT or ELOOP, also marks that module unavailable until restart.
+If close of a successful probe descriptor fails, the operation still refuses and
+the unavailable flag was already set. A remaining untested runtime fault is
+honoring O_EXLOCK but dropping O_NONBLOCK: the synchronous same-stage probe
+could wait on itself. Packaged qualification must cover the exact flags; this
+source-only checkpoint makes no such runtime claim. No changed source or test
+behavior follows the review.
+
+
+## Butler verified rotation prefix across restart — 2026-11-11
+
+The integrator's review of cfe4d57 found that a fresh Role loses its in-memory
+prefix and can resolve original identity A after a previously accepted A-to-B
+handoff is deleted, shortened, rewritten or made ambiguous. The new checkpoint
+keeps B4 dormant and records only verified metadata before returning authority.
+It does not change capabilities, user-only gates or default recording/activation.
+
+On the old 4cff19d source, the original 25 new cases yield 5 passes and 20
+failures. Eight are actual cold reads returning A, including one isolated host
+Node process after log deletion; the other twelve assert the new proof protocol.
+These raw failures are retained privately in `.local/rotation-proof/red.log`.
+This is source/host evidence, not an installed Electron or DSH handoff test.
+
+The required private proof stores a canonical selection digest, monotonically
+advanced proof revision, verified raw log prefix length/hash and resolved ids.
+File-backed current() holds the existing Role lock across fresh selector/proof/
+log reads and durable proof advance. New selector disk version 2 is refused by
+the old strict reader; the new public snapshot remains version 1, and legacy
+version 1 is human-readable/revocable without model authorization. No automatic
+migration invents a trusted baseline. Bad proof never becomes authority and
+never blocks human revoke solely because that proof is bad. The proof and ledger
+are retained. Failed proof writes return no advanced identity; an unconfirmed
+directory sync cannot be reused as a durability acknowledgement. Already synced
+unchanged proof bytes/inode metadata may reuse that acknowledgement, but every
+call still reads proof and actual log. Trusted explicit-entry fixtures do not
+write or affect persistent authority.
+
+Author counterexamples cover seven cold rollback/ambiguity variants, one actual
+reaped host child, normal B-to-C growth, bad/missing/unsafe/mismatched proof with
+human revoke, legacy downgrade, exact metadata keys/privacy canary, serialized
+peer readers, initialization/advance faults, failed-sync retry and same-object
+proof revision/identity rollback. Three owned marker write/fsync/link faults
+also retain the former lock protocol's conservative failure behavior. Existing
+failure injection is corrected to hit the selector's directory fsync after its
+actual rename, rather than accidentally failing an earlier proof sync; physical
+file assertions include the new proof while public state remains version 1.
+
+Known boundaries: only verified observations persist. Unverified tail byte
+high-water remains process-local; restoring an older valid proof together with
+compatible log bytes, including joint rollback of all trust sources, is not
+detected. No cleanup of arbitrary files, legacy lock takeover, activation,
+model call, GUI trial or physical stop is added. Durable DSH handoff production,
+packaged flock qualification and human recovery from corrupt stores remain open.
+Relevant author logs, old-reader check, complete suite and independent review
+are retained in the owner lane before READY; zero-failure completion, review and
+clean staged/message scans are required before committing this checkpoint.
+
+Author validation now passes 93/93 across the proof, Role, selection-read and
+revoke-log cases (zero fail/cancel/skip), plus 196/196 in nine direct-authority
+files under the credential-empty, no-fork/no-network sandbox. The targeted real
+audit-fd sync fault passes 1/1; exact old-reader and guard-only mutation probes
+exit 0. Source build exits 0. The earlier broader sandbox run exceeded its
+120-second limit and is not counted as a pass. Whole-suite output remains in
+`.local/rotation-proof/full.log` and must finish with zero failures before handoff.
+
+Independent review 33BDEA95-787D-4D3C-AA04-D084A7554D6B cannot begin: the CLI
+returns authentication-expired, is_error=true, cost USD 0. Its initialization has
+only Glob/Grep/Read, no MCP; actual resolved model is claude-opus-5-5. HEAD, index,
+worktree and new source/test contents are unchanged after that invocation. This
+is not approval. The integrator is notified privately to restore login or supply
+a separate review; checkpoint remains REVIEW_PENDING, never READY meanwhile.
+
+The first whole-suite run exposes one author error in the packaging allowlist:
+the new module was inserted before butler-role.cjs instead of after it. The
+alphabetization assertion in package-sources.test.cjs catches it. Only the new
+entry's position is corrected; all existing entries remain. The four packaging
+source checks then pass 4/4, fail/cancel/skip 0. The failed whole run ends with 6,044 passes and one failure out of 6,045,
+zero cancellations or skips, exit 1; its raw output is retained as
+`.local/rotation-proof/full-before-package-order.log`. A fresh complete suite
+is required after this correction. The substantive
+Role/proof source and its tested authority behavior are unchanged. The earlier
+publication pass predates this correction and is not reused for final commit.

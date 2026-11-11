@@ -100,6 +100,7 @@ async function build() {
       'butler-review-projection.cjs',
       'butler-role-lock.cjs',
       'butler-role.cjs',
+      'butler-rotation-proof.cjs',
       'butler-runner.cjs',
       'butler-runner.py',
       'butler-service-driver.cjs',

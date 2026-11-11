@@ -7,6 +7,7 @@ const { randomUUID, createHash } = require('node:crypto');
 const { successor } = require('./queue-secretary.cjs');
 const { roomIds } = require('./collaboration-spaces.cjs');
 const { acquireRoleLock, ROLE_LOCK_NAME } = require('./butler-role-lock.cjs');
+const { PROOF_FILE_NAME, parseRotationProof, initialRotationProof, advanceRotationProof, selectionFingerprint } = require('./butler-rotation-proof.cjs');
 
 const MAX_RECORD = 16 * 1024, MAX_LOG = 32 * 1024 * 1024;
 const codeError = code => Object.assign(Error(code), { code });
@@ -21,7 +22,8 @@ const unchanged = (a, b) => sameFile(a, b) && a.size === b.size && a.mtimeMs ===
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 // A failed read still throws ERR_BUTLER_STATE. Only this internally branded,
 // safely opened selection read may be retried on a later explicit call.
-const selectionReadFailures = new WeakSet();
+const selectionReadFailures = new WeakSet(), proofWriteFailures = new WeakSet();
+function proofWriteFailure() { const error = codeError('ERR_BUTLER_STATE'); proofWriteFailures.add(error); return error; }
 function selectionReadFailure() {
   const error = codeError('ERR_BUTLER_STATE'); selectionReadFailures.add(error); return error;
 }
@@ -48,7 +50,7 @@ function selection(value) {
   return { identity: identity(value.identity), runner: runner(value.runner), budget: budget(value.budget) };
 }
 function state(value) {
-  if (!fields(value, ['version', 'revision', 'selected']) || value.version !== 1 || !revision(value.revision) || value.revision === 0) fail('ERR_BUTLER_INVALID');
+  if (!fields(value, ['version', 'revision', 'selected']) || ![1, 2].includes(value.version) || !revision(value.revision) || value.revision === 0) fail('ERR_BUTLER_INVALID');
   return { version: 1, revision: value.revision, selected: value.selected === null ? null : selection(value.selected) };
 }
 function safePrivateFile(stat, limit) {
@@ -56,8 +58,8 @@ function safePrivateFile(stat, limit) {
 }
 
 class ButlerRole {
-  #directory; #directoryIdentity; #file; #logFile; #authorizePerson; #state = { version: 1, revision: 0, selected: null };
-  #failed = false; #seenRecord = false;
+  #directory; #directoryIdentity; #file; #logFile; #proofFile; #authorizePerson; #state = { version: 1, revision: 0, selected: null };
+  #failed = false; #seenRecord = false; #diskVersion = 1; #proofHighwater = null; #proofDurable = null;
   // Process-local integrity observations, never a cached authorization result.
   #seenLog = false; #logMinimum = 0; #logPrefix = null; #resolvedLog = null;
   constructor(directory, { authorizePerson = () => false } = {}) {
@@ -68,6 +70,7 @@ class ButlerRole {
       if (!initial.isDirectory() || initial.isSymbolicLink() || initial.uid !== process.getuid() || (initial.mode & 0o777) !== 0o700) fail('ERR_BUTLER_STATE');
       this.#directory = fs.realpathSync(directory); this.#directoryIdentity = initial;
       this.#file = path.join(this.#directory, 'butler.json'); this.#logFile = path.join(this.#directory, 'rotation-log.jsonl');
+      this.#proofFile = path.join(this.#directory, PROOF_FILE_NAME);
       this.#load();
     } catch (error) { if (!selectionReadFailures.has(error)) this.#failed = true; }
   }
@@ -84,8 +87,8 @@ class ButlerRole {
       return fd;
     } catch { this.#failed = true; if (fd !== undefined) fs.closeSync(fd); fail('ERR_BUTLER_STATE'); }
   }
-  #read(file, limit) {
-    const directoryFd = this.#directoryFd(), rotation = file === this.#logFile; let fd;
+  #read(file, limit, expectedPrefix = null) {
+    const directoryFd = this.#directoryFd(), rotation = file === this.#logFile, selected = file === this.#file; let fd;
     try {
       const before = fs.lstatSync(file);
       if (rotation) this.#seenLog = true;
@@ -94,28 +97,42 @@ class ButlerRole {
       fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
       const opened = fs.fstatSync(fd);
       if (!sameFile(opened, before) || !safePrivateFile(opened, limit)) fail('ERR_BUTLER_STATE');
-      if (!rotation) this.#seenRecord = true;
+      if (selected) this.#seenRecord = true;
       const buffer = Buffer.alloc(limit + 1); let length = 0;
       while (length < buffer.length) {
         let read;
         try { read = fs.readSync(fd, buffer, length, buffer.length - length, length); }
         catch (error) {
-          if (!rotation && error.code === 'EIO') throw selectionReadFailure();
+          if (selected && error.code === 'EIO') throw selectionReadFailure();
           throw error;
         }
         if (!read) break;
         length += read;
       }
-      const text = buffer.toString('utf8', 0, length), after = fs.fstatSync(fd), present = rotation ? fs.lstatSync(file) : after;
+      const text = buffer.toString('utf8', 0, length), after = fs.fstatSync(fd), present = selected ? after : fs.lstatSync(file);
       if (rotation) for (const info of [opened, after, present]) {
         if (safePrivateFile(info, limit)) this.#logMinimum = Math.max(this.#logMinimum, info.size);
       }
       if (!unchanged(before, after) || !unchanged(after, present) || !safePrivateFile(after, limit) ||
           !safePrivateFile(present, limit) || length !== after.size || Buffer.byteLength(text) > limit) fail('ERR_BUTLER_STATE');
       if (rotation) {
-        if (length < this.#logMinimum || this.#logPrefix && (length < this.#logPrefix.length ||
-            digest(buffer.subarray(0, this.#logPrefix.length)) !== this.#logPrefix.digest)) fail('ERR_BUTLER_STATE');
-        return { text, prefix: { length, digest: digest(buffer.subarray(0, length)) } };
+        if (length < this.#logMinimum) fail('ERR_BUTLER_STATE');
+        const full = digest(buffer.subarray(0, length)), hashes = new Map([[length, full]]);
+        for (const prefix of [this.#logPrefix, expectedPrefix]) {
+          if (!prefix) continue;
+          if (length < prefix.length) fail('ERR_BUTLER_STATE');
+          if (!hashes.has(prefix.length)) hashes.set(prefix.length, digest(buffer.subarray(0, prefix.length)));
+          if (hashes.get(prefix.length) !== prefix.digest) fail('ERR_BUTLER_STATE');
+        }
+        return { text, prefix: { length, digest: full } };
+      }
+      if (!selected) {
+        // Reading a complete stored proof also confirms its file and directory
+        // durability, including after an earlier writer's unconfirmed fsync.
+        const fingerprint = digest(buffer.subarray(0, length));
+        if (!this.#proofDurable || !unchanged(this.#proofDurable.stat, after) || this.#proofDurable.digest !== fingerprint) {
+          fs.fsyncSync(fd); fs.fsyncSync(directoryFd); this.#proofDurable = { stat: after, digest: fingerprint };
+        }
       }
       return text;
     } finally { if (fd !== undefined) fs.closeSync(fd); fs.closeSync(directoryFd); }
@@ -123,11 +140,11 @@ class ButlerRole {
   #load() {
     if (this.#failed) fail('ERR_BUTLER_STATE');
     try {
-      let loaded;
-      try { loaded = state(JSON.parse(this.#read(this.#file, MAX_RECORD))); }
+      let loaded, record;
+      try { record = JSON.parse(this.#read(this.#file, MAX_RECORD)); loaded = state(record); }
       catch (error) { if (error.code === 'ENOENT' && !this.#seenRecord) return; throw error; }
       if (loaded.revision < this.#state.revision || loaded.revision === this.#state.revision && JSON.stringify(loaded) !== JSON.stringify(this.#state)) fail('ERR_BUTLER_STATE');
-      this.#state = loaded; this.#seenRecord = true;
+      this.#state = loaded; this.#seenRecord = true; this.#diskVersion = record.version;
     } catch (error) {
       if (selectionReadFailures.has(error)) throw error;
       this.#failed = true; fail('ERR_BUTLER_STATE');
@@ -138,45 +155,90 @@ class ButlerRole {
     try { authorized = this.#authorizePerson(actor) === true; } catch { /* No caller-provided assertion grants this role. */ }
     if (!authorized) fail('ERR_BUTLER_PERSON');
   }
-  #write(selected, expectedRevision) {
-    if (!revision(expectedRevision)) fail('ERR_BUTLER_REVISION');
-    let directoryFd, lockFd, lockIdentity, tempFd, tempIdentity, next;
-    const lock = path.join(this.#directory || '', ROLE_LOCK_NAME), temp = `${this.#file}.${randomUUID()}.tmp`;
+  #locked(operation) {
+    let directoryFd, lockFd, lockIdentity;
+    const lock = path.join(this.#directory || '', ROLE_LOCK_NAME);
     try {
       directoryFd = this.#directoryFd();
       try { lockFd = acquireRoleLock(this.#directory, directoryFd); }
       catch (error) { if (error.code === 'EEXIST') fail('ERR_BUTLER_BUSY'); throw error; }
       lockIdentity = fs.fstatSync(lockFd);
       if (!safePrivateFile(lockIdentity, MAX_RECORD)) fail('ERR_BUTLER_STATE');
-      this.#load();
-      if (expectedRevision !== this.#state.revision || this.#state.revision === Number.MAX_SAFE_INTEGER) fail('ERR_BUTLER_REVISION');
-      next = { version: 1, revision: this.#state.revision + 1, selected };
-      tempFd = fs.openSync(temp, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o600);
-      tempIdentity = fs.fstatSync(tempFd);
-      if (!safePrivateFile(tempIdentity, MAX_RECORD)) fail('ERR_BUTLER_STATE');
-      fs.writeFileSync(tempFd, JSON.stringify(next)); fs.fsyncSync(tempFd); fs.closeSync(tempFd); tempFd = undefined;
-      const checkedFd = this.#directoryFd(); fs.closeSync(checkedFd);
-      fs.renameSync(temp, this.#file); fs.fsyncSync(directoryFd);
-      this.#state = next; this.#seenRecord = true;
-    } catch (error) {
-      if (['ERR_BUTLER_BUSY', 'ERR_BUTLER_REVISION'].includes(error.code) || selectionReadFailures.has(error)) throw error;
-      this.#failed = true; fail('ERR_BUTLER_STATE');
+      return operation(directoryFd);
     } finally {
-      try {
-        if (tempFd !== undefined) fs.closeSync(tempFd);
-        // Keep the cooperative kernel lock until its own published name is gone.
-        // Only remove files created by this invocation, never another writer's lock.
-        for (const [file, owned] of [[temp, tempIdentity], [lock, lockIdentity]]) {
-          if (!owned) continue;
-          try { const present = fs.lstatSync(file); if (sameFile(present, owned) && safePrivateFile(present, MAX_RECORD)) fs.unlinkSync(file); else this.#failed = true; }
-          catch (error) { if (error.code !== 'ENOENT') { this.#failed = true; } }
-        }
-        if (lockFd !== undefined) fs.closeSync(lockFd);
-        if (directoryFd !== undefined) fs.closeSync(directoryFd);
-      } catch { this.#failed = true; fail('ERR_BUTLER_STATE'); }
+      let uncertain = false;
+      if (lockIdentity) {
+        try {
+          const present = fs.lstatSync(lock);
+          if (sameFile(present, lockIdentity) && safePrivateFile(present, MAX_RECORD)) fs.unlinkSync(lock);
+          else uncertain = true;
+        } catch (error) { if (error.code !== 'ENOENT') uncertain = true; }
+      }
+      for (const fd of [lockFd, directoryFd]) {
+        try { if (fd !== undefined) fs.closeSync(fd); } catch { uncertain = true; }
+      }
+      if (uncertain) { this.#failed = true; fail('ERR_BUTLER_STATE'); }
     }
-    if (this.#failed) fail('ERR_BUTLER_STATE');
-    return copy(this.#state);
+  }
+  #replace(file, value, directoryFd) {
+    const temp = `${file}.${randomUUID()}.tmp`; let fd, owned;
+    try {
+      fd = fs.openSync(temp, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o600);
+      owned = fs.fstatSync(fd);
+      if (!safePrivateFile(owned, MAX_RECORD)) fail('ERR_BUTLER_STATE');
+      fs.writeFileSync(fd, JSON.stringify(value)); fs.fsyncSync(fd);
+      const closing = fd; fd = undefined; fs.closeSync(closing);
+      const checked = this.#directoryFd(); fs.closeSync(checked);
+      fs.renameSync(temp, file); fs.fsyncSync(directoryFd);
+      if (file === this.#proofFile) {
+        const present = fs.lstatSync(file);
+        if (!sameFile(present, owned) || !safePrivateFile(present, MAX_RECORD)) fail('ERR_BUTLER_STATE');
+        this.#proofDurable = { stat: present, digest: digest(Buffer.from(JSON.stringify(value))) };
+      }
+    } finally {
+      let uncertain = false;
+      try { if (fd !== undefined) fs.closeSync(fd); } catch { uncertain = true; }
+      if (owned) {
+        try {
+          const present = fs.lstatSync(temp);
+          if (sameFile(present, owned) && safePrivateFile(present, MAX_RECORD)) fs.unlinkSync(temp);
+          else uncertain = true;
+        } catch (error) { if (error.code !== 'ENOENT') uncertain = true; }
+      }
+      if (uncertain) fail('ERR_BUTLER_STATE');
+    }
+  }
+  #storedProof() { return parseRotationProof(JSON.parse(this.#read(this.#proofFile, MAX_RECORD))); }
+  #proofSeen(proof) {
+    const fingerprint = selectionFingerprint(proof), prior = this.#proofHighwater;
+    if (prior?.selection === proof.selection && (proof.revision < prior.revision ||
+        proof.revision === prior.revision && fingerprint !== prior.fingerprint)) fail('ERR_BUTLER_STATE');
+    this.#proofHighwater = { selection: proof.selection, revision: proof.revision, fingerprint };
+  }
+  #write(selected, expectedRevision) {
+    if (!revision(expectedRevision)) fail('ERR_BUTLER_REVISION');
+    try {
+      return this.#locked(directoryFd => {
+        this.#load();
+        if (expectedRevision !== this.#state.revision || this.#state.revision === Number.MAX_SAFE_INTEGER) fail('ERR_BUTLER_REVISION');
+        const next = { version: 1, revision: this.#state.revision + 1, selected }; let proof;
+        if (selected) {
+          try {
+            try { this.#storedProof(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+            proof = initialRotationProof(next, this.#logPrefix);
+            // The public selector stays unchanged until its new proof is durable.
+            this.#replace(this.#proofFile, proof, directoryFd);
+          } catch { throw proofWriteFailure(); }
+        }
+        this.#replace(this.#file, { ...next, version: 2 }, directoryFd);
+        this.#state = next; this.#seenRecord = true; this.#diskVersion = 2;
+        if (proof) this.#proofSeen(proof);
+        return copy(this.#state);
+      });
+    } catch (error) {
+      if (['ERR_BUTLER_BUSY', 'ERR_BUTLER_REVISION'].includes(error.code) || selectionReadFailures.has(error) || proofWriteFailures.has(error)) throw error;
+      this.#failed = true; fail('ERR_BUTLER_STATE');
+    }
   }
   set(actor, value, expectedRevision) { this.#person(actor); return this.#write(selection(value), expectedRevision); }
   revoke(actor, expectedRevision) { this.#person(actor); return this.#write(null, expectedRevision); }
@@ -184,24 +246,41 @@ class ButlerRole {
   current(entries) {
     this.#load();
     if (!this.#state.selected) return null;
-    const fileBacked = entries === undefined; let observed = null;
-    try {
-      if (fileBacked) {
-        try {
-          const read = this.#read(this.#logFile, MAX_LOG);
-          entries = read.text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line)); observed = read.prefix;
-        } catch (error) { if (error.code !== 'ENOENT' || this.#seenLog) throw error; entries = []; }
-      }
+    // Explicit entries are the trusted parser-fixture API, never a production
+    // authority source or a way to create/advance persistent history.
+    if (entries !== undefined) {
       if (!Array.isArray(entries)) fail('ERR_BUTLER_STATE');
-      const resolved = successor(this.#state.selected.identity, entries);
-      if (fileBacked) {
-        if (this.#resolvedLog?.revision === this.#state.revision &&
-            JSON.stringify(successor(this.#resolvedLog.identity, entries)) !== JSON.stringify(resolved)) fail('ERR_BUTLER_STATE');
+      return { ...copy(this.#state.selected), identity: successor(this.#state.selected.identity, entries),
+        selectionRevision: this.#state.revision, mode: 'record-only' };
+    }
+    try {
+      return this.#locked(directoryFd => {
+        this.#load();
+        if (!this.#state.selected) return null;
+        if (this.#diskVersion !== 2) fail('ERR_BUTLER_STATE');
+        // The complete read/verify/advance is serialized. A reader that saw B
+        // cannot overwrite proof C written by a later reader at the same role rev.
+        const proof = this.#storedProof();
+        if (proof.selection !== selectionFingerprint(this.#state)) fail('ERR_BUTLER_STATE');
+        this.#proofSeen(proof);
+        if (proof.prefix) { this.#seenLog = true; this.#logMinimum = Math.max(this.#logMinimum, proof.prefix.length); }
+        let observed = null, parsed;
+        try {
+          const read = this.#read(this.#logFile, MAX_LOG, proof.prefix);
+          parsed = read.text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line)); observed = read.prefix;
+        } catch (error) { if (error.code !== 'ENOENT' || this.#seenLog) throw error; parsed = []; }
+        const resolved = successor(this.#state.selected.identity, parsed);
+        if (JSON.stringify(successor(proof.identity, parsed)) !== JSON.stringify(resolved) ||
+            this.#resolvedLog?.revision === this.#state.revision &&
+            JSON.stringify(successor(this.#resolvedLog.identity, parsed)) !== JSON.stringify(resolved)) fail('ERR_BUTLER_STATE');
+        const next = advanceRotationProof(proof, observed, resolved);
+        if (next !== proof) this.#replace(this.#proofFile, next, directoryFd);
+        this.#proofSeen(next);
         if (observed) this.#logPrefix = observed;
         this.#resolvedLog = { revision: this.#state.revision, identity: copy(resolved) };
-      }
-      return { ...copy(this.#state.selected), identity: resolved, selectionRevision: this.#state.revision, mode: 'record-only' };
-    } catch { fail('ERR_BUTLER_STATE'); } // A failed rotation view is not a damaged designation.
+        return { ...copy(this.#state.selected), identity: resolved, selectionRevision: this.#state.revision, mode: 'record-only' };
+      });
+    } catch (error) { if (error.code === 'ERR_BUTLER_BUSY') throw error; fail('ERR_BUTLER_STATE'); }
   }
   authorize(actorRecord, expected, records, entries) {
     if (!fields(expected, ['selectionRevision', 'runnerRef']) || !revision(expected.selectionRevision) || !id(expected.runnerRef)) fail('ERR_BUTLER_UNAUTHORIZED');
