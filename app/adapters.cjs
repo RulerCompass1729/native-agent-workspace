@@ -2618,7 +2618,7 @@ class NativeHost {
     this.claudeModChecks = new Map();
     this.codexMessageToken = crypto.randomBytes(32).toString('hex');
     this.submissions = createSubmissionServer(this.submitSocket, this.hookTargets);
-    this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() };
+    this.resolvePrograms();
     this.hooks = net.createServer(socket => {
       socket.setEncoding('utf8');
       socket.setTimeout(2000, () => socket.destroy()); let data = '';
@@ -2918,9 +2918,12 @@ class NativeHost {
     });
     return this.starting;
   }
+  // Where the native programs are now: resolved at start, before each session starts, and whenever a client
+  // asks for the initial state, so that state's `available` is current and not the answer from the last start.
+  resolvePrograms() { this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() }; return this.binaries; }
   create(record) {
     if (this.serviceBinding) throw require('./service-binding.cjs').failure('butler-qualification-required');
-    this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() };
+    this.resolvePrograms();
     if (!this.binaries[record.provider] || !this.binaries.python) throw uiError("error.nativeRuntimeMissing");
     if (record.provider === 'codex' && this.codexBinary && this.codexBinary !== this.binaries.codex) throw uiError("error.codexLocationChanged");
     return record.provider === 'claude' ? new Claude(record, this) : new Codex(record, this);

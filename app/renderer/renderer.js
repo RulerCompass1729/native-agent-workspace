@@ -3829,7 +3829,7 @@ function render() {
     else if (s?.name) { ui.display.unbind($('title')); $('title').textContent = s.name; }
     else ui.display.text($('title'), 'header.workspace');
     const warningText = (raw, message) => message ? ui.displayText(raw, message) : raw;
-    const warning = () => [disconnected ? uiText('error.serviceDisconnectedNotice') : [warningText(state.storageWarning, state.storageWarningUiMessage), warningText(state.sessionNameWarning, state.sessionNameWarningUiMessage), warningText(state.roomStorageWarning, state.roomStorageWarningUiMessage)].filter(Boolean).join(' '), warningText(state.viewStorageWarning, state.viewStorageWarningUiMessage)].filter(Boolean).join(' ');
+    const warning = () => [disconnected ? uiText('error.serviceDisconnectedNotice') : [warningText(state.storageWarning, state.storageWarningUiMessage), warningText(state.sessionNameWarning, state.sessionNameWarningUiMessage), warningText(state.roomStorageWarning, state.roomStorageWarningUiMessage), warningText(state.programWarning, state.programWarningUiMessage)].filter(Boolean).join(' '), warningText(state.viewStorageWarning, state.viewStorageWarningUiMessage)].filter(Boolean).join(' ');
     $('alert').hidden = !warning(); ui.display.computed($('alert'), 'text', warning);
     $('reconnect-button').hidden = !disconnected;
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
