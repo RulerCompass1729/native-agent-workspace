@@ -1161,6 +1161,12 @@ async function boot() {
     confirmationPending: notifyBackgroundConfirmation,
     project: projectBackgroundRecord,
     confirmation: (actor, command, action, context) => {
+      // Validate only input shape and the owned in-memory token before asking.
+      // File metadata/content stays behind the person's existing confirmation.
+      if (command.method === 'saveLocalFile' && (!context.filePreview || context.filePreview.token !== command.arguments[0] || context.fileSaving)) throw uiError('error.main.filePreviewChanged');
+      const onePath = ['openLocalFile', 'saveLocalFile'].includes(command.method) || command.method === 'runtimeLocation' && command.arguments[1] !== true;
+      if (onePath && command.paths?.length !== 1) throw uiError('error.background.oneFilePathRequired');
+      if (command.method === 'spaceFiles' && command.arguments[1] === undefined && !command.paths?.length) throw uiError('error.background.importPathsRequired');
       if ((action === 'readConversation' || ['terminalSnapshot', 'observe', 'terminal'].includes(command.method) && command.arguments[0] !== actor.id) &&
           !conversationReaderAllowed(actor)) throw uiError('error.background.secretaryConversation');
       if (command.method === 'spaceFiles' && command.arguments[1] !== undefined) {
@@ -1224,7 +1230,7 @@ async function boot() {
             sessionArchives: roomState.value.sessionArchives };
         }
         const global = ['quitService', 'clearSharedHistory', 'archiveRoom', 'switchBackend', 'continueConnection'].includes(command.method);
-        return { sessions: state.sessions.filter(s => global || strings.has(s.id)).map(s => ({ id: s.id, nativeId: s.nativeId, pid: s.pid, owner: s.owner, state: s.state, activeTurnId: s.activeTurnId, pendingTag: s.pendingTag, controlRevision: s.controlRevision,
+        return { sessions: roomState.apply(state).sessions.filter(s => global || strings.has(s.id)).map(s => ({ id: s.id, nativeId: s.nativeId, pid: s.pid, owner: s.owner, state: s.state, activeTurnId: s.activeTurnId, pendingTag: s.pendingTag, controlRevision: s.controlRevision,
           connectionRevision: s.connectionRevision, archived: s.archived, approval: s.approval, nativeApproval: s.nativeApproval })),
           rooms: (state.rooms || [state.room]).filter(r => r && (global || strings.has(r.id))).map(r => ({ id: r.id, memberIds: r.memberIds })) };
       };

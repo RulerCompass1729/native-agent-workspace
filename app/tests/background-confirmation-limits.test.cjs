@@ -113,6 +113,38 @@ test('the real desktop roster marks a backend session archived for admission and
   const result = await controller.call({ sender: actor, identity: { callId: 'call', turnId: 'turn' }, valid: () => true }, { ...command('stop', 0, 'archived-raw-backend'), arguments: [target] });
   assert.equal(result.state, 'not-executed'); assert.equal(result.reason, 'originating-session-unavailable'); assert.equal(notices.length, 0);
 });
+for (const provider of ['claude', 'codex']) test(`${provider}: archiving a standalone target invalidates its pending stop`, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-target-archive-'));
+  const host = { binaries: {}, close() {}, create(record) { record.nativeId = randomUUID(); const runtime = new EventEmitter(); runtime.start = async () => runtime.emit('state', 'idle'); runtime.stop = async () => ({ state: 'ended' }); return runtime; } };
+  const workspace = new Workspace(host, dir), rooms = new RoomState(dir); let controller;
+  t.after(async () => { await controller?.close(); workspace.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const id = await workspace.create(provider, dir, 'owner', 'Actor'), target = await workspace.create(provider, dir, 'owner', 'Target');
+  const effects = [], handlers = new Map(), client = { snapshot: () => workspace.snapshot(), refresh: async () => workspace.snapshot(), close() {},
+    callSpace() { throw Error('Standalone archive must not mutate a room'); }, call: async (method, ...args) => {
+      if (method === 'initial') return { ...workspace.snapshot(), capabilities: ['singleHomeMoveV1'] };
+      effects.push({ method, args }); return true;
+    } };
+  client.entries = [{ key: 'backend', state: { ...client.snapshot(), capabilities: [operation.CAPABILITY] } }];
+  const actor = { id, nativeId: workspace.get(id).nativeId, provider, name: 'Actor' };
+  const c = { background: true, actor, client, view: {}, refresh: client.refresh, win: { destroy() {}, isDestroyed: () => false } };
+  const scope = vm.createContext({ context: c, client, actor, roomState: rooms, backgroundOperation: operation, roomIds: require('../collaboration-spaces.cjs').roomIds,
+    applicationHandlers: handlers, ipcMain: { handle() {} }, showDialog: (context, kind, options) => dialog(context, kind, options), displayText: key => key, uiError: require('../ui-errors.cjs').uiError });
+  vm.runInContext(part('function controlRequestActors(', '\nfunction projectBackgroundRecord('), scope);
+  vm.runInContext(part('      context.confirmationActors =', '      context.fingerprint ='), scope);
+  vm.runInContext(part('      context.fingerprint = command =>', '\n      context.delivery ='), scope);
+  vm.runInContext(part('function register(', '\nasync function replaceBackendSockets('), scope);
+  vm.runInContext(part("  register('stop',", "  register('openExternal',"), scope);
+  controller = new BackgroundControl({ dataDir: dir, handlers, context: () => c });
+  const pending = await controller.call({ sender: actor, identity: { callId: 'call', turnId: 'turn' }, valid: () => true },
+    { action: 'invoke', method: 'stop', arguments: [target], operation_id: 'standalone-target-stop' });
+  assert.equal(pending.state, 'confirmation-required');
+  const before = structuredClone(workspace.get(target)); assert.deepEqual(scope.roomIds(before), []);
+  await rooms.archiveSession(client, target);
+  assert.deepEqual(workspace.get(target), before); assert.equal(Object.hasOwn(workspace.get(target), 'archived'), false);
+  assert.equal(rooms.apply(client.snapshot()).sessions.find(s => s.id === target).archived, true);
+  const result = await controller.decide(id, actor.nativeId, pending.id, 1);
+  assert.equal(result.state, 'unconfirmed'); assert.match(result.error, /operation target changed/i); assert.deepEqual(effects, []);
+});
 test('all pending cards and maintenance reservations count; unrelated running work does not', async t => {
   const f = fixture(t); await seed(f, 'stop', [30]);
   f.controller.commit(data => {
