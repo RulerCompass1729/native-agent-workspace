@@ -95,7 +95,7 @@ test('the actual DSH builder includes the existing Setup slot and module before 
   t.after(() => fs.rmSync(root, { recursive: true }));
   fs.mkdirSync(path.join(root, 'scripts')); fs.mkdirSync(path.join(root, 'app/dsh'), { recursive: true });
   fs.cpSync(path.resolve(__dirname, '../renderer'), path.join(root, 'app/renderer'), { recursive: true });
-  for (const name of ['collaboration-spaces.cjs', 'room-mention.js', 'native-usage.js', 'room-threads.js', 'approval-policy.js', 'terminal-continuation.js', 'ui-locale.js', 'ui-messages.js', 'dsh/bootstrap.js']) fs.copyFileSync(path.resolve(__dirname, '..', name), path.join(root, 'app', name));
+  for (const name of ['collaboration-spaces.cjs', 'room-mention.js', 'native-usage.js', 'room-threads.js', 'approval-policy.js', 'terminal-continuation.js', 'butler-entry-view.js', 'ui-locale.js', 'ui-messages.js', 'dsh/bootstrap.js']) fs.copyFileSync(path.resolve(__dirname, '..', name), path.join(root, 'app', name));
   fs.copyFileSync(path.resolve(__dirname, '../../scripts/build-ui.cjs'), path.join(root, 'scripts/build-ui.cjs'));
   fs.symlinkSync(path.resolve(__dirname, '../../node_modules'), path.join(root, 'node_modules'), 'dir');
   const result = execFileSync(process.execPath, ['--max-old-space-size=64', path.join(root, 'scripts/build-ui.cjs')], { timeout: 5000, encoding: 'utf8', maxBuffer: 65536 });

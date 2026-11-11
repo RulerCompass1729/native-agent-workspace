@@ -864,3 +864,29 @@ header h1, header p { overflow-wrap: anywhere; }
   .focused-member-surface #session-toolbar button { padding: 3px 7px; min-height: 26px; }
   .focused-member-surface #session-status { min-width: 0; flex: 1 1 45px; }
 }
+/* Butler entry: one sidebar row and its dialog. The row stays hidden until the main process gives a view. */
+.butler-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border-color:transparent;background:transparent;padding:7px 13px;position:relative}
+.butler-row .rail-label{font-weight:600}
+.butler-state{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);white-space:nowrap}
+/* The state is always written out; the dot only repeats it. No butler, no dot. */
+.butler-dot{width:8px;height:8px;border-radius:50%;flex:none;border:1px solid var(--muted);background:transparent}
+[data-butler-state="empty"] .butler-dot{display:none}
+[data-butler-state="ready"] .butler-dot,[data-butler-state="recording"] .butler-dot{background:var(--green);border-color:var(--green)}
+[data-butler-state^="blocked"] .butler-dot,[data-butler-state="unknown"] .butler-dot,[data-butler-state="held"] .butler-dot{background:#b5651d;border-color:#b5651d}
+&[data-native-surface="sidebar"][data-collapsed="true"] .butler-row{padding:5px;width:38px;height:38px;margin:0;justify-content:center}
+&[data-native-surface="sidebar"][data-collapsed="true"] .butler-state{position:absolute;top:3px;right:3px;margin:0}
+&[data-native-surface="sidebar"][data-collapsed="true"] .butler-state>span:not(.butler-dot){display:none}
+.butler-dialog{width:min(600px,calc(100vw - 48px))}
+.butler-dialog h2{margin:0 0 12px}
+.butler-status{display:flex;align-items:center;gap:8px;margin:0 0 8px;font-size:16px}
+.butler-note,.butler-not-yet{margin:0 0 12px;line-height:1.6}
+.butler-not-yet{margin-top:16px;padding-top:12px;border-top:1px solid var(--border)}
+.butler-dialog .quiet{margin:4px 0}
+.butler-facts{display:grid;grid-template-columns:minmax(88px,30%) 1fr;gap:8px 16px;margin:0;line-height:1.5}
+.butler-facts dt{color:var(--muted)}
+.butler-facts dd{margin:0}
+/* The actions stay on one line in both languages; revoking sits apart on the left. */
+.butler-dialog .dialog-actions{flex-wrap:nowrap;margin-top:20px}
+.butler-dialog .dialog-actions button{white-space:nowrap}
+.butler-dialog .butler-apart{margin-right:auto}
+/* End butler entry. */
