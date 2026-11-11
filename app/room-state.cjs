@@ -81,6 +81,34 @@ function validateRoom(data) {
   return room;
 }
 
+// What NAW notices about a queue from the write that changed it (B6 E1 and E2). Both are
+// records only: no model, no message and no notification follows from them here.
+// - A delivery line (READY <branch> <commit>) is recorded once, when its item becomes done.
+// - A queue that runs dry is recorded by the write that took its last queued or sent item
+//   away, and by no other write. The space counts these, so each record has its own key and
+//   a restart, a later write or an older build that added items cannot repeat one.
+const queueRound = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
+const toSend = item => ['queued', 'sent'].includes(item.status);
+function queueFacts(room, roomId, previous, next, queue) {
+  const facts = [], fields = {};
+  if (previous && next && previous.status !== 'done' && next.status === 'done' && next.ready) {
+    // The name NAW recorded when it sent this member its item; a member holds one item at a time.
+    const name = room.events.findLast(e => e.sessionId === next.sentTo && e.uiMessage?.key === 'notice.queue.dispatched')?.uiMessage?.params?.name;
+    const params = { text: queueRules.shortText(next.text), branch: next.ready.branch, commit: next.ready.commit.slice(0, 12) };
+    facts.push({ kind: 'queue', ...(next.sentTo ? { sessionId: next.sentTo } : {}),
+      ...(name ? uiNotice('notice.queue.ready', { ...params, name }) : uiNotice('notice.queue.readyUnnamed', params)),
+      monitor: { kind: 'ready', key: `ready:${roomId}:${next.id}`, itemId: next.id, branch: next.ready.branch, commit: next.ready.commit } });
+  }
+  if (previous && next && toSend(previous) && !toSend(next) && !queue.some(toSend)) {
+    const round = queueRound(room.queueDryRound) + 1, waiting = queue.filter(item => item.status === 'waiting').length;
+    fields.queueDryRound = round;
+    // 'queue-dry' is this record's own kind; B4's ledger kind 'queue-empty' has another definition.
+    facts.push({ kind: 'queue', ...(waiting ? uiNotice('notice.queue.dryWaiting', { count: waiting }) : uiNotice('notice.queue.dry')),
+      monitor: { kind: 'queue-dry', key: `queue-dry:${roomId}:${round}`, round, waiting } });
+  }
+  return { facts, fields };
+}
+
 // A detached copy of a space queue for display and dispatch decisions.
 function copyQueue(queue) {
   const copy = [];
@@ -88,7 +116,7 @@ function copyQueue(queue) {
     return copy;
   }
   for (const item of queue) {
-    copy.push({ ...item, ...(item.creator ? { creator: { ...item.creator } } : {}) });
+    copy.push({ ...item, ...(item.creator ? { creator: { ...item.creator } } : {}), ...(item.ready ? { ready: { ...item.ready } } : {}) });
   }
   return copy;
 }
@@ -428,11 +456,15 @@ class RoomState {
     });
   }
 
-  update(fields, event, id = DEFAULT_ROOM_ID) {
+  update(fields, event, id = DEFAULT_ROOM_ID, facts = []) {
     const value = this.metadata(id);
     if (value.revision === Number.MAX_SAFE_INTEGER) throw uiError("error.room.dataVersionLimit");
-    const record = event ? { id: randomUUID(), role: 'system', time: Date.now(), ...event } : null;
-    const events = record ? [...value.events, record] : (fields.events || value.events);
+    const time = Date.now(), record = event ? { id: randomUUID(), role: 'system', time, ...event } : null;
+    // Facts noticed in this write are saved with it, before its own event: that event stays the
+    // last one and keeps its ID, which the decision notification and its readers rely on.
+    // An event or a fact is added to the stored events; fields.events applies only without them.
+    const noticed = facts.map(fact => ({ id: randomUUID(), role: 'system', time, ...fact }));
+    const events = record || noticed.length ? [...value.events, ...noticed, ...(record ? [record] : [])] : (fields.events || value.events);
     this.commit({ ...value, ...fields, revision: value.revision + 1, events }, id);
     return record?.id || null;
   }
@@ -513,14 +545,18 @@ class RoomState {
   queueReplace(id, itemId, next, event) {
     this.writable(id);
     const queue = [];
+    let previous = null;
     for (const item of this.queueItems(id)) {
       if (item.id === itemId) {
+        previous = item;
         queue.push(next);
       } else {
         queue.push(item);
       }
     }
-    return this.update({ queue: queueRules.validateQueue(queue) }, event, id);
+    const checked = queueRules.validateQueue(queue);
+    const noticed = queueFacts(this.metadata(id), id, previous, next, checked);
+    return this.update({ queue: checked, ...noticed.fields }, event, id, noticed.facts);
   }
   queueAdd(text, assignee, id = DEFAULT_ROOM_ID, creator) {
     this.writable(id);
@@ -608,7 +644,7 @@ class RoomState {
     this.queueReplace(id, itemId, next);
   }
   // reply is the member's own answer, kept so the queue row can show what came back.
-  queueSettle(id, itemId, status, reason, name, reply = '', question) {
+  queueSettle(id, itemId, status, reason, name, reply = '', question, ready) {
     const item = this.queueFind(id, itemId);
     if (item.status !== 'sent') {
       throw uiError("error.queue.notSent");
@@ -619,6 +655,9 @@ class RoomState {
     }
     if (reply) {
       next.reply = reply;
+    }
+    if (ready) {
+      next.ready = ready;
     }
     // Only outcomes that need the person are written to the space record.
     let event;
