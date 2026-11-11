@@ -132,3 +132,12 @@ which the provider's lazy resolver formerly called from the removed header
 expression. The product User-Agent remains. The network sandbox proves no
 successful off-fixture connection during acceptance; it does not by itself prove
 that no denied connection was attempted.
+
+
+The existing role resolver can follow trusted `done` handoff edges without
+changing the person's designation revision. A supplementary packaged test proves
+that reading path across two real DSH replacements; production handoff-record
+creation remains part of the dormant host/activation integration. App upgrades
+refuse old runtime bindings. An authorized re-preparation flow and localized
+blocked-state UI are required before activation; this checkpoint supplies neither
+a silent migration nor a new activation path.
