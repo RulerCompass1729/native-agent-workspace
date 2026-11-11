@@ -134,6 +134,16 @@ An ordinary completed queue item is not a READY handoff. No task-board, private
 conversation or terminal text is scanned to infer one. Typed READY and direct
 person-request ingress remain a later checkpoint; existing synthetic controller
 READY batching is not a claim that a production READY producer is connected.
+When a trusted intake has already committed an event, its future controller
+binding must call `notifyPersisted(eventId)`, which reads that exact pending
+event from the ledger. Calling `receive` with the event again retains its
+existing duplicate semantics and does not start a READY window. Notifications
+reuse the original event time and one non-extending timer; they cannot admit new
+text, repeat a consumed event, or authorize a failed batch retry. This is a
+dormant source interface, not an activation switch or a connected producer.
+A persisted recovery event also grants no retry authority; sending that same ID
+through `receive` remains a duplicate. A future host must use a separate,
+explicitly authorized retry path rather than replaying a notification.
 Source intake failures keep the durable room event, and expose a fixed blocked
 status. They do not prevent B1's independent notification or claim the input was
 consumed. The initial vacancy projection uses the dispatcher's observed snapshot;

@@ -53,13 +53,41 @@ class ButlerController {
     if (!duplicate && !wakes(event)) this.ledger.consumeRecorded([event.eventId]);
     const recovery = await this.recoverPublications();
     if (duplicate) return { status: 'duplicate' };
+    return this.dispatchPersisted(event, recovery, event.kind === 'recovery');
+  }
+  // Intake commits the source before notifying this dormant coordinator. Read
+  // only that committed identity; a signal cannot admit text or authorize retry.
+  async notifyPersisted(eventId) {
+    if (this.closed) throw Error('Butler controller closed');
+    const snapshot = this.ledger.snapshot();
+    const event = typeof eventId === 'string' && snapshot.events.find(e => e.eventId === eventId);
+    if (!event) throw Error('Butler persisted event unavailable');
+    if (!snapshot.pendingEvents.some(e => e.eventId === eventId)) return { status: 'duplicate' };
+    if (!wakes(event)) {
+      const owner = snapshot.activeBatch;
+      // The batch owns its complete input prefix, including rule-only facts.
+      // A late intake signal must not consume one of those inputs separately.
+      if (owner?.eventIds.includes(eventId)) return { status: owner.status === 'failed' ? 'awaiting-retry' : 'batched', batchId: owner.batchId };
+      this.ledger.consumeRecorded([eventId]);
+    }
+    const recovery = await this.recoverPublications();
+    if (wakes(event)) {
+      // Another notification may finish or fail the batch while publication
+      // recovery awaits. Only current pending work may arm another deadline.
+      const current = this.ledger.snapshot();
+      if (!current.pendingEvents.some(e => e.eventId === eventId)) return { status: 'duplicate' };
+      if (current.activeBatch?.status === 'failed') return { status: 'awaiting-retry', batchId: current.activeBatch.batchId };
+    }
+    return this.dispatchPersisted(event, recovery, false);
+  }
+  dispatchPersisted(event, recovery, retry) {
     if (event.kind === 'ready') {
       if (!this.running) this.armReady();
       return recovery.status === 'blocked' ? recovery : { status: 'batched' };
     }
     if (recovery.status === 'blocked') return recovery;
     if (!wakes(event)) return { status: 'recorded' };
-    return this.drain({ retry: event.kind === 'recovery' });
+    return this.drain({ retry });
   }
   armReady() {
     if (this.closed || this.timer !== null) return;

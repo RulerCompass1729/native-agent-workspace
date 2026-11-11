@@ -71,6 +71,29 @@ The required independent delta approval is separate; the integrator owns review
 and installation. Known N3/N4/N5/N8/N9 tradeoffs remain unchanged.
 
 **Managed maintenance recovery and expanded consent, 2026-11-09 (source approved 2026-11-10):**
+**B4 persisted-event notification, 2026-11-10 (source checkpoint):** the next
+trusted intake binding must commit a source before scheduling work. Reusing
+`ButlerController.receive` after that commit classified the READY as a duplicate
+and created no batching timer; the synthetic before-probe reproduces zero timers
+where one is required. The dormant `notifyPersisted(eventId)` interface reads only
+an existing pending event and reuses the original READY deadline. It does not
+admit a new payload, repeat consumed work, authorize a failed-batch retry, or
+connect a producer/native runtime. Existing `receive` semantics remain intact.
+Targeted regressions cover persisted READY bursts, repeated notification,
+restart deadlines, write failure, failed batches, busy turns and closure.
+The independent reviewer identified a late rule-event notification whose event
+was already owned by the active batch: the ledger rejected its separate
+consumption. Running and failed real-controller counterexamples reproduce that
+refusal. The fix returns the owning batch state without consuming it, preserving
+completion and explicitly authorized retry. A fresh snapshot after publication
+recovery also prevents stale notifications from arming work already completed
+or failed during that await.
+The same independent reviewer closed the reproduced blocker with scoped
+approval. All 219 related synthetic tests pass without failures or skips; the
+raw failure/fix output remains private. Activation and the working-day record period remain off;
+the dedicated runner, typed producers and installed acceptance are separate.
+
+**Managed maintenance recovery and expanded consent, 2026-11-09 (re-review pending):**
 review 42ea257f blocked the initial candidate: stopping an archived session changed
 its connection revision, and rejecting its old placement left it archived forever.
 Ambiguous legacy homes, missing spaces and uncertain joins had the same problem;
