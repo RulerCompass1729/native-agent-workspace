@@ -2,6 +2,7 @@
 // The model proposes business records. It never supplies a caller identity,
 // dispatch target, native command, credential, delivery receipt or billed cost.
 const { roomIds } = require('./collaboration-spaces.cjs');
+const { MAX_BATCH_INPUT_BYTES, encodedBatchBytes } = require('./butler-dsh-input.cjs');
 const plain = v => v && typeof v === 'object' && !Array.isArray(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v));
 const fail = (code = 'ERR_BUTLER_BUSINESS_DATA') => { throw Object.assign(Error('Invalid butler business data'), { code }); };
 const obviousSecret = /\b(?:DEEPSEEK_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY)\s*[=:]\s*\S+|Authorization\s*:\s*Bearer\s+\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----/iu;
@@ -90,7 +91,10 @@ function buildInput({ batchId, events, catalog, questions = [] }) {
     if (q.decisionSource !== undefined) result.decisionSource = text(q.decisionSource, 600, code);
     return result;
   });
-  return { version: 1, mode: 'record-only', batchId, events: normalizedEvents, spaces: readableCatalogRows(catalog), pendingQuestions };
+  const input = { version: 1, mode: 'record-only', batchId, events: normalizedEvents, spaces: readableCatalogRows(catalog), pendingQuestions };
+  // Reserve the largest valid batch ID and attempt number added by the caller.
+  if (encodedBatchBytes({ ...input, batchId: 'b'.repeat(200), attempt: Number.MAX_SAFE_INTEGER }) > MAX_BATCH_INPUT_BYTES) fail('ERR_BUTLER_INPUT_CAPACITY');
+  return input;
 }
 function interpretResult(value, { events, catalog, questions = [] }) {
   const code = 'ERR_BUTLER_RESULT', questionCode = 'ERR_BUTLER_QUESTION_SOURCE';

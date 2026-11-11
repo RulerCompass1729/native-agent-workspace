@@ -3,7 +3,9 @@
 const fs = require('node:fs'), path = require('node:path'), http = require('node:http');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { ButlerBackend } = require('../app/butler-backend.cjs');
-const { ButlerDshDriver } = require('../app/butler-dsh-driver.cjs');
+const runtimeRoot = path.resolve(process.argv.find(a => a.startsWith('--runtime-root='))?.slice(15) || path.join(__dirname, '..'));
+if (runtimeRoot.startsWith('/Applications/')) throw Error('Daily app is forbidden');
+const { ButlerDshDriver } = require(path.join(runtimeRoot, 'app/butler-dsh-driver.cjs'));
 const { ButlerRole } = require('../app/butler-role.cjs');
 const { ButlerLedger } = require('../app/butler-ledger.cjs');
 const { ButlerController } = require('../app/butler-controller.cjs');
@@ -23,8 +25,11 @@ function stream(tool) {
 }
 const outcomes = [];
 (async () => {
-  for (const mode of ['large-tool', 'error-tool', 'small-error', 'accumulated-input', 'escaped-input', 'large-schema', 'ledger-failure', 'normal-rotate']) {
+  for (const mode of ['large-tool', 'error-tool', 'small-error', 'accumulated-input', 'escaped-input', 'large-schema', 'ledger-failure', 'normal-rotate', 'max-event', 'business-pages']) {
     const folder = path.join(evidence, mode); fs.mkdirSync(folder, { mode: 0o700 });
+    const businessPages = mode === 'business-pages' ? require('./fixtures/butler-business-pages.cjs')(folder) : null;
+    if (businessPages) fs.writeFileSync(path.join(folder, 'pages.json'), JSON.stringify(businessPages));
+    const receivedBudgets = [];
     const receivedBytes = []; let fixtureError, prices = 0, resultCode, controller, ledgerEvidence;
     const server = http.createServer((req, res) => {
       const chunks = []; req.on('data', c => chunks.push(c)); req.on('end', () => {
@@ -33,9 +38,13 @@ const outcomes = [];
           assert.equal(req.url, '/v1/messages');
           assert.equal(req.headers['x-deepseek-harness-user-id'], undefined);
           assert.equal(req.headers['x-deepseek-harness-session-id'], undefined);
-          assert.equal(JSON.parse(body).max_tokens, 4096);
+          const parsed = JSON.parse(body); assert.equal(parsed.max_tokens, 4096);
+          const budget = (parsed.system || []).findLast?.(b => b.type === 'text' && b.text.startsWith('NAW_CAPACITY '));
+          const remaining = budget ? Number(/remaining_bytes=(\d+)/.exec(budget.text)[1]) : null;
+          receivedBudgets.push(remaining);
+          if (remaining !== null) assert.equal(remaining, 262144 - body.length);
           res.writeHead(200, { 'content-type': 'text/event-stream' });
-          res.end(stream(['large-tool', 'error-tool', 'small-error', 'ledger-failure'].includes(mode) ? receivedBytes.length === 1 : mode === 'accumulated-input' ? receivedBytes.length < 7 : false));
+          res.end(stream(mode === 'business-pages' ? (remaining === null ? receivedBytes.length <= 4 : remaining > Math.max(...businessPages.map(p => Buffer.byteLength(JSON.stringify(JSON.stringify(p))))) + 512 + 65536) : ['large-tool', 'error-tool', 'small-error', 'ledger-failure'].includes(mode) ? receivedBytes.length === 1 : mode === 'accumulated-input' ? receivedBytes.length < 7 : false));
         } catch (error) { fixtureError = error.message; res.writeHead(400); res.end('Fixture failure'); }
       });
     });
@@ -48,12 +57,34 @@ const outcomes = [];
     backend.prepare(); const proof = JSON.parse(fs.readFileSync(backend.file)).binding;
     process.env.DEEPSEEK_API_KEY = 'fixture-key';
     const driver = new ButlerDshDriver(directory, { executablePath: wrapper, fixtureEndpoint: `http://127.0.0.1:${port}`, priceUsage: () => { prices++; return 0; },
-      mcp: { command: process.execPath, args: [path.join(root, 'scripts/fixtures/butler-dsh-mcp.cjs'), path.join(folder, 'mcp.jsonl'), '--input-fixture', mode === 'ledger-failure' ? 'large-tool' : mode], tools: ['mcp__native_workspace__workspace_status'] } });
+      mcp: { command: process.execPath, args: [path.join(root, 'scripts/fixtures/butler-dsh-mcp.cjs'), path.join(folder, 'mcp.jsonl'), '--input-fixture', mode === 'ledger-failure' ? 'large-tool' : mode, ...(businessPages ? ['--business-pages', path.join(folder, 'pages.json')] : [])], tools: ['mcp__native_workspace__workspace_status'] } });
     try {
+      if (mode === 'large-schema') {
+        await assert.rejects(driver.start(proof), e => e.code === 'input-boundary');
+        assert.equal(receivedBytes.length, 0); outcomes.push({ mode, receivedBytes, resultCode: 'input-boundary', stage: 'initialize', status: 'passed' }); continue;
+      }
       await driver.start(proof); const pid = driver.child.pid;
       const expected = () => ({ selectionRevision: 1, identity: { sessionId: 'synthetic', nativeId: driver.nativeId }, runnerRef: proof.runnerRef });
-      const input = { batchId: 'synthetic-batch', attempt: 1, events: [{ text: mode === 'escaped-input' ? '\\'.repeat(90000) : 'Synthetic input' }] };
-      if (mode === 'ledger-failure') {
+      let input = { batchId: 'synthetic-batch', attempt: 1, events: [{ text: mode === 'business-pages' ? 'Synthetic batch '.repeat(3800) : mode === 'escaped-input' ? '\\'.repeat(90000) : 'Synthetic input' }] };
+      if (mode === 'max-event') {
+        const limits = { text: 12000, title: 400, spaceId: 200, spaceName: 200, memberName: 200, memberId: 200, itemId: 200, outcome: 200, reason: 2000, decisionKind: 200, questionKey: 600, supersedes: 200 };
+        input = { ...require('../app/butler-policy.cjs').buildInput({ batchId: 'b'.repeat(200), catalog: [], events: [{ eventId: '\ud800'.repeat(200), sourceRef: '\ud800'.repeat(600), kind: 'request', payload: Object.fromEntries(Object.entries(limits).map(([k,n]) => [k, '\ud800'.repeat(n)])) }] }), attempt: 1 };
+        const result = await driver.run(input, expected());
+        assert.deepEqual(result.reply, { actions: [] }); assert.equal(result.failureCode, null);
+        assert.equal(receivedBytes.length, 1); assert.ok(receivedBytes[0] < 262144);
+        assert.equal(result.usage.tokensComplete, true);
+      } else if (mode === 'escaped-input') {
+        await assert.rejects(driver.run(input, expected()), e => e.code === 'input-too-large');
+        assert.equal(receivedBytes.length, 0); assert.equal(prices, 0);
+      } else if (mode === 'business-pages') {
+        const result = await driver.run(input, expected());
+        assert.equal(result.failureCode, null); assert.deepEqual(result.reply, { actions: [] });
+        assert.ok(receivedBudgets.every(v => Number.isInteger(v) && v >= 0));
+        assert.ok(receivedBytes.length >= 2 && receivedBytes.length <= 3);
+        assert.ok(businessPages.every(p => Buffer.byteLength(JSON.stringify(p)) <= 65536));
+        assert.ok(businessPages.some(p => Buffer.byteLength(JSON.stringify(p)) > 55000));
+        assert.equal(result.usage.tokensComplete, true);
+      } else if (mode === 'ledger-failure') {
         const person = Symbol('synthetic person'), role = new ButlerRole(folder, { authorizePerson: a => a === person });
         const binding = Object.fromEntries(['runnerRef', 'backendRef', 'purpose', 'profile', 'provider', 'model'].map(k => [k, proof[k]]));
         role.set(person, { identity: expected().identity, runner: binding, budget: { limitMicros: 2000000 } }, 0);
@@ -64,7 +95,9 @@ const outcomes = [];
         const event = { eventId: 'synthetic', sourceRef: 'synthetic', kind: 'request', payload: { text: 'Synthetic input' } };
         const failed = await controller.receive(event); assert.equal(failed.reason, 'batch-failed');
         const snapshot = ledger.snapshot(); assert.equal(snapshot.activeBatch.status, 'failed');
-        assert.equal(snapshot.attempts.length, 1); assert.equal(snapshot.attempts[0].usage, null);
+        assert.equal(snapshot.attempts.length, 1); assert.equal(snapshot.attempts[0].usage.inputTokens, 9);
+        assert.equal(snapshot.attempts[0].usage.outputTokens, 2); assert.equal(snapshot.attempts[0].usage.costMicros, null);
+        assert.equal(snapshot.attempts[0].usage.tokensComplete, true);
         assert.ok(notices.some(n => n.reason === 'usage-cost-unknown'));
         assert.ok(notices.some(n => n.reason === 'batch-failed'));
         const beforeNext = receivedBytes.length;
@@ -80,7 +113,8 @@ const outcomes = [];
         assert.deepEqual((await driver.run(input, expected())).reply, { actions: [] });
         assert.equal(receivedBytes.length, 2); assert.equal(prices, 2);
       } else {
-        await assert.rejects(driver.run(input, expected()), e => { resultCode = e.code; return e.code === 'input-boundary'; });
+        const failed = await driver.run(input, expected()); resultCode = failed.failureCode; assert.equal(resultCode, 'input-boundary');
+        assert.equal(failed.usage.costMicros, null); assert.equal(failed.usage.inputTokens, 9 * receivedBytes.length);
         assert.equal(prices, 0);
         assert.ok(receivedBytes.every(n => n <= 262144));
         if (['large-tool', 'error-tool'].includes(mode)) assert.equal(receivedBytes.length, 1);
@@ -92,7 +126,7 @@ const outcomes = [];
       for (const row of fs.readFileSync(path.join(folder, 'mcp.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(r => r.kind === 'started')) {
         assert.equal(row.providerCredentialPresent, false); assert.throws(() => process.kill(row.pid, 0), { code: 'ESRCH' });
       }
-      outcomes.push({ mode, receivedBytes, resultCode, prices, ...(ledgerEvidence ? { ledgerEvidence } : {}), status: 'passed' });
+      outcomes.push({ mode, receivedBytes, ...(businessPages ? { receivedBudgets, pageBytes: businessPages.map(p => Buffer.byteLength(JSON.stringify(p))) } : {}), resultCode, prices, ...(ledgerEvidence ? { ledgerEvidence } : {}), status: 'passed' });
     } catch (error) { outcomes.push({ mode, receivedBytes, resultCode, prices, status: 'failed', error: error.message }); process.exitCode = 1; }
     finally { await controller?.close(); await driver.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); delete process.env.DEEPSEEK_API_KEY; }
   }

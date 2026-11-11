@@ -174,3 +174,23 @@ test('only the currently resolved dedicated non-member can become an additional 
   assert.deepEqual(rotationCandidates(selection, [record]), ['butler-a']);
   for (const patch of [{ nativeId: 'old-native' }, { runner: { ...runner, profile: 'default' } }, { roomIds: ['shared'], roomId: 'shared' }, { archived: true }, { nativeContextPending: true }]) assert.deepEqual(rotationCandidates(selection, [{ ...record, ...patch }]), []);
 });
+
+test('batch input limit counts the second JSON escaping and refuses a whole oversized input', () => {
+  const events = Array.from({ length: 8 }, (_, i) => ({ ...event, eventId: 'event-' + i, payload: { text: '\\'.repeat(11000) } }));
+  assert.throws(() => buildInput({ batchId: 'batch-a', events, catalog: [] }), { code: 'ERR_BUTLER_INPUT_CAPACITY' });
+  const one = buildInput({ batchId: 'batch-a', events: events.slice(0, 1), catalog: [] });
+  assert.equal(one.events[0].payload.text, events[0].payload.text);
+  assert.ok(Buffer.byteLength(JSON.stringify(JSON.stringify(one))) <= 131072);
+});
+
+
+test('the largest valid single event still fits, including worst-case lone-surrogate escaping', () => {
+  const limits = { text: 12000, title: 400, spaceId: 200, spaceName: 200, memberName: 200,
+    memberId: 200, itemId: 200, outcome: 200, reason: 2000, decisionKind: 200, questionKey: 600, supersedes: 200 };
+  const payload = Object.fromEntries(Object.entries(limits).map(([k,n]) => [k, '\ud800'.repeat(n)]));
+  const worst = { eventId: '\ud800'.repeat(200), sourceRef: '\ud800'.repeat(600), kind: 'request', payload };
+  assert.doesNotThrow(() => validateEvent(worst));
+  const input = buildInput({ batchId: 'b'.repeat(200), events: [worst], catalog: [] });
+  assert.deepEqual(input.events[0], worst);
+  assert.ok(Buffer.byteLength(JSON.stringify(JSON.stringify(input))) <= 131072);
+});

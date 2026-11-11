@@ -9452,3 +9452,31 @@ fix output and exact review evidence paths remain in the private lane handoff.
 **Checks.** One unit test on the real entries and the real space record: a secretary is designated and adds an item; the person archives it the real way, and the backend's record still carries no "archived"; the archived secretary's next addition is refused and nothing is added; it cannot be designated again while archived; the person can revoke it and add items themselves; restored, it can be designated and add again. Reverting either line turns the test red. The full unit suite passes on the delivered head, and the real app boots and passes the session-menu journey.
 
 **Independent review (passed).** The reviewer confirmed that for these two callers only the `archived` field differs from the backend's list, that nothing new can fail, and that a session being archived at that moment still counts as not archived until the archive finishes. It found two more places in the main process that read `archived` from the backend's own list and are not changed here: the fingerprint of an ordinary background command (archiving the target between an agent's request and its execution does not change the fingerprint), and the fallback that chooses which connection-update options are offered when no profile is passed.
+
+## B4 capacity alignment and retained failed-attempt usage (2026-11-11)
+
+Source: the integration review found that valid business pages plus twice-escaped
+batch input can overflow the wire cap; a boundary throw also discarded settled
+tokens. Owner: DSH runner lane, coordinating the core contract with the B4 owner.
+The old host/driver code is identical between the prior runner checkpoint and the
+integration baseline. Real synthetic Business pages reproduced overflow after
+three requests; the previous ledger receipt retained no token counts.
+
+The patch bounds twice-escaped input before an attempt, selects complete event
+prefixes, caps startup schemas and tells the model exact remaining request bytes.
+A trusted failure envelope records confirmed usage before marking the batch
+failed, preserving incomplete token sums as lower bounds and unknown cost.
+The daily page budget and all activation gates are unchanged. A live model's
+obedience and unreceived usage remain outside this source qualification.
+
+Final verification: full suite 5421/5421, no failures/cancellations/skips,
+with test concurrency four. A preceding unrestricted run was 5420/1 on the
+unmodified service-reuse bootstrap test (existing-backend-unreachable), retained
+as a separate startup timing finding; no lock protection was relaxed. Ten real
+DSH input scenarios and 13 failure/lifecycle scenarios pass, plus the existing
+runner continuity/privacy scenario. Reviewer 0F5CE02F-9118-45ED-961A-FAFB00B2EAC8 gave
+APPROVE_WITH_NOTES for the staged checkpoint and its delta, conditional on the
+final full pass; that condition is met. Per-field partial usage, mid-stream abort
+and the largest valid single event were added after its findings. Fixed context
+above the bound and old oversized saved batches remain documented blocked states,
+without a new model attempt or automatic recovery.

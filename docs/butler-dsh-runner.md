@@ -91,54 +91,71 @@ the caller must persist the corresponding role/record succession before another
 batch. A closed/restarted host also needs a new trusted identity. The policy and
 ledger supply business continuity, not DSH history or compaction.
 
-The trusted host sums settled assistant-message usage once per request, including
-separate cache counts. Model JSON cannot choose identity or usage. A failed/aborted turn, missing usage or fewer settled usage rows than actual
-requests makes the whole attempt unknown; partial counts never price the whole
-attempt. A missing/invalid price calculation retains known token counts and
-unknown cost; production has no injected pricing function here. Existing core
-unknown-cost rules then stop another automatic batch. Fixture pricing is zero
-only because all responses are synthetic and local. Output is bounded to 4096
-tokens/request and eight model requests/batch; no provider retry is configured.
-Exceeding the local request/provider/model boundary returns the fixed
-`request-boundary` protocol error, including when the upstream loop records the
-failure instead of throwing it. The core still records a generic failed batch
-with unknown usage; this is not a new localized UI reason.
+The trusted host preserves settled assistant-message usage even if a later
+request or boundary fails. Cache counts remain included. Model JSON cannot
+choose identity or usage. The trusted result envelope carries a fixed
+`failureCode` independently from `reply` and `usage`; the controller first records
+its matching attempt usage, then fails the batch. A failure never calls the
+pricing function. Missing provider rows or fields leave confirmed counts as lower bounds
+(`tokensComplete: false`), while a refusal before an additional transmission can
+retain complete token counts for all requests actually sent. A generic failed stream always marks counts incomplete even if it left a usage
+row. Cost remains unknown
+for the failed attempt, so automatic work remains blocked. This does not recover
+usage the SDK never exposes, nor survive a host crash before its result receipt.
+Pinned rc.2 emits its usage chunk only at message_stop: a stream aborted after
+message_start therefore remains unknown even if that wire event held input counts.
+The abort fixture checks that this is not presented as an exact zero.
+
+The ledger persists the completeness flag. Partial bounds can only increase;
+marking them complete requires all four counts, after which known counts cannot
+change. Existing records without the flag keep their previous per-field semantics.
+The usage projection displays incomplete counts as known lower bounds with an
+unknown-run marker. Missing pricing on otherwise successful work still retains
+measured tokens and unknown cost. Fixture prices are zero only because responses
+are synthetic. Output remains bounded to 4096 tokens/request and eight streams
+and actual transport attempts/batch; no provider retry is configured.
 
 ## Input limits
 
-The dedicated host checks **complete UTF-8 serialized request bodies**, including
-system text, accumulated messages, tool definitions and JSON escaping, immediately
-before invoking the pinned adapter's global fetch transport. Each body is at most
-256 KiB. There are at most eight actual transport attempts per batch (at most
-2 MiB of request bodies), as well as the existing eight-stream limit. Failed
-transport attempts still count; only an explicit new session resets the counters.
-The guard never inspects, copies or logs authentication headers. It accepts only
-the exact configured messages endpoint, POST and a string body; unsupported
-transport shapes and Files endpoints fail closed.
+Before a batch begins, policy caps its **twice-JSON-escaped input at 128 KiB**,
+including space metadata and open questions, reserving the largest valid batch
+ID and attempt number. The controller takes the largest whole-event prefix that
+fits, leaving all other events pending. It never truncates event text or changes
+a saved failed batch's membership. All fields of one maximally sized valid event fit with an empty catalog,
+including worst-case surrogate escaping. Fixed context that cannot fit with even one
+event is blocked before an attempt record or model call; repeating it incurs no
+new model attempt. Such fixed context must be reduced by the producer (or a later
+qualified pagination design); old saved batches above the new bound stay intact
+and blocked. Later events remain pending and the existing notice is deduplicated
+per selection revision. This is a documented size limit, not automatic recovery. Both driver and host enforce the same limit. Startup also
+refuses a tool schema set over 32 KiB, before a batch can be attempted.
 
-Every final tool result, including errors, is checked synchronously through the
-pinned DSH `tools/result` event. Its model-facing content plus deferred contexts
-have a 128 KiB serialized ceiling per result and 512 KiB per batch. This leaves
-room around a business page of at most 64 KiB; escaping and envelope overhead can
-still make a particular page fail. In the cumulative-history fixture four
-approximately 65 KB pages fit (261856-byte request); the fifth makes the whole
-batch fail. C6 must account for this smaller per-batch capacity even though its
-daily reading allowance is larger. The core's 64-page UTC-day reading budget is
-separate and durable; rotating a DSH session does not reset that daily allowance.
-There is no truncation or partial-answer fallback. An over-limit result may
-remain in the isolated DSH session's local record, but no subsequent tool or model
-request is allowed from that batch. A fixed `input-boundary` protocol error is
-retained even when the DSH loop catches the underlying error. The core records a
-failed batch and unknown cost, shows its existing notices, and does not retry it
-automatically. These byte ceilings are **not measured input-token limits or a
-spending guarantee**. Exact token prediction and budgeted pricing remain separate
-activation requirements.
+The final transport guard adds one trusted system block to **each** request with
+its exact remaining UTF-8 JSON space. It computes the number after serializing
+all input, system text, tool definitions, history and this budget block itself;
+no credential/header is inspected. The extra text adds input tokens and its
+changing system content may reduce provider prefix-cache reuse; that cost effect
+is unmeasured and belongs in the pre-activation pricing qualification. The budget is regenerated rather than stored
+in DSH history. It tells the model to read fewer records, leave space for its own
+reply/envelopes, and finish with an unread cursor if the next page cannot fit.
+The local fixture uses actual ButlerBusiness pages, quotes/backslashes and a
+large initial batch; it reads the budget and finishes before overflow. This is
+proof of the signal and wire behavior, not proof that a live model obeys it.
 
-This composition supplies text only and rejects non-text tool projections.
-Images remain unsupported: the provider can prepare attachments and its Files
-retry/inline fallback paths need a separate qualification before enabling them.
-The transport guard now counts every messages fetch, including any internal
-retry, and refuses other endpoints; it does not qualify image handling.
+Every complete body is still limited to 256 KiB. Nothing is transmitted on
+refusal, and the eight-transport-attempt limit still counts internal resends.
+Every final tool projection has its own 128 KiB ceiling and 512 KiB per batch;
+the whole-body check also covers fields DSH adds outside that projection. The
+core's durable 64-page UTC-day budget is separate; session rotation cannot reset
+it. Real page sizes and escaping matter, so there is no fixed pages-per-batch
+promise. Ignoring the budget can still fail a batch, with confirmed usage retained
+and no automatic retry. Byte limits are not exact token or spending limits.
+
+Only text is supported. Unexpected endpoints, Files requests, body types and
+non-text tool results fail closed. An oversized result may remain in the isolated
+DSH record but cannot trigger another model/tool call from that failed batch.
+Image preparation and unreceived usage still need their own qualification; no
+activation, credential supply or production pricing is added here.
 
 ## Reproducible checks
 

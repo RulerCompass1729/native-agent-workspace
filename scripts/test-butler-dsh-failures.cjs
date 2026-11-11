@@ -24,7 +24,7 @@ function stream(tool) {
   return events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
 }
 (async () => {
-  for (const mode of ['partial-error', 'request-cap', 'forced-close', 'desktop-quit', 'desktop-lost-exit', 'parent-eof', 'host-sigterm', 'hung-dispose', 'hung-dispose-parent-eof', 'missing-tool', 'production-endpoint', 'unknown-price']) {
+  for (const mode of ['partial-error', 'mid-stream-error', 'request-cap', 'forced-close', 'desktop-quit', 'desktop-lost-exit', 'parent-eof', 'host-sigterm', 'hung-dispose', 'hung-dispose-parent-eof', 'missing-tool', 'production-endpoint', 'unknown-price']) {
     const folder = path.join(evidence, mode); fs.mkdirSync(folder, { mode: 0o700 });
     let count = 0, fixtureError, controller, prices = 0, processGroup;
     const server = http.createServer((req, res) => {
@@ -33,6 +33,11 @@ function stream(tool) {
           count++; assert.ok(count <= 8); assert.equal(req.url, '/v1/messages');
           assert.equal(req.headers['x-deepseek-harness-user-id'], undefined);
           assert.equal(req.headers['x-deepseek-harness-session-id'], undefined);
+          if (mode === 'mid-stream-error') {
+            res.writeHead(200, { 'content-type': 'text/event-stream' });
+            res.write(stream(false).split('event: content_block_start')[0]);
+            setTimeout(() => res.destroy(), 50); return;
+          }
           if (mode === 'partial-error' && count === 2) { res.writeHead(401); res.end('{"error":{"message":"FIXTURE_ERROR_PRIVATE_CANARY"}}'); }
           else { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(stream(mode !== 'unknown-price')); }
         } catch (error) { fixtureError = error.message; res.writeHead(400); res.end('Fixture failure'); }
@@ -123,7 +128,8 @@ registerHooks({load(url,context,next){const loaded=next(url,context);if(url!==ta
           else process.kill(pid, 'SIGTERM');
           await exited; assert.equal(count, 0);
         } else if (mode === 'request-cap') {
-          await assert.rejects(driver.run(input, expected), error => error.code === 'request-boundary');
+          const failed = await driver.run(input, expected); assert.equal(failed.failureCode, 'request-boundary');
+          assert.equal(failed.usage.inputTokens, 72); assert.equal(failed.usage.tokensComplete, true); assert.equal(failed.usage.costMicros, null);
           assert.equal(count, 8); assert.equal(prices, 0);
         } else if (mode === 'unknown-price') {
           const roleDir = path.join(folder, 'role'), ledgerDir = path.join(folder, 'ledger');
@@ -141,9 +147,11 @@ registerHooks({load(url,context,next){const loaded=next(url,context);if(url!==ta
           assert.ok(notices.some(n => n.reason === 'usage-cost-unknown'));
         } else {
           const result = await driver.run(input, expected);
-          assert.equal(result.reply, null); assert.equal(result.usage, null); assert.equal(prices, 0);
+          assert.equal(result.reply, null); assert.equal(result.usage.inputTokens, mode === 'partial-error' ? 9 : 0);
+          assert.equal(result.usage.tokensComplete, false); assert.equal(result.usage.costMicros, null); assert.equal(prices, 0);
+          if (mode === 'mid-stream-error') assert.equal(result.failureCode, 'host-failed'); // rc.2 emits usage only at message_stop.
           assert.ok(!JSON.stringify(result).includes('FIXTURE_ERROR_PRIVATE_CANARY'));
-          assert.equal(count, mode === 'partial-error' ? 2 : mode === 'production-endpoint' ? 0 : 8);
+          assert.equal(count, mode === 'partial-error' ? 2 : mode === 'mid-stream-error' ? 1 : mode === 'production-endpoint' ? 0 : 8);
           if (mode === 'production-endpoint') assert.deepEqual(fs.readFileSync(path.join(folder, 'urls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse), [{ url: 'https://api.deepseek.com/anthropic/v1/messages' }]);
         }
         await controller?.close(); await driver.close();

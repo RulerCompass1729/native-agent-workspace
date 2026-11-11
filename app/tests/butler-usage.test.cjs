@@ -164,3 +164,28 @@ test('usage reading is detached, ignores extra caller fields and rejects an unav
   assert.throws(() => sum({ attempts: [] }), TypeError);
   assert.throws(() => summarizeUsage(data, { now: NaN }), TypeError);
 });
+
+
+test('confirmed partial tokens remain a visible lower bound, never an exact total or a price', () => {
+  const value = sum(snapshot([attempt('partial-dsh', { inputTokens: 9, cachedInputTokens: 0, outputTokens: 2, totalTokens: 11, tokensComplete: false, costMicros: null })]));
+  assert.deepEqual(value.today.tokens.totalTokens, { value: null, knownLowerBound: 11, unknownRuns: 1, overflow: false });
+  assert.equal(value.guard.reason, 'usage-cost-unknown');
+});
+
+test('partial lower bounds survive ledger replay and cannot be decreased or made unknown again', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-partial-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const ledger = new ButlerLedger(directory, { now: () => today });
+  const actor = { selectionRevision: 1, identity: { sessionId: 's', nativeId: 'n' }, runnerRef: 'r' };
+  ledger.ingest({ eventId: 'e', sourceRef: 'e', kind: 'request', payload: { text: 'Synthetic' } });
+  const batch = ledger.beginBatch(actor); ledger.beginAttempt(batch.batchId, actor);
+  ledger.recordAttemptUsage(batch.batchId, actor, { inputTokens: 9, outputTokens: 2, totalTokens: 11, cachedInputTokens: 0, tokensComplete: false, costMicros: null }, 1);
+  ledger.failBatch(batch.batchId, 'synthetic');
+  assert.deepEqual(sum(new ButlerLedger(directory).snapshot()).today.tokens.totalTokens, { value: null, knownLowerBound: 11, unknownRuns: 1, overflow: false });
+  assert.throws(() => ledger.recordAttemptUsage(batch.batchId, actor, { totalTokens: 10, tokensComplete: false }, 1), { code: 'BUTLER_USAGE_CONFLICT' });
+  assert.throws(() => ledger.recordAttemptUsage(batch.batchId, actor, { totalTokens: 20, tokensComplete: true }, 1));
+  ledger.recordAttemptUsage(batch.batchId, actor, { inputTokens: 18, cachedInputTokens: 0, outputTokens: 2, totalTokens: 20, tokensComplete: true }, 1);
+  assert.equal(sum(ledger.snapshot()).today.tokens.totalTokens.value, 20);
+  assert.throws(() => ledger.recordAttemptUsage(batch.batchId, actor, { inputTokens: 18, cachedInputTokens: 0, outputTokens: 2, totalTokens: 21, tokensComplete: true }, 1), { code: 'BUTLER_USAGE_CONFLICT' });
+  assert.throws(() => ledger.recordAttemptUsage(batch.batchId, actor, { tokensComplete: false }, 1), { code: 'BUTLER_USAGE_CONFLICT' });
+});

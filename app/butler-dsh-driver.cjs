@@ -5,6 +5,7 @@ const { butlerBinding } = require('./butler-backend.cjs');
 const binding = require('./service-binding.cjs');
 const { lockIdentity, ownerMayBeAlive } = require('./service-lock.cjs');
 const runner = require('./butler-runner.cjs');
+const { encodedBatchBytes, MAX_BATCH_INPUT_BYTES } = require('./butler-dsh-input.cjs');
 const failure = code => Object.assign(new Error(code === 'credential-missing'
   ? 'DEEPSEEK_API_KEY is missing from the butler launch environment.' : 'DSH butler: ' + code), { code });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -132,19 +133,19 @@ class ButlerDshDriver {
     if (this.active) throw failure('busy');
     if (!selection?.identity || selection.identity.nativeId !== this.nativeId || selection.runnerRef !== this.proof?.runnerRef ||
         !Number.isSafeInteger(selection.selectionRevision) || typeof input?.batchId !== 'string' || !Number.isSafeInteger(input.attempt)) throw failure('selection-mismatch');
+    if (encodedBatchBytes(input) > MAX_BATCH_INPUT_BYTES) throw failure('input-too-large');
     const expected = structuredClone(selection), batchId = input.batchId, attempt = input.attempt;
     this.active = true;
     try {
       const result = await this.request('run', { input, nativeId: this.nativeId });
       if (result.nativeId !== expected.identity.nativeId) throw failure('selection-mismatch');
-      if (!result.usageComplete || !result.completed || result.requestCount !== result.settledUsageRows) result.usage = null;
-      if (result.usage) {
+      if (result.usage && result.usageComplete && result.completed && !result.failureCode && result.usage.tokensComplete === true && result.requestCount === result.settledUsageRows) {
         let cost = null;
         try { const value = this.priceUsage(structuredClone(result.usage)); if (Number.isSafeInteger(value) && value >= 0) cost = value; } catch {}
         // Unknown pricing cannot discard already measured tokens or become $0.
         result.usage.costMicros = cost; result.usage.estimated = cost !== null;
       }
-      return { batchId, attempt, selection: expected, reply: result.reply, usage: result.usage };
+      return { batchId, attempt, selection: expected, reply: result.reply, usage: result.usage, failureCode: result.failureCode || null };
     } finally { this.active = false; }
   }
   async rotate() {
