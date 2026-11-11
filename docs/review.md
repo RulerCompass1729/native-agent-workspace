@@ -10491,3 +10491,61 @@ owned children and app registrations were cleaned up, with the original bundle
 signature still verified. Neither attempt is a new Main startup pass. Actual
 Session/singleton acceptance remains required before the entry opens; recording
 and activation stay off.
+
+## Butler rotation history observations — 2026-11-11
+
+Source finding from the integrator's revoke review: after a failed read stopped
+being permanently sticky, deleting the rotation log or replacing it with an
+earlier complete prefix could resolve an older designated identity again. An
+author-run two-case probe reproduced that limit before this checkpoint.
+
+The B4 owner adds a process-local seen-file/observed-size guard and a SHA-256
+length/hash of the last complete accepted byte prefix. It stores no log body or
+new durable record. File-backed reads revalidate the current named file after
+reading the descriptor, refuse missing or shorter observed history and reject
+changes to verified bytes even if padding makes the file larger. A fully fresh
+parse must also advance consistently from the last observed identity at the same
+selection revision; later branch/cycle/kept data cannot restore an older identity
+or silently authorize the cached successor. Both original and cached identities
+are rejected when the current history is unresolved.
+
+Snapshots and person revoke stay independent of log resolution; no selection
+file is modified by these checks, and no physical stop is claimed. Selection
+file and directory fault handling is unchanged. The minimum observed size also
+prevents an initial safe-open EIO from being followed by silent truncation to an
+empty history. Recovery must preserve the verified prefix and the observed size;
+the older append/bad-tail recovery fixture now repairs a sufficiently long valid
+suffix instead of silently truncating observed bytes. Secretary/successor rules
+and all action permissions remain unchanged. Explicit trusted entry fixtures
+keep their old parser interface; actual production authorization callers supply
+no entry override and must retain Main's shared Role through bindings.
+
+Bounds: this is one Role object's observation history. A new object/cold restart
+and history not yet successfully verified have no prior prefix hash. It is not
+a durable handoff proof, cannot detect every before-start edit, and does not
+complete the cross-restart or transport gate. Unknown legacy locks, selection
+file/directory failures and an independent owned-stop path remain open. No new
+store, queue/rotation writer change, activation or recording-period enablement
+is introduced.
+
+The final new black-box tests compiled the exact HEAD Role source in a private
+separate test process against the unchanged current tests: 21 total, 7 pass and
+14 fail. The earlier direct old-source run of the first 20 cases also has 13
+failures. Current strict credential-free related checks pass 186/186 without
+failures, cancellations or skips, including actual Role, Person, Main IPC,
+Controller, Business and delayed Queue commit guards. These are author runs,
+not independent reruns; raw old/new logs remain in the private rotation-prefix
+lane. Build exits 0. The credential-free full suite exits 0 with 5,849 tests
+passing and zero failures, cancellations or skips (1,041,027 ms).
+
+Separate read-only reviewer BEB7B02C-0337-4213-B9A2-77A32FD7D5F2 returns
+APPROVE_SCOPED for this process-local checkpoint (reported cost USD 1.0194556,
+actual reported model claude-opus-5-5). Private evidence is in the owner rotation-
+prefix lane at `.local/rotation-prefix-review/review.jsonl`, with raw tests at
+`.local/rotation-prefix/`. The author verified HEAD, index and worktree unchanged
+by review and the reviewed patch equal to the implementation. This review did
+not rerun the author tests and does not approve activation or cold-start history
+protection. Once a branch/cycle/kept disagreement is observed, this object refuses
+that selection until valid history can agree, the person changes the designation,
+or the process is restarted; a restart can again expose the original resolver
+boundary and is not a safe recovery procedure.

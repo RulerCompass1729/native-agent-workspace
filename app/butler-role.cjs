@@ -3,7 +3,7 @@
 // record-only role; it never grants queue-secretary or lifecycle powers.
 const fs = require('node:fs');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const { successor } = require('./queue-secretary.cjs');
 const { roomIds } = require('./collaboration-spaces.cjs');
 
@@ -16,6 +16,8 @@ const id = value => typeof value === 'string' && value.length > 0 && value.lengt
 const copy = value => structuredClone(value);
 const configurationName = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,119}$/.test(value);
 const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino;
+const unchanged = (a, b) => sameFile(a, b) && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const revision = value => Number.isSafeInteger(value) && value >= 0;
 function identity(value) {
   if (!fields(value, ['sessionId', 'nativeId']) || !id(value.sessionId) || !id(value.nativeId)) fail('ERR_BUTLER_INVALID');
@@ -49,6 +51,8 @@ function safePrivateFile(stat, limit) {
 class ButlerRole {
   #directory; #directoryIdentity; #file; #logFile; #authorizePerson; #state = { version: 1, revision: 0, selected: null };
   #failed = false; #seenRecord = false;
+  // Process-local integrity observations, never a cached authorization result.
+  #seenLog = false; #logMinimum = 0; #logPrefix = null; #resolvedLog = null;
   constructor(directory, { authorizePerson = () => false } = {}) {
     this.#authorizePerson = authorizePerson;
     try {
@@ -74,10 +78,12 @@ class ButlerRole {
     } catch { this.#failed = true; if (fd !== undefined) fs.closeSync(fd); fail('ERR_BUTLER_STATE'); }
   }
   #read(file, limit) {
-    const directoryFd = this.#directoryFd(); let fd;
+    const directoryFd = this.#directoryFd(), rotation = file === this.#logFile; let fd;
     try {
       const before = fs.lstatSync(file);
+      if (rotation) this.#seenLog = true;
       if (!safePrivateFile(before, limit)) fail('ERR_BUTLER_STATE');
+      if (rotation) this.#logMinimum = Math.max(this.#logMinimum, before.size);
       fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
       const opened = fs.fstatSync(fd);
       if (!sameFile(opened, before) || !safePrivateFile(opened, limit)) fail('ERR_BUTLER_STATE');
@@ -87,9 +93,17 @@ class ButlerRole {
         if (!read) break;
         length += read;
       }
-      const text = buffer.toString('utf8', 0, length), after = fs.fstatSync(fd);
-      if (!sameFile(after, before) || !safePrivateFile(after, limit) || length !== after.size || before.size !== after.size ||
-          before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || Buffer.byteLength(text) > limit) fail('ERR_BUTLER_STATE');
+      const text = buffer.toString('utf8', 0, length), after = fs.fstatSync(fd), present = rotation ? fs.lstatSync(file) : after;
+      if (rotation) for (const info of [opened, after, present]) {
+        if (safePrivateFile(info, limit)) this.#logMinimum = Math.max(this.#logMinimum, info.size);
+      }
+      if (!unchanged(before, after) || !unchanged(after, present) || !safePrivateFile(after, limit) ||
+          !safePrivateFile(present, limit) || length !== after.size || Buffer.byteLength(text) > limit) fail('ERR_BUTLER_STATE');
+      if (rotation) {
+        if (length < this.#logMinimum || this.#logPrefix && (length < this.#logPrefix.length ||
+            digest(buffer.subarray(0, this.#logPrefix.length)) !== this.#logPrefix.digest)) fail('ERR_BUTLER_STATE');
+        return { text, prefix: { length, digest: digest(buffer.subarray(0, length)) } };
+      }
       return text;
     } finally { if (fd !== undefined) fs.closeSync(fd); fs.closeSync(directoryFd); }
   }
@@ -151,13 +165,22 @@ class ButlerRole {
   current(entries) {
     this.#load();
     if (!this.#state.selected) return null;
+    const fileBacked = entries === undefined; let observed = null;
     try {
-      if (entries === undefined) {
-        try { entries = this.#read(this.#logFile, MAX_LOG).split('\n').filter(line => line.trim()).map(line => JSON.parse(line)); }
-        catch (error) { if (error.code !== 'ENOENT') throw error; entries = []; }
+      if (fileBacked) {
+        try {
+          const read = this.#read(this.#logFile, MAX_LOG);
+          entries = read.text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line)); observed = read.prefix;
+        } catch (error) { if (error.code !== 'ENOENT' || this.#seenLog) throw error; entries = []; }
       }
       if (!Array.isArray(entries)) fail('ERR_BUTLER_STATE');
       const resolved = successor(this.#state.selected.identity, entries);
+      if (fileBacked) {
+        if (this.#resolvedLog?.revision === this.#state.revision &&
+            JSON.stringify(successor(this.#resolvedLog.identity, entries)) !== JSON.stringify(resolved)) fail('ERR_BUTLER_STATE');
+        if (observed) this.#logPrefix = observed;
+        this.#resolvedLog = { revision: this.#state.revision, identity: copy(resolved) };
+      }
       return { ...copy(this.#state.selected), identity: resolved, selectionRevision: this.#state.revision, mode: 'record-only' };
     } catch { fail('ERR_BUTLER_STATE'); } // A failed rotation view is not a damaged designation.
   }
