@@ -1,8 +1,9 @@
 // Real isolated GUI and service with a synthetic provider; no model runs.
-// Proves in an actual window what the unit tests prove for the gate alone: once the page is ready, the
-// main process sends full state one numbered snapshot at a time, each only after the page acknowledged
-// the previous one; a page that is slow receives fewer snapshots than were produced; the last state
-// always arrives.
+// Shows in an actual window that the bound engages: once the page is ready the main process sends
+// numbered snapshots, the page's acknowledgements flow back (otherwise no second numbered snapshot would
+// ever be sent), a page that is slow is sent fewer snapshots than were produced, and the last state
+// arrives. That at most one snapshot is unacknowledged at a time is proven by the unit tests of the gate;
+// this script observes its effect, the reduced number of sends, not the acknowledgement times.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -130,7 +131,7 @@ async function run() {
   const numbered = ordinary.filter(sequence => sequence > 0);
   assert.ok(numbered.length >= 12, 'The ready page receives numbered snapshots: the bound is armed (' + JSON.stringify(ordinary.slice(-20)) + ')');
   numbered.forEach((sequence, index) => {
-    assert.equal(sequence, numbered[0] + index, 'Numbered snapshots are consecutive: each followed the acknowledgement of the one before');
+    assert.equal(sequence, numbered[0] + index, 'Numbered snapshots are consecutive from the first one');
   });
   const firstNumbered = ordinary.indexOf(numbered[0]);
   assert.ok(ordinary.slice(firstNumbered).every(sequence => sequence > 0), 'After the bound is armed no snapshot bypasses it');
@@ -163,6 +164,7 @@ async function run() {
     assert.equal(sequence, flood[0] + index, 'Flood snapshots are consecutive as well');
   });
   assert.ok(flood.length < produced, 'A slow page is sent fewer snapshots than were produced (' + flood.length + ' of ' + produced + ')');
+  // Holds with or without the bound once a backlog has drained; kept as a sanity check of the recording.
   assert.ok(handled >= flood.length - 1 && handled <= flood.length, 'Every sent snapshot but possibly the one in transit was handled by the page');
   const final = await page.evaluate(async sessionId => {
     const session = (await workspace.initial()).sessions.find(candidate => candidate.id === sessionId);
