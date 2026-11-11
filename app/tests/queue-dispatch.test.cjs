@@ -230,6 +230,26 @@ test('a member older than the rotation age is rotated before it receives its nex
   assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [] }], [old]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
 });
 
+test('a session the caller names as engaged gets no queued item and is not rotated; the item goes to another member', () => {
+  const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
+  assert.deepEqual(plan(rooms, [member('a'), member('b')], { engaged: ['a'] }), [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'b' }]);
+  assert.deepEqual(plan(rooms, [member('a')], { engaged: ['a'] }), [], 'The item waits rather than go to it');
+  // An item assigned to it by name waits as well.
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [item('1', { assignee: 'a' })] }], [member('a'), member('b')], { engaged: ['a'] }), []);
+  // It is not rotated either, with or without queued work.
+  const old = member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages() });
+  assert.deepEqual(plan(rooms, [old], { engaged: ['a'] }), []);
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [] }], [old], { engaged: ['a'] }), []);
+  // An item it was sent before is still settled.
+  const sent = [{ id: 'shared', name: 'Team', queue: [sentItem()] }];
+  const replied = member('a', { messages: [{ id: 't1', role: 'user', text: 'task', origin: 'naw-dispatch', time: NOW - 30000 }, { id: 'r1', role: 'assistant', text: 'Done.', time: NOW - 20000 }] });
+  assert.deepEqual(plan(sent, [replied], { engaged: ['a'] }).map(action => [action.kind, action.status]), [['settle', 'done']]);
+  // Nobody named, or something that is not a list: the plan is as it always was.
+  for (const engaged of [undefined, null, [], 'a', { a: true }]) {
+    assert.deepEqual(plan(rooms, [member('a')], { engaged }), [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' }], JSON.stringify(engaged));
+  }
+});
+
 test('an old, quiet space member is rotated even with no work queued; a recent conversation is not cut off', () => {
   const finished = item('1', { status: 'done', sentTo: 'a', sentAt: NOW - 2 * HOUR, tag: 't1' });
   const rooms = [{ id: 'shared', name: 'Team', queue: [finished] }];

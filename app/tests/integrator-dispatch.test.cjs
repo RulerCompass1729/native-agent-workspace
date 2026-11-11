@@ -339,6 +339,41 @@ test('an integrator NAW itself is busy with is handed nothing until that is over
   g.dispatcher.rotations = {};
 });
 
+test('the session that holds an open handoff is sent no queue item until the handoff is closed', async t => {
+  const f = fixture(t);
+  f.room.queueAdd('Synthetic task', null);
+  await f.pass();
+  f.reply('member-a', `READY lane/a ${COMMIT}`);
+  await f.pass();
+  assert.deepEqual([f.calls.length, f.states()], [2, { 'lane/a': 'handed' }]);
+  assert.deepEqual(f.dispatcher.integration.holding(), ['integrator']);
+  // While it works on the handoff the person puts it into the space and queues a task for it by name.
+  const integrator = () => f.client.state.sessions.find(candidate => candidate.id === 'integrator');
+  integrator().roomId = 'shared'; integrator().roomIds = ['shared'];
+  const second = f.room.queueAdd('Second synthetic task', 'integrator');
+  await f.pass();
+  // It answers the handoff with a question for the person. It is idle now, and the handoff waits: still no queue item.
+  f.reply('integrator', '需要你决定：现在合吗？');
+  await f.pass(); await f.pass();
+  assert.equal(f.handoffs.snapshot().handoff.status, 'waiting');
+  assert.equal(f.calls.length, 2, 'Nothing was sent to it besides the handoff');
+  assert.equal(f.room.queueItems().find(item => item.id === second).status, 'queued');
+  // The person deals with the handoff: its place is free, and the queued task goes out.
+  f.handoffs.resolveHandoff(f.handoffs.snapshot().handoff.id, { retry: false });
+  assert.deepEqual(f.dispatcher.integration.holding(), []);
+  await f.pass();
+  assert.deepEqual(f.calls.slice(2).map(call => [call.id, call.itemId]), [['integrator', second]]);
+  // A record that cannot be read names nobody.
+  const g = fixture(t);
+  fs.writeFileSync(path.join(g.directory, FILE), '{', { mode: 0o600 });
+  g.dispatcher.integration.handoffs = new IntegrationHandoffs(g.directory);
+  assert.deepEqual(g.dispatcher.integration.holding(), []);
+  // The planner is told only when there is an engine.
+  const dispatch = fs.readFileSync(path.join(__dirname, '../queue-dispatch.cjs'), 'utf8');
+  assert.match(dispatch, /\n      engaged: this\.integration \? this\.integration\.holding\(\) : undefined,\n/);
+  assert.equal(dispatch.match(/input\.engaged/g).length, 2);
+});
+
 test('the engine is built only behind a switch that the daily app cannot open', () => {
   const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
   // One place builds it, and that place is inside the test-only condition.

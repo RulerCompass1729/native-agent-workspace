@@ -91,6 +91,13 @@ class IntegratorEngine {
     } catch { return false; }
   }
 
+  // The session an open handoff was sent to, as a list of at most one id. Until that handoff is
+  // closed (settled, or dealt with by the person) the queue sends it nothing and does not rotate
+  // it. A record that cannot be read names nobody.
+  holding() {
+    try { const open = this.handoffs.summary().handoff; return open ? [open.integrator.sessionId] : []; } catch { return []; }
+  }
+
   // Whether a space's record is worth looking through: it changed since the last intake. One with
   // a delivery that was left out of a full backlog is worth it only when its record has changed
   // since then or the backlog has room again; the same look would otherwise repeat without end.
