@@ -2,6 +2,9 @@
 // One dedicated read capability. It has no generic executor, session reader,
 // native connection, file tool, model call or approval-based escape route.
 const { createHash } = require('node:crypto');
+const { types: { isProxy } } = require('node:util');
+const path = require('node:path');
+const { ButlerReadAudit, MAX_PAGES_PER_UTC_DAY } = require('./butler-read-audit.cjs');
 const { roomId, DEFAULT_ROOM_ID } = require('./collaboration-spaces.cjs');
 const { validReady, ITEM_TEXT_LIMIT, QUEUE_LIMIT } = require('./queue-dispatch.cjs');
 const { storedReadySource } = require('./butler-ready.cjs');
@@ -10,7 +13,7 @@ const { validateEvent } = require('./butler-policy.cjs');
 const MAX_BYTES = 64 * 1024, MAX_LIMIT = 50, MAX_SCAN_RECORDS = 2000, MAX_SPACES = 1000, MAX_WINDOW = 31 * 24 * 60 * 60 * 1000;
 const STATUSES = ['queued', 'sent', 'waiting', 'done', 'failed', 'cancelled'];
 const fail = code => { throw Object.assign(Error(code), { code }); };
-const plain = value => value && typeof value === 'object' && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
+const plain = value => value && typeof value === 'object' && !isProxy(value) && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const time = value => Number.isSafeInteger(value) && value >= 0;
 function fields(value, allowed, required = []) {
@@ -66,10 +69,12 @@ function decodeCursor(cursor, scope, version, length) {
 const encodeCursor = (scope, version, position) => Buffer.from(JSON.stringify({ version: 1, scope, revision: version, position, afterRef: scanRef(scope, version, position) })).toString('base64url');
 
 class ButlerBusiness {
-  #role; #roomState; #view;
-  constructor({ role, roomState, view }) {
+  #role; #roomState; #view; #readAudit;
+  constructor({ role, roomState, view, readAudit }) {
     if (!role || typeof role.authorize !== 'function' || !roomState || typeof roomState.metadata !== 'function' || typeof view !== 'function') fail('ERR_BUTLER_BUSINESS_OPTIONS');
+    if (readAudit !== undefined && !(readAudit instanceof ButlerReadAudit) || typeof role.file !== 'string' || !path.isAbsolute(role.file)) fail('ERR_BUTLER_BUSINESS_OPTIONS');
     this.#role = role; this.#roomState = roomState; this.#view = view;
+    this.#readAudit = readAudit || new ButlerReadAudit(path.dirname(role.file));
   }
   #records() {
     const state = this.#view();
@@ -91,12 +96,31 @@ class ButlerBusiness {
         this.#authorize(binding);
         return { readOnly: true, activation: 'off', recordPeriod: 'off', methods: [{ name: 'readBusiness',
           kinds: ['spaces', 'queue', 'deliveries'], maxRecords: MAX_LIMIT, maxBytes: MAX_BYTES,
-          maxScanRecords: MAX_SCAN_RECORDS, maxSpaces: MAX_SPACES, maxWindowMs: MAX_WINDOW }] };
+          maxScanRecords: MAX_SCAN_RECORDS, maxSpaces: MAX_SPACES, maxWindowMs: MAX_WINDOW,
+          maxPagesPerUtcDay: MAX_PAGES_PER_UTC_DAY }] };
       },
       invoke: (method, input) => {
         this.#authorize(binding);
         if (method !== 'readBusiness') fail('ERR_BUTLER_BUSINESS_METHOD');
-        return this.#read(input);
+        const parsed = queryInput(input), { query } = parsed, page = this.#read(parsed);
+        const selected = this.#authorize(binding);
+        const scope = { kind: query.kind, spaceId: query.spaceId ?? null, limit: query.limit };
+        if (query.kind === 'spaces') scope.includeArchived = query.includeArchived;
+        if (query.kind === 'deliveries') Object.assign(scope, { fromTime: query.fromTime, throughTime: query.throughTime });
+        try {
+          const receipt = this.#readAudit.recordPage({
+            actor: { sessionId: selected.identity.sessionId, nativeId: selected.identity.nativeId,
+              selectionRevision: selected.selectionRevision, runnerRef: selected.runner.runnerRef },
+            query: scope, result: { count: page.records.length, recordRefs: page.records.map(row => row.recordRef),
+              scanned: page.scanned, truncated: page.truncated },
+          });
+          if (!receipt || !Number.isSafeInteger(receipt.sequence) || receipt.sequence < 1 ||
+              !Number.isSafeInteger(receipt.pageOfDay) || receipt.pageOfDay < 1 || receipt.pageOfDay > MAX_PAGES_PER_UTC_DAY) fail('ERR_BUTLER_BUSINESS_AUDIT');
+        } catch (error) {
+          fail(error?.code === 'ERR_BUTLER_READ_LIMIT' ? 'ERR_BUTLER_BUSINESS_READ_LIMIT' : 'ERR_BUTLER_BUSINESS_AUDIT');
+        }
+        this.#authorize(binding);
+        return page;
       },
     });
   }
@@ -121,7 +145,10 @@ class ButlerBusiness {
       if (!STATUSES.includes(item.status)) fail('ERR_BUTLER_BUSINESS_UNAVAILABLE');
       queueCounts[item.status]++;
     }
-    return { ...metadata, recordRef: spaceRef(id), time: null, name: safeText(room.name, 200), queueCounts };
+    let name;
+    try { name = safeText(room.name, 200); }
+    catch { return { ...metadata, recordRef: spaceRef(id), time: null, status: 'unavailable' }; }
+    return { ...metadata, recordRef: spaceRef(id), time: null, name, queueCounts };
   }
   #queueRow(item, metadata) {
     const ref = recordRef('item', metadata.spaceId, item.id);
@@ -163,8 +190,8 @@ class ButlerBusiness {
       itemRecordRef: recordRef('item', metadata.spaceId, source.payload.itemId), time: event.time,
       kind: source.kind, status: source.kind === 'decision' ? 'waiting' : 'failed' };
   }
-  #read(input) {
-    const { query, cursor } = queryInput(input), scope = hash(query);
+  #read({ query, cursor }) {
+    const scope = hash(query);
     let length, sourceAt, project, version, metadata = null;
     if (query.kind === 'spaces') {
       if (this.#roomState.warning || this.#roomState.spacesWarning || !Array.isArray(this.#roomState.spaces?.rooms)) fail('ERR_BUTLER_BUSINESS_UNAVAILABLE');

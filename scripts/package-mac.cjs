@@ -88,6 +88,7 @@ async function build() {
       'butler-ledger.cjs',
       'butler-policy.cjs',
       'butler-question-notification.cjs',
+      'butler-read-audit.cjs',
       'butler-ready.cjs',
       'butler-review-policy.js',
       'butler-review-projection.cjs',

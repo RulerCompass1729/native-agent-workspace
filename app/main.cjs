@@ -20,6 +20,7 @@ const { QueueSecretary } = require('./queue-secretary.cjs');
 const { IntegratorRole } = require('./integrator-role.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
+const { ButlerReadAudit } = require('./butler-read-audit.cjs');
 const { showQuestionNotification } = require('./butler-question-notification.cjs');
 const { createDedicatedBackend } = require('./butler-backend-host.cjs');
 const { CreationDefaults } = require('./creation-defaults.cjs');
@@ -90,7 +91,7 @@ const queueOutcomeSeen = new Set(), queueOutcomeNotifications = new Map();
 let pendingReveal = null;
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
-let dataDir, sessionLabels, roomState, queueSecretary, integratorRole, butlerIngress, butlerBackend = null, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
+let dataDir, sessionLabels, roomState, queueSecretary, integratorRole, butlerIngress, butlerReadAudit = null, butlerBackend = null, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
 let applicationBuild, applicationMenu;
 let mobileBroker;
@@ -1116,6 +1117,8 @@ async function boot() {
   }
   catch { /* Sources stay in the committed room events; status remains blocked. */ }
   bindQueueOutcomes(roomState, butlerIngress, notifyQueueOutcome);
+  try { butlerReadAudit ||= new ButlerReadAudit(dataDir, { authorizePerson: isCurrentHumanContext }); }
+  catch { /* Read-audit failure blocks model reads, not ordinary sessions or B1. */ }
   try { butlerBackend = createDedicatedBackend(path.join(dataDir, 'butler-native'), {
     runtimeVersion: app.getVersion(), executablePath: process.execPath }); }
   catch { butlerBackend = null; } // Dedicated failure must not stop ordinary sessions.
@@ -1402,9 +1405,16 @@ async function boot() {
     if (!isCurrentHumanContext(c)) throw Object.assign(Error('Only the current person window can review butler records'), { code: 'BUTLER_PERSON_ONLY' });
     const invalid = () => { throw Object.assign(Error('Invalid butler review request'), { code: 'BUTLER_REVIEW_REQUEST' }); };
     const token = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\s\u0000-\u001f\u007f]/u.test(value);
-    if (!['availability', 'latest', 'read', 'freeze', 'confirm'].includes(action)) invalid();
+    if (!['availability', 'latest', 'read', 'freeze', 'confirm', 'reads'].includes(action)) invalid();
     if (['availability', 'latest', 'freeze'].includes(action)) { if (args.length) invalid(); }
     else if (action === 'read') { if (args.length !== 1 || !token(args[0])) invalid(); }
+    else if (action === 'reads') {
+      const value = args[0];
+      if (args.length !== 1 || !value || typeof value !== 'object' || Array.isArray(value) ||
+          Object.keys(value).some(key => !['afterSequence', 'limit'].includes(key)) ||
+          value.afterSequence !== undefined && (!Number.isSafeInteger(value.afterSequence) || value.afterSequence < 0) ||
+          value.limit !== undefined && (!Number.isSafeInteger(value.limit) || value.limit < 1 || value.limit > 50)) invalid();
+    }
     else {
       const value = args[0], fields = ['reviewId', 'contentDigest', 'expectedRevision', 'disagreedSuggestionIds', 'disagreedCandidateIds', 'allRead'];
       if (args.length !== 1 || !value || typeof value !== 'object' || Array.isArray(value) ||
@@ -1413,6 +1423,11 @@ async function boot() {
           !Number.isSafeInteger(value.expectedRevision) || value.expectedRevision < 0 || value.allRead !== true ||
           !Array.isArray(value.disagreedSuggestionIds) || !value.disagreedSuggestionIds.every(token) ||
           !Array.isArray(value.disagreedCandidateIds) || !value.disagreedCandidateIds.every(token)) invalid();
+    }
+    if (action === 'reads') {
+      if (!butlerReadAudit) throw uiError('error.butler.readAuditUnavailable');
+      try { return butlerReadAudit.read(c, args[0]); }
+      catch { throw uiError('error.butler.readAuditUnavailable'); }
     }
     const ledger = butlerIngress?.ledger;
     let available = Boolean(ledger && ['healthy', 'freezeReview', 'latestReview', 'review', 'confirmReview'].every(name => typeof ledger[name] === 'function'));

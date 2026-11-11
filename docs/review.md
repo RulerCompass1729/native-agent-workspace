@@ -9278,3 +9278,55 @@ The ten-minute default has costs: a sleeping machine or a late response may cros
 Recovery limit, still a condition before opening migration: the pre-existing save-failure-first cleanup order can lose the subsequent stop call as well as notices if the application crashes between them. No restart replay is claimed. The next durable-receipt checkpoint must account for that timeout-cleanup boundary as well as initial decision deduplication.
 
 The DSH client file is generated and ignored by Git. `scripts/build-ui.cjs` concatenates the primary locale catalogs; normal source start and packaging both rebuild it. The author rebuilt it, verified all four added locale keys in the output and reran the six-check GUI successfully. The first complete unit run had three missing-module failures in unchanged DSH privacy tests; the lane lacked dependencies already committed by its new base. Reusing exact locked versions from the existing main installation restored those tests to 4/4; The repair changed neither manifest nor lockfile; it used no network access or install scripts.
+
+
+## B4 business-read review follow-ups (2026-11-11, source checkpoint)
+
+Integrator review `786f4ba2` found no blocker in the original source boundary and
+identified pre-activation work. This checkpoint addresses item 1 (metadata read
+audit), item 4 (explicit open/archive targets writable and active), item 6 (a
+persistent fixed UTC-day page allowance) and item 7 (literal exact row-key tests).
+Blank or secret-shaped space names now yield one unavailable metadata row instead
+of failing the whole spaces page. The separate legacy event/title/name questions
+remain with the person; those paths are not changed here. Item 5, the dedicated
+DSH transport and runtime tool/context proof, remains a separate delivery.
+
+The metadata journal and page counter share one private file lock and fsync.
+No body is copied into the log. Identity is checked at entry, before logging and
+before return; a late revocation can withhold an already prepared page. Missing
+or damaged durability cannot become a successful read or a zeroed quota. A
+verified person can page the log through the existing review IPC, independently
+of suggestion-ledger availability; agents cannot invoke that command.
+
+Author-run direct/combined checks cover unsafe storage, torn/partial writes,
+opaque authorization, daily rollover, replacement roles, logger reconstruction,
+metadata-only persistence, late revocation, actual Main IPC and exact row fields.
+An old-source replay demonstrates the missing audit/limit behavior; policy target
+counterexamples fail before and pass after the fix. Early integration failures
+were outdated fixture assumptions (no audit file, uninitialized queue, IPC error
+shape/context replacement, and manifest addition); they are retained as failures.
+Final author-run related checks: 129 pass, zero fail/skip. The actual in-memory
+queue-field mutant adds `reason` and produces two failing literal contracts;
+the other 16 tests pass. The original NONBLOCK fixture failed under `/tmp`
+because its pathname alias missed the real opened path. It now requires actual
+canonical-path interception for both refusal and success and includes a symlink
+ancestor case: 40 pass, zero fail/skip in both direct and isolated runs. A proxy
+query counterexample fails before the guard and passes after; the query is parsed
+once for both page and audit scope.
+
+Independent headless reviewer `93f728f0-5b5d-4040-8d15-9979ee23bba3` initially
+withheld approval for that test failure, then returned APPROVE_SCOPED for the
+fixes and source boundary, conditional on a green new-base combined run. That
+condition is now met: base `190987d`, full suite 5353 pass, zero fail/skip. The
+first new-base run had 5352 pass and one missing generated client error; source
+build and both runtime-payload checks pass, followed by the complete green run.
+Main's upstream lifecycle/S2 changes, its package retention-floor/DSH-root walk
+and both review histories are preserved. Thirteen other candidate files were
+programmatically byte-compared across the replay before the final documentation
+clarification. Review tools were exactly Read/Grep/Glob with no MCP; HEAD, index
+and worktree were unchanged by review. Raw failures, final output and reviewer
+transcripts remain in the private lane evidence named on the task board.
+
+The allowance counts newly released pages, not repeated provider input. Actual
+DSH sole-outlet proof remains separate. No native model, installed application,
+working-day trial or activation is qualified.

@@ -35,7 +35,11 @@ function fixture(t) {
     confirmReview(id, value, actor) { calls.push(['confirm', id, value, actor]); return { reviewId: id, revision: 1 }; },
     snapshot() { throw Error('Availability must not copy the ledger snapshot'); },
   };
-  const sandbox = { windows, applicationHandlers: handlers, ipcMain: { handle: (name, fn) => ipc.set(name, fn) },
+  const auditCalls = [], audit = { read(actor, options) {
+    auditCalls.push({ actor, options });
+    return { records: [{ sequence: 1, result: { count: 1 } }], throughSequence: 1, nextAfterSequence: 1, truncated: false };
+  } };
+  const sandbox = { butlerReadAudit: audit, windows, applicationHandlers: handlers, ipcMain: { handle: (name, fn) => ipc.set(name, fn) },
     trusted: url => url === 'synthetic-trusted', uiLocale: locale, uiError, butlerIngress: { ledger },
     backgroundOperation: require('../background-operation.cjs') };
   vm.createContext(sandbox);
@@ -43,7 +47,7 @@ function fixture(t) {
   vm.runInContext(section('function register(name, handler)', '\nasync function replaceBackendSockets('), sandbox);
   vm.runInContext(section("  register('butlerReview',", "  register('queueSecretary',"), sandbox);
   const call = (action, ...args) => ipc.get('workspace:butlerReview')(person.event, action, ...args);
-  return { directory, handlers, ipc, windows, calls, ledger, sandbox, person, agent, makeContext, call };
+  return { directory, handlers, ipc, windows, calls, ledger, audit, auditCalls, sandbox, person, agent, makeContext, call };
 }
 
 test('actual Main IPC routes the five human operations to the same host writer and fixes audit scope at zero', async t => {
@@ -232,4 +236,54 @@ test('preload exposes a dedicated butlerReview IPC wrapper without a generic inv
   assert.equal(api.invoke, undefined); assert.equal(api.call, undefined);
   assert.equal(await api.butlerReview('read', 'review:one'), 'host-review');
   assert.deepEqual(calls, [['workspace:butlerReview', 'read', 'review:one']]);
+});
+
+
+test('the person reads bounded read-audit metadata independently of the review journal, never through an agent command', async t => {
+  const f = fixture(t), options = { afterSequence: 0, limit: 2 };
+  const result = await f.call('reads', options);
+  assert.equal(result.ok, true); assert.equal(result.value.records[0].result.count, 1);
+  assert.equal(f.auditCalls[0].actor, f.person.context); assert.equal(f.auditCalls[0].options, options);
+  assert.equal(f.calls.length, 0); assert.equal(f.handlers.has('butlerReview'), false);
+  const invoke = f.ipc.get('workspace:butlerReview');
+  assert.equal((await invoke(f.agent.event, 'reads', options)).ok, false);
+  assert.equal(f.auditCalls.length, 1);
+  f.sandbox.butlerIngress = null;
+  assert.equal((await f.call('reads', {})).ok, true, 'A review-journal failure cannot hide the separate metadata audit');
+  f.sandbox.butlerReadAudit = null;
+  const unavailable = await f.call('reads', {}); assert.equal(unavailable.ok, false);
+  assert.equal(unavailable.uiMessage.key, 'error.butler.readAuditUnavailable');
+});
+
+test('read-audit IPC refuses arbitrary scopes, counts, identities and malformed paging before storage access', async t => {
+  const f = fixture(t);
+  for (const args of [[], [null], [[]], [{}, {}], [{ afterSequence: -1 }], [{ afterSequence: '0' }],
+    [{ limit: 0 }], [{ limit: 51 }], [{ limit: 1.5 }], [{ actor: { kind: 'person' } }],
+    [{ path: 'arbitrary-file' }], [{ records: [] }], [{ text: 'arbitrary-body' }]]) {
+    assert.equal((await f.call('reads', ...args)).ok, false);
+  }
+  assert.equal(f.auditCalls.length, 0); assert.equal(f.calls.length, 0);
+});
+
+test('the actual Main initializer and handler use the opaque person verifier with the real read-audit store', async t => {
+  const { ButlerReadAudit } = require('../butler-read-audit.cjs');
+  const f = fixture(t);
+  const environment = { windows: f.windows, applicationHandlers: f.handlers,
+    ipcMain: { handle: (name, handler) => f.ipc.set(name, handler) }, trusted: url => url === 'synthetic-trusted',
+    uiLocale: locale, uiError, backgroundOperation: require('../background-operation.cjs'), dataDir: f.directory, ButlerReadAudit };
+  const open = () => new Function(...Object.keys(environment), 'let butlerReadAudit = null; const butlerIngress = null;\n' +
+    section('function isCurrentHumanContext(', '\nfunction showDialog(') + '\n' +
+    section('function register(name, handler)', '\nasync function replaceBackendSockets(') + '\n' +
+    section('  try { butlerReadAudit ||=', '  try { butlerBackend =') + '\n' +
+    section("  register('butlerReview',", "  register('queueSecretary',") + '\nreturn butlerReadAudit;')(...Object.values(environment));
+  const audit = open(); assert.ok(audit instanceof ButlerReadAudit);
+  audit.recordPage({ actor: { sessionId: 'synthetic-instance', nativeId: 'synthetic-native', selectionRevision: 1, runnerRef: 'runner' },
+    query: { kind: 'spaces', spaceId: null, includeArchived: false, limit: 20 },
+    result: { count: 0, recordRefs: [], scanned: 0, truncated: false } });
+  assert.equal((await f.call('reads', {})).value.records.length, 1);
+  assert.throws(() => audit.read({ ...f.person.context }), { code: 'ERR_BUTLER_READ_AUDIT_PERSON' });
+  f.windows.set(1, { ...f.person.context });
+  assert.throws(() => audit.read(f.person.context), { code: 'ERR_BUTLER_READ_AUDIT_PERSON' });
+  assert.equal((await f.call('reads', {})).ok, true, 'IPC resolves the replacement trusted human context rather than trusting the stale one');
+  f.windows.delete(1); await assert.rejects(f.call('reads', {}), /Unexpected IPC source/);
 });

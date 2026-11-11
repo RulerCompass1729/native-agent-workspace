@@ -20,6 +20,19 @@ test('the default business index includes read-only active spaces without giving
   assert.deepEqual(result.actions.map(row => [row.kind, row.spaceId]), [['queue', 'writable'], ['report', 'readonly'], ['question', 'readonly']]);
 });
 
+for (const target of [space('writable'), space('readonly', { writable: false }), space('archived', { archived: true })]) {
+  for (const kind of ['queue', 'open', 'archive', 'question', 'report']) test(`explicit ${kind} target scope: ${target.id}`, () => {
+    const proposal = action(kind, target.id), result = interpret([proposal], [target]);
+    const allowed = target.id === 'writable' || ['question', 'report'].includes(kind);
+    if (allowed) {
+      assert.deepEqual(result, { actions: [{ ...proposal, ...(kind === 'question' ? { decisionKind: event.payload.decisionKind } : {}) }] });
+    } else {
+      assert.deepEqual(result.actions, []);
+      assert.deepEqual(result.suspended, [{ stage: 'policy', index: 0, reason: 'ERR_BUTLER_RESULT', kind, sourceRef: event.sourceRef, text: proposal.text }]);
+    }
+  });
+}
+
 test('default archived spaces are neither read nor writable and no archived detail getter is touched', () => {
   let reads = 0; const archived = { archived: true };
   for (const key of ['id', 'name', 'writable', 'queue', 'members', 'messages', 'environment']) {
@@ -28,6 +41,9 @@ test('default archived spaces are neither read nor writable and no archived deta
   assert.deepEqual(input([archived]).spaces, []); assert.equal(reads, 0);
   assert.deepEqual(interpret([action('queue')], [space('live'), archived]).actions, [action('queue', 'live')]);
   assert.equal(reads, 0, 'Queue-only validation does not request archived metadata');
+  const restricted = interpret([action('open', 'archived'), action('archive', 'archived')], [space('live'), archived]);
+  assert.deepEqual(restricted.actions, []); assert.equal(restricted.suspended.length, 2);
+  assert.equal(reads, 0, 'Lifecycle target validation does not request archived metadata');
   const target = space('archived-target', { archived: true });
   const result = interpret([action('queue', target.id), action('report', target.id), action('question', target.id)], [target]);
   assert.deepEqual(result.actions.map(row => [row.kind, row.spaceId]), [['report', target.id], ['question', target.id]]);

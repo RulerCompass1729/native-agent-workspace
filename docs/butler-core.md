@@ -200,6 +200,7 @@ are not added to initial state, ordinary display state or view state.
 | `latest` | None | Latest stored review or `null`, without creating a new review |
 | `read` | `reviewId` | That stored review |
 | `freeze` | None | Reuse the saved latest review when only audit records changed; otherwise freeze a new head. Main fixes `afterSequence:0` and audit-only provenance |
+| `reads` | `{afterSequence?, limit?}` | Person-only paginated read-audit metadata; independent of the suggestion ledger |
 | `confirm` | One request object below | Current durable review with the saved confirmation |
 
 The exact confirmation request is:
@@ -445,3 +446,16 @@ blocks; an old legacy unknown cost does not newly block. Cost overflow is invali
 token overflow alone does not change the monetary guard. The person's budget,
 estimate gate and reminder path retain their existing semantics. A two-dollar
 reminder is not introduced here as a new cap. `guard.reason:null` grants nothing.
+
+
+## Business read audit (source, activation closed)
+
+`ButlerBusiness` records an allowed page's metadata before release, then rechecks
+the bound instance. Its separate private audit store atomically enforces 64 pages
+per UTC day across role changes and restarts. It never stores business bodies or
+raw cursors. A quota or audit failure returns no page. The review IPC's new
+`reads` operation exposes only this metadata to the current person window, using
+the same opaque window verifier; it has no agent catalog entry. See
+[the exact audit and quota contract](butler-business.md#read-audit-and-page-allowance).
+This neither changes the USD reminder/budget policy nor approves activation,
+legacy automatic context or a real provider trial.
