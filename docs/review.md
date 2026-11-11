@@ -8257,3 +8257,28 @@ Owner: the author of this checkpoint. Evidence: 20 unit tests in `app/tests/stuc
 The three scripts named as not done in the entry above (native-concurrent, native-retained-claude, native-history-existing) were handled in another lane's batch.
 
 **native-retained-codex is a known limitation, decided.** The person answered on 2026-11-10, relayed by the integrator: Codex 0.163.0 will not be installed. The script stays ported and unverified, and nobody needs to ask again. It becomes runnable if 0.163.0 is on disk, or if the product opens a retained host's shared Codex replies to another version (`app/legacy-codex.cjs` `sharedReplyAvailable`); in that second case the script's exact version check changes with the product.
+
+
+## Finite butler native trial, preparation checkpoint (2026-11-11 UTC)
+
+The real Codex 0.167.1 request omitted an output limit despite candidate config
+and RPC settings. A separate synthetic trial gateway limits requests, output,
+context and destination; it does not qualify or activate the production driver.
+The shared native fixture configuration is extracted without behavior changes.
+
+Independent review found that failed/incomplete final events and over-limit
+usage were discarded before accounting. Two regressions fail on that candidate;
+the fix persists integer-only usage before validation and retains unknown fields
+as null. Incomplete, failed, excess-input, excess-output and unexpected-server-tool
+cases now stop with their reported usage intact. Receipt-write failure closes
+owned sockets before inference, and shared cleanup bounds child termination.
+The native synthetic-auth fixture checks the real header path with a fake key;
+the transport separately checks verified TLS against an owned local test server.
+
+Review also requires the person's separate approval of the credential relay:
+Codex constructs the header, a loopback gateway receives opaque bytes and sends
+them to the fixed provider. The existing finite-spend approval does not establish
+that permission. The live entry requires an additional explicit flag, refuses
+extra certificate authorities, and remains unexecuted at this checkpoint.
+Preparation is not a live compatibility PASS. No real model request, private
+context, daily application change or production qualification is claimed here.
