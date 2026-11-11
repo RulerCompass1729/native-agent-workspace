@@ -594,7 +594,7 @@ class Claude extends EventEmitter {
     const claudePin = require('./claude-pin.cjs'), fresh = !record.recovering && !record.forkPicker;
     const launch = claudePin.choose({ launcher: host.binaries.claude, fresh, lastVersion: record.nativeLaunchVersion,
       // Someone may have resumed this session elsewhere since: its own transcript says which version wrote last.
-      lastWritten: fresh ? undefined : claudePin.lastWrittenVersion({ cwd: record.cwd, nativeId: record.nativeId }),
+      lastWritten: fresh ? undefined : claudePin.lastWrittenVersion({ cwd: record.cwd, nativeId: record.nativeId, transcript: record.nativeTranscript }),
       stateFile: path.join(host.dataDir || host.privateDir, 'claude-pin.json') });
     if (launch.version) record.nativeLaunchVersion = launch.version; else delete record.nativeLaunchVersion;
     if (launch.pin) record.nativePin = launch.pin; else delete record.nativePin;
@@ -1101,7 +1101,11 @@ class Claude extends EventEmitter {
     // Only an authenticated root settings event selects the journal. The
     // identity lookup route never accepts a caller-supplied filesystem path.
     if (event.session_id === this.record.nativeId && typeof event.transcript_path === 'string' &&
-      path.isAbsolute(event.transcript_path) && path.basename(event.transcript_path) === `${this.record.nativeId}.jsonl`) this.nativeTranscript = event.transcript_path;
+      path.isAbsolute(event.transcript_path) && path.basename(event.transcript_path) === `${this.record.nativeId}.jsonl`) {
+      this.nativeTranscript = event.transcript_path;
+      // Kept with the session, so a later resume can see which version wrote it last (claude-pin.cjs).
+      if (this.record.nativeTranscript !== event.transcript_path) { this.record.nativeTranscript = event.transcript_path; this.emit('capability'); }
+    }
     // The branch exists once its own session starts; later launches resume it.
     if (this.record.forkPicker && event.hook_event_name === 'SessionStart') { this.record.forkPicker = false; this.emit('capability'); }
     const mode = PERMISSION_MODES.includes(event.permission_mode) ? event.permission_mode : this.record.nativePermissionMode;

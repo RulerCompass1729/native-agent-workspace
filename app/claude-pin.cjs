@@ -4,7 +4,8 @@
 // version still installed beside it, for at most seven days per fallback version, and
 // the session says so. Nothing running is touched. A session is resumed with the
 // fallback only when both NAW's own record and the session's transcript show that no
-// newer version has run it; anything unknown keeps the launcher.
+// newer version has run it; anything unknown, including a transcript NAW cannot find,
+// keeps the launcher.
 //
 // The fallback ends by itself: once a NAW update qualifies the new version, or the
 // vendor removes the fallback version, or the seven days pass, the next session NAW
@@ -68,10 +69,10 @@ function choose({ launcher, fresh, lastVersion, lastWritten, stateFile, now = Da
   const older = newestQualified(current.dir);
   // Only ever fall back to an older qualified version, never sideways or forward.
   if (!older || compare(older.version, current.version) >= 0) return direct(null);
-  // Never reopen a session with an older version than the one that last ran it; unknown counts as newer.
-  // lastWritten: undefined when the session has no transcript yet, null when it has one of unknown version.
+  // Never reopen a session with an older version than the one that last ran it: both NAW's own launch
+  // record and the session's transcript must name a version that is not newer. Unknown counts as newer.
   if (!fresh && !(exact(lastVersion) && compare(lastVersion, older.version) <= 0)) return direct(null);
-  if (!fresh && lastWritten !== undefined && !(exact(lastWritten) && compare(lastWritten, older.version) <= 0)) return direct(null);
+  if (!fresh && !(exact(lastWritten) && compare(lastWritten, older.version) <= 0)) return direct(null);
   let state = readState(stateFile, now);
   // A record that cannot be trusted could hide an expired period: no fallback.
   if (state === null) { console.error('[NAW] Claude fallback record is unreadable; the launcher is used'); return direct(null); }
@@ -87,24 +88,32 @@ function choose({ launcher, fresh, lastVersion, lastWritten, stateFile, now = Da
   return { binary: older.file, version: older.version, pin };
 }
 
-// The newest Claude version recorded in the end of a session's own transcript: only the version
-// field of each entry is used. undefined: no transcript; null: one exists but names no version.
-// Claude keeps it at <config>/projects/<cwd, every other character as "-">/<native id>.jsonl.
+// The newest Claude version recorded in the end of a session's own transcript; only the version
+// field of each entry is used. null when no transcript is found or it names no version: unknown.
+// The file is the one Claude itself reported for this session, or else the usual place,
+// <config>/projects/<cwd, every other character as "-">/<native id>.jsonl, for the folder as stored and as resolved.
 const TAIL_BYTES = 1024 * 1024;
-function lastWrittenVersion({ cwd, nativeId, root = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects') }) {
-  if (typeof cwd !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nativeId || '')) return null;
-  const file = path.join(root, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${nativeId}.jsonl`);
-  let text;
-  try {
-    const fd = fs.openSync(file, 'r');
-    try { const size = fs.fstatSync(fd).size, length = Math.min(size, TAIL_BYTES), buffer = Buffer.alloc(length); fs.readSync(fd, buffer, 0, length, size - length); text = buffer.toString('utf8'); }
-    finally { fs.closeSync(fd); }
-  } catch (error) { return error.code === 'ENOENT' ? undefined : null; }
+function lastWrittenVersion({ cwd, nativeId, transcript, root = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects') }) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nativeId || '')) return null;
+  const files = new Set();
+  if (typeof transcript === 'string' && path.isAbsolute(transcript) && path.basename(transcript) === `${nativeId}.jsonl`) files.add(transcript);
+  if (typeof cwd === 'string') {
+    const folders = [cwd]; try { folders.push(fs.realpathSync(cwd)); } catch { /* the folder may be gone */ }
+    for (const folder of folders) files.add(path.join(root, folder.replace(/[^a-zA-Z0-9]/g, '-'), `${nativeId}.jsonl`));
+  }
   let newest = null;
-  for (const line of text.split('\n')) {
-    if (!line.includes('"version"')) continue;
-    let entry; try { entry = JSON.parse(line); } catch { continue; } // the first line of the tail may be cut
-    if (exact(entry?.version) && (!newest || compare(entry.version, newest) > 0)) newest = entry.version;
+  for (const file of files) {
+    let text;
+    try {
+      const fd = fs.openSync(file, 'r');
+      try { const size = fs.fstatSync(fd).size, length = Math.min(size, TAIL_BYTES), buffer = Buffer.alloc(length); fs.readSync(fd, buffer, 0, length, size - length); text = buffer.toString('utf8'); }
+      finally { fs.closeSync(fd); }
+    } catch (error) { if (error.code === 'ENOENT') continue; return null; }
+    for (const line of text.split('\n')) {
+      if (!line.includes('"version"')) continue;
+      let entry; try { entry = JSON.parse(line); } catch { continue; } // the first line of the tail may be cut
+      if (exact(entry?.version) && (!newest || compare(entry.version, newest) > 0)) newest = entry.version;
+    }
   }
   return newest;
 }

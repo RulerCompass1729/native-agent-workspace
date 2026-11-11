@@ -46,7 +46,7 @@ test('a qualified version, another layout or an exact file the person chose is n
 
 test('a session is never reopened by an older version than the one that last ran it', t => {
   const i = install(t, ['2.1.322', '2.1.999'], '2.1.999');
-  const resume = lastVersion => pin.choose({ launcher: i.launcher, fresh: false, lastVersion, stateFile: i.stateFile, now: T0 });
+  const resume = lastVersion => pin.choose({ launcher: i.launcher, fresh: false, lastVersion, lastWritten: '2.1.320', stateFile: i.stateFile, now: T0 });
   for (const unknown of [undefined, null, '', '2.1', '2.1.322-beta']) assert.deepEqual(resume(unknown), { binary: i.launcher, version: '2.1.999', pin: null }, String(unknown));
   assert.deepEqual(resume('2.1.999'), { binary: i.launcher, version: '2.1.999', pin: null });
   assert.equal(resume('2.1.323').pin, null);
@@ -106,16 +106,16 @@ test('the clock survives a restart, a newer qualified version starts its own per
 test('a resume also checks which version last wrote the session itself', t => {
   const i = install(t, ['2.1.322', '2.1.999'], '2.1.999');
   const resume = lastWritten => pin.choose({ launcher: i.launcher, fresh: false, lastVersion: '2.1.322', lastWritten, stateFile: i.stateFile, now: T0 });
-  assert.equal(resume(undefined).binary, i.file('2.1.322'), 'No transcript yet: NAW\'s own record decides');
   assert.equal(resume('2.1.322').binary, i.file('2.1.322')); assert.equal(resume('2.1.320').binary, i.file('2.1.322'));
-  for (const newerOrUnknown of ['2.1.999', '2.1.323', null, '', 'x']) assert.deepEqual(resume(newerOrUnknown), { binary: i.launcher, version: '2.1.999', pin: null }, String(newerOrUnknown));
+  // A newer writer, a transcript without a version, or no transcript NAW can find: the launcher.
+  for (const newerOrUnknown of ['2.1.999', '2.1.323', null, undefined, '', 'x']) assert.deepEqual(resume(newerOrUnknown), { binary: i.launcher, version: '2.1.999', pin: null }, String(newerOrUnknown));
   // A new session has nothing to reopen.
   assert.equal(pin.choose({ launcher: i.launcher, fresh: true, lastWritten: '2.1.999', stateFile: i.stateFile, now: T0 }).binary, i.file('2.1.322'));
 
   // Reading it from a synthetic transcript: only the version field of each entry counts.
   const root = path.join(i.dir, 'projects'), cwd = '/tmp/some.dir/work', id = randomUUID();
   const file = path.join(root, '-tmp-some-dir-work', `${id}.jsonl`);
-  assert.equal(pin.lastWrittenVersion({ cwd, nativeId: id, root }), undefined);
+  assert.equal(pin.lastWrittenVersion({ cwd, nativeId: id, root }), null, 'No transcript found is unknown');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const row = (version, extra = {}) => JSON.stringify({ type: 'user', sessionId: id, ...(version ? { version } : {}), ...extra });
   fs.writeFileSync(file, [row('2.1.322'), row(null), row('2.1.322', { message: { content: 'text that says "version":"9.9.9"' } })].join('\n') + '\n');
@@ -125,6 +125,13 @@ test('a resume also checks which version last wrote the session itself', t => {
   fs.writeFileSync(file, 'cut-off first line "version":"2.1.999"}\n' + row(null) + '\n');
   assert.equal(pin.lastWrittenVersion({ cwd, nativeId: id, root }), null, 'A transcript that names no version is unknown');
   assert.equal(pin.lastWrittenVersion({ cwd, nativeId: 'not-an-id', root }), null);
+  // The file Claude itself reported is read wherever it is; the stored folder may also be a link to the real one.
+  const reported = path.join(i.dir, 'elsewhere', `${id}.jsonl`); fs.mkdirSync(path.dirname(reported)); fs.writeFileSync(reported, row('2.1.998') + '\n');
+  assert.equal(pin.lastWrittenVersion({ cwd: '/nowhere', nativeId: id, transcript: reported, root }), '2.1.998');
+  assert.equal(pin.lastWrittenVersion({ cwd: '/nowhere', nativeId: id, transcript: path.join(i.dir, 'elsewhere', 'other.jsonl'), root }), null, 'A reported path for another session is not read');
+  const real = path.join(i.dir, 'real-work'), link = path.join(i.dir, 'link-work'); fs.mkdirSync(real); fs.symlinkSync(real, link);
+  const resolved = path.join(root, fs.realpathSync(real).replace(/[^a-zA-Z0-9]/g, '-'), `${id}.jsonl`); fs.mkdirSync(path.dirname(resolved), { recursive: true }); fs.writeFileSync(resolved, row('2.1.997') + '\n');
+  assert.equal(pin.lastWrittenVersion({ cwd: link, nativeId: id, root }), '2.1.997');
 });
 
 test('NAW starts a new Claude session with the fallback program and records it; a resume of unknown origin keeps the launcher', async t => {
@@ -143,9 +150,18 @@ test('NAW starts a new Claude session with the fallback program and records it; 
   const { NativeHost } = require('../adapters.cjs');
   assert.equal(new NativeHost(sockets, data).codexQualificationFile, path.join(data, 'codex-qualification.json'));
   assert.equal(new NativeHost(sockets).dataDir, sockets, 'A host given one folder keeps using it');
-  // The same session resumed later stays on the fallback version.
+  // The same session resumed later, with no transcript NAW can find, is not moved down.
   argv = await start({ ...fresh, recovering: true });
-  assert.equal(argv[0], '2.1.322'); assert.ok(argv.includes('--resume'));
+  assert.equal(argv[0], '2.1.999'); assert.ok(argv.includes('--resume'));
+  // With the transcript Claude reported, last written by the fallback version, it stays on that version.
+  const transcript = path.join(data, `${fresh.nativeId}.jsonl`); fs.writeFileSync(transcript, JSON.stringify({ type: 'user', version: '2.1.322' }) + '\n');
+  const resumed = { ...fresh, recovering: true, nativeLaunchVersion: '2.1.322', nativeTranscript: transcript };
+  argv = await start(resumed);
+  assert.equal(argv[0], '2.1.322'); assert.equal(resumed.nativePin.pinned, '2.1.322');
+  // After someone resumed it elsewhere with the new version, NAW does not reopen it with the old one.
+  fs.appendFileSync(transcript, JSON.stringify({ type: 'user', version: '2.1.999' }) + '\n');
+  argv = await start({ ...resumed });
+  assert.equal(argv[0], '2.1.999');
   // A session NAW has no launch version for (taken over, or started before this existed) is not moved down.
   const taken = { id: randomUUID(), nativeId: randomUUID(), name: 'Taken over', cwd: i.dir, recovering: true };
   argv = await start(taken);
