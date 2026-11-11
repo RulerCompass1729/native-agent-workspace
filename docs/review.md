@@ -8078,3 +8078,20 @@ Both pass on real Codex 0.167.0 with two `/v1/responses` requests each and no cr
 **native-retained-codex** is ported to the fixture but was not run to the end, and the committed script stops at its version check on any Codex but 0.163.0. The observations below come from one local run with that check relaxed: the retained alpha.2 host started with Codex 0.167.0 inside the sandbox, ran its terminal task and attached its history with the same native id and pid, then met a product gate: a retained host's Codex replies are shared to a space on Codex 0.163.0 only (`app/legacy-codex.cjs` `sharedReplyAvailable`). 0.163.0 is not installed. The script keeps the exact 0.163.0 check, with that reason. Its tool step now uses one command with escalation that writes and reads the file, because a sandboxed apply_patch cannot run inside the fixture. Unverified until 0.163.0 is available: the whole flow after the gate, and in particular the check that a shared tool row is frozen when the permission is asked (before, the applied patch row satisfied it; a pending command may leave no shared row).
 
 Not done in this batch: native-addressed and native-concurrent (real Claude and real Codex in one run: two fixtures, and a per-version decision for each assertion), native-retained-claude (needs Claude 2.1.302; 2.1.319, 321 and 322 are installed), native-history-existing (imports a history produced by test-native-codex-context.cjs, which is not ported, and reuses that script's unsandboxed shim and fixed port).
+
+### Butler native configuration evidence
+
+A bounded real Codex app-server experiment uses fixed loopback responses only.
+The tested switches can yield an empty tool registry under the observed metadata,
+and forced shell/patch/image/web/MCP calls are rejected. Counterexamples retain
+global AGENTS loading and catalog-driven patch registration; read-only permits
+reading an outside file, while a named native profile denies it and outbound TCP.
+No full tool ceiling, live provider policy, activation or working-day acceptance
+is claimed. The previous dedicated binding alone is not context isolation.
+
+Independent review approved that scoped conclusion. Its non-blocking observations
+were addressed with an actual positive project-instruction control, exact call-ID
+rejection assertions, server-request/reply separation, and explicit wording about
+the direct native sandbox probes and the fresh empty global-instruction home.
+Native version changes, inherited configuration/catalogs and production adoption
+remain explicit qualification gates; all automatic security flags stay false.
