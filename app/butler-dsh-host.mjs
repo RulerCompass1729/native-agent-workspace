@@ -15,7 +15,8 @@ const errorCode = code => ({ code, message: code === 'credential-missing'
   ? 'DEEPSEEK_API_KEY is missing from the butler launch environment.' : 'DSH butler: ' + code });
 // Do not serialize provider errors: upstream errors can include response bodies.
 const fail = code => Object.assign(Error(code), { code });
-let boundaryFailure = null;
+const { ButlerInputBoundary } = require('./butler-dsh-input.cjs');
+let boundaryFailure = null, inputBoundary;
 let ctx, handle, nativeId, allowedTools = [], requestCount = 0, consumed = false, initialized = false, closing = false;
 async function close() {
   if (closing) return; closing = true;
@@ -31,6 +32,7 @@ process.on('SIGTERM', close); process.stdin.on('end', close);
 async function newSession() {
   await handle?.dispose();
   nativeId = 'dsh-' + randomUUID(); consumed = false; requestCount = 0; boundaryFailure = null;
+  inputBoundary.reset();
   handle = await ctx.agents.create({ sessionId: nativeId, meta: { cwd: home },
     agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-pro', maxTokens: 4096, reasoningEffort: 'off' } });
   await handle.agent.whenIdle();
@@ -49,6 +51,10 @@ async function initialize(config) {
   // cannot route a credential to another host. The test seam accepts loopback only.
   if (config.fixtureEndpoint != null && (!/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(config.fixtureEndpoint) || new URL(config.fixtureEndpoint).port > 65535)) throw fail('endpoint-invalid');
   process.env.DEEPSEEK_BASE_URL = config.fixtureEndpoint || 'https://api.deepseek.com/anthropic';
+  inputBoundary = new ButlerInputBoundary(process.env.DEEPSEEK_BASE_URL + '/v1/messages');
+  // The pinned adapter uses global fetch. Guard the final serialized body in
+  // this dedicated process only; no credentials or response content are read.
+  globalThis.fetch = inputBoundary.wrapFetch(globalThis.fetch.bind(globalThis));
   const privacy = require('./butler-dsh-privacy.cjs').install();
   const { Context } = await import('@deepseek-ai/cordis');
   ctx = new Context();
@@ -65,7 +71,15 @@ async function initialize(config) {
   for (const [name, options] of manifest) { const mod = await import('@deepseek-ai/dsh-' + name); await ctx.plugin(mod.default ?? mod, options); }
   privacy.assertApplied();
   allowedTools = [...mcp.tools];
+  ctx.on('tools/pre-execute', (exec, next) => { inputBoundary.assertHealthy(); return next(); });
+  // rc.2 invokes final-result observers synchronously, including tool errors
+  // and final content projections. Latch failure before any subsequent call;
+  // observer exceptions alone cannot stop the DSH loop.
+  ctx.on('tools/result', (exec, result) => {
+    try { inputBoundary.tool(result); } catch { /* fixed failure retained by guard */ }
+  });
   ctx.on('llm/stream', async function* (options, next) {
+    inputBoundary.assertHealthy();
     if (requestCount >= 8 || options.provider !== 'deepseek-official' || options.model !== 'deepseek-v4-pro') {
       boundaryFailure = 'request-boundary'; throw fail(boundaryFailure);
     }
@@ -85,7 +99,7 @@ async function run(request) {
   await handle.agent.whenIdle();
   // The agent loop records hook failures as a failed turn instead of throwing.
   // Preserve our fixed boundary reason without serializing any provider error.
-  if (boundaryFailure) throw fail(boundaryFailure);
+  if (boundaryFailure || inputBoundary.failed) throw fail(boundaryFailure || inputBoundary.failed);
   const events = handle.agent.session.snapshotEvents();
   const messages = handle.agent.session.deriveMessages().filter(m => m.role === 'assistant');
   const rows = events.filter(e => e.type === 'assistant/message').map(e => e.data.usage);
@@ -123,7 +137,7 @@ process.stdin.on('data', chunk => {
       if (request.method === 'rotate' && initialized) return { nativeId: await newSession() };
       throw fail('invalid-command');
     }).then(result => emit({ id: request.id, result }), error => emit({ id: request.id,
-      error: errorCode(['credential-missing', 'mcp-unavailable', 'session-unavailable', 'invalid-command', 'already-initialized', 'privacy-unconfirmed', 'endpoint-invalid', 'request-boundary'].includes(error.code) ? error.code : 'host-failed') }))
+      error: errorCode(['credential-missing', 'mcp-unavailable', 'session-unavailable', 'invalid-command', 'already-initialized', 'privacy-unconfirmed', 'endpoint-invalid', 'request-boundary', 'input-boundary'].includes(error.code) ? error.code : 'host-failed') }))
       .finally(() => { flight = false; });
   }
 });

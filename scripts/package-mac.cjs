@@ -82,6 +82,7 @@ async function build() {
       'butler-controller.cjs',
       'butler-dsh-driver.cjs',
       'butler-dsh-host.mjs',
+      'butler-dsh-input.cjs',
       'butler-dsh-launch.py',
       'butler-dsh-privacy.cjs',
       'butler-ingress.cjs',
