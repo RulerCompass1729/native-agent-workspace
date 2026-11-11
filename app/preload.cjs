@@ -53,7 +53,35 @@ for (const name of ['previewImage', 'expandImage', 'copyImage', 'releaseImage', 
 }
 api.retryStartup = () => ipcRenderer.invoke('workspace:retry-startup');
 api.startupData = () => ipcRenderer.invoke('workspace:startup-data');
-for (const [name, channel] of [['onRevealRecord', 'workspace:reveal-record'], ['onLocale', 'workspace:locale'], ['onState', 'workspace:state'], ['onViewStorage', 'workspace:view-storage'], ['onReconnected', 'workspace:reconnected'], ['onBackendSwitched', 'workspace:backend-switched'], ['onSessionName', 'workspace:session-name'], ['onTerminal', 'workspace:terminal'], ['onProgress', 'workspace:progress'], ['onNew', 'workspace:new'], ['onDisconnected', 'workspace:disconnected'], ['onStartup', 'workspace:startup']]) {
+// Full state arrives one snapshot at a time once this page is ready: the main process sends the next one
+// only after this acknowledgement, so a slow page cannot pile up snapshots it has not handled. The listener
+// is registered at load, so every numbered snapshot is acknowledged exactly once, also when no subscriber
+// exists yet or one of them throws. Sequence 0 marks a snapshot that needs no reply.
+const stateCallbacks = new Set();
+ipcRenderer.on('workspace:state', (_event, value, sequence) => {
+  let failure = null;
+  try {
+    for (const callback of [...stateCallbacks]) {
+      try {
+        callback(value);
+      } catch (error) {
+        failure = failure || error;
+      }
+    }
+  } finally {
+    if (sequence) {
+      ipcRenderer.invoke('workspace:state-rendered', sequence).catch(() => {});
+    }
+  }
+  if (failure) {
+    throw failure;
+  }
+});
+api.onState = callback => {
+  stateCallbacks.add(callback);
+  return () => stateCallbacks.delete(callback);
+};
+for (const [name, channel] of [['onRevealRecord', 'workspace:reveal-record'], ['onLocale', 'workspace:locale'], ['onViewStorage', 'workspace:view-storage'], ['onReconnected', 'workspace:reconnected'], ['onBackendSwitched', 'workspace:backend-switched'], ['onSessionName', 'workspace:session-name'], ['onTerminal', 'workspace:terminal'], ['onProgress', 'workspace:progress'], ['onNew', 'workspace:new'], ['onDisconnected', 'workspace:disconnected'], ['onStartup', 'workspace:startup']]) {
   api[name] = callback => { const listener = (_event, ...data) => callback(...data); ipcRenderer.on(channel, listener); return () => ipcRenderer.removeListener(channel, listener); };
 }
 contextBridge.exposeInMainWorld('workspace', Object.freeze(api));
