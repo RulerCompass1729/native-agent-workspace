@@ -8641,3 +8641,24 @@ and versioned historical replay remain gates before a working-day trial or a
 future projection change. Native/GUI/provider behavior and the C2 renderer remain
 outside this source approval. Activation and record period stay off.
 Owner: butler outcome owner.
+
+
+## B4 shared usage reading without a budget-policy change (2026-11-11, source reviewed)
+
+The entry needs one UTC-day reading from the same accounting used by the budget
+guard. A pure helper now supplies recorded run counts, token and micro-dollar
+readings, unknown counts, source/estimate status and the existing guard reason.
+Controller reuses it. The amount, estimate, day-boundary, authority and activation
+gates are unchanged. Actual provider request counts remain unknown; runs are not
+labelled as HTTP requests. Missing values and overflow cannot become zero.
+
+Author-run checks: 68 related cases pass, including the real Controller and package
+source walk. A direct comparison against the actual preceding Controller agrees
+on 500 deterministic history cases. A missing-reading-as-zero in-memory mutation
+fails three tests; it is a negative control, not an old product failure. The
+full isolated suite passes 4976 checks with zero failures or skips. Fresh
+read-only review `19B06247-5D9D-4D87-BE87-72F0649C8760` returned `APPROVE_SCOPED`
+for the source and final evidence closure (private evidence:
+`.local/usage-review/review.jsonl` and `close.jsonl`). No person entry is wired by this
+change. This is source accounting, not real billing, provider, installed,
+activation or working-day acceptance. Owner: butler outcome owner.

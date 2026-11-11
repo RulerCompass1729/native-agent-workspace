@@ -3,6 +3,7 @@
 // dependencies; there is no native, queue/lifecycle or model API implementation.
 const { createHash, randomUUID } = require('node:crypto');
 const { buildInput, interpretResult, validateEvent } = require('./butler-policy.cjs');
+const { summarizeUsage } = require('./butler-usage.cjs');
 const identityKey = s => JSON.stringify([s?.selectionRevision, s?.identity?.sessionId, s?.identity?.nativeId, s?.runnerRef || s?.runner?.runnerRef]);
 const selectionFor = s => ({ selectionRevision: s.selectionRevision, identity: s.identity, runnerRef: s.runner.runnerRef });
 const sameRole = (saved, current) => saved?.selectionRevision === current.selectionRevision && saved.runnerRef === current.runner.runnerRef;
@@ -154,21 +155,9 @@ class ButlerController {
   }
   budgetReady(selection, events) {
     if (!selection.budget || selection.budget.currency !== 'USD' || selection.budget.dayBoundary !== 'UTC') return 'budget-unset';
-    const snapshot = this.ledger.snapshot(), metered = new Set(); let spent = 0;
-    // Include failed, stale and quarantined attempts, not just completed batches.
-    for (const attempt of snapshot.attempts) {
-      metered.add(attempt.batchId);
-      const amount = attempt.usage?.costMicros;
-      if (!cost(amount)) return 'usage-cost-unknown';
-      if (day(attempt.startedAt) !== day(this.now())) continue;
-      spent += amount; if (!Number.isSafeInteger(spent)) return 'usage-cost-invalid';
-    }
-    for (const batch of snapshot.batches) {
-      if (metered.has(batch.batchId) || batch.status !== 'completed' || day(batch.completedAt) !== day(this.now())) continue;
-      const amount = batch.result?.usage?.costMicros;
-      if (!cost(amount)) return 'usage-cost-unknown';
-      spent += amount; if (!Number.isSafeInteger(spent)) return 'usage-cost-invalid';
-    }
+    const usage = summarizeUsage(this.ledger.snapshot(), { now: this.now() });
+    if (usage.guard.reason) return usage.guard.reason;
+    const spent = usage.today.costMicros.value;
     if (spent >= selection.budget.limitMicros) return 'daily-budget-reached';
     const estimated = this.estimateBatchCost(events);
     if (!cost(estimated)) return 'next-batch-cost-unknown';
