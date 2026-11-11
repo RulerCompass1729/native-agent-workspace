@@ -50,6 +50,157 @@ test('READY has one non-extending timer and a report even when the model emits n
   assert.deepEqual(f.reports[0].eventIds, ['event-1', 'event-2']);
   await f.controller.receive(f.event(1, 'ready')); await f.controller.flushReports(); assert.equal(f.calls.length, 1); assert.equal(f.reports.length, 1);
 });
+test('persisted READY notifications use one original deadline and cannot repeat a consumed event', async t => {
+  const f = fixture(t, { run: async (input, selection) => envelope(input, selection) });
+  const first = f.event('persisted-ready-1', 'ready'); f.ledger.ingest(first);
+  const bytes = fs.readFileSync(f.ledger.file);
+  assert.equal((await f.controller.notifyPersisted(first.eventId)).status, 'batched');
+  assert.deepEqual(fs.readFileSync(f.ledger.file), bytes, 'Notification reads the existing source rather than ingesting it again');
+  const timer = [...f.timers.values()][0]; assert.equal(timer.delay, 30000);
+  f.advance(10000);
+  const second = f.event('persisted-ready-2', 'ready'); f.ledger.ingest(second);
+  await f.controller.notifyPersisted(second.eventId);
+  await f.controller.notifyPersisted(first.eventId); await f.controller.notifyPersisted(second.eventId);
+  assert.equal(f.timers.size, 1); assert.equal([...f.timers.values()][0], timer); assert.equal(f.calls.length, 0);
+  f.advance(20000); f.timers.clear(); timer.fn(); await f.controller.running;
+  assert.equal(f.calls.length, 1); assert.equal(f.reports.length, 1);
+  assert.deepEqual(f.calls[0].events.map(event => event.eventId), [first.eventId, second.eventId]);
+  assert.equal((await f.controller.notifyPersisted(first.eventId)).status, 'duplicate');
+  assert.equal((await f.controller.notifyPersisted(second.eventId)).status, 'duplicate');
+  assert.equal(f.calls.length, 1); assert.equal(f.reports.length, 1); assert.equal(f.timers.size, 0);
+});
+test('the passive intake can commit a READY before notifying the same ledger owner', async t => {
+  const { ButlerIngress } = require('../butler-ingress.cjs');
+  const f = fixture(t, { run: async (input, selection) => {
+    const rows = fs.readFileSync(f.ledger.file, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.ok(rows.some(row => row.type === 'event' && row.data.eventId === ready.eventId), 'The source is durable before any runner call');
+    return envelope(input, selection);
+  } });
+  const intake = new ButlerIngress(f.directory, { ledger: f.ledger, roomState: { butlerSources: () => [] } });
+  const ready = f.event('intake-ready', 'ready');
+  assert.equal(intake.record(ready).status, 'recorded');
+  assert.equal(intake.status().activation, 'off'); assert.equal(intake.status().recordPeriod, 'off');
+  assert.equal((await f.controller.notifyPersisted(ready.eventId)).status, 'batched');
+  const timer = [...f.timers.values()][0]; assert.equal(timer.delay, 30000); assert.equal(f.calls.length, 0);
+  f.advance(30000); f.timers.clear(); timer.fn(); await f.controller.running;
+  assert.equal(f.calls.length, 1); assert.equal(f.reports.length, 1);
+  assert.equal((await f.controller.notifyPersisted(ready.eventId)).status, 'duplicate');
+});
+test('a persisted READY notification after restart restores its saved deadline', async t => {
+  const f = fixture(t), ready = f.event('persisted-before-restart', 'ready');
+  f.ledger.ingest(ready); await f.controller.close(); f.advance(12000);
+  const restored = f.reopen();
+  assert.equal((await restored.controller.notifyPersisted(ready.eventId)).status, 'batched');
+  const timer = [...f.timers.values()][0]; assert.equal(timer.delay, 18000);
+  await restored.controller.notifyPersisted(ready.eventId); assert.equal(f.timers.size, 1);
+  f.advance(18000); f.timers.clear(); timer.fn(); await restored.controller.running;
+  assert.equal(f.calls.length, 1); assert.equal(f.reports.length, 1);
+  assert.deepEqual(f.reports[0].eventIds, [ready.eventId]);
+});
+test('failed persistence and unknown persisted IDs cannot schedule or run butler work', async t => {
+  const f = fixture(t), event = f.event('unwritten-ready', 'ready');
+  t.mock.method(f.ledger, 'ingest', () => { throw Error('Synthetic source write failure'); });
+  await assert.rejects(f.controller.receive(event), /Synthetic source write failure/);
+  await assert.rejects(f.controller.notifyPersisted(event.eventId), /persisted event/);
+  await assert.rejects(f.controller.notifyPersisted(event), /persisted event/);
+  assert.equal(f.ledger.snapshot().events.length, 0); assert.equal(f.calls.length, 0); assert.equal(f.timers.size, 0);
+});
+test('persisted business notifications never retry a failed batch or authorize recovery replay', async t => {
+  const f = fixture(t, { run: async (input, selection) => envelope(input, selection, '{invalid reply', 0) });
+  const request = f.event('persisted-failure'); f.ledger.ingest(request);
+  assert.equal((await f.controller.notifyPersisted(request.eventId)).status, 'blocked');
+  const batch = f.ledger.snapshot().activeBatch; assert.equal(batch.status, 'failed'); assert.equal(f.calls.length, 1);
+  for (const kind of ['ready', 'request', 'recovery']) {
+    const event = f.event('persisted-after-failure-' + kind, kind); f.ledger.ingest(event);
+    for (let i = 0; i < 2; i++) assert.equal((await f.controller.notifyPersisted(event.eventId)).status, 'awaiting-retry');
+  }
+  assert.equal(f.calls.length, 1); assert.equal(f.timers.size, 0);
+  assert.equal(f.ledger.snapshot().activeBatch.batchId, batch.batchId); assert.equal(f.ledger.snapshot().activeBatch.attempt, 1);
+});
+for (const status of ['failed', 'completed']) test(`a persisted READY notification rechecks a ${status} batch after publication recovery awaits`, async t => {
+  const f = fixture(t), ready = f.event('persisted-publication-race-' + status, 'ready'); f.ledger.ingest(ready);
+  let release; const paused = new Promise(resolve => { release = resolve; });
+  f.controller.recoverPublications = () => paused;
+  const notifying = f.controller.notifyPersisted(ready.eventId);
+  if (status === 'completed') completeFixtureBatch(f, ready, []);
+  else {
+    const batch = f.ledger.beginBatch(selectionFor(f.role)); f.ledger.failBatch(batch.batchId, 'Synthetic concurrent failure');
+  }
+  release({ status: 'ready' });
+  assert.equal((await notifying).status, status === 'completed' ? 'duplicate' : 'awaiting-retry');
+  assert.equal(f.timers.size, 0); assert.equal(f.calls.length, 0);
+});
+test('persisted READY and request notifications during a turn accumulate without concurrent work', async t => {
+  let finish, active = 0, maximum = 0, count = 0;
+  const pause = new Promise(resolve => { finish = resolve; });
+  const f = fixture(t, { run: async (input, selection) => {
+    active++; maximum = Math.max(maximum, active); if (++count === 1) await pause; active--;
+    return envelope(input, selection);
+  } });
+  const first = f.event('persisted-busy-1'); f.ledger.ingest(first);
+  const running = f.controller.notifyPersisted(first.eventId); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.calls.length, 1);
+  const ready = f.event('persisted-busy-ready', 'ready'); f.ledger.ingest(ready);
+  assert.equal((await f.controller.notifyPersisted(ready.eventId)).status, 'batched');
+  await f.controller.notifyPersisted(ready.eventId); assert.equal(f.timers.size, 0);
+  const second = f.event('persisted-busy-2'); f.ledger.ingest(second);
+  const waiting = f.controller.notifyPersisted(second.eventId);
+  finish(); await Promise.all([running, waiting]);
+  assert.equal(count, 2); assert.equal(maximum, 1); assert.equal(f.ledger.pendingEvents().length, 0);
+  assert.equal(f.calls.flatMap(input => input.events).filter(event => event.eventId === ready.eventId).length, 1);
+  assert.equal(f.timers.size, 0);
+});
+test('persisted rule-only facts are consumed locally and consumed notifications stay inert', async t => {
+  const f = fixture(t), event = f.event('persisted-rule', 'failure'); f.ledger.ingest(event);
+  assert.equal((await f.controller.notifyPersisted(event.eventId)).status, 'recorded');
+  assert.equal((await f.controller.notifyPersisted(event.eventId)).status, 'duplicate');
+  assert.equal(f.calls.length, 0); assert.equal(f.timers.size, 0); assert.equal(f.ledger.pendingEvents().length, 0);
+});
+test('a rule-only notification already owned by a running batch does not consume or disrupt it', async t => {
+  let finish; const pause = new Promise(resolve => { finish = resolve; });
+  const f = fixture(t, { run: async (input, selection) => { await pause; return envelope(input, selection); } });
+  const failure = f.event('active-rule', 'failure'), request = f.event('active-rule-request');
+  f.ledger.ingest(failure); f.ledger.ingest(request);
+  const running = f.controller.notifyPersisted(request.eventId); await new Promise(resolve => setImmediate(resolve));
+  const active = f.ledger.snapshot().activeBatch, bytes = fs.readFileSync(f.ledger.file);
+  assert.ok(active.eventIds.includes(failure.eventId)); assert.equal(active.status, 'running');
+  try {
+    const outcome = await f.controller.notifyPersisted(failure.eventId);
+    assert.equal(outcome.status, 'batched'); assert.equal(outcome.batchId, active.batchId);
+    assert.deepEqual(fs.readFileSync(f.ledger.file), bytes);
+    assert.ok(f.ledger.pendingEvents().some(event => event.eventId === failure.eventId));
+    assert.equal(f.calls.length, 1); assert.equal(f.timers.size, 0);
+  } finally { finish(); await running; }
+  const completed = f.ledger.snapshot();
+  assert.equal(completed.batches[0].status, 'completed'); assert.equal(completed.pendingEvents.length, 0);
+  assert.equal(f.calls.length, 1); assert.equal(completed.activeBatch, null);
+});
+test('a rule-only notification in a failed batch stays pending until an explicit retry completes', async t => {
+  let count = 0;
+  const f = fixture(t, { run: async (input, selection) => envelope(input, selection, ++count === 1 ? '{invalid reply' : { actions: [] }, 0) });
+  const failure = f.event('failed-batch-rule', 'failure'), request = f.event('failed-batch-rule-request');
+  f.ledger.ingest(failure); f.ledger.ingest(request);
+  assert.equal((await f.controller.notifyPersisted(request.eventId)).status, 'blocked');
+  const before = f.ledger.snapshot(), bytes = fs.readFileSync(f.ledger.file), active = before.activeBatch;
+  assert.equal(active.status, 'failed'); assert.ok(active.eventIds.includes(failure.eventId));
+  for (let i = 0; i < 2; i++) {
+    const outcome = await f.controller.notifyPersisted(failure.eventId);
+    assert.equal(outcome.status, 'awaiting-retry'); assert.equal(outcome.batchId, active.batchId);
+  }
+  assert.deepEqual(fs.readFileSync(f.ledger.file), bytes); assert.deepEqual(f.ledger.snapshot(), before);
+  assert.equal(f.calls.length, 1); assert.equal(f.timers.size, 0);
+  assert.equal((await f.controller.receive(f.event('explicit-rule-batch-retry', 'recovery'))).status, 'recorded');
+  const completed = f.ledger.snapshot(), original = completed.batches.find(batch => batch.batchId === active.batchId);
+  assert.equal(original.status, 'completed'); assert.equal(original.attempt, 2);
+  assert.equal(completed.pendingEvents.length, 0); assert.equal(completed.activeBatch, null);
+});
+test('a closed controller rejects persisted notification without scheduling or consuming it', async t => {
+  const f = fixture(t), ready = f.event('persisted-after-close', 'ready'); f.ledger.ingest(ready);
+  await f.controller.close();
+  await assert.rejects(f.controller.notifyPersisted(ready.eventId), /closed/);
+  assert.equal(f.calls.length, 0); assert.equal(f.timers.size, 0);
+  assert.deepEqual(f.ledger.pendingEvents().map(event => event.eventId), [ready.eventId]);
+});
 test('requests become unassigned record-only queue proposals and no lifecycle API exists', async t => {
   const f = fixture(t); assert.equal((await f.controller.receive(f.event(1))).status, 'recorded');
   const actions = f.ledger.snapshot().actions; assert.ok(actions.some(a => a.kind === 'queue' && a.spaceId === 'shared')); assert.ok(actions.every(a => a.effect === 'none' && !Object.hasOwn(a, 'assignee')));
