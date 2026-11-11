@@ -173,7 +173,7 @@ let localeProvisional, localeWarning = null, localeHostGeneration = 0;
 const displayLanguage = () => localeProvisional || uiLocale.language(localeSnapshot);
 const displayText = (key, params) => uiLocale.format(displayLanguage(), key, params);
 function broadcastLocale() {
-  const targets = new Set([startupWindow, ...[...windows.values()].map(c => c.win)]);
+  const targets = new Set([startupWindow, ...[...windows.values()].filter(c => !c.background).map(c => c.win)]);
   for (const win of targets) if (win && !win.isDestroyed()) win.webContents.send('workspace:locale', { ...localeSnapshot, startupLanguage: localeProvisional, warning: localeWarning });
 }
 async function readStartupLocale() {
@@ -336,17 +336,28 @@ function flushReveal() {
   if (!context) return;
   const target = pendingReveal; pendingReveal = null;
   if (!backgroundTest) { if (context.win.isMinimized()) context.win.restore(); context.win.show(); context.win.focus(); }
-  context.win.webContents.send('workspace:reveal-record', target);
+  sendToPage(context, 'workspace:reveal-record', target);
 }
 function discardReveal(context) {
   if (!context.uiReady) pendingReveal = null;
+}
+// A background window owns an agent's connection and dialogs but never loads a document. Nothing can
+// receive what is sent to it, and the browser keeps every such message in memory for as long as the window
+// lives. With one such window per agent that had used workspace control, and every state change, terminal
+// chunk and progress line sent to each, that memory, which no process accounts for, grew until the machine
+// ran out (2026-11-10). Everything sent to a window's page goes through here or through pushState.
+function sendToPage(context, channel, ...data) {
+  if (context.background || context.win.isDestroyed()) {
+    return;
+  }
+  context.win.webContents.send(channel, ...data);
 }
 // Every 'workspace:state' send goes through here. Once a window's page has reported that it is ready, one
 // full snapshot is in transit at a time and the newest wins (state-push.cjs); until then, and for a window
 // whose page never reports ready (a background window loads no document), the snapshot is sent as before
 // with sequence 0, which needs no reply.
 function pushState(context, display) {
-  if (context.win.isDestroyed()) {
+  if (context.background || context.win.isDestroyed()) {
     return;
   }
   if (context.statePush) {
@@ -396,8 +407,8 @@ function bindClient(context) {
       for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'queueShared', 'steerShared', 'run'].includes(method), roomId);
     }
   };
-  const send = (channel, ...data) => { if (context.client === client && !win.isDestroyed()) win.webContents.send(channel, ...data); };
-  client.on('state', data => { if (context.client === client && !win.isDestroyed()) {
+  const send = (channel, ...data) => { if (context.client === client) sendToPage(context, channel, ...data); };
+  client.on('state', data => { if (context.client === client && !win.isDestroyed() && !context.background) {
     const display = displayState(data, context);
     pushState(context, display); if (!context.background) { notifyToolWait(data, win); notifyCapacity(display, win); }
   } });
@@ -428,7 +439,7 @@ function displayState(snapshot, context) {
 function reportViewStorage(warning, uiMessage = null) {
   if (viewStorageWarning === warning) return;
   viewStorageWarning = warning; viewStorageWarningUiMessage = uiMessage;
-  for (const { win } of windows.values()) if (!win.isDestroyed()) win.webContents.send('workspace:view-storage', warning, uiMessage);
+  for (const context of windows.values()) sendToPage(context, 'workspace:view-storage', warning, uiMessage);
 }
 // Space task queues: NAW sends each idle member its next item (queue-dispatch.cjs).
 let queueDispatcher = null;
@@ -495,7 +506,7 @@ async function broadcastRoom() {
   }));
 }
 function broadcastName(id, name) {
-  for (const context of windows.values()) if (!context.win.isDestroyed()) context.win.webContents.send('workspace:session-name', { id, name });
+  for (const context of windows.values()) sendToPage(context, 'workspace:session-name', { id, name });
 }
 
 let readingSaveTimer, readingSavePromise, finishReadingSave, failReadingSave;
@@ -771,11 +782,11 @@ async function replaceBackendSockets(key) {
   } catch (error) { for (const replacement of replacements) replacement.client.close(); throw error; }
   for (const { context, client, state } of replacements) {
     context.client.replaceService(key, client, state);
-    if (!context.client.socket.destroyed && !context.win.isDestroyed()) {
+    if (!context.client.socket.destroyed && !context.win.isDestroyed() && !context.background) {
       const refreshed = displayState(await context.client.refresh(), context);
       // This complete state is newer than any snapshot still waiting behind the bound.
       context.statePush?.discardWaiting();
-      context.win.webContents.send('workspace:reconnected', refreshed);
+      sendToPage(context, 'workspace:reconnected', refreshed);
     }
   }
 }
@@ -880,7 +891,7 @@ async function autoBackendSwitchOnce() {
       notice = error.continuationReconnectFailed ? { backend, reconnectFailed: true }
         : { backend, error: error.message || '后台更新未完成。', errorUiMessage: error.message ? uiLocale.displayMessage(error.uiMessage) : uiError('error.backendAutoUpdateIncomplete').uiMessage };
     }
-    for (const context of windows.values()) if (!context.win.isDestroyed()) context.win.webContents.send('workspace:backend-switched', notice);
+    for (const context of windows.values()) sendToPage(context, 'workspace:backend-switched', notice);
     return;
   }
   const option = queueRules.nextBackendMove(options, settings, sessions, humanAt, Date.now(), autoSwitchFailed, migrateQuietMs(), migrateUnprovenQuietMs());
@@ -927,7 +938,7 @@ async function autoBackendSwitchOnce() {
     notice = { error: error.message || '后台更新未完成。', errorUiMessage: error.message ? uiLocale.displayMessage(error.uiMessage) : uiError('error.backendAutoUpdateIncomplete').uiMessage };
     recordMigrationFailure(option, screens, error, startedAt);
   }
-  for (const context of windows.values()) if (!context.win.isDestroyed()) context.win.webContents.send('workspace:backend-switched', notice);
+  for (const context of windows.values()) sendToPage(context, 'workspace:backend-switched', notice);
 }
 let backendSwitchTimer;
 async function boot() {
