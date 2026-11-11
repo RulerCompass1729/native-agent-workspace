@@ -39,7 +39,7 @@ function fixture(t, provider = 'codex') {
   const binding = (n = 0) => ({ sender: { id: actors[n].id, nativeId: actors[n].nativeId, provider: actors[n].provider, name: actors[n].name }, identity: { callId: 'native-call-' + n, turnId: 'native-turn' }, valid: () => true });
   const controller = new BackgroundControl({ dataDir: dir, handlers, confirmation: () => ({ message: 'Maintenance', buttons: ['Cancel', 'Confirm'], cancelId: 0 }), audit() {},
     confirmationPending: row => notices.push(row), context: async owner => {
-      const c = { background: true, actor: owner, view: {}, client, checkActor() {}, refresh: client.refresh, win: { destroy() {} },
+      const c = { background: true, actor: owner, view: {}, client, checkActor() {}, refresh: client.refresh, win: { destroy() {}, isDestroyed: () => false },
         confirmationActors: () => state.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, archived: s.archived, nativeContextPending: s.nativeContextPending })),
         fingerprint: args => ({ sessions: state.sessions.filter(s => args.arguments.includes(s.id)).map(s => ({ id: s.id, nativeId: s.nativeId })), targetRevision: 1 }) };
       contexts.set(owner.id, c); return c;
@@ -150,4 +150,37 @@ test('failed refresh while admitting a dialog leaves a refusal, not a running op
   c.refresh = async () => {};
   const duplicate = await f.controller.call(f.binding(), args); assert.equal(duplicate.duplicate, true); assert.equal(duplicate.retryWithNewOperationId, true);
   assert.equal((await f.controller.call(f.binding(), { ...args, operation_id: 'fresh-after-refresh' })).state, 'confirmation-required');
+});
+for (const provider of ['claude', 'codex']) test(`${provider}: 33 real chooseFolder calls without paths leave normal confirmations available`, async t => {
+  const f = fixture(t, provider);
+  vm.runInContext(part("  register('chooseFolder',", "  register('newWindow',"), f.scope);
+  const results = [];
+  for (let n = 0; n < 33; n++) results.push(await f.controller.call(f.binding(), { action: 'invoke', method: 'chooseFolder', arguments: [], operation_id: 'folder-' + n }));
+  const stop = await f.controller.call(f.binding(), command('stop')); assert.equal(stop.state, 'confirmation-required', 'A normal card remains available after all 33 selector attempts');
+  for (const result of results) {
+    assert.equal(result.state, 'not-executed'); assert.equal(result.reason, 'explicit-paths-required'); assert.equal(result.confirmation, undefined);
+  }
+  assert.equal(f.notices.length, 1); assert.equal(f.controller.data.records.filter(r => r.state === 'confirmation-required').length, 1);
+  assert.equal((await f.controller.decide(stop.actor.id, stop.actor.nativeId, stop.id, 0)).state, 'cancelled');
+  const chosen = await f.controller.call(f.binding(), { action: 'invoke', method: 'chooseFolder', arguments: [], operation_id: 'folder-with-path', paths: [f.dir] });
+  assert.equal(chosen.state, 'complete'); assert.equal(chosen.value, f.dir); assert.equal(f.notices.length, 1);
+});
+for (const provider of ['claude', 'codex']) test(`${provider}: legacy open and save cards cannot exhaust the per-actor or global limit after restart`, async t => {
+  const f = fixture(t, provider); await seed(f, 'stop', [32, 32, 32, 32]);
+  f.controller.commit(data => { for (const [n, row] of data.records.entries()) {
+    row.confirmation = { kind: n % 2 ? 'open' : 'save', options: {} }; delete row.confirmationNotifiedAt;
+    row.command = { action: 'invoke', method: n % 2 ? 'chooseFolder' : 'saveSelector', arguments: [], operation_id: row.id };
+  } });
+  const cold = new BackgroundControl({ dataDir: f.dir, handlers: f.handlers, context: owner => f.controller.view(owner), confirmationPending: row => f.notices.push(row) });
+  const pending = await cold.call(f.binding(), command('stop')); assert.equal(pending.state, 'confirmation-required'); assert.equal(f.notices.length, 2);
+  assert.equal((await cold.decide(pending.actor.id, pending.actor.nativeId, pending.id, 0)).state, 'cancelled');
+  assert.equal(f.effects.length, 0);
+});
+test('a missing save path returns a refusal instead of an unanswerable card', async t => {
+  const f = fixture(t); f.handlers.set('saveSelector', c => dialog(c, 'save', { defaultPath: 'copy.txt' }));
+  const args = { action: 'invoke', method: 'saveSelector', arguments: [], operation_id: 'missing-save-path' };
+  const result = await f.controller.call(f.binding(), args);
+  assert.equal(result.state, 'not-executed'); assert.equal(result.reason, 'explicit-paths-required'); assert.equal(result.confirmation, undefined);
+  assert.match(result.error, /explicit.*paths/); assert.equal(f.notices.length, 0);
+  assert.equal((await f.controller.call(f.binding(), args)).duplicate, true);
 });

@@ -219,7 +219,7 @@ class BackgroundControl {
       return 'originating-session-unavailable';
     const key = this.key(actor), pending = this.data.records.filter(r =>
       !(r.id === args.operation_id && this.key(r.actor) === key) &&
-      (r.state === 'confirmation-required' || r.state === 'running' && operation.maintenanceAction(r.command.method, r.command.arguments, r.actor)) &&
+      (r.state === 'confirmation-required' && r.confirmation?.kind === 'message' || r.state === 'running' && operation.maintenanceAction(r.command.method, r.command.arguments, r.actor)) &&
       sessions.some(s => s.id === r.actor.id && s.nativeId === r.actor.nativeId && !s.archived && !s.nativeContextPending));
     return pending.length >= MAX_PENDING || pending.filter(r => this.key(r.actor) === key).length >= MAX_PENDING_PER_ACTOR ? 'confirmation-limit' : null;
   }
@@ -350,7 +350,7 @@ class BackgroundControl {
         delivery = await context.delivery?.(args, value, actor, row.guard);
         state = delivery ? delivery.nativeReceived ? 'received' : 'awaiting-native' : 'complete';
       } catch (e) {
-        if (e instanceof ConfirmationRequired) {
+        if (e instanceof ConfirmationRequired && e.confirmation?.kind === 'message') {
           // Refresh first; the quota decision and pending-row commit below have
           // no await between them. Concurrent actors cannot both take slot128.
           try {
@@ -363,6 +363,10 @@ class BackgroundControl {
             refusal = refusalDetails('originating-session-unavailable'); state = refusal.state;
             error = String(refreshError.message || 'The originating session could not be refreshed').slice(0, 2048);
           }
+        }
+        else if (e instanceof ConfirmationRequired) {
+          refusal = refusalDetails('explicit-paths-required'); state = refusal.state;
+          error = 'Background file selection requires explicit absolute paths on a new operation_id.';
         }
         else { state = 'unconfirmed'; error = typeof e.message === 'string' ? e.message.slice(0, 2048) : 'Operation outcome is unconfirmed'; }
       }

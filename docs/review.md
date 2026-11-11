@@ -1,5 +1,17 @@
 # Review and issue record
 
+**S2 selector-card quota repair, 2026-11-11 (delta review pending):**
+only answerable message confirmations consume the 32/128 pending-card bound,
+along with existing maintenance intents already running. Legacy open/save
+selection records remain readable across restart but do not reserve slots.
+New background file selectors without explicit paths return not-executed with
+an explicit-paths-required reason and no confirmation or notification, since
+the inline human decision handler cannot answer a native picker. Explicit
+paths retain their existing validation and handler; human windows are unchanged.
+Both providers have regressions for 33 actual chooseFolder requests followed by
+a working message confirmation, legacy global/per-actor exhaustion after
+restart, and a missing save path. Existing admitted message cards still count.
+
 **S2 shared confirmation admission, 2026-11-11 (delta review pending):**
 all requests that reach a background human dialog now share the same native
 actor eligibility and 32-per-actor / 128-global pending-card bound. This also
