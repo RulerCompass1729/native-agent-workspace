@@ -4,10 +4,11 @@ const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real Electron + real Claude CLI; canned responses are served on loopback.
 // No paid inference, user profile edits, global keyboard input, or foregrounding.
-const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
 const installed = Boolean(process.env.NAW_APP_EXECUTABLE);
 const { _electron } = testScratch.playwright(installed ? { _electron: require('./fixtures/installed-renderer.cjs') } : require('playwright'));
+const loopback = require('./fixtures/loopback-model.cjs');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connectService } = require(path.join(code, 'app/service-client.cjs'));
 const { executable, processIdentity } = require(path.join(code, 'app/platform.cjs'));
@@ -25,7 +26,11 @@ const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), confi
 for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
 const located = executable('claude'), binary = located && fs.realpathSync(located); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, inlineTrial ? /^2\.1\.312\b/ : noModelServer ? /^2\.1\.(308|309|310|311|316|317|318|319(?=\s|$))\b/ : /^2\.1\.(308|309|310|311)\b/, 'Verify the updated native contract before sending a test task');
+// Each journey runs only on the exact versions it was verified on (app/tests/claude-319-contract.test.cjs pins this
+// line). The third list covers the queue journey, solo and shared, and the shared model-only journey; all three
+// passed on exact 2.1.322 on 2026-11-10 inside the loopback fixture's sandbox. The product also qualifies queueing
+// on 318, 319 and 321, which are not installed and have not been run.
+assert.match(nativeVersion, inlineTrial ? /^2\.1\.312\b/ : noModelServer ? /^2\.1\.(308|309|310|311|316|317|318|319(?=\s|$))\b/ : /^2\.1\.(308|309|310|311|322(?=\s|$))\b/, 'Verify the updated native contract before sending a test task');
 let application, page, client, calls = 0, held, releaseFinal, pausedNative;
 let budgetError, toolMarker;
 const errors = [], checks = [];
@@ -39,8 +44,9 @@ function block(res, index, content) {
   event(res, 'content_block_delta', { index, delta: content.type === 'text' ? { type: 'text_delta', text: content.text } : { type: 'input_json_delta', partial_json: JSON.stringify(content.input) } });
   event(res, 'content_block_stop', { index });
 }
-const server = http.createServer((req, res) => {
-  let body = ''; req.on('data', data => body += data); req.on('end', async () => {
+// The one B11 loopback fixture: 127.0.0.1, random port, sandboxed CLI, fixed responses below.
+const fixture = loopback.create({ directory: base, provider: 'claude', respond: async (req, res, body) => {
+  {
     if (!req.url.startsWith('/v1/messages') || req.url.includes('count_tokens')) {
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ input_tokens: 100, data: [] })); return;
     }
@@ -61,8 +67,8 @@ const server = http.createServer((req, res) => {
       event(res, 'message_stop', {}); res.end();
     };
     if (number === 1) { held = res; if (inlineTool) finish(); else releaseFinal = finish; } else finish();
-  });
-});
+  }
+} });
 const snapshot = () => client.call('initial');
 function resumeNative() {
   if (!pausedNative) return;
@@ -82,17 +88,20 @@ async function cleanup() {
   releaseFinal?.(); held?.destroy();
   if (application) await application.close().catch(() => {});
   if (client) { try { for (const s of (await snapshot()).sessions) await client.call('stop', s.id); await client.call('shutdown'); } finally { client.close(); } }
-  server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+  await fixture.stop();
 }
 (async () => {
-  if (!noModelServer) await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const modelEndpoint = noModelServer ? 'http://127.0.0.1:9' : `http://127.0.0.1:${server.address().port}`;
+  // Every journey runs the CLI inside the fixture's sandbox. The model-only journey sends no task: any model
+  // request there is refused by the response budget above and fails the run.
+  await fixture.start(); await fixture.preflight();
   const shim = path.join(base, 'claude-local');
   // A selected executable is the supported native-discovery setting. No
   // production adapter methods are replaced by this test.
-  fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\nos.environ.pop("ANTHROPIC_AUTH_TOKEN",None)\nos.environ.pop("CLAUDE_CODE_OAUTH_TOKEN",None)\nos.environ.update(' +
-    `ANTHROPIC_BASE_URL=${JSON.stringify(modelEndpoint)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",DISABLE_AUTOUPDATER="1")\n` +
-    `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+${JSON.stringify(inlineTool ? ['--model', 'haiku', '--permission-mode', 'default', '--allowedTools', 'Bash(printf:*)', 'Bash(sleep:*)'] : ['--model', 'haiku', '--allowedTools', 'Bash(printf:*)'])})\n`, { mode: 0o700 });
+  // --allowedTools takes several values, so --model follows it: the session arguments NAW adds come after these,
+  // and a --model or --permission-mode of NAW's own would now win over these.
+  fixture.wrapper(binary, { file: shim, env: { CLAUDE_CONFIG_DIR: config }, args: inlineTool
+    ? ['--permission-mode', 'default', '--allowedTools', 'Bash(printf:*)', 'Bash(sleep:*)', '--model', 'haiku']
+    : ['--allowedTools', 'Bash(printf:*)', '--model', 'haiku'] });
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim }), { mode: 0o600 });
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
@@ -122,9 +131,9 @@ async function cleanup() {
   if (modelOnly) {
     await require('./native-model-check.cjs')({ page, snapshot, base });
     assert.equal(calls, 0); assert.deepEqual(errors, []);
-    if (noModelServer) { assert.equal(server.listening, false); assert.equal((await snapshot()).diagnostics.dispatches, 0); }
-    // With no responder, calls is not a measurement of attempted HTTP requests.
-    console.log(JSON.stringify({ checks: ['Native model switches and GUI reload preserve identity/draft and match actual header'], nativeVersion, modelCalls: noModelServer ? undefined : calls, modelResponderStarted: !noModelServer, guiDispatches: (await snapshot()).diagnostics.dispatches, errors, evidence: base })); return;
+    if (noModelServer) assert.equal((await snapshot()).diagnostics.dispatches, 0);
+    fixture.assertClean();
+    console.log(JSON.stringify({ checks: ['Native model switches and GUI reload preserve identity/draft and match actual header'], nativeVersion, modelCalls: calls, fixture: fixture.summary(), guiDispatches: (await snapshot()).diagnostics.dispatches, errors, evidence: base })); return;
   }
   const before = (await snapshot()).sessions[0];
   assert.equal(before.queueAvailable, true);
@@ -188,7 +197,7 @@ async function cleanup() {
     if (inlineTool) assert.equal(await page.locator('#messages .message').filter({ has: page.locator('.message-body').filter({ hasText: text }) }).locator('.message-heading strong').first().innerText(), '原生会话', 'Native framing is not labeled as human-authored');
     fs.writeFileSync(path.join(base, 'native-inline-completed.json'), JSON.stringify({ before, after, rows, calls, errors }, null, 2));
     if (process.env.NAW_EVIDENCE_DIR) await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-inline.png') });
-    assert.deepEqual(errors, []); console.log(JSON.stringify({ checks: ['Real312 queued input reaches the model once and its exact native accepted rendering appears once under the original UUID'], nativeVersion, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
+    assert.deepEqual(errors, []); fixture.assertClean(); console.log(JSON.stringify({ fixture: fixture.summary(), checks: ['Real312 queued input reaches the model once and its exact native accepted rendering appears once under the original UUID'], nativeVersion, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
   }
   await until(async () => (await page.locator('#send-button').innerText()) === '等本轮结束后发送 ↑', 'Working composer receives state');
   // A draft in the native prompt makes native refuse a queued send before holding it.
@@ -208,6 +217,10 @@ async function cleanup() {
   const owned = (await snapshot()).sessions.find(s => s.id === before.id);
   assert.equal(owned.nativeId, before.nativeId); assert.equal(owned.pid, before.pid);
   pausedNative = processIdentity(owned.pid); assert.ok(pausedNative);
+  // The sandbox wrapper replaces itself with the CLI under the same pid: the paused process is this session's own CLI.
+  const pausedCommand = testScratch.childProcess.execFileSync('/bin/ps', ['-ww', '-o', 'args=', '-p', String(pausedNative.pid)], { encoding: 'utf8' });
+  assert.ok(pausedCommand.includes(binary) && pausedCommand.includes(before.nativeId), 'The paused process is the native CLI of this session');
+  assert.doesNotMatch(pausedCommand, /(^|\/)sandbox-exec\s/, 'The paused process is the CLI, not the sandbox wrapper that started it');
   process.kill(pausedNative.pid, 'SIGSTOP');
   try {
     await page.locator(send).click();
@@ -307,7 +320,8 @@ async function cleanup() {
   assert.match(terminal, /Run the original local task/); assert.match(terminal, /Do the next local task/); assert.match(terminal, /QUEUED_NATIVE_REPLY/);
   assert.equal(calls, 2); assert.deepEqual(errors, []);
   checks.push('Actual native terminal and main conversation contain the same two inputs and replies');
-  console.log(JSON.stringify({ checks, shared, nativeVersion, localResponses: calls, paidModelCalls: 0, errors, evidence: base }));
+  fixture.assertClean();
+  console.log(JSON.stringify({ checks, shared, nativeVersion, fixture: fixture.summary(), localResponses: calls, paidModelCalls: 0, errors, evidence: base }));
 })().catch(async error => {
   if (page && !page.isClosed()) { await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
