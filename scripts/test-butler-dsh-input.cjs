@@ -106,6 +106,13 @@ const outcomes = [];
         await controller.receive({ ...event, eventId: 'second', sourceRef: 'second' });
         assert.equal(receivedBytes.length, 1); assert.equal(prices, 0);
         ledgerEvidence = { batchStatus: snapshot.activeBatch.status, usage: snapshot.attempts[0].usage, notices: notices.map(n => n.reason), subsequentRequests: receivedBytes.length - beforeNext };
+      } else if (mode === 'accumulated-input') {
+        const result = await driver.run(input, expected());
+        assert.equal(result.failureCode, null); assert.deepEqual(result.reply, { actions: [] });
+        assert.equal(result.readBudget.exhausted, true); assert.equal(result.readBudget.withheldResults, 1);
+        assert.ok(result.readBudget.skippedReads > 0); assert.equal(result.usage.tokensComplete, true);
+        assert.equal(receivedBytes.length, 7); assert.equal(prices, 1);
+        assert.ok(receivedBytes.every(n => n <= 262144));
       } else if (mode === 'small-error') {
         assert.deepEqual((await driver.run(input, expected())).reply, { actions: [] });
         assert.equal(receivedBytes.length, 2); assert.equal(prices, 1);
@@ -120,7 +127,6 @@ const outcomes = [];
         assert.equal(prices, 0);
         assert.ok(receivedBytes.every(n => n <= 262144));
         if (['large-tool', 'error-tool'].includes(mode)) assert.equal(receivedBytes.length, 1);
-        if (mode === 'accumulated-input') assert.ok(receivedBytes.length >= 2 && receivedBytes.length < 7);
         if (mode === 'escaped-input' || mode === 'large-schema') assert.equal(receivedBytes.length, 0);
       }
       assert.equal(fixtureError, undefined);

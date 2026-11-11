@@ -85,6 +85,7 @@ async function build() {
       'butler-dsh-input.cjs',
       'butler-dsh-launch.py',
       'butler-dsh-privacy.cjs',
+      'butler-dsh-read-budget.cjs',
       'butler-dsh-usage.cjs',
       'butler-ingress.cjs',
       'butler-ledger.cjs',

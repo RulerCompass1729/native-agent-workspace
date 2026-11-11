@@ -145,9 +145,29 @@ provider cache hits and prices are unmeasured. This preserves a stable semantic
 prefix rather than claiming a measured cost saving. The budget is regenerated rather than stored
 in DSH history. It tells the model to read fewer records, leave space for its own
 reply/envelopes, and finish with an unread cursor if the next page cannot fit.
-The local fixture uses actual ButlerBusiness pages, quotes/backslashes and a
-large initial batch; it reads the budget and finishes before overflow. This is
-proof of the signal and wire behavior, not proof that a live model obeys it.
+The host also enforces admission before a tool result enters conversation history.
+It retains the adapter's actual previous JSON body, projects the current text-only
+assistant/tool step with the pinned adapter's serialization rules, and measures
+the next complete wire body with the same capacity-note serializer. All pending
+calls reserve a short refusal result. A whole result is admitted only with 64 KiB
+left for reply/envelopes; a page that does not fit is withheld in full and replaced
+by explicit feedback. No records are truncated and no cursor is invented. After
+exhaustion, further reads in that batch are denied before MCP execution. The
+model is told to retain its original query/cursor for a later batch and not mark
+an unreceived page processed. No automatic retry is added.
+
+This uses DSH's existing pre/post-execution policy hooks, not a change to Business
+permissions, schema or pagination. A Business-approved page is already counted
+and logged, even when the host withholds it; there is no quota refund or audit
+deletion. Rotation clears only the host's per-batch admission state. The actual
+shared audit uses the trusted host data directory across sessions.
+
+The live loopback fixture runs actual Business -> MCP -> DSH with roughly 60 KiB
+pages: obedient sequential reads, repeated reads ignoring the note, six calls in
+one assistant step and a heavily escaped batch. It checks whole-page equality,
+no MCP calls after exhaustion, confirmed usage, a completed core ledger batch
+without unknown-cost notifications, and rotation without resetting daily quota.
+No live model is used or assumed to follow the advisory.
 
 Every complete body is still limited to 256 KiB. Nothing is transmitted on
 refusal, and the eight-transport-attempt limit still counts internal resends.
@@ -155,8 +175,11 @@ Every final tool projection has its own 128 KiB ceiling and 512 KiB per batch;
 the whole-body check also covers fields DSH adds outside that projection. The
 core's durable 64-page UTC-day budget is separate; session rotation cannot reset
 it. Real page sizes and escaping matter, so there is no fixed pages-per-batch
-promise. Ignoring the budget can still fail a batch, with confirmed usage retained
-and no automatic retry. Byte limits are not exact token or spending limits.
+promise. Admitted pages cannot consume the reserved headroom. This is not a
+promise that arbitrary model output or unlimited repeated refusals can complete:
+the eight-request limit, malformed/non-text content and oversized single tool
+results still fail closed, with measured usage retained and no automatic retry.
+Byte limits are not exact token or spending limits.
 
 Only text is supported. Unexpected endpoints, Files requests, body types and
 non-text tool results fail closed. An oversized result may remain in the isolated
@@ -243,3 +266,9 @@ ButlerDshDriver, DSH host and MCP child (owned process-group kill), plus a real
 driver with its exit callback deliberately withheld (desktop deadline). The
 separate hidden GUI check verifies notice rendering; this does not claim a full
 GUI quit with an activated production butler.
+
+`env -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL node scripts/test-butler-dsh-read-budget.cjs`
+exercises live synthetic business pages, host admission and core ledger behavior
+in an owned loopback-only sandbox; synthetic price zero is a fixture, not a
+production pricing qualification. The dedicated host returns bounded read-budget
+counts separately from model JSON for verification.

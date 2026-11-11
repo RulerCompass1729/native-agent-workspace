@@ -145,7 +145,7 @@ class ButlerDshDriver {
         // Unknown pricing cannot discard already measured tokens or become $0.
         result.usage.costMicros = cost; result.usage.estimated = cost !== null;
       }
-      return { batchId, attempt, selection: expected, reply: result.reply, usage: result.usage, failureCode: result.failureCode || null };
+      return { batchId, attempt, selection: expected, reply: result.reply, usage: result.usage, readBudget: result.readBudget, failureCode: result.failureCode || null };
     } finally { this.active = false; }
   }
   async rotate() {

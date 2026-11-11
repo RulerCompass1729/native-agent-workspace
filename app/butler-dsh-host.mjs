@@ -16,8 +16,9 @@ const errorCode = code => ({ code, message: code === 'credential-missing'
 // Do not serialize provider errors: upstream errors can include response bodies.
 const fail = code => Object.assign(Error(code), { code });
 const { ButlerInputBoundary, encodedBatchBytes, MAX_BATCH_INPUT_BYTES, MAX_TOOL_SCHEMA_BYTES } = require('./butler-dsh-input.cjs');
+const { ButlerReadBudget } = require('./butler-dsh-read-budget.cjs');
 const { settledUsage } = require('./butler-dsh-usage.cjs');
-let boundaryFailure = null, inputBoundary;
+let boundaryFailure = null, inputBoundary, readBudget;
 let ctx, handle, nativeId, allowedTools = [], requestCount = 0, consumed = false, initialized = false, closing = false;
 async function close() {
   if (closing) return; closing = true;
@@ -33,7 +34,7 @@ process.on('SIGTERM', close); process.stdin.on('end', close);
 async function newSession() {
   await handle?.dispose();
   nativeId = 'dsh-' + randomUUID(); consumed = false; requestCount = 0; boundaryFailure = null;
-  inputBoundary.reset();
+  inputBoundary.reset(); readBudget.reset();
   handle = await ctx.agents.create({ sessionId: nativeId, meta: { cwd: home },
     agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-pro', maxTokens: 4096, reasoningEffort: 'off' } });
   await handle.agent.whenIdle();
@@ -54,6 +55,7 @@ async function initialize(config) {
   if (config.fixtureEndpoint != null && (!/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(config.fixtureEndpoint) || new URL(config.fixtureEndpoint).port > 65535)) throw fail('endpoint-invalid');
   process.env.DEEPSEEK_BASE_URL = config.fixtureEndpoint || 'https://api.deepseek.com/anthropic';
   inputBoundary = new ButlerInputBoundary(process.env.DEEPSEEK_BASE_URL + '/v1/messages');
+  readBudget = new ButlerReadBudget(inputBoundary);
   // The pinned adapter uses global fetch. Guard the final serialized body in
   // this dedicated process only; no credentials or response content are read.
   globalThis.fetch = inputBoundary.wrapFetch(globalThis.fetch.bind(globalThis));
@@ -73,7 +75,14 @@ async function initialize(config) {
   for (const [name, options] of manifest) { const mod = await import('@deepseek-ai/dsh-' + name); await ctx.plugin(mod.default ?? mod, options); }
   privacy.assertApplied();
   allowedTools = [...mcp.tools];
-  ctx.on('tools/pre-execute', (exec, next) => { inputBoundary.assertHealthy(); return next(); });
+  ctx.on('tools/pre-execute', (exec, next) => {
+    const reason = readBudget.before(exec, handle.agent.session.deriveMessages());
+    return reason ? { kind: 'deny', reason } : next();
+  });
+  ctx.on('tools/post-execute', (exec, result, next) => {
+    const decision = readBudget.after(exec, result, handle.agent.session.deriveMessages());
+    return decision || next();
+  });
   // rc.2 invokes final-result observers synchronously, including tool errors
   // and final content projections. Latch failure before any subsequent call;
   // observer exceptions alone cannot stop the DSH loop.
@@ -85,6 +94,7 @@ async function initialize(config) {
     if (requestCount >= 8 || options.provider !== 'deepseek-official' || options.model !== 'deepseek-v4-pro') {
       boundaryFailure = 'request-boundary'; throw fail(boundaryFailure);
     }
+    readBudget.beginStep(handle.agent.session.deriveMessages());
     requestCount++;
     yield* next();
   });
@@ -115,7 +125,7 @@ async function run(request) {
   const text = messages.at(-1)?.content.filter(b => b.type === 'text').map(b => b.text).join('');
   // Only model JSON enters reply. Identity/attempt/metering come from the host.
   let reply; try { reply = end?.kind === 'completed' ? JSON.parse(text) : null; } catch { reply = null; }
-  return { nativeId, reply, usage, usageComplete, failureCode, completed: end?.kind === 'completed', requestCount, settledUsageRows: rows.length };
+  return { nativeId, reply, usage, usageComplete, failureCode, completed: end?.kind === 'completed', requestCount, settledUsageRows: rows.length, readBudget: readBudget.summary() };
 }
 let buffer = '', flight = false;
 process.stdin.setEncoding('utf8');
