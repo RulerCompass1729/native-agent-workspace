@@ -4,6 +4,10 @@
 (function (root, factory) { const api = factory(); if (typeof module === 'object' && module.exports) module.exports = api; else root.nativeWorkspaceButlerReadsView = api; })(typeof self !== 'undefined' ? self : globalThis, function () {
   // The core's allowance of pages per UTC day and the most records one page can hold (app/butler-read-audit.cjs).
   const PAGES_PER_DAY = 64, RECORDS_PER_PAGE = 50;
+  // The most one log record can take (the core's MAX_RECORD_BYTES). The core refuses a page when its own record does
+  // not fit in what is left: with this much room or more no page is refused for room, with less a page can be (usually
+  // those that return more first, their records tending to be longer), and at the cap every page is.
+  const RECORD_BYTES = 128 * 1024;
   // From this many pages left the count is marked; the number itself is always shown.
   const NEAR_LEFT = 8;
   const KINDS = Object.freeze(['spaces', 'queue', 'deliveries']);
@@ -35,11 +39,18 @@
       space: spaceId === null ? null : { id: spaceId, short: spaceId.length > 12 ? spaceId.slice(0, 8) + '…' : spaceId, name: typeof name === 'string' && name ? name : null },
       window, count: result.count, more: result.truncated, revision: actor.selectionRevision };
   }
+  // How full the log file is, as the core reports it with a read of the log (its own prewarning, not a threshold of
+  // this view), or null when the answer carries no such report or one that does not add up: then nothing is said.
+  function storageView(value) {
+    if (!value || !count(value.usedBytes) || !count(value.maxBytes) || value.maxBytes === 0 || !count(value.remainingBytes) ||
+        value.usedBytes + value.remainingBytes !== value.maxBytes || typeof value.warning !== 'boolean') return null;
+    return { usedBytes: value.usedBytes, maxBytes: value.maxBytes, warning: value.warning, full: value.remainingBytes < RECORD_BYTES };
+  }
   // records: every record loaded so far, in any order; the newest one must be among them for today's count.
   // through: the log's highest sequence (throughSequence). now: the window's clock. spaceNames: id -> name the
   // window itself knows, or nothing. zone: minutes east of UTC at a given moment (the window's own by default).
   // Every time shown is local, as "MM-DD HH:MM"; the allowance is counted per UTC day, so each day says its local span.
-  function readsView({ records, through, now, spaceNames, zone = ownZone }) {
+  function readsView({ records, through, now, spaceNames, zone = ownZone, storage }) {
     const local = time => { let offset; try { offset = zone(time); } catch { return null; } const value = Number.isFinite(offset) ? iso(time + offset * 60000) : null; return value ? value.slice(5, 16).replace('T', ' ') : null; };
     const today = utcDay(now), rows = [], seen = new Set(); let unreadable = 0, reached = count(through) && through === 0;
     for (const record of Array.isArray(records) ? records : []) {
@@ -67,11 +78,11 @@
         from: span(today).from, resets: span(today).through },
       // newest: the log's newest record is on screen, so "the newest N" can be said. reached: it was at least read,
       // so "newer ones were not reached" would be false.
-      days, total: count(through) ? through : null, shown: rows.length, newest: complete, reached, unreadable, hasOlder: Boolean(oldest) && oldest.sequence > 1 };
+      days, total: count(through) ? through : null, shown: rows.length, newest: complete, reached, unreadable, storage: storageView(storage), hasOlder: Boolean(oldest) && oldest.sequence > 1 };
   }
   // Which page to ask for next. The log only pages forward, so the newest records are reached by position.
   const PAGE = 50;
   function tailRequest(through) { return { afterSequence: Math.max(0, through - PAGE), limit: PAGE }; }
   function olderRequest(oldestSequence) { const end = oldestSequence - 1, start = Math.max(0, end - PAGE); return end < 1 ? null : { afterSequence: start, limit: end - start }; }
-  return Object.freeze({ readsView, tailRequest, olderRequest, PAGES_PER_DAY, RECORDS_PER_PAGE, NEAR_LEFT, PAGE, KINDS });
+  return Object.freeze({ readsView, tailRequest, olderRequest, PAGES_PER_DAY, RECORDS_PER_PAGE, RECORD_BYTES, NEAR_LEFT, PAGE, KINDS });
 });

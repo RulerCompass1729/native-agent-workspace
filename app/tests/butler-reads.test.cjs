@@ -48,7 +48,7 @@ const few = t => records(t, page => { const morning = NOW - 2 * 3600 * 1000;
   page(morning + 9 * MINUTE, 'deliveries', { spaceId: SPACE, count: 4 }); page(morning + 80 * MINUTE, 'queue', { spaceId: 'shared', count: 0 }); });
 // Twenty-five minutes apart: at most 58 pages fall into one UTC day, under the core's 64.
 const many = (t, pages = 96) => records(t, page => { for (let index = 0; index < pages; index++) page(MIDNIGHT - DAY + 600 * 1000 + index * 25 * MINUTE, index % 2 ? 'queue' : 'spaces', { spaceId: SPACE }); });
-function fixture(log, { fail = () => false, display, text, now = () => NOW, spaceName = id => ({ shared: '默认空间', [SPACE]: '发版准备' })[id], breakTable = () => false } = {}) {
+function fixture(log, { fail = () => false, display, text, storage, now = () => NOW, spaceName = id => ({ shared: '默认空间', [SPACE]: '发版准备' })[id], breakTable = () => false } = {}) {
   const page = { activeElement: null, created: [], createElement(tag) { if (tag === 'table' && breakTable()) throw Error('The page cannot build a table'); page.created.push(tag); return new Element(tag, page); } }, dialog = new Element('dialog', page), body = new Element('body', page); dialog.id = 'butler-reads-dialog'; body.append(dialog);
   const calls = [], state = { log, pending: null };
   // Anything but the one existing person-only call is a failure of this test.
@@ -61,14 +61,14 @@ function fixture(log, { fail = () => false, display, text, now = () => NOW, spac
       const failure = fail(calls.length, options); if (failure === true) throw Error('/PRIVATE_IPC_PATH'); if (failure && Object.hasOwn(failure, 'answer')) return failure.answer;
       const afterSequence = options.afterSequence ?? 0, limit = options.limit ?? 50, through = state.log.length;
       const found = state.log.filter(record => record.sequence > afterSequence).slice(0, limit), nextAfterSequence = found.at(-1)?.sequence ?? afterSequence;
-      return { records: found, throughSequence: through, nextAfterSequence, truncated: nextAfterSequence < through };
+      return { records: found, throughSequence: through, nextAfterSequence, truncated: nextAfterSequence < through, ...(storage ? { storage: storage() } : {}) };
     };
   } });
   const reads = bind({ dialog, document: page, api, now, zone: () => -480, display, text, spaceName });
   const find = cls => dialog.all().filter(node => node.className.split(' ').includes(cls)), button = action => dialog.all().find(node => node.tag === 'button' && node.dataset.action === action);
   const rows = () => dialog.all().filter(node => node.tag === 'tr' && !node.className && node.children[0]?.tag === 'td').map(row => row.children.map(cell => cell.textContent));
   const notes = () => find('butler-reads-note').filter(node => !node.hidden).map(node => node.textContent);
-  return { page, dialog, body, calls, state, reads, find, button, rows, notes, today: () => find('butler-reads-today')[0], listed: () => dialog.all().filter(node => node.className === 'quiet')[1],
+  return { page, dialog, body, calls, state, reads, find, button, rows, notes, today: () => find('butler-reads-today')[0], full: () => find('butler-reads-storage')[0], listed: () => dialog.all().filter(node => node.className === 'quiet')[1],
     days: () => dialog.all().filter(node => node.className === 'butler-reads-day').map(row => row.children[0].textContent), requests: () => calls.map(call => call[1]) };
 }
 
@@ -193,6 +193,37 @@ test('a newest record that was read but is not understood is not called "not rea
   assert.equal(f.dialog.text().includes('刷新」再读'), false);
 });
 
+test('the log file filling up is said beside the day\'s count, in the core\'s own words about when', async t => {
+  const MIB = 1024 * 1024, report = used => ({ usedBytes: used, maxBytes: 32 * MIB, remainingBytes: 32 * MIB - used, warningThresholdBytes: 24 * MIB, warning: used >= 24 * MIB });
+  const log = few(t);
+  // No report at all (an older core), or no warning: nothing is said.
+  for (const storage of [undefined, () => report(5 * MIB), () => report(24 * MIB - 1), () => ({ ...report(30 * MIB), warning: false }), () => ({ usedBytes: 9, maxBytes: 2, remainingBytes: 0, warning: true }), () => 'nearly full']) {
+    const f = fixture(log, { storage }); await f.reads.open(); assert.deepEqual([f.full().hidden, f.full().textContent, f.dialog.dataset.readsState, f.rows().length], [true, '', 'records', 5]);
+  }
+  let used = 24 * MIB; const f = fixture(log, { storage: () => report(used) }); await f.reads.open();
+  assert.equal(f.full().hidden, false); assert.equal(f.full().attributes.role, 'status');
+  assert.equal(f.full().textContent, zh('butler.reads.storageWarning', { used: '24', max: '32' })); assert.ok(f.full().textContent.startsWith('记录文件快满了：已用 24 MiB，上限 32 MiB。到上限后大管家读不到任何'));
+  assert.equal(f.today().textContent, '从 11-10 16:00 起已读 5 页，还剩 59 页。每天最多 64 页，11-11 16:00 重新计。', 'The day\'s count is still given; the warning says why it may not be usable');
+  // Shown to one decimal and never emptier than it is.
+  for (const [bytes, shown] of [[24 * MIB + 1, '24.1'], [25.04 * MIB, '25.1'], [31.5 * MIB, '31.5']]) { used = Math.floor(bytes); await f.button('refresh').fire('click'); assert.equal(f.full().textContent, zh('butler.reads.storageWarning', { used: shown, max: '32' }), String(bytes)); }
+  // At the cap, or closer to it than the largest record, it is not "nearly": the butler's reads can be refused, and at the cap all are.
+  for (const [bytes, shown, key] of [[32 * MIB - 128 * 1024, '31.9', 'storageWarning'], [32 * MIB - 128 * 1024 + 1, '31.9', 'storageFull'], [31.99 * MIB, '32', 'storageFull'], [32 * MIB, '32', 'storageFull']]) {
+    used = Math.floor(bytes); await f.button('refresh').fire('click'); assert.equal(f.full().textContent, zh(`butler.reads.${key}`, { used: shown, max: '32' }), String(bytes)); }
+  assert.ok(f.full().textContent.startsWith('记录文件已经到上限，或离上限不到一条记录的最大长度：已用 32 MiB，上限 32 MiB。从这里起大管家的读取可能被拒绝（一页的记录放不下就拒绝，通常先是返回条数多的页），到上限后全部被拒绝，')); assert.equal(f.full().textContent.includes('快满'), false);
+  // What the sentence says about when a page is refused is the core's own rule: a page's record must fit in what is left.
+  assert.ok(fs.readFileSync(path.join(__dirname, '..', 'butler-read-audit.cjs'), 'utf8').includes("if (bytes.length > MAX_RECORD_BYTES || (loaded.identity?.size || 0) + bytes.length > MAX_FILE_BYTES) fail('CAPACITY');"));
+  // A full file is said even if a report should ever carry no warning with it.
+  const odd = fixture(log, { storage: () => ({ ...report(32 * MIB), warning: false }) }); await odd.reads.open(); assert.equal(odd.full().textContent, zh('butler.reads.storageFull', { used: '32', max: '32' }));
+  // The report is the newest answer's: once the file is no longer warned about, or cannot be read, the sentence goes.
+  used = 3 * MIB; await f.button('refresh').fire('click'); assert.equal(f.full().hidden, true);
+  used = 26 * MIB; await f.button('refresh').fire('click'); assert.equal(f.full().hidden, false); f.dialog.close();
+  const g = fixture(log, { storage: () => report(26 * MIB), fail: count => count > 1 }); await g.reads.open(); assert.equal(g.full().hidden, false);
+  await g.button('refresh').fire('click'); assert.deepEqual([g.dialog.dataset.readsState, g.full().hidden, g.full().textContent], ['unavailable', true, '']);
+  // The report that comes with earlier records is newer than the one the dialog opened with.
+  let size = 3 * MIB; const h = fixture(many(t), { storage: () => report(size) }); await h.reads.open(); assert.equal(h.full().hidden, true);
+  size = 27 * MIB; await h.button('older').fire('click'); assert.equal(h.full().textContent, zh('butler.reads.storageWarning', { used: '27', max: '32' }));
+});
+
 test('closing drops what was read, and an answer that arrives afterwards is not drawn', async t => {
   const f = fixture(few(t)); await f.reads.open(); f.dialog.close();
   assert.deepEqual([f.dialog.open, f.rows().length], [false, 0]);
@@ -210,7 +241,9 @@ test('every sentence is in the catalog in both languages, the catalog has no oth
   const asked = new Set(), record = language => (key, params) => { asked.add(key); return locale.format(language, key, params); };
   const log = few(t), long = many(t), full = records(t, page => { for (let index = 0; index < 64; index++) page(MIDNIGHT + MINUTE + index * 8 * MINUTE, 'deliveries', { spaceId: SPACE }); });
   const plain = records(t, page => { page(NOW - MINUTE, 'spaces'); page(NOW - 30000, 'deliveries', { spaceId: SPACE }); });
-  for (const [value, options, after] of [[log], [[]], [full], [plain], [log, { fail: () => true }], [log.map(r => ({ ...r, version: 2 }))], [log.map((r, i) => i ? r : { ...r, version: 2 })],
+  const nearlyFull = () => ({ usedBytes: 25 * 1048576, maxBytes: 32 * 1048576, remainingBytes: 7 * 1048576, warningThresholdBytes: 24 * 1048576, warning: true });
+  const atCap = () => ({ usedBytes: 32 * 1048576, maxBytes: 32 * 1048576, remainingBytes: 0, warningThresholdBytes: 24 * 1048576, warning: true });
+  for (const [value, options, after] of [[log], [[]], [full], [plain], [log, { storage: nearlyFull }], [log, { storage: atCap }], [log, { fail: () => true }], [log.map(r => ({ ...r, version: 2 }))], [log.map((r, i) => i ? r : { ...r, version: 2 })],
     [long, { fail: count => count > 1 && { answer: { records: long.slice(40, 60), throughSequence: 96, nextAfterSequence: 60, truncated: true } } }],
     [long, { fail: (count, options) => options.limit === 46 }, f => f.button('older').fire('click')]]) {
     const f = fixture(value, { ...options, text: record('zh') }); const opening = f.reads.open(); asked.add('butler.reads.loading'); await opening; if (after) await after(f);

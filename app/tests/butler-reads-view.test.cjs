@@ -2,7 +2,7 @@
 // Synthetic identities and space ids; nothing is started and no model is called.
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
-const { readsView, tailRequest, olderRequest, PAGES_PER_DAY, RECORDS_PER_PAGE, NEAR_LEFT, PAGE, KINDS } = require('../butler-reads-view.js');
+const { readsView, tailRequest, olderRequest, PAGES_PER_DAY, RECORDS_PER_PAGE, RECORD_BYTES, NEAR_LEFT, PAGE, KINDS } = require('../butler-reads-view.js');
 const { ButlerReadAudit, MAX_PAGES_PER_UTC_DAY } = require('../butler-read-audit.cjs');
 
 const NOW = Date.UTC(2026, 10, 11, 9, 30), DAY = 24 * 3600 * 1000, MINUTE = 60 * 1000, MIDNIGHT = Date.UTC(2026, 10, 11);
@@ -29,6 +29,8 @@ test('the view shows the core\'s own limits', () => {
   const read = name => fs.readFileSync(path.join(__dirname, '..', name), 'utf8');
   // The most records one page can hold, and the most a person's read of the log may ask for at once.
   assert.equal(Number(read('butler-read-audit.cjs').match(/const MAX_LIMIT = (\d+),/)[1]), RECORDS_PER_PAGE);
+  // The most one record can take: with less room than this the core can already refuse a page, whose record must fit.
+  assert.ok(read('butler-read-audit.cjs').includes('MAX_RECORD_BYTES = 128 * 1024;')); assert.equal(RECORD_BYTES, 128 * 1024);
   assert.ok(read('main.cjs').includes('value.limit > ' + PAGE + ')'), 'The main process accepts a page of this size and no larger');
   assert.deepEqual([...KINDS], ['spaces', 'queue', 'deliveries']); assert.ok(NEAR_LEFT > 0 && NEAR_LEFT < PAGES_PER_DAY);
 });
@@ -36,7 +38,7 @@ test('the view shows the core\'s own limits', () => {
 test('nothing read yet: no rows, the whole allowance left, and the counting day named in local time', t => {
   const { records, through } = log(t).all();
   assert.deepEqual(readsView({ records, through, now: NOW, spaceNames: names, zone: pacific }), { today: { day: '2026-11-11', pages: 0, left: 64, limit: 64, level: 'ok', from: '11-10 16:00', resets: '11-11 16:00' },
-    days: [], total: 0, shown: 0, newest: true, reached: true, unreadable: 0, hasOlder: false });
+    days: [], total: 0, shown: 0, newest: true, reached: true, unreadable: 0, storage: null, hasOlder: false });
   assert.deepEqual(readsView({ records, through, now: NOW, zone: beijing }).today, { day: '2026-11-11', pages: 0, left: 64, limit: 64, level: 'ok', from: '11-11 08:00', resets: '11-12 08:00' });
 });
 
@@ -153,6 +155,26 @@ test('the local span of a counting day follows the zone at each moment, across a
   const view = readsView({ records: [record, later], through: 2, now: at, zone });
   assert.deepEqual([view.days[0].from, view.days[0].through, view.today.from, view.today.resets], ['10-31 17:00', '11-01 16:00', '10-31 17:00', '11-01 16:00']);
   assert.deepEqual(view.days[0].rows.map(row => row.time), ['11-01 01:30', '11-01 01:30'], 'An hour apart in fact, the same clock time on the day the clocks go back');
+});
+
+test('how full the log file is comes from the core\'s own report and its own warning, or is not said at all', t => {
+  const l = log(t); l.page(NOW - MINUTE, 'spaces');
+  const answer = l.audit.read(person, { afterSequence: 0, limit: 50 });
+  // The report as the core gives it with every read of the log.
+  assert.deepEqual(Object.keys(answer.storage).sort(), ['maxBytes', 'remainingBytes', 'usedBytes', 'warning', 'warningThresholdBytes']);
+  assert.deepEqual([answer.storage.maxBytes, answer.storage.warningThresholdBytes, answer.storage.warning, answer.storage.usedBytes > 0], [32 * 1024 * 1024, 24 * 1024 * 1024, false, true]);
+  const view = value => readsView({ records: answer.records, through: answer.throughSequence, now: NOW, zone: pacific, storage: value }).storage;
+  assert.deepEqual(view(answer.storage), { usedBytes: answer.storage.usedBytes, maxBytes: 32 * 1024 * 1024, warning: false, full: false });
+  // The warning is the core's: this view has no threshold of its own.
+  const nearly = { ...answer.storage, usedBytes: 25 * 1024 * 1024, remainingBytes: 7 * 1024 * 1024, warning: true };
+  assert.deepEqual(view(nearly), { usedBytes: 25 * 1024 * 1024, maxBytes: 32 * 1024 * 1024, warning: true, full: false });
+  // Nearly full and full are different things: closer to the cap than the largest record, a read can be refused.
+  const at = left => view({ ...answer.storage, usedBytes: 32 * 1024 * 1024 - left, remainingBytes: left, warning: true }).full;
+  assert.deepEqual([at(RECORD_BYTES + 1), at(RECORD_BYTES), at(RECORD_BYTES - 1), at(1), at(0)], [false, false, true, true, true]);
+  assert.equal(view({ ...nearly, warning: false }).warning, false, 'A file the core does not warn about is not warned about here, however full');
+  // No report, or one that does not add up, says nothing rather than something wrong.
+  for (const value of [undefined, null, {}, 'full', { ...nearly, warning: 'true' }, { ...nearly, warning: 1 }, { ...nearly, usedBytes: -1 }, { ...nearly, remainingBytes: 1 }, { ...nearly, maxBytes: 0, usedBytes: 0, remainingBytes: 0 },
+    { usedBytes: 1, maxBytes: 2, warning: true }, { ...nearly, usedBytes: '26214400' }]) assert.equal(view(value), null);
 });
 
 test('the log pages forward only, so the newest and the earlier records are asked for by position', () => {

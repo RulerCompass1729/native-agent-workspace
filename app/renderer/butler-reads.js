@@ -14,18 +14,20 @@
     const control = (key, action, handler) => { const el = make('button', '', key); el.type = 'button'; el.dataset.action = action; el.addEventListener('click', handler); return el; };
 
     const title = make('h2', '', 'butler.reads.title'); title.id = (dialog.id || 'butler-reads-dialog') + '-title'; dialog.setAttribute('aria-labelledby', title.id);
-    const today = make('p', 'butler-reads-today'), listed = make('p', 'quiet'), note = make('p', 'butler-reads-note'), help = make('p', 'butler-reads-note');
+    const today = make('p', 'butler-reads-today'), full = make('p', 'butler-reads-storage'), listed = make('p', 'quiet'), note = make('p', 'butler-reads-note'), help = make('p', 'butler-reads-note');
     const wrap = make('div', 'butler-reads-wrap'), list = make('div', 'butler-reads-list'), foot = make('p', 'butler-reads-note'), actions = make('div', 'dialog-actions');
-    today.setAttribute('role', 'status'); note.setAttribute('role', 'status'); foot.setAttribute('role', 'status'); wrap.append(list);
+    today.setAttribute('role', 'status'); full.setAttribute('role', 'status'); full.hidden = true; note.setAttribute('role', 'status'); foot.setAttribute('role', 'status'); wrap.append(list);
     // Rows below the fold are announced by a fade; the list's own scrollbar stays visible.
     const below = () => { wrap.dataset.more = String(list.scrollTop + list.clientHeight < list.scrollHeight - 1); };
     list.addEventListener('scroll', below);
     const older = control('butler.reads.older', 'older', () => loadOlder()), refresh = control('butler.reads.refresh', 'refresh', () => load()), done = control('common.done', 'done', () => dialog.close());
     older.className = 'subtle butler-apart';
     actions.append(older, refresh, done);
-    dialog.append(title, make('p', 'quiet', 'butler.reads.intro', { limit: RECORDS_PER_PAGE }), today, listed, note, help, wrap, foot, actions);
+    dialog.append(title, make('p', 'quiet', 'butler.reads.intro', { limit: RECORDS_PER_PAGE }), today, full, listed, note, help, wrap, foot, actions);
 
-    let records = [], through = null, state = 'idle', ticket = 0, olderFailed = false, readAt = 0;
+    let records = [], through = null, storage = null, state = 'idle', ticket = 0, olderFailed = false, readAt = 0;
+    // One decimal, never rounded down: the file is not shown emptier than it is.
+    const mib = bytes => { const tenths = Math.ceil(bytes / 104857.6); return tenths % 10 ? (tenths / 10).toFixed(1) : String(tenths / 10); };
     const valid = page => page && Array.isArray(page.records) && Number.isSafeInteger(page.throughSequence) && page.throughSequence >= 0 && typeof page.truncated === 'boolean' &&
       Number.isSafeInteger(page.nextAfterSequence) && page.nextAfterSequence >= 0;
     const ask = async request => { const page = await api.butlerReview('reads', request); if (!valid(page)) throw Error('unreadable'); return page; };
@@ -36,7 +38,7 @@
       const loading = state === 'loading';
       older.disabled = refresh.disabled = loading;
       if (state !== 'ready') {
-        today.hidden = listed.hidden = foot.hidden = true; quiet(today); quiet(listed); quiet(foot); list.replaceChildren(); older.hidden = true; below();
+        today.hidden = full.hidden = listed.hidden = foot.hidden = true; quiet(today); quiet(full); quiet(listed); quiet(foot); list.replaceChildren(); older.hidden = true; below();
         note.hidden = false; say(note, state === 'unavailable' ? 'butler.reads.unavailable' : 'butler.reads.loading');
         // The rule is general; a log this window cannot read does not prove the butler's own writes fail.
         help.hidden = state !== 'unavailable'; if (state === 'unavailable') say(help, 'butler.reads.unavailableHelp'); else quiet(help);
@@ -44,7 +46,7 @@
         dialog.dataset.readsState = state; return;
       }
       // The count line is true as of the moment the log was read; Refresh reads again.
-      const view = readsView({ records, through, now: readAt, spaceNames: spaceName, ...(zone ? { zone } : {}) });
+      const view = readsView({ records, through, now: readAt, spaceNames: spaceName, storage, ...(zone ? { zone } : {}) });
       help.hidden = true; quiet(help);
       dialog.dataset.readsState = view.shown ? 'records' : 'empty'; dialog.dataset.readsLevel = view.today.level;
       say(refresh, 'butler.reads.refresh');
@@ -54,6 +56,13 @@
       else if (view.today.level === 'full') say(today, 'butler.reads.todayFull', { from: view.today.from, limit: view.today.limit, resets: view.today.resets });
       else if (!view.today.pages) say(today, 'butler.reads.todayNone', { from: view.today.from, limit: view.today.limit, resets: view.today.resets });
       else say(today, 'butler.reads.today', { from: view.today.from, pages: view.today.pages, left: view.today.left, limit: view.today.limit, resets: view.today.resets });
+      // The core's own warning that the log file is filling up. A full file stops the butler's reads whatever the day's
+      // count says, so this is said beside that count.
+      // Close to the cap is not the same as at it: closer than the largest single record, the butler's reads can
+      // already be refused, and at the cap they all are. The sentence says that instead of "nearly".
+      const warned = Boolean(view.storage) && (view.storage.warning || view.storage.full);
+      full.hidden = !warned;
+      if (warned) say(full, view.storage.full ? 'butler.reads.storageFull' : 'butler.reads.storageWarning', { used: mib(view.storage.usedBytes), max: mib(view.storage.maxBytes) }); else quiet(full);
       // How much of the log is listed, so a short list is not taken for the whole of it.
       listed.hidden = !view.shown;
       if (!view.shown) quiet(listed);
@@ -108,7 +117,7 @@
         if (mine !== ticket) return;
         // A log that says it has records and gives none was not read.
         if (!got.length && page.throughSequence > 0) throw Error('unreadable');
-        records = got; through = page.throughSequence; readAt = now(); state = 'ready';
+        records = got; through = page.throughSequence; storage = page.storage ?? null; readAt = now(); state = 'ready';
       } catch { if (mine !== ticket) return; state = 'unavailable'; }
       draw();
     }
@@ -118,12 +127,12 @@
       if (!request) return;
       const mine = ++ticket; older.disabled = true; olderFailed = false;
       // An earlier page that comes back empty was not read either.
-      try { const page = await ask(request); if (mine !== ticket) return; if (!page.records.length) throw Error('unreadable'); records = page.records.concat(records); }
+      try { const page = await ask(request); if (mine !== ticket) return; if (!page.records.length) throw Error('unreadable'); records = page.records.concat(records); if (page.storage) storage = page.storage; }
       catch { if (mine !== ticket) return; olderFailed = true; }
       draw();
     }
     function open() { if (!dialog.open) dialog.showModal(); done.focus(); return load(); }
-    const closed = () => { ticket++; records = []; through = null; state = 'idle'; olderFailed = false; list.replaceChildren(); };
+    const closed = () => { ticket++; records = []; through = null; storage = null; state = 'idle'; olderFailed = false; list.replaceChildren(); };
     dialog.addEventListener('close', closed);
     return { open, load, loadOlder, dispose() { ticket++; dialog.removeEventListener('close', closed); if (dialog.open) dialog.close(); dialog.replaceChildren(); } };
   }

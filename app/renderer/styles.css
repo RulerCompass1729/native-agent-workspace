@@ -911,6 +911,8 @@ header h1, header p { overflow-wrap: anywhere; }
 .butler-reads-today { margin: 0 0 6px; color: var(--ink); font-size: 14px; }
 /* Close to the day's allowance and at it look the same; the sentence says which. */
 [data-reads-level="near"] .butler-reads-today, [data-reads-level="full"] .butler-reads-today { font-weight: 600; color: #8a4a12; }
+/* The log file filling up is said in the same way, beside the day's count. */
+.butler-reads-storage { margin: 0 0 6px; font-size: 14px; line-height: 1.6; font-weight: 600; color: #8a4a12; }
 .butler-reads-note { margin: 0 0 8px; line-height: 1.6; }
 /* Only the list scrolls; the day's count above it and the actions below it stay in sight. */
 .butler-reads-wrap { position: relative; display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; border-top: 1px solid var(--border); }

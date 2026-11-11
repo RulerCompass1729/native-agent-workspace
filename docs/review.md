@@ -10125,7 +10125,7 @@ records and returns none is shown as unreadable, not as empty.
 
 Author-run evidence, no model call: the read log's two test files and the
 entry's pass 46 of 46 together with the entry view's; the full suite passes with
-zero failures or skips (count in the commit message); 44 deliberate faults in
+zero failures or skips (count in the commit message); 52 deliberate faults in
 the view, the dialog and the entry change are each caught. Hidden real-Electron
 check `scripts/test-butler-reads.cjs`: with the entry closed the dialog is in the
 page, shut and invisible; a real 64-page log over two UTC days, written into the
@@ -10143,11 +10143,14 @@ check and a unit test of the lookup, not on screen; the dark theme was not
 looked at.
 
 Required before the butler is switched on (not part of this delivery):
-- Showing how full the log file is. The existing call gives no size. At the
-  32 MiB cap the log still reads, while every further page of the butler is
-  refused: this dialog would then state pages left that the butler cannot use,
-  which is a false statement, not only missing information. By the module's own
-  limits the worst case is about four days to the cap. Owner: butler outcome
+- A safe way to make room in a full log. None exists: nothing is rotated or
+  pruned. Removing the file with NAW closed starts an empty log, so the record
+  of what was read is gone and the day's count starts again; once the running
+  NAW has read or written the log, removing, shrinking or replacing the file
+  leaves the log unreadable until NAW is reopened.
+  The dialog says there is no way to clear it yet and tells the person not to
+  delete the file. By the module's own limits the worst case is about three
+  days to the core's prewarning and four to the cap. Owner: butler outcome
   owner.
 - The person's decision on whether refused or failed reads are recorded at all.
 - Known interaction, as the core already works: the person's read takes the
@@ -10209,3 +10212,34 @@ inventory verified; worktree fingerprint unchanged after each invocation):
   while the record table is still asking whether it has data, the record table
   can open on top of it. Both are harmless and neither can occur in an ordinary
   launch; align them when the entry is switched on.
+- The log file filling up (third commit of the branch). Main's `e920230` added
+  a report of the file's size and the core's own 75% prewarning to every read
+  of the log, which is what the first verdict's deferred item needed. The view
+  passes on the core's warning and has no threshold of its own; a report that
+  is missing or does not add up says nothing. From the prewarning on, the
+  dialog says beside the day's count how much of the file is used (to one
+  decimal, never rounded down), that at the limit the butler cannot read
+  whatever the day's count shows, and that old records are not deleted
+  automatically. Closer to the cap than the largest single record (the core's
+  own 128 KiB), or at the cap, a second sentence says instead that the
+  butler's reads can be refused from here, usually pages that return more
+  first, and that at the cap every page is: the core refuses a page when its
+  own record does not fit, and the log still reads for the person there, so
+  "nearly full" beside "pages left" would be false. The sentences
+  carry the three things the stand-in asked to be on the screen before
+  switch-on; they were not shown to the stand-in again.
+  The Electron check shows it with the real records and the real call, with
+  only the report replaced on its way to the dialog, because writing a real
+  24 MiB log is too slow for a check. Reviewer verdict on this commit:
+  `APPROVE_WITH_CHANGES`, one required change, applied: a file already at its
+  cap was still called "nearly full" (the second sentence above). Its
+  suggestions taken: the report that comes with earlier records is used too;
+  the sentence no longer tells the person to "deal with it" when no safe way is
+  defined (see the switch-on item). The author's first wording of the second
+  sentence said reads "are already being refused" from 128 KiB below the cap;
+  read against the core, that is only certain at the cap, and the sentence was
+  corrected before it went back to the reviewer. Verdict on that delta:
+  `APPROVE`; "can be refused" confirmed against the core's refusal rule. Its
+  two wording suggestions were applied as given and not sent back: "usually"
+  before "those that return more items", and the sentence above about the
+  file while NAW runs.
