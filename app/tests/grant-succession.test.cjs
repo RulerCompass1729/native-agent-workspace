@@ -139,29 +139,66 @@ test('it is the same grant: the space it names goes with it, and what the old se
   await assert.rejects(async () => g.report(started, 'After the person turned the old session off'), /revoked or expired|not eligible|no longer/i);
 });
 
-test('nothing is widened by the move: a revoked grant stays revoked, an expired one expired, and a bypass session still needs a holder in bypass', async t => {
-  const f = await fixture(t), revoked = f.grant(), expired = f.grant();
+test('nothing is widened by the move: beside a grant in force, a revoked grant stays revoked and an expired one expired, and a bypass session still needs a holder in bypass', async t => {
+  const f = await fixture(t), live = f.grant(), revoked = f.grant(), expired = f.grant();
   f.w.operatorAction(f.id, 'revoke', revoked);
   f.w.operator.data.domains[expired].expiresAt = Date.now() - 1;
   const next = await f.replace(); await f.carry();
   assert.equal(f.records()[0].monitor.carried, true);
+  // All three went with it as they were: the entry counts the one that is in force, and the other two are no more usable than before.
+  assert.equal(f.records()[0].monitor.grants, 1); assert.equal(f.records()[0].uiMessage.key, 'notice.monitor.grantCarried');
+  for (const grantId of [live, revoked, expired]) assert.deepEqual(f.w.operator.data.domains[grantId].initiators.map(i => i.id), [next]);
   assert.ok(f.w.operator.data.domains[revoked].revokedAt, 'Still revoked'); assert.ok(f.w.operator.data.domains[expired].expiresAt < Date.now(), 'Still expired');
-  // Revoking a grant does not stop the interface permission from going on; the entry then says exactly that,
-  // and does not read as if a usable grant had moved.
-  assert.equal(f.records()[0].monitor.grants, 0);
-  assert.equal(text(f.records()[0]), 'Lead 换会话后，你给它的 agent 控制接口许可由 Lead · 续 接续；它名下没有有效的建会话授权，已撤销或已到期的仍然无效');
-  assert.equal(text(f.records()[0], 'en'), 'After Lead was replaced, Lead · 续 holds the agent control interface permission you gave it. It has no session-creation grant in force; a revoked or expired grant stays revoked or expired');
-  assert.equal((await f.open(next)).status, 'pending-authorization', 'Neither grant covers an open: the person is asked, as for the old session');
   assert.equal((await f.open(next, { permission: 'bypass' })).status, 'pending-authorization', 'The holder is not in bypass');
+  assert.equal((await f.open(next)).status, 'created', 'The grant in force covers an open, as it did for the old session');
+  // With the one in force revoked too, neither of the others covers an open: the person is asked.
+  f.w.operatorAction(next, 'revoke', live);
+  assert.equal((await f.open(next)).status, 'pending-authorization', 'A revoked or expired grant that went on covers nothing');
 });
 
-test('the entry says what went on: the interface permission alone when no grant is in force, and the grants only when one is', async t => {
-  // The interface was on and no grant was ever given: the permission still goes on, and the entry names nothing else.
-  const f = await fixture(t);
-  const next = await f.replace(); await f.carry();
-  assert.equal(f.w.snapshot().sessions.find(s => s.id === next).operatorEnabled, true);
-  assert.deepEqual([f.records()[0].monitor.carried, f.records()[0].monitor.grants], [true, 0]);
-  assert.equal(f.records()[0].uiMessage.key, 'notice.monitor.interfaceCarried');
+// The person's decision of 2026-11-11: the agent control interface follows a replaced session only together
+// with a grant in force. Without one the successor is an ordinary new session.
+test('the interface does not go on by itself: a holder with no grant in force is not followed, its successor gets nothing, and nothing is said', async t => {
+  for (const [label, prepare] of [
+    ['no grant was ever given', () => {}],
+    ['its only grant was revoked', f => { f.w.operatorAction(f.id, 'revoke', f.grant()); }],
+    ['its only grant has run out', f => { const grantId = f.grant(); f.w.operator.data.domains[grantId].expiresAt = Date.now() - 1; }],
+    ['one grant revoked and one run out', f => { f.w.operatorAction(f.id, 'revoke', f.grant()); const grantId = f.grant(); f.w.operator.data.domains[grantId].expiresAt = Date.now() - 1; }],
+  ]) {
+    const f = await fixture(t); prepare(f);
+    const next = await f.replace(), journal = JSON.stringify(f.w.operator.data);
+    assert.deepEqual(listed(f), [], label + ': the holder is not listed for a decision');
+    await f.carry(); await f.carry(undefined, 31000);
+    assert.equal(f.calls.length, 0, label + ': the desktop asks the journal nothing'); assert.equal(f.follows.length, 0, label + ': and does not read the rotation log for it');
+    assert.equal(JSON.stringify(f.w.operator.data), journal, label + ': nothing is decided or saved');
+    assert.equal(Object.hasOwn(f.w.operator.data.sessions, next), false, label + ': the successor has no interface setting');
+    assert.ok(!f.w.snapshot().sessions.find(s => s.id === next).operatorEnabled, label + ': and is not shown as holding the interface');
+    await assert.rejects(f.open(next), /has not enabled this initiator interface/, label + ': the successor cannot use the interface');
+    assert.equal(f.records().length + f.records('shared').length, 0, label + ': nothing is said in any space');
+    // Asked all the same, to carry or to refuse, the journal answers that there is no grant and saves nothing.
+    assert.deepEqual(f.w.operatorAction(f.id, 'succession', pair(f, f.id, next)), { carried: false, reason: 'no-grant', saved: false }, label);
+    assert.deepEqual(f.w.operatorAction(f.id, 'succession', { step: 'refuse', nativeId: f.w.get(f.id).nativeId, reason: 'ambiguous', loggedAt: Date.now() + 1 }), { carried: false, reason: 'no-grant', saved: false }, label);
+    assert.equal(JSON.stringify(f.w.operator.data), journal, label + ': still nothing is saved, and no audit line is written');
+    // The old session keeps the setting the person gave it; brought back, it is what it was.
+    assert.equal(f.w.operator.data.sessions[f.id].enabled, true, label + ': the old session\'s own setting is untouched');
+  }
+  // A grant that runs out after the holder was listed and before the step: the journal checks again and carries nothing.
+  const g = await fixture(t), late = g.grant(), heir = await g.replace(), state = g.w.snapshot();
+  assert.deepEqual(state.operatorPolicy.successions, [{ id: g.id, nativeId: g.w.get(g.id).nativeId }], 'Listed while its grant is in force');
+  g.w.operator.data.domains[late].expiresAt = Date.now() - 1;
+  const before = JSON.stringify(g.w.operator.data);
+  await g.carry(state);
+  assert.deepEqual(g.calls, ['carry'], 'The desktop asked, from the earlier state');
+  assert.equal(JSON.stringify(g.w.operator.data), before, 'and the journal carried nothing');
+  assert.equal(Object.hasOwn(g.w.operator.data.sessions, heir), false); assert.equal(g.records().length, 0);
+  // With a grant in force the interface goes on together with it: the narrowing takes nothing from that.
+  const h = await fixture(t), kept = h.grant(), follower = await h.replace(); await h.carry();
+  assert.equal(h.w.operator.data.sessions[follower].enabled, true); assert.deepEqual(h.w.operator.data.domains[kept].initiators.map(i => i.id), [follower]);
+  assert.equal(h.w.operator.data.sessions[h.id].enabled, false, 'One holder: the old session no longer has the interface');
+  assert.equal((await h.open(follower)).status, 'created');
+});
+
+test('the entry says what went on: the grants that are in force, or the interface permission alone when the grant was revoked before the entry could be written', async t => {
   // One grant in force beside a revoked one: the entry speaks of grants, and counts the one that is in force.
   const g = await fixture(t), live = g.grant(), dead = g.grant(); g.w.operatorAction(g.id, 'revoke', dead);
   await g.replace(); await g.carry();
@@ -173,13 +210,18 @@ test('the entry says what went on: the interface permission alone when no grant 
   h.w.operatorAction(h.id, 'enabled', true); h.grant(); h.grant();
   await h.carry(undefined, 31000);
   assert.deepEqual([h.records()[0].monitor.carried, h.records()[0].monitor.grants], [true, 1]);
-  // And when nothing but the interface permission had gone on, grants given to the old session since do not make the entry speak of grants.
-  const k = await fixture(t);
-  await k.replace(); k.failRecords(1); await k.carry();
+  // The grant went on and the person revoked it before the entry could be written: the entry does not read as if a
+  // usable grant had moved, and grants given to the old session since do not make it speak of grants.
+  const k = await fixture(t), moved = k.grant();
+  const heir = await k.replace(); k.failRecords(1); await k.carry();
+  assert.equal(k.records().length, 0); assert.deepEqual(k.w.operator.data.domains[moved].initiators.map(i => i.id), [heir]);
+  k.w.operatorAction(heir, 'revoke', moved);
   k.w.operatorAction(k.id, 'enabled', true); k.grant(); k.grant();
   await k.carry(undefined, 31000);
   assert.deepEqual([k.records()[0].monitor.carried, k.records()[0].monitor.grants], [true, 0]);
   assert.equal(k.records()[0].uiMessage.key, 'notice.monitor.interfaceCarried');
+  assert.equal(text(k.records()[0]), 'Lead 换会话后，你给它的 agent 控制接口许可由 Lead · 续 接续；它名下没有有效的建会话授权，已撤销或已到期的仍然无效');
+  assert.equal(text(k.records()[0], 'en'), 'After Lead was replaced, Lead · 续 holds the agent control interface permission you gave it. It has no session-creation grant in force; a revoked or expired grant stays revoked or expired');
 });
 
 test('the person\'s own off switches win: a holder whose interface was turned off, or the interface turned off for everyone, carries nothing', async t => {
@@ -193,9 +235,10 @@ test('the person\'s own off switches win: a holder whose interface was turned of
   const other = await g.replace(); g.w.operatorAction(null, 'enabled', false); await g.carry();
   assert.deepEqual(listed(g), []); assert.equal(g.records().length, 0);
   assert.deepEqual(g.w.operatorAction(g.id, 'succession', pair(g, g.id, other)), { carried: false, reason: 'interface-off', saved: false });
-  // Turned back on, the grants it revoked stay revoked.
+  // Turned back on, the grants it revoked stay revoked, so the holder has none in force: nothing goes on, nothing is said.
   g.w.operatorAction(null, 'enabled', true); await g.carry();
-  assert.equal((await g.open(other)).status, 'pending-authorization');
+  assert.deepEqual(listed(g), []); assert.equal(g.records().length, 0); assert.equal(Object.hasOwn(g.w.operator.data.sessions, other), false);
+  await assert.rejects(g.open(other), /has not enabled this initiator interface/);
 });
 
 test('a holder the person stopped, with no replacement in the log, is left alone and the log is not read again until it changes', async t => {
@@ -421,10 +464,12 @@ test('a revoke reaches the grant wherever it has gone: from the card of any sess
   }
   const { f, grantId } = await chain(), stranger = await f.w.create('claude', f.root, 'owner', 'Stranger');
   assert.throws(() => f.w.operatorAction(stranger, 'revoke', grantId), /another initiator/);
-  // A revoke made before a replacement is not undone by it.
+  // A revoke made before a replacement is not undone by it: with that grant revoked nothing goes on at all.
   const g = await fixture(t), early = g.grant(); g.w.operatorAction(g.id, 'revoke', early);
   const heir = await g.replace(); await g.carry();
-  assert.ok(g.w.operator.data.domains[early].revokedAt); assert.equal((await g.open(heir)).status, 'pending-authorization');
+  assert.ok(g.w.operator.data.domains[early].revokedAt); assert.deepEqual(g.w.operator.data.domains[early].initiators.map(i => i.id), [g.id], 'The revoked grant stays where it was');
+  assert.equal(Object.hasOwn(g.w.operator.data.sessions, heir), false); assert.equal(g.records().length, 0);
+  await assert.rejects(g.open(heir), /has not enabled this initiator interface/);
 });
 
 test('what was decided is part of the journal: a restarted backend knows it, and a record the journal could not have written disables the interface', async t => {
@@ -467,7 +512,10 @@ test('the person turning the old session on again after a carry decides nothing 
   f.w.operatorAction(f.id, 'enabled', true);
   const outcome = f.w.operator.data.sessions[f.id].succession;
   assert.equal(outcome.carried, true, 'What was decided stays on record');
-  assert.deepEqual(listed(f), [{ id: f.id, nativeId: f.w.get(f.id).nativeId }], 'An ended holder again, open for a decision about a later replacement');
+  assert.deepEqual(listed(f), [], 'An ended holder again, but with no grant in force it is not listed for a decision');
+  // Given a grant of its own, it is listed, open for a decision about a later replacement.
+  f.grant();
+  assert.deepEqual(listed(f), [{ id: f.id, nativeId: f.w.get(f.id).nativeId }], 'A holder anew, with a grant in force');
   const before = JSON.stringify(f.w.operator.data);
   for (let state = 0; state < 3; state += 1) await f.carry();
   // The replacement in the log is older than this turning on: it is not a replacement of this holder.
