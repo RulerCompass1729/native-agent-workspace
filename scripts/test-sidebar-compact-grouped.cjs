@@ -75,6 +75,24 @@ async function run() {
   assert.equal(initial.rows.length, 4); assert.ok(initial.rows.every(r => r.draggable && r.state && r.accessible));
   assert.equal(new Set(initial.rows.map(r => r.id)).size, 4); assert.equal(await surface().locator('.session-row').count(), 4);
   await capture('01-expanded'); record('Four unique grouped members retain status, accessibility and drag metadata');
+  // T-145 follow-up: in English the default space's heading with its count was 3px short and took two lines.
+  // Read in place through the real settings control, then back to Chinese for the rest of this script.
+  const headingLines = () => group().evaluate(el => {
+    const heading = el.querySelector('.session-space-heading'), range = document.createRange(); range.selectNodeContents(heading);
+    return { text: heading.textContent, lines: new Set([...range.getClientRects()].map(r => Math.round(r.top))).size, height: el.querySelector('h3').getBoundingClientRect().height };
+  });
+  const chineseHeading = await headingLines();
+  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('en');
+  await page.waitForFunction(() => document.querySelector('#setup-title')?.textContent === 'Settings'); await page.locator('#close-setup').click();
+  await page.waitForFunction(() => document.querySelector('#session-list .session-space-enter')?.textContent === 'Open'); await settle();
+  const englishHeading = await headingLines(); await capture('01b-english-heading');
+  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('zh');
+  await page.waitForFunction(() => document.querySelector('#setup-title')?.textContent === '设置'); await page.locator('#close-setup').click();
+  await page.waitForFunction(() => document.querySelector('#session-list .session-space-enter')?.textContent === '进入'); await settle();
+  assert.equal(chineseHeading.text, '共同工作 · 4'); assert.equal(chineseHeading.lines, 1);
+  assert.equal(englishHeading.text, 'Shared work · 4'); assert.equal(englishHeading.lines, 1, 'The English heading is one line');
+  assert.ok(Math.abs(englishHeading.height - chineseHeading.height) < 0.5, 'The heading is as tall in English as in Chinese');
+  record('The default space heading with its count is one line in English, as in Chinese');
   if (!baseline) {
     assert.ok(Math.abs(initial.svg.width - 22) < 0.1 && Math.abs(initial.svg.height - 22) < 0.1);
     assert.ok(initial.toggle.width >= 40 && initial.toggle.height >= 44);

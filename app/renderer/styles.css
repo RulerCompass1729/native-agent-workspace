@@ -591,10 +591,12 @@ header h1, header p { overflow-wrap: anywhere; }
      hang from a guide line. 独立会话 keeps the plain heading. The name's text and accessible label are unchanged. */
   .sidebar .session-space-group:not([data-session-group="independent"]) h3{background:color-mix(in srgb,var(--green) 9%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 28%,transparent);border-radius:6px;margin:1px 0;gap:0}
   .sidebar .session-space-group:not([data-session-group="independent"]) .session-space-toggle{box-shadow:inset -1px 0 color-mix(in srgb,var(--green) 22%,transparent);border-radius:6px 0 0 6px}
-  .sidebar .session-space-group:not([data-session-group="independent"]) .session-space-heading{display:flex;align-items:center;gap:6px;border:0;align-self:stretch}
+  /* The default English name with its count ("Shared work · 4") was 3px short of one line: the name's
+     trailing space, the icon gap and the 进入 padding give it 8px back. Nothing is shortened or cut. */
+  .sidebar .session-space-group:not([data-session-group="independent"]) .session-space-heading{display:flex;align-items:center;gap:5px;padding-right:2px;border:0;align-self:stretch}
   .sidebar .session-space-group:not([data-session-group="independent"]) .session-space-heading:not(.active){background:transparent}
   .sidebar .session-space-group:not([data-session-group="independent"]) .session-space-heading::before{content:'';flex:none;width:16px;height:16px;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='9' cy='8' r='3.5'/%3E%3Cpath d='M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6'/%3E%3Cpath d='M16 4.5a3.5 3.5 0 0 1 0 7'/%3E%3Cpath d='M18 14.5c1.8.8 3 2.7 3 4.9'/%3E%3C/svg%3E") center/contain no-repeat}
-  .sidebar .session-space-enter{flex:none;align-self:stretch;display:flex;align-items:center;padding:0 4px;font-size:12px;font-weight:500;color:var(--green,var(--ink));white-space:nowrap;cursor:pointer;
+  .sidebar .session-space-enter{flex:none;align-self:stretch;display:flex;align-items:center;padding:0 2px;font-size:12px;font-weight:500;color:var(--green,var(--ink));white-space:nowrap;cursor:pointer;
     body[data-ds-dark-theme] &{color:var(--dsw-alias-link,var(--ink))}}
   .sidebar .session-space-group:not([data-session-group="independent"])>div{border-left:1px solid var(--border)}
 }
