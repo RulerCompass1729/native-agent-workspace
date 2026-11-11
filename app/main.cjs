@@ -21,6 +21,9 @@ const { IntegratorRole } = require('./integrator-role.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
 const { ButlerReadAudit } = require('./butler-read-audit.cjs');
+const { ButlerRole } = require('./butler-role.cjs');
+const { ButlerPerson } = require('./butler-person.cjs');
+const { displayCredentialPresent: butlerCredentialPresent } = require('./butler-presence.cjs');
 const { showQuestionNotification } = require('./butler-question-notification.cjs');
 const { createDedicatedBackend } = require('./butler-backend-host.cjs');
 const { CreationDefaults } = require('./creation-defaults.cjs');
@@ -69,6 +72,7 @@ if (testRequested) {
   } catch { /* An unverifiable profile must never fall through to foreground. */ }
   if (!backgroundTest) { console.error('Invalid isolated headed-test parent/profile; no window opened.'); process.exit(1); }
 }
+const butlerEntryEnabled = backgroundTest && process.env.NAW_TEST_BUTLER_ENTRY === '1';
 // NAW_TEST_VISIBLE=1 keeps every isolation check but shows the test window
 // without taking focus, so a person can watch it close and reopen.
 const visibleTest = backgroundTest && process.env.NAW_TEST_VISIBLE === '1';
@@ -92,6 +96,7 @@ let pendingReveal = null;
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
 let dataDir, sessionLabels, roomState, queueSecretary, integratorRole, butlerIngress, butlerReadAudit = null, butlerBackend = null, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
+let butlerRole = null, butlerPerson = null;
 let startupWindow, starting = false, wired = false;
 let applicationBuild, applicationMenu;
 let mobileBroker;
@@ -1123,6 +1128,14 @@ async function boot() {
     runtimeVersion: app.getVersion(), executablePath: process.execPath }); }
   catch { butlerBackend = null; } // Dedicated failure must not stop ordinary sessions.
   // No prepare/ensure/controller here. Activation and the record period stay off.
+  // Person-only source controls reuse the existing ledger; construction does
+  // not check credentials, start a runner or add records to ordinary state.
+  try {
+    butlerRole ||= new ButlerRole(dataDir, { authorizePerson: isCurrentHumanContext });
+    if (!butlerPerson) butlerPerson = new ButlerPerson({ role: butlerRole, ledger: butlerIngress?.ledger,
+      backend: butlerBackend, credentialPresent: butlerCredentialPresent, authorizePerson: isCurrentHumanContext });
+    else { butlerPerson.ledger = butlerIngress?.ledger; butlerPerson.backend = butlerBackend; }
+  } catch { butlerPerson = null; } // Keep B1 and ordinary sessions independent.
   queueSecretary = new QueueSecretary(dataDir);
   // Who the person designated as integrator. A record only: nothing is sent to it from here.
   integratorRole = new IntegratorRole(dataDir);
@@ -1445,6 +1458,32 @@ async function boot() {
   // Review records belong only to the person's renderer IPC, never the agent
   // catalog/invoke map. The handler still checks every direct IPC caller.
   applicationHandlers.delete('butlerReview');
+  register('butler', async (c, action, ...args) => {
+    if (!isCurrentHumanContext(c)) throw uiError('error.butler.personOnly');
+    if (!butlerEntryEnabled) throw uiError('error.butler.entryDisabled');
+    const validRevision = value => Number.isSafeInteger(value) && value >= 0;
+    if (!['status', 'recheck', 'designate', 'revoke', 'setActive'].includes(action) ||
+        (action === 'status' ? args.length !== 0 : action === 'setActive' ?
+          args.length !== 2 || typeof args[0] !== 'boolean' || !validRevision(args[1]) :
+          args.length !== 1 || !validRevision(args[0]))) throw uiError('error.butler.invalidRequest');
+    if (!butlerPerson) throw uiError('error.butler.unavailable');
+    try {
+      if (action === 'recheck') {
+        const state = butlerPerson.status(c);
+        if (!state.role.available) throw Object.assign(Error('ERR_BUTLER_STATE'), { code: 'ERR_BUTLER_STATE' });
+        if (state.role.revision !== args[0]) throw Object.assign(Error('ERR_BUTLER_REVISION'), { code: 'ERR_BUTLER_REVISION' });
+        return butlerPerson.recheck(c);
+      }
+      return await butlerPerson[action](c, ...args);
+    }
+    catch (error) {
+      const keys = { ERR_BUTLER_PERSON: 'personOnly', ERR_BUTLER_REQUEST: 'invalidRequest',
+        ERR_BUTLER_REVISION: 'changed', ERR_BUTLER_BUSY: 'busy', ERR_BUTLER_ACTIVATION_DISABLED: 'activationDisabled' };
+      let key = 'unavailable'; try { const code = error?.code; if (Object.hasOwn(keys, code)) key = keys[code]; } catch {}
+      throw uiError('error.butler.' + key);
+    }
+  });
+  applicationHandlers.delete('butler');
   register('queueSecretary', async (c, id) => {
     if (c.background) throw uiError('error.queue.personOnly');
     if (id === null) queueSecretary.set(null);

@@ -40,7 +40,7 @@ const every = [...ACTIONS];
 const offer = () => designated.selected;
 const entry = extra => ({ version: 1, role: designated, startable: true, backend: backends.ready, intake: { recordPeriod: 'off' }, actions: every, ...extra });
 
-test('this version gives no view, so nothing is shown: the switch is closed', () => {
+test('normal window state gives no entry view; the dedicated preload IPC remains closed by the actual Main gate', () => {
   for (const value of [undefined, null, 'on', 1, {}, { version: 2, role: { revision: 0, selected: null } }, { version: 1 }, { version: 1, role: { revision: '0', selected: null } }]) assert.deepEqual(entryView(value), { visible: false });
   // The window state's butler field is ButlerIngress.status(); it carries no entry, and no code adds one.
   const status = ButlerIngress.prototype.status.call({ errors: new Map() });
@@ -48,7 +48,12 @@ test('this version gives no view, so nothing is shown: the switch is closed', ()
   assert.equal(Object.hasOwn(status, 'entry'), false); assert.deepEqual(entryView(status.entry), { visible: false });
   const read = name => fs.readFileSync(path.join(__dirname, '..', name), 'utf8');
   assert.equal(/\bentry\s*:/.test(read('main.cjs').split('\n').filter(line => line.includes('butlerIngress?.status()')).join('\n')), false);
-  assert.equal(/api\.butler\s*=/.test(read('preload.cjs')), false, 'the person-only entry is not exposed to any window yet');
+  let api;
+  vm.runInNewContext(read('preload.cjs'), { require(name) {
+    assert.equal(name, 'electron'); return { contextBridge: { exposeInMainWorld(key, value) { if (key === 'workspace') api = value; } },
+      ipcRenderer: { on() {}, invoke() { throw Error('Inspecting the closed entry must not invoke a handler'); } } };
+  } });
+  assert.equal(typeof api.butler, 'function', 'The dedicated IPC surface exists; actual Main IPC tests prove its default-off gate');
 });
 
 test('with no butler designated the person is asked only when the confirmation can be complete', () => {

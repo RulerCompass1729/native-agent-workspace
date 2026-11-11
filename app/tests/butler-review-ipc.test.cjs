@@ -267,16 +267,27 @@ test('read-audit IPC refuses arbitrary scopes, counts, identities and malformed 
 
 test('the actual Main initializer and handler use the opaque person verifier with the real read-audit store', async t => {
   const { ButlerReadAudit } = require('../butler-read-audit.cjs');
-  const f = fixture(t);
+  const { ButlerRole } = require('../butler-role.cjs'), { ButlerPerson } = require('../butler-person.cjs');
+  const { bindQueueOutcomes } = require('../butler-ingress.cjs');
+  const f = fixture(t), ledger = new ButlerLedger(f.directory);
   const environment = { windows: f.windows, applicationHandlers: f.handlers,
     ipcMain: { handle: (name, handler) => f.ipc.set(name, handler) }, trusted: url => url === 'synthetic-trusted',
-    uiLocale: locale, uiError, backgroundOperation: require('../background-operation.cjs'), dataDir: f.directory, ButlerReadAudit };
-  const open = () => new Function(...Object.keys(environment), 'let butlerReadAudit = null; const butlerIngress = null;\n' +
+    uiLocale: locale, uiError, backgroundOperation: require('../background-operation.cjs'), dataDir: f.directory, ButlerReadAudit,
+    ButlerRole, ButlerPerson, butlerIngress: { ledger }, roomState: {}, bindQueueOutcomes, notifyQueueOutcome() {}, path,
+    app: { getVersion: () => 'synthetic-joint-initializer' }, createDedicatedBackend: () => ({ snapshot: () => ({ state: 'unprepared' }) }),
+    backgroundTest: true, process: { execPath: '/synthetic/electron', env: { NAW_TEST_BUTLER_ENTRY: '1' } },
+    butlerCredentialPresent: () => { throw Error('The initializer must not probe credentials'); } };
+  const open = () => new Function(...Object.keys(environment), 'let butlerReadAudit = null, butlerBackend = null, butlerRole = null, butlerPerson = null;\n' +
+    section('const butlerEntryEnabled =', '\n') + '\n' +
     section('function isCurrentHumanContext(', '\nfunction showDialog(') + '\n' +
     section('function register(name, handler)', '\nasync function replaceBackendSockets(') + '\n' +
-    section('  try { butlerReadAudit ||=', '  try { butlerBackend =') + '\n' +
-    section("  register('butlerReview',", "  register('queueSecretary',") + '\nreturn butlerReadAudit;')(...Object.values(environment));
-  const audit = open(); assert.ok(audit instanceof ButlerReadAudit);
+    section('  bindQueueOutcomes(roomState, butlerIngress, notifyQueueOutcome);', '  queueSecretary = new QueueSecretary(') + '\n' +
+    section("  register('butlerReview',", "  register('queueSecretary',") + '\nreturn { audit: butlerReadAudit, role: butlerRole, person: butlerPerson };')(...Object.values(environment));
+  const initialized = open(), audit = initialized.audit;
+  assert.ok(audit instanceof ButlerReadAudit); assert.ok(initialized.role instanceof ButlerRole); assert.ok(initialized.person instanceof ButlerPerson);
+  assert.equal(initialized.person.role, initialized.role); assert.equal(initialized.person.ledger, ledger);
+  assert.equal((await f.ipc.get('workspace:butler')(f.person.event, 'status')).value.state, 'empty',
+    'Both actual stores and the person core initialize; caught ReferenceErrors cannot look like a pass');
   audit.recordPage({ actor: { sessionId: 'synthetic-instance', nativeId: 'synthetic-native', selectionRevision: 1, runnerRef: 'runner' },
     query: { kind: 'spaces', spaceId: null, includeArchived: false, limit: 20 },
     result: { count: 0, recordRefs: [], scanned: 0, truncated: false } });
