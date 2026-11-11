@@ -93,3 +93,21 @@ test('a dispatch cannot be combined with another delivery kind', async t => {
   await assert.rejects(w.send(ids[0], 'x', 'person', null, forward, null, null, null, null, null, { itemId: 'item-1' }), error => error.uiMessage?.key === 'error.queue.invalid');
   assert.equal(sent.length, 0);
 });
+
+test('B2: workspace exposes only ephemeral startup trust metadata and never creates an approval or answers native', async t => {
+  const { w, ids, sent } = await fixture(t), id = ids[0], runtime = w.runtimes.get(id);
+  const { Terminal } = require('@xterm/headless');
+  const screen = new Terminal({ cols: 100, rows: 30, allowProposedApi: true }); t.after(() => screen.dispose());
+  runtime.terminal = { alive: true, screen };
+  runtime.emit('state', 'starting');
+  let changes = 0; w.on('change', () => changes++);
+  await new Promise(resolve => screen.write('Is this a project you created or one you trust?\r\n1. Yes, I trust this folder\r\n2. No, exit\r\n', resolve));
+  runtime.emit('terminal', { sequence: 1, data: 'synthetic native output' });
+  const seen = w.snapshot().sessions.find(s => s.id === id);
+  assert.equal(seen.nativeStartupPrompt.kind, 'directory-trust');
+  assert.equal(seen.approval, null); assert.equal(seen.nativeApproval, null);
+  assert.equal(sent.length, 0); assert.equal(w.get(id).nativeStartupPrompt, undefined, 'screen metadata is not persisted into the session row');
+  assert.ok(changes > 0, 'a newly observed startup prompt publishes state for the dispatcher');
+  runtime.emit('state', 'idle');
+  assert.equal(w.snapshot().sessions.find(s => s.id === id).nativeStartupPrompt, null, 'ready state retires startup classification even if the old screen has not repainted');
+});

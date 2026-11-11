@@ -1896,7 +1896,7 @@ app.on('will-quit', () => {
 });
 // A session rotation is announced to the person; the space record and log keep the ids.
 function notifyRotation(outcome, record) {
-  const keys = { done: 'os.rotationDoneBody', saved: 'os.rotationSavedBody', kept: 'os.rotationKeptBody', keptUnsaved: 'os.rotationKeptUnsavedBody', failed: 'os.rotationFailedBody' };
+  const keys = { done: 'os.rotationDoneBody', saved: 'os.rotationSavedBody', kept: 'os.rotationKeptBody', keptUnsaved: 'os.rotationKeptUnsavedBody', failed: 'os.rotationFailedBody', needsTrust: 'os.rotationNeedsTrustBody' };
   const notice = { key: keys[outcome], params: { old: record.name, new: record.newName || record.name, reason: record.reason || '' } };
   try {
     if (!Notification.isSupported()) {

@@ -95,3 +95,15 @@ test('a defaults save error cannot turn an already-created session into a failed
   const h = harness({ get: empty, remember() { throw Error('Synthetic defaults save failure'); } });
   assert.equal(await h.call('create', { cwd: '/synthetic/chosen' }), 'new-id'); assert.equal(h.created, 1);
 });
+
+test('B2: production startup keeps directory migration closed even when the test env switch is set', async () => {
+  for (const [backgroundTest, flag, enabled] of [[false, undefined, false], [false, '1', false], [true, undefined, false], [true, '1', true]]) {
+    let options;
+    const sandbox = { queueDispatcher: null, backgroundTest, process: { env: { NAW_TEST_QUEUE_DIRECTORY_MIGRATION: flag } }, roomState: {}, dataDir: '/synthetic/private', windows: new Map(),
+      connect() {}, sessionLabels: { labels: new Map() }, broadcastRoom() {}, notifyRotation() {}, creationDefaults: { get() { return {}; } }, butlerIngress: null,
+      QueueDispatcher: class { constructor(value) { options = value; } async start() { return this; } } };
+    await vm.runInNewContext(section('async function startQueueDispatcher()', 'async function broadcastRoom()') + '\nstartQueueDispatcher()', sandbox);
+    assert.ok(options, 'production startup constructed the dispatcher');
+    assert.equal(options.migrateDirectories === true, enabled, JSON.stringify({ backgroundTest, flag }));
+  }
+});

@@ -1,6 +1,7 @@
 // B2: real Electron/main/service/Git worktrees; only NativeHost is synthetic.
 // Default mode checks the human create flow. --migration additionally enables
 // the explicitly isolated test-only dispatcher gate, not the product default.
+// --trust checks the native startup decision pause through that same closed gate.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process'), { randomUUID } = require('node:crypto');
@@ -8,7 +9,8 @@ const scratch = require('./fixtures/test-scratch.cjs');
 const { _electron } = scratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const migration = process.argv.includes('--migration');
+const trustMode = process.argv.includes('--trust');
+const migration = process.argv.includes('--migration') || trustMode;
 const evidence = path.resolve(process.env.NAW_EVIDENCE_DIR || path.join(os.homedir(), 'Pictures/naw-dogfood', new Date().toISOString().slice(0, 7), 'b2-inheritance', String(Date.now())));
 let existing = evidence; while (!fs.existsSync(existing)) existing = path.dirname(existing);
 const destination = path.join(fs.realpathSync(existing), path.relative(existing, evidence));
@@ -16,7 +18,7 @@ for (const repo of [root, code].map(p => fs.realpathSync(p))) assert.ok(destinat
 const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('GUI slot occupied; no profile, fixture or application started.'); process.exit(75); }
-const receipt = { owner: 'Codex3', task: 'B2 creation defaults and recoverable worktree migration', token, pid: process.pid, createdAt: new Date().toISOString(), migration };
+const receipt = { owner: 'Codex3', task: 'B2 creation defaults and recoverable worktree migration', token, pid: process.pid, createdAt: new Date().toISOString(), migration, trustMode };
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify(receipt));
 fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const profile = scratch.directory(path.join(os.tmpdir(), 'naw-b2-creation-'));
@@ -115,8 +117,8 @@ async function holdDefault() {
 }
 async function defaultHeld() { await until(() => app.evaluate(() => globalThis.b2HeldDefaults.length === 1), 'Default reply held after the real main handler'); }
 async function releaseDefault() { await app.evaluate(() => { const release = globalThis.b2HeldDefaults.shift(); if (!release) throw Error('No owned held default'); release(); }); await delay(100); }
-async function emptyMember(name) {
-  await open(name, 'claude'); await readyPreview(); await page.locator('#new-folder').click();
+async function emptyMember(name, provider = 'claude') {
+  await open(name, provider); await readyPreview(); await page.locator('#new-folder').click();
   assert.equal(await page.locator('#git-worktree').isChecked(), false);
   const record = await submit(name); assert.equal(path.dirname(record.cwd), legacy + '-sessions');
   fs.mkdirSync(path.join(record.cwd, '.local')); fs.writeFileSync(path.join(record.cwd, 'retained.txt'), 'B2_PRIVATE_FILE_CONTENT_MUST_NOT_BE_SENT');
@@ -156,6 +158,48 @@ async function migrate(name, pause) {
   await page.locator(`[data-session-id="${fresh.id}"]`).click(); await page.locator('#chat-tab').click(); await capture(pause ? '06-restart-adopted' : '04-directory-handoff');
   check(pause ? 'Creating restart adopts the same nonce and successor, creates exactly one worktree, then delivers the handoff' : 'An automatic UUID member moves to the saved repository worktree; names-only handoff and old files survive');
 }
+async function trustMigration(provider) {
+  const name = 'B2 trust ' + provider, newName = name + ' · 续';
+  const old = await emptyMember(name, provider), before = lanes();
+  await addWork(old.id, 'B2 prepare ' + name); await sendTo(old.id, /B2 prepare /, 'Trust preparation reaches old member');
+  await fixture('release', { session: old.id, reply: 'B2 preparation complete.' });
+  await fixture('b2TrustStart', { name: newName });
+  await addWork(old.id, 'B2 continue ' + name); await sendTo(old.id, /【NAW 换会话】/, 'Trust handoff request reaches old member');
+  await fixture('release', { session: old.id, reply: 'B2 synthetic handoff: continue the queued request.' });
+  await until(async () => (await named(newName)).length === 1 && rotation(old.id).phase === 'waiting-trust', 'Native viewport creates a durable trust wait', 45000);
+  const fresh = (await named(newName))[0], saved = rotation(old.id);
+  verifyRules(fresh); assert.equal(lanes().length, before.length + 1);
+  assert.deepEqual(fresh.nativeStartupPrompt, { kind: 'directory-trust', provider, source: 'native-terminal' });
+  assert.equal(fresh.state, 'starting'); assert.notEqual((await snapshot()).sessions.find(row => row.id === old.id).state, 'ended');
+  const decisions = async () => (await snapshot()).rooms.find(room => room.id === roomId).events.filter(event => event.uiMessage?.key === 'notice.rotation.needsTrust');
+  const ownDecision = async () => (await decisions()).filter(event => event.rotationReceipt === saved.trustNoticeId);
+  await until(async () => (await ownDecision()).length === 1, 'One saved trust decision in the space');
+  assert.match((await ownDecision())[0].text, /^需要你决定：/);
+  await page.locator(`[data-space-id="${roomId}"] .room-nav`).click(); await page.locator('#room-record').click();
+  const decisionRow = page.locator('#room-messages .message-body').filter({ hasText: '需要你决定：' }).filter({ hasText: newName });
+  await until(async () => (await decisionRow.count()) === 1, 'The trust decision is rendered exactly once'); await decisionRow.waitFor();
+  fs.writeFileSync(path.join(evidence, `trust-${provider}-before.txt`), await decisionRow.innerText());
+  await capture(`trust-${provider}-waiting`);
+  assert.equal((await fixture()).sends.filter(row => row.id === fresh.id).length, 0, 'No task or handoff to an untrusted successor');
+  assert.deepEqual((await fixture('b2Stats')).inputs, [], 'No native trust input');
+  await relaunch();
+  await until(async () => rotation(old.id).phase === 'waiting-trust' && (await named(newName)).length === 1, 'Window restart restores the persisted trust wait');
+  assert.equal((await named(newName))[0].id, fresh.id); assert.equal(rotation(old.id).trustNoticeId, saved.trustNoticeId);
+  assert.equal(rotation(old.id).newWorktree.nonce, saved.newWorktree.nonce); assert.equal(lanes().length, before.length + 1);
+  assert.equal((await fixture('b2Stats')).creations.filter(row => row.name === newName).length, 1, 'Window restart only adopts the same native successor');
+  assert.equal((await ownDecision()).length, 1, 'Reloaded space does not duplicate the trust decision');
+  await page.locator(`[data-space-id="${roomId}"] .room-nav`).click(); await page.locator('#room-record').click();
+  const restoredRow = page.locator('#room-messages .message-body').filter({ hasText: '需要你决定：' }).filter({ hasText: newName });
+  await until(async () => (await restoredRow.count()) === 1, 'The restored decision is rendered exactly once'); await restoredRow.waitFor(); await capture(`trust-${provider}-restored`);
+  assert.equal((await fixture()).sends.filter(row => row.id === fresh.id).length, 0); assert.deepEqual((await fixture('b2Stats')).inputs, []);
+  assert.equal((await fixture('b2TrustReady', { session: fresh.id })).released, true);
+  await sendTo(fresh.id, /【NAW 换会话】/, 'Only an independent native-ready event resumes the handoff');
+  await until(async () => (await snapshot()).sessions.find(row => row.id === old.id)?.state === 'ended', 'Old session ends after successor acceptance', 45000);
+  assert.equal((await fixture()).sends.filter(row => row.id === fresh.id && /【NAW 换会话】/.test(row.text)).length, 1);
+  assert.deepEqual((await fixture('b2Stats')).inputs, []); assert.equal((await ownDecision()).length, 1);
+  check(`${provider}: visible directory-trust decision pauses delivery and keeps the old session; a window restart adopts the same successor and receipt; native readiness resumes exactly one handoff without trust input`);
+  await fixture('release', { session: fresh.id, reply: 'B2 trust fixture complete.' });
+}
 async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Owned synthetic service ready'); client = await connect(profile, 'b2-creation-observer'); await launch();
   await open('B2 first worktree'); await until(async () => !(await page.locator('#confirm-create').isDisabled()), 'Initial empty-folder defaults loaded');
@@ -182,14 +226,15 @@ async function run() {
   assert.equal(lanes().length, 2); check('Late defaults cannot overwrite a manual folder or a newer create-dialog opening');
   if (migration) {
     roomId = await page.evaluate(() => workspace.spaceCreate('B2 migration'));
-    await migrate('B2 migration source', false); await migrate('B2 restart source', true);
+    if (trustMode) { await trustMigration('claude'); await trustMigration('codex'); }
+    else { await migrate('B2 migration source', false); await migrate('B2 restart source', true); }
   }
   const stats = await fixture('b2Stats'), sends = (await fixture()).sends;
   assert.deepEqual(stats.inputs, []); assert.deepEqual(errors, []); assert.equal(app.windows().length, 1);
   clipboard.push(await app.evaluate(() => ({ ...globalThis.b2Clipboard }))); assert.ok(clipboard.every(item => item.reads === 0 && item.writes === 0));
   if (!migration) assert.deepEqual(sends, []);
   const result = { checks, errors, clipboard, providerProcesses: stats.providerProcesses, productModelCalls: stats.modelCalls, syntheticSends: sends.length,
-    migration: migration ? 'isolated test-only main dispatcher gate; production remains off' : 'not run; product migration gate remains off',
+    migration: migration ? 'isolated test-only main dispatcher gate; production remains off' : 'not run; product migration gate remains off', trustMode,
     limits: 'Synthetic native transport; actual native trust, rule loading, signed installation and daily use are not claimed' };
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result, null, 2));
 }

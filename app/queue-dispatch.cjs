@@ -95,7 +95,7 @@ const NOT_SENT_KEYS = [
   NATIVE_DRAFT_KEY,
   'error.room.updatingDraftRetained',
 ];
-const ROTATION_PHASES = ['requested', 'creating', 'joining', 'created', 'handed', 'failed', 'kept'];
+const ROTATION_PHASES = ['requested', 'creating', 'joining', 'created', 'handed', 'waiting-trust', 'failed', 'kept'];
 // Records that only stop a member from being rotated again for a while.
 const RESTING_PHASES = ['failed', 'kept'];
 // The active backend can start a session with given settings (workspace.cjs createSettings).
@@ -122,6 +122,10 @@ function validText(value, limit) {
 
 function validId(value) {
   return typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f]/u.test(value);
+}
+
+function validTrustReceipt(value) {
+  return typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value);
 }
 
 function validTime(value) {
@@ -1025,9 +1029,10 @@ function validLogEntry(entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
     return false;
   }
-  if (!['requested', 'done', 'kept', 'failed'].includes(entry.event) || !Number.isFinite(entry.time)) {
+  if (!['requested', 'done', 'kept', 'failed', 'waiting'].includes(entry.event) || !Number.isFinite(entry.time)) {
     return false;
   }
+  if (entry.noticeId !== undefined && !validTrustReceipt(entry.noticeId)) return false;
   if (!Array.isArray(entry.spaces) || entry.spaces.some(space => typeof space !== 'string')) {
     return false;
   }
@@ -1367,6 +1372,10 @@ function readRotations(file, now) {
     if (!validId(record.oldNativeId || '') || !Array.isArray(record.roomIds) || typeof record.name !== 'string') {
       continue;
     }
+    if (record.phase === 'waiting-trust' && (!validId(record.newId) || !validTrustReceipt(record.trustNoticeId) || !validTime(record.trustWaitingAt) || !['claude', 'codex'].includes(record.provider) || !record.newCwd || record.newCwd === record.cwd)) continue;
+    if (record.trustNoticeId !== undefined && !validTrustReceipt(record.trustNoticeId)) continue;
+    if (record.trustNotified !== undefined && typeof record.trustNotified !== 'boolean') continue;
+    if (record.trustWaitingAt !== undefined && !validTime(record.trustWaitingAt)) continue;
     if (record.newId !== undefined && !validId(record.newId)) {
       continue;
     }
@@ -2110,7 +2119,7 @@ class QueueDispatcher {
     record.failedAt = now;
     record.reason = reason;
     this.save();
-    if (record.newId && !record.handoffConfirmed && ['joining', 'created', 'handed'].includes(phase)) {
+    if (record.newId && !record.handoffConfirmed && ['joining', 'created', 'handed', 'waiting-trust'].includes(phase)) {
       for (const roomId of record.roomIds) {
         try {
           this.roomState.queueReassign(roomId, record.newId, oldId);
@@ -2138,9 +2147,50 @@ class QueueDispatcher {
     await this.broadcast();
   }
 
+  // One durable decision per successor. Never send an answer to native here.
+  async waitForDirectoryTrust(oldId, record, now) {
+    record.phase = 'waiting-trust';
+    record.trustWaitingAt ||= now;
+    record.trustNoticeId ||= randomUUID();
+    record.reason = 'native-directory-trust';
+    this.save();
+    // No queued work belongs to a successor that has not received its handoff.
+    for (const roomId of record.roomIds) this.roomState.queueReassign(roomId, record.newId, oldId);
+    if (!this.log.some(entry => entry.event === 'waiting' && entry.noticeId === record.trustNoticeId)) {
+      this.appendLog('waiting', record, { reason: record.reason, noticeId: record.trustNoticeId });
+    }
+    this.roomState.rotationEvent(record.roomIds, 'needsTrust', this.label(oldId, record.name), this.label(record.newId, record.newName), record.trustNoticeId);
+    if (!record.trustNotified) {
+      record.trustNotified = true;
+      this.save(); // OS delivery is best effort; do not re-notify after a restart.
+      this.notify('needsTrust', record);
+    }
+    await this.broadcast();
+  }
+
   async advanceRotation(oldId, record, snapshot, now) {
     if (this.closed) return;
     const old = snapshot.sessions.find(s => s.id === oldId);
+    const successor = snapshot.sessions.find(s => s.id === record.newId);
+    if (record.phase === 'waiting-trust') {
+      if (old && !this.untouched(old, record, replyAfter(old, record.tag, record.requestedAt))) throw Error('person-active');
+      if (!successor || ['ended', 'background', 'recoverable', 'error'].includes(successor.state)) throw Error('new-session-directory-trust-unavailable');
+      if (successor.nativeStartupPrompt?.kind === 'directory-trust') {
+        if (!record.trustNotified) await this.waitForDirectoryTrust(oldId, record, now);
+        return;
+      }
+      if (!sessionReady(successor, snapshot.wakePolicy).ready) return;
+      // Native readiness, not a rendered line disappearing, resolves the wait.
+      // Joining again is idempotent and reassigns queued items only at this point.
+      record.phase = 'joining';
+      record.createdNewAt = now;
+      this.save();
+    }
+    if (record.newCwd && record.newCwd !== record.cwd && ['joining', 'created'].includes(record.phase) &&
+        successor?.nativeStartupPrompt?.kind === 'directory-trust' && successor.nativeStartupPrompt.source === 'native-terminal' && successor.nativeStartupPrompt.provider === record.provider) {
+      await this.waitForDirectoryTrust(oldId, record, now);
+      return;
+    }
     if (record.phase === 'requested') {
       if (!record.tag) {
         if (now - record.requestedAt > UNCONFIRMED_SEND_MS) {
@@ -2220,6 +2270,11 @@ class QueueDispatcher {
       await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
     }
     if (record.phase === 'joining') {
+      const latest = record.newCwd && record.newCwd !== record.cwd ? this.client.snapshot().sessions.find(session => session.id === record.newId) : null;
+      if (record.newCwd && record.newCwd !== record.cwd && latest?.nativeStartupPrompt?.kind === 'directory-trust' &&
+          latest.nativeStartupPrompt.source === 'native-terminal' && latest.nativeStartupPrompt.provider === record.provider) {
+        await this.waitForDirectoryTrust(oldId, record, now); return;
+      }
       for (const roomId of record.roomIds) {
         await withTimeout(this.roomState.membership(this.client, record.newId, true, record.newName, roomId), CALL_TIMEOUT_MS, 'join-timeout');
         this.roomState.queueReassign(roomId, oldId, record.newId);
