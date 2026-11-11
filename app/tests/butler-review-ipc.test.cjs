@@ -29,6 +29,7 @@ function fixture(t) {
   const person = makeContext(1), agent = makeContext(2, true);
   const ledger = {
     healthy() {},
+    hasReviewData(actor) { assert.equal(actor, person.context); return true; },
     latestReview(actor) { calls.push(['latest', actor]); return { reviewId: 'review:one', source: 'host-stored' }; },
     review(id, actor) { calls.push(['read', id, actor]); return { reviewId: id, source: 'host-stored' }; },
     freezeReview(scope, actor) { calls.push(['freeze', scope, actor]); return { reviewId: 'review:frozen', provenance: { kind: 'audit' } }; },
@@ -52,7 +53,7 @@ function fixture(t) {
 
 test('actual Main IPC routes the five human operations to the same host writer and fixes audit scope at zero', async t => {
   const f = fixture(t);
-  assert.deepEqual(JSON.parse(JSON.stringify(await f.call('availability'))), { ok: true, value: { available: true, activation: 'off', recordPeriod: 'off' } });
+  assert.deepEqual(JSON.parse(JSON.stringify(await f.call('availability'))), { ok: true, value: { available: true, hasData: true, activation: 'off', recordPeriod: 'off' } });
   assert.equal(f.calls.length, 0);
   assert.equal((await f.call('latest')).value.source, 'host-stored');
   assert.equal((await f.call('read', 'review:one')).value.reviewId, 'review:one');
@@ -109,12 +110,12 @@ test('unknown actions, renderer scopes and extra review facts fail before reachi
   assert.equal(f.calls.length, 0);
 });
 
-test('availability exposes only an availability bit and off flags, including absent or failed storage', async t => {
+test('availability exposes only availability/data bits and off flags, including absent or failed storage', async t => {
   const f = fixture(t);
   f.ledger.healthy = () => { throw Error('Synthetic storage unavailable'); };
-  assert.deepEqual(JSON.parse(JSON.stringify((await f.call('availability')).value)), { available: false, activation: 'off', recordPeriod: 'off' });
+  assert.deepEqual(JSON.parse(JSON.stringify((await f.call('availability')).value)), { available: false, hasData: false, activation: 'off', recordPeriod: 'off' });
   f.sandbox.butlerIngress = null;
-  assert.deepEqual(JSON.parse(JSON.stringify((await f.call('availability')).value)), { available: false, activation: 'off', recordPeriod: 'off' });
+  assert.deepEqual(JSON.parse(JSON.stringify((await f.call('availability')).value)), { available: false, hasData: false, activation: 'off', recordPeriod: 'off' });
   assert.equal((await f.call('latest')).ok, false); assert.equal(f.calls.length, 0);
 });
 
@@ -166,7 +167,7 @@ test('actual Main and Ledger freeze, confirm and restore the same audit without 
     section("  register('butlerReview',", "  register('queueSecretary',") + '\nreturn butlerIngress;')(...Object.values(environment));
   const ingress = open(), ledger = ingress.ledger;
   assert.ok(ledger instanceof ButlerLedger); assert.equal(f.handlers.has('butlerReview'), false);
-  assert.deepEqual((await f.call('availability')).value, { available: true, activation: 'off', recordPeriod: 'off' });
+  assert.deepEqual((await f.call('availability')).value, { available: true, hasData: false, activation: 'off', recordPeriod: 'off' });
   assert.equal((await f.call('latest')).value, null);
   const fullText = 'Original synthetic task: ' + 'source detail '.repeat(120);
   ledger.ingest({ eventId: 'audit-source', sourceRef: 'task:audit', kind: 'request', payload: { text: fullText, spaceId: 'source-space', itemId: 'source-item' } });
@@ -286,6 +287,12 @@ test('the actual Main initializer and handler use the opaque person verifier wit
   const initialized = open(), audit = initialized.audit;
   assert.ok(audit instanceof ButlerReadAudit); assert.ok(initialized.role instanceof ButlerRole); assert.ok(initialized.person instanceof ButlerPerson);
   assert.equal(initialized.person.role, initialized.role); assert.equal(initialized.person.ledger, ledger);
+  assert.equal(typeof ledger.hasReviewData, 'function');
+  // This joint fixture's real Ledger deliberately keeps its default-deny verifier.
+  // Its refusal must survive the entire extracted Main handler as display metadata.
+  const deniedReview = await f.call('latest');
+  assert.equal(deniedReview.ok, false);
+  assert.equal(deniedReview.uiMessage.key, 'error.butlerReview.personOnly');
   assert.equal((await f.ipc.get('workspace:butler')(f.person.event, 'status')).value.state, 'empty',
     'Both actual stores and the person core initialize; caught ReferenceErrors cannot look like a pass');
   audit.recordPage({ actor: { sessionId: 'synthetic-instance', nativeId: 'synthetic-native', selectionRevision: 1, runnerRef: 'runner' },
@@ -297,4 +304,31 @@ test('the actual Main initializer and handler use the opaque person verifier wit
   assert.throws(() => audit.read(f.person.context), { code: 'ERR_BUTLER_READ_AUDIT_PERSON' });
   assert.equal((await f.call('reads', {})).ok, true, 'IPC resolves the replacement trusted human context rather than trusting the stale one');
   f.windows.delete(1); await assert.rejects(f.call('reads', {}), /Unexpected IPC source/);
+});
+
+
+test('availability keeps a healthy empty ledger hidden without freezing or copying it', async t => {
+  const f = fixture(t);
+  f.ledger.hasReviewData = actor => { assert.equal(actor, f.person.context); return false; };
+  assert.deepEqual(JSON.parse(JSON.stringify((await f.call('availability')).value)), { available: true, hasData: false, activation: 'off', recordPeriod: 'off' });
+  assert.equal(f.calls.length, 0);
+  f.ledger.hasReviewData = () => { throw Error('Synthetic read failure'); };
+  assert.deepEqual(JSON.parse(JSON.stringify((await f.call('availability')).value)), { available: false, hasData: false, activation: 'off', recordPeriod: 'off' });
+});
+
+test('actual Main, sandboxed preload and adapter retain localized review failure metadata', async t => {
+  const f = fixture(t), preload = fs.readFileSync(require.resolve('../preload.cjs'), 'utf8');
+  const start = preload.indexOf('function apiFailure(result) {'), end = preload.indexOf('api.createDefaults =', start);
+  assert.ok(start >= 0 && end > start);
+  const wrapper = preload.split('\n').find(line => line.startsWith('api.butlerReview ='));
+  const api = {};
+  new Function('api', 'ipcRenderer', preload.slice(start, end) + '\n' + wrapper)(api, { invoke: (_channel, ...args) => f.call(...args) });
+  const adapter = require('../renderer/butler-review-adapter.js').create({ api, text: (key, params) => locale.format('en', key, params) });
+  for (const [code, key] of [['BUTLER_REVIEW_REVISION', 'conflict'], ['BUTLER_REVIEW_CAPACITY', 'capacity'],
+    ['BUTLER_PERSON_ONLY', 'personOnly'], ['BUTLER_REVIEW_UNAVAILABLE', 'unavailable']]) {
+    f.ledger.latestReview = () => { throw Object.assign(Error('Synthetic original core failure'), { code }); };
+    const reply = await f.call('latest');
+    assert.equal(reply.uiMessage.key, 'error.butlerReview.' + key); assert.equal(Object.hasOwn(reply, 'code'), false);
+    await assert.rejects(adapter.read(), { message: locale.format('en', 'error.butlerReview.' + key) });
+  }
 });

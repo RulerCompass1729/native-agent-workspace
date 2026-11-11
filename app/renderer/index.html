@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="collaboration-overview.css">
   <link rel="stylesheet" href="collaboration-panorama.css">
   <link rel="stylesheet" href="sidebar-layout.css">
+  <link rel="stylesheet" href="butler-review.css">
 </head>
 <body>
   <aside class="sidebar">
@@ -140,6 +141,7 @@
   <dialog closedby="any" id="room-member-status-dialog" aria-labelledby="room-member-status-title"><h2 id="room-member-status-title" data-naw-text="room.memberStates"></h2><div id="room-member-status-list"></div><div class="dialog-actions"><button id="close-room-member-status" type="button" data-naw-text="common.done"></button></div></dialog>
   <dialog closedby="any" id="session-chain-dialog" aria-labelledby="session-chain-title"><h2 id="session-chain-title" data-naw-text="chain.title"></h2><ol id="session-chain-list"></ol><div class="dialog-actions"><button id="close-session-chain" type="button" data-naw-text="common.done"></button></div></dialog>
   <dialog closedby="any" id="butler-dialog" class="butler-dialog"></dialog>
+  <dialog closedby="any" id="butler-review-dialog"></dialog>
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../native-usage.js"></script>
@@ -157,6 +159,10 @@
   <script src="../terminal-continuation.js"></script>
   <script src="mobile-setup.js"></script>
   <script src="../butler-entry-view.js"></script>
+  <script src="../butler-review-policy.js"></script>
+  <script src="butler-review-model.js"></script>
+  <script src="butler-review-adapter.js"></script>
+  <script src="butler-review.js"></script>
   <script src="butler-entry.js"></script>
   <script src="renderer.js"></script>
 </body>
