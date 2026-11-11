@@ -42,6 +42,9 @@ function validate(name, args) {
 }
 const initial = () => ({ version: 1, sequence: 0, enabled: false, sessions: {}, domains: {}, requests: {}, dispatches: {}, actions: {}, reports: {}, calls: {}, audit: [] });
 const copy = value => JSON.parse(JSON.stringify(value));
+// B5: whether the person had given this grant by the time a replacement was logged. A grant with no time of
+// its own cannot be shown to have been there.
+const givenBy = (domain, at) => Number.isSafeInteger(domain.createdAt) && domain.createdAt <= at;
 const day = at => new Date(at).toISOString().slice(0, 10);
 const actualModel = s => s?.model && s.modelUiMessage?.key !== 'notice.model.nativeDefault' ? s.model : null;
 const permission = s => s?.nativePermissionMode === 'bypassPermissions' ? 'bypass' : ['default', 'acceptEdits'].includes(s?.nativePermissionMode) ? 'default' : 'unknown';
@@ -195,7 +198,8 @@ class OperatorControl {
   // Narrowed on the person's decision of 2026-11-11: the interface setting follows only together with a grant
   // that is in force. A holder with the interface on and no grant, or only revoked or expired ones, is not
   // followed at all: its successor gets nothing, nothing is decided and nothing is said. The grant in force must
-  // be one the holder had when it was replaced; given one only afterwards, it is not followed either.
+  // be one the holder had when it was replaced; given one only afterwards, it is not followed either. And only
+  // what the holder had when it was replaced goes on: a grant given afterwards stays with the old session.
   successions() {
     if (this.error || !this.data.enabled) return [];
     const listed = [];
@@ -215,7 +219,7 @@ class OperatorControl {
   // time a replacement was logged, only a grant the person had given by then counts: a grant given to a session
   // after it was replaced does not make that replacement one to follow.
   inForce(id, nativeId, by = null) {
-    return Object.values(this.data.domains).some(domain => !domain.revokedAt && domain.expiresAt > Date.now() && (by === null || Number.isSafeInteger(domain.createdAt) && domain.createdAt <= by) &&
+    return Object.values(this.data.domains).some(domain => !domain.revokedAt && domain.expiresAt > Date.now() && (by === null || givenBy(domain, by)) &&
       domain.initiators.some(i => i.id === id && i.nativeId === nativeId));
   }
   // Desktop only (workspace.cjs operatorAction), in three steps: 'carry' to the successor the log names,
@@ -272,11 +276,14 @@ class OperatorControl {
       // successor itself, logged after that, can be followed in its turn.
       data.sessions[to.id] = { enabled: true, nativeId: to.nativeId, enabledAt: value.loggedAt, carriedFrom: { ...from, at } };
       // One holder: the old session, if the person brings it back, no longer has the interface. Its grants are
-      // not revoked by this: they have moved.
+      // not revoked by this: they have moved. Those it had when it was replaced, that is, in force or not; one
+      // the person gave it after that, before this step, was not there to go on and stays in its name, where
+      // nothing new can be started under it while that session's interface is off, and the person can revoke
+      // it from the old session's menu.
       data.sessions[oldId] = { ...data.sessions[oldId], enabled: false, succession: { at, carried: true, to: { ...holder } } };
       const moved = [];
       for (const domain of Object.values(data.domains)) {
-        if (!domain.initiators.some(i => i.id === oldId && i.nativeId === value.nativeId)) continue;
+        if (!domain.initiators.some(i => i.id === oldId && i.nativeId === value.nativeId) || !givenBy(domain, value.loggedAt)) continue;
         domain.initiators = domain.initiators.map(i => i.id === oldId && i.nativeId === value.nativeId ? { ...holder } : i);
         (domain.carried ||= []).push({ from: { ...from }, to: { ...holder }, at }); moved.push(domain.id);
       }

@@ -242,16 +242,33 @@ test('a grant given to a session after it was replaced does not make that replac
   await k.carry();
   assert.deepEqual(k.records().map(record => [record.monitor.carried, record.monitor.reason]), [[false, 'ambiguous']]);
   assert.deepEqual(k.w.operator.data.domains[stays].initiators.map(i => i.id), [k.id]); assert.equal(Object.hasOwn(k.w.operator.data.sessions, untimed), false);
-  // With a grant in force that it had when it was replaced, the replacement is followed as before, and what moves is
-  // unchanged: every grant that names the old session at the step, one given in between included.
-  const h = await fixture(t), early = h.grant();
-  h.w.operator.data.sessions[h.id].enabledAt = Date.now() - 7200000; h.w.operator.data.domains[early].createdAt = Date.now() - 7000000;
+  // With a grant in force that it had when it was replaced, the replacement is followed as before. What goes on is
+  // what it had then, in force or not; a grant the person gave it after that, before the desktop's step, stays.
+  const h = await fixture(t), early = h.grant(), lapsed = h.grant(), withdrawn = h.grant();
+  h.w.operator.data.sessions[h.id].enabledAt = Date.now() - 7200000;
+  for (const id of [early, lapsed, withdrawn]) h.w.operator.data.domains[id].createdAt = Date.now() - 7000000;
+  h.w.operator.data.domains[lapsed].expiresAt = Date.now() - 1; h.w.operatorAction(h.id, 'revoke', withdrawn);
   const follower = await h.successor(); await h.w.stop(h.id);
   h.logged('done', h.w.get(h.id), h.w.get(follower), Date.now() - 3600000);
-  const between = h.grant();
+  const between = h.grant(), undated = h.grant(); delete h.w.operator.data.domains[undated].createdAt;
   await h.carry();
-  assert.deepEqual([early, between].map(id => h.w.operator.data.domains[id].initiators.map(i => i.id)), [[follower], [follower]]);
-  assert.equal(h.w.operator.data.sessions[follower].enabled, true); assert.deepEqual([h.records()[0].monitor.carried, h.records()[0].monitor.grants], [true, 2]);
+  const holders = id => h.w.operator.data.domains[id].initiators.map(i => i.id);
+  assert.deepEqual([early, lapsed, withdrawn].map(holders), [[follower], [follower], [follower]], 'What it had when it was replaced goes on, as it is');
+  assert.deepEqual([between, undated].map(holders), [[h.id], [h.id]], 'What it was given afterwards, or cannot be shown to have had, stays');
+  assert.deepEqual([between, undated].map(id => h.w.operator.data.domains[id].carried), [undefined, undefined], 'and is not marked as having gone on');
+  assert.equal(h.w.operator.data.sessions[follower].enabled, true); assert.equal(h.w.operator.data.sessions[h.id].enabled, false);
+  assert.deepEqual([h.records()[0].monitor.carried, h.records()[0].monitor.grants], [true, 1], 'The entry counts the one grant in force that went on');
+  assert.deepEqual(h.w.operator.data.audit.find(entry => entry.tool === 'operator_succession').domains.sort(), [early, lapsed, withdrawn].sort());
+  // The successor opens under the grant that went on, and not under the one that stayed.
+  const opened = await h.open(follower); assert.equal(opened.status, 'created'); assert.equal(opened.domainId, early);
+  const refused = await h.open(follower, { grant_id: between });
+  assert.deepEqual([refused.status, refused.sessionId], ['pending-authorization', null], 'Named by the successor, the grant that stayed creates nothing: the request waits for the person');
+  // Nothing new can be started under the grant that stayed: the old session has ended and its interface is off.
+  // The person can revoke it from the old session's menu (what that item sends); the journal's own off switch
+  // for that session reaches it too.
+  assert.equal(h.w.operator.data.domains[between].revokedAt, undefined);
+  h.w.operatorAction(h.id, 'revoke', between); assert.ok(h.w.operator.data.domains[between].revokedAt);
+  h.w.operatorAction(h.id, 'enabled', false); assert.ok(h.w.operator.data.domains[undated].revokedAt);
 });
 
 test('the entry says what went on: the grants that are in force, or the interface permission alone when the grant was revoked before the entry could be written', async t => {
