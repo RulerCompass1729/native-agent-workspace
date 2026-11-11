@@ -7,9 +7,12 @@
 // tests, and the engine's own message when it gives one.
 //
 // The run starts no session and sends nothing. `plugin test` runs under a system sandbox that
-// denies all network and the keychain and allows no write under the person's home, with a private
-// home and configuration directory, on a private copy of the mod, with a time limit. When the
-// sandbox cannot be applied, nothing runs and the record says so.
+// denies all network (local sockets included) and the keychain, allows no write outside the run's
+// own folder and no read of the person's Claude configuration, with a private home and
+// configuration directory, on a private copy of the mod, with a time limit. When the sandbox
+// cannot be applied or cannot start the program, nothing runs, the record says so, and the next
+// NAW start tries again. If NAW's service is killed during the run, nothing stops the sandboxed
+// program before it ends by itself.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 
@@ -57,9 +60,13 @@ function parse(output) {
 
 function profile(work) {
   const quoted = value => JSON.stringify(value);
+  // The account's home and the one this process was started with, in every spelling.
+  const homes = new Set();
+  for (const home of [os.userInfo().homedir, os.homedir()]) { homes.add(home); try { homes.add(fs.realpathSync(home)); } catch { /* not there */ } }
   return ['(version 1)', '(allow default)', '(deny network*)',
     '(deny mach-lookup (global-name "com.apple.securityd"))', '(deny mach-lookup (global-name "com.apple.SecurityServer"))',
-    `(deny file-write* (subpath ${quoted(fs.realpathSync(os.homedir()))}))`, `(allow file-write* (subpath ${quoted(work)}))`].join('');
+    '(deny file-write*)', `(allow file-write* (subpath ${quoted(work)}) (subpath "/dev"))`,
+    ...[...homes].map(home => `(deny file-read* (subpath ${quoted(path.join(home, '.claude'))}) (literal ${quoted(path.join(home, '.claude.json'))}))`)].join('');
 }
 // One process in its own group; the whole group is ended at the time limit or when NAW closes.
 function execute(file, args, { env, cwd, timeoutMs, signal }) {
@@ -95,6 +102,9 @@ async function run({ binary, version, privateDir, dir = __dirname, timeoutMs = 6
     const env = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home, TMPDIR: temp, LANG: 'en_US.UTF-8', CLAUDE_CONFIG_DIR: config, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
     const done = await execute(sandbox, ['-p', profile(work), binary, 'plugin', 'test', copy], { env, cwd: work, timeoutMs, signal });
     const output = done.output.split(work).join(''), counted = parse(output);
+    // The sandbox itself could not apply its profile or start the program: the program did not run.
+    const refused = counted.tests === null && output.split('\n').find(line => line.startsWith('sandbox-exec: '));
+    if (refused) return { version, mod, at, reason: refused.slice(0, 200) };
     return { version, mod, at, seconds: Math.round((Date.now() - started) / 100) / 10, exit: done.code, ...(done.signal ? { signal: done.signal } : {}), ...(done.timedOut && done.code === null ? { timedOut: true } : {}),
       ...counted, ...(counted.tests === null ? { note: output.trim().slice(0, 400) } : {}) };
   } catch (error) {

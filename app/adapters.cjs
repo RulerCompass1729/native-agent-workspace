@@ -2786,7 +2786,9 @@ class NativeHost {
   }
   // An unqualified Claude version gets the managed mod's own tests run once in the background, without
   // network or a session (B3, claude-mod-check.cjs). The result is kept in the data directory for the
-  // manual qualification and logged; it opens nothing and does not change the fallback.
+  // manual qualification; it opens nothing and does not change the fallback. The record file is the
+  // only output in daily use: the service runs with its output discarded, so the line below shows
+  // only when the service is started by hand.
   checkClaudeVersion() {
     if (this.serviceBinding || this.closed) return;
     const claudePin = require('./claude-pin.cjs'), current = claudePin.installed(this.binaries.claude);
