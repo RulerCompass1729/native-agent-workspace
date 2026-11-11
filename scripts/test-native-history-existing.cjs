@@ -3,10 +3,11 @@ const { joinSpace, leaveSpace } = require('./fixtures/space-membership.cjs');
 // Import a stopped, actual context-runner history into a completely fresh app.
 // Explicit owned fixture required; no normal profile. Optional cold continuation
 // serves only the explicitly sent draft with one fixed reply and at most one native title.
-const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http'), { randomUUID } = require('node:crypto');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), { randomUUID } = require('node:crypto');
+const loopback = require('./fixtures/loopback-model.cjs');
 const assert = require('node:assert/strict'), { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
-const { processIdentity, processMayBeAlive } = require(path.join(code, 'app/platform.cjs'));
+const { executable, processIdentity, processMayBeAlive } = require(path.join(code, 'app/platform.cjs'));
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
 const source = fs.realpathSync(process.env.NAW_NATIVE_HISTORY_EVIDENCE || 'MISSING_OWNED_FIXTURE');
 assert.equal(fs.statSync(source).uid, process.getuid());
@@ -20,6 +21,11 @@ for (const identity of [original.processIdentity, original.serverIdentity]) asse
 const config = fs.readFileSync(path.join(source, 'codex/config.toml'), 'utf8');
 const url = new URL(config.match(/^base_url\s*=\s*"([^"]+)"/m)?.[1]);
 assert.equal(url.protocol, 'http:'); assert.equal(url.hostname, '127.0.0.1'); assert.ok(Number(url.port) > 0);
+// The history is imported by the same qualified Codex version that wrote it.
+const binary = executable('codex'); if (!binary) throw Error('Real Codex required');
+assert.equal(testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim(), 'codex-cli ' + original.nativeVersion);
+assert.ok(require(path.join(code, 'app/native-history.cjs')).verifiedCodexProtocol({ nativeVersion: original.nativeVersion }), 'Unqualified Codex for history: ' + original.nativeVersion);
+assert.ok(fs.realpathSync(original.cwd).startsWith(source + path.sep), 'The original session folder belongs to the owned fixture');
 const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-import-')), profile = path.join(base, 'profile');
 const originalRollouts = new Map();
 function collectRollouts(folder) {
@@ -52,8 +58,10 @@ assert.ok(!continueCold || process.env.NAW_NATIVE_COLD_RECOVERY === '1');
 let allowContinuation = false, taskResponses = 0, titleResponses = 0, sequence = 0;
 const draft = 'Unsent follow-up to the original native session. ' + path.basename(base), reply = '原会话继续成功（' + path.basename(base).slice(-6) + '）。';
 function event(res, type, body) { res.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: ++sequence, ...body })}\n\n`); }
-const trap = http.createServer((req, res) => {
-  let body = ''; req.on('data', b => body += b); req.on('end', () => {
+// The one B11 loopback fixture: 127.0.0.1, a new random port, sandboxed CLI, fixed responses below. The endpoint the
+// history fixture was written with is gone, so its private config and CLI wrapper are pointed at this run's fixture.
+const trap = loopback.create({ directory: base, provider: 'codex', respond: (req, res, body) => {
+  {
     requests.push(req.url);
     try {
       assert.ok(continueCold && allowContinuation && req.url.endsWith('/responses'), 'No inference before explicit continuation');
@@ -77,8 +85,8 @@ const trap = http.createServer((req, res) => {
       event(res, 'response.output_item.done', { output_index: 0, item });
       event(res, 'response.completed', { response: { ...response, status: 'completed', output: [item] } }); res.end();
     } catch (e) { errors.push(e.message); res.writeHead(503); res.end('Unexpected inference is refused'); }
-  });
-});
+  }
+} });
 let app, page; const cleaned = new Set();
 async function until(fn, label) { for (let n = 0; n < 300; n++) { if (await fn()) return; await sleep(60); } throw Error(label); }
 const snapshot = () => page.evaluate(() => workspace.initial());
@@ -111,13 +119,17 @@ async function selectOriginal(accepted = true) {
 }
 (async () => {
   console.log('Evidence:', base, 'Owned source:', source);
-  await new Promise((resolve, reject) => { trap.once('error', reject); trap.listen(Number(url.port), '127.0.0.1', resolve); });
+  await trap.start(); await trap.preflight();
+  const configFile = path.join(source, 'codex/config.toml');
+  assert.ok(fs.lstatSync(configFile).isFile() && fs.realpathSync(configFile).startsWith(source + path.sep), 'The private Codex config is the fixture\'s own regular file');
+  fs.writeFileSync(configFile, config.replace(/^base_url\s*=\s*"[^"]+"/m, `base_url = "${trap.endpoint}/v1"`));
+  trap.wrapper(binary, { file: path.join(source, 'codex-local'), env: { CODEX_HOME: path.join(source, 'codex'), HOME: path.join(source, 'home') } });
   await launch(); assert.equal((await snapshot()).sessions.length, 0);
   await selectOriginal();
   await until(async () => { const s = (await snapshot()).sessions[0]; return s?.chatAvailable && s.messages.some(m => m.text === 'CONTEXT_TASK_1'); }, 'Actual original native history loaded');
   let state = await snapshot(), session = state.sessions[0];
   assert.equal(state.sessions.length, 1); assert.equal(session.nativeId, original.nativeId); assert.equal(session.model, original.model);
-  assert.equal(session.externalHistory, true); assert.equal(session.roomId, null); assert.equal(session.nativeVersion, '0.164.0');
+  assert.equal(session.externalHistory, true); assert.equal(session.roomId, null); assert.equal(session.nativeVersion, original.nativeVersion);
   const expected = original.messages.filter(m => m.nativeId === original.nativeId && ['user', 'assistant'].includes(m.role) && m.text?.trim());
   assert.ok(expected.length >= 2);
   for (const message of expected) assert.ok(session.messages.some(m => m.role === message.role && m.text === message.text), 'Original received text is recovered, not a new summary');
@@ -128,7 +140,7 @@ async function selectOriginal(accepted = true) {
     return nativeTimes.every(t => rows.some(m => m.kind === 'turn' && m.turnId === t.turnId && ['nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs'].every(k => m[k] === t[k])));
   }, 'Original native completion time and duration are recovered exactly');
   await page.locator('#terminal-tab').click();
-  await require('./native-trust.cjs').acceptOwnedFolder(page, path.join(source, 'work'), process.env.NAW_NATIVE_EXPECT_IMPORT_TRUST === '1');
+  await require('./native-trust.cjs').acceptOwnedFolder(page, original.cwd, process.env.NAW_NATIVE_EXPECT_IMPORT_TRUST === '1');
   await until(async () => (await page.locator('#terminal-area').innerText()).includes('CONTEXT_TASK_1'), 'The actual native terminal has passed its folder gate and displays the same original history');
   fs.writeFileSync(path.join(base, 'native-terminal.txt'), await page.locator('#terminal-area').innerText());
   state = await snapshot(); assert.equal(state.sessions[0].nativeId, original.nativeId);
@@ -183,14 +195,11 @@ async function selectOriginal(accepted = true) {
     assert.equal(cold.sessions[0].pid, null); assert.equal(cold.sessions[0].nativeVersionStatus, 'unreported');
     assert.equal(await page.locator('#message-input').inputValue(), draft);
     assert.deepEqual(requests, []);
-    // Preserve the actual recovery confirmation handler and explicit choice;
-    // its OS-native rendering/click is a separate, unverified surface.
+    // The current product resumes on the explicit button alone (app/main.cjs returns before any dialog
+    // for 'resume'); the OS confirmation this script once answered no longer exists. Any OS dialog here is unexpected.
     await app.evaluate(({ dialog }) => {
       globalThis.recoveryConfirmations = [];
-      dialog.showMessageBox = async (_window, options) => {
-        if (options?.message !== '继续这个原生会话？' || options.buttons?.join('|') !== '取消|继续会话' || options.defaultId !== 0 || options.cancelId !== 0) throw Error('Unexpected confirmation in owned cold fixture');
-        globalThis.recoveryConfirmations.push(options); return { response: 1 };
-      };
+      dialog.showMessageBox = async (_window, options) => { globalThis.recoveryConfirmations.push(options); throw Error('Unexpected OS dialog in owned cold fixture'); };
     });
     await page.locator('#chat-tab').click(); await page.locator('#send-button').getByText('继续原生会话', { exact: true }).click();
     await until(async () => { const s = (await snapshot()).sessions[0]; return s.state === 'idle' && s.chatAvailable && s.nativeVersionStatus === 'verified'; }, 'Explicit GUI action resumes the same native history');
@@ -203,9 +212,9 @@ async function selectOriginal(accepted = true) {
     assert.equal(await page.locator('#message-input').inputValue(), draft);
     assert.equal(resumed.diagnostics.dispatches, 0); assert.deepEqual(requests, []); assert.deepEqual(errors, []);
     const confirmations = await app.evaluate(() => globalThis.recoveryConfirmations);
-    assert.equal(confirmations.length, 1); fs.writeFileSync(path.join(base, 'recovery-confirmation.json'), JSON.stringify(confirmations, null, 2));
+    assert.equal(confirmations.length, 0, 'The explicit button resumes without an OS dialog');
     fs.writeFileSync(path.join(base, 'cold-resumed.json'), JSON.stringify(resumed, null, 2));
-    checks.push('After confirmed native service exit, cold GUI recovery with explicit fixture consent resumes the original ID on a new backend without replay; OS-dialog appearance is not certified');
+    checks.push('After confirmed native service exit, cold GUI recovery by the explicit button resumes the original ID on a new backend without replay or an OS dialog');
     if (continueCold) {
       await page.locator('#terminal-tab').click();
       await require('./native-trust.cjs').acceptOwnedFolder(page, path.join(source, 'work'));
@@ -231,7 +240,8 @@ async function selectOriginal(accepted = true) {
   }
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-import.png') }); }
   checkNativeHistoryPrefix();
-  console.log(JSON.stringify({ checks, nativeRolloutsPreserved:nativeWrites.length, nativeSettingsMayAppend:true, originalTextBlocks: expected.length, recoveryInferenceRequests: requests.length - taskResponses - titleResponses, explicitContinuationResponses: taskResponses, nativeTitleResponses: titleResponses, portalDispatches: (await snapshot()).diagnostics.dispatches, paidModelCalls: 0, errors, evidence: base }));
+  trap.assertClean();
+  console.log(JSON.stringify({ fixture: trap.summary(), checks, nativeRolloutsPreserved:nativeWrites.length, nativeSettingsMayAppend:true, originalTextBlocks: expected.length, recoveryInferenceRequests: requests.length - taskResponses - titleResponses, explicitContinuationResponses: taskResponses, nativeTitleResponses: titleResponses, portalDispatches: (await snapshot()).diagnostics.dispatches, paidModelCalls: 0, errors, evidence: base }));
 })().catch(async e => {
   console.error(e.stack);
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.json'), JSON.stringify(await snapshot().catch(() => ({})), null, 2)); fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); }
@@ -240,6 +250,6 @@ async function selectOriginal(accepted = true) {
   try {
     if (app) await app.close().catch(() => {});
     for (const target of profiles) await cleanupProfile(target);
-  } finally { trap.closeAllConnections(); await new Promise(resolve => trap.close(resolve)); }
+  } finally { await trap.stop(); }
   assert.equal(requests.length, taskResponses + titleResponses, 'Cleanup must not initiate inference');
 }));

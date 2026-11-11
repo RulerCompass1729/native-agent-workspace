@@ -1,7 +1,8 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 // Actual Electron + Codex TUI; fixed loopback inference, isolated credentials/config.
-const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http=require('node:http');
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const loopback=require('./fixtures/loopback-model.cjs');
 const assert=require('node:assert/strict'),{execFileSync}=testScratch.childProcess;
 const {_electron}=testScratch.playwright(require('playwright'));
 const {executable,processIdentity,processMayBeAlive}=require('../app/platform.cjs');
@@ -21,6 +22,8 @@ assert.ok(['0.163.0','0.164.0','0.165.0'].includes(nativeVersion)||overloadOnly)
 const binary=executable('codex');assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli '+nativeVersion);
 let app,page,calls=0,titles=0,seq=0,releaseRetry,releaseSearch,releaseGoal,goalRpc,goalCodeMode,budgetError,activeHeld;const errors=[],checks=[];
 const updateStartupTrial=process.env.NAW_NATIVE_UPDATE_STARTUP==='1';
+// The loopback fixture starts Codex with its update check off, so the update-menu trial cannot see a menu to bypass.
+assert.ok(!updateStartupTrial,'NAW_NATIVE_UPDATE_STARTUP is not available under the loopback fixture (Codex update check is off there)');
 const capacityTrial=process.env.NAW_NATIVE_CAPACITY_TRIAL;assert.ok(!capacityTrial||['continue','cancel','goal'].includes(capacityTrial));
 const capacityGoal=capacityTrial==='goal';
 const failureTrial=process.env.NAW_NATIVE_FAILURE_TRIAL==='1',failureBody='NATIVE_REJECTED_REQUEST: Keep This BODY exactly.';
@@ -56,7 +59,9 @@ function sameLiveServer(before, after) {
 }
 async function until(fn,label,timeout=30000){const start=Date.now();while(Date.now()-start<timeout){if(budgetError)throw budgetError;if(await fn())return;await sleep(80);}throw Error(label);}
 function event(res,type,body){res.write(`event: ${type}\ndata: ${JSON.stringify({type,sequence_number:++seq,...body})}\n\n`);}
-const server=http.createServer((req,res)=>{if(updateStartupTrial){errors.push('Unexpected local inference request in startup-only trial');res.writeHead(500);res.end('Startup-only fixture forbids inference');return;}let body='';req.on('data',b=>body+=b);req.on('end',async()=>{
+// The one B11 loopback fixture: 127.0.0.1, random port, sandboxed CLI, fixed responses below.
+// Its preflight socket needs a short path, so it works in the temporary folder even when the native fixture is kept elsewhere.
+const fixture=loopback.create({directory:temporary,provider:'codex',respond:async(req,res,body)=>{{
  if(!req.url.endsWith('/responses')){res.writeHead(404);res.end();return;}
  const input=JSON.parse(body),title=input.input?.some(m=>m.role==='user'&&m.content?.some(p=>p.text?.startsWith('Generate a concise, single-line task title')));
  const n=title?0:++calls;if(title)titles++;if(calls>(scrollTrial?1:goalTrial?(capacityGoal?3:activeGoalRecovery?5:4):failureTrial||capacityTrial||process.env.NAW_NATIVE_RETRY_TRIAL==='1'?2:3)||titles>1){budgetError=Error('Native context task/title budget exceeded');res.writeHead(400);res.end(budgetError.message);return;}
@@ -99,7 +104,7 @@ const server=http.createServer((req,res)=>{if(updateStartupTrial){errors.push('U
  event(res,'response.output_item.added',{output_index:0,item:{...item,status:'in_progress',content:[]}});
  event(res,'response.output_text.delta',{output_index:0,item_id:item.id,content_index:0,delta:item.content[0].text});
  event(res,'response.output_item.done',{output_index:0,item});event(res,'response.completed',{response:{...response,status:'completed',output:[item]}});res.end();
- });});
+ }}});
 const snapshot=()=>page.evaluate(()=>workspace.initial());
 async function terminalText(){return page.locator('#terminal-area').innerText();}
 async function nativeCommand(command){
@@ -111,8 +116,8 @@ async function nativeCommand(command){
  await input.press('Enter');
 }
 (async()=>{
- await new Promise(r=>server.listen(0,'127.0.0.1',r));
- fs.writeFileSync(path.join(home,'config.toml'),`model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\ncli_auth_credentials_store = "file"\n[features]\ndaemon_auto_start = false\n${goalsDisabled?'goals = false\n':''}[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n${capacityTrial?'request_max_retries = 0\nstream_max_retries = 0\n':''}`,{mode:0o600});
+ await fixture.start();await fixture.preflight();
+ fs.writeFileSync(path.join(home,'config.toml'),`model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\ncli_auth_credentials_store = "file"\n[features]\ndaemon_auto_start = false\n${goalsDisabled?'goals = false\n':''}[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "${fixture.endpoint}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n${capacityTrial?'request_max_retries = 0\nstream_max_retries = 0\n':''}`,{mode:0o600});
  let runtimeBinary=binary;
  if(updateStartupTrial){
   assert.equal(nativeVersion,'0.164.0');
@@ -122,7 +127,7 @@ async function nativeCommand(command){
   fs.mkdirSync(path.dirname(runtimeBinary),{recursive:true});fs.copyFileSync(fs.realpathSync(binary),runtimeBinary,fs.constants.COPYFILE_FICLONE);fs.chmodSync(runtimeBinary,0o700);
   fs.writeFileSync(path.join(home,'version.json'),JSON.stringify({latest_version:'0.165.0',last_checked_at:new Date().toISOString(),dismissed_version:null}),{mode:0o600});
  }
- const shim=path.join(base,'codex-local');fs.writeFileSync(shim,'#!/usr/bin/python3\nimport os,sys\n'+`os.environ["CODEX_HOME"]=${JSON.stringify(home)}\nos.environ["HOME"]=${JSON.stringify(userHome)}\n`+'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n'+`os.execv(${JSON.stringify(runtimeBinary)},["codex"]+sys.argv[1:])\n`,{mode:0o700});
+ const shim=path.join(base,'codex-local');fixture.wrapper(runtimeBinary,{file:shim,env:{CODEX_HOME:home,HOME:userHome}});
  fs.writeFileSync(path.join(profile,'runtime-locations.json'),JSON.stringify({codex:shim}),{mode:0o600});
  if(!process.env.NAW_APP_EXECUTABLE)execFileSync(process.execPath,[path.join(root,'scripts/build-ui.cjs')]);
  app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],...(process.env.NAW_VIDEO_DIR?{recordVideo:{dir:process.env.NAW_VIDEO_DIR,size:{width:1280,height:900}}}:{}),env:{...process.env,NAW_DATA_DIR:profile,NAW_WORKSPACE:cwd,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});
@@ -571,8 +576,8 @@ async function nativeCommand(command){
  assert.ok(catalog.data.some(row=>row.nativeId===before.nativeId||row.nativeId===current),'The original native thread remains in the read-only catalog');
  checks.push('Read-only native history catalog retains the original contexts without another task');
  assert.equal(calls,3);assert.deepEqual(errors,[]);console.log(JSON.stringify({checks,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));
-})().catch(async e=>{fs.writeFileSync(path.join(base,'failure-counts.json'),JSON.stringify({calls,titles,budgetExceeded:Boolean(budgetError),paidModelCalls:0},null,2));console.error(e.stack,'\nEvidence:',base);if(page&&!page.isClosed()){fs.writeFileSync(path.join(base,'failure.txt'),await page.locator('body').innerText());await page.screenshot({path:path.join(base,'failure.png')});}process.exitCode=1;}).finally(testScratch.cleanup(async()=>{
- releaseRetry?.();releaseGoal?.();activeHeld?.destroy();goalRpc?.ws.close();if(app)await app.close().catch(()=>{});server.closeAllConnections();
+})().then(()=>fixture.assertClean()).catch(async e=>{fs.writeFileSync(path.join(base,'failure-counts.json'),JSON.stringify({calls,titles,budgetExceeded:Boolean(budgetError),paidModelCalls:0},null,2));console.error(e.stack,'\nEvidence:',base);if(page&&!page.isClosed()){fs.writeFileSync(path.join(base,'failure.txt'),await page.locator('body').innerText());await page.screenshot({path:path.join(base,'failure.png')});}process.exitCode=1;}).finally(testScratch.cleanup(async()=>{
+ releaseRetry?.();releaseGoal?.();activeHeld?.destroy();goalRpc?.ws.close();if(app)await app.close().catch(()=>{});
  try{const c=await connect(profile,'native-context-cleanup');try{for(const s of(await c.call('initial')).sessions)await c.call('stop',s.id);const owned=c.entries.map(e=>processIdentity(e.state.servicePid));for(const p of owned){assert.ok(p&&processMayBeAlive(p));process.kill(p.pid,'SIGTERM');}await until(()=>owned.every(p=>!processMayBeAlive(p)),'Owned service exit',15000);}finally{c.close();}}catch(e){console.error('Cleanup:',e.message);process.exitCode=1;}
- await new Promise(r=>server.close(r));
+ await fixture.stop();
 }));
