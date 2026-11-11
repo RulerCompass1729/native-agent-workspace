@@ -48,7 +48,7 @@ test('all five actions require literal opaque person authorization before readin
 test('empty status is off, unverified rather than a measured zero, and does not create a designation or budget', t => {
   const f = fixture(t), api = f.make(), view = api.status(person);
   assert.equal(view.state, 'empty'); assert.equal(view.activation, 'off'); assert.equal(view.recordPeriod, 'off');
-  assert.deepEqual(view.role, { available: true, revision: 0, selected: null });
+  assert.deepEqual(view.role, { available: true, currentAvailable: true, revision: 0, selected: null });
   assert.equal(view.credentialPresent, null); assert.equal(view.usage.state, 'unverified');
   assert.equal(view.usage.today.costMicros.value, null); assert.equal(view.usage.today.costMicros.knownLowerBound, 0);
   assert.equal(view.usage.today.providerRequestCount, null); assert.equal(view.usage.today.recordedRunCount, 0);

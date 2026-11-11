@@ -85,6 +85,16 @@ test('a bound capability follows fresh trusted record objects but never a change
   }
 });
 
+test('a bad rotation tail blocks both old business closures and new bindings while human snapshot/revoke remain usable', t => {
+  const f = fixture(t), bound = f.bind(); assert.equal(bound.catalog().readOnly, true);
+  fs.writeFileSync(f.role.logFile, '{partial-tail\n', { mode: 0o600 });
+  assert.throws(() => bound.catalog(), code('ERR_BUTLER_STATE'));
+  assert.throws(() => read(bound, { kind: 'spaces' }), code('ERR_BUTLER_STATE'));
+  assert.throws(() => f.bind(), code('ERR_BUTLER_STATE'));
+  assert.equal(f.role.snapshot().revision, 1); f.role.revoke(f.person, 1);
+  assert.throws(() => bound.catalog(), code('ERR_BUTLER_UNAUTHORIZED'));
+});
+
 test('active metadata index includes readonly spaces; archive and queue bodies require explicit requests', t => {
   const f = fixture(t), archived = f.room.create('Archived synthetic team'), readonly = f.room.create('Readonly synthetic team');
   const text = 'Complete synthetic archived task ' + '文'.repeat(5000);

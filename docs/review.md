@@ -9682,3 +9682,64 @@ Author-run baseline tests against the exact pre-change dispatcher and RoomState 
 Production migration remains closed. Real trust-page state ordering, detection outside starting and actual Chat successor coverage remain B2-TRUST-2 items 3 and 4. Claude Chat creates a terminal; Codex Chat does not. No native qualification, installed daily-app acceptance or safe downgrade support is claimed by this checkpoint.
 
 The reviewer leaves the following non-blocking conditions before migration can open. Unknown cleanup currently has no terminal resolution: a deleted row, changed native identity, missing proof or archived space can retain quarantine and prevent the original from auto-rotating indefinitely. It also keeps the existing three-second tick doing full passes and holding a service connection; define bounded passive observation and an explicit resolution. A later observed stopped state must not authorize removing a successor the person has since adopted: recheck unused control/draft/history before late departure. Failures after a completed trust wait but before confirmed handoff conservatively use this guarded path and can leave the successor quarantined instead of stopping it. Ready/prompt flapping can repeatedly start new clocks, so actual native ordering remains a prerequisite, not an assumption. End-to-end departure with the dispatcher's scoped client still needs runtime coverage (the GUI prompt precedes joining); synthetic stop coverage does not qualify real adapter behavior. Invalid durable receipt state currently disables dispatch fail-closed without a visible explanation; add an actionable recovery notice before enabling migration. These remain owned by Codex3 as pre-opening follow-ups, alongside items3/4; none permits opening the gate.
+
+## Butler human revoke during rotation-log faults — 2026-11-11
+
+Trigger and severity: an append during the bounded rotation-log read, a transient
+read error or a malformed tail made Role permanently fail in that process. The
+person's status then hid the otherwise readable designation and could not revoke
+it. This blocks the reliable-revoke pre-activation gate. The B4 owner repairs
+only this log-resolution dependency; activation and recording remain closed.
+
+The saved designation is now separate from its current resolved identity.
+`role.available` retains the validated saved revision, configuration and budget;
+new `role.currentAvailable:false` and `selected.identity:null` report an unknown
+rotation view without inventing an original or cached successor during the failed
+read. Status remains
+unknown, with revoke available, no pause and no close target. A valid complete
+log can recover the same Role object. Existing missing-log behavior is unchanged:
+ENOENT becomes an empty log and resolves the original saved designation. No
+log-growth check exists; after a fault, deleting the log or replacing it with an
+earlier complete prefix may resolve an earlier identity. This is an open
+pre-activation integrity condition, not proof of safe log rollback. Model
+current/authorization, cached
+business bindings and queue transaction guards continue to refuse failed log
+reads. Close and designate gain no fallback.
+
+Human revoke checks the saved revision before the existing locked writer reloads
+and compares it atomically. Optional target resolution cannot prevent a durable
+clear; an unknown target is never stopped, and its physical-stop and cleanup
+fields remain null/unconfirmed. The ledger is preserved. Corrupt or rolled-back
+designation files, directory-integrity/permission faults and write uncertainty
+retain their existing sticky guards. A rotation-log file with unsafe owner,
+mode, link count or size is refused on each affected read, but this log-file
+fault is no longer sticky. Busy/live/unknown or legacy empty locks are not
+recovered or stolen. No universal OS-write guarantee, whole reliable-revoke gate
+completion or physical runtime exit is claimed.
+
+Author-run real-file append/EIO/malformed-tail and actual Main/Person checks fail
+before the repair (71 total, 58 pass, 13 fail) and pass after it (71/71).
+Final targeted credential-free checks pass 187/187, with zero failures or skips;
+they also cover replacement-revision races, old business closures, queue
+admission and delayed commits, sticky selection/directory faults, failed
+directory fsync and retention of a foreign empty lock. Syntax and diff checks
+pass. Raw outputs and the nullable-identity caller contract are kept in the
+private lane. The empty-environment build exits zero. The first full run
+had 5,781 passes and two failures: our path-string fault hook missed the real
+directory through the temporary-directory alias, and an existing outbox test
+failed. The hook now matches device/inode and asserts it actually fired; its
+normal-environment file passes 14/14. The unchanged outbox file separately
+passes 34/34; this does not establish the cause of its initial failure. The
+complete second full run passes 5,783/5,783 with zero failures, cancellations
+or skips. Both full outputs remain private and the first is not called a pass.
+A fresh separate headless Claude session (2E863E31-C65E-4C87-A4E6-14A2DADE5BE0)
+found no code blocker and requested accurate missing/rolled-back-log wording.
+The same session approves that documentation delta and the alias-test repair
+with APPROVE_SCOPED. Its tools were Read/Grep/Glob only, no MCP. The author
+confirmed the reviewed product/existing tests unchanged, the new test equal
+to the approved increment, and the docs equal to the approved wording before
+factual closure. The reviewer read author-run evidence and did not rerun tests.
+A bounded private actual-Role probe also reproduces both open log-deletion and
+earlier-prefix cases; those two passing observation checks confirm the limit,
+not a repair. No installed
+app, native/provider process, GUI or model trial is part of this repair.
