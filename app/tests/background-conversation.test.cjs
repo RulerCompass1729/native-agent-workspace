@@ -454,7 +454,14 @@ for (const provider of ['claude', 'codex']) for (const role of ['member', 'nonme
   if (role === 'nonmember') f.state.sessions[0].roomIds = [];
   if (role === 'secretary') f.sandbox.secretary = { sessionId: 'agent', nativeId: 'native-agent' };
   const args = command('spaceFiles', ['shared', 'space-file']), pending = await f.controller.call(f.binding, args);
-  assert.equal(pending.state, 'confirmation-required'); assert.equal(f.fileReads, 0);
+  assert.equal(f.fileReads, 0);
+  if (role !== 'member') {
+    assert.equal(pending.state, 'unconfirmed'); assert.equal(pending.confirmation, undefined); assert.equal(pending.value, undefined);
+    assert.equal(f.notices.length, 0); assert.equal(JSON.stringify(pending).includes('Shared material.txt'), false);
+    await assert.rejects(f.controller.decide('agent', 'native-agent', pending.id, 1), /no longer current/);
+    return;
+  }
+  assert.equal(pending.state, 'confirmation-required');
   const approved = await f.controller.decide('agent', 'native-agent', pending.id, 1);
   assert.equal(approved.value, undefined);
   if (role === 'member') {

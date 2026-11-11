@@ -7,10 +7,13 @@ const invisible = /[\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800]/u;
 function productionConfirmation() {
   const start = main.indexOf('    confirmation: (actor, command, action'), end = main.indexOf('\n    audit:', start);
   assert.ok(start > 0 && end > start);
-  return vm.runInNewContext('(' + main.slice(start + '    confirmation: '.length, end).trim().replace(/,$/, '') + ')', {
+  const sandbox = vm.createContext({
     backgroundOperation: operation, displayText: (key, params) => locale.format('zh', key, params),
-    roomState: { apply: value => value }, sessionLabels: { apply: value => value },
+    roomState: { apply: value => value, value: {} }, sessionLabels: { apply: value => value },
+    queueSecretary: { current: () => null }, roomIds: session => session.roomIds || [], uiError: require('../ui-errors.cjs').uiError,
   });
+  vm.runInContext(main.slice(main.indexOf('function conversationReaderAllowed('), main.indexOf('function projectBackgroundRecord(')), sandbox);
+  return vm.runInContext('(' + main.slice(start + '    confirmation: '.length, end).trim().replace(/,$/, '') + ')', sandbox);
 }
 const context = snapshot => ({ client: { snapshot: () => snapshot } });
 test('actual maintenance confirmation escapes format and separator characters without changing Unicode payloads', () => {
@@ -22,8 +25,8 @@ test('actual maintenance confirmation escapes format and separator characters wi
   assert.match(options.detail, /αа中文/); assert.equal(JSON.stringify(command), before);
 });
 test('confirmation keeps exact IDs and adds session, space and selected-file names', () => {
-  const snapshot = { sessions: [{ id: 'target', name: 'Target 中文', provider: 'codex' }], rooms: [{ id: 'room', name: 'Space 中文', files: [{ id: 'file', name: '材料.txt' }] }] };
-  const build = productionConfirmation(), actor = { name: 'Agent' };
+  const snapshot = { sessions: [{ id: 'agent', nativeId: 'native-agent', roomIds: ['room'] }, { id: 'target', name: 'Target 中文', provider: 'codex' }], rooms: [{ id: 'room', name: 'Space 中文', files: [{ id: 'file', name: '材料.txt' }] }] };
+  const build = productionConfirmation(), actor = { id: 'agent', nativeId: 'native-agent', name: 'Agent' };
   const member = JSON.parse(build(actor, { method: 'spaceAction', arguments: ['room', 'join', ['target', true]] }, 'joinRoom', context(snapshot)).detail);
   assert.deepEqual(member.arguments, ['room', 'join', ['target', true]]);
   assert.ok(member.references.some(r => r.kind === 'session' && r.id === 'target' && r.name === 'Target 中文'));

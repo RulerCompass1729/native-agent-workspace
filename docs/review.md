@@ -11,6 +11,16 @@ and the person's window keep their existing paths. The three timing cases and
 role-storage failure have reproduced regressions; independent delta review is
 required before declaring this installation gate ready.
 
+The pending-confirmation bound counts only actors in the refreshed consent
+roster with the same native identity, unarchived and without a pending native
+context. Forgotten, replaced and archived actors' historical requests retain
+their operation IDs but no longer reserve invisible global slots. A missing
+roster conservatively retains the earlier count. Space-file membership and the
+secretary role are also checked during confirmation construction, so a forbidden
+request returns no confirmation, notification or referenced file name. The later
+file-read and pickup checks remain. Path-based file permissions are a separate
+user decision; no change to openLocalFile or openMessageFile is included here.
+
 **S2 consent follow-ups and space files, 2026-11-10 (delta review pending):**
 the person approved retaining a cancelled implicit conversation-read receipt
 until its selected target or consent fingerprint changes. Navigating away

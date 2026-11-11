@@ -23,7 +23,7 @@ function fixture(t, provider = 'codex') {
   const context = { background: true, view: {}, checkActor: async () => {}, client: { close() {} }, win: { destroy() {} } };
   const snapshot = { sessions: [{ id: 'agent', nativeId: 'native-agent' }, { id: 'target', nativeId: 'native-target' }] };
   context.client.snapshot = () => snapshot;
-  context.fingerprint = () => ({ sessions: snapshot.sessions.map(s => ({ id: s.id, nativeId: s.nativeId })) });
+  context.fingerprint = () => ({ sessions: snapshot.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, archived: s.archived, nativeContextPending: s.nativeContextPending })) });
   const sender = { id: 'agent', nativeId: 'native-agent', name: 'Agent', provider };
   const binding = { sender, identity: { callId: 'native-call', turnId: 'native-turn' }, valid: () => true };
   const config = { dataDir: dir, handlers, context: () => context,
@@ -35,6 +35,7 @@ function fixture(t, provider = 'codex') {
 test('unanswered confirmations have per-actor and global bounds; cancellation releases a slot without replay', async t => {
   const f = fixture(t), ask = (binding, id) => f.controller.call(binding, { action: 'invoke', method: 'spaceCreate', arguments: ['Synthetic space'], operation_id: id });
   const bindings = Array.from({ length: 5 }, (_, n) => ({ ...f.binding, sender: { ...f.binding.sender, id: 'bounded-agent-' + n, nativeId: 'bounded-native-' + n } }));
+  f.context.client.snapshot().sessions.push(...bindings.map(b => ({ id: b.sender.id, nativeId: b.sender.nativeId })));
   for (let actor = 0; actor < 4; actor++) {
     for (let n = 0; n < 32; n++) assert.equal((await ask(bindings[actor], `pending-${actor}-${n}`)).state, 'confirmation-required');
     const limited = await ask(bindings[actor], `actor-limit-${actor}`);
@@ -49,6 +50,29 @@ test('unanswered confirmations have per-actor and global bounds; cancellation re
   assert.equal((await ask(bindings[4], 'global-limit')).state, 'not-executed');
   await assert.rejects(f.controller.call(bindings[4], { action: 'invoke', method: 'spaceCreate', arguments: ['Changed intent'], operation_id: 'global-limit' }), /different command/);
   assert.equal(f.writes.length, 0);
+});
+for (const mode of ['forgotten', 'native-replaced', 'archived', 'context-pending']) test(`unanswerable ${mode} actor confirmations cannot exhaust the global allowance`, async t => {
+  const f = fixture(t), ask = (binding, id) => f.controller.call(binding, { action: 'invoke', method: 'spaceCreate', arguments: ['Synthetic space'], operation_id: id });
+  const bindings = Array.from({ length: 5 }, (_, n) => ({ ...f.binding, sender: { ...f.binding.sender, id: 'orphan-agent-' + n, nativeId: 'orphan-native-' + n } }));
+  const sessions = f.context.client.snapshot().sessions;
+  sessions.push(...bindings.map(b => ({ id: b.sender.id, nativeId: b.sender.nativeId })));
+  for (let n = 0; n < 4; n++) {
+    const row = await ask(bindings[n], 'template-' + n); assert.equal(row.state, 'confirmation-required');
+    f.controller.commit(data => {
+      for (let index = 1; index < 32; index++) {
+        const copy = JSON.parse(JSON.stringify(row)); copy.id = `saved-${n}-${index}`; copy.actor.operationId = copy.id; copy.command.operation_id = copy.id; data.records.push(copy);
+      }
+    });
+  }
+  assert.equal((await ask(bindings[4], 'before-orphan')).reason, 'confirmation-limit');
+  const prior = sessions.find(s => s.id === bindings[0].sender.id);
+  if (mode === 'forgotten') sessions.splice(sessions.indexOf(prior), 1);
+  if (mode === 'native-replaced') prior.nativeId = 'replacement-native';
+  if (mode === 'archived') prior.archived = true;
+  if (mode === 'context-pending') prior.nativeContextPending = true;
+  const next = await ask(bindings[4], 'after-orphan');
+  assert.equal(next.state, 'confirmation-required'); assert.equal(f.writes.length, 0);
+  assert.equal(f.controller.data.records.find(r => r.id === 'template-0').state, 'confirmation-required', 'History is retained and never replayed or silently approved');
 });
 for (const provider of ['claude', 'codex']) for (const [index, [method, args]] of cases.entries()) test(`${provider} ${method}[${index}]: pending and cancel have no effect, human approval executes once`, async t => {
   const f = fixture(t, provider), command = { action: 'invoke', operation_id: 'refuse', method, arguments: args };
