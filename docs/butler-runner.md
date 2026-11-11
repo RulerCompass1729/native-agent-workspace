@@ -1,4 +1,14 @@
-# Dedicated butler service dependency
+# Dormant legacy butler service dependency
+
+The current execution target is a designated DSH butler instance. This document
+records the earlier dormant native service dependency, not the production target.
+Its existing factory explicitly supplies the former profile/provider/model names;
+the shared backend no longer defaults to them. A new DSH factory must pass its
+actual `configuration: { profile, provider, model }`, keep its own exact persistent
+instance proof and reject foreign/unknown stores. Do not relabel a Codex process
+as DSH or reuse its liveness claim. Role and rotation authorization now require the
+actual designated DSH record, with the same IDs, binding and revision checks.
+The core `run(input, expected)` return envelope is unchanged.
 
 This checkpoint provides the dedicated service driver for the dormant
 [butler core](butler-core.md). It does not activate the butler or qualify native
@@ -42,6 +52,11 @@ qualified or claimed disabled; that is a remaining activation gate.
 Before native launch and on recovery, a narrow helper checks these non-secret
 configuration names: profile `deepseek-pro`, model `deepseek-v4-pro`, provider
 `deepseek`, and provider credential environment name `DEEPSEEK_API_KEY`.
+`spawnRunner` also requires its supplied binding to match that exact three-name
+configuration before its own Python discovery, environment or child spawn. Other names
+fail rather than being recorded for a process that still uses fixed arguments.
+This guard belongs to the legacy runner; a DSH driver must check its own actual
+configuration instead of inheriting these legacy model pins.
 The profile must explicitly declare model and provider; its provider environment
 name may inherit from the base configuration. Missing, mismatched, duplicate or
 unsupported metadata blocks launch. The checker supports canonical simple TOML

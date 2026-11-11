@@ -1,26 +1,36 @@
 'use strict';
 
-// Dedicated backend reservation only. This module does not start NativeHost,
-// select the ordinary active service, or claim that Codex's tool/context gates
-// are available. A future trusted local driver must prove all four boundaries.
+// Dedicated backend reservation only. This module does not start a provider,
+// select the ordinary active service, or qualify tool/context boundaries.
+// A trusted local driver must prove all four boundaries.
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
 const FLAGS = ['tools', 'context', 'provider', 's2'];
 const STATUSES = ['prepared', 'qualifying', 'blocked', 'recovering', 'starting', 'ready', 'failed', 'unknown'];
-const REASONS = ['runtime-unqualified', 'credential-missing', 'credential-presence-invalid', 'qualification-invalid',
+const REASONS = ['configuration-unset', 'runtime-unqualified', 'credential-missing', 'credential-presence-invalid', 'qualification-invalid',
   ...FLAGS.map(name => `${name}-unqualified`), 'driver-unavailable', 'backend-busy', 'owner-unconfirmed',
   'recover-failed', 'liveness-unconfirmed', 'start-failed', 'start-unconfirmed', 'binding-mismatch', 'recovery-required'];
 const BINDING_KEYS = ['purpose', 'profile', 'provider', 'model', 'runtimeVersion', 'backendRef', 'runnerRef', 'store', 'startNonce'];
 const RECORD_KEYS = ['format', 'binding', 'status', 'blocked', 'credentialPresent', 'qualification', 'operation', 'createdAt', 'updatedAt'];
-const fixed = { purpose: 'butler', profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro', store: 'store' };
+const fixed = { purpose: 'butler', store: 'store' };
+const CONFIGURATION_KEYS = ['profile', 'provider', 'model'];
 const emptyQualification = () => Object.fromEntries(FLAGS.map(name => [name, false]));
 const isName = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,119}$/.test(value);
 const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
   Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 function failure(code) { return Object.assign(new Error(`Butler backend: ${code}`), { code }); }
+// Host-selected names only. The core treats profile as an opaque identifier;
+// it does not resolve a CLI profile or inspect configuration/credentials.
+function configurationRecord(value) {
+  if (value === undefined || value === null) return null;
+  if (!exactKeys(value, CONFIGURATION_KEYS)) throw failure('configuration-invalid');
+  const selected = Object.fromEntries(CONFIGURATION_KEYS.map(key => [key, Object.getOwnPropertyDescriptor(value, key)?.value]));
+  if (CONFIGURATION_KEYS.some(key => !isName(selected[key]))) throw failure('configuration-invalid');
+  return Object.freeze(selected);
+}
 function binding(value) {
   if (!exactKeys(value, BINDING_KEYS) || BINDING_KEYS.some(key => !isName(value[key])) ||
       Object.entries(fixed).some(([key, expected]) => value[key] !== expected) ||
@@ -56,10 +66,12 @@ function ownerAlive(pid) {
 }
 
 class ButlerBackend {
+  #configuration;
   constructor(directory, { driver, credentialPresent = () => false, qualify = () => emptyQualification(),
-    runtimeVersion = 'unknown', now = Date.now, id = randomUUID } = {}) {
+    runtimeVersion = 'unknown', configuration, now = Date.now, id = randomUUID } = {}) {
     if (typeof directory !== 'string' || !path.isAbsolute(directory) || !isName(runtimeVersion) ||
         ![credentialPresent, qualify, now, id].every(value => typeof value === 'function')) throw failure('invalid-options');
+    this.#configuration = configurationRecord(configuration);
     this.directory = path.resolve(directory);
     this.file = path.join(this.directory, 'backend.json');
     this.lockFile = path.join(this.directory, 'backend.lock');
@@ -92,6 +104,8 @@ class ButlerBackend {
       if (!privateFile(opened) || !privateFile(current) || opened.dev !== current.dev || opened.ino !== current.ino || opened.size > 8192) throw failure('unsafe-record');
       let value;
       try { value = record(JSON.parse(fs.readFileSync(fd, 'utf8'))); } catch { throw failure('state-invalid'); }
+      if (value.binding.runtimeVersion !== this.runtimeVersion || this.#configuration &&
+          CONFIGURATION_KEYS.some(key => value.binding[key] !== this.#configuration[key])) throw failure('binding-mismatch');
       this._store();
       return value;
     } catch (error) {
@@ -141,15 +155,13 @@ class ButlerBackend {
     }
   }
   _prepare() {
+    if (!this.#configuration) throw failure('configuration-unset');
     const previous = this._read();
-    if (previous) {
-      if (previous.binding.runtimeVersion !== this.runtimeVersion) throw failure('binding-mismatch');
-      return previous;
-    }
+    if (previous) return previous;
     this._store(true);
     if (fs.readdirSync(this.store).length) throw failure('unowned-store');
     const time = this._time();
-    const value = { format: 1, binding: binding({ ...fixed, runtimeVersion: this.runtimeVersion,
+    const value = { format: 1, binding: binding({ ...fixed, ...this.#configuration, runtimeVersion: this.runtimeVersion,
       backendRef: `butler-backend:${this._id()}`, runnerRef: `butler-runner:${this._id()}`, startNonce: this._id() }),
     status: 'prepared', blocked: [], credentialPresent: null, qualification: emptyQualification(), operation: null, createdAt: time, updatedAt: time };
     this._write(value, null);
@@ -157,7 +169,10 @@ class ButlerBackend {
   }
   _snapshot(value) {
     if (!value) return { prepared: false, binding: null, state: 'unprepared', ready: false, credentialPresent: false,
-      credentialChecked: false, qualified: false, blocked: ['recovery-required'] };
+      credentialChecked: false, qualified: false, blocked: [this.#configuration ? 'recovery-required' : 'configuration-unset'] };
+    if (!this.#configuration) return { prepared: true, binding: publicBinding(value.binding), state: 'blocked', ready: false,
+      credentialPresent: value.credentialPresent === true, credentialChecked: value.credentialPresent !== null,
+      qualified: false, blocked: ['configuration-unset'] };
     const ready = value.status === 'ready' && this.confirmed === JSON.stringify(value.binding);
     const recovery = value.status === 'ready' && !ready;
     return { prepared: true, binding: publicBinding(value.binding), state: recovery ? 'unconfirmed' : value.status, ready,
@@ -166,7 +181,10 @@ class ButlerBackend {
   }
   read() { const value = this._read(); return value ? this._snapshot(value) : null; }
   snapshot() { return this._snapshot(this._read()); }
-  prepare() { return this._locked(() => this._snapshot(this._prepare())); }
+  prepare() {
+    if (!this.#configuration) throw failure('configuration-unset');
+    return this._locked(() => this._snapshot(this._prepare()));
+  }
   ensure() {
     if (!this.flight) this.flight = Promise.resolve().then(() => this._ensure()).finally(() => { this.flight = null; });
     return this.flight;
@@ -186,6 +204,7 @@ class ButlerBackend {
   }
   async _ensure() {
     this.confirmed = null;
+    if (!this.#configuration) return { ready: false, blocked: ['configuration-unset'] };
     let owned;
     try {
       owned = this._locked(() => {

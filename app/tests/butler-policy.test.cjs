@@ -162,7 +162,7 @@ test('malformed reply containers still fail atomically and cannot inject host su
 test('only the currently resolved dedicated non-member can become an additional rotation candidate', () => {
   const runner = { runnerRef: 'butler-runner-a', profile: 'deepseek-pro' };
   const selection = { mode: 'record-only', identity: { sessionId: 'butler-a', nativeId: 'native-a' }, runner };
-  const record = { id: 'butler-a', nativeId: 'native-a', provider: 'codex', state: 'idle', roomIds: [], runner };
+  const record = { id: 'butler-a', nativeId: 'native-a', provider: 'dsh', state: 'idle', roomIds: [], runner };
   assert.deepEqual(rotationCandidates(selection, [record]), ['butler-a']);
   for (const patch of [{ nativeId: 'old-native' }, { runner: { ...runner, profile: 'default' } }, { roomIds: ['shared'], roomId: 'shared' }, { archived: true }, { nativeContextPending: true }]) assert.deepEqual(rotationCandidates(selection, [{ ...record, ...patch }]), []);
 });

@@ -33,7 +33,7 @@ function fixture(t, action = { kind: 'queue', spaceId: 'shared', text: 'A synthe
   const person = Symbol('verified-person'), role = new ButlerRole(directory, { authorizePerson: actor => actor === person });
   const identity = { sessionId: 'butler-original', nativeId: 'native-original' };
   role.set(person, { identity, runner }, 0);
-  const record = { id: identity.sessionId, nativeId: identity.nativeId, name: 'Synthetic butler', provider: 'codex', state: 'idle', roomIds: [], runner };
+  const record = { id: identity.sessionId, nativeId: identity.nativeId, name: 'Synthetic butler', provider: 'dsh', state: 'idle', roomIds: [], runner };
   const records = [record], spaces = [{ id: 'shared', archived: false, writable: true }];
   const ledger = new ButlerLedger(directory), selection = { selectionRevision: 1, identity, runnerRef: runner.runnerRef };
   ledger.ingest({ eventId: 'synthetic-event', sourceRef: 'person:request-one', kind: 'request', payload: { text: 'Original synthetic words' } });

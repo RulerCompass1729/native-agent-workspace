@@ -56,6 +56,16 @@ test('dedicated host construction, snapshots and reopening have no launch, prese
   assert.deepEqual(fs.readdirSync(f.root), []);
 });
 
+test('the dormant legacy desktop boundary supplies its own explicit configuration and ignores caller replacements', async t => {
+  const f = fixture(t), backend = f.make({ configuration: { profile: 'different', provider: 'fixture-vendor', model: 'fixture-model' } });
+  const calls = blockDriver(backend);
+  assertClosed(await backend.ensure());
+  const binding = backend.snapshot().binding;
+  assert.deepEqual({ profile: binding.profile, provider: binding.provider, model: binding.model },
+    { profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro' });
+  assert.deepEqual(calls, []); assert.deepEqual(f.calls(), { presence: 1, launch: 0 });
+});
+
 test('factory defaults are unknown version and actual executable; an explicit executable stays dedicated', t => {
   const f = fixture(t);
   const unknown = createDedicatedBackend(f.directory);

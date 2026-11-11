@@ -10,6 +10,29 @@ The core separates the butler's designation from the queue secretary. A trusted
 host supplies an unforgeable person context, the actual caller record and the
 current runner binding; model-authored identity fields are not authority.
 
+The designated execution identity is a DSH butler instance. Its actual record must
+match the selected session/native IDs, runner/backend binding and selection
+revision; changing a provider label or constructing a lookalike caller grants
+nothing. `actorRecord.provider === 'dsh'` identifies the execution harness, while
+`runner.provider` names the configured model vendor. These are different fields.
+The identity correction changes neither the five proposal kinds nor their
+`effect:none`, record-only mode, default-off state or person-only controls.
+
+`ButlerBackend` requires explicit non-secret host metadata:
+`configuration: { profile, provider, model }`. Here `profile` is an opaque named
+configuration, not proof of a native Codex profile. There is no model/vendor
+fallback in the shared backend. Missing configuration refuses preparation/start
+before checking presence or qualification. A different configuration/runtime
+cannot reuse or rewrite an existing reservation. All four qualification defaults
+remain false. The old dormant native factory supplies its former values only at
+that legacy boundary; the DSH factory is a separate integration by its owner.
+The legacy runner rejects any different configuration triple before its spawn
+work. With explicit host configuration, backend `read()` and `snapshot()` throw
+`binding-mismatch` when a persisted reservation belongs to a different runtime or
+configuration. A future host/UI caller
+must catch that refusal and show a blocked state; upgrading never silently
+rewrites or reuses the old binding.
+
 - `butler-ingress.cjs` captures only structured queue decisions/failures and
   vacancy transitions. RoomState stores a compact source in the same commit as
   the outcome; startup recovery is independent of OS notification delivery and
@@ -85,12 +108,14 @@ used by the controller for ordinary candidate or host-context errors.
 
 ## Remaining connection gates
 
-S2 must reach main before its trusted caller/control hook is connected. The
-normal Codex app-server interface has no verified full-tool ceiling in this
-checkpoint. Turning off shell alone does not disable independently registered
-patch tools; project document limits do not turn off global instructions.
-Tool/context qualification therefore remains false. This source adds no invented
-Codex flag and does not infer provider compatibility from a saved profile name.
+S2 is present in the source base. The target execution layer is NAW's own DSH
+agent loop with DeepSeek, above the independent native session service. The old
+Codex composition remains dormant and is not the target of further qualification.
+The source now accepts the designated DSH instance through the existing identity
+checks. This does not qualify live tools/context, provider privacy, credentials,
+usage accounting, installed operation or a working-day trial. Those gates remain
+closed until the DSH host and its business-only tool boundary are integrated and
+verified. No other model adapter is added here.
 
 The desktop pairs the dedicated NativeHost/service driver and name-only profile
 checks with the existing backend, without preparing or starting it. Native provider compatibility remains

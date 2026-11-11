@@ -9,7 +9,7 @@ function fixture(t, options = {}) {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const person = Symbol('person'), role = new ButlerRole(directory, { authorizePerson: actor => actor === person });
   role.set(person, { identity: { sessionId: 'butler-a', nativeId: 'native-a' }, runner, budget: { limitMicros: 100 } }, 0);
-  const records = [{ id: 'butler-a', nativeId: 'native-a', provider: 'codex', state: 'idle', roomIds: [], runner }];
+  const records = [{ id: 'butler-a', nativeId: 'native-a', provider: 'dsh', state: 'idle', roomIds: [], runner }];
   const spaces = [{ id: 'shared', name: 'Example space', archived: false, writable: true, members: [], queue: [] }];
   let time = Date.UTC(2026, 10, 9); const now = () => time;
   let epoch = 0;

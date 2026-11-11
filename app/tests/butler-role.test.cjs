@@ -11,7 +11,7 @@ const identity = { sessionId: 'butler-original', nativeId: 'native-original' };
 const next = { sessionId: 'butler-next', nativeId: 'native-next' };
 const binding = { runnerRef: 'dedicated-runner', backendRef: 'dedicated-backend', purpose: 'butler', profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro' };
 const designation = (changes = {}) => ({ identity: { ...identity }, runner: { ...binding }, ...changes });
-const record = (who = identity, changes = {}) => ({ id: who.sessionId, nativeId: who.nativeId, provider: 'codex', state: 'idle', roomId: null, runner: { ...binding }, ...changes });
+const record = (who = identity, changes = {}) => ({ id: who.sessionId, nativeId: who.nativeId, provider: 'dsh', state: 'idle', roomId: null, runner: { ...binding }, ...changes });
 const edge = (event = 'done', from = identity, to = next) => ({ event, old: { id: from.sessionId, nativeId: from.nativeId }, new: { id: to.sessionId, nativeId: to.nativeId } });
 const options = { authorizePerson: actor => actor === person };
 const code = expected => error => error.code === expected;
@@ -54,13 +54,13 @@ test('selection revisions invalidate former batches across instances, replacemen
   assert.throws(() => role.authorize(nextRecord, { selectionRevision: 2, runnerRef: binding.runnerRef }, [nextRecord], []), code('ERR_BUTLER_UNAUTHORIZED'));
   assert.equal(role.snapshot().revision, 3);
 });
-test('only a dedicated, non-member Codex record with the current native and runner identity is authorized', t => {
+test('only a designated, non-member DSH instance with the current native and runner identity is authorized', t => {
   const { role } = setup(t); role.set(person, designation(), 0);
   const expected = { selectionRevision: 1, runnerRef: binding.runnerRef }, good = record();
   assert.deepEqual(role.authorize(good, expected, [good], []).identity, identity);
   assert.throws(() => role.authorize({ ...good }, expected, [good], []), code('ERR_BUTLER_UNAUTHORIZED'), 'JSON assertions are not the canonical actor record');
   for (const changes of [
-    { id: 'other' }, { nativeId: 'changed-native' }, { provider: 'claude' }, { archived: true }, { nativeContextPending: true },
+    { id: 'other' }, { nativeId: 'changed-native' }, { provider: 'claude' }, { provider: 'codex' }, { archived: true }, { nativeContextPending: true },
     { state: 'ended' }, { state: 'background' }, { state: 'disconnected' }, { roomId: 'shared' }, { roomIds: ['shared'], roomId: 'shared' },
     { roomIds: 'unverifiable' }, { runner: null },
     ...Object.keys(binding).map(key => ({ runner: { ...binding, [key]: 'other' } })),
@@ -121,7 +121,7 @@ test('unknown capabilities and malformed selections cannot widen record-only aut
   const { role } = setup(t);
   for (const bad of [null, { ...designation(), mode: 'queue-only' }, { ...designation(), lifecycle: true }, { ...designation(), capabilities: ['queueAdd'] },
     designation({ identity: { ...identity, sessionId: '' } }), designation({ identity: { ...identity, nativeId: 'line\nbreak' } }),
-    designation({ runner: { ...binding, profile: 'default' } }), designation({ runner: { ...binding, unexpected: 'must-not-be-accepted' } })]) {
+    designation({ runner: { ...binding, profile: 'invalid profile' } }), designation({ runner: { ...binding, unexpected: 'must-not-be-accepted' } })]) {
     assert.throws(() => role.set(person, bad, 0), code('ERR_BUTLER_INVALID'));
   }
   assert.equal(role.current(), null);
