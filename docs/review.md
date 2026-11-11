@@ -8144,3 +8144,30 @@ working-day acceptance is claimed.
   surface as a generic start failure; it still cannot admit another binding.
 - The live compatibility proposal is separately pending explicit approval and
   enforceable request/fee limits. No installed application was changed.
+
+## Reader rename freshness and snapshot reachability (2026-11-10)
+
+The focused reader's render signature omitted the current session name. After a
+rename-only state update, the wake sender fallback and image accessibility label
+kept the old scalar name until another message changed the signature. The
+signature now includes the name; original recorded wake sender names remain
+historical facts. Row bodies, image preview tokens, copy focus and raw messages
+are preserved.
+
+The rename regression executes the actual focused-reader invalidation block.
+It fails on the previous code without new messages and passes after the change.
+A separate subprocess with explicit garbage collection keeps fifty real reader
+rows and their callbacks alive across identical-content snapshots. It requires
+the old session, original and filtered histories, and context to be collected.
+In-memory negative controls that capture each heavyweight binding demonstrate
+that the reachability guard detects retention. This is not a string-pattern
+assertion or a measurement of the machine's memory-pressure incident.
+
+Author-run: 126 related reading/locale/terminal/image checks pass with zero
+failures or skips. Private synthetic regressions for session, messages and
+context each make the no-retention assertion fail. A source-backed hidden GUI
+renames a synthetic session without appending a message: the wake fallback and
+image owner label update, while original messages and body/image DOM nodes
+remain. The unavailable-image wrapper is sufficient for this label check; it is
+not native wake delivery, successful image preview, installed or VoiceOver
+qualification. No provider/model calls or native inputs; owned resources close.

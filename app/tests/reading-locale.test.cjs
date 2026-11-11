@@ -378,6 +378,36 @@ test('the actual reader image call keeps its owner fallback live without replayi
   entry.images.dispose(); assert.deepEqual(releases, ['owned-token']);
 });
 
+test('rename-only focused renders refresh wake and image owners without replaying history or pixels', async () => {
+  const wake = (id, senderName) => ({ id, role: 'system', kind: 'notice', origin: 'agent-wake-intent', text: 'Original wake body',
+    wake: { id, senderId: 'session-A', nativeId: 'native-A', recipientId: 'target-B', body: 'Original wake body', status: 'staged', ...(senderName ? { senderName } : {}) } });
+  const rows = [wake('wake-live'), wake('wake-recorded', 'Recorded sender'),
+    { id: 'rename-image', role: 'user', kind: 'input', nativeBlock: true, nativeId: 'native-A', status: 'submitted', text: 'Original image body', images: [{}] }];
+  let reads = 0; const releases = [];
+  const f = fixture(rows, false, {}, { previewImage: async () => { reads++; return previewPixels; }, releaseImage: async token => releases.push(token) });
+  f.state.sessions.push({ id: 'target-B', name: 'Target reader' });
+  f.context.current = () => f.state.sessions[0];
+  f.controls.set('messages', f.root); f.context.sessionMessages = s => s.messages;
+  f.context.focusedReadingKey = id => id; f.context.lastMessages = '';
+  const renderer = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
+  const from = renderer.indexOf('      const visibleMessages = sessionMessages(s);'), to = renderer.indexOf('      renderAdvanced(s);', from);
+  assert.ok(from >= 0 && to > from, 'Execute the actual focused-reader invalidation guard');
+  const renderFocused = () => { f.context.s = f.state.sessions[0]; vm.runInContext('(() => {' + renderer.slice(from, to) + '})()', f.context); };
+  renderFocused(); f.switch('en'); await new Promise(resolve => setImmediate(resolve));
+  const live = f.view.entries.get('wake-live'), recorded = f.view.entries.get('wake-recorded'), imageEntry = f.view.entries.get('rename-image');
+  const body = imageEntry.body, toggle = body.nextSibling.firstChild.firstChild, image = toggle.firstChild, writes = body.textWrites, original = JSON.stringify(rows);
+  f.document.activeElement = imageEntry.copyText;
+  f.state.sessions[0] = { ...f.state.sessions[0], name: 'Renamed reader' };
+  renderFocused();
+  assert.ok(live.heading.firstChild.textContent.startsWith('Renamed reader → Target reader'));
+  assert.ok(recorded.heading.firstChild.textContent.startsWith('Recorded sender → Target reader'), 'Recorded sender names remain historical facts');
+  assert.equal(toggle.getAttribute('aria-label'), 'View image (Renamed reader) Native image 1');
+  assert.equal(toggle.firstChild, image); assert.equal(imageEntry.body, body); assert.equal(body.textWrites, writes);
+  assert.equal(f.document.activeElement, imageEntry.copyText); assert.equal(JSON.stringify(rows), original);
+  assert.equal(reads, 1); assert.deepEqual(releases, []); assert.deepEqual(f.calls, []);
+  imageEntry.images.dispose(); assert.deepEqual(releases, ['owned-token']);
+});
+
 
 test('a stale own notice descriptor cannot hide an appended original body or change its copy', async () => {
   const own = locale.createNotice('notice.legacyOffline'), raw = own.text + '\nRAW appended 原文 <native>{key}';
