@@ -131,5 +131,13 @@ async function cleanup() {
   console.log(JSON.stringify({ checks, nativeVersion, fixture: fixture.summary(), pin: row.nativePin, modCheck: tested, promptsSent: 0, paidModelCalls: 0, evidence: base }));
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
+  // The service's own copy of the native screen and the page's focus: whether a key reached the native program or only the page is stale.
+  if (client) {
+    const seen = {};
+    try { const s = (await snapshot()).sessions[0]; seen.session = s && { state: s.state, view: s.view, owner: s.owner, terminalState: s.terminalState, terminalInputPending: s.terminalInputPending }; seen.screen = s && await client.call('terminalSnapshot', s.id); }
+    catch (failure) { seen.error = String(failure?.message); }
+    if (page && !page.isClosed()) seen.focus = await page.evaluate(() => ({ tag: document.activeElement?.tagName, className: String(document.activeElement?.className || ''), id: document.activeElement?.id || '', inTerminal: Boolean(document.activeElement?.closest('#terminal-area')) })).catch(() => null);
+    fs.writeFileSync(path.join(base, 'service-terminal.json'), JSON.stringify(seen));
+  }
   console.error(error.stack, '\nFixture:', JSON.stringify(fixture.summary()), '\nEvidence:', base); process.exitCode = 1;
 }).finally(testScratch.cleanup(cleanup));
