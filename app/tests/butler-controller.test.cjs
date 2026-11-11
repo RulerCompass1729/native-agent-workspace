@@ -674,3 +674,25 @@ test('one unavailable stored question does not suppress another question, READY 
   assert.equal(f.blocked.filter(item => item.reason === 'question-delivery-unavailable').length, 1, 'The durable question-specific fault notice is not repeated');
   assert.equal(f.blocked.some(item => item.reason === 'publication-recovery-unavailable'), false);
 });
+
+test('large pending event prefixes become fitting batches without truncation, loss or a failed attempt', async t => {
+  const f = fixture(t, { run: async (input, selected) => {
+    assert.ok(Buffer.byteLength(JSON.stringify(JSON.stringify(input))) <= 131072);
+    assert.ok(input.events.every(e => e.payload.text === '\\'.repeat(11000)));
+    return envelope(input, selected);
+  } });
+  for (let i = 0; i < 8; i++) f.ledger.ingest({ ...f.event('bounded-' + i), payload: { text: '\\'.repeat(11000) } });
+  assert.equal((await f.controller.drain()).status, 'recorded');
+  assert.ok(f.calls.length > 1);
+  assert.deepEqual(f.calls.flatMap(i => i.events.map(e => e.eventId)), Array.from({ length: 8 }, (_, i) => 'event-bounded-' + i));
+  assert.ok(f.ledger.snapshot().batches.every(b => b.status === 'completed'));
+});
+
+
+test('fixed context too large for any batch refuses before creating a charged attempt', async t => {
+  const f = fixture(t, { controller: { view: () => ({ records: [{ id: 'butler-a', nativeId: 'native-a', provider: 'dsh', state: 'idle', roomIds: [], runner }],
+    spaces: Array.from({ length: 180 }, (_, i) => ({ id: 'space-' + i, name: '"'.repeat(200), writable: true, queue: [] })) }) } });
+  const result = await f.controller.receive(f.event('fixed-context'));
+  assert.equal(result.reason, 'context-unavailable'); assert.equal(f.calls.length, 0);
+  assert.equal(f.ledger.snapshot().attempts.length, 0); assert.equal(f.ledger.snapshot().activeBatch, null);
+});

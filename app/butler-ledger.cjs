@@ -79,7 +79,7 @@ function normalizeAction(value) {
   return result;
 }
 function normalizeUsage(value) {
-  object(value, ['inputTokens', 'cachedInputTokens', 'outputTokens', 'totalTokens', 'costUsd', 'costMicros', 'source', 'reportedAt', 'estimated']);
+  object(value, ['inputTokens', 'cachedInputTokens', 'outputTokens', 'totalTokens', 'costUsd', 'costMicros', 'source', 'reportedAt', 'estimated', 'tokensComplete']);
   const result = {};
   for (const key of ['inputTokens', 'cachedInputTokens', 'outputTokens', 'totalTokens']) if (value[key] !== undefined) {
     requireValue(value[key] === null || safeInteger(value[key]), 'Invalid usage token count'); result[key] = value[key];
@@ -94,6 +94,11 @@ function normalizeUsage(value) {
   if (value.source !== undefined) result.source = string(value.source, 200);
   if (value.reportedAt !== undefined) { requireValue(Number.isFinite(value.reportedAt) && value.reportedAt >= 0, 'Invalid usage date'); result.reportedAt = value.reportedAt; }
   if (value.estimated !== undefined) { requireValue(typeof value.estimated === 'boolean', 'Invalid usage estimate flag'); result.estimated = value.estimated; }
+  if (value.tokensComplete !== undefined) {
+    requireValue(typeof value.tokensComplete === 'boolean', 'Invalid token completeness');
+    if (value.tokensComplete) requireValue(['inputTokens', 'cachedInputTokens', 'outputTokens', 'totalTokens'].every(k => safeInteger(value[k])), 'Complete token counts are required');
+    result.tokensComplete = value.tokensComplete;
+  }
   return result;
 }
 function safeCandidateText(value, limit = 12000) {
@@ -198,8 +203,13 @@ function mergeUsage(previous, value) {
   for (const key of ['inputTokens', 'cachedInputTokens', 'outputTokens', 'totalTokens', 'costUsd', 'costMicros']) {
     if (!Object.hasOwn(incoming, key)) continue;
     if (result[key] !== undefined && result[key] !== null)
-      requireValue(incoming[key] === result[key], 'Known attempt usage cannot be replaced', 'BUTLER_USAGE_CONFLICT');
+      requireValue(previous?.tokensComplete === false && ['inputTokens', 'cachedInputTokens', 'outputTokens', 'totalTokens'].includes(key)
+        ? safeInteger(incoming[key]) && incoming[key] >= result[key] : incoming[key] === result[key], 'Known attempt usage cannot be replaced', 'BUTLER_USAGE_CONFLICT');
     result[key] = incoming[key];
+  }
+  if (Object.hasOwn(incoming, 'tokensComplete')) {
+    requireValue(!previous || previous.tokensComplete === false || incoming.tokensComplete !== false, 'Complete tokens cannot become incomplete', 'BUTLER_USAGE_CONFLICT');
+    result.tokensComplete = incoming.tokensComplete;
   }
   for (const key of ['source', 'reportedAt', 'estimated']) if (Object.hasOwn(incoming, key)) result[key] = incoming[key];
   return result;

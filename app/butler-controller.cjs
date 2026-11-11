@@ -189,17 +189,36 @@ class ButlerController {
       const snapshot = this.ledger.snapshot(), saved = snapshot.activeBatch, expected = selectionFor(selection);
       if (saved?.status === 'running') return this.blocked('restart-unconfirmed', selection, saved);
       if (saved?.status === 'failed' && !retry) return { status: 'awaiting-retry', batchId: saved.batchId };
-      const chosen = saved ? snapshot.events.filter(e => saved.eventIds.includes(e.eventId)) : snapshot.pendingEvents.slice(0, 100);
+      let chosen = saved ? snapshot.events.filter(e => saved.eventIds.includes(e.eventId)) : snapshot.pendingEvents.slice(0, 100);
       if (!chosen.length) return { status: 'empty' };
       // Context capacity is checked before creating an active batch. A temporary
       // catalog problem must not permanently poison the pending event prefix.
       let preview;
-      try { preview = buildInput({ batchId: 'preflight', events: chosen, catalog: this.hostView().spaces, questions: snapshot.questions }); }
+      try {
+        const catalog = this.hostView().spaces;
+        const make = events => buildInput({ batchId: 'preflight', events, catalog, questions: snapshot.questions });
+        try { preview = make(chosen); }
+        catch (error) {
+          if (saved || error.code !== 'ERR_BUTLER_INPUT_CAPACITY') throw error;
+          // Maximal fitting prefix. Keep every event whole and leave the rest pending.
+          let low = 1, high = chosen.length - 1;
+          while (low <= high) {
+            const middle = Math.floor((low + high) / 2);
+            try { preview = make(chosen.slice(0, middle)); low = middle + 1; }
+            catch (candidateError) {
+              if (candidateError.code !== 'ERR_BUTLER_INPUT_CAPACITY') throw candidateError;
+              high = middle - 1;
+            }
+          }
+          if (!preview) throw error;
+          chosen = chosen.slice(0, preview.events.length);
+        }
+      }
       catch { return this.blocked('context-unavailable', selection); }
       if (saved) {
         if (identityKey(saved.selection) !== identityKey(expected)) this.ledger.rebindBatch(saved.batchId, saved.selection, expected);
         batch = this.ledger.retryBatch(saved.batchId, expected);
-      } else batch = this.ledger.beginBatch(expected, 100);
+      } else batch = this.ledger.beginBatch(expected, chosen.length);
       const budget = this.budgetReady(selection, chosen);
       if (budget) return this.blocked(budget, selection, batch);
       const backend = await this.backend.ensure();
@@ -219,6 +238,7 @@ class ButlerController {
       this.announceCost(selection, batch.batchId);
       const active = this.ledger.snapshot().activeBatch;
       if (!proven || !active || active.attempt !== batch.attempt || identityKey(selection) !== identityKey(this.authenticatedSelection())) return this.blocked('stale-native-reply', selection, active?.attempt === batch.attempt ? batch : null);
+      if (response.failureCode) return this.blocked('batch-failed', selection, batch);
       const result = interpretResult(response.reply, { events: chosen, catalog: this.hostView().spaces, questions: this.ledger.snapshot().questions });
       if (response.usage !== undefined) result.usage = response.usage;
       this.ledger.completeBatch(batch.batchId, expected, result); completed = true;

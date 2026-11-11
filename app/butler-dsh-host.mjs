@@ -15,7 +15,8 @@ const errorCode = code => ({ code, message: code === 'credential-missing'
   ? 'DEEPSEEK_API_KEY is missing from the butler launch environment.' : 'DSH butler: ' + code });
 // Do not serialize provider errors: upstream errors can include response bodies.
 const fail = code => Object.assign(Error(code), { code });
-const { ButlerInputBoundary } = require('./butler-dsh-input.cjs');
+const { ButlerInputBoundary, encodedBatchBytes, MAX_BATCH_INPUT_BYTES, MAX_TOOL_SCHEMA_BYTES } = require('./butler-dsh-input.cjs');
+const { settledUsage } = require('./butler-dsh-usage.cjs');
 let boundaryFailure = null, inputBoundary;
 let ctx, handle, nativeId, allowedTools = [], requestCount = 0, consumed = false, initialized = false, closing = false;
 async function close() {
@@ -40,6 +41,7 @@ async function newSession() {
   if (allowedTools.some(name => !discovered.has(name))) throw fail('mcp-unavailable');
   handle.agent.ctx.tools.restrict({ allow: allowedTools });
   if (JSON.stringify(handle.agent.ctx.tools.schemas().map(tool => tool.name).sort()) !== JSON.stringify([...new Set(allowedTools)].sort())) throw fail('mcp-unavailable');
+  if (Buffer.byteLength(JSON.stringify(handle.agent.ctx.tools.schemas())) > MAX_TOOL_SCHEMA_BYTES) throw fail('input-boundary');
   return nativeId;
 }
 async function initialize(config) {
@@ -93,31 +95,27 @@ async function initialize(config) {
 }
 async function run(request) {
   if (!initialized || !handle || consumed || request.nativeId !== nativeId) throw fail('session-unavailable');
+  if (encodedBatchBytes(request.input) > MAX_BATCH_INPUT_BYTES) throw fail('input-too-large');
   consumed = true; // A failed/uncertain attempt never silently reuses the session.
   const { createUserMessage } = await import('@deepseek-ai/dsh-llm');
   handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: JSON.stringify(request.input) }], source: { kind: 'user' } }));
   await handle.agent.whenIdle();
   // The agent loop records hook failures as a failed turn instead of throwing.
   // Preserve our fixed boundary reason without serializing any provider error.
-  if (boundaryFailure || inputBoundary.failed) throw fail(boundaryFailure || inputBoundary.failed);
+  const boundaryCode = boundaryFailure || inputBoundary.failed;
   const events = handle.agent.session.snapshotEvents();
   const messages = handle.agent.session.deriveMessages().filter(m => m.role === 'assistant');
   const rows = events.filter(e => e.type === 'assistant/message').map(e => e.data.usage);
-  let usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, totalTokens: 0, costMicros: null, source: 'dsh-provider', estimated: false };
-  if (!rows.length || rows.some(u => !u || ['inputTokens', 'outputTokens', 'totalTokens'].some(k => !Number.isSafeInteger(u[k]) || u[k] < 0))) usage = null;
-  else for (const row of rows) {
-    // DSH inputTokens exclude separately reported cache read/write counts.
-    for (const key of ['inputTokens', 'outputTokens', 'totalTokens']) usage[key] += row[key];
-    usage.inputTokens += (row.cacheReadTokens || 0) + (row.cacheWriteTokens || 0);
-    usage.cachedInputTokens += row.cacheReadTokens || 0;
-  }
+  const usage = settledUsage(rows, inputBoundary.requests);
   const end = events.filter(e => e.type === 'turn/end').at(-1)?.data.reason;
-  const usageComplete = end?.kind === 'completed' && rows.length === requestCount && usage !== null;
-  if (!usageComplete) usage = null; // Partial/aborted request usage cannot price a whole batch.
+  const failureCode = boundaryCode || (end?.kind === 'completed' ? null : 'host-failed');
+  // A failed stream may have emitted an initial usage row before aborting.
+  if (failureCode === 'host-failed') usage.tokensComplete = false;
+  const usageComplete = !failureCode && usage.tokensComplete;
   const text = messages.at(-1)?.content.filter(b => b.type === 'text').map(b => b.text).join('');
   // Only model JSON enters reply. Identity/attempt/metering come from the host.
   let reply; try { reply = end?.kind === 'completed' ? JSON.parse(text) : null; } catch { reply = null; }
-  return { nativeId, reply, usage, usageComplete, completed: end?.kind === 'completed', requestCount, settledUsageRows: rows.length };
+  return { nativeId, reply, usage, usageComplete, failureCode, completed: end?.kind === 'completed', requestCount, settledUsageRows: rows.length };
 }
 let buffer = '', flight = false;
 process.stdin.setEncoding('utf8');
@@ -137,7 +135,7 @@ process.stdin.on('data', chunk => {
       if (request.method === 'rotate' && initialized) return { nativeId: await newSession() };
       throw fail('invalid-command');
     }).then(result => emit({ id: request.id, result }), error => emit({ id: request.id,
-      error: errorCode(['credential-missing', 'mcp-unavailable', 'session-unavailable', 'invalid-command', 'already-initialized', 'privacy-unconfirmed', 'endpoint-invalid', 'request-boundary', 'input-boundary'].includes(error.code) ? error.code : 'host-failed') }))
+      error: errorCode(['credential-missing', 'mcp-unavailable', 'session-unavailable', 'invalid-command', 'already-initialized', 'privacy-unconfirmed', 'endpoint-invalid', 'request-boundary', 'input-boundary', 'input-too-large'].includes(error.code) ? error.code : 'host-failed') }))
       .finally(() => { flight = false; });
   }
 });

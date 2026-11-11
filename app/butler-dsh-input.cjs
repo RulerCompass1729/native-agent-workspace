@@ -1,5 +1,8 @@
 'use strict';
 // Dedicated host only. Byte ceilings are not a tokenizer or a cost estimate.
+const MAX_BATCH_INPUT_BYTES = 128 * 1024;
+const MAX_TOOL_SCHEMA_BYTES = 32 * 1024;
+const encodedBatchBytes = input => Buffer.byteLength(JSON.stringify(JSON.stringify(input)));
 const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_TOOL_RESULT_BYTES = 128 * 1024;
 const MAX_BATCH_TOOL_BYTES = 512 * 1024;
@@ -33,7 +36,27 @@ class ButlerInputBoundary {
     this.requests++;
   }
   wrapFetch(transport) {
-    return (url, init) => { this.request(url, init); return transport(url, init); };
+    return (url, init) => {
+      this.assertHealthy();
+      if (url !== this.endpoint || init?.method !== 'POST' || typeof init.body !== 'string') this.reject();
+      if (Buffer.byteLength(init.body) > MAX_REQUEST_BYTES) this.reject();
+      let body; try { body = JSON.parse(init.body); } catch { this.reject(); }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) this.reject();
+      const system = body.system === undefined ? [] : typeof body.system === 'string' ? [{ type: 'text', text: body.system }] : body.system;
+      if (!Array.isArray(system)) this.reject();
+      // This trusted system block is regenerated per transmission, not retained
+      // as session history. Its six-digit counter keeps serialization size fixed.
+      const prefix = 'NAW_CAPACITY remaining_bytes=';
+      const suffix = '; wire_limit_bytes=262144. This is remaining UTF-8 JSON space, not tokens. Every next request resends all history. Tool replies, escaping and your next reply consume it. Read fewer records; leave 65536 bytes for reply/envelopes. If a page will not fit, finish this batch and report the unread cursor; do not guess missing content.';
+      const note = { type: 'text', text: prefix + '000000' + suffix };
+      body.system = [...system, note];
+      const bytes = Buffer.byteLength(JSON.stringify(body));
+      if (bytes > MAX_REQUEST_BYTES) this.reject();
+      note.text = prefix + String(MAX_REQUEST_BYTES - bytes).padStart(6, '0') + suffix;
+      init.body = JSON.stringify(body); // Preserve init/headers identity; never inspect auth.
+      this.request(url, init);
+      return transport(url, init);
+    };
   }
 }
-module.exports = { ButlerInputBoundary, MAX_REQUEST_BYTES, MAX_TOOL_RESULT_BYTES, MAX_BATCH_TOOL_BYTES, MAX_REQUESTS };
+module.exports = { MAX_BATCH_INPUT_BYTES, MAX_TOOL_SCHEMA_BYTES, encodedBatchBytes, ButlerInputBoundary, MAX_REQUEST_BYTES, MAX_TOOL_RESULT_BYTES, MAX_BATCH_TOOL_BYTES, MAX_REQUESTS };

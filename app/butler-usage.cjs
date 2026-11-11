@@ -5,13 +5,14 @@ const TOKEN_FIELDS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'total
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const utcDay = time => new Date(time).toISOString().slice(0, 10);
 const reading = () => ({ value: 0, knownLowerBound: 0, unknownRuns: 0, overflow: false });
-function add(target, value) {
+function add(target, value, complete = true) {
   if (!count(value)) target.unknownRuns++;
   else if (!target.overflow) {
     const total = target.knownLowerBound + value;
     if (!count(total)) { target.overflow = true; target.knownLowerBound = null; }
     else target.knownLowerBound = total;
   }
+  if (count(value) && !complete) target.unknownRuns++;
   target.value = target.overflow || target.unknownRuns ? null : target.knownLowerBound;
 }
 
@@ -28,7 +29,7 @@ function summarizeUsage(snapshot, { now = Date.now() } = {}) {
     today.recordedRunCount++;
     if (isAttempt) today.attemptCount++; else today.legacyBatchCount++;
     add(today.costMicros, usage?.costMicros);
-    for (const field of TOKEN_FIELDS) add(today.tokens[field], usage?.[field]);
+    for (const field of TOKEN_FIELDS) add(today.tokens[field], usage?.[field], usage?.tokensComplete !== false);
     if (typeof usage?.source === 'string' && usage.source.trim()) sources.add(usage.source);
     else today.sources.unknownRuns++;
     today.estimated[usage?.estimated === true ? 'yes' : usage?.estimated === false ? 'no' : 'unknown']++;

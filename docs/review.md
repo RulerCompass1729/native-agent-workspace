@@ -9353,3 +9353,32 @@ case, real ledger caller and reused package/quit evidence. No blocker remains
 for this source checkpoint. Token prediction, pricing and production activation
 are outside this approval. Four approximately 65 KB business pages fit in the
 cumulative fixture; the fifth fails the whole batch and remains unpriced.
+
+
+## B4 capacity alignment and retained failed-attempt usage (2026-11-11)
+
+Source: the integration review found that valid business pages plus twice-escaped
+batch input can overflow the wire cap; a boundary throw also discarded settled
+tokens. Owner: DSH runner lane, coordinating the core contract with the B4 owner.
+The old host/driver code is identical between the prior runner checkpoint and the
+integration baseline. Real synthetic Business pages reproduced overflow after
+three requests; the previous ledger receipt retained no token counts.
+
+The patch bounds twice-escaped input before an attempt, selects complete event
+prefixes, caps startup schemas and tells the model exact remaining request bytes.
+A trusted failure envelope records confirmed usage before marking the batch
+failed, preserving incomplete token sums as lower bounds and unknown cost.
+The daily page budget and all activation gates are unchanged. A live model's
+obedience and unreceived usage remain outside this source qualification.
+
+Final verification: full suite 5421/5421, no failures/cancellations/skips,
+with test concurrency four. A preceding unrestricted run was 5420/1 on the
+unmodified service-reuse bootstrap test (existing-backend-unreachable), retained
+as a separate startup timing finding; no lock protection was relaxed. Ten real
+DSH input scenarios and 13 failure/lifecycle scenarios pass, plus the existing
+runner continuity/privacy scenario. Reviewer 0F5CE02F-9118-45ED-961A-FAFB00B2EAC8 gave
+APPROVE_WITH_NOTES for the staged checkpoint and its delta, conditional on the
+final full pass; that condition is met. Per-field partial usage, mid-stream abort
+and the largest valid single event were added after its findings. Fixed context
+above the bound and old oversized saved batches remain documented blocked states,
+without a new model attempt or automatic recovery.
