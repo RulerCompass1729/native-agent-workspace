@@ -8282,3 +8282,30 @@ that permission. The live entry requires an additional explicit flag, refuses
 extra certificate authorities, and remains unexecuted at this checkpoint.
 Preparation is not a live compatibility PASS. No real model request, private
 context, daily application change or production qualification is claimed here.
+
+
+## Finite butler native trial, authorized result (2026-11-11 UTC)
+
+The same independent reviewer approved one live run of unchanged `6bb98d8`
+after the person separately approved its one-time credential relay. The author
+checked the clean commit and approved executable blobs before invocation. The
+full preparation suite passed 4561/4561 with no skips; fixed outgoing content
+passed the privacy and secret scan before transmission.
+
+The run completed one native turn, two TLS-written requests and one constant
+fixture callback. Provider usage totals are 381 input and 29 output tokens,
+zero cached/reasoning tokens; both completed responses omit server-tool usage
+as documented for zero operations. The native final record is `B4_DONE`.
+The recorded peak-price estimate is USD 0.000619 after rounding upwards per
+request; a provider invoice was not returned, so actual billed cost is unknown.
+The native process exited and the one-time claim is retained. No retry or
+further relay use is authorized. The separate result record consumes the
+approval without rewriting the original consent evidence.
+
+The documentation now records the native output-limit gap as an upstream
+0.167.1 limitation; that release was already current at the integrator's check.
+This result qualifies only this bounded synthetic gateway trial, not the
+production B4 driver, accounting or activation. Earlier nonblocking notes
+about a post-send receipt-write exception and the claim's approval-reference
+field remain known; this one-time run encountered neither an I/O failure nor
+missing consent evidence. Future reuse requires a new user decision.

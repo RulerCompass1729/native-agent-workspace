@@ -4,11 +4,25 @@ The person approved one native turn, at most two inference requests and at most
 USD 1 on 2026-11-10. The separate daily reminder choice is USD 2 per UTC day;
 this script does not set that role configuration or activate B4.
 
+**The one-time authorization has been consumed.** On 2026-11-11 at 05:43 UTC,
+the reviewed `6bb98d8` trial completed successfully after separate approval of
+the credential relay. Do not reuse that relay or run the live flag again under
+this approval, including from another checkout. Any further use needs a new
+explicit decision. The exclusive claim and the separate relay-consent record
+are retained with the private evidence.
+
 ## Why this trial has a local gate
 
 The real Codex 0.167.1 binary did not serialize `max_output_tokens` when candidate
 config/RPC overrides requested 1024. Its captured local request had no output
 limit. A prompt asking for a short answer cannot supply that missing limit.
+
+This is an **upstream native limitation**, not a missing NAW setting. The
+integrator's release check on 2026-11-10 confirmed 0.167.1 was already the latest
+Codex release, so there was no available update that resolved the gap. The
+finding covers the tested config and RPC overrides, not every hypothetical
+future interface. A future native release must demonstrate the field in an
+actual outgoing request before the workaround can be retired.
 
 `scripts/test-butler-native-trial.cjs` therefore runs the native app-server
 against a one-purpose local gateway. This is a guarded protocol experiment,
@@ -27,6 +41,42 @@ added by the author without that answer. It has a durable exclusive claim under
 the lane's private evidence, anchored to the script rather than the caller's cwd;
 an existing claim forbids another invocation. There is no automatic paid retry.
 Recheck rates before allowing execution on a different UTC day.
+
+## Completed one-time result
+
+The exact reviewed executable was unchanged from `6bb98d8`. Independent review
+explicitly approved this live action after receiving the relay consent. The
+script opened one isolated native thread and one turn. Both upstream requests
+were written over TLS and both returned completed responses:
+
+| Request | Input tokens | Cached input | Output tokens | Reasoning tokens | Peak estimate (USD) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 304 | 0 | 25 | 0 | 0.000501 |
+| 2 | 77 | 0 | 4 | 0 | 0.000118 |
+| Total | 381 | 0 | 29 | 0 | 0.000619 |
+
+Counts come from the provider's final usage. Estimates use the recorded peak
+rates and round each request upwards to integer micro-dollars; they are not an
+invoice. **Actual billed USD was not returned and remains unknown.** Both final
+responses omitted `server_tool_use`, which the documented schema defines as
+zero Search/Fetch operations. No retries or additional model requests ran.
+
+The first response produced exactly one `b4_fixture_echo` callback; the host
+returned the fixed result. The second produced `B4_DONE`, also present as the
+native thread's final `task_complete` message. The fixed outgoing bodies were
+505 and 481 bytes. The owned native process and listeners closed after the turn.
+Both permitted requests were used (2 of 2); no limit was exceeded, and the 120-second and token limits were not reached.
+
+Private evidence retains `live-authorized-once.json`, `relay-consent.json`,
+`live/events.jsonl`, `live/summary.json`, the synthetic native history and a new
+`execution-result.json`. The consent record is unchanged; the result records
+that the authorization is consumed. The preparation suite passed 4561 tests,
+with no failures or skips; only documentation changed after the live run.
+
+This verifies the bounded synthetic function-call round trip through this
+specific gateway and provider endpoint. It does not verify the unmodified
+production driver, accounting integration, a reasoning-enabled workload, or
+production B4 qualification. The qualification flags remain unchanged.
 
 ## Enforced and measured boundaries
 
