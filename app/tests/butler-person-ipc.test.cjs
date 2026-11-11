@@ -76,6 +76,19 @@ function fixture(t, options = {}) {
 const designation = { identity: { sessionId: 'ipc-butler', nativeId: 'ipc-native' }, runner: { runnerRef: 'ipc-runner', backendRef: 'ipc-backend',
   purpose: 'butler', profile: 'host-profile', provider: 'host-provider', model: 'host-model' } };
 
+test('actual human Main status keeps a readable designation revocable with unknown current identity and a broken log', async t => {
+  const f = fixture(t), role = f.host.role(); role.set(f.person.context, designation, 0);
+  fs.writeFileSync(role.logFile, '{partial-tail\n', { mode: 0o600 });
+  const view = (await f.call('status')).value;
+  assert.equal(view.state, 'unknown'); assert.equal(view.role.available, true); assert.equal(view.role.currentAvailable, false);
+  assert.equal(view.role.revision, 1); assert.equal(view.role.selected.identity, null);
+  assert.deepEqual(view.role.selected.configuration, { profile: 'host-profile', provider: 'host-provider', model: 'host-model' });
+  assert.equal(view.actions.revoke, true); assert.equal(view.actions.close, false); assert.equal(view.pause, null);
+  const result = await f.call('revoke', 1); assert.equal(result.ok, true); assert.equal(result.value.revoked, true);
+  assert.equal(result.value.shutdown.target, null); assert.equal(result.value.shutdown.stopped, null);
+  assert.equal(role.snapshot().selected, null);
+});
+
 test('actual Main denies the dedicated person IPC unless the verified isolated test and explicit flag both enable it', async t => {
   for (const options of [{ backgroundTest: false, entryFlag: '1' }, { backgroundTest: true, entryFlag: null }, { backgroundTest: false, entryFlag: null },
     { backgroundTest: true, entryFlag: 'true' }]) {

@@ -60,18 +60,23 @@ class ButlerPerson {
     try { allowed = this.authorizePerson(actor) === true; } catch {}
     if (!allowed) fail('ERR_BUTLER_PERSON');
   }
-  #role() {
+  #snapshot() {
     if (!(this.role instanceof ButlerRole)) fail('ERR_BUTLER_STATE');
-    const snapshot = this.role.snapshot(), current = snapshot.selected ? this.role.current() : null;
+    return this.role.snapshot();
+  }
+  #resolve(snapshot) {
+    const current = snapshot.selected ? this.role.current() : null;
     if (snapshot.selected && (!current?.identity || current.selectionRevision !== snapshot.revision)) fail('ERR_BUTLER_STATE');
-    return { snapshot, current };
+    return current;
   }
-  #expected(expected) {
+  #role() { const snapshot = this.#snapshot(); return { snapshot, current: this.#resolve(snapshot) }; }
+  #expectedSnapshot(expected) {
     if (!revision(expected)) fail('ERR_BUTLER_REQUEST');
-    const state = this.#role();
-    if (state.snapshot.revision !== expected) fail('ERR_BUTLER_REVISION');
-    return state;
+    const snapshot = this.#snapshot();
+    if (snapshot.revision !== expected) fail('ERR_BUTLER_REVISION');
+    return snapshot;
   }
+  #expected(expected) { const snapshot = this.#expectedSnapshot(expected); return { snapshot, current: this.#resolve(snapshot) }; }
   #backend() {
     try {
       const raw = typeof this.backend?.snapshot === 'function' ? this.backend.snapshot() : this.backend?.read();
@@ -86,20 +91,24 @@ class ButlerPerson {
     }
   }
   #view() {
-    let state = null, rawLedger = null, usage = { state: 'unavailable' };
-    try { state = this.#role(); } catch {}
+    let state = null, currentAvailable = false, rawLedger = null, usage = { state: 'unavailable' };
+    try {
+      const snapshot = this.#snapshot(); state = { snapshot, current: null };
+      try { state.current = this.#resolve(snapshot); currentAvailable = true; }
+      catch { state = { snapshot: this.#snapshot(), current: null }; }
+    } catch { state = null; }
     try { rawLedger = this.ledger.snapshot(); usage = usageReading(rawLedger, this.now()); } catch {}
     const backend = this.#backend(), selected = state?.snapshot.selected, current = state?.current;
     // Old Boolean gates persisted false for both absent and unconfirmed. Only
     // this object's explicit display probe can establish a presence reading.
     const presence = this.#presence === undefined ? null : this.#presence;
-    const unknown = !state || !backend.available || ['unknown', 'unconfirmed', 'failed'].includes(backend.state) ||
+    const unknown = !state || !currentAvailable || !backend.available || ['unknown', 'unconfirmed', 'failed'].includes(backend.state) ||
       backend.blocked.some(reason => backendUnreadable.has(reason)) || usage.state === 'unavailable';
     let pause = null; if (usage.state !== 'unavailable') { try { pause = recordedPause(rawLedger, current); } catch {} }
     return { ...off(), state: !state ? 'unknown' : !selected ? 'empty' : unknown ? 'unknown' : 'selected-disabled',
-      role: state ? { available: true, revision: state.snapshot.revision, selected: selected ? {
-        identity: { ...current.identity }, configuration: { profile: current.runner.profile, provider: current.runner.provider, model: current.runner.model },
-        budget: selected.budget ? { ...selected.budget } : null } : null } : { available: false, revision: null, selected: null },
+      role: state ? { available: true, currentAvailable, revision: state.snapshot.revision, selected: selected ? {
+        identity: current ? { ...current.identity } : null, configuration: { profile: selected.runner.profile, provider: selected.runner.provider, model: selected.runner.model },
+        budget: selected.budget ? { ...selected.budget } : null } : null } : { available: false, currentAvailable: false, revision: null, selected: null },
       backend, credentialPresent: presence, usage, pause,
       dailyReminder: { currency: 'USD', amountMicros: 2000000, dayBoundary: 'UTC', onReached: 'undecided' },
       actions: { designate: false, recheck: Boolean(state), revoke: Boolean(state && selected), open: false, close: Boolean(current && typeof this.stopOwned === 'function') } };
@@ -139,7 +148,8 @@ class ButlerPerson {
   }
   async revoke(actor, expectedRevision) {
     this.#person(actor); if (arguments.length !== 2) fail('ERR_BUTLER_REQUEST');
-    const { current } = this.#expected(expectedRevision), target = current ? targetFor(current) : null;
+    const snapshot = this.#expectedSnapshot(expectedRevision);
+    let target = null; try { const current = this.#resolve(snapshot); if (current) target = targetFor(current); } catch {}
     const result = this.role.revoke(actor, expectedRevision);
     const cleanup = await this.#stop(actor, target, () => { const state = this.role.snapshot(); return state.revision === result.revision && state.selected === null; });
     return { ...off(), revoked: true, revision: result.revision, shutdown: cleanup };

@@ -132,7 +132,7 @@ test('async or nonboolean grants cannot activate even a fake transaction', async
   assert.equal(f.adapter.calls, 0);
 });
 
-for (const change of ['revoke', 'archive-space', 'grant', 'native']) test(`the synchronous transaction guard catches ${change} after an awaited adapter delay`, async t => {
+for (const change of ['revoke', 'archive-space', 'grant', 'native', 'rotation-log']) test(`the synchronous transaction guard catches ${change} after an awaited adapter delay`, async t => {
   const f = fixture(t); let grant = true;
   const queue = f.bridge({ authorizeQueue: () => grant });
   f.adapter.beforeCommit = async () => {
@@ -141,9 +141,16 @@ for (const change of ['revoke', 'archive-space', 'grant', 'native']) test(`the s
     if (change === 'archive-space') f.spaces[0].archived = true;
     if (change === 'grant') grant = false;
     if (change === 'native') f.record.nativeId = 'changed-before-commit';
+    if (change === 'rotation-log') fs.writeFileSync(f.role.logFile, '{partial-tail\n', { mode: 0o600 });
   };
   await assert.rejects(queue.add(f.record, f.expected, f.actionId));
   assert.equal(f.adapter.store.value.items.length, 0); assert.equal(f.adapter.store.value.receipts.length, 0);
+});
+
+test('an unresolved rotation refuses queue admission before an adapter is called', async t => {
+  const f = fixture(t); fs.writeFileSync(f.role.logFile, '{partial-tail\n', { mode: 0o600 });
+  await assert.rejects(f.bridge({ authorizeQueue: () => true }).add(f.record, f.expected, f.actionId), { code: 'ERR_BUTLER_STATE' });
+  assert.equal(f.adapter.calls, 0); assert.equal(f.role.snapshot().revision, 1);
 });
 
 test('a written done handoff can read the original receipt without changing its stable operation', async t => {

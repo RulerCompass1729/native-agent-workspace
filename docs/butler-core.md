@@ -548,8 +548,35 @@ refused in this phase. The renderer remains closed; its future host adapter must
 preserve unknown status, compare the displayed selection against the actual
 trusted candidate and respect the still-pending activation decisions.
 
-A Role read fault is sticky within the process. It can leave status and revocation
-unavailable until the underlying storage is safely investigated and the app is
-restarted; restart alone does not repair persistent malformed data. No rollback,
-truncation or fresh Role instance is used to hide uncertain state. This remains
-a documented limitation before activation, not a confirmed physical shutdown.
+The persisted designation and its resolved current identity have separate
+availability. `role.available` means the designation can be read and validated;
+`role.currentAvailable` means the rotation view can also be resolved, or the
+readable designation is empty. When a rotation log changes during a read, is
+temporarily unreadable or has a malformed tail, status retains the saved
+revision, configuration and budget, but returns `state:unknown`,
+`selected.identity:null`, no pause and no close target. During a failed read it substitutes neither the original identity nor a
+previously resolved successor. A later valid complete log read can restore the
+current identity on the same Role instance. Existing missing-log semantics remain:
+ENOENT is an empty log and resolves the original saved designation. There is no
+log-growth guard, so deletion or an earlier complete prefix after a fault can
+resolve an earlier identity. This is an open pre-activation integrity condition,
+not a safe rollback or cached-identity fallback. Model reads,
+bindings and queue commits still fail closed on an unresolved rotation view.
+
+A readable saved designation remains human-revocable without resolving that
+view. Person verifies the expected saved revision, then the real Role writer
+reloads and checks it again under its existing lock before persisting the clear.
+Cleanup resolution is best effort and cannot prevent that clear: an unknown
+target receives no stop call and returns unconfirmed cleanup with null physical
+stop fields. The ledger is retained. Close and designate still require a resolved
+current identity; this recovery grants neither operation a fallback identity.
+
+Designation-file corruption, rollback, directory-integrity/permission faults and
+uncertain writes retain the existing sticky guards. A rotation-log file with
+unsafe owner/mode/link-count/size is refused on every affected read, but that
+log-file error is no longer sticky; a later valid log may recover. A busy or legacy empty lock
+is not recovered or stolen, and OS write failures or a stale expected revision
+can still reject revocation. A failed directory fsync after rename is not called
+durable success. Safe store recovery and reliable physical cleanup remain
+pre-activation work; restart alone does not repair persistent malformed data.
+No rollback, truncation or fresh Role instance hides uncertain storage.

@@ -71,7 +71,7 @@ class ButlerRole {
       fd = fs.openSync(this.#directory, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
       if (!sameFile(fs.fstatSync(fd), current)) fail('ERR_BUTLER_STATE');
       return fd;
-    } catch { if (fd !== undefined) fs.closeSync(fd); fail('ERR_BUTLER_STATE'); }
+    } catch { this.#failed = true; if (fd !== undefined) fs.closeSync(fd); fail('ERR_BUTLER_STATE'); }
   }
   #read(file, limit) {
     const directoryFd = this.#directoryFd(); let fd;
@@ -159,7 +159,7 @@ class ButlerRole {
       if (!Array.isArray(entries)) fail('ERR_BUTLER_STATE');
       const resolved = successor(this.#state.selected.identity, entries);
       return { ...copy(this.#state.selected), identity: resolved, selectionRevision: this.#state.revision, mode: 'record-only' };
-    } catch { this.#failed = true; fail('ERR_BUTLER_STATE'); }
+    } catch { fail('ERR_BUTLER_STATE'); } // A failed rotation view is not a damaged designation.
   }
   authorize(actorRecord, expected, records, entries) {
     if (!fields(expected, ['selectionRevision', 'runnerRef']) || !revision(expected.selectionRevision) || !id(expected.runnerRef)) fail('ERR_BUTLER_UNAUTHORIZED');

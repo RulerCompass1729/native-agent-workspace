@@ -9858,3 +9858,63 @@ Owner: the author of this change. Evidence: a new hidden check, `scripts/test-me
 - An integrator that stays engaged until the person acts is handed nothing and nothing says why: a queue item sent to it that waits for the person, or a successor session whose folder was not trusted (the person is told about the trust question, not about the handoffs behind it). This joins the long-unready integrator in the list above.
 - A fault of the dispatcher's own inside this step (reading the sessions again, telling the windows) is told as "the integration handoff step failed".
 - Three copies of the "engaged" rule: to be made one when the planner is next changed.
+## Butler human revoke during rotation-log faults — 2026-11-11
+
+Trigger and severity: an append during the bounded rotation-log read, a transient
+read error or a malformed tail made Role permanently fail in that process. The
+person's status then hid the otherwise readable designation and could not revoke
+it. This blocks the reliable-revoke pre-activation gate. The B4 owner repairs
+only this log-resolution dependency; activation and recording remain closed.
+
+The saved designation is now separate from its current resolved identity.
+`role.available` retains the validated saved revision, configuration and budget;
+new `role.currentAvailable:false` and `selected.identity:null` report an unknown
+rotation view without inventing an original or cached successor during the failed
+read. Status remains
+unknown, with revoke available, no pause and no close target. A valid complete
+log can recover the same Role object. Existing missing-log behavior is unchanged:
+ENOENT becomes an empty log and resolves the original saved designation. No
+log-growth check exists; after a fault, deleting the log or replacing it with an
+earlier complete prefix may resolve an earlier identity. This is an open
+pre-activation integrity condition, not proof of safe log rollback. Model
+current/authorization, cached
+business bindings and queue transaction guards continue to refuse failed log
+reads. Close and designate gain no fallback.
+
+Human revoke checks the saved revision before the existing locked writer reloads
+and compares it atomically. Optional target resolution cannot prevent a durable
+clear; an unknown target is never stopped, and its physical-stop and cleanup
+fields remain null/unconfirmed. The ledger is preserved. Corrupt or rolled-back
+designation files, directory-integrity/permission faults and write uncertainty
+retain their existing sticky guards. A rotation-log file with unsafe owner,
+mode, link count or size is refused on each affected read, but this log-file
+fault is no longer sticky. Busy/live/unknown or legacy empty locks are not
+recovered or stolen. No universal OS-write guarantee, whole reliable-revoke gate
+completion or physical runtime exit is claimed.
+
+Author-run real-file append/EIO/malformed-tail and actual Main/Person checks fail
+before the repair (71 total, 58 pass, 13 fail) and pass after it (71/71).
+Final targeted credential-free checks pass 187/187, with zero failures or skips;
+they also cover replacement-revision races, old business closures, queue
+admission and delayed commits, sticky selection/directory faults, failed
+directory fsync and retention of a foreign empty lock. Syntax and diff checks
+pass. Raw outputs and the nullable-identity caller contract are kept in the
+private lane. The empty-environment build exits zero. The first full run
+had 5,781 passes and two failures: our path-string fault hook missed the real
+directory through the temporary-directory alias, and an existing outbox test
+failed. The hook now matches device/inode and asserts it actually fired; its
+normal-environment file passes 14/14. The unchanged outbox file separately
+passes 34/34; this does not establish the cause of its initial failure. The
+complete second full run passes 5,783/5,783 with zero failures, cancellations
+or skips. Both full outputs remain private and the first is not called a pass.
+A fresh separate headless Claude session (2E863E31-C65E-4C87-A4E6-14A2DADE5BE0)
+found no code blocker and requested accurate missing/rolled-back-log wording.
+The same session approves that documentation delta and the alias-test repair
+with APPROVE_SCOPED. Its tools were Read/Grep/Glob only, no MCP. The author
+confirmed the reviewed product/existing tests unchanged, the new test equal
+to the approved increment, and the docs equal to the approved wording before
+factual closure. The reviewer read author-run evidence and did not rerun tests.
+A bounded private actual-Role probe also reproduces both open log-deletion and
+earlier-prefix cases; those two passing observation checks confirm the limit,
+not a repair. No installed
+app, native/provider process, GUI or model trial is part of this repair.

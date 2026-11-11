@@ -102,7 +102,10 @@ test('the actual private rotation log follows done; malformed log fails closed w
   fs.writeFileSync(role.logFile, '{broken\n');
   assert.throws(() => role.current(), code('ERR_BUTLER_STATE'));
   assert.deepEqual(fs.readFileSync(role.file), before);
-  assert.throws(() => role.set(person, designation(), 1), code('ERR_BUTLER_STATE'));
+  assert.equal(role.snapshot().revision, 1, 'A bad rotation view does not poison the readable designation');
+  const nextRecord = record(next);
+  assert.throws(() => role.authorize(nextRecord, { selectionRevision: 1, runnerRef: binding.runnerRef }, [nextRecord]), code('ERR_BUTLER_STATE'));
+  assert.equal(role.revoke(person, 1).selected, null, 'The actual person can revoke without resolving the broken log');
 });
 test('the budget stores only a configured USD limit and explicit UTC boundary; unknown remains null', t => {
   const { role } = setup(t);
