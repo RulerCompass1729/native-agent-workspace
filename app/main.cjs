@@ -410,7 +410,7 @@ function bindClient(context) {
   const send = (channel, ...data) => { if (context.client === client) sendToPage(context, channel, ...data); };
   client.on('state', data => { if (context.client === client && !win.isDestroyed() && !context.background) {
     const display = displayState(data, context);
-    pushState(context, display); if (!context.background) { notifyToolWait(data, win); notifyCapacity(display, win); }
+    pushState(context, display); notifyToolWait(data, win); notifyCapacity(display, win);
   } });
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('progress', data => send('workspace:progress', data));
@@ -500,7 +500,8 @@ async function startQueueDispatcher() {
 }
 async function broadcastRoom() {
   await Promise.allSettled([...windows.values()].map(async context => {
-    if (context.win.isDestroyed() || context.client.socket.destroyed) return;
+    // A background window has no page: do not fetch and build a state that would be dropped.
+    if (context.background || context.win.isDestroyed() || context.client.socket.destroyed) return;
     const snapshot = await context.client.call('initial');
     pushState(context, displayState(snapshot, context));
   }));

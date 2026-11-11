@@ -136,6 +136,7 @@ test('everything sent to a window\'s page goes through sendToPage or pushState',
   assert.match(outside, /filter\(c => !c\.background\)\.map\(c => c\.win\)\]\);\n  for \(const win of targets\)/, 'the locale broadcast skips background windows');
   assert.doesNotMatch(outside, /[^.]send\('workspace:state'/, 'no send of full state bypasses pushState');
   assert.equal((outside.match(/pushState\(context, /g) || []).length, 3, 'the state event, the room broadcast and the quit notice');
+  assert.match(outside, /if \(context\.background \|\| context\.win\.isDestroyed\(\) \|\| context\.client\.socket\.destroyed\) return;\n    const snapshot = await context\.client\.call\('initial'\);/, 'the room broadcast does not fetch state for a background window');
   assert.match(outside, /register\('uiReady', c => \{[^\n]*c\.armStatePush\?\.\(\)/);
   assert.equal((outside.match(/bindStatePush\(context\);/g) || []).length, 1, 'ordinary windows; a background window loads no document and never reports ready');
   // The reconnect refresh is the one other complete state sent to the page; nothing older may follow it.
