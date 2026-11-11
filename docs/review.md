@@ -10048,3 +10048,35 @@ for the subsequent green full run. Remounted FUSE/SMB content with a
 different device/inode and later replacement of resolved path components through
 a writable parent remain known limitations; this delta does not claim to prevent
 them. Raw red/green and build evidence are retained in the private lane handoff.
+
+## Host-enforced whole-page admission (2026-11-11)
+
+Old-host live Business/MCP/DSH fixtures reproduced input-boundary failures for
+sequential over-reading, six same-step reads and a heavily escaped batch. The
+host now admits each whole tool result only if the next projected wire request
+fits with 64 KiB reserved, counting pending refusal envelopes and actual escaping.
+It withholds an unfit result through the existing DSH post-execution policy,
+then refuses further MCP reads in that batch. Cursor, authority and whole records
+are preserved; the Business-approved page stays in the shared daily audit even
+when not delivered. The new fixture passes the main process's trusted dataDir
+and shared Audit. Rotation resets host admission, never the daily page count.
+
+Ninety focused checks pass, including exact inclusive reservation, Unicode/JSON
+escaping, pending parallel results, deferred context and unchanged hard ceilings.
+Four live multipage scenarios pass, plus all ten prior host boundary scenarios.
+The core over-reading case completes with all seven requests' usage in its ledger
+and no blocked/unknown-cost notice. A new session can read again; its shared audit
+still includes the withheld page. No real provider calls or credential values.
+The normal fixed eight-request limit remains: an agent that keeps requesting
+refused reads forever is not silently allowed more requests. Unbounded model
+output and unsupported content remain hard refusals, not an admission guarantee.
+Full-suite and independent-review receipts are recorded in the private lane.
+
+The full suite passes 5,804/5,804 with no failures, cancellations or skips. A
+separate read-only headless reviewer approved the product and signed-runtime
+proof after closing its initial evidence/packaging gaps. Its test notes led to
+strict assertions for accepted-plus-withheld MCP counts and the bounded live
+fixture's reserved headroom; all four live cases still pass. Product source and
+the full-suite tests are unchanged since that complete run. Unsupported pipeline
+failures or unbounded model output still rely on the final hard guard; the
+admission promise does not cover those paths.
