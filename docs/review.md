@@ -1,5 +1,19 @@
 # Review and issue record
 
+**Mod timeout test ordering, 2026-11-11 (author verification pending):**
+The process-group timeout test treated a 600ms spawn deadline as proof that the
+sandbox's shell had created a child and printed its PID. Holding the fake program
+before that print reproduces the same empty note and null-match failure without
+load. Production collection already waits for close and drains both pipes; no
+production output-loss fix is justified by that evidence. The test now advances
+only its deadline clock after a fixture-owned readiness file proves the PID was
+written, then checks the real sandbox, SIGKILL, complete output and group exit.
+A second ordering expires before output and requires an incomplete, empty note.
+An independent wall-clock startup watchdog reports missing readiness explicitly;
+finally aborts and awaits the exact run before removing its scratch directory.
+The production timeout, sandbox profile and record rules are unchanged. PID is
+matched as one complete line among diagnostics rather than the entire note.
+
 **PTY stop during startup, 2026-11-11 (independent review pending):**
 The display restart test failed again after its unrelated test-only stop bound
 was widened. The host published started immediately after the parent returned
