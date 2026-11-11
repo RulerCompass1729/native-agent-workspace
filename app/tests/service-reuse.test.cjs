@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), net = require('node:net');
 const { ensureService, connect, connectService, continuationStatus, continueService } = require('../service-client.cjs');
 const { readLayout, writeLayout } = require('../service-layout.cjs');
+const { readLock, ownerMayBeAlive } = require('../service-lock.cjs');
 
 test('cold bootstrap stages the disabled local prepared-command service without provider inference', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-prepared-bootstrap-'));
@@ -217,12 +218,36 @@ async function syntheticService(directory, state) {
   return service;
 }
 async function stopOwnEmptyService(directory) {
+  const file = path.join(directory, 'service.lock'), owner = readLock(file);
   let client;
   try { client = await connectService(directory, 'test-cleanup'); }
-  catch (error) { if (error.code === 'ENOENT') return; throw error; }
-  try { await client.call('shutdown'); if (!client.socket.destroyed) await new Promise(resolve => client.socket.once('close', resolve)); }
-  finally { client.close(); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (client) {
+    try { await client.call('shutdown'); if (!client.socket.destroyed) await new Promise(resolve => client.socket.once('close', resolve)); }
+    finally { client.close(); }
+  }
+  // The daemon removes its record after closing clients, then exits later.
+  // A closed socket alone cannot authorize a second boot or fixture removal.
+  for (let n = 0; n < 60; n++) {
+    if (!fs.existsSync(file) && !ownerMayBeAlive(owner, directory, 'service')) return;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw Error('Test backend did not finish shutdown');
 }
+test('the bootstrap fixture waits beyond socket close until both lock and process are gone', async () => {
+  const source = fs.readFileSync(__filename, 'utf8'), start = source.indexOf('async function stopOwnEmptyService(');
+  const end = source.indexOf('\ntest(', start);
+  for (const lockFirst of [true, false]) {
+    let phase = 0;
+    const context = { path, fs: { existsSync: () => phase < (lockFirst ? 1 : 2) }, readLock: () => ({ pid: 123 }),
+      ownerMayBeAlive: () => phase < (lockFirst ? 2 : 1),
+      connectService: async () => ({ call: async () => {}, close() {}, socket: { destroyed: true } }),
+      setTimeout: callback => { phase++; callback(); } };
+    const vm = require('node:vm'); vm.createContext(context); vm.runInContext(source.slice(start, end), context);
+    await context.stopOwnEmptyService('/synthetic/profile');
+    assert.equal(phase, 2, 'Socket closure alone cannot authorize the next bootstrap or profile deletion');
+  }
+});
 test('same-version butler service cannot become an ordinary active backend or be paused', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-purpose-reuse-'));
   const old = process.env.NAW_APP_VERSION;

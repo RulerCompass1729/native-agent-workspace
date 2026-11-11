@@ -8,7 +8,7 @@ const { lockIdentity, createLock, readLock, ownerMayBeAlive } = require('../serv
 const { execFileSync } = require('node:child_process');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function stop(directory) {
-  const file = path.join(directory, 'service.lock'), owner = fs.existsSync(file) ? readLock(file) : null;
+  const file = path.join(directory, 'service.lock'), owner = readLock(file);
   let client;
   try { client = await connectService(directory, 'owned-lock-test-cleanup'); await client.call('shutdown'); }
   catch (e) { if (fs.existsSync(path.join(directory, 'connection.json'))) throw e; }
@@ -22,6 +22,51 @@ async function cleanup(directory, started) {
   else if (fs.existsSync(path.join(directory, 'runtimes'))) throw Error('Failed bootstrap store retained for inspection: ' + directory);
   fs.rmSync(directory, { recursive: true, force: true });
 }
+for (const filename of ['service.lock', 'services.lock']) for (const method of ['lstatSync', 'readFileSync']) {
+  test(filename + ' disappearing immediately before ' + method + ' permits actual cold bootstrap', async t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-disappearing-lock-')), file = path.join(directory, filename);
+    let started = false, removed = false, client;
+    fs.writeFileSync(file, String(process.pid));
+    assert.equal(fs.existsSync(file), true);
+    const original = fs[method];
+    const mock = t.mock.method(fs, method, function (target, ...args) {
+      if (target === file && !removed) { fs.unlinkSync(file); removed = true; }
+      return original.call(this, target, ...args);
+    });
+    try {
+      await ensureService(directory, process.execPath); started = true;
+      assert.equal(removed, true, 'The read really raced with removal');
+      client = await connectService(directory, 'disappearing-lock-check');
+      const state = await client.call('initial');
+      assert.notEqual(state.servicePid, process.pid); assert.deepEqual(state.sessions, []); assert.equal(state.diagnostics.dispatches, 0);
+      assert.equal(fs.existsSync(path.join(directory, 'services.lock')), false);
+    } finally { mock.mock.restore(); client?.close(); await cleanup(directory, started); }
+  });
+}
+test('both startup paths refuse corrupt, nonregular, foreign-owned and unreadable locks before spawning', async t => {
+  for (const filename of ['service.lock', 'services.lock']) for (const kind of ['corrupt', 'directory', 'symlink', 'foreign', 'denied']) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-invalid-lock-')), file = path.join(directory, filename);
+    let mock, started = false;
+    if (kind === 'directory') fs.mkdirSync(file);
+    else if (kind === 'symlink') fs.symlinkSync(path.join(directory, 'missing'), file);
+    else fs.writeFileSync(file, kind === 'corrupt' ? '{invalid' : String(process.pid));
+    if (kind === 'foreign' || kind === 'denied') {
+      const original = fs.lstatSync;
+      mock = t.mock.method(fs, 'lstatSync', function (target, ...args) {
+        if (target === file && kind === 'denied') throw Object.assign(Error('fixture denied'), { code: 'EACCES' });
+        const stat = original.call(this, target, ...args);
+        if (target === file) stat.uid = process.getuid() + 1;
+        return stat;
+      });
+    }
+    try {
+      await assert.rejects(async () => { await ensureService(directory, process.execPath); started = true; }, error => kind === 'denied'
+        ? error.code === 'EACCES' : error.uiMessage?.key === (filename === 'service.lock' ? 'error.service.recordCorrupted' : 'error.service.invalidStartupRecord'));
+      assert.equal(fs.existsSync(path.join(directory, 'runtimes')), false, 'No replacement runtime allocated');
+      t.diagnostic(filename + ': ' + kind + ' retained');
+    } finally { mock?.mock.restore(); await cleanup(directory, started); }
+  }
+});
 test('legacy locks naming a live unrelated root process recover even when kill(pid, 0) is EPERM', async () => {
   const processes = execFileSync('/bin/ps', ['-axo', 'pid=,uid=,comm='], { encoding: 'utf8' }).split('\n');
   const row = processes.map(line => line.trim().match(/^(\d+)\s+0\s+(\/usr\/libexec\/logd)$/)).find(Boolean);

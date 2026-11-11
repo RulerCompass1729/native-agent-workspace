@@ -20,26 +20,35 @@ function parseLock(text) {
   return value;
 }
 function readLock(file) {
-  const stat = fs.lstatSync(file);
-  if (!stat.isFile() || stat.uid !== process.getuid()) return null;
-  const text = fs.readFileSync(file, 'utf8'), record = parseLock(text);
-  return record && { ...record, text, ino: stat.ino, dev: stat.dev };
+  // Absence (including removal during this read) is not a corrupt lock. Only
+  // ENOENT permits startup to continue; invalid records remain null and other
+  // I/O failures propagate. Callers must not collapse these three outcomes.
+  try {
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.uid !== process.getuid()) return null;
+    const text = fs.readFileSync(file, 'utf8'), record = parseLock(text);
+    return record && { ...record, text, ino: stat.ino, dev: stat.dev };
+  } catch (error) { if (error.code === 'ENOENT') return undefined; throw error; }
 }
 function createLock(file, kind, directory) {
   const record = { format: 1, pid: process.pid, started: lockIdentity(process.pid)?.started || null,
     kind, directory: fs.realpathSync(directory), token: crypto.randomUUID() };
   const fd = fs.openSync(file, 'wx', 0o600);
   try { fs.writeFileSync(fd, JSON.stringify(record)); } finally { fs.closeSync(fd); }
-  const lock = readLock(file); held.set(file, lock); return lock;
+  const lock = readLock(file);
+  if (!lock || lock.token !== record.token) throw Object.assign(new Error('Lock acquisition changed before confirmation'), { code: 'EAGAIN' });
+  held.set(file, lock); return lock;
 }
 function releaseLock(file, lock) {
   try {
     const current = readLock(file);
-    if (!lock || !current || current.ino !== lock.ino || current.dev !== lock.dev || current.text !== lock.text) return false;
-    fs.unlinkSync(file);
-    if (held.get(file) === lock) held.delete(file);
-    return true;
-  } catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+    if (current !== undefined) {
+      if (!lock || !current || current.ino !== lock.ino || current.dev !== lock.dev || current.text !== lock.text) return false;
+      fs.unlinkSync(file);
+    }
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (held.get(file) === lock) held.delete(file);
+  return true;
 }
 function commandLine(pid) {
   const read = field => execFileSync('/bin/ps', ['-ww', '-p', String(pid), '-o', field + '='],

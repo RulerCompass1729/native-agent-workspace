@@ -9550,3 +9550,43 @@ Measured with the same content before and after: the conversation is 17px taller
 Prototype first, as the task requires: the rules were injected at run time into a hidden source build and compared with the current page in seven cases (Chinese and English, two window sizes; read-only, idle with a draft, working, waiting for the person). An independent agent then reviewed the pictures in the person's place, in one session: accepted with notes, nothing required. It confirmed that nothing that has to stay is lost in the read-only, working and waiting pairs, and judged the result better divided, not only different. Its optional note on the input card (10px rather than 8px above and below, so the send control sits evenly in its corner) was taken. Its other note is left for a separate slice: the terminal pane's header wraps to two rows in English and in small windows, which is existing behaviour, so there the two header rules are at different heights; the same slice should look at the interrupt and send labels breaking onto two lines.
 
 Owner: the author of this change. Evidence: a new hidden check, `scripts/test-session-split-density.cjs`, with a synthetic backend and no model, in ten steps: read-only, idle, a later turn, reachability and the open disclosure, working, waiting for the person, more than one page, the small window and English, the conversation alone, and an ended session; it fails on the earlier stylesheet. Five existing hidden scripts that use these parts still pass (reading turns, compact header, send hints, control focus, operator control), and the full unit checks pass with no failures. The code was not reviewed separately from the prototype: five style rules and a check, reversible, each measured before and after. Not covered: a dark theme, Codex sessions, the expanded draft-copy hint, physical keys and a screen reader (the window is hidden and cannot take focus; the check asserts Tab order, sizes and that nothing covers the controls).
+## Service locks disappearing during startup — 2026-11-11
+
+A previous daemon can remove its lock between the launcher's existence check and
+the lock reader's lstat/read. The reported startup then failed with ENOENT.
+The shared reader now returns undefined only for ENOENT, null for a present
+invalid record, and throws other I/O errors. Both ordinary bootstrap paths and
+dedicated recovery/start use that distinction without a separate existence check.
+Release treats absence as success and forgets its own held entry. Acquisition
+still requires its newly written token to be present before claiming ownership.
+
+Deterministic tests remove each of service.lock and services.lock immediately
+before lstat and before reading the contents. All four actual isolated bootstrap
+cases fail with ENOENT on the base and pass with the fix. Reader tests distinguish
+invalid files, foreign ownership and permission errors; startup counterexamples
+reject corrupt/nonregular/foreign/unreadable locks without allocating a runtime.
+Real unresponsive daemon tests retain both old and versioned locks. Dedicated
+recovery and startup use only a synthetic provider executable, with no inference.
+The waitForShutdown and waitGone loops have absence checks without subsequent
+reads; their socket/process identity safeguards remain unchanged. The separate
+backend-switch serviceProcess pre-maintenance identity check reads the lock
+directly and already fails closed if it disappears; that reader is unchanged.
+The test-scratch ownership probe also reads directly and already catches ENOENT.
+The separate desktop test-driver lock uses a different protocol and is outside
+this repair.
+
+The first independent review approved the product diff without code blockers,
+conditional on a green full suite and the audit wording correction above (R1).
+The first full run had one distinct failure: the existing service-reuse fixture
+returned on socket close while its daemon still held the lock. The live-owner
+guard correctly refused its second bootstrap. A deterministic fixture test fails
+before the fix; cleanup now waits for both lock removal and owner exit before
+rebooting or removing its owned profile. No production safeguard is relaxed.
+The same independent reviewer approved the incremental fixture/doc diff with no
+blockers and closed R1. Its final prerequisite is met: the full suite with test
+concurrency four passed 5,472 tests, zero failures/cancellations/skips; the whole
+service-reuse file separately passed 23 tests. Raw red, the first full failure,
+green outputs and both read-only reviews are retained privately. Product sources
+were unchanged during both reviews; only the test cleanup and audit wording
+needed the second review. This source checkpoint neither installs nor restarts
+the daily app.

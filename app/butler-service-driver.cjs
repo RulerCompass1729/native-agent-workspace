@@ -34,8 +34,8 @@ class ButlerServiceDriver {
       // connection record or an uncertain native child left by a dead daemon.
       if (error.code === 'binding-mismatch') throw error;
       for (const [name, kind] of [['service.lock', 'service'], ['services.lock', 'startup']]) {
-        if (!fs.existsSync(path.join(this.store, name))) continue;
         const record = readLock(path.join(this.store, name));
+        if (record === undefined) continue;
         if (!record || ownerMayBeAlive(record, this.store, kind)) throw binding.failure('owner-unconfirmed');
       }
       if (!binding.runnerAbsent(this.store)) throw binding.failure('runner-exit-unconfirmed');
@@ -48,8 +48,8 @@ class ButlerServiceDriver {
     const proof = butlerBinding(value);
     binding.reserveBinding(this.store, proof);
     const file = path.join(this.store, 'services.lock');
-    if (fs.existsSync(file)) {
-      const old = readLock(file);
+    const old = readLock(file);
+    if (old !== undefined) {
       if (!old || ownerMayBeAlive(old, this.store, 'startup') || !releaseLock(file, old)) throw binding.failure('owner-unconfirmed');
     }
     const lock = createLock(file, 'startup', this.store);

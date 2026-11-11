@@ -54,6 +54,39 @@ async function stop(directory) {
   finally { c.close(); }
   for (let i = 0; i < 100 && fs.existsSync(path.join(directory, 'service.lock')); i++) await new Promise(r => setTimeout(r, 20));
 }
+test('dedicated recovery and startup tolerate disappearing locks but keep invalid records protected', async t => {
+  const f = fixture(t), driver = new ButlerServiceDriver(f.backend.directory);
+  binding.reserveBinding(f.backend.store, f.proof);
+  for (const name of ['service.lock', 'services.lock']) {
+    const file = path.join(f.backend.store, name), original = fs.lstatSync;
+    fs.writeFileSync(file, '{invalid');
+    await assert.rejects(driver.recover(f.proof), /owner-unconfirmed/);
+    if (name === 'services.lock') await assert.rejects(driver.start(f.proof), /owner-unconfirmed/);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{invalid');
+    let removed = false;
+    const mock = t.mock.method(fs, 'lstatSync', function (target, ...args) {
+      if (target === file && !removed) { fs.unlinkSync(file); removed = true; }
+      return original.call(this, target, ...args);
+    });
+    try { assert.deepEqual(await driver.recover(f.proof), { status: 'absent' }); assert.equal(removed, true); }
+    finally { mock.mock.restore(); }
+  }
+  assert.deepEqual(f.rows(), [], 'Recovery never launches a provider');
+  const file = path.join(f.backend.store, 'services.lock'), original = fs.readFileSync;
+  fs.writeFileSync(file, String(process.pid)); let removed = false;
+  const mock = t.mock.method(fs, 'readFileSync', function (target, ...args) {
+    if (target === file && !removed) { fs.unlinkSync(file); removed = true; }
+    return original.call(this, target, ...args);
+  });
+  try {
+    assert.deepEqual(await driver.start(f.proof), { status: 'present', binding: f.proof });
+    assert.equal(removed, true); assert.equal(f.rows().filter(row => row.args).length, 1);
+    assert.deepEqual(f.rows().filter(row => row.method).map(row => row.method), ['initialize', 'initialized']);
+  } finally {
+    mock.mock.restore();
+    if (fs.existsSync(path.join(f.backend.store, 'connection.json'))) await stop(f.backend.store);
+  }
+});
 test('dedicated cold boot and recovery bind the same runner; normal same-version service stays separate', async t => {
   const f = fixture(t), driver = new ButlerServiceDriver(f.backend.directory);
   const ordinary = path.join(f.root, 'ordinary');
