@@ -30,8 +30,34 @@ const sessionStatus = (record, recoveryBadge = false) => {
 };
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 const mobileSetup = window.nativeWorkspaceMobileSetup.bind({ container: $('mobile-setup'), document, api, getSessions: () => state?.sessions || [], text: (key, params) => uiText(key, params), display: ui.display });
+// The existing butler view owns visibility and state; the record table has no second sidebar entry.
+const butlerReviewAdapter = window.nativeWorkspaceButlerReviewAdapter.create({ api, text: uiText });
+const butlerReviewView = window.nativeWorkspaceButlerReview.create({ dialog: $('butler-review-dialog'),
+  text: uiText, language: () => ui.language.getSnapshot().active,
+  read: () => butlerReviewAdapter.open(), readNew: () => butlerReviewAdapter.freeze(), confirm: draft => butlerReviewAdapter.confirm(draft) });
+let butlerReviewOpening = false, butlerReviewDisposed = false;
+async function openButlerReview() {
+  if (butlerReviewDisposed || butlerReviewOpening || $('butler-row')?.hidden !== false) return;
+  butlerReviewOpening = true;
+  try {
+    const availability = await api.butlerReview('availability');
+    if (butlerReviewDisposed || $('butler-row')?.hidden !== false) return;
+    if (availability?.available !== true || availability.hasData !== true) throw uiError('error.butlerReview.unavailable');
+    await butlerReviewView.open();
+  } catch (error) { if (!butlerReviewDisposed) toastError(error); }
+  finally { butlerReviewOpening = false; }
+}
+function returnFromButlerReview() {
+  if (!butlerReviewDisposed && $('butler-row')?.hidden === false) $('butler-row').focus({ preventScroll: true });
+}
+function disposeButlerReview() {
+  butlerReviewDisposed = true;
+  $('butler-review-dialog').removeEventListener('close', returnFromButlerReview);
+  butlerReviewView.dispose(); butlerReviewAdapter.dispose();
+}
+$('butler-review-dialog').addEventListener('close', returnFromButlerReview);
 // The butler's row is drawn only from a view the main process gives this window; this version gives none.
-const butlerEntry = window.nativeWorkspaceButlerEntry.bind({ row: $('butler-row'), dialog: $('butler-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display, showError: ui.showError });
+const butlerEntry = window.nativeWorkspaceButlerEntry.bind({ row: $('butler-row'), dialog: $('butler-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display, showError: ui.showError, openReview: openButlerReview });
 let newDirectory = false, creatingSession = false;
 let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
 let latestViewStorage, latestViewStorageUiMessage;
@@ -3809,6 +3835,7 @@ const nativeActivityClock = setInterval(() => {
 function render() {
   if (!state || rendering) return;
   butlerEntry.render(state.butler?.entry);
+  if ($('butler-row')?.hidden === true && $('butler-review-dialog')?.open) $('butler-review-dialog').close();
   captureReadingViews();
   rendering = true;
   let removedRoomFocus;
@@ -4425,6 +4452,7 @@ function writeTerminal(entry, event) {
 const disposers = [
   () => mobileSetup.dispose(),
   () => butlerEntry.dispose(),
+  disposeButlerReview,
   disposeToastKeyboard,
   api.onProgress(updateLegacyProgress),
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
@@ -5492,7 +5520,7 @@ for (const dialog of document.querySelectorAll('dialog')) {
 $('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').onclick = () => attempt(showSetup);
 $('close-setup').onclick = () => $('setup-dialog').close();
 $('ui-language').onchange = event => { void changeInterfaceLanguage(event.target.value); };
-disposers.push(ui.language.subscribe(() => { renderInterfaceLanguage(); renderSetupPrograms(true); if (selected === 'panorama') document.title = uiText('panorama.windowTitle'); }));
+disposers.push(ui.language.subscribe(() => { renderInterfaceLanguage(); renderSetupPrograms(true); butlerReviewView.refresh(); if (selected === 'panorama') document.title = uiText('panorama.windowTitle'); }));
 disposers.push(api.onLocale(value => { if (!value || typeof value !== 'object') return; languageWarning = ['unavailable', 'migrationNotSaved'].includes(value.warning) ? value.warning : null; if (!languageWarning) notifiedLanguageWarning = undefined; renderInterfaceLanguage(); reportLanguageWarning(); }));
 renderInterfaceLanguage();
 

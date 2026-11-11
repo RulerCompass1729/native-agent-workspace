@@ -131,7 +131,7 @@ function initialState() {
   return { sequence: 0, eventSequence: 0, events: [], eventIndex: new Map(), processed: new Set(),
     batches: new Map(), activeBatchId: null, actions: new Map(), questions: new Map(), questionHead: new Map(),
     deliveries: new Map(), reports: new Map(), reported: new Set(), attempts: new Map(), suspended: new Map(), quarantined: new Map(), quarantinedEvents: new Set(), sourceStates: new Map(),
-    questionMetricEpochs: new Map(), questionMetricGaps: [], questionSends: new Map(), reviews: new Map() };
+    questionMetricEpochs: new Map(), questionMetricGaps: [], questionSends: new Map(), reviews: new Map(), hasStoredReviewData: false };
 }
 function pending(state) { return state.events.filter(event => !state.processed.has(event.eventId) && !state.quarantinedEvents.has(event.eventId)); }
 function cursor(state, covered) {
@@ -650,6 +650,7 @@ function reduce(state, record) {
       requireValue(data.contentDigest === stableId('review-content', reviewContent(data)), 'Invalid frozen review digest', 'BUTLER_REVIEW_DIGEST');
       state.reviews.set(reviewId, { reviewId, ...clone(reviewContent(data)), contentDigest: data.contentDigest,
         createdAt: time, physicalSeq: record.sequence, revision: 0, confirmation: null, confirmations: [], summary: reviewSummary(frozen, null) });
+      if (frozen.rows.length || frozen.failed.length) state.hasStoredReviewData = true;
       break;
     }
     case 'review-confirm': {
@@ -975,6 +976,13 @@ class ButlerLedger {
     let authorized = false;
     try { authorized = this.#authorizePerson(person) === true; } catch {}
     requireValue(authorized, 'Only a verified person can review butler records', 'BUTLER_PERSON_ONLY');
+  }
+  hasReviewData(person) {
+    this.#reviewPerson(person); this.healthy();
+    // Inspect existing indexes only. A saved failure remains reviewable after
+    // its live batch is retried; an empty frozen review never creates an entry.
+    return this.state.actions.size > 0 || this.state.suspended.size > 0 ||
+      this.state.batches.get(this.state.activeBatchId)?.status === 'failed' || this.state.hasStoredReviewData;
   }
   freezeReview(options = {}, person) {
     this.#reviewPerson(person); this.healthy(); object(options, ['afterSequence']);

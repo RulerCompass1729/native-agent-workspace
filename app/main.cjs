@@ -1424,6 +1424,7 @@ async function boot() {
   register('nativeHistory', (c, options) => c.client.call('nativeHistory', options));
   register('importHistory', (c, nativeId, options) => c.client.call('importHistory', nativeId, options));
   register('butlerReview', (c, action, ...args) => {
+    try {
     if (!isCurrentHumanContext(c)) throw Object.assign(Error('Only the current person window can review butler records'), { code: 'BUTLER_PERSON_ONLY' });
     const invalid = () => { throw Object.assign(Error('Invalid butler review request'), { code: 'BUTLER_REVIEW_REQUEST' }); };
     const token = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\s\u0000-\u001f\u007f]/u.test(value);
@@ -1452,10 +1453,11 @@ async function boot() {
       catch { throw uiError('error.butler.readAuditUnavailable'); }
     }
     const ledger = butlerIngress?.ledger;
-    let available = Boolean(ledger && ['healthy', 'freezeReview', 'latestReview', 'review', 'confirmReview'].every(name => typeof ledger[name] === 'function'));
+    let available = Boolean(ledger && ['healthy', 'hasReviewData', 'freezeReview', 'latestReview', 'review', 'confirmReview'].every(name => typeof ledger[name] === 'function'));
     if (action === 'availability') {
-      if (available) { try { ledger.healthy(); } catch { available = false; } }
-      return { available, activation: 'off', recordPeriod: 'off' };
+      let hasData = false;
+      if (available) { try { ledger.healthy(); hasData = ledger.hasReviewData(c) === true; } catch { available = false; } }
+      return { available, hasData: available && hasData, activation: 'off', recordPeriod: 'off' };
     }
     if (!available) throw Object.assign(Error('Butler review storage is unavailable'), { code: 'BUTLER_REVIEW_UNAVAILABLE' });
     if (action === 'latest') return ledger.latestReview(c);
@@ -1463,6 +1465,15 @@ async function boot() {
     if (action === 'freeze') return ledger.freezeReview({ afterSequence: 0 }, c);
     const { reviewId, ...request } = args[0];
     return ledger.confirmReview(reviewId, request, c);
+    } catch (error) {
+      // Preserve the existing structured display-error path through sandboxed
+      // preload; generic IPC intentionally does not forward arbitrary codes.
+      const key = { BUTLER_REVIEW_REVISION: 'conflict', BUTLER_REVIEW_DIGEST: 'conflict',
+        BUTLER_REVIEW_CAPACITY: 'capacity', BUTLER_PERSON_ONLY: 'personOnly',
+        BUTLER_REVIEW_UNAVAILABLE: 'unavailable' }[error?.code];
+      if (key) error.uiMessage = uiError('error.butlerReview.' + key).uiMessage;
+      throw error;
+    }
   });
   // Review records belong only to the person's renderer IPC, never the agent
   // catalog/invoke map. The handler still checks every direct IPC caller.

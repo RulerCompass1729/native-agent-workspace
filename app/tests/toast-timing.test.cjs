@@ -8,7 +8,7 @@ const source = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 
 const part = (from, to) => source.slice(source.indexOf(from), source.indexOf(to));
 const code = part('function toast(', 'function sessionNotice(') + '\n' + part('// T-128: a notice with an action keeps no time limit', 'async function attempt(');
 function fixture() {
-  let now = 0, timers = [], seq = 0, action = null;
+  let now = 0, timers = [], seq = 0, action = null; let reviewDisposals = 0;
   const documentListeners = {}, captures = new Map();
   class Element {
     setAttribute() {} removeAttribute() {}
@@ -33,13 +33,13 @@ function fixture() {
     contains: el => el != null && (el === toast || el === text || el === close || el === action),
     querySelector: () => action, insertBefore: el => { action = el; } });
   const button = (label, run) => { const el = new Element('toast-action', true); Object.assign(el, { label, isConnected: true, setAttribute() {}, remove() { el.isConnected = false; if (action === el) action = null; }, click: run }); return el; };
-  const context = vm.createContext({ ...localeUI(), document, button, Element, mobileSetup: { dispose() {} }, butlerEntry: { dispose() {} },
+  const context = vm.createContext({ ...localeUI(), document, button, Element, mobileSetup: { dispose() {} }, butlerEntry: { dispose() {} }, disposeButlerReview() { reviewDisposals++; },
     $: id => ({ toast, 'toast-text': text, 'toast-close': close })[id],
     setTimeout: (fn, ms) => { const id = ++seq; timers.push({ id, at: now + ms, fn }); return id; },
     clearTimeout: id => { timers = timers.filter(t => t.id !== id); } });
   vm.runInContext('let toastTimer;\n' + code + '\nthis.toast = toast;', context);
   const advance = ms => { now += ms; for (const t of timers.filter(t => t.at <= now)) { timers = timers.filter(x => x !== t); t.fn(); } };
-  return { context, toast, text, close, outside, body, document, documentListeners, advance, action: () => action,
+  return { context, toast, text, close, outside, body, document, documentListeners, advance, action: () => action, reviewDisposals: () => reviewDisposals,
     dispose() {
       // Exercise the actual renderer cleanup registry, without running its event callbacks.
       context.api = new Proxy({}, { get: () => () => () => {} }); context.updateLegacyProgress = () => {};
@@ -128,7 +128,7 @@ test('hidden or disposed toast keyboard handling leaves keys and focus alone', (
   const f = fixture(); f.focus(f.outside);
   const hidden = f.key(f.outside); assert.equal(hidden.defaultPrevented, false); assert.equal(hidden.stopped, false);
   f.context.toast('Joined', { label: 'Undo', run() {} });
-  f.dispose(); f.key(f.outside);
+  f.dispose(); f.key(f.outside); assert.equal(f.reviewDisposals(), 1);
   assert.equal(f.toast.hidden, false); assert.equal(f.document.activeElement, f.outside);
   assert.equal(f.documentListeners.keydown?.length || 0, 0); assert.equal(f.documentListeners.focusin?.length || 0, 0);
 });

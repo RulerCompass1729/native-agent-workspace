@@ -9452,3 +9452,43 @@ fix output and exact review evidence paths remain in the private lane handoff.
 **Checks.** One unit test on the real entries and the real space record: a secretary is designated and adds an item; the person archives it the real way, and the backend's record still carries no "archived"; the archived secretary's next addition is refused and nothing is added; it cannot be designated again while archived; the person can revoke it and add items themselves; restored, it can be designated and add again. Reverting either line turns the test red. The full unit suite passes on the delivered head, and the real app boots and passes the session-menu journey.
 
 **Independent review (passed).** The reviewer confirmed that for these two callers only the `archived` field differs from the backend's list, that nothing new can fail, and that a session being archived at that moment still counts as not archived until the archive finishes. It found two more places in the main process that read `archived` from the backend's own list and are not changed here: the fingerprint of an ordinary background command (archiving the target between an agent's request and its execution does not change the fingerprint), and the fallback that chooses which connection-update options are offered when no profile is passed.
+
+
+## 2026-11-11 butler record-table UI behind closed switches
+
+Outcome: the person's window can review every frozen occurrence and its full source text, mark disagreement once per distinct suggestion, explicitly attest all read, and restore or amend the durable confirmation after reopening. Suspended candidates remain visible outside the denominator; unknown sources stay in it and cannot become agreement. The renderer and host import one sample policy. Audit data is labelled as audit, with zero working-day samples, rather than as a synthetic example or a qualified trial.
+
+The earlier display component had no production persistence connection. The adapter now binds review ID, digest and revision, checks both returned mark sets and the exact new confirmation, and retains drafts on failures or competing revisions. Opening reads latest and freezes the current head when no saved review exists or the saved review is empty; otherwise only an explicit new-audit action freezes a new head, and that action is disabled while a draft is unsaved. A non-null old receipt cannot mark a new draft saved. Review errors use the existing structured display metadata through sandboxed preload, without forwarding arbitrary IPC error codes.
+
+The storage-health bit alone could expose an empty entry or hide unfrozen suggestions. Person-only availability now includes a constant-time data bit over existing indexes and a replayed nonempty-review flag. Empty freezes do not create an entry; a failure-only record remains visible and cannot be falsely confirmed. No whole-ledger snapshot, periodic poll, automatic freeze, new journal type, background-agent access or activation is introduced. The existing butler panel is the only entry; its explicit review callback rechecks person-only availability, without a timer, poll or second sidebar entry.
+
+Author validation includes the real Main/register/preload/adapter chain, semantic duplicates, unknown sources, suspended-only and failure-only records, stale/idempotent receipts, competing revisions, save/restart restoration and absent/incomplete delivery measurements. In the actual hidden source app, inherited header layout initially let the introduction cover the close button; the record-table header now sets its own block layout, and an actual center-hit/click check covers that regression. Chinese and English at regular and small sizes, a real restart, revision amendment, retained draft after an injected capacity failure and stored delivery counters 0/2/unknown all pass with synthetic evidence. The complete suite is rerun after integration with bounded test concurrency. No model/provider test call, real notification delivery, working-day trial, merge or installed-app acceptance is claimed.
+
+Independent review requested changes for three missed test-fixture dependencies and for a saved empty review trapping later suggestions. The fixtures now include the real shared policy and spies for the new cleanup/locale callbacks, preserving their original assertions. The empty-latest journey fails before the adapter correction and succeeds afterward: only an explicit opening refreezes an empty saved review, while read-only reads and nonempty saved confirmations retain their behavior.
+
+An author-run locale regression also reproduced an owned incomplete-measurement reason retaining its old language. The adapter now retains validated display keys and numeric parameters for those reasons, and the view repaints them locally without re-reading the journal or changing marks/revisions; ordinary source text remains literal.
+
+
+### Record table within the butler entry — 2026-11-11
+
+The record table now uses the entry author's existing `openReview` callback.
+Opening it closes the parent panel first; closing it restores focus to the
+visible butler row. The host entry view alone determines the row's visibility,
+and hiding it closes the record table. No second row, cached role, background
+availability read, activation or native action is added. The production host
+still emits no entry view, so this source checkpoint keeps the interface hidden.
+
+The entry author's approved state rules remain unchanged: the review action
+is offered only in ready, held or recording states with `reviewAvailable:true`.
+An author proposal to add it to other states was withdrawn after independent
+review identified the design mismatch; that proposal was not a regression fix.
+The widget can mount without its former independent trigger. The merged
+builder and mobile/toast fixtures retain both authors' modules and cleanup
+assertions. The integration tests cover late replies, duplicate opens, loss of
+visibility, teardown and focus restoration.
+
+The hidden GUI uses the actual Main/preload/ledger and an explicitly synthetic
+host entry view to exercise the one-panel path; the unmodified production
+hidden gate is checked before that fixture is enabled and after restart. This
+is source integration evidence, not qualification of a future host adapter,
+a working-day trial or permission to open either switch.

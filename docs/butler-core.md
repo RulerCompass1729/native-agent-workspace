@@ -127,7 +127,7 @@ proof that a live runtime exposes only that dispatcher.
 The desktop pairs the dedicated NativeHost/service driver and name-only profile
 checks with the existing backend, without preparing or starting it. Native provider compatibility remains
 unverified. The next source stage needs direct person-request ingress and controller binding, the
-person-only designation menu/dialog and review-table renderer, a production queue transaction adapter
+person-only designation menu/dialog, a production queue transaction adapter
 and the non-member rotation/create-plan hooks. The core's pure
 rotation candidate filter and role successor are not a claim that those hooks
 are already connected. Missing or unverified provider usage/cost and reminder
@@ -140,8 +140,8 @@ operations. Blocked notices without a batch currently dedupe for their recorded
 scope; the host must surface rejected input, and future journal validation
 changes must preserve the recorded schema's replay rules.
 The durable audit projection includes suspended candidates and their sources.
-Its person-only review API is connected below; the review-table renderer and
-installed suspension notification remain separate work.
+Its person-only review API and record-table renderer are connected below;
+installed suspension notification remains separate work.
 Host mapping must give different decisions of the same type distinct source
 references. Canonical question keys still dedupe a single decision across those
 references. Raw B1 observation errors must be surfaced by the host caller.
@@ -196,12 +196,41 @@ are not added to initial state, ordinary display state or view state.
 
 | Action | Arguments | Result |
 | --- | --- | --- |
-| `availability` | None | `{available, activation:'off', recordPeriod:'off'}` only; no ledger snapshot |
+| `availability` | None | `{available, hasData, activation:'off', recordPeriod:'off'}` only; no ledger snapshot |
 | `latest` | None | Latest stored review or `null`, without creating a new review |
 | `read` | `reviewId` | That stored review |
 | `freeze` | None | Reuse the saved latest review when only audit records changed; otherwise freeze a new head. Main fixes `afterSequence:0` and audit-only provenance |
 | `reads` | `{afterSequence?, limit?}` | Person-only paginated read-audit metadata; independent of the suggestion ledger |
 | `confirm` | One request object below | Current durable review with the saved confirmation |
+
+The existing butler panel is the sole record-table entry. Its host-provided
+`entry.reviewAvailable` must come from the same ledger writer's
+`hasReviewData(context)` result; `available` alone reports storage health. This
+person-only data bit
+reads the existing action/suspension/current-failure indexes and one replayed
+flag for a nonempty saved review, without cloning or scanning the journal.
+Pending facts and an empty frozen review do not create an entry; a failure-only
+review does. Storage failures offer no review action. The existing entry
+projection offers review only in ready, held or recording states, when that
+data flag is true; this integration preserves those approved state rules.
+Main currently supplies no butler entry view, so the production entry remains
+hidden; this UI adds no fallback entry or second business-state projection. No
+review body enters an ordinary state update.
+
+The renderer opens the saved latest review and restores its marks, all-read
+confirmation and revision. The person's first opening, or opening a previously
+empty saved review, can freeze the current head. Otherwise only an explicit new-audit
+action freezes it; that action is disabled while the person has an unsaved draft. Failed saves
+retain that draft. The adapter checks the identity, digest, expected revision
+and both mark sets before reporting success. The shared structured display-error
+path carries conflict/capacity reasons through sandboxed preload. The panel
+closes before its `openReview` callback opens the record dialog. That explicit
+click rechecks person-only availability and requires both `available` and
+`hasData`; concurrent clicks coalesce. Closing returns focus to the sole butler
+row if it is still visible, and hiding the host entry closes the record dialog.
+There is no availability timer, poll, or automatic freeze. Both recording and activation
+remain off. Audit records show zero working-day samples, distinct from synthetic
+examples and qualified real samples.
 
 The exact confirmation request is:
 

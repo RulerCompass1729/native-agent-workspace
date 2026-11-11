@@ -13,7 +13,7 @@ function fixture() {
   const nodes = new Map(ids.map(id => [id, { id, textContent: '', attributes: {}, setAttribute(key, value) { this.attributes[key] = value; } }]));
   const control = nodes.get('ui-language'); control.options = [{ value: 'zh' }, { value: 'en' }];
   const rail = { textContent: '' }; nodes.get('setup-button').querySelector = () => rail;
-  let accepted = 'zh', save;
+  let accepted = 'zh', save, reviewRefreshes = 0;
   const writes = [], observers = [], calls = [];
   const state = { sessions: [{ nativeId: 'original-native', owner: 'original-owner', liveDraft: '中文 English unsent\n{raw}' }], sharedDraft: '@original 中文 draft' };
   const document = { activeElement: control };
@@ -21,26 +21,26 @@ function fixture() {
     set: value => { writes.push(value); return new Promise((resolve, reject) => { save = { accept() { accepted = value; resolve(); for (const fn of observers) fn(); }, reject }; }); },
     subscribe: fn => { observers.push(fn); return () => {}; } } };
   const context = vm.createContext({ selected: '', ui, state, document, $: id => { assert.ok(nodes.has(id), 'Locale-only control must not reach another surface'); return nodes.get(id); }, uiText: ui.language.text,
-    toast() {}, api: new Proxy({}, { get(_target, key) { if (key === 'onLocale') return () => () => {}; calls.push(key); throw Error('Unexpected native/product API'); } }), disposers: [] });
+    toast() {}, butlerReviewView: { refresh() { reviewRefreshes++; } }, api: new Proxy({}, { get(_target, key) { if (key === 'onLocale') return () => () => {}; calls.push(key); throw Error('Unexpected native/product API'); } }), disposers: [] });
   vm.runInContext(renderer.slice(begin, end), context);
   const hook = renderer.indexOf("$('ui-language').onchange =");
   const hookEnd = renderer.indexOf('for (const input of document.querySelectorAll', hook);
   assert.ok(hook > 0 && hookEnd > hook);
   vm.runInContext(renderer.slice(hook, hookEnd), context);
-  return { context, control, nodes, document, state, writes, calls, save: () => save, get accepted() { return accepted; }, change: value => vm.runInContext(`changeInterfaceLanguage(${JSON.stringify(value)})`, context) };
+  return { context, control, nodes, document, state, writes, calls, reviewRefreshes: () => reviewRefreshes, save: () => save, get accepted() { return accepted; }, change: value => vm.runInContext(`changeInterfaceLanguage(${JSON.stringify(value)})`, context) };
 }
 
 test('pending language selection retains accepted display, focus, native identity and drafts without repeated writes', async () => {
   const f = fixture(), before = JSON.stringify(f.state);
   const pending = f.change('en');
   assert.equal(f.control.value, 'zh');
-  assert.equal(f.control.attributes['aria-busy'], 'true');
+  assert.equal(f.control.attributes['aria-busy'], 'true'); assert.equal(f.reviewRefreshes(), 0);
   assert.equal(f.document.activeElement, f.control);
   await f.change('en'); assert.deepEqual(f.writes, ['en']);
   f.save().accept(); await pending;
   assert.equal(f.control.value, 'en');
   assert.equal(f.control.attributes['aria-busy'], 'false');
-  assert.equal(f.nodes.get('setup-title').textContent, 'Settings');
+  assert.equal(f.nodes.get('setup-title').textContent, 'Settings'); assert.equal(f.reviewRefreshes(), 1);
   assert.equal(f.document.activeElement, f.control);
   assert.equal(JSON.stringify(f.state), before);
   assert.deepEqual(f.calls, []);
