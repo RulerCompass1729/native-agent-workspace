@@ -1,5 +1,22 @@
 # Review and issue record
 
+**Native quota failure input, 2026-11-11 (independent review pending):**
+Claude can finish an exhausted-credit request before its StopFailure hook.
+An error without the API Error prefix previously prevented the late confirmed
+failure from enabling a new explicit chat input. Tool permission boundaries
+also revoke reply-sharing authority; recovery now uses the separately observed
+started root without restoring that authority or automatic continuation.
+Completed-root input is consumed once and revoked by later control boundaries,
+disconnect, observation gaps and rebinding. The shared workspace readiness guard
+is unchanged. A native synthetic credit error receives a localized manual
+recovery notice only when its processed text retains that fact.
+The sandboxed real-Claude loopback journey covers plain, tool, background-command,
+child and native-terminal input, with fixed replies, stable native identity,
+one-time tool execution and no automatic recovery request. Event-order,
+redaction and revocation regressions cover the boundaries; Codex's completed
+failure still returns to ordinary idle input. This is not a real billing reset
+or permission-mode qualification. Independent code and wording review is required.
+
 **Mod readiness file visibility, 2026-11-11 (incremental review pending):**
 The integration run exposed a gap in the new timeout test: the shell creates
 and truncates child-ready before writing its PID, so existence alone could
