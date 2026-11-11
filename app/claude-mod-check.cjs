@@ -95,14 +95,15 @@ async function run({ binary, version, privateDir, dir = __dirname, timeoutMs = 6
     const env = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home, TMPDIR: temp, LANG: 'en_US.UTF-8', CLAUDE_CONFIG_DIR: config, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
     const done = await execute(sandbox, ['-p', profile(work), binary, 'plugin', 'test', copy], { env, cwd: work, timeoutMs, signal });
     const output = done.output.split(work).join(''), counted = parse(output);
-    return { version, mod, at, seconds: Math.round((Date.now() - started) / 100) / 10, exit: done.code, ...(done.signal ? { signal: done.signal } : {}), ...(done.timedOut ? { timedOut: true } : {}),
+    return { version, mod, at, seconds: Math.round((Date.now() - started) / 100) / 10, exit: done.code, ...(done.signal ? { signal: done.signal } : {}), ...(done.timedOut && done.code === null ? { timedOut: true } : {}),
       ...counted, ...(counted.tests === null ? { note: output.trim().slice(0, 400) } : {}) };
   } catch (error) {
     return { version, mod, at, reason: String(error?.message).split(work || '\0').join('').slice(0, 200) };
   } finally { if (work) fs.rmSync(work, { recursive: true, force: true }); }
 }
-// The run reached its own end for this mod; anything else is tried again after the next NAW start.
-const complete = (record, mod) => Boolean(record) && record.mod === mod && Number.isInteger(record.exit) && !record.timedOut;
+// The run reached its own end for this mod (a run stopped at the limit has no exit code); anything else
+// is tried again after the next NAW start.
+const complete = (record, mod) => Boolean(record) && record.mod === mod && Number.isInteger(record.exit);
 const passed = record => Boolean(record) && record.exit === 0 && record.fail === 0 && record.pass > 0 && record.pass === record.tests;
 function describe(record) {
   if (!record) return 'no record';

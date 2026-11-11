@@ -172,6 +172,12 @@ test('NAW runs the check once when a session starts under an unqualified launche
   point('2.1.322'); const qualified = host(); await start(qualified); assert.equal(qualified.claudeModChecks.size, 0, 'A qualified version is not checked');
   const exact = host({ binaries: { claude: path.join(versions, '2.1.999') } }); exact.checkClaudeVersion(); assert.equal(exact.claudeModChecks.size, 0, 'A program the person chose is theirs');
   assert.equal(fs.existsSync(file), false); assert.equal(starts().filter(l => l.endsWith('plugin test')).length, 1);
+  // Two sessions starting while the first check still runs, or after a run that did not finish, share that one run.
+  fs.writeFileSync(path.join(versions, '2.1.998'), `#!/bin/sh\necho "2.1.998 $1 $2" >> '${ran}'\n/bin/sleep 1\nexit 3\n`, { mode: 0o700 });
+  point('2.1.998'); const busy = host(); busy.checkClaudeVersion(); busy.checkClaudeVersion();
+  await busy.claudeModChecks.get('2.1.998').done; busy.checkClaudeVersion();
+  assert.equal(starts().filter(l => l === '2.1.998 plugin test').length, 1);
+  assert.deepEqual([check.load(file)['2.1.998'].exit, check.load(file)['2.1.998'].tests], [3, null], 'A run with no summary is still recorded');
 });
 
 test('closing NAW ends a running check and keeps no record of it', mac, async t => {
