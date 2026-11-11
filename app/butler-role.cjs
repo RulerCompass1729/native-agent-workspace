@@ -18,6 +18,12 @@ const configurationName = value => typeof value === 'string' && /^[A-Za-z0-9][A-
 const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino;
 const unchanged = (a, b) => sameFile(a, b) && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+// A failed read still throws ERR_BUTLER_STATE. Only this internally branded,
+// safely opened selection read may be retried on a later explicit call.
+const selectionReadFailures = new WeakSet();
+function selectionReadFailure() {
+  const error = codeError('ERR_BUTLER_STATE'); selectionReadFailures.add(error); return error;
+}
 const revision = value => Number.isSafeInteger(value) && value >= 0;
 function identity(value) {
   if (!fields(value, ['sessionId', 'nativeId']) || !id(value.sessionId) || !id(value.nativeId)) fail('ERR_BUTLER_INVALID');
@@ -62,7 +68,7 @@ class ButlerRole {
       this.#directory = fs.realpathSync(directory); this.#directoryIdentity = initial;
       this.#file = path.join(this.#directory, 'butler.json'); this.#logFile = path.join(this.#directory, 'rotation-log.jsonl');
       this.#load();
-    } catch { this.#failed = true; }
+    } catch (error) { if (!selectionReadFailures.has(error)) this.#failed = true; }
   }
   get file() { return this.#file; }
   get logFile() { return this.#logFile; }
@@ -87,9 +93,15 @@ class ButlerRole {
       fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
       const opened = fs.fstatSync(fd);
       if (!sameFile(opened, before) || !safePrivateFile(opened, limit)) fail('ERR_BUTLER_STATE');
+      if (!rotation) this.#seenRecord = true;
       const buffer = Buffer.alloc(limit + 1); let length = 0;
       while (length < buffer.length) {
-        const read = fs.readSync(fd, buffer, length, buffer.length - length, length);
+        let read;
+        try { read = fs.readSync(fd, buffer, length, buffer.length - length, length); }
+        catch (error) {
+          if (!rotation && error.code === 'EIO') throw selectionReadFailure();
+          throw error;
+        }
         if (!read) break;
         length += read;
       }
@@ -115,7 +127,10 @@ class ButlerRole {
       catch (error) { if (error.code === 'ENOENT' && !this.#seenRecord) return; throw error; }
       if (loaded.revision < this.#state.revision || loaded.revision === this.#state.revision && JSON.stringify(loaded) !== JSON.stringify(this.#state)) fail('ERR_BUTLER_STATE');
       this.#state = loaded; this.#seenRecord = true;
-    } catch { this.#failed = true; fail('ERR_BUTLER_STATE'); }
+    } catch (error) {
+      if (selectionReadFailures.has(error)) throw error;
+      this.#failed = true; fail('ERR_BUTLER_STATE');
+    }
   }
   #person(actor) {
     let authorized = false;
@@ -143,18 +158,20 @@ class ButlerRole {
       fs.renameSync(temp, this.#file); fs.fsyncSync(directoryFd);
       this.#state = next; this.#seenRecord = true;
     } catch (error) {
-      if (['ERR_BUTLER_BUSY', 'ERR_BUTLER_REVISION'].includes(error.code)) throw error;
+      if (['ERR_BUTLER_BUSY', 'ERR_BUTLER_REVISION'].includes(error.code) || selectionReadFailures.has(error)) throw error;
       this.#failed = true; fail('ERR_BUTLER_STATE');
     } finally {
-      if (tempFd !== undefined) fs.closeSync(tempFd);
-      if (lockFd !== undefined) fs.closeSync(lockFd);
-      // Only remove files created by this invocation, never another writer's lock.
-      for (const [file, owned] of [[temp, tempIdentity], [lock, lockIdentity]]) {
-        if (!owned) continue;
-        try { const present = fs.lstatSync(file); if (sameFile(present, owned) && safePrivateFile(present, MAX_RECORD)) fs.unlinkSync(file); else this.#failed = true; }
-        catch (error) { if (error.code !== 'ENOENT') { this.#failed = true; } }
-      }
-      if (directoryFd !== undefined) fs.closeSync(directoryFd);
+      try {
+        if (tempFd !== undefined) fs.closeSync(tempFd);
+        if (lockFd !== undefined) fs.closeSync(lockFd);
+        // Only remove files created by this invocation, never another writer's lock.
+        for (const [file, owned] of [[temp, tempIdentity], [lock, lockIdentity]]) {
+          if (!owned) continue;
+          try { const present = fs.lstatSync(file); if (sameFile(present, owned) && safePrivateFile(present, MAX_RECORD)) fs.unlinkSync(file); else this.#failed = true; }
+          catch (error) { if (error.code !== 'ENOENT') { this.#failed = true; } }
+        }
+        if (directoryFd !== undefined) fs.closeSync(directoryFd);
+      } catch { this.#failed = true; fail('ERR_BUTLER_STATE'); }
     }
     if (this.#failed) fail('ERR_BUTLER_STATE');
     return copy(this.#state);

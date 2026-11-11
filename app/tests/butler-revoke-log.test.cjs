@@ -104,12 +104,14 @@ test('unresolved rotation does not grant close/designation operations or skip th
   await assert.rejects(f.api.revoke({ kind: 'person' }, 1), { code: 'ERR_BUTLER_PERSON' }); assert.equal(f.stops(), 0);
 });
 
-test('selection-file read uncertainty stays sticky and cannot be reclassified as a log-only fault', async t => {
+test('selection-file read EIO refuses that call and permits a later complete read before human revoke', async t => {
   const f = fixture(t), before = fs.readFileSync(f.role.file);
   const view = readFault(f.role.file, 'eio', () => f.api.status(person));
   assert.equal(view.role.available, false); assert.equal(view.actions.revoke, false);
-  await assert.rejects(f.api.revoke(person, 1), { code: 'ERR_BUTLER_STATE' });
   assert.deepEqual(fs.readFileSync(f.role.file), before); assert.equal(f.stops(), 0);
+  const result = await f.api.revoke(person, 1);
+  assert.equal(result.revoked, true); assert.equal(result.revision, 2);
+  assert.equal(f.role.snapshot().selected, null); assert.equal(f.stops(), 1);
 });
 
 test('unsafe directory detected during log resolution remains sticky after its mode is restored', t => {

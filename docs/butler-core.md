@@ -613,6 +613,26 @@ target receives no stop call and returns unconfirmed cleanup with null physical
 stop fields. The ledger is retained. Close and designate still require a resolved
 current identity; this recovery grants neither operation a fallback identity.
 
+A selection `readSync` EIO after the private file was safely opened refuses the
+current call with `ERR_BUTLER_STATE`. Only that internally identified read fault
+allows the same Role to try a future explicit call. It returns no old snapshot,
+identity or empty designation. A later complete, stable read must still pass
+all file, schema and saved revision/content checks. Safe opened-file existence
+is remembered before its first byte, including a constructor read failure, so a
+later missing file cannot become the never-designated initial state.
+
+The locked writer can see this fault only while loading the selection before
+creating a replacement. It writes no designation in that case and releases only
+its own lock. Any uncertain fd close or owned-file cleanup remains sticky;
+write/fsync/rename failures are never read retries. An I/O error in lstat, open,
+fstat or final metadata checks is also not covered. Role itself schedules no
+retry. The existing human status path may make another complete snapshot read
+when resolving current identity fails; that can restore saved metadata and the
+revoke action, but current identity stays unknown. If resolution fails during
+revoke, the saved role can still be cleared while stop/cleanup remain unconfirmed
+and no target is invented. None of these reads changes a permission, recovers a
+legacy lock or proves physical shutdown.
+
 Designation-file corruption, rollback, directory-integrity/permission faults and
 uncertain writes retain the existing sticky guards. A rotation-log file with
 unsafe owner/mode/link-count/size is refused on every affected read, but that
