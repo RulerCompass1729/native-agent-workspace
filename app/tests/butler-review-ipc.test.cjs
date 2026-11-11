@@ -277,7 +277,7 @@ test('the actual Main initializer and handler use the opaque person verifier wit
     ButlerRole, ButlerPerson, butlerIngress: { ledger }, roomState: {}, bindQueueOutcomes, notifyQueueOutcome() {}, path,
     app: { getVersion: () => 'synthetic-joint-initializer' }, createDedicatedBackend: () => ({ snapshot: () => ({ state: 'unprepared' }) }),
     backgroundTest: true, process: { execPath: '/synthetic/electron', env: { NAW_TEST_BUTLER_ENTRY: '1' } },
-    butlerCredentialPresent: () => { throw Error('The initializer must not probe credentials'); } };
+    butlerCredentialPresent: () => { throw Error('The initializer must not probe credentials'); }, butlerEntryHost: require('../butler-entry-host.cjs') };
   const open = () => new Function(...Object.keys(environment), 'let butlerReadAudit = null, butlerBackend = null, butlerRole = null, butlerPerson = null;\n' +
     section('const butlerEntryEnabled =', '\n') + '\n' +
     section('function isCurrentHumanContext(', '\nfunction showDialog(') + '\n' +
@@ -293,7 +293,9 @@ test('the actual Main initializer and handler use the opaque person verifier wit
   const deniedReview = await f.call('latest');
   assert.equal(deniedReview.ok, false);
   assert.equal(deniedReview.uiMessage.key, 'error.butlerReview.personOnly');
-  assert.equal((await f.ipc.get('workspace:butler')(f.person.event, 'status')).value.state, 'empty',
+  // The handler answers a window with the entry it draws (app/butler-entry-host.cjs): nothing designated, revision 0.
+  const answered = await f.ipc.get('workspace:butler')(f.person.event, 'status');
+  assert.deepEqual([answered.ok, answered.value?.role, answered.value?.actions], [true, { revision: 0, selected: null }, ['recheck']],
     'Both actual stores and the person core initialize; caught ReferenceErrors cannot look like a pass');
   audit.recordPage({ actor: { sessionId: 'synthetic-instance', nativeId: 'synthetic-native', selectionRevision: 1, runnerRef: 'runner' },
     query: { kind: 'spaces', spaceId: null, includeArchived: false, limit: 20 },

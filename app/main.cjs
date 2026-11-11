@@ -24,6 +24,7 @@ const { ButlerLedger } = require('./butler-ledger.cjs');
 const { ButlerReadAudit } = require('./butler-read-audit.cjs');
 const { ButlerRole } = require('./butler-role.cjs');
 const { ButlerPerson } = require('./butler-person.cjs');
+const butlerEntryHost = require('./butler-entry-host.cjs');
 const { displayCredentialPresent: butlerCredentialPresent } = require('./butler-presence.cjs');
 const { showQuestionNotification } = require('./butler-question-notification.cjs');
 const { createDedicatedBackend } = require('./butler-backend-host.cjs');
@@ -1525,14 +1526,19 @@ async function boot() {
           args.length !== 2 || typeof args[0] !== 'boolean' || !validRevision(args[1]) :
           args.length !== 1 || !validRevision(args[0]))) throw uiError('error.butler.invalidRequest');
     if (!butlerPerson) throw uiError('error.butler.unavailable');
+    // What leaves this process is the entry a person window draws and the plain facts of an action's result.
+    // The session identity, runner and backend references, batch ids and stop targets stay here.
+    const reviewData = () => { try { return butlerIngress?.ledger?.hasReviewData(c) === true; } catch { return false; } };
+    const shown = view => butlerEntryHost.entry(view, { reviewAvailable: Boolean(view?.role?.selected) && reviewData() });
     try {
+      if (action === 'status') return shown(butlerPerson.status(c));
       if (action === 'recheck') {
         const state = butlerPerson.status(c);
         if (!state.role.available) throw Object.assign(Error('ERR_BUTLER_STATE'), { code: 'ERR_BUTLER_STATE' });
         if (state.role.revision !== args[0]) throw Object.assign(Error('ERR_BUTLER_REVISION'), { code: 'ERR_BUTLER_REVISION' });
-        return butlerPerson.recheck(c);
+        return shown(butlerPerson.recheck(c));
       }
-      return await butlerPerson[action](c, ...args);
+      return butlerEntryHost.outcome(await butlerPerson[action](c, ...args));
     }
     catch (error) {
       const keys = { ERR_BUTLER_PERSON: 'personOnly', ERR_BUTLER_REQUEST: 'invalidRequest',

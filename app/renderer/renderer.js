@@ -61,7 +61,9 @@ function disposeButlerReview() {
 $('butler-review-dialog').addEventListener('close', returnFromButlerReview);
 // The butler's row is drawn only from a view the main process gives this window; this version gives none.
 const butlerEntry = window.nativeWorkspaceButlerEntry.bind({ row: $('butler-row'), dialog: $('butler-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display, showError: ui.showError, openReview: openButlerReview,
-  openReads: () => butlerReads.open() });
+  openReads: () => butlerReads.open(),
+  // Another window may have changed the designation: the entry asks again when this one comes back to the front.
+  front: listener => { window.addEventListener('focus', listener); return () => window.removeEventListener('focus', listener); } });
 let newDirectory = false, creatingSession = false;
 let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
 let latestViewStorage, latestViewStorageUiMessage;
@@ -3838,7 +3840,8 @@ const nativeActivityClock = setInterval(() => {
 }, 1000);
 function render() {
   if (!state || rendering) return;
-  butlerEntry.render(state.butler?.entry);
+  // The entry is not part of the window state: the window asks for it once here, and again on its own events.
+  butlerEntry.start();
   if ($('butler-row')?.hidden === true && $('butler-review-dialog')?.open) $('butler-review-dialog').close();
   captureReadingViews();
   rendering = true;

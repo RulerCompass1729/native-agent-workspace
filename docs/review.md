@@ -10274,3 +10274,99 @@ inventory verified; worktree fingerprint unchanged after each invocation):
 **Independent review (passed).** It asked that a fault which is over be told apart from one that still happens; the kept fault now carries the time a later step went through. The author lane's own reviewer (headless session 980f8974); its result is in the delivery note.
 
 **Left open.** No screen shows the overview yet; the prototype for it is with the person.
+
+## Butler entry: what a person window is answered with (2026-11-11, behind the closed entry)
+
+Requested outcome (the integrator's dispatch, after the person-only controls
+`7347c1c` reached main): the isolated switch, the adapter from the core's person
+view to the entry the window draws, and the window asking for its state on
+demand, without a second handler; and one alignment from the identity review of
+those controls: the window sent a third argument with `designate` that the main
+process refuses, and the core's `open`/`close` names are not actions of the
+call. It serves the approved form of the butler: visible, can be turned off,
+empty by default.
+
+What changed:
+- `app/butler-entry-host.cjs` (new, pure): the core's person view becomes the
+  entry of `app/butler-entry-view.js`, by copying named fields only. The same
+  `butler` handler in `app/main.cjs` answers `status` and `recheck` with it and
+  cuts the result of the other actions down to plain facts. The session
+  identity, runner and backend references, batch ids and stop targets no longer
+  cross IPC. The existing gate is reused; no handler, role or store is added.
+- The entry is not in the window state. The window asks once as it starts, when
+  it comes back to the front, when the dialog opens and after each action. In
+  an ordinary launch the first question is refused as closed, nothing is shown
+  and nothing is asked again in that window: one refused call per window.
+  Nothing else is asked while that first question is unanswered.
+- Before a first answer a failure shows nothing; after one, a failed question
+  is shown as "state unknown", never as "none designated".
+- The entry gained three fields: `unavailable` (the designation record cannot
+  be read), `uncertain` (the core cannot establish the state) and `reminder`
+  (the daily reminder line, shown when a designation records no limit of its
+  own). With nothing designated and no designation accepted, the dialog says
+  that none can be made in this version.
+- Alignment: the main process is the authority. The window now sends the
+  action and the revision only; one table of call shapes in the window's
+  module is put through the real handler by a test, and the old three-argument
+  shape is pinned as refused. A designation the core answers with "blocked" is
+  said in the dialog.
+
+Decision recorded for the owner of the controls: the adapter sits in the
+handler, as its contract asked, which changes what `status` and `recheck`
+return. The existing IPC tests keep every assertion on the core's view: each
+makes the same call through the real handler and then reads the view from the
+same real core object.
+
+Checks (author-run, no model, no native program): the eight related test
+files pass; full unit suite 5890 pass, 0 fail (an earlier run of it had one
+failure, a timing test in `claude-mod-check.test.cjs` that this change does
+not touch and that passes alone, three runs). The deliberate faults in the
+adapter, the handler lines, the view and the window's module are all caught
+(count in the verdict lines below). Three hidden-window checks pass:
+`scripts/test-butler-entry-open.cjs` (new) drives the product's own row and
+dialog with the switch open through the real main process: empty, a
+designation written by the core's own record store, a stale revoke refused in
+words, revoke, the read log, an unreadable record, with no identity on the
+page or in an answer; `scripts/test-butler-entry.cjs` (closed switch, and the
+states this version cannot reach, both languages, two widths);
+`scripts/test-butler-reads.cjs`.
+
+Not verified, and limits:
+- No state with a designation can arise in this version without a test writing
+  the record: the core answers `designate` with "blocked". Ready, recording,
+  paused and the record table are drawn only from entries a check hands in.
+- `recheck` was not pressed in a window: it runs the key-presence probe. Its
+  path is covered by the unit tests with a stand-in probe.
+- A second window is not driven; "back to the front" is a dispatched focus
+  event in one window.
+- The line beside a designation is labelled a reminder line in every case,
+  also when it is the designation's own limit; what happens when it is reached
+  is still an open question to the person (V19).
+- Dark theme, and the packaged application, are not checked here.
+- The result of a revoke no longer shows at the IPC layer that nothing was
+  targeted when the designated identity could not be read: the target never
+  crosses. That guarantee is held at the core (`butler-revoke-log.test.cjs`).
+
+Before the entry is switched on:
+- Designating: a trusted candidate in the core, and then the confirmation's
+  comparison on both sides (owner: the controls' owner).
+- Whether `recheck` should be offered in "cannot start in this version".
+- "None can be designated in this version" is shown whenever the main process
+  does not accept a designation. That is a fact of the build today (the core
+  always answers "blocked"). Once a designation can be refused for a passing
+  reason, the sentence needs its own condition.
+
+Independent review (a fresh reviewer session for this checkpoint; its id is
+kept with the private evidence; Read, Grep, Glob only; tool inventory verified;
+worktree fingerprint unchanged after each invocation):
+- First verdict: `APPROVE_WITH_CHANGES`, nothing blocking, four findings, all
+  applied. A window coming to the front while its first question was still
+  unanswered could send a second one: nothing is asked now until that question
+  has settled. This section quoted an earlier run's counts. A limit that is
+  recorded but cannot be read was replaced by the reminder line: it is now
+  passed on as unreadable and shown as a designation that cannot be described.
+  The condition of the "none can be designated" sentence is listed above. Two
+  notes taken: the missing-key reason is checked over IPC again, and the stop
+  target is under "Not verified".
+- Delta verdict: `APPROVE`. Deliberate faults on the final tree: 51 of 51
+  caught.

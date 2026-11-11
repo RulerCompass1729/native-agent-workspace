@@ -2,9 +2,12 @@ const testScratch = require('./fixtures/test-scratch.cjs');
 // Real Electron and NAW's own backend service. No native program is started, no model is called and nothing is
 // designated: in an ordinary launch the main process refuses every call of the person-only butler entry.
 // 1. The product as it is. The butler's row is in the page and hidden; nothing about a butler is on the screen.
-// 2. The same page with a view handed in by this script, because no main-process code gives one. The product's
-//    own module, stylesheet and catalog draw a row and a dialog placed beside the hidden ones, in both languages
-//    and at two window widths (1280, and 860 where the sidebar is a rail; the window's minimum is 850); `butler` here only records what the dialog would ask the main process to do.
+// 2. The same page with entries handed in by this script, for the states the main process cannot answer with in
+//    this version. The product's own module, stylesheet and catalog draw a row and a dialog placed beside the hidden
+//    ones, in both languages and at two window widths (1280, and 860 where the sidebar is a rail; the window's
+//    minimum is 850); `butler` here answers the question for the entry with what the script handed in and only
+//    records what the dialog would ask the main process to do.
+// The entry with its switch open, through the real main process, is scripts/test-butler-entry-open.cjs.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
 const { _electron } = testScratch.playwright(require('playwright'));
@@ -25,7 +28,6 @@ async function cleanup() {
 // Synthetic views in the shape app/butler-entry-view.js documents.
 const selected = { runner: { profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro' }, budget: { limitMicros: 2_000_000, dayBoundary: 'UTC' } };
 const every = ['designate', 'revoke', 'recheck'];
-const agreed = { profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro', limitMicros: 2000000, dayBoundary: 'UTC', startable: false };
 const none = { version: 1, role: { revision: 0, selected: null }, offer: selected, startable: false, actions: every };
 const designated = extra => ({ version: 1, role: { revision: 1, selected }, startable: false, backend: null, intake: { recordPeriod: 'off' }, actions: every, ...extra });
 const ready = extra => designated({ startable: true, backend: { state: 'ready', ready: true, blocked: [] }, ...extra });
@@ -68,6 +70,9 @@ const gallery = [
   // The call exists, and the main process refuses it: the entry is closed in an ordinary launch.
   for (const call of [['status'], ['revoke', 0], ['designate', 0]]) assert.equal(await page.evaluate(args => window.workspace.butler(...args).then(() => 'accepted', error => error.message), call), locale.format('zh', 'error.butler.entryDisabled'));
   for (const name of ['butler.json', 'butler-native']) assert.equal(fs.existsSync(path.join(profile, name)), false, 'Nothing about a butler is written: ' + name);
+  // The window asked once as it started and was refused; coming back to the front does not make a row appear.
+  await page.evaluate(() => { window.dispatchEvent(new Event('focus')); }); await sleep(300);
+  assert.deepEqual(await closed(), { row: true, rowBeforeNew: true, dialog: true, entry: 'function', text: false, module: 'function', view: '{"visible":false}' });
   // The hidden row takes no room: "new session" sits where it sits without it.
   const gapWith = await page.evaluate(() => document.getElementById('new-session').getBoundingClientRect().top);
   const gapWithout = await page.evaluate(() => { const row = document.getElementById('butler-row'), parent = row.parentNode, next = row.nextSibling; row.remove(); const top = document.getElementById('new-session').getBoundingClientRect().top; parent.insertBefore(row, next); return top; });
@@ -81,12 +86,13 @@ const gallery = [
     document.getElementById('butler-row').before(row);
     const dialog = document.createElement('dialog'); dialog.id = 'butler-dialog-check'; dialog.className = 'butler-dialog'; dialog.setAttribute('closedby', 'any');
     document.getElementById('butler-dialog').after(dialog);
-    const calls = [];
-    const entry = window.nativeWorkspaceButlerEntry.bind({ row, dialog, document, api: { butler: async (...args) => { calls.push(args); } }, text: (key, params) => window.nativeWorkspaceLocale.format(lang, key, params) });
-    window.butlerEntryCheck = { entry, calls, row, dialog };
+    const calls = [], check = { calls, row, dialog, current: undefined };
+    // The question for the entry is answered with what the script handed in last; everything else is only recorded.
+    check.entry = window.nativeWorkspaceButlerEntry.bind({ row, dialog, document, api: { butler: async (...args) => { if (args[0] === 'status') return check.current; calls.push(args); } }, text: (key, params) => window.nativeWorkspaceLocale.format(lang, key, params) });
+    window.butlerEntryCheck = check;
   }, language);
   const unmount = () => page.evaluate(() => { const { entry, row, dialog } = window.butlerEntryCheck; entry.dispose(); row.remove(); dialog.remove(); delete window.butlerEntryCheck; });
-  const give = view => page.evaluate(value => window.butlerEntryCheck.entry.render(value), view);
+  const give = view => page.evaluate(value => { window.butlerEntryCheck.current = value; window.butlerEntryCheck.entry.render(value); }, view);
   const calls = () => page.evaluate(() => window.butlerEntryCheck.calls);
   const row = () => page.locator('#butler-row-check'), dialog = () => page.locator('#butler-dialog-check');
   const act = name => dialog().locator(`button[data-action="${name}"]:visible`);
@@ -141,6 +147,12 @@ const gallery = [
     assert.equal((await dialog().locator('.butler-note:visible').first().innerText()).trim(), say('butler.note.empty'));
     assert.deepEqual(await dialog().locator('.dialog-actions:visible button').evaluateAll(list => list.map(el => el.dataset.action)), ['designate', 'done']);
     await look('empty');
+    // What the main process answers in this version: nothing designated and no designation accepted. Said, with no button.
+    await give({ ...none, offer: undefined, actions: ['recheck'] });
+    assert.deepEqual((await dialog().locator('.butler-note:visible').allInnerTexts()).map(value => value.trim()), [say('butler.note.empty'), say('butler.note.designateLater')]);
+    assert.deepEqual(await dialog().locator('.dialog-actions:visible button').evaluateAll(list => list.map(el => el.dataset.action)), ['done']);
+    await look('empty-no-designation');
+    await give(none);
     await act('designate').click();
     assert.equal(await focused(), 'back', 'A question puts the focus on Cancel');
     assert.deepEqual((await dialog().locator('.butler-facts dt').allInnerTexts()).map(value => value.trim()), ['model', 'reads', 'never', 'sent', 'period', 'limit'].map(key => say(`butler.confirm.${key}`)));
@@ -151,7 +163,7 @@ const gallery = [
     assert.deepEqual(await calls(), [], 'Asking is not designating');
     await look('confirm');
     await act('confirmDesignate').click();
-    assert.deepEqual(await calls(), [['designate', 0, agreed]], 'The call carries what the confirmation stated');
+    assert.deepEqual(await calls(), [['designate', 0]], 'The call carries the revision the page was drawn for, the one shape the main process accepts');
     // What the main process would answer in this version: designated, and it cannot start.
     await give(gallery[0][1]);
     assert.equal(await row().getAttribute('aria-label'), say('butler.rowLabel', { state: say('butler.row.blockedBuild') }));
@@ -164,9 +176,9 @@ const gallery = [
     await act('revoke').click();
     assert.equal(await focused(), 'back'); assert.equal((await dialog().locator('.butler-note:visible').innerText()).trim(), say('butler.revoke.text'));
     await look('revoke');
-    await act('back').click(); assert.deepEqual(await calls(), [['designate', 0, agreed]], 'Cancelling revokes nothing');
+    await act('back').click(); assert.deepEqual(await calls(), [['designate', 0]], 'Cancelling revokes nothing');
     await act('revoke').click(); await act('confirmRevoke').click();
-    assert.deepEqual(await calls(), [['designate', 0, agreed], ['revoke', 1]]);
+    assert.deepEqual(await calls(), [['designate', 0], ['revoke', 1]]);
     await give(none);
     assert.equal(await row().getAttribute('aria-label'), say('butler.rowLabel', { state: say('butler.row.empty') }));
     // The other states the view can answer, for when the core gives their fields.
@@ -183,7 +195,7 @@ const gallery = [
     assert.equal(await row().isVisible(), false, 'Without a view the row is hidden again');
     await unmount();
     assert.equal(await collapsed(), rail);
-    checks.push(`${tag}${rail ? ' (sidebar as a rail)' : ''}: empty, confirmation, this version's "cannot start", revoke, and the ${gallery.length - 1} other states are drawn`);
+    checks.push(`${tag}${rail ? ' (sidebar as a rail)' : ''}: empty, "none can be designated in this version", confirmation, this version's "cannot start", revoke, and the ${gallery.length - 1} other states are drawn`);
   }
   assert.deepEqual(problems, [], 'Nothing clipped, no dialog off the window, the actions on one line');
   assert.deepEqual(await closed(), { row: true, rowBeforeNew: true, dialog: true, entry: 'function', text: false, module: 'function', view: '{"visible":false}' });
