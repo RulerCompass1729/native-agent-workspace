@@ -13,7 +13,7 @@ function fixture(t, provider = 'codex', extra = {}) {
     nativeActivity: { label: body }, activity: body, activityUiMessage: { params: { reason: body } }, claudeQuestion: { questions: [{ question: body }] }, approval: { params: { command: body } }, approvals: [{ params: { input: body } }], nativeApproval: { requests: [{ question: body }] }, fleet: [{ task: body }], futurePrivateField: body, liveDraft: body, draft: body });
   const state = { sessions: [session(actor.id, actor.nativeId, actor.name, own), session('other', 'native-other', 'Other 中文', secret), session('third', 'native-third', 'Third', third)], rooms: [{ id: 'shared', name: 'Shared', messages: [{ text: 'SHARED_RECORD' }], queue: [{ id: 'queued-task', status: 'queued', assignee: 'agent', text: 'QUEUE_RECORD' }] }] };
   state.sessions[0].roomIds = ['shared'];
-  const sandbox = { backgroundOperation: operation, submissionState: s => s, sessionLabels: { apply: s => s }, roomState: { apply: s => s, value: { sessionArchives: {} }, metadata: () => ({ restoreMembers: [], restorePlacements: {} }) },
+  const sandbox = { background: require('../background-control.cjs'), backgroundOperation: operation, submissionState: s => s, sessionLabels: { apply: s => s }, roomState: { apply: s => s, value: { sessionArchives: {} }, metadata: () => ({ restoreMembers: [], restorePlacements: {} }) },
     queueSecretary: { current: () => sandbox.secretary || null }, backgroundControl: null, roomPeerIdentity: () => ({ nativeId: 'metadata' }), endedByMove: () => [], queueDispatcher: null, butlerIngress: null,
     viewStorageWarning: '', viewStorageWarningUiMessage: null, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
     displayText: (key, params) => locale.format('zh', key, params), uiError: require('../ui-errors.cjs').uiError, applicationBuild: {}, app: { getVersion: () => 'fixture' }, localeWarning: '', preflight: () => ({}), notifyCapacity() {},
@@ -464,13 +464,18 @@ for (const provider of ['claude', 'codex']) for (const [method, args] of [
   c.filePreview = { token: 'preview-token', name: 'Local.txt', bytes: Buffer.from('LOCAL'), text: 'LOCAL' };
   const paths = count ? [path.join(f.dir, 'one.txt'), path.join(f.dir, 'two.txt')] : [];
   const result = await f.controller.call(f.binding, { ...command(method, args), paths });
-  assert.equal(result.state, 'unconfirmed'); assert.equal(result.confirmation, undefined); assert.equal(f.notices.length, 0); assert.equal(f.fileReads, 0);
+  assert.equal(result.state, 'not-executed'); assert.equal(result.reason, 'invalid-file-path-count');
+  assert.deepEqual(Object.keys(result.guard), ['auditRooms']);
+  assert.equal(result.confirmation, undefined); assert.equal(f.notices.length, 0); assert.equal(f.fileReads, 0);
+  assert.ok(f.controller.rows(f.actor.id).at(-1).text.includes('未执行'));
   assert.equal((await f.controller.call(f.binding, { ...command(method, args, result.id), paths })).duplicate, true);
 });
 for (const provider of ['claude', 'codex']) test(`${provider}: an expired export token never asks for a decision`, async t => {
   const f = spaceExportFixture(t, provider);
   const result = await f.controller.call(f.binding, { ...command('saveLocalFile', ['expired']), paths: [path.join(f.dir, 'copy.txt')] });
-  assert.equal(result.state, 'unconfirmed'); assert.equal(result.confirmation, undefined); assert.equal(f.notices.length, 0);
+  assert.equal(result.state, 'not-executed'); assert.equal(result.reason, 'file-preview-changed');
+  assert.deepEqual(Object.keys(result.guard), ['auditRooms']);
+  assert.equal(result.confirmation, undefined); assert.equal(f.notices.length, 0);
   assert.equal(fs.existsSync(path.join(f.dir, 'copy.txt')), false);
 });
 test('valid explicit file selection asks before target metadata or content is read', async t => {
@@ -495,6 +500,41 @@ test('multiple space import paths remain eligible for one human decision', async
   const request = { ...command('spaceFiles', ['shared']), paths: [path.join(f.dir, 'one.txt'), path.join(f.dir, 'two.txt')] };
   assert.equal((await f.controller.call(f.binding, request)).state, 'confirmation-required'); assert.equal(f.fileReads, 0);
 });
+for (const provider of ['claude', 'codex']) for (const change of ['closed', 'replaced', 'saving']) test(`${provider}: export preview ${change} while awaiting consent is explicitly not executed`, async t => {
+  const f = spaceExportFixture(t, provider), c = await f.controller.view(f.actor); let entered = 0;
+  c.filePreview = { token: 'token', name: 'Local.txt', bytes: Buffer.from('LOCAL') };
+  f.config.handlers.set('saveLocalFile', () => { entered++; });
+  const args = { ...command('saveLocalFile', ['token']), paths: [path.join(f.dir, 'copy.txt')] };
+  const pending = await f.controller.call(f.binding, args); assert.equal(pending.state, 'confirmation-required');
+  if (change === 'closed') c.filePreview = null;
+  if (change === 'replaced') c.filePreview = { token: 'replacement' };
+  if (change === 'saving') c.fileSaving = true;
+  const result = await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
+  assert.equal(result.state, 'not-executed'); assert.equal(result.reason, 'file-preview-changed'); assert.equal(entered, 0);
+  assert.deepEqual(Object.keys(result.guard), ['auditRooms']); assert.equal(result.humanDecision, 1);
+  assert.equal((await f.controller.call(f.binding, args)).duplicate, true); assert.equal(entered, 0);
+});
+for (const typed of [false, true]) test(`a ${typed ? 'typed precondition' : 'normal'} error from an entered handler keeps its outcome unknown`, async t => {
+  const f = spaceExportFixture(t, 'codex'), c = await f.controller.view(f.actor); let entered = 0;
+  c.filePreview = { token: 'token' };
+  f.config.handlers.set('saveLocalFile', () => { entered++; throw typed ? new f.sandbox.background.PreconditionRefused(Error('Handler effect may have occurred'), 'file-preview-changed') : Error('Handler effect may have occurred'); });
+  const args = { ...command('saveLocalFile', ['token']), paths: [path.join(f.dir, 'copy.txt')] };
+  const pending = await f.controller.call(f.binding, args), result = await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
+  assert.equal(result.state, 'unconfirmed'); assert.ok(result.guard.sessions); assert.equal(entered, 1);
+  assert.equal((await f.controller.call(f.binding, args)).duplicate, true); assert.equal(entered, 1);
+});
+test('a precondition after a previously entered resumable handler cannot erase earlier effects', async t => {
+  const f = spaceExportFixture(t, 'codex'), c = await f.controller.view(f.actor); let effects = 0;
+  c.filePreview = { token: 'token' };
+  f.config.handlers.set('saveLocalFile', async context => { effects++; await f.sandbox.background.dialog(context, 'message', { message: 'Second question', buttons: ['Cancel', 'Continue'], cancelId: 0 }); });
+  const args = { ...command('saveLocalFile', ['token']), paths: [path.join(f.dir, 'copy.txt')] };
+  const first = await f.controller.call(f.binding, args), second = await f.controller.decide(f.actor.id, f.actor.nativeId, first.id, 1);
+  assert.equal(second.state, 'confirmation-required'); assert.equal(effects, 1);
+  c.filePreview = null;
+  const result = await f.controller.decide(f.actor.id, f.actor.nativeId, first.id, 1);
+  assert.equal(result.state, 'unconfirmed'); assert.ok(result.guard.sessions); assert.equal(effects, 1);
+  assert.equal((await f.controller.call(f.binding, args)).duplicate, true); assert.equal(effects, 1);
+});
 for (const provider of ['claude', 'codex']) for (const when of ['before-pickup', 'after-pickup', 'after-leaving']) test(`${provider}: a space-file read has no reusable export preview ${when}`, async t => {
   const f = spaceExportFixture(t, provider), c = await f.controller.view(f.actor);
   const read = await f.controller.call(f.binding, command('spaceFiles', ['shared', 'space-file']));
@@ -508,7 +548,8 @@ for (const provider of ['claude', 'codex']) for (const when of ['before-pickup',
   const target = path.join(f.dir, 'export.txt');
   const notices = f.notices.length;
   const pending = await f.controller.call(f.binding, { ...command('saveLocalFile', [token]), paths: [target] });
-  assert.equal(pending.state, 'unconfirmed'); assert.equal(pending.confirmation, undefined); assert.equal(f.notices.length, notices);
+  assert.equal(pending.state, 'not-executed'); assert.equal(pending.reason, 'file-preview-changed');
+  assert.deepEqual(Object.keys(pending.guard), ['auditRooms']); assert.equal(pending.confirmation, undefined); assert.equal(f.notices.length, notices);
   assert.equal(fs.existsSync(target), false);
   assert.equal(c.filePreview, null); assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('SPACE_FILE_PRIVATE_BODY'), false);
 });

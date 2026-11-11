@@ -1163,10 +1163,10 @@ async function boot() {
     confirmation: (actor, command, action, context) => {
       // Validate only input shape and the owned in-memory token before asking.
       // File metadata/content stays behind the person's existing confirmation.
-      if (command.method === 'saveLocalFile' && (!context.filePreview || context.filePreview.token !== command.arguments[0] || context.fileSaving)) throw uiError('error.main.filePreviewChanged');
+      if (command.method === 'saveLocalFile' && (!context.filePreview || context.filePreview.token !== command.arguments[0] || context.fileSaving)) throw new background.PreconditionRefused(uiError('error.main.filePreviewChanged'), 'file-preview-changed');
       const onePath = ['openLocalFile', 'saveLocalFile'].includes(command.method) || command.method === 'runtimeLocation' && command.arguments[1] !== true;
-      if (onePath && command.paths?.length !== 1) throw uiError('error.background.oneFilePathRequired');
-      if (command.method === 'spaceFiles' && command.arguments[1] === undefined && !command.paths?.length) throw uiError('error.background.importPathsRequired');
+      if (onePath && command.paths?.length !== 1) throw new background.PreconditionRefused(uiError('error.background.oneFilePathRequired'), 'invalid-file-path-count');
+      if (command.method === 'spaceFiles' && command.arguments[1] === undefined && !command.paths?.length) throw new background.PreconditionRefused(uiError('error.background.importPathsRequired'), 'invalid-file-path-count');
       if ((action === 'readConversation' || ['terminalSnapshot', 'observe', 'terminal'].includes(command.method) && command.arguments[0] !== actor.id) &&
           !conversationReaderAllowed(actor)) throw uiError('error.background.secretaryConversation');
       if (command.method === 'spaceFiles' && command.arguments[1] !== undefined) {
