@@ -606,6 +606,33 @@ function rotationReason(session, now, options, rotations) {
   return 'memory';
 }
 
+// A business-only projection, using the same readiness and human quiet gates
+// as dispatch. No history or native output leaves the dispatcher through it.
+function queueVacancies(input) {
+  const busy = new Set((input.actions || []).filter(action => ['dispatch', 'rotate'].includes(action.kind)).map(action => action.sessionId));
+  for (const [id, rotation] of Object.entries(input.rotations || {})) {
+    if (rotation && !RESTING_PHASES.includes(rotation.phase)) {
+      busy.add(id);
+      if (rotation.newId && !rotation.handoffConfirmed) busy.add(rotation.newId);
+    }
+  }
+  for (const room of input.rooms || []) {
+    if (room.run?.status === 'running' && Array.isArray(room.run.ids)) for (const id of room.run.ids) busy.add(id);
+    for (const item of room.queue || []) if (['sent', 'waiting'].includes(item.status) && item.sentTo) busy.add(item.sentTo);
+  }
+  return (input.rooms || []).map(room => {
+    const candidates = !room.archived && !(room.queue || []).some(item => OPEN_STATUSES.includes(item.status))
+      ? (input.sessions || []).filter(session => !busy.has(session.id) && roomIds(session).includes(room.id) &&
+        sessionReady(session, input.wakePolicy).ready &&
+        !humanRecent(session.id, input.humanAt || new Map(), input.now, input.humanQuietMs ?? HUMAN_QUIET_MS))
+      : [];
+    const candidateIds = candidates.map(session => session.id).sort();
+    const availableIds = candidates.filter(session => settled(session.id, input.idleSince || new Map(), input.now,
+      input.settleMs ?? IDLE_SETTLE_MS)).map(session => session.id).sort();
+    return { roomId: room.id, name: room.name, active: availableIds.length > 0, availableIds, candidateIds };
+  });
+}
+
 // One pass over every space. Returns the actions in the order to run them.
 function planDispatch(input) {
   const rooms = input.rooms || [];
@@ -1331,6 +1358,7 @@ class QueueDispatcher {
     // Native first-directory trust must be qualified before unattended moves.
     this.migrateDirectories = options.migrateDirectories === true;
     this.broadcast = options.broadcast || (async () => {});
+    this.observeQueueState = options.observeQueueState || null;
     this.file = path.join(options.dataDir, 'queue-dispatch.json');
     this.now = options.now || Date.now;
     this.settleMs = options.settleMs ?? IDLE_SETTLE_MS;
@@ -1352,6 +1380,10 @@ class QueueDispatcher {
     this.lastMaintenance = 0;
     this.owner = options.owner || randomUUID();
     this.idleSince = new Map();
+    // Passive business observations must survive skipped minute-maintenance
+    // ticks. This clock never authorizes a native dispatch or rotation.
+    this.vacancySince = new Map();
+    this.vacancyIdentity = new Map();
     this.humanAt = new Map();
     this.pending = null;
     this.again = false;
@@ -1362,8 +1394,9 @@ class QueueDispatcher {
     this.timer = null;
     this.dirty = true;
     this.lastFullPass = 0;
-    this.onState = () => {
+    this.onState = snapshot => {
       this.dirty = true;
+      if (this.observeQueueState) this.observeVacancyReadiness(snapshot, this.now());
     };
     this.rotations = readRotations(this.file, this.now());
     this.notify = options.notify || (() => {});
@@ -1492,6 +1525,7 @@ class QueueDispatcher {
   noteHuman(sessionId) {
     if (typeof sessionId === 'string' && sessionId) {
       this.humanAt.set(sessionId, this.now());
+      this.vacancySince.delete(sessionId); this.vacancyIdentity.delete(sessionId);
       this.dirty = true;
     }
   }
@@ -1500,6 +1534,7 @@ class QueueDispatcher {
     if (this.listening === client) {
       return;
     }
+    this.vacancySince.clear(); this.vacancyIdentity.clear();
     if (this.listening && this.listening.off) {
       this.listening.off('state', this.onState);
     }
@@ -1637,7 +1672,32 @@ class QueueDispatcher {
         this.idleSince.delete(session.id);
       }
     }
+    if (this.observeQueueState) this.observeVacancyReadiness(snapshot, now);
     return { snapshot, now };
+  }
+
+  observeVacancyReadiness(snapshot, now) {
+    if (!Array.isArray(snapshot?.sessions)) {
+      this.vacancySince.clear(); this.vacancyIdentity.clear(); return;
+    }
+    const observed = new Set();
+    for (const session of snapshot.sessions) {
+      if (!session || typeof session.id !== 'string') continue;
+      observed.add(session.id);
+      let identity;
+      try {
+        if (this.roomState.value.archivedSessions?.includes(session.id) ||
+            !sessionReady(session, snapshot.wakePolicy).ready || humanRecent(session.id, this.humanAt, now, this.humanQuietMs)) throw Error('not-ready');
+        identity = JSON.stringify([session.nativeId, session.provider, session.connectionRevision || 0,
+          session.controlRevision || 0, roomIds(session).sort()]);
+      } catch { this.vacancySince.delete(session.id); this.vacancyIdentity.delete(session.id); continue; }
+      if (this.vacancyIdentity.get(session.id) !== identity) {
+        this.vacancyIdentity.set(session.id, identity); this.vacancySince.set(session.id, now);
+      }
+    }
+    for (const id of this.vacancySince.keys()) if (!observed.has(id)) {
+      this.vacancySince.delete(id); this.vacancyIdentity.delete(id);
+    }
   }
 
   name(session) {
@@ -1733,6 +1793,9 @@ class QueueDispatcher {
         await this.requestHandoff(action, sample.memory.get(action.sessionId));
       }
     }
+    if (this.observeQueueState) await this.observeQueueState(queueVacancies({ ...current.snapshot,
+      idleSince: this.vacancySince, humanAt: this.humanAt, now: current.now,
+      settleMs: this.settleMs, humanQuietMs: this.humanQuietMs, rotations: this.rotations, actions }));
   }
 
   settle(action, snapshot) {
@@ -2275,6 +2338,7 @@ module.exports = {
   newItem,
   trimQueue,
   sessionReady,
+  queueVacancies,
   planDispatch,
   replyAfter,
   dispatchText,

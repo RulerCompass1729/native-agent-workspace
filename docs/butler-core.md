@@ -1,14 +1,29 @@
 # Record-only butler core
 
-This is a dormant source checkpoint, not an enabled assistant. No existing app,
-service, native adapter, menu, task queue or rotation dispatcher imports these
-modules. The complete B4 feature and its installed working-day acceptance remain
-open. No provider is started by importing or constructing this core.
+The app now records passive local queue facts, including before a butler is
+designated. Native/model activation and the working-day recording trial remain
+off. No provider, automatic judgment, queue write or lifecycle operation is
+started by this intake. The complete B4 feature and installed acceptance remain
+open.
 
 The core separates the butler's designation from the queue secretary. A trusted
 host supplies an unforgeable person context, the actual caller record and the
 current runner binding; model-authored identity fields are not authority.
 
+- `butler-ingress.cjs` captures only structured queue decisions/failures and
+  vacancy transitions. RoomState stores a compact source in the same commit as
+  the outcome; startup recovery is independent of OS notification delivery and
+  queue-row trimming. B1 retains its direct notification and the intake never
+  asks it again. Vacancy episodes and their events share one journal append, so
+  unchanged observations and restarts create no new event. The existing
+  dispatcher supplies readiness/quiet/busy-filtered business fields without a
+  new timer, connection or native-history scan.
+- `butler-queue.cjs` is an unconnected transaction contract. The default host
+  grant is false and its record-only result invokes no adapter. Synthetic-only
+  granted tests require real caller/current role/canonical completed action and
+  space checks again immediately before an atomic adapter commit. The adapter
+  must retain the operation receipt independently of trimmed queue rows. There
+  is no production adapter, S2 caller-proof route or creator-schema expansion.
 - `butler-role.cjs` persists the person's selection and revision. It follows the
   existing complete `successor` rules for written done/kept rotation edges, then
   rechecks the resolved native identity and dedicated non-member runner.
@@ -79,8 +94,9 @@ Codex flag and does not infer provider compatibility from a saved profile name.
 
 The next source stage needs a real dedicated NativeHost/service driver, runtime
 profile/provider validation, restricted automatic context and tool execution,
-actual global event/B1 ingress, the person-only menu/dialog, queue transaction
-idempotency and the non-member rotation/create-plan hooks. The core's pure
+the remaining typed user-request/READY ingress and controller binding, the
+person-only menu/dialog and review table, a production queue transaction adapter
+and the non-member rotation/create-plan hooks. The core's pure
 rotation candidate filter and role successor are not a claim that those hooks
 are already connected. Missing or unverified provider usage/cost and reminder
 settings also keep automatic work off.
@@ -107,4 +123,38 @@ enable queue-only/lifecycle execution.
 The new core and its direct secretary/membership dependencies have deterministic
 Node tests in `app/tests/butler-*.test.cjs`. They use synthetic records and fake
 local drivers, not a provider, model endpoint, user session or installed app.
-The original full-app behavior is untouched in this checkpoint.
+B1 notification text and native dispatch actions retain their existing behavior.
+Passive intake adds local source records and a small off/blocked status in window
+state. It does not enable an execution path. The future controller must reuse
+the intake ledger owner; this checkpoint does not qualify concurrent writers.
+
+## Passive intake boundaries
+
+An ordinary completed queue item is not a READY handoff. No task-board, private
+conversation or terminal text is scanned to infer one. Typed READY and direct
+person-request ingress remain a later checkpoint; existing synthetic controller
+READY batching is not a claim that a production READY producer is connected.
+Source intake failures keep the durable room event, and expose a fixed blocked
+status. They do not prevent B1's independent notification or claim the input was
+consumed. The initial vacancy projection uses the dispatcher's observed snapshot;
+a separate passive readiness clock survives skipped maintenance ticks while the
+native dispatch clock keeps its original freshness rules. A newly reopened
+window waits for readiness evidence without declaring that a previously active
+vacancy ended. The same unknown-settling rule applies between observations; a
+brief busy spell between minute-apart passes can remain in the same episode.
+This is passive sampling, not a continuous idle trace. No model is called to retry a source or observe an unchanged
+empty queue. An extra eligible member within an already active room is included
+in capacity metadata; the persisted episode is per room.
+
+Bad auxiliary sources remain on disk and become separate blocked B4 records;
+they cannot make a space unreadable or prevent its queue writes. Intake errors
+are tracked by source, so unrelated success does not erase a pending error. A
+rejected display name is omitted without preventing later rooms from being
+observed. Internal butlerSource fields are excluded from ordinary exported room
+events; the source intake reads the private metadata directly.
+
+While activation is off, vacancy facts can accumulate toward the ledger's finite
+capacity; there is no automatic history deletion or paid drain. An explicit clear
+of space history can remove sources not yet copied to the ledger. The ledger is
+a separate audit record, and this checkpoint does not change history-deletion
+semantics or qualify a data-erasure workflow.

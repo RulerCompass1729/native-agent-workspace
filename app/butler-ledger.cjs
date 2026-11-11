@@ -124,7 +124,7 @@ function normalizeResult(value) {
 function initialState() {
   return { sequence: 0, eventSequence: 0, events: [], eventIndex: new Map(), processed: new Set(),
     batches: new Map(), activeBatchId: null, actions: new Map(), questions: new Map(), questionHead: new Map(),
-    deliveries: new Map(), reports: new Map(), reported: new Set(), attempts: new Map(), suspended: new Map(), quarantined: new Map(), quarantinedEvents: new Set() };
+    deliveries: new Map(), reports: new Map(), reported: new Set(), attempts: new Map(), suspended: new Map(), quarantined: new Map(), quarantinedEvents: new Set(), sourceStates: new Map() };
 }
 function pending(state) { return state.events.filter(event => !state.processed.has(event.eventId) && !state.quarantinedEvents.has(event.eventId)); }
 function cursor(state, covered) {
@@ -229,6 +229,31 @@ function reduce(state, record) {
       requireValue(!previous, 'Duplicate event record');
       const event = { ...input, sequence: ++state.eventSequence, time };
       state.events.push(event); state.eventIndex.set(event.eventId, event); break;
+    }
+    case 'source-transition': {
+      object(data, ['sourceRef', 'active', 'generation', 'event'], ['sourceRef', 'active', 'generation']);
+      const sourceRef = reference(data.sourceRef), previous = state.sourceStates.get(sourceRef);
+      normalizeEvent({ eventId: 'source-validation', kind: 'queue-empty', sourceRef, payload: {} });
+      requireValue(typeof data.active === 'boolean' && previous?.active !== data.active, 'Invalid source transition');
+      const generation = (previous?.generation || 0) + (data.active ? 1 : 0);
+      requireValue(safeInteger(data.generation) && data.generation === generation, 'Invalid source generation');
+      requireValue(data.active === Object.hasOwn(data, 'event'), 'Only an active source transition records an event');
+      let event;
+      if (data.active) {
+        const input = normalizeEvent(data.event);
+        requireValue(input.kind === 'queue-empty' && input.sourceRef === sourceRef &&
+          input.eventId === stableId('queue-empty', [sourceRef, generation]) && !state.eventIndex.has(input.eventId), 'Invalid source event');
+        event = { ...input, sequence: state.eventSequence + 1, time };
+      }
+      // The episode marker and its business event are committed by one journal
+      // row, so a crash cannot consume the transition without its pending event.
+      state.sourceStates.set(sourceRef, { sourceRef, active: data.active, generation,
+        ...(event || previous?.eventId ? { eventId: event?.eventId || previous.eventId } : {}) });
+      if (event) {
+        state.eventSequence = event.sequence;
+        state.events.push(event); state.eventIndex.set(event.eventId, event);
+      }
+      break;
     }
     case 'events-recorded': {
       object(data, ['eventIds'], ['eventIds']);
@@ -484,6 +509,20 @@ class ButlerLedger {
     }
     this.#append('event', event); return clone(this.state.eventIndex.get(event.eventId));
   }
+  // Trusted host observations only. The source's false-to-true edge creates a
+  // queue-empty episode; repeated snapshots do not create model work or rows.
+  observeSource(sourceRef, active, payload = {}) {
+    this.healthy(); sourceRef = reference(sourceRef);
+    requireValue(typeof active === 'boolean', 'Source activity must be a boolean');
+    const previous = this.state.sourceStates.get(sourceRef);
+    const generation = (previous?.generation || 0) + (active && previous?.active !== true ? 1 : 0);
+    requireValue(safeInteger(generation), 'Source generation exhausted');
+    const event = normalizeEvent({ eventId: stableId('queue-empty', [sourceRef, generation]), kind: 'queue-empty', sourceRef, payload });
+    if (previous?.active === active) return { changed: false,
+      event: active ? clone(this.state.eventIndex.get(previous.eventId)) : null };
+    this.#append('source-transition', { sourceRef, active, generation, ...(active ? { event } : {}) });
+    return { changed: true, event: active ? clone(this.state.eventIndex.get(event.eventId)) : null };
+  }
   pendingEvents() { this.healthy(); return clone(pending(this.state)); }
   // Decisions/failures already handled by the rule/B1 path need no model turn.
   // Keep the original event and its independent reporting state for audit.
@@ -621,7 +660,7 @@ class ButlerLedger {
     return clone({ version: 1, sequence: this.state.sequence, events: this.state.events, pendingEvents: pending(this.state), batches: [...this.state.batches.values()],
       activeBatch: this.state.activeBatchId ? this.state.batches.get(this.state.activeBatchId) : null,
       actions: [...this.state.actions.values()], questions: [...this.state.questions.values()], deliveries: [...this.state.deliveries.values()],
-      reports: [...this.state.reports.values()], attempts: [...this.state.attempts.values()], suspended: [...this.state.suspended.values()], quarantined: [...this.state.quarantined.values()], cursors: { processed: cursor(this.state, this.state.processed), reported: cursor(this.state, this.state.reported) } });
+      reports: [...this.state.reports.values()], attempts: [...this.state.attempts.values()], suspended: [...this.state.suspended.values()], quarantined: [...this.state.quarantined.values()], sourceStates: [...this.state.sourceStates.values()], cursors: { processed: cursor(this.state, this.state.processed), reported: cursor(this.state, this.state.reported) } });
   }
 }
 module.exports = { ButlerLedger };

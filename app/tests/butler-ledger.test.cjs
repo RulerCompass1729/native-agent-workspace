@@ -48,6 +48,112 @@ test('event payload is a bounded business projection; extra environment/history 
   assert.equal(fs.existsSync(file), false, 'Rejected business inputs never create a journal');
 });
 
+test('a queue-empty source records one atomic episode across repeated observations and restart', t => {
+  const f = fixture(t), source = 'queue-empty:space-one', payload = { spaceId: 'space-one', spaceName: 'Synthetic team' };
+  assert.deepEqual(f.ledger.observeSource(source, false, payload), { changed: true, event: null });
+  assert.deepEqual(f.ledger.snapshot().sourceStates, [{ sourceRef: source, active: false, generation: 0 }]);
+  assert.deepEqual(f.ledger.pendingEvents(), []);
+  assert.equal(lines(f.file).length, 1);
+  assert.deepEqual(f.ledger.observeSource(source, false, payload), { changed: false, event: null });
+  const first = f.ledger.observeSource(source, true, payload), saved = f.ledger.snapshot();
+  assert.equal(first.changed, true); assert.equal(first.event.kind, 'queue-empty');
+  assert.equal(first.event.sourceRef, source); assert.deepEqual(first.event.payload, payload);
+  assert.equal(first.event.sequence, 1); assert.equal(lines(f.file).length, 2);
+  assert.deepEqual(saved.sourceStates, [{ sourceRef: source, active: true, generation: 1, eventId: first.event.eventId }]);
+  const row = JSON.parse(lines(f.file)[1]);
+  assert.equal(row.type, 'source-transition'); assert.equal(row.data.event.eventId, first.event.eventId);
+  const restored = f.open(), bytes = fs.readFileSync(f.file);
+  assert.deepEqual(restored.observeSource(source, true, { ...payload, spaceName: 'Renamed team' }), { changed: false, event: first.event });
+  assert.deepEqual(restored.snapshot(), saved); assert.deepEqual(fs.readFileSync(f.file), bytes);
+  first.event.payload.spaceName = 'Changed returned copy';
+  assert.equal(restored.pendingEvents()[0].payload.spaceName, payload.spaceName);
+});
+
+test('a later queue-empty edge gets a new stable generation without depending on time or random IDs', t => {
+  const f = fixture(t), source = 'queue-empty:space-one', payload = { spaceId: 'space-one' };
+  const first = f.ledger.observeSource(source, true, payload).event;
+  assert.equal(f.ledger.observeSource(source, false, payload).event, null);
+  const restored = f.open(), second = restored.observeSource(source, true, payload).event;
+  assert.notEqual(first.eventId, second.eventId); assert.equal(second.sequence, 2);
+  assert.equal(restored.snapshot().sourceStates[0].generation, 2);
+  const other = fixture(t), matching = other.ledger.observeSource(source, true, payload).event;
+  assert.equal(matching.eventId, first.eventId, 'The stable source and episode determine its identity');
+  assert.equal(f.open().observeSource(source, true, payload).event.eventId, second.eventId);
+  assert.deepEqual(f.open().pendingEvents().map(e => e.eventId), [first.eventId, second.eventId]);
+});
+
+test('source episodes are independent and a conflicting event ID cannot consume a source edge', t => {
+  const f = fixture(t), one = 'queue-empty:space-one', two = 'queue-empty:space-two';
+  const first = f.ledger.observeSource(one, true).event, second = f.ledger.observeSource(two, true).event;
+  assert.notEqual(first.eventId, second.eventId);
+  assert.deepEqual(f.ledger.snapshot().sourceStates.map(s => [s.sourceRef, s.generation]), [[one, 1], [two, 1]]);
+  const collision = fixture(t);
+  collision.ledger.ingest(event(first.eventId, 'unrelated-host-source'));
+  const before = fs.readFileSync(collision.file), sequence = collision.ledger.snapshot().sequence;
+  assert.throws(() => collision.ledger.observeSource(one, true));
+  assert.equal(collision.ledger.snapshot().sequence, sequence);
+  assert.deepEqual(collision.ledger.snapshot().sourceStates, []); assert.deepEqual(fs.readFileSync(collision.file), before);
+});
+
+test('invalid queue-empty source observations never append or create state', t => {
+  const f = fixture(t), source = 'queue-empty:space-one';
+  for (const active of [undefined, null, 0, 1, 'true', {}, []]) assert.throws(() => f.ledger.observeSource(source, active));
+  for (const ref of ['', 'x'.repeat(601), 'Authorization: Bearer synthetic-placeholder'])
+    assert.throws(() => f.ledger.observeSource(ref, false));
+  for (const active of [false, true]) for (const payload of [null, [], { env: {} }, { text: 'x'.repeat(12001) }, { text: 'Authorization: Bearer synthetic-placeholder' }])
+    assert.throws(() => f.ledger.observeSource(source, active, payload));
+  assert.equal(f.ledger.snapshot().sequence, 0); assert.deepEqual(f.ledger.snapshot().sourceStates, []);
+  assert.deepEqual(f.ledger.pendingEvents(), []); assert.equal(fs.existsSync(f.file), false);
+  f.ledger.observeSource(source, true);
+  const before = fs.readFileSync(f.file);
+  assert.throws(() => f.ledger.observeSource(source, true, { history: [] }));
+  assert.deepEqual(fs.readFileSync(f.file), before, 'A repeated boolean does not skip input validation');
+});
+
+test('source-transition replay refuses changed generations, identities and unsupported event kinds', t => {
+  for (const mutate of [
+    row => { row.data.generation = 2; },
+    row => { row.data.active = 'true'; },
+    row => { row.data.event.kind = 'request'; },
+    row => { row.data.event.eventId = 'invented-event'; },
+    row => { row.data.event.sourceRef = 'queue-empty:another-space'; },
+    row => { delete row.data.event; },
+    row => { row.data.authority = true; },
+  ]) {
+    const f = fixture(t); f.ledger.observeSource('queue-empty:space-one', true, { spaceId: 'space-one' });
+    const row = JSON.parse(lines(f.file)[0]); mutate(row); fs.writeFileSync(f.file, JSON.stringify(row) + '\n');
+    const before = fs.readFileSync(f.file); assert.throws(() => f.open());
+    assert.deepEqual(fs.readFileSync(f.file), before, 'Replay retains malformed source evidence');
+  }
+  const inactive = fixture(t); inactive.ledger.observeSource('queue-empty:space-one', false);
+  const row = JSON.parse(lines(inactive.file)[0]); row.data.event = event();
+  fs.writeFileSync(inactive.file, JSON.stringify(row) + '\n'); assert.throws(() => inactive.open());
+});
+
+test('a refused source-transition write cannot acknowledge its edge or advance the stored episode', t => {
+  const f = fixture(t), source = 'queue-empty:space-one'; f.ledger.observeSource(source, false);
+  const before = fs.readFileSync(f.file);
+  t.mock.method(fs, 'writeSync', () => { throw Object.assign(Error('Synthetic write refusal'), { code: 'EIO' }); });
+  assert.throws(() => f.ledger.observeSource(source, true), { code: 'BUTLER_LEDGER_WRITE' });
+  t.mock.restoreAll(); assert.throws(() => f.ledger.snapshot(), { code: 'BUTLER_LEDGER_FAILED' });
+  assert.deepEqual(fs.readFileSync(f.file), before);
+  const restored = f.open(); assert.deepEqual(restored.snapshot().sourceStates, [{ sourceRef: source, active: false, generation: 0 }]);
+  assert.deepEqual(restored.pendingEvents(), []);
+  assert.equal(restored.observeSource(source, true).event.sequence, 1);
+});
+
+test('an uncertain fsync after a whole source row recovers both edge and event without repeating either', t => {
+  const f = fixture(t), source = 'queue-empty:space-one'; f.ledger.observeSource(source, false);
+  const original = fs.fsyncSync;
+  t.mock.method(fs, 'fsyncSync', fd => { original(fd); throw Object.assign(Error('Synthetic acknowledgement loss'), { code: 'EIO' }); });
+  assert.throws(() => f.ledger.observeSource(source, true, { spaceId: 'space-one' }), { code: 'BUTLER_LEDGER_WRITE' });
+  t.mock.restoreAll(); const restored = f.open(), before = fs.readFileSync(f.file);
+  const result = restored.observeSource(source, true, { spaceId: 'space-one' });
+  assert.equal(result.changed, false); assert.equal(result.event.sequence, 1);
+  assert.equal(restored.snapshot().sourceStates[0].eventId, result.event.eventId);
+  assert.deepEqual(fs.readFileSync(f.file), before); assert.equal(restored.pendingEvents().length, 1);
+});
+
 test('one active batch survives a restart and completion consumes its prefix in one durable record', t => {
   const f = fixture(t);
   f.ledger.ingest(event()); f.ledger.ingest(event('event-2', 'task:two'));
