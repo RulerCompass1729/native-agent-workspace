@@ -118,6 +118,13 @@
 .collaboration-statuses { padding-bottom: 5px; }
 .collaboration-member-status { border-left: 0; border-right: 0; border-top: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
 .collaboration-member-reader { border-radius: 3px; }
+/* T-163: in the grid a member's name row is the label of the column under it. It draws no rule of its own and
+   sits 2px above the column, whose top border is the one line between a name and its content. A narrow
+   container stacks the columns under a wrapped row of names, so there the names keep their rule. */
+@container (width > 600px) {
+  .collaboration-statuses { padding-bottom: 2px; }
+  .collaboration-member-status { border-bottom: 0; }
+}
 .collaboration-toolbar { padding: 5px 8px; gap: 6px; }
 .collaboration-messages { padding: 8px 9px; }
 #room-composer { padding: 8px 12px; }
