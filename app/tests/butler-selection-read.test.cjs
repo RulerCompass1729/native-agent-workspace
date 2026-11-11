@@ -38,18 +38,22 @@ function oneReadFault(t, file, { code = 'EIO', beforeThrow = () => {} } = {}) {
 function phaseFault(t, f, stage, target = 'selection') {
   const raw = Object.fromEntries(['openSync', 'closeSync', 'lstatSync', 'fstatSync', 'unlinkSync', 'writeFileSync', 'fsyncSync'].map(key => [key, fs[key]]));
   const file = target === 'lock' ? f.lock : target === 'directory' ? f.directory : f.role.file;
-  const inode = target === 'lock' ? null : raw.lstatSync(file), owned = new Set(); let fired = 0, stats = 0;
+  const inode = target === 'lock' ? null : raw.lstatSync(file), owned = new Set(), replacements = new Set(); let fired = 0, stats = 0, observedLock = null;
   const matches = fd => {
-    const wanted = inode || raw.lstatSync(file);
-    return same(raw.fstatSync(fd), wanted);
+    if (!inode && !observedLock) {
+      try { observedLock = raw.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    }
+    return same(raw.fstatSync(fd), inode || observedLock);
   };
   t.mock.method(fs, 'openSync', (name, ...args) => {
     if (stage === 'open' && name === file && !fired++) throw readError();
-    const fd = raw.openSync(name, ...args); owned.add(fd); return fd;
+    const fd = raw.openSync(name, ...args); owned.add(fd);
+    if (typeof name === 'string' && name.startsWith(f.role.file + '.') && name.endsWith('.tmp')) replacements.add(fd);
+    return fd;
   });
   t.mock.method(fs, 'closeSync', fd => {
     const reject = stage === 'close' && !fired && matches(fd);
-    const value = raw.closeSync(fd); owned.delete(fd);
+    const value = raw.closeSync(fd); owned.delete(fd); replacements.delete(fd);
     if (reject) { fired++; throw readError(); }
     return value;
   });
@@ -67,11 +71,11 @@ function phaseFault(t, f, stage, target = 'selection') {
     return raw.unlinkSync(name, ...args);
   });
   if (stage === 'write') t.mock.method(fs, 'writeFileSync', (fd, ...args) => {
-    if (typeof fd === 'number' && raw.fstatSync(fd).isFile() && !fired++) throw readError();
+    if (typeof fd === 'number' && replacements.has(fd) && !fired++) throw readError();
     return raw.writeFileSync(fd, ...args);
   });
   if (stage === 'fsync') t.mock.method(fs, 'fsyncSync', fd => {
-    const stat = raw.fstatSync(fd), wanted = target === 'directory' ? stat.isDirectory() : stat.isFile();
+    const stat = raw.fstatSync(fd), wanted = target === 'directory' ? stat.isDirectory() : replacements.has(fd);
     if (wanted && !fired++) throw readError();
     return raw.fsyncSync(fd);
   });

@@ -636,7 +636,28 @@ legacy lock or proves physical shutdown.
 Designation-file corruption, rollback, directory-integrity/permission faults and
 uncertain writes retain the existing sticky guards. A rotation-log file with
 unsafe owner/mode/link-count/size is refused on every affected read, but that
-log-file error is no longer sticky; a later valid log may recover. A busy or legacy empty lock
+log-file error is no longer sticky; a later valid log may recover. On Darwin, new writers publish a fixed protocol marker from an already-written,
+fsynced private stage through an atomic hard link. They hold a nonblocking
+`O_EXLOCK` descriptor until their own published lock name is removed. This is a
+cooperative file lock, not proof that a PID has died. A later writer can recover
+only a safely read, recognized marker after obtaining its kernel lock and
+rechecking the named path against that descriptor. A two-link crash window is
+accepted only when both links are the canonical lock and the exact marker-named
+stage inode; arbitrary extra links are refused. Selection files still require
+one link. Recovery removes only those known protocol names, then competes for
+the lock name atomically again. An old O_EXCL writer that wins that gap is kept.
+Other platforms retain the previous no-recovery protocol.
+
+Empty, unknown, malformed, unsafe or still-held lock files remain busy; merely
+being old or obtaining a new kernel lock on a legacy file never authorizes its
+removal. An unpublished orphan stage is not searched for or swept. The protocol
+assumes cooperating writers in the private directory and does not defend an
+arbitrary same-user process rewriting paths or metadata. The exact host Node
+Darwin protocol tests pass, but the owned embedded-runtime probe produced no
+confirmation and exited SIGTRAP. Embedded Electron qualification remains open;
+no activation or normal-App startup proof follows from the host tests.
+
+A busy or legacy empty lock
 is not recovered or stolen, and OS write failures or a stale expected revision
 can still reject revocation. A failed directory fsync after rename is not called
 durable success. Safe store recovery and reliable physical cleanup remain

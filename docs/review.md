@@ -10672,3 +10672,84 @@ This closes only the distinguishable selection-read fault. Persistent bad data,
 unsafe directories, unknown legacy locks, durable history across restart and an
 independent owned-stop adapter remain open before activation. No Session storage
 or singleton runtime pass, recording-period start or model activation is claimed.
+
+## Butler cooperative lock crash recovery — 2026-11-11
+
+The integrator's pre-activation list identified that the old empty O_EXCL lock
+survives a writer crash and keeps person revoke busy forever. This checkpoint
+changes only future protocol writers on Darwin. A private, already-fsynced
+marker is atomically linked to the existing lock name while its stage descriptor
+holds `O_EXLOCK|O_NONBLOCK`. The marker contains only the fixed protocol and a
+UUID stage basename, no PID, person name, session data or credential. No empty
+published-file window is introduced. The normal caller removes its own lock
+name before closing the descriptor.
+
+Recovery requires a recognized bounded private regular file, a kernel lock that
+is actually available, a stable inode and matching named path. nlink2 is allowed
+only for the exact marker-declared stage and canonical name on that same inode;
+all ordinary selection files retain nlink1. The recovery removes those names
+while holding the descriptor, then atomically competes for the name one more
+time. It refuses if an old O_EXCL writer wins. Empty legacy/unknown bytes,
+malformed fields, links, unsafe metadata and live holders remain busy. This is
+advisory/cooperative exclusion, not PID death, arbitrary same-user path attack
+protection or authority to remove unknown files. Unpublished orphan stages are
+retained rather than enumerated for cleanup. Non-Darwin keeps the old protocol.
+
+Primary local SDK facts: sys/fcntl.h:113/120 defines O_NONBLOCK=4/O_EXLOCK=32;
+open.2 describes flock during open, link.2:63/75 the link-count change and
+link.2:209 EEXIST atomic contention; flock.2:41/53/73 describes cooperative
+advisory locking. The author read these actual SDK files. Existing host Node
+26.12.1 evidence verifies contention and same-inode release after holder exit.
+The new actual-host child cases verify both published two-link and one-link
+crashes, and a live holder that is killed/reaped before recovery.
+
+The test author's first three children missed the fault hook through a temporary
+path alias; that fixture output is retained separately and is not crash evidence.
+After canonicalizing fixtures, the old Role has 19 tests: 13 pass, 6 fail. Three
+failures are actual empty locks left by two exited children and one killed/reaped
+holder; three are new-protocol expectation failures, not observed old-code
+namespace races. Current exact same tests pass 19/19, with three owned children
+reaped and no skips. The first combined strict run has 228 pass/1 fail because
+the prior close-fault hook looked up the lock after the correct new unlink-before-
+close order. It now remembers the target inode once seen; selection write/fsync
+fault hooks also track only the actual record replacement, so marker writes
+cannot hide those checks. The corrected combined strict checks pass 229/229,
+with no failures, cancellations or skips. Existing person/identity controls,
+revision checks, read refusal and record-only action semantics remain unchanged.
+
+One separately bounded owned noindex Electron executable invocation with
+RUN_AS_NODE and constructed empty credential environment ends SIGTRAP with no
+packet or stderr. Its scripted fixture was not created before the only child
+spawn point, and no remaining mapping of that exact owned executable is found.
+The parent is reaped, the owned copy's strict signature remains valid and its
+LaunchServices registration remains false. No policy relaxation or retry is
+attempted. This is UNKNOWN, not embedded-Node locking, Main startup, Session or
+singleton proof. Tests invoke no real provider/model. Recording and activation
+remain off. The full suite exits 0 with 5,983/5,983 passing and zero failures,
+cancellations or skips (213,459 ms), including the 19 new cases and their three
+actual host children. Its 5,911 top-level plus 72 nested passes were also counted
+by program. Source-only readiness cannot open the still-unqualified runtime gate.
+
+Fresh separate read-only reviewer `ADCD49CB-DAA3-4D51-A7F0-F15D0AC16DFA`
+finds no source blockers within Darwin/host Node/cooperating new-protocol writers
+on this base. Its initial conditional result requires the final full suite to
+include the real child cases. A one-read same-session follow-up reads the raw
+TAP excerpts, confirms all 19 cases and 5,983 passing, and states that this
+source-review condition is satisfied. This is not Electron qualification,
+legacy-lock takeover or activation approval. Exact source/test contents, HEAD,
+index and worktree match the before-review snapshot after both invocations.
+No source/test changes follow the reviews; the remaining edit records final
+facts. All dynamic checks are author-run, not independently rerun.
+
+Private evidence stays in the owner role-lock lane at
+`.local/role-lock-review/review.jsonl`, `full-verdict.jsonl` and `full-proof.txt`,
+with complete tests under `.local/role-lock/`. Both CLI initializations expose
+only Read/Grep/Glob and no MCP. Reported model is `claude-opus-5-5`; list costs
+are USD 1.301834 and 1.4166942. Publication scans remain mandatory before commit.
+
+Non-blocking follow-up triggers: before reusing this path for frequent metadata
+writes, cover marker write/fsync/non-EEXIST-link I/O failures directly; the
+selection-replacement fault tests no longer stand in for them. Unsupported
+flock filesystems fail closed without a fallback and remain unqualified. Unknown
+legacy recovery, cross-restart rotation integrity and independent physical stop
+remain separate open conditions. No person permission or model action is added.
