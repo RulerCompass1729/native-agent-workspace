@@ -75,8 +75,12 @@ function osOptions(language, codex = true, prefix = 'os.decision') {
   })) }));
 }
 test('all existing OS option groups use the chosen language while raw names, picker scope and cancel safeguards stay intact', () => {
-  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 21);
-  // The last surface is the integration handoff notice (B6): a count and a reason, never task text.
+  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 22);
+  // The last surface is the folder dialog for the project where merges are checked (B6, the queue panel): a title, and folders only.
+  assert.deepEqual([en[21].type, en[21].value], ['showOpenDialog', { title: 'Choose the project folder: the top folder of the project the integrator merges into', properties: ['openDirectory'] }]);
+  assert.deepEqual([zh[21].type, zh[21].value], ['showOpenDialog', { title: '选择项目文件夹：集成者把活合进去的那个项目最上层的文件夹', properties: ['openDirectory'] }]);
+  en.pop(); zh.pop();
+  // Before it comes the integration handoff notice (B6): a count and a reason, never task text.
   assert.deepEqual(en[20].value, { title: 'NAW · Integration handoff needs you', body: 'The merge lock is held by RAW 中文 owner. Deliveries waiting: 2' });
   assert.deepEqual(zh[20].value, { title: 'NAW · 集成交接要你处理', body: '合并锁被 RAW 中文 owner 占着，2 件交付在等' });
   assert.equal(en[20].type, 'notification'); en.pop(); zh.pop();

@@ -664,6 +664,24 @@ header h1, header p { overflow-wrap: anywhere; }
 .queue-text{grid-row:2;grid-column:1/-1;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
 .queue-outcome{grid-row:3;grid-column:1/-1;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap;font-size:12px;color:var(--muted)}
 .queue-actions{grid-row:1;grid-column:2;display:flex;gap:6px}
+/* The integration handoff in the queue panel (B6): one block on top, and on a delivered task's row a line that says why it waits. */
+.queue-handoff-why{grid-row:4;color:inherit}
+#queue-handoff{margin:0 0 6px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.queue-handoff-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.queue-handoff-head h3{margin:0;font-size:13px;font-weight:600;white-space:nowrap}
+.queue-handoff-head span{font-size:12px;text-align:right;overflow-wrap:anywhere}
+.queue-handoff-line{margin:8px 0 2px;overflow-wrap:anywhere}
+.queue-handoff-small{margin:4px 0;font-size:12px;overflow-wrap:anywhere}
+.queue-handoff-repository{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin:8px 0 2px;font-size:12px}
+.queue-handoff-repository>div{min-width:0;overflow-wrap:anywhere}
+.queue-handoff-repository>button{flex:none}
+.queue-handoff-path{word-break:break-all}
+.queue-handoff-ask{margin-top:8px}
+.queue-handoff-question{margin:2px 0 4px;overflow-wrap:anywhere;white-space:pre-wrap}
+.queue-handoff-buttons{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+#queue-handoff-error{margin:8px 0;padding:6px 10px;border-left:3px solid currentColor;color:var(--ink);white-space:pre-line;overflow-wrap:anywhere}
+.queue-handoff-refused{font-weight:600}
+#room-queue[data-need]:not([data-need="0"]){font-weight:600}
 /* The one implicit column would otherwise take the member select's widest option as its minimum. */
 #queue-form{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;margin-top:12px}
 #queue-rotations{margin-top:12px}

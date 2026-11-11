@@ -34,15 +34,19 @@ function fixture(t, enabled = true, options = {}) {
   f.dispatcher = { schedule() { f.schedules += 1; }, integrationError: null };
   // The repository choice as the engine's builder makes it in main.cjs, on a real record and the real git reader.
   f.repository = new IntegrationRepository(directory); f.unblocked = 0;
+  f.dialog = async () => { throw Error('No dialog was expected'); };
   // The spaces' own record, in a folder of its own, and the sessions the backend lists.
   fs.mkdirSync(path.join(directory, 'room'));
   f.room = new RoomState(path.join(directory, 'room')); f.sessions = [];
   const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, ipcMain: { handle() {} }, integrationHandoffs: enabled ? handoffs : null, integrationFault: null, Date,
     integrationRepository: null, repository: f.repository, integratorGit, handoffs, engine: { unblock() { f.unblocked += 1; } },
     roomState: f.room, roomIds, validRoomId, queueRules: rules, displayText: (name, params) => locale.format('en', name, params),
+    // The system's folder dialog, as a test stands in for the person; and the one module the entry loads when it is needed.
+    showDialog: async (c, kind, options) => f.dialog(c, kind, options), require: name => { assert.equal(name, './integrator-words.cjs'); return require('../integrator-words.cjs'); },
     broadcastRoom: async () => { f.broadcasts += 1; }, queueDispatcher: options.noDispatcher ? null : f.dispatcher });
   vm.runInContext(slice('function register(name, handler) {', 'async function replaceBackendSockets'), context);
   vm.runInContext(slice('function handoffOverview(handoffs) {', '\n// One notice for one reason of the integration handoff'), context);
+  vm.runInContext(slice('function chooseRepositoryFolder(c) {', '\n}\n') + '\n}', context);
   vm.runInContext(slice("  register('handoff', async (c, action, value, choice) => {", "  register('rename',"), context);
   if (enabled) vm.runInContext(slice('  integrationRepository = {', '\n  return engine;\n}'), context);
   const client = f.client = { call: async () => ({ sessions: f.sessions }), entries: [{ state: { sessions: [{ id: 'old' }], capabilities: [] } }], refresh: async () => {}, snapshot: () => ({ wakePolicy: { enabled: true }, sessions: [{ id: 'old' }, ...f.sessions] }) };
@@ -138,7 +142,7 @@ test('an agent can do none of this, whatever it names; without an originating op
   const id = f.waiting(['a']);
   f.handoffs.noteReady(ready('b'), NOW); f.handoffs.hold(key('b'), 'review-off', NOW);
   const before = f.bytes();
-  for (const args of [['list'], ['retryDelivery', key('b')], ['retryReason', 'review-off'], ['retryReason', 'no-reply'], ['resolve', id, true], ['resolve', id], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('b')], ['made-up'], []]) {
+  for (const args of [['list'], ['retryDelivery', key('b')], ['retryReason', 'review-off'], ['retryReason', 'no-reply'], ['resolve', id, true], ['resolve', id], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('b')], ['chooseRepository'], ['made-up'], []]) {
     await assert.rejects(f.agent(...args), refused('error.handoff.personOnly'), JSON.stringify(args));
   }
   assert.equal(f.bytes(), before); assert.deepEqual([f.broadcasts, f.schedules], [0, 0]);
@@ -153,7 +157,7 @@ test('an agent can do none of this, whatever it names; without an originating op
 
 test('with the switch closed the person is told handoffs are not enabled, and nothing is created', async t => {
   const f = fixture(t, false);
-  for (const args of [['list'], ['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('a')]]) {
+  for (const args of [['list'], ['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('a')], ['chooseRepository']]) {
     await assert.rejects(f.person(...args), refused('error.handoff.unavailable'), JSON.stringify(args));
   }
   assert.equal(fs.existsSync(f.file), false); assert.deepEqual([f.broadcasts, f.schedules], [0, 0]);
@@ -179,9 +183,13 @@ test('a fault the dispatcher kept for the engine is shown to the person, also wh
   assert.deepEqual(plain(unstarted), { started: false, engineFault: { message: 'Synthetic build fault', at: NOW, count: 1 } });
   unstarted.engineFault.message = 'changed by the caller';
   assert.equal(g.dispatcher.integrationError.message, 'Synthetic build fault', 'A copy here too');
-  for (const args of [['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('a')], ['made-up']]) {
+  for (const args of [['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['redo', key('a')], ['chooseRepository'], ['made-up']]) {
     await assert.rejects(g.person(...args), refused('error.handoff.notStarted'), JSON.stringify(args));
   }
+  // The queue panel looks through 'space': it is told the same, and what it draws from that says why, not "cannot be read".
+  const panel = plain(await g.person('space', 'shared'));
+  assert.deepEqual(panel, { started: false, engineFault: { message: 'Synthetic build fault', at: NOW, count: 1 } });
+  assert.deepEqual(plain(require('../renderer/handoff-queue.js').model({ view: panel }).block.faults), [{ key: 'queue.handoff.fault.notStarted', params: { message: 'Synthetic build fault' } }]);
   assert.equal(fs.existsSync(g.file), false); assert.deepEqual([g.broadcasts, g.schedules], [0, 0]);
   // An agent is refused first, whatever the state.
   await assert.rejects(g.agent('list'), refused('error.handoff.personOnly'));
@@ -233,8 +241,27 @@ test('the person chooses the main repository, sees it and clears it; an agent ca
   assert.deepEqual(plain(await f.person('setRepository', null)), { root: null });
   assert.deepEqual(plain(await f.person('repository')), { root: null, problem: null });
   assert.deepEqual([f.broadcasts, f.schedules, f.unblocked], [2, 2, 1], 'Clearing unblocks nothing: there is nothing to try');
-  // An agent can neither look nor choose, whatever it names.
-  for (const args of [['repository'], ['setRepository', repo], ['setRepository', null]]) await assert.rejects(f.agent(...args), refused('error.handoff.personOnly'), JSON.stringify(args));
+  // Chosen in the system's own folder dialog, which the main process opens for the person's window: the page names no path.
+  const asked = [];
+  f.dialog = async (c, kind, options) => { asked.push([c.client === f.client, kind, options]); return { canceled: true, filePaths: [] }; };
+  assert.deepEqual(plain(await f.person('chooseRepository', repo)), { canceled: true }, 'A value from the page is not a folder');
+  assert.deepEqual(plain(asked), [[true, 'open', { title: 'Choose the project folder: the top folder of the project the integrator merges into', properties: ['openDirectory'] }]]);
+  for (const answer of [{ canceled: false, filePaths: [] }, { canceled: true, filePaths: [repo] }, { canceled: false }]) {
+    f.dialog = async () => answer;
+    assert.deepEqual(plain(await f.person('chooseRepository')), { canceled: true }, JSON.stringify(answer));
+  }
+  assert.deepEqual([new IntegrationRepository(f.directory).chosen(), f.broadcasts, f.schedules, f.unblocked], [null, 2, 2, 1], 'Closing the dialog changes and announces nothing');
+  // A folder goes through the same checks as one that is named; a good one is recorded and announced.
+  f.dialog = async () => ({ canceled: false, filePaths: [trunk] });
+  await assert.rejects(f.person('chooseRepository', repo), refused('error.handoff.repositoryNoMain'), 'The dialog\'s folder is the one that is checked, whatever the page names');
+  fs.writeFileSync(path.join(repo, '.git/config'), fs.readFileSync(path.join(repo, '.git/config'), 'utf8').replace('[include]\n\tpath = /synthetic/elsewhere\n', ''));
+  f.dialog = async () => ({ canceled: false, filePaths: [repo, trunk] });
+  assert.deepEqual(plain(await f.person('chooseRepository')), { root: repo });
+  assert.deepEqual([new IntegrationRepository(f.directory).chosen(), f.broadcasts, f.schedules, f.unblocked], [repo, 3, 3, 2]);
+  assert.deepEqual(plain(await f.person('setRepository', null)), { root: null });
+  // An agent can neither look nor choose, whatever it names; no dialog is opened for it.
+  f.dialog = async () => { throw Error('No dialog for an agent'); };
+  for (const args of [['repository'], ['setRepository', repo], ['setRepository', null], ['chooseRepository']]) await assert.rejects(f.agent(...args), refused('error.handoff.personOnly'), JSON.stringify(args));
   assert.equal(new IntegrationRepository(f.directory).chosen(), null);
   // With the switch closed there is nothing to choose for.
   const closed = fixture(t, false);
@@ -315,8 +342,15 @@ test('the person sees where each delivery of one space stands, and gives a retur
   f.sessions.push({ id: 'member-b', nativeId: 'native-b', name: 'Member b', state: 'idle', roomIds: ['shared'] });
   settled(f, [ready('a'), { ...ready('b'), key: b, itemId, memberId: 'member-b' }, ready('c')],
     `MERGED ${commitOf('a')} as ${HEAD2} tests 3/3\nRETURNED ${commitOf('b')} needs a rebase\nRETURNED ${commitOf('c')}`, { [key('a')]: { verified: true, as: HEAD2 } });
+  // Two more on hold: one for a cause with a sentence of its own, one for another cause in the integrator's words.
+  for (const [name, reason] of [['d', 'review-off'], ['e', 'held-other']]) { f.handoffs.noteReady({ ...ready(name), ...(name === 'e' ? { branch: 'lane/e' } : {}) }, NOW + 70000); f.handoffs.hold(key(name), reason, NOW + 70000); }
   const before = f.bytes(), room = fs.readFileSync(f.room.file, 'utf8');
   const seen = plain(await f.person('space', 'shared'));
+  assert.deepEqual([seen.items.d, seen.items.e], [
+    { key: key('d'), state: 'held', branch: 'lane/d', commit: commitOf('d'), text: 'Task d', memberName: 'Member d', reason: 'review-off', why: { key: 'queue.handoff.why.reviewOff', params: {} } },
+    { key: key('e'), state: 'held', branch: 'lane/e', commit: commitOf('e'), text: 'Task e', memberName: 'Member e', reason: 'held-other', why: { key: 'queue.handoff.why.unknown', params: {} } }]);
+  delete seen.items.d; delete seen.items.e;
+  assert.ok(Object.values(seen.items).every(item => item.why === undefined), 'Only a delivery on hold carries a cause');
   assert.deepEqual(seen.items, {
     a: { key: key('a'), state: 'merged', branch: 'lane/a', commit: commitOf('a'), text: 'Task a', memberName: 'Member a', mergedAs: HEAD2, tests: { passed: 3, total: 3 } },
     [itemId]: { key: b, state: 'returned', branch: 'lane/b', commit: commitOf('b'), text: 'Task b', memberId: 'member-b', memberName: 'Member b', note: 'needs a rebase' },
@@ -441,6 +475,14 @@ test('the entry is wired for the person\'s window, and its words exist in both l
     const zh = locale.format('zh', name), en = locale.format('en', name);
     assert.ok(zh && en && zh !== en && zh !== name && en !== name, name);
   }
+  // The window's state says that handoffs are enabled only where they are, or where they could not start; elsewhere it is as it always was.
+  const flag = slice('  const handoffEnabled = ', '\n');
+  // (It reads the dispatcher only, which the state function already reads: other tests evaluate that function on its own.)
+  const told = dispatcher => JSON.parse(JSON.stringify(vm.runInNewContext(`${flag}\nhandoffEnabled`, { queueDispatcher: dispatcher })));
+  assert.deepEqual([told(null), told(undefined), told({ integration: null, integrationError: null }), told({ integration: {}, integrationError: null }), told({ integration: null, integrationError: { message: 'Synthetic build fault' } })],
+    [{}, {}, {}, { handoffEnabled: true }, { handoffEnabled: true }]);
+  assert.ok(!/integrationHandoffs/.test(slice('function displayState(snapshot, context, read = null) {', '\nfunction reportViewStorage(')), 'The state function names nothing new');
+  assert.match(source, /const result = \{ \.\.\.display, queueSecretary: secretary, integrator, \.\.\.handoffEnabled, /);
   // The task given back names the task, the branch and (when there are any) the integrator's words, in both languages.
   for (const language of ['zh', 'en']) {
     const said = locale.format(language, 'queue.redo.text', { text: 'TASK', branch: 'BRANCH', note: 'NOTE' }), bare = locale.format(language, 'queue.redo.plain', { text: 'TASK', branch: 'BRANCH' });
