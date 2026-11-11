@@ -63,14 +63,31 @@ function normalProfileIdentity(target) {
     return null;
   }
 }
+function profileHasAncestor(identity, target) {
+  let current = path.resolve(target);
+  for (;;) {
+    try {
+      current = fs.realpathSync(current);
+      const candidate = fs.statSync(current);
+      if (!candidate.isDirectory()) throw Error('Profile ancestry is not a directory');
+      if (candidate.dev === identity.dev && candidate.ino === identity.ino) return true;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
 let backgroundTest = false;
 if (testRequested) {
   try {
     const profile = process.env.NAW_DATA_DIR && fs.realpathSync(path.resolve(process.env.NAW_DATA_DIR));
     const info = profile && fs.statSync(profile);
     const normalInfo = normalProfileIdentity(normalDataDir);
-    backgroundTest = /^\d+$/.test(process.env.NAW_TEST_PARENT_PID) && Number.isSafeInteger(testParent) && testParent > 1 && process.ppid === testParent && Boolean(profile) && (!normalInfo || info.dev !== normalInfo.dev || info.ino !== normalInfo.ino) && info.isDirectory() && typeof process.getuid === 'function' && info.uid === process.getuid() && (info.mode & 0o077) === 0;
-  } catch { /* An unverifiable profile must never fall through to foreground. */ }
+    backgroundTest = /^\d+$/.test(process.env.NAW_TEST_PARENT_PID) && Number.isSafeInteger(testParent) && testParent > 1 && process.ppid === testParent && Boolean(profile) && (!normalInfo || !profileHasAncestor(normalInfo, profile)) && !profileHasAncestor(info, normalDataDir) && info.isDirectory() && typeof process.getuid === 'function' && info.uid === process.getuid() && (info.mode & 0o077) === 0;
+    if (backgroundTest) app.setPath('userData', profile);
+  } catch { backgroundTest = false; /* An unverifiable profile must never fall through to foreground. */ }
   if (!backgroundTest) { console.error('Invalid isolated headed-test parent/profile; no window opened.'); process.exit(1); }
 }
 const butlerEntryEnabled = backgroundTest && process.env.NAW_TEST_BUTLER_ENTRY === '1';

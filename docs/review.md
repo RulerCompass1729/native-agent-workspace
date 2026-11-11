@@ -9745,3 +9745,35 @@ and review evidence remain in the private handoff named on the task board.
 - The reader still reads main in the integrator's own folder; which repository counts is the person's decision (H6b list).
 - The notices are read where the main process would show them; no real system notification is shown.
 - The person sees "handed out", "merged" and "returned" only under the space's shared-record tab; the member overview, which opens first, says nothing about a handoff. After a return nothing queues the task again or tells the member outside that record. Both belong to the screen that still needs a prototype.
+## Isolated-profile path pin and parent boundaries (2026-11-11)
+
+After successful shared startup verification, Electron's `userData` is pinned to
+the resolved path that was checked. Replacing the caller's symlink afterwards
+can no longer redirect that stored runtime path to the normal profile. Failure
+to store the checked path clears test permission and aborts startup.
+
+Both ancestry directions now compare device and inode while walking resolved
+directory parents: a test profile inside normal, or containing normal, is
+refused. If normal does not exist, only `ENOENT` is skipped while walking to its
+existing parents; no directory is created. Other lookup errors fail closed.
+Sibling names sharing a text prefix remain eligible. This is one shared gate
+for all test switches; parent, owner, private-mode and ordinary-startup rules
+remain. Ordinary startup is closed to test-only access; a verified isolated test
+may still use an installed binary. The normal reference remains `app.getPath`;
+how command-line or HOME choices derive that reference is a separate check.
+Remounted FUSE/SMB content with different device/inode identities is not proven
+related by this check; no remount inspection is claimed.
+
+Actual-bootstrap synthetic filesystem checks kept all six earlier real-Mac
+identity regressions green and reproduced six new failures before this delta.
+Afterwards: 12 pass, 0 fail/skip, with the real symlink swap, separate child and
+parent cases, aliased ancestry and absent-normal ancestry. No GUI, provider or
+installed application was run. The author-run complete suite passes 5,750/5,750
+with zero failures, cancellations or skips; the empty-environment UI build exits
+zero. A fresh separate headless Claude reviewer (C53CD85F-499A-4BE2-B138-ED9E58B2CC3C)
+returns APPROVE_SCOPED for this source delta. Its tools were Read/Grep/Glob only,
+with no MCP; HEAD, index and worktree remained unchanged. The reviewer read the
+author-run red/green evidence but did not rerun tests. Private evidence is in the
+profile-boundary lane under `.local/boundary-review` and `.local/profile-boundary`.
+The pin preserves the checked path spelling, rather than an open directory handle;
+a later replacement of that resolved directory is a separate known limitation.
