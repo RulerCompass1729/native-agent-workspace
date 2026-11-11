@@ -284,6 +284,49 @@ test('after an automatic message from someone else: a later answer counts when t
   assert.deepEqual(shape(planned(['a'], earlier).action), ['done', undefined, undefined, [], 1]);
 });
 
+test('the record says where each delivery of a space stands by queue item, and remembers a returned one that was given back', t => {
+  const { backlog, file, open } = fixture(t);
+  backlog.noteReady(ready('elsewhere', { key: 'ready:space-2:elsewhere', roomId: 'space-2' }), NOW);
+  assert.deepEqual([Object.keys(backlog.spaceView('space-1')), Object.getPrototypeOf(backlog.spaceView('space-1'))], [[], null]);
+  handed(backlog, ['a', 'b', 'c']);
+  assert.deepEqual(Object.fromEntries(Object.entries(backlog.spaceView('space-1')).map(([item, view]) => [item, view.state])), { a: 'handed', b: 'handed', c: 'handed' });
+  settleWith(backlog, 'tag-1', `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9\nRETURNED ${commitOf('b')} needs a rebase`, { verified: ok(['a']), mainHead: MAIN2 });
+  backlog.noteReady(ready('d'), NOW); backlog.hold(key('d'), 'review-off', NOW);
+  const view = backlog.spaceView('space-1');
+  assert.deepEqual(view.a, { key: key('a'), state: 'merged', branch: 'lane/a', commit: commitOf('a'), text: 'Task a', memberId: 'member-a', memberName: 'Member a', mergedAs: MAIN2, tests: { passed: 9, total: 9 } });
+  assert.deepEqual(view.b, { key: key('b'), state: 'returned', branch: 'lane/b', commit: commitOf('b'), text: 'Task b', memberId: 'member-b', memberName: 'Member b', note: 'needs a rebase' });
+  assert.deepEqual([view.c.state, view.d.state, view.d.reason, view.elsewhere], ['queued', 'held', 'review-off', undefined]);
+  assert.deepEqual(Object.keys(backlog.spaceView('space-2')), ['elsewhere']);
+  // What is handed out is a copy.
+  view.a.tests.passed = 0; view.b.state = 'merged';
+  assert.deepEqual([backlog.spaceView('space-1').a.tests.passed, backlog.spaceView('space-1').b.state], [9, 'returned']);
+  // A delivery inside a handoff that waits for the person reads "asking"; one that a newer delivery replaced is left out.
+  const second = handed(backlog, ['c'], 'tag-2');
+  const asked = backlog.plan(later(answered('tag-2', '需要你决定：c 冲突了')));
+  backlog.settle(asked, { handoffId: second.handoffId }, NOW + 60000);
+  assert.equal(backlog.spaceView('space-1').c.state, 'asking');
+  backlog.noteReady(ready('d2', { branch: 'lane/d' }), NOW + 1);
+  assert.deepEqual([backlog.spaceView('space-1').d, backlog.spaceView('space-1').d2.state], [undefined, 'queued']);
+  // A queue item with a name that an object already has is a key like any other.
+  backlog.noteReady(ready('__proto__', { branch: 'lane/odd' }), NOW);
+  assert.deepEqual([Object.keys(backlog.spaceView('space-1')).includes('__proto__'), backlog.spaceView('space-1').__proto__.state, Object.getPrototypeOf(backlog.spaceView('space-1'))], [true, 'queued', null]);
+  // Giving back: only a returned delivery, and once. It is kept across a restart.
+  assert.deepEqual(backlog.redoTarget(key('b')), { key: key('b'), roomId: 'space-1', itemId: 'b', branch: 'lane/b', text: 'Task b', note: 'needs a rebase', memberId: 'member-b' });
+  for (const other of [key('a'), key('c'), key('d2'), 'ready:space-1:unknown', undefined]) {
+    assert.throws(() => backlog.redoTarget(other), { code: 'HANDOFF_STATE', stale: true }, String(other));
+    assert.throws(() => backlog.markRedone(other), { code: 'HANDOFF_STATE', stale: true }, String(other));
+  }
+  assert.deepEqual(backlog.markRedone(key('b')), { redone: true });
+  assert.equal(open().spaceView('space-1').b.redone, true);
+  assert.throws(() => backlog.redoTarget(key('b')), { code: 'HANDOFF_STATE', stale: true });
+  assert.throws(() => backlog.markRedone(key('b')), { code: 'HANDOFF_STATE', stale: true });
+  // The mark belongs to a returned delivery only: a record that carries it elsewhere is not read.
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  data.ready.find(entry => entry.itemId === 'a').redone = true;
+  fs.writeFileSync(file, JSON.stringify(data), { mode: 0o600 });
+  assert.throws(() => open().spaceView('space-1'), { code: 'HANDOFF_STATE' });
+});
+
 test('a verified merge is recorded once and registers the main commit to install once', t => {
   const { backlog, open } = fixture(t);
   handed(backlog, ['a', 'b']);

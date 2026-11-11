@@ -1682,12 +1682,45 @@ async function boot() {
     let result;
     try {
       if (action === 'list') return handoffOverview(handoffs);
+      // One space's view for its queue panel: the overview, and where each delivery of that space stands by queue item.
+      if (action === 'space') {
+        if (typeof value !== 'string' || !validRoomId(value)) throw uiError('error.handoff.invalid');
+        return { ...handoffOverview(handoffs), items: handoffs.spaceView(value) };
+      }
       if (action === 'repository') return integrationRepository.show();
       if (action === 'setRepository') result = await integrationRepository.choose(value);
       else if (action === 'retryDelivery') result = handoffs.retryReady(value);
       else if (action === 'retryReason') result = handoffs.retryReason(value);
       else if (action === 'resolve') result = handoffs.resolveHandoff(value, { retry: choice === true });
       else if (action === 'answer') result = handoffs.answer(value);
+      else if (action === 'redo') {
+        // A returned delivery: its task goes back into the space's queue with the integrator's reason, for the member
+        // who did it if that member can still take it, and the delivery is marked so that it is not offered again.
+        // Everything after the sessions were read is one step, so two presses cannot add the task twice.
+        const sessions = roomState.apply(await c.client.call('initial')).sessions;
+        const target = handoffs.redoTarget(value);
+        const member = target.memberId ? sessions.find(session => session.id === target.memberId) : null;
+        let assignee = null;
+        try { if (member && !member.archived && member.state !== 'ended' && roomIds(member).includes(target.roomId)) assignee = member.id; } catch { /* Membership that cannot be read: any member may take it. */ }
+        // The task as it was written while the queue still has it; the delivery's short label otherwise.
+        const original = roomState.queueItems(target.roomId).find(item => item.id === target.itemId)?.text || target.text || target.branch;
+        const words = text => displayText(target.note ? 'queue.redo.text' : 'queue.redo.plain', { text, branch: target.branch, note: target.note });
+        const room = queueRules.ITEM_TEXT_LIMIT - words('').length;
+        const task = original.length > room ? original.slice(0, room - 1).replace(/[\ud800-\udbff]$/, '') + '…' : original;
+        const itemId = roomState.queueAdd(words(task), assignee, target.roomId, { kind: 'person', name: 'You', sessionId: null });
+        try { result = { ...handoffs.markRedone(value), itemId, assignee }; }
+        catch (error) {
+          // The mark could not be kept: the task is taken out again, so that a second press does not add it twice.
+          let stayed = false;
+          try { roomState.queueCancel(itemId, target.roomId); } catch { stayed = true; }
+          // The space's record has changed either way, so the windows are told.
+          try { await broadcastRoom(); } catch { /* The next announcement carries it. */ }
+          if (!stayed) throw error;
+          // It could not be taken out either: the person is told that the task is in the queue, so that they do not press again.
+          if (error?.code === 'HANDOFF_STATE') integrationFault = { message: String(error.message).slice(0, 300), at: Date.now() };
+          throw uiError('error.handoff.redoKept');
+        }
+      }
       else throw uiError('error.handoff.invalid');
     } catch (error) {
       // The record refuses an action that does not fit its state (a handoff already dealt with,
