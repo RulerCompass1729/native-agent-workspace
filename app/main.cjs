@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, session, shell, screen, Notification } = require('electron');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { ensureService, connect, connectService, continuationStatus, continueService } = require('./service-client.cjs');
@@ -84,8 +85,17 @@ if (testRequested) {
   try {
     const profile = process.env.NAW_DATA_DIR && fs.realpathSync(path.resolve(process.env.NAW_DATA_DIR));
     const info = profile && fs.statSync(profile);
-    const normalInfo = normalProfileIdentity(normalDataDir);
-    backgroundTest = /^\d+$/.test(process.env.NAW_TEST_PARENT_PID) && Number.isSafeInteger(testParent) && testParent > 1 && process.ppid === testParent && Boolean(profile) && (!normalInfo || !profileHasAncestor(normalInfo, profile)) && !profileHasAncestor(info, normalDataDir) && info.isDirectory() && typeof process.getuid === 'function' && info.uid === process.getuid() && (info.mode & 0o077) === 0;
+    const normalReferences = [normalDataDir];
+    if (process.platform === 'darwin') {
+      // Electron's userData may move with a CLI override; HOME is also mutable.
+      const home = os.userInfo().homedir;
+      if (typeof home !== 'string' || !path.isAbsolute(home)) throw Error('OS account home is unavailable');
+      normalReferences.push(path.join(home, 'Library', 'Application Support', 'Native Agent Workspace'));
+    }
+    backgroundTest = /^\d+$/.test(process.env.NAW_TEST_PARENT_PID) && Number.isSafeInteger(testParent) && testParent > 1 && process.ppid === testParent && Boolean(profile) && normalReferences.every(reference => {
+      const normalInfo = normalProfileIdentity(reference);
+      return (!normalInfo || !profileHasAncestor(normalInfo, profile)) && !profileHasAncestor(info, reference);
+    }) && info.isDirectory() && typeof process.getuid === 'function' && info.uid === process.getuid() && (info.mode & 0o077) === 0;
     if (backgroundTest) app.setPath('userData', profile);
   } catch { backgroundTest = false; /* An unverifiable profile must never fall through to foreground. */ }
   if (!backgroundTest) { console.error('Invalid isolated headed-test parent/profile; no window opened.'); process.exit(1); }
