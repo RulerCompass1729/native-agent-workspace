@@ -9519,3 +9519,20 @@ host entry view to exercise the one-panel path; the unmodified production
 hidden gate is checked before that fixture is enabled and after restart. This
 is source integration evidence, not qualification of a future host adapter,
 a working-day trial or permission to open either switch.
+## B6 integration handoff, checkpoint H7a: the person's own actions, as entries — 2026-11-11
+
+**What this adds.** One entry in the main process, `handoff`, for the person's window only: retry one delivery that is on hold; retry everything under one reason; say that a waiting handoff is dealt with, with or without a retry; answer a question (a main commit that may be installed, a branch returned too often); and look at where things stand. It acts on the handoff record of the running engine. The switch that builds the engine is still closed in the daily app, so there the entry answers "integration handoffs are not enabled" and creates nothing. No screen uses the entry yet: the buttons and the list need a design the person has seen first.
+
+**Whose it is.** The person's alone. An agent's call is refused in the entry's first line, whatever it names and whether or not the switch is open, because the general background gate is a fixed table with no row for this method. A retry counts only when it is exactly "true". After a change every window is told and the dispatcher looks again; looking changes and announces nothing.
+
+**When it cannot be done.** An action that does not fit the record's state (a handoff someone already dealt with, a delivery that is no longer on hold, a reason or question that does not exist) is refused in words and nothing changes; the record itself marks these refusals. Any other refusal of the record is a fault of the record (it cannot be saved or read, or the change would have made it invalid or too large): it is said as that, never as "look again and retry", and its message is kept and shown in the overview.
+
+**What the overview holds.** Counts; what is on hold, grouped by reason, each delivery with its space, branch, commit, task label and the integrator's note; the handoff that waits for the person with its reason, the integrator's question and the integrator's session; the open reasons with whether the person was told; and the notices that may not have been shown. It is for the person only, since it holds task labels of every space.
+
+**Checks.** Six unit tests on the real `register` wrapper, the real entry and overview taken from `main.cjs`, and a real record: each action for the person; the overview; an agent refused for every action; the closed switch; actions that do not fit; the wiring and the words in both languages. Sixteen deliberate breakages each turned tests red. In the real app, called from the window of an isolated run: with the switch open the overview comes back and a stale action is refused in words; with the switch closed every call is refused as "not enabled" and no record exists. The full unit suite passes on the delivered head; the count is in the delivery note.
+
+**Independent review (passed, with one finding, then changed).** Every refusal of the record was reported as a stale action unless the record was marked failed, so a broken invariant or a record that would be too large would have asked the person to retry something that can never work. Stale refusals are now marked by the record and only those are worded as stale. The reviewer confirmed that the gate is as strong as the integrator's entry, that every argument is checked by the record itself, and that the overview hands out only copies.
+
+**Left open.**
+- The screen: where the person sees what is on hold and presses retry. It needs a prototype the person, or a reviewer standing in for them, has looked at.
+- After a retry the engine's memory of "only the person can change this" is not cleared by the entry; the next pass that runs for another reason looks again, which with a window open is within a minute.

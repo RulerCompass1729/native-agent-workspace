@@ -584,6 +584,10 @@ function reportViewStorage(warning, uiMessage = null) {
 }
 // Space task queues: NAW sends each idle member its next item (queue-dispatch.cjs).
 let queueDispatcher = null;
+// The integration handoff record of this run when its switch is open (B6); null in the daily app.
+let integrationHandoffs = null;
+// The last fault of that record met while the person acted on it, kept so that it is not lost: { message, at }.
+let integrationFault = null;
 const HUMAN_SESSION_METHODS = new Set(['prepareInput', 'input', 'draft', 'send', 'queue', 'steer', 'claim', 'terminal', 'interrupt', 'approve', 'answer', 'forward', 'queueShared', 'steerShared']);
 // A terminal's own replies (focus, cursor reports) are not the person typing.
 function terminalReplyOnly(method, args) {
@@ -914,7 +918,7 @@ function register(name, handler) {
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
       // handler below still authenticates the secretary and person-only actions.
-      const localQueue = name === 'queueSecretary' || name === 'integrator' || name === 'spaceAction' && ['queueAdd', 'queueCancel', 'queueResolve'].includes(args[1]);
+      const localQueue = name === 'queueSecretary' || name === 'integrator' || name === 'handoff' || name === 'spaceAction' && ['queueAdd', 'queueCancel', 'queueResolve'].includes(args[1]);
       if (!local.has(name) && !localQueue) {
         const targetIds = (name === 'spaceAction' ? [args[2]?.[0]].flat() : [args[0]].flat()).filter(id => typeof id === 'string');
         const targets = c.client.entries.filter(e => !targetIds.length || e.state.sessions.some(s => targetIds.includes(s.id)));
@@ -1532,6 +1536,38 @@ async function boot() {
     }
     await broadcastRoom();
   });
+  // B6: the person's own actions on an integration handoff: retry one delivery or everything
+  // under one reason, say that a waiting handoff is dealt with (with or without a retry), answer
+  // a question, and look at where things stand. Each is the person's alone. The background gate
+  // is a fixed table that does not know this method, so an agent's call is refused here.
+  register('handoff', async (c, action, value, choice) => {
+    if (c.background) throw uiError('error.handoff.personOnly');
+    const handoffs = integrationHandoffs;
+    if (!handoffs) throw uiError('error.handoff.unavailable');
+    let result;
+    try {
+      if (action === 'list') return handoffOverview(handoffs);
+      if (action === 'retryDelivery') result = handoffs.retryReady(value);
+      else if (action === 'retryReason') result = handoffs.retryReason(value);
+      else if (action === 'resolve') result = handoffs.resolveHandoff(value, { retry: choice === true });
+      else if (action === 'answer') result = handoffs.answer(value);
+      else throw uiError('error.handoff.invalid');
+    } catch (error) {
+      // The record refuses an action that does not fit its state (a handoff already dealt with,
+      // a delivery that is no longer held): the person is told it cannot be done now. Any other
+      // refusal of the record is a fault of the record (it could not be saved or read, or it
+      // would have become invalid): it is said as that, and its message is kept.
+      if (error?.code === 'HANDOFF_STATE' && error.stale === true) throw uiError('error.handoff.invalid');
+      if (error?.code === 'HANDOFF_STATE') {
+        integrationFault = { message: String(error.message).slice(0, 300), at: Date.now() };
+        throw uiError('error.handoff.record');
+      }
+      throw error;
+    }
+    await broadcastRoom();
+    queueDispatcher?.schedule();
+    return result;
+  });
   register('rename', async (c, id, name) => {
     const snapshot = await c.client.call('initial');
     if (!snapshot.sessions.some(s => s.id === id)) throw uiError("error.main.renameSessionMissing");
@@ -2096,6 +2132,7 @@ function integrationEngine(dispatcher) {
   const { IntegratorEngine } = require('./integrator-engine.cjs');
   const integratorGit = require('./integrator-git.cjs');
   const handoffs = new IntegrationHandoffs(dataDir), readers = new Map();
+  integrationHandoffs = handoffs;
   const reader = () => {
     try {
       const integrator = integratorRole.current();
@@ -2112,6 +2149,18 @@ function integrationEngine(dispatcher) {
     reader: { commit: ask('commit'), isAncestor: ask('isAncestor'), changes: ask('changes') },
     send: (session, text, handoffId) => dispatcher.send(session, text, handoffId), typing: sessionId => dispatcher.noteHuman(sessionId),
     record: fact => roomState.recordHandoff(fact), notify: info => notifyHandoff(info) });
+}
+// What the person is shown about integration handoffs: counts, what is on hold and why, the
+// handoff that waits for them with its question, and the open questions. For the person only.
+function handoffOverview(handoffs) {
+  const snapshot = handoffs.snapshot(), open = snapshot.handoff;
+  const brief = entry => ({ key: entry.key, roomId: entry.roomId, itemId: entry.itemId, branch: entry.branch, commit: entry.commit,
+    ...(entry.text ? { text: entry.text } : {}), ...(entry.memberName ? { memberName: entry.memberName } : {}), ...(entry.note ? { note: entry.note } : {}) });
+  return { summary: handoffs.summary(),
+    held: handoffs.held().map(group => ({ reason: group.reason, count: group.count, entries: group.entries.map(brief) })),
+    waiting: open && open.status === 'waiting' ? { handoffId: open.id, reason: open.reason, question: open.question || '', sessionId: open.integrator.sessionId,
+      entries: snapshot.ready.filter(entry => open.keys.includes(entry.key)).map(brief) } : null,
+    reasons: handoffs.openReasons(), unknownNotices: handoffs.unknownNotices(), fault: integrationFault && { ...integrationFault } };
 }
 // One notice for one reason of the integration handoff; without a reason, that its record
 // cannot be read (null) or that the handoff step itself failed (undefined). It says how many
