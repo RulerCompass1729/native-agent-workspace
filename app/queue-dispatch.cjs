@@ -694,6 +694,8 @@ function engagedSessions(rotations, rooms) {
 // as dispatch. No history or native output leaves the dispatcher through it.
 function queueVacancies(input) {
   const busy = new Set((input.actions || []).filter(action => ['dispatch', 'rotate'].includes(action.kind)).map(action => action.sessionId));
+  // The same sessions the planner was told are engaged (B6: the holder of an open handoff) are not vacant either.
+  for (const id of Array.isArray(input.engaged) ? input.engaged : []) busy.add(id);
   for (const [id, rotation] of Object.entries(input.rotations || {})) {
     if (quarantinedSuccessor(rotation) && rotation.newId !== id) busy.add(rotation.newId);
     if (rotation && !RESTING_PHASES.includes(rotation.phase)) {
@@ -1942,6 +1944,9 @@ class QueueDispatcher {
       current = this.view();
     }
     const sample = await this.memory(current.snapshot.sessions, current.now);
+    // B6: the session that holds an open handoff gets no queue work and is not rotated, so what
+    // it writes until the handoff is closed is not a member's reply; it is not listed as vacant either.
+    const engaged = this.integration ? this.integration.holding() : undefined;
     const actions = planDispatch({
       rooms: current.snapshot.rooms,
       sessions: current.snapshot.sessions,
@@ -1959,9 +1964,7 @@ class QueueDispatcher {
       memoryLimit: sample.limit,
       memoryMinAgeMs: this.memoryMinAgeMs,
       rotations: this.rotations,
-      // B6: the session that holds an open handoff gets no queue work and is not rotated, so
-      // what it writes until the handoff is closed is the handoff's answer alone.
-      engaged: this.integration ? this.integration.holding() : undefined,
+      engaged,
     });
     for (const action of actions) {
       if (this.closed) {
@@ -1977,7 +1980,7 @@ class QueueDispatcher {
     }
     if (this.observeQueueState) await this.observeQueueState(queueVacancies({ ...current.snapshot,
       idleSince: this.vacancySince, humanAt: this.humanAt, now: current.now,
-      settleMs: this.settleMs, humanQuietMs: this.humanQuietMs, rotations: this.rotations, actions }));
+      settleMs: this.settleMs, humanQuietMs: this.humanQuietMs, rotations: this.rotations, actions, engaged }));
     if (this.integration && !this.closed) await this.integrate();
   }
 
@@ -2780,6 +2783,7 @@ module.exports = {
   planDispatch,
   replyAfter,
   startsWithDecision,
+  AUTOMATIC_ORIGINS,
   UNCONFIRMED_SEND_MS,
   dispatchText,
   handoffRequestText,

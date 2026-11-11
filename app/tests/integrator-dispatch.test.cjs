@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { RoomState } = require('../room-state.cjs');
-const { QueueDispatcher, CAPABILITY, INTEGRATOR_ABSENT_MS } = require('../queue-dispatch.cjs');
+const { QueueDispatcher, CAPABILITY, INTEGRATOR_ABSENT_MS, queueVacancies } = require('../queue-dispatch.cjs');
 const { IntegrationHandoffs, FILE } = require('../integrator-handoff.cjs');
 const { IntegratorEngine } = require('../integrator-engine.cjs');
 
@@ -48,7 +48,7 @@ function fixture(t, options = {}) {
     mainHead: async () => { f.heads += 1; return f.head; }, reader: read, send: (target, text, handoffId) => dispatcher.send(target, text, handoffId), typing: id => dispatcher.noteHuman(id),
     record: fact => room.recordHandoff(fact), notify: async info => { f.notices.push(info); } });
   f.dispatcher = new QueueDispatcher({ roomState: room, dataDir: directory, clients: () => client, now: () => Date.now() + f.skew, settleMs: 0, humanQuietMs: 0, broadcast: async () => { f.broadcasts += 1; },
-    sampleProcesses: async () => '', samplePressure: async () => '', ...(options.plain ? {} : { integration: options.build || engine, integrationUnreadable: () => { f.unreadable += 1; }, integrationFailed: error => { f.failed.push(error.message); } }) });
+    sampleProcesses: async () => '', samplePressure: async () => '', ...(options.observe ? { observeQueueState: options.observe } : {}), ...(options.plain ? {} : { integration: options.build || engine, integrationUnreadable: () => { f.unreadable += 1; }, integrationFailed: error => { f.failed.push(error.message); } }) });
   t.after(() => { f.dispatcher.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   f.records = () => room.metadata('shared').events.filter(event => event.monitor?.kind === 'handoff').map(event => [event.monitor.outcome, event.monitor.itemId]);
   f.states = () => Object.fromEntries(f.handoffs.snapshot().ready.map(entry => [entry.branch, entry.state + (entry.reason ? ':' + entry.reason : '')]));
@@ -370,8 +370,67 @@ test('the session that holds an open handoff is sent no queue item until the han
   assert.deepEqual(g.dispatcher.integration.holding(), []);
   // The planner is told only when there is an engine.
   const dispatch = fs.readFileSync(path.join(__dirname, '../queue-dispatch.cjs'), 'utf8');
-  assert.match(dispatch, /\n      engaged: this\.integration \? this\.integration\.holding\(\) : undefined,\n/);
-  assert.equal(dispatch.match(/input\.engaged/g).length, 2);
+  assert.match(dispatch, /\n    const engaged = this\.integration \? this\.integration\.holding\(\) : undefined;\n    const actions = planDispatch\(\{\n/);
+  assert.equal(dispatch.match(/this\.integration\.holding\(\)/g).length, 1, 'Asked once in a pass, before anything is sent');
+  assert.equal(dispatch.match(/input\.engaged/g).length, 4, 'Read by the planner and by the vacancy list, nowhere else');
+});
+
+test('the session that holds an open handoff is not listed as vacant for the space it was put into', async t => {
+  const seen = [];
+  const f = fixture(t, { observe: async states => { seen.push(states); } });
+  f.room.queueAdd('Synthetic task', null);
+  await f.pass();
+  f.reply('member-a', `READY lane/a ${COMMIT}`);
+  await f.pass();
+  assert.deepEqual(f.states(), { 'lane/a': 'handed' });
+  // It answers with a question, so it is idle and its handoff waits; the person puts it into the space.
+  f.reply('integrator', '需要你决定：现在合吗？');
+  await f.pass();
+  const integrator = f.client.state.sessions.find(candidate => candidate.id === 'integrator');
+  integrator.roomId = 'shared'; integrator.roomIds = ['shared'];
+  f.dispatcher.lastMaintenance = 0;
+  await f.pass(); await f.pass();
+  const listed = () => seen.at(-1).find(space => space.roomId === 'shared').candidateIds;
+  assert.equal(f.handoffs.snapshot().handoff.status, 'waiting');
+  assert.ok(listed().includes('member-a') && !listed().includes('integrator'), JSON.stringify(listed()));
+  // The handoff is dealt with: it is a member like any other.
+  f.handoffs.resolveHandoff(f.handoffs.snapshot().handoff.id, { retry: false });
+  f.dispatcher.lastMaintenance = 0;
+  await f.pass();
+  assert.ok(listed().includes('integrator'), JSON.stringify(listed()));
+  // The list itself: named sessions are not vacant; nobody named, or something that is not a list, changes nothing.
+  const input = extra => ({ rooms: [{ id: 'shared', name: 'Synthetic team', queue: [] }], sessions: [session('member-a', { roomId: 'shared', roomIds: ['shared'] }), session('member-b', { roomId: 'shared', roomIds: ['shared'] })],
+    wakePolicy: { enabled: true }, idleSince: new Map([['member-a', 0], ['member-b', 0]]), humanAt: new Map(), now: 1_000_000, settleMs: 0, humanQuietMs: 0, ...extra });
+  const plain = queueVacancies(input())[0];
+  assert.deepEqual(plain.candidateIds, ['member-a', 'member-b']);
+  assert.deepEqual([queueVacancies(input({ engaged: ['member-a'] }))[0].candidateIds, queueVacancies(input({ engaged: ['member-a'] }))[0].availableIds], [['member-b'], ['member-b']]);
+  for (const engaged of [undefined, null, [], 'member-a', { 'member-a': true }]) assert.deepEqual(queueVacancies(input({ engaged }))[0], plain, JSON.stringify(engaged));
+});
+
+test('what the integrator writes for another automatic message is not taken as the handoff\'s answer', async t => {
+  const f = fixture(t);
+  const itemId = f.room.queueAdd('Synthetic task', null);
+  await f.pass();
+  f.reply('member-a', `READY lane/a ${COMMIT}`);
+  await f.pass();
+  assert.deepEqual([f.calls.length, f.states()], [2, { 'lane/a': 'handed' }]);
+  const first = f.handoffs.snapshot().handoff.id;
+  // Another agent wakes the integrator before it has answered; what it writes for that begins like a question for the person.
+  const integrator = f.client.state.sessions.find(candidate => candidate.id === 'integrator');
+  integrator.messages.push({ id: 'wake-1', role: 'user', text: 'Synthetic wake from another agent', origin: 'agent-wake', time: Date.now() });
+  f.reply('integrator', '需要你决定：这件另外的事怎么办？');
+  await f.pass();
+  // The handoff does not wait on that question. The delivery has no result, so it is handed once more, in a new handoff.
+  const second = f.handoffs.snapshot().handoff;
+  assert.ok(second && second.id !== first && second.status === 'sent', JSON.stringify(second));
+  assert.deepEqual(f.calls.map(call => [call.id, call.itemId]), [['member-a', itemId], ['integrator', first], ['integrator', second.id]]);
+  assert.deepEqual(f.notices.map(info => info.reason), [], 'The person is asked nothing');
+  // It answers the new handoff; that answer is read and the merge is checked.
+  f.head = HEAD2;
+  f.reply('integrator', `MERGED ${COMMIT.slice(0, 9)} as ${HEAD2.slice(0, 9)} tests 12/12`);
+  await f.pass();
+  assert.deepEqual([f.states(), f.handoffs.snapshot().handoff], [{ 'lane/a': 'merged' }, null]);
+  assert.deepEqual(f.notices.map(info => info.reason), [`installable:${HEAD2}`]);
 });
 
 test('the engine is built only behind a switch that the daily app cannot open', () => {
