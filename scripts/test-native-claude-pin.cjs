@@ -86,7 +86,10 @@ async function cleanup() {
   for (let step = 0; step < 4 && !(await ready()); step++) {
     const text = await terminalText();
     if (!QUESTION.test(text)) { await sleep(500); continue; }
+    // Keys go in only once the native terminal accepts input and has the focus (as in the concurrent journey).
+    await until(async () => !(await page.locator('#terminal-paste').isDisabled()), 'Native terminal input ready', 15000);
     await page.locator('#terminal-area .xterm-screen >> visible=true').click();
+    await until(() => page.evaluate(() => Boolean(document.activeElement?.classList.contains('xterm-helper-textarea') && document.activeElement.closest('#terminal-area'))), 'Native terminal input focused', 15000);
     if (/Yes, I trust this folder/.test(text)) {
       assert.ok(text.replace(/\s*\n\s*/g, '').includes(fs.realpathSync(base)), 'Trust is answered only for the owned temporary folder');
       await page.keyboard.press('ArrowDown');
