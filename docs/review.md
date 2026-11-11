@@ -3,7 +3,10 @@
 **S2 bounded refusal summaries, 2026-11-11 (delta review pending):**
 confirmation-limit and originating-session-unavailable now retain one counted
 summary per native actor, reason and minute, with at most 128 recent summaries
-in the operation file and 128 summary events per space. They retain method names,
+in the operation file and 128 summary events per space, at most 32 per stable
+NAW session across native replacements. Global overflow removes the oldest row
+from the largest remaining share, so a busy session cannot consume every slot.
+They retain method names,
 counts and timing, never request arguments or a full consent snapshot. Space
 counters include only requests audited in that space; duplicate or older audit
 deliveries do not change a newer count. Other history and legacy records remain.
@@ -20,6 +23,14 @@ An already approved operation is never compacted after a later confirmation
 refusal: effects may have occurred, so its original intent, decision and unknown
 outcome remain durable and cannot replay. Counterexamples reproduce one effect
 followed by a quota refusal and verify retention and no second effect.
+Recent original refused IDs resolve to their aggregate receipt, with at most
+512 aliases globally and 128 per NAW session, while the referenced summary
+remains. Aliases bind provider, session and native identity; they are metadata
+for receipt lookup only, never invocation replay records. An actual normal
+operation with that ID takes precedence and removes the alias. Evicted aliases
+return no receipt; old candidates did not store original IDs, so those cannot
+be reconstructed. Stored summary hints now agree with immediate replies and
+the tool description, including on loading an earlier candidate file.
 No model, provider permission or human-window behavior changes.
 
 This bounds those two refusal classes, not all ordinary operation history. At
@@ -29,8 +40,8 @@ result and cannot be replayed. Pickup cannot expose a read body without saving
 consumption first. Failed summary saves roll back their counters and perform no
 new action. Legacy history is not deleted to create space. The real 32 MiB probe
 and counter/replay regressions require incremental independent review. Nonblocking
-follow-ups remain: per-actor summary retention fairness, original-ID receipt
-aliases for compacted refusals, and growth of other ordinary refusal classes.
+follow-ups remain: growth of other ordinary refusal classes and typed, compact
+not-executed results for file preconditions that currently report unconfirmed.
 
 **S2 selector-card quota repair, 2026-11-11 (delta review pending):**
 only answerable message confirmations consume the 32/128 pending-card bound,

@@ -9,6 +9,25 @@ function actor(value) {
 }
 function current() { return scope.getStore()?.actor || null; }
 function request() { return scope.getStore()?.request || null; }
+// Bounded recent metadata, shared by refusal receipts and each space's audit.
+// A stable NAW session keeps one share even across native-context replacement.
+function retainRefusalRows(rows, total, perSession) {
+  const retained = [], counts = new Map(), key = row => row.actor?.id || row.controlAudit?.actor?.id;
+  const remove = index => {
+    const id = key(retained[index]), n = counts.get(id) - 1;
+    retained.splice(index, 1); if (n) counts.set(id, n); else counts.delete(id);
+  };
+  for (const row of rows) {
+    const id = key(row);
+    if (counts.get(id) === perSession) remove(retained.findIndex(r => key(r) === id));
+    retained.push(row); counts.set(id, (counts.get(id) || 0) + 1);
+    if (retained.length > total) {
+      const largest = Math.max(...counts.values());
+      remove(retained.findIndex(r => counts.get(key(r)) === largest));
+    }
+  }
+  return retained;
+}
 // Foreign conversations expose roster/capability metadata until one exact read
 // is approved. Unknown future session fields are private by default.
 const rosterFields = ['id', 'nativeId', 'name', 'provider', 'model', 'state', 'owner', 'cwd', 'archived', 'roomId', 'roomIds',
@@ -141,4 +160,4 @@ function inputGuard(workspace, ids, origin = current()) {
   if (!valid()) throw require('./ui-errors.cjs').uiError('error.backgroundMessagesDisabled');
   return valid;
 }
-module.exports = { actor, current, request, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, run, message, activity, deliveryTargets, assertDeliveryPolicy, inputGuard, CAPABILITY: 'backgroundControlV1' };
+module.exports = { actor, current, request, retainRefusalRows, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, run, message, activity, deliveryTargets, assertDeliveryPolicy, inputGuard, CAPABILITY: 'backgroundControlV1' };

@@ -61,7 +61,7 @@ test('minute buckets and space events have a hard global bound; evicted refused 
   const f = fixture(t); f.snapshot.sessions[0].archived = true;
   const original = request('spaceCreate', 'old-refusal', ['Space']); let result = await f.controller.call(f.binding, original);
   for (let n = 1; n <= 130; n++) { f.setTime(60000 * (n + 1)); result = await f.controller.call(f.binding, request('spaceCreate', nextId(result), ['Space'])); }
-  assert.equal(f.controller.data.refusals.length, 128); assert.equal(f.room.value.events.filter(e => e.controlAudit?.refusalSummary).length, 128);
+  assert.equal(f.controller.data.refusals.length, 32); assert.equal(f.room.value.events.filter(e => e.controlAudit?.refusalSummary).length, 32);
   assert.equal(f.controller.data.refusals.some(r => r.refusalSummary.windowStart === 60000), false);
   f.snapshot.sessions[0].archived = false;
   assert.equal((await new BackgroundControl(f.config).call(f.binding, original)).state, 'confirmation-required'); assert.equal(f.writes, 0);
@@ -173,4 +173,77 @@ test('an approved operation is retained when a follow-up confirmation is refused
   assert.equal(result.state, 'unconfirmed'); assert.ok(saved); assert.equal(saved.humanDecision, 1);
   assert.ok(f.controller.rows(f.actor.id).some(row => row.id.endsWith(original.id)));
   assert.equal((await f.controller.call(f.binding, args)).duplicate, true); assert.equal(effects, 1);
+});
+for (const provider of ['claude', 'codex']) test(`${provider}: stored summary and returned hints agree, including old candidate files`, async t => {
+  const f = fixture(t, provider); f.snapshot.sessions[0].archived = true;
+  const result = await f.controller.call(f.binding, request('spaceCreate', 'hint', ['Space']));
+  const summary = (await f.controller.call(f.binding, { action: 'receipt', operation_id: result.summaryId })).receipt;
+  assert.equal(summary.retryHint, result.retryHint); assert.match(summary.retryHint, /compacted refused ID/);
+  const old = JSON.parse(fs.readFileSync(f.controller.file)); old.refusals[0].retryHint = 'This refused operation_id will not execute';
+  fs.writeFileSync(f.controller.file, JSON.stringify(old), { mode: 0o600 });
+  const cold = new BackgroundControl(f.config);
+  assert.equal(cold.receipt(f.actor, result.summaryId).retryHint, result.retryHint);
+  assert.equal(JSON.parse(fs.readFileSync(cold.file)).refusals[0].retryHint, result.retryHint);
+});
+for (const provider of ['claude', 'codex']) test(`${provider}: original refused IDs resolve to their summary without binding a later invocation`, async t => {
+  const f = fixture(t, provider); f.snapshot.sessions[0].archived = true;
+  const args = request('spaceCreate', 'original-refused-id', ['Space']), denied = await f.controller.call(f.binding, args);
+  const receipt = (await f.controller.call(f.binding, { action: 'receipt', operation_id: args.operation_id })).receipt;
+  assert.ok(receipt); assert.equal(receipt.id, denied.summaryId); assert.equal(receipt.refusalSummary.count, 1);
+  assert.equal(new BackgroundControl(f.config).receipt(f.actor, args.operation_id).id, denied.summaryId);
+  assert.equal(f.controller.receipt({ ...f.actor, nativeId: 'other-native' }, args.operation_id), null);
+  assert.equal(f.controller.receipt({ ...f.actor, id: 'other-agent' }, args.operation_id), null);
+  assert.equal(f.controller.receipt({ ...f.actor, provider: provider === 'claude' ? 'codex' : 'claude' }, args.operation_id), null);
+  f.snapshot.sessions[0].archived = false;
+  assert.equal((await f.controller.call(f.binding, args)).state, 'confirmation-required'); assert.equal(f.writes, 0);
+  assert.equal((await f.controller.decide(f.actor.id, f.actor.nativeId, args.operation_id, 0)).state, 'cancelled');
+  assert.equal(f.controller.receipt(f.actor, args.operation_id).state, 'cancelled', 'Exact normal records take precedence over receipt aliases');
+  assert.equal((await f.controller.call(f.binding, args)).duplicate, true); assert.equal(f.writes, 0);
+});
+test('one session cannot evict another session through repeated minute summaries or native replacements', async t => {
+  const f = fixture(t); f.snapshot.sessions[0].archived = true;
+  const quiet = { ...f.actor, id: 'quiet', nativeId: 'quiet-native' };
+  const first = await f.controller.call({ ...f.binding, sender: quiet }, request('spaceCreate', 'quiet-refusal', ['Space']));
+  for (let n = 0; n < 130; n++) {
+    f.setTime((n + 2) * 60000);
+    await f.controller.call({ ...f.binding, sender: { ...f.actor, nativeId: 'changing-native-' + n } }, request('spaceCreate', 'spam-' + n, ['Space']));
+  }
+  assert.ok(f.controller.data.refusals.some(r => r.id === first.summaryId));
+  assert.equal(f.controller.data.refusals.filter(r => r.actor.id === f.actor.id).length, 32);
+  assert.equal(f.room.value.events.filter(e => e.controlAudit?.refusalSummary && e.sessionId === f.actor.id).length, 32);
+  assert.ok(f.room.value.events.some(e => e.controlAudit?.operationId === first.summaryId));
+  assert.equal(f.controller.receipt(quiet, 'quiet-refusal').id, first.summaryId);
+});
+test('receipt aliases are bounded and fairly retained; evicted summaries have no dangling aliases', { timeout: 60000 }, async t => {
+  const f = fixture(t); f.snapshot.sessions[0].archived = true;
+  const quiet = { ...f.actor, id: 'quiet', nativeId: 'quiet-native' };
+  const first = await f.controller.call({ ...f.binding, sender: quiet }, request('spaceCreate', 'quiet-original', ['Space']));
+  for (let n = 0; n < 140; n++) await f.controller.call(f.binding, request('spaceCreate', 'crowded-' + n, ['Space']));
+  assert.ok(f.controller.data.refusalReceipts.length <= 512);
+  assert.equal(f.controller.data.refusalReceipts.filter(r => r.actor.id === f.actor.id).length, 128);
+  assert.equal(f.controller.receipt(quiet, 'quiet-original').id, first.summaryId);
+  assert.equal(f.controller.receipt(f.actor, 'crowded-0'), null);
+  assert.ok(f.controller.receipt(f.actor, 'crowded-139'));
+  for (let actor = 0; actor < 4; actor++) for (let n = 0; n < 128; n++) {
+    const sender = { ...f.actor, id: 'alias-actor-' + actor, nativeId: 'alias-native-' + actor };
+    await f.controller.call({ ...f.binding, sender }, request('spaceCreate', `alias-${actor}-${n}`, ['Space']));
+  }
+  assert.equal(f.controller.data.refusalReceipts.length, 512);
+  assert.equal(f.controller.receipt(quiet, 'quiet-original').id, first.summaryId, 'An oldest quiet receipt is not evicted by busy actors');
+  for (let n = 0; n < 129; n++) { f.setTime((n + 2) * 60000); await f.controller.call(f.binding, request('spaceCreate', 'later-' + n, ['Space'])); }
+  assert.equal(f.controller.receipt(f.actor, 'crowded-139'), null);
+  assert.ok(f.controller.data.refusalReceipts.every(a => f.controller.data.refusals.some(r => r.id === a.summaryId && r.actor.id === a.actor.id && r.actor.nativeId === a.actor.nativeId)));
+});
+test('a full legacy refusal file migrates its old hint without growing or erasing history', async t => {
+  const f = fixture(t); f.snapshot.sessions[0].archived = true;
+  const result = await f.controller.call(f.binding, request('spaceCreate', 'old-full-file', ['Space']));
+  const old = JSON.parse(fs.readFileSync(f.controller.file)); delete old.refusalReceipts;
+  old.refusals[0].retryHint = 'Refresh the originating session, then use a new operation_id. This refused operation_id will not execute.';
+  old.padding = ''; old.padding = 'x'.repeat(32 * 1024 * 1024 - Buffer.byteLength(JSON.stringify(old)));
+  fs.writeFileSync(f.controller.file, JSON.stringify(old), { mode: 0o600 });
+  assert.equal(fs.statSync(f.controller.file).size, 32 * 1024 * 1024);
+  const cold = new BackgroundControl(f.config);
+  assert.equal(cold.receipt(f.actor, result.summaryId).retryHint, result.retryHint);
+  assert.equal(cold.data.padding.length, old.padding.length); assert.equal(cold.data.refusals.length, 1);
+  assert.ok(fs.statSync(cold.file).size <= 32 * 1024 * 1024); assert.equal(f.writes, 0);
 });
