@@ -3,7 +3,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const operation = require('../background-operation.cjs'), locale = require('../ui-locale.js');
 const { BackgroundControl, dialog } = require('../background-control.cjs');
 const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
-const invisible = /[\p{Cf}\p{Zl}\p{Zp}\u115f\u2800\u3164]/u;
+const invisible = /[\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800]/u;
 function productionConfirmation() {
   const start = main.indexOf('    confirmation: (actor, command, action'), end = main.indexOf('\n    audit:', start);
   assert.ok(start > 0 && end > start);
@@ -14,7 +14,7 @@ function productionConfirmation() {
 }
 const context = snapshot => ({ client: { snapshot: () => snapshot } });
 test('actual maintenance confirmation escapes format and separator characters without changing Unicode payloads', () => {
-  const chars = '\u00ad\u061c\u200b\u200c\u200d\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\ufeff\u{e0001}\u2028\u2029\u115f\u2800\u3164';
+  const chars = '\u00ad\u061c\u200b\u200c\u200d\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\ufeff\u{e0001}\u2028\u2029\u115f\u2800\u3164\u1160\uffa0\u034f\u17b4\u17b5\ufe0f\u{e0100}';
   const actor = { name: 'Agent' + chars }, command = { method: 'input', arguments: ['target', 'echo αа中文' + chars], paths: ['/synthetic/' + chars] };
   const before = JSON.stringify(command), options = productionConfirmation()(actor, command, 'input', context({ sessions: [], rooms: [] }));
   assert.equal(invisible.test(options.message), false); assert.equal(invisible.test(options.detail), false);

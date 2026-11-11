@@ -53,6 +53,7 @@ function validMove(p) {
 function validSessionArchive(p) {
   return p && typeof p === 'object' && (p.nativeId === null || typeof p.nativeId === 'string') && Array.isArray(p.rooms) && p.rooms.length <= 10000 &&
     new Set(p.rooms.map(r => r?.id)).size === p.rooms.length && p.rooms.every(r => r && roomId(r.id) && Number.isSafeInteger(r.index) && r.index >= 0 && r.index <= 10000 &&
+      (r.next === undefined || r.next === null || orderId(r.next)) &&
       typeof r.done === 'boolean' && (r.expected === null || validMove(r.expected))) &&
     validPlacement(p.checkpoint) && (p.detached === null || validPlacement(p.detached)) && (p.restoreExpected === undefined || validMove(p.restoreExpected));
 }
@@ -1011,7 +1012,8 @@ class RoomState {
           // cannot be distinguished from an absent backend by this snapshot.
           const order = [...value.memberOrder.filter(member => members.includes(member) || !ids.has(member) && !this.value.archivedSessions.includes(member)),
             ...members.filter(member => !value.memberOrder.includes(member))];
-          return { id: space, index: order.indexOf(id), expected: null, done: false };
+          const index = order.indexOf(id);
+          return { id: space, index, next: order[index + 1] || null, expected: null, done: false };
         });
         plan = { nativeId: session.nativeId ?? null, rooms, checkpoint: restorePlacement(session), detached: null };
         this.update({ sessionArchives: { ...this.value.sessionArchives, [id]: plan } });
@@ -1080,7 +1082,14 @@ class RoomState {
           // saved active index, so a returning member keeps its relative order.
           const rest = [...metadata.memberOrder.filter(member => member !== id), ...members.filter(member => member !== id && !metadata.memberOrder.includes(member))];
           const active = rest.filter(member => members.includes(member) || !ids.has(member) && !this.value.archivedSessions.includes(member)), next = active[place.index];
-          const offset = next ? rest.indexOf(next) : rest.length;
+          // A saved neighbour survives changes to the number of earlier members.
+          // For a legacy plan or missing neighbour, keep the retained raw slot
+          // when present; only then fall back to the old active index.
+          const slot = metadata.memberOrder.indexOf(id);
+          const offset = place.next && rest.includes(place.next) ? rest.indexOf(place.next)
+            : slot >= 0 ? metadata.memberOrder.slice(0, slot).filter(member => rest.includes(member)).length
+            : place.next === null ? rest.length
+            : next ? rest.indexOf(next) : rest.length;
           this.commit({ ...metadata, memberOrder: [...rest.slice(0, offset), id, ...rest.slice(offset)] }, place.id);
         }
         placement = 'restored';
