@@ -1,11 +1,13 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
 const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron, Claude and Codex. Four task responses (five for native interruption),
 // plus at most one native title response; all fixed loopback data, no paid inference.
 // Tests the existing room interaction, including real mouse drag and native streaming.
-const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const loopback = require('./fixtures/loopback-model.cjs');
 const assert = require('node:assert/strict'), { execFileSync, fork } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..');
@@ -31,9 +33,13 @@ if (retained) { assert.ok(process.env.NAW_CLAUDE_302); binaries.claude = process
 const versions = Object.fromEntries(Object.entries(binaries).map(([p, file]) => {
   assert.ok(file, `Real ${p} required`); return [p, execFileSync(file, ['--version'], { encoding: 'utf8' }).trim()];
 }));
-if (!emptyTerminal) assert.match(versions.claude, retained ? /^2\.1\.302\b/ : /^2\.1\.(308|309|310|311)\b/);
-const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
-assert.equal(versions.codex, 'codex-cli '+nativeVersion);
+// Each CLI must be a version the product itself qualifies: Claude on the managed list, Codex for steering. The retained
+// journey needs exactly Claude 2.1.302 and Codex 0.163.0: the product offers retained Codex shared replies on 0.163.0 only
+// (app/legacy-codex.cjs). Fixed old pins (Claude 2.1.308-311, Codex 0.163/0.164) named versions no longer installed.
+if (!emptyTerminal) { if (retained) assert.match(versions.claude, /^2\.1\.302\b/); else assert.ok(require('../app/claude-pin.cjs').QUALIFIED.includes(versions.claude.split(' ')[0]), `Unqualified Claude: ${versions.claude}`); }
+const nativeVersion = versions.codex.replace(/^codex-cli /, '');
+assert.ok(require('../app/codex-qualification.cjs').allows('steer', nativeVersion), `Unqualified Codex: ${versions.codex}`);
+if (retained) assert.equal(nativeVersion, '0.163.0', 'The retained journey waits for a retained Codex shared reply, offered on 0.163.0 only');
 const retainedIds = {};
 let application, page, child, legacyClient, sequence = 0, titleCalls = 0;
 const counts = { claude: 0, codex: 0 }, controls = {}, errors = [], checks = [];
@@ -42,8 +48,9 @@ async function until(fn, label, timeout = 30000) {
   const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label);
 }
 function event(res, type, data) { res.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: ++sequence, ...data })}\n\n`); }
-const server = http.createServer((req, res) => {
-  let body = ''; req.on('data', b => body += b); req.on('end', () => {
+// The one B11 loopback fixture, once per CLI: 127.0.0.1, random port, sandboxed CLI, the same fixed responses below.
+const respond = (req, res, body) => {
+  {
     const provider = req.url.endsWith('/responses') ? 'codex' : req.url.startsWith('/v1/messages') && !req.url.includes('count_tokens') ? 'claude' : null;
     if (!provider) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"input_tokens":100,"data":[]}'); return; }
     const input = JSON.parse(body);
@@ -97,8 +104,9 @@ const server = http.createServer((req, res) => {
         event(res, 'response.completed', { response: { ...response, status: 'completed', output: [item] } }); res.end();
       } };
     }
-  });
-});
+  }
+};
+const fixtures = Object.fromEntries(providers.map(provider => [provider, loopback.create({ directory: base, provider, respond })]));
 const snapshot = () => page.evaluate(() => workspace.initial());
 const session = async id => (await snapshot()).sessions.find(s => s.id === id);
 const save = async name => fs.writeFileSync(path.join(base, `${name}.json`), JSON.stringify(await snapshot(), null, 2));
@@ -121,12 +129,29 @@ async function create(provider) {
     const takeover = page.getByRole('button', { name: '接管此窗口', exact: true }); if (await takeover.isVisible()) await takeover.click();
   } else {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#session-name').fill(provider === 'claude' ? 'Claude review' : 'Codex build'); await createIn(page, provider === 'claude' ? 'terminal' : 'chat');
+  await page.locator('#session-name').fill(provider === 'claude' ? 'Claude review' : 'Codex build');
+  // NAW starts each session in its own folder beside the workspace. Record trust for exactly that owned folder in the
+  // CLI's private config before it starts, the way each CLI saves it.
+  const chosen = path.resolve(await page.locator('#chosen-folder').innerText()), owned = [path.resolve(base), fs.realpathSync(base)].find(root => chosen.startsWith(root + path.sep));
+  assert.ok(owned, 'Only owned fixture folders');
+  const folders = [...new Set([chosen, fs.realpathSync(base) + chosen.slice(owned.length)])];
+  if (provider === 'claude') {
+    const file = path.join(claudeHome, '.claude.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const folder of folders) saved.projects[folder] = { hasTrustDialogAccepted: true };
+    fs.writeFileSync(file, JSON.stringify(saved), { mode: 0o600 });
+  } else for (const folder of folders) {
+    const table = `[projects.${JSON.stringify(folder)}]`, file = path.join(codexHome, 'config.toml');
+    if (!fs.readFileSync(file, 'utf8').includes(table)) fs.appendFileSync(file, `\n${table}\ntrust_level = "trusted"\n`);
+  }
+  await createIn(page, provider === 'claude' ? 'terminal' : 'chat');
   }
   if (provider === 'claude') {
     await until(async () => /Yes, I trust this folder|Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()) || (await snapshot()).sessions.find(s => s.provider === provider)?.chatAvailable, 'Claude startup');
     if ((await page.locator('#terminal-area').innerText()).includes('Yes, I trust this folder')) {
-      assert.ok((await page.locator('#terminal-area').innerText()).includes(fs.realpathSync(cwd)));
+      // NAW starts each session in its own folder beside the workspace; trust only that folder, inside the owned base.
+      const folder = fs.realpathSync((await snapshot()).sessions.find(s => s.provider === provider).cwd);
+      assert.ok(folder.startsWith(fs.realpathSync(base) + path.sep), 'The session folder belongs to the owned fixture');
+      assert.ok((await page.locator('#terminal-area').innerText()).replace(/\s/g, '').includes(folder.replace(/\s/g, '')), 'Native trust question names only the exact owned session folder');
       await page.locator('#terminal-area .xterm-helper-textarea').waitFor({ state: 'visible' });
       await until(async () => !(await page.locator('#terminal-paste').isDisabled()), 'Native terminal input ready');
       await page.locator('#terminal-area .xterm-screen').click();
@@ -181,19 +206,15 @@ async function openApplication() {
   page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
 }
 (async () => {
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const address = `http://127.0.0.1:${server.address().port}`;
-  fs.writeFileSync(path.join(codexHome, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local fixture"\nbase_url = "${address}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
+  for (const provider of providers) { await fixtures[provider].start(); await fixtures[provider].preflight(); }
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local fixture"\nbase_url = "${fixtures.codex.endpoint}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
   fs.writeFileSync(path.join(claudeHome, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
   for(const folder of new Set([cwd,fs.realpathSync(cwd)])) fs.appendFileSync(path.join(codexHome,'config.toml'), `\n[projects.${JSON.stringify(folder)}]\ntrust_level = "trusted"\n`);
   const shims = {};
   for (const provider of providers) {
-    const config = provider === 'codex' ? { CODEX_HOME: codexHome } : { ANTHROPIC_BASE_URL: address, ANTHROPIC_API_KEY: 'local-fixture', CLAUDE_CONFIG_DIR: claudeHome, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' };
     shims[provider] = path.join(base, `${provider}-local`);
-    fs.writeFileSync(shims[provider], '#!/usr/bin/python3\nimport os,sys\n' +
-      'for key in ["OPENAI_API_KEY","CODEX_API_KEY","ANTHROPIC_AUTH_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]: os.environ.pop(key,None)\n' +
-      `os.environ.update(${JSON.stringify(config)})\n` +
-      `os.execv(${JSON.stringify(binaries[provider])},[${JSON.stringify(provider)}]+sys.argv[1:]+${JSON.stringify(provider === 'claude' ? ['--model', 'haiku', '--debug-file', path.join(base, 'claude-debug.log')] : [])})\n`, { mode: 0o700 });
+    fixtures[provider].wrapper(binaries[provider], { file: shims[provider], env: provider === 'codex' ? { CODEX_HOME: codexHome } : { CLAUDE_CONFIG_DIR: claudeHome },
+      args: provider === 'claude' ? ['--model', 'haiku', '--debug-file', path.join(base, 'claude-debug.log')] : [] });
   }
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify(shims), { mode: 0o600 });
   if (peerReleased) {
@@ -279,7 +300,7 @@ async function openApplication() {
     assert.deepEqual(counts, { claude: 2, codex: 1 }); assert.ok(titleCalls <= 1); assert.deepEqual(errors, []);
     await save('peer-completed');
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-peer.png') }); }
-    console.log(JSON.stringify({ checks: ['Actual Claude and Codex in separate supported services complete a finite round', 'Opening the same Codex TUI preserves the backend and active round; UI-closed handoff returns to the original Claude; identities/drafts and one reading stream survive reopening', 'Only explicit goal and prior reply transfer; no draft broadcast or seed task'], versions, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
+    for (const provider of providers) fixtures[provider].assertClean(); console.log(JSON.stringify({ fixtures: Object.fromEntries(providers.map(p => [p, fixtures[p].summary()])), checks: ['Actual Claude and Codex in separate supported services complete a finite round', 'Opening the same Codex TUI preserves the backend and active round; UI-closed handoff returns to the original Claude; identities/drafts and one reading stream survive reopening', 'Only explicit goal and prior reply transfer; no draft broadcast or seed task'], versions, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
     return;
   }
   if (emptyTerminal) {
@@ -328,7 +349,7 @@ async function openApplication() {
     await until(async () => { const text = await page.locator('#messages').innerText(); return text.includes('CODEX_SHARED_PREFIX') && text.includes('AFTER_ATTACH'); }, 'The main reader retains both pre-attachment and later output');
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
     await until(async () => { const text = await page.locator('#room-messages').innerText(); return text.includes('Start the first Codex task.') && text.includes('AFTER_ATTACH'); }, 'Inline addressed task and original native reply appear in shared reader');
-    console.log(JSON.stringify({ checks: ['An empty native Codex session shows the necessary first-message step with zero seed tasks', 'The single inline-addressed room task reaches the native Codex and shared reader; terminal displays its input and new output after attachment', 'Native activity phase and turn start clock are visible; the completed original turn clears live status and retains the complete reply without another submission'], versions, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
+    for (const provider of providers) fixtures[provider].assertClean(); console.log(JSON.stringify({ fixtures: Object.fromEntries(providers.map(p => [p, fixtures[p].summary()])), checks: ['An empty native Codex session shows the necessary first-message step with zero seed tasks', 'The single inline-addressed room task reaches the native Codex and shared reader; terminal displays its input and new output after attachment', 'Native activity phase and turn start clock are visible; the completed original turn clears live status and retains the complete reply without another submission'], versions, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
     return;
   }
   if (retained) await application.evaluate(({ app }) => {
@@ -363,6 +384,8 @@ async function openApplication() {
   });
   const claude = await create('claude'), codex = await create('codex'); if (!retained) assert.equal(codex.model, 'gpt-6-luna');
 
+  // The default space stays hidden until something uses it; show it before dragging members onto its row.
+  await revealDefaultSpace(page);
   for (const s of [claude, codex]) {
     await drag(page.locator(`[data-session-id="${s.id}"]`), page.locator('#room-nav'));
     await until(async () => (await session(s.id)).roomId === 'shared', 'Mouse join');
@@ -510,7 +533,7 @@ async function openApplication() {
     const final = await snapshot(); assert.equal(final.diagnostics.dispatches, 4); await save('interrupted-reopened');
     assert.ok(final.room.messages.filter(m => m.role === 'human').every(m => m.status === 'submitted'));
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-interruption.png') }); }
-    console.log(JSON.stringify({ checks, versions, retained, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
+    for (const provider of providers) fixtures[provider].assertClean(); console.log(JSON.stringify({ fixtures: Object.fromEntries(providers.map(p => [p, fixtures[p].summary()])), checks, versions, retained, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
     return;
   }
   const turn = (await session(codex.id)).activeTurnId;
@@ -587,7 +610,7 @@ async function openApplication() {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'concurrent-room.png') }); }
   if (retained) fs.writeFileSync(path.join(base, 'sharing-trace.json'), JSON.stringify(await application.evaluate(() => globalThis.retainedShareTrace), null, 2));
-  console.log(JSON.stringify({ checks, versions, retained, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
+  for (const provider of providers) fixtures[provider].assertClean(); console.log(JSON.stringify({ fixtures: Object.fromEntries(providers.map(p => [p, fixtures[p].summary()])), checks, versions, retained, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
 })().catch(async error => {
   if (page && !page.isClosed()) {
     fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => ''));
@@ -596,7 +619,7 @@ async function openApplication() {
   }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
 }).finally(testScratch.cleanup(async () => {
-  server.closeAllConnections(); if (application) await application.close().catch(() => {});
+  if (application) await application.close().catch(() => {});
   try {
     const client = await connect(profile, 'concurrent-cleanup');
     try {
@@ -608,5 +631,5 @@ async function openApplication() {
     } finally { client.close(); }
   } catch (error) { console.error('Owned trial cleanup not confirmed:', error.message); process.exitCode = 1; }
   legacyClient?.close(); if (child?.connected) child.disconnect();
-  await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
+  for (const provider of providers) await fixtures[provider].stop();
 }));

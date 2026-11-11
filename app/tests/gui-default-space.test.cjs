@@ -14,7 +14,7 @@ const fs = require('node:fs'), path = require('node:path');
 const opens = /locator\(\s*['"`]#room-nav['"`]\s*\)\s*\.click\(|\.click\(\s*['"`]#room-nav['"`]|移到「(?:共同工作|\$\{)/;
 const usesHelper = source => /\brevealDefaultSpace\(/.test(source);
 // Remove a name when its script adopts the helper or stops opening the space, and lower the cap with it. Never add one.
-const legacyCap = 67;
+const legacyCap = 66;
 const legacy = new Set([
   'check-room.cjs', 'check-tui.cjs', 'test-active-process-fold.cjs', 'test-bounded-away.cjs',
   'test-capacity-room.cjs', 'test-check-room.cjs', 'test-claude-image-reading.cjs', 'test-codex-usability.cjs',
@@ -27,7 +27,7 @@ const legacy = new Set([
   'test-forget-images.cjs', 'test-grid-follow.cjs', 'test-grouped-space-rename.cjs', 'test-inline-input-reading.cjs',
   'test-inline-rename.cjs', 'test-installed-workspace.cjs', 'test-markdown-copy.cjs', 'test-member-actions.cjs',
   'test-member-header-menu.cjs', 'test-member-order.cjs', 'test-membership-navigation.cjs',
-  'test-message-file-links.cjs', 'test-native-addressed.cjs', 'test-native-blocks.cjs', 'test-native-concurrent.cjs',
+  'test-message-file-links.cjs', 'test-native-addressed.cjs', 'test-native-blocks.cjs',
   'test-native-context.cjs', 'test-native-cut.cjs', 'test-native-image-reading.cjs', 'test-native-plans.cjs',
   'test-native-queue.cjs', 'test-native-retained-claude.cjs', 'test-native-retained-codex.cjs',
   'test-native-steer.cjs', 'test-native-summaries.cjs', 'test-native-tools.cjs', 'test-native-version.cjs',
