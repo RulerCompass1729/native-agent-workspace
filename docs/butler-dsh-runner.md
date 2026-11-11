@@ -261,6 +261,17 @@ Packaged runtime prerequisite **closed**: the isolated packaged Electron 44.9.0
 This is the existing packaged DSH-runner witness, not a claim that later source
 patches were installed or tested in the daily App.
 
+The signed alpha.232 candidate was separately checked read-only with its own
+executable in isolated Electron Node mode: Electron 44.9.0 / Node 24.22.0 exposed
+`module.registerHooks`, the packaged adapter matched the DIGEST above, and the
+packaged privacy loader's `assertApplied()` passed after importing that adapter.
+The network sandbox denied all outbound connections; the fetch witness counted
+zero calls. No provider variables were supplied and no window was created.
+Strict signatures and all 12,236 regular-file contents were unchanged before and
+after; the owned runtime exited and its canonical test slot was released. This
+closes these two runtime prerequisites for that signed candidate only; it does
+not qualify a real provider call or activate the steward.
+
 Quit verification includes the actual before-quit handler paired with a real
 ButlerDshDriver, DSH host and MCP child (owned process-group kill), plus a real
 driver with its exit callback deliberately withheld (desktop deadline). The
