@@ -9384,3 +9384,62 @@ cumulative fixture; the fifth fails the whole batch and remains unpriced.
 - The ten-minute absence and the dispatcher's clocks are kept only while the app runs.
 - A click on a notice brings the app to the front; it does not yet open the space record.
 - The activity line of the integrator's session calls the handoff a queue dispatch, because it goes through that entry.
+
+## B4 person control boundary (2026-11-11, source checkpoint)
+
+The user asked for a person-designated butler that is visible and can be stopped,
+with an empty default. This source checkpoint supplies the human-only status,
+presence recheck and durable revocation boundary without inventing a DSH
+candidate, enabling activation or claiming physical shutdown. Main reuses one
+Role and the existing ingress Ledger; constructor failure leaves ordinary
+startup and B1 notifications available. Background IPC, generic agent invoke,
+forged contexts and extra identity/configuration/budget/receipt fields are
+refused. Every public error uses fixed localized metadata.
+
+Author-run related checks: 152 pass, zero fail/skip in an empty credential
+sandbox with network/fork denied. New-source red tests cover repeated presence
+probes and unconfirmed shutdown being mistaken for false; a later factory
+counterexample covers unreadable storage being mistaken for ordinary disabled
+state. These are candidate regressions, not reproduced faults in the earlier
+product. The production stop adapter, real candidate/rotation producer,
+renderer state adapter and working-day trial remain unverified. Final source
+validation and the independent finding are recorded below.
+
+
+Person checkpoint independent review `ce1a2429-1cab-46ec-9852-6bd9f499d521`
+initially withheld approval for one false-status finding: the actual DSH startup
+presence probe collapses timeout/nonzero/malformed output to false, so the first
+display path mislabeled an unconfirmed check as credential absence. The fix uses
+a separate display-only probe, with bounded exact Boolean receipts and unknown
+failures. The legacy runner/driver/backend/factory gate is unchanged. Old backend
+negative flags and the derived missing reason are suppressed unless this Person
+has a successful negative display probe. A separate localized busy error replaces
+the inaccurate changed-designation wording.
+
+Actual Main adapter counterexamples fail before and pass after the fix, including
+legacy scalar and cached missing-reason cases. Final related checks:169 pass,
+zero fail/skip, strict empty credential sandbox. The original 152-pass result did
+not cover this real callback failure and is not used to dismiss it. Sticky Role
+read failure, synchronous probe latency and pending production cleanup remain
+explicit limitations. The same-session delta and combined run are complete below.
+
+Forward-port gate delta, chosen by the outcome owner to match the entry
+author's already assigned isolated phase: the dedicated IPC now requires both the
+verified test profile and its explicit entry flag, after the real person check.
+Normal runs return a fixed localized closed-entry error before calling Person or
+presence methods. The former no-preload-method assertion is replaced with the
+current invariant: no entry in normal window state and actual Main IPC denied by
+default. Combined initializer and four gate combinations use synthetic process
+inputs; neither rendering, offers, recording nor model activation is enabled.
+The same independent headless session returned APPROVE_SCOPED for the presence
+fix and narrowed gate. Its explicit prerequisite, a green full candidate suite,
+is now met: base `f9c2413`, 5448 pass, zero fail/skip. New-base targeted checks
+cover the combined Audit/Role/Person initializer and gate: 58 pass, zero fail/skip;
+source build exits zero. The early replay had 56 pass/one failure in the old
+no-preload-method assertion; the explicit phase change and actual default-deny
+IPC matrix replace that obsolete proxy. The preceding source-unit 169-pass
+result remains distinct from this combined validation. The reviewer used only
+Read/Grep/Glob with no MCP; HEAD, index and worktree were unchanged. Startup gate
+modules are unchanged by this checkpoint. No real provider call, installed UI,
+physical-stop proof, rotation producer or activation is qualified. Raw failures,
+fix output and exact review evidence paths remain in the private lane handoff.

@@ -459,3 +459,61 @@ the same opaque window verifier; it has no agent catalog entry. See
 [the exact audit and quota contract](butler-business.md#read-audit-and-page-allowance).
 This neither changes the USD reminder/budget policy nor approves activation,
 legacy automatic context or a real provider trial.
+
+
+## Person controls (source, activation closed)
+
+The dedicated IPC is closed in normal runs. Only the existing verified isolated
+test profile together with `NAW_TEST_BUTLER_ENTRY=1` enables its source-phase
+handler, after the real person-window check. The flag does not enable a model,
+recording period, entry view or designation offer.
+
+The dedicated `workspace.butler(action, ...args)` IPC accepts only the current
+live person window. It is removed from the agent catalog and generic invoke
+map. Construction reuses the existing ingress ledger and never prepares a
+backend, checks credentials or starts a runner. Status is not added to ordinary
+window state.
+
+| Action | Arguments | Source-phase result |
+| --- | --- | --- |
+| `status` | None | Current designation, bounded status/usage metadata, fixed closed phase |
+| `recheck` | Expected role revision | One presence-only probe after revision validation; literal boolean or unknown |
+| `designate` | Expected role revision | Blocked until a trusted actual DSH candidate exists; no inferred identity or budget |
+| `revoke` | Expected role revision | Persist revocation, preserve the ledger, then report cleanup separately |
+| `setActive` | Boolean, expected role revision | `true` refused; `false` requests only the selected target's cleanup |
+
+Status uses only this object's explicit display-probe result. Legacy backend
+negative presence and its `credential-missing` reason cannot prove absence:
+the old startup probe also returns false on failure. The display-only probe
+returns a boolean only for a successful bounded Boolean-only receipt; spawn,
+timeout, protocol and exit failures remain unknown. A confirmed missing reason
+is shown only after this object's successful negative probe. The startup gate
+is unchanged. The display probe is synchronous and bounded to three seconds;
+only an explicit recheck calls it. Status does not probe the environment. Unknown readings remain
+unknown, and no recorded runs do not certify zero provider spending. The shared
+UTC usage arithmetic is retained; arbitrary source labels are reduced to counts.
+The reminder amount is separate from a selected budget; this checkpoint changes
+no monetary guard.
+
+A pause is based only on a persisted failed active batch matching the current
+selection revision, both identity IDs and runner reference. Its batch creation
+position, ledger head and failure time remain distinct facts. A computed usage
+guard, an in-flight batch or a notification alone is not a recorded pause.
+
+Main does not yet supply an owned-stop adapter. Physical `stopped` and
+`cleanupConfirmed` therefore remain `null`; source activation `off` and a saved
+revocation prove no physical exit. A future adapter must resolve the exact
+captured target and prove both stop and cleanup, including after restart. A
+fresh driver with no local child is not that proof.
+
+This IPC view is not the renderer's versioned `butler.entry` view. No offer or
+confirmation is synthesized, and an extra designation-confirmation object is
+refused in this phase. The renderer remains closed; its future host adapter must
+preserve unknown status, compare the displayed selection against the actual
+trusted candidate and respect the still-pending activation decisions.
+
+A Role read fault is sticky within the process. It can leave status and revocation
+unavailable until the underlying storage is safely investigated and the app is
+restarted; restart alone does not repair persistent malformed data. No rollback,
+truncation or fresh Role instance is used to hide uncertain state. This remains
+a documented limitation before activation, not a confirmed physical shutdown.
