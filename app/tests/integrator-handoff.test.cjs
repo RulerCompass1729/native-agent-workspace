@@ -548,6 +548,46 @@ test('real room ends the full-backlog condition, and filling up again is a new o
   assert.deepEqual(backlog.noteReady(ready('too-many'), NOW + 1), { stored: false, why: 'backlog-full', superseded: [], notify: { reason: 'backlog-full' } });
 });
 
+test('the record knows when it began, answers cheap questions without copying, and asks once about an integrator inside a space', t => {
+  const { backlog, open, file, directory } = fixture(t);
+  // The starting line is set once and survives a restart; a record without one is still read.
+  assert.equal(backlog.summary().since, null);
+  for (const bad of [NaN, Infinity, 0, -5, null, '1']) assert.throws(() => backlog.begin(bad), { code: 'HANDOFF_STATE' }, String(bad));
+  assert.equal(backlog.begin(NOW), NOW); assert.equal(backlog.begin(NOW + 500), NOW); assert.equal(open().begin(NOW + 900), NOW);
+  backlog.noteReady(ready('a'), NOW); backlog.noteReady(ready('b'), NOW); backlog.noteReady(ready('c'), NOW);
+  backlog.hold(key('b'), 'review-off', NOW); backlog.hold(key('c'), 'review-off', NOW);
+  assert.deepEqual(backlog.summary(), { deliverable: 1, held: 2, handed: 0, since: NOW, handoff: null });
+  assert.deepEqual(backlog.reasonsHeld(), ['review-off']);
+  assert.deepEqual([backlog.knows(key('a')), backlog.knows(key('zz')), backlog.knows(undefined)], [true, false, false]);
+  // An integrator that is inside a space is handed nothing; the person is asked once, and only when there is something to hand.
+  const inSpace = observed({ inSpace: true });
+  assert.deepEqual(backlog.advance(inSpace, NOW), { kind: 'ask-integrator', reason: 'integrator-in-space', notify: { reason: 'integrator-in-space' } });
+  assert.deepEqual(backlog.advance(inSpace, NOW + 1), { kind: 'none', why: 'integrator-asked' });
+  assert.deepEqual(states(backlog), { a: 'deliverable', b: 'held:review-off', c: 'held:review-off' });
+  assert.equal(backlog.snapshot().handoff, null);
+  // It is a condition, not a place to hold deliveries, and it ends when the integrator takes a handoff.
+  assert.throws(() => backlog.hold(key('a'), 'integrator-in-space', NOW), { code: 'HANDOFF_STATE' });
+  for (const other of [false, undefined, 'yes']) assert.equal(backlog.plan(observed({ inSpace: other })).kind, 'open', String(other));
+  const action = openHandoff(backlog);
+  assert.equal(backlog.snapshot().reasons['integrator-in-space'].open, false);
+  const summary = backlog.summary();
+  assert.deepEqual(summary, { deliverable: 0, held: 2, handed: 1, since: NOW, handoff: { id: action.handoffId, status: 'sent', confirmed: false, sentAt: NOW, integrator: INTEGRATOR } });
+  summary.handoff.integrator.sessionId = 'changed';
+  assert.equal(backlog.summary().handoff.integrator.sessionId, 'integrator', 'What it hands out is a copy');
+  // A refusal that is not counted leaves the count of refusals as it was.
+  backlog.sendRefused(action.handoffId, NOW, { counts: false });
+  assert.equal(backlog.snapshot().refusals, 0); assert.deepEqual(states(backlog).a, 'deliverable');
+  backlog.sendRefused(openHandoff(backlog).handoffId, NOW);
+  assert.equal(backlog.snapshot().refusals, 1);
+  // A starting line that is not a time is a record no start accepts; one without the field is an older record.
+  const state = backlog.snapshot();
+  fs.writeFileSync(file, JSON.stringify({ ...state, since: 'yesterday' }), { mode: 0o600 });
+  assert.throws(() => new IntegrationHandoffs(directory).snapshot(), { code: 'HANDOFF_STATE' });
+  const { since, ...older } = state;
+  fs.writeFileSync(file, JSON.stringify(older), { mode: 0o600 });
+  assert.equal(new IntegrationHandoffs(directory).summary().since, null);
+});
+
 test('deliveries that have waited more than four hours are listed apart', t => {
   const { backlog } = fixture(t);
   backlog.noteReady(ready('a'), NOW - AGED_MS - 1); backlog.noteReady(ready('b'), NOW - AGED_MS); backlog.noteReady(ready('c'), NOW - AGED_MS - 5);

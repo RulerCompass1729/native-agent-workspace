@@ -2433,6 +2433,7 @@ module.exports = {
   CONTENT_LIMITS,
   QUIET_BEFORE_ROTATE_MS,
   NOT_SENT_ATTEMPTS,
+  NATIVE_DRAFT_KEY,
   validateQueue,
   newItem,
   trimQueue,

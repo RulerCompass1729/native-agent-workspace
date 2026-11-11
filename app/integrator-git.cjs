@@ -12,6 +12,7 @@ const worktree = require('./git-worktree.cjs');
 
 const COMMIT = /^[0-9a-f]{7,40}$/u;
 const FULL = /^[0-9a-f]{40}$/u;
+const BRANCH = /^[A-Za-z0-9._\/-]{1,200}$/u;
 const RANGE_LIMIT = 500;                 // commits in one range
 const OUTPUT_LIMIT = 64 * 1024 * 1024;   // bytes of patch text read for one range
 
@@ -46,6 +47,14 @@ function reader(repo) {
     // that begins with the given digits is the commit that was named.
     return result.code === 0 && FULL.test(id) && id.startsWith(revision) ? id : null;
   }
+  // The commit a local branch points at, or null. The exact ref is asked for, with no name
+  // lookup: a tag or another ref that only looks like the branch is not the branch.
+  async function branch(name) {
+    if (typeof name !== 'string' || !BRANCH.test(name) || name.includes('..') || name.startsWith('-') || name.startsWith('/') || name.endsWith('/') || name.endsWith('.lock')) return null;
+    const result = await run(repo, ['show-ref', '--verify', '--hash', '--', `refs/heads/${name}`]);
+    const id = text(result).trim();
+    return result.code === 0 && FULL.test(id) ? commit(id) : null;
+  }
   // Whether the first commit is the second or one of its ancestors; null when git cannot say.
   async function isAncestor(ancestor, descendant) {
     if (!FULL.test(ancestor || '') || !FULL.test(descendant || '')) return null;
@@ -74,7 +83,7 @@ function reader(repo) {
     }
     return commits.map(id => ({ commit: id, change: byCommit.get(id) || null }));
   }
-  return { commit, isAncestor, changes };
+  return { commit, branch, isAncestor, changes };
 }
 
 module.exports = { reader, RANGE_LIMIT };

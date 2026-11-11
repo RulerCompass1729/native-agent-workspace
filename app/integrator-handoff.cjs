@@ -30,7 +30,7 @@ const OPEN_STATES = ['deliverable', 'held', 'handed'];
 const STATES = [...OPEN_STATES, 'merged', 'returned', 'superseded'];
 // Reasons that exist once for the whole backlog, and those that exist once per subject.
 const GLOBAL_REASONS = ['review-off', 'review-cap', 'checkpoint-invalid', 'merge-unverified', 'send-unconfirmed',
-  'record-missing', 'send-refused', 'no-result', 'no-reply', 'person-intervened', 'held-other', 'backlog-full', 'integrator-unset'];
+  'record-missing', 'send-refused', 'no-result', 'no-reply', 'person-intervened', 'held-other', 'backlog-full', 'integrator-unset', 'integrator-in-space'];
 const SUBJECT_REASONS = ['lock-held', 'integrator-missing', 'conflict', 'returned-limit', 'installable'];
 const RETURN_LIMIT = 2;       // a branch returned more often than this is the person's to decide, not suggested again
 // The reasons an integrator may write on a HELD line; anything else is kept as "held for another reason".
@@ -42,7 +42,7 @@ const HELD_WORDS = ['review-off', 'review-cap', 'checkpoint-invalid'];
 // A question (a main commit that may be installed, a branch returned too often) has no deliveries
 // under it and ends only with the person's answer.
 const question = reason => reason.startsWith('installable:') || reason.startsWith('returned-limit:');
-const standing = reason => ['review-off', 'review-cap', 'integrator-unset', 'backlog-full'].includes(reason) || reason.startsWith('lock-held:') ||
+const standing = reason => ['review-off', 'review-cap', 'integrator-unset', 'integrator-in-space', 'backlog-full'].includes(reason) || reason.startsWith('lock-held:') ||
   reason.startsWith('integrator-missing:') || question(reason);
 // Why a handoff waits for the person. These last at least as long as that handoff is the open one.
 const waitingOn = (handoff, key) => Boolean(handoff) && (key === `conflict:${handoff.id}` || handoff.status === 'waiting' && handoff.reason === key);
@@ -73,7 +73,7 @@ function reasonKey(value) {
 const calendarDay = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) &&
   new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 
-function empty() { return { version: 1, seq: 0, ready: [], handoff: null, reasons: {}, refusals: 0, seen: [], capDay: null, returns: {} }; }
+function empty() { return { version: 1, seq: 0, ready: [], handoff: null, reasons: {}, refusals: 0, seen: [], capDay: null, returns: {}, since: null }; }
 
 function checkEntry(entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry) || !plain(entry.key, 300) || !plain(entry.roomId, 100) || !plain(entry.itemId, 100) ||
@@ -90,7 +90,8 @@ function checkState(data) {
       !Array.isArray(data.ready) || !data.reasons || typeof data.reasons !== 'object' || Array.isArray(data.reasons) ||
       !Number.isSafeInteger(data.refusals) || data.refusals < 0 || !Array.isArray(data.seen) || data.seen.length > SEEN_KEPT || data.seen.some(key => !plain(key, 300)) ||
       !(data.capDay === null || calendarDay(data.capDay)) || !data.returns || typeof data.returns !== 'object' || Array.isArray(data.returns) ||
-      Object.entries(data.returns).some(([key, count]) => !plain(key, 320) || !Number.isSafeInteger(count) || count < 1)) throw fail('Invalid handoff record');
+      Object.entries(data.returns).some(([key, count]) => !plain(key, 320) || !Number.isSafeInteger(count) || count < 1) ||
+      !(data.since === undefined || data.since === null || Number.isFinite(data.since))) throw fail('Invalid handoff record');
   const keys = new Set();
   for (const [index, entry] of data.ready.entries()) {
     checkEntry(entry);
@@ -307,6 +308,9 @@ function plan(state, input) {
     const reason = `integrator-missing:${integrator.sessionId}`;
     return state.reasons[reason]?.open ? none('integrator-asked') : { kind: 'ask-integrator', reason };
   }
+  // The integrator stays outside every space: a member is sent queue work. One that was put into a
+  // space after it was designated is handed nothing, and the person is asked once.
+  if (seen.inSpace === true) return state.reasons['integrator-in-space']?.open ? none('integrator-asked') : { kind: 'ask-integrator', reason: 'integrator-in-space' };
   const verdict = sessionReady(session, seen.wakePolicy);
   if (!verdict.ready) return none(verdict.reason);
   // Engaged in something NAW itself is doing with it, such as a session rotation or a running space exchange.
@@ -425,6 +429,28 @@ class IntegrationHandoffs {
 
   plan(input) { this.usable(); return plan(this.state, input); }
 
+  // The moment this record began to take in deliveries. Deliveries NAW recorded before it were
+  // dealt with by hand and are never handed out. Set once, at the first intake.
+  begin(now = Date.now()) {
+    this.usable();
+    if (Number.isFinite(this.state.since)) return this.state.since;
+    if (!Number.isFinite(now) || now <= 0) throw fail('Invalid time');
+    const next = this.draft();
+    next.since = now;
+    this.commit(next);
+    return now;
+  }
+  // Read-only looks at the record that copy nothing: whether a delivery is already known, which
+  // reasons hold deliveries, and where things stand.
+  knows(key) { this.usable(); return this.state.seen.includes(key) || this.state.ready.some(entry => entry.key === key); }
+  reasonsHeld() { this.usable(); return [...new Set(this.state.ready.filter(entry => entry.state === 'held').map(entry => entry.reason))]; }
+  summary() {
+    this.usable();
+    const count = state => this.state.ready.filter(entry => entry.state === state).length, handoff = this.state.handoff;
+    return { deliverable: count('deliverable'), held: count('held'), handed: count('handed'), since: this.state.since ?? null,
+      handoff: handoff ? { id: handoff.id, status: handoff.status, confirmed: handoff.tag !== null, sentAt: handoff.sentAt, integrator: { ...handoff.integrator } } : null };
+  }
+
   // Decide from what the caller observes now and record the decision in the same step, so a
   // handoff can only open for the integrator and main head that were just checked and an old
   // decision cannot be replayed.
@@ -445,7 +471,7 @@ class IntegrationHandoffs {
     next.handoff = { id: action.handoffId, status: 'sent', keys: action.keys, integrator: action.integrator, mainHead: action.mainHead, sentAt: now, tag: null };
     // An integrator took a handoff: the question about a missing one is over, and what was held
     // because that session was gone waits for the next handoff.
-    const ended = ['integrator-unset', `integrator-missing:${action.integrator.sessionId}`];
+    const ended = ['integrator-unset', 'integrator-in-space', `integrator-missing:${action.integrator.sessionId}`];
     this.release(next, reason => ended.includes(reason), true);
     this.commit(next);
     return action;
@@ -467,12 +493,14 @@ class IntegrationHandoffs {
   // That is not a handoff: the deliveries wait again. After the queue's limit of refusals in a
   // row they are held for the person instead of being tried for ever. Only the code that just
   // saw the refusal may call this; an unconfirmed send found after a restart is not a refusal.
-  sendRefused(handoffId, now = Date.now()) {
+  // A refusal because the person left a prompt unsent in that session is not counted (counts:
+  // false): as for a queue item, the deliveries wait for as long as the person takes.
+  sendRefused(handoffId, now = Date.now(), options = {}) {
     const next = this.draft();
     if (next.handoff?.id !== handoffId || next.handoff.status !== 'sent' || next.handoff.tag !== null) throw fail('No such unsent handoff');
     const keys = next.handoff.keys;
     next.handoff = null;
-    next.refusals += 1;
+    if (options?.counts !== false) next.refusals += 1;
     const limit = next.refusals >= NOT_SENT_ATTEMPTS;
     if (limit) next.refusals = 0;
     let notify = null;
@@ -620,7 +648,7 @@ class IntegrationHandoffs {
     const entry = next.ready.find(candidate => candidate.key === key);
     if (!entry || entry.state !== 'deliverable') throw fail('This delivery cannot be held');
     // Conditions and questions that have no deliveries under them cannot hold one.
-    if (reasonKey(reason) === null || ['integrator-unset', 'backlog-full'].includes(reason) || question(reason)) throw fail('Unknown reason');
+    if (reasonKey(reason) === null || ['integrator-unset', 'integrator-in-space', 'backlog-full'].includes(reason) || question(reason)) throw fail('Unknown reason');
     const notify = this.leave(next, entry, 'held', reason, now);
     this.commit(next);
     return { notify, state: entry.state };

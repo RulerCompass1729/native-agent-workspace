@@ -46,6 +46,26 @@ test('a commit is named by hex digits only, and an unknown or unsafe name is not
   assert.equal(await read.commit(next), next);
 });
 
+test('the head of a local branch is read by its name; a tag or another ref of that name is not the branch', async t => {
+  const { read, base, commit, git } = fixture(t);
+  const next = commit('a.txt', 'a\n');
+  assert.equal(await read.branch('main'), next);
+  git('checkout', '--quiet', '-b', 'lane/work', base); const side = commit('b.txt', 'b\n');
+  assert.equal(await read.branch('lane/work'), side);
+  assert.equal(await read.branch('main'), next, 'Another branch being checked out changes nothing');
+  // A tag named like a branch that does not exist, and a tag named like main that points elsewhere.
+  git('tag', 'release', base); git('tag', 'main', base);
+  assert.equal(await read.branch('release'), null);
+  assert.equal(await read.branch('main'), next);
+  // A tag whose own name looks like a branch path is not a branch either: the exact ref is asked for.
+  git('tag', 'refs/heads/ghost', base);
+  assert.equal(git('rev-parse', '--verify', '--quiet', 'refs/heads/ghost^{commit}'), base, 'git\'s own name lookup finds the tag');
+  assert.equal(await read.branch('ghost'), null);
+  for (const bad of ['missing', 'HEAD', '', null, 7, '-main', '--upload-pack=x', 'a..b', 'main^', 'main~1', 'main:file', 'refs/heads/main', '/main', 'main/', 'main.lock', 'ma in', `main\n`, 'x'.repeat(201)]) {
+    assert.equal(await read.branch(bad), null, String(bad));
+  }
+});
+
 test('ancestry is answered yes, no, or not at all', async t => {
   const { read, base, commit, git } = fixture(t);
   const next = commit('a.txt', 'a\n');
@@ -154,17 +174,19 @@ test('reading runs none of the repository\'s own programs and writes nothing', a
   try { assert.equal(await read.commit(next), next); } finally { if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved; }
 });
 
-test('the reader is not connected: nothing in the app or its scripts loads it or the handoff record yet', () => {
+test('the reader is not connected: nothing in the app or its scripts loads it, the handoff record or the engine yet', () => {
   const root = path.join(__dirname, '../..');
   const sources = directory => fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
     const file = path.join(directory, entry.name);
     if (entry.isDirectory()) return ['node_modules', 'tests', 'dist', '.git'].includes(entry.name) ? [] : sources(file);
     return /\.(?:c?js|mjs|html)$/.test(entry.name) ? [file] : [];
   });
-  const files = [...sources(path.join(root, 'app')), ...sources(path.join(root, 'scripts'))].filter(file => !/integrator-(?:git|handoff)\.cjs$/.test(file));
+  const files = [...sources(path.join(root, 'app')), ...sources(path.join(root, 'scripts'))].filter(file => !/integrator-(?:git|handoff|engine)\.cjs$/.test(file));
   assert.ok(files.length > 100 && files.some(file => file.endsWith('renderer.js')) && files.some(file => file.includes(`${path.sep}scripts${path.sep}`)), 'The scan covers the app, its subfolders and the scripts');
   // The two module names as a program would load them (the lock script's folder of release records has another name).
-  for (const file of files) assert.ok(!/integrator-(?:git|handoff)(?:\.cjs)?['"`]/.test(fs.readFileSync(file, 'utf8')), path.relative(root, file));
+  for (const file of files) assert.ok(!/integrator-(?:git|handoff|engine)(?:\.cjs)?['"`]/.test(fs.readFileSync(file, 'utf8')), path.relative(root, file));
+  // Among themselves only the engine may come to load the record; neither loads the reader.
+  for (const name of ['integrator-handoff.cjs', 'integrator-engine.cjs']) assert.ok(!fs.readFileSync(path.join(root, 'app', name), 'utf8').includes('integrator-git'), name);
 });
 
 test('a change of a submodule is read as its two commit ids; git is not run inside the submodule', async t => {
@@ -212,6 +234,6 @@ test('a grafts file does not change what the reader answers about ancestry', asy
 test('the reader only reads: its source has no writing git command', () => {
   const source = fs.readFileSync(path.join(__dirname, '../integrator-git.cjs'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
   const commands = [...source.matchAll(/run\(repo, \['([a-z-]+)'/g)].map(match => match[1]).sort();
-  assert.deepEqual(commands, ['log', 'merge-base', 'patch-id', 'rev-list', 'rev-parse']);
+  assert.deepEqual(commands, ['log', 'merge-base', 'patch-id', 'rev-list', 'rev-parse', 'show-ref']);
   for (const word of ["'merge'", "'commit'", "'push'", "'fetch'", "'checkout'", "'reset'", "'update-ref'", "'cherry-pick'", "'rebase'", 'integrator-lock', 'writeFile', 'unlink', 'renameSync', 'mkdir']) assert.ok(!source.includes(word), word);
 });

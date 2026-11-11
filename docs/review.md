@@ -8906,3 +8906,29 @@ or inserting a duplicate makes the equality guard fail. Related checks: 468 pass
 zero fail/skip. New-base full-suite and actual package closure results are kept
 with the lane handoff. The integrator requested this change and owns the combined
 independent review before merging; no additional activation path is introduced.
+
+## B6 integration handoff, checkpoint H4: handing out — 2026-11-11
+
+**What this adds.** `app/integrator-engine.cjs` carries out the steps between the handoff record and the app: it takes in the deliveries NAW recorded in spaces, and when the session the person designated as integrator can take a message it opens one handoff and sends it. Everything it touches is passed in (the record, who is designated, a fresh look at the sessions, main's head, the send), so it calls no model, runs no program, merges nothing and takes no lock. It is not connected: nothing in the app or its scripts loads it, and a test says so. Settling a handoff from the engine and telling the person are the next checkpoint.
+
+**Taking deliveries in.** A delivery is the READY fact NAW writes into a space when a queue item is done. The engine takes a fact only from the space that recorded it and only in the shape NAW writes; anything else is passed over and counted. The first intake sets the record's starting line, once: a delivery recorded before it was dealt with by hand and is never handed out. A fact already known writes nothing. A delivery keeps the time it was recorded, so its age is its real age. A full backlog takes nothing in and tells the person once; the delivery is taken in on a later pass when there is room.
+
+**Handing out.** One pass does this, in order.
+- While a handoff is open, nothing.
+- It reads who is designated. A designation that cannot be read decides nothing. Nobody designated, the designated session gone from a complete list, or the integrator found inside a space each ask the person once and hand out nothing; an integrator inside a space is a new condition in the record, over when the integrator takes a handoff.
+- It asks the record whether a handoff would open, by the queue's own readiness rule and waits, without reading git or recording anything.
+- Only if one would open, or if deliveries held because an integrator was gone may come back, it takes a fresh look. Everything from there is decided on that fresh view: a designated integrator whose session is present releases what was held for a missing integrator; main's head is read only if a handoff still opens; the decision and its record are one step. If the moment has passed, or the head cannot be read, no handoff is recorded.
+- The handoff is recorded as sent before the message goes out, and the message goes out once. A tag confirms it, with the control revision of the session the message went to, so that the person taking control afterwards is noticed when the handoff settles. A refusal in which nothing was sent lets the deliveries wait again, and the fifth in a row holds them for the person; a refusal because the person left a prompt unsent in that session is not counted, as for a queue item, and the caller is told so that it leaves the session alone for a while. A send whose outcome is unknown is never repeated: the handoff stays unconfirmed and is later settled as such, also after a restart.
+
+**Additions elsewhere.** The record gains its starting line, three read-only looks that copy nothing, and the uncounted refusal. The git reader can read the head of a local branch by its exact ref; a tag or another ref that only looks like the branch is not the branch. `app/queue-dispatch.cjs` exports one more name, the key of the unsent-prompt refusal.
+
+**Independent review (passed, with two findings, then changed).** The control revision came only from the send's return value, so a send that returns just a tag would have switched off the later check for the person taking control; it now falls back to the session's own. The release of deliveries held for a missing integrator was decided on the older view, which could tell the person twice about one absence; it is now decided on the fresh look. From the notes: the caller is told when the person is at work in the integrator's session, so a handoff is not opened and refused on every pass; the caller can see that the record is unreadable; a starting line must be a real time; the branch is read by its exact ref; another native session under the integrator's id is treated as the integrator being gone, whatever its membership says.
+
+**Checks.** Fourteen unit tests for the engine, one of them fed by the fact the real space record writes for a finished queue item; one more for the record's additions and one for the reader's. Thirty-eight deliberate breakages each turned tests red. The full unit suite passes on the delivered head; the count is in the delivery note.
+
+**Left open.**
+- The starting line compares times: a delivery recorded while the clock was set back before the line is passed over.
+- Which repository and which branch "main" is are chosen by whoever connects the engine; here they are a function passed in. The send is passed in too: whoever connects it must make sure that an error the send can raise after the message reached the session never carries one of the queue's "not sent" keys.
+- A question for the person, and the release just described, are recorded although the integrator cannot take a message at that moment; a handoff never is.
+- An integrator that is put into a space while a handoff is open still has that handoff settled normally.
+- Space records of a delivery being handed out, and the notices for the questions above, are written by the next checkpoint from the record's own state.
