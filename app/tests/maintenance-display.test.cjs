@@ -7,10 +7,13 @@ const invisible = /[\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800]/u;
 function productionConfirmation() {
   const start = main.indexOf('    confirmation: (actor, command, action'), end = main.indexOf('\n    audit:', start);
   assert.ok(start > 0 && end > start);
-  return vm.runInNewContext('(' + main.slice(start + '    confirmation: '.length, end).trim().replace(/,$/, '') + ')', {
+  const sandbox = vm.createContext({
     backgroundOperation: operation, displayText: (key, params) => locale.format('zh', key, params),
-    roomState: { apply: value => value }, sessionLabels: { apply: value => value },
+    roomState: { apply: value => value, value: {} }, sessionLabels: { apply: value => value },
+    queueSecretary: { current: () => null }, roomIds: session => session.roomIds || [], uiError: require('../ui-errors.cjs').uiError,
   });
+  vm.runInContext(main.slice(main.indexOf('function conversationReaderAllowed('), main.indexOf('function projectBackgroundRecord(')), sandbox);
+  return vm.runInContext('(' + main.slice(start + '    confirmation: '.length, end).trim().replace(/,$/, '') + ')', sandbox);
 }
 const context = snapshot => ({ client: { snapshot: () => snapshot } });
 test('actual maintenance confirmation escapes format and separator characters without changing Unicode payloads', () => {
@@ -22,8 +25,8 @@ test('actual maintenance confirmation escapes format and separator characters wi
   assert.match(options.detail, /αа中文/); assert.equal(JSON.stringify(command), before);
 });
 test('confirmation keeps exact IDs and adds session, space and selected-file names', () => {
-  const snapshot = { sessions: [{ id: 'target', name: 'Target 中文', provider: 'codex' }], rooms: [{ id: 'room', name: 'Space 中文', files: [{ id: 'file', name: '材料.txt' }] }] };
-  const build = productionConfirmation(), actor = { name: 'Agent' };
+  const snapshot = { sessions: [{ id: 'agent', nativeId: 'native-agent', roomIds: ['room'] }, { id: 'target', name: 'Target 中文', provider: 'codex' }], rooms: [{ id: 'room', name: 'Space 中文', files: [{ id: 'file', name: '材料.txt' }] }] };
+  const build = productionConfirmation(), actor = { id: 'agent', nativeId: 'native-agent', name: 'Agent' };
   const member = JSON.parse(build(actor, { method: 'spaceAction', arguments: ['room', 'join', ['target', true]] }, 'joinRoom', context(snapshot)).detail);
   assert.deepEqual(member.arguments, ['room', 'join', ['target', true]]);
   assert.ok(member.references.some(r => r.kind === 'session' && r.id === 'target' && r.name === 'Target 中文'));
@@ -35,7 +38,8 @@ test('human approval sees escaped rows while the input handler receives the exac
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-consent-display-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const payload = 'echo safe\u202e; hidden\u2066\u200b\u2028', writes = [], actor = { id: 'agent', nativeId: 'native', name: 'Agent\u202e', provider: 'codex' };
-  const c = { background: true, ...context({ sessions: [{ id: 'target', name: 'Target', provider: 'codex' }], rooms: [] }), checkActor() {}, view: {} };
+  const c = { background: true, ...context({ sessions: [{ ...actor }, { id: 'target', nativeId: 'native-target', name: 'Target', provider: 'codex' }], rooms: [] }), checkActor() {}, view: {} };
+  c.fingerprint = () => ({ sessions: c.client.snapshot().sessions.map(s => ({ id: s.id, nativeId: s.nativeId })) });
   const controller = new BackgroundControl({ dataDir: dir, context: () => c, handlers: new Map([['input', (_c, _id, text) => writes.push(text)]]), confirmation: productionConfirmation(), audit() {} });
   const args = { action: 'invoke', method: 'input', arguments: ['target', payload], operation_id: 'input' };
   const pending = await controller.call({ sender: actor, identity: { callId: 'call', turnId: 'turn' }, valid: () => true }, args);

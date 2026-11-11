@@ -1123,6 +1123,10 @@ async function boot() {
     confirmation: (actor, command, action, context) => {
       if ((action === 'readConversation' || ['terminalSnapshot', 'observe', 'terminal'].includes(command.method) && command.arguments[0] !== actor.id) &&
           !conversationReaderAllowed(actor)) throw uiError('error.background.secretaryConversation');
+      if (command.method === 'spaceFiles' && command.arguments[1] !== undefined) {
+        const access = conversationAccess(actor, context.client.snapshot());
+        if (access.secretary || !access.roomIds.includes(command.arguments[0])) throw uiError('error.background.spaceFileMembership');
+      }
       const state = sessionLabels.apply(roomState.apply(context.client.snapshot()));
       const target = state.sessions.find(s => s.id === backgroundOperation.conversationTarget(command.method, command.arguments, actor));
       if (action === 'readConversation' && !target) throw uiError('error.background.conversationChanged');

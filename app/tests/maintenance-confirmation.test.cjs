@@ -23,7 +23,7 @@ function fixture(t, provider = 'codex') {
   const context = { background: true, view: {}, checkActor: async () => {}, client: { close() {} }, win: { destroy() {} } };
   const snapshot = { sessions: [{ id: 'agent', nativeId: 'native-agent' }, { id: 'target', nativeId: 'native-target' }] };
   context.client.snapshot = () => snapshot;
-  context.fingerprint = () => ({ sessions: snapshot.sessions.map(s => ({ id: s.id, nativeId: s.nativeId })) });
+  context.fingerprint = () => ({ sessions: snapshot.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, archived: s.archived, nativeContextPending: s.nativeContextPending })) });
   const sender = { id: 'agent', nativeId: 'native-agent', name: 'Agent', provider };
   const binding = { sender, identity: { callId: 'native-call', turnId: 'native-turn' }, valid: () => true };
   const config = { dataDir: dir, handlers, context: () => context,
@@ -35,6 +35,7 @@ function fixture(t, provider = 'codex') {
 test('unanswered confirmations have per-actor and global bounds; cancellation releases a slot without replay', async t => {
   const f = fixture(t), ask = (binding, id) => f.controller.call(binding, { action: 'invoke', method: 'spaceCreate', arguments: ['Synthetic space'], operation_id: id });
   const bindings = Array.from({ length: 5 }, (_, n) => ({ ...f.binding, sender: { ...f.binding.sender, id: 'bounded-agent-' + n, nativeId: 'bounded-native-' + n } }));
+  f.context.client.snapshot().sessions.push(...bindings.map(b => ({ id: b.sender.id, nativeId: b.sender.nativeId })));
   for (let actor = 0; actor < 4; actor++) {
     for (let n = 0; n < 32; n++) assert.equal((await ask(bindings[actor], `pending-${actor}-${n}`)).state, 'confirmation-required');
     const limited = await ask(bindings[actor], `actor-limit-${actor}`);
@@ -49,6 +50,59 @@ test('unanswered confirmations have per-actor and global bounds; cancellation re
   assert.equal((await ask(bindings[4], 'global-limit')).state, 'not-executed');
   await assert.rejects(f.controller.call(bindings[4], { action: 'invoke', method: 'spaceCreate', arguments: ['Changed intent'], operation_id: 'global-limit' }), /different command/);
   assert.equal(f.writes.length, 0);
+});
+for (const mode of ['forgotten', 'native-replaced', 'archived', 'context-pending']) test(`unanswerable ${mode} actor confirmations cannot exhaust the global allowance`, async t => {
+  const f = fixture(t), ask = (binding, id) => f.controller.call(binding, { action: 'invoke', method: 'spaceCreate', arguments: ['Synthetic space'], operation_id: id });
+  const bindings = Array.from({ length: 5 }, (_, n) => ({ ...f.binding, sender: { ...f.binding.sender, id: 'orphan-agent-' + n, nativeId: 'orphan-native-' + n } }));
+  const sessions = f.context.client.snapshot().sessions;
+  sessions.push(...bindings.map(b => ({ id: b.sender.id, nativeId: b.sender.nativeId })));
+  for (let n = 0; n < 4; n++) {
+    const row = await ask(bindings[n], 'template-' + n); assert.equal(row.state, 'confirmation-required');
+    f.controller.commit(data => {
+      for (let index = 1; index < 32; index++) {
+        const copy = JSON.parse(JSON.stringify(row)); copy.id = `saved-${n}-${index}`; copy.actor.operationId = copy.id; copy.command.operation_id = copy.id; data.records.push(copy);
+      }
+    });
+  }
+  assert.equal((await ask(bindings[4], 'before-orphan')).reason, 'confirmation-limit');
+  const prior = sessions.find(s => s.id === bindings[0].sender.id);
+  if (mode === 'forgotten') sessions.splice(sessions.indexOf(prior), 1);
+  if (mode === 'native-replaced') prior.nativeId = 'replacement-native';
+  if (mode === 'archived') prior.archived = true;
+  if (mode === 'context-pending') prior.nativeContextPending = true;
+  const next = await ask(bindings[4], 'after-orphan');
+  assert.equal(next.state, 'confirmation-required'); assert.equal(f.writes.length, 0);
+  assert.equal(f.controller.data.records.find(r => r.id === 'template-0').state, 'confirmation-required', 'History is retained and never replayed or silently approved');
+});
+for (const provider of ['claude', 'codex']) for (const mode of ['missing', 'native-replaced', 'archived', 'context-pending', 'missing-roster']) test(`${provider}: a running ${mode} requester is refused before any maintenance confirmation`, async t => {
+  const f = fixture(t, provider), notices = []; f.controller.confirmationPending = row => notices.push(row);
+  const fingerprint = f.context.fingerprint;
+  const sessions = f.context.client.snapshot().sessions, self = sessions.find(s => s.id === f.binding.sender.id);
+  if (mode === 'missing') sessions.splice(sessions.indexOf(self), 1);
+  if (mode === 'native-replaced') self.nativeId = 'replacement-native';
+  if (mode === 'archived') self.archived = true;
+  if (mode === 'context-pending') self.nativeContextPending = true;
+  if (mode === 'missing-roster') f.context.fingerprint = () => ({});
+  const rejected = { action: 'invoke', method: 'spaceCreate', arguments: ['No unusable prompt'], operation_id: 'invalid-requester' };
+  const first = await f.controller.call(f.binding, rejected);
+  assert.equal(first.state, 'not-executed'); assert.equal(first.reason, 'originating-session-unavailable');
+  assert.equal(first.confirmation, undefined); assert.equal(f.writes.length, 0); assert.equal(notices.length, 0);
+  assert.equal(f.controller.data.records.filter(r => r.state === 'confirmation-required').length, 0);
+  assert.equal((await f.controller.call(f.binding, rejected)).duplicate, true);
+  for (let n = 0; n < 33; n++) {
+    const next = await f.controller.call(f.binding, { ...rejected, operation_id: 'blocked-' + n });
+    assert.equal(next.state, 'not-executed'); assert.equal(next.confirmation, undefined);
+  }
+  assert.equal(notices.length, 0); assert.equal(f.writes.length, 0);
+  assert.equal(f.controller.data.records.filter(r => r.state === 'confirmation-required').length, 0);
+  assert.equal(f.room.value.events.at(-1).controlAudit.state, 'not-executed');
+  await assert.rejects(f.controller.decide(f.binding.sender.id, f.binding.sender.nativeId, first.id, 1), /no longer current/);
+  const restored = { ...self, nativeId: f.binding.sender.nativeId, archived: false, nativeContextPending: false };
+  if (mode === 'missing') sessions.push(restored); else Object.assign(self, restored);
+  f.context.fingerprint = fingerprint;
+  assert.equal((await f.controller.call(f.binding, rejected)).state, 'not-executed', 'Restoring the actor cannot replay an already refused ID');
+  const fresh = await f.controller.call(f.binding, { ...rejected, operation_id: 'fresh-after-restoration' });
+  assert.equal(fresh.state, 'confirmation-required'); assert.equal(notices.length, 1);
 });
 for (const provider of ['claude', 'codex']) for (const [index, [method, args]] of cases.entries()) test(`${provider} ${method}[${index}]: pending and cancel have no effect, human approval executes once`, async t => {
   const f = fixture(t, provider), command = { action: 'invoke', operation_id: 'refuse', method, arguments: args };
@@ -69,7 +123,7 @@ test('read-only merge phases and unrelated queue metadata do not acquire a maint
   for (const phase of ['queueAdd', 'queueCancel', 'queueResolve', 'notes', 'memberOrder']) assert.equal(operation.maintenanceAction('spaceAction', ['shared', phase, []]), null);
 });
 test('a confirmed operation refuses a changed fingerprint and records the refusal', async t => {
-  const f = fixture(t); let placement = 1; f.context.fingerprint = () => ({ placement });
+  const f = fixture(t), fingerprint = f.context.fingerprint; let placement = 1; f.context.fingerprint = () => ({ ...fingerprint(), placement });
   await f.controller.call(f.binding, { action: 'invoke', operation_id: 'changed', method: 'archiveSession', arguments: ['target'] });
   placement++;
   assert.equal((await f.controller.decide('agent', 'native-agent', 'changed', 1)).state, 'unconfirmed');
@@ -151,9 +205,9 @@ test(`actual main input wrapper preserves own pending-approval protection withou
   assert.equal(f.writes.length, 1);
 });
 test('the independent view is refreshed before saving a consent fingerprint', async t => {
-  const f = fixture(t); let generation = 0;
+  const f = fixture(t), fingerprint = f.context.fingerprint; let generation = 0;
   f.context.refresh = async () => { generation = 1; };
-  f.context.fingerprint = () => { const read = { generation }; generation = 1; return read; };
+  f.context.fingerprint = () => { const read = { ...fingerprint(), generation }; generation = 1; return read; };
   const r = await f.controller.call(f.binding, { action: 'invoke', operation_id: 'fresh-view', method: 'openLocalFile', arguments: [] });
   assert.equal(r.state, 'confirmation-required'); assert.equal(r.guard.generation, 1); assert.equal(f.writes.length, 0);
 });

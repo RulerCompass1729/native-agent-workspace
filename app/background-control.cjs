@@ -268,16 +268,22 @@ class BackgroundControl {
     // independent view, then check the reservation again before saving intent.
     await context.refresh?.(); await valid();
     if (this.inflight.has(key)) return refuse('another-operation-running');
+    const guard = controlGuard(context, args);
     if (operation.maintenanceAction(args.method, args.arguments, actor)) {
+      const requester = Array.isArray(guard?.sessions) && guard.sessions.find(s => s.id === actor.id);
+      if (!requester || requester.nativeId !== actor.nativeId || requester.archived || requester.nativeContextPending)
+        return refuse('originating-session-unavailable');
       // No timer or automatic decision: old confirmations remain answerable.
       // Count intent already running too, so parallel actors cannot overbook.
+      // The refreshed roster excludes invisible requests from forgotten,
+      // replaced or archived actors without freeing their operation IDs.
       const pending = this.data.records.filter(r => ['confirmation-required', 'running'].includes(r.state) &&
-        operation.maintenanceAction(r.command.method, r.command.arguments, r.actor));
+        operation.maintenanceAction(r.command.method, r.command.arguments, r.actor) &&
+        (!Array.isArray(guard?.sessions) || guard.sessions.some(s => s.id === r.actor.id && s.nativeId === r.actor.nativeId && !s.archived && !s.nativeContextPending)));
       if (pending.length >= MAX_PENDING || pending.filter(r => this.key(r.actor) === key).length >= MAX_PENDING_PER_ACTOR)
         return refuse('confirmation-limit');
     }
     // Save intent before calling ANY mutation, including an independent draft.
-    const guard = controlGuard(context, args);
     this.commit(d => d.records.push({ id: args.operation_id, actor, command: args, guard, state: 'running', at: this.now() }));
     return this.execute(actor, args, context, valid);
   }
