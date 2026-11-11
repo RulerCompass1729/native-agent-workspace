@@ -348,7 +348,7 @@ function replyAfter(session, tag, sentAt) {
   if (parts.length) {
     last = parts[parts.length - 1];
   }
-  return { found: true, text: parts.join('\n\n'), last, humanAfter };
+  return { found: true, text: parts.join('\n\n'), last, humanAfter, parts };
 }
 
 function memberIds(room, sessions) {
@@ -2385,6 +2385,8 @@ module.exports = {
   queueVacancies,
   planDispatch,
   replyAfter,
+  startsWithDecision,
+  UNCONFIRMED_SEND_MS,
   dispatchText,
   handoffRequestText,
   handoffText,

@@ -36,7 +36,13 @@ function openHandoff(backlog, extra) {
   assert.equal(action.kind, 'open', JSON.stringify(action));
   return action;
 }
-const emptyState = (extra = {}) => ({ version: 1, seq: 0, ready: [], handoff: null, reasons: {}, refusals: 0, seen: [], capDay: null, ...extra });
+// The integrator's reply settles the open handoff: one result for each named delivery.
+function settleLines(backlog, action, results) {
+  return backlog.settle({ kind: 'settle', handoffId: action.handoffId, status: 'done',
+    results: { ignored: 0, results: Object.fromEntries(Object.entries(results).map(([name, result]) => [key(name), result])) } }, {}, NOW);
+}
+const HELD_REVIEW_OFF = { kind: 'held', reason: 'review-off' };
+const emptyState = (extra = {}) => ({ version: 1, seq: 0, ready: [], handoff: null, reasons: {}, refusals: 0, seen: [], capDay: null, returns: {}, ...extra });
 
 test('a delivery is recorded once; an unusable one is refused, and a bad label never loses the delivery', t => {
   const { backlog, file } = fixture(t);
@@ -83,13 +89,14 @@ test('a delivery inside a handoff that leaves it without an outcome after a newe
   assert.deepEqual(backlog.sendRefused(action.handoffId, NOW), { held: [], notify: null });
   assert.deepEqual(states(backlog), { a: 'superseded', a2: 'deliverable' });
   assert.deepEqual(openHandoff(backlog).keys, [key('a2')], 'Only the newer delivery is handed');
-  // It is held from inside the handoff: no hold, no reason, and its reason changing cannot bring it back.
+  // The integrator holds it from inside the handoff: no hold, no reason, and its reason changing cannot bring it back.
   ({ backlog } = fixture(t));
   backlog.noteReady(ready('a'), NOW); backlog.noteReady(ready('b'), NOW);
   action = openHandoff(backlog);
   backlog.noteReady(ready('a2', { branch: 'lane/a' }), NOW + 1);
-  assert.deepEqual(backlog.hold(key('a'), 'review-off', NOW), { notify: null, state: 'superseded' });
-  assert.deepEqual(backlog.hold(key('b'), 'review-off', NOW), { notify: { reason: 'review-off' }, state: 'held' });
+  const settled = settleLines(backlog, action, { a: HELD_REVIEW_OFF, b: HELD_REVIEW_OFF });
+  assert.deepEqual(settled.facts.map(fact => [fact.itemId, fact.outcome, fact.reason]), [['a', 'superseded', undefined], ['b', 'held', 'review-off']]);
+  assert.deepEqual(settled.notify, ['review-off']);
   assert.deepEqual(backlog.reasonCleared('review-opened'), { released: [key('b')] });
   assert.deepEqual(states(backlog), { a: 'superseded', b: 'deliverable', a2: 'deliverable' });
   // At the refusal limit too: the replaced one is void, the other is held.
@@ -164,7 +171,13 @@ test('an integrator that cannot take a message now gets none, and nothing is los
   const before = JSON.stringify(backlog.snapshot());
   for (const [change, why] of cases) assert.deepEqual(backlog.advance(observed(change), NOW), { kind: 'none', why }, why);
   assert.equal(JSON.stringify(backlog.snapshot()), before, 'Nothing is recorded while the integrator cannot take it');
-  assert.deepEqual(backlog.plan(), { kind: 'ask-integrator', reason: 'integrator-unset' }, 'No observation at all is no integrator');
+  // "Nobody designated" is said with null. A designation that was not read, or not understood, asks nothing.
+  assert.deepEqual(backlog.plan({ integrator: null }), { kind: 'ask-integrator', reason: 'integrator-unset' });
+  for (const unknown of [undefined, {}, 'integrator', { sessionId: 'integrator' }, [INTEGRATOR]]) {
+    assert.deepEqual(backlog.advance(observed({ integrator: unknown }), NOW), { kind: 'none', why: 'designation-unknown' }, JSON.stringify(unknown));
+  }
+  assert.deepEqual(backlog.plan(), { kind: 'none', why: 'designation-unknown' }, 'No observation at all says nothing about the designation');
+  assert.equal(JSON.stringify(backlog.snapshot()), before);
   // The same readiness rule as a queue dispatch decides it.
   assert.equal(rules.sessionReady(integratorSession(), { enabled: true }).ready, true);
   const action = backlog.advance(observed({ humanAt: new Map([[INTEGRATOR.sessionId, NOW - rules.HUMAN_QUIET_MS]]) }), NOW);
@@ -205,7 +218,7 @@ test('a handoff carries the deliverable deliveries under its own marker, and onl
   assert.equal(state.seq, 1);
   // One at a time: a new delivery waits.
   backlog.noteReady(ready('d'), NOW);
-  assert.deepEqual(backlog.advance(observed(), NOW + 9), { kind: 'none', why: 'handoff-open' });
+  assert.deepEqual(backlog.advance(observed(), NOW + 9), { kind: 'none', why: 'send-pending' }, 'The open handoff has the one place');
   assert.deepEqual(open().snapshot(), backlog.snapshot(), 'A restart reads the same record');
 });
 
@@ -234,9 +247,9 @@ test('a decision is recorded in the step that makes it, so an old one cannot be 
   const second = openHandoff(backlog);
   assert.notEqual(second.handoffId, first.handoffId); assert.match(second.handoffId, /^H2-/);
   assert.deepEqual(second.keys, first.keys);
-  // Delivered, then every delivery held, then retried by the person: the next handoff is a new one.
+  // Delivered, then every delivery held by the integrator, then retried by the person: the next handoff is a new one.
   backlog.confirmSent(second.handoffId, { tag: 'tag-2' }, NOW);
-  backlog.hold(key('a'), 'review-off', NOW);
+  settleLines(backlog, second, { a: HELD_REVIEW_OFF });
   assert.equal(backlog.snapshot().handoff, null);
   backlog.retryReady(key('a'));
   const third = openHandoff(backlog);
@@ -341,7 +354,7 @@ test('a standing condition is asked about once until the condition itself change
   assert.deepEqual(backlog.hold(key('b'), 'lock-held:owner-1', NOW).notify, { reason: 'lock-held:owner-1' });
   assert.deepEqual(backlog.hold(key('c'), 'lock-held:owner-2', NOW).notify, { reason: 'lock-held:owner-2' });
   assert.equal(backlog.hold(key('d'), 'lock-held:owner-1', NOW).notify, null);
-  for (const bad of ['', 'made-up', 'lock-held', 'lock-held:', 'integrator-unset', 'backlog-full', 7]) assert.throws(() => backlog.hold(key('a'), bad, NOW), { code: 'HANDOFF_STATE' }, String(bad));
+  for (const bad of ['', 'made-up', 'lock-held', 'lock-held:', 'integrator-unset', 'backlog-full', 'installable:' + MAIN, 7]) assert.throws(() => backlog.hold(key('a'), bad, NOW), { code: 'HANDOFF_STATE' }, String(bad));
   assert.throws(() => backlog.hold(key('zz'), 'review-off', NOW), { code: 'HANDOFF_STATE' });
   assert.equal(reasonKey('conflict:H1-abcd'), 'conflict:H1-abcd'); assert.equal(reasonKey('conflict'), null); assert.equal(reasonKey('review-off:x'), null);
   assert.equal(reasonKey('lock-held:' + 'x'.repeat(201)), null);
@@ -388,11 +401,8 @@ test('an event reason is over when nothing is held under it, and the next failur
   assert.deepEqual(backlog.hold(key('c'), 'conflict:H7-abcd', NOW).notify, { reason: 'conflict:H7-abcd' });
   backlog.retryReady(key('c'));
   assert.equal(backlog.snapshot().reasons['conflict:H7-abcd'].open, false);
-  // The same for a task returned too often: the next time it goes over the limit the person is told again.
-  assert.deepEqual(backlog.hold(key('c'), 'returned-limit:lane/c', NOW).notify, { reason: 'returned-limit:lane/c' });
-  backlog.retryReady(key('c'));
-  assert.equal(backlog.snapshot().reasons['returned-limit:lane/c'].open, false);
-  assert.deepEqual(backlog.hold(key('c'), 'returned-limit:lane/c', NOW + 5).notify, { reason: 'returned-limit:lane/c' });
+  // A question has no deliveries under it, so nothing can be held under one.
+  for (const bad of ['returned-limit:lane/c', 'installable:' + MAIN]) assert.throws(() => backlog.hold(key('c'), bad, NOW), { code: 'HANDOFF_STATE' }, bad);
 });
 
 test('a notice starts once, is confirmed after it was shown, and is not sent again when its outcome is unknown', t => {
@@ -422,13 +432,14 @@ test('a notice starts once, is confirmed after it was shown, and is not sent aga
   assert.deepEqual(restarted.pendingNotices(), ['lock-held:owner-1']);
 });
 
-test('holding a delivery that is inside the open handoff takes it out; the last one closes the handoff', t => {
+test('a delivery inside the open handoff cannot be held from outside; the integrator\'s lines take it out, and the last one ends the handoff', t => {
   const { backlog } = fixture(t);
   backlog.noteReady(ready('a'), NOW); backlog.noteReady(ready('b'), NOW);
   const action = openHandoff(backlog);
-  backlog.hold(key('a'), 'review-off', NOW);
-  assert.deepEqual(backlog.snapshot().handoff.keys, [key('b')]);
-  backlog.hold(key('b'), 'lock-held:owner-1', NOW);
+  const before = JSON.stringify(backlog.snapshot());
+  for (const name of ['a', 'b']) assert.throws(() => backlog.hold(key(name), 'review-off', NOW), { code: 'HANDOFF_STATE' }, name);
+  assert.equal(JSON.stringify(backlog.snapshot()), before, 'The handoff and what is inside it are as they were');
+  settleLines(backlog, action, { a: HELD_REVIEW_OFF, b: { kind: 'held', reason: 'lock-held:owner-1' } });
   assert.equal(backlog.snapshot().handoff, null);
   assert.deepEqual(states(backlog), { a: 'held:review-off', b: 'held:lock-held:owner-1' });
   assert.throws(() => backlog.confirmSent(action.handoffId, { tag: 'late' }, NOW), { code: 'HANDOFF_STATE' });
@@ -497,7 +508,7 @@ test('a record too large for the next start to accept is never written: the chan
 
 test('the backlog is bounded: a full one refuses new deliveries without dropping any and tells the person once', t => {
   const { directory, file } = fixture(t);
-  const entry = (index, state) => ({ ...ready('x'), key: key(`${state}-${index}`), itemId: `${state}-${index}`, branch: `lane/${state}-${index}`, state, notedAt: NOW + index });
+  const entry = (index, state) => ({ ...ready('x'), key: key(`${state}-${index}`), itemId: `${state}-${index}`, branch: `lane/${state}-${index}`, state, notedAt: NOW + index, ...(state === 'merged' ? { mergedAs: MAIN } : {}) });
   const full = emptyState({ ready: [...Array.from({ length: OPEN_LIMIT }, (_, index) => entry(index, 'deliverable')), ...Array.from({ length: CLOSED_KEPT + 3 }, (_, index) => entry(index, 'merged'))] });
   fs.writeFileSync(file, JSON.stringify(full), { mode: 0o600 });
   const backlog = new IntegrationHandoffs(directory);
