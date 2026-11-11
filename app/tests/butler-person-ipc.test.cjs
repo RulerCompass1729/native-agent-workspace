@@ -341,3 +341,27 @@ test('the record table is offered only for a designation, from the ledger\'s own
     assert.equal(result.ok, true); assert.equal(result.value.reviewAvailable, false); assert.equal(JSON.stringify(result).includes('PRIVATE'), false);
   }
 });
+
+
+test('actual Main retains one shared Role and its refused rotation history across status calls and reinitialization', async t => {
+  const f = fixture(t), role = f.host.role(), core = f.host.person();
+  assert.equal(core.role, role, "The person core must use Main's exact shared Role");
+  role.set(f.person.context, designation, 0);
+  const next = { sessionId: 'ipc-successor', nativeId: 'ipc-successor-native' };
+  fs.writeFileSync(role.logFile, JSON.stringify({ event: 'done', old: { id: designation.identity.sessionId, nativeId: designation.identity.nativeId },
+    new: { id: next.sessionId, nativeId: next.nativeId } }) + '\n', { mode: 0o600 });
+  assert.deepEqual((await f.seen('status')).role.selected.identity, next);
+  assert.equal(f.host.initialize(), 'ordinary-startup-continues');
+  assert.equal(f.host.role(), role); assert.equal(f.host.person(), core); assert.equal(core.role, role); assert.equal(f.calls.roles, 1);
+  fs.writeFileSync(role.logFile, '');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const view = await f.seen('status');
+    assert.equal(view.role.available, true); assert.equal(view.role.currentAvailable, false);
+    assert.equal(view.role.selected.identity, null); assert.equal(view.actions.revoke, true);
+    assert.throws(() => role.current(), { code: 'ERR_BUTLER_STATE' });
+    assert.equal(f.host.initialize(), 'ordinary-startup-continues');
+    assert.equal(f.host.role(), role); assert.equal(f.host.person(), core); assert.equal(core.role, role); assert.equal(f.calls.roles, 1);
+  }
+  assert.equal((await f.call('revoke', 1)).value.revoked, true);
+  assert.equal(role.snapshot().selected, null); assert.equal(f.calls.presence, 0);
+});

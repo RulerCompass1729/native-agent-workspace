@@ -10417,7 +10417,7 @@ How it got here. Prototype first, as the task requires, reviewed by an independe
 The language is read from the state of the language selector in the setup dialog, as that dialog's own rules already do, because the page's `lang` attribute is fixed at `zh-CN` and does not follow the interface language. That attribute is a separate defect (a screen reader reads the English interface with a Chinese voice); when it follows the language, this condition should become `:lang(zh)`.
 
 Owner: the author of this change. Evidence: `scripts/test-session-split-density.cjs`, hidden, synthetic backend, no model, now twelve steps. New in it: whole labels in the read-only, idle, working and waiting states and while working at 850x600; the working card as tall as the idle one; the input area fitting at 850x600 while working; the rule's computed values on in Chinese and off in English (idle and working at 1240x850, idle at 850x600); the divider dragged to its 20% stop, where the card is under 320px, the row is sized as before and nothing scrolls sideways; and the measurement against the earlier sizing, for every label the renderer's `soloAction` can choose and every hint in the catalog, at fourteen card widths (9,828 comparisons). It fails on the earlier stylesheet at its first step, and failed in the same place on the build whose selector did not match. Not covered: English, which is left as it was, broken labels included; a dark theme; physical keys and a screen reader. The sweep puts texts into the row and measures them; it does not bring the program into each of those states, which the whole-page steps do for four of them. Not changed and worth their own tasks: the `lang` attribute, and the divider's 20% stop, at which the input card is about 160px wide and the row is barely usable in either language.
-## Requested-test profile and audit-export guards (2026-11-11, review pending)
+## Requested-test profile and audit-export guards (2026-11-11)
 
 User feedback B identified another mismatch: a CLI `--user-data-dir` value can
 move Electron's initial reference before the isolated-test gate examines a
@@ -10600,3 +10600,75 @@ when argument checks moved out of exit polling. The same independent reviewer
 closed that note after the incremental diff; targeted checks passed 33/33. Final
 full-suite counts and unchanged source/index were verified by the author after
 review. Read-only review and approved fixture cleanup do not authorize daily use.
+
+
+## Butler selection read recovery — 2026-11-11
+
+Source of the pre-activation issue: one designation read failure permanently
+poisoned the Role and prevented a later person revoke. This checkpoint narrows
+only the distinguishable read failure. An actual selection `readSync` EIO after
+safe file open is branded privately and still rejects the failing call. A later
+explicit call rechecks everything and can recover on a complete stable record.
+There is no saved-authority, empty-state or original-identity fallback. Safe
+opened-file existence is remembered even if its first bytes fail.
+
+The revision/content highwater, person-only writer and locked expected-revision
+check remain unchanged. A locked preflight read failure cannot write a
+replacement. fd close and owned-file cleanup uncertainty remain sticky, as do
+malformed/incomplete/unsafe data, rollback and write durability failures. Only
+files created by the current call can be removed; old/foreign locks are never
+recovered here. Rotation history behavior remains the preceding checkpoint.
+
+Legacy locks, persistent corrupt data, directory faults, cross-restart integrity
+and an independent owned-stop path remain pre-activation work. Recording and
+activation remain off; no action permissions or model/provider calls are added.
+The final checks and independent review are recorded below.
+
+The first full run exposed two new test hooks that compared an unresolved
+`os.tmpdir()` path with Role's real path. A separate normal `/tmp` run reproduced
+30/32 rather than strict-isolation 32/32; both failures say the intended hook
+fired zero times. The fixture now canonicalizes its owned directory, as the
+reviewer independently requested. Product source is unchanged. Two further
+black-box cases cover the existing Person fallback snapshot and revoke with an
+unresolved target: saved metadata may recover, current identity stays unknown,
+and a saved clear never claims physical shutdown. Role schedules no retry;
+Person's already-existing extra status read is documented explicitly.
+
+After the integration notice, the owned WIP is rebased onto main `e3e25dd`;
+its baseline Role equals `cfe4d57`, and the reviewed product delta is unchanged.
+The final exact-baseline private test process has 34 cases: 22 pass, 12 fail.
+The repaired normal-path test file passes 34/34 and the combined strict checks
+pass 224/224, with no failures, cancellations or skips. The first full run on
+the earlier base completed 5,879 pass and 2 failures (5,881 total); its raw
+output is retained, not relabeled a pass. The new complete run on main exits 0
+with 5,964/5,964 passing and zero failures, cancellations or skips (501,897 ms).
+
+The requested production search finds one `new ButlerRole`, in Main's shared
+initializer using `||=`. The existing actual-Main VM test covers one construction
+and repeated initialization. A new IPC case additionally retains the exact
+Person/Role objects and refused-history observations across repeated status and
+initialization, then human revoke. A separate in-memory-only Main mutation that
+replaces `||=` with unconditional construction makes this exact case fail; no
+production file is modified for that probe. This proves the new guard can catch
+a recreated Role, not merely count matching source text. These are synthetic
+VM/IPC checks, not a real Electron startup or Session/singleton acceptance.
+
+Fresh separate headless reviewer `6DF969D6-2A40-4E41-A258-1DA5F43EA3E4`
+finds no product-source blockers but initially withholds clearance for the two
+path-dependent test hooks. The same session's bounded four-read delta closes
+that issue and finds no incremental blockers, conditional on the final full
+suite and publication scans. The full-suite condition is now met as above.
+Both invocations expose exactly Read/Grep/Glob and no MCP; the actual reported
+model is `claude-opus-5-5`, with reported list costs USD 1.186486 and 1.4935302.
+All tests are author-run, not independent reruns. Private raw evidence is in the
+owner selection-eio lane at `.local/selection-eio-review/review.jsonl` and
+`delta.jsonl`, with the test logs under `.local/selection-eio/`. The author
+verified both review invocations left HEAD, index, worktree and the new test
+unchanged. Subsequent edits only record final factual results; no source or test
+behavior changed. The old requested-test heading's stale pending word is also
+removed; its previously approved 729B conclusion is retained unchanged.
+
+This closes only the distinguishable selection-read fault. Persistent bad data,
+unsafe directories, unknown legacy locks, durable history across restart and an
+independent owned-stop adapter remain open before activation. No Session storage
+or singleton runtime pass, recording-period start or model activation is claimed.
