@@ -9944,3 +9944,26 @@ Claude 2.1.322 was version-checked but its actual adapter was not started: the o
 A separate actual Codex 0.167.1 Chat backend trial uses a fresh isolated HOME/config and zero GUI windows. The real app-server accepts thread/start for an empty thread with on-request approval and a read-only sandbox. The existing adapter reports idle across 100 samples over approximately twenty seconds; it creates no Terminal and exposes no nativeStartupPrompt. The startup reply includes permissions and an empty instructionSources array, but no affirmative directory-trust completion signal used by this adapter. Read-only permissions and an idle thread are not evidence that the person accepted native directory trust. No task/model turn or trust answer was attempted; model-endpoint requests and forbidden writes remain zero, and owned backend/process/fixture cleanup is confirmed.
 
 There is currently no reliable directory-trust detector for a Codex Chat successor, so automatic directory migration is unavailable in that mode. Claude Chat does create a Terminal, but its real startup ordering remains unqualified pending item3. The production migration gate remains closed for both; the existing fifteen creation/default checks pass, including the case that a test environment flag alone cannot enable migration in production. This checkpoint adds no gate-opening code, permission, real-configuration use or claim about later model turns. The required pre-opening conditions above remain open.
+## Capacity advisory after conversation history — 2026-11-11
+
+The changing remaining-byte counter used to be inserted into system content,
+ahead of all business history. The host now appends the same advisory to the final
+user content, after tool results, without changing system or preceding blocks.
+It remains outside durable history and grants no authority. The six-digit count
+is still computed from the entire serialized outgoing body, including the note;
+256 KiB is inclusive and overflow sends nothing. This preserves a stable input
+prefix; actual provider caching and cost savings are not claimed.
+
+Regression: two old-source failures become seven passing checks for location,
+unchanged prefix, exact UTF-8 size, inclusive boundary and no transport on refusal.
+The real isolated DSH/MCP/loopback check covers ten scenarios; its actual business
+pages now receive the shared read-audit object required by the current interface.
+The first run exposed that stale fixture wiring before any business-page model
+request; the corrected fixture passes with actual pages and shared audit enabled.
+All requests are to an owned loopback fixture, no production model or credential.
+Independent review approved this checkpoint without blockers. The first full run
+had one unrelated locale-profile cleanup ENOTEMPTY (5,777 pass/one fail); that
+file alone passed 23 tests. The unchanged candidate's final full run at
+concurrency two passed 5,778 tests, zero failures/cancellations/skips. Raw failures
+and receipts remain private. This neither qualifies real provider caching nor
+activates the steward.

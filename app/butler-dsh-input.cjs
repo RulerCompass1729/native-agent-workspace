@@ -42,14 +42,19 @@ class ButlerInputBoundary {
       if (Buffer.byteLength(init.body) > MAX_REQUEST_BYTES) this.reject();
       let body; try { body = JSON.parse(init.body); } catch { this.reject(); }
       if (!body || typeof body !== 'object' || Array.isArray(body)) this.reject();
-      const system = body.system === undefined ? [] : typeof body.system === 'string' ? [{ type: 'text', text: body.system }] : body.system;
-      if (!Array.isArray(system)) this.reject();
-      // This trusted system block is regenerated per transmission, not retained
-      // as session history. Its six-digit counter keeps serialization size fixed.
+      if (body.system !== undefined && typeof body.system !== 'string' && !Array.isArray(body.system) || !Array.isArray(body.messages)) this.reject();
+      // Append this host-owned advisory after all history, not in the system
+      // prefix. It is regenerated per transmission, never kept in session history.
+      // Its six-digit counter keeps serialization size fixed; it grants no power.
       const prefix = 'NAW_CAPACITY remaining_bytes=';
       const suffix = '; wire_limit_bytes=262144. This is remaining UTF-8 JSON space, not tokens. Every next request resends all history. Tool replies, escaping and your next reply consume it. Read fewer records; leave 65536 bytes for reply/envelopes. If a page will not fit, finish this batch and report the unread cursor; do not guess missing content.';
       const note = { type: 'text', text: prefix + '000000' + suffix };
-      body.system = [...system, note];
+      const last = body.messages.at(-1);
+      if (last?.role === 'user') {
+        const content = typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : last.content;
+        if (!Array.isArray(content)) this.reject();
+        last.content = [...content, note];
+      } else body.messages.push({ role: 'user', content: [note] });
       const bytes = Buffer.byteLength(JSON.stringify(body));
       if (bytes > MAX_REQUEST_BYTES) this.reject();
       note.text = prefix + String(MAX_REQUEST_BYTES - bytes).padStart(6, '0') + suffix;

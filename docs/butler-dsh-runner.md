@@ -130,12 +130,19 @@ and blocked. Later events remain pending and the existing notice is deduplicated
 per selection revision. This is a documented size limit, not automatic recovery. Both driver and host enforce the same limit. Startup also
 refuses a tool schema set over 32 KiB, before a batch can be attempted.
 
-The final transport guard adds one trusted system block to **each** request with
-its exact remaining UTF-8 JSON space. It computes the number after serializing
+The final transport guard appends one host-owned user text block **after all
+history** in each request, with its exact remaining UTF-8 JSON space. It appends
+to the final user message (after any tool results), or adds a final user message.
+The system value and all preceding conversation blocks stay unchanged. Previously
+the changing counter was an extra system block before the history, invalidating
+that prefix for reuse. The text is now an advisory at user-message priority; it
+grants no permission and does not replace any host enforcement. The same advice
+and counter reach the model, after the business content instead of before it.
+It computes the number after serializing
 all input, system text, tool definitions, history and this budget block itself;
-no credential/header is inspected. The extra text adds input tokens and its
-changing system content may reduce provider prefix-cache reuse; that cost effect
-is unmeasured and belongs in the pre-activation pricing qualification. The budget is regenerated rather than stored
+no credential/header is inspected. The extra text still adds input tokens; actual
+provider cache hits and prices are unmeasured. This preserves a stable semantic
+prefix rather than claiming a measured cost saving. The budget is regenerated rather than stored
 in DSH history. It tells the model to read fewer records, leave space for its own
 reply/envelopes, and finish with an unread cursor if the next page cannot fit.
 The local fixture uses actual ButlerBusiness pages, quotes/backslashes and a
