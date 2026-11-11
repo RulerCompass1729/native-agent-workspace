@@ -20,6 +20,9 @@ function fixture(t, provider = 'codex') {
   const room = new RoomState(dir), writes = [], handlers = new Map();
   for (const [method] of cases) handlers.set(method, (_c, ...args) => { writes.push({ method, args }); return 'applied'; });
   const context = { background: true, view: {}, checkActor: async () => {}, client: { close() {} }, win: { destroy() {} } };
+  const snapshot = { sessions: [{ id: 'agent', nativeId: 'native-agent' }, { id: 'target', nativeId: 'native-target' }] };
+  context.client.snapshot = () => snapshot;
+  context.fingerprint = () => ({ sessions: snapshot.sessions.map(s => ({ id: s.id, nativeId: s.nativeId })) });
   const sender = { id: 'agent', nativeId: 'native-agent', name: 'Agent', provider };
   const binding = { sender, identity: { callId: 'native-call', turnId: 'native-turn' }, valid: () => true };
   const config = { dataDir: dir, handlers, context: () => context,

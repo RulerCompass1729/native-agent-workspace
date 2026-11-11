@@ -7,7 +7,8 @@ const { isDeepStrictEqual } = require('node:util');
 const operation = require('./background-operation.cjs');
 const clone = v => JSON.parse(JSON.stringify(v));
 const MAX_RECORD_BYTES = 32 * 1024 * 1024;
-const privateReads = new Set(['initial', 'previewImage', 'expandImage']);
+const terminalReads = new Set(['terminalSnapshot', 'observe', 'terminal']);
+const privateReads = new Set(['initial', 'previewImage', 'expandImage', ...terminalReads]);
 const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value) ? value : 'sha256:' + createHash('sha256').update(JSON.stringify(value)).digest('hex');
 function hideApprovalBodies(guard) {
   for (const session of Array.isArray(guard?.sessions) ? guard.sessions : []) for (const key of ['approval', 'nativeApproval'])
@@ -21,12 +22,12 @@ function compactRead(record) {
 }
 function readTarget(record, value) {
   const source = record.command.arguments?.[0];
-  const id = record.readAuthorization?.sessionId || (record.command.method === 'initial' ? source || value?.viewState?.selected || record.actor.id : source?.sessionId);
+  const id = record.readAuthorization?.sessionId || (terminalReads.has(record.command.method) ? source : record.command.method === 'initial' ? source || value?.viewState?.selected || record.actor.id : source?.sessionId);
   if (typeof id !== 'string' || !id) return typeof source?.roomId === 'string' ? { roomId: source.roomId } : null;
   const session = value?.sessions?.find(s => s.id === id);
-  let name = session?.name;
+  let name = session?.name || (id === record.actor.id ? record.actor.name : null);
   if (!name) try { name = JSON.parse(record.confirmation?.options?.detail).references?.find(r => r.kind === 'session' && r.id === id)?.name; } catch { /* Legacy receipts may have no named reference. */ }
-  return { sessionId: id, nativeId: record.readAuthorization?.nativeId || session?.nativeId || (id === record.actor.id ? record.actor.nativeId : null),
+  return { sessionId: id, nativeId: record.readAuthorization?.nativeId || session?.nativeId || record.guard?.sessions?.find(s => s.id === id)?.nativeId || (id === record.actor.id ? record.actor.nativeId : null),
     ...(typeof name === 'string' ? { name: operation.visibleText(name) } : {}) };
 }
 const token = v => typeof v === 'string' && v.length > 0 && v.length <= 160 && !/[\x00-\x1f\x7f]/.test(v);
@@ -281,6 +282,7 @@ class BackgroundControl {
         const request = { context, args, actor, guard: row.guard, valid, approved, dialogIndex: 0 };
         value = await operation.run(actor, async () => {
           const action = operation.maintenanceAction(args.method, args.arguments, actor);
+          let terminalTarget = null;
           if (action) {
             if (typeof this.confirmation !== 'function' || typeof this.audit !== 'function') throw Error('Human maintenance confirmation or event storage is unavailable');
             const answer = await dialog(context, 'message', this.confirmation(actor, args, action, context));
@@ -288,14 +290,20 @@ class BackgroundControl {
             request.maintenanceApproved = true;
             // If the event writer is broken, fail before an approved mutation.
             await this.publish({ ...row, state: 'running' }, context);
-            if (action === 'readConversation') {
-              const targetId = operation.conversationTarget(args.method, args.arguments, actor);
+            if (action === 'readConversation' || terminalReads.has(args.method)) {
+              const targetId = terminalReads.has(args.method) ? args.arguments[0] : operation.conversationTarget(args.method, args.arguments, actor);
               const target = row.guard?.sessions?.find(s => s.id === targetId);
               if (!target) throw Error('The conversation target is unavailable');
               this.commit(data => { data.records.find(r => r.id === row.id && this.key(r.actor) === key).readAuthorization = { sessionId: target.id, nativeId: target.nativeId }; });
+              if (terminalReads.has(args.method)) terminalTarget = target;
             }
           }
-          return handler(context, ...args.arguments);
+          if (!terminalTarget) return handler(context, ...args.arguments);
+          const result = await handler(context, ...args.arguments), frozen = result === undefined ? undefined : clone(result);
+          await context.refresh?.(); await valid();
+          const current = context.client.snapshot().sessions.find(s => s.id === terminalTarget.id);
+          if (!current || current.nativeId !== terminalTarget.nativeId) throw Error('The approved terminal target changed before the read completed');
+          return frozen;
         }, request);
         delivery = await context.delivery?.(args, value, actor, row.guard);
         state = delivery ? delivery.nativeReceived ? 'received' : 'awaiting-native' : 'complete';
