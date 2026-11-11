@@ -9353,3 +9353,41 @@ case, real ledger caller and reused package/quit evidence. No blocker remains
 for this source checkpoint. Token prediction, pricing and production activation
 are outside this approval. Four approximately 65 KB business pages fit in the
 cumulative fixture; the fifth fails the whole batch and remains unpriced.
+
+
+## B4 audit-capacity and shared-store boundary (2026-11-11, source checkpoint)
+
+Integrator review `786f4ba2` of `2b926f4` approved source with pre-activation notes:
+no human log screen, no capacity warning, and a future host could accidentally
+write beside its role file while Main reads another store. This checkpoint
+removes the silent default: ButlerBusiness requires an actual explicitly supplied
+shared Audit. A missing-audit counterexample fails on the preceding constructor;
+real nested-role/shared-main fixtures write only the shared log, preserve human
+access and share the 64-page allowance across replacement/reconstruction. No
+production Business caller exists yet; actual host injection still needs joint
+runtime proof, not an assumption from this API.
+
+The existing human read result adds five capacity-only fields. Fixed 75% (24 MiB)
+prewarning leaves the 32 MiB cap, 64/day allowance and all retained records unchanged.
+An optional trusted callback receives a frozen count-only copy after successful
+operation and lock cleanup, once per object; notification failures cannot undo
+approval or poison storage. A new reader can warn again. Failed/rejected reads
+are not newly recorded, no timer/model call or automatic archive/delete is added.
+The human UI must consume this contract before activation; a callback is not
+proof the person saw a warning. Offline same-user deletion and system-clock
+boundaries remain explicit.
+
+Literal tests now pin business page envelopes and unavailable decision/failure
+rows. These preserve the fixed wrapper's no-extra-field contract. Source tests
+use an actual replay-valid journal crossing 24 MiB, not mocked stat sizes. Earlier
+new-feature red 66 total / 59 pass / 7 fail and missing-audit red 43 total / 42 pass / 1 fail are retained.
+Combined relevant checks: 90 pass, zero fail/skip in the strict empty-credential
+sandbox. Source build exits zero; full suite on base `416bd74`: 5421 pass, zero
+fail/skip. Independent headless session `5ecfb875-28db-4ddd-93b2-8c12b23ed983`
+approved this exact source checkpoint with no blocking finding, conditioned on
+the final full run and publication guards. The full-run condition is met. Only
+Read/Grep/Glob were exposed with no MCP; HEAD, index and worktree were unchanged
+by review. The UI, real host injection and warning delivery are not qualified.
+A host callback should remain fast; the UI should also read `storage.warning`
+rather than rely on a once-per-process notification. Raw failure/fix/full output
+and review evidence remain in the private handoff named on the task board.

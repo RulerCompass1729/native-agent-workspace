@@ -267,12 +267,13 @@ test('the sentence about what is sent was written for what the core can put befo
     'pendingQuestions[].questionId', 'pendingQuestions[].sourceRef', 'pendingQuestions[].decisionKind', 'pendingQuestions[].text', 'pendingQuestions[].decisionSource'].sort());
   assert.equal(/not sent|not-sent|\/not\/sent/.test(JSON.stringify(input)), false);
   // The read capability, on the product's own room state in a scratch directory.
-  const { ButlerBusiness } = require('../butler-business.cjs'), { RoomState } = require('../room-state.cjs'), { ButlerRole } = require('../butler-role.cjs');
+  const { ButlerBusiness } = require('../butler-business.cjs'), { RoomState } = require('../room-state.cjs'), { ButlerRole } = require('../butler-role.cjs'), { ButlerReadAudit } = require('../butler-read-audit.cjs');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-entry-sent-')); fs.chmodSync(directory, 0o700); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const runner = { runnerRef: 'butler-runner', backendRef: 'butler-backend', purpose: 'butler', profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro' };
   const person = {}, role = new ButlerRole(directory, { authorizePerson: value => value === person }), actor = { id: 'butler-a', nativeId: 'native-a', provider: 'dsh', state: 'idle', roomIds: [], runner };
   role.set(person, { identity: { sessionId: actor.id, nativeId: actor.nativeId }, runner }, 0);
-  const room = new RoomState(directory), read = new ButlerBusiness({ role, roomState: room, view: () => ({ records: [actor] }) }).bind(actor, { selectionRevision: 1, runnerRef: runner.runnerRef });
+  const readAudit = new ButlerReadAudit(directory, { authorizePerson: value => value === person });
+  const room = new RoomState(directory), read = new ButlerBusiness({ role, roomState: room, view: () => ({ records: [actor] }), readAudit }).bind(actor, { selectionRevision: 1, runnerRef: runner.runnerRef });
   assert.deepEqual(read.catalog().methods.map(method => [method.name, method.kinds]), [['readBusiness', ['spaces', 'queue', 'deliveries']]]);
   const itemId = room.queueAdd('Synthetic task', null, 'shared'); room.queueMarkSent('shared', itemId, 'worker-a', 'Synthetic worker', Date.now());
   room.queueSettle('shared', itemId, 'done', '', 'Synthetic worker', 'A native reply stays private', undefined, { branch: 'lane/synthetic', commit: 'abcdef1234567' });

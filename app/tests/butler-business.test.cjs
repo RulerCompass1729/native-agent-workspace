@@ -4,6 +4,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const { ButlerBusiness, MAX_BYTES, MAX_LIMIT, MAX_WINDOW, MAX_SCAN_RECORDS, MAX_SPACES } = require('../butler-business.cjs');
 const { RoomState } = require('../room-state.cjs');
 const { ButlerRole } = require('../butler-role.cjs');
+const { ButlerReadAudit } = require('../butler-read-audit.cjs');
 const { QUEUE_LIMIT } = require('../queue-dispatch.cjs');
 const NOW = 1_800_000_000_000, SECRET_SHAPE = 'Authorization: Bearer synthetic-placeholder';
 const runner = { runnerRef: 'butler-runner', backendRef: 'butler-backend', purpose: 'butler', profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro' };
@@ -21,6 +22,11 @@ const ROW_KEYS = {
   readyLegacy: ['archived', 'branch', 'commit', 'eventId', 'itemId', 'itemRecordRef', 'kind', 'metadataRevision', 'readOnly', 'recordRef', 'sourceTaskStatus', 'spaceId', 'spaceRecordRef', 'status', 'time', 'writable'],
   outcome: ['archived', 'eventId', 'itemId', 'itemRecordRef', 'kind', 'metadataRevision', 'readOnly', 'recordRef', 'spaceId', 'spaceRecordRef', 'status', 'time', 'writable'],
 };
+const PAGE_KEYS = {
+  spaces: ['activation', 'kind', 'limit', 'nextCursor', 'readOnly', 'recordPeriod', 'records', 'scanned', 'truncated'],
+  queue: ['activation', 'archived', 'kind', 'limit', 'metadataRevision', 'nextCursor', 'readOnly', 'recordPeriod', 'records', 'scanned', 'spaceId', 'spaceRecordRef', 'truncated', 'writable'],
+  deliveries: ['activation', 'archived', 'coverage', 'fromTime', 'kind', 'legacyDetails', 'limit', 'metadataRevision', 'nextCursor', 'readOnly', 'recordPeriod', 'records', 'scanned', 'spaceId', 'spaceRecordRef', 'throughTime', 'truncated', 'writable'],
+};
 const READY_KEYS = ['branch', 'commit'];
 const COUNT_KEYS = ['cancelled', 'done', 'failed', 'queued', 'sent', 'waiting'];
 const HIDDEN_FIELDS = { reason: 'Synthetic private reason', question: 'Synthetic private question?',
@@ -35,8 +41,9 @@ function fixture(t) {
   role.set(person, { identity: { sessionId: actor.id, nativeId: actor.nativeId }, runner }, 0);
   const room = new RoomState(directory), records = [actor], expected = { selectionRevision: 1, runnerRef: runner.runnerRef };
   const view = () => ({ records });
-  const bind = () => new ButlerBusiness({ role, roomState: room, view }).bind(actor, expected);
-  return { directory, person, role, actor, records, expected, room, view, bind, at: value => { now = value; } };
+  const readAudit = new ButlerReadAudit(directory, { authorizePerson: value => value === person, now: () => now });
+  const bind = () => new ButlerBusiness({ role, roomState: room, view, readAudit }).bind(actor, expected);
+  return { directory, person, role, actor, records, expected, room, view, bind, readAudit, at: value => { now = value; } };
 }
 function read(capability, query) { return capability.invoke('readBusiness', query); }
 function ready(f, text = 'Full synthetic task', spaceId = 'shared') {
@@ -64,7 +71,7 @@ test('dedicated catalog and invoke expose only the read capability, with no appr
 });
 
 test('only an exact designated record binds, and each old closure rechecks native identity and designation', t => {
-  const f = fixture(t), business = new ButlerBusiness({ role: f.role, roomState: f.room, view: f.view });
+  const f = fixture(t), business = new ButlerBusiness({ role: f.role, roomState: f.room, view: f.view, readAudit: f.readAudit });
   assert.throws(() => business.bind({ ...f.actor }, f.expected), code('ERR_BUTLER_UNAUTHORIZED'));
   const other = { ...f.actor, id: 'other', nativeId: 'other-native' }; f.records.push(other);
   assert.throws(() => business.bind(other, f.expected), code('ERR_BUTLER_UNAUTHORIZED'));
@@ -292,4 +299,32 @@ test('the literal key contract rejects an extra reason or question in an in-memo
   rowKeys(row, ROW_KEYS.queue);
   for (const extra of [{ reason: 'Synthetic accidental field' }, { question: 'Synthetic accidental question?' }])
     assert.throws(() => rowKeys({ ...row, ...extra }, ROW_KEYS.queue), assert.AssertionError);
+});
+
+test('business page envelopes have literal keys and never gain human audit storage or log capabilities', t => {
+  const f = fixture(t), capability = f.bind();
+  for (const query of [{ kind: 'spaces' }, { kind: 'queue', spaceId: 'shared' },
+    { kind: 'deliveries', spaceId: 'shared', fromTime: NOW, throughTime: NOW }]) {
+    const result = read(capability, query); rowKeys(result, PAGE_KEYS[query.kind]);
+    assert.equal(result.activation, 'off'); assert.equal(result.recordPeriod, 'off');
+    assert.equal(Object.hasOwn(result, 'storage'), false); assert.equal(Object.hasOwn(result, 'audit'), false);
+    assert.throws(() => rowKeys({ ...result, storage: { usedBytes: 0 } }, PAGE_KEYS[query.kind]), assert.AssertionError);
+  }
+  assert.deepEqual(capability.catalog().methods.map(value => value.name), ['readBusiness']);
+});
+
+test('rejected decision and failure sources retain only the literal unavailable metadata keys', t => {
+  const f = fixture(t);
+  for (const status of ['waiting', 'failed']) {
+    const id = f.room.queueAdd('Synthetic source ' + status, null);
+    f.room.queueMarkSent('shared', id, 'worker-a', 'Synthetic worker', NOW);
+    f.room.queueSettle('shared', id, status, status === 'failed' ? 'Synthetic failure' : '', 'Synthetic worker', '', 'Synthetic decision?');
+  }
+  const sources = f.room.value.events.filter(event => ['decision', 'failure'].includes(event.butlerSource?.kind));
+  assert.deepEqual(sources.map(event => event.butlerSource.kind), ['decision', 'failure']);
+  for (const source of sources) source.butlerSource.payload.unrecognized = 'Synthetic rejected private detail';
+  const result = read(f.bind(), { kind: 'deliveries', spaceId: 'shared', fromTime: NOW, throughTime: NOW });
+  assert.equal(result.records.length, 2);
+  for (const row of result.records) { rowKeys(row, ROW_KEYS.unavailable); assert.equal(row.status, 'unavailable'); assert.equal(row.time, NOW); }
+  assert.equal(JSON.stringify(result).includes('Synthetic rejected private detail'), false);
 });

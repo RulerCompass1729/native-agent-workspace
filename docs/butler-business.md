@@ -30,7 +30,9 @@ The trusted runtime host supplies the role, private RoomState and current
 metadata records. It binds the actual designated record and exact selection:
 
 ```js
-const business = new ButlerBusiness({ role, roomState, view });
+// Main creates one audit object with its opaque person verifier. Reuse that
+// exact instance for this capability and the human butlerReview('reads') path.
+const business = new ButlerBusiness({ role, roomState, view, readAudit: butlerReadAudit });
 const capability = business.bind(actualRecord, { selectionRevision, runnerRef });
 const catalog = capability.catalog();
 const page = capability.invoke('readBusiness', {
@@ -43,6 +45,14 @@ calls resolve its bound session/native identity in a fresh view and recheck the
 role revision, runner, membership and liveness. A revoked, rotated or replaced
 binding cannot fall through to ordinary agent permissions. The model never
 supplies an actor, selection or authorization object.
+
+`readAudit` is required and must be an actual `ButlerReadAudit` instance. There
+is no implicit store derived from `role.file`: the role record may live in a
+nested instance directory while the shared human-readable audit lives elsewhere.
+The host reuses its shared audit object for every role and reconstructed business
+capability, including its person-only log reader. The role file must still have
+an absolute path. This explicit source contract does not wire or qualify the
+production DSH host.
 
 The catalog exposes only `readBusiness`. Every other method is refused, including
 `initial`, `nativeHistory`, terminal/observation/file reads and queue mutations.
@@ -131,12 +141,37 @@ This adds audit metadata only; the business data stays read-only.
 
 Only a verified person can page the metadata through the existing review API:
 `workspace.butlerReview('reads', { afterSequence: 0, limit: 20 })`. It returns
-`{records, throughSequence, nextAfterSequence, truncated}`. These positions belong
-to the read log, independently of the suggestion ledger's sequence. Human log
+`{records, throughSequence, nextAfterSequence, truncated, storage}`. These positions
+belong to the read log, independently of the suggestion ledger's sequence. Human log
 reads do not consume model pages. The command is absent from the agent catalog;
 an ordinary cross-session consent cannot grant it.
 
-Literal regression contracts pin each kind of returned row, including nested
+`storage` contains only `usedBytes`, `maxBytes`, `remainingBytes`,
+`warningThresholdBytes` and a literal `warning` Boolean. The byte counts describe
+this validated metadata journal, not device free space. The hard cap remains
+32 MiB. The prewarning threshold is the engineering default of **75% (24 MiB)**,
+not a product approval, a spending threshold or a time-to-full estimate. Neither
+the threshold nor the cap is a model option. There is no automatic archive,
+prune, rotation, deletion or counter reset. Oversized or invalid journals still
+fail closed; capacity status does not make an unreadable journal readable.
+
+A trusted host may supply `onCapacityWarning(storage)` when constructing
+`ButlerReadAudit`. It receives a frozen copy of those same five fields, without
+actor, query, body or filesystem paths. On the first successful record or
+verified human read at/above the threshold, the callback runs only after the
+operation and lock cleanup succeed. Synchronous throws and rejected promises do
+not change a successful audit/page outcome. It fires at most once per object;
+a reconstructed object's first human read of an already large journal can warn
+again. No timer or heartbeat is added, and rejected/failed calls emit no warning
+event. No rejected/failed-attempt record type is added; a complete preparation
+row left by an uncertain write still conservatively counts. The callback is an
+optional host signal, not proof that the person saw a warning. The future runtime host must explicitly
+inject its shared audit instance; this checkpoint changes no Main/UI entry.
+`recordPage` keeps its existing preparation receipt. Business tool pages never
+contain storage status or a log-reading capability.
+
+Literal regression contracts pin the spaces/queue/deliveries page envelopes and
+each kind of returned row, including rejected decision/failure metadata, nested
 READY and queue-count fields. Adding a `reason`, `question` or other field requires
 an explicit contract change. Blank or secret-shaped space names yield a metadata-
 only unavailable row, leaving other space rows readable.

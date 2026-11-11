@@ -11,6 +11,8 @@ const FILE_NAME = 'butler-business-reads.jsonl';
 // to at most 4 MiB of business pages, including empty or repeated pages.
 const MAX_PAGES_PER_UTC_DAY = 64;
 const MAX_FILE_BYTES = 32 * 1024 * 1024, MAX_RECORD_BYTES = 128 * 1024;
+// An engineering prewarning only. It never changes the cap or removes records.
+const WARNING_THRESHOLD_BYTES = MAX_FILE_BYTES * 3 / 4;
 const MAX_LIMIT = 50, MAX_SCAN_RECORDS = 2000, MAX_REFERENCE_LENGTH = 2048;
 const PREFIX = 'ERR_BUTLER_READ_AUDIT_';
 const errorCode = suffix => suffix === 'QUOTA' ? 'ERR_BUTLER_READ_LIMIT' : PREFIX + suffix;
@@ -103,14 +105,20 @@ function privateFile(stat) {
 function privateDirectory(stat) {
   return stat.isDirectory() && !stat.isSymbolicLink() && stat.uid === process.getuid() && (stat.mode & 0o777) === 0o700;
 }
+function storageStatus(usedBytes) {
+  return { usedBytes, maxBytes: MAX_FILE_BYTES, remainingBytes: MAX_FILE_BYTES - usedBytes,
+    warningThresholdBytes: WARNING_THRESHOLD_BYTES, warning: usedBytes >= WARNING_THRESHOLD_BYTES };
+}
 
 class ButlerReadAudit {
   #directory; #identity; #file; #lock; #now; #authorizePerson; #failed = false; #observed = null;
+  #onCapacityWarning; #capacityWarned = false;
   constructor(directory, options = {}) {
-    fields(options, ['authorizePerson', 'now'], []);
-    const { authorizePerson = () => false, now = Date.now } = options;
-    if (typeof directory !== 'string' || !path.isAbsolute(directory) || typeof authorizePerson !== 'function' || typeof now !== 'function') fail('OPTIONS');
-    this.#now = now; this.#authorizePerson = authorizePerson;
+    fields(options, ['authorizePerson', 'now', 'onCapacityWarning'], []);
+    const { authorizePerson = () => false, now = Date.now, onCapacityWarning = () => {} } = options;
+    if (typeof directory !== 'string' || !path.isAbsolute(directory) ||
+        ![authorizePerson, now, onCapacityWarning].every(value => typeof value === 'function')) fail('OPTIONS');
+    this.#now = now; this.#authorizePerson = authorizePerson; this.#onCapacityWarning = onCapacityWarning;
     try {
       this.#identity = fs.lstatSync(directory);
       if (!privateDirectory(this.#identity)) fail('STATE');
@@ -118,6 +126,14 @@ class ButlerReadAudit {
       if (!sameFile(this.#identity, fs.lstatSync(this.#directory))) fail('STATE');
     } catch { fail('STATE'); }
     this.#file = path.join(this.#directory, FILE_NAME); this.#lock = this.#file + '.lock';
+  }
+  #warnCapacity(storage) {
+    if (!storage.warning || this.#capacityWarned) return;
+    this.#capacityWarned = true;
+    // This runs only after the locked operation and cleanup succeed. A host
+    // notifier cannot mutate the reader's status or undo a durable approval.
+    try { Promise.resolve(this.#onCapacityWarning(Object.freeze({ ...storage }))).catch(() => {}); }
+    catch { /* Notification failure never changes audit or business outcomes. */ }
   }
   #directoryFd() {
     if (this.#failed) fail('STATE');
@@ -203,7 +219,7 @@ class ButlerReadAudit {
   }
   recordPage(input) {
     const page = pageInput(input);
-    return this.#locked(({ directoryFd, owned }) => {
+    const approved = this.#locked(({ directoryFd, owned }) => {
       const loaded = this.#load(), time = this.#now(), day = dayOf(time), pageOfDay = (loaded.days.get(day) || 0) + 1;
       if (pageOfDay > MAX_PAGES_PER_UTC_DAY) fail('QUOTA');
       if (loaded.sequence === Number.MAX_SAFE_INTEGER) fail('CAPACITY');
@@ -229,8 +245,9 @@ class ButlerReadAudit {
         this.#checkLock(owned); this.#observed = after;
       } catch { fail('WRITE'); }
       finally { if (fd !== undefined) fs.closeSync(fd); }
-      return { sequence: record.sequence, time, day, pageOfDay };
+      return { receipt: { sequence: record.sequence, time, day, pageOfDay }, storage: storageStatus(this.#observed.size) };
     });
+    this.#warnCapacity(approved.storage); return approved.receipt;
   }
   read(person, options = {}) {
     let permitted = false; try { permitted = this.#authorizePerson(person) === true; } catch {}
@@ -238,12 +255,14 @@ class ButlerReadAudit {
     fields(options, ['afterSequence', 'limit'], []);
     const { afterSequence = 0, limit = MAX_LIMIT } = options;
     if (!integer(afterSequence) || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) fail('INPUT');
-    return this.#locked(() => {
+    const result = this.#locked(() => {
       const loaded = this.#load({ afterSequence, limit });
       if (afterSequence > loaded.sequence) fail('INPUT');
       const nextAfterSequence = loaded.records.at(-1)?.sequence ?? afterSequence;
-      return { records: loaded.records, throughSequence: loaded.sequence, nextAfterSequence, truncated: nextAfterSequence < loaded.sequence };
+      return { records: loaded.records, throughSequence: loaded.sequence, nextAfterSequence, truncated: nextAfterSequence < loaded.sequence,
+        storage: storageStatus(loaded.identity?.size || 0) };
     });
+    this.#warnCapacity(result.storage); return result;
   }
 }
 module.exports = { ButlerReadAudit, MAX_PAGES_PER_UTC_DAY };

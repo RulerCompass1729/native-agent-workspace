@@ -25,12 +25,16 @@ function fixture(t) {
 function poison(target, key, hit) {
   Object.defineProperty(target, key, { enumerable: true, configurable: true, get() { hit(); throw Error('synthetic getter executed'); } });
 }
+function storage(usedBytes) {
+  return { usedBytes, maxBytes: 33_554_432, remainingBytes: 33_554_432 - usedBytes,
+    warningThresholdBytes: 25_165_824, warning: usedBytes >= 25_165_824 };
+}
 
 test('construction creates nothing; an authorized empty read leaves no log and consumes no pages', t => {
   const f = fixture(t);
   assert.equal(MAX_PAGES_PER_UTC_DAY, 64);
   assert.deepEqual(fs.readdirSync(f.directory), []);
-  assert.deepEqual(f.audit.read(f.person), { records: [], throughSequence: 0, nextAfterSequence: 0, truncated: false });
+  assert.deepEqual(f.audit.read(f.person), { records: [], throughSequence: 0, nextAfterSequence: 0, truncated: false, storage: storage(0) });
   assert.deepEqual(fs.readdirSync(f.directory), []);
   assert.equal(f.audit.recordPage(page()).pageOfDay, 1);
 });
@@ -342,4 +346,105 @@ test('no-progress writes fail rather than looping or returning an approval', t =
   const f = fixture(t); t.mock.method(fs, 'writeSync', () => 0);
   assert.throws(() => f.audit.recordPage(page()), code('WRITE')); assert.equal(fs.statSync(f.file).size, 0);
   assert.equal(fs.existsSync(f.lock), false);
+});
+
+// A real replay-valid journal near the fixed threshold, with no filler fields
+// or mocked file statistics. All page payloads are bounded metadata references.
+let nearWarning;
+function nearWarningJournal() {
+  if (nearWarning) return nearWarning;
+  const large = page();
+  large.result = { count: 20, scanned: 20, truncated: false, recordRefs: Array.from({ length: 20 }, (_, n) =>
+    'naw:space:shared/item:' + encodeURIComponent('测'.repeat(197) + String(n).padStart(3, '0'))) };
+  const small = page(), lines = []; let sequence = 0, size = 0;
+  function line(input) {
+    const time = NOW - (100 - Math.floor(sequence / 64)) * DAY;
+    return Buffer.from(JSON.stringify({ version: 1, sequence: sequence + 1, time, day: new Date(time).toISOString().split('T')[0],
+      pageOfDay: sequence % 64 + 1, ...input }) + '\n');
+  }
+  function add(bytes) { lines.push(bytes); size += bytes.length; sequence++; }
+  for (;;) { const next = line(large); if (size + next.length >= 25_165_824) break; add(next); }
+  while (25_165_824 - size > 20_000) add(line(small));
+  nearWarning = { bytes: Buffer.concat(lines), large, sequence };
+  return nearWarning;
+}
+
+test('human storage status uses actual byte counts, stays separate from page receipts, and has five fixed metadata fields', t => {
+  const f = fixture(t); assert.deepEqual(f.audit.read(f.person).storage, storage(0));
+  const receipt = f.audit.recordPage(page());
+  assert.deepEqual(Object.keys(receipt).sort(), ['day', 'pageOfDay', 'sequence', 'time']);
+  const result = f.audit.read(f.person);
+  assert.deepEqual(result.storage, storage(fs.statSync(f.file).size));
+  assert.deepEqual(Object.keys(result.storage).sort(), ['maxBytes', 'remainingBytes', 'usedBytes', 'warning', 'warningThresholdBytes']);
+  result.storage.usedBytes = -1; assert.deepEqual(f.audit.read(f.person).storage, storage(fs.statSync(f.file).size));
+  assert.throws(() => new ButlerReadAudit(f.directory, { warningThresholdBytes: 1 }), code('INPUT'));
+});
+
+test('a durable crossing of seventy-five percent warns once after unlock; a new reader can warn again without consuming a page', t => {
+  const f = fixture(t), large = nearWarningJournal(), notices = [];
+  fs.writeFileSync(f.file, large.bytes, { mode: 0o600 });
+  const audit = new ButlerReadAudit(f.directory, { authorizePerson: value => value === f.person, now: () => NOW,
+    onCapacityWarning: value => {
+      assert.equal(fs.existsSync(f.lock), false, 'the callback cannot run while the audit is locked');
+      assert.deepEqual(value, storage(fs.statSync(f.file).size)); assert.equal(Object.isFrozen(value), true);
+      assert.equal(Reflect.set(value, 'usedBytes', -1), false); notices.push(value);
+    } });
+  assert.ok(large.bytes.length < 25_165_824);
+  assert.equal(audit.read(f.person, { limit: 1 }).storage.warning, false); assert.equal(notices.length, 0);
+  const receipt = audit.recordPage(large.large);
+  assert.equal(receipt.pageOfDay, 1, 'old UTC days do not consume the current day');
+  assert.equal(receipt.sequence, large.sequence + 1); assert.equal(notices.length, 1);
+  assert.ok(notices[0].usedBytes >= 25_165_824); assert.ok(notices[0].remainingBytes > 0);
+  t.diagnostic(JSON.stringify({ journalBeforeBytes: large.bytes.length, journalAfterBytes: notices[0].usedBytes,
+    warningThresholdBytes: 25_165_824, priorApprovedPages: large.sequence, newPageOfUtcDay: receipt.pageOfDay }));
+  assert.equal(audit.recordPage(page()).pageOfDay, 2); assert.equal(notices.length, 1);
+  const nextNotices = [], reopened = new ButlerReadAudit(f.directory, { authorizePerson: value => value === f.person,
+    onCapacityWarning: value => nextNotices.push(value) });
+  const read = reopened.read(f.person, { afterSequence: large.sequence, limit: 2 });
+  assert.deepEqual(read.storage, storage(fs.statSync(f.file).size)); assert.equal(nextNotices.length, 1);
+  assert.notEqual(nextNotices[0], read.storage); assert.equal(Object.isFrozen(nextNotices[0]), true);
+  assert.deepEqual(read.records.map(row => row.pageOfDay), [1, 2]);
+  reopened.read(f.person, { limit: 1 }); assert.equal(nextNotices.length, 1);
+  assert.deepEqual(fs.readdirSync(f.directory), [FILE_NAME]);
+});
+
+test('warning callback errors and rejected promises cannot change a successful read or write or its storage status', async t => {
+  const f = fixture(t), large = nearWarningJournal(); fs.writeFileSync(f.file, large.bytes, { mode: 0o600 });
+  let syncCalls = 0;
+  const writer = new ButlerReadAudit(f.directory, { now: () => NOW, onCapacityWarning: () => { syncCalls++; throw Error('synthetic callback failure'); } });
+  assert.equal(writer.recordPage(large.large).pageOfDay, 1); assert.equal(syncCalls, 1);
+  let asyncCalls = 0;
+  const reader = new ButlerReadAudit(f.directory, { authorizePerson: value => value === f.person,
+    onCapacityWarning: async () => { asyncCalls++; throw Error('synthetic asynchronous callback failure'); } });
+  const result = reader.read(f.person, { limit: 1 });
+  assert.deepEqual(result.storage, storage(fs.statSync(f.file).size)); assert.equal(asyncCalls, 1);
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(reader.read(f.person, { limit: 1 }).storage.warning, true); assert.equal(asyncCalls, 1);
+});
+
+test('uncertain writes and failed lock cleanup never call a capacity callback or claim an approved page', async t => {
+  for (const fault of ['fsync', 'unlock']) await t.test(fault, t => {
+    const f = fixture(t), large = nearWarningJournal(); fs.writeFileSync(f.file, large.bytes, { mode: 0o600 });
+    let called = 0;
+    const audit = new ButlerReadAudit(f.directory, { now: () => NOW, onCapacityWarning: () => called++ });
+    if (fault === 'fsync') t.mock.method(fs, 'fsyncSync', () => { throw Error('synthetic fsync failure'); });
+    else {
+      const unlink = fs.unlinkSync, canonicalLock = path.join(fs.realpathSync(f.directory), FILE_NAME + '.lock');
+      t.mock.method(fs, 'unlinkSync', file => { if (file === canonicalLock) throw Error('synthetic cleanup failure'); return unlink(file); });
+    }
+    assert.throws(() => audit.recordPage(large.large), code(fault === 'fsync' ? 'WRITE' : 'STATE'));
+    assert.equal(called, 0); t.mock.restoreAll();
+    assert.ok(fs.statSync(f.file).size >= 25_165_824, 'failure did not roll back or truncate the complete intent');
+  });
+});
+
+test('a quota-rejected page above the storage threshold emits no warning event and adds no failed-attempt record', t => {
+  const f = fixture(t), large = nearWarningJournal(), lines = [large.bytes];
+  for (let n = 1; n <= 64; n++) lines.push(Buffer.from(JSON.stringify({ version: 1, sequence: large.sequence + n,
+    time: NOW, day: '2026-11-11', pageOfDay: n, ...large.large }) + '\n'));
+  const bytes = Buffer.concat(lines); assert.ok(bytes.length < 33_554_432); assert.ok(bytes.length >= 25_165_824);
+  fs.writeFileSync(f.file, bytes, { mode: 0o600 }); let calls = 0;
+  const audit = new ButlerReadAudit(f.directory, { now: () => NOW, onCapacityWarning: () => calls++ });
+  assert.throws(() => audit.recordPage(page()), code('LIMIT'));
+  assert.equal(calls, 0); assert.equal(fs.statSync(f.file).size, bytes.length); assert.equal(fs.existsSync(f.lock), false);
 });
