@@ -406,3 +406,36 @@ suggestions and the person's confirmed agreement. No installed OS notification,
 real working day or enabled production ask adapter is qualified by synthetic
 EventEmitter/unit checks. All future formal outward ask channels must use this
 measurement before they can participate in acceptance.
+
+
+## Shared UTC-day usage reading (source, dormant)
+
+`require('./butler-usage.cjs').summarizeUsage(ledger.snapshot(), { now })` is the
+shared read-only calculation for the person's entry and `Controller.budgetReady`.
+Use the existing healthy writer, not a second ledger. It returns `{utcDay, asOf,
+today, guard}`. It does not authorize a call, qualify a runtime or start a period.
+
+`today.recordedRunCount`, `attemptCount` and `legacyBatchCount` count ledger runs,
+not HTTP requests. One DSH run may make multiple requests, and an uncertain attempt
+may not have reached a provider. `providerRequestCount` remains null until trusted
+provider-request measurement is persisted. An empty-day zero describes the ledger,
+not a verified provider bill or proof that no requests occurred.
+
+`today.costMicros` and each `today.tokens` field (`inputTokens`,
+`cachedInputTokens`, `outputTokens`, `totalTokens`) return `{value,
+knownLowerBound, unknownRuns, overflow}`. Any missing reading makes its complete
+value null. The subtotal adds only supplied values; overflow makes both totals
+null. There is no price conversion, inferred token total or missing-cache zero.
+`knownLowerBound` is a subtotal of recorded values, including any marked estimates;
+it is not a verified lower bound on the actual bill. Keep source and estimate
+uncertainty visible: `sources:{values,unknownRuns}` and
+`estimated:{yes,no,unknown}` preserve absent or mixed metadata.
+
+Attempts belong to their start UTC day, including retries, stale and quarantined
+attempts. Any attempt coverage suppresses the completed-batch fallback. Legacy
+completed batches without attempts belong to their completion UTC day. The guard
+retains the existing first-failure order: any historical unknown attempt cost
+blocks; an old legacy unknown cost does not newly block. Cost overflow is invalid;
+token overflow alone does not change the monetary guard. The person's budget,
+estimate gate and reminder path retain their existing semantics. A two-dollar
+reminder is not introduced here as a new cap. `guard.reason:null` grants nothing.

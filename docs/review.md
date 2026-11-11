@@ -8749,3 +8749,23 @@ The first GUI run passed the creation checks and Claude trust/restart path. Its 
 ### B2 joining guard follow-up — 2026-11-11
 
 Integrator review found one new fallible read on the unchanged-directory joining path: `client.snapshot()` ran before the migration directory guard, so a session-ownership conflict could fail an ordinary handoff immediately. The directory guard now runs before that read. Regression cases cover both an older record with no `newCwd` and an explicit same-directory record: a throwing snapshot must never be called, while membership and queued ownership still transfer. On the rebased pre-fix source both cases fail with the injected ownership conflict; after the one-line guard both pass. The original checkpoint is rebased onto the requested main; both append-only review sections were retained. The same independent reviewer approved this one-line guard and the recorded gate conditions after reading the red/green logs and actual source. The rebased full suite passes 4,979/4,979 with no failures, cancellations or skips.
+
+## B4 shared usage reading without a budget-policy change (2026-11-11, source reviewed)
+
+The entry needs one UTC-day reading from the same accounting used by the budget
+guard. A pure helper now supplies recorded run counts, token and micro-dollar
+readings, unknown counts, source/estimate status and the existing guard reason.
+Controller reuses it. The amount, estimate, day-boundary, authority and activation
+gates are unchanged. Actual provider request counts remain unknown; runs are not
+labelled as HTTP requests. Missing values and overflow cannot become zero.
+
+Author-run checks: 68 related cases pass, including the real Controller and package
+source walk. A direct comparison against the actual preceding Controller agrees
+on 500 deterministic history cases. A missing-reading-as-zero in-memory mutation
+fails three tests; it is a negative control, not an old product failure. The
+full isolated suite passes 4976 checks with zero failures or skips. Fresh
+read-only review `19B06247-5D9D-4D87-BE87-72F0649C8760` returned `APPROVE_SCOPED`
+for the source and final evidence closure (private evidence:
+`.local/usage-review/review.jsonl` and `close.jsonl`). No person entry is wired by this
+change. This is source accounting, not real billing, provider, installed,
+activation or working-day acceptance. Owner: butler outcome owner.
