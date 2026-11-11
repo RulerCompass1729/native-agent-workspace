@@ -50,9 +50,10 @@
       help.hidden = true; quiet(help);
       dialog.dataset.readsState = view.shown ? 'records' : 'empty'; dialog.dataset.readsLevel = view.today.level;
       say(refresh, 'butler.reads.refresh');
-      // Today's count is given only when the newest record is on screen; it is the core's own running count.
-      today.hidden = view.today.pages === null;
-      if (view.today.pages === null) quiet(today);
+      // Today's count is the core's own running count, known only with the newest record on screen. When it cannot
+      // be told, that is said with the reason: a missing line would read as "nothing to report".
+      today.hidden = false;
+      if (view.today.pages === null) say(today, view.reached ? 'butler.reads.todayUnknownNewest' : 'butler.reads.todayUnknownReach', { from: view.today.from, limit: view.today.limit, resets: view.today.resets });
       else if (view.today.level === 'full') say(today, 'butler.reads.todayFull', { from: view.today.from, limit: view.today.limit, resets: view.today.resets });
       else if (!view.today.pages) say(today, 'butler.reads.todayNone', { from: view.today.from, limit: view.today.limit, resets: view.today.resets });
       else say(today, 'butler.reads.today', { from: view.today.from, pages: view.today.pages, left: view.today.left, limit: view.today.limit, resets: view.today.resets });
@@ -60,9 +61,13 @@
       // count says, so this is said beside that count.
       // Close to the cap is not the same as at it: closer than the largest single record, the butler's reads can
       // already be refused, and at the cap they all are. The sentence says that instead of "nearly".
-      const warned = Boolean(view.storage) && (view.storage.warning || view.storage.full);
+      // A report that is missing or does not add up is not "all is well": how full the file is cannot be told, and
+      // that is said, because a full file stops the butler whatever the day's count shows.
+      const warned = !view.storage || view.storage.warning || view.storage.full;
       full.hidden = !warned;
-      if (warned) say(full, view.storage.full ? 'butler.reads.storageFull' : 'butler.reads.storageWarning', { used: mib(view.storage.usedBytes), max: mib(view.storage.maxBytes) }); else quiet(full);
+      if (!view.storage) say(full, 'butler.reads.storageUnknown');
+      else if (warned) say(full, view.storage.full ? 'butler.reads.storageFull' : 'butler.reads.storageWarning', { used: mib(view.storage.usedBytes), max: mib(view.storage.maxBytes) });
+      else quiet(full);
       // How much of the log is listed, so a short list is not taken for the whole of it.
       listed.hidden = !view.shown;
       if (!view.shown) quiet(listed);
@@ -83,7 +88,7 @@
         for (const column of COLUMNS) { const cell = make('th', '', `butler.reads.column.${column}`); cell.setAttribute('scope', 'col'); headRow.append(cell); }
         head.append(headRow); table.append(head);
         for (const group of view.days) {
-          const body = make('tbody'), dayRow = make('tr', 'butler-reads-day'), dayCell = make('th', '', 'butler.reads.day', { from: group.from, through: group.through, day: group.day, pages: group.pages });
+          const body = make('tbody'), dayRow = make('tr', 'butler-reads-day'), dayCell = make('th', '', group.whole ? 'butler.reads.day' : 'butler.reads.dayAtLeast', { from: group.from, through: group.through, day: group.day, pages: group.pages });
           dayCell.setAttribute('colspan', String(COLUMNS.length)); dayCell.setAttribute('scope', 'rowgroup'); dayRow.append(dayCell); body.append(dayRow);
           for (const row of group.rows) {
             const line = make('tr');
@@ -104,16 +109,15 @@
       }
       older.hidden = !view.hasOlder; below();
     }
-    // The newest records first. The log pages forward only, so the tail is reached by position.
+    // The newest records first. The log pages forward only, so the tail is reached by position: one read to learn where
+    // the log ends, and one for its tail. Each read makes the main process go through the whole file, so there are
+    // never more than these two for one opening or refresh; pages written between them are not chased. They show as
+    // "newer ones were not reached", and Refresh reads again.
     async function load() {
       const mine = ++ticket; state = 'loading'; olderFailed = false; draw();
       try {
         let page = await ask({ afterSequence: 0, limit: PAGE }), got = page.records;
-        if (page.truncated) {
-          page = await ask(tailRequest(page.throughSequence)); got = page.records;
-          // Pages written between the two calls: follow them, a bounded number of times.
-          for (let round = 0; round < 2 && page.truncated; round++) { page = await ask({ afterSequence: page.nextAfterSequence, limit: PAGE }); got = got.concat(page.records); }
-        }
+        if (page.truncated) { page = await ask(tailRequest(page.throughSequence)); got = page.records; }
         if (mine !== ticket) return;
         // A log that says it has records and gives none was not read.
         if (!got.length && page.throughSequence > 0) throw Error('unreadable');

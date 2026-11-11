@@ -10600,3 +10600,86 @@ when argument checks moved out of exit polling. The same independent reviewer
 closed that note after the incremental diff; targeted checks passed 33/33. Final
 full-suite counts and unchanged source/index were verified by the author after
 review. Read-only review and approved fixture cleanup do not authorize daily use.
+
+## Butler read log: the activation notes in the dialog's own files (2026-11-11, behind the closed entry)
+
+Source: the integration review of the read log approved it with notes, none
+blocking, and listed what has to be done before the butler is switched on. The
+notes that are in the dialog's own files are done here. The others belong to
+the log's and the host's owners and are listed at the end.
+
+What changed:
+- Two silences are said. When the day's count cannot be told, the line is no
+  longer left out: it says so and why (the newest record is not understood by
+  this version, or the newest records were not reached this time). When the
+  answer carries no report of how full the file is, or one that does not add
+  up, the dialog says it cannot tell how full the file is, and that a full
+  file stops the butler whatever the day's count shows. A day's header gives
+  its page count as "at least" when it cannot be told that the day's last
+  record is on screen: the newest day without the log's newest record; an
+  earlier day when the record after its last shown one is missing, since that
+  record could belong to either day; a day that shows up again further on
+  because the clock went back. So it does not contradict the line above it.
+- One opening or refresh reads the log at most twice (once when the log fits
+  one page): one read to learn where it ends and one for its tail. Pages
+  written between the two are no longer chased with up to two more reads; they
+  show as "newer ones were not reached", and Refresh reads again.
+- The window starts without a butler part that cannot be set up. The read
+  log's and the entry's setup in `app/renderer/renderer.js` each fall back to
+  a stand-in, and the failure is written to the console. Before, a module
+  missing from the page stopped the whole window. A read log that was not set
+  up, asked for from an entry that was, tells the person it cannot be read.
+- Without the entry on screen the read log does not stay open (the record
+  table's existing rule, for the read log).
+
+Measured, for the cost of the person's read (the real log module in one
+process, a synthetic log, no application, no model): with records of a usual
+size (about 660 bytes) one read takes about 12 ms per MiB of log from 8 MiB
+up, about 0.38 s at the 32 MiB cap; with records of about 33,000 bytes about
+0.12 s at the cap. Every read
+goes through the whole file in the main process. One opening therefore went
+from up to four such reads to at most two. The rest is not the dialog's: a
+read that seeks the tail, or an index the log keeps, would remove it.
+
+Checks (author-run, no model, no native program): the full unit suite passes
+with no failure and every deliberate fault in these changes is caught (counts
+in the verdict lines below); the hidden window checks pass: the read log with
+the new sentences in both languages
+(`scripts/test-butler-reads.cjs`), the entry with its switch open, and the
+entry's drawn states.
+
+Not verified:
+- A window with a module really missing: the test runs the renderer's own two
+  setup statements where the module is absent or its setup fails.
+- The read log closing with the entry is tested on the renderer's own two
+  lines, not driven in a window: in this version an entry that has appeared
+  does not go away while the application runs.
+- The new sentences were not shown to the stand-in reviewer.
+- A file larger than its cap would be reported as "cannot tell how full"
+  rather than "full": only damage from outside could produce it.
+
+Left to their owners (not in this delivery):
+- Which process does the page accounting, and a separate answer or a bounded
+  retry when the person's read holds the lock.
+- A lock left behind if the application ends during the person's read.
+- The cost of one read of a large log in the main process (the measurement
+  above).
+- The same guard for the neighbouring setups in the renderer (the record
+  table, the mobile setup).
+
+Independent review (a fresh reviewer session for this checkpoint; its id is
+kept with the private evidence; Read, Grep, Glob only; tool inventory verified;
+worktree fingerprint unchanged after each invocation):
+- First verdict: `APPROVE_WITH_CHANGES`, nothing blocking. One finding to fix
+  before switch-on, fixed here: with the newest record missing, the newest
+  day's header gave a page count that read as the day's total (the "at least"
+  header above). One suggestion taken in another form: a read log that was not
+  set up is not a button that does nothing, it says that it cannot be read.
+- Delta verdict: `APPROVE`, with four notes. Applied as given and not sent
+  back: the clock going back across UTC midnight (an earlier group of a day
+  that shows up again is not called whole); the English window check now
+  looks for the words that tell the two headers apart; the description of
+  "at least" above. Left as it is: the stand-in's sentence says "right now"
+  for a state that lasts until the build is fixed.
+- On the final tree: full unit suite and deliberate faults, counts in the
+  commit message.

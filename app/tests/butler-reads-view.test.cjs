@@ -49,7 +49,7 @@ test('each record is one row of what the log holds, newest first, with nothing e
   const { records, through } = l.all(), view = readsView({ records, through, now: NOW, spaceNames: names, zone: pacific });
   assert.deepEqual(view.today, { day: '2026-11-11', pages: 6, left: 58, limit: 64, level: 'ok', from: '11-10 16:00', resets: '11-11 16:00' });
   assert.deepEqual([view.total, view.shown, view.newest, view.unreadable, view.hasOlder, view.days.length], [6, 6, true, 0, false, 1]);
-  assert.deepEqual({ ...view.days[0], rows: undefined }, { day: '2026-11-11', from: '11-10 16:00', through: '11-11 16:00', pages: 6, rows: undefined });
+  assert.deepEqual({ ...view.days[0], rows: undefined }, { day: '2026-11-11', from: '11-10 16:00', through: '11-11 16:00', pages: 6, whole: true, rows: undefined });
   assert.deepEqual(view.days[0].rows, [
     { sequence: 6, day: '2026-11-11', time: '11-11 00:50', pageOfDay: 6, kind: 'queue', archived: false, space: { id: 'shared', short: 'shared', name: 'Default' }, window: null, count: 0, more: false, revision: 4 },
     { sequence: 5, day: '2026-11-11', time: '11-11 00:01', pageOfDay: 5, kind: 'queue', archived: false, space: { id: SPACES.gone, short: '33333333…', name: null }, window: null, count: 1, more: false, revision: 4 },
@@ -155,6 +155,31 @@ test('the local span of a counting day follows the zone at each moment, across a
   const view = readsView({ records: [record, later], through: 2, now: at, zone });
   assert.deepEqual([view.days[0].from, view.days[0].through, view.today.from, view.today.resets], ['10-31 17:00', '11-01 16:00', '10-31 17:00', '11-01 16:00']);
   assert.deepEqual(view.days[0].rows.map(row => row.time), ['11-01 01:30', '11-01 01:30'], 'An hour apart in fact, the same clock time on the day the clocks go back');
+});
+
+test('a day\'s page count is its whole count only when the day\'s last record is on screen', t => {
+  // Three UTC days: two pages, three pages, two pages, written and read back by the real module.
+  const l = log(t);
+  for (const [day, pages] of [[2, 2], [1, 3], [0, 2]]) for (let page = 0; page < pages; page++) l.page(NOW - day * DAY - (pages - page) * MINUTE, 'spaces');
+  const all = l.audit.read(person, { afterSequence: 0, limit: 50 }).records; assert.equal(all.length, 7);
+  const view = records => readsView({ records, through: 7, now: NOW, zone: pacific }).days.map(day => [day.pages, day.whole]);
+  // Everything on screen: every day's number is its whole count.
+  assert.deepEqual(view(all), [[2, true], [3, true], [2, true]]);
+  // The newest record missing (not reached, or not understood): the newest day's number is a lower bound only.
+  assert.deepEqual(view(all.slice(0, 6)), [[1, false], [3, true], [2, true]]);
+  assert.deepEqual(view(all.map(record => record.sequence === 7 ? { ...record, version: 2 } : record)), [[1, false], [3, true], [2, true]]);
+  // An earlier day's last record missing: that day's number is a lower bound; the days around it are not affected.
+  assert.deepEqual(view(all.filter(record => record.sequence !== 5)), [[2, true], [2, false], [2, true]]);
+  // A day's first record missing: which day the missing record belongs to cannot be told, so the day before it is not called whole.
+  assert.deepEqual(view(all.filter(record => record.sequence !== 3)), [[2, true], [3, true], [2, true]].map(([pages, whole], index) => index === 2 ? [pages, false] : [pages, whole]));
+  // A record missing in the middle of a day does not change the day's last record.
+  assert.deepEqual(view(all.filter(record => record.sequence !== 4)), [[2, true], [3, true], [2, true]]);
+  // The clock went back across UTC midnight: the core goes on counting the earlier day, which then shows as two groups.
+  // The earlier of them is not that day's whole count, although the record after it is on screen.
+  const back = log(t); for (const at of [NOW - DAY - 2 * MINUTE, NOW - DAY - MINUTE, NOW - MINUTE, NOW - DAY]) back.page(at, 'spaces');
+  const again = back.audit.read(person, { afterSequence: 0, limit: 50 }).records;
+  assert.deepEqual(again.map(record => [record.day, record.pageOfDay]), [['2026-11-10', 1], ['2026-11-10', 2], ['2026-11-11', 1], ['2026-11-10', 3]], 'Written and read back by the real module');
+  assert.deepEqual(readsView({ records: again, through: 4, now: NOW, zone: pacific }).days.map(day => [day.day, day.pages, day.whole]), [['2026-11-10', 3, true], ['2026-11-11', 1, true], ['2026-11-10', 2, false]]);
 });
 
 test('how full the log file is comes from the core\'s own report and its own warning, or is not said at all', t => {
