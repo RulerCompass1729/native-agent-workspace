@@ -616,8 +616,20 @@ New on-disk selectors use version 2; the public set/snapshot shape stays version
 bypassing its required proof. Legacy version-1 selections remain visible and
 human-revocable in the new reader, but file-backed `current()` refuses them;
 there is no automatic proof creation from an untrusted existing log. A human
-set prepares the new proof durably before replacing the selector. An interrupted
-set can leave a mismatched proof and must refuse model authority. Missing,
+set prepares the new proof durably before replacing the selector. Re-designation
+carries the recognized stored proof's recorded byte prefix, including after cold
+restart, revoke or an interrupted selector replacement. It does not inherit that
+proof's old identity, runner or authority: the person selects those anew. When
+both disk and memory have a prefix, equal-length conflicting hashes refuse;
+for different lengths, the actual log must satisfy both before the longer
+constraint is carried forward. A revoked/interrupted selection hash need not
+match the new selection to retain that restriction. This carries the recorded byte restriction,
+not all prior selection-specific semantic comparisons when the person selects a
+new origin. Malformed/unsafe proof still blocks re-designation; a human recovery
+route for it remains separate pre-activation work. A well-formed stored prefix
+that no longer matches the log also requires such a recovery route; re-designation
+must not erase it to make current() succeed.
+An interrupted set can leave a mismatched proof and must refuse model authority. Missing,
 malformed, unsafe or mismatched proof blocks current identity without poisoning
 the readable saved selection or its revision-checked human revoke. Revoke neither
 reads nor deletes the proof, log or ledger. Recovery or re-designation after
@@ -635,6 +647,9 @@ packaged-runtime qualification and default-off controls remain unchanged.
 Trusted explicit-entry fixtures retain their parser semantics, never write proof
 and never affect real-log observations; production Controller, Business and
 Queue authorizations all use the file-backed form and must keep doing so.
+A full-source invariant pins every named direct authorize/current call in the
+production Butler modules to three/zero arguments respectively. It does not
+claim to detect indirect aliases or arbitrary runtime code changes.
 The shared Main Role must be retained across bindings rather than reconstructed
 for each model call. Model reads, bindings and queue commits still fail closed
 on an unresolved rotation view.

@@ -10919,3 +10919,79 @@ zero cancellations or skips, exit 1; its raw output is retained as
 is required after this correction. The substantive
 Role/proof source and its tested authority behavior are unchanged. The earlier
 publication pass predates this correction and is not reused for final commit.
+
+
+## Butler re-designation retains verified bytes — 2026-11-11
+
+The integrator's bdd28c09 review accepts 47e8f47/97aef09 with notes and no merge
+blockers. That supplies the previously authentication-blocked independent review;
+it does not close activation gates. Its new re-designation finding is reproduced
+here: set() parses the stored proof but initializes from RAM, which is empty in
+a new process. After a previously accepted A-to-B handoff, a cold human selection
+can then accept rewritten log bytes and return original A, or lose a peer's newer
+prefix and return B after C was accepted.
+
+On the exact 97aef09 source, nine targeted cases yield one pass and eight
+failures, zero skips. Five failures are real acceptance of rolled-back authority:
+four return A and one returns B. The other three are new immediate-prefix or
+conflicting-hash protocol assertions. Raw author evidence is retained privately
+as `.local/rotation-reselect/red.log`; no App, provider, model or child process
+is used by those cases.
+
+Under the existing Role lock and revision check, set now carries the stored
+verified prefix. It retains the stronger known disk/RAM constraint: equal-length
+conflicting hashes refuse; different-length observations require a real log read
+satisfying both hashes before choosing the longer one. Matching the current
+selection hash is not required merely to retain a byte restriction after revoke
+or interrupted set. New selection identity/runner still come only from the
+verified person, never from an old proof. Proof remains durable before selector
+replacement; revoke still skips proof entirely. Bad/unsafe proof recovery, link-
+only locking fallback and physical stopping remain separate activation work.
+
+Tests cover cold rewritten same-length/padded logs, revoke then re-designate,
+a newer peer proof, a stronger RAM observation, conflicting hashes, normal
+runner change and growth, a newly selected unrelated identity, and interrupted
+selector rename then retry. A separate source invariant pins all named direct
+production Butler authorize/current calls to three/zero arguments, guarding the
+trusted parser-fixture boundary. It deliberately makes no claim about aliases
+or arbitrary runtime replacement.
+
+This is byte-prefix continuity across a new human selection; it does not retain
+all prior selection-specific resolver comparisons when that person chooses a
+new origin. No authority, action, qualification or default-off gate expands.
+The new checkpoint requires its own independent scoped review and clean scans
+before READY; tests and full suite remain author-run, not independent reruns.
+
+Fresh read-only reviewer 3D0D1727-4A1F-44F1-84BF-0FC2BA76CCCB returns a scoped
+pass with no blocking findings for the 16-line Role change and original nine
+counterexamples/call invariant/docs. It verifies the five real original failures,
+proof-before-selector and locked strongest-prefix selection, human revoke and
+unchanged permissions. Author checks HEAD/index/worktree/newfiles unchanged
+after the invocation. Actual initialization is Glob/Grep/Read only, no MCP;
+actual model claude-opus-5-5, reported list cost USD 0.9547526. The raw stream
+contains 13 unique tool calls (the prose says 12); the author extends the initial
+12-call budget to 16 solely to finish concrete raw-log verification. No runtime
+or whole-suite rerun by the reviewer is claimed.
+
+The reviewer identifies an untested different-length log mismatch branch. Two
+new author cases cover a newer disk or memory prefix with only the shorter bytes
+still valid; set must refuse without changing either saved file, while revoke
+remains available. The product code is unchanged. Documentation now calls the
+cold carried value the stored proof's recorded prefix and names the recovery gap
+when a well-formed prefix no longer matches the actual log. That recovery path
+remains pre-activation work, rather than clearing the prefix. The direct-call
+invariant still covers only Butler-named modules and named calls. The initial
+private call-mutant harness assumes TAP while Node emits the spec reporter; the
+raw intended assertion failure is retained, and its corrected explicit-TAP run
+rejects the fourth-argument mutant. No source mutation is made on disk.
+
+The same review session's bounded delta review also returns scoped pass with no
+blocking findings for the two additional cases and corrected wording. It checks
+both longer hashes, unchanged saved files, continued snapshot/revoke and the
+9-pass/2-fail private mutant result. It reports four Read/Grep calls and no other
+tools; reported list cost for that invocation is USD 1.1491356 (actual model
+claude-opus-5-5). Author verifies HEAD/index/worktree/newfiles unchanged after
+the delta; the sole later wording fix says recorded byte restriction. No product
+or test behavior changes after that approval. Neither review independently runs
+tests, verifies the embedded runtime or clears the other activation conditions.
+The author retains the complete whole-suite and scans as separate conditions.
