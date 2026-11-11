@@ -64,6 +64,9 @@ function showLabel(state, entry) {
 }
 
 function fail(message) { const error = new Error(message); error.code = 'HANDOFF_STATE'; return error; }
+// A person's action that does not fit the record as it is now (already dealt with, no longer
+// held, no such reason): refused, and told apart from a fault of the record itself.
+function stale(message) { return Object.assign(fail(message), { stale: true }); }
 const CONTROL = /[\u0000-\u001f\u007f\u2028\u2029]/gu;
 const plain = (value, limit) => typeof value === 'string' && value.length > 0 && value.length <= limit && !/[\u0000-\u001f\u007f\u2028\u2029]/u.test(value);
 const optional = (value, limit) => value === undefined || value === null || value === '' ? '' : plain(value, limit) ? value : null;
@@ -656,7 +659,7 @@ class IntegrationHandoffs {
   resolveHandoff(handoffId, choice = {}, now = Date.now()) {
     const next = this.draft();
     const handoff = next.handoff;
-    if (!handoff || handoff.id !== handoffId || handoff.status !== 'waiting') throw fail('No such waiting handoff');
+    if (!handoff || handoff.id !== handoffId || handoff.status !== 'waiting') throw stale('No such waiting handoff');
     const outcome = this.endWaiting(next, choice?.retry === true, now);
     this.commit(next);
     return outcome;
@@ -665,7 +668,7 @@ class IntegrationHandoffs {
   // a branch returned too often.
   answer(reason) {
     const next = this.draft();
-    if (typeof reason !== 'string' || !question(reason) || reasonKey(reason) === null) throw fail('Not a question');
+    if (typeof reason !== 'string' || !question(reason) || reasonKey(reason) === null) throw stale('Not a question');
     if (!next.reasons[reason]?.open) return { answered: false };
     next.reasons[reason].open = false;
     this.commit(next);
@@ -763,7 +766,7 @@ class IntegrationHandoffs {
   retryReady(key) {
     const next = this.draft();
     const entry = next.ready.find(candidate => candidate.key === key);
-    if (!entry || entry.state !== 'held') throw fail('This delivery is not held');
+    if (!entry || entry.state !== 'held') throw stale('This delivery is not held');
     entry.state = 'deliverable'; delete entry.reason;
     this.commit(next);
     return { released: [key] };
@@ -774,7 +777,7 @@ class IntegrationHandoffs {
   // standing condition stays open until it changes.
   retryReason(reason, now = Date.now()) {
     const next = this.draft();
-    if (reasonKey(reason) === null) throw fail('Unknown reason');
+    if (reasonKey(reason) === null) throw stale('Unknown reason');
     const waits = next.handoff?.status === 'waiting' && next.handoff.reason === reason;
     const released = waits ? this.endWaiting(next, true, now).released : [];
     released.push(...this.release(next, candidate => candidate === reason, !standing(reason)));
@@ -807,6 +810,11 @@ class IntegrationHandoffs {
   }
 
   // What the person or a report can be shown.
+  // The reasons that are open, with whether the person was told: { reason, notice, firstAt }.
+  openReasons() {
+    this.usable();
+    return Object.entries(this.state.reasons).filter(([, record]) => record.open).map(([reason, record]) => ({ reason, notice: record.notice, firstAt: record.firstAt }));
+  }
   deliverable() { this.usable(); return structuredClone(this.state.ready.filter(entry => entry.state === 'deliverable')); }
   held() {
     this.usable();
