@@ -2325,6 +2325,14 @@ function sidebarSessions() {
   const ranks = new Map((state.sidebar?.order || []).map((id, index) => [id, index]));
   return state.sessions.filter(s => !s.archived).sort((a, b) => (ranks.get(a.id) ?? Infinity) - (ranks.get(b.id) ?? Infinity));
 }
+// U22: the listed sessions whose name another listed session also has. Their rows show the
+// short id beside the name; a unique name stays without it. One session shown under two spaces
+// in the grouped view is still one session.
+function sameNameSessions(sessions) {
+  const count = new Map();
+  for (const session of sessions) count.set(session.name, (count.get(session.name) || 0) + 1);
+  return new Set(sessions.filter(session => count.get(session.name) > 1).map(session => session.id));
+}
 function versionValue(value) {
   return typeof value === 'string' && /^[a-z0-9][a-z0-9.+_-]{0,95}$/i.test(value) ? value : null;
 }
@@ -2625,7 +2633,7 @@ function renderSessions() {
   const keys = new Set(occurrences.map(row => row.key));
   if (sessionMenu && !sessionMenu.anchor && sessionMenu.rowKey && !keys.has(sessionMenu.rowKey)) sessionMenu.close();
   for (const [key, row] of sessionRows) if (!keys.has(key) && renameTarget?.row !== row.element) { row.element.remove(); sessionRows.delete(key); }
-  const positions = new Map();
+  const positions = new Map(), repeated = sameNameSessions(visible);
   for (const { record, key, group, container } of occurrences) {
     let row = sessionRows.get(key);
     if (!row) {
@@ -2670,6 +2678,7 @@ function renderSessions() {
     const moreParams = () => ({ name: record.name, id: sessionShortId(record.id), space: group ? ` · ${spaceName(spaceRecord(group))}` : '' }); ui.display.attribute(row.more, 'aria-label', 'sidebar.sessionActions', moreParams); ui.display.attribute(row.more, 'title', 'sidebar.sessionActions', moreParams); row.more.disabled = renameTarget?.id === record.id;
     ui.display.computed(row.more, 'aria-description', () => sidebarDetails(record).join(' · '));
     row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); ui.display.computed(row.status, 'text', () => sidebarPresentation(record).compact);
+    row.element.classList.toggle('same-name', repeated.has(record.id));
     row.time.textContent = sessionActivityTime(record); row.time.title = sessionTimes(record);
     row.dot.className = `state-dot ${presentation.tone}${presentation.workTone ? ' ' + presentation.workTone : ''}`; ui.display.computed(row.dot, 'title', () => sidebarPresentation(record).full); row.dot.dataset.nativeState = record.state;
     row.marker.textContent = presentation.marker; ui.display.computed(row.marker, 'title', () => sidebarPresentation(record).full); row.element.classList.toggle('has-status-detail', presentation.detail);

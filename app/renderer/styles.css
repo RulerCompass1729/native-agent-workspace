@@ -673,6 +673,10 @@ header h1, header p { overflow-wrap: anywhere; }
   .session-link .label>.session-title{grid-column:1;grid-row:1;display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .session-link .label>.session-backend-version{grid-column:2;grid-row:1;font-size:11px;line-height:1.4}
   .session-link .label>.session-short-id{display:none}
+  /* U22: a row whose name another listed session shares shows its short id beside the name. */
+  .session-row.same-name .session-link .label{grid-template-columns:minmax(0,1fr) auto auto}
+  .session-row.same-name .session-link .label>.session-short-id{display:block;grid-column:2;grid-row:1;max-width:none;white-space:nowrap}
+  .session-row.same-name .session-link .label>.session-backend-version{grid-column:3}
   .session-link .label>.session-metadata{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1px 6px;min-width:0;align-items:baseline}
   .session-link .session-space-badges{grid-column:1;display:flex;flex-wrap:nowrap;gap:2px;margin:0;min-width:min-content;overflow:hidden}
   .session-space-badges .space-badge{flex:1 1 0;min-width:0;width:0}
