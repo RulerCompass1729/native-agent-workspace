@@ -638,6 +638,80 @@ async function versionScenario(a, b) {
     syntheticDispatches: (await sends()).length, nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
 }
 
+// B5 prerequisite: a session opened under the person's creation grant receives work. The person (this script,
+// through the desktop's own API) enables the interface for one member and gives it a grant that names this
+// space. That member then opens a session; the desktop joins it to the space and the next queued item reaches
+// it. Over quota nothing is created. No model, no native process; the opener's own task is neither delivered
+// nor queued.
+async function openScenario(a, b) {
+  assert.equal(process.env.NAW_TEST_DECISION_NOTICE, '1', 'Runs with the notification fixture, so nothing reaches the OS');
+  const english = process.env.NAW_TEST_UI_LANGUAGE === 'en';
+  const notices = () => app.evaluate(() => globalThis.decisionNotifications.map(n => n.options));
+  const shared = async () => (await snapshot()).rooms.find(r => r.id === 'shared');
+  const opens = async () => (await shared()).events.filter(event => event.monitor?.kind === 'opened');
+  const act = (id, action, value) => page.evaluate(([session, name, payload]) => workspace.operatorAction(session, name, payload), [id, action, value]);
+  // The interface accepts only the canonical directory, as the person's grant form shows it.
+  const cwd = fs.realpathSync(profile);
+  // Both existing members are busy, and one more item waits with nobody free to take it.
+  await addItem('Busy one', a); await expectSend(1, a, /Busy one/, 'first member busy');
+  await addItem('Busy two', b); await expectSend(2, b, /Busy two/, 'second member busy');
+  await addItem('Waits for the newcomer');
+  await expectQuiet(2, 'Nobody is free for the third item', 6000);
+  // The person's part: the interface on, for this member, with a grant of one session a day that names this space.
+  assert.equal((await fixture('operator-ready', a)).done, true, 'The synthetic initiator has a native identity');
+  await act(null, 'enabled', true); await act(a, 'enabled', true);
+  const grant = await act(a, 'grant', { providers: ['claude'], directories: [cwd], permission: 'default', daily: 1, concurrent: 1, expiresAt: Date.now() + 3600000, space: 'shared' });
+  assert.equal(typeof grant, 'string');
+  const before = (await snapshot()).sessions.length;
+  // The member's part: one open within quota.
+  const first = await fixture('open', a, JSON.stringify({ action_id: 'open-within-quota', provider: 'claude', cwd, name: 'Newcomer', task: 'Task the opener gave', permission: 'default' }));
+  assert.equal(first.done, true, first.error); assert.equal(first.result.status, 'created'); assert.equal(first.result.space, 'shared');
+  const newcomer = first.result.sessionId;
+  await until(async () => (await opens()).length === 1, 'Joined and recorded');
+  const [record] = await opens();
+  assert.deepEqual(record.monitor, { kind: 'opened', key: `opened:${newcomer}`, sessionId: newcomer, initiatorId: a, joined: true });
+  const elapsed = await until(async () => (await sends()).some(send => send.id === newcomer), 'The newcomer was sent its first item', DISPATCH_LIMIT_MS);
+  const all = await sends();
+  assert.equal(all.length, 3, 'Exactly one new send');
+  assert.equal(all[2].id, newcomer); assert.match(all[2].text, /【NAW 派活】[\s\S]*Waits for the newcomer/);
+  assert.equal((await itemByText('Waits for the newcomer')).sentTo, newcomer);
+  assert.equal((await queue()).some(item => item.text === 'Task the opener gave'), false, 'The opener\'s task is not queued: only the person or the secretary adds items');
+  assert.equal(first.result.delivery, 'pending-1b');
+  timings.push({ label: 'first item to the session opened under the grant', ms: elapsed });
+  if (await page.locator('#queue-dialog').isVisible()) {
+    await page.locator('#close-queue').click();
+    await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
+  }
+  await page.waitForFunction(id => document.querySelector('#room-messages [data-message-id="' + id + '"]'), record.id);
+  const row = await page.evaluate(id => {
+    const element = document.querySelector('#room-messages [data-message-id="' + id + '"]');
+    element.scrollIntoView({ block: 'center' });
+    const box = element.getBoundingClientRect(), list = document.querySelector('#room-messages').getBoundingClientRect();
+    return { text: element.innerText, width: box.width, height: box.height, inside: box.top >= list.top - 1 && box.bottom <= list.bottom + 1 };
+  }, record.id);
+  const text = english ? 'Under your grant, 队员甲 opened Newcomer; it has joined this space' : '按你的授权，队员甲 新开了 Newcomer，已加入这个空间';
+  assert.ok(row.text.includes(text), `the row reads ${JSON.stringify(row.text)}, expected ${JSON.stringify(text)}`);
+  assert.ok(row.width > 0 && row.height > 0 && row.inside, `the row is not on screen: ${JSON.stringify(row)}`);
+  await capture('opened-and-dispatched-' + (english ? 'en' : 'zh'));
+  passed.push('A session opened within the grant joined the named space and was sent the next queued item');
+  // Over quota: a second open the same day creates nothing, places nothing, sends nothing.
+  const second = await fixture('open', a, JSON.stringify({ action_id: 'open-over-quota', provider: 'claude', cwd, name: 'One too many', task: 'Never starts', permission: 'default' }));
+  assert.equal(second.done, false); assert.match(second.error, /quota is exhausted/);
+  await delay(4000);
+  assert.equal((await snapshot()).sessions.length, before + 1, 'Only the session within quota exists');
+  assert.equal((await opens()).length, 1); assert.equal((await sends()).length, 3);
+  // The same action again reports what happened, and repeats nothing.
+  const again = await fixture('open', a, JSON.stringify({ action_id: 'open-within-quota', provider: 'claude', cwd, name: 'Newcomer', task: 'Task the opener gave', permission: 'default' }));
+  assert.equal(again.result.sessionId, newcomer); assert.equal(again.result.placement, 'joined');
+  await page.reload(); await page.locator('#new-session').waitFor(); await delay(3500);
+  assert.equal((await opens()).length, 1); assert.equal((await sends()).length, 3);
+  assert.equal((await notices()).length, 0, 'Nothing here notifies');
+  assert.deepEqual(errors, []);
+  passed.push('Over quota nothing was created; a repeat of the same action repeated nothing');
+  console.log(JSON.stringify({ passed, placement: again.result.placement, notifications: (await notices()).length, syntheticDispatches: (await sends()).length,
+    nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
+}
+
 async function run() {
   console.log('Fixture profile:', profile);
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon');
@@ -650,6 +724,7 @@ async function run() {
   if (process.env.NAW_TEST_QUEUE_MONITOR === '1') return monitorScenario(a);
   if (process.env.NAW_TEST_STUCK_RECORD === '1') return stuckScenario(a);
   if (process.env.NAW_TEST_VERSION_GATE === '1') return versionScenario(a, b);
+  if (process.env.NAW_TEST_OPEN_WORK === '1') return openScenario(a, b);
   if (process.env.NAW_TEST_DECISION_NOTICE === '1') return decisionNoticeScenario(a, b);
 
   // 1) Two idle members each get exactly one item; NAW, not the person, sends them.

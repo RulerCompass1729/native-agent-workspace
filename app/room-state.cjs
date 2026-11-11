@@ -820,6 +820,19 @@ class RoomState {
     }
     return wrote;
   }
+  // B5: a session opened under the person's grant that names this space (operator-control.cjs placements). One
+  // record per session, keyed, so several windows, later states and a restart repeat nothing: that it joined, or
+  // that it could not. Records only; no queue item is added here, and the opener's task is not delivered.
+  recordOpened(room, opened) {
+    const value = this.metadata(room);
+    const key = `opened:${opened.sessionId}`, existing = value.events.find(event => event.monitor?.kind === 'opened' && event.monitor.key === key);
+    if (existing) return { recorded: false, joined: existing.monitor.joined === true };
+    this.writable(room);
+    const joined = opened.joined === true;
+    this.update({}, { kind: 'monitor', sessionId: opened.sessionId, ...uiNotice(joined ? 'notice.monitor.opened' : 'notice.monitor.openedNotPlaced', { name: opened.name, initiator: opened.initiator }),
+      monitor: { kind: 'opened', key, sessionId: opened.sessionId, initiatorId: opened.initiatorId, joined } }, room);
+    return { recorded: true, joined };
+  }
   // B6 E4, the version gate. A member whose native version NAW has not verified keeps working with
   // fewer features. The session's own header says so; this records it once in each of its spaces,
   // per session and version, and never again for that version. Records only. Because a record is

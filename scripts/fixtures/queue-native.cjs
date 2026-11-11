@@ -92,8 +92,28 @@ function stuck(request) {
   return true;
 }
 
+// B5: a synthetic initiator uses the operator interface the way a Claude root turn does, under the grant the
+// person (the script, through the desktop's own API) has given it. Nothing here grants or widens anything.
+function operator(request) {
+  const runtime = runtimes.get(request.session), session = workspace?.sessions.get(request.session);
+  if (!runtime || !session) return Promise.resolve({ done: false, error: 'No such synthetic session' });
+  if (request.method === 'operator-ready') {
+    // What a real Claude runtime reports: a current root turn, its permission mode, and that the interface is usable.
+    runtime.operatorAvailable = true; runtime.liveTurn = { id: 'turn-' + session.id, promptId: 'prompt-' + session.id };
+    session.nativePermissionMode = 'default'; workspace.changed();
+    return Promise.resolve({ done: Boolean(session.nativeId), nativeId: session.nativeId || null });
+  }
+  const identity = { nativeId: session.nativeId, turnId: runtime.liveTurn?.id, promptId: runtime.liveTurn?.promptId, callId: 'call-' + Date.now() + '-' + Math.random().toString(16).slice(2) };
+  return Promise.resolve().then(() => runtime.operatorCall(identity, 'workspace_open', JSON.parse(request.reply)))
+    .then(result => ({ done: true, result }), error => ({ done: false, error: String(error?.message || error).slice(0, 300) }));
+}
+
 process.on('message', request => {
   if (request.method === 'fail-next-send') failNext.add(request.session);
+  if (['operator-ready', 'open'].includes(request.method)) {
+    operator(request).then(result => process.send({ requestId: request.id, ...result, sends: sends.map(({ id, text }) => ({ id, text })) }));
+    return;
+  }
   if (['approval', 'approval-resolved', 'age-waits', 'pin'].includes(request.method)) {
     process.send({ requestId: request.id, done: stuck(request), sends: sends.map(({ id, text }) => ({ id, text })) });
     return;
