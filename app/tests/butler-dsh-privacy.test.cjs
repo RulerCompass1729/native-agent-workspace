@@ -27,7 +27,7 @@ test('the privacy gate requires an actual intercepted import', async () => {
 });
 test('all explicit DSH composition packages are exact production dependencies and the host is packaged', () => {
   const root = path.join(__dirname, '../..'), manifest = require('../../package.json');
-  for (const name of ['agent-loop','llm-deepseek','llm-deepseek-api-key','mcp-client','session','session-projection','system-prompt','llm','tools']) {
+  for (const name of ['agent','agent-loop','llm-deepseek','llm-deepseek-api-key','mcp-client','session','session-projection','system-prompt','llm','tools']) {
     assert.equal(manifest.dependencies['@deepseek-ai/dsh-' + name], VERSION);
   }
   const source = fs.readFileSync(path.join(root, 'scripts/package-mac.cjs'), 'utf8');
