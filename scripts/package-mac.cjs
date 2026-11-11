@@ -132,6 +132,7 @@ async function build() {
       'goal-continuation-runner.cjs',
       'goal-continuation.cjs',
       'integrator-role.cjs',
+      'integrator-words.cjs',
       'legacy-claude.cjs',
       'legacy-codex.cjs',
       'legacy-input.cjs',
