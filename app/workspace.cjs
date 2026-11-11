@@ -327,7 +327,10 @@ class Workspace extends EventEmitter {
     if (action === 'enabled') return this.operator.settings(id, value);
     this.get(id);
     if (action === 'revoke' && !this.operator.data.domains[value]?.initiators.some(i => i.id === id)) throw Error('Authorization domain belongs to another initiator');
-    if (['authorize', 'dismiss'].includes(action) && this.operator.data.actions[value?.key]?.initiatorId !== id) throw Error('Creation confirmation belongs to another initiator');
+    if (['authorize', 'dismiss', 'placement', 'placed'].includes(action) && this.operator.data.actions[value?.key]?.initiatorId !== id) throw Error('Creation confirmation belongs to another initiator');
+    if (action === 'placement') return this.operator.placement(value?.key);
+    if (action === 'placed') return this.operator.placed(value?.key, value?.result);
+    // (Both are the desktop's own steps; main.cjs refuses them, and a grant that names a space, from an agent's context.)
     if (['close', 'read'].includes(action) && this.operator.data.requests[action === 'read' ? value : value?.requestId]?.initiatorId !== id) throw Error('Request belongs to another initiator');
     if (action === 'grant') return this.operator.grant(id, value);
     if (action === 'revoke') return this.operator.revoke(value);

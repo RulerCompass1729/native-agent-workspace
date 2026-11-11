@@ -210,7 +210,9 @@ class WorkspaceClient extends EventEmitter {
     const programDisplay = missingPrograms.length ? uiError('error.warning.programsMissing', { programs: missingPrograms.map(key => programNames[key]).join(', ') }) : null;
     const operators = this.entries.filter(e => e.state.capabilities?.includes('operatorControl1a'));
     const operatorPolicy = operators.length ? { enabled: operators.every(e => !e.closed && !e.closing && !this.control.maintenance.has(e.key) && e.state.operatorPolicy?.enabled === true && !e.state.operatorPolicy?.error),
-      error: operators.find(e => e.state.operatorPolicy?.error)?.state.operatorPolicy.error || null, domains: operators.flatMap(e => e.state.operatorPolicy?.domains || []) } : null;
+      error: operators.find(e => e.state.operatorPolicy?.error)?.state.operatorPolicy.error || null, domains: operators.flatMap(e => e.state.operatorPolicy?.domains || []),
+      // B5: sessions created under a grant that names a space, until the desktop has placed them (operator-control.cjs).
+      placements: operators.flatMap(e => e.state.operatorPolicy?.placements || []) } : null;
     return { ...this.active.state, operatorPolicy, nativeImageCacheRoots: snapshotImageRoots(this.entries.map(e => e.state.nativeImageCacheRoot).filter(Boolean)), wakePolicy: this.entries.find(e => e.state.capabilities?.includes('agentWakeV1'))?.state.wakePolicy, sessions, capabilities,
       rooms, room: rooms.find(r => r.id === roomId) || { id: roomId, revision: 0, run: null, messages: [] },
       diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.localDispatchCount?.() ?? this.control.legacyInput?.records.length ?? 0) },

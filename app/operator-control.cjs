@@ -122,7 +122,49 @@ class OperatorControl {
     this.data = next; this.w.emit('change'); return result;
   }
   policy() { return { enabled: !this.error && this.data.enabled, error: this.error,
-    sessions: copy(this.data.sessions), domains: Object.values(this.data.domains).map(copy) }; }
+    sessions: copy(this.data.sessions), domains: Object.values(this.data.domains).map(copy), placements: this.placements() }; }
+  // B5: a grant may name one space, chosen by the person. A session created under such a grant is
+  // listed here until the desktop, which alone owns spaces, has placed it and written the result
+  // back. Only while the grant is still in force: revoking it, its expiry, turning the interface
+  // off for the initiator or for everyone, or the initiator going away all end a pending placement.
+  // Nothing about the task is involved: it stays undelivered, as the tool and the consent text say.
+  // (Archiving is the desktop's own list, which this journal does not see; main.cjs placeOpened checks it.)
+  placing(action, data = this.data) {
+    const domain = data.domains[action.domainId], initiator = this.w.sessions.get(action.initiatorId);
+    return Boolean(domain?.space && !domain.revokedAt && domain.expiresAt > Date.now() && data.enabled && initiator && !initiator.archived &&
+      data.sessions[action.initiatorId]?.enabled && data.sessions[action.initiatorId].nativeId === initiator.nativeId && initiator.nativeId === action.initiatorNativeId);
+  }
+  placements() {
+    if (this.error) return [];
+    return Object.values(this.data.actions).filter(a => a.status === 'created' && a.sessionId && !a.placement && this.placing(a))
+      .map(a => ({ key: a.key, initiatorId: a.initiatorId, sessionId: a.sessionId, space: this.data.domains[a.domainId].space }));
+  }
+  placeable(key, inForce = true) {
+    const action = this.data.actions[key];
+    if (!action || action.status !== 'created' || !action.sessionId || !this.data.domains[action.domainId]?.space) fail('No created session waits for a space under this grant');
+    if (inForce && !action.placement && !this.placing(action)) fail('The grant that named a space is no longer in force');
+    return action;
+  }
+  // Desktop only (workspace.cjs operatorAction): where this session goes, from the journal that owns the action.
+  placement(key) {
+    const action = this.placeable(key);
+    return { key, space: this.data.domains[action.domainId].space, sessionId: action.sessionId, placed: Boolean(action.placement) };
+  }
+  // Desktop only: the result of placing it, saved once. A later call cannot change it. It is a statement of
+  // what happened, so it is accepted even if the grant ended while the desktop was in the middle of the join.
+  placed(key, result) {
+    const action = this.placeable(key, false);
+    if (!result || typeof result.joined !== 'boolean' || Object.keys(result).some(k => !['joined', 'error'].includes(k)) ||
+        result.error !== undefined && (typeof result.error !== 'string' || !/^[a-z-]{1,60}$/.test(result.error)) || !result.joined && result.error === undefined) fail('Invalid placement result');
+    if (action.placement) return copy(action.placement);
+    return this.commit(data => {
+      const a = data.actions[key];
+      a.placement = { space: data.domains[a.domainId].space, at: Date.now(), joined: result.joined, ...(result.error ? { error: result.error } : {}) };
+      // The identity is the open this result belongs to; the entry itself is written by the desktop, not by the agent.
+      this.audit(data, { id: a.initiatorId, nativeId: a.initiatorNativeId }, a.identity, names[1], result.joined ? 'placed' : 'not-placed', { targetId: a.sessionId, actionId: a.id, domainId: a.domainId, by: 'desktop' });
+      return copy(a.placement);
+    });
+  }
   actor(s, r, identity) {
     if (s.provider !== 'claude' || this.w.runtimes.get(s.id) !== r || !r.operatorAvailable || r.retainedReader || r.stopped || r.disposed || r.transportDisconnected || this.w.closed || s.nativeContextPending ||
         identity?.nativeId !== s.nativeId || typeof identity.callId !== 'string' || !identity.callId || identity.callId.length > 160 ||
@@ -159,14 +201,17 @@ class OperatorControl {
   grant(initiatorId, spec) {
     const s = this.w.get(initiatorId); this.initiator(s);
     if (permission(s) === 'unknown') fail('The current initiator permission ceiling is unknown or cannot safely be compared; no creation grant was recorded');
-    if (!spec || Object.keys(spec).some(k => !['providers', 'directories', 'permission', 'daily', 'concurrent', 'expiresAt'].includes(k)) || !Array.isArray(spec.providers) || !spec.providers.length || spec.providers.some(p => !['claude', 'codex'].includes(p)) ||
+    if (!spec || Object.keys(spec).some(k => !['providers', 'directories', 'permission', 'daily', 'concurrent', 'expiresAt', 'space'].includes(k)) || !Array.isArray(spec.providers) || !spec.providers.length || spec.providers.some(p => !['claude', 'codex'].includes(p)) ||
         !Array.isArray(spec.directories) || !spec.directories.length || spec.directories.length > 16 || !['default', 'bypass'].includes(spec.permission) ||
         !Number.isSafeInteger(spec.daily) || spec.daily < 1 || !Number.isSafeInteger(spec.concurrent) || spec.concurrent < 1 || !Number.isSafeInteger(spec.expiresAt) || spec.expiresAt <= Date.now()) fail('Explicit providers, directories, permission, daily/concurrent quotas and expiry are required');
     if (spec.permission === 'bypass' && permission(s) !== 'bypass') fail('The grant cannot exceed the initiator permission posture');
+    // Optional, and only from the person's own grant form: the one space sessions created under this grant join.
+    if (spec.space !== undefined && (typeof spec.space !== 'string' || !spaces.roomId(spec.space))) fail('The space for new sessions is not a space');
     const directories = spec.directories.map(dir => { text(dir, 4096, 'directory'); if (!path.isAbsolute(dir) || !fs.statSync(dir).isDirectory()) fail('An existing absolute directory is required'); return fs.realpathSync(dir); });
     return this.commit(data => {
       const id = randomUUID(); data.domains[id] = { id, initiators: [{ id: s.id, nativeId: s.nativeId }], providers: [...new Set(spec.providers)], directories, permission: spec.permission,
-        daily: spec.daily, concurrent: spec.concurrent, expiresAt: spec.expiresAt, model: 'native-default', createdAt: Date.now(), source: 'human' };
+        daily: spec.daily, concurrent: spec.concurrent, expiresAt: spec.expiresAt, model: 'native-default', createdAt: Date.now(), source: 'human',
+        ...(spec.space !== undefined ? { space: spec.space } : {}) };
       return id;
     });
   }
@@ -299,7 +344,14 @@ class OperatorControl {
       domainId: action.domainId || null,
       provider: s?.provider || action.args.provider, cwd: s?.cwd || action.args.cwd, model: actualModel(s) || 'unknown', modelSelection: 'native-default', permission: action.args.permission, permissionObserved: s?.nativePermissionMode || this.w.runtimes.get(s?.id)?.nativeSettings?.sandboxMode || null,
       delivery: this.data.requests[action.requestId]?.closed ? 'voided' : 'pending-1b', canReport: Boolean(s && this.localMetadata(s).canReport),
+      // Where the person's grant sends the new session, and what the desktop did. The task stays undelivered.
+      space: this.data.domains[action.domainId]?.space || null, ...this.placementResult(action),
       ...(action.error ? { message: action.error } : {}) };
+  }
+  placementResult(action) {
+    if (action.status !== 'created' || !this.data.domains[action.domainId]?.space) return { placement: null };
+    if (action.placement) return { placement: action.placement.joined ? 'joined' : 'not-placed', ...(action.placement.error ? { placementError: action.placement.error } : {}) };
+    return this.placing(action) ? { placement: 'pending' } : { placement: 'not-placed', placementError: 'grant-ended' };
   }
   authorize(key, domainId) {
     const action = this.data.actions[key]; if (!action || action.status !== 'pending-authorization') fail('The creation confirmation is stale');

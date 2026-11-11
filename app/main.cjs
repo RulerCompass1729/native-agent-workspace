@@ -23,7 +23,7 @@ const { createDedicatedBackend } = require('./butler-backend-host.cjs');
 const { CreationDefaults } = require('./creation-defaults.cjs');
 const { readingState } = require('./reading-state.cjs');
 const { ViewStore, validViews, dropRetiredViewFields } = require('./view-store.cjs');
-const { roomId: validRoomId, roomIds, untouchedDefault } = require('./collaboration-spaces.cjs');
+const { roomId: validRoomId, roomIds, untouchedDefault, placementRevision } = require('./collaboration-spaces.cjs');
 const { identity: roomPeerIdentity } = require('./peer-handoffs.cjs');
 const { windowPlacement } = require('./window-placement.cjs');
 const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
@@ -278,6 +278,72 @@ function notifyCapacity(snapshot, win) {
     }
   }
 }
+// B5: a session created under a grant in which the person named a space joins that space and is recorded there,
+// so that queued work reaches it. The quota gate already ran in the backend (operator-control.cjs): nothing here
+// creates a session, widens a grant, queues a task or asks a model. Where the session goes is read from the
+// journal that owns the action, which refuses once the grant is no longer in force. Run only from a person's
+// window, never from an agent's hidden one. A space that is busy is tried again, a few times, seconds apart.
+const openPlacing = new Set(), openAttempts = new Map(), OPEN_RETRY_MS = [2000, 5000, 15000, 30000];
+async function placeOpened(client, snapshot, now = Date.now()) {
+  const placements = Array.isArray(snapshot?.operatorPolicy?.placements) ? snapshot.operatorPolicy.placements : [];
+  for (const listed of placements) {
+    const key = listed?.key, tried = openAttempts.get(key);
+    if (typeof key !== 'string' || typeof listed.initiatorId !== 'string' || openPlacing.has(key) || tried && (tried.over || now < tried.next)) continue;
+    openPlacing.add(key);
+    const call = (action, value) => client.call('operatorAction', listed.initiatorId, action, { key, ...value });
+    let space = null, joined = false, names = null, answered = false;
+    try {
+      const placement = await call('placement');
+      answered = true;
+      if (placement.placed) continue;
+      const sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
+      const opened = sessions.find(s => s.id === placement.sessionId), initiator = sessions.find(s => s.id === listed.initiatorId);
+      const label = s => sessionLabels.labels.get(s.id) || s.name || s.id;
+      let room = null;
+      try { room = roomState.metadata(placement.space); } catch { /* No such space any more. */ }
+      if (!room || room.archived) { await call('placed', { result: { joined: false, error: 'space-unavailable' } }); continue; }
+      // Archiving is the desktop's own list; the backend does not know it.
+      const archived = id => roomState.value.archivedSessions.includes(id);
+      if (!opened || !initiator || ['ended', 'recoverable'].includes(opened.state) || archived(opened.id)) { await call('placed', { result: { joined: false, error: 'session-unavailable' } }); continue; }
+      if (archived(initiator.id)) { await call('placed', { result: { joined: false, error: 'initiator-archived' } }); continue; }
+      space = placement.space; names = { sessionId: opened.id, name: label(opened), initiator: label(initiator), initiatorId: initiator.id };
+      // The person may have put it somewhere else meanwhile: a session that already has another home is left there.
+      const homes = roomIds(opened);
+      if (homes.length && !homes.includes(space)) {
+        roomState.recordOpened(space, { ...names, joined: false });
+        await call('placed', { result: { joined: false, error: 'moved-elsewhere' } }); await broadcastRoom(); continue;
+      }
+      // Already a member (an earlier attempt joined it): do not join again. Otherwise join with the placement this
+      // state showed, so a move the person makes in between fails this join and is not undone by it.
+      if (!homes.includes(space)) {
+        await roomState.membership(client, opened.id, true, sessionLabels.labels.get(opened.id), space,
+          { nativeId: opened.nativeId ?? null, placementRevision: placementRevision(opened), connectionRevision: opened.connectionRevision || 0 });
+      }
+      joined = true;
+      roomState.recordOpened(space, { ...names, joined: true });
+      await call('placed', { result: { joined: true } });
+      openAttempts.delete(key);
+      await broadcastRoom(); queueDispatcher?.schedule();
+    } catch {
+      const attempts = (tried?.attempts || 0) + 1, over = attempts > OPEN_RETRY_MS.length, wait = OPEN_RETRY_MS[attempts - 1] || 0;
+      openAttempts.set(key, { attempts, next: now + wait, over });
+      // One timer per retry, so a quiet system still tries again; nothing polls. It uses whichever of the
+      // person's windows is open then: the window this attempt ran in may be closed or reconnected by that time.
+      if (!over) setTimeout(() => {
+        const live = [...windows.values()].find(c => !c.background && c.client && !c.win.isDestroyed() && !c.client.closing && !c.client.socket?.destroyed);
+        // Reading the state can throw (two backends listing one session); inside the chain it cannot escape the timer.
+        if (live) Promise.resolve().then(() => placeOpened(live.client, live.client.snapshot())).catch(() => {});
+      }, wait + 100).unref?.();
+      if (over) {
+        // Said once, where the person can see it, and saved; after that nothing more is tried.
+        // Only when the journal offered it: a refusal there (the grant ended) is not a failed join and saves nothing.
+        try { if (space && names && !joined) roomState.recordOpened(space, { ...names, joined: false }); } catch { /* The space cannot take a record now. */ }
+        if (answered) await call('placed', { result: joined ? { joined: true, error: 'record-failed' } : { joined: false, error: 'join-refused' } }).catch(() => {});
+        await broadcastRoom().catch(() => {});
+      }
+    } finally { openPlacing.delete(key); }
+  }
+}
 function auditBackgroundOperation(record) {
   roomState.recordControlOperation(record, record.guard?.auditRooms || ['shared']);
   // Consent depends on the durable event, never on every window completing a
@@ -469,6 +535,7 @@ function bindClient(context) {
     // Each writer on its own: one that cannot write neither stops the other nor holds state.
     const name = s => sessionLabels.labels.get(s.id) || s.name, wrote = ['recordStuck', 'recordVersionGates'].map(writer => { try { return roomState[writer](data?.sessions, name); } catch { return false; } });
     if (wrote.some(Boolean)) broadcastRoom().catch(() => {});
+    if (!context.background) placeOpened(client, data).catch(() => {});
   });
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('progress', data => send('workspace:progress', data));
@@ -794,6 +861,9 @@ function register(name, handler) {
       const request = backgroundOperation.request();
       if (!request || request.context !== c) throw Error('Background command has no originating operation');
       await request.valid();
+      // B5: which space a grant sends new sessions to is chosen only by the person in the desktop, and saving
+      // where a session went is the desktop's own step. An agent can do neither, with or without confirmation.
+      if (name === 'operatorAction' && (['placement', 'placed'].includes(args[1]) || args[1] === 'grant' && args[2] && typeof args[2] === 'object' && Object.hasOwn(args[2], 'space'))) throw uiError('error.operator.personOnlySpace');
       if (backgroundOperation.deliveryTargets(name, args)) {
         await c.client.refresh();
         backgroundOperation.assertDeliveryPolicy(c.client.snapshot(), name, args);
