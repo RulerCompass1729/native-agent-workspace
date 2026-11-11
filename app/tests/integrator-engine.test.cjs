@@ -159,6 +159,27 @@ test('a full backlog, or a record that cannot be read, is not work that keeps pa
   assert.equal(broken.hasWork([space([fact('a')])]), false);
 });
 
+test('the engine asks whether the person\'s main repository can be read; "no" in any form hands out nothing and asks once', async t => {
+  for (const [answer, asked] of [[() => null, true], [() => false, true], [() => undefined, true], [() => { throw Error('Synthetic record failure'); }, true], [() => true, false]]) {
+    const f = fixture(t, { repository: answer });
+    f.engine.intake([space([fact('a')])]);
+    const result = await f.handOut(view());
+    if (asked) {
+      assert.deepEqual(result, { kind: 'ask-integrator', reason: 'repository-unset', notify: { reason: 'repository-unset' }, released: [] }, String(answer));
+      assert.deepEqual([f.heads, f.sent.length, f.looks], [0, 0, 0], 'git is not read, nothing is sent, the sessions are not read again');
+      assert.deepEqual(await f.handOut(view()), { kind: 'none', why: 'integrator-asked', released: [] });
+      // The question is still owed to the person; once it is told, only the person can change anything, and no passes are kept going.
+      assert.equal(f.engine.hasWork([space([fact('a')])]), true);
+      assert.deepEqual((await f.engine.tell()).told, ['repository-unset']);
+      assert.equal(f.engine.hasWork([space([fact('a')])]), false);
+    } else assert.equal(result.kind, 'opened', String(answer));
+  }
+  // An engine that was given no such question reads main as before.
+  const plain = fixture(t);
+  plain.engine.intake([space([fact('a')])]);
+  assert.equal((await plain.handOut(view())).kind, 'opened');
+});
+
 test('without a usable designation nothing is handed out, and the person is asked once', async t => {
   const f = fixture(t);
   f.engine.intake([space([fact('a')])]);

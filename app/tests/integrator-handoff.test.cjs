@@ -109,6 +109,32 @@ test('a delivery inside a handoff that leaves it without an outcome after a newe
   assert.deepEqual(states(backlog), { a: 'superseded', b: 'held:send-refused', a2: 'deliverable' });
 });
 
+test('with no main repository that can be read nothing is handed out, and the person is asked once', t => {
+  const { backlog } = fixture(t);
+  backlog.noteReady(ready('a'), NOW);
+  // The caller says so with null. A caller that does not say at all is as before: main is read as given.
+  assert.deepEqual(backlog.plan(observed({ repository: null })), { kind: 'ask-integrator', reason: 'repository-unset' });
+  assert.equal(backlog.plan(observed()).kind, 'open');
+  assert.equal(backlog.plan(observed({ repository: true })).kind, 'open');
+  // Who merges comes first: nobody designated, a missing session and an integrator inside a space are asked about before the repository.
+  assert.equal(backlog.plan(observed({ integrator: null, repository: null })).reason, 'integrator-unset');
+  assert.equal(backlog.plan(observed({ session: undefined, repository: null })).reason, 'integrator-missing:integrator');
+  assert.equal(backlog.plan(observed({ inSpace: true, repository: null })).reason, 'integrator-in-space');
+  // Asked whether or not the integrator could take a message right now; git is not needed for the question.
+  assert.equal(backlog.plan(observed({ repository: null, session: integratorSession({ state: 'working' }), mainHead: null })).reason, 'repository-unset');
+  assert.deepEqual(backlog.advance(observed({ repository: null }), NOW), { kind: 'ask-integrator', reason: 'repository-unset', notify: { reason: 'repository-unset' } });
+  backlog.noteReady(ready('b'), NOW);
+  assert.deepEqual(backlog.advance(observed({ repository: null }), NOW + 1), { kind: 'none', why: 'integrator-asked' });
+  assert.deepEqual(states(backlog), { a: 'deliverable', b: 'deliverable' }, 'The deliveries wait; they are not held');
+  assert.deepEqual(backlog.noticeInfo('repository-unset'), { reason: 'repository-unset', count: 2, roomId: 'space-1', itemId: 'a' });
+  // It is a condition, not something a delivery can be held under or the person can "retry".
+  assert.throws(() => backlog.hold('ready:space-1:a', 'repository-unset', NOW), { code: 'HANDOFF_STATE' });
+  // The person chooses a repository: the next handoff opens, and the question is over (a later loss asks again).
+  const opened = backlog.advance(observed({ repository: true }), NOW + 2);
+  assert.equal(opened.kind, 'open');
+  assert.equal(backlog.snapshot().reasons['repository-unset'].open, false);
+});
+
 test('without a designated integrator the person is asked once; a session that is gone is asked about once too', t => {
   const { backlog } = fixture(t);
   assert.deepEqual(backlog.advance(observed({ integrator: null }), NOW), { kind: 'none', why: 'nothing-deliverable' });

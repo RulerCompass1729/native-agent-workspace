@@ -43,6 +43,8 @@ class IntegratorEngine {
   // - typing(sessionId): told when the send was refused because the person left a prompt unsent
   //   in that session, so the caller leaves the session alone for a while, as after typing.
   // - reader: the read-only git reader ({ commit, isAncestor, changes }) for checking merges.
+  // - repository(): whether there is a main repository that can be read now: true, or null for
+  //   none (none chosen, or the chosen one fails its checks). Absent, main is read as given.
   // - record(fact): writes one delivery's space record, at once or as a promise; it may be asked
   //   to write the same fact (same key and label) again after a crash and must then write nothing new.
   // - notify(info): tells the person about one reason ({ reason, count, roomId, itemId, sessionId? }).
@@ -56,6 +58,7 @@ class IntegratorEngine {
     this.send = options.send;
     this.typing = options.typing || (() => {});
     this.reader = options.reader || null;
+    this.repository = options.repository || null;
     this.record = options.record || (() => {});
     this.notify = options.notify || (async () => {});
     this.holderRecord = options.holderRecord || null;
@@ -161,8 +164,13 @@ class IntegratorEngine {
     if (session && session.nativeId === integrator.nativeId) { try { inSpace = roomIds(session).length > 0; } catch { membership = false; } }
     return { membership, input: { integrator, session, inSpace, complete: complete(view, usable ? integrator.sessionId : undefined), wakePolicy: view?.wakePolicy, now: view?.now,
       idleSince: view?.idleSince, humanAt: view?.humanAt, settleMs: view?.settleMs, humanQuietMs: view?.humanQuietMs,
-      busy: Boolean(session) && typeof view?.busy === 'function' && view.busy(session.id) === true, review: view?.review, checkpoint: view?.checkpoint } };
+      busy: Boolean(session) && typeof view?.busy === 'function' && view.busy(session.id) === true, review: view?.review, checkpoint: view?.checkpoint,
+      // Asked only when the caller has such a thing; a failure to say counts as "none that can be read".
+      ...(this.repository ? { repository: this.readable() } : {}) } };
   }
+
+  // Whether the person's main repository can be read now: true, or null.
+  readable() { try { return this.repository() === true ? true : null; } catch { return null; } }
 
   // Open one handoff and send it, if the integrator can take it now.
   // - `view` is what the caller sees at this moment: { sessions, complete, wakePolicy, now,

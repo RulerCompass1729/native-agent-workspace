@@ -190,4 +190,4 @@ async function prepare(plan) {
   if ((cwd !== plan.target && !cwd.startsWith(plan.target + path.sep)) || !fs.statSync(cwd).isDirectory()) throw failure("error.gitCopySubdirectoryEscaped");
   return cwd;
 }
-module.exports = { CAPABILITY, available, preview, planShape, validate, prepare, controls, gitEnvironment };
+module.exports = { CAPABILITY, available, preview, planShape, validate, prepare, controls, gitEnvironment, repository };

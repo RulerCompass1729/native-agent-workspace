@@ -7,6 +7,9 @@ const locale = require('../ui-locale.js');
 const rules = require('../queue-dispatch.cjs');
 const backgroundOperation = require('../background-operation.cjs');
 const { IntegrationHandoffs, FILE } = require('../integrator-handoff.cjs');
+const { IntegrationRepository, FILE: REPOSITORY_FILE } = require('../integrator-repository.cjs');
+const integratorGit = require('../integrator-git.cjs');
+const { execFileSync } = require('node:child_process');
 
 // The person's own actions on an integration handoff (B6 E2b, checkpoint H7a): the real `register`
 // wrapper, the real `handoff` entry and the real overview from main.cjs, on a real record.
@@ -27,11 +30,15 @@ function fixture(t, enabled = true, options = {}) {
   const handlers = new Map(), f = { directory, file: path.join(directory, FILE), handoffs, handlers, broadcasts: 0, schedules: 0 };
   // The dispatcher as the entry sees it: its schedule, and the engine fault it kept (none unless a test sets one).
   f.dispatcher = { schedule() { f.schedules += 1; }, integrationError: null };
+  // The repository choice as the engine's builder makes it in main.cjs, on a real record and the real git reader.
+  f.repository = new IntegrationRepository(directory);
   const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, ipcMain: { handle() {} }, integrationHandoffs: enabled ? handoffs : null, integrationFault: null, Date,
+    integrationRepository: null, repository: f.repository, integratorGit,
     broadcastRoom: async () => { f.broadcasts += 1; }, queueDispatcher: options.noDispatcher ? null : f.dispatcher });
   vm.runInContext(slice('function register(name, handler) {', 'async function replaceBackendSockets'), context);
   vm.runInContext(slice('function handoffOverview(handoffs) {', '\n// One notice for one reason of the integration handoff'), context);
   vm.runInContext(slice("  register('handoff', async (c, action, value, choice) => {", "  register('rename',"), context);
+  if (enabled) vm.runInContext(slice('  integrationRepository = {', '\n  return engine;\n}'), context);
   const client = { call: async () => ({ sessions: [] }), entries: [{ state: { sessions: [{ id: 'old' }], capabilities: [] } }], refresh: async () => {}, snapshot: () => ({ wakePolicy: { enabled: true }, sessions: [{ id: 'old' }] }) };
   f.person = (...args) => handlers.get('handoff')({ client }, ...args);
   f.agent = (...args) => {
@@ -174,6 +181,50 @@ test('a fault the dispatcher kept for the engine is shown to the person, also wh
   // No dispatcher at all (it could not start): as with the switch closed.
   const h = fixture(t, false, { noDispatcher: true });
   for (const args of [['list'], ['retryDelivery', key('a')]]) await assert.rejects(h.person(...args), refused('error.handoff.unavailable'), JSON.stringify(args));
+});
+
+test('the person chooses the main repository, sees it and clears it; an agent can do neither, and a folder that will not do is refused', async t => {
+  const f = fixture(t);
+  const plain = value => JSON.parse(JSON.stringify(value));
+  const gitEnv = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/.test(name))), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' };
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'user.name=Synthetic fixture', '-c', 'user.email=fixture@example.com', ...args],
+    { cwd, env: gitEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-integrator-actions-repo-')));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const make = (name, branch) => { const folder = path.join(base, name); fs.mkdirSync(folder); git(folder, 'init', '--quiet', `--initial-branch=${branch}`);
+    fs.writeFileSync(path.join(folder, 'synthetic.txt'), 'base\n'); git(folder, 'add', '--', 'synthetic.txt'); git(folder, 'commit', '--quiet', '-m', 'Synthetic base'); return folder; };
+  const repo = make('repository', 'main'), trunk = make('trunk-only', 'trunk');
+  // Nothing chosen: the person sees that, also in the overview.
+  assert.deepEqual(plain(await f.person('repository')), { root: null, problem: null });
+  assert.deepEqual(plain((await f.person('list')).repository), { root: null, problem: null });
+  assert.deepEqual([f.broadcasts, f.schedules], [0, 0], 'Looking changes and announces nothing');
+  // A folder that will not do is refused in this feature's own words, and nothing is recorded.
+  await assert.rejects(f.person('setRepository', trunk), refused('error.handoff.repositoryNoMain'));
+  fs.mkdirSync(path.join(repo, 'inside'));
+  for (const inside of [path.join(repo, 'inside'), path.join(repo, '.git')]) await assert.rejects(f.person('setRepository', inside), refused('error.handoff.repositoryNotMain'), inside.slice(base.length));
+  await assert.rejects(f.person('setRepository', base), refused('error.handoff.repositoryUnsafe'), 'A folder that is in no repository');
+  for (const bad of [7, {}, 'relative', '']) await assert.rejects(f.person('setRepository', bad), refused('error.handoff.repositoryUnsafe'), JSON.stringify(bad));
+  assert.deepEqual([fs.existsSync(path.join(f.directory, REPOSITORY_FILE)), f.broadcasts, f.schedules], [false, 0, 0]);
+  // The person's choice is recorded; every window is told and the dispatcher looks again.
+  assert.deepEqual(plain(await f.person('setRepository', repo)), { root: repo });
+  assert.deepEqual([f.broadcasts, f.schedules], [1, 1]);
+  assert.deepEqual(plain(await f.person('repository')), { root: repo, problem: null });
+  assert.deepEqual(plain((await f.person('list')).repository), { root: repo, problem: null });
+  assert.equal(new IntegrationRepository(f.directory).chosen(), repo);
+  // The repository changes afterwards: the choice is shown with why it cannot be read now.
+  fs.appendFileSync(path.join(repo, '.git/config'), '[include]\n\tpath = /synthetic/elsewhere\n');
+  assert.deepEqual(plain(await f.person('repository')), { root: repo, problem: 'error.handoff.repositoryUnsafe' });
+  // Cleared with null (or nothing): none.
+  assert.deepEqual(plain(await f.person('setRepository', null)), { root: null });
+  assert.deepEqual(plain(await f.person('repository')), { root: null, problem: null });
+  assert.deepEqual([f.broadcasts, f.schedules], [2, 2]);
+  // An agent can neither look nor choose, whatever it names.
+  for (const args of [['repository'], ['setRepository', repo], ['setRepository', null]]) await assert.rejects(f.agent(...args), refused('error.handoff.personOnly'), JSON.stringify(args));
+  assert.equal(new IntegrationRepository(f.directory).chosen(), null);
+  // With the switch closed there is nothing to choose for.
+  const closed = fixture(t, false);
+  for (const args of [['repository'], ['setRepository', repo]]) await assert.rejects(closed.person(...args), refused('error.handoff.unavailable'), JSON.stringify(args));
+  assert.equal(fs.existsSync(path.join(closed.directory, REPOSITORY_FILE)), false);
 });
 
 test('an action that does not fit the record\'s state is refused in words, and nothing changes', async t => {

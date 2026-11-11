@@ -173,6 +173,14 @@ async function run() {
 
   // 2) The person designates the integrator; one handoff goes to it, and the space says so.
   await page.evaluate(id => workspace.integrator(id), integrator.id);
+  // No main repository is chosen yet: "main" is read nowhere, least of all in the integrator's own folder. Nothing is handed out, and the person is asked once.
+  await until(async () => (await notices()).some(options => options.body === '2 件交付在等集成，但没有可用的主仓库：还没有指定，或者指定的那个现在通不过检查'), 'The person is asked to choose the main repository');
+  assert.equal((await sends()).filter(send => send.text.includes('【NAW 集成交接】')).length, 0);
+  assert.deepEqual(await page.evaluate(() => workspace.handoff('repository')), { root: null, problem: null });
+  // The person chooses it from their own window: this run's temporary repository, by its real path (a path through a link is refused).
+  const main = fs.realpathSync(folder);
+  await assert.rejects(page.evaluate(inside => workspace.handoff('setRepository', inside), path.join(main, '.git')), /主仓库/);
+  assert.deepEqual(await page.evaluate(root => workspace.handoff('setRepository', root), main), { root: main });
   await until(async () => (await sends()).some(send => send.id === integrator.id && send.text.startsWith('【NAW 集成交接】')), 'The handoff reaches the integrator');
   const handoff = (await sends()).find(send => send.text.startsWith('【NAW 集成交接】'));
   for (const [branch, commit] of [['lane/a', delivery], ['lane/b', other]]) assert.ok(handoff.text.includes(commit) && handoff.text.includes(branch), `The handoff names ${branch}`);
@@ -183,7 +191,7 @@ async function run() {
   await page.locator('#room-record').click();
   await until(async () => { const shown = await page.locator('#room-messages').innerText(); return shown.includes(`（lane/a ${delivery.slice(0, 12)}）已交给集成者`) && shown.includes(`（lane/b ${other.slice(0, 12)}）已交给集成者`); }, 'The person sees both handed-out notices in the space\'s shared record');
   await capture('handed-out');
-  passed.push('After the designation one handoff with both deliveries went to the integrator, and the space says so for each');
+  passed.push('With an integrator but no main repository the person is asked once; after they choose it one handoff with both deliveries went out, and the space says so for each');
 
   // 3) The integrator merges one delivery in git and returns the other; NAW checks the merge in the real repository.
   git('cherry-pick', delivery);
@@ -208,9 +216,9 @@ async function run() {
   assert.equal(all.filter(send => send.text.startsWith('【NAW 集成交接】')).length, 1, 'One handoff, sent once');
   for (const each of [member, second]) assert.equal(all.filter(send => send.id === each.id).length, 1, 'Each member got its one task and never a handoff');
   const shown = (await notices()).map(options => options.title + ' | ' + options.body);
-  assert.equal(shown.filter(text => text.startsWith('NAW · 集成交接要你处理')).length, 2, 'Two notices: nobody designated, then installable');
+  assert.equal(shown.filter(text => text.startsWith('NAW · 集成交接要你处理')).length, 3, 'Three notices: nobody designated, no main repository, then installable');
   assert.ok(!shown.some(text => text.includes('修好列表') || text.includes('补上说明')), 'No notice carries a task\'s text');
-  passed.push('The install question was answered through the window\'s entry; one handoff and two notices in all, none with task text');
+  passed.push('The install question was answered through the window\'s entry; one handoff and three notices in all, none with task text');
 
   assert.deepEqual(errors, []);
   assert.equal(app.windows().length, 1);

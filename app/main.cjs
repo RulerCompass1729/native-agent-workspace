@@ -616,6 +616,8 @@ function reportViewStorage(warning, uiMessage = null) {
 let queueDispatcher = null;
 // The integration handoff record of this run when its switch is open (B6); null in the daily app.
 let integrationHandoffs = null;
+// The person's choice of main repository for integration handoffs, as the entry uses it; set with the engine.
+let integrationRepository = null;
 // The last fault of that record met while the person acted on it, kept so that it is not lost: { message, at }.
 let integrationFault = null;
 const HUMAN_SESSION_METHODS = new Set(['prepareInput', 'input', 'draft', 'send', 'queue', 'steer', 'claim', 'terminal', 'interrupt', 'approve', 'answer', 'forward', 'queueShared', 'steerShared']);
@@ -1595,7 +1597,9 @@ async function boot() {
     let result;
     try {
       if (action === 'list') return handoffOverview(handoffs);
-      if (action === 'retryDelivery') result = handoffs.retryReady(value);
+      if (action === 'repository') return integrationRepository.show();
+      if (action === 'setRepository') result = await integrationRepository.choose(value ?? null);
+      else if (action === 'retryDelivery') result = handoffs.retryReady(value);
       else if (action === 'retryReason') result = handoffs.retryReason(value);
       else if (action === 'resolve') result = handoffs.resolveHandoff(value, { retry: choice === true });
       else if (action === 'answer') result = handoffs.answer(value);
@@ -2180,27 +2184,46 @@ function integrationEngine(dispatcher) {
   const { IntegrationHandoffs } = require('./integrator-handoff.cjs');
   const { IntegratorEngine } = require('./integrator-engine.cjs');
   const integratorGit = require('./integrator-git.cjs');
-  const handoffs = new IntegrationHandoffs(dataDir), readers = new Map();
+  const { IntegrationRepository } = require('./integrator-repository.cjs');
+  const handoffs = new IntegrationHandoffs(dataDir), repository = new IntegrationRepository(dataDir), readers = new Map();
+  // git is read only in the main repository the person chose, and that folder is checked again
+  // before every use. The working folder of the integrator's session is never read.
   const reader = () => {
     try {
-      const integrator = integratorRole.current();
-      const session = integrator && dispatcher.client?.snapshot().sessions.find(s => s.id === integrator.sessionId && s.nativeId === integrator.nativeId);
-      const folder = session?.cwd;
-      if (typeof folder !== 'string' || !path.isAbsolute(folder)) return null;
-      if (!readers.has(folder)) { if (readers.size >= 8) readers.clear(); readers.set(folder, integratorGit.reader(folder)); }
+      const folder = repository.usable();
+      if (!folder) return null;
+      if (!readers.has(folder)) { readers.clear(); readers.set(folder, integratorGit.reader(folder)); }
       return readers.get(folder);
     } catch { return null; }
   };
-  // A question git cannot be asked just now (no integrator, no folder) is answered "unknown".
+  // A question git cannot be asked just now (no repository chosen, or it fails its checks) is answered "unknown".
   const ask = name => async (...args) => { const read = reader(); return read ? read[name](...args) : null; };
   const engine = new IntegratorEngine({ handoffs, designation: () => integratorRole.current(), mainHead: () => ask('branch')('main'),
     reader: { commit: ask('commit'), isAncestor: ask('isAncestor'), changes: ask('changes') },
     send: (session, text, handoffId) => dispatcher.send(session, text, handoffId), typing: sessionId => dispatcher.noteHuman(sessionId),
     record: fact => roomState.recordHandoff(fact), notify: info => notifyHandoff(info),
-    holderRecord: fact => roomState.recordHandoffHolder(fact), nameOf: session => dispatcher.name(session) });
+    holderRecord: fact => roomState.recordHandoffHolder(fact), nameOf: session => dispatcher.name(session),
+    repository: () => (repository.usable() ? true : null) });
   // The person's own entry gets the record only when the engine exists: an engine that could not
   // be built leaves the entry answering "not enabled" instead of changing a record nothing reads.
   integrationHandoffs = handoffs;
+  integrationRepository = {
+    // What the person is shown: the folder they chose, and why it cannot be read now, if so.
+    show() {
+      let root = null, problem = null;
+      try { root = repository.chosen(); if (root !== null) repository.usable(); }
+      catch (error) { problem = error?.uiMessage?.key || 'error.handoff.repositoryState'; }
+      return { root, problem };
+    },
+    // The person's choice: null clears it; a folder is checked and must have a main branch.
+    async choose(selected) {
+      if (selected === null) return { root: repository.set(null) };
+      if (typeof selected !== 'string') throw uiError('error.handoff.repositoryUnsafe');
+      const root = repository.check(selected);
+      if (!(await integratorGit.reader(root).branch('main'))) throw uiError('error.handoff.repositoryNoMain');
+      return { root: repository.set(root) };
+    },
+  };
   return engine;
 }
 // What the person is shown about integration handoffs: counts, what is on hold and why, the
@@ -2213,7 +2236,7 @@ function handoffOverview(handoffs) {
   // and recoveredAt when a later step went through): the person may have missed its one notice,
   // so it stays readable here.
   const engineFault = queueDispatcher?.integrationError;
-  return { started: true, engineFault: engineFault ? { ...engineFault } : null, summary: handoffs.summary(),
+  return { started: true, engineFault: engineFault ? { ...engineFault } : null, repository: integrationRepository ? integrationRepository.show() : null, summary: handoffs.summary(),
     held: handoffs.held().map(group => ({ reason: group.reason, count: group.count, entries: group.entries.map(brief) })),
     waiting: open && open.status === 'waiting' ? { handoffId: open.id, reason: open.reason, question: open.question || '', sessionId: open.integrator.sessionId,
       entries: snapshot.ready.filter(entry => open.keys.includes(entry.key)).map(brief) } : null,
