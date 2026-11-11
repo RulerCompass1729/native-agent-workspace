@@ -15,6 +15,7 @@ const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.c
 const { installPlugin: refreshCompatPlugin } = require('./claude-compat-plugin.cjs');
 const { TerminalJournal } = require('./observation.cjs');
 const { serverVersion, verifiedCodexProtocol } = require('./native-history.cjs');
+const codexQualification = require('./codex-qualification.cjs');
 const { toolContent, toolStatus, toolTypes, fileChanges, nativeTextContent, nativeTextItemId } = require('./codex-tool-content.cjs');
 const { codexTurnBlock } = require('./native-blocks.cjs');
 const { computerUseMcpServer, codexComputerUseMcpArgs } = require('./native-computer-use.cjs');
@@ -1604,7 +1605,7 @@ class Codex extends EventEmitter {
     // Native 0.166/0.167 use the same transparent terminal event stream. Observe it
     // from the first turn so native MCP provenance is not lost before a later
     // history attachment. This does not qualify unrelated history/steer APIs.
-    if (!verifiedCodexProtocol(this.host.rpc) && !['0.166.0', '0.167.0'].includes(this.host.rpc?.nativeVersion)) return this.host.codexSocket;
+    if (!codexQualification.allows('terminalBridge', this.host.rpc?.nativeVersion)) return this.host.codexSocket;
     if (!this.terminalBridge) {
       const { CodexTerminalBridge } = require('./codex-terminal-bridge.cjs');
       const bridge = new CodexTerminalBridge(path.join(this.host.privateDir, `tui-${crypto.randomUUID()}.sock`), this.host.codexSocket, event => this.observeTerminalContext(event));
@@ -2259,7 +2260,7 @@ class Codex extends EventEmitter {
     else this.emit('complete', { tag: pending?.tag, supersededTag: pending?.supersededTag, messageId: turn.messageId, inputTag: turn.itemInputs.get(turn.messageId) || '', text: turn.text, background: null, scheduled: null, fleetPending: null, stopHookActive: null });
     if (live) this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId: id, status: turn.completed.status, errorInfo: turn.completed.error?.codexErrorInfo, errorMessage: turn.completed.error?.message });
   }
-  get steerAvailable() { return verifiedCodexProtocol(this.host.rpc) && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
+  get steerAvailable() { return codexQualification.allows('steer', this.host.rpc?.nativeVersion) && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
   async steer(text, tag, expectedTurnId, guard, shared = false, acceptedGuard = guard) {
     if (!this.steerAvailable || !expectedTurnId || this.turnId !== expectedTurnId || this.nativeRequests.size || this.steering || !guard()) throw uiError("error.nativeTurnChangedSteerNotSent");
     this.ownInputs.add(tag);
@@ -2280,7 +2281,7 @@ class Codex extends EventEmitter {
       this.finishTurn(expectedTurnId);
     }
   }
-  get spaceImagesAvailable() { return ['0.166.0', '0.167.0'].includes(this.host.rpc?.nativeVersion) && this.host.rpc?.ws?.readyState === WebSocket.OPEN && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
+  get spaceImagesAvailable() { return codexQualification.allows('spaceImages', this.host.rpc?.nativeVersion) && this.host.rpc?.ws?.readyState === WebSocket.OPEN && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
   scopedOutboxRpc() {
     const rpc = this.terminalNotificationSource ? this.terminalRpc : this.host.rpc;
     if (this.stopped || this.transportDisconnected || this.record.nativeContextPending || !this.currentRpc(rpc) ||
@@ -2596,6 +2597,8 @@ class NativeHost {
     this.privateDir = privateDir; this.hookSocket = path.join(privateDir, 'hooks.sock');
     this.submitSocket = path.join(privateDir, 'submit.sock');
     this.codexSocket = path.join(privateDir, 'codex.sock'); this.hookTargets = new Map(); this.codexTargets = new Map();
+    // Automatic Codex version decisions (B3) live beside the private service state.
+    this.codexQualificationFile = path.join(privateDir, 'codex-qualification.json'); codexQualification.load(this.codexQualificationFile);
     this.codexMessageToken = crypto.randomBytes(32).toString('hex');
     this.submissions = createSubmissionServer(this.submitSocket, this.hookTargets);
     this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() };
@@ -2615,7 +2618,7 @@ class NativeHost {
           Promise.resolve().then(async () => {
             const identity = event.identity, runtime = this.codexTargets.get(identity?.nativeId);
             const args = event.arguments;
-            if (event.token !== this.codexMessageToken || !['0.164.0', '0.165.0', '0.166.0', '0.167.0'].includes(this.rpc?.nativeVersion) || !runtime || !runtime.addressedCall) throw uiError("error.nativeToolOriginUnconfirmed");
+            if (event.token !== this.codexMessageToken || !codexQualification.allows('addressedTool', this.rpc?.nativeVersion) || !runtime || !runtime.addressedCall) throw uiError("error.nativeToolOriginUnconfirmed");
             const call = await workspaceMcpProof(runtime, identity, args, socket);
             const valid = () => currentWorkspaceMcpProof(runtime, identity, args, socket, call);
             if (!valid()) throw uiError("error.nativeToolOriginUnconfirmed");
@@ -2755,6 +2758,7 @@ class NativeHost {
         sameEndpoint();
         ws.send(JSON.stringify({ method: 'initialized', params: {} }));
         watcher.activate();
+        this.qualifyCodexVersion(rpc.nativeVersion);
       } catch (error) {
         watcher?.dispose(); ws?.terminate();
         // A failed observer connection cannot stop the existing native server.
@@ -2762,6 +2766,22 @@ class NativeHost {
       }
     }).finally(() => { this.reconnecting = null; });
     return this.reconnecting;
+  }
+  // A Codex version newer than the qualified baseline is compared in the background (B3);
+  // its gates stay closed until a decision opens them, and targets then recheck.
+  qualifyCodexVersion(version) {
+    if (this.closed || !this.codexBinary || !codexQualification.needsCheck(version) || this.codexQualifying?.version === version) return;
+    const job = this.codexQualifying = { version };
+    job.done = codexQualification.qualify({ binary: this.codexBinary, version, privateDir: this.privateDir })
+      .then(decision => {
+        if (this.closed) return;
+        codexQualification.record(this.codexQualificationFile, decision);
+        const held = codexQualification.held(version);
+        console.error(`[NAW] Codex ${version} checked against ${decision.basis}: ${held.length ? 'held ' + held.join(', ') : 'all capabilities open'}; ${decision.records.length} record(s)`);
+        for (const target of this.codexTargets.values()) target.emit('capability');
+      })
+      .catch(() => {})
+      .finally(() => { if (this.codexQualifying === job) this.codexQualifying = null; });
   }
   async startCodex() {
     if (this.closed) throw uiError("error.nativeServiceClosed");
@@ -2829,6 +2849,7 @@ class NativeHost {
       this.codexEndpoint = endpoint;
       ws.send(JSON.stringify({ method: 'initialized', params: {} }));
       watcher.activate();
+      this.qualifyCodexVersion(rpc.nativeVersion);
       } catch (error) {
         watcher?.dispose(); ws?.terminate();
         // Only this unsuccessful startup's child can be terminated. No thread

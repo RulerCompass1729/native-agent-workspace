@@ -3,11 +3,17 @@ const { uiError, uiNotice } = require('./ui-errors.cjs');
 const path = require('node:path');
 const { executable } = require('./platform.cjs');
 const serverVersion = result => typeof result?.userAgent === 'string' ? result.userAgent.match(/^[^/\s]+\/(\d+\.\d+\.\d+)(?:\s|$)/)?.[1] || null : null;
-const verifiedCodexProtocol = rpc => ['0.163.0', '0.164.0', '0.165.0', '0.167.0'].includes(rpc?.nativeVersion);
+const codexQualification = require('./codex-qualification.cjs');
+// History is the protocol capability the version status reports.
+const verifiedCodexProtocol = rpc => codexQualification.allows('history', rpc?.nativeVersion);
 function codexVersionInfo(rpc, connected = true) {
   const version = typeof rpc?.nativeVersion === 'string' && /^\d+\.\d+\.\d+$/.test(rpc.nativeVersion) ? rpc.nativeVersion : null;
   const current = connected && rpc?.ws?.readyState === 1 && Object.hasOwn(rpc, 'nativeVersion');
-  return { nativeVersion: version, nativeVersionStatus: current ? verifiedCodexProtocol(rpc) ? 'verified' : 'unverified' : version ? 'last-known' : 'unreported' };
+  // An automatically checked version reads as verified only when no capability was held; the
+  // check's result travels with it so a held capability is never hidden behind 'verified'.
+  const check = version && codexQualification.decision(version), held = version ? codexQualification.held(version) : [];
+  return { nativeVersion: version, nativeVersionStatus: current ? verifiedCodexProtocol(rpc) && held.length === 0 ? 'verified' : 'unverified' : version ? 'last-known' : 'unreported',
+    ...(check ? { nativeVersionCheck: { basis: check.basis, held, records: check.records.length } } : {}) };
 }
 function nativeId(value) {
   if (typeof value !== 'string' || !/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(value)) throw uiError("error.history.invalidNativeId");
