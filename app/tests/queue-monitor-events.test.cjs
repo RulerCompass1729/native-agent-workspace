@@ -267,3 +267,35 @@ test('a detached queue copy does not share the stored delivery line', t => {
   shown.ready.branch = 'changed';
   assert.equal(f.state.queueFind('shared', id).ready.branch, READY.branch);
 });
+
+test('a member is told how to report a delivery in every dispatch and in the shared rules; the examples themselves are not deliveries', () => {
+  const text = rules.dispatchText('Synthetic space', { text: 'Synthetic task' }), lines = text.split('\n');
+  assert.equal(lines[0], '【NAW 派活】空间「Synthetic space」队列里的下一件：'); assert.equal(lines[2], 'Synthetic task');
+  assert.equal(lines[4], '做完这一件就结束本轮：不留后台命令（要等审查或测试，就在本轮里用长等待等到它结束）、不留运行中的队友、不开 goal，也不要自己去任务板认领别的任务，NAW 会接着派下一件。需要人来决定时，本轮最后一条回复的第一行写「需要你决定：」，NAW 会停派并提醒。',
+    'What members were already told is unchanged');
+  assert.equal(lines.length, 6);
+  assert.ok(lines[5].includes('READY <分支名> <分支上最新的提交号，7 到 40 位>') && lines[5].includes('没有提交就不写这一行'));
+  assert.equal(rules.readyLine(text), null, 'A member that quotes the instruction has not delivered anything');
+  assert.equal(rules.readyLine(lines[5] + '\nREADY <分支名> <分支上最新的提交号，7 到 40 位>'), null);
+  // Every form the instruction forbids is one that settling does not recognise, and each is named in the instruction.
+  for (const [word, reply] of [
+    ['反引号', '`READY lane/member-task 0123abc`'], ['反引号', 'READY `lane/member-task` `0123abc`'], ['加粗', '**READY** lane/member-task 0123abc'],
+    ['加粗', '**READY lane/member-task 0123abc**'], ['不加引号、', '"READY lane/member-task 0123abc"'], ['不加引号、', '「READY lane/member-task 0123abc」'],
+    ['列表符号', '- READY lane/member-task 0123abc'], ['列表符号', '1. READY lane/member-task 0123abc'], ['行尾不加句号', 'READY lane/member-task 0123abc。'],
+    ['行尾不加句号', 'READY lane/member-task 0123abc.'], ['各用一个空格隔开', 'READY  lane/member-task 0123abc'], ['各用一个空格隔开', 'READY　lane/member-task　0123abc'],
+    ['7 到 40 位', 'READY lane/member-task 0123ab'], ['7 到 40 位', `READY lane/member-task ${'a'.repeat(64)}`],
+  ]) {
+    assert.ok(lines[5].includes(word), word);
+    assert.equal(rules.readyLine('改好了。\n' + reply), null, reply);
+  }
+  // The line goes after the first line: a decision request must stay first to hold the member.
+  assert.ok(lines[5].includes('不要放在第一行'));
+  // What the instruction asks for is what settling recognises, also after a decision request and before closing remarks.
+  assert.deepEqual(rules.readyLine('改好了，测试 12/12。\nREADY lane/member-task 0123abc'), { branch: 'lane/member-task', commit: '0123abc' });
+  assert.deepEqual(rules.readyLine('需要你决定：现在合并吗？\nREADY lane/member-task 0123abc\n我先停在这里。'), { branch: 'lane/member-task', commit: '0123abc' });
+  const shared = fs.readFileSync(path.join(__dirname, '../../CLAUDE.md'), 'utf8');
+  const rule = shared.slice(shared.indexOf('A member of a space whose NAW queue the person uses ends each turn idle'));
+  assert.ok(rule.includes('`READY <branch> <commit>`') && rule.includes('an item without commits has no such'), 'The shared rule says the same');
+  for (const word of ['after its first', 'single', 'no quotes, backticks,', 'bold, list marker or closing period', '7 to 40 hex characters']) assert.ok(rule.includes(word), word);
+  assert.equal(rules.readyLine(shared), null, 'The shared rule holds no line that reads as a delivery');
+});
