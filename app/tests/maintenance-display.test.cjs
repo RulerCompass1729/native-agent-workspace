@@ -3,7 +3,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const operation = require('../background-operation.cjs'), locale = require('../ui-locale.js');
 const { BackgroundControl, dialog } = require('../background-control.cjs');
 const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
-const invisible = /[\p{Cf}\p{Zl}\p{Zp}]/u;
+const invisible = /[\p{Cf}\p{Zl}\p{Zp}\u115f\u2800\u3164]/u;
 function productionConfirmation() {
   const start = main.indexOf('    confirmation: (actor, command, action'), end = main.indexOf('\n    audit:', start);
   assert.ok(start > 0 && end > start);
@@ -14,7 +14,7 @@ function productionConfirmation() {
 }
 const context = snapshot => ({ client: { snapshot: () => snapshot } });
 test('actual maintenance confirmation escapes format and separator characters without changing Unicode payloads', () => {
-  const chars = '\u00ad\u061c\u200b\u200c\u200d\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\ufeff\u{e0001}\u2028\u2029';
+  const chars = '\u00ad\u061c\u200b\u200c\u200d\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\ufeff\u{e0001}\u2028\u2029\u115f\u2800\u3164';
   const actor = { name: 'Agent' + chars }, command = { method: 'input', arguments: ['target', 'echo αа中文' + chars], paths: ['/synthetic/' + chars] };
   const before = JSON.stringify(command), options = productionConfirmation()(actor, command, 'input', context({ sessions: [], rooms: [] }));
   assert.equal(invisible.test(options.message), false); assert.equal(invisible.test(options.detail), false);
@@ -91,4 +91,23 @@ test('persisted confirmations from an earlier version are escaped when their row
   assert.equal(invisible.test(row.backgroundOperation.confirmation.options.detail), false);
   assert.match(row.backgroundOperation.confirmation.options.detail, /\\u2066/);
   assert.equal(new BackgroundControl(config).data.records[0].confirmation.options.detail, 'Old\u2066\u2028');
+});
+test('space audit actor names are visible, including legacy records and maximal escaped names', t => {
+  const { RoomState } = require('../room-state.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-audit-visible-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const state = new RoomState(dir), raw = 'Agent\u202e\u115f\u3164\u2800';
+  const row = { id: 'audit-name', actor: { id: 'agent', nativeId: 'native', name: raw, provider: 'codex' },
+    command: { method: 'archiveRoom', arguments: [] }, state: 'confirmation-required', at: 1 };
+  state.recordControlOperation(row);
+  assert.equal(invisible.test(state.value.events[0].controlAudit.actor.name), false);
+  assert.equal(row.actor.name, raw, 'Original transport identity is unchanged');
+  const old = structuredClone(state.value.events[0]); old.name = old.controlAudit.actor.name = raw;
+  old.text = 'Waiting ' + raw; old.uiMessage.params.name = raw;
+  state.commit({ ...state.value, events: [old] });
+  const cold = new RoomState(dir), display = cold.apply({ sessions: [], rooms: [{ id: 'shared' }] });
+  assert.equal(invisible.test(JSON.stringify(display.rooms[0].events)), false);
+  assert.equal(cold.value.events[0].controlAudit.actor.name, raw, 'Display projection does not rewrite legacy storage');
+  row.id = 'maximal-name'; row.actor.name = '\u202e'.repeat(160); state.recordControlOperation(row);
+  const reread = new RoomState(dir); assert.equal(reread.warning, '');
+  assert.equal(reread.value.events.at(-1).controlAudit.actor.name.length, 960);
 });

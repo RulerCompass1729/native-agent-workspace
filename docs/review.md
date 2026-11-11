@@ -1,5 +1,28 @@
 # Review and issue record
 
+**S2 snapshot and consent follow-up, 2026-11-10 (delta review pending):**
+the person requested fixes for non-session selections, repeated read prompts,
+invisible audit names, archive ordering and agent renames of other sessions.
+Only an existing foreign session selection requests conversation consent;
+space and missing selections return the usual redacted snapshot without a
+conversation audit. Implicit repeated snapshots reuse a still-pending request
+only for the same actor, view, command and current consent fingerprint.
+Resolved requests and changed native targets are not a standing read grant.
+
+Managed renames of other sessions now use the existing human consent/audit gate,
+because those labels identify targets in later consent prompts. Own renames and
+human-window operations keep their paths. Audit actor names and legacy event
+projections escape format/separator characters and the three additional blank
+characters reported by review; raw command and transport identities stay intact.
+The stored display-name bound accounts for the existing escape expansion.
+
+Forgetting a session does not prune its room order. Archive and restore now use
+the same unknown-slot counting rule, retaining absent backend positions without
+letting a forgotten slot shift a newly saved restore index. Regressions cover a
+forgotten or absent member before archive, its return, and forgetting afterward.
+Top-level hosted snapshot fields and stored approved-read retention await the
+person's separate scope decisions; this change does not claim to resolve them.
+
 **S2 N7: consent for another hosted conversation, 2026-11-10 (delta review pending):**
 the person approved the recommendation: selecting another session is navigation,
 not permission to read its private conversation. Hosted snapshots and `initial`
