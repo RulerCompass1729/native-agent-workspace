@@ -70,7 +70,8 @@ async function fixture(t) {
     const next = await successor(name); if (event === 'done') await w.stop(of);
     logged(event, w.get(of), w.get(next)); return next;
   };
-  const carry = (snapshot = w.snapshot(), advance = 0) => { clock += advance; return sandbox.carryGrants(client, snapshot, clock); };
+  // The desktop's clock: never behind the real one, and moved on by the test where it waits.
+  const carry = (snapshot = w.snapshot(), advance = 0) => { clock = Math.max(clock, Date.now()) + advance; return sandbox.carryGrants(client, snapshot, clock); };
   const records = (room = space) => roomState.metadata(room).events.filter(event => event.monitor?.kind === 'carried');
   const grants = () => JSON.stringify(w.operator.data.domains);
   return { w, id, root, desk, roomState, space, logFile, client, calls, follows, grant, open, report, logged, successor, replace, carry, records, grants,
@@ -101,7 +102,7 @@ test('a holder NAW replaced: its successor opens under the same grant with no ne
   assert.deepEqual(listed(f), [], 'Decided and told: no longer listed'); assert.deepEqual(f.calls, ['carry', 'told']);
   const [record] = f.records(), outcome = f.w.operator.data.sessions[f.id].succession; assert.equal(f.records().length, 1);
   assert.deepEqual(outcome, { at: outcome.at, carried: true, to: { id: next, nativeId: f.w.get(next).nativeId }, told: true });
-  assert.deepEqual(record.monitor, { kind: 'carried', key: `carried:${f.id}:${outcome.at}`, oldId: f.id, newId: next, carried: true });
+  assert.deepEqual(record.monitor, { kind: 'carried', key: `carried:${f.id}:${outcome.at}`, oldId: f.id, newId: next, carried: true, grants: 1 });
   assert.equal(text(record), 'Lead 换会话后，你给它的 agent 控制接口许可和建会话授权由 Lead · 续 接续；额度和到期时间不变');
   assert.equal(text(record, 'en'), 'After Lead was replaced, Lead · 续 holds the agent control interface permission and the session-creation grants you gave it; quotas and expiry are unchanged');
   const audit = f.w.operator.data.audit.find(entry => entry.tool === 'operator_succession');
@@ -145,8 +146,33 @@ test('nothing is widened by the move: a revoked grant stays revoked, an expired 
   const next = await f.replace(); await f.carry();
   assert.equal(f.records()[0].monitor.carried, true);
   assert.ok(f.w.operator.data.domains[revoked].revokedAt, 'Still revoked'); assert.ok(f.w.operator.data.domains[expired].expiresAt < Date.now(), 'Still expired');
+  // Revoking a grant does not stop the interface permission from going on; the entry then says exactly that,
+  // and does not read as if a usable grant had moved.
+  assert.equal(f.records()[0].monitor.grants, 0);
+  assert.equal(text(f.records()[0]), 'Lead 换会话后，你给它的 agent 控制接口许可由 Lead · 续 接续；它名下没有有效的建会话授权，已撤销或已到期的仍然无效');
+  assert.equal(text(f.records()[0], 'en'), 'After Lead was replaced, Lead · 续 holds the agent control interface permission you gave it. It has no session-creation grant in force; a revoked or expired grant stays revoked or expired');
   assert.equal((await f.open(next)).status, 'pending-authorization', 'Neither grant covers an open: the person is asked, as for the old session');
   assert.equal((await f.open(next, { permission: 'bypass' })).status, 'pending-authorization', 'The holder is not in bypass');
+});
+
+test('the entry says what went on: the interface permission alone when no grant is in force, and the grants only when one is', async t => {
+  // The interface was on and no grant was ever given: the permission still goes on, and the entry names nothing else.
+  const f = await fixture(t);
+  const next = await f.replace(); await f.carry();
+  assert.equal(f.w.snapshot().sessions.find(s => s.id === next).operatorEnabled, true);
+  assert.deepEqual([f.records()[0].monitor.carried, f.records()[0].monitor.grants], [true, 0]);
+  assert.equal(f.records()[0].uiMessage.key, 'notice.monitor.interfaceCarried');
+  // One grant in force beside a revoked one: the entry speaks of grants, and counts the one that is in force.
+  const g = await fixture(t), live = g.grant(), dead = g.grant(); g.w.operatorAction(g.id, 'revoke', dead);
+  await g.replace(); await g.carry();
+  assert.deepEqual([g.records()[0].monitor.carried, g.records()[0].monitor.grants], [true, 1]);
+  assert.equal(g.records()[0].uiMessage.key, 'notice.monitor.grantCarried'); assert.ok(!g.w.operator.data.domains[live].revokedAt);
+  // Written later, from a state that already shows the move, it counts the same grants and not one the old session was given since.
+  const h = await fixture(t); h.grant();
+  await h.replace(); h.failRecords(1); await h.carry();
+  h.w.operatorAction(h.id, 'enabled', true); h.grant(); h.grant();
+  await h.carry(undefined, 31000);
+  assert.deepEqual([h.records()[0].monitor.carried, h.records()[0].monitor.grants], [true, 1]);
 });
 
 test('the person\'s own off switches win: a holder whose interface was turned off, or the interface turned off for everyone, carries nothing', async t => {

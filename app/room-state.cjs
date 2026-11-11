@@ -925,10 +925,12 @@ class RoomState {
     const key = `carried:${carried.oldId}:${carried.at}`;
     if (value.events.some(event => event.monitor?.kind === 'carried' && event.monitor.key === key)) return { recorded: false };
     this.writable(room);
-    const done = carried.carried === true;
+    const done = carried.carried === true, grants = done && Number.isSafeInteger(carried.inForce) && carried.inForce > 0 ? carried.inForce : 0;
+    // With no grant in force among those that went with it, the entry says that only the interface permission
+    // went on: a revoked or expired grant is carried as it is and must not read as a usable one.
     this.update({}, { kind: 'monitor', sessionId: done ? carried.newId : carried.oldId,
-      ...uiNotice(done ? 'notice.monitor.grantCarried' : 'notice.monitor.grantNotCarried', done ? { old: carried.old, new: carried.new } : { old: carried.old }),
-      monitor: { kind: 'carried', key, oldId: carried.oldId, ...(carried.newId ? { newId: carried.newId } : {}), carried: done, ...(done ? {} : { reason: carried.reason }) } }, room);
+      ...uiNotice(!done ? 'notice.monitor.grantNotCarried' : grants ? 'notice.monitor.grantCarried' : 'notice.monitor.interfaceCarried', done ? { old: carried.old, new: carried.new } : { old: carried.old }),
+      monitor: { kind: 'carried', key, oldId: carried.oldId, ...(carried.newId ? { newId: carried.newId } : {}), carried: done, ...(done ? { grants } : { reason: carried.reason }) } }, room);
     return { recorded: true };
   }
   // B6 E4, the version gate. A member whose native version NAW has not verified keeps working with

@@ -435,8 +435,15 @@ async function carryGrants(client, snapshot, now = Date.now()) {
       try { for (const room of heir ? roomIds(heir) : []) rooms.add(room); } catch { /* Unreadable membership: fall back to where the replacement was recorded. */ }
       if (!rooms.size) for (const room of next?.spaces || []) rooms.add(room);
       if (!rooms.size) rooms.add('shared');
+      // How many of the grants that went with it are in force as the notice is written. A revoked or expired
+      // grant is carried as it is, and the notice must not read as if a usable grant had moved.
+      const grants = Array.isArray(snapshot.operatorPolicy?.domains) ? snapshot.operatorPolicy.domains : [];
+      const moved = outcome.carried ? grants.filter(domain => domain?.carried?.some(c => c?.from?.id === holder.id && c.from.nativeId === holder.nativeId && c.to?.id === outcome.to.id)) : [];
+      // (A state from before the carry does not show the move yet: there they are still the old session's.)
+      const pool = moved.length || !outcome.carried ? moved : grants.filter(domain => domain?.initiators?.some(i => i?.id === holder.id && i.nativeId === holder.nativeId));
+      const inForce = pool.filter(domain => !domain.revokedAt && domain.expiresAt > now).length;
       const carried = { oldId: holder.id, at: outcome.at, old: label(holder.id), carried: outcome.carried,
-        ...(outcome.carried ? { newId: outcome.to.id, new: label(outcome.to.id) } : { reason: String(outcome.reason || 'refused').slice(0, 60) }) };
+        ...(outcome.carried ? { newId: outcome.to.id, new: label(outcome.to.id), inForce } : { reason: String(outcome.reason || 'refused').slice(0, 60) }) };
       let said = false, wrote = false;
       const say = room => { try { if (roomState.recordCarried(room, carried).recorded) wrote = true; said = true; } catch { /* That space is gone, archived or busy; another may still say it. */ } };
       for (const room of rooms) say(room);
