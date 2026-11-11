@@ -55,10 +55,12 @@ test('headed startup isolates before windows and rejects unsafe test flags befor
     ['invalid flag', { NAW_DATA_DIR: isolated, NAW_TEST_PARENT_PID: 'bad' }, 321, 'reject'],
     ['missing profile', { NAW_TEST_PARENT_PID: '321' }, 321, 'reject'],
     ['nonprivate mode', { NAW_DATA_DIR: shared, NAW_TEST_PARENT_PID: '321' }, 321, 'reject'],
+    ['Session data pin failed', { NAW_DATA_DIR: isolated, NAW_TEST_PARENT_PID: '321' }, 321, 'reject'],
   ]) {
-    const calls = [], noop = () => {};
+    const calls = [], sessionPaths = [], noop = () => {};
     const electron = {
-      app: { setName: noop, getVersion: () => 'fixture', commandLine: { appendSwitch: noop }, getPath: () => label === 'missing normal profile' ? path.join(temp, 'not-created') : normal, setPath: noop,
+      app: { setName: noop, getName: () => 'Native Agent Workspace', getVersion: () => 'fixture', commandLine: { appendSwitch: noop, hasSwitch: () => false }, getPath: () => label === 'missing normal profile' ? path.join(temp, 'not-created') : normal,
+        setPath(name, value) { if (name === 'sessionData') { if (label === 'Session data pin failed') throw Error('Synthetic Session path failure'); sessionPaths.push(value); } },
         setActivationPolicy: p => calls.push(['policy', p]), requestSingleInstanceLock: () => { calls.push(['lock']); return false; }, quit: noop, on: noop, whenReady: () => ({ then: noop }) },
       ipcMain: { handle: noop },
       BrowserWindow: class { constructor(options) { this.options = options; calls.push(['window']); } showInactive() { calls.push(['inactive']); } show() { calls.push(['show']); } focus() { calls.push(['focus']); } isDestroyed() { return false; } isMinimized() { return false; } },
@@ -71,6 +73,7 @@ test('headed startup isolates before windows and rejects unsafe test flags befor
     load();
     const options = vm.runInContext('startupWindow = createWindow({ bounds: { show: true, focusable: true } }); startupWindow.options', context);
     const background = outcome === 'background';
+    assert.deepEqual(sessionPaths, background ? [fs.realpathSync(isolated)] : [], label);
     assert.equal(options.show, background || outcome === 'normal-hidden' ? false : true, label);
     assert.equal(options.focusable, background ? false : true, label);
     vm.runInContext('focusOrOpen()', context);

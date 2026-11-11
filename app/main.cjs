@@ -84,6 +84,7 @@ function profileHasAncestor(identity, target) {
 let backgroundTest = false;
 if (testRequested) {
   try {
+    if (app.commandLine.hasSwitch('user-data-dir')) throw Error('CLI userData overrides cannot request test permissions');
     const profile = process.env.NAW_DATA_DIR && fs.realpathSync(path.resolve(process.env.NAW_DATA_DIR));
     const info = profile && fs.statSync(profile);
     const normalReferences = [normalDataDir];
@@ -91,13 +92,13 @@ if (testRequested) {
       // Electron's userData may move with a CLI override; HOME is also mutable.
       const home = os.userInfo().homedir;
       if (typeof home !== 'string' || !path.isAbsolute(home)) throw Error('OS account home is unavailable');
-      normalReferences.push(path.join(home, 'Library', 'Application Support', 'Native Agent Workspace'));
+      normalReferences.push(path.join(home, 'Library', 'Application Support', app.getName()));
     }
     backgroundTest = /^\d+$/.test(process.env.NAW_TEST_PARENT_PID) && Number.isSafeInteger(testParent) && testParent > 1 && process.ppid === testParent && Boolean(profile) && normalReferences.every(reference => {
       const normalInfo = normalProfileIdentity(reference);
       return (!normalInfo || !profileHasAncestor(normalInfo, profile)) && !profileHasAncestor(info, reference);
     }) && info.isDirectory() && typeof process.getuid === 'function' && info.uid === process.getuid() && (info.mode & 0o077) === 0;
-    if (backgroundTest) app.setPath('userData', profile);
+    if (backgroundTest) { app.setPath('userData', profile); app.setPath('sessionData', profile); }
   } catch { backgroundTest = false; /* An unverifiable profile must never fall through to foreground. */ }
   if (!backgroundTest) { console.error('Invalid isolated headed-test parent/profile; no window opened.'); process.exit(1); }
 }

@@ -55,6 +55,12 @@ cannot assert a different root. Physical aliases of the same directory remain
 valid. With Main's real `dataDir` supplied, an audit in a different private folder
 is refused; the comparison alone cannot authenticate that supplied reference.
 
+The audit module's export object is frozen, so property assignment or redefinition
+cannot substitute its constructor before Business imports it. This shallow guard
+keeps the existing constructor, prototype, instance and public API behavior; it
+does not defend arbitrary same-process code that can replace require.cache or
+module.exports itself.
+
 There is no implicit store derived from `role.file`, and that path is not read
 to choose the audit. The role record may live in a nested instance directory;
 its real authorization checks still run. The host reuses its shared audit object
