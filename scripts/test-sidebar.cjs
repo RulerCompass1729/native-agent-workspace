@@ -95,6 +95,38 @@ async function run() {
   await page.keyboard.press('Escape');
   checks.push('Collision-expanded NAW IDs distinguish duplicate names in every row\'s accessible name; header and exact full NAW/native copy agree without changing system clipboard');
 
+  // B6: the person designates one session outside every space as integrator, from that session's own menu.
+  const INTEGRATOR_SET = '设为集成者（把交上来的活合进主线）', INTEGRATOR_REVOKE = '撤销集成者', integratorFile = path.join(profile, 'integrator.json');
+  const designated = async p => JSON.stringify((await p.evaluate(() => workspace.initial())).integrator);
+  const chosen = index => JSON.stringify({ sessionId: ids[index], nativeId: 'synthetic-native-' + index });
+  const offered = async (p, id, name) => {
+    await p.locator(`[data-session-menu="${id}"]`).click(); await p.getByRole('menuitem', { name: '重命名…', exact: true }).waitFor();
+    const count = await p.getByRole('menuitem', { name, exact: true }).count();
+    await p.keyboard.press('Escape'); await p.locator('.naw-session-menu').waitFor({ state: 'hidden' }); return count;
+  };
+  assert.equal(await designated(page), 'null'); assert.equal(fs.existsSync(integratorFile), false);
+  assert.equal(await offered(page, ids[2], INTEGRATOR_SET), 0, 'A session without a native id is not offered the designation');
+  await menu(ids[0], INTEGRATOR_SET);
+  for (const p of [page, peer]) await until(async () => await designated(p) === chosen(0), 'The designation reaches the state of both windows');
+  assert.deepEqual(JSON.parse(fs.readFileSync(integratorFile, 'utf8')), { version: 1, selected: JSON.parse(chosen(0)) });
+  assert.equal(fs.statSync(integratorFile).mode & 0o777, 0o600);
+  // The menus follow in both windows: the designated session can be revoked, the other can take over.
+  for (const p of [page, peer]) {
+    await until(async () => await offered(p, ids[0], INTEGRATOR_REVOKE) === 1, 'The designated session shows the revoke');
+    assert.equal(await offered(p, ids[0], INTEGRATOR_SET), 0); assert.equal(await offered(p, ids[1], INTEGRATOR_SET), 1); assert.equal(await offered(p, ids[1], INTEGRATOR_REVOKE), 0);
+  }
+  // There is one integrator: designating another session replaces the first.
+  await menu(ids[1], INTEGRATOR_SET);
+  await until(async () => await designated(page) === chosen(1), 'The newer designation replaces the older');
+  assert.equal(await offered(page, ids[0], INTEGRATOR_REVOKE), 0);
+  await menu(ids[1], INTEGRATOR_REVOKE);
+  for (const p of [page, peer]) await until(async () => await designated(p) === 'null', 'The revocation reaches both windows');
+  assert.deepEqual(JSON.parse(fs.readFileSync(integratorFile, 'utf8')), { version: 1, selected: null });
+  // Left designated, to be found again after the reload and the reopen at the end.
+  await menu(ids[0], INTEGRATOR_SET);
+  await until(async () => await designated(page) === chosen(0), 'Designated again');
+  checks.push('The integrator is designated, replaced and revoked from the session menu; both windows follow; the record is private');
+
   // U22: 学习 and 学习 show their own short ids beside the name; the uniquely named 常用 does not.
   const surface = page.locator('[data-native-surface="sidebar"]'), unique = page.locator(`[data-session-row="${ids[2]}"] .session-link`);
   const sameNameView = async label => {
@@ -232,6 +264,7 @@ async function run() {
   await page.locator('#solo-drop').press('ArrowRight');
   assert.equal(await page.locator('#message-input').inputValue(), original.at(-1));
   assert.deepEqual(identity((await snapshot()).sessions.find(s => s.id === ids[0])), original);
+  assert.equal(await designated(page), chosen(0), 'The integrator designation survives the reload and the reopen');
   await capture('reopened-sorted');
   const stats = (await fixture()).stats; assert.equal(stats.sends, 0); assert.equal(stats.inputs, 0);
   assert.equal((await snapshot()).diagnostics.dispatches, 0); assert.deepEqual(errors, []);

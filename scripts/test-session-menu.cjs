@@ -144,6 +144,25 @@ async function run() {
   assert.ok(await more(b.id).evaluate(el => { const r = el.getBoundingClientRect(); return r.width >= 24 && r.height >= 24 && r.right <= innerWidth; }));
   await screenshot('session-menu-small'); await page.keyboard.press('Escape');
   console.log('PASS: keyboard menu/new-window target, cross-window and room-name sync, light/dark contrast, small-window menu bounds.');
+  // B6: the integrator is designated from a session's own menu, only outside every space. These fixtures are
+  // ended sessions, which cannot be designated; test-sidebar.cjs designates, replaces and revokes for real.
+  const INTEGRATOR_SET = '设为集成者（把交上来的活合进主线）', INTEGRATOR_REVOKE = '撤销集成者', integratorFile = path.join(profile, 'integrator.json');
+  assert.equal((await snapshot()).integrator, null);
+  await more(b.id).click(); await item('重命名…').waitFor({ state: 'visible' });
+  assert.equal(await item(INTEGRATOR_SET).count() + await item(INTEGRATOR_REVOKE).count(), 0, 'A space member is offered neither action');
+  await page.keyboard.press('Escape');
+  await more(a.id).click(); await item(INTEGRATOR_SET).waitFor({ state: 'visible' });
+  assert.equal(await item(INTEGRATOR_REVOKE).count(), 0);
+  await screenshot('session-menu-integrator');
+  // The refusal comes from the app's own entry and reaches the person in words; nothing is saved.
+  await item(INTEGRATOR_SET).click();
+  await until(async () => await page.locator('#toast-text').innerText() === '这个会话尚不可用，不能设为集成者。', 'The refusal is shown in words');
+  assert.equal((await snapshot()).integrator, null); assert.equal(fs.existsSync(integratorFile), false);
+  // The header menu of a session carries the same action.
+  await link(a.id).click(); await page.locator('#session-header-more').click();
+  await item(INTEGRATOR_SET).waitFor({ state: 'visible' }); await page.keyboard.press('Escape');
+  assert.equal((await snapshot()).integrator, null, 'Opening menus designates nobody'); assert.equal(fs.existsSync(integratorFile), false);
+  console.log('PASS: integrator action offered only outside spaces, in the row menu and the header menu; an ended session is refused in words and nothing is saved.');
   after = await snapshot(); assert.deepEqual(stable(after), stable(before));
   assert.equal(after.diagnostics.dispatches, 0); assert.equal(after.diagnostics.shellModelCalls, 0);
   fs.writeFileSync(path.join(profile, 'menu-result.json'), JSON.stringify(after), { mode: 0o600 });
