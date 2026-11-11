@@ -77,6 +77,9 @@ registerHooks({load(url,context,next){const loaded=next(url,context);if(url!==ta
           else if (hang) driver.close();
           else process.kill(pid, 'SIGTERM');
           await exited; assert.equal(count, 0);
+        } else if (mode === 'request-cap') {
+          await assert.rejects(driver.run(input, expected), error => error.code === 'request-boundary');
+          assert.equal(count, 8); assert.equal(prices, 0);
         } else if (mode === 'unknown-price') {
           const roleDir = path.join(folder, 'role'), ledgerDir = path.join(folder, 'ledger');
           fs.mkdirSync(roleDir, { mode: 0o700 }); fs.mkdirSync(ledgerDir, { mode: 0o700 });

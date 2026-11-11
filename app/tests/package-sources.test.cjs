@@ -3,49 +3,37 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-// Every module the packaged main process loads must be in package-mac.cjs's explicit list;
-// a missing one only fails when the signed app starts (found by review 2026-11-08).
-test('every local module reachable from main.cjs is packaged', () => {
-  const root = path.resolve(__dirname, '../..');
-  const app = path.join(root, 'app');
-  const packager = fs.readFileSync(path.join(root, 'scripts/package-mac.cjs'), 'utf8');
-  const start = packager.indexOf('const sources = [');
-  const end = packager.indexOf('];', start);
-  assert.ok(start > 0 && end > start, 'package-mac.cjs keeps an explicit sources list');
-  const listed = new Set();
-  for (const match of packager.slice(start, end).matchAll(/'([^']+)'/g)) {
-    listed.add(match[1]);
-  }
-  const seen = new Set();
-  const missing = [];
+// Include path-spawned entries as well as local require() dependencies.
+function missingSources(entries) {
+  const app = path.resolve(__dirname, '..'), listed = new Set(entries), seen = new Set(), missing = [];
   function visit(relative) {
-    if (seen.has(relative)) {
-      return;
-    }
+    if (seen.has(relative)) return;
     seen.add(relative);
     const file = path.join(app, relative);
-    if (!fs.existsSync(file)) {
-      return;
-    }
-    if (!listed.has(relative)) {
-      missing.push(relative);
-    }
+    assert.ok(fs.existsSync(file), 'Source entry exists: ' + relative);
+    if (!listed.has(relative)) missing.push(relative);
     const source = fs.readFileSync(file, 'utf8');
     for (const match of source.matchAll(/require\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g)) {
       const target = path.relative(app, path.resolve(path.dirname(file), match[1]));
-      if (!target.startsWith('..')) {
-        visit(target);
-      }
+      if (!target.startsWith('..')) visit(target);
     }
   }
-  visit('main.cjs');
+  for (const root of ['main.cjs', 'butler-dsh-host.mjs', 'butler-dsh-launch.py', 'butler-dsh-privacy.cjs']) visit(root);
   assert.ok(seen.size > 50, 'the require walk reached the application modules');
-  assert.deepEqual(missing, []);
+  return missing;
+}
+test('every local module reachable from desktop and dedicated DSH entry points is packaged', () => {
+  assert.deepEqual(missingSources(sourceList().entries), []);
+});
+test('omitting any independently loaded DSH entry fails the package closure guard', () => {
+  for (const name of ['butler-dsh-host.mjs', 'butler-dsh-launch.py', 'butler-dsh-privacy.cjs']) {
+    assert.ok(missingSources(sourceList().entries.filter(entry => entry !== name)).includes(name), name);
+  }
 });
 
-
 // Captured from the resolved union of main 908005f and runner 6baa02a,
-// before sorting/reformatting. Intentional package changes update this fixture.
+// before sorting/reformatting, plus the integration union. This is a retention
+// floor: additions need no fixture edit; the dependency walk checks omissions.
 function sourceList() {
   const text = fs.readFileSync(path.join(__dirname, '../../scripts/package-mac.cjs'), 'utf8');
   const start = text.indexOf('const sources = [');
@@ -54,12 +42,14 @@ function sourceList() {
   const body = text.slice(start + 'const sources = ['.length, end);
   return { body, entries: [...body.matchAll(/'([^']+)'/g)].map(match => match[1]) };
 }
-test('the source allowlist keeps every pre-format entry with its original multiplicity', () => {
+test('the source allowlist retains the baseline while allowing new source entries', () => {
   const before = require('./fixtures/package-sources-before-format.json');
-  assert.deepEqual(sourceList().entries.sort(), [...before].sort());
+  const entries = new Set(sourceList().entries);
+  for (const name of before) assert.ok(entries.has(name), 'Retained package source: ' + name);
 });
 test('the source allowlist is alphabetized with one file on each line', () => {
   const { body, entries } = sourceList();
+  assert.equal(new Set(entries).size, entries.length, 'Each source is packaged once');
   assert.deepEqual(entries, [...entries].sort());
   const lines = body.split('\n').filter(line => line.trim());
   assert.equal(lines.length, entries.length);
