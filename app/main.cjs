@@ -441,8 +441,10 @@ async function carryGrants(client, snapshot, now = Date.now()) {
       const moved = outcome.carried ? grants.filter(domain => domain?.carried?.some(c => c?.from?.id === holder.id && c.from.nativeId === holder.nativeId && c.to?.id === outcome.to.id)) : [];
       // A holder listed with its outcome was decided before this state was taken, so the state shows the move.
       // One decided in this pass comes with a state from before the carry, where the grants are still the old
-      // session's. (Told apart this way, grants the old session was given since are never counted.)
-      const pool = !outcome.carried || holder.outcome ? moved : grants.filter(domain => domain?.initiators?.some(i => i?.id === holder.id && i.nativeId === holder.nativeId));
+      // session's. (Told apart this way, grants the old session was given since are never counted.) Of those,
+      // only what it had when the replacement was logged went on; a grant given after that stayed with it.
+      const pool = !outcome.carried || holder.outcome ? moved : grants.filter(domain => Number.isSafeInteger(domain?.createdAt) && domain.createdAt <= next.at &&
+        domain.initiators?.some(i => i?.id === holder.id && i.nativeId === holder.nativeId));
       const inForce = pool.filter(domain => !domain.revokedAt && domain.expiresAt > now).length;
       const carried = { oldId: holder.id, at: outcome.at, old: label(holder.id), carried: outcome.carried,
         ...(outcome.carried ? { newId: outcome.to.id, new: label(outcome.to.id), inForce } : { reason: String(outcome.reason || 'refused').slice(0, 60) }) };
