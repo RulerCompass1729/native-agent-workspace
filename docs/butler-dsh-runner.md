@@ -76,7 +76,10 @@ claims cleanup succeeded or removes an unconfirmed owner record. Late receipts d
 not schedule another quit. Notices use the existing in-window toast and OS
 notification channels in the selected language. With no running/pending butler,
 quit adds no asynchronous wait or notice. `close()` is idempotent and
-returns a receipt; unknown/changed ownership is preserved and reported as
+returns a receipt. If a later view/outbox check cancels quit, the start seal
+remains until relaunch. Before activation the user-facing cancellation path must
+explain that restarting the App is required to start the butler again. The
+English entry and quit notices both use 'butler'. Unknown/changed ownership is preserved and reported as
 `cleanupConfirmed: false`. A crash before a trustworthy owner identity was saved
 requires manual identity reconciliation; elapsed time never authorizes takeover.
 
@@ -101,10 +104,41 @@ Exceeding the local request/provider/model boundary returns the fixed
 failure instead of throwing it. The core still records a generic failed batch
 with unknown usage; this is not a new localized UI reason.
 
-This composition currently supplies text only. Before enabling images, count
-actual transport requests: upstream Files retries and inline fallback can issue
-multiple requests inside one `llm/stream` call (rc.2 adapter's RequestFiles path).
-The current stream count must not be treated as an image-request billing cap.
+## Input limits
+
+The dedicated host checks **complete UTF-8 serialized request bodies**, including
+system text, accumulated messages, tool definitions and JSON escaping, immediately
+before invoking the pinned adapter's global fetch transport. Each body is at most
+256 KiB. There are at most eight actual transport attempts per batch (at most
+2 MiB of request bodies), as well as the existing eight-stream limit. Failed
+transport attempts still count; only an explicit new session resets the counters.
+The guard never inspects, copies or logs authentication headers. It accepts only
+the exact configured messages endpoint, POST and a string body; unsupported
+transport shapes and Files endpoints fail closed.
+
+Every final tool result, including errors, is checked synchronously through the
+pinned DSH `tools/result` event. Its model-facing content plus deferred contexts
+have a 128 KiB serialized ceiling per result and 512 KiB per batch. This leaves
+room around a business page of at most 64 KiB; escaping and envelope overhead can
+still make a particular page fail. In the cumulative-history fixture four
+approximately 65 KB pages fit (261856-byte request); the fifth makes the whole
+batch fail. C6 must account for this smaller per-batch capacity even though its
+daily reading allowance is larger. The core's 64-page UTC-day reading budget is
+separate and durable; rotating a DSH session does not reset that daily allowance.
+There is no truncation or partial-answer fallback. An over-limit result may
+remain in the isolated DSH session's local record, but no subsequent tool or model
+request is allowed from that batch. A fixed `input-boundary` protocol error is
+retained even when the DSH loop catches the underlying error. The core records a
+failed batch and unknown cost, shows its existing notices, and does not retry it
+automatically. These byte ceilings are **not measured input-token limits or a
+spending guarantee**. Exact token prediction and budgeted pricing remain separate
+activation requirements.
+
+This composition supplies text only and rejects non-text tool projections.
+Images remain unsupported: the provider can prepare attachments and its Files
+retry/inline fallback paths need a separate qualification before enabling them.
+The transport guard now counts every messages fetch, including any internal
+retry, and refuses other endpoints; it does not qualify image handling.
 
 ## Reproducible checks
 
@@ -167,3 +201,21 @@ creation remains part of the dormant host/activation integration. App upgrades
 refuse old runtime bindings. An authorized re-preparation flow and localized
 blocked-state UI are required before activation; this checkpoint supplies neither
 a silent migration nor a new activation path.
+
+`env -u DEEPSEEK_API_KEY -u DEEPSEEK_BASE_URL node scripts/test-butler-dsh-input.cjs`
+boots the real isolated DSH host and MCP server inside a loopback-only network
+sandbox. It checks oversized success/error tool results, cumulative history,
+JSON escaping, large tool schemas, failure/unknown-cost ledger records and normal
+session rotation. No provider service is contacted.
+
+Packaged runtime prerequisite **closed**: the isolated packaged Electron 44.9.0
+(Node 24.22.0) exposes `module.registerHooks`; its rc.2 adapter SHA-256 equals
+`eba35025ed1eedda89c51f2da46a3a968f7be1d59719f2ceeadfc4518dff37d6`.
+This is the existing packaged DSH-runner witness, not a claim that later source
+patches were installed or tested in the daily App.
+
+Quit verification includes the actual before-quit handler paired with a real
+ButlerDshDriver, DSH host and MCP child (owned process-group kill), plus a real
+driver with its exit callback deliberately withheld (desktop deadline). The
+separate hidden GUI check verifies notice rendering; this does not claim a full
+GUI quit with an activated production butler.

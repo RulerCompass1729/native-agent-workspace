@@ -9330,3 +9330,26 @@ transcripts remain in the private lane evidence named on the task board.
 The allowance counts newly released pages, not repeated provider input. Actual
 DSH sole-outlet proof remains separate. No native model, installed application,
 working-day trial or activation is qualified.
+
+## B4 DSH input boundaries (2026-11-11)
+
+Source: the activation review found unbounded tool responses and accumulated
+request input. Owner: DSH runner lane. Before the fix the real isolated provider
+fixture received 400908-byte tool history, 392488-byte cumulative history,
+360577-byte escaped input and a 300550-byte tool schema. All four completed instead
+of rejecting. The minimal host guard bounds final request bodies and final tool
+projections, preserves a fixed failure across SDK error swallowing, and leaves
+failed attempts unpriced rather than reporting zero cost. Limits and the remaining
+token/pricing qualification are documented in butler-dsh-runner.md. Defaults,
+credential supply and all activation gates remain unchanged.
+
+Verification: 12 targeted tests, eight real DSH input scenarios, the existing
+runner continuity/privacy scenario and all 12 negative/lifecycle scenarios passed.
+The first full suite was 5292/1 because this new lane lacked generated client.js;
+after the documented UI build, the full suite passed 5293/5293 with zero skips.
+Reviewer E35C5BB6-0581-4627-B02C-FA8FCFF2F9EA gave APPROVE_WITH_NOTES and then
+approved the complete delivery delta, including the small-error continuation
+case, real ledger caller and reused package/quit evidence. No blocker remains
+for this source checkpoint. Token prediction, pricing and production activation
+are outside this approval. Four approximately 65 KB business pages fit in the
+cumulative fixture; the fifth fails the whole batch and remains unpriced.
