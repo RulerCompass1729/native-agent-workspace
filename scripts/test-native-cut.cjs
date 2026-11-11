@@ -4,9 +4,10 @@ const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron/native Codex interruption and next-turn continuation.
 // Two fixed loopback task responses and at most one native title; no paid inference.
-const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { execFileSync, fork } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
+const loopback = require('./fixtures/loopback-model.cjs'), { trustOwnedFolder } = require('./native-trust.cjs');
 const root = path.resolve(__dirname, '..');
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs');
 const { connect, connectService } = require('../app/service-client.cjs');
@@ -15,14 +16,17 @@ const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-cut-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), home = path.join(base, 'codex');
 for (const dir of [profile, cwd, home]) fs.mkdirSync(dir, {mode:0o700});
 const binary=executable('codex'); assert.ok(binary);
-const version=execFileSync(binary,['--version'],{encoding:'utf8'}).trim(); assert.equal(version,'codex-cli 0.163.0');
+const version=execFileSync(binary,['--version'],{encoding:'utf8'}).trim();
+// Shared rows and turn records come from the protocol the product verifies; follow its gate, not a fixed old version.
+const { verifiedCodexProtocol } = require('../app/native-history.cjs');
+assert.ok(verifiedCodexProtocol({ nativeVersion: version.replace(/^codex-cli /, '') }), `Unqualified Codex: ${version}`);
 let application,page,child,legacyClient,calls=0,titleCalls=0,sequence=0,release,releaseStart;
 const checks=[],errors=[],sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(fn,label,timeout=30000){const start=Date.now();while(Date.now()-start<timeout){if(await fn())return;await sleep(75);}throw Error(label);}
 function event(res,type,body){res.write(`event: ${type}\ndata: ${JSON.stringify({type,sequence_number:++sequence,...body})}\n\n`);}
 const partial='OBSERVED_CUT: this exact partial stays.\n', final='NEXT_TURN: a new request still completes.';
-const server=http.createServer((req,res)=>{
- let body='';req.on('data',b=>body+=b);req.on('end',async()=>{
+// The one B11 loopback fixture: 127.0.0.1, random port, sandboxed CLI, fixed responses below.
+const fixture=loopback.create({directory:base,provider:'codex',respond:async(req,res,body)=>{
   if(!req.url.endsWith('/responses')){res.writeHead(404);res.end();return;}
   const input=JSON.parse(body);assert.equal(input.model,'gpt-6-luna');
   const title=input.input?.some(m=>m.role==='user'&&m.content?.some(p=>p.text?.startsWith('Generate a concise, single-line task title')));
@@ -45,19 +49,15 @@ const server=http.createServer((req,res)=>{
   event(res,'response.content_part.done',{output_index:0,item_id:item.id,content_index:0,part:item.content[0]});
   event(res,'response.output_item.done',{output_index:0,item});
   event(res,'response.completed',{response:{...response,status:'completed',output:[item]}});res.end();
- });
-});
+}});
 const snapshot=()=>page.evaluate(()=>workspace.initial());
 async function save(name){const state=await snapshot();fs.writeFileSync(path.join(base,name+'.json'),JSON.stringify(state,null,2));return JSON.parse(JSON.stringify(state));}
 (async()=>{
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  fs.writeFileSync(path.join(home, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
+  await fixture.start(); await fixture.preflight();
+  fs.writeFileSync(path.join(home, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "${fixture.endpoint}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
   const shim = path.join(base, 'codex-local');
   for(const folder of new Set([cwd,fs.realpathSync(cwd)])) fs.appendFileSync(path.join(home,'config.toml'), `\n[projects.${JSON.stringify(folder)}]\ntrust_level = "trusted"\n`);
-  fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\n' +
-    `os.environ["CODEX_HOME"]=${JSON.stringify(home)}\n` +
-    'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n' +
-    `os.execv(${JSON.stringify(binary)},["codex"]+sys.argv[1:])\n`, { mode: 0o700 });
+  fixture.wrapper(binary, { file: shim, env: { CODEX_HOME: home } });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ codex: shim }), { mode: 0o600 });
   let retainedId;
   if (retained) {
@@ -91,6 +91,8 @@ async function save(name){const state=await snapshot();fs.writeFileSync(path.joi
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Native Codex ready');
   const before = (await snapshot()).sessions[0];
   if (!retained) assert.equal(before.model, 'gpt-6-luna');
+  // The native TUI attaches below; it must find the session's own folder trusted, or it stops at a prompt.
+  trustOwnedFolder({ home, base, folder: before.cwd });
   await joinSpace(page);
   await page.locator('#room-nav').click();await page.locator('#room-record').click();
   await inlineRecipient(page, before.id);
@@ -147,13 +149,14 @@ async function save(name){const state=await snapshot();fs.writeFileSync(path.joi
   assert.equal(calls,2);assert.equal(reopened.diagnostics.dispatches,2);assert.deepEqual(errors,[]);
   if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'interrupted-shared.png')});}
   checks.push('Whole-app reopening retains exact solo/shared rows, native process/identity and both drafts without another dispatch');
-  console.log(JSON.stringify({version,retained,checks,taskResponses:calls,nativeTitleResponses:titleCalls,paidModelCalls:0,errors,evidence:base}));
+  fixture.assertClean();
+  console.log(JSON.stringify({version,retained,fixture:fixture.summary(),checks,taskResponses:calls,nativeTitleResponses:titleCalls,paidModelCalls:0,errors,evidence:base}));
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
   if(page&&!page.isClosed()){await save('failure-state');fs.writeFileSync(path.join(base,'failure-toast.txt'),await page.locator('#toast').textContent());}
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
 }).finally(testScratch.cleanup(async () => {
-  releaseStart?.(); release?.(); server.closeAllConnections();
+  releaseStart?.(); release?.();
   if (application) await application.close().catch(() => {});
   legacyClient?.close();
   try {
@@ -172,5 +175,5 @@ async function save(name){const state=await snapshot();fs.writeFileSync(path.joi
     } finally { client.close(); }
   } catch (error) { console.error('Owned trial cleanup not confirmed:', error.message); process.exitCode = 1; }
   if (child?.connected) child.disconnect();
-  await new Promise(resolve => server.close(resolve));
+  await fixture.stop();
 }));

@@ -4,18 +4,22 @@ const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Codex Plan mode and Electron; four bounded fixed loopback responses.
 // Private native configuration; no paid inference or normal-profile edits.
-const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { execFileSync } = testScratch.childProcess;
 const root = path.resolve(__dirname, '..');
 const { _electron } = testScratch.playwright(require('playwright'));
+const loopback = require('./fixtures/loopback-model.cjs');
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs'), { connect } = require('../app/service-client.cjs');
 const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-plans-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), home = path.join(base, 'codex'), userHome = path.join(base, 'home');
 for (const dir of [profile, cwd, home, userHome]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = executable('codex'); if (!binary) throw Error('Real Codex required');
 const version = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-const nativeVersion = process.env.NAW_CODEX_VERSION || '0.163.0';
-assert.ok(['0.163.0', '0.164.0'].includes(nativeVersion)); assert.equal(version, 'codex-cli ' + nativeVersion);
+// Plan rows come from the protocol the product verifies; follow its gate, not a fixed old version.
+// NAW_CODEX_VERSION, when given, must name the installed version.
+const nativeVersion = version.replace(/^codex-cli /, ''), { verifiedCodexProtocol } = require('../app/native-history.cjs');
+assert.ok(verifiedCodexProtocol({ nativeVersion }), `Unqualified Codex: ${version}`);
+if (process.env.NAW_CODEX_VERSION) assert.equal(nativeVersion, process.env.NAW_CODEX_VERSION);
 let application, page, calls = 0, titleCalls = 0, sequence = 0, releaseStart, releaseFinal, budgetError;
 const checks = [];
 const errors = [], requests = [], sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -24,8 +28,9 @@ async function until(fn, label, timeout = 30000) {
 }
 function event(res, type, body) { res.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: ++sequence, ...body })}\n\n`); }
 const plan = '# Small plan\n\n1. Read the supplied example.\n2. Check the result.';
-const server = http.createServer((req, res) => {
-  let body = ''; req.on('data', b => body += b); req.on('end', async () => {
+// The one B11 loopback fixture: 127.0.0.1, random port, sandboxed CLI, fixed responses below.
+const fixture = loopback.create({ directory: base, provider: 'codex', respond: async (req, res, body) => {
+  {
     if (!req.url.endsWith('/responses')) { res.writeHead(404); res.end(); return; }
     const input = JSON.parse(body);
     const nativeTitle = input.input?.some(m => m.role === 'user' && m.content?.some(p => typeof p.text === 'string' && p.text.startsWith('Generate a concise, single-line task title')));
@@ -50,8 +55,8 @@ const server = http.createServer((req, res) => {
     item.status='completed';item.content=[{type:'output_text',text:planBody,annotations:[]}];
     event(res,'response.output_item.done',{output_index:0,item});
     event(res,'response.completed',{response:{...response,status:'completed',output:[item]}});res.end();
-  });
-});
+  }
+} });
 const snapshot = () => page.evaluate(() => workspace.initial());
 async function launch() {
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
@@ -60,24 +65,24 @@ async function launch() {
 }
 
 (async () => {
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  fs.writeFileSync(path.join(home, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\ncli_auth_credentials_store = "file"\n[features]\ndaemon_auto_start = false\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
+  await fixture.start(); await fixture.preflight();
+  fs.writeFileSync(path.join(home, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\ncli_auth_credentials_store = "file"\n[features]\ndaemon_auto_start = false\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "${fixture.endpoint}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
   const shim = path.join(base, 'codex-local');
-  fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\n' +
-    `os.environ["CODEX_HOME"]=${JSON.stringify(home)}\n` +
-    `os.environ["HOME"]=${JSON.stringify(userHome)}\n` +
-    'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n' +
-    `os.execv(${JSON.stringify(binary)},["codex"]+sys.argv[1:])\n`, { mode: 0o700 });
+  fixture.wrapper(binary, { file: shim, env: { CODEX_HOME: home, HOME: userHome } });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ codex: shim }), { mode: 0o600 });
   await launch();
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
   await page.locator('#session-name').fill('Native plans'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Native Codex ready');
   const before = (await snapshot()).sessions[0]; assert.equal(before.model, 'gpt-6-luna'); assert.equal(before.nativeVersion, nativeVersion);
+  // NAW starts the session in its own folder inside the owned base. Codex 0.167's TUI shows another screen before
+  // its trust prompt, so the prompt is not waited for: the folder is recorded as trusted before the TUI attaches.
+  require('./native-trust.cjs').trustOwnedFolder({ home, base, folder: before.cwd });
   await page.locator('#message-input').fill('Prepare to plan this small example.'); await page.locator('#send-button').click();
   await until(async()=>(await snapshot()).sessions[0].messages.some(m=>m.text==='Ready for the plan.'),'Warmup complete');
   await page.locator('#terminal-tab').click();
-  await require('./native-trust.cjs').acceptOwnedFolder(page, cwd);
+  await require('./native-trust.cjs').acceptOwnedFolder(page, before.cwd);
+  fs.writeFileSync(path.join(base,'native-attached.txt'),await page.locator('#terminal-area').innerText());
   const terminal=page.locator('#terminal-area'), input=terminal.locator('.xterm-helper-textarea');
   await until(async()=>(await terminal.innerText()).includes('Ready for the plan.'),'Native terminal ready',60000);
   await input.pressSequentially('/plan',{delay:70});
@@ -105,7 +110,11 @@ async function launch() {
   assert.equal(complete.text,plan+'\n');assert.equal(complete.status,'complete');
   assert.equal(completed.sessions[0].messages.filter(m=>m.kind==='plan').length,1);
   assert.equal(await page.locator('#native-activity').isVisible(), false, 'Completed turn has no visible running clock');
-  assert.equal(await page.locator('#messages .native-turn').count(), 0, 'Native time fields do not fabricate a completion footer');
+  // A completion footer is shown only for a native turn record that carries native time fields (Codex 0.167 reports
+  // them for every turn; 0.163/0.164 reported none here). The reader adds none of its own.
+  const nativeTurns=completed.sessions[0].messages.filter(m=>m.kind==='turn'&&m.nativeBlock&&Number.isFinite(m.nativeCompletedAt)&&Number.isSafeInteger(m.nativeDurationMs));
+  assert.equal(await page.locator('#messages .reading-turn-footer').count(), nativeTurns.length, 'Every completion footer is a native turn record with native time fields; none is fabricated');
+  for(const turn of nativeTurns) assert.equal(await page.locator('#messages [data-message-id="'+turn.id+'"] > .reading-turn-footer').count(), 1, 'Each native turn record has its own footer');
   assert.doesNotMatch(await page.locator('#messages').innerText(), /本轮已运行|Worked for|Cooked for|原生本轮已结束/);
   fs.writeFileSync(path.join(base,'plan-completed.json'),JSON.stringify(completed,null,2));
   checks.push('Native Plan command and input produce one streaming plan in the reader; completion replaces that same block');
@@ -140,6 +149,8 @@ async function launch() {
   await input.press('Escape');
   await until(async()=>!(await terminal.innerText()).includes('Implement this plan?'),'Shared native menu dismissed');
   await page.locator('#room-nav').click();await page.locator('#room-record').click();
+  // The earlier send used up its recipient mention; choose the member again, as a person does with @.
+  await inlineRecipient(page, before.id);
   await fillRoomMessage(page, 'Start the next shared plan.');await page.locator('#forward-button').click();
   await until(()=>calls===4&&releaseFinal,'Last bounded shared task');
   await page.locator('#room-messages').getByText('Keep this observed cut.',{exact:true}).waitFor();
@@ -163,12 +174,13 @@ async function launch() {
   assert.doesNotMatch(await page.locator('#messages').innerText(), /本轮已运行|Worked for|Cooked for|原生本轮已结束/);
   fs.writeFileSync(path.join(base,'reopened.json'),JSON.stringify(reopened,null,2));
   checks.push('Whole-app reopen preserves native identity, original plan/cut, shared records and draft, with no extra submission');
-  assert.ok(!budgetError);assert.deepEqual(errors,[]);console.log(JSON.stringify({version,checks,evidence:base,localTaskResponses:calls,nativeTitleResponses:titleCalls,paidModelCalls:0}));
+  assert.ok(!budgetError);assert.deepEqual(errors,[]);fixture.assertClean();
+  console.log(JSON.stringify({version,fixture:fixture.summary(),checks,evidence:base,localTaskResponses:calls,nativeTitleResponses:titleCalls,paidModelCalls:0}));
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base,'failure.json'),JSON.stringify(await snapshot().catch(()=>null),null,2)); fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
   console.error(error.stack, '\nEvidence:', base, JSON.stringify({calls,titleCalls,releaseStart:Boolean(releaseStart),releaseFinal:Boolean(releaseFinal)})); process.exitCode = 1;
 }).finally(testScratch.cleanup(async () => {
-  releaseStart?.(); releaseFinal?.(); server.closeAllConnections();
+  releaseStart?.(); releaseFinal?.();
   if (application) await application.close().catch(() => {});
   try {
     const client = await connect(profile, 'native-plans-cleanup');
@@ -185,5 +197,5 @@ async function launch() {
       console.log('Owned service exit confirmed.');
     } finally { client.close(); }
   } catch (error) { console.error('Owned trial cleanup not confirmed:', error.message); process.exitCode = 1; }
-  await new Promise(resolve => server.close(resolve));
+  await fixture.stop();
 }));

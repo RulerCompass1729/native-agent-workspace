@@ -4,9 +4,10 @@ const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Codex tool execution and Electron with two bounded loopback summary streams.
 // Private native configuration; no paid inference or normal-profile edits.
-const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { execFileSync } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
+const loopback = require('./fixtures/loopback-model.cjs'), { trustOwnedFolder } = require('./native-trust.cjs');
 const root = path.resolve(__dirname, '..');
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs'), { connect } = require('../app/service-client.cjs');
 const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-summaries-'));
@@ -14,7 +15,9 @@ const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), home 
 for (const dir of [profile, cwd, home]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = executable('codex'); if (!binary) throw Error('Real Codex required');
 const version = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.equal(version, 'codex-cli 0.163.0');
+// Summary rows and turn records come from the protocol the product verifies; follow its gate, not a fixed old version.
+const { verifiedCodexProtocol } = require('../app/native-history.cjs');
+assert.ok(verifiedCodexProtocol({ nativeVersion: version.replace(/^codex-cli /, '') }), `Unqualified Codex: ${version}`);
 let application, page, calls = 0, titleCalls = 0, sequence = 0, releaseStart, releaseFinal;
 const checks = [];
 const errors = [], requests = [], sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -24,8 +27,9 @@ async function until(fn, label, timeout = 30000) {
 function event(res, type, body) { res.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: ++sequence, ...body })}\n\n`); }
 const summary = '**PUBLIC_SUMMARY**\n\nChecking the given material.';
 const second = 'Comparing the visible result.';
-const server = http.createServer((req, res) => {
-  let body = ''; req.on('data', b => body += b); req.on('end', async () => {
+// The one B11 loopback fixture: 127.0.0.1, random port, sandboxed CLI, fixed responses below.
+const fixture = loopback.create({ directory: base, provider: 'codex', respond: async (req, res, body) => {
+  {
     if (!req.url.endsWith('/responses')) { res.writeHead(404); res.end(); return; }
     const input = JSON.parse(body);
     const nativeTitle = input.input?.some(m => m.role === 'user' && m.content?.some(p => typeof p.text === 'string' && p.text.startsWith('Generate a concise, single-line task title')));
@@ -60,8 +64,8 @@ const server = http.createServer((req, res) => {
     event(res, 'response.output_text.delta', {output_index:1,item_id:answer.id,content_index:0,delta:'SUMMARY_TASK_DONE'});
     event(res, 'response.output_item.done', {output_index:1,item:answer});
     event(res, 'response.completed', {response:{...response,status:'completed',output:[item,answer]}}); res.end();
-  });
-});
+  }
+} });
 const snapshot = () => page.evaluate(() => workspace.initial());
 async function launch() {
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
@@ -70,26 +74,26 @@ async function launch() {
 }
 
 (async () => {
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  fs.writeFileSync(path.join(home, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
+  await fixture.start(); await fixture.preflight();
+  fs.writeFileSync(path.join(home, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "${fixture.endpoint}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
   const shim = path.join(base, 'codex-local');
   for(const folder of new Set([cwd,fs.realpathSync(cwd)])) fs.appendFileSync(path.join(home,'config.toml'), `\n[projects.${JSON.stringify(folder)}]\ntrust_level = "trusted"\n`);
-  fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\n' +
-    `os.environ["CODEX_HOME"]=${JSON.stringify(home)}\n` +
-    'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n' +
-    `os.execv(${JSON.stringify(binary)},["codex"]+sys.argv[1:])\n`, { mode: 0o700 });
+  fixture.wrapper(binary, { file: shim, env: { CODEX_HOME: home } });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ codex: shim }), { mode: 0o600 });
   await launch();
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
   await page.locator('#session-name').fill('Native summaries'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Native Codex ready');
   const before = (await snapshot()).sessions[0]; assert.equal(before.model, 'gpt-6-luna');
+  // The native TUI attaches below; it must find the session's own folder trusted, or it stops at a prompt.
+  trustOwnedFolder({ home, base, folder: before.cwd });
   await joinSpace(page);
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await inlineRecipient(page, before.id);
   await fillRoomMessage(page, 'Check this small example and report your progress.'); await page.locator('#forward-button').click();
   await until(() => calls === 1 && releaseStart, 'One requested native task');
-  await page.locator('#run-status').getByText('Native summaries · 正在处理',{exact:false}).waitFor();
+  // The room status bar names the working member and its native state in the interface language.
+  await page.locator('#run-status').getByText('Native summaries · 工作中',{exact:false}).waitFor();
   await page.locator(`[data-session-id="${before.id}"]`).click();
   await until(async () => (await snapshot()).sessions[0].terminalState?.alive && (await page.locator('#terminal-area').innerText()).includes('esc to interrupt'), 'Actual native terminal attaches alongside the reader without a tab switch', 60000);
   releaseStart();
@@ -107,9 +111,11 @@ async function launch() {
   await page.locator('#messages').getByText('Checking the given material.',{exact:true}).waitFor();
   assert.equal(await page.locator('#terminal-area').isVisible(),true,'Actual native TUI remains alongside its structured reader');
   const streaming = await snapshot(), row = streaming.sessions[0].messages.find(m=>m.kind==='summary');
-  assert.equal(row.text,summary); assert.equal(row.status,'streaming');
-  assert.equal(streaming.room.messages.find(m=>m.title==='过程摘要').text,summary);
+  // Saved before the checks, so a failed check leaves the state it saw.
   fs.writeFileSync(path.join(base,'streaming.json'),JSON.stringify(streaming,null,2));
+  assert.equal(row.text,summary); assert.equal(row.status,'streaming');
+  // Shared summary rows are told by their kind; their title has been empty since the interface took over the label.
+  assert.equal(streaming.room.messages.find(m=>m.kind==='summary').text,summary);
   await page.locator('#message-input').fill('Unsent draft remains.'); await page.reload(); await page.locator('#new-session').waitFor();
   assert.equal(await page.locator('#message-input').inputValue(),'Unsent draft remains.');
   releaseFinal();
@@ -126,44 +132,59 @@ async function launch() {
   assert.equal(sharedCompletion?.kind,'turn'); assert.equal(sharedCompletion.nativeCompletedAt,completion.nativeCompletedAt);
   assert.equal(sharedCompletion.nativeDurationMs,completion.nativeDurationMs);
   const completionRow=page.locator('#messages [data-message-id="'+completion.id+'"]');
-  await completionRow.getByText('Worked for',{exact:false}).waitFor();
-  const displayedCompletion=await completionRow.locator('.message-body').innerText();
+  // The reader shows the native turn's duration in the row's footer, without the TUI's "Worked for" label.
+  const completionFooter=completionRow.locator(':scope > .reading-turn-footer'); await completionFooter.waitFor();
+  const displayedDuration=(await completionFooter.locator('span').first().innerText()).trim();
+  assert.match(displayedDuration,/^(<1s|\d+s|\d+m \d+s|\d+h \d+m \d+s)$/);
+  assert.doesNotMatch(await completionRow.innerText(),/Worked for/);
   await page.locator('#terminal-tab').click();
   await until(async()=> (await page.locator('#terminal-area').innerText()).includes('Worked for'),'Native completion label');
   const nativeCompleted=await page.locator('#terminal-area').innerText();
-  assert.ok(nativeCompleted.includes(displayedCompletion.split(' • ')[0]),'Reader duration matches the native TUI completion');
+  assert.ok(nativeCompleted.includes('Worked for '+displayedDuration),'Reader duration matches the native TUI completion');
   fs.writeFileSync(path.join(base,'native-completed.txt'),nativeCompleted);
   await page.locator('#chat-tab').click();
   fs.writeFileSync(path.join(base,'completed.json'),JSON.stringify(completed,null,2));
   checks.push('One native summary block streams in solo/shared readers; reload preserves draft; final reply stays separate');
   checks.push('Native completion duration agrees with TUI and retains exact native clock in solo and shared records');
+  // The shared record is read on the records page. The member overview shows the shared composer together with
+  // each member's own native terminal (member overview, 10-28): the person interrupts there.
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  await page.locator(`[data-room-session="${before.id}"]`).click();
   assert.equal(await page.locator('#room-messages').isVisible(),true);
-  assert.equal(await page.locator('#terminal-area').isVisible(),true,'Shared reading and the actual native member remain together');
   await page.locator('#room-messages .process-details').filter({hasText:'PUBLIC_SUMMARY'}).locator(':scope > summary').click();
   assert.match(await page.locator('#room-messages').innerText(),/Checking the given material/);
   if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true}); await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'public-summary.png')});}
+  // The earlier send used up its recipient mention; choose the member again, as a person does with @.
+  await inlineRecipient(page, before.id);
   await fillRoomMessage(page, 'Start another small check.'); await page.locator('#forward-button').click();
   await until(()=>calls===2&&releaseStart,'Second bounded task'); releaseStart();
   await page.locator('#room-messages .process-details').filter({hasText:'INTERRUPTED_SUMMARY'}).locator(':scope > summary').click();
   await page.locator('#room-messages').getByText('This visible partial must remain.',{exact:true}).waitFor();
-  assert.equal(await page.locator('#room-messages').isVisible(),true);
+  await page.locator('#room-overview').click();
+  const memberColumn=page.locator(`.collaboration-member-reader[data-member-id="${before.id}"]`), memberTerminal=memberColumn.locator('.column-native-host');
+  await memberColumn.waitFor();
   await fillRoomMessage(page,'Unsent shared draft before native intervention.');
-  const sharedDraftBeforeInterrupt=await page.locator('#shared-input').inputValue();
-  await page.locator('#terminal-area .xterm-screen').click();
-  await until(async ()=>(await page.locator('#terminal-area').innerText()).includes('This visible partial must remain.'),'Native partial summary');
-  await page.locator('#terminal-area .xterm-helper-textarea').press('Escape');
+  const sharedDraftBeforeInterrupt=await roomBody(page), recipientBeforeInterrupt=await page.locator('#recipient').inputValue();
+  assert.equal(sharedDraftBeforeInterrupt,'Unsent shared draft before native intervention.');
+  // 原生输入 gives this member's column terminal the keyboard, as a person does before typing there.
+  await memberColumn.locator('.session-native-button').click();
+  await memberTerminal.waitFor({state:'visible'});
+  await until(async ()=>(await memberTerminal.innerText()).includes('This visible partial must remain.'),'Native partial summary in the member column',60000);
+  await until(()=>memberTerminal.locator('.xterm-helper-textarea').evaluate(el=>el===document.activeElement),'The member terminal has the keyboard');
+  assert.equal(await page.locator('#shared-input').isVisible(),true,'The shared composer and the member\'s native terminal are on screen together');
+  await page.keyboard.press('Escape');
   await until(async ()=>(await snapshot()).sessions[0].messages.some(m=>m.kind==='summary'&&m.status==='interrupted'),'Native interruption boundary');
-  assert.equal(await page.locator('#room-messages').isVisible(),true,'Native Escape occurs inside the shared workspace');
-  assert.equal(await page.locator('#shared-input').inputValue(),sharedDraftBeforeInterrupt,'Native interruption preserves the independent shared draft');
+  assert.equal(await page.locator('#shared-input').isVisible(),true,'Native Escape occurs inside the shared workspace');
+  assert.equal(await roomBody(page),sharedDraftBeforeInterrupt,'Native interruption preserves the independent shared draft');
+  assert.equal(await page.locator('#recipient').inputValue(),recipientBeforeInterrupt,'Native interruption keeps the chosen recipient');
   fs.writeFileSync(path.join(base,'shared-interrupted.json'),JSON.stringify(await snapshot(),null,2));
   if(process.env.NAW_EVIDENCE_DIR) await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'shared-native-interrupted.png')});
+  await page.locator('#room-record').click();
+  await page.locator('#room-messages').getByText('This visible partial must remain.',{exact:true}).waitFor();
   releaseFinal();
   await page.locator(`[data-session-id="${before.id}"]`).click();await page.locator('#chat-tab').click(); await page.reload(); await page.locator('#new-session').waitFor();
   const interrupted=await snapshot();
   assert.ok(interrupted.sessions[0].messages.some(m=>m.kind==='summary'&&m.status==='interrupted'&&m.text.includes('This visible partial must remain.')));
-  assert.ok(interrupted.room.messages.some(m=>m.title==='过程摘要'&&m.status==='interrupted'));
+  assert.ok(interrupted.room.messages.some(m=>m.kind==='summary'&&m.status==='interrupted'));
   assert.equal(interrupted.diagnostics.dispatches,2); assert.equal(calls,2); assert.deepEqual(errors,[]);
   fs.writeFileSync(path.join(base,'interrupted.json'),JSON.stringify(interrupted,null,2));
   checks.push('Actual native Escape freezes partial summary in both readers; no extra response or final handoff');
@@ -172,17 +193,18 @@ async function launch() {
   await until(async ()=>(await snapshot()).sessions[0]?.messages.some(m=>m.kind==='summary'&&m.status==='interrupted'),'Whole-app reopen preserves native cut');
   const reopened=await snapshot(); assert.equal(reopened.sessions[0].nativeId,identity.nativeId); assert.equal(reopened.sessions[0].pid,identity.pid);
   assert.equal(await page.locator('#message-input').inputValue(),'Unsent draft remains.'); assert.equal(calls,2);
-  assert.ok(reopened.room.messages.some(m=>m.title==='过程摘要'&&m.status==='interrupted'));
+  assert.ok(reopened.room.messages.some(m=>m.kind==='summary'&&m.status==='interrupted'));
   fs.writeFileSync(path.join(base,'reopened.json'),JSON.stringify(reopened,null,2));
   assert.equal(await page.locator('#messages .message.assistant .message-body').first().evaluate(el=>getComputedStyle(el).whiteSpace),'normal','Rendered Markdown must not double its paragraph breaks');
   fs.writeFileSync(path.join(base,'summary-dom.json'),JSON.stringify(await page.locator('#messages .message.assistant .message-body').evaluateAll(els=>els.map(el=>({html:el.innerHTML,style:getComputedStyle(el).whiteSpace,children:[...el.querySelectorAll('*')].slice(0,25).map(child=>({tag:child.tagName,cls:child.className,height:child.getBoundingClientRect().height,margin:getComputedStyle(child).margin,whiteSpace:getComputedStyle(child).whiteSpace}))}))),null,2));
   checks.push('Whole-app reopening retains native identity/process, summary cut, shared records and unsent draft');
-  console.log(JSON.stringify({version,checks,localResponses:calls,nativeTitleResponses:titleCalls,paidModelCalls:0,evidence:base}));
+  fixture.assertClean();
+  console.log(JSON.stringify({version,fixture:fixture.summary(),checks,localResponses:calls,nativeTitleResponses:titleCalls,paidModelCalls:0,evidence:base}));
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
   console.error(error.stack, '\nEvidence:', base, JSON.stringify({calls,titleCalls,releaseStart:Boolean(releaseStart),releaseFinal:Boolean(releaseFinal)})); process.exitCode = 1;
 }).finally(testScratch.cleanup(async () => {
-  releaseStart?.(); releaseFinal?.(); server.closeAllConnections();
+  releaseStart?.(); releaseFinal?.();
   if (application) await application.close().catch(() => {});
   try {
     const client = await connect(profile, 'native-summaries-cleanup');
@@ -199,5 +221,5 @@ async function launch() {
       console.log('Owned service exit confirmed.');
     } finally { client.close(); }
   } catch (error) { console.error('Owned trial cleanup not confirmed:', error.message); process.exitCode = 1; }
-  await new Promise(resolve => server.close(resolve));
+  await fixture.stop();
 }));
