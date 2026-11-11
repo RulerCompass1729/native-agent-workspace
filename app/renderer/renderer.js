@@ -30,9 +30,13 @@ const sessionStatus = (record, recoveryBadge = false) => {
 };
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 const mobileSetup = window.nativeWorkspaceMobileSetup.bind({ container: $('mobile-setup'), document, api, getSessions: () => state?.sessions || [], text: (key, params) => uiText(key, params), display: ui.display });
+// The butler's parts are optional to this window: if one cannot be set up (its module or its element is missing),
+// the window starts without it instead of not starting at all. A read log that was not set up says so when asked for.
 // The read log names a space by this window's own name for it; the log itself holds ids only.
-const butlerReads = window.nativeWorkspaceButlerReads.bind({ dialog: $('butler-reads-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display,
-  spaceName: id => { const room = spaceRecord(id); return room ? spaceName(room) : null; } });
+let butlerReads = { open() { toastError(uiError('error.butler.readAuditUnavailable')); }, dispose() {} };
+try { butlerReads = window.nativeWorkspaceButlerReads.bind({ dialog: $('butler-reads-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display,
+  spaceName: id => { const room = spaceRecord(id); return room ? spaceName(room) : null; } }); }
+catch (error) { console.error(error); }
 // The existing butler view owns visibility and state; the record table has no second sidebar entry.
 const butlerReviewAdapter = window.nativeWorkspaceButlerReviewAdapter.create({ api, text: uiText });
 const butlerReviewView = window.nativeWorkspaceButlerReview.create({ dialog: $('butler-review-dialog'),
@@ -60,10 +64,12 @@ function disposeButlerReview() {
 }
 $('butler-review-dialog').addEventListener('close', returnFromButlerReview);
 // The butler's row is drawn only from a view the main process gives this window; this version gives none.
-const butlerEntry = window.nativeWorkspaceButlerEntry.bind({ row: $('butler-row'), dialog: $('butler-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display, showError: ui.showError, openReview: openButlerReview,
+let butlerEntry = { start() {}, refresh() {}, dispose() {} };
+try { butlerEntry = window.nativeWorkspaceButlerEntry.bind({ row: $('butler-row'), dialog: $('butler-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display, showError: ui.showError, openReview: openButlerReview,
   openReads: () => butlerReads.open(),
   // Another window may have changed the designation: the entry asks again when this one comes back to the front.
-  front: listener => { window.addEventListener('focus', listener); return () => window.removeEventListener('focus', listener); } });
+  front: listener => { window.addEventListener('focus', listener); return () => window.removeEventListener('focus', listener); } }); }
+catch (error) { console.error(error); }
 let newDirectory = false, creatingSession = false;
 let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
 let latestViewStorage, latestViewStorageUiMessage;
@@ -3843,6 +3849,8 @@ function render() {
   // The entry is not part of the window state: the window asks for it once here, and again on its own events.
   butlerEntry.start();
   if ($('butler-row')?.hidden === true && $('butler-review-dialog')?.open) $('butler-review-dialog').close();
+  // The read log is reached from the entry: without the entry on screen it does not stay open.
+  if ($('butler-row')?.hidden === true && $('butler-reads-dialog')?.open) $('butler-reads-dialog').close();
   captureReadingViews();
   rendering = true;
   let removedRoomFocus;

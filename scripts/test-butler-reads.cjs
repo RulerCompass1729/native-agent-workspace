@@ -134,25 +134,44 @@ const all = () => { const records = []; let after = 0, through = 0;
   }
   // The log file filling up. A real file of 24 MiB is not written here: the records are the real ones through the
   // real call, and only the core's report of how full the file is is replaced on its way to the dialog.
-  // Two states: the core's prewarning, and a file at its cap (which the log still reads from, for the person).
-  for (const language of ['zh', 'en']) for (const [state, used, key, shown] of [['nearly-full', 25 * 1048576 + 1, 'storageWarning', '25.1'], ['full', 32 * 1048576, 'storageFull', '32']]) {
+  // Four states: the core's prewarning; a file at its cap (which the log still reads from, for the person); an
+  // answer without the report, where the dialog says it cannot tell how full the file is; and a newest record this
+  // version does not understand, where it says it cannot tell the day's count.
+  for (const language of ['zh', 'en']) for (const [state, change, key, params] of [['nearly-full', { used: 25 * 1048576 + 1 }, 'storageWarning', { used: '25.1', max: '32' }],
+    ['full', { used: 32 * 1048576 }, 'storageFull', { used: '32', max: '32' }], ['report-missing', { drop: true }, 'storageUnknown'], ['newest-not-understood', { newest: true }, null]]) {
     const say = (key, params) => locale.format(language, key, params);
-    await page.evaluate(([lang, used]) => {
+    await page.evaluate(([lang, change]) => {
       const dialog = document.createElement('dialog'); dialog.id = 'butler-reads-dialog-check'; dialog.className = 'butler-reads'; dialog.setAttribute('closedby', 'any');
       document.getElementById('butler-reads-dialog').after(dialog);
       const api = { butlerReview: async (...args) => { const answer = await window.workspace.butlerReview(...args); if (!answer.storage || answer.storage.warning !== false) throw Error('The real answer must carry an unwarned report');
-        return { ...answer, storage: { ...answer.storage, usedBytes: used, remainingBytes: answer.storage.maxBytes - used, warning: true } }; } };
+        if (change.drop) { const { storage, ...rest } = answer; return rest; }
+        if (change.newest) return { ...answer, records: answer.records.map(record => record.sequence === answer.throughSequence ? { ...record, version: 2 } : record) };
+        return { ...answer, storage: { ...answer.storage, usedBytes: change.used, remainingBytes: answer.storage.maxBytes - change.used, warning: true } }; } };
       const reads = window.nativeWorkspaceButlerReads.bind({ dialog, document, api, text: (key, params) => window.nativeWorkspaceLocale.format(lang, key, params), spaceName: id => id === 'shared' ? 'Shared (this window)' : null });
       window.butlerReadsCheck = { reads, dialog };
-    }, [language, used]);
+    }, [language, change]);
     await page.evaluate(() => { window.butlerReadsCheck.reads.open(); }); await settled('records');
-    assert.equal((await dialog().locator('.butler-reads-storage').innerText()).trim(), say(`butler.reads.${key}`, { used: shown, max: '32' }));
-    // The day's count is still given beside it, and the records are still listed.
-    assert.equal(await dialog().locator('.butler-reads-today').isVisible(), true); assert.ok(await rows().count() > 0);
+    const count = (await dialog().locator('.butler-reads-today').innerText()).trim();
+    if (key) {
+      assert.equal((await dialog().locator('.butler-reads-storage').innerText()).trim(), say(`butler.reads.${key}`, params));
+      // The day's count is still given beside it.
+      assert.equal(count.includes(say('butler.reads.todayUnknownNewest', { from: '\u0000', limit: 64, resets: '\u0000' }).split('\u0000')[1]), false);
+    } else {
+      // Where the day's count would be, the dialog says it cannot tell, and why; the file itself is not warned about.
+      for (const part of say('butler.reads.todayUnknownNewest', { from: '\u0000', limit: 64, resets: '\u0000' }).split('\u0000').filter(Boolean)) assert.ok(count.includes(part.trim()), `${language}: ${part} in ${count}`);
+      assert.equal(await dialog().locator('.butler-reads-storage').isVisible(), false);
+      // The newest day's own header does not contradict it: its number is said as a lower bound.
+      // The words between the day and the number are what tell this header from the ordinary one, in either language.
+      const least = say('butler.reads.dayAtLeast', { from: 'F', through: 'T', day: '\u0001', pages: '\u0002' }).split('\u0001')[1].split('\u0002')[0].trim();
+      const plain = say('butler.reads.day', { from: 'F', through: 'T', day: '\u0001', pages: '\u0002' }).split('\u0001')[1].split('\u0002')[0].trim();
+      assert.ok(least.length > plain.length && !plain.includes(least), 'The two headers differ in these words');
+      assert.ok((await days())[0].includes(least), `${language}: "${least}" in ${(await days())[0]}`);
+    }
+    assert.equal(await dialog().locator('.butler-reads-today').isVisible(), true); assert.ok(await rows().count() > 0, 'The records are still listed');
     const problem = await fits(`${language}-860 reads-file-${state}`); if (problem) problems.push(problem); await shot(`reads-file-${state}-${language}-860`);
     await dialog().locator('button[data-action="done"]').click(); await dialog().waitFor({ state: 'hidden' }); await unmount();
   }
-  checks.push('The core\'s warning that the log file is filling up, and a file already at its cap, are said beside the day\'s count, in both languages');
+  checks.push('The core\'s warning that the log file is filling up, a file already at its cap, a missing report ("cannot tell how full") and a newest record that is not understood ("cannot tell the day\'s count") are each said, in both languages');
   // Last, because it cannot be undone while the app runs: the log is damaged. It is said to be unreadable, with the
   // rule and what to do; nothing is shown as if it were the log; and putting the file back does not help until NAW
   // is reopened, which is what the dialog says.

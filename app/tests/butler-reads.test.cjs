@@ -48,7 +48,9 @@ const few = t => records(t, page => { const morning = NOW - 2 * 3600 * 1000;
   page(morning + 9 * MINUTE, 'deliveries', { spaceId: SPACE, count: 4 }); page(morning + 80 * MINUTE, 'queue', { spaceId: 'shared', count: 0 }); });
 // Twenty-five minutes apart: at most 58 pages fall into one UTC day, under the core's 64.
 const many = (t, pages = 96) => records(t, page => { for (let index = 0; index < pages; index++) page(MIDNIGHT - DAY + 600 * 1000 + index * 25 * MINUTE, index % 2 ? 'queue' : 'spaces', { spaceId: SPACE }); });
-function fixture(log, { fail = () => false, display, text, storage, now = () => NOW, spaceName = id => ({ shared: '默认空间', [SPACE]: '发版准备' })[id], breakTable = () => false } = {}) {
+const HEALTHY = () => ({ usedBytes: 4096, maxBytes: 32 * 1048576, remainingBytes: 32 * 1048576 - 4096, warningThresholdBytes: 24 * 1048576, warning: false });
+// `storage`: the core's report of how full the file is, given with every read; null leaves it out of the answer.
+function fixture(log, { fail = () => false, display, text, storage = HEALTHY, now = () => NOW, spaceName = id => ({ shared: '默认空间', [SPACE]: '发版准备' })[id], breakTable = () => false } = {}) {
   const page = { activeElement: null, created: [], createElement(tag) { if (tag === 'table' && breakTable()) throw Error('The page cannot build a table'); page.created.push(tag); return new Element(tag, page); } }, dialog = new Element('dialog', page), body = new Element('body', page); dialog.id = 'butler-reads-dialog'; body.append(dialog);
   const calls = [], state = { log, pending: null };
   // Anything but the one existing person-only call is a failure of this test.
@@ -108,22 +110,34 @@ test('a long log shows its newest fifty first and earlier ones on request, askin
   await f.button('refresh').fire('click'); assert.deepEqual(f.requests().slice(3), [{ afterSequence: 0, limit: 50 }, { afterSequence: 46, limit: 50 }]); assert.equal(f.rows().length, 50);
 });
 
-test('pages written while the log is being read are followed, a bounded number of times', async t => {
-  const log = many(t, 200);
-  // Between the first call and the tail call the butler reads more: the tail is no longer the end.
+test('one opening reads the log at most twice; pages written meanwhile are said, not chased', async t => {
+  const log = many(t, 200), unknownReach = '从 11-10 16:00 起已读多少页现在判断不了：最新的记录这次没读到。每天最多 64 页，11-11 16:00 重新计。';
+  assert.equal(zh('butler.reads.todayUnknownReach', { from: '11-10 16:00', limit: 64, resets: '11-11 16:00' }), unknownReach);
+  // Between the first read and the tail read the butler reads more: the tail is no longer the end.
   const grow = fixture(log.slice(0, 60), { fail: count => { if (count === 2) grow.state.log = log.slice(0, 75); return false; } });
   await grow.reads.open();
-  assert.deepEqual(grow.requests(), [{ afterSequence: 0, limit: 50 }, { afterSequence: 10, limit: 50 }, { afterSequence: 60, limit: 50 }]); assert.equal(grow.rows().length, 65); assert.equal(grow.listed().textContent, '共 75 条，下面是最新的 65 条。');
-  assert.equal(grow.today().hidden, false, 'With the newest record on screen the day\'s count is known');
-  // A log that keeps growing faster than it is read: the reading stops, and neither today's count nor "the newest" is claimed.
+  assert.deepEqual(grow.requests(), [{ afterSequence: 0, limit: 50 }, { afterSequence: 10, limit: 50 }], 'One read to learn where the log ends, one for its tail, and no more');
+  assert.equal(grow.rows().length, 50); assert.equal(grow.listed().textContent, '共 75 条，下面显示了其中 50 条；还有更新的没读到，点「刷新」再读。');
+  // The day's count cannot be told without the newest record: that is said, with the reason, where the count would be.
+  assert.deepEqual([grow.today().hidden, grow.today().textContent, grow.dialog.dataset.readsLevel], [false, unknownReach, 'unknown']);
+  // The newest day's own header does not contradict it: its number is the highest page on screen, said as a lower bound.
+  assert.match(grow.days()[0], /· 至少 \d+ 页$/); for (const header of grow.days().slice(1)) assert.doesNotMatch(header, /至少/);
+  // Refresh reads again, twice, and then the newest record is on screen and the count is known.
+  await grow.button('refresh').fire('click');
+  assert.deepEqual(grow.requests().slice(2), [{ afterSequence: 0, limit: 50 }, { afterSequence: 25, limit: 50 }]); assert.equal(grow.listed().textContent, '共 75 条，下面是最新的 50 条。');
+  assert.notEqual(grow.dialog.dataset.readsLevel, 'unknown'); assert.equal(grow.today().textContent.includes('判断不了'), false);
+  for (const header of grow.days()) assert.doesNotMatch(header, /至少/);
+  // A log that keeps growing is not chased: every opening and every refresh is two reads.
   const sizes = [60, 120, 180, 200], racing = fixture(log.slice(0, 60), { fail: count => { racing.state.log = log.slice(0, sizes[Math.min(count, sizes.length) - 1]); return false; } });
-  await racing.reads.open();
-  assert.deepEqual(racing.requests(), [{ afterSequence: 0, limit: 50 }, { afterSequence: 10, limit: 50 }, { afterSequence: 60, limit: 50 }, { afterSequence: 110, limit: 50 }], 'One first page, one tail, at most two more');
-  assert.deepEqual([racing.rows().length, racing.today().hidden, racing.dialog.dataset.readsLevel, racing.listed().textContent], [150, true, 'unknown', '共 200 条，下面显示了其中 150 条；还有更新的没读到，点「刷新」再读。']);
+  await racing.reads.open(); assert.equal(racing.requests().length, 2);
+  assert.deepEqual([racing.rows().length, racing.today().textContent, racing.listed().textContent], [50, unknownReach, '共 120 条，下面显示了其中 50 条；还有更新的没读到，点「刷新」再读。']);
+  await racing.button('refresh').fire('click'); assert.equal(racing.requests().length, 4);
+  // A log that fits one page is read once.
+  const small = fixture(few(t)); await small.reads.open(); assert.equal(small.requests().length, 1);
   // With a record this version does not understand among them, both things are still said.
-  const odd = log.map((record, index) => index === 30 ? { ...record, version: 2 } : record), mixed = fixture(odd.slice(0, 60), { fail: count => { mixed.state.log = odd.slice(0, sizes[Math.min(count, sizes.length) - 1]); return false; } });
+  const odd = log.map((record, index) => index === 30 ? { ...record, version: 2 } : record), mixed = fixture(odd.slice(0, 60), { fail: count => { if (count === 2) mixed.state.log = odd.slice(0, 120); return false; } });
   await mixed.reads.open();
-  assert.deepEqual([mixed.rows().length, mixed.listed().textContent, mixed.notes()], [149, '共 200 条，下面显示了其中 149 条；还有更新的没读到，点「刷新」再读。', ['有 1 条记录这一版看不懂，没有显示。']]);
+  assert.deepEqual([mixed.rows().length, mixed.listed().textContent, mixed.notes(), mixed.today().textContent], [49, '共 120 条，下面显示了其中 49 条；还有更新的没读到，点「刷新」再读。', ['有 1 条记录这一版看不懂，没有显示。'], unknownReach]);
 });
 
 test('a log that cannot be read is said to be unreadable, with the rule and what to do, and nothing shown as if complete', async t => {
@@ -181,7 +195,10 @@ test('records this version does not understand are counted, never drawn', async 
   const f = fixture(odd); await f.reads.open();
   assert.equal(f.rows().length, 3); assert.equal(f.listed().textContent, '共 5 条，下面显示了其中 3 条；另外 2 条这一版看不懂，没有显示。'); assert.deepEqual(f.notes(), []);
   const none = fixture(log.map(record => ({ ...record, version: 2 }))); await none.reads.open();
-  assert.deepEqual([none.rows().length, none.notes(), none.listed().hidden, none.today().hidden], [0, ['有 5 条记录这一版看不懂，没有显示。'], true, true]);
+  // The day's count cannot be told either, and the dialog says so and why; Refresh would not change it.
+  assert.deepEqual([none.rows().length, none.notes(), none.listed().hidden, none.today().hidden, none.today().textContent],
+    [0, ['有 5 条记录这一版看不懂，没有显示。'], true, false, '从 11-10 16:00 起已读多少页现在判断不了：最新一条记录这一版看不懂。每天最多 64 页，11-11 16:00 重新计。']);
+  assert.equal(none.dialog.text().includes('刷新」再读'), false);
 });
 
 test('a newest record that was read but is not understood is not called "not reached", and Refresh is not offered as a cure', async t => {
@@ -189,16 +206,28 @@ test('a newest record that was read but is not understood is not called "not rea
   const log = records(t, page => { page(NOW - 10 * MINUTE, 'queue', { spaceId: SPACE, count: 3 }); page(NOW - 5 * MINUTE, 'spaces', { count: 1 }); page(NOW - MINUTE, 'deliveries', { spaceId: SPACE, count: 0, window: [8.64e15 - DAY, 8.64e15] }); });
   assert.equal(log.length, 3); assert.equal(log[2].query.throughTime, 8.64e15, 'Written and read back by the real module');
   const f = fixture(log); await f.reads.open();
-  assert.deepEqual([f.dialog.dataset.readsState, f.rows().length, f.listed().textContent, f.notes(), f.today().hidden], ['records', 2, '共 3 条，下面显示了其中 2 条；另外 1 条这一版看不懂，没有显示。', [], true]);
+  assert.deepEqual([f.dialog.dataset.readsState, f.rows().length, f.listed().textContent, f.notes(), f.today().hidden], ['records', 2, '共 3 条，下面显示了其中 2 条；另外 1 条这一版看不懂，没有显示。', [], false]);
+  // Where the day's count would be, the dialog says it cannot tell and why. It is not left out.
+  assert.equal(f.today().textContent, zh('butler.reads.todayUnknownNewest', { from: '11-10 16:00', limit: 64, resets: '11-11 16:00' })); assert.equal(f.dialog.dataset.readsLevel, 'unknown');
+  // The day's header counts the two pages on screen as "at least": the third page of the day is the one not understood.
+  assert.deepEqual(f.days(), ['11-10 16:00 至 11-11 16:00（按 UTC 算的 2026-11-11 这一天）· 至少 2 页']);
   assert.equal(f.dialog.text().includes('刷新」再读'), false);
 });
 
 test('the log file filling up is said beside the day\'s count, in the core\'s own words about when', async t => {
   const MIB = 1024 * 1024, report = used => ({ usedBytes: used, maxBytes: 32 * MIB, remainingBytes: 32 * MIB - used, warningThresholdBytes: 24 * MIB, warning: used >= 24 * MIB });
   const log = few(t);
-  // No report at all (an older core), or no warning: nothing is said.
-  for (const storage of [undefined, () => report(5 * MIB), () => report(24 * MIB - 1), () => ({ ...report(30 * MIB), warning: false }), () => ({ usedBytes: 9, maxBytes: 2, remainingBytes: 0, warning: true }), () => 'nearly full']) {
+  // A report without the core's warning: nothing is said.
+  for (const storage of [undefined, () => report(5 * MIB), () => report(24 * MIB - 1), () => ({ ...report(30 * MIB), warning: false })]) {
     const f = fixture(log, { storage }); await f.reads.open(); assert.deepEqual([f.full().hidden, f.full().textContent, f.dialog.dataset.readsState, f.rows().length], [true, '', 'records', 5]);
+  }
+  // No report, or one that does not add up, is not "all is well": the dialog says it cannot tell how full the file is.
+  const unknown = '记录文件有多满现在判断不了：这次读到的容量报告缺失或对不上。文件到上限后大管家读不到任何队列、交付记录和空间列表，不管这一天还剩多少页。';
+  assert.equal(zh('butler.reads.storageUnknown'), unknown);
+  for (const storage of [null, () => ({ usedBytes: 9, maxBytes: 2, remainingBytes: 0, warning: true }), () => 'nearly full', () => ({ ...report(5 * MIB), warning: 'false' }), () => ({ ...report(5 * MIB), usedBytes: -1 }), () => ({}), () => null]) {
+    const f = fixture(log, { storage }); await f.reads.open();
+    assert.deepEqual([f.full().hidden, f.full().textContent, f.full().attributes.role, f.dialog.dataset.readsState, f.rows().length], [false, unknown, 'status', 'records', 5]);
+    assert.equal(f.today().textContent, '从 11-10 16:00 起已读 5 页，还剩 59 页。每天最多 64 页，11-11 16:00 重新计。', 'The day\'s count is still given');
   }
   let used = 24 * MIB; const f = fixture(log, { storage: () => report(used) }); await f.reads.open();
   assert.equal(f.full().hidden, false); assert.equal(f.full().attributes.role, 'status');
@@ -265,12 +294,67 @@ test('every sentence is in the catalog in both languages, the catalog has no oth
   f.dialog.close(); language = 'zh'; assert.doesNotThrow(() => display.refresh(f.body));
 });
 
+test('if the read log or the entry cannot be set up, the window still starts without it', () => {
+  const renderer = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
+  // The renderer's own two statements, as written, run where the window's other parts are stand-ins.
+  const reads = renderer.slice(renderer.indexOf('let butlerReads = '), renderer.indexOf('// The existing butler view owns visibility and state;'));
+  const entryStart = renderer.indexOf('let butlerEntry = '), entry = renderer.slice(entryStart, renderer.indexOf('catch (error) { console.error(error); }\n', entryStart) + 'catch (error) { console.error(error); }\n'.length);
+  assert.ok(reads.startsWith("let butlerReads = { open() { toastError(uiError('error.butler.readAuditUnavailable')); }, dispose() {} };\ntry {") && reads.trimEnd().endsWith('catch (error) { console.error(error); }'), reads);
+  assert.ok(entry.startsWith('let butlerEntry = { start() {}, refresh() {}, dispose() {} };\ntry {'), entry.slice(0, 120));
+  const run = window => {
+    const errors = [], said = [], sandbox = { window, errors, console: { error: error => errors.push(error) }, $: id => ({ id }), document: {}, api: {}, uiText() {}, ui: { display: {}, showError() {} },
+      spaceRecord: () => null, spaceName: () => '', openButlerReview() {}, uiError: key => ({ key }), toastError: error => said.push(error.key) };
+    require('node:vm').runInNewContext(reads + entry + '\nthis.result = { butlerReads, butlerEntry };', sandbox);
+    return { ...sandbox.result, errors, said };
+  };
+  // A module that is not there (left out of the page or the bundle), or one whose bind fails (its element is missing).
+  for (const window of [{}, { nativeWorkspaceButlerReads: null, nativeWorkspaceButlerEntry: undefined },
+    { nativeWorkspaceButlerReads: { bind() { throw Error('no dialog element'); } }, nativeWorkspaceButlerEntry: { bind() { throw Error('no row element'); } } }]) {
+    const { butlerReads, butlerEntry, errors } = run(window);
+    assert.equal(errors.length, 2, 'Both failures are written to the console, not swallowed without a trace');
+    // What the rest of the window calls on them does not throw.
+    assert.doesNotThrow(() => { butlerReads.dispose(); butlerEntry.start(); butlerEntry.refresh(); butlerEntry.dispose(); });
+  }
+  // A read log that was not set up, asked for from an entry that was: the person is told it cannot be read; the
+  // button is not one that does nothing.
+  let lone; const alone = run({ nativeWorkspaceButlerEntry: { bind: options => { lone = options; return { start() {}, refresh() {}, dispose() {} }; } } });
+  assert.equal(alone.errors.length, 1); assert.deepEqual(alone.said, []); lone.openReads(); assert.deepEqual(alone.said, ['error.butler.readAuditUnavailable']);
+  assert.equal(messages.zh['error.butler.readAuditUnavailable'], '暂时无法读取大管家的读取记录。');
+  // One failing does not take the other with it, and when both work they are what the window uses.
+  const bound = { open() { return 'opened'; }, dispose() {} }, row = { start() { return 'started'; }, refresh() {}, dispose() {} };
+  const half = run({ nativeWorkspaceButlerReads: { bind: () => bound } }); assert.equal(half.butlerReads.open(), 'opened'); assert.equal(half.errors.length, 1); assert.equal(half.butlerEntry.start(), undefined);
+  let given; const both = run({ nativeWorkspaceButlerReads: { bind: () => bound }, nativeWorkspaceButlerEntry: { bind: options => { given = options; return row; } } });
+  assert.equal(both.errors.length, 0); assert.equal(both.butlerEntry.start(), 'started'); assert.equal(given.openReads(), 'opened', 'The entry opens the read log that was set up');
+});
+
+test('without the entry on screen the read log does not stay open', () => {
+  const renderer = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
+  // The renderer's own two lines of its state render, as written: the record table's rule and the read log's.
+  const start = renderer.indexOf("  if ($('butler-row')?.hidden === true && $('butler-review-dialog')?.open)"), end = renderer.indexOf('\n', renderer.indexOf("$('butler-reads-dialog').close();", start)) + 1;
+  assert.ok(start > 0 && end > start); const lines = renderer.slice(start, end); assert.equal(lines.split('\n').filter(line => line.trim() && !line.trim().startsWith('//')).length, 2);
+  const run = (row, reads, review = { open: false }) => {
+    const closed = [], make = (name, value) => value && { ...value, close() { closed.push(name); } };
+    const parts = { 'butler-row': row, 'butler-reads-dialog': make('reads', reads), 'butler-review-dialog': make('review', review) };
+    require('node:vm').runInNewContext(lines, { $: id => { assert.ok(Object.hasOwn(parts, id), id); return parts[id]; } });
+    return closed;
+  };
+  assert.deepEqual(run({ hidden: true }, { open: true }), ['reads'], 'The entry is gone: the read log closes');
+  assert.deepEqual(run({ hidden: false }, { open: true }), [], 'The entry is on screen: the read log stays');
+  assert.deepEqual(run({ hidden: true }, { open: false }), [], 'A closed dialog is left alone');
+  assert.deepEqual(run({ hidden: true }, { open: true }, { open: true }), ['review', 'reads'], 'Each dialog by its own rule');
+  // A page without these elements (the guards above) is left alone too.
+  assert.deepEqual(run(null, { open: true }), []); assert.deepEqual(run({ hidden: true }, null, null), []);
+});
+
 test('the page loads the view before the dialog and the dialog before the renderer, which gives it this window\'s space names', () => {
   const read = name => fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), html = read('renderer/index.html'), build = fs.readFileSync(path.join(__dirname, '../../scripts/build-ui.cjs'), 'utf8'), renderer = read('renderer/renderer.js');
   for (const positions of [['src="../butler-reads-view.js"', 'src="butler-reads.js"', 'src="renderer.js"'].map(name => html.indexOf(name)), ["read('app/butler-reads-view.js')", "'butler-reads.js'", "'renderer.js'"].map(name => build.indexOf(name))])
     assert.ok(positions.every(value => value > 0) && positions[0] < positions[1] && positions[1] < positions[2]);
   assert.match(html, /<dialog closedby="any" id="butler-reads-dialog" class="butler-reads"><\/dialog>/);
-  assert.match(renderer, /const butlerReads = window\.nativeWorkspaceButlerReads\.bind\(\{ dialog: \$\('butler-reads-dialog'\), document, api, text: \(key, params\) => uiText\(key, params\), display: ui\.display,\n\s*spaceName: id => \{ const room = spaceRecord\(id\); return room \? spaceName\(room\) : null; \} \}\);/);
+  // If the dialog cannot be set up the window still starts: a stand-in that does nothing takes its place.
+  assert.match(renderer, /let butlerReads = \{ open\(\) \{ toastError\(uiError\('error\.butler\.readAuditUnavailable'\)\); \}, dispose\(\) \{\} \};\ntry \{ butlerReads = window\.nativeWorkspaceButlerReads\.bind\(\{ dialog: \$\('butler-reads-dialog'\), document, api, text: \(key, params\) => uiText\(key, params\), display: ui\.display,\n\s*spaceName: id => \{ const room = spaceRecord\(id\); return room \? spaceName\(room\) : null; \} \}\); \}\ncatch \(error\) \{ console\.error\(error\); \}\n/);
+  // Without the entry on screen the read log does not stay open.
+  assert.match(renderer, /if \(\$\('butler-row'\)\?\.hidden === true && \$\('butler-reads-dialog'\)\?\.open\) \$\('butler-reads-dialog'\)\.close\(\);/);
   assert.match(renderer, /openReads: \(\) => butlerReads\.open\(\),\n/); assert.match(renderer, /\(\) => butlerReads\.dispose\(\),/);
   // The dialog asks the main process for nothing but the existing read of the log.
   const source = read('renderer/butler-reads.js');

@@ -40,7 +40,8 @@
       window, count: result.count, more: result.truncated, revision: actor.selectionRevision };
   }
   // How full the log file is, as the core reports it with a read of the log (its own prewarning, not a threshold of
-  // this view), or null when the answer carries no such report or one that does not add up: then nothing is said.
+  // this view), or null when the answer carries no such report or one that does not add up: the dialog then says
+  // that it cannot tell.
   function storageView(value) {
     if (!value || !count(value.usedBytes) || !count(value.maxBytes) || value.maxBytes === 0 || !count(value.remainingBytes) ||
         value.usedBytes + value.remainingBytes !== value.maxBytes || typeof value.warning !== 'boolean') return null;
@@ -72,6 +73,12 @@
     // Today's pages are only known when the newest record of the log is on screen; pageOfDay is the day's running count.
     const complete = count(through) && (through === 0 || Boolean(newest) && newest.sequence === through);
     const pages = !complete ? null : newest && newest.day === today ? newest.pageOfDay : 0;
+    // A day's page count is its last record's running count, so it is the day's whole count only when that last
+    // record is on screen: for the newest day when the log's newest record is, for an earlier day when its newest
+    // row is the record just before the next day's oldest row. Otherwise the number is a lower bound. A day that
+    // shows up again further on (the clock went back across UTC midnight) is counted on, so its earlier group is not whole.
+    days.forEach((group, index) => { const later = days[index - 1];
+      group.whole = index === 0 ? complete : group.rows[0].sequence + 1 === later.rows[later.rows.length - 1].sequence && !days.slice(0, index).some(other => other.day === group.day); });
     const left = pages === null ? null : PAGES_PER_DAY - pages;
     return { today: { day: today, pages, left, limit: PAGES_PER_DAY, level: pages === null ? 'unknown' : left === 0 ? 'full' : left <= NEAR_LEFT ? 'near' : 'ok',
         // The counting day is a UTC day, which is not the person's own day: the line names its local start and end.
