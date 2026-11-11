@@ -277,3 +277,10 @@ test('the page loads the view before the dialog and the dialog before the render
   assert.deepEqual([...source.matchAll(/api\.(\w+)\(/g)].map(match => match[1]), ['butlerReview']); assert.ok(source.includes("api.butlerReview('reads', request)"));
   assert.equal(/createElement\('(input|textarea|select|a|form)'\)|make\('(input|textarea|select|a|form)'|innerHTML|localStorage|fetch\(/.test(source), false);
 });
+
+for (const language of ['zh', 'en']) test(`read counts explain withheld pages in ${language}`, async t => {
+  const f = fixture(few(t), { text: (key, params) => locale.format(language, key, params) });
+  await f.reads.open();
+  const visible = f.dialog.text();
+  assert.match(visible, language === 'zh' ? /因容量不足被扣下、未发给模型的页仍计入每天 64 页/ : /Pages withheld for lack of capacity still count toward the daily 64 pages, even though they were not sent to the model/);
+});

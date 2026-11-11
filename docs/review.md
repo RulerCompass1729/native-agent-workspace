@@ -10565,3 +10565,34 @@ boundary and is not a safe recovery procedure.
 - The vacancy list that the butler reads still shows such a session as free.
 - When the record cannot be read, or the engine could not be built over a record that still holds an open handoff from an earlier run, nobody is named and the queue can send that session work; once the record is read again, what it wrote would count as the handoff's answer.
 - Messages from outside the queue (an agent's wake, a continuation after a limit, a space exchange) can still reach the holder. The reviewer's proposal for the second half: end the answer at the first automatic message after the handoff, instead of only waiting when the integrator is found in a space.
+
+
+## Butler read exhaustion retains pending work
+
+- Source/trigger: a host withholds a whole business page or refuses another read,
+  then returns a valid reply with `readBudget.exhausted`. The controller used to
+  complete the batch and consume its events despite the unread work.
+- Severity/owner/status: incomplete work could disappear; controller author;
+  closed for this repair after independent review (checkpoint f60e0716,
+  APPROVE_WITH_NOTES; fallback question closed on incremental review). The chosen outcome is to retain all
+  source events, not to certify or publish partial model actions.
+- Evidence: controller + read-dialog regressions failed 4 assertions before the
+  change and passed 76/76 after. Actual Business → MCP → DSH → loopback reproduced
+  `recorded` instead of `blocked`; four scenarios now pass, including ignored
+  capacity instructions, multiple same-step calls, escaped input and rotation.
+  The exhausted attempt's 63 input + 14 output tokens remain recorded; its event
+  survives ledger reopen and its sole notice identifies read exhaustion.
+- Counterexamples: no automatic retry on restart/new work; explicit retry keeps
+  the earlier usage; non-exhausted replies complete, and model text cannot
+  manufacture an exhausted host envelope. Business page accounting, request
+  ceilings, qualification switches and ordinary native backends are unchanged.
+- Final verification: full unit suite 5934/5934, no failures or skips; the hidden
+  Electron read dialog passed in both languages at 1280 and 860 pixels, with
+  13 screenshots, no native sessions or model calls and the owned profile removed.
+  The author checked the source was unchanged across both read-only review runs.
+- Review notes: this dormant controller has no desktop notice consumer. Unknown
+  failures use the existing generic person/entry wording; specific read-exhaustion
+  wording and a person-facing recovery route remain activation work. The new
+  sentence names the currently fixed 64-page limit; update it if that limit changes.
+- Integration acceptance and actual package activation remain separate; this
+  repair performs no provider calls and adds no activation or recovery control.
