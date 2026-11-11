@@ -6,6 +6,7 @@ const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { successor } = require('./queue-secretary.cjs');
 const { roomIds } = require('./collaboration-spaces.cjs');
+const { acquireRoleLock, ROLE_LOCK_NAME } = require('./butler-role-lock.cjs');
 
 const MAX_RECORD = 16 * 1024, MAX_LOG = 32 * 1024 * 1024;
 const codeError = code => Object.assign(Error(code), { code });
@@ -140,10 +141,10 @@ class ButlerRole {
   #write(selected, expectedRevision) {
     if (!revision(expectedRevision)) fail('ERR_BUTLER_REVISION');
     let directoryFd, lockFd, lockIdentity, tempFd, tempIdentity, next;
-    const lock = path.join(this.#directory || '', 'butler.json.lock'), temp = `${this.#file}.${randomUUID()}.tmp`;
+    const lock = path.join(this.#directory || '', ROLE_LOCK_NAME), temp = `${this.#file}.${randomUUID()}.tmp`;
     try {
       directoryFd = this.#directoryFd();
-      try { lockFd = fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o600); }
+      try { lockFd = acquireRoleLock(this.#directory, directoryFd); }
       catch (error) { if (error.code === 'EEXIST') fail('ERR_BUTLER_BUSY'); throw error; }
       lockIdentity = fs.fstatSync(lockFd);
       if (!safePrivateFile(lockIdentity, MAX_RECORD)) fail('ERR_BUTLER_STATE');
@@ -163,13 +164,14 @@ class ButlerRole {
     } finally {
       try {
         if (tempFd !== undefined) fs.closeSync(tempFd);
-        if (lockFd !== undefined) fs.closeSync(lockFd);
+        // Keep the cooperative kernel lock until its own published name is gone.
         // Only remove files created by this invocation, never another writer's lock.
         for (const [file, owned] of [[temp, tempIdentity], [lock, lockIdentity]]) {
           if (!owned) continue;
           try { const present = fs.lstatSync(file); if (sameFile(present, owned) && safePrivateFile(present, MAX_RECORD)) fs.unlinkSync(file); else this.#failed = true; }
           catch (error) { if (error.code !== 'ENOENT') { this.#failed = true; } }
         }
+        if (lockFd !== undefined) fs.closeSync(lockFd);
         if (directoryFd !== undefined) fs.closeSync(directoryFd);
       } catch { this.#failed = true; fail('ERR_BUTLER_STATE'); }
     }

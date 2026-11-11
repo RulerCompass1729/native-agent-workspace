@@ -98,6 +98,7 @@ async function build() {
       'butler-ready.cjs',
       'butler-review-policy.js',
       'butler-review-projection.cjs',
+      'butler-role-lock.cjs',
       'butler-role.cjs',
       'butler-runner.cjs',
       'butler-runner.py',
