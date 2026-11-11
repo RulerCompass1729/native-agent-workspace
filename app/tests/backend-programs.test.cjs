@@ -34,12 +34,21 @@ test('an own entry whose program is gone is dropped at a start, recorded, and th
   assert.deepEqual(locations.backendLocations(f.backend, f.shared, { repair: true }), dry);
   assert.deepEqual(f.read(f.own), { codex: f.old }); assert.equal(fs.statSync(f.own).mode & 0o777, 0o600);
   const kept = f.read(f.record);
-  assert.deepEqual(kept.removed, dry.removed); assert.ok(Date.parse(kept.at) <= Date.now()); assert.equal(fs.statSync(f.record).mode & 0o777, 0o600);
+  assert.deepEqual(kept.removals.map(entry => entry.removed), [dry.removed]); assert.ok(Date.parse(kept.removals[0].at) <= Date.now()); assert.equal(fs.statSync(f.record).mode & 0o777, 0o600);
   assert.deepEqual(fs.readdirSync(f.backend).sort(), ['runtime-locations.json', 'runtime-locations.removed.json'], 'No temporary file is left');
   // The next start has nothing to drop and writes nothing.
   const stamp = fs.statSync(f.own).mtimeMs, recorded = fs.readFileSync(f.record, 'utf8');
   assert.deepEqual(locations.backendLocations(f.backend, f.shared, { repair: true }), { file: f.own, locations: { codex: f.old }, removed: [] });
   assert.equal(fs.statSync(f.own).mtimeMs, stamp); assert.equal(fs.readFileSync(f.record, 'utf8'), recorded);
+  // A later repair is added to the record, which keeps the last twenty and stays private even if it was not.
+  fs.chmodSync(f.record, 0o644);
+  for (let i = 0; i < 21; i++) { f.write(f.own, { codex: f.old, python3: path.join(f.base, 'versions', `python-${i}`) }); locations.backendLocations(f.backend, f.shared, { repair: true }); }
+  const later = f.read(f.record).removals;
+  assert.equal(later.length, 20); assert.deepEqual(later.at(-1).removed, [{ key: 'python3', path: path.join(f.base, 'versions', 'python-20') }]); assert.equal(later[0].removed[0].path, path.join(f.base, 'versions', 'python-1'));
+  assert.equal(fs.statSync(f.record).mode & 0o777, 0o600);
+  fs.writeFileSync(f.record, '{ not json'); f.write(f.own, { codex: f.gone });
+  assert.equal(locations.backendLocations(f.backend, f.shared, { repair: true }).file, f.shared, 'An unreadable record does not stop the repair');
+  assert.equal(f.read(f.record).removals.length, 1);
 });
 
 test('an own file left with no entry is no override: the shared Settings file applies again', t => {
@@ -73,6 +82,26 @@ test('the shared Settings file is never repaired, a hand-started service keeps i
   fs.writeFileSync(f.own, '{ not json'); assert.throws(() => locations.backendLocations(f.backend, f.shared, { repair: true }));
   f.write(f.own, { codex: f.old }); fs.chmodSync(f.own, 0o644); assert.throws(() => locations.backendLocations(f.backend, f.shared, { repair: true }), 'A file others can read is refused, as before');
   assert.deepEqual(f.read(f.own), { codex: f.old });
+});
+
+test('a repair that cannot be written does not stop the backend: its file is used as it is', { skip: process.getuid?.() === 0 }, t => {
+  const f = fixture(t); f.write(f.own, { claude: path.join(f.base, 'versions', '2.1.312'), codex: f.old });
+  const before = fs.readFileSync(f.own, 'utf8');
+  fs.chmodSync(f.backend, 0o500);
+  // (Made writable again here, before the fixture's folder is removed.)
+  try { assert.deepEqual(locations.backendLocations(f.backend, f.shared, { repair: true }), { file: f.own, locations: { claude: path.join(f.base, 'versions', '2.1.312'), codex: f.old }, removed: [] }); }
+  finally { fs.chmodSync(f.backend, 0o700); }
+  assert.equal(fs.readFileSync(f.own, 'utf8'), before); assert.deepEqual(fs.readdirSync(f.backend), ['runtime-locations.json']);
+});
+
+test('a backend whose own file cannot be read still refuses to start and names the file, as before this repair', async t => {
+  const { ensureServiceAt } = require('../service-client.cjs');
+  const f = fixture(t); process.env.NAW_RUNTIME_CONFIG = f.shared; t.after(() => { delete process.env.NAW_RUNTIME_CONFIG; });
+  for (const broken of [() => fs.writeFileSync(f.own, '{ not json', { mode: 0o600 }), () => { f.write(f.own, { codex: f.old }); fs.chmodSync(f.own, 0o644); }]) {
+    fs.rmSync(f.own, { force: true }); broken();
+    await assert.rejects(ensureServiceAt(f.backend, process.execPath, path.join(f.base, 'workspace')), error => error.uiMessage?.key === 'error.service.locationsUnreadable' && error.uiMessage.params.arg1 === f.own);
+    assert.equal(fs.existsSync(path.join(f.backend, 'runtimes')), false, 'Nothing was started');
+  }
 });
 
 test('the check before an update: a gone entry, an existing older version and no entry all leave both providers runnable', t => {
@@ -164,7 +193,7 @@ test('a backend started with a gone entry runs both providers, and its initial s
     const started = await ensureServiceAt(f.backend, process.execPath, path.join(f.base, 'workspace')); pid = started.servicePid;
     assert.ok(started.capabilities.includes('programAvailabilityV1'));
     assert.deepEqual(started.available, { claude: true, codex: true, python: true }, 'The gone entries were dropped before the backend started');
-    assert.deepEqual(f.read(f.own), {}); assert.deepEqual(f.read(f.record).removed.map(entry => entry.key).sort(), ['claude', 'codex']);
+    assert.deepEqual(f.read(f.own), {}); assert.deepEqual(f.read(f.record).removals.map(entry => entry.removed.map(item => item.key).sort()), [['claude', 'codex']]);
     // While it runs, a program that disappears or comes back is seen at the next initial state, not at the next restart.
     client = await connectService(f.backend, 'availability-check');
     fs.renameSync(f.launchers.codex, f.launchers.codex + '.away');

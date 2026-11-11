@@ -847,12 +847,15 @@ installed or copied by this setting.
 Settings edits only the shared file, so nothing in the interface can repair a
 backend's private entry. When a backend starts, a private entry whose program no
 longer exists (vendors remove old versions) is therefore dropped from that file,
-and what was dropped is kept beside it in `runtime-locations.removed.json`; a
-private file left with no entry is no override, and the shared Settings file
-applies again. A private entry whose program still exists is kept, whatever its
-version. The shared file is never changed this way: a program the person selected
-in Settings stays selected and shows as not found. A running backend is not
-touched; its native Codex server cannot change program while it runs.
+and what was dropped is kept beside it in `runtime-locations.removed.json` (the
+last twenty repairs); a private file left with no entry is no override, and the
+shared Settings file applies again. A private entry whose program still exists is
+kept, whatever its version. The shared file is never changed this way: a program
+the person selected in Settings stays selected and shows as not found. A private
+file that cannot be rewritten is used as it is. A running backend is not touched;
+its native Codex server cannot change program while it runs. So a private entry
+whose program disappears while its backend runs stays until that backend next
+starts: the alert below names the program, but Settings cannot change it.
 
 A backend resolves its programs again whenever a client asks for its initial
 state and before each session starts (capability `programAvailabilityV1`), and

@@ -34,7 +34,9 @@ function setLocation(file, key, value) {
 // was dropped is kept beside it; without repair nothing is written and only the result is computed. An own
 // file left with no entry is no override, so the shared file applies again. An own entry whose program
 // still exists is kept, whatever its version. The shared file is never changed here: a program the person
-// selected in Settings stays selected and shows as missing.
+// selected in Settings stays selected and shows as missing. An own file that cannot be read is an error, as
+// it was before; one that cannot be rewritten is used as it is, so the repair never stops a backend that
+// started before it existed.
 // Returns { file, locations, removed }: file is what the backend reads (undefined when there is none);
 // locations is given when the own file applies, otherwise read file; removed lists { key, path }.
 function backendLocations(dataDir, shared, { repair = false } = {}) {
@@ -48,9 +50,15 @@ function backendLocations(dataDir, shared, { repair = false } = {}) {
   const removed = Object.entries(entries).filter(([, value]) => !isExecutable(value)).map(([key, value]) => ({ key, path: value }));
   const kept = Object.fromEntries(Object.entries(entries).filter(([, value]) => isExecutable(value)));
   if (repair && removed.length) {
-    save(own, kept);
-    // The record is for whoever checks an update afterwards; failing to write it must not stop the backend.
-    try { fs.writeFileSync(path.join(dataDir, 'runtime-locations.removed.json'), JSON.stringify({ at: new Date().toISOString(), removed }), { mode: 0o600 }); } catch { /* the file itself is already repaired */ }
+    try { save(own, kept); } catch { return { file: own, locations: entries, removed: [] }; }
+    // The record is for whoever checks an update afterwards: the last twenty repairs, oldest first. Failing
+    // to write it must not stop the backend.
+    const record = path.join(dataDir, 'runtime-locations.removed.json');
+    try {
+      let earlier = [];
+      try { const kept = JSON.parse(fs.readFileSync(record, 'utf8')); if (Array.isArray(kept?.removals)) earlier = kept.removals; } catch { /* none yet, or unreadable: start again */ }
+      save(record, { removals: [...earlier, { at: new Date().toISOString(), removed }].slice(-20) });
+    } catch { /* the locations file itself is already repaired */ }
   }
   return Object.keys(kept).length ? { file: own, locations: kept, removed } : { file: shared, locations: null, removed };
 }
