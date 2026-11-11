@@ -24,9 +24,9 @@ function stream(tool) {
   return events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
 }
 (async () => {
-  for (const mode of ['partial-error', 'request-cap', 'forced-close', 'parent-eof', 'host-sigterm', 'hung-dispose', 'hung-dispose-parent-eof', 'missing-tool', 'production-endpoint', 'unknown-price']) {
+  for (const mode of ['partial-error', 'request-cap', 'forced-close', 'desktop-quit', 'desktop-lost-exit', 'parent-eof', 'host-sigterm', 'hung-dispose', 'hung-dispose-parent-eof', 'missing-tool', 'production-endpoint', 'unknown-price']) {
     const folder = path.join(evidence, mode); fs.mkdirSync(folder, { mode: 0o700 });
-    let count = 0, fixtureError, controller, prices = 0;
+    let count = 0, fixtureError, controller, prices = 0, processGroup;
     const server = http.createServer((req, res) => {
       req.resume(); req.on('end', () => {
         try {
@@ -64,7 +64,52 @@ registerHooks({load(url,context,next){const loaded=next(url,context);if(url!==ta
         await driver.start(proof); const pid = driver.child.pid;
         const expected = { selectionRevision: 1, identity: { sessionId: 'synthetic', nativeId: driver.nativeId }, runnerRef: proof.runnerRef };
         const input = { version: 1, mode: 'record-only', batchId: 'synthetic-batch', attempt: 1, events: [{ eventId: 'event', sourceRef: 'source', kind: 'request', payload: { text: 'Synthetic input' } }], spaces: [], pendingQuestions: [] };
-        if (mode === 'forced-close') {
+        if (mode === 'desktop-quit' || mode === 'desktop-lost-exit') {
+          const cp = require('node:child_process'), vm = require('node:vm');
+          const mcpRows = fs.readFileSync(path.join(folder, 'mcp.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(row => row.kind === 'started');
+          const pgid = id => Number(cp.execFileSync('/bin/ps', ['-o', 'pgid=', '-p', String(id)], { encoding: 'utf8' }).trim());
+          const observed = mcpRows.map(row => {
+            assert.equal(row.ppid, pid);
+            const inspected = cp.spawnSync('/bin/ps', ['-o', 'pgid=', '-p', String(row.pid)], { encoding: 'utf8' });
+            if (inspected.status === 1) { assert.throws(() => process.kill(row.pid, 0), { code: 'ESRCH' }); return { pid: row.pid, exitedBeforeInspection: true }; }
+            assert.equal(inspected.status, 0); return { pid: row.pid, ppid: row.ppid, pgid: Number(inspected.stdout.trim()) };
+          });
+          processGroup = { host: { pid, pgid: pgid(pid) }, mcp: observed };
+          assert.equal(processGroup.host.pgid, pid); assert.ok(observed.some(row => row.pgid === pid));
+          for (const row of observed.filter(row => !row.exitedBeforeInspection)) assert.equal(row.pgid, pid);
+          let releaseExit;
+          const child = driver.child, once = child.once;
+          if (mode === 'desktop-lost-exit') child.once = function (event, callback) {
+            // Fault injection: the real driver does not receive its one-shot exit callback.
+            if (event === 'exit') { releaseExit = callback; return this; }
+            return once.call(this, event, callback);
+          };
+          else process.kill(pid, 'SIGSTOP'); // Real driver's owned group-kill fallback.
+          const main = fs.readFileSync(path.join(root, 'app/main.cjs'), 'utf8');
+          const a = main.indexOf("app.on('before-quit', event => {"), b = main.indexOf('// Deliberately no native shutdown', a);
+          let beforeQuit, finish, frontendStops = 0; const notices = [];
+          const exited = new Promise(resolve => { finish = resolve; });
+          const app = { on(name, handler) { assert.equal(name, 'before-quit'); beforeQuit = handler; },
+            quit() { let prevented = false; beforeQuit({ preventDefault() { prevented = true; } }); if (!prevented) finish(); } };
+          const context = vm.createContext({ app, setImmediate, setTimeout, clearTimeout,
+            pendingReveal: null, quitting: false, outboxClosing: false, butlerClosing: false, butlerQuitAttempted: false,
+            outboxQuitFailed: false, outboxBroker: null, backgroundControl: null, butlerBackend: { driver, confirmed: 'fixture' },
+            viewStore: null, windows: new Map(), revokeAppMobile() {}, notifyButlerQuit: key => notices.push(key), dsh: { stop() { frontendStops++; } } });
+          vm.runInContext(main.slice(a, b), context);
+          const started = Date.now(); app.quit();
+          await assert.rejects(driver.start(proof), error => error.code === 'closing');
+          await exited;
+          const elapsed = Date.now() - started;
+          if (mode === 'desktop-lost-exit') {
+            assert.ok(elapsed >= 4900 && elapsed < 6500);
+            assert.deepEqual(notices, ['os.butlerQuitWaiting', 'os.butlerQuitUnconfirmed']);
+            child.once = once; releaseExit(); // Deliver the late owned receipt to finish fixture cleanup.
+            await driver.close(); await new Promise(resolve => setImmediate(resolve));
+          } else { assert.ok(elapsed >= 2900 && elapsed < 5000); assert.deepEqual(notices, ['os.butlerQuitWaiting']); }
+          processGroup.elapsedMs = elapsed;
+          assert.equal(count, 0); assert.equal(frontendStops, 1);
+          await assert.rejects(driver.start(proof), error => error.code === 'closing');
+        } else if (mode === 'forced-close') {
           process.kill(pid, 'SIGSTOP'); // The real host cannot process its close pipe.
           const start = Date.now(), closed = await driver.close();
           assert.ok(Date.now() - start >= 2900); assert.equal(closed.stopped, true); assert.equal(count, 0);
@@ -109,7 +154,7 @@ registerHooks({load(url,context,next){const loaded=next(url,context);if(url!==ta
         assert.equal(row.providerCredentialPresent, false);
         assert.throws(() => process.kill(row.pid, 0), { code: 'ESRCH' });
       }
-      assert.equal(fixtureError, undefined); outcomes.push({ mode, requests: count, priceCalls: prices, status: 'passed' });
+      assert.equal(fixtureError, undefined); outcomes.push({ mode, requests: count, priceCalls: prices, ...(processGroup ? { processGroup } : {}), status: 'passed' });
     } finally {
       await controller?.close(); await driver.close();
       // Test-owned stubborn MCP children must be cleaned even when a red assertion fails.

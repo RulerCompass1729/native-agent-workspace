@@ -4,7 +4,7 @@ const readline = require('node:readline'), fs = require('node:fs');
 const log = process.argv[2];
 // Only the shutdown-failure fixture opts in to a child that survives stdin EOF.
 if (process.argv.includes('--ignore-eof')) setInterval(() => {}, 1000);
-fs.appendFileSync(log, JSON.stringify({ kind: 'started', pid: process.pid, providerCredentialPresent: Object.hasOwn(process.env, 'DEEPSEEK_API_KEY') }) + '\n', { mode: 0o600 });
+fs.appendFileSync(log, JSON.stringify({ kind: 'started', pid: process.pid, ppid: process.ppid, providerCredentialPresent: Object.hasOwn(process.env, 'DEEPSEEK_API_KEY') }) + '\n', { mode: 0o600 });
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line); if (m.id === undefined) return;
   let result;

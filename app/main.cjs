@@ -38,7 +38,7 @@ const queueRules = require('./queue-dispatch.cjs');
 const { QueueDispatcher } = queueRules;
 const applicationHandlers = new Map();
 let backgroundControl, backgroundUnavailable = false;
-let butlerClosing = false;
+let butlerClosing = false, butlerQuitAttempted = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
 app.setName('Native Agent Workspace');
@@ -1880,16 +1880,26 @@ app.on('before-quit', event => {
       saveViews();
     }
   } catch { event.preventDefault(); return; }
-  // While this instance is still the exclusive owner, so the revocation is written durably.
+  // Sealing is synchronous and does no I/O, even if no butler is running.
+  const driver = butlerBackend?.driver;
+  driver?.beginShutdown();
+  // Repeating revocation stays closed and invalidates only this broker's grants.
   revokeAppMobile();
   // The NAW-owned butler belongs to this desktop, unlike ordinary native sessions.
-  const driver = butlerBackend?.driver;
-  if (driver && (driver.child || driver.starting)) {
-    event.preventDefault(); butlerClosing = true; butlerBackend.confirmed = null;
+  if (!butlerQuitAttempted && driver && (driver.child || driver.starting)) {
+    event.preventDefault(); butlerClosing = true; butlerQuitAttempted = true; butlerBackend.confirmed = null;
+    notifyButlerQuit('os.butlerQuitWaiting');
+    let settled = false;
+    const finish = confirmed => {
+      if (settled) return; settled = true;
+      clearTimeout(deadline); butlerClosing = false;
+      if (!confirmed) notifyButlerQuit('os.butlerQuitUnconfirmed');
+      setImmediate(() => app.quit());
+    };
+    const deadline = setTimeout(() => finish(false), 5000); deadline.unref();
     Promise.resolve().then(() => driver.close()).then(receipt => {
-      butlerClosing = false;
-      if (receipt?.stopped === true) setImmediate(() => app.quit());
-    }, () => { butlerClosing = false; });
+      finish(receipt?.stopped === true && receipt?.cleanupConfirmed !== false);
+    }, () => finish(false));
     return;
   }
   if (outboxQuitFailed) { quitting = true; dsh?.stop(); return; }
@@ -1911,6 +1921,15 @@ app.on('will-quit', () => {
   queueDispatcher?.close();
   try { butlerIngress?.ledger.closeQuestionMetricEpoch(); } catch { /* An unclosed epoch remains unverified. */ }
 });
+function notifyButlerQuit(key) {
+  // An in-window toast works when OS notices are disabled; OS delivery can outlive quit.
+  for (const context of windows.values()) {
+    if (!context.background) { try { sendToPage(context, 'workspace:quit-status', key); } catch {} }
+  }
+  try {
+    if (Notification.isSupported()) new Notification({ title: displayText('os.butlerQuitTitle'), body: displayText(key) }).show();
+  } catch { /* The in-window message remains available until exit. */ }
+}
 // A session rotation is announced to the person; the space record and log keep the ids.
 function notifyRotation(outcome, record) {
   const keys = { done: 'os.rotationDoneBody', saved: 'os.rotationSavedBody', kept: 'os.rotationKeptBody', keptUnsaved: 'os.rotationKeptUnsavedBody', failed: 'os.rotationFailedBody', needsTrust: 'os.rotationNeedsTrustBody' };

@@ -67,13 +67,17 @@ function osOptions(language, codex = true, prefix = 'os.decision') {
     names: 'RAW 中文 backend names', option: { switch: { stops: [{ name: 'RAW 中文 session' }], endsCodex: codex, reason: 'RAW 中文 background detail' } },
     textExtensions: ['txt', 'md'], record: { cwd: raw, actor: { name: 'RAW 中文 agent' }, command: { method: 'openLocalFile' } }, action: 'openLocalFile', snapshot: { defaultWorkspace: '/unused' },
     preview: { name: 'RAW 中文.txt' }, ext: '.txt', path,
-    prefix, name: 'RAW 中文 member', space: 'RAW 中文 space', task: 'RAW 中文 task', question: 'RAW 中文 question',
+    key: 'os.butlerQuitWaiting', prefix, name: 'RAW 中文 member', space: 'RAW 中文 space', task: 'RAW 中文 task', question: 'RAW 中文 question',
     notice: { key: 'os.rotationDoneBody', params: { old: 'RAW 中文 old', new: 'RAW 中文 new', reason: '' } },
     migrationNotice: { key: 'os.migrationSavedBody', params: { names: 'RAW 中文 session' } },
   })) }));
 }
 test('all existing OS option groups use the chosen language while raw names, picker scope and cancel safeguards stay intact', () => {
-  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 19);
+  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 20);
+  const quit = en.findIndex(option => option.value.title === 'NAW · Quitting');
+  assert.ok(quit >= 0); assert.equal(en[quit].value.body, 'Closing the butler; waiting up to 5 seconds.');
+  assert.equal(zh[quit].value.body, '正在关闭大管家，最多等待 5 秒。');
+  en.splice(quit, 1); zh.splice(quit, 1);
   assert.deepEqual(en[2].value, { title: 'NAW · Needs your decision', body: 'RAW 中文 agent requests Read a local file; waiting for your confirmation' });
   assert.deepEqual(zh[2].value, { title: 'NAW · 需要你决定', body: 'RAW 中文 agent 请求读取本机文件，等你确认' });
   en.splice(2, 1); zh.splice(2, 1); // Keep the existing eighteen option-group checks below.

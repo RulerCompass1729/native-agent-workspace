@@ -236,3 +236,14 @@ test('unrelated actors and origins cannot exhaust the legitimate pairing secret 
   for (let i = 0; i < 20; i++) assert.throws(() => f.access.pair({ secret: challenge.secret, actor, origin: 'https://other.invalid' }), /手机授权/);
   assert.ok(f.access.pair({ secret: challenge.secret, actor, origin: site }).cookieValue);
 });
+
+test('repeated desktop quit revocation stays closed and invalidates the same old grant', t => {
+  const f = ready(t), session = f.pair(), ticket = f.authorize(session);
+  for (let repeat = 0; repeat < 2; repeat++) {
+    assert.equal(f.access.revoke().confirmed, true);
+    const stored = JSON.parse(f.read());
+    assert.equal(stored.enabled, false); assert.equal(stored.pairing, null); assert.equal(stored.device, null);
+    assert.equal(f.access.closed, true); assert.throws(() => f.authorize(session));
+    assert.throws(() => f.verify(ticket), error => error.code === 'MOBILE_DENIED');
+  }
+});

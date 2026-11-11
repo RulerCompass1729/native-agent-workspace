@@ -82,7 +82,7 @@ api.onState = callback => {
   stateCallbacks.add(callback);
   return () => stateCallbacks.delete(callback);
 };
-for (const [name, channel] of [['onRevealRecord', 'workspace:reveal-record'], ['onLocale', 'workspace:locale'], ['onViewStorage', 'workspace:view-storage'], ['onReconnected', 'workspace:reconnected'], ['onBackendSwitched', 'workspace:backend-switched'], ['onSessionName', 'workspace:session-name'], ['onTerminal', 'workspace:terminal'], ['onProgress', 'workspace:progress'], ['onNew', 'workspace:new'], ['onDisconnected', 'workspace:disconnected'], ['onStartup', 'workspace:startup']]) {
+for (const [name, channel] of [['onQuitStatus', 'workspace:quit-status'], ['onRevealRecord', 'workspace:reveal-record'], ['onLocale', 'workspace:locale'], ['onViewStorage', 'workspace:view-storage'], ['onReconnected', 'workspace:reconnected'], ['onBackendSwitched', 'workspace:backend-switched'], ['onSessionName', 'workspace:session-name'], ['onTerminal', 'workspace:terminal'], ['onProgress', 'workspace:progress'], ['onNew', 'workspace:new'], ['onDisconnected', 'workspace:disconnected'], ['onStartup', 'workspace:startup']]) {
   api[name] = callback => { const listener = (_event, ...data) => callback(...data); ipcRenderer.on(channel, listener); return () => ipcRenderer.removeListener(channel, listener); };
 }
 contextBridge.exposeInMainWorld('workspace', Object.freeze(api));

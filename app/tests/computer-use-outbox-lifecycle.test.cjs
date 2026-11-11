@@ -7,12 +7,13 @@ const a = source.indexOf("app.on('before-quit', event => {"), b = source.indexOf
 assert.ok(a >= 0 && b > a);
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function fixture(close, butlerBackend = null) {
-  let listener, stops = 0, quits = 0, calls = 0; const scheduled = [];
-  const context = vm.createContext({ setImmediate(callback) { scheduled.push(callback); }, app: { on(name, cb) { assert.equal(name, 'before-quit'); listener = cb; }, quit() { quits++; } },
+  let listener, stops = 0, quits = 0, calls = 0; const scheduled = [], timers = new Map(), notices = [];
+  if (butlerBackend?.driver && !butlerBackend.driver.beginShutdown) butlerBackend.driver.beginShutdown = () => { butlerBackend.driver.sealed = true; };
+  const context = vm.createContext({ setTimeout(fn, ms) { const timer = { unref() {} }; timers.set(timer, { fn, ms }); return timer; }, clearTimeout(timer) { timers.delete(timer); }, notifyButlerQuit(key) { notices.push(key); }, setImmediate(callback) { scheduled.push(callback); }, app: { on(name, cb) { assert.equal(name, 'before-quit'); listener = cb; }, quit() { quits++; } },
     viewStore: undefined, windows: new Map(), saveViews() { throw Error('No GUI or view write in this test'); },
-    dsh: { stop() { stops++; } }, revokeAppMobile() {}, butlerBackend, butlerClosing: false, backgroundControl: undefined, outboxBroker: close && { close() { calls++; return close(); } }, outboxUnavailable: false });
+    dsh: { stop() { stops++; } }, revokeAppMobile() {}, butlerBackend, butlerClosing: false, butlerQuitAttempted: false, backgroundControl: undefined, outboxBroker: close && { close() { calls++; return close(); } }, outboxUnavailable: false });
   vm.runInContext('let quitting=false, outboxClosing=false, outboxQuitFailed=false;\n' + source.slice(a, b), context);
-  return { attempt() { let prevented = false; listener({ preventDefault() { prevented = true; } }); return prevented; }, facts: () => ({ stops, quits, calls }), advanceLoop() { for (const callback of scheduled.splice(0)) callback(); } };
+  return { context, attempt() { let prevented = false; listener({ preventDefault() { prevented = true; } }); return prevented; }, facts: () => ({ stops, quits, calls }), notices, expire() { for (const { fn, ms } of timers.values()) { assert.equal(ms, 5000); fn(); } timers.clear(); }, advanceLoop() { for (const callback of scheduled.splice(0)) callback(); } };
 }
 test('failed owned outbox cleanup retains the frontend; a later explicit quit proceeds without replaying failed cleanup', async () => {
   const f = fixture(async () => { throw Error('Owned cleanup unconfirmed'); });
@@ -58,11 +59,34 @@ test('outbox failure does not skip stopping the dedicated butler on the next qui
   driver.child = {}; assert.equal(f.attempt(), true); await tick(); f.advanceLoop();
   assert.equal(f.attempt(), false); assert.equal(f.facts().stops, 1);
 });
-test('unconfirmed butler stop retains the frontend and permits an explicit retry', async () => {
+test('unconfirmed butler stop reports the failure and continues quitting without retrying forever', async () => {
   let closes = 0;
   const driver = { child: {}, async close() { closes++; return { stopped: false }; } };
   const f = fixture(null, { driver });
   assert.equal(f.attempt(), true); await tick(); f.advanceLoop();
-  assert.equal(f.facts().quits, 0); assert.equal(f.facts().stops, 0);
-  assert.equal(f.attempt(), true); await tick(); assert.equal(closes, 2);
+  assert.equal(f.facts().quits, 1); assert.equal(f.notices.at(-1), 'os.butlerQuitUnconfirmed');
+  assert.equal(f.attempt(), false); assert.equal(closes, 1);
+});
+test('a missing child exit cannot hold Cmd+Q beyond the five-second deadline', async () => {
+  let release;
+  const driver = { child: {}, close: () => new Promise(resolve => { release = resolve; }) };
+  const f = fixture(null, { driver });
+  assert.equal(f.attempt(), true); await tick();
+  assert.deepEqual(f.notices, ['os.butlerQuitWaiting']);
+  f.expire(); f.advanceLoop(); assert.equal(f.facts().quits, 1);
+  assert.equal(f.attempt(), false); assert.equal(f.notices.at(-1), 'os.butlerQuitUnconfirmed');
+  release({ stopped: true, cleanupConfirmed: true }); await tick(); f.advanceLoop();
+  assert.equal(f.facts().quits, 1, 'late receipt cannot quit twice');
+});
+test('desktop seals new starts synchronously even with an idle driver during asynchronous outbox cleanup', async () => {
+  let release;
+  const driver = { child: null, starting: null }, f = fixture(() => new Promise(resolve => { release = resolve; }), { driver });
+  assert.equal(f.attempt(), true); assert.equal(driver.sealed, true);
+  assert.deepEqual(f.notices, [], 'no delay or butler notice when no host is running');
+  await tick(); release(); await tick();
+});
+
+test('a failed view save still cancels before sealing the butler or revoking anything', () => {
+  const driver = {}, f = fixture(null, { driver }); f.context.viewStore = { loaded: true };
+  assert.equal(f.attempt(), true); assert.equal(driver.sealed, undefined); assert.deepEqual(f.notices, []);
 });
