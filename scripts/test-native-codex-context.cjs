@@ -158,7 +158,7 @@ async function nativeCommand(command){
   fs.writeFileSync(path.join(base,'startup-update-native.json'),JSON.stringify({before,after,calls,titles,dispatches:0,versionCacheUnchanged:true},null,2));
   fs.writeFileSync(path.join(base,'startup-update-terminal.txt'),await terminalText());
   if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'startup-update-editor.png')});
-  console.log(JSON.stringify({checks:['Actual164 new-terminal startup bypasses a fresh165 cached update menu, preserves original identity/owner/draft without persistent dismissal'],nativeVersion,localResponses:0,nativeTitleResponses:0,paidModelCalls:0,dispatches:0,evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:['Actual164 new-terminal startup bypasses a fresh165 cached update menu, preserves original identity/owner/draft without persistent dismissal'],nativeVersion,localResponses:0,nativeTitleResponses:0,paidModelCalls:0,dispatches:0,evidence:base}));return;
  }
  if(initialTerminal){
   // Keep the native readiness label visible beside newer warning badges.
@@ -175,7 +175,7 @@ async function nativeCommand(command){
   await page.locator('#message-input').fill('Show the numbered local fixture without changing files.');await page.locator('#send-button').click();
   await until(async()=>calls===1&&(await snapshot()).sessions[0].state==='idle','One local native reply completes');
   checks.push(await require('./native-scroll-check.cjs').check({page,snapshot,base,provider:'codex',localCalls:()=>calls}));assert.equal(calls,1);assert.ok(titles<=1);assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({checks,nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,physicalTrackpad:'not tested',iTermComparison:'not tested',evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks,nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,physicalTrackpad:'not tested',iTermComparison:'not tested',evidence:base}));return;
  }
  if(process.env.NAW_NATIVE_METADATA_ONLY==='1'){
   assert.equal(before.nativeVersion,nativeVersion);assert.equal(before.nativeVersionStatus,'verified');
@@ -183,7 +183,7 @@ async function nativeCommand(command){
   await page.locator('#message-input').fill('Unsent metadata-check draft.');
   assert.equal((await snapshot()).diagnostics.dispatches,0);assert.equal(calls,0);assert.equal(titles,0);assert.deepEqual(errors,[]);
   fs.writeFileSync(path.join(base,'native-metadata.json'),JSON.stringify(await snapshot(),null,2));
-  console.log(JSON.stringify({checks:['Actual native running handshake reaches the original graphical session without inference or a task'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:['Actual native running handshake reaches the original graphical session without inference or a task'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(!activeGoalRecovery){await page.locator('#message-input').fill(goalTrial?'Create the bounded native goal, verify its continuation while this window is closed, then complete it.':'Make one small local check.');await page.locator('#send-button').click();}
  if(capacityGoal){
@@ -212,7 +212,7 @@ async function nativeCommand(command){
   await until(async()=>(await page.locator('#messages').innerText()).includes('/goal resume'),'The reopened reader shows the exact recovery limitation');
   if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'capacity-goal-reopened.png')});
   assert.equal(calls,3);assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({checks:['Native overload blocks its goal; metadata-only preflight preserves that goal and budget, sends no ineffective continue, and reports same-screen native resume guidance after reopening'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:['Native overload blocks its goal; metadata-only preflight preserves that goal and budget, sends no ineffective continue, and reports same-screen native resume guidance after reopening'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(capacityTrial){
   await until(async()=>calls===1&&(await snapshot()).sessions[0].capacityRecovery?.status==='scheduled','Actual terminal capacity failure schedules recovery',30000);
@@ -223,7 +223,7 @@ async function nativeCommand(command){
   if(capacityTrial==='cancel'){
    await page.getByRole('button',{name:'取消自动继续',exact:true}).click();await until(async()=>!(await snapshot()).sessions[0].capacityRecovery,'Explicit GUI action cancels recovery');await page.locator('#message-input').fill('Human draft after cancelling automatic continuation');await sleep(1500);
    assert.equal(calls,1);assert.equal((await snapshot()).sessions[0].liveDraft,'Human draft after cancelling automatic continuation');assert.deepEqual(errors,[]);
-   console.log(JSON.stringify({checks:[`Actual${nativeVersion} typed overload schedules a visible two-minute continuation; the GUI cancel action cancels it without native interruption or another request, and a later human draft is retained`],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+   fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:[`Actual${nativeVersion} typed overload schedules a visible two-minute continuation; the GUI cancel action cancels it without native interruption or another request, and a later human draft is retained`],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
   }
   fs.writeFileSync(path.join(base,'capacity-before.json'),JSON.stringify(await snapshot(),null,2));const observer=await connect(profile,'owned-capacity-observer');
   try{
@@ -238,7 +238,7 @@ async function nativeCommand(command){
   app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],env:{...process.env,NAW_DATA_DIR:profile,NAW_WORKSPACE:cwd,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});page=await app.firstWindow();await page.locator('#new-session').waitFor();
   await until(async()=>(await snapshot()).sessions[0].messages.some(m=>m.text==='CONTEXT_TASK_2'),'Completed continuation is in the reopened reader');assert.deepEqual(errors,[]);assert.equal(calls,2);
   if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'capacity-continued.png')});
-  console.log(JSON.stringify({checks:[`Actual${nativeVersion} terminal overload preserves native error and two-minute schedule; one new continue runs while the window is closed on the same native server/thread; reader result and explicit NAW provenance survive reopen without original-task replay`],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:[`Actual${nativeVersion} terminal overload preserves native error and two-minute schedule; one new continue runs while the window is closed on the same native server/thread; reader result and explicit NAW provenance survive reopen without original-task replay`],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(skipPermissions){
   assert.equal(before.skipPermissions,true);
@@ -253,7 +253,7 @@ async function nativeCommand(command){
   const r=await rpc.call('thread/resume',{threadId:before.nativeId,excludeTurns:true});ws.close();
   assert.deepEqual({approvalPolicy:r.approvalPolicy,sandbox:r.sandbox?.type},{approvalPolicy:'never',sandbox:'dangerFullAccess'},'The chosen thread runs with never + full access');
   assert.equal(calls,1);assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({checks:[`A Codex row created ${initialTerminal?'in the terminal view':'in the chat view'} with skip-all-confirmations gets never + full access`],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:[`A Codex row created ${initialTerminal?'in the terminal view':'in the chat view'} with skip-all-confirmations gets never + full access`],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(autoName){
   await until(()=>calls===1,'First native task');assert.equal(before.autoName,true);
@@ -274,7 +274,7 @@ async function nativeCommand(command){
   if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'codex-name.png')});
   assert.equal(calls,1);assert.deepEqual(errors,[]);
   checks.push(initialTerminal?'A later native rename replaces the generated title':'An unnamed Codex row shows its first request, then the native thread name, with the provider name');
-  console.log(JSON.stringify({checks,nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks,nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(activeGoalRecovery){
   const net=require('node:net'),WebSocket=require('ws'),{Rpc}=require('../app/adapters.cjs');
@@ -349,7 +349,7 @@ async function nativeCommand(command){
   assert.ok(createCalls.every(c=>c===1),'No completed native tool is replayed');
   assert.deepEqual(afterLoss,beforeLoss,'The thread posture survives NAW recovery');assert.deepEqual(errors,[]);
   if(fileAccessDirectory)assert.equal(JSON.parse(fs.readFileSync(path.join(fileAccessDirectory,'native-file-access.json'))).readWriteFsyncRenameDelete,true,'The recovered installed native session executes actual repository file IO');
-  console.log(JSON.stringify({checks:['Active native goal survives owned app-server loss mid-continuation: same thread, goal, draft and posture; no human or tool replay'],result,nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:['Active native goal survives owned app-server loss mid-continuation: same thread, goal, draft and posture; no human or tool replay'],result,nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(goalTrial){
   await until(()=>releaseGoal,'Native goal created before the first turn finishes');
@@ -399,7 +399,7 @@ async function nativeCommand(command){
    if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'goal-process-recovered.png')});
    checks.push('Owned native server death resumes the exact saved native ID/model/history/goal/draft on a new PID without replay or inference');
   }
-  console.log(JSON.stringify({checks:['Actual native goal create/automatic continuation/complete works through the installed app with its window closed; same thread/process, draft and final reader retained on reopen, one human dispatch',...checks],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:['Actual native goal create/automatic continuation/complete works through the installed app with its window closed; same thread/process, draft and final reader retained on reopen, one human dispatch',...checks],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(failureTrial){
   await until(async()=>{const s=(await snapshot()).sessions[0];return s.messages.some(m=>m.kind==='notice'&&m.text.includes(failureBody))&&s.messages.some(m=>m.kind==='turn'&&m.status==='failed')&&s.state==='idle';},'Native failure finishes without claiming a successful response');
@@ -418,7 +418,7 @@ async function nativeCommand(command){
   assert.ok(recovered.sessions[0].messages.some(m=>m.id===notice.id&&m.text===notice.text),'Original error remains after recovery');
   assert.equal(recovered.diagnostics.dispatches,2);assert.deepEqual(errors,[]);
   fs.writeFileSync(path.join(base,'failed-recovered.json'),JSON.stringify(recovered,null,2));
-  console.log(JSON.stringify({checks:['Native non-retryable failure retains exact error body and failed boundary, creates no assistant reply or automatic replay; one explicit next task completes in the same native thread'],nativeVersion,localTaskAttempts:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:['Native non-retryable failure retains exact error body and failed boundary, creates no assistant reply or automatic replay; one explicit next task completes in the same native thread'],nativeVersion,localTaskAttempts:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(process.env.NAW_NATIVE_RETRY_TRIAL==='1'){
   await until(async()=>(await snapshot()).sessions[0].messages.some(m=>m.kind==='notice'&&m.text.includes('stream disconnected before completion'))&&releaseRetry,'Actual native retry notification',60000);
@@ -437,7 +437,7 @@ async function nativeCommand(command){
   const completed=await snapshot();fs.writeFileSync(path.join(base,'retry-completed.json'),JSON.stringify(completed,null,2));
   assert.equal(await page.locator('#native-activity').isVisible(),false,'Recovered idle turn has no visible running clock');
   assert.equal(await page.locator('#messages .native-turn').count(),0,'Successful recovery does not invent a native footer');
-  console.log(JSON.stringify({checks:['Actual native stream loss retains its exact public error body in GUI; same-screen TUI shows native reconnect/error; retry remains working and final completion reaches the same GUI thread with no stale running clock'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:['Actual native stream loss retains its exact public error body in GUI; same-screen TUI shows native reconnect/error; retry remains working and final completion reaches the same GUI thread with no stale running clock'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1'){
   await until(async()=>releaseSearch&&(await snapshot()).sessions[0].messages.some(m=>m.toolKind==='webSearch'),'Actual native search starts',60000);
@@ -465,12 +465,12 @@ async function nativeCommand(command){
   const reopened=await snapshot(),again=reopened.sessions[0].messages.find(m=>m.id===row.id);
   assert.equal(again.status,'complete');assert.equal(again.title,row.title);assert.equal(reopened.sessions[0].nativeId,before.nativeId);sameLiveServer(before,reopened.sessions[0]);assert.equal(calls,1);
   fs.writeFileSync(path.join(base,'web-search-reopened.json'),JSON.stringify(reopened,null,2));assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({checks:['Actual Codex search starts and completes with its original English native summary in the GUI and same TUI; compact disclosure; reader reload preserves exact identity and completed status; no fabricated footer'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:['Actual Codex search starts and completes with its original English native summary in the GUI and same TUI; compact disclosure; reader reload preserves exact identity and completed status; no fabricated footer'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(initialTerminal){
   await until(async()=>(await snapshot()).sessions[0].messages.some(m=>m.text==='CONTEXT_TASK_1')&&(await terminalText()).includes('CONTEXT_TASK_1'),'First GUI task on the empty actual native-first thread');
   assert.equal((await snapshot()).sessions[0].nativeId,before.nativeId);assert.equal(calls,1);
-  console.log(JSON.stringify({checks:['Actual folder trust before any inference; empty native-first session accepts its first GUI input and displays the same native reply without a seed turn'],localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:['Actual folder trust before any inference; empty native-first session accepts its first GUI input and displays the same native reply without a seed turn'],localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  await until(async()=>/Trust this folder\?|CONTEXT_TASK_1/.test(await terminalText()),'Actual native terminal or folder gate',60000);
  if((await terminalText()).includes('Trust this folder?')){
@@ -503,7 +503,7 @@ async function nativeCommand(command){
    await until(async()=>!(await terminalText()).includes('Which small implementation should be used?')||(await terminalText()).includes('Build a replacement'),'Native terminal leaves the question');
    fs.writeFileSync(path.join(base,'question-gui-answered.json'),JSON.stringify(await snapshot(),null,2));
    if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'native-question-gui-answered.png')});
-   assert.deepEqual(errors,[]);console.log(JSON.stringify({checks:['An actual native Codex question is answered in the chat view; native receives the structured answer once on its own request'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+   assert.deepEqual(errors,[]);fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:['An actual native Codex question is answered in the chat view; native receives the structured answer once on its own request'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
   }
   assert.equal(calls,2);await page.locator('#approval').getByRole('button',{name:'在 Native context 的原生终端处理',exact:true}).click();
   fs.writeFileSync(path.join(base,'question-control-before-enter.json'),JSON.stringify({ready:!(await page.locator('#terminal-paste').isDisabled()),focused:await page.locator('#terminal-area .xterm-helper-textarea').evaluate(el=>el===document.activeElement)}));
@@ -517,7 +517,7 @@ async function nativeCommand(command){
   fs.writeFileSync(path.join(base,'question-completed.json'),JSON.stringify(await snapshot(),null,2));
   if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'native-question-completed.png')});
   if(process.env.NAW_VIDEO_DIR)await sleep(1200);
-  console.log(JSON.stringify({checks:['Actual native Plan question and exact option descriptions appear in the GUI; native selection returns to the same request, then the GUI receives completion'],localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks:['Actual native Plan question and exact option descriptions appear in the GUI; native selection returns to the same request, then the GUI receives completion'],localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  await nativeCommand('/status');await until(async()=>(await terminalText()).includes('Session:'),'Native status renders');
  fs.writeFileSync(path.join(base,'original-status.txt'),await terminalText());
@@ -575,8 +575,8 @@ async function nativeCommand(command){
  fs.writeFileSync(path.join(base,'native-history-catalog.json'),JSON.stringify(catalog,null,2));
  assert.ok(catalog.data.some(row=>row.nativeId===before.nativeId||row.nativeId===current),'The original native thread remains in the read-only catalog');
  checks.push('Read-only native history catalog retains the original contexts without another task');
- assert.equal(calls,3);assert.deepEqual(errors,[]);console.log(JSON.stringify({checks,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));
-})().then(()=>fixture.assertClean()).catch(async e=>{fs.writeFileSync(path.join(base,'failure-counts.json'),JSON.stringify({calls,titles,budgetExceeded:Boolean(budgetError),paidModelCalls:0},null,2));console.error(e.stack,'\nEvidence:',base);if(page&&!page.isClosed()){fs.writeFileSync(path.join(base,'failure.txt'),await page.locator('body').innerText());await page.screenshot({path:path.join(base,'failure.png')});}process.exitCode=1;}).finally(testScratch.cleanup(async()=>{
+ assert.equal(calls,3);assert.deepEqual(errors,[]);fixture.assertClean();console.log(JSON.stringify({fixture:fixture.summary(),checks,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));
+})().catch(async e=>{fs.writeFileSync(path.join(base,'failure-counts.json'),JSON.stringify({calls,titles,budgetExceeded:Boolean(budgetError),paidModelCalls:0},null,2));console.error(e.stack,'\nEvidence:',base);if(page&&!page.isClosed()){fs.writeFileSync(path.join(base,'failure.txt'),await page.locator('body').innerText());await page.screenshot({path:path.join(base,'failure.png')});}process.exitCode=1;}).finally(testScratch.cleanup(async()=>{
  releaseRetry?.();releaseGoal?.();activeHeld?.destroy();goalRpc?.ws.close();if(app)await app.close().catch(()=>{});
  try{const c=await connect(profile,'native-context-cleanup');try{for(const s of(await c.call('initial')).sessions)await c.call('stop',s.id);const owned=c.entries.map(e=>processIdentity(e.state.servicePid));for(const p of owned){assert.ok(p&&processMayBeAlive(p));process.kill(p.pid,'SIGTERM');}await until(()=>owned.every(p=>!processMayBeAlive(p)),'Owned service exit',15000);}finally{c.close();}}catch(e){console.error('Cleanup:',e.message);process.exitCode=1;}
  await fixture.stop();

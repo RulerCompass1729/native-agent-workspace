@@ -33,11 +33,13 @@ if (retained) { assert.ok(process.env.NAW_CLAUDE_302); binaries.claude = process
 const versions = Object.fromEntries(Object.entries(binaries).map(([p, file]) => {
   assert.ok(file, `Real ${p} required`); return [p, execFileSync(file, ['--version'], { encoding: 'utf8' }).trim()];
 }));
-// Each CLI must be a version the product itself qualifies: Claude on the managed list (the retained journey needs 2.1.302),
-// Codex for history and steering. Fixed old pins (Claude 2.1.308-311, Codex 0.163/0.164) named versions no longer installed.
+// Each CLI must be a version the product itself qualifies: Claude on the managed list, Codex for steering. The retained
+// journey needs exactly Claude 2.1.302 and Codex 0.163.0: the product offers retained Codex shared replies on 0.163.0 only
+// (app/legacy-codex.cjs). Fixed old pins (Claude 2.1.308-311, Codex 0.163/0.164) named versions no longer installed.
 if (!emptyTerminal) { if (retained) assert.match(versions.claude, /^2\.1\.302\b/); else assert.ok(require('../app/claude-pin.cjs').QUALIFIED.includes(versions.claude.split(' ')[0]), `Unqualified Claude: ${versions.claude}`); }
 const nativeVersion = versions.codex.replace(/^codex-cli /, '');
-assert.ok(require('../app/native-history.cjs').verifiedCodexProtocol({ nativeVersion }), `Unqualified Codex: ${versions.codex}`);
+assert.ok(require('../app/codex-qualification.cjs').allows('steer', nativeVersion), `Unqualified Codex: ${versions.codex}`);
+if (retained) assert.equal(nativeVersion, '0.163.0', 'The retained journey waits for a retained Codex shared reply, offered on 0.163.0 only');
 const retainedIds = {};
 let application, page, child, legacyClient, sequence = 0, titleCalls = 0;
 const counts = { claude: 0, codex: 0 }, controls = {}, errors = [], checks = [];
@@ -130,7 +132,7 @@ async function create(provider) {
   await page.locator('#session-name').fill(provider === 'claude' ? 'Claude review' : 'Codex build');
   // NAW starts each session in its own folder beside the workspace. Record trust for exactly that owned folder in the
   // CLI's private config before it starts, the way each CLI saves it.
-  const chosen = await page.locator('#chosen-folder').innerText(), owned = [path.resolve(base), fs.realpathSync(base)].find(root => chosen.startsWith(root + path.sep));
+  const chosen = path.resolve(await page.locator('#chosen-folder').innerText()), owned = [path.resolve(base), fs.realpathSync(base)].find(root => chosen.startsWith(root + path.sep));
   assert.ok(owned, 'Only owned fixture folders');
   const folders = [...new Set([chosen, fs.realpathSync(base) + chosen.slice(owned.length)])];
   if (provider === 'claude') {

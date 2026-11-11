@@ -1,7 +1,8 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
 const { joinSpace, leaveSpace } = require('./fixtures/space-membership.cjs');
 // Import a stopped, actual context-runner history into a completely fresh app.
-// Explicit owned fixture required; no normal profile. Optional cold continuation
+// Explicit owned fixture required; no normal profile. This run points that fixture's private Codex config and CLI
+// wrapper at its own loopback fixture, so the history fixture is changed in place (its rollouts are not). Optional cold continuation
 // serves only the explicitly sent draft with one fixed reply and at most one native title.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), { randomUUID } = require('node:crypto');
 const loopback = require('./fixtures/loopback-model.cjs');
@@ -123,7 +124,9 @@ async function selectOriginal(accepted = true) {
   const configFile = path.join(source, 'codex/config.toml');
   assert.ok(fs.lstatSync(configFile).isFile() && fs.realpathSync(configFile).startsWith(source + path.sep), 'The private Codex config is the fixture\'s own regular file');
   fs.writeFileSync(configFile, config.replace(/^base_url\s*=\s*"[^"]+"/m, `base_url = "${trap.endpoint}/v1"`));
-  trap.wrapper(binary, { file: path.join(source, 'codex-local'), env: { CODEX_HOME: path.join(source, 'codex'), HOME: path.join(source, 'home') } });
+  const wrapperFile = path.join(source, 'codex-local');
+  assert.ok(fs.lstatSync(wrapperFile).isFile(), 'The CLI wrapper is the fixture\'s own regular file');
+  trap.wrapper(binary, { file: wrapperFile, env: { CODEX_HOME: path.join(source, 'codex'), HOME: path.join(source, 'home') } });
   await launch(); assert.equal((await snapshot()).sessions.length, 0);
   await selectOriginal();
   await until(async () => { const s = (await snapshot()).sessions[0]; return s?.chatAvailable && s.messages.some(m => m.text === 'CONTEXT_TASK_1'); }, 'Actual original native history loaded');
