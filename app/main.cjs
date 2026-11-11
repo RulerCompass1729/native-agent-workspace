@@ -1330,7 +1330,8 @@ async function boot() {
       throw uiError("error.queue.personOnly");
     } else if (action === 'queueAdd') {
       const creator = c.background
-        ? queueSecretary.creator(backgroundOperation.current(), (await c.client.call('initial')).sessions, sessionLabels.labels)
+        // The backend's own list does not say which sessions the person archived; the desktop's record does.
+        ? queueSecretary.creator(backgroundOperation.current(), roomState.apply(await c.client.call('initial')).sessions, sessionLabels.labels)
         : { kind: 'person', name: 'You', sessionId: null };
       const itemId = roomState.queueAdd(args[0], args[1] ?? null, roomId, creator);
       await broadcastRoom();
@@ -1496,7 +1497,8 @@ async function boot() {
     if (c.background) throw uiError('error.queue.personOnly');
     if (id === null) queueSecretary.set(null);
     else {
-      const record = (await c.client.call('initial')).sessions.find(record => record.id === id);
+      // As above: "archived" is read from the desktop's record, not from the backend's list.
+      const record = roomState.apply(await c.client.call('initial')).sessions.find(record => record.id === id);
       if (!record || !record.nativeId || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) throw uiError('error.queue.secretaryInvalid');
       queueSecretary.set({ sessionId: record.id, nativeId: record.nativeId });
     }
