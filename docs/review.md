@@ -9662,3 +9662,36 @@ Author-run baseline tests against the exact pre-change dispatcher and RoomState 
 Production migration remains closed. Real trust-page state ordering, detection outside starting and actual Chat successor coverage remain B2-TRUST-2 items 3 and 4. Claude Chat creates a terminal; Codex Chat does not. No native qualification, installed daily-app acceptance or safe downgrade support is claimed by this checkpoint.
 
 The reviewer leaves the following non-blocking conditions before migration can open. Unknown cleanup currently has no terminal resolution: a deleted row, changed native identity, missing proof or archived space can retain quarantine and prevent the original from auto-rotating indefinitely. It also keeps the existing three-second tick doing full passes and holding a service connection; define bounded passive observation and an explicit resolution. A later observed stopped state must not authorize removing a successor the person has since adopted: recheck unused control/draft/history before late departure. Failures after a completed trust wait but before confirmed handoff conservatively use this guarded path and can leave the successor quarantined instead of stopping it. Ready/prompt flapping can repeatedly start new clocks, so actual native ordering remains a prerequisite, not an assumption. End-to-end departure with the dispatcher's scoped client still needs runtime coverage (the GUI prompt precedes joining); synthetic stop coverage does not qualify real adapter behavior. Invalid durable receipt state currently disables dispatch fail-closed without a visible explanation; add an actionable recovery notice before enabling migration. These remain owned by Codex3 as pre-opening follow-ups, alongside items3/4; none permits opening the gate.
+
+## Isolated-profile path pin and parent boundaries (2026-11-11)
+
+After successful shared startup verification, Electron's `userData` is pinned to
+the resolved path that was checked. Replacing the caller's symlink afterwards
+can no longer redirect that stored runtime path to the normal profile. Failure
+to store the checked path clears test permission and aborts startup.
+
+Both ancestry directions now compare device and inode while walking resolved
+directory parents: a test profile inside normal, or containing normal, is
+refused. If normal does not exist, only `ENOENT` is skipped while walking to its
+existing parents; no directory is created. Other lookup errors fail closed.
+Sibling names sharing a text prefix remain eligible. This is one shared gate
+for all test switches; parent, owner, private-mode and ordinary-startup rules
+remain. Ordinary startup is closed to test-only access; a verified isolated test
+may still use an installed binary. The normal reference remains `app.getPath`;
+how command-line or HOME choices derive that reference is a separate check.
+Remounted FUSE/SMB content with different device/inode identities is not proven
+related by this check; no remount inspection is claimed.
+
+Actual-bootstrap synthetic filesystem checks kept all six earlier real-Mac
+identity regressions green and reproduced six new failures before this delta.
+Afterwards: 12 pass, 0 fail/skip, with the real symlink swap, separate child and
+parent cases, aliased ancestry and absent-normal ancestry. No GUI, provider or
+installed application was run. The author-run complete suite passes 5,750/5,750
+with zero failures, cancellations or skips; the empty-environment UI build exits
+zero. A fresh separate headless Claude reviewer (C53CD85F-499A-4BE2-B138-ED9E58B2CC3C)
+returns APPROVE_SCOPED for this source delta. Its tools were Read/Grep/Glob only,
+with no MCP; HEAD, index and worktree remained unchanged. The reviewer read the
+author-run red/green evidence but did not rerun tests. Private evidence is in the
+profile-boundary lane under `.local/boundary-review` and `.local/profile-boundary`.
+The pin preserves the checked path spelling, rather than an open directory handle;
+a later replacement of that resolved directory is a separate known limitation.
