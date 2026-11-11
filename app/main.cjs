@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { ensureService, connect, connectService, continuationStatus, continueService } = require('./service-client.cjs');
+const { createStatePush } = require('./state-push.cjs');
 const backendSwitch = require('./backend-switch.cjs');
 const { startDsh, resetUiAuthentication } = require('./dsh-host.cjs');
 const { startupMessage, uiError } = require('./ui-errors.cjs');
@@ -340,6 +341,36 @@ function flushReveal() {
 function discardReveal(context) {
   if (!context.uiReady) pendingReveal = null;
 }
+// Every 'workspace:state' send goes through here. Once a window's page has reported that it is ready, one
+// full snapshot is in transit at a time and the newest wins (state-push.cjs); until then, and for a window
+// whose page never reports ready, the snapshot is sent as before with sequence 0, which needs no reply.
+function pushState(context, display) {
+  if (context.win.isDestroyed()) {
+    return;
+  }
+  if (context.statePush) {
+    context.statePush.push(display);
+    return;
+  }
+  context.win.webContents.send('workspace:state', display, 0);
+}
+// The page's ready report arms the bound; a reload or the end of its process removes it, because the
+// acknowledgement for a snapshot sent to the old document can no longer arrive.
+function bindStatePush(context) {
+  context.armStatePush = () => {
+    context.statePush = createStatePush((value, sequence) => {
+      if (!context.win.isDestroyed()) {
+        context.win.webContents.send('workspace:state', value, sequence);
+      }
+    });
+  };
+  context.win.webContents.on('did-start-loading', () => {
+    context.statePush = null;
+  });
+  context.win.webContents.on('render-process-gone', () => {
+    context.statePush = null;
+  });
+}
 function bindClient(context) {
   const { win, client } = context;
   if (client.control?.legacyInput) client.control.legacyInput.restrictedOutboxCall = (proof, signal) => {
@@ -363,7 +394,7 @@ function bindClient(context) {
   const send = (channel, ...data) => { if (context.client === client && !win.isDestroyed()) win.webContents.send(channel, ...data); };
   client.on('state', data => { if (context.client === client && !win.isDestroyed()) {
     const display = displayState(data, context);
-    send('workspace:state', display); if (!context.background) { notifyToolWait(data, win); notifyCapacity(display, win); }
+    pushState(context, display); if (!context.background) { notifyToolWait(data, win); notifyCapacity(display, win); }
   } });
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('progress', data => send('workspace:progress', data));
@@ -455,7 +486,7 @@ async function broadcastRoom() {
   await Promise.allSettled([...windows.values()].map(async context => {
     if (context.win.isDestroyed() || context.client.socket.destroyed) return;
     const snapshot = await context.client.call('initial');
-    if (!context.win.isDestroyed()) context.win.webContents.send('workspace:state', displayState(snapshot, context));
+    pushState(context, displayState(snapshot, context));
   }));
 }
 function broadcastName(id, name) {
@@ -500,7 +531,7 @@ async function openWindow(saved) {
     win.setBounds(view.bounds);
   }
   const context = { win, client, view, failed: false, uiReady: false };
-  windows.set(win.webContents.id, context); bindClient(context);
+  windows.set(win.webContents.id, context); bindClient(context); bindStatePush(context);
   const ready = new Promise((resolve, reject) => { context.ready = resolve; context.readyTimer = setTimeout(() => reject(new Error('UI did not become ready')), 25000); });
   ready.catch(() => {}); // loadURL may fail before the readiness timer fires.
   win.webContents.on('did-start-loading', () => { context.uiReady = false; });
@@ -981,7 +1012,7 @@ async function boot() {
           nativeReceived: message.status === 'submitted', status: message.status, body: message.text };
       };
       const id = win.webContents.id;
-      windows.set(id, context); bindClient(context);
+      windows.set(id, context); bindClient(context); bindStatePush(context);
       win.on('closed', () => { windows.delete(id); client.close(); });
       return context;
     } }); backgroundUnavailable = false;
@@ -1204,7 +1235,7 @@ async function boot() {
     }
     return submit(c, method, ...args);
   });
-  register('uiReady', c => { c.ready?.(); c.uiReady = true; flushReveal(); });
+  register('uiReady', c => { c.ready?.(); c.uiReady = true; c.armStatePush?.(); flushReveal(); });
   for (const method of ['send', 'queue', 'steer']) register(method, async (c, id, text, nativeId, turnId) => {
     const draft = backups(c.view)[id];
     const result = await submit(c, method, id, text, nativeId, ...(method === 'steer' ? [turnId] : []));
@@ -1541,6 +1572,14 @@ async function start() {
     if (!quitting && startupWindow && !startupWindow.isDestroyed()) startupWindow.webContents.send('workspace:startup', { kind: 'failed', code: uiLocale.startupCode(error.code), title: displayText('startup.failed'), detail: startupMessage(error, displayLanguage()), retry: true, data: error.code === 'NAW_VIEW_RECORD' });
   } finally { starting = false; if (!quitting) updateApplicationMenu(); }
 }
+// The page handled the full-state snapshot with this sequence; see pushState.
+ipcMain.handle('workspace:state-rendered', (event, sequence) => {
+  const context = windows.get(event.sender.id);
+  if (!context || event.senderFrame !== event.sender.mainFrame || !trusted(event.senderFrame.url)) {
+    return;
+  }
+  context.statePush?.acknowledged(sequence);
+});
 ipcMain.handle('workspace:retry-startup', event => { if (startupWindow?.webContents === event.sender && event.senderFrame === event.sender.mainFrame && event.senderFrame.url === pathToFileURL(startupFile).href) return start(); });
 ipcMain.handle('workspace:startup-data', event => { if (startupWindow?.webContents === event.sender && event.senderFrame === event.sender.mainFrame && event.senderFrame.url === pathToFileURL(startupFile).href && viewStore && !viewStore.loaded) return shell.openPath(dataDir); });
 function focusOrOpen() {
@@ -1580,7 +1619,7 @@ app.on('before-quit', event => {
     }, () => {
       outboxClosing = false; outboxUnavailable = true; outboxQuitFailed = true;
       for (const context of windows.values()) {
-        try { if (!context.win.isDestroyed()) context.win.webContents.send('workspace:state', displayState(context.client.snapshot(), context)); } catch {}
+        try { pushState(context, displayState(context.client.snapshot(), context)); } catch {}
       }
     });
   } else { quitting = true; dsh?.stop(); }
