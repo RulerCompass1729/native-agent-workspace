@@ -27,6 +27,14 @@ test('model output cannot select an executor, grant itself authority or report a
   assert.throws(() => interpretResult({ actions: [action], usage: { costMicros: 0 } }, options), 'The model cannot override trusted usage');
   for (const kind of ['open', 'archive']) assert.deepEqual(interpretResult({ actions: [{ ...action, kind }] }, options), { actions: [{ ...action, kind }] });
 });
+test('untargeted lifecycle records keep their source and never infer a target or a question from the catalog', () => {
+  for (const catalog of [[], [space], [{ ...space, writable: false }], [{ ...space, archived: true }], [space, { ...space, id: 'other' }]]) {
+    for (const kind of ['open', 'archive']) {
+      const action = { kind, sourceRef: event.sourceRef, text: 'Synthetic lifecycle record without a target' };
+      assert.deepEqual(interpretResult({ actions: [action] }, { events: [event], catalog }), { actions: [action] });
+    }
+  }
+});
 test('ambiguous or unwritable spaces become a stable decision instead of guessing or creating a space', () => {
   const action = { kind: 'queue', sourceRef: event.sourceRef, text: 'Task' };
   const host = { ...event, payload: { ...event.payload, questionKey: 'task-a-space', decisionKind: 'space-selection' } };

@@ -103,8 +103,8 @@ function interpretResult(value, { events, catalog, questions = [] }) {
   const sources = sourcesByRef(businessEvents(events)), spaces = readableCatalogRows(catalog);
   const writableSpaces = spaces.filter(space => space.writable === true);
   let includingArchived;
-  // An explicit non-queue reference can name a previously requested archive.
-  // Queue validation never requests those metadata, nor any archived bodies.
+  // An explicit question/report reference can name a previously requested archive.
+  // Queue and lifecycle target validation never requests archived metadata or bodies.
   const readableSpace = spaceId => spaces.some(space => space.id === spaceId) ||
     (includingArchived ||= readableCatalogRows(catalog, { includeArchived: true })).some(space => space.id === spaceId);
   if (!Array.isArray(questions)) fail(questionCode);
@@ -113,7 +113,8 @@ function interpretResult(value, { events, catalog, questions = [] }) {
     if (!['queue', 'open', 'archive', 'question', 'report'].includes(a.kind) || !sources.has(a.sourceRef)) fail(code);
     const result = { kind: a.kind, sourceRef: a.sourceRef, text: text(a.text, a.kind === 'queue' ? 6000 : 12000, code) };
     if (a.spaceId !== undefined) {
-      if (!id(a.spaceId) || !(a.kind === 'queue' ? writableSpaces.some(space => space.id === a.spaceId) : readableSpace(a.spaceId))) fail(code);
+      if (!id(a.spaceId) || !(['queue', 'open', 'archive'].includes(a.kind)
+        ? writableSpaces.some(space => space.id === a.spaceId) : readableSpace(a.spaceId))) fail(code);
       result.spaceId = a.spaceId;
     }
     if (a.kind === 'queue' && !result.spaceId) {

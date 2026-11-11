@@ -8,6 +8,24 @@ const { QUEUE_LIMIT } = require('../queue-dispatch.cjs');
 const NOW = 1_800_000_000_000, SECRET_SHAPE = 'Authorization: Bearer synthetic-placeholder';
 const runner = { runnerRef: 'butler-runner', backendRef: 'butler-backend', purpose: 'butler', profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro' };
 const code = expected => error => error.code === expected;
+// Contract literals deliberately do not reuse implementation fields or derive
+// an expected shape from another projected row.
+const ROW_KEYS = {
+  space: ['archived', 'metadataRevision', 'name', 'queueCounts', 'readOnly', 'recordRef', 'spaceId', 'spaceRecordRef', 'time', 'writable'],
+  unavailable: ['archived', 'metadataRevision', 'readOnly', 'recordRef', 'spaceId', 'spaceRecordRef', 'status', 'time', 'writable'],
+  queue: ['archived', 'assignee', 'itemId', 'metadataRevision', 'readOnly', 'recordRef', 'spaceId', 'spaceRecordRef', 'status', 'text', 'time', 'writable'],
+  queueTimed: ['archived', 'assignee', 'finishedAt', 'itemId', 'metadataRevision', 'readOnly', 'recordRef', 'sentAt', 'spaceId', 'spaceRecordRef', 'status', 'text', 'time', 'writable'],
+  queueReady: ['archived', 'assignee', 'finishedAt', 'itemId', 'metadataRevision', 'readOnly', 'ready', 'recordRef', 'sentAt', 'spaceId', 'spaceRecordRef', 'status', 'text', 'time', 'writable'],
+  queueReadyUnavailable: ['archived', 'assignee', 'finishedAt', 'itemId', 'metadataRevision', 'readOnly', 'readyStatus', 'recordRef', 'sentAt', 'spaceId', 'spaceRecordRef', 'status', 'text', 'time', 'writable'],
+  readyTyped: ['archived', 'branch', 'commit', 'eventId', 'itemId', 'itemRecordRef', 'kind', 'metadataRevision', 'readOnly', 'recordRef', 'sourceTask', 'sourceTaskStatus', 'spaceId', 'spaceRecordRef', 'status', 'time', 'writable'],
+  readyLegacy: ['archived', 'branch', 'commit', 'eventId', 'itemId', 'itemRecordRef', 'kind', 'metadataRevision', 'readOnly', 'recordRef', 'sourceTaskStatus', 'spaceId', 'spaceRecordRef', 'status', 'time', 'writable'],
+  outcome: ['archived', 'eventId', 'itemId', 'itemRecordRef', 'kind', 'metadataRevision', 'readOnly', 'recordRef', 'spaceId', 'spaceRecordRef', 'status', 'time', 'writable'],
+};
+const READY_KEYS = ['branch', 'commit'];
+const COUNT_KEYS = ['cancelled', 'done', 'failed', 'queued', 'sent', 'waiting'];
+const HIDDEN_FIELDS = { reason: 'Synthetic private reason', question: 'Synthetic private question?',
+  reply: 'Synthetic private native reply', memberName: 'Synthetic private member', privateHistory: 'Synthetic private history', privateExtra: 'Synthetic private extension' };
+function rowKeys(row, expected) { assert.deepEqual(Object.keys(row).sort(), expected); }
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-business-')); fs.chmodSync(directory, 0o700);
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -41,7 +59,8 @@ test('dedicated catalog and invoke expose only the read capability, with no appr
     assert.throws(() => read(capability, query), code('ERR_BUTLER_BUSINESS_QUERY'));
   const result = read(capability, { kind: 'spaces' });
   assert.equal(result.activation, 'off'); assert.equal(result.recordPeriod, 'off'); assert.equal(f.role.current().mode, 'record-only');
-  assert.deepEqual(fs.readdirSync(f.directory), files); assert.deepEqual(fs.readFileSync(f.role.file), roleBefore);
+  assert.deepEqual(fs.readdirSync(f.directory).sort(), [...files, 'butler-business-reads.jsonl'].sort());
+  assert.deepEqual(fs.readFileSync(f.role.file), roleBefore);
 });
 
 test('only an exact designated record binds, and each old closure rechecks native identity and designation', t => {
@@ -189,4 +208,88 @@ test('an oversized space universe is refused before any per-space metadata enume
   Object.defineProperty(rooms, 0, { get() { hits++; throw Error('Unbounded space scan'); } });
   f.room.spaces.rooms = rooms;
   assert.throws(() => read(f.bind(), { kind: 'spaces' }), code('ERR_BUTLER_BUSINESS_CAPACITY')); assert.equal(hits, 0);
+});
+
+test('space rows have exactly their public keys; invalid names yield only the nine unavailable metadata keys', t => {
+  const f = fixture(t); f.room.value.queue = [];
+  for (const status of ['queued', 'sent', 'waiting', 'done', 'failed', 'cancelled'])
+    f.room.value.queue.push({ id: 'synthetic-' + status, text: 'Synthetic task', status, assignee: null, createdAt: NOW, ...HIDDEN_FIELDS });
+  Object.assign(f.room.value, HIDDEN_FIELDS);
+  const capability = f.bind(), healthy = read(capability, { kind: 'spaces' }).records[0];
+  rowKeys(healthy, ROW_KEYS.space); rowKeys(healthy.queueCounts, COUNT_KEYS);
+  assert.deepEqual(healthy.queueCounts, { queued: 1, sent: 1, waiting: 1, done: 1, failed: 1, cancelled: 1 });
+  for (const name of ['', ' \t ', SECRET_SHAPE]) {
+    f.room.value.name = name;
+    const [unavailable] = read(capability, { kind: 'spaces' }).records;
+    rowKeys(unavailable, ROW_KEYS.unavailable);
+    assert.equal(unavailable.status, 'unavailable'); assert.equal(unavailable.time, null);
+    assert.equal(Object.hasOwn(unavailable, 'name'), false);
+    assert.equal(Object.hasOwn(unavailable, 'queueCounts'), false);
+    assert.equal(JSON.stringify(unavailable).includes(SECRET_SHAPE), false);
+  }
+});
+
+test('queue rows pin all optional timestamp and READY variants without exporting stored reason, question or reply', t => {
+  const f = fixture(t), itemId = f.room.queueAdd('Approved synthetic task', null), item = f.room.queueFind('shared', itemId);
+  Object.assign(item, HIDDEN_FIELDS);
+  const capability = f.bind(), projected = () => read(capability, { kind: 'queue', spaceId: 'shared' }).records[0];
+  rowKeys(projected(), ROW_KEYS.queue);
+  item.sentAt = NOW + 1; item.finishedAt = NOW + 2;
+  const timed = projected(); rowKeys(timed, ROW_KEYS.queueTimed);
+  assert.equal(timed.sentAt, NOW + 1); assert.equal(timed.finishedAt, NOW + 2);
+  item.ready = { branch: 'lane/synthetic', commit: 'abcdef1234567', ...HIDDEN_FIELDS };
+  const withReady = projected(); rowKeys(withReady, ROW_KEYS.queueReady); rowKeys(withReady.ready, READY_KEYS);
+  assert.deepEqual(withReady.ready, { branch: 'lane/synthetic', commit: 'abcdef1234567' });
+  item.ready = { branch: 'invalid branch', commit: 'abcdef1234567' };
+  const invalidReady = projected(); rowKeys(invalidReady, ROW_KEYS.queueReadyUnavailable);
+  assert.equal(invalidReady.readyStatus, 'unavailable');
+  item.text = SECRET_SHAPE;
+  const unavailable = projected(); rowKeys(unavailable, ROW_KEYS.unavailable);
+  assert.equal(unavailable.status, 'unavailable'); assert.equal(unavailable.time, null);
+  assert.equal(JSON.stringify(unavailable).includes(SECRET_SHAPE), false);
+});
+
+test('typed, legacy and rejected READY rows expose exactly their respective source and metadata keys', t => {
+  const f = fixture(t), saved = ready(f, 'Approved full source task');
+  const item = f.room.queueFind('shared', saved.itemId), parent = saved.event, typedSource = structuredClone(parent.butlerSource);
+  Object.assign(item, HIDDEN_FIELDS); Object.assign(parent, HIDDEN_FIELDS);
+  const capability = f.bind(), projected = () => read(capability, { kind: 'deliveries', spaceId: 'shared', fromTime: NOW, throughTime: NOW }).records[0];
+  const typed = projected(); rowKeys(typed, ROW_KEYS.readyTyped);
+  assert.equal(typed.sourceTask, 'Approved full source task'); assert.equal(typed.sourceTaskStatus, 'available');
+  delete parent.butlerSource;
+  const legacy = projected(); rowKeys(legacy, ROW_KEYS.readyLegacy);
+  assert.equal(legacy.sourceTaskStatus, 'unavailable'); assert.equal(Object.hasOwn(legacy, 'sourceTask'), false);
+  parent.butlerSource = { ...typedSource, payload: { ...typedSource.payload, question: 'Rejected auxiliary question' } };
+  const invalidSource = projected(); rowKeys(invalidSource, ROW_KEYS.readyLegacy);
+  assert.equal(invalidSource.sourceTaskStatus, 'unavailable'); assert.equal(Object.hasOwn(invalidSource, 'sourceTask'), false);
+  assert.equal(JSON.stringify(invalidSource).includes('Rejected auxiliary question'), false);
+  parent.monitor.key = 'ready:shared:wrong-item';
+  const unavailable = projected(); rowKeys(unavailable, ROW_KEYS.unavailable);
+  assert.equal(unavailable.status, 'unavailable'); assert.equal(unavailable.time, NOW);
+});
+
+test('decision and failure delivery rows have only the exact ID, status and shared metadata fields', t => {
+  const f = fixture(t);
+  for (const status of ['waiting', 'failed']) {
+    const itemId = f.room.queueAdd('Synthetic outcome task ' + status, null);
+    f.room.queueMarkSent('shared', itemId, 'worker-a', 'Synthetic worker name', NOW);
+    f.room.queueSettle('shared', itemId, status, status === 'failed' ? 'Synthetic private failure detail' : '',
+      'Synthetic worker name', 'Synthetic private native reply', 'Synthetic question for the person?');
+    Object.assign(f.room.queueFind('shared', itemId), HIDDEN_FIELDS);
+  }
+  for (const parent of f.room.value.events) if (parent.butlerSource) Object.assign(parent, HIDDEN_FIELDS);
+  const rows = read(f.bind(), { kind: 'deliveries', spaceId: 'shared', fromTime: NOW, throughTime: NOW }).records;
+  assert.equal(rows.length, 2);
+  for (const row of rows) rowKeys(row, ROW_KEYS.outcome);
+  assert.deepEqual(rows.map(row => [row.kind, row.status]), [['decision', 'waiting'], ['failure', 'failed']]);
+  for (const hidden of ['title', 'reason', 'question', 'reply', 'memberName', 'privateHistory', 'privateExtra'])
+    assert.ok(rows.every(row => !Object.hasOwn(row, hidden)));
+});
+
+test('the literal key contract rejects an extra reason or question in an in-memory negative control', t => {
+  const f = fixture(t); f.room.queueAdd('Synthetic task', null);
+  const [row] = read(f.bind(), { kind: 'queue', spaceId: 'shared' }).records;
+  rowKeys(row, ROW_KEYS.queue);
+  for (const extra of [{ reason: 'Synthetic accidental field' }, { question: 'Synthetic accidental question?' }])
+    assert.throws(() => rowKeys({ ...row, ...extra }, ROW_KEYS.queue), assert.AssertionError);
 });
