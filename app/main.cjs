@@ -17,6 +17,7 @@ const { ImagePreviews, imageSource } = require('./native-images.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary } = require('./queue-secretary.cjs');
+const { IntegratorRole } = require('./integrator-role.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
 const { showQuestionNotification } = require('./butler-question-notification.cjs');
@@ -88,7 +89,7 @@ const queueOutcomeSeen = new Set(), queueOutcomeNotifications = new Map();
 let pendingReveal = null;
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
-let dataDir, sessionLabels, roomState, queueSecretary, butlerIngress, butlerBackend = null, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
+let dataDir, sessionLabels, roomState, queueSecretary, integratorRole, butlerIngress, butlerBackend = null, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
 let applicationBuild, applicationMenu;
 let mobileBroker;
@@ -557,8 +558,10 @@ function displayState(snapshot, context, read = null) {
     : outboxUnavailable ? 'The independent space outbox is unavailable; new delivery cannot be confirmed.' : '';
   let secretary = null, secretaryWarning = '';
   try { secretary = queueSecretary?.current() || null; } catch { secretaryWarning = displayText('error.queue.secretaryState'); }
-  const warning = [outboxWarning, secretaryWarning].filter(Boolean).join('\n');
-  const result = { ...display, queueSecretary: secretary, ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
+  let integrator = null, integratorWarning = '';
+  try { integrator = integratorRole?.current() || null; } catch { integratorWarning = displayText('error.integrator.state'); }
+  const warning = [outboxWarning, secretaryWarning, integratorWarning].filter(Boolean).join('\n');
+  const result = { ...display, queueSecretary: secretary, integrator, ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
   return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected, conversationAccess(context.actor, snapshot)) : result;
@@ -891,7 +894,7 @@ function register(name, handler) {
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
       // handler below still authenticates the secretary and person-only actions.
-      const localQueue = name === 'queueSecretary' || name === 'spaceAction' && ['queueAdd', 'queueCancel', 'queueResolve'].includes(args[1]);
+      const localQueue = name === 'queueSecretary' || name === 'integrator' || name === 'spaceAction' && ['queueAdd', 'queueCancel', 'queueResolve'].includes(args[1]);
       if (!local.has(name) && !localQueue) {
         const targetIds = (name === 'spaceAction' ? [args[2]?.[0]].flat() : [args[0]].flat()).filter(id => typeof id === 'string');
         const targets = c.client.entries.filter(e => !targetIds.length || e.state.sessions.some(s => targetIds.includes(s.id)));
@@ -1112,6 +1115,8 @@ async function boot() {
   catch { butlerBackend = null; } // Dedicated failure must not stop ordinary sessions.
   // No prepare/ensure/controller here. Activation and the record period stay off.
   queueSecretary = new QueueSecretary(dataDir);
+  // Who the person designated as integrator. A record only: nothing is sent to it from here.
+  integratorRole = new IntegratorRole(dataDir);
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
   creationDefaults = new CreationDefaults(dataDir, { defaultWorkspace, newWorkspaceRoot: `${path.resolve(defaultWorkspace)}-sessions` });
   viewStore = new ViewStore(dataDir);
@@ -1424,6 +1429,23 @@ async function boot() {
       const record = (await c.client.call('initial')).sessions.find(record => record.id === id);
       if (!record || !record.nativeId || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) throw uiError('error.queue.secretaryInvalid');
       queueSecretary.set({ sessionId: record.id, nativeId: record.nativeId });
+    }
+    await broadcastRoom();
+  });
+  // Designating or revoking the integrator is the person's alone. The background-operation gate
+  // is a fixed method table that does not know this method, so the refusal is made here.
+  register('integrator', async (c, id) => {
+    if (c.background) throw uiError('error.integrator.personOnly');
+    if (id === null) integratorRole.set(null);
+    else {
+      // The backend's own list does not say which sessions the person archived; the desktop's record does.
+      const record = roomState.apply(await c.client.call('initial')).sessions.find(record => record.id === id);
+      if (!record || !record.nativeId || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) throw uiError('error.integrator.invalid');
+      // The integrator stays outside every space: a member is sent queue work, which an integrator must not get.
+      let spaces;
+      try { spaces = roomIds(record); } catch { throw uiError('error.integrator.invalid'); }
+      if (spaces.length) throw uiError('error.integrator.inSpace');
+      integratorRole.set({ sessionId: record.id, nativeId: record.nativeId });
     }
     await broadcastRoom();
   });

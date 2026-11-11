@@ -152,3 +152,101 @@ test('disconnected header keeps existing usage control while blocking secretary 
   menu.onSelect('usage');
   assert.deepEqual(f.calls, [['existing-usage']]);
 });
+
+// B6: the integrator designation uses the same menus. Synthetic sessions; no entry is called for real.
+const INTEGRATOR_SET = '设为集成者（把交上来的活合进主线）';
+const tick = () => new Promise(resolve => setImmediate(resolve));
+function integratorFixture() {
+  const f = fixture();
+  f.c.window = { nativeWorkspaceSpaces: { roomIds: record => record.roomIds || [] } };
+  f.c.api.integrator = async id => f.calls.push(['integrator', id]);
+  // The model's arrays belong to the page's own context: copy them before comparing.
+  f.actions = () => Array.from(f.c.sessionMenuModel(f.record.id, {}).items).filter(item => !item.type);
+  return f;
+}
+test('the session menu offers the integrator designation only outside every space, and the revoke where it is set', async () => {
+  const f = integratorFixture();
+  // After the secretary action and before rename, with its words in both languages.
+  assert.deepEqual(f.actions().slice(0, 3).map(item => item.id), ['queue-secretary-set', 'integrator-set', 'rename']);
+  assert.equal(f.actions()[1].label, INTEGRATOR_SET);
+  assert.equal(locale.format('en', 'menu.integratorSet'), 'Use as integrator (merges delivered work)');
+  f.c.openSessionMenu(f.record.id);
+  await f.menus.at(-1).onSelect('integrator-set'); await tick();
+  assert.deepEqual(f.calls, [['integrator', f.record.id], ['refresh'], ['render']]);
+  // A member of a space, a session without a native id, and an archived one are not offered it.
+  for (const change of [{ roomIds: ['shared'] }, { roomIds: ['shared', 'space-2'] }, { nativeId: null }, { archived: true }]) {
+    const saved = { ...f.record }; Object.assign(f.record, change);
+    assert.ok(!f.actions().some(item => item.id.startsWith('integrator-')), JSON.stringify(change));
+    for (const name of Object.keys(change)) { if (name in saved) f.record[name] = saved[name]; else delete f.record[name]; }
+  }
+  // The designated session shows the revoke, also after it was put into a space: the person can always take it back.
+  f.state.integrator = { sessionId: f.record.id, nativeId: f.record.nativeId };
+  for (const roomIds of [[], ['shared']]) {
+    f.record.roomIds = roomIds;
+    assert.deepEqual(f.actions().filter(item => item.id.startsWith('integrator-')).map(item => [item.id, item.label]), [['integrator-revoke', '撤销集成者']], JSON.stringify(roomIds));
+  }
+  f.calls.length = 0; f.c.openSessionMenu(f.record.id, { x: 0, y: 0 });
+  await f.menus.at(-1).onSelect('integrator-revoke'); await tick();
+  assert.deepEqual(f.calls, [['integrator', null], ['refresh'], ['render']]);
+  // Another session holds the designation: this one, outside every space, can take it over.
+  f.record.roomIds = []; f.state.integrator = { sessionId: 'another-session', nativeId: 'another-native' };
+  assert.ok(f.actions().some(item => item.id === 'integrator-set'));
+  // A menu opened while this session was the integrator must not revoke the session designated since.
+  f.state.integrator = { sessionId: f.record.id, nativeId: f.record.nativeId };
+  f.c.openSessionMenu(f.record.id, { x: 1, y: 1 });
+  const stale = f.menus.at(-1);
+  f.state.integrator = { sessionId: 'another-session', nativeId: 'another-native' };
+  f.calls.length = 0; await stale.onSelect('integrator-revoke'); await tick();
+  assert.deepEqual(f.calls, []);
+  // An app whose window has no such entry shows the menu as it was.
+  delete f.c.api.integrator;
+  assert.ok(!f.actions().some(item => item.id.startsWith('integrator-')));
+});
+
+test('a disconnected menu shows the integrator action disabled and does not run it', async () => {
+  const f = integratorFixture();
+  f.c.disconnected = true;
+  assert.equal(f.actions().find(item => item.id === 'integrator-set').disabled, true);
+  f.c.openSessionMenu(f.record.id);
+  f.menus.at(-1).onSelect('integrator-set'); await tick();
+  assert.deepEqual(f.calls, []);
+});
+
+test('the header menu carries the integrator action, ignores a changed designation, and the terminal menu does not carry it', async () => {
+  const f = integratorFixture(), anchor = new Element('button'), control = new Element('button');
+  control.click = () => f.calls.push(['original']);
+  Object.assign(f.c, { current: () => f.record, selectionRevision: 1, selected: f.record.id, spaceId: 'shared', pairRevision: () => 1,
+    headerControls: { membership: control, selectedText: control, usage: control }, $: () => control });
+  vm.runInContext(section('const headerMenuKey =', 'function renderHeaderLayout('), f.c);
+  f.c.openHeaderMenu(anchor);
+  const menu = f.menus.at(-1);
+  assert.equal(menu.items.find(item => item.id === 'integrator-set')?.label, INTEGRATOR_SET);
+  assert.equal(menu.items.find(item => item.id === 'integrator-set').disabled, false);
+  await menu.onSelect('integrator-set'); await tick();
+  assert.deepEqual(f.calls[0], ['integrator', f.record.id]);
+  // The designation changed while the menu was open: what it shows is no longer true, so it does nothing.
+  f.calls.length = 0; f.state.integrator = { sessionId: 'another-session', nativeId: 'another-native' };
+  menu.onSelect('integrator-set'); await tick();
+  assert.deepEqual(f.calls, []);
+  // Designated: the header revokes. Archived and designated: still revocable.
+  f.state.integrator = { sessionId: f.record.id, nativeId: f.record.nativeId };
+  for (const archived of [false, true]) {
+    f.record.archived = archived; f.calls.length = 0;
+    f.c.openHeaderMenu(new Element('button'));
+    const open = f.menus.at(-1);
+    assert.ok(open.items.some(item => item.id === 'integrator-revoke') && !open.items.some(item => item.id === 'integrator-set'), String(archived));
+    await open.onSelect('integrator-revoke'); await tick();
+    assert.deepEqual(f.calls[0], ['integrator', null], String(archived));
+  }
+  f.record.archived = false;
+  // The terminal's own menu is about the terminal display only.
+  f.c.openHeaderMenu(new Element('button'), true);
+  assert.ok(!f.menus.at(-1).items.some(item => item.id.startsWith('integrator-')));
+  // Disconnected: shown disabled, not run.
+  f.c.disconnected = true; f.calls.length = 0;
+  f.c.openHeaderMenu(new Element('button'));
+  const offline = f.menus.at(-1);
+  assert.equal(offline.items.find(item => item.id === 'integrator-revoke').disabled, true);
+  offline.onSelect('integrator-revoke'); await tick();
+  assert.deepEqual(f.calls, []);
+});
