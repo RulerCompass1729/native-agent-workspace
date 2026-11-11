@@ -291,7 +291,7 @@ function notifyBackgroundConfirmation(record) {
     if (!Notification.isSupported()) return;
     const action = backgroundOperation.maintenanceAction(record.command.method, record.command.arguments, record.actor);
     const notification = new Notification({ title: displayText('os.decisionTitle'),
-      body: displayText('os.backgroundConfirmationBody', { name: record.actor.name,
+      body: action === 'readConversation' && record.confirmation?.options?.message ? backgroundOperation.visibleText(record.confirmation.options.message) : displayText('os.backgroundConfirmationBody', { name: backgroundOperation.visibleText(record.actor.name),
         command: action ? displayText('background.action.' + action) : record.command.method }) });
     queueOutcomeNotifications.set(key, notification);
     if (queueOutcomeNotifications.size > 50) queueOutcomeNotifications.delete(queueOutcomeNotifications.keys().next().value);
@@ -341,6 +341,22 @@ function flushReveal() {
 }
 function discardReveal(context) {
   if (!context.uiReady) pendingReveal = null;
+}
+function conversationReaderAllowed(actor) {
+  const secretary = queueSecretary?.current();
+  return !secretary || secretary.sessionId !== actor.id || secretary.nativeId !== actor.nativeId;
+}
+function projectBackgroundRecord(record) {
+  if (!['initial', 'previewImage'].includes(record.command.method) || record.value === undefined) return record;
+  const target = backgroundOperation.conversationTarget(record.command.method, record.command.arguments, record.actor);
+  const candidate = record.humanDecision === 1 && record.readAuthorization?.sessionId === target ? record.readAuthorization : null;
+  let read = null;
+  if (candidate) try { if (conversationReaderAllowed(record.actor)) read = candidate; } catch { /* Fail closed on an unknown role. */ }
+  if (record.command.method === 'previewImage' && target && (!read || read.sessionId !== target)) {
+    const { value: _privateValue, ...publicRecord } = record; return publicRecord;
+  }
+  if (record.command.method !== 'initial' || !record.value?.sessions) return record;
+  return { ...record, value: backgroundOperation.conversationSnapshot(record.value, record.actor, read) };
 }
 // A background window owns an agent's connection and dialogs but never loads a document. Nothing can
 // receive what is sent to it, and the browser keeps every such message in memory for as long as the window
@@ -417,7 +433,7 @@ function bindClient(context) {
   client.on('progress', data => send('workspace:progress', data));
   client.on('closed', () => { if (context.client === client) { const notice = uiError('error.warning.serviceDisconnected'); send('workspace:disconnected', notice.message, notice.uiMessage); } });
 }
-function displayState(snapshot, context) {
+function displayState(snapshot, context, read = null) {
   const roomId = context?.view?.spaceId || 'shared';
   const display = roomState.apply(sessionLabels.apply(submissionState(snapshot)), roomId);
   display.sessions = display.sessions.map(s => ({ ...s }));
@@ -426,7 +442,6 @@ function displayState(snapshot, context) {
     if (rows.length) s.messages = [...s.messages, ...rows].sort((a, b) => a.time - b.time);
     if (context?.background) {
       s.liveDraft = ''; s.draft = '';
-      if (s.id !== context.view.selected) s.messages = [];
     }
   }
   const outboxWarning = backgroundUnavailable ? 'Background control is unavailable; existing native sessions and ordinary controls remain available.' : outboxQuitFailed ? 'Outbox cleanup could not be confirmed. Quit again to close the app; native sessions keep running.'
@@ -434,9 +449,10 @@ function displayState(snapshot, context) {
   let secretary = null, secretaryWarning = '';
   try { secretary = queueSecretary?.current() || null; } catch { secretaryWarning = displayText('error.queue.secretaryState'); }
   const warning = [outboxWarning, secretaryWarning].filter(Boolean).join('\n');
-  return { ...display, queueSecretary: secretary, ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
+  const result = { ...display, queueSecretary: secretary, ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
+  return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected) : result;
 }
 function reportViewStorage(warning, uiMessage = null) {
   if (viewStorageWarning === warning) return;
@@ -973,10 +989,17 @@ async function boot() {
   views = loaded.views;
   try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: () => { broadcastRoom().catch(() => {}); },
     confirmationPending: notifyBackgroundConfirmation,
-    confirmation: (actor, command, action) => ({ type: 'warning',
-      message: displayText('background.maintenanceTitle', { name: actor.name, command: displayText('background.action.' + action) }),
-      detail: JSON.stringify({ method: command.method, arguments: command.arguments, ...(command.paths ? { paths: command.paths } : {}) }, null, 2),
-      buttons: [displayText('common.cancel'), displayText('background.confirm')], defaultId: 0, cancelId: 0 }),
+    project: projectBackgroundRecord,
+    confirmation: (actor, command, action, context) => {
+      if (action === 'readConversation' && !conversationReaderAllowed(actor)) throw uiError('error.background.secretaryConversation');
+      const state = sessionLabels.apply(roomState.apply(context.client.snapshot()));
+      const target = state.sessions.find(s => s.id === backgroundOperation.conversationTarget(command.method, command.arguments, actor));
+      if (action === 'readConversation' && !target) throw uiError('error.background.conversationChanged');
+      return { type: 'warning',
+      message: action === 'readConversation' ? displayText('background.readConversationTitle', { name: backgroundOperation.visibleText(actor.name), target: backgroundOperation.visibleText(target.name) })
+        : displayText('background.maintenanceTitle', { name: backgroundOperation.visibleText(actor.name), command: displayText('background.action.' + action) }),
+      detail: backgroundOperation.confirmationDetail(command, state, context),
+      buttons: [displayText('common.cancel'), displayText('background.confirm')], defaultId: 0, cancelId: 0 }; },
     audit: auditBackgroundOperation,
     context: async (actor, saved) => {
       const view = saved || { owner: randomUUID(), selected: actor.id, mode: 'chat', preference: 'chat', active: false };
@@ -984,6 +1007,7 @@ async function boot() {
       const client = await connect(dataDir, view.owner);
       const win = new BrowserWindow({ ...windowOptions(), show: false, focusable: false, skipTaskbar: true });
       const context = { background: true, actor, win, client, view, failed: false };
+      context.metadataOnly = () => !conversationReaderAllowed(actor);
       context.refresh = () => client.refresh();
       context.checkActor = async () => {
         await context.refresh();
@@ -997,7 +1021,7 @@ async function boot() {
         const state = client.snapshot();
         if (backgroundOperation.maintenanceAction(command.method, command.arguments, actor)) {
           const metadata = roomState.apply(state), auditRooms = new Set();
-          const controlTarget = ['interrupt', 'pause', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input'].includes(command.method) ? command.arguments[0] : null;
+          const controlTarget = ['interrupt', 'pause', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent'].includes(command.method) ? command.arguments[0] : null;
           for (const s of state.sessions) if (s.id === actor.id || strings.has(s.id)) {
             roomIds(s).forEach(id => auditRooms.add(id));
             roomState.value.sessionArchives[s.id]?.rooms.forEach(r => auditRooms.add(r.id));
@@ -1012,6 +1036,8 @@ async function boot() {
           // Placement and archive state are consent targets. Background native
           // progress and the audit event itself must not invalidate consent.
           return { auditRooms: [...(auditRooms.size ? auditRooms : ['shared'])].sort(),
+            ...(command.method === 'initial' ? { selected: context.view.selected } : {}),
+            ...(command.method === 'pasteNativeContent' ? { clipboardRevision: context.clipboardRevision || null } : {}),
             sessions: metadata.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, connectionRevision: s.connectionRevision,
               nativeContextPending: s.nativeContextPending, archived: s.archived, roomIds: roomIds(s), placementRevision: s.placementRevision,
               memberRevision: s.memberRevision, roomMembershipRevisions: s.roomMembershipRevisions,
@@ -1426,7 +1452,14 @@ async function boot() {
   }, source, file, options));
   register('initial', async c => {
     const appBuild = await (applicationBuild ||= appBuildInfo(app, dataDir));
-    const display = displayState(await c.client.call('initial'), c);
+    const snapshot = await c.client.call('initial'), request = backgroundOperation.request();
+    let read = null;
+    if (c.background && request?.maintenanceApproved && request.args.method === 'initial') {
+      const id = request.args.arguments[0], expected = request.guard?.sessions?.find(s => s.id === id), target = snapshot.sessions.find(s => s.id === id);
+      if (!conversationReaderAllowed(request.actor) || c.view.selected !== id || !expected || !target || target.nativeId !== expected.nativeId) throw uiError('error.background.conversationChanged');
+      read = { sessionId: id, nativeId: target.nativeId };
+    }
+    const display = displayState(snapshot, c, read);
     if (!c.background) notifyCapacity(display, c.win);
     return { ...display, viewState: c.view, appVersion: app.getVersion(), appBuild, localeWarning, preflight: preflight() };
   });
@@ -1523,7 +1556,7 @@ async function boot() {
     return result.filePaths[0];
   });
   register('newWindow', async (c, id) => { const snapshot = await c.client.call('initial'); if (id && !snapshot.sessions.some(s => s.id === id)) throw uiError("error.main.sessionNotFound"); if (c.background) return backgroundControl.newView(c.actor, id, c.view.mode); await openWindow({ owner: randomUUID(), selected: id || '', mode: c.view.mode, preference: c.view.preference, active: true }); });
-  register('copy', (c, text) => { if (typeof text !== 'string' || text.length > 100000) throw uiError("error.main.invalidCopyContent"); if (c.background) { c.clipboardText = text; c.clipboardImage = null; return; } return clipboard.writeText(text); });
+  register('copy', (c, text) => { if (typeof text !== 'string' || text.length > 100000) throw uiError("error.main.invalidCopyContent"); if (c.background) { c.clipboardText = text; c.clipboardImage = null; c.clipboardRevision = randomUUID(); return; } return clipboard.writeText(text); });
   // Read only when the person presses Paste; never watch or persist clipboard content.
   register('pasteText', async c => { const text = c.background ? c.clipboardText || '' : await clipboard.readText(); if (text.length > 65500) throw uiError("error.main.pasteTooLong"); return text; });
   const imageTarget = async (c, id, expectedNativeId) => {
@@ -1547,7 +1580,10 @@ async function boot() {
     const text = c.background ? c.clipboardText || '' : clipboard.readText(); if (text.length > 65500) throw uiError("error.main.pasteTooLong"); return { text };
   });
   const imagesFor = c => c.imagePreviews ||= new ImagePreviews({ nativeImage,
-    snapshot: async source => source?.kind === 'space-draft' ? null : roomState.apply(await c.client.call('initial')),
+    snapshot: async source => {
+      if (c.background && source?.kind === 'session' && source.sessionId !== c.actor.id && !conversationReaderAllowed(c.actor)) throw uiError('error.background.secretaryConversation');
+      return source?.kind === 'space-draft' ? null : roomState.apply(await c.client.call('initial'));
+    },
     resolveSource: (snapshot, source) => {
       if (source?.kind === 'space-message') {
         if (!validRoomId(source.roomId) || typeof source.messageId !== 'string' || !source.messageId || source.messageId.length > 100 ||
@@ -1569,7 +1605,7 @@ async function boot() {
     } });
   register('previewImage', (c, source) => imagesFor(c).preview(source));
   register('expandImage', (c, token) => imagesFor(c).expand(token));
-  register('copyImage', (c, token) => imagesFor(c).copy(token, c.background ? { writeImage: image => { c.clipboardImage = image; c.clipboardText = ''; } } : clipboard));
+  register('copyImage', (c, token) => imagesFor(c).copy(token, c.background ? { writeImage: image => { c.clipboardImage = image; c.clipboardText = ''; c.clipboardRevision = randomUUID(); } } : clipboard));
   register('releaseImage', (c, token) => c.imagePreviews?.release(token));
   updateApplicationMenu();
   }

@@ -26,6 +26,7 @@ function harness(language = 'zh') {
     webContents: { send: (...args) => sent.push(args) } };
   const context = { client, win };
   const sandbox = { Notification, capacityNotifications: new Map(), context, quitting: false, focusOrOpen: () => activations++,
+    backgroundOperation: require('../background-operation.cjs'),
     roomState: { assertAvailable() {} }, displayState: value => value,
     notifyToolWait() {}, register: (name, callback) => callbacks.set(name, callback),
     applicationBuild: null, appBuildInfo: async () => ({}), app: { getVersion: () => 'synthetic' },

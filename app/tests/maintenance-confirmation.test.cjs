@@ -10,8 +10,8 @@ const cases = [
   ['spaceAction', ['shared', 'archive', []]], ['spaceAction', ['shared', 'restore', []]],
   ['join', ['target', true]], ['join', ['target', false]], ['resume', ['target']], ['importHistory', ['native-target', {}]],
   ...['commit', 'recover', 'undo'].map(action => ['spaceMerge', [action, { operationId: 'merge', binding: 'binding' }]]),
-  ...['runtimeLocation', 'openLocalFile', 'saveLocalFile', 'spaceFiles'].map(method => [method, ['target']]),
-  ...['interrupt', 'pause', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input'].map(method => [method, ['target']]),
+  ...['runtimeLocation', 'openLocalFile', 'saveLocalFile', 'spaceFiles', 'openMessageFile'].map(method => [method, ['target']]),
+  ...['interrupt', 'pause', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent'].map(method => [method, ['target']]),
   ['pause', []], ['pause', ['agent']], ['spaceAction', ['shared', 'pause', []]],
 ];
 function fixture(t, provider = 'codex') {
@@ -91,14 +91,15 @@ test('a protected invocation refused by the busy actor gate is durably attribute
 });
 test('own-session controls retain their ordinary path; pause remains global even with an own ID', async t => {
   const f = fixture(t);
-  for (const method of ['interrupt', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input']) {
+  for (const method of ['interrupt', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent']) {
     const result = await f.controller.call(f.binding, { action: 'invoke', operation_id: method, method, arguments: ['agent'] });
     assert.equal(result.state, 'complete');
     assert.equal(operation.maintenanceAction(method, ['agent'], f.binding.sender), null);
   }
-  assert.equal(f.writes.length, 7);
+  assert.equal(f.writes.length, 11);
   assert.equal(operation.maintenanceAction('pause', [], f.binding.sender), 'pause');
   assert.equal(operation.maintenanceAction('pause', ['agent'], f.binding.sender), 'pause');
+  for (const method of ['unobserve', 'nativeHistory', 'pasteText']) assert.equal(operation.maintenanceAction(method, ['target'], f.binding.sender), null);
 });
 test('durable confirmation notifies once, binds selected paths, and cannot be replayed', async t => {
   const f = fixture(t), notices = [], controller = new BackgroundControl({ ...f.config, confirmationPending: row => notices.push(row) });
@@ -142,4 +143,17 @@ test('an absent original space cannot block the audit or confirmation for releas
   assert.equal(f.room.value.events.at(-1).controlAudit.state, 'confirmation-required');
   assert.equal((await controller.decide('agent', 'native-agent', command.operation_id, 1)).state, 'complete');
   assert.equal(f.writes.length, 1);
+});
+test('a valid own message cannot authorize an unmentioned local file before human confirmation', async t => {
+  const f = fixture(t), file = path.join(f.dir, 'separate.txt'); fs.writeFileSync(file, 'SYNTHETIC SEPARATE MATERIAL', { mode: 0o600 });
+  const source = { kind: 'session', sessionId: 'agent', messageId: 'message', nativeId: 'native-agent', cwd: f.dir };
+  const snapshot = { sessions: [{ id: 'agent', nativeId: 'native-agent', cwd: f.dir, messages: [{ id: 'message', nativeId: 'native-agent', role: 'assistant', text: 'No local file reference here.' }] }] };
+  let reads = 0;
+  f.config.handlers.set('openMessageFile', async (_c, ...args) => { reads++; return require('../local-files.cjs').openMessageFile({ snapshot: async () => snapshot, background: true, openPath() { throw Error('No desktop file open'); } }, ...args); });
+  const command = { action: 'invoke', operation_id: 'unmentioned', method: 'openMessageFile', arguments: [source, file] };
+  assert.equal((await f.controller.call(f.binding, command)).state, 'confirmation-required'); assert.equal(reads, 0);
+  assert.equal((await f.controller.decide('agent', 'native-agent', command.operation_id, 0)).state, 'cancelled'); assert.equal(reads, 0);
+  const approved = { ...command, operation_id: 'selected' }; await f.controller.call(f.binding, approved);
+  const done = await f.controller.decide('agent', 'native-agent', approved.operation_id, 1);
+  assert.equal(done.state, 'complete'); assert.equal(done.value.text, 'SYNTHETIC SEPARATE MATERIAL'); assert.equal(reads, 1);
 });

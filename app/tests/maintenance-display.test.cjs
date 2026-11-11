@@ -1,0 +1,94 @@
+const test = require('node:test'), assert = require('node:assert/strict');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
+const operation = require('../background-operation.cjs'), locale = require('../ui-locale.js');
+const { BackgroundControl, dialog } = require('../background-control.cjs');
+const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
+const invisible = /[\p{Cf}\p{Zl}\p{Zp}]/u;
+function productionConfirmation() {
+  const start = main.indexOf('    confirmation: (actor, command, action'), end = main.indexOf('\n    audit:', start);
+  assert.ok(start > 0 && end > start);
+  return vm.runInNewContext('(' + main.slice(start + '    confirmation: '.length, end).trim().replace(/,$/, '') + ')', {
+    backgroundOperation: operation, displayText: (key, params) => locale.format('zh', key, params),
+    roomState: { apply: value => value }, sessionLabels: { apply: value => value },
+  });
+}
+const context = snapshot => ({ client: { snapshot: () => snapshot } });
+test('actual maintenance confirmation escapes format and separator characters without changing Unicode payloads', () => {
+  const chars = '\u00ad\u061c\u200b\u200c\u200d\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\ufeff\u{e0001}\u2028\u2029';
+  const actor = { name: 'Agent' + chars }, command = { method: 'input', arguments: ['target', 'echo αа中文' + chars], paths: ['/synthetic/' + chars] };
+  const before = JSON.stringify(command), options = productionConfirmation()(actor, command, 'input', context({ sessions: [], rooms: [] }));
+  assert.equal(invisible.test(options.message), false); assert.equal(invisible.test(options.detail), false);
+  assert.match(options.message, /\\u202e/i); assert.match(options.detail, /\\u202e/i);
+  assert.match(options.detail, /αа中文/); assert.equal(JSON.stringify(command), before);
+});
+test('confirmation keeps exact IDs and adds session, space and selected-file names', () => {
+  const snapshot = { sessions: [{ id: 'target', name: 'Target 中文', provider: 'codex' }], rooms: [{ id: 'room', name: 'Space 中文', files: [{ id: 'file', name: '材料.txt' }] }] };
+  const build = productionConfirmation(), actor = { name: 'Agent' };
+  const member = JSON.parse(build(actor, { method: 'spaceAction', arguments: ['room', 'join', ['target', true]] }, 'joinRoom', context(snapshot)).detail);
+  assert.deepEqual(member.arguments, ['room', 'join', ['target', true]]);
+  assert.ok(member.references.some(r => r.kind === 'session' && r.id === 'target' && r.name === 'Target 中文'));
+  assert.ok(member.references.some(r => r.kind === 'space' && r.id === 'room' && r.name === 'Space 中文'));
+  const file = JSON.parse(build(actor, { method: 'spaceFiles', arguments: ['room', 'file'] }, 'spaceFiles', context(snapshot)).detail);
+  assert.ok(file.references.some(r => r.kind === 'file' && r.id === 'file' && r.name === '材料.txt'));
+});
+test('human approval sees escaped rows while the input handler receives the exact original command', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-consent-display-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const payload = 'echo safe\u202e; hidden\u2066\u200b\u2028', writes = [], actor = { id: 'agent', nativeId: 'native', name: 'Agent\u202e', provider: 'codex' };
+  const c = { background: true, ...context({ sessions: [{ id: 'target', name: 'Target', provider: 'codex' }], rooms: [] }), checkActor() {}, view: {} };
+  const controller = new BackgroundControl({ dataDir: dir, context: () => c, handlers: new Map([['input', (_c, _id, text) => writes.push(text)]]), confirmation: productionConfirmation(), audit() {} });
+  const args = { action: 'invoke', method: 'input', arguments: ['target', payload], operation_id: 'input' };
+  const pending = await controller.call({ sender: actor, identity: { callId: 'call', turnId: 'turn' }, valid: () => true }, args);
+  assert.equal(pending.state, 'confirmation-required'); assert.deepEqual(writes, []);
+  assert.equal(invisible.test(pending.confirmation.options.detail), false);
+  assert.equal(invisible.test(controller.rows('agent')[0].name), false);
+  assert.equal(invisible.test(controller.rows('agent')[0].text), false);
+  assert.equal((await controller.decide('agent', 'native', 'input', 1)).state, 'complete');
+  assert.deepEqual(writes, [payload]); assert.equal(controller.receipt(actor, 'input').command.arguments[1], payload);
+});
+test('existing own-input and stop dialogs escape text before binding the human decision', async () => {
+  const c = { background: true }, actor = { id: 'agent', nativeId: 'native', name: 'Agent', provider: 'codex', callId: 'call', turnId: 'turn', operationId: 'operation' };
+  const options = { message: 'Agent\u202e', detail: 'input\u2066\u2028', buttons: ['Cancel', 'Confirm'], cancelId: 0 };
+  await assert.rejects(async () => operation.run(actor, () => dialog(c, 'message', options), { context: c, actor, args: {}, dialogIndex: 0 }), error => {
+    assert.equal(invisible.test(error.confirmation.options.message), false);
+    assert.equal(invisible.test(error.confirmation.options.detail), false); return true;
+  });
+});
+test('the real consent fingerprint changes with the independent clipboard, including ABA writes', () => {
+  const actor = { id: 'agent' }, snapshot = { sessions: [{ id: 'target', nativeId: 'native', roomIds: [] }], rooms: [] }, c = {};
+  const sandbox = { context: c, actor, client: { snapshot: () => snapshot }, roomState: { apply: value => value, value: { sessionArchives: {} } }, backgroundOperation: operation, roomIds: () => [], randomUUID: require('node:crypto').randomUUID,
+    register: (_name, handler) => { sandbox.copy = handler; }, clipboard: { writeText() { throw Error('System clipboard must not be read or written'); } } };
+  vm.createContext(sandbox);
+  const start = main.indexOf('      context.fingerprint = command =>'), end = main.indexOf('\n      context.delivery =', start);
+  vm.runInContext(main.slice(start, end), sandbox);
+  const copyStart = main.indexOf("  register('copy',"), copyEnd = main.indexOf('\n', copyStart);
+  vm.runInContext(main.slice(copyStart, copyEnd), sandbox);
+  c.background = true; const command = { method: 'pasteNativeContent', arguments: ['target', 'native'] };
+  sandbox.copy(c, 'A'); const first = JSON.stringify(c.fingerprint(command));
+  sandbox.copy(c, 'B'); const second = JSON.stringify(c.fingerprint(command));
+  sandbox.copy(c, 'A'); const third = JSON.stringify(c.fingerprint(command));
+  assert.notEqual(first, second); assert.notEqual(first, third);
+  sandbox.imagesFor = () => ({ copy: (_token, destination) => destination.writeImage({ isEmpty: () => false }) });
+  const imageStart = main.indexOf("  register('copyImage',"), imageEnd = main.indexOf('\n', imageStart);
+  vm.runInContext(main.slice(imageStart, imageEnd), sandbox);
+  sandbox.copy(c, 'image'); const fourth = JSON.stringify(c.fingerprint(command));
+  assert.notEqual(third, fourth); assert.equal(c.clipboardText, '');
+});
+test('background pasteText reads only its own clipboard and leaves the system clipboard untouched', async () => {
+  let handler;
+  const start = main.indexOf("  register('pasteText',"), end = main.indexOf('\n', start);
+  vm.runInNewContext(main.slice(start, end), { register: (_name, value) => { handler = value; }, clipboard: { readText() { throw Error('System clipboard must not be read'); } } });
+  assert.equal(await handler({ background: true, clipboardText: 'Independent synthetic text' }), 'Independent synthetic text');
+});
+test('persisted confirmations from an earlier version are escaped when their row is displayed', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-legacy-consent-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const config = { dataDir: dir, handlers: new Map(), context() { throw Error('Displaying a row must not execute an operation'); } };
+  const controller = new BackgroundControl(config);
+  controller.commit(data => data.records.push({ id: 'old', actor: { id: 'agent', nativeId: 'native', name: 'Agent\u202e', provider: 'codex' }, command: { method: 'input', arguments: ['target', '\u202e'] }, state: 'confirmation-required', confirmation: { kind: 'message', options: { message: 'Old\u202e', detail: 'Old\u2066\u2028', buttons: ['Cancel', 'Confirm'] } } }));
+  const row = new BackgroundControl(config).rows('agent')[0];
+  assert.equal(invisible.test(row.backgroundOperation.confirmation.options.message), false);
+  assert.equal(invisible.test(row.backgroundOperation.confirmation.options.detail), false);
+  assert.match(row.backgroundOperation.confirmation.options.detail, /\\u2066/);
+  assert.equal(new BackgroundControl(config).data.records[0].confirmation.options.detail, 'Old\u2066\u2028');
+});

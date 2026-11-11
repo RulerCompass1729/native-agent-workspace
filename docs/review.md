@@ -1,6 +1,76 @@
 # Review and issue record
 
-**Managed maintenance recovery and expanded consent, 2026-11-09 (re-review pending):**
+**S2 N7: consent for another hosted conversation, 2026-11-10 (delta review pending):**
+the person approved the recommendation: selecting another session is navigation,
+not permission to read its private conversation. Hosted snapshots and `initial`
+reads of that selection now use the existing S2 human confirmation, audit and
+one-shot notification. The prompt names the target. Own reads and human windows
+retain their normal paths. A snapshot may provide an operation ID; a foreign read
+without one receives a generated durable ID whose receipt holds the approved result.
+
+Background displays default to an explicit member-metadata projection. Messages,
+questions, native approval payloads, private activity and unknown future session
+fields remain hidden without the exact read. Only the approved direct return may
+expose its bound native target; passive state, broadcasts and restored/new views
+receive no standing grant. Old unapproved snapshot receipts and duplicates remain
+projected. Saved results are copied rather than kept as live references, so a later
+message cannot change an already approved receipt. The final read rechecks target
+selection and native identity after awaiting the snapshot.
+
+Private-session image previews are the same conversation-read surface and ask
+before loading pixels. Shared images and own images retain their existing paths;
+cached images retain source/file identity checks. Secretary identity is matched by
+both session and native ID through the existing rotation-aware designation. It can
+obtain member/space/queue metadata without a conversation grant; explicit private
+reads and later private-image source resolution do not gain a role exemption.
+
+The exact baseline fails the new privacy regressions. Both synthetic provider
+paths also pass real proof/tool/broker/application/hidden-renderer checks for a
+named prompt, cancellation, a frozen approved result, new-content re-confirmation,
+old receipt filtering and designation changes. No real provider or model starts.
+The integrator owns the combined N1/N2/N6/N7 delta review and installation; these
+author checks do not claim that independent approval or daily-app acceptance.
+
+**S2 confirmation display and boundary follow-up, 2026-11-10 (delta review pending):**
+the person's post-review request requires visible format/separator characters in
+consent text, names beside stable target IDs, and investigation of missing-backend
+member order and eight related command surfaces. Format, line-separator and
+paragraph-separator characters now display as literal Unicode escapes in managed
+confirmation text, actor labels and notifications. Execution parameters retain
+their original bytes; ordinary multilingual names and letters are not normalized.
+Previously persisted confirmation rows are escaped on display without rewriting
+their saved command or treating changed confirmation text as approval.
+Session, space and selected-file references include their current names and IDs.
+
+The missing-backend order defect reproduces: restoring a member filtered stored
+order through a partial session snapshot. Restoration now retains absent members'
+slots and counts unarchived unknowns when locating the saved active index. Middle
+and end positions retain their exact order across a cold metadata reload.
+
+Managed `openMessageFile` can read a path not mentioned in its valid source row,
+so it now always asks like `openLocalFile`. Cross-session `observe`, `prepareInput`,
+`stageImages` and `pasteNativeContent` use the existing consent/audit gate. Existing
+owner, native-identity, capability and image checks remain. Preparing a connection
+or caching an image is not a model call or terminal submission. Paste text only
+returns the private view's clipboard; its potential image-cache write justifies
+the cross-session gate. Clipboard changes, including changing back to the same
+text, invalidate pending paste consent. The dialog shows the text or image size.
+
+`unobserve` releases only this client's watcher; `pasteText` reads only its private
+clipboard. `nativeHistory` remains bounded metadata discovery with no target
+session, import or turn read. The person's later N7 decision is implemented in
+the separate follow-up above. `saveCopy` already uses exclusive creation: existing
+files and symlinks are rejected without replacement. No repair is needed there.
+
+Author checks include baseline failures, exact production confirmation/wrapper
+code, real file-copy collisions, missing-backend order, both providers' policy
+matrix and hidden GUI/tool calls with escaped names and exact original input.
+The final GUI uses synthetic provider transports and intercepted OS notifications;
+it is not real-provider inference or physical notification-center acceptance.
+The required independent delta approval is separate; the integrator owns review
+and installation. Known N3/N4/N5/N8/N9 tradeoffs remain unchanged.
+
+**Managed maintenance recovery and expanded consent, 2026-11-09 (source approved 2026-11-10):**
 review 42ea257f blocked the initial candidate: stopping an archived session changed
 its connection revision, and rejecting its old placement left it archived forever.
 Ambiguous legacy homes, missing spaces and uncertain joins had the same problem;
@@ -28,9 +98,11 @@ Local regression cases cover
 stop/restore, missing and overlapping homes, uncertain joins, stale plans, paths,
 own versus other controls, notification navigation and handled requests. Synthetic
 native GUI calls use real proof validation, broker and application handlers.
-Low-risk metadata such as names, notes and display order are deferred. This is
-author-run remediation, not the required same-reviewer approval or permission to
-install; the integrator must return it to 42ea257f before READY.
+Low-risk metadata such as names, notes and display order are deferred. The
+integrator merged this source after fresh reviewer 9e277362 approved with notes,
+using the original BLOCK verbatim after review 42ea257f became unavailable in a
+machine restart. The follow-up above addresses its installation notes and still
+requires a separate delta approval; this record is not installation permission.
 
 **Initial managed-maintenance candidate db3c359, 2026-11-09 (blocked, superseded):**
 the person requested that managed sessions ask for human confirmation before
