@@ -88,6 +88,7 @@ function restoreReceipt(file, before, written) {
   // Do not overwrite a receipt that another actor changed during this attempt.
   const bytes = current?.bytes ?? null;
   assert.ok((bytes === null && !before && !written) || Buffer.isBuffer(bytes) && [written, before?.bytes].some(value => Buffer.isBuffer(value) && bytes.equals(value)), 'Installation record changed concurrently');
+  if (before && current?.mode === before.mode && current.bytes.equals(before.bytes) || !before && !current) return;
   if (before) atomic(file, before.bytes, before.mode);
   else if (current) fs.unlinkSync(file);
   assert.deepEqual(receiptSnapshot(file)?.bytes ?? null, before?.bytes ?? null, 'Installation record restored');
@@ -95,9 +96,9 @@ function restoreReceipt(file, before, written) {
 async function runInstall(c, { platform, inspector, apply = false }) {
   const record = { format: 1, status: 'checking', stage: 'preflight', exposure: false, errors: [], startedAt: new Date().toISOString() };
   const result = path.join(c.resultDir, 'result.json'), journal = path.join(c.resultDir, 'journal.json');
-  const rollback = path.join(c.resultDir, 'previous.app'), receipt = path.join(c.data, 'installation.json');
+  const rollback = path.join(c.resultDir, 'rollback.noindex/previous.app'), receipt = path.join(c.data, 'installation.json');
   let archiveAttempted = false;
-  let lease = null, before = null, baseline = null, originalReceipt, writtenReceipt = null, quitRequested = false, movedOld = false;
+  let lease = null, before = null, baseline = null, originalReceipt, writtenReceipt = null, quitRequested = false, quitConfirmed = false, movedOld = false;
   const save = () => atomic(journal, JSON.stringify(record, null, 2) + '\n');
   const stage = name => { record.stage = name; save(); };
   const instances = (checkArguments = false) => {
@@ -123,12 +124,21 @@ async function runInstall(c, { platform, inspector, apply = false }) {
     assert.equal(plist('CFBundleExecutable'), c.executableName);
     if (version === c.newVersion) assert.equal(plist('NAWSourceRevision'), c.commit);
   };
+  function unusedOldCopy() {
+    try { platform.assertUnused(rollback); return true; }
+    catch (error) {
+      if (error.code !== 'bundle-in-use') throw error;
+      record.cleanup = { status: 'pending', reason: 'old-bundle-in-use', path: rollback,
+        message: 'Installation checks passed only if verificationPassed is true. Keep the old bundle until its backends end; do not launch it or stop live sessions to remove it.' };
+      save(); return false;
+    }
+  }
   async function retireOldCopy() {
     if (!movedOld || !fs.existsSync(rollback)) return;
     assert.equal(archiveAttempted, false, 'Archive/remove is not retried'); archiveAttempted = true;
     const rows = platform.bundleApps();
     assert.ok(rows.every(r => !r.executable.startsWith(rollback + path.sep)), 'Old bundle is still running');
-    platform.assertUnused(rollback);
+    if (!unusedOldCopy()) return;
     const contents = inventory(rollback), archive = path.join(c.resultDir, 'previous.zip');
     record.removal = { source: rollback, archive, files: contents.filter(r => !r.directory).length, bytes: contents.reduce((n, r) => n + (r.bytes || 0), 0) };
     atomic(path.join(c.resultDir, 'archived-files.json'), JSON.stringify(contents)); save();
@@ -137,7 +147,7 @@ async function runInstall(c, { platform, inspector, apply = false }) {
     platform.run('/usr/bin/unzip', ['-t', archive]);
     record.removal.archiveSha256 = digest(archive);
     assert.deepEqual(inventory(rollback), contents, 'Old bundle changed while archiving');
-    save(); platform.assertUnused(rollback); fs.rmSync(rollback, { recursive: true });
+    save(); if (!unusedOldCopy()) return; fs.rmSync(rollback, { recursive: true });
     assert.ok(!fs.existsSync(rollback)); record.removal.removed = true; save();
   }
   try {
@@ -155,13 +165,14 @@ async function runInstall(c, { platform, inspector, apply = false }) {
       const last = await inspector.capture(); inspector.retained(before, last);
       assert.deepEqual(instances(true).map(r => r.pid), record.oldGuiPids, 'GUI changed before quit');
       stage('quit-old'); quitRequested = true;
-      if (gui.length) platform.quit(); await waitGui(0);
+      if (gui.length) platform.quit(); await waitGui(0); quitConfirmed = true;
       baseline = await inspector.capture();
       // GUI shutdown may flush drafts; backend/native state must remain intact.
       inspector.retained({ ...last, views: baseline.views }, baseline);
       record.baseline = baseline.state; record.flushedViews = baseline.views;
       record.restartBackups = inspector.backUp(baseline);
       stage('swap');
+      fs.mkdirSync(path.dirname(rollback), { mode: 0o700 });
       fs.renameSync(c.app, rollback); movedOld = true;
       fs.renameSync(c.candidate, c.app);
       verifyBundle(c.app, c.newVersion, c.newSignature);
@@ -181,10 +192,19 @@ async function runInstall(c, { platform, inspector, apply = false }) {
       assert.deepEqual(instances(true).map(r => r.pid), opened.map(r => r.pid), 'Verified GUI changed');
       record.newGuiPid = opened[0].pid; record.verificationPassed = true; record.status = 'installed';
       stage('archive-old'); await retireOldCopy();
+      if (record.cleanup?.status === 'pending') record.status = 'installed-cleanup-pending';
     }
   } catch (error) {
     record.errors.push({ stage: record.stage, ...errorRecord(error) });
-    if (!quitRequested) record.status = 'unchanged';
+    // A rejected termination request did not replace the app or its receipt.
+    // Only certify unchanged when the same old window is still confirmed up;
+    // if it actually exited, the existing verified recovery path must reopen it.
+    let oldGuiUnchanged = false;
+    if (quitRequested && !quitConfirmed && !movedOld && writtenReceipt === null) {
+      try { const rows = instances(true); oldGuiUnchanged = rows.length === record.oldGuiPids.length && rows.length > 0 &&
+        rows.every(r => r.finishedLaunching && record.oldGuiPids.includes(r.pid)); } catch { /* Unconfirmed GUI still needs recovery. */ }
+    }
+    if (!quitRequested || oldGuiUnchanged) record.status = 'unchanged';
     else if (record.exposure) {
       record.status = 'recovery-required';
       record.recovery = record.verificationPassed ? 'New application and backend checks passed; only old-bundle cleanup is incomplete. Keep running the new version, retain the report and archive, and let the integrator resolve the cleanup error. Do not downgrade or restore stores.' : 'New code may have written storage. Do not launch the old archive or restore stores automatically. Preserve this report, installation record and all backend stores; have the integrator inspect identities and new writes, then obtain approval for a version-compatible recovery.';
@@ -236,7 +256,7 @@ async function main(args) {
     platform.checkRelease(c);
     const inspector = require(c.code.inspector.path).createInspector(c, platform);
     const record = await runInstall(c, { platform, inspector, apply: options.apply });
-    console.log(JSON.stringify(record)); if (!['installed', 'check-passed'].includes(record.status)) process.exitCode = 1;
+    console.log(JSON.stringify(record)); if (!['installed', 'installed-cleanup-pending', 'check-passed'].includes(record.status)) process.exitCode = 1;
   } catch (error) {
     const record = error.installResult
       ? { ...error.installResult, outcomeStatus: error.installResult.status, status: 'result-write-failed', error: errorRecord(error) }

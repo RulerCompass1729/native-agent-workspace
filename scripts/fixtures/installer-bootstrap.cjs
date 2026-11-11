@@ -10,8 +10,10 @@ process.env.NAW_WORKSPACE = path.join(config.dataDir, 'workspace');
 const { ensureService, connectService } = require(path.join(config.runtime, 'app/service-client.cjs'));
 (async () => {
   if (config.mode === 'active-timeout' && config.version === config.newVersion) return;
-  await ensureService(config.dataDir, config.node);
-  const client = await connectService(config.dataDir, 'synthetic-installer');
+  await ensureService(config.dataDir, path.resolve(path.dirname(process.argv[2]), config.node));
+  const { readLayout } = require(path.join(config.runtime, 'app/service-layout.cjs'));
+  const active = readLayout(config.dataDir).active;
+  const client = await connectService(path.join(config.dataDir, active), 'synthetic-installer');
   try {
     if (config.version === config.newVersion && config.mode === 'changed-draft') {
       await client.call('claim', 'retained', 'chat');

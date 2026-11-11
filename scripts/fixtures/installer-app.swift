@@ -5,8 +5,13 @@ let configURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources
 let config = try JSONSerialization.jsonObject(with: Data(contentsOf: configURL)) as! [String: String]
 let app = NSApplication.shared
 app.setActivationPolicy(.prohibited)
+final class RefuseQuit: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { .terminateCancel }
+}
+let refusal = RefuseQuit()
+if config["mode"] == "quit-refused" { app.delegate = refusal }
 let backend = Process()
-backend.executableURL = URL(fileURLWithPath: config["node"]!)
+backend.executableURL = config["node"]!.hasPrefix("/") ? URL(fileURLWithPath: config["node"]!) : configURL.deletingLastPathComponent().appendingPathComponent(config["node"]!).standardizedFileURL
 backend.arguments = [configURL.deletingLastPathComponent().appendingPathComponent(config["bootstrap"]!).path, configURL.path]
 backend.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": config["home"]!, "TMPDIR": config["tmp"]!]
 let log = FileHandle(forWritingAtPath: config["log"]!)!

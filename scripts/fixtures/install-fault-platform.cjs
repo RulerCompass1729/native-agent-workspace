@@ -9,6 +9,14 @@ function createFaultPlatform(c) {
   assert.ok(!c.testRoot.startsWith('/Applications')); assert.equal(fs.realpathSync(c.testRoot), c.testRoot);
   const platform = createPlatform(c), run = platform.run;
   let corrupted = false;
+  if (c.testFault === 'bundled-backend') {
+    const unused = platform.assertUnused;
+    platform.assertUnused = app => {
+      const observed = cp.spawnSync('/usr/sbin/lsof', ['-nP', '-F', 'pfn', '+D', app], { encoding: 'utf8', timeout: 10000 });
+      fs.writeFileSync(path.join(c.testRoot, 'bundle-use.json'), JSON.stringify({ app, status: observed.status, stdout: observed.stdout, stderr: observed.stderr, error: observed.error?.message }));
+      return unused(app);
+    };
+  }
   const version = () => JSON.parse(fs.readFileSync(path.join(c.app, 'Contents/Resources/app/package.json'))).version;
   platform.run = (file, args) => {
     if (['pre-launch', 'old-reopen-fails'].includes(c.testFault) && !corrupted && file === '/usr/bin/codesign' && args.includes('--verify') && args.includes(c.app) && version() === c.newVersion) {

@@ -35,7 +35,11 @@ files of eligible backends, not a complete transactional store backup.
 Every caught JavaScript exception or terminal result writes a private `result.json`: phase, primary/recovery
 errors, whether new code could have run, observed bundle/GUI/receipt state, and
 recovery instructions. `rolled-back` is still a failed update (nonzero exit).
-The private journal is updated before changing phases. Result records include the
+The private journal is updated before changing phases. A rejected quit request
+returns `unchanged` when the same old GUI remains confirmed and no app/receipt
+was replaced; it neither reopens that GUI nor rewrites an identical receipt. If
+the GUI actually exited despite a quit error, verified pre-launch recovery still
+runs. Uncertain or failed old-GUI recovery never claims unchanged. Result records include the
 original receipt hash/absence, confirmed receipt restoration, and a separate
 verification-passed marker when only old-bundle cleanup failed. A process kill, power loss
 or unwritable filesystem cannot promise a final receipt: inspect the journal;
@@ -45,8 +49,16 @@ The displaced bundle is inventoried (paths, bytes and file hashes), archived and
 checked with `unzip -t` before removing that exact copy. A targeted `lsof` check
 before archiving and again before removal refuses a bundle still in use, including
 a mapped backend executable, or one whose use cannot be determined. If archive/removal fails,
-the report explicitly flags the remaining launchable backup; it does not hide it
-or claim a clean success. Original input candidates are not swept away. Existing
+the report explicitly flags the remaining launchable backup. A verified install
+with positively observed old-bundle use returns `installed-cleanup-pending`
+(exit 0), with `verificationPassed: true` and the exact pending path. Its old
+bundle stays under `rollback.noindex/previous.app`; no live session is stopped to
+remove it. The integrator must wait for those backends to end and recheck the
+exact copy before any later removal. This is not an automatic cleanup service.
+An unknown lsof result or archive/removal error still reports a recovery failure;
+a failed upgrade can never become installed merely because cleanup is pending.
+macOS lsof can return status 1 with mapped-file records: positive PID/path records
+mean in use; only empty output and diagnostics with status 1 prove absence. Original input candidates are not swept away. Existing
 GUI test leases are never stolen. All evidence may contain private paths/session
 identifiers and belongs outside Git.
 
@@ -96,7 +108,11 @@ or debug arguments). The Swift helper quits only the precise executable path; an
 Unit tests cover terminal paths, receipt bytes/absence/concurrent edits, approval
 and helper tampering, foreign app instances and occupied leases. The opt-in macOS
 fixture additionally runs real signed synthetic AppKit bundles and actual release
-backend code with one ended synthetic session. It uses hidden launches, explicit
+backend code with one ended synthetic session. The `bundled-backend` case instead
+keeps a synthetic background record (no native process) so the actual old daemon
+remains running from a copied Node executable inside the displaced bundle. A
+separately signed nested executable preserves valid deep bundle verification;
+raw lsof records witness that exact backend PID mapping the displaced binary. It uses hidden launches, explicit
 credential-free child environments, its own data/profile and the canonical GUI
 slot. No native/provider session or model turn is started.
 
