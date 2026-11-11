@@ -9,6 +9,26 @@ function actor(value) {
 }
 function current() { return scope.getStore()?.actor || null; }
 function request() { return scope.getStore()?.request || null; }
+// One policy point for workspace_control maintenance. Native tool permission is
+// not person consent for a new session, placement or archive. No role currently
+// bypasses this gate; a future metered manager policy must be added here.
+function maintenanceAction(method, args = [], actor) {
+  if (['create', 'spaceCreate', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'resume', 'importHistory'].includes(method)) return method;
+  if (['runtimeLocation', 'openLocalFile', 'saveLocalFile', 'spaceFiles'].includes(method)) return method;
+  // WorkspaceClient.pause stops routing across backends even when passed an ID;
+  // that ID only scopes manual-input invalidation, not the affected sessions.
+  if (method === 'pause') return method;
+  if (actor && ['interrupt', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input'].includes(method) && args[0] !== actor.id) return method;
+  if (method === 'join') return args[1] === false ? 'leaveRoom' : 'joinRoom';
+  if (method === 'spaceAction') {
+    if (args[1] === 'join') return args[2]?.[1] === false ? 'leaveRoom' : 'joinRoom';
+    if (args[1] === 'archive') return 'archiveRoom';
+    if (args[1] === 'restore') return 'restoreRoom';
+    if (args[1] === 'pause') return 'pause';
+  }
+  if (method === 'spaceMerge' && ['commit', 'recover', 'undo'].includes(args[0])) return { commit: 'mergeSpaces', recover: 'recoverMerge', undo: 'undoMerge' }[args[0]];
+  return null;
+}
 function run(value, fn, request = null) { return scope.run({ actor: actor(value), request }, fn); }
 function message(recipient) {
   const a = current();
@@ -41,4 +61,4 @@ function inputGuard(workspace, ids, origin = current()) {
   if (!valid()) throw require('./ui-errors.cjs').uiError('error.backgroundMessagesDisabled');
   return valid;
 }
-module.exports = { actor, current, request, run, message, activity, deliveryTargets, assertDeliveryPolicy, inputGuard, CAPABILITY: 'backgroundControlV1' };
+module.exports = { actor, current, request, maintenanceAction, run, message, activity, deliveryTargets, assertDeliveryPolicy, inputGuard, CAPABILITY: 'backgroundControlV1' };

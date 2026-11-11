@@ -58,10 +58,10 @@ function harness(language = 'zh') {
   const sandbox = { Notification, queueRules: rules, untouchedDefault: require('../collaboration-spaces.cjs').untouchedDefault,
     queueOutcomeSeen: new Set(), queueOutcomeNotifications: new Map(), pendingReveal: null,
     windows: new Map([[1,c]]), quitting: false, backgroundTest: true, focusOrOpen: () => activations++,
-    roomState: { metadata: () => ({ id: 'shared', name: '共同工作' }) },
+    roomState: { metadata: () => ({ id: 'shared', name: '共同工作' }) }, backgroundOperation: require('../background-operation.cjs'),
     displayText: (key, params) => locale.format(language, key, params), register: (key, fn) => callbacks.set(key, fn) };
   vm.createContext(sandbox);
-  vm.runInContext(section(main, 'function notifyQueueOutcome(', '\nfunction bindClient(') + '\n' + section(main, "register('uiReady',", '\n  register('), sandbox);
+  vm.runInContext(section(main, 'function notifyBackgroundConfirmation(', '\nfunction bindClient(') + '\n' + section(main, "register('uiReady',", '\n  register('), sandbox);
   return { sandbox, c, notices, sent, ready: () => callbacks.get('uiReady')(c), fire: value => sandbox.notifyQueueOutcome({ roomId:'shared', eventId:'event', status:'waiting', reason:'', memberName:'Member', task:'Task', reply:'需要你决定：Proceed?', ...value }),
     set supported(v) { supported=v; }, set fail(v) { fail=v; }, get activations() { return activations; } };
 }
@@ -107,6 +107,35 @@ test('record navigation validates before changing views, including archived and 
     current=room;calls.length=0;assert.equal(await c.showRoomRecord('shared',id),false);assert.deepEqual(calls,['search.sharedRemoved']);
   }
   current={events:[{id:'event'}],messages:[]};calls.length=0;await c.showRoomRecord('shared','event');assert.deepEqual(calls,['shared','event']);
+});
+for (const language of ['zh', 'en']) test(`background confirmation uses B1 one-shot notification and exact session target: ${language}`, () => {
+  const h = harness(language), record = { id: 'operation', actor: { id: 'agent', nativeId: 'native-agent', name: 'Agent' }, command: { method: 'openLocalFile', arguments: [], paths: ['/synthetic/PRIVATE'] } };
+  h.sandbox.notifyBackgroundConfirmation(record); h.sandbox.notifyBackgroundConfirmation(record);
+  assert.equal(h.notices.length, 1); assert.ok(!JSON.stringify(h.notices[0].options).includes('PRIVATE'));
+  assert.equal(h.notices[0].options.body, language === 'zh' ? 'Agent 请求读取本机文件，等你确认' : 'Agent requests Read a local file; waiting for your confirmation');
+  h.c.uiReady = false; h.notices[0].emit('click'); assert.equal(h.sent.length, 0);
+  h.ready(); assert.equal(h.sent.length, 1);
+  assert.equal(JSON.stringify(h.sent[0][1]), JSON.stringify({ sessionId: 'agent', nativeId: 'native-agent', messageId: 'background:native-agent:operation' }));
+});
+test('session confirmation navigation rejects stale identities or handled requests before changing views', async () => {
+  const source = fs.readFileSync(require.resolve('../renderer/search-view.js'), 'utf8'), calls = [];
+  const row = { id: 'message', backgroundOperation: { state: 'confirmation-required' } }, record = { id: 'agent', nativeId: 'native-agent', messages: [row] };
+  const c = { state: { sessions: [record] }, toast: m => calls.push(m), uiText: k => k, $: () => ({}),
+    select: async (...args) => calls.push(args), pointToMessage: (_el, key, id) => { calls.push([key, id]); return true; } };
+  vm.createContext(c); vm.runInContext(section(source, 'async function showBackgroundConfirmation(', '\nasync function showRoomRecord('), c);
+  const target = { sessionId: 'agent', nativeId: 'native-agent', messageId: 'message' };
+  assert.equal(await c.showBackgroundConfirmation({ ...target, nativeId: 'new-native' }), false); assert.deepEqual(calls, ['search.changed']);
+  calls.length = 0; assert.equal(await c.showBackgroundConfirmation(target), true); assert.deepEqual(calls, [['agent', 'chat'], ['agent', 'message']]);
+  calls.length = 0; row.backgroundOperation.state = 'complete'; assert.equal(await c.showBackgroundConfirmation(target), false); assert.deepEqual(calls, ['search.changed']);
+});
+test('a durable control audit never waits for a window broadcast to finish', t => {
+  const { state } = room(t), record = { id: 'restore', actor: { id: 'agent', nativeId: 'native', name: 'Agent', provider: 'codex' },
+    command: { method: 'restoreSession', arguments: ['target'] }, state: 'confirmation-required' };
+  let broadcasts = 0;
+  const c = { roomState: state, broadcastRoom: () => { broadcasts++; return new Promise(() => {}); } };
+  vm.createContext(c); vm.runInContext(section(main, 'function auditBackgroundOperation(', '\nfunction notifyBackgroundConfirmation('), c);
+  assert.equal(c.auditBackgroundOperation(record), undefined); assert.equal(broadcasts, 1);
+  assert.equal(state.value.events.at(-1).controlAudit.state, 'confirmation-required');
 });
 test('a missing member uses its recorded name, never a local session ID', () => {
   const h=harness();h.sandbox.roomState.metadata=()=>({name:'Space',events:[{sessionId:'local-private-id',uiMessage:{key:'notice.queue.dispatched',params:{name:'Former member'}}}]});
