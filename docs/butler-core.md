@@ -92,8 +92,8 @@ patch tools; project document limits do not turn off global instructions.
 Tool/context qualification therefore remains false. This source adds no invented
 Codex flag and does not infer provider compatibility from a saved profile name.
 
-The dedicated NativeHost/service driver and name-only profile checks are now
-available as a separate dependency. Native provider compatibility remains
+The desktop pairs the dedicated NativeHost/service driver and name-only profile
+checks with the existing backend, without preparing or starting it. Native provider compatibility remains
 unverified. The next source stage needs restricted automatic context and tool execution,
 the remaining typed user-request/READY ingress and controller binding, the
 person-only menu/dialog and review table, a production queue transaction adapter

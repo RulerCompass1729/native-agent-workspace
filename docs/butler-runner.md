@@ -13,6 +13,15 @@ Boolean callback. All four qualification flags still default to false.
 Only a trusted host may supply qualification evidence; a successful precheck or
 initialize response is not such evidence.
 
+The desktop now constructs that pairing through `createDedicatedBackend` in the
+desktop-only `butler-backend-host.cjs`, using its private `butler-native` child directory and
+current application version/executable. Construction makes no provider call,
+configuration/presence check, store preparation or native launch. Event intake
+retains its existing single ledger owner; no controller is constructed. Even an
+explicit later `ensure()` remains blocked by the four false qualification
+defaults; the factory does not accept qualification flags from its options.
+This is dormant host composition, not a running thread or an enabled trial.
+
 The service manifest retains the exact core binding, including purpose,
 profile, provider, model, runtime version, backend/runner references and start
 nonce. The ordinary layout never registers this store. Both ordinary connection

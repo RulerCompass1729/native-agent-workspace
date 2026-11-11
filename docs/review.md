@@ -1,5 +1,24 @@
 # Review and issue record
 
+**B4 dedicated backend composition, 2026-11-10 (source checkpoint):** the desktop
+now constructs the existing backend with the real dedicated service driver and
+its Boolean presence callback. It supplies a fixed private child directory and
+the actual application executable/version; it accepts no qualification or
+replacement-driver option. Construction, snapshots and reopening prepare no
+store, check no profile/credential and start no process. Explicit synthetic
+`ensure` calls execute the captured presence callback but remain blocked by all
+four false qualification defaults, with no driver recovery/start call. Tests
+also cover missing presence, extra-option injection and unsafe existing records.
+The unchanged intake retains one ledger owner. No controller, native thread or
+turn is created; the activation and working-day record switches stay off.
+The first full run caught the shared backend acquiring a desktop driver require
+absent from the copied daemon runtime. The factory now lives in a desktop-only
+packaged host module; the shared backend and runtime copy list stay unchanged.
+The same independent reviewer approved the revised host placement and dependency
+closure. All 226 related synthetic tests and all 4,554 unit tests pass without
+failures or skips. This does not qualify native context/tools/provider access or
+installed operation.
+
 **S2 N7: consent for another hosted conversation, 2026-11-10 (delta review pending):**
 the person approved the recommendation: selecting another session is navigation,
 not permission to read its private conversation. Hosted snapshots and `initial`
