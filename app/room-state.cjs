@@ -899,11 +899,12 @@ class RoomState {
   }
   // B6: a member that holds an open integration handoff gets no work from this space's queue
   // until the handoff is closed. Said once in the space, per handoff and per state of it (still
-  // open, or waiting for the person). A repeat, a missing space and a space that is being
-  // updated are treated as in recordHandoff; an archived space is told nothing.
+  // open, or waiting for the person), and once more when that handoff is over (closed), if the
+  // space had been told about it. A repeat, a missing space and a space that is being updated
+  // are treated as in recordHandoff; an archived space is told nothing.
   recordHandoffHolder(fact) {
     if (!fact || typeof fact.sessionId !== 'string' || !fact.sessionId || typeof fact.handoffId !== 'string' || !fact.handoffId) return { recorded: false, why: 'no-words' };
-    const state = fact.waiting === true ? 'waiting' : 'sent';
+    const state = fact.closed === true ? 'closed' : fact.waiting === true ? 'waiting' : 'sent';
     let value;
     try { value = this.metadata(fact.roomId); }
     catch (error) { if (error?.uiMessage?.key === 'error.room.missing' || error?.uiMessage?.key === 'error.main.invalidSpace') return { recorded: false, why: 'space-missing' }; throw error; }
@@ -911,6 +912,9 @@ class RoomState {
     if (value.archived) return { recorded: false, why: 'space-archived' };
     const key = `handoff-holder:${fact.handoffId}:${fact.sessionId}:${state}`;
     if (value.events.some(event => event.monitor?.kind === 'handoff-holder' && event.monitor.key === key)) return { recorded: false, why: 'known' };
+    // The end is said only where the handoff was said to be open.
+    const open = `handoff-holder:${fact.handoffId}:${fact.sessionId}:`;
+    if (state === 'closed' && !value.events.some(event => event.monitor?.kind === 'handoff-holder' && [open + 'sent', open + 'waiting'].includes(event.monitor.key))) return { recorded: false, why: 'nothing-open' };
     this.writable(fact.roomId);
     const name = typeof fact.name === 'string' && fact.name.trim() ? fact.name.trim().slice(0, 60) : fact.sessionId;
     this.update({}, { kind: 'monitor', sessionId: fact.sessionId, ...uiNotice(`notice.handoff.holder.${state}`, { name }),
@@ -932,6 +936,25 @@ class RoomState {
       ...uiNotice(!done ? 'notice.monitor.grantNotCarried' : grants ? 'notice.monitor.grantCarried' : 'notice.monitor.interfaceCarried', done ? { old: carried.old, new: carried.new } : { old: carried.old }),
       monitor: { kind: 'carried', key, oldId: carried.oldId, ...(carried.newId ? { newId: carried.newId } : {}), carried: done, ...(done ? { grants } : { reason: carried.reason }) } }, room);
     return { recorded: true };
+  }
+  // The spaces that were told a member's handoff is open and not yet that it is over, as their
+  // records say it: [{ roomId, sessionId, handoffId, name }]. Read once after a start, so that
+  // a handoff that ended while the app was down still gets its closing line.
+  handoffHolderLines() {
+    const lines = [];
+    for (const room of [{ ...this.value, id: DEFAULT_ROOM_ID }, ...this.spaces.rooms]) {
+      if (room.archived) continue;
+      const seen = new Map();
+      for (const event of room.events) {
+        const fact = event.monitor;
+        if (fact?.kind !== 'handoff-holder' || typeof fact.handoffId !== 'string' || typeof event.sessionId !== 'string') continue;
+        const id = `${fact.handoffId}\n${event.sessionId}`;
+        if (fact.state === 'closed') seen.set(id, null);
+        else if (seen.get(id) !== null) seen.set(id, { roomId: room.id, sessionId: event.sessionId, handoffId: fact.handoffId, name: event.uiMessage?.params?.name });
+      }
+      for (const line of seen.values()) if (line) lines.push(line);
+    }
+    return lines;
   }
   // B6 E4, the version gate. A member whose native version NAW has not verified keeps working with
   // fewer features. The session's own header says so; this records it once in each of its spaces,

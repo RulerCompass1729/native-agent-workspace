@@ -267,11 +267,11 @@ async function verifyResults(read, state, action, mainHead) {
 //   (a message's origin, or NAW's marker on a native row without one), with two differences:
 //   the handoff's own message (it begins with the marker and the handoff's id) is never the
 //   person's, also where a native row took the place of NAW's copy of it; and a message that
-//   reached the session through a space counts as well. Such a message comes from the person or
-//   from another member (an exchange in the space, a member's outbox), and its origin does not
-//   say which, so the handoff waits for the person either way.
+//   reached the session through a space without a sender's name counts as well: the person
+//   wrote it there, or it is a turn of an exchange they started.
 // - own: how many of the integrator's messages came before the first automatic message from
-//   someone else (a queue item, another agent's wake or control message, a rotation request).
+//   someone else (a queue item, another agent's wake or control message, a rotation request,
+//   another member's message through a space, which carries that member's name).
 //   A continuation after a limit is not from someone else: it resumes the same work.
 function rowsAfter(session, handoff) {
   const messages = Array.isArray(session?.messages) ? session.messages : [];
@@ -290,7 +290,9 @@ function rowsAfter(session, handoff) {
     if (text.trimStart().startsWith(MARKER + handoff.id)) continue;
     let automatic = AUTOMATIC_ORIGINS.includes(message.origin);
     if (message.origin === undefined) automatic = text.includes('【NAW 派活】') || text.includes('【NAW 换会话】');
-    if (!automatic || message.origin === 'room') typed = true;
+    // Through a space: with a sender's name it is another member's message, without one the person's own step.
+    const named = typeof message.name === 'string' && message.name.trim() !== '';
+    if (!automatic || (message.origin === 'room' && !named)) typed = true;
     else if (message.origin !== 'capacity-recovery') other = true;
   }
   return { typed, own };
@@ -329,22 +331,52 @@ function planSettle(state, seen) {
   // nothing, and lines from an earlier message (written while it worked) are not mixed in. An
   // answer whose lines cannot be read is still the answer: its deliveries have no result, which
   // is safer than taking an earlier line for one.
-  // After an automatic message from someone else the integrator may be answering that message.
-  // A question for the person and result lines for this handoff's own deliveries still count
-  // wherever they stand: the question is put to the person rather than dropped, a merge is
-  // checked with git, and a returned or held delivery is named by its own commit. But lines
-  // that cannot be read do not make such a later message the answer: they may be about
-  // something else, and would hide the answer given before.
   const inside = state.ready.filter(entry => handoff.keys.includes(entry.key));
   const parts = Array.isArray(reply.parts) && reply.parts.length ? reply.parts : [reply.last];
   const before = Math.min(rows.own, parts.length);
-  let answer = reply.last, results = parseResults(answer, inside);
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const parsed = parseResults(parts[index], inside);
-    if (startsWithDecision(parts[index]) || Object.keys(parsed.results).length || (index < before && parsed.ignored > 0)) { answer = parts[index]; results = parsed; break; }
+  // The last message of parts[from, to) that reads like an answer. After an automatic message
+  // from someone else, lines that cannot be read do not count: they may be about something else.
+  const answerIn = (from, to, unreadable) => {
+    for (let index = to - 1; index >= from; index -= 1) {
+      const parsed = parseResults(parts[index], inside);
+      if (startsWithDecision(parts[index]) || Object.keys(parsed.results).length || (unreadable && parsed.ignored > 0)) return { text: parts[index], results: parsed };
+    }
+    return null;
+  };
+  const found = answerIn(0, before, true), later = answerIn(before, parts.length, false);
+  const ask = (text, results) => settle('waiting', '', { decision: true, question: decisionLine(text), results });
+  if (!later) {
+    // Nothing that reads like an answer after someone else's message (or no such message): as always.
+    const answer = found || { text: reply.last, results: parseResults(reply.last, inside) };
+    return startsWithDecision(answer.text) ? ask(answer.text, answer.results) : settle('done', '', { results: answer.results });
   }
-  // The first line of the answer decides the handoff's state; its lines are read either way.
-  return startsWithDecision(answer) ? settle('waiting', '', { decision: true, question: decisionLine(answer), results }) : settle('done', '', { results });
+  // An earlier message with nothing but lines that cannot be read (a provisional note, lines
+  // copied from the handoff's own text) is no answer to protect: only its count is kept.
+  const earlier = found && (startsWithDecision(found.text) || Object.keys(found.results.results).length) ? found : null;
+  const unread = found && !earlier ? found.results.ignored : 0;
+  // Only after someone else's message: that message is the answer. A question in it is put to
+  // the person rather than dropped, a merge is checked with git, and a returned or held delivery
+  // is named by its own commit.
+  if (!earlier) {
+    const results = { results: later.results.results, ignored: later.results.ignored + unread };
+    return startsWithDecision(later.text) ? ask(later.text, results) : settle('done', '', { results });
+  }
+  // An answer before someone else's message and another after it. The later one may be the
+  // integrator's reply to that message. A merge it reports in a line that can be read is laid
+  // over the earlier answer, because git decides that merge. A line that only repeats what the
+  // earlier answer said changes nothing. Anything else in it (a question, another result for a
+  // delivery, a merge line that cannot be read) cannot be told from words meant for someone
+  // else: the earlier answer's results stand, the later merges are checked, and the person is
+  // asked, with the integrator's own earlier question if it had one.
+  const merges = {};
+  let unclear = startsWithDecision(later.text);
+  for (const [key, result] of Object.entries(later.results.results)) {
+    if (result.kind === 'merged' && result.malformed !== true) merges[key] = result;
+    else if (JSON.stringify(result) !== JSON.stringify(earlier.results.results[key])) unclear = true;
+  }
+  const results = { results: { ...earlier.results.results, ...merges }, ignored: earlier.results.ignored };
+  if (startsWithDecision(earlier.text)) return ask(earlier.text, results);
+  return unclear ? ask(startsWithDecision(later.text) ? later.text : '', results) : settle('done', '', { results });
 }
 
 // What may happen next, from the stored state and what the caller observes. Pure: it changes nothing.

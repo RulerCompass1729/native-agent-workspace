@@ -53,7 +53,9 @@ class IntegratorEngine {
   // - notify(info): tells the person about one reason ({ reason, count, roomId, itemId, sessionId? }).
   // - holderRecord(fact): writes, into one space, that a member holding the open handoff gets no
   //   queue work for now ({ roomId, sessionId, name, handoffId, waiting }); returns { recorded }.
-  //   Absent, nothing of the kind is written. nameOf(session) gives the name to write.
+  //   Absent, nothing of the kind is written. nameOf(session) gives the name to write. With
+  //   closed: true the same writer says that the handoff is over. holderLines() gives the spaces
+  //   that were told about an open handoff and not yet about its end, as their records say it.
   constructor(options) {
     this.handoffs = options.handoffs;
     this.designation = options.designation;
@@ -67,6 +69,11 @@ class IntegratorEngine {
     this.notify = options.notify || (async () => {});
     this.holderRecord = options.holderRecord || null;
     this.nameOf = options.nameOf || (session => session?.name);
+    this.holderLines = options.holderLines || null;
+    // Which spaces were told about which holder: one entry per space, handoff and member
+    // ({ roomId, sessionId, handoffId, name }). Kept while the app runs, and read from the
+    // spaces' records after a start (again on the next pass if they cannot be read then).
+    this.holderTold = null;
     this.now = options.now || Date.now;
     this.headWaitMs = options.headWaitMs ?? HEAD_WAIT_MS;
     // How far each space's record was looked through by the last intake (kept while the app runs).
@@ -321,8 +328,10 @@ class IntegratorEngine {
       try { await this.notify(info); } catch { continue; }
       if (handoffs.confirmNotice(reason).confirmed) told.push(reason);
     }
-    if (fault) throw fault;
-    return { shown: written.length + lines, told, unknown: handoffs.unknownNotices() };
+    const result = { shown: written.length + lines, told, unknown: handoffs.unknownNotices() };
+    // The fault is thrown with what this step did all the same, so the caller can still announce it.
+    if (fault) throw Object.assign(fault, { told: result });
+    return result;
   }
 
   // A member that holds the open handoff is kept out of its spaces' queues (see holding()). Each
@@ -330,15 +339,40 @@ class IntegratorEngine {
   // no queue to be kept out of. A space that is being updated is told on a later pass; any other
   // failure to write is thrown. Returns how many lines were written.
   tellHolder(view) {
-    if (!this.holderRecord) return 0;
+    // A record that cannot be read says nothing about who holds what: nothing is written, also no ending.
+    if (!this.holderRecord || this.unreadable()) return 0;
+    const entry = line => `${line.roomId}\n${line.handoffId}\n${line.sessionId}`;
+    let remembered = this.holderTold;
+    if (!remembered) {
+      remembered = new Map();
+      try {
+        for (const line of this.holderLines ? this.holderLines() : []) remembered.set(entry(line), { roomId: line.roomId, sessionId: line.sessionId, handoffId: line.handoffId, name: line.name });
+        this.holderTold = remembered;
+      } catch { remembered = new Map(); /* The spaces' records cannot be read just now: read again on the next pass. */ }
+    }
     const holder = this.holder();
+    let written = 0;
+    const updating = error => { if (error?.uiMessage?.key !== 'error.room.updatingDraftRetained') throw error; };
+    // A handoff the spaces were told about is over (or another one took its place): each of them is told once.
+    for (const [id, told] of [...remembered]) {
+      if (holder && holder.handoffId === told.handoffId && holder.sessionId === told.sessionId) continue;
+      try {
+        if (this.holderRecord({ roomId: told.roomId, sessionId: told.sessionId, name: told.name, handoffId: told.handoffId, closed: true })?.recorded === true) written += 1;
+        remembered.delete(id);
+      } catch (error) { updating(error); }
+    }
     const session = holder && (Array.isArray(view?.sessions) ? view.sessions : []).find(candidate => candidate?.id === holder.sessionId);
-    if (!session) return 0;
-    let spaces = [], written = 0;
-    try { spaces = roomIds(session); } catch { return 0; }
+    if (!session) return written;
+    let spaces = [];
+    try { spaces = roomIds(session); } catch { return written; }
     for (const roomId of spaces) {
-      try { if (this.holderRecord({ roomId, sessionId: holder.sessionId, name: this.nameOf(session), handoffId: holder.handoffId, waiting: holder.waiting })?.recorded === true) written += 1; }
-      catch (error) { if (error?.uiMessage?.key !== 'error.room.updatingDraftRetained') throw error; }
+      try {
+        const name = this.nameOf(session);
+        const result = this.holderRecord({ roomId, sessionId: holder.sessionId, name, handoffId: holder.handoffId, waiting: holder.waiting });
+        if (result?.recorded === true) written += 1;
+        // Remembered where the space says so (now or already), so that its end is told there.
+        if (result?.recorded === true || result?.why === 'known') remembered.set(entry({ roomId, handoffId: holder.handoffId, sessionId: holder.sessionId }), { roomId, sessionId: holder.sessionId, handoffId: holder.handoffId, name });
+      } catch (error) { updating(error); }
     }
     return written;
   }
@@ -361,6 +395,7 @@ class IntegratorEngine {
     }
     try { done.told = await this.tell(view); }
     catch (error) {
+      if (error?.told) done.told = error.told;
       if (this.unreadable()) return { kind: 'unreadable', ...done };
       failure ||= error;
     }

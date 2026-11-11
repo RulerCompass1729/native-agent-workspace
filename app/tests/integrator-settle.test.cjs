@@ -168,7 +168,7 @@ test('a line written while the integrator still worked is not mixed into its lat
   assert.deepEqual(settled.notify, [`conflict:${opened.handoffId}`], 'The person is still told once about the conflict');
 });
 
-test('after an automatic message from someone else the last answer still counts, a question is put to the person, and unreadable lines do not hide the answer before', t => {
+test('after an automatic message from someone else: a later answer counts when there was none before; an earlier answer is only overlaid by later merges, and anything else later asks the person', t => {
   const user = (id, text, extra = {}) => ({ id, role: 'user', text, time: NOW + 2, ...extra });
   const says = (id, text, time) => ({ id, role: 'assistant', text, time });
   const sessionWith = (...rows) => integratorSession({ messages: [{ id: 'tag-1', role: 'user', text: 'handoff', origin: 'naw-dispatch', time: NOW }, ...rows] });
@@ -178,21 +178,58 @@ test('after an automatic message from someone else the last answer still counts,
   const planned = (names, session) => { const { backlog } = fixture(t); handed(backlog, names); return { backlog, action: backlog.plan(later(session)) }; };
   const shape = action => [action.status, action.reason, action.decision, Object.keys(action.results?.results || {}), action.results?.ignored];
   // Each kind of automatic message from someone else, as the queue's reply reader knows them: by origin, or by NAW's marker on a native row.
-  const others = [{ origin: 'naw-dispatch' }, { origin: 'agent-wake' }, { origin: 'agent-control' }, { text: '【NAW 派活】Another task' }, { text: '【NAW 换会话】Hand over' }];
+  // Another member's message through a space carries that member's name, and is one of them.
+  const others = [{ origin: 'naw-dispatch' }, { origin: 'agent-wake' }, { origin: 'agent-control' }, { origin: 'room', name: 'Member B' }, { text: '【NAW 派活】Another task' }, { text: '【NAW 换会话】Hand over' }];
   for (const other of others) {
-    const row = user('other', other.text || 'Synthetic words', other.origin ? { origin: other.origin } : {}), label = JSON.stringify(other);
+    const row = user('other', other.text || 'Synthetic words', { ...(other.origin ? { origin: other.origin } : {}), ...(other.name ? { name: other.name } : {}) }), label = JSON.stringify(other);
     // A question written after it is put to the person, with its text; it is not dropped as "no result".
     const asked = planned(['a', 'b'], sessionWith(row, says('r2', QUESTION, NOW + 3)));
     assert.deepEqual(shape(asked.action), ['waiting', undefined, true, [], 0], label);
     assert.equal(asked.action.question, '这件事怎么办？', label);
+    // An answer before it and a question after it: the question may be about something else, so the person is asked,
+    // and what the earlier answer said is kept, not dropped.
     const late = planned(['a', 'b'], sessionWith(says('r1', merged('a'), NOW + 1), row, says('r2', QUESTION, NOW + 3)));
-    assert.deepEqual(shape(late.action), ['waiting', undefined, true, [], 0], label);
-    // The real answer written after it wins over what the integrator wrote earlier: a provisional line, or lines copied from the handoff's own text.
-    for (const earlier of [`HELD ${commitOf('a')} review-off (will check again)`, 'MERGED <READY 的提交号> as <main 上的提交号> tests <通过数/总数>']) {
+    assert.deepEqual(shape(late.action), ['waiting', undefined, true, [key('a')], 0], label);
+    assert.equal(late.action.question, '这件事怎么办？', label);
+    assert.deepEqual(outcomes(late.backlog.settle(late.action, { handoffId: late.action.handoffId, verified: ok(['a']), mainHead: MAIN2 }, NOW + 60000)).a, 'merged', label);
+    // A later message that only reports merges is laid over the earlier answer, because git decides each merge:
+    // it wins over a provisional line and over lines copied from the handoff's own text, and adds to the rest.
+    for (const [earlier, ignored] of [[`HELD ${commitOf('a')} review-off (will check again)`, 0], ['MERGED <READY 的提交号> as <main 上的提交号> tests <通过数/总数>', 1]]) {
       const real = planned(['a'], sessionWith(says('r1', earlier, NOW + 1), row, says('r2', merged('a'), NOW + 3)));
-      assert.deepEqual(shape(real.action), ['done', undefined, undefined, [key('a')], 0], label + earlier);
+      assert.deepEqual(shape(real.action), ['done', undefined, undefined, [key('a')], ignored], label + earlier);
       assert.deepEqual(outcomes(real.backlog.settle(real.action, { handoffId: real.action.handoffId, verified: ok(['a']), mainHead: MAIN2 }, NOW + 60000)), { a: 'merged' }, label);
     }
+    const both = planned(['a', 'b'], sessionWith(says('r1', `${merged('a')}\nRETURNED ${commitOf('b')} needs a rebase`, NOW + 1), row, says('r2', `Rebased it myself.\n${merged('b')}`, NOW + 3)));
+    assert.deepEqual(shape(both.action), ['done', undefined, undefined, [key('a'), key('b')], 0], label);
+    assert.deepEqual(outcomes(both.backlog.settle(both.action, { handoffId: both.action.handoffId, verified: ok(['a', 'b']), mainHead: MAIN2 }, NOW + 60000)), { a: 'merged', b: 'merged' }, label);
+    // A later RETURNED or HELD does not replace an earlier MERGED (only merges are checked): the earlier results stand and the person is asked.
+    for (const word of [`RETURNED ${commitOf('a')} changed my mind`, `HELD ${commitOf('a')} review-off`, `${merged('b')}\nRETURNED ${commitOf('a')} changed my mind`]) {
+      const replaced = planned(['a', 'b'], sessionWith(says('r1', merged('a'), NOW + 1), row, says('r2', word, NOW + 3)));
+      assert.deepEqual(shape(replaced.action).slice(0, 3), ['waiting', undefined, true], label + word);
+      assert.equal(replaced.action.results.results[key('a')].kind, 'merged', label + word);
+      assert.equal(replaced.action.results.results[key('b')]?.kind, word.startsWith('MERGED') ? 'merged' : undefined, label + word);
+      assert.equal(replaced.action.question, '', 'No question of its own: the person is pointed to the integrator\'s session');
+      // The record takes it: the earlier merge is checked and recorded (so main may be installed), the handoff waits, and the person is told once about each.
+      const settled = replaced.backlog.settle(replaced.action, { handoffId: replaced.action.handoffId, verified: ok(['a', 'b']), mainHead: MAIN2 }, NOW + 60000);
+      assert.deepEqual([outcomes(settled).a, replaced.backlog.snapshot().handoff.status, settled.notify], ['merged', 'waiting', [`conflict:${replaced.action.handoffId}`, `installable:${MAIN2}`]], label + word);
+    }
+    // Its own question stands when only merges follow; the merges are recorded. It also stands when the later message asks something:
+    // that later question may be the reply to the other message, and the one about this handoff must not be hidden.
+    for (const after of [merged('a'), `${QUESTION}\n${merged('a')}`]) {
+      const asking = planned(['a', 'b'], sessionWith(says('r1', '需要你决定：a 和 b 冲突', NOW + 1), row, says('r2', after, NOW + 3)));
+      assert.deepEqual(shape(asking.action), ['waiting', undefined, true, [key('a')], 0], label + after);
+      assert.equal(asking.action.question, 'a 和 b 冲突', label + after);
+    }
+    // A later line that only repeats what the earlier answer said about that delivery changes nothing and asks nobody.
+    const repeated = planned(['a', 'b'], sessionWith(says('r1', `${merged('a')}\nRETURNED ${commitOf('b')} needs a rebase`, NOW + 1), row, says('r2', `As I said: \nRETURNED ${commitOf('b')} needs a rebase`, NOW + 3)));
+    assert.deepEqual(shape(repeated.action), ['done', undefined, undefined, [key('a'), key('b')], 0], label);
+    // A later MERGED line that cannot be read is not laid over the earlier answer (git would never be asked about it): the earlier result stands, and the person is asked.
+    const garbled = planned(['a'], sessionWith(says('r1', merged('a'), NOW + 1), row, says('r2', `MERGED ${commitOf('a')} already`, NOW + 3)));
+    assert.deepEqual(shape(garbled.action).slice(0, 3), ['waiting', undefined, true], label);
+    assert.deepEqual([garbled.action.results.results[key('a')].kind, garbled.action.results.results[key('a')].malformed], ['merged', undefined], label);
+    // An earlier message with nothing but lines that cannot be read is no answer to protect: the later message is the answer, whatever it says.
+    const stray = planned(['a'], sessionWith(says('r1', 'MERGED all of them as abc123d tests 1/1', NOW + 1), row, says('r2', `RETURNED ${commitOf('a')} needs work`, NOW + 3)));
+    assert.deepEqual(shape(stray.action), ['done', undefined, undefined, [key('a')], 1], label);
     // Result lines for this handoff's own deliveries are read wherever they stand: a merge is still checked, a return carries its reason.
     const lines = planned(['a', 'b'], sessionWith(row, says('r2', `${merged('a')}\nRETURNED ${commitOf('b')} needs a rebase`, NOW + 3), says('r3', 'All done here.', NOW + 4)));
     assert.deepEqual(shape(lines.action), ['done', undefined, undefined, [key('a'), key('b')], 0], label);
@@ -221,7 +258,8 @@ test('after an automatic message from someone else the last answer still counts,
   // The person's own step counts wherever it came: typing before or after the other message, and a message that reached the session through a space.
   for (const rows of [[says('r1', merged('a'), NOW + 1), user('other', 'Synthetic words', { origin: 'agent-wake' }), user('typed', 'A word from the person', { origin: 'human', time: NOW + 4 })],
     [user('typed', 'A word from the person', { origin: 'human' }), user('other', 'Synthetic words', { origin: 'agent-wake', time: NOW + 3 }), says('r1', merged('a'), NOW + 4)],
-    [user('space', '@integrator a word in the space', { origin: 'room' }), says('r1', merged('a'), NOW + 4)]]) {
+    [user('space', '@integrator a word in the space', { origin: 'room' }), says('r1', merged('a'), NOW + 4)],
+    [user('space', '@integrator a word in the space', { origin: 'room', name: '  ' }), says('r1', merged('a'), NOW + 4)]]) {
     assert.deepEqual(shape(planned(['a'], sessionWith(...rows)).action).slice(0, 2), ['waiting', 'person-intervened']);
   }
   // A row that only quotes this handoff's header is still the person's typing, with or without an origin.
