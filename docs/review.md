@@ -8724,3 +8724,8 @@ Owner: butler outcome owner.
 - A session that is designated and afterwards put into a space keeps the designation, and its menu still offers the revoke. The step that connects the backlog must not hand anything to an integrator that is inside a space, and must tell the person once.
 - Nothing shows who the integrator is except that session's own menu. A visible mark is for the step that shows handoffs in the space record.
 - The record is read on every state snapshot, as the secretary's is.
+## The operator card keeps nothing of the earlier language after a switch (2026-11-11)
+
+Found while checking the grant form in English. After a language switch four labels of the operator card kept words in the earlier language until the card was drawn again: the observed model, the new session's permission, the reason inside the status line, and the permission select's accessible name. Those words were taken when the card was drawn. They are now read when the label is painted, like the rest of the card.
+
+Owner: the author of this change. Checks: three unit tests, one per kind of card, that fail on the earlier code; the hidden operator journey asserts that nothing in the card stays in Chinese after the switch to English, and fails on the earlier code; full unit checks pass with no failures. Not independently reviewed: four labels in one function, reversible, each covered by a check that was red before and is green now.
