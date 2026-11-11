@@ -70,10 +70,16 @@ function osOptions(language, codex = true, prefix = 'os.decision') {
     key: 'os.butlerQuitWaiting', prefix, name: 'RAW 中文 member', space: 'RAW 中文 space', task: 'RAW 中文 task', question: 'RAW 中文 question',
     notice: { key: 'os.rotationDoneBody', params: { old: 'RAW 中文 old', new: 'RAW 中文 new', reason: '' } },
     migrationNotice: { key: 'os.migrationSavedBody', params: { names: 'RAW 中文 session' } },
+    // B6: the notice for one reason of an integration handoff, as integrator-words.cjs words it.
+    words: require('../integrator-words.cjs').personWords({ reason: 'lock-held:RAW 中文 owner', count: 2 }),
   })) }));
 }
 test('all existing OS option groups use the chosen language while raw names, picker scope and cancel safeguards stay intact', () => {
-  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 20);
+  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 21);
+  // The last surface is the integration handoff notice (B6): a count and a reason, never task text.
+  assert.deepEqual(en[20].value, { title: 'NAW · Integration handoff needs you', body: 'The merge lock is held by RAW 中文 owner. Deliveries waiting: 2' });
+  assert.deepEqual(zh[20].value, { title: 'NAW · 集成交接要你处理', body: '合并锁被 RAW 中文 owner 占着，2 件交付在等' });
+  assert.equal(en[20].type, 'notification'); en.pop(); zh.pop();
   const quit = en.findIndex(option => option.value.title === 'NAW · Quitting');
   assert.ok(quit >= 0); assert.equal(en[quit].value.body, 'Closing the butler; waiting up to 5 seconds.');
   assert.equal(zh[quit].value.body, '正在关闭大管家，最多等待 5 秒。');

@@ -160,7 +160,7 @@ test('the space record is written once per delivery and state, into the space th
   assert.deepEqual(room.recordHandoff(fact({ label: 'handed:H2-00000000', handoffId: 'H2-00000000' })), { recorded: true });
 });
 
-test('the words module only maps: it loads nothing and nothing but the space record loads it', () => {
+test('the words module only maps: it loads nothing, and only the space record and the main process\'s notice load it', () => {
   const source = fs.readFileSync(path.join(__dirname, '../integrator-words.cjs'), 'utf8');
   assert.deepEqual([...source.matchAll(/require\(/g)].length, 0);
   const root = path.join(__dirname, '../..'), loaders = [];
@@ -170,5 +170,5 @@ test('the words module only maps: it loads nothing and nothing but the space rec
     else if (/\.(cjs|mjs|js)$/.test(entry.name) && entry.name !== 'integrator-words.cjs' && /integrator-words(\.cjs)?['"`]/.test(fs.readFileSync(file, 'utf8'))) loaders.push(path.relative(root, file));
   } };
   walk(path.join(root, 'app')); walk(path.join(root, 'scripts'));
-  assert.deepEqual(loaders.sort(), ['app/room-state.cjs', 'scripts/package-mac.cjs']);
+  assert.deepEqual(loaders.sort(), ['app/main.cjs', 'app/room-state.cjs', 'scripts/package-mac.cjs']);
 });

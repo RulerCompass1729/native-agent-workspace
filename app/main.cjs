@@ -612,6 +612,14 @@ async function startQueueDispatcher() {
       observeQueueState: states => butlerIngress?.observeQueues(states),
     };
     if (backgroundTest && process.env.NAW_TEST_QUEUE_DIRECTORY_MIGRATION === '1') options.migrateDirectories = true;
+    // B6 integration handoffs are closed in the daily app: only a verified isolated test run can
+    // open them, until the person's own actions for a held or waiting handoff exist. Closed,
+    // nothing is built and the dispatcher runs exactly as before.
+    if (backgroundTest && process.env.NAW_TEST_INTEGRATION_HANDOFF === '1') {
+      options.integration = dispatcher => integrationEngine(dispatcher);
+      options.integrationUnreadable = () => notifyHandoff(null);
+      options.integrationFailed = () => notifyHandoff(undefined);
+    }
     // Only a verified isolated test run may lower the record limit, the memory limit
     // (and the age a session needs before a memory rotation) or the quiet time after the person's input.
     const testContent = Number(process.env.NAW_TEST_QUEUE_CONTENT_LIMIT);
@@ -2025,4 +2033,44 @@ function recordMigration(option, screens, result) {
   } catch {
     // The private log remains when OS delivery fails.
   }
+}
+// B6: the engine that hands delivered work to the person's designated integrator, for one
+// dispatcher. It sends through the dispatcher's own send (the same path, switches and "not
+// sent" rules as a queue item), writes space records through the space state, and reads git
+// only in the repository the designated integrator works in, whose main branch is "main".
+function integrationEngine(dispatcher) {
+  // Loaded here, not at the top: with the switch closed the daily app does not even read these files.
+  const { IntegrationHandoffs } = require('./integrator-handoff.cjs');
+  const { IntegratorEngine } = require('./integrator-engine.cjs');
+  const integratorGit = require('./integrator-git.cjs');
+  const handoffs = new IntegrationHandoffs(dataDir), readers = new Map();
+  const reader = () => {
+    try {
+      const integrator = integratorRole.current();
+      const session = integrator && dispatcher.client?.snapshot().sessions.find(s => s.id === integrator.sessionId && s.nativeId === integrator.nativeId);
+      const folder = session?.cwd;
+      if (typeof folder !== 'string' || !path.isAbsolute(folder)) return null;
+      if (!readers.has(folder)) { if (readers.size >= 8) readers.clear(); readers.set(folder, integratorGit.reader(folder)); }
+      return readers.get(folder);
+    } catch { return null; }
+  };
+  // A question git cannot be asked just now (no integrator, no folder) is answered "unknown".
+  const ask = name => async (...args) => { const read = reader(); return read ? read[name](...args) : null; };
+  return new IntegratorEngine({ handoffs, designation: () => integratorRole.current(), mainHead: () => ask('branch')('main'),
+    reader: { commit: ask('commit'), isAncestor: ask('isAncestor'), changes: ask('changes') },
+    send: (session, text, handoffId) => dispatcher.send(session, text, handoffId), typing: sessionId => dispatcher.noteHuman(sessionId),
+    record: fact => roomState.recordHandoff(fact), notify: info => notifyHandoff(info) });
+}
+// One notice for one reason of the integration handoff; without a reason, that its record
+// cannot be read (null) or that the handoff step itself failed (undefined). It says how many
+// deliveries, never their text. When the system cannot show a notice this throws: the engine
+// then keeps the notice as "may not have been shown" and does not repeat it.
+function notifyHandoff(info) {
+  const words = info === null ? { title: 'os.handoffTitle', key: 'os.handoffUnreadable', params: {} }
+    : info === undefined ? { title: 'os.handoffTitle', key: 'os.handoffFailed', params: {} } : require('./integrator-words.cjs').personWords(info);
+  if (!words) return;
+  if (!Notification.isSupported()) throw Error('Notifications are unavailable');
+  const notification = new Notification({ title: displayText(words.title), body: displayText(words.key, words.params) });
+  notification.once('click', () => focusOrOpen());
+  notification.show();
 }

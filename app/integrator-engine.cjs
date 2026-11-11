@@ -23,6 +23,15 @@ if (typeof NATIVE_DRAFT_KEY !== 'string') throw Error('The dispatcher no longer 
 // Stands in for main's head while only asking whether a handoff would open; git is read only then.
 const SOME_HEAD = '0'.repeat(40);
 const none = why => ({ kind: 'none', why });
+// Reasons a handoff did not open that only the person can change: they were asked about the
+// integrator, automatic messages are off, that session is paused for them, its backend needs an update.
+const PERSON_ONLY = ['integrator-asked', 'automatic-messages-off', 'paused', 'backend-update-needed'];
+const who = designated => (designated && typeof designated === 'object' ? `${designated.sessionId}\n${designated.nativeId}` : '');
+// A cheap sign of where a space's record ends: it changes whenever an event is added.
+const mark = room => `${room.events.length}:${room.events.at(-1)?.id ?? ''}`;
+// Whether the caller's list of sessions is complete, so that a session missing from it is gone.
+// The caller says so outright, or answers for the one session that is looked for.
+const complete = (view, sessionId) => (typeof view?.complete === 'function' ? view.complete(sessionId) === true : view?.complete === true);
 
 class IntegratorEngine {
   // - handoffs: the record (IntegrationHandoffs).
@@ -48,14 +57,34 @@ class IntegratorEngine {
     this.notify = options.notify || (async () => {});
     this.now = options.now || Date.now;
     this.headWaitMs = options.headWaitMs ?? HEAD_WAIT_MS;
+    // How far each space's record was looked through by the last intake (kept while the app runs).
+    this.looked = new Map();
+    // Why the last attempt to hand out stopped, when only the person can change that; null otherwise.
+    this.blocked = null;
   }
   // The record cannot be read: nothing is taken in or handed out until the person has looked at it.
   unreadable() { return this.handoffs.failed === true; }
 
-  // Whether a pass is worth making: something can be handed out, or a handoff is open.
-  hasWork() {
-    try { const summary = this.handoffs.summary(); return summary.deliverable > 0 || summary.handoff !== null; }
-    catch { return false; }
+  // Whether a pass is worth making, that is, whether something can move without the person:
+  // a space whose record changed since the last intake (it may hold a new delivery); a handoff
+  // that was sent and awaits its answer; a delivery to hand out when somebody is designated; or
+  // a space record or notice that is still owed. What waits for the person (nobody designated,
+  // a waiting handoff) needs no passes: the person's step starts them again.
+  hasWork(rooms) {
+    try {
+      if (Array.isArray(rooms) && rooms.some(room => room && typeof room.id === 'string' && Array.isArray(room.events) && this.looked.get(room.id) !== mark(room))) return true;
+      const summary = this.handoffs.summary();
+      if (summary.handoff?.status === 'sent') return true;
+      // Deliveries to hand out, or held because an integrator was gone, can move when somebody is
+      // designated, unless the last attempt ended on something only the person can change.
+      const waiting = summary.deliverable > 0 || this.handoffs.reasonsHeld().some(reason => reason.startsWith('integrator-missing:'));
+      if (!summary.handoff && waiting) {
+        const designated = this.designation();
+        // A block is over as soon as the person designates somebody else (or somebody at all).
+        if (designated && !(this.blocked && this.blocked.designated === who(designated))) return true;
+      }
+      return this.handoffs.pendingNotices().length > 0 || this.handoffs.showable().length > 0;
+    } catch { return false; }
   }
 
   // Take in the deliveries recorded in the given spaces. Each is a READY fact NAW wrote into its
@@ -83,6 +112,9 @@ class IntegratorEngine {
         if (result.stored) { report.stored.push(monitor.key); report.superseded.push(...result.superseded); }
         else if (result.why === 'backlog-full') report.full = true;
       }
+      // This space's record has been looked through up to here. A delivery left out because the
+      // backlog was full is looked for again.
+      if (!report.full) this.looked.set(room.id, mark(room));
     }
     return report;
   }
@@ -96,7 +128,7 @@ class IntegratorEngine {
     let inSpace = false, membership = true;
     // Only the designated native session's membership matters; another one under that id is "gone" to the record.
     if (session && session.nativeId === integrator.nativeId) { try { inSpace = roomIds(session).length > 0; } catch { membership = false; } }
-    return { membership, input: { integrator, session, inSpace, complete: view?.complete === true, wakePolicy: view?.wakePolicy, now: view?.now,
+    return { membership, input: { integrator, session, inSpace, complete: complete(view, usable ? integrator.sessionId : undefined), wakePolicy: view?.wakePolicy, now: view?.now,
       idleSince: view?.idleSince, humanAt: view?.humanAt, settleMs: view?.settleMs, humanQuietMs: view?.humanQuietMs,
       busy: Boolean(session) && typeof view?.busy === 'function' && view.busy(session.id) === true, review: view?.review, checkpoint: view?.checkpoint } };
   }
@@ -111,6 +143,16 @@ class IntegratorEngine {
   // whose outcome is unknown is never repeated, and a crash in between leaves an unconfirmed
   // handoff that is later settled as such.
   async handOut(view, look) {
+    const result = await this.attempt(view, look);
+    // Remembered for hasWork(): what only the person can change does not keep passes going. Any
+    // pass that runs for another reason (a window's own check, queue work) tries again and clears it.
+    const personOnly = result.kind === 'ask-integrator' || result.kind === 'none' && PERSON_ONLY.includes(result.why);
+    let designated = null;
+    if (personOnly) { try { designated = this.designation(); } catch { /* Unknown: any later designation ends the block. */ } }
+    this.blocked = personOnly ? { why: result.why || result.reason, designated: who(designated) } : null;
+    return result;
+  }
+  async attempt(view, look) {
     const handoffs = this.handoffs;
     if (handoffs.summary().handoff) return none('handoff-open');
     const first = this.observe(view);
@@ -162,7 +204,7 @@ class IntegratorEngine {
     let integrator;
     try { integrator = this.designation(); } catch { integrator = undefined; }
     const session = (Array.isArray(view?.sessions) ? view.sessions : []).find(candidate => candidate?.id === handoff.integrator.sessionId);
-    return { integrator, session, complete: view?.complete === true, now: view?.now, idleSince: view?.idleSince, settleMs: view?.settleMs, unconfirmedMs: view?.unconfirmedMs };
+    return { integrator, session, complete: complete(view, handoff.integrator.sessionId), now: view?.now, idleSince: view?.idleSince, settleMs: view?.settleMs, unconfirmedMs: view?.unconfirmedMs };
   }
 
   // Settle the open handoff if it can be settled now. An answer that reports merges is checked

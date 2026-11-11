@@ -612,7 +612,7 @@ test('planning is pure, and the module only records: no timer, process, network,
   for (const word of ['setTimeout', 'setInterval', 'setImmediate', 'child_process', 'spawn', 'execFile', 'fetch(', 'http', 'net.', 'integrator-lock', 'merge --', "'git'", 'rev-parse']) {
     assert.ok(!code.includes(word), word);
   }
-  // Not connected yet: nothing in the app or its scripts loads it.
+  // Only the main process loads it, behind the closed switch (integrator-dispatch.test.cjs); the packaging list names it.
   const root = path.join(__dirname, '../..'), loaders = [];
   const walk = directory => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -622,5 +622,5 @@ test('planning is pure, and the module only records: no timer, process, network,
     }
   };
   walk(path.join(root, 'app')); walk(path.join(root, 'scripts'));
-  assert.deepEqual(loaders, []);
+  assert.deepEqual(loaders.sort(), ['app/main.cjs', 'scripts/package-mac.cjs']);
 });
