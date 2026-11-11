@@ -11,10 +11,12 @@ function createStatePush(send) {
   let waitingValue = null;
   let superseded = 0;
 
+  // A snapshot counts as in transit only once the send returned. If the send throws, that snapshot is
+  // lost, as it was before the bound existed, and the window is not left waiting for a reply.
   function deliver(value) {
     sequence += 1;
-    unacknowledged = sequence;
     send(value, sequence);
+    unacknowledged = sequence;
   }
 
   function push(value) {
@@ -45,11 +47,21 @@ function createStatePush(send) {
     return true;
   }
 
+  // Another path just sent the page a newer complete state. The waiting snapshot is older than that one
+  // and must not arrive after it.
+  function discardWaiting() {
+    if (waiting) {
+      superseded += 1;
+    }
+    waiting = false;
+    waitingValue = null;
+  }
+
   function status() {
     return { sequence, unacknowledged, waiting, superseded };
   }
 
-  return { push, acknowledged, status };
+  return { push, acknowledged, discardWaiting, status };
 }
 
 module.exports = { createStatePush };

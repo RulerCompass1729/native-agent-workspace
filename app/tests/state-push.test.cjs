@@ -82,6 +82,46 @@ test('a slow page under a flood receives a bounded number of snapshots and alway
   assert.equal(sent.at(-1).value, 'state 3000');
 });
 
+test('a send that throws loses that snapshot only; the window is not left waiting for a reply', () => {
+  const sent = [];
+  let fail = true;
+  const push = createStatePush((value, sequence) => {
+    if (fail) {
+      throw new Error('value could not be cloned');
+    }
+    sent.push({ value, sequence });
+  });
+  assert.throws(() => push.push('a'), /could not be cloned/);
+  assert.equal(push.status().unacknowledged, 0);
+  fail = false;
+  assert.equal(push.push('b'), true);
+  assert.deepEqual(sent, [{ value: 'b', sequence: 2 }]);
+
+  // The same failure while handing over the waiting snapshot after an acknowledgement.
+  push.push('c');
+  fail = true;
+  assert.throws(() => push.acknowledged(2), /could not be cloned/);
+  assert.deepEqual(push.status(), { sequence: 3, unacknowledged: 0, waiting: false, superseded: 0 });
+  fail = false;
+  assert.equal(push.push('d'), true);
+  assert.equal(sent.at(-1).value, 'd');
+});
+
+test('a newer complete state sent by another path discards the waiting snapshot, not the one in transit', () => {
+  const { sent, push } = recorder();
+  push.push('in transit');
+  push.push('older than the refresh');
+  push.discardWaiting();
+  assert.deepEqual(push.status(), { sequence: 1, unacknowledged: 1, waiting: false, superseded: 1 });
+  assert.equal(push.acknowledged(1), true);
+  assert.equal(sent.length, 1, 'nothing older is delivered after the refresh');
+  assert.equal(push.push('after the refresh'), true);
+  assert.equal(sent.at(-1).value, 'after the refresh');
+  // With nothing waiting it changes nothing.
+  push.discardWaiting();
+  assert.equal(push.status().superseded, 1);
+});
+
 test('every full-state send in the main process goes through pushState', () => {
   const helperStart = mainSource.indexOf('function pushState(context, display)');
   const helperEnd = mainSource.indexOf('function bindClient(context)');
@@ -90,7 +130,10 @@ test('every full-state send in the main process goes through pushState', () => {
   assert.doesNotMatch(outside, /send\('workspace:state'/, 'no send of full state bypasses pushState');
   assert.equal((outside.match(/pushState\(context, /g) || []).length, 3, 'the state event, the room broadcast and the quit notice');
   assert.match(outside, /register\('uiReady', c => \{[^\n]*c\.armStatePush\?\.\(\)/);
-  assert.equal((outside.match(/bindClient\(context\); bindStatePush\(context\);/g) || []).length, 2, 'ordinary and background windows');
+  assert.equal((outside.match(/bindStatePush\(context\);/g) || []).length, 1, 'ordinary windows; a background window loads no document and never reports ready');
+  // The reconnect refresh is the one other complete state sent to the page; nothing older may follow it.
+  const reconnect = outside.slice(outside.indexOf("context.statePush?.discardWaiting();"), outside.indexOf("context.win.webContents.send('workspace:reconnected', refreshed);"));
+  assert.ok(reconnect.length > 0 && reconnect.length < 80, 'the waiting snapshot is discarded right before the reconnect refresh is sent');
   assert.match(outside, /ipcMain\.handle\('workspace:state-rendered'/);
 });
 
@@ -177,6 +220,12 @@ test('a ready page gets one snapshot at a time; a reload or a renderer crash rel
   h.push('f');
   h.push('g');
   assert.deepEqual(h.sent.at(-1), { channel: 'workspace:state', value: 'f', sequence: 1 });
+  // A second ready report from the same document keeps the bound: 'g' still waits and numbering goes on.
+  h.context.armStatePush();
+  h.push('g2');
+  assert.deepEqual(h.sent.at(-1), { channel: 'workspace:state', value: 'f', sequence: 1 });
+  h.acknowledge(1);
+  assert.deepEqual(h.sent.at(-1), { channel: 'workspace:state', value: 'g2', sequence: 2 });
   h.pageEvents.get('render-process-gone')();
   h.push('h');
   assert.deepEqual(h.sent.at(-1), { channel: 'workspace:state', value: 'h', sequence: 0 });

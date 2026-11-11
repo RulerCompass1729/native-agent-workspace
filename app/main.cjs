@@ -343,7 +343,8 @@ function discardReveal(context) {
 }
 // Every 'workspace:state' send goes through here. Once a window's page has reported that it is ready, one
 // full snapshot is in transit at a time and the newest wins (state-push.cjs); until then, and for a window
-// whose page never reports ready, the snapshot is sent as before with sequence 0, which needs no reply.
+// whose page never reports ready (a background window loads no document), the snapshot is sent as before
+// with sequence 0, which needs no reply.
 function pushState(context, display) {
   if (context.win.isDestroyed()) {
     return;
@@ -358,6 +359,10 @@ function pushState(context, display) {
 // acknowledgement for a snapshot sent to the old document can no longer arrive.
 function bindStatePush(context) {
   context.armStatePush = () => {
+    // A second ready report from the same document keeps the bound and its numbering.
+    if (context.statePush) {
+      return;
+    }
     context.statePush = createStatePush((value, sequence) => {
       if (!context.win.isDestroyed()) {
         context.win.webContents.send('workspace:state', value, sequence);
@@ -766,7 +771,12 @@ async function replaceBackendSockets(key) {
   } catch (error) { for (const replacement of replacements) replacement.client.close(); throw error; }
   for (const { context, client, state } of replacements) {
     context.client.replaceService(key, client, state);
-    if (!context.client.socket.destroyed && !context.win.isDestroyed()) context.win.webContents.send('workspace:reconnected', displayState(await context.client.refresh(), context));
+    if (!context.client.socket.destroyed && !context.win.isDestroyed()) {
+      const refreshed = displayState(await context.client.refresh(), context);
+      // This complete state is newer than any snapshot still waiting behind the bound.
+      context.statePush?.discardWaiting();
+      context.win.webContents.send('workspace:reconnected', refreshed);
+    }
   }
 }
 let backendSwitching = null, switchRecords = {};
@@ -1012,7 +1022,7 @@ async function boot() {
           nativeReceived: message.status === 'submitted', status: message.status, body: message.text };
       };
       const id = win.webContents.id;
-      windows.set(id, context); bindClient(context); bindStatePush(context);
+      windows.set(id, context); bindClient(context);
       win.on('closed', () => { windows.delete(id); client.close(); });
       return context;
     } }); backgroundUnavailable = false;
