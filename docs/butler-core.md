@@ -95,7 +95,7 @@ Codex flag and does not infer provider compatibility from a saved profile name.
 The desktop pairs the dedicated NativeHost/service driver and name-only profile
 checks with the existing backend, without preparing or starting it. Native provider compatibility remains
 unverified. The next source stage needs restricted automatic context and tool execution,
-the remaining typed user-request/READY ingress and controller binding, the
+the remaining direct person-request ingress and controller binding, the
 person-only menu/dialog and review table, a production queue transaction adapter
 and the non-member rotation/create-plan hooks. The core's pure
 rotation candidate filter and role successor are not a claim that those hooks
@@ -118,6 +118,31 @@ After those gates and integration, a real working day in record-only mode needs
 the person's review: at least nine tenths agreement and zero repeat questions,
 with the actual sample count. Synthetic tests cannot pass that acceptance or
 enable queue-only/lifecycle execution.
+The rate counts distinct admitted suggestions once, even when they appear
+repeatedly. Suspended candidates are listed separately and excluded from its
+denominator. Complete occurrences and sources remain available for audit;
+unreviewed suggestions are never assumed to agree. Fewer than ten distinct
+suggestions means insufficient samples, with no agreement conclusion. No durable
+review or canonical suggestion projection is implemented in this checkpoint.
+
+Both host code and the record-table renderer must use the same arithmetic from
+`butler-review-policy.js`, rather than copy a sample threshold:
+
+```js
+const { MIN_REVIEW_SUGGESTIONS, agreementSummary } = require('./butler-review-policy.js');
+const quality = agreementSummary({ distinctSuggestions, agreedSuggestions, confirmed });
+```
+
+The browser export is `NativeButlerReviewPolicy`. `MIN_REVIEW_SUGGESTIONS` is 10.
+`quality.status` is `insufficient-samples` below that value, `unreviewed` before
+explicit confirmation, and `reviewed` otherwise. The first two return null for
+both `agreementRate` and `agreementMeetsThreshold`; the reviewed case calculates
+the rate and compares the nine-tenths threshold exactly. Callers provide the
+deduplicated admitted-suggestion counts, excluding suspensions. This arithmetic
+does not establish actual question delivery, a full working day, overall
+acceptance or authority to activate the butler. Logical delivery reservations
+and blocked candidates cannot certify zero repeat questions; confirmed delivery
+instrumentation is a separate required gate before the working-day trial.
 
 ## Source checks
 
@@ -131,17 +156,21 @@ the intake ledger owner; this checkpoint does not qualify concurrent writers.
 
 ## Passive intake boundaries
 
-An ordinary completed queue item is not a READY handoff. No task-board, private
-conversation or terminal text is scanned to infer one. Typed READY and direct
-person-request ingress remain a later checkpoint; existing synthetic controller
-READY batching is not a claim that a production READY producer is connected.
+An ordinary completed queue item is not a READY handoff. B6's typed completion
+fact now retains a compact source with the complete original queue task, branch
+and commit in the same durable write. Only after that write does its intake
+callback admit the source to the existing ledger. Recovery uses the retained
+source even after its queue item is trimmed; no task-board, private conversation
+or additional terminal parser is used. Earlier B6 monitor rows without that
+auxiliary source remain in space history and are not backfilled from short text.
+Direct person-request ingress and a live controller binding remain later work.
 When a trusted intake has already committed an event, its future controller
 binding must call `notifyPersisted(eventId)`, which reads that exact pending
 event from the ledger. Calling `receive` with the event again retains its
 existing duplicate semantics and does not start a READY window. Notifications
 reuse the original event time and one non-extending timer; they cannot admit new
 text, repeat a consumed event, or authorize a failed batch retry. This is a
-dormant source interface, not an activation switch or a connected producer.
+dormant scheduling interface, not an activation switch or a live controller binding.
 A persisted recovery event also grants no retry authority; sending that same ID
 through `receive` remains a duplicate. A future host must use a separate,
 explicitly authorized retry path rather than replaying a notification.

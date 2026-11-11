@@ -8360,3 +8360,29 @@ Author-run, zero model calls: the module against the real Claude 2.1.319, 2.1.32
 Found on the way, not caused by this change: four of the first five trial runs stopped at the native trust question, one of them with the background check removed. The retained service screen of one run shows the arrow key had been written to the native terminal and the choice had not moved; a question that has just appeared can drop a key. The trial now presses again only while the screen still shows the other choice, at most three times, and confirms only once Yes is shown selected; on a failure it keeps the service's own screen. Why the native program drops the key is not established.
 
 Independent read-only review (one session, two rounds; the CLI reported the model as claude-opus-5-5): PASS on `19f7faf` (`2cd04b5` after the rebase onto `51fafd6`) with notes, taken: the sandbox allowed writes outside the home folder and reads of the Claude configuration (both now denied); a refusal by the sandbox itself was stored as a finished run (now retried); a comment and the guide said the result was logged; the final head had no passing trial (rerun). Then PASS on `413624d` (`932fb03` after the rebase) with notes, taken in a commit that changes only comments, the guide's wording and one test's readiness check: the guide names the two protected paths and the crash case, the close test waits for the program itself, and the mutation run was repeated on the commit. Not verified: the sandbox's message when a profile fails to apply; the read denial for the account's real home (testing it would read the real configuration).
+
+## B4 typed READY source and shared review sample policy (2026-11-10)
+
+Requested outcome: a typed queue handoff retains its full original task and enters
+the dormant butler ledger once, including after queue trimming and restart. The
+existing B6 monitor and queue change remain one durable write; intake runs only
+after that write. No additional reply parser or private-history scan is added.
+Malformed auxiliary data blocks intake without making its space unavailable.
+Activation and the working-day record period remain off.
+
+The person's acceptance rule uses distinct admitted suggestions once, excluding
+suspensions; a shared Node/browser policy requires ten before an agreement
+conclusion and compares nine tenths exactly after explicit confirmation. This
+checkpoint does not implement a canonical suggestion projection, durable human
+review, actual question-delivery measurement or overall working-day acceptance.
+
+Author evidence: typed-source tests 31 pass; actual RoomState/intake/ledger binding
+16 pass (7 pass / 9 fail on the prior binding); shared policy 13 pass. Related
+no-model sandbox checks: 340 pass, zero fail or skip. Full isolated unit suite:
+4633 pass, zero fail or skip. Existing B6 dependency tests/review are reused;
+new integration and changed product paths are included in this checkpoint review.
+Independent review approved this exact scoped checkpoint, with no blocking
+findings. Browser loading and the canonical suggestion projection remain later
+work; damaged-monitor recovery is not a universal repair promise. Owner: butler
+outcome owner. Installed use remains pending integration and the separately
+authorized working-day trial.
