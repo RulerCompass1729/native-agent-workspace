@@ -115,6 +115,18 @@ async function run() {
   await delay(500);   // the shell decides between the open sidebar and the rail from the new width
   assert.equal(await surface.getAttribute('data-collapsed'), 'false', 'This small window still has the open sidebar');
   await sameNameView('English small window');
+  // Narrower still: wherever the shell keeps the open sidebar, the same holds; where it switches to the rail, every row shows its id.
+  const widths = {};
+  for (const width of [1060, 1040, 1010]) {
+    await browserWindow.evaluate((win, value) => win.setContentSize(value, 620), width);
+    await until(async () => (await browserWindow.evaluate(win => win.getContentSize()))[0] === width, `Window ${width} wide`);
+    await delay(500);
+    const rail = await surface.getAttribute('data-collapsed') === 'true';
+    widths[width] = { rail, sidebar: Math.round(await surface.evaluate(node => node.getBoundingClientRect().width)) };
+    if (rail) for (const id of ids) assert.equal(await idShown(page, id), true, `The rail at ${width} shows every row's short id`);
+    else await sameNameView(`English window ${width} wide`);
+  }
+  console.log('Sidebar at small widths:', JSON.stringify(widths));
   await browserWindow.evaluate(win => win.setContentSize(950, 620));
   await until(async () => await surface.getAttribute('data-collapsed') === 'true', 'The narrow rail');
   for (const id of ids) assert.equal(await idShown(page, id), true, 'The rail shows every row\'s short id, as before');
