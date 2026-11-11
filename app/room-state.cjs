@@ -3,6 +3,7 @@ const { spaceWords } = require('./integrator-words.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
 const { validateName } = require('./session-labels.cjs');
 const { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
 const { captureSource, prepareBatch, assertCurrentSources, sameOperation, validateBatch } = require('./space-merge.cjs');
@@ -199,6 +200,17 @@ class RoomState {
       const spaces = { ...this.spaces, rooms: this.spaces.rooms.map(r => r.id === id ? next : r) };
       this.write(this.spacesFile, spaces); this.spaces = spaces;
     }
+  }
+  directoryTrustIsolation() {
+    return this.value.directoryTrustIsolation === undefined ? undefined : structuredClone(this.value.directoryTrustIsolation);
+  }
+  saveDirectoryTrustIsolation(next) {
+    if (!next || typeof next !== 'object' || Array.isArray(next)) throw Error('Invalid directory trust isolation');
+    const copy = structuredClone(next);
+    if (!isDeepStrictEqual(copy, JSON.parse(JSON.stringify(copy)))) throw Error('Invalid directory trust isolation');
+    // Internal safety state is independent of cleared history and does not
+    // change the person's metadata revision or appear in renderer projections.
+    this.commit({ ...this.value, directoryTrustIsolation: copy });
   }
   create(name) {
     if (this.spacesWarning) throw Object.assign(Error(this.spacesWarning), { uiMessage: this.spacesWarningUiMessage });
@@ -752,7 +764,7 @@ class RoomState {
   }
   rotationEvent(ids, phase, oldName, detail, receiptId) {
     if (receiptId !== undefined && (typeof receiptId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(receiptId))) throw Error('Invalid rotation receipt');
-    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', needsTrust: 'notice.rotation.needsTrust', trustTimedOut: 'notice.rotation.trustTimedOut', trustTimeoutUnconfirmed: 'notice.rotation.trustTimeoutUnconfirmed', trustCleanupUnconfirmed: 'notice.rotation.trustCleanupUnconfirmed' };
+    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', needsTrust: 'notice.rotation.needsTrust', trustTimedOut: 'notice.rotation.trustTimedOut', trustTimeoutUnconfirmed: 'notice.rotation.trustTimeoutUnconfirmed', trustCleanupUnconfirmed: 'notice.rotation.trustCleanupUnconfirmed', trustStateInvalid: 'notice.rotation.trustStateInvalid', trustStateUnknown: 'notice.rotation.trustStateUnknown' };
     for (const id of ids) {
       try {
         this.metadata(id);
@@ -761,7 +773,7 @@ class RoomState {
         continue;
       }
       if (receiptId && this.metadata(id).events.some(event => event.kind === 'rotation' && event.rotationReceipt === receiptId)) continue;
-      const params = { name: oldName, detail: detail || '' };
+      const params = phase === 'trustStateUnknown' ? {} : { name: oldName, detail: detail || '' };
       const event = { kind: 'rotation', ...(receiptId ? { rotationReceipt: receiptId } : {}), ...uiNotice(keys[phase], params) };
       this.update({}, event, id);
     }
