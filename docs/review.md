@@ -8906,3 +8906,20 @@ or inserting a duplicate makes the equality guard fail. Related checks: 468 pass
 zero fail/skip. New-base full-suite and actual package closure results are kept
 with the lane handoff. The integrator requested this change and owns the combined
 independent review before merging; no additional activation path is introduced.
+
+## 2026-11-10 product/foundation decision provenance
+
+Decision evidence for this update is solely the complete section 9 of the local architecture record, including the 23:1x statements. User quotations and approval labels are preserved with dates; old entries remain, with explicit replacement scopes. DSH layering is an approved direction and is not presented as completed integration.
+
+The initial invocation reached its time limit without a verdict; the bounded same-session closeout requested changes: B1 risked dropping old cost, consent, event and tool gates; B2 narrowed the first complete layering item labelled approved in the source; B3 omitted the conflict with the existing V7 entry-agent capability requirement. The corrected documents retain old gates until explicit replacement, copy the full layering item with the question/label scope ambiguity recorded, and place tool-capability applicability in V18 for the person to decide. The same reviewer accepted that delta. Its two nonblocking recommendations were applied: remove the unsupported word “only” from the old shell description and include V12's existing secretary-tool condition in the V18 background.
+
+Author checks compare complete quoted text and retained old lines, unique tension IDs, local links and the file scope. No runtime or CLAUDE.md change, GUI qualification, new cost allowance or permission expansion is claimed. Follow-up CLAUDE references are handed to the integrator; tool-scope questions are handed to the integrator to collect for the person's decision; this log is a review record, not an additional source of user decisions.
+
+
+## 2026-11-11 correction of public decision scope
+
+Integration review of 9dc699a required the temporary instruction to be scoped as non-standing and flagged private workflow details; the integrator chose the stricter fix of removing them rather than relabelling them as a time-limited record. Only the product confirmation entries remain; the complete operational source stays private.
+
+The explicitly authorized public excerpts from the earlier approved decisions now supply the default/global count, the exact vision replacement, and the DeepSeek pro selection. No credential continuation is copied. The two layering questions and the existing tool, record-only and off gates are recorded without granting new authority. The earlier review record remains history; its quote-fidelity check alone did not establish suitability for permanent public documentation.
+
+The approval excerpt is retained with its date for all three product confirmations. V14 is now an implementation check outside the pending-person-decision table; the record-only boundary is stated in full.
