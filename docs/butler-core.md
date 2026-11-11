@@ -489,6 +489,14 @@ the same opaque window verifier; it has no agent catalog entry. See
 The host must explicitly pass its shared `ButlerReadAudit` instance; there is no
 implicit audit directory based on the role record's path. Reconstructed business
 capabilities and the human reader use that shared store.
+Business records through the fixed base entry and private audit implementation,
+so an instance or subclass public-method override cannot supply its receipt or
+skip the allowance. The base static check and record entry cannot be replaced.
+This protects host API composition, not arbitrary same-process code execution.
+Runtime acceptance still requires the actual Main factory to inject its real
+`dataDir` and the single `butlerReadAudit` also used by the person's reader.
+Two matching but incorrect directory arguments do not establish correctness;
+that production factory injection remains unverified in this checkpoint.
 Human reads also return journal byte counts and a fixed 75% (24 MiB) engineering
 prewarning. The 32 MiB cap, UTC allowance and retained records stay unchanged.
 An optional trusted-host callback emits only capacity metadata after a successful

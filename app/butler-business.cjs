@@ -112,7 +112,7 @@ class ButlerBusiness {
         if (query.kind === 'spaces') scope.includeArchived = query.includeArchived;
         if (query.kind === 'deliveries') Object.assign(scope, { fromTime: query.fromTime, throughTime: query.throughTime });
         try {
-          const receipt = this.#readAudit.recordPage({
+          const receipt = ButlerReadAudit.record(this.#readAudit, {
             actor: { sessionId: selected.identity.sessionId, nativeId: selected.identity.nativeId,
               selectionRevision: selected.selectionRevision, runnerRef: selected.runner.runnerRef },
             query: scope, result: { count: page.records.length, recordRefs: page.records.map(row => row.recordRef),

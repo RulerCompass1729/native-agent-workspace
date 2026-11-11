@@ -74,12 +74,64 @@ test('a role revoked while the receipt is recorded cannot receive the prepared p
   assert.equal(f.audit.read(f.person).records.length, 1);
 });
 
-test('a non-synchronous or missing audit receipt cannot approve a page', t => {
+test('a non-synchronous or missing public receipt cannot replace the real internal audit', t => {
   for (const returned of [undefined, true, Promise.resolve({ sequence: 1, pageOfDay: 1 })]) {
     const f = fixture(t), cap = f.bind();
     const method = t.mock.method(f.audit, 'recordPage', () => returned);
-    assert.throws(() => cap.invoke('readBusiness', query), { code: 'ERR_BUTLER_BUSINESS_AUDIT' });
+    assert.equal(cap.invoke('readBusiness', query).records[0].text, BODY);
+    assert.equal(method.mock.callCount(), 0);
+    assert.equal(f.audit.read(f.person).throughSequence, 1);
     method.mock.restore();
+  }
+});
+
+for (const kind of ['subclass', 'own']) test(`a same-root ${kind} recordPage override cannot forge a receipt or bypass the 64-page allowance`, t => {
+  const f = fixture(t); let fakeCalls = 0;
+  const fake = () => { fakeCalls++; return { sequence: 1, pageOfDay: 1 }; };
+  class OverriddenAudit extends ButlerReadAudit { recordPage() { return fake(); } }
+  const audit = kind === 'subclass' ? new OverriddenAudit(f.directory, { authorizePerson: value => value === f.person, now: () => NOW }) : f.audit;
+  if (kind === 'own') audit.recordPage = fake;
+  const business = new ButlerBusiness({ dataDir: f.directory, role: f.role, roomState: f.room, view: () => ({ records: f.records }), readAudit: audit });
+  const cap = business.bind(f.actor, f.expected);
+  for (let index = 0; index < 64; index++) assert.equal(cap.invoke('readBusiness', query).records[0].text, BODY);
+  assert.equal(fakeCalls, 0, 'Business must not dispatch through the supplied public method');
+  assert.throws(() => cap.invoke('readBusiness', query), { code: 'ERR_BUTLER_BUSINESS_READ_LIMIT' });
+  const first = f.audit.read(f.person), last = f.audit.read(f.person, { afterSequence: first.nextAfterSequence });
+  const rows = [...first.records, ...last.records];
+  assert.equal(last.throughSequence, 64); assert.equal(rows.length, 64);
+  assert.equal(rows[0].sequence, 1); assert.equal(rows.at(-1).sequence, 64);
+  assert.equal(rows.at(-1).pageOfDay, 64);
+  assert.ok(rows.every(row => row.actor.sessionId === f.actor.id && row.actor.nativeId === f.actor.nativeId &&
+    row.query.kind === 'queue' && row.result.recordRefs[0] === 'naw:space:shared/item:synthetic-item'));
+  assert.equal(fs.readFileSync(path.join(f.directory, 'butler-business-reads.jsonl'), 'utf8').includes(BODY), false);
+});
+
+test('overwriting or redefining the base directory predicate cannot authorize a different audit root', t => {
+  const f = fixture(t), other = path.join(f.directory, 'different-audit-root'); fs.mkdirSync(other, { mode: 0o700 });
+  const wrong = new ButlerReadAudit(other), original = Object.getOwnPropertyDescriptor(ButlerReadAudit, 'matchesDataDir'); let fakeCalls = 0;
+  const fake = () => { fakeCalls++; return true; };
+  try {
+    const assigned = Reflect.set(ButlerReadAudit, 'matchesDataDir', fake);
+    const redefined = Reflect.defineProperty(ButlerReadAudit, 'matchesDataDir', { ...original, value: fake });
+    assert.throws(() => new ButlerBusiness({ dataDir: f.directory, role: f.role, roomState: f.room,
+      view: () => ({ records: f.records }), readAudit: wrong }), { code: 'ERR_BUTLER_BUSINESS_OPTIONS' });
+    assert.equal(assigned, false); assert.equal(redefined, false); assert.equal(fakeCalls, 0);
+    assert.deepEqual(fs.readdirSync(other), []);
+  } finally { Object.defineProperty(ButlerReadAudit, 'matchesDataDir', original); }
+});
+
+test('the base record entry cannot be replaced with a host-supplied fake receipt', t => {
+  const f = fixture(t), original = Object.getOwnPropertyDescriptor(ButlerReadAudit, 'record'); let fakeCalls = 0;
+  const fake = () => { fakeCalls++; return { sequence: 1, pageOfDay: 1 }; };
+  try {
+    const assigned = Reflect.set(ButlerReadAudit, 'record', fake);
+    const redefined = Reflect.defineProperty(ButlerReadAudit, 'record', { value: fake });
+    assert.equal(f.bind().invoke('readBusiness', query).records[0].text, BODY);
+    assert.equal(fakeCalls, 0); assert.equal(f.audit.read(f.person).throughSequence, 1);
+    assert.equal(typeof original?.value, 'function'); assert.equal(assigned, false); assert.equal(redefined, false);
+  } finally {
+    if (original) Object.defineProperty(ButlerReadAudit, 'record', original);
+    else Reflect.deleteProperty(ButlerReadAudit, 'record');
   }
 });
 
