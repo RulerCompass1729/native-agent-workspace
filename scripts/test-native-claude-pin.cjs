@@ -3,7 +3,9 @@ const { createIn } = require('./fixtures/create-view.cjs');
 // Real Electron + real Claude Code 2.1.322 under the loopback model fixture (B11):
 // the launcher points at an unqualified "2.1.999", so NAW must start the new session
 // with the qualified 2.1.322 installed beside it, bind it as usual and say so (B3
-// fallback). No prompt is sent; any model request gets a fixed local reply. Nothing paid.
+// fallback). In the background NAW runs the mod's own tests with the unqualified version,
+// offline, and keeps the result for the manual qualification (claude-mod-check.cjs).
+// No prompt is sent; any model request gets a fixed local reply. Nothing paid.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
 const { _electron } = testScratch.playwright(require('playwright'));
@@ -56,9 +58,10 @@ async function cleanup() {
 (async () => {
   await fixture.start(); await fixture.preflight();
   // The vendor layout: versions/<version> programs and a launcher link. The unqualified version is a
-  // stub that leaves a marker and fails, so a session that starts at all did not use it.
+  // stub: asked for the mod's tests it is the real program (NAW's background check, which has no
+  // network); started any other way it leaves a marker and fails, so a session that starts did not use it.
   const marker = path.join(base, 'unqualified-version-ran');
-  fs.writeFileSync(path.join(versions, '2.1.999'), `#!/bin/sh\necho ran > '${marker}'\nexit 1\n`, { mode: 0o700 });
+  fs.writeFileSync(path.join(versions, '2.1.999'), `#!/bin/sh\nif [ "$1" = plugin ] && [ "$2" = test ]; then exec '${binary}' "$@"; fi\necho ran > '${marker}'\nexit 1\n`, { mode: 0o700 });
   fixture.wrapper(binary, { file: path.join(versions, '2.1.322'), env: { HOME: userHome, CLAUDE_CONFIG_DIR: config }, args: ['--model', 'haiku'] });
   const launcher = path.join(bin, 'claude'); fs.symlinkSync(path.join(versions, '2.1.999'), launcher);
   const serviceCwd = path.join(profile, 'workspace'); fs.mkdirSync(serviceCwd, { mode: 0o700 });
@@ -109,9 +112,20 @@ async function cleanup() {
   await until(async () => (await page.locator('#session-status').innerText()).includes(expected.trim().replace(/^· /, '')), 'The session status names the fallback', 15000);
   assert.equal(await page.locator('#session-status').getAttribute('title'), locale.format('zh', 'native.claudePinnedDetail', { pinned: '2.1.322', requested: '2.1.999', date }));
   checks.push('The session status and its hover text name the version in use, the new version and the last day');
+  // The background check ran the mod's tests from the copied runtime with the unqualified version and kept the result.
+  const modCheck = require('../app/claude-mod-check.cjs'), recordFile = path.join(profile, 'claude-mod-check.json');
+  await until(() => fs.existsSync(recordFile), 'The background check is recorded', 90000);
+  const tested = modCheck.load(recordFile)['2.1.999'];
+  assert.equal(modCheck.passed(tested), true, JSON.stringify(tested)); assert.equal(tested.files, modCheck.TESTS.length); assert.equal(tested.mod, modCheck.modHash());
+  const runtimes = fs.readdirSync(path.join(profile, 'runtimes')); assert.equal(runtimes.length, 1);
+  const runtime = path.join(profile, 'runtimes', runtimes[0]);
+  assert.deepEqual(fs.readdirSync(path.join(runtime, 'claude-bridge-tests')).sort(), [...modCheck.TESTS].sort());
+  assert.deepEqual(fs.readdirSync(path.join(runtime, 'claude-bridge')).filter(name => name.endsWith('.test.ts')), [], 'The folder the session loads has no test file');
+  assert.equal(fs.existsSync(marker), false, 'The check ran only the tests of the unqualified version');
+  checks.push(`In the background the mod's tests ran offline with the unqualified version and the result is kept: ${modCheck.describe(tested)}`);
   fixture.assertClean(); assert.deepEqual(errors, []);
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'claude-fallback-version.png') }); }
-  console.log(JSON.stringify({ checks, nativeVersion, fixture: fixture.summary(), pin: row.nativePin, promptsSent: 0, paidModelCalls: 0, evidence: base }));
+  console.log(JSON.stringify({ checks, nativeVersion, fixture: fixture.summary(), pin: row.nativePin, modCheck: tested, promptsSent: 0, paidModelCalls: 0, evidence: base }));
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
   console.error(error.stack, '\nFixture:', JSON.stringify(fixture.summary()), '\nEvidence:', base); process.exitCode = 1;

@@ -16,6 +16,7 @@ const { installPlugin: refreshCompatPlugin } = require('./claude-compat-plugin.c
 const { TerminalJournal } = require('./observation.cjs');
 const { serverVersion, verifiedCodexProtocol } = require('./native-history.cjs');
 const codexQualification = require('./codex-qualification.cjs');
+const claudeModCheck = require('./claude-mod-check.cjs');
 const { toolContent, toolStatus, toolTypes, fileChanges, nativeTextContent, nativeTextItemId } = require('./codex-tool-content.cjs');
 const { codexTurnBlock } = require('./native-blocks.cjs');
 const { computerUseMcpServer, codexComputerUseMcpArgs } = require('./native-computer-use.cjs');
@@ -598,6 +599,7 @@ class Claude extends EventEmitter {
       stateFile: path.join(host.dataDir || host.privateDir, 'claude-pin.json') });
     if (launch.version) record.nativeLaunchVersion = launch.version; else delete record.nativeLaunchVersion;
     if (launch.pin) record.nativePin = launch.pin; else delete record.nativePin;
+    host.checkClaudeVersion?.();
     this.terminal = new Terminal([launch.binary, ...identity, ...(record.autoName ? [] : ['--name', record.name]), '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message,mcp__native_workspace__workspace_sessions,mcp__native_workspace__workspace_open,mcp__native_workspace__workspace_report', '--plugin-dir', path.join(__dirname, 'claude-bridge'), ...posture], record.cwd, {
       NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket, NAW_SUBMIT_SOCKET: host.submitSocket,
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
@@ -2613,6 +2615,7 @@ class NativeHost {
     this.codexSocket = path.join(privateDir, 'codex.sock'); this.hookTargets = new Map(); this.codexTargets = new Map();
     // Automatic Codex version decisions (B3) are kept in the persistent data directory.
     this.codexQualificationFile = path.join(dataDir, 'codex-qualification.json'); codexQualification.load(this.codexQualificationFile);
+    this.claudeModChecks = new Map();
     this.codexMessageToken = crypto.randomBytes(32).toString('hex');
     this.submissions = createSubmissionServer(this.submitSocket, this.hookTargets);
     this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() };
@@ -2781,6 +2784,20 @@ class NativeHost {
     }).finally(() => { this.reconnecting = null; });
     return this.reconnecting;
   }
+  // An unqualified Claude version gets the managed mod's own tests run once in the background, without
+  // network or a session (B3, claude-mod-check.cjs). The result is kept in the data directory for the
+  // manual qualification and logged; it opens nothing and does not change the fallback.
+  checkClaudeVersion() {
+    if (this.serviceBinding || this.closed) return;
+    const claudePin = require('./claude-pin.cjs'), current = claudePin.installed(this.binaries.claude);
+    if (!current || claudePin.QUALIFIED.includes(current.version) || this.claudeModChecks.has(current.version)) return;
+    const version = current.version, stop = new AbortController();
+    const done = claudeModCheck.checkOnce({ file: path.join(this.dataDir, 'claude-mod-check.json'), binary: path.join(current.dir, version), version, privateDir: this.privateDir, signal: stop.signal })
+      .then(record => { if (record) console.error(`[NAW] Claude ${version} is not qualified; its mod tests ran in the background: ${claudeModCheck.describe(record)}`); })
+      .catch(error => console.error(`[NAW] Claude ${version} mod tests could not be recorded: ${String(error?.message).slice(0, 200)}`));
+    // Once per version for this start; a run that did not finish is tried again after the next start.
+    this.claudeModChecks.set(version, { stop, done });
+  }
   // A Codex version newer than the qualified baseline is compared in the background (B3);
   // its gates stay closed until a decision opens them, and targets then recheck.
   qualifyCodexVersion(version) {
@@ -2906,7 +2923,7 @@ class NativeHost {
     if (record.provider === 'codex' && this.codexBinary && this.codexBinary !== this.binaries.codex) throw uiError("error.codexLocationChanged");
     return record.provider === 'claude' ? new Claude(record, this) : new Codex(record, this);
   }
-  close() { this.closed = true; for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
+  close() { this.closed = true; for (const check of this.claudeModChecks.values()) check.stop.abort(); for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
 }
 
 module.exports = { claudeHolder, claudeImportAvailable, NativeHost, Terminal, Claude, Codex, Rpc, executable, delay, claudeGeneratedTitle, promptTextTag };

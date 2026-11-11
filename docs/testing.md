@@ -1493,6 +1493,21 @@ the real mod dispatcher with mocked external boundaries, without login, network
 or a model turn. Node mocks alone missed a native dispatch difference during
 alpha.5 development. Neither kind of local check replaces a visible native test.
 
+When the Claude launcher points at a version NAW has not qualified, NAW runs these
+four mod test files once in the background with that version
+(`app/claude-mod-check.cjs`): `claude plugin test` on a private copy of the mod,
+under a system sandbox with no network, no keychain and no write under the home
+folder, with a private home and configuration directory and a 60-second limit. No
+session starts and no model is called. The result is kept in `claude-mod-check.json`
+in the data directory, one record per version: the pass and fail counts, the failed
+test names and the engine's message, or why the run did not happen. It qualifies
+nothing and does not end the temporary fallback: a pass says only that the engine
+calls those tests reach still exist in that version. Adding a version to the
+qualified list stays a manual step, which can start from this record. The test files
+are named in three places that a unit test compares: `claude-mod-check.cjs`, the
+runtime copy in `service-client.cjs` (a folder beside the mod, so the folder a
+session loads is unchanged) and `scripts/package-mac.cjs`.
+
 Automated Electron launchers use a validated test parent and private profile and
 remain hidden by default, including startup, restored views and duplicates. The
 checks below can establish DOM interaction and real IPC/storage behavior; they do
