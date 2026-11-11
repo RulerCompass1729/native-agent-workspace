@@ -8822,3 +8822,87 @@ integrator's request, an additional independent review of the model-visible data
 scope and designated-instance gate is still pending before integration. This
 replay does not claim that future review, live tool wiring or activation passed.
 Record period and activation remain off.
+### Dormant DSH runner integration (2026-11-11, Codex 5)
+
+The requested checkpoint replaces only the dedicated butler factory with DSH.
+Ordinary native services, all four qualification defaults, activation and the
+recording trial stay unchanged/off. Model verification uses only fixed loopback
+fixtures with synthetic credentials and an isolated home. Core identity/config
+changes reuse the independently reviewed Codex 6 checkpoints 47f8fcc and 5994010.
+
+Independent headless review session 41212ac8-29f8-4c92-b535-6c9e3fda1259
+returned NOT APPROVED on the first candidate. Its five blocking findings were:
+
+| Trigger / impact | Fix and evidence | Owner / state |
+| --- | --- | --- |
+| Malformed host packet plus changed owner could throw outside the request promise or reject an unawaited close | Validate packets; idempotent close returns cleanup receipt and preserves unknown owner. Original-driver regression fails; fixed targeted suite passes. | C5, closed for default-off checkpoint |
+| A later request failed after settled usage and partial tokens could be priced as the whole batch | Count actual requests and require completed turn plus all usage rows. Real two-request HTTP failure and eight-request cap retain unknown usage; no price callback. | C5, closed for default-off checkpoint |
+| Import hook might not intercept packaged module resolution | Require actual intercepted import before ready, reject alternate provider URL. Hook-negative unit check passes; package runtime acceptance required. | C5, closed for default-off checkpoint |
+| Inherited endpoint could forward credentials outside bound provider | Drop inherited endpoint/proxy environment, pin official production endpoint; explicit loopback-only fixture seam. Poisoned inherited endpoint never receives fixture traffic. | C5, closed for default-off checkpoint |
+| Missing expected MCP tool was not an exact-set failure | Require exact tool schema set in host and ready receipt. Real empty MCP server refuses startup with zero requests. | C5, closed for default-off checkpoint |
+
+Additional author-run witnesses cover real child-process SIGSTOP/forced close,
+MCP credential absence, default unknown pricing blocking the next batch with a
+notice, three batches across real DSH session rotation and host restart,
+per-attempt usage, no event replay, absent anonymous headers, no new ID file and
+an unread pre-existing FIFO at the ID path. These prove isolated protocol/core
+behaviour, not daily activation, live provider compatibility or S2 qualification.
+Raw first failures, fixes and independent review output remain in private lane
+evidence. Final full-suite/package counts and review verdict are recorded below
+when complete; this entry itself does not claim approval.
+
+
+The same reviewer closed F1-F5 with scoped code approval, package evidence pending.
+The controller fixture's publish receipt lacked its delivery ID; it now returns
+the exact ID and asserts three sent delivery receipts. Missing-tool startup now
+reports exactly mcp-unavailable, not any host failure. The later integrator
+request to rebase onto 1e4f5bf adds a desktop-only status adapter: runtime-version
+mismatch reads as blocked, while core ensure still refuses and preserves bytes.
+The new upgrade test failed with binding-mismatch on the preceding factory.
+These small deltas and final package evidence await the same reviewer.
+
+
+Final scope: the same independent reviewer approved code and packaged-runtime
+evidence at a0e7192 for the default-off checkpoint. Author-run full suite on the
+1e4f5bf integration base: 4921 pass, zero fail/skip; the subsequent explicit
+agent dependency pin changes no resolved version/integrity/dependency edge and
+its five related checks pass. The first package ran successfully but a manifest
+assertion found agent only peer-declared; the explicit root pin and rebuilt final
+package pass. Final clean build contains 129 production packages; Electron 44.9.0
+(Node 24.22.0) runs three batches/six loopback requests with 105 measured tokens
+and three sent synthetic receipts. Strict signature verification passes before
+and after. Byte equality was checked for driver, host, launcher, privacy hook,
+role and controller. No real model call or daily installation occurred.
+
+The supplementary packaged continuity probe makes one synthetic designation,
+then writes two trusted done edges. Core follows them with revision 1, no replay
+and three processed batches. It proves the reading/authorization contract; it
+does not implement the production writer of those edges. Isolated bundles remain
+under noindex paths with zero application-search results.
+
+Remaining activation gates (not approved by this checkpoint): live provider and
+S2 qualification, business MCP binding, credential supply, UI activation and its
+stop/cleanup receipt handling. The upgrade adapter is backend-only: main currently
+constructs the dormant backend but has no status UI caller. Before activation,
+the core/host owner must provide an explicitly authorized re-preparation path
+when an app upgrade makes the saved runtime binding mismatch. No automatic
+migration is supplied here. Future status UI must localize the display-only
+blocked reasons, including unavailable/unsafe state. Ordinary native services
+and qualification defaults remain unchanged.
+
+
+### DSH runner rebase and package allowlist layout (2026-11-11)
+
+The runner was rebased from 1e4f5bf onto 908005f. The resolved package list keeps
+all six runner-only entries and main's butler-review-projection entry: 125 unique
+files in total. The DSH host/driver/privacy code and dependency lock are unchanged
+from the previously scoped-approved checkpoint. Existing review records from
+both branches are retained.
+
+The list is now alphabetized, one entry per line. A captured pre-format fixture
+checks the exact multiset, including duplicate counts; the existing main require
+walk still checks runtime source reachability. Removing either side's new file
+or inserting a duplicate makes the equality guard fail. Related checks: 468 pass,
+zero fail/skip. New-base full-suite and actual package closure results are kept
+with the lane handoff. The integrator requested this change and owns the combined
+independent review before merging; no additional activation path is introduced.

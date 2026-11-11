@@ -42,3 +42,26 @@ test('every local module reachable from main.cjs is packaged', () => {
   assert.ok(seen.size > 50, 'the require walk reached the application modules');
   assert.deepEqual(missing, []);
 });
+
+
+// Captured from the resolved union of main 908005f and runner 6baa02a,
+// before sorting/reformatting. Intentional package changes update this fixture.
+function sourceList() {
+  const text = fs.readFileSync(path.join(__dirname, '../../scripts/package-mac.cjs'), 'utf8');
+  const start = text.indexOf('const sources = [');
+  const end = text.indexOf('];', start);
+  assert.ok(start > 0 && end > start);
+  const body = text.slice(start + 'const sources = ['.length, end);
+  return { body, entries: [...body.matchAll(/'([^']+)'/g)].map(match => match[1]) };
+}
+test('the source allowlist keeps every pre-format entry with its original multiplicity', () => {
+  const before = require('./fixtures/package-sources-before-format.json');
+  assert.deepEqual(sourceList().entries.sort(), [...before].sort());
+});
+test('the source allowlist is alphabetized with one file on each line', () => {
+  const { body, entries } = sourceList();
+  assert.deepEqual(entries, [...entries].sort());
+  const lines = body.split('\n').filter(line => line.trim());
+  assert.equal(lines.length, entries.length);
+  for (const line of lines) assert.match(line, /^      '[^']+',$/);
+});

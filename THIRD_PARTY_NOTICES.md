@@ -9,6 +9,7 @@ own terms. This is an independent product, not an official DSH distribution.
 | Input | Pinned version / source | Distribution treatment |
 | --- | --- | --- |
 | DSH UI/host packages | 0.2.1-rc.2; npm integrity pins in package-lock.json | MIT and vendored original notices retained with each package; original plugin source in app/dsh; no upstream model/tool/account/telemetry plugins mounted |
+| Dedicated DSH butler packages | 0.2.1-rc.2; exact production dependency pins | MIT/ISC package notices retained in the clean build. Dormant separate host, explicit composition only. Host-local SHA-256-checked transport patch removes two anonymous-identifier headers (the product User-Agent remains); upstream installed source is unchanged. No telemetry, built-in execution tool, subagent or compaction plugin is mounted. |
 | DSH SDK protocol | 0.2.1-rc.2 | MIT notice retained; its JSON-RPC line transport is reused for the session-local Claude MCP tool; no remote broker or model client is mounted |
 | xterm.js and headless | 6.0.0 | Full MIT notices preserved; headless npm omission supplemented from the same xterm.js release |
 | xterm fit / serialize | 0.11.0 / 0.14.0 | Full MIT notices preserved; serialize omission supplemented from xterm.js |
