@@ -69,6 +69,7 @@ function validControlAudit(a) {
 function validateRoom(data) {
   if (!data || data.version !== 1 || validateName(data.name) !== data.name || typeof data.notes !== 'string' || data.notes.length > 8000 || !Number.isSafeInteger(data.revision) || data.revision < 0 || !Array.isArray(data.events)) throw Error('Invalid room');
   for (const e of data.events) if (!e || typeof e.id !== 'string' || e.role !== 'system' || typeof e.text !== 'string' || !Number.isFinite(e.time) || (e.sessionId !== undefined && typeof e.sessionId !== 'string')) throw Error('Invalid event');
+  if (data.events.some(e => e.rotationReceipt !== undefined && (e.kind !== 'rotation' || typeof e.rotationReceipt !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(e.rotationReceipt)))) throw Error('Invalid rotation receipt');
   if (data.events.some(e => e.controlAudit !== undefined && (e.kind !== 'control-audit' || !validControlAudit(e.controlAudit)))) throw Error('Invalid maintenance event');
   // B4 metadata is auxiliary; intake policy must not disable this space.
   for (const key of ['archivedSessions', 'restoreMembers']) if (data[key] !== undefined && (!Array.isArray(data[key]) || data[key].some(id => !orderId(id)))) throw Error('Invalid archive');
@@ -722,8 +723,9 @@ class RoomState {
       this.update({ queue }, undefined, id);
     }
   }
-  rotationEvent(ids, phase, oldName, detail) {
-    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed' };
+  rotationEvent(ids, phase, oldName, detail, receiptId) {
+    if (receiptId !== undefined && (typeof receiptId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(receiptId))) throw Error('Invalid rotation receipt');
+    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', needsTrust: 'notice.rotation.needsTrust' };
     for (const id of ids) {
       try {
         this.metadata(id);
@@ -731,8 +733,9 @@ class RoomState {
       } catch {
         continue;
       }
+      if (receiptId && this.metadata(id).events.some(event => event.kind === 'rotation' && event.rotationReceipt === receiptId)) continue;
       const params = { name: oldName, detail: detail || '' };
-      const event = { kind: 'rotation', ...uiNotice(keys[phase], params) };
+      const event = { kind: 'rotation', ...(receiptId ? { rotationReceipt: receiptId } : {}), ...uiNotice(keys[phase], params) };
       this.update({}, event, id);
     }
   }

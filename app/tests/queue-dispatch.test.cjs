@@ -730,9 +730,11 @@ async function projectRotation(t, extra = {}) {
       const saved = JSON.parse(fs.readFileSync(path.join(dir, 'queue-dispatch.json'))).rotations.a;
       extra.beforeCreate?.(saved, args[0]);
     }
-    return original(method, ...args);
+    const result = await original(method, ...args);
+    if (method === 'create') extra.afterCreate?.(client.state.sessions.find(session => session.id === result));
+    return result;
   };
-  const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now: () => NOW, settleMs: 0, tickMs: 3600000, creationDefaults: () => extra.defaults || { repository: '/synthetic/repo', directory: null }, migrateDirectories: extra.enabled !== false });
+  const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now: () => NOW, settleMs: 0, tickMs: 3600000, creationDefaults: () => extra.defaults || { repository: '/synthetic/repo', directory: null }, migrateDirectories: extra.enabled !== false, notify: extra.notify });
   t.after(() => dispatcher.close());
   await dispatcher.start(); await dispatcher.schedule();
   return { client, dispatcher, dir, record: dispatcher.rotations.a, automatic };
@@ -1722,4 +1724,114 @@ test('decision notification keeps only the first line before the queue summary f
   const actions = plan([{id:'shared',queue:[sentItem()]}],[member('a',{messages})]);
   assert.equal(actions[0].question, 'Proceed?');
   assert.ok(actions[0].reply.includes('Private remainder'), 'Existing in-app summary is retained');
+});
+
+const trustPrompt = provider => ({ kind: 'directory-trust', provider, source: 'native-terminal' });
+test('B2: a migrated successor asking directory trust pauses before joining, does not accept or send, and announces once', async t => {
+  const notices = [];
+  const { client, dispatcher, record } = await projectRotation(t, { notify: (kind, value) => notices.push([kind, value.newId]), record: { oldControl: 0 }, afterCreate(fresh) { fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('claude'); } });
+  const room = dispatcher.roomState, id = room.queueAdd('still owned by old member', 'a');
+  assert.equal(record.phase, 'waiting-trust');
+  assert.equal(client.state.sessions.find(s => s.id === record.newId).roomIds.length, 0, 'it has not joined or acquired the old queue');
+  for (const elapsed of [1, 11 * 60000, 24 * HOUR]) await dispatcher.advanceRotations(client.snapshot(), NOW + elapsed);
+  assert.equal(record.phase, 'waiting-trust', 'human trust has no generic ready timeout');
+  assert.equal(client.calls.some(c => ['stop', 'dispatch', 'approve', 'answer', 'input'].includes(c[0])), false);
+  assert.equal(room.queueItems('shared').find(item => item.id === id).assignee, 'a');
+  const decisions = room.value.events.filter(e => e.uiMessage?.key === 'notice.rotation.needsTrust');
+  assert.equal(decisions.length, 1); assert.match(decisions[0].text, /^需要你决定：/);
+  assert.equal(JSON.stringify(decisions).includes('/synthetic/'), false, 'native screen/cwd are not published in the space');
+  assert.equal(dispatcher.rotationEntries().filter(e => e.event === 'waiting').length, 1);
+  assert.deepEqual(notices, [['needsTrust', record.newId]], 'one decision notification for this successor');
+});
+
+test('B2: persisted trust wait survives restart without duplicate notices or a new successor, then resumes the same ready one', async t => {
+  const { client, dispatcher, record, dir } = await projectRotation(t, { record: { oldControl: 0 }, afterCreate(fresh) { fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('claude'); } });
+  const made = record.newId;
+  dispatcher.close();
+  const room = new RoomState(dir); fakeMembership(room, client);
+  assert.equal(room.value.events.filter(e => e.uiMessage?.key === 'notice.rotation.needsTrust').length, 1, 'decision receipt reloads from the space file');
+  const notifications = [], restored = new rules.QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now: () => NOW, settleMs: 0, tickMs: 3600000, migrateDirectories: false, notify: kind => notifications.push(kind) });
+  t.after(() => restored.close()); await restored.start(); await restored.schedule();
+  assert.equal(restored.rotations.a.phase, 'waiting-trust');
+  assert.equal(client.calls.filter(c => c[0] === 'create').length, 1); assert.deepEqual(notifications, []);
+  assert.equal(room.value.events.filter(e => e.uiMessage?.key === 'notice.rotation.needsTrust').length, 1);
+  const fresh = client.state.sessions.find(s => s.id === made); fresh.nativeStartupPrompt = null;
+  await restored.advanceRotations(client.snapshot(), NOW + 1000);
+  assert.equal(restored.rotations.a.phase, 'waiting-trust', 'a disappearing line alone does not resume anything');
+  fresh.state = 'idle'; restored.idleSince.set(made, NOW); await restored.advanceRotations(client.snapshot(), NOW + 2000);
+  assert.equal(restored.rotations.a.phase, 'created');
+  await restored.advanceRotations(client.snapshot(), NOW + 3000);
+  assert.equal(restored.rotations.a.phase, 'handed');
+  assert.equal(client.calls.filter(c => c[0] === 'create').length, 1);
+  assert.equal(client.sends(made).length, 1, 'one handoff only after real native readiness');
+});
+
+test('B2: a trust wait observed after joining returns only queued assignments to the old member; cancellation is retained', async t => {
+  const { client, dispatcher, record } = await projectRotation(t, { record: { oldControl: 0 }, afterCreate(fresh) { fresh.state = 'starting'; } });
+  const room = dispatcher.roomState, id = room.queueAdd('cancel this before handoff', record.newId);
+  const fresh = client.state.sessions.find(s => s.id === record.newId); fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('claude');
+  await dispatcher.advanceRotations(client.snapshot(), NOW + 1000);
+  assert.equal(room.queueItems('shared').find(item => item.id === id).assignee, 'a');
+  room.queueCancel(id);
+  await dispatcher.advanceRotations(client.snapshot(), NOW + 20 * 60000);
+  assert.equal(room.queueItems('shared').find(item => item.id === id).status, 'cancelled');
+  assert.equal(client.sends(record.newId).length, 0);
+});
+
+test('B2: person activity during the trust wait cancels the handoff without ending the old member', async t => {
+  const { client, dispatcher, record } = await projectRotation(t, { record: { oldControl: 0 }, afterCreate(fresh) { fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('claude'); } });
+  client.state.sessions.find(s => s.id === 'a').controlRevision++;
+  await dispatcher.advanceRotations(client.snapshot(), NOW + 1000);
+  assert.equal(record.phase, 'failed'); assert.equal(record.reason, 'person-active');
+  assert.equal(client.calls.some(c => c[0] === 'stop' && c[1] === 'a'), false);
+  assert.equal(client.calls.filter(c => c[0] === 'stop' && c[1] === record.newId).length, 1);
+  assert.equal(client.calls.some(c => ['input', 'approve', 'answer'].includes(c[0])), false);
+  assert.equal(client.sends(record.newId).length, 0);
+});
+for (const outcome of ['closed', 'missing']) test(`B2: ${outcome} successor while waiting for trust fails without ending the old member`, async t => {
+  const { client, dispatcher, record } = await projectRotation(t, { record: { oldControl: 0 }, afterCreate(fresh) { fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('claude'); } });
+  const made = record.newId;
+  if (outcome === 'closed') client.state.sessions.find(s => s.id === made).state = 'ended';
+  else client.state.sessions = client.state.sessions.filter(s => s.id !== made);
+  await dispatcher.advanceRotations(client.snapshot(), NOW + 1000);
+  assert.equal(record.phase, 'failed'); assert.equal(client.state.sessions.find(s => s.id === 'a').state, 'idle');
+  assert.equal(client.calls.some(c => c[0] === 'stop' && c[1] === 'a'), false);
+  assert.equal(client.sends(made).length, 0);
+});
+
+for (const moved of [false, true]) test(`B2: ${moved ? 'a moved directory with a wrong-provider' : 'a same-directory'} startup observation cannot take the migration trust path`, async t => {
+  const { client, dispatcher, record } = await projectRotation(t, { enabled: moved, afterCreate(fresh) { fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('codex'); } });
+  assert.equal(record.newCwd !== record.cwd, moved, 'exercise both directory and provider guards independently');
+  await dispatcher.advanceRotations(client.snapshot(), NOW + 1000);
+  assert.equal(record.phase, 'created');
+  assert.equal(dispatcher.roomState.value.events.some(e => e.uiMessage?.key === 'notice.rotation.needsTrust'), false);
+});
+
+test('B2: startup trust replay fills an unannounced receipt without duplicating the stored space event', async t => {
+  const { client, dispatcher, record, dir } = await projectRotation(t, { record: { oldControl: 0 }, afterCreate(fresh) { fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('claude'); } });
+  const file = path.join(dir, 'queue-dispatch.json');
+  dispatcher.close(); delete record.trustNotified;
+  fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: record } }), { mode: 0o600 });
+  const room = new RoomState(dir); fakeMembership(room, client);
+  const notices = [], resumed = new rules.QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now: () => NOW, settleMs: 0, tickMs: 3600000, notify: type => notices.push(type) }); t.after(() => resumed.close());
+  await resumed.start(); await resumed.schedule();
+  assert.deepEqual(notices, ['needsTrust']);
+  assert.equal(room.value.events.filter(e => e.uiMessage?.key === 'notice.rotation.needsTrust').length, 1);
+  assert.equal(resumed.rotationEntries().filter(e => e.event === 'waiting').length, 1);
+});
+
+test('B2: persisted directory-trust wait validates its successor and decision receipt fields', t => {
+  const { dir, room } = roomSetup(t), file = path.join(dir, 'queue-dispatch.json');
+  const valid = { phase: 'waiting-trust', oldNativeId: 'native-a', name: 'A', roomIds: [], provider: 'claude', cwd: '/old', newCwd: '/new', newId: 'made', trustNoticeId: projectPlan().nonce, trustWaitingAt: NOW };
+  fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: valid } }), { mode: 0o600 });
+  assert.equal(rules.readRotations(file, NOW).a.phase, 'waiting-trust');
+  for (const bad of [{ newId: undefined }, { trustNoticeId: 'not-a-receipt' }, { trustWaitingAt: -1 }, { trustNotified: 'yes' }, { provider: 'other' }, { newCwd: '/old' }]) {
+    fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: { ...valid, ...bad } } }), { mode: 0o600 });
+    assert.deepEqual(rules.readRotations(file, NOW), {}, JSON.stringify(bad));
+  }
+  assert.throws(() => room.rotationEvent(['shared'], 'needsTrust', 'A', 'B', {}), /Invalid rotation receipt/);
+  room.rotationEvent(['shared'], 'needsTrust', 'A', 'B', valid.trustNoticeId);
+  const damaged = structuredClone(room.value); damaged.events.at(-1).rotationReceipt = { invalid: true };
+  fs.writeFileSync(room.file, JSON.stringify(damaged), { mode: 0o600 });
+  assert.ok(new RoomState(dir).warning, 'malformed saved decision metadata is rejected on reload');
 });
