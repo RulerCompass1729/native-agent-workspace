@@ -113,6 +113,21 @@ function storageStatus(usedBytes) {
 class ButlerReadAudit {
   #directory; #identity; #file; #lock; #now; #authorizePerson; #failed = false; #observed = null;
   #onCapacityWarning; #capacityWarned = false;
+  // Host composition only: no model method, path disclosure or overridable
+  // instance predicate. A prototype/JSON stand-in has no private store brand.
+  static matchesDataDir(audit, dataDir) {
+    if (!audit || typeof audit !== 'object' || isProxy(audit) || !(#directory in audit) ||
+        typeof dataDir !== 'string' || !path.isAbsolute(dataDir)) return false;
+    let fd;
+    try {
+      const expected = fs.statSync(dataDir);
+      if (!privateDirectory(expected)) return false;
+      fd = audit.#directoryFd();
+      const current = fs.statSync(dataDir);
+      return privateDirectory(current) && sameFile(current, expected) && sameFile(fs.fstatSync(fd), expected);
+    } catch { return false; }
+    finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { return false; } }
+  }
   constructor(directory, options = {}) {
     fields(options, ['authorizePerson', 'now', 'onCapacityWarning'], []);
     const { authorizePerson = () => false, now = Date.now, onCapacityWarning = () => {} } = options;

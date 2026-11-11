@@ -32,7 +32,7 @@ metadata records. It binds the actual designated record and exact selection:
 ```js
 // Main creates one audit object with its opaque person verifier. Reuse that
 // exact instance for this capability and the human butlerReview('reads') path.
-const business = new ButlerBusiness({ role, roomState, view, readAudit: butlerReadAudit });
+const business = new ButlerBusiness({ dataDir, role, roomState, view, readAudit: butlerReadAudit });
 const capability = business.bind(actualRecord, { selectionRevision, runnerRef });
 const catalog = capability.catalog();
 const page = capability.invoke('readBusiness', {
@@ -46,13 +46,23 @@ role revision, runner, membership and liveness. A revoked, rotated or replaced
 binding cannot fall through to ordinary agent permissions. The model never
 supplies an actor, selection or authorization object.
 
-`readAudit` is required and must be an actual `ButlerReadAudit` instance. There
-is no implicit store derived from `role.file`: the role record may live in a
-nested instance directory while the shared human-readable audit lives elsewhere.
-The host reuses its shared audit object for every role and reconstructed business
-capability, including its person-only log reader. The role file must still have
-an absolute path. This explicit source contract does not wire or qualify the
-production DSH host.
+`readAudit` and `dataDir` are required. The trusted host must pass Main's own
+`dataDir` constant, never a model field, query option or inferred role directory.
+The audit's private store brand and its actual directory device/inode must match
+that owned mode-700 directory before construction, binding and each read's
+authorization checks. JSON/prototype stand-ins and overridden instance checks
+cannot assert a different root. Physical aliases of the same directory remain
+valid; a different private folder cannot create a second invisible allowance.
+
+There is no implicit store derived from `role.file`, and that path is not read
+to choose the audit. The role record may live in a nested instance directory;
+its real authorization checks still run. The host reuses its shared audit object
+and Main directory for every role and reconstructed business capability,
+including its person-only log reader. Directory changes refuse the operation before a body is returned; a change
+during a read can still count one prepared page in Main's correct log. A failed
+audit also refuses binding and catalog access. This explicit source
+contract does not inject, wire or qualify the production DSH host; its future
+factory still must supply the trusted Main values.
 
 The catalog exposes only `readBusiness`. Every other method is refused, including
 `initial`, `nativeHistory`, terminal/observation/file reads and queue mutations.
