@@ -10080,3 +10080,78 @@ fixture's reserved headroom; all four live cases still pass. Product source and
 the full-suite tests are unchanged since that complete run. Unsupported pipeline
 failures or unbounded model output still rely on the final hard guard; the
 admission promise does not cover those paths.
+
+## Requested-test profile and audit-export guards (2026-11-11, review pending)
+
+User feedback B identified another mismatch: a CLI `--user-data-dir` value can
+move Electron's initial reference before the isolated-test gate examines a
+different private `NAW_DATA_DIR`. Requested test startup now refuses the switch's
+presence before profile verification on every platform, without reading its
+value. The existing fixed refusal is retained. Ordinary startup without a test
+parent does not query the switch or this test-only name reference; its CLI and
+environment directory-setting behavior is unchanged.
+
+The macOS OS-account reference now uses `app.getName()` rather than a second
+hardcoded product-name string. The existing captured Electron reference, OS home,
+parent/owner/private-mode checks, both ancestry directions and resolved-path pin
+remain. This removes CLI-profile test launches; it does not relax any other test
+permission or change the normal userData setter.
+
+After successful requested-test verification, Main explicitly pins both
+`userData` and `sessionData` to that checked real path before ready. It does not
+rely on an implicit relationship between those paths. The pinned Electron 44.9
+declaration requires Session data overrides before ready for web cookies/caches.
+A failed Session setter clears test permission through the same fixed refusal
+and exit, before activation policy, the instance lock or any window. Ordinary
+startup has no new Session setter.
+
+Feedback A is delivered in this same batch: the audit module retains its literal
+CommonJS export assignment and freezes that export object immediately afterward.
+A caller cannot replace the exported Audit constructor before Business loads it
+and thereby fake the root check, metadata receipt or daily allowance. Constructor,
+prototype and instance behavior is unchanged; this shallow API guard does not
+defend arbitrary require-cache or same-process code replacement.
+
+The owner has retained the original alpha.202 pre-ready probe's default
+`getPath('userData')` result in private stdout and checked that it agrees with the
+OS-account reference for the probed name. That observation does not establish
+that changing the name dynamically changes Electron's path, that all Session
+data resides under that path, or that the repaired Main booted successfully.
+The separate owner-run literal API consumer stopped with UNKNOWN under its
+policy: P1 returned a false instance-lock result and a native socket-directory
+diagnostic before ready or Session observation; P2/P3 were not launched. The
+owned child and LaunchServices registration were cleaned up. This is neither a
+passing new Main startup nor a diagnosed product lock defect. This helper did
+not launch Electron, a GUI or a provider, and did not read any real profile or
+credential. All-Session storage and complete Main-boot proof remain open.
+
+Author-run synthetic-directory checks reproduce three failures before the source
+repair (24 total: 21 pass, 3 fail), then pass 24/24 in the strict empty-credential,
+network/fork-denied sandbox. Cases cover a CLI initial daily directory with a
+different private NAW directory; same/different directories and empty/arbitrary
+switch values on macOS, Linux and Windows; ordinary no-test startup; and a
+dynamic synthetic app name. The Session-pin delta separately fails two of 26
+checks before its source change, with the first-version patch and logs retained.
+Audit-export counterexamples also fail on the old mutable export, which returns
+65 pages with no real audit rows. The combined strict run passes 96/96 without
+skips, including real log/quota checks and explicit stored Session-path and setter-
+failure assertions. The whole-Main VM fixture uses mocked Electron and passes
+its four tests without skips in an empty environment, including the unchanged
+finite Node-only UI-parent lease checks. Three additional selected ordinary Main
+VM consumers pass 3/3 in the strict sandbox without stubs for the new switch/name
+APIs; the rest of those three consumer files were not selected. Raw red/green,
+VM and build output stays in the private profile-switch and audit-export lanes.
+The combined empty-environment source UI build exits zero.
+The complete author-run suite passes 5,855/5,855 with zero failures,
+cancellations or skips. Fresh separate headless reviewer729B5640-B9CA-4576-A835-CEDF8E6F4FF0
+returns APPROVE_SCOPED for this exact seven-file combined batch. It used only
+Read/Grep/Glob, no MCP. HEAD/index/worktree matched the review snapshot; the
+new export test is byte-identical to the red-test source in its original lane.
+The reviewer read author-run evidence and did not rerun tests. Raw complete
+output remains private as `profile-export-combined-full.log`. A second bounded
+Session-only literal API observation also ended UNKNOWN after a HELLO and a
+SIGTRAP exit, before an actual Session result; no singleton was retried. All
+owned children and app registrations were cleaned up, with the original bundle
+signature still verified. Neither attempt is a new Main startup pass. Actual
+Session/singleton acceptance remains required before the entry opens; recording
+and activation stay off.

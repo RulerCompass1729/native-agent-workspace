@@ -289,3 +289,4 @@ class ButlerReadAudit {
 // entry with an instance/subclass override. This is not a same-process RCE boundary.
 Object.freeze(ButlerReadAudit);
 module.exports = { ButlerReadAudit, MAX_PAGES_PER_UTC_DAY };
+Object.freeze(module.exports);
