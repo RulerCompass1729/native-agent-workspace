@@ -61,8 +61,10 @@ async function besideName(id, short, label) {
   const row = page.locator(`[data-session-row="${id}"]`);
   const box = await row.evaluate(element => {
     const edges = node => { const b = node.getBoundingClientRect(); return { left: b.left, right: b.right, top: b.top, bottom: b.bottom }; };
-    return { link: edges(element.querySelector('.session-link')), title: edges(element.querySelector('.session-title')), id: edges(element.querySelector('.session-short-id')) };
+    const id = element.querySelector('.session-short-id');
+    return { link: edges(element.querySelector('.session-link')), title: edges(element.querySelector('.session-title')), id: edges(id), fits: id.scrollWidth <= id.clientWidth + 1 && id.scrollHeight <= id.clientHeight + 1 };
   });
+  assert.equal(box.fits, true, `${label}: the whole short id fits in its place, none of it is cut off`);
   assert.ok(box.id.left >= box.title.right - 1 && box.id.right <= box.link.right + 1, `${label}: the short id follows the name inside the row ${JSON.stringify(box)}`);
   assert.ok(box.id.top < box.title.bottom && box.id.bottom > box.title.top, `${label}: the short id is on the name's line`);
   assert.ok(box.title.right - box.title.left >= 24, `${label}: the name keeps room`);
@@ -120,7 +122,25 @@ async function run() {
   await until(async () => await surface.getAttribute('data-collapsed') !== 'true', 'The open sidebar returns');
   await interfaceLanguage('zh');
   await sameNameView('Chinese small-window return');
-  checks.push('Same-name rows show their own short id beside the name in Chinese and English, in a regular and a small window; a unique name stays compact; the rail is unchanged');
+  // The grouped view lists the same sessions under their spaces: the same two rows show their ids.
+  await page.locator('#sessions-grouped').click();
+  await until(async () => await page.locator('#sessions-grouped').getAttribute('aria-pressed') === 'true', 'Grouped view');
+  await sameNameView('Chinese grouped view');
+  await page.locator('#sessions-flat').click();
+  await until(async () => await page.locator('#sessions-flat').getAttribute('aria-pressed') === 'true', 'Flat view');
+  // Two sessions sharing a long name: the name is shortened, never the id.
+  const long = '同一个很长的会话名字用来检查名字被截短而短编号完整显示出来';
+  for (const id of ids.slice(0, 2)) { await menu(id, '重命名…'); await page.locator('#rename-name').fill(long); await page.locator('#confirm-rename').click(); }
+  await until(async () => (await snapshot()).sessions.filter(s => s.name === long).length === 2, 'Both renamed');
+  await sameNameView('Chinese long shared name');
+  for (const id of ids.slice(0, 2)) {
+    const title = page.locator(`[data-session-row="${id}"] .session-title`);
+    assert.equal(await title.evaluate(node => node.scrollWidth > node.clientWidth), true, 'The long name is shortened with an ellipsis');
+  }
+  for (const id of ids.slice(0, 2)) { await menu(id, '重命名…'); await page.locator('#rename-name').fill('学习'); await page.locator('#confirm-rename').click(); }
+  await until(async () => (await snapshot()).sessions.filter(s => s.name === '学习').length === 2, 'Names restored');
+  await sameNameView('Chinese names restored');
+  checks.push('Same-name rows show their own short id at the end of the name\'s line in Chinese and English, in a regular and a small window, in the grouped view and with a long shared name; a unique name stays compact; the rail is unchanged');
 
   await dragTo(page.locator(`[data-session-id="${ids[2]}"]`), page.locator(`[data-session-row="${ids[0]}"]`), 0.2);
   await expectOrder([ids[2], ids[0], ids[1]]);
