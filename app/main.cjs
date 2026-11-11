@@ -347,7 +347,16 @@ function conversationReaderAllowed(actor) {
   const secretary = queueSecretary?.current();
   return !secretary || secretary.sessionId !== actor.id || secretary.nativeId !== actor.nativeId;
 }
-function projectBackgroundRecord(record) {
+function conversationAccess(actor, snapshot) {
+  const access = { roomIds: [], secretary: true };
+  try { access.secretary = !conversationReaderAllowed(actor); } catch { /* Unknown roles get metadata only. */ }
+  const current = snapshot?.sessions?.find(s => s.id === actor.id && s.nativeId === actor.nativeId);
+  if (current && !current.archived && !current.nativeContextPending && !roomState.value.archivedSessions?.includes(actor.id)) {
+    try { access.roomIds = roomIds(current); } catch { /* Invalid membership grants nothing. */ }
+  }
+  return access;
+}
+function projectBackgroundRecord(record, context = null) {
   if (!['initial', 'previewImage'].includes(record.command.method) || record.value === undefined) return record;
   const target = backgroundOperation.conversationTarget(record.command.method, record.command.arguments, record.actor);
   const candidate = record.humanDecision === 1 && record.readAuthorization?.sessionId === target ? record.readAuthorization : null;
@@ -356,8 +365,14 @@ function projectBackgroundRecord(record) {
   if (record.command.method === 'previewImage' && target && (!read || read.sessionId !== target)) {
     const { value: _privateValue, ...publicRecord } = record; return publicRecord;
   }
-  if (record.command.method !== 'initial' || !record.value?.sessions) return record;
-  return { ...record, value: backgroundOperation.conversationSnapshot(record.value, record.actor, read) };
+  const access = conversationAccess(record.actor, context?.client.snapshot?.());
+  const source = record.command.arguments[0];
+  if (record.command.method === 'previewImage' && ['room', 'space-message'].includes(source?.kind) &&
+      (access.secretary || !access.roomIds.includes(source.roomId || 'shared'))) {
+    const { value: _privateValue, ...publicRecord } = record; return publicRecord;
+  }
+  if (record.command.method !== 'initial') return record;
+  return { ...record, value: backgroundOperation.conversationSnapshot(record.value, record.actor, read, record.value?.viewState?.selected, access) };
 }
 // A background window owns an agent's connection and dialogs but never loads a document. Nothing can
 // receive what is sent to it, and the browser keeps every such message in memory for as long as the window
@@ -459,7 +474,7 @@ function displayState(snapshot, context, read = null) {
   const result = { ...display, queueSecretary: secretary, ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
-  return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected) : result;
+  return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected, conversationAccess(context.actor, snapshot)) : result;
 }
 function reportViewStorage(warning, uiMessage = null) {
   if (viewStorageWarning === warning) return;
@@ -1472,7 +1487,8 @@ async function boot() {
     }
     const display = displayState(snapshot, c, read);
     if (!c.background) notifyCapacity(display, c.win);
-    return { ...display, viewState: c.view, appVersion: app.getVersion(), appBuild, localeWarning, preflight: preflight() };
+    const result = { ...display, viewState: c.view, appVersion: app.getVersion(), appBuild, localeWarning, preflight: preflight() };
+    return c.background ? backgroundOperation.conversationSnapshot(result, c.actor, read, c.view.selected, conversationAccess(c.actor, snapshot)) : result;
   });
   register('mobilePairing', (_c, selection) => beginAppMobile(selection));
   register('mobileRevoke', () => revokeAppMobile());
@@ -1593,7 +1609,13 @@ async function boot() {
   const imagesFor = c => c.imagePreviews ||= new ImagePreviews({ nativeImage,
     snapshot: async source => {
       if (c.background && source?.kind === 'session' && source.sessionId !== c.actor.id && !conversationReaderAllowed(c.actor)) throw uiError('error.background.secretaryConversation');
-      return source?.kind === 'space-draft' ? null : roomState.apply(await c.client.call('initial'));
+      if (source?.kind === 'space-draft') return null; // This view's own draft, not a published space record.
+      const snapshot = roomState.apply(await c.client.call('initial'));
+      if (c.background && ['room', 'space-message'].includes(source?.kind)) {
+        const access = conversationAccess(c.actor, snapshot);
+        if (access.secretary || !access.roomIds.includes(source.roomId || 'shared')) throw uiError('error.background.spaceContent');
+      }
+      return snapshot;
     },
     resolveSource: (snapshot, source) => {
       if (source?.kind === 'space-message') {

@@ -1,6 +1,36 @@
 # Review and issue record
 
-**S2 snapshot and consent follow-up, 2026-11-10 (delta review pending):**
+**S2 one-use conversation copies and space visibility, 2026-11-10 (delta review pending):**
+the person approved deleting a read copy after pickup, restricting space content
+to its current members, and showing the secretary queue metadata without bodies.
+Initial snapshots now use an explicit top-level projection, including safe
+navigation/build/availability fields added by the final application handler.
+Operator domains, peer-handoff bodies and unknown future fields stay private.
+Room aliases use the same projected rooms. Secretary and nonmember queues pick
+known identity/status/time fields, without task, reply or error bodies.
+
+Space authority uses the current actor's session and native identity, never the
+selected session's membership or an old approved snapshot. Receipts revalidate
+current authority. Published space image previews, expansion and copy recheck
+membership through their existing source resolver; the view's private image
+draft and human-confirmed local-file operations keep their existing paths.
+Own native conversation reads and human windows retain their content.
+
+Conversation and image read values no longer enter the durable operation file.
+An approved foreign read has one frozen, in-memory copy in a shared bounded cache
+(the existing 32 MiB limit); metadata records the target and pickup time. Pickup
+persists consumption before returning a body. A duplicate or later receipt gets
+metadata only; a new read needs new consent. Restart and cache pressure expire
+unclaimed copies with an explicit reason. Old stored copies are removed on load,
+and no read body can accumulate against the durable file's size limit.
+
+Regression work also found native approval text in navigation consent guards.
+Those guards now bind its digest, preserving stale-question detection without
+returning or storing the question text. Existing guards migrate the same way.
+Raw execution parameters and native permissions remain unchanged. These are
+author checks pending the integrator's independent delta review.
+
+**S2 snapshot and consent follow-up, 2026-11-10 (source approved):**
 the person requested fixes for non-session selections, repeated read prompts,
 invisible audit names, archive ordering and agent renames of other sessions.
 Only an existing foreign session selection requests conversation consent;
@@ -20,8 +50,8 @@ Forgetting a session does not prune its room order. Archive and restore now use
 the same unknown-slot counting rule, retaining absent backend positions without
 letting a forgotten slot shift a newly saved restore index. Regressions cover a
 forgotten or absent member before archive, its return, and forgetting afterward.
-Top-level hosted snapshot fields and stored approved-read retention await the
-person's separate scope decisions; this change does not claim to resolve them.
+Top-level hosted snapshot fields and stored approved-read retention awaited
+separate scope decisions at that checkpoint; the approved follow-up is above.
 **B4 dedicated backend composition, 2026-11-10 (source checkpoint):** the desktop
 now constructs the existing backend with the real dedicated service driver and
 its Boolean presence callback. It supplies a fixed private child directory and

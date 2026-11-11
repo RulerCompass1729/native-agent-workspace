@@ -22,14 +22,44 @@ function conversationTarget(method, args = [], actor) {
   const id = method === 'initial' ? args[0] : method === 'previewImage' && args[0]?.kind === 'session' ? args[0].sessionId : null;
   return actor && typeof id === 'string' && id && id !== actor.id ? id : null;
 }
-function conversationSnapshot(value, actor, read = null, selected = value?.viewState?.selected) {
-  if (!value || !Array.isArray(value.sessions)) return value;
-  return { ...value, sessions: value.sessions.map(s => {
+const pick = (value, keys) => Object.fromEntries(keys.filter(key => value && Object.hasOwn(value, key)).map(key => [key, value[key]]));
+const scalars = (value, keys) => Object.fromEntries(Object.entries(pick(value, keys)).filter(([_key, v]) => v === null || ['string', 'number', 'boolean'].includes(typeof v)));
+const queueMetadata = ['id', 'status', 'assignee', 'sentTo', 'tag', 'control', 'attempts', 'createdAt', 'sentAt', 'finishedAt'];
+function conversationSnapshot(value, actor, read = null, selected = value?.viewState?.selected, access = null) {
+  if (!value || !Array.isArray(value.sessions)) return {};
+  const owner = value.sessions.find(s => s.id === actor.id && s.nativeId === actor.nativeId);
+  let rooms = [];
+  try { rooms = access ? access.roomIds : require('./collaboration-spaces.cjs').roomIds(owner); } catch { /* Unknown membership grants nothing. */ }
+  const secretary = access ? access.secretary : value.queueSecretary?.sessionId === actor.id && value.queueSecretary?.nativeId === actor.nativeId;
+  const result = scalars(value, ['protocol', 'runtimeVersion', 'appVersion', 'storageRetryable', 'peerHandoffsAvailable', 'peerDirectedAvailable']);
+  result.sessions = value.sessions.map(s => {
     const own = s.id === actor.id && s.nativeId === actor.nativeId;
     const authorized = read?.sessionId === s.id && read.nativeId === s.nativeId;
     if (own || authorized) return { ...s, messages: own && selected !== undefined && selected !== s.id ? [] : s.messages, liveDraft: '', draft: '' };
     return { ...Object.fromEntries(rosterFields.filter(key => Object.hasOwn(s, key)).map(key => [key, s[key]])), messages: [], liveDraft: '', draft: '' };
-  }) };
+  });
+  result.rooms = (value.rooms || []).map(room => {
+    const member = !secretary && rooms?.includes(room.id);
+    const projected = { ...pick(room, ['id', 'name', 'archived', 'unavailable', 'revision', 'metadataRevision', 'queueRevision', 'memberOrder']),
+      ...(member ? pick(room, ['notes', 'messages', 'events', 'files', 'run', 'snapshotBatches', 'merge']) : {}) };
+    if (Array.isArray(room.queue)) projected.queue = room.queue.map(item => ({ ...scalars(item, member ? [...queueMetadata, 'text', 'reply', 'reason'] : queueMetadata),
+      ...(item.creator ? { creator: scalars(item.creator, ['kind', 'name', 'sessionId']) } : {}), ...(member ? pick(item, ['reasonUiMessage']) : {}) }));
+    return projected;
+  });
+  if (value.room) result.room = result.rooms.find(room => room.id === value.room.id) || pick(value.room, ['id', 'name', 'archived', 'unavailable']);
+  if (Array.isArray(value.capabilities)) result.capabilities = value.capabilities.filter(v => typeof v === 'string');
+  if (value.wakePolicy) result.wakePolicy = Object.fromEntries(Object.entries(pick(value.wakePolicy, ['enabled', 'unavailable'])).filter(([_k, v]) => typeof v === 'boolean'));
+  if (value.operatorPolicy) result.operatorPolicy = { enabled: value.operatorPolicy.enabled === true };
+  if (value.queueSecretary) result.queueSecretary = scalars(value.queueSecretary, ['sessionId', 'nativeId']);
+  if (value.butler) result.butler = scalars(value.butler, ['intake', 'errorCode', 'activation', 'recordPeriod']);
+  if (value.viewState) result.viewState = scalars(value.viewState, ['selected', 'spaceId', 'mode', 'preference']);
+  if (value.preflight) result.preflight = Object.fromEntries(Object.entries(pick(value.preflight, ['claude', 'codex', 'python'])).filter(([_k, v]) => typeof v === 'boolean'));
+  if (value.appBuild) result.appBuild = scalars(value.appBuild, ['version', 'commit', 'installedAt']);
+  if (value.diagnostics) result.diagnostics = scalars(value.diagnostics, ['shellModelCalls', 'dispatches']);
+  if (Array.isArray(value.services)) result.services = value.services.map(service => scalars(service, ['version', 'active', 'sessions']));
+  if (Array.isArray(value.rotationChains)) result.rotationChains = value.rotationChains.map(chain => ({ spaces: (chain.spaces || []).filter(id => typeof id === 'string'),
+    sessions: (chain.sessions || []).map(s => scalars(s, ['id', 'nativeId', 'name', 'handedAt', 'outcome'])) }));
+  return result;
 }
 // Display only: preserve the original command/name for identity and execution.
 // Escape UTF-16 code units so supplementary format characters are visible too.
