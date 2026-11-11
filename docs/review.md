@@ -9808,3 +9808,27 @@ A directory change during a read may still construct a page in memory or count
 one approved page in Main's correct log; the recheck withholds its body. A
 failed audit now refuses binding and catalog access as well. No production
 factory injection or runtime transport qualification is established.
+
+## Capacity advisory after conversation history — 2026-11-11
+
+The changing remaining-byte counter used to be inserted into system content,
+ahead of all business history. The host now appends the same advisory to the final
+user content, after tool results, without changing system or preceding blocks.
+It remains outside durable history and grants no authority. The six-digit count
+is still computed from the entire serialized outgoing body, including the note;
+256 KiB is inclusive and overflow sends nothing. This preserves a stable input
+prefix; actual provider caching and cost savings are not claimed.
+
+Regression: two old-source failures become seven passing checks for location,
+unchanged prefix, exact UTF-8 size, inclusive boundary and no transport on refusal.
+The real isolated DSH/MCP/loopback check covers ten scenarios; its actual business
+pages now receive the shared read-audit object required by the current interface.
+The first run exposed that stale fixture wiring before any business-page model
+request; the corrected fixture passes with actual pages and shared audit enabled.
+All requests are to an owned loopback fixture, no production model or credential.
+Independent review approved this checkpoint without blockers. The first full run
+had one unrelated locale-profile cleanup ENOTEMPTY (5,777 pass/one fail); that
+file alone passed 23 tests. The unchanged candidate's final full run at
+concurrency two passed 5,778 tests, zero failures/cancellations/skips. Raw failures
+and receipts remain private. This neither qualifies real provider caching nor
+activates the steward.
