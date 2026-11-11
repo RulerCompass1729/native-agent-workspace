@@ -11105,3 +11105,65 @@ zero cancellations or skips, exit 1; its raw output is retained as
 is required after this correction. The substantive
 Role/proof source and its tested authority behavior are unchanged. The earlier
 publication pass predates this correction and is not reused for final commit.
+
+## Butler read log: what a line shows and what it does not (2026-11-11, text only, behind the closed entry)
+
+Requested (the integrator's dispatch, from the log author's own note): two
+honest statements on the read log dialog. A line is a page NAW approved, not
+proof that the other side received it; and the log is not a tamper-proof
+ledger against programs of the same user or a changed clock. The wording was
+to go through the stand-in reviewer first, and only the dialog's text changes.
+
+What is on the page now, as a second quiet paragraph under the introduction,
+in every state of the dialog: a line means NAW approved giving the page to the
+butler (every page is logged before it is given) and does not show that the
+model service received it; the log is not tamper-proof: any program running
+under the person's account can delete or change it, and deleting it or
+changing the system clock gets around the limit of 64 pages a day.
+
+Stand-in review (a fresh read-only session standing in for the person, on
+screenshots of the product's own dialog with two placements, always visible
+and one line that opens): `APPROVE_WITH_CHANGES`, always visible. Its three
+required changes are applied as given. The draft said "while NAW is not
+running", which named a smaller risk than the source shows: a program of the
+same user can add well-formed lines while NAW runs. Deletion gets around the
+daily limit as well as the clock does. "Approved" stays, never "gave". Two of
+its suggestions are taken ("the model service", and that every page is logged
+before it is given); one is not, for length: that a changed clock also makes
+the logged times wrong.
+
+One layout rule changed with it, because the added text (and a sentence added
+to the introduction meanwhile on main) left no record in sight in the smallest
+window with the long warning of a file at its limit, in English. The list now
+keeps room for about two records. It still gives way first; when that is not
+enough, the explanation at the top gives way too and scrolls in its own box,
+so the count, the warning, the records and the actions stay in sight. The
+hidden-window check now fails when no whole record is in sight, when the
+explanation is cut in an ordinary state, or when it is out of sight; the
+earlier check passed with no record in sight.
+
+Each claim is tested on the real modules, not only as text: the 65th page of a
+day is refused; a well-formed line appended by another program is read as the
+log's own; the clock moved to another day gives a fresh allowance; a log
+deleted while the application is closed is empty at the next start with a
+fresh allowance; and the page is returned only after its line is written.
+
+Checks (author-run, no model): the full unit suite passes with no failure and
+every deliberate fault in the read log's activation changes, this paragraph
+and its layout rule is caught (counts in the commit message); the three
+hidden-window checks pass, the read log's in both languages and at both
+widths. No independent code review of this commit: it adds one paragraph of
+text whose claims the stand-in checked against the source, tests that run
+those claims, and a layout rule the window check now enforces.
+
+Known, and left for the next change of these texts:
+- In the smallest window with the long warning of a file at its limit, the
+  explanation scrolls in its own box and its second paragraph, the one added
+  here, is not in sight until it is scrolled. The stand-in saw the paragraph
+  always in sight; it did not see this state after the layout change.
+- With a file at its limit the page says both that a program can delete the
+  file (which gets around the daily limit) and "do not delete this file
+  yourself". Both are true; side by side they may read as a hint.
+- The dialog is behind the entry: a person deciding whether to switch the
+  butler on has not necessarily seen these two limits. The designation
+  confirmation is where that decision is made.

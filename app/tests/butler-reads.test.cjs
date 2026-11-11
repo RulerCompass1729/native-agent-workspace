@@ -294,6 +294,53 @@ test('every sentence is in the catalog in both languages, the catalog has no oth
   f.dialog.close(); language = 'zh'; assert.doesNotThrow(() => display.refresh(f.body));
 });
 
+test('what a line shows and does not show is on the page without a click, in every state, as the real modules behave', async t => {
+  const ZH = '一条记录表示 NAW 准许把这一页交给大管家（每一页都先记下，才交出），不能证明模型服务真的收到了。这份记录不防篡改：用你的账户运行的程序能删掉或改动它；删掉它或改系统时钟，都能绕过每天 64 页的上限。';
+  const EN = 'A line means NAW approved giving the page to the butler (every page is logged before it is given), and does not show that the model service received it. The log is not tamper-proof: any program running under your account can delete or change it, and deleting it or changing the system clock gets around the limit of 64 pages a day.';
+  assert.equal(zh('butler.reads.limits', { limit: 64 }), ZH); assert.equal(locale.format('en', 'butler.reads.limits', { limit: 64 }), EN.replace("model service", 'model service'));
+  // "Approved", never "gave" or "received": a line can exist for a page the butler did not get.
+  assert.equal(/交给了|已交给|收到了这一页|gave the page|was given/.test(ZH + EN), false);
+  // Right under the introduction, and there whatever the log holds or whether it can be read at all.
+  for (const [value, options] of [[few(t)], [[]], [few(t), { fail: () => true }], [few(t), { storage: null }]]) {
+    const f = fixture(value, options), quiet = () => f.dialog.all().filter(node => node.tag === 'p' && node.className.split(' ').includes('quiet'));
+    assert.deepEqual(quiet().slice(0, 2).map(node => node.textContent), [zh('butler.reads.intro', { limit: 50 }), ZH], 'Before the log is opened');
+    await f.reads.open();
+    assert.deepEqual(quiet().slice(0, 2).map(node => [node.textContent, node.hidden]), [[zh('butler.reads.intro', { limit: 50 }), false], [ZH, false]]);
+    // The two share one box, directly under the title, before anything that was read.
+    const about = f.dialog.children[1]; assert.equal(about.className, 'butler-reads-about'); assert.deepEqual(about.children, quiet().slice(0, 2));
+  }
+  // The order of giving way when the window is too small for everything: the list first, down to room for about two
+  // records; then this explanation, scrolling in its own box. The count, a warning and the actions do not give way.
+  const css = fs.readFileSync(path.join(__dirname, '../renderer/styles.css'), 'utf8');
+  assert.ok(css.includes('.butler-reads-about { flex: 0 1 auto; min-height: 44px; overflow-y: auto; }'));
+  assert.match(css, /\.butler-reads-wrap \{ position: relative; display: flex; flex-direction: column; min-height: 132px; flex: 1 100000000 auto;/);
+  assert.match(css, /\.butler-reads \.dialog-actions \{ flex: none; flex-wrap: nowrap; margin-top: 14px; \}/);
+  // The number in it is the core's own daily allowance.
+  assert.ok(fs.readFileSync(path.join(__dirname, '../butler-read-audit.cjs'), 'utf8').includes('const MAX_PAGES_PER_UTC_DAY = 64;'));
+
+  // What the two sentences rest on, on the real modules. A page is given only after its line is written:
+  const business = fs.readFileSync(path.join(__dirname, '../butler-business.cjs'), 'utf8'), invoke = business.slice(business.indexOf('invoke: (method, input) => {'));
+  assert.ok(invoke.indexOf('ButlerReadAudit.record(this.#readAudit') > 0 && invoke.indexOf('ButlerReadAudit.record(this.#readAudit') < invoke.indexOf('return page;'));
+  const { ButlerReadAudit } = require('../butler-read-audit.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-reads-limits-')); fs.chmodSync(dir, 0o700); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const person = {}, file = path.join(dir, 'butler-business-reads.jsonl'); let clock = NOW;
+  const open = () => new ButlerReadAudit(dir, { authorizePerson: actor => actor === person, now: () => clock });
+  const page = audit => audit.recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 1, runnerRef: 'butler-runner-synthetic' },
+    query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } });
+  // The daily limit holds as long as the file and the clock are left alone.
+  const audit = open(); for (let index = 0; index < 64; index++) page(audit);
+  assert.throws(() => page(audit), { code: 'ERR_BUTLER_READ_LIMIT' }); assert.equal(audit.read(person, {}).throughSequence, 64);
+  // Another program under the same account adds a well-formed line while NAW runs: the log takes it as its own.
+  const last = JSON.parse(fs.readFileSync(file, 'utf8').trim().split('\n').at(-1));
+  fs.appendFileSync(file, JSON.stringify({ ...last, sequence: 65, time: NOW - DAY * 400, day: new Date(NOW - DAY * 400).toISOString().slice(0, 10), pageOfDay: 1 }) + '\n');
+  const forged = audit.read(person, { afterSequence: 64, limit: 50 }); assert.equal(forged.throughSequence, 65); assert.equal(forged.records[0].day, new Date(NOW - DAY * 400).toISOString().slice(0, 10));
+  // The clock moved to another day: the same log gives a fresh allowance.
+  clock = NOW + DAY; assert.equal(page(audit).pageOfDay, 1);
+  // The file deleted while NAW is closed: the next start has an empty log and a fresh allowance for the same day.
+  clock = NOW; fs.rmSync(file); const fresh = open();
+  assert.deepEqual([fresh.read(person, {}).throughSequence, fresh.read(person, {}).records.length], [0, 0]); assert.equal(page(fresh).pageOfDay, 1);
+});
+
 test('if the read log or the entry cannot be set up, the window still starts without it', () => {
   const renderer = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
   // The renderer's own two statements, as written, run where the window's other parts are stand-ins.

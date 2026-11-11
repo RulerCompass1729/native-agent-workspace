@@ -933,8 +933,13 @@ header h1, header p { overflow-wrap: anywhere; }
 /* The log file filling up is said in the same way, beside the day's count. */
 .butler-reads-storage { margin: 0 0 6px; font-size: 14px; line-height: 1.6; font-weight: 600; color: #8a4a12; }
 .butler-reads-note { margin: 0 0 8px; line-height: 1.6; }
-/* Only the list scrolls; the day's count above it and the actions below it stay in sight. */
-.butler-reads-wrap { position: relative; display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; border-top: 1px solid var(--border); }
+/* Only the list scrolls; the day's count above it and the actions below it stay in sight. The list gives way first
+   and keeps room for about two records. Only when that is not enough (a small window with a long warning) does the
+   explanation at the top give way too, scrolling in its own box, so that the count, the warning and the records stay
+   in sight. */
+.butler-reads-about { flex: 0 1 auto; min-height: 44px; overflow-y: auto; }
+/* The shrink factor is the order of giving way: the list takes all of it until it is at its minimum. */
+.butler-reads-wrap { position: relative; display: flex; flex-direction: column; min-height: 132px; flex: 1 100000000 auto; border-top: 1px solid var(--border); }
 .butler-reads-wrap:has(.butler-reads-list:empty) { display: none; }
 .butler-reads-list { overflow-y: auto; min-height: 0; flex: 1 1 auto; }
 /* A scrollbar that is always there when the list is longer than its box, and a fade over rows still below. */

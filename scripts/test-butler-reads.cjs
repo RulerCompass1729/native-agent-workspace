@@ -74,10 +74,19 @@ const all = () => { const records = []; let after = 0, through = 0;
   const unmount = () => page.evaluate(() => { const { reads, dialog } = window.butlerReadsCheck; reads.dispose(); dialog.remove(); delete window.butlerReadsCheck; });
   const dialog = () => page.locator('#butler-reads-dialog-check'), settled = state => page.waitForFunction(value => window.butlerReadsCheck.dialog.dataset.readsState === value, state);
   const rows = () => dialog().locator('tbody tr:not(.butler-reads-day)'), days = () => dialog().locator('tr.butler-reads-day').allInnerTexts().then(list => list.map(value => value.trim()));
-  const fits = label => page.evaluate(name => {
+  // `tight`: a small window with a long warning, where the explanation at the top may scroll in its own box so
+  // that the count, the warning and the records keep their room. Everywhere else only the list scrolls.
+  const fits = (label, tight = false) => page.evaluate(([name, tight]) => {
     const d = window.butlerReadsCheck.dialog, list = d.querySelector('.butler-reads-list'), box = d.getBoundingClientRect(), problems = [], clipped = el => el.scrollWidth > el.clientWidth + 1;
     if (box.left < 0 || box.top < 0 || box.right > innerWidth || box.bottom > innerHeight) problems.push('dialog outside the window');
     if (d.scrollHeight > d.clientHeight + 1 || clipped(d)) problems.push('the dialog itself scrolls');
+    const about = d.querySelector('.butler-reads-about');
+    // Not by a fraction of a pixel either: any overflow draws a scrollbar beside the explanation.
+    if (!tight && (about.scrollHeight > about.clientHeight || about.lastElementChild.getBoundingClientRect().bottom > about.getBoundingClientRect().bottom + 0.01)) problems.push('the explanation is cut');
+    if (about.getBoundingClientRect().height < 40) problems.push('the explanation is out of sight');
+    // With records in the log, at least one whole record is in sight without scrolling anything.
+    const records = list ? [...list.querySelectorAll('tbody tr:not(.butler-reads-day)')] : [], area = list && list.getBoundingClientRect();
+    if (records.length && !records.some(row => { const r = row.getBoundingClientRect(); return r.top >= area.top - 1 && r.bottom <= Math.min(area.bottom, box.bottom) + 1; })) problems.push('no record is in sight');
     if (list && clipped(list)) problems.push('the list scrolls sideways');
     const buttons = [...d.querySelectorAll('.dialog-actions button')].filter(el => el.getClientRects().length);
     if (new Set(buttons.map(el => Math.round(el.getBoundingClientRect().top))).size > 1) problems.push('actions on more than one line');
@@ -85,7 +94,7 @@ const all = () => { const records = []; let after = 0, through = 0;
     for (const el of d.querySelectorAll('p, h2, th, td')) if (el.getClientRects().length && clipped(el)) problems.push('text clipped: ' + el.tagName);
     if (d.querySelectorAll('input, textarea, select, a, form').length) problems.push('a field or link');
     return problems.length ? name + ': ' + problems.join('; ') : '';
-  }, label);
+  }, [label, tight]);
   const problems = [];
   let shown = 'zh';
   for (const [language, width, height] of [['zh', 1280, 800], ['en', 1280, 800], ['en', 860, 600], ['zh', 860, 600]]) {
@@ -103,8 +112,11 @@ const all = () => { const records = []; let after = 0, through = 0;
     await page.evaluate(() => { window.butlerReadsCheck.reads.open(); }); await settled('records');
     assert.equal(await page.evaluate(() => document.activeElement.dataset.action), 'done', 'Opening puts the focus on Done');
     assert.equal((await dialog().locator('.butler-reads-today').innerText()).trim(), say('butler.reads.today', { from: view.today.from, pages: 6, left: 58, limit: 64, resets: view.today.resets }));
-    assert.equal((await dialog().locator('p.quiet').nth(1).innerText()).trim(), say('butler.reads.listed', { total: 64, shown: 50 }));
+    assert.equal((await dialog().locator('p.quiet:not(.butler-reads-limits)').nth(1).innerText()).trim(), say('butler.reads.listed', { total: 64, shown: 50 }));
     assert.equal(await dialog().locator('.butler-reads-storage').isVisible(), false, 'A small log file is not warned about');
+    // What a line shows and does not show is on the page without a click, right under what a line is.
+    assert.equal((await dialog().locator('p.butler-reads-limits').innerText()).trim(), say('butler.reads.limits', { limit: 64 }));
+    assert.equal(await dialog().evaluate(el => el.querySelector('p.butler-reads-limits').previousElementSibling === el.querySelector('p.quiet')), true);
     assert.deepEqual(await days(), view.days.map(day => say('butler.reads.day', { from: day.from, through: day.through, day: day.day, pages: day.pages })));
     assert.deepEqual([view.days.length, view.days[0].pages, view.days[1].pages], [2, 6, 58]); assert.equal(await rows().count(), 50);
     const cells = async index => (await rows().nth(index).locator('td').allInnerTexts()).map(value => value.trim()), expect = row => [row.time,
@@ -119,7 +131,7 @@ const all = () => { const records = []; let after = 0, through = 0;
     await look('reads');
     // Earlier records: the remaining fourteen, and then nothing more to ask for.
     await dialog().locator('button[data-action="older"]').click(); await until(async () => await rows().count() === 64, 'The earlier records arrive');
-    assert.equal((await dialog().locator('p.quiet').nth(1).innerText()).trim(), say('butler.reads.listedAll', { total: 64 })); assert.equal(await dialog().locator('button[data-action="older"]').isVisible(), false);
+    assert.equal((await dialog().locator('p.quiet:not(.butler-reads-limits)').nth(1).innerText()).trim(), say('butler.reads.listedAll', { total: 64 })); assert.equal(await dialog().locator('button[data-action="older"]').isVisible(), false);
     await dialog().locator('.butler-reads-list').evaluate(list => { list.scrollTop = list.scrollHeight; });
     await until(async () => await page.evaluate(() => window.butlerReadsCheck.dialog.querySelector('.butler-reads-wrap').dataset.more) === 'false', 'The fade goes at the end of the list');
     // Scrolled to the oldest rows, their day is still on screen, pinned under the column names.
@@ -168,7 +180,7 @@ const all = () => { const records = []; let after = 0, through = 0;
       assert.ok((await days())[0].includes(least), `${language}: "${least}" in ${(await days())[0]}`);
     }
     assert.equal(await dialog().locator('.butler-reads-today').isVisible(), true); assert.ok(await rows().count() > 0, 'The records are still listed');
-    const problem = await fits(`${language}-860 reads-file-${state}`); if (problem) problems.push(problem); await shot(`reads-file-${state}-${language}-860`);
+    const problem = await fits(`${language}-860 reads-file-${state}`, true); if (problem) problems.push(problem); await shot(`reads-file-${state}-${language}-860`);
     await dialog().locator('button[data-action="done"]').click(); await dialog().waitFor({ state: 'hidden' }); await unmount();
   }
   checks.push('The core\'s warning that the log file is filling up, a file already at its cap, a missing report ("cannot tell how full") and a newest record that is not understood ("cannot tell the day\'s count") are each said, in both languages');
