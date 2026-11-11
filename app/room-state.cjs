@@ -726,7 +726,7 @@ class RoomState {
   }
   rotationEvent(ids, phase, oldName, detail, receiptId) {
     if (receiptId !== undefined && (typeof receiptId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(receiptId))) throw Error('Invalid rotation receipt');
-    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', needsTrust: 'notice.rotation.needsTrust', trustTimedOut: 'notice.rotation.trustTimedOut', trustTimeoutUnconfirmed: 'notice.rotation.trustTimeoutUnconfirmed' };
+    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', needsTrust: 'notice.rotation.needsTrust', trustTimedOut: 'notice.rotation.trustTimedOut', trustTimeoutUnconfirmed: 'notice.rotation.trustTimeoutUnconfirmed', trustCleanupUnconfirmed: 'notice.rotation.trustCleanupUnconfirmed' };
     for (const id of ids) {
       try {
         this.metadata(id);
@@ -949,12 +949,16 @@ class RoomState {
   membership(client, id, join, label, room = DEFAULT_ROOM_ID, expected) {
     if (typeof id !== 'string' || typeof join !== 'boolean') return Promise.reject(uiError("error.invalidMemberAction"));
     try { this.metadata(room); } catch (error) { return Promise.reject(error); }
-    return this.enqueue(client, () => {
+    const action = () => {
       if (join) this.assertAvailable(id, true, room);
       return this.changeMember(client, id, join, label, room, expected);
-    }, id, room);
+    };
+    // Cleanup is conditional on the owning backend's final run check. An eager
+    // human-intervention pause would affect unrelated work before that check.
+    return expected?.unusedSuccessor === true ? this.serial(action) : this.enqueue(client, action, id, room);
   }
   async changeMember(client, id, join, label, room = DEFAULT_ROOM_ID, expected, archivePlacement = false) {
+      if (expected?.unusedSuccessor === true && join) throw uiError('error.invalidMemberAction');
       const legacyDetach = archivePlacement && !join;
       const snapshot = await client.call('initial'), before = snapshot.sessions.find(s => s.id === id);
       if (!before) throw uiError("error.sessionMissing");
@@ -967,6 +971,12 @@ class RoomState {
           expected.placementRevision !== undefined && !recovered && expected.placementRevision !== placementRevision(before) ||
           expected.connectionRevision !== undefined && expected.connectionRevision !== (before.connectionRevision || 0))) throw uiError("error.room.membershipChangedNoRevocation");
       const prior = roomIds(before), modern = (before.serviceCapabilities || snapshot.capabilities || []).includes('singleHomeMoveV1') && !(legacyDetach && prior.length > 1);
+      const guarded = expected?.unusedSuccessor === true;
+      if (guarded) {
+        if (!modern || !(before.serviceCapabilities || snapshot.capabilities || []).includes('guardedSessionStopV1')) throw uiError('error.movePlacementUnsupported');
+        if (snapshot.storageWarning || this.spacesWarning) throw Object.assign(Error(snapshot.storageWarning || this.spacesWarning), { uiMessage: snapshot.storageWarning ? snapshot.storageWarningUiMessage : this.spacesWarningUiMessage });
+        for (const place of new Set([room, ...prior])) { this.writable(place); this.assertAvailable(id, true, place); }
+      }
       if (before.nativeContextPending || prior.length > 1 && !(legacyDetach && !join)) throw uiError(prior.length > 1 ? 'error.movePlacementAmbiguous' : 'error.movePlacementChanged');
       if (isMember(before, room) === join && !recovered) return { changed: false, roomId: room, sessionId: id, joined: join };
       // Both histories must be readable before changing an owning backend.
@@ -975,7 +985,7 @@ class RoomState {
       let move;
       if (modern) {
         const proof = { operationId: expected?.operationId || randomUUID(), nativeId: before.nativeId,
-          revision: placementRevision(before), connectionRevision: before.connectionRevision || 0 };
+          revision: placementRevision(before), connectionRevision: before.connectionRevision || 0, ...(guarded ? { unusedSuccessor: true } : {}) };
         try { move = recovered ? { ...before.placementReceipt, changed: true } : await client.call('moveMembership', id, join ? room : null, proof); }
         catch (error) {
           // Lost replies are reconciled from the same writer's saved receipt, never retried.

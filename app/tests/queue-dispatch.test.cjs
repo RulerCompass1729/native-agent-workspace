@@ -10,6 +10,7 @@ const { RoomState } = require('../room-state.cjs');
 const HOUR = 60 * 60 * 1000;
 const NOW = 1_800_000_000_000;
 const AWAKE = { enabled: true };
+const GUARDED_STOP = 'guardedSessionStopV1';
 
 function member(id, extra = {}) {
   return {
@@ -28,7 +29,9 @@ function member(id, extra = {}) {
     chatAvailable: true,
     liveDraft: '',
     controlRevision: 0,
-    serviceCapabilities: [rules.CAPABILITY],
+    draftRevision: 0,
+    placementRevision: 0,
+    serviceCapabilities: [rules.CAPABILITY, GUARDED_STOP],
     fleet: [],
     messages: [],
     ...extra,
@@ -341,11 +344,11 @@ test('a refusal before sending returns the item to the queue, and fails it after
 class FakeClient extends EventEmitter {
   constructor(sessions) {
     super();
-    this.state = { sessions, rooms: [{ id: 'shared', revision: 0, run: null, messages: [] }], wakePolicy: AWAKE, capabilities: [rules.CAPABILITY, rules.CREATE_SETTINGS_CAPABILITY] };
+    this.state = { sessions, rooms: [{ id: 'shared', revision: 0, run: null, messages: [] }], wakePolicy: AWAKE, capabilities: [rules.CAPABILITY, rules.CREATE_SETTINGS_CAPABILITY, GUARDED_STOP] };
     this.calls = [];
     this.sequence = 0;
     this.reads = 0;
-    this.capabilities = [rules.CAPABILITY];
+    this.capabilities = [rules.CAPABILITY, GUARDED_STOP];
   }
   snapshot() {
     this.reads += 1;
@@ -390,6 +393,13 @@ class FakeClient extends EventEmitter {
     if (method === 'stop') {
       session.state = 'ended';
       return { state: 'ended' };
+    }
+    if (method === 'stopUnusedSuccessor') {
+      assert.deepEqual(args[1], trustProof(session), 'the server checks the exact current identity and person revisions');
+      assert.ok(['starting', 'idle'].includes(session.state) && !session.pendingTag && !session.liveDraft && !session.nativeInputRequired &&
+        !session.activeTurnId && !session.pendingQueue && !session.pendingSteer && session.nativeGoal?.status !== 'active' &&
+        !(session.messages || []).some(m => m.role === 'user') && !(session.background > 0), 'the owned successor is still unused');
+      return this.call('stop', session.id);
     }
     if (method === 'terminalSnapshot') {
       if (this.snapshotFails) {
@@ -1828,7 +1838,7 @@ for (const moved of [false, true]) test(`B2: ${moved ? 'a moved directory with a
 test('B2: startup trust replay fills an unannounced receipt without duplicating the stored space event', async t => {
   const { client, dispatcher, record, dir } = await projectRotation(t, { record: { oldControl: 0 }, afterCreate(fresh) { fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('claude'); } });
   const file = path.join(dir, 'queue-dispatch.json');
-  dispatcher.close(); delete record.trustNotified;
+  dispatcher.close(); delete record.trustNotified; delete record.trustEffects; delete record.trustOwner;
   fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: record } }), { mode: 0o600 });
   const room = new RoomState(dir); fakeMembership(room, client);
   const notices = [], resumed = new rules.QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now: () => NOW, settleMs: 0, tickMs: 3600000, notify: type => notices.push(type) }); t.after(() => resumed.close());
@@ -1855,6 +1865,10 @@ test('B2: persisted directory-trust wait validates its successor and decision re
 });
 
 // Load the same persisted waiting receipt as production; no native create or model is needed.
+function trustProof(session) {
+  return { nativeId: session.nativeId, controlRevision: session.controlRevision, draftRevision: session.draftRevision, placementRevision: session.placementRevision };
+}
+const trustEffects = state => ({ v: 1, log: state, rooms: { shared: state }, os: state });
 function trustTimeoutSetup(t, options = {}) {
   const { dir, room } = roomSetup(t), notifications = [];
   const old = member('a', { cwd: '/synthetic/old' });
@@ -1863,7 +1877,8 @@ function trustTimeoutSetup(t, options = {}) {
   const record = { phase: 'waiting-trust', oldId: old.id, oldNativeId: old.nativeId, oldControl: 0,
     requestedAt: NOW - 60000, provider: old.provider, cwd: old.cwd, name: old.name, roomIds: ['shared'],
     newId: fresh.id, newCwd: fresh.cwd, newName: 'Agent a · successor', createdNewAt: NOW, handoff: 'Synthetic saved work',
-    trustWaitingAt: options.waitingAt ?? NOW, trustNoticeId: projectPlan().nonce, trustNotified: true };
+    trustWaitingAt: options.waitingAt ?? NOW, trustNoticeId: projectPlan().nonce, trustNotified: true,
+    ...(options.legacy ? {} : { trustOwner: trustProof(fresh), trustEffects: trustEffects('attempted') }) };
   room.rotationEvent(record.roomIds, 'needsTrust', old.name, record.newName, record.trustNoticeId);
   fs.writeFileSync(path.join(dir, 'queue-dispatch.json'), JSON.stringify({ version: 1, rotations: { a: record } }), { mode: 0o600 });
   let now = NOW;
@@ -1990,4 +2005,369 @@ test('B2 timeout: a successor stop that never confirms reaches the existing boun
   assert.equal(f.fresh.state, 'starting'); assert.equal(f.old.state, 'idle');
   assert.deepEqual(f.notifications, ['trustTimeoutUnconfirmed']);
   assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 1);
+});
+
+function saveTrustFixture(f) {
+  fs.writeFileSync(path.join(f.dir, 'queue-dispatch.json'), JSON.stringify({ version: 1, rotations: f.dispatcher.rotations }), { mode: 0o600 });
+}
+function restoreTrustFixture(t, f, time = NOW) {
+  f.dispatcher.close();
+  const room = new RoomState(f.dir), notifications = []; fakeMembership(room, f.client);
+  let now = time;
+  const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: f.dir, connect: async () => f.client, now: () => now,
+    settleMs: 0, tickMs: 3600000, directoryTrustTimeoutMs: 1000, notify: kind => notifications.push(kind) });
+  dispatcher.client = f.client; t.after(() => dispatcher.close());
+  return { ...f, room, dispatcher, notifications, record: dispatcher.rotations.a,
+    async at(value) { now = value; await dispatcher.advanceRotations(f.client.snapshot(), now); } };
+}
+function expiredTrustCleanup(f, stop = 'pending', attempts = 0) {
+  Object.assign(f.record, { phase: 'failed', failedAt: NOW, reason: 'native-directory-trust-timeout',
+    trustCleanup: { v: 1, id: 'bbccddee-1122-4333-8444-556677889900', proof: structuredClone(f.record.trustOwner),
+      stop: { state: stop, attempts }, rooms: { shared: 'pending' }, notices: trustEffects('pending') } });
+  saveTrustFixture(f);
+}
+function trimTrustLog(f) {
+  const noise = f.dispatcher.appendLog('failed', { oldId: 'other', oldNativeId: 'native-other', name: 'Other', roomIds: ['shared'] }, { reason: 'later synthetic event' });
+  fs.appendFileSync(f.dispatcher.logFile, (JSON.stringify(noise) + '\n').repeat(1001), { mode: 0o600 });
+}
+
+test('B2 receipt: clear and log retention followed by a real restart never replay an attempted trust decision', async t => {
+  const f = trustTimeoutSetup(t);
+  f.dispatcher.appendLog('waiting', f.record, { noticeId: f.record.trustNoticeId, reason: 'native-directory-trust' });
+  trimTrustLog(f); f.room.clear(); saveTrustFixture(f);
+  const resumed = restoreTrustFixture(t, f);
+  assert.equal(resumed.dispatcher.rotationEntries().some(e => e.noticeId === f.record.trustNoticeId), false, 'the old log receipt is outside the retained view');
+  await resumed.dispatcher.waitForDirectoryTrust(f.old.id, resumed.record, NOW + 1, f.fresh);
+  assert.equal(resumed.room.value.events.filter(e => e.uiMessage?.key === 'notice.rotation.needsTrust').length, 0, 'clear is respected after restart');
+  const matching = fs.readFileSync(resumed.dispatcher.logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(e => e.noticeId === f.record.trustNoticeId);
+  assert.equal(matching.length, 1); assert.deepEqual(resumed.notifications, []);
+  assert.equal(f.client.calls.some(c => ['create', 'stop', 'approve', 'answer', 'input', 'dispatch'].includes(c[0])), false);
+});
+
+test('B2 receipt: an old log/space-written but OS-flag-not-written crash is migrated without replay after clear and trim', async t => {
+  const f = trustTimeoutSetup(t, { legacy: true }); delete f.record.trustNotified;
+  f.dispatcher.appendLog('waiting', f.record, { noticeId: f.record.trustNoticeId, reason: 'native-directory-trust' });
+  trimTrustLog(f); f.room.clear(); saveTrustFixture(f);
+  const resumed = restoreTrustFixture(t, f);
+  await resumed.at(NOW + 1);
+  assert.deepEqual(resumed.notifications, ['needsTrust'], 'the old source saved its flag before OS attempt; only the missing OS attempt is due');
+  assert.equal(resumed.room.value.events.length, 0);
+  assert.equal(fs.readFileSync(resumed.dispatcher.logFile, 'utf8').split('\n').filter(line => line.includes(f.record.trustNoticeId)).length, 1);
+  const again = restoreTrustFixture(t, resumed); await again.at(NOW + 2);
+  assert.deepEqual(again.notifications, []); assert.equal(again.room.value.events.length, 0);
+  assert.equal(f.client.calls.some(c => ['create', 'stop', 'approve', 'answer', 'input', 'dispatch'].includes(c[0])), false);
+});
+
+for (const action of ['log', 'space', 'os']) for (const boundary of ['before', 'after']) test(`B2 receipt: ${action} ${boundary}-call interruption keeps its durable attempt and never replays it`, async t => {
+  const f = trustTimeoutSetup(t); f.record.trustEffects = trustEffects('pending'); delete f.record.trustNotified;
+  f.room.clear(); saveTrustFixture(f);
+  let attempted = 0;
+  const interrupt = run => (...args) => {
+    attempted++;
+    const saved = JSON.parse(fs.readFileSync(path.join(f.dir, 'queue-dispatch.json'))).rotations.a;
+    const state = action === 'space' ? saved.trustEffects.rooms.shared : saved.trustEffects[action];
+    assert.equal(state, 'attempted', 'attempt is persisted before making the side effect');
+    if (boundary === 'after') run(...args);
+    f.dispatcher.closed = true; throw Error('synthetic interruption at the external boundary');
+  };
+  if (action === 'log') f.dispatcher.appendLog = interrupt(f.dispatcher.appendLog.bind(f.dispatcher));
+  else if (action === 'space') f.room.rotationEvent = interrupt(f.room.rotationEvent.bind(f.room));
+  else f.dispatcher.notify = interrupt(f.dispatcher.notify);
+  await f.dispatcher.waitForDirectoryTrust(f.old.id, f.record, NOW + 1, f.fresh).catch(() => {});
+  assert.equal(attempted, 1, 'the selected action boundary was reached');
+  const resumed = restoreTrustFixture(t, f);
+  let replayed = 0;
+  if (action === 'log') { const base = resumed.dispatcher.appendLog.bind(resumed.dispatcher); resumed.dispatcher.appendLog = (...args) => { replayed++; return base(...args); }; }
+  else if (action === 'space') { const base = resumed.room.rotationEvent.bind(resumed.room); resumed.room.rotationEvent = (...args) => { replayed++; return base(...args); }; }
+  else resumed.dispatcher.notify = () => { replayed++; };
+  await resumed.dispatcher.waitForDirectoryTrust(f.old.id, resumed.record, NOW + 2, f.fresh);
+  assert.equal(replayed, 0, 'an attempted action is never inferred to be unsent because a receipt is absent');
+  assert.equal(f.client.calls.some(c => ['stop', 'create', 'dispatch', 'approve', 'answer', 'input'].includes(c[0])), false);
+});
+
+test('B2 receipt: an effects-save failure prevents the subsequent external actions', async t => {
+  const f = trustTimeoutSetup(t); f.record.trustEffects = trustEffects('pending'); delete f.record.trustNotified; saveTrustFixture(f);
+  let effects = 0;
+  f.dispatcher.appendLog = () => { effects++; }; f.room.rotationEvent = () => { effects++; }; f.dispatcher.notify = () => { effects++; };
+  f.dispatcher.save = () => { throw Error('synthetic write failure'); };
+  await assert.rejects(f.dispatcher.waitForDirectoryTrust(f.old.id, f.record, NOW + 1, f.fresh), /write failure/);
+  assert.equal(effects, 0); assert.equal(f.client.calls.length, 0);
+});
+
+test('B2 receipt: failed cleanup intent is saved before stop and a restart completes the known-pending cleanup once', async t => {
+  const f = trustTimeoutSetup(t, { timeoutMs: 1 }); f.fresh.roomIds = ['shared']; f.fresh.roomId = 'shared';
+  const save = f.dispatcher.save.bind(f.dispatcher);
+  f.dispatcher.save = () => {
+    save();
+    if (f.record.phase === 'failed') {
+      assert.equal(f.record.trustCleanup?.stop.state, 'pending', 'the same failed write retains cleanup intent');
+      f.dispatcher.closed = true; throw Error('synthetic crash after failed intent save');
+    }
+  };
+  await f.at(NOW + 1);
+  assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 0);
+  const resumed = restoreTrustFixture(t, f, NOW + 2), order = [], call = f.client.call.bind(f.client), membership = resumed.room.membership.bind(resumed.room);
+  f.client.call = async (method, ...args) => { if (method === 'stopUnusedSuccessor') order.push('stop'); return call(method, ...args); };
+  resumed.room.membership = async (...args) => {
+    const saved = JSON.parse(fs.readFileSync(path.join(f.dir, 'queue-dispatch.json'))).rotations.a;
+    assert.equal(saved.trustCleanup.rooms.shared, 'started', 'leave attempt is saved before changing membership');
+    order.push('leave'); return membership(...args);
+  };
+  await resumed.at(NOW + 2);
+  assert.deepEqual(order, ['stop', 'leave']);
+  assert.equal(resumed.record.trustCleanup.stop.state, 'confirmed');
+  assert.equal(resumed.record.trustCleanup.rooms.shared, 'confirmed');
+  assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 1); assert.equal(f.old.state, 'idle');
+  const again = restoreTrustFixture(t, resumed, NOW + 3); await again.at(NOW + 3);
+  assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 1); assert.deepEqual(again.notifications, []);
+});
+
+for (const inactive of ['ended', 'disconnected']) test(`B2 receipt: a started stop observes ${inactive} and does not stop again`, async t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f, 'started', 1); f.fresh.state = inactive;
+  const resumed = restoreTrustFixture(t, f); await resumed.at(NOW + 1);
+  assert.equal(resumed.record.trustCleanup.stop.state, 'confirmed');
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor'].includes(c[0])), false);
+});
+
+test('B2 receipt: a started stop with unchanged unused ownership may retry once through the guarded capability', async t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f, 'started', 1);
+  const resumed = restoreTrustFixture(t, f); await resumed.at(NOW + 1);
+  assert.equal(resumed.record.trustCleanup.stop.state, 'confirmed'); assert.equal(resumed.record.trustCleanup.stop.attempts, 2);
+  assert.deepEqual(f.client.calls.find(c => c[0] === 'stopUnusedSuccessor'), ['stopUnusedSuccessor', f.fresh.id, trustProof(f.fresh)]);
+  assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 1);
+});
+
+for (const changed of ['nativeId', 'controlRevision', 'draftRevision', 'placementRevision', 'draft', 'working', 'pending', 'goal']) test(`B2 receipt: a ${changed} change blocks an interrupted cleanup from stopping the successor`, async t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f, 'started', 1);
+  if (changed === 'nativeId') f.fresh.nativeId = 'a-different-native-thread';
+  else if (changed.endsWith('Revision')) f.fresh[changed]++;
+  else if (changed === 'draft') f.fresh.liveDraft = 'a new unsent person draft';
+  else if (changed === 'working') f.fresh.state = 'working';
+  else if (changed === 'pending') f.fresh.pendingTag = 'a-new-person-turn';
+  else f.fresh.nativeGoal = { status: 'active' };
+  const resumed = restoreTrustFixture(t, f); await resumed.at(NOW + 1);
+  assert.equal(resumed.record.trustCleanup.stop.state, 'unknown');
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor', 'create', 'input', 'approve', 'answer'].includes(c[0])), false);
+});
+
+test('B2 receipt: missing guarded capability never falls back to unguarded stop', async t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f); f.client.capabilities = [rules.CAPABILITY];
+  const resumed = restoreTrustFixture(t, f); await resumed.at(NOW + 1);
+  assert.equal(resumed.record.trustCleanup.stop.state, 'unknown');
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor'].includes(c[0])), false);
+});
+
+test('B2 receipt: an interrupted leave is observed and never blindly repeated while membership remains', async t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f, 'confirmed', 1); f.record.trustCleanup.rooms.shared = 'started';
+  f.fresh.state = 'ended'; f.fresh.roomIds = ['shared']; f.fresh.roomId = 'shared'; saveTrustFixture(f);
+  const resumed = restoreTrustFixture(t, f); let leaves = 0; resumed.room.membership = async () => { leaves++; };
+  await resumed.at(NOW + 1); assert.equal(leaves, 0); assert.equal(resumed.record.trustCleanup.rooms.shared, 'unknown');
+  f.fresh.roomIds = []; f.fresh.roomId = null; await resumed.at(NOW + 2);
+  assert.equal(resumed.record.trustCleanup.rooms.shared, 'confirmed'); assert.equal(leaves, 0);
+});
+
+test('B2 receipt: ready without a visible prompt wins over an elapsed trust deadline', async t => {
+  const f = trustTimeoutSetup(t, { timeoutMs: 1 }); f.fresh.state = 'idle'; f.fresh.nativeStartupPrompt = null; f.dispatcher.idleSince.set(f.fresh.id, NOW - 60000);
+  await f.at(NOW + 2); assert.equal(f.record.phase, 'created');
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor'].includes(c[0])), false);
+  assert.deepEqual(f.notifications, []);
+});
+
+test('B2 receipt: a new visible prompt after readiness starts a fresh cycle, clock and notice', async t => {
+  const f = trustTimeoutSetup(t, { timeoutMs: 1000 }), earlier = f.record.trustNoticeId;
+  f.fresh.state = 'idle'; f.fresh.nativeStartupPrompt = null; f.dispatcher.idleSince.set(f.fresh.id, NOW - 60000);
+  await f.at(NOW + 500); assert.equal(f.record.phase, 'created');
+  f.fresh.state = 'starting'; f.fresh.nativeStartupPrompt = trustPrompt('claude');
+  await f.at(NOW + 900);
+  assert.equal(f.record.phase, 'waiting-trust'); assert.notEqual(f.record.trustNoticeId, earlier); assert.equal(f.record.trustWaitingAt, NOW + 900);
+  assert.deepEqual(f.record.trustOwner, trustProof(f.fresh)); assert.deepEqual(f.notifications, ['needsTrust']);
+  assert.equal(f.room.value.events.filter(e => e.uiMessage?.key === 'notice.rotation.needsTrust').length, 2);
+  await f.at(NOW + 1001); assert.equal(f.record.phase, 'waiting-trust', 'the original cycle deadline cannot expire a new prompt');
+});
+
+for (const failed of ['stop', 'leave']) test(`B2 receipt: ${failed} failure keeps only the successor quarantined after trust is accepted and beyond seven days`, async t => {
+  const f = trustTimeoutSetup(t, { timeoutMs: 1 }); f.fresh.roomIds = ['shared']; f.fresh.roomId = 'shared';
+  const call = f.client.call.bind(f.client);
+  f.client.call = async (method, ...args) => {
+    if (method === 'stop' && failed === 'stop') { f.client.calls.push([method, ...args]); throw Error('synthetic stop refusal'); }
+    return call(method, ...args);
+  };
+  if (failed === 'leave') f.room.membership = async () => { throw Error('synthetic leave failure'); };
+  await f.at(NOW + 1); assert.equal(f.record.phase, 'failed');
+  f.fresh.state = 'idle'; f.fresh.nativeStartupPrompt = null; f.fresh.controlRevision++;
+  const next = f.room.queueAdd('must not reach the quarantined successor', f.fresh.id), oldNext = f.room.queueAdd('old member continues', f.old.id);
+  f.dispatcher.pruneRotations(NOW + 8 * 24 * HOUR);
+  assert.ok(f.dispatcher.rotations.a?.trustCleanup, 'unfinished cleanup is not lost to failed-record pruning');
+  const resumed = restoreTrustFixture(t, f, NOW + 8 * 24 * HOUR); await resumed.at(NOW + 8 * 24 * HOUR);
+  const actions = plan([{ id: 'shared', name: 'Team', queue: resumed.room.queueItems('shared') }], f.client.state.sessions,
+    { rotations: resumed.dispatcher.rotations, now: NOW + 8 * 24 * HOUR });
+  assert.equal(actions.some(a => a.kind === 'dispatch' && a.sessionId === f.fresh.id), false);
+  assert.ok(actions.some(a => a.kind === 'dispatch' && a.itemId === next && a.sessionId === f.old.id), 'the earlier reassigned task reaches the old member first');
+  assert.equal(resumed.room.queueItems('shared').find(i => i.id === oldNext).assignee, f.old.id, 'later queued work remains owned by the original member');
+  assert.deepEqual(resumed.dispatcher.activeRotations(), [], 'cleanup does not occupy the global rotation slot');
+  await resumed.dispatcher.dispatch({ kind: 'dispatch', roomId: 'shared', itemId: next, sessionId: f.fresh.id });
+  assert.equal(f.client.sends(f.fresh.id).length, 0, 'a stale pre-cleanup action cannot bypass quarantine');
+});
+
+test('B2 receipt: legacy failed cleanup is unknown and never manufactures another stop or notice', async t => {
+  const f = trustTimeoutSetup(t, { legacy: true }); Object.assign(f.record, { phase: 'failed', failedAt: NOW, reason: 'native-directory-trust-timeout' }); saveTrustFixture(f);
+  const resumed = restoreTrustFixture(t, f); await resumed.at(NOW + 1);
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor', 'dispatch', 'input', 'approve', 'answer'].includes(c[0])), false);
+  assert.deepEqual(resumed.notifications, []);
+});
+
+test('B2 receipt: malformed new receipt fields fail closed instead of dropping a potentially live successor', t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f);
+  const valid = structuredClone(f.record), file = path.join(f.dir, 'queue-dispatch.json');
+  const damaged = [
+    r => { r.trustNoticeId = 'damaged'; }, r => { r.newId = r.oldId; }, r => { r.roomIds = null; }, r => { r.newCwd = 'relative'; },
+    r => { r.trustOwner.controlRevision = -1; }, r => { delete r.trustOwner.draftRevision; }, r => { r.trustOwner.nativeId = null; },
+    r => { r.trustEffects.v = 2; }, r => { r.trustEffects.log = 'delivered'; }, r => { r.trustEffects.rooms.shared = 'done'; },
+    r => { r.trustEffects.os = true; }, r => { r.trustCleanup.id = 'not-a-receipt'; }, r => { r.trustCleanup.proof = {}; },
+    r => { r.trustCleanup.stop.state = 'delivered'; }, r => { r.trustCleanup.stop.attempts = 3; }, r => { r.trustCleanup.rooms.shared = 'attempted'; },
+    r => { r.trustCleanup.notices.os = 'delivered'; },
+  ];
+  for (const mutate of damaged) {
+    const record = structuredClone(valid); mutate(record);
+    fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: record } }), { mode: 0o600 });
+    assert.throws(() => rules.readRotations(file, NOW), /invalid.*receipt.*state/i);
+  }
+});
+
+for (const action of ['log', 'space', 'os']) for (const boundary of ['before', 'after']) test(`B2 receipt: timeout ${action} ${boundary}-call interruption never replays that cleanup notice`, async t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f, 'confirmed', 1);
+  f.record.trustCleanup.rooms.shared = 'confirmed'; f.fresh.state = 'ended'; saveTrustFixture(f);
+  let attempted = 0;
+  const interrupt = run => (...args) => {
+    attempted++;
+    const notices = JSON.parse(fs.readFileSync(path.join(f.dir, 'queue-dispatch.json'))).rotations.a.trustCleanup.notices;
+    assert.equal(action === 'space' ? notices.rooms.shared : notices[action], 'attempted');
+    if (boundary === 'after') run(...args);
+    f.dispatcher.closed = true; throw Error('synthetic interruption at timeout notice boundary');
+  };
+  if (action === 'log') f.dispatcher.appendLog = interrupt(f.dispatcher.appendLog.bind(f.dispatcher));
+  else if (action === 'space') f.room.rotationEvent = interrupt(f.room.rotationEvent.bind(f.room));
+  else f.dispatcher.notify = interrupt(f.dispatcher.notify);
+  await f.at(NOW + 1).catch(() => {}); assert.equal(attempted, 1);
+  const resumed = restoreTrustFixture(t, f); let replayed = 0;
+  if (action === 'log') { const base = resumed.dispatcher.appendLog.bind(resumed.dispatcher); resumed.dispatcher.appendLog = (...args) => { replayed++; return base(...args); }; }
+  else if (action === 'space') { const base = resumed.room.rotationEvent.bind(resumed.room); resumed.room.rotationEvent = (...args) => { replayed++; return base(...args); }; }
+  else resumed.dispatcher.notify = () => { replayed++; };
+  await resumed.at(NOW + 2);
+  assert.equal(replayed, 0); assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor', 'input', 'approve', 'answer', 'create'].includes(c[0])), false);
+});
+
+test('B2 receipt: two started guarded stop attempts are the hard limit, even with unchanged ownership', async t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f, 'started', 2);
+  const resumed = restoreTrustFixture(t, f); await resumed.at(NOW + 1); await resumed.at(NOW + 2);
+  assert.equal(resumed.record.trustCleanup.stop.state, 'unknown'); assert.equal(resumed.record.trustCleanup.stop.attempts, 2);
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor'].includes(c[0])), false);
+});
+
+test('B2 receipt: an uninitialized Codex successor keeps an explicit null native identity in its guarded proof', async t => {
+  const f = trustTimeoutSetup(t); f.old.provider = f.fresh.provider = f.record.provider = 'codex'; f.fresh.nativeId = null;
+  f.record.trustOwner = trustProof(f.fresh); expiredTrustCleanup(f);
+  const resumed = restoreTrustFixture(t, f); await resumed.at(NOW + 1);
+  assert.equal(resumed.record.trustCleanup.stop.state, 'confirmed');
+  assert.deepEqual(f.client.calls.find(c => c[0] === 'stopUnusedSuccessor'), ['stopUnusedSuccessor', f.fresh.id, { nativeId: null, controlRevision: 0, draftRevision: 0, placementRevision: 0 }]);
+});
+
+test('B2 receipt boundary: a crash after the started-stop save recovers with exactly one guarded retry', async t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f);
+  const save = f.dispatcher.save.bind(f.dispatcher);
+  f.dispatcher.save = () => {
+    save();
+    if (f.record.trustCleanup.stop.state === 'started') { f.dispatcher.closed = true; throw Error('synthetic crash after started-stop save'); }
+  };
+  await f.at(NOW + 1);
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor'].includes(c[0])), false);
+  const resumed = restoreTrustFixture(t, f); await resumed.at(NOW + 2);
+  assert.equal(resumed.record.trustCleanup.stop.state, 'confirmed'); assert.equal(resumed.record.trustCleanup.stop.attempts, 2);
+  assert.equal(f.client.calls.filter(c => c[0] === 'stopUnusedSuccessor').length, 1);
+  assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 1);
+});
+
+test('B2 receipt boundary: a stop applied before its confirmation save is observed after restart and is never repeated', async t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f); const call = f.client.call.bind(f.client);
+  f.client.call = async (method, ...args) => {
+    const value = await call(method, ...args);
+    if (method === 'stopUnusedSuccessor') f.dispatcher.closed = true;
+    return value;
+  };
+  await f.at(NOW + 1);
+  assert.equal(f.fresh.state, 'ended');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir, 'queue-dispatch.json'))).rotations.a.trustCleanup.stop.state, 'started');
+  const resumed = restoreTrustFixture(t, f); await resumed.at(NOW + 2);
+  assert.equal(resumed.record.trustCleanup.stop.state, 'confirmed');
+  assert.equal(f.client.calls.filter(c => c[0] === 'stopUnusedSuccessor').length, 1);
+  assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 1);
+});
+
+test('B2 receipt boundary: an unsuccessful started-stop write cannot launch the native mutation', async t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f); const save = f.dispatcher.save.bind(f.dispatcher);
+  f.dispatcher.save = () => { if (f.record.trustCleanup.stop.state === 'started') throw Error('synthetic stop-state write failure'); return save(); };
+  await assert.rejects(f.at(NOW + 1), /stop-state write failure/);
+  assert.equal(f.record.trustCleanup.stop.state, 'pending'); assert.equal(f.record.trustCleanup.stop.attempts, 0);
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor'].includes(c[0])), false);
+});
+
+test('B2 receipt boundary: a crash after the started-leave save does not blindly repeat membership removal', async t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f, 'confirmed', 1); f.fresh.state = 'ended'; f.fresh.roomIds = ['shared']; f.fresh.roomId = 'shared'; saveTrustFixture(f);
+  let leaves = 0; f.room.membership = async () => { leaves++; };
+  const save = f.dispatcher.save.bind(f.dispatcher);
+  f.dispatcher.save = () => {
+    save();
+    if (f.record.trustCleanup.rooms.shared === 'started') { f.dispatcher.closed = true; throw Error('synthetic crash after started-leave save'); }
+  };
+  await f.at(NOW + 1); assert.equal(leaves, 0);
+  const resumed = restoreTrustFixture(t, f); resumed.room.membership = async () => { leaves++; };
+  await resumed.at(NOW + 2);
+  assert.equal(resumed.record.trustCleanup.rooms.shared, 'unknown'); assert.equal(leaves, 0);
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor'].includes(c[0])), false);
+});
+
+test('B2 receipt boundary: a leave applied before its confirmation save is observed after restart without another leave', async t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f, 'confirmed', 1); f.fresh.state = 'ended'; f.fresh.roomIds = ['shared']; f.fresh.roomId = 'shared'; saveTrustFixture(f);
+  let leaves = 0; const membership = f.room.membership.bind(f.room);
+  f.room.membership = async (...args) => { leaves++; await membership(...args); f.dispatcher.closed = true; throw Error('synthetic reply lost after leave'); };
+  await f.at(NOW + 1);
+  assert.deepEqual(f.fresh.roomIds, []); assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir, 'queue-dispatch.json'))).rotations.a.trustCleanup.rooms.shared, 'started');
+  const resumed = restoreTrustFixture(t, f); resumed.room.membership = async () => { leaves++; };
+  await resumed.at(NOW + 2);
+  assert.equal(resumed.record.trustCleanup.rooms.shared, 'confirmed'); assert.equal(leaves, 1);
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor'].includes(c[0])), false);
+});
+
+test('B2 receipt boundary: a failed leave-state save leaves native membership untouched and pending', async t => {
+  const f = trustTimeoutSetup(t); expiredTrustCleanup(f, 'confirmed', 1); f.fresh.state = 'ended'; f.fresh.roomIds = ['shared']; f.fresh.roomId = 'shared'; saveTrustFixture(f);
+  let leaves = 0; f.room.membership = async () => { leaves++; }; const save = f.dispatcher.save.bind(f.dispatcher);
+  f.dispatcher.save = () => { if (f.record.trustCleanup.rooms.shared === 'started') throw Error('synthetic leave-state write failure'); return save(); };
+  await assert.rejects(f.at(NOW + 1), /leave-state write failure/);
+  assert.equal(f.record.trustCleanup.rooms.shared, 'pending'); assert.equal(leaves, 0); assert.deepEqual(f.fresh.roomIds, ['shared']);
+});
+
+const unrelatedRun = () => ({ id: 'other-members-run', status: 'running', ids: ['peer-x', 'peer-y'], awaiting: { sessionId: 'peer-y' }, steps: 3 });
+test('B2 receipt isolation: cleanup preserves a running exchange between unrelated members in the same space', async t => {
+  const f = trustTimeoutSetup(t, { timeoutMs: 1 }); f.fresh.roomIds = ['shared']; f.fresh.roomId = 'shared';
+  f.client.state.rooms[0].run = unrelatedRun(); const before = structuredClone(f.client.state.rooms[0]);
+  let leaves = 0; const membership = f.room.membership.bind(f.room);
+  f.room.membership = async (...args) => { leaves++; f.client.state.rooms[0].run.status = 'paused'; return membership(...args); };
+  await f.at(NOW + 1);
+  assert.equal(f.record.trustCleanup.stop.state, 'confirmed'); assert.equal(f.record.trustCleanup.rooms.shared, 'pending');
+  assert.equal(leaves, 0); assert.deepEqual(f.client.state.rooms[0], before);
+  assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 1); assert.equal(f.client.calls.find(c => c[0] === 'stop')[1], f.fresh.id);
+  f.client.state.rooms[0].run.status = 'completed';
+  await f.at(NOW + 2);
+  assert.equal(leaves, 1); assert.equal(f.record.trustCleanup.rooms.shared, 'confirmed');
+  assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 1, 'finishing the space run cannot re-stop the successor');
+});
+
+test('B2 receipt isolation: a new unrelated exchange that starts during the stop RPC is preserved after refresh', async t => {
+  const f = trustTimeoutSetup(t, { timeoutMs: 1 }); f.fresh.roomIds = ['shared']; f.fresh.roomId = 'shared'; const call = f.client.call.bind(f.client);
+  f.client.call = async (method, ...args) => { const result = await call(method, ...args); if (method === 'stopUnusedSuccessor') f.client.state.rooms[0].run = unrelatedRun(); return result; };
+  let leaves = 0; f.room.membership = async () => { leaves++; f.client.state.rooms[0].run.status = 'paused'; };
+  await f.at(NOW + 1);
+  assert.equal(leaves, 0, 'the room run is checked after the asynchronous stop, before membership can pause it');
+  assert.deepEqual(f.client.state.rooms[0].run, unrelatedRun());
+  assert.equal(f.record.trustCleanup.rooms.shared, 'pending'); assert.equal(f.old.state, 'idle');
 });

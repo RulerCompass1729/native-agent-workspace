@@ -9,11 +9,13 @@ const { NativeHost } = require(path.join(root, 'app/adapters.cjs'));
 const { Terminal } = require(require.resolve('@xterm/headless', { paths: [root] }));
 const create = NativeHost.prototype.create;
 const creations = [], held = new Map(), names = new Set(), inputs = [];
+const maintenanceStops = [];
 const trustNames = new Set(), trust = new Map();
 
 NativeHost.prototype.create = function (record) {
   if (!record.nativeId) record.nativeId = randomUUID();
   const runtime = create.call(this, record), start = runtime.start;
+  runtime.stopForMaintenance = check => { check(); maintenanceStops.push(record.id); return runtime.stop(); };
   // The shared queue fixture's complete.text supplies Claude's final body.
   // Codex records its body through messageItem before the completion boundary.
   if (record.provider === 'codex') runtime.on('complete', info => {
@@ -67,5 +69,5 @@ process.on('message', request => {
     for (const waiting of trust.values()) waiting.screen.dispose();
     trust.clear(); trustNames.clear();
   }
-  process.send({ requestId: request.id, fixture: 'b2-creation', released, held: [...held.keys()], trust: [...trust.keys()], creations, inputs, providerProcesses: 0, modelCalls: 0 });
+  process.send({ requestId: request.id, fixture: 'b2-creation', released, held: [...held.keys()], trust: [...trust.keys()], creations, inputs, maintenanceStops, providerProcesses: 0, modelCalls: 0 });
 });

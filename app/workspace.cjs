@@ -1061,6 +1061,7 @@ class Workspace extends EventEmitter {
         proof.nativeId !== s.nativeId || !Number.isSafeInteger(proof.revision) || proof.revision < 0 ||
         proof.connectionRevision !== (s.connectionRevision || 0) || s.nativeContextPending || this.stops.has(id)) throw uiError('error.movePlacementChanged');
     if (destination !== null && !spaces.roomId(destination)) throw uiError('error.invalidMemberAction');
+    if (proof.unusedSuccessor === true && destination !== null) throw uiError('error.invalidMemberAction');
     const previous = spaces.roomIds(s), last = s.placementReceipt;
     if (previous.length > 1) throw uiError('error.movePlacementAmbiguous');
     if (last?.operationId === proof.operationId) {
@@ -1076,6 +1077,10 @@ class Workspace extends EventEmitter {
       previousRoomId: previous[0] || null, roomId: destination, beforeRevision: generation,
       revision: next.placementRevision, connectionRevision: s.connectionRevision || 0 };
     next.placementReceipt = receipt;
+    // Cleanup may only detach an already stopped successor. Check the owning
+    // writer's current runs in this synchronous mutation, after any RPC wait.
+    if (proof.unusedSuccessor === true && (!['ended', 'recoverable', 'disconnected'].includes(s.state) ||
+        previous.some(room => this.rooms.get(room)?.run?.status === 'running'))) throw uiError('error.movePlacementChanged');
     // Revoke old routing before committing; accepted native work is not stopped.
     for (const room of new Set([...previous, ...(destination ? [destination] : [])])) {
       this.roomFor(room, true);
@@ -1688,6 +1693,44 @@ class Workspace extends EventEmitter {
     check();
     return this.stop(id, { check, expected });
   }
+  async stopUnusedSuccessor(id, proof) {
+    // Automatic cleanup has narrower authority than a person's Stop action.
+    // A persisted caller proof cannot authorize stopping newer work or a new
+    // native context, including while the adapter waits for observation.
+    const refuse = () => uiError('error.backendSwitchSessionChanged', { name: this.sessions.get(id)?.name || id });
+    if (typeof id !== 'string' || !id || id.length > 2000 || /[\u0000-\u001f]/u.test(id) ||
+        !proof || typeof proof !== 'object' || Array.isArray(proof) ||
+        Object.keys(proof).sort().join(',') !== 'controlRevision,draftRevision,nativeId,placementRevision' ||
+        !(proof.nativeId === null || typeof proof.nativeId === 'string' && proof.nativeId.length > 0 && proof.nativeId.length <= 2000 && !/[\u0000-\u001f]/u.test(proof.nativeId)) ||
+        !Number.isSafeInteger(proof.controlRevision) || proof.controlRevision < 0 || !Number.isSafeInteger(proof.draftRevision) || proof.draftRevision < 0 ||
+        !Number.isSafeInteger(proof.placementRevision) || proof.placementRevision < 0) throw refuse();
+    const s = this.get(id), { sameStop, maintenanceProof } = require('./backend-switch.cjs');
+    if (s.nativeId !== proof.nativeId || spaces.placementRevision(s) !== proof.placementRevision ||
+        !['claude', 'codex'].includes(s.provider) || proof.nativeId === null && s.provider !== 'codex') throw refuse();
+    // This is an observed connection state, not a claim that our request ended
+    // a provider thread. A disconnected Codex thread may still have subscribers.
+    if (['ended', 'recoverable', 'disconnected'].includes(s.state)) return { state: s.state };
+    const runtime = this.runtime(id), current = () => ({ ...s, draftRevision: this.draftRevisions.get(id) ?? 0 });
+    const expected = maintenanceProof(current());
+    const check = () => {
+      const goal = runtime.nativeGoalSnapshot?.();
+      if (this.closed || this.storageWarning || this.sessions.get(id) !== s || this.runtimes.get(id) !== runtime || this.stops.has(id) ||
+          !sameStop(current(), expected) || s.nativeId !== proof.nativeId || s.controlRevision !== proof.controlRevision ||
+          (this.draftRevisions.get(id) ?? 0) !== proof.draftRevision || spaces.placementRevision(s) !== proof.placementRevision || this.drafts.get(id) ||
+          !['starting', 'idle', 'error'].includes(s.state) || s.nativeContextPending || s.pendingTag || s.approval ||
+          !Array.isArray(s.messages) || s.messages.some(message => ['user', 'assistant'].includes(message?.role)) ||
+          s.background > 0 || s.scheduled > 0 || s.fleet?.length ||
+          runtime.turnId || runtime.rootTurn?.status === 'working' || runtime.pendingQueue || runtime.pendingSteer ||
+          runtime.nativeInputRequired || runtime.nativeAbortRequest || goal?.status === 'active' || goal?.known === false ||
+          [...this.rooms.values()].some(room => room.run?.status === 'running' && room.run.ids?.includes(id)) ||
+          typeof runtime.stopForMaintenance !== 'function') throw refuse();
+    };
+    check();
+    const result = await this.stop(id, { check, expected, participantOnly: true });
+    if (result?.stopped !== true || this.sessions.get(id) !== s || !sameStop(current(), result.stoppedState) ||
+        !['ended', 'recoverable', 'disconnected'].includes(s.state)) throw uiError('error.workspace.nativeEndUnconfirmed');
+    return { state: s.state };
+  }
   maintenanceResume(id, expected, owner) {
     const { sameStop } = require('./backend-switch.cjs'), s = this.get(id);
     if (!expected || s.state !== expected.state || !sameStop({ ...s, draftRevision: this.draftRevisions.get(id) || 0 }, expected)) throw uiError('error.backendSwitchSessionChanged', { name: s.name || id });
@@ -1724,7 +1767,9 @@ class Workspace extends EventEmitter {
     const begin = () => {
       maintenance?.check();
       committed = true;
-      this.pause('正在断开原生会话', undefined, false, uiActivity('notice.run.disconnecting')[1]); s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'stopping'; setActivity(s, ...uiActivity("notice.activity.waitingNativeConfirmation")); this.changed();
+      if (maintenance?.participantOnly) this.pauseParticipant(id, '正在断开原生会话', false, uiActivity('notice.run.disconnecting')[1]);
+      else this.pause('正在断开原生会话', undefined, false, uiActivity('notice.run.disconnecting')[1]);
+      s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'stopping'; setActivity(s, ...uiActivity("notice.activity.waitingNativeConfirmation")); this.changed();
       stoppedState = { ...maintenance?.expected, controlRevision: s.controlRevision, connectionRevision: s.connectionRevision };
       this.stops.set(id, operation);
     };
