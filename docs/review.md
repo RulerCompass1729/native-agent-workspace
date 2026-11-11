@@ -7852,3 +7852,39 @@ Owner: butler source author. Initial synthetic checks passed 81/86: question res
 The new delta suspends invalid proposals individually instead of quarantining their whole batch, including question metadata/history failures discovered at ledger commit. Suspended records have stable IDs and no effects; independent valid proposals and the trusted READY report survive. Context errors preserve pending sources without creating an active batch. Publication recovery records a visible blocked notice instead of rejecting silently, while rule-only B1 events are consumed first. Recovery is retried only by an actual event or explicit resume. Author-run core plus direct secretary/membership checks pass 158/158, zero failures or skips. The separate regression copy uses the current controller tests against reconstructed prior-reviewed modules; it passes 28/39 and fails 11/39 on the old code, with no skips. Its raw failures distinguish these fixes from passing fixtures. All tests use synthetic records and fake local drivers under a credential-free, network-denied sandbox; no provider, model inference, GUI or daily app was started. The sandbox's post-reboot path preflight initially refused to run target tests; the allow/deny ordering was corrected before the passing run.
 
 Independent incremental review approved D3 and N1–N3 for a dormant local commit, then found R1: re-admitting a stored question against later source metadata could block all publication recovery. Delivery now reserves the immutable stored question by ID, skips existing receipts, and isolates a question-domain failure with a question-specific notice; storage and global-context failures still stop processing. Different host decision types on one task remain distinct, while an invented type or conflicting keys within one type stay refused. Three controller regressions fail on the prior reviewed source (40 pass, 3 fail); the final frozen related group passes 165/165 with no failures or skips. The final separate read-only R1 recheck is APPROVE_SCOPED, with no local-commit blockers. Tools were limited to Read/Grep/Glob and no MCP; HEAD, index and tracked worktree were unchanged across each invocation. The reviewer read the raw logs and source but did not rerun tests. Approval remains conditional on unchanged butler files and direct secretary/membership dependencies after rebase. Remaining source limits stay OPEN: clean ledger deletion/rollback, racing process writers, automatic stale-lock takeover, torn-log recovery, schema-version replay compatibility, unsent questions across a new human designation, and a real unknown-cost reconciliation path. The reported cursor is a conservative contiguous prefix; per-report receipts are authoritative. These limitations, every actual S2/native/event/UI/queue/rotation connection and installed acceptance are outside this dormant checkpoint. Host event mapping must give distinct same-type decisions distinct source references; otherwise a conflicting question is suspended. Raw B1 observation admission errors must be surfaced by its future caller. A local core commit is not full B4 READY or permission to activate it.
+
+## Reboot recovery when a lock PID is reused (2026-11-10)
+
+Owner: service lifecycle author. Severity: startup unavailable. Base: `6a92546`.
+After a reboot, a persisted PID can belong to a root helper or the newly launched
+GUI. Previously both service locks treated that PID as their live owner and
+refused startup. The two numeric-self-PID cold-boot reproductions fail on
+`dbe02b7` and pass with this repair.
+
+New locks record PID, process start time, role, canonical data directory and an
+ownership token. Start time is read under a fixed locale and timezone. Numeric
+legacy records use the live command and data directory; an unreadable or
+ambiguous owner remains protected. Startup, service shutdown waiting and backend
+switch waiting use the same birth identity. A release checks the file identity
+and complete record before removing it. Both runtime and application payloads
+include the helper, and fixture cleanup reads both record formats.
+
+Author-run: both lock kinds recover with an actual unrelated root process whose
+liveness probe returns EPERM. A real test-owned daemon paused with SIGSTOP stays
+protected for both lock kinds and both old/new formats, retaining its record,
+connection and process identity. Each kind of numeric lock naming the actual
+GUI process also boots through normal main/service startup in a hidden isolated
+source GUI. Both trials have zero sessions, dispatches and model calls, and their
+owned processes and profiles are released. These GUI trials ran at `b6c430a`;
+the final rebase to `6a92546` retains the later packaging entries. The full suite
+passes 4306/4306 with no failures or skips at concurrency two. The UI build also
+passes. An earlier full run caught a missing packaging entry and an unbuilt UI;
+the repaired payload tests and subsequent full suites pass.
+
+Independent review is pending with the integrator; this is a local candidate,
+not an installation or a completed rollout. No paid model test or new paid
+review session was started. The daily application and native parents were not
+stopped or restarted. Legacy startup locks naming another GUI/Node launcher
+without a provable data directory remain conservative. The change does not
+claim to make file comparison plus unlink atomic against arbitrary same-user
+writers, or to solve the separate system memory-pressure investigation.

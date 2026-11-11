@@ -44,7 +44,7 @@ test('process identity refusals preserve their guards and carry English display 
   const begin = source.indexOf('function serviceProcess('), end = source.indexOf('const psCommand =', begin);
   assert.ok(begin > 0 && end > begin);
   let lock = '43', commands = 0; const identity = { pid: 42, started: 1 };
-  const context = { fs: { readFileSync: () => lock }, path, uiError: locale.createError, processIdentity: () => identity };
+  const context = { fs: { readFileSync: () => lock }, path, uiError: locale.createError, parseLock: require('../service-lock.cjs').parseLock, lockIdentity: () => identity };
   vm.runInNewContext(source.slice(begin, end) + ';globalThis.check = serviceProcess;', context);
   const command = () => { commands++; return '/fixture/backend/runtimes/v1/daemon.cjs'; };
   assert.throws(() => context.check('/fixture/backend', 42, command), error => error.message === '后台进程记录不一致；没有结束任何进程。' && locale.errorText('en', error).includes('no processes were ended'));

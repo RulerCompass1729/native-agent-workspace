@@ -12,6 +12,7 @@ const { roomId: validRoomId, isMember, membershipRevision } = require('./collabo
 const { displayMessage } = require('./ui-locale.js');
 const gitWorktree = require('./git-worktree.cjs');
 const background = require('./background-operation.cjs');
+const { createLock, releaseLock } = require('./service-lock.cjs');
 
 function dispatchScopedOutbox(workspace, client, args, send) {
   return workspace.scopedOutboxRequest(client, args[0], args[1], data => send(client, { event: 'scopedOutbox', data }));
@@ -20,7 +21,7 @@ async function main() {
   const dataDir = process.argv[2];
   if (!dataDir || !path.isAbsolute(dataDir)) throw new Error('Data directory required');
   const lockPath = path.join(dataDir, 'service.lock');
-  const lock = fs.openSync(lockPath, 'wx', 0o600); fs.writeFileSync(lock, String(process.pid)); fs.closeSync(lock);
+  const lock = createLock(lockPath, 'service', dataDir);
   const privateDir = fs.mkdtempSync('/tmp/naw-service-');
   // The socket directory belongs only to this daemon, also on startup failure.
   process.once('exit', () => { fs.rmSync(privateDir, { recursive: true, force: true }); });
@@ -218,7 +219,7 @@ async function main() {
   await new Promise(resolve => server.listen(endpoint, resolve)); fs.chmodSync(endpoint, 0o600);
   const connection = path.join(dataDir, 'connection.json'); const tmp = `${connection}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ protocol: 1, endpoint, token, pid: process.pid }), { mode: 0o600 }); fs.renameSync(tmp, connection);
-  function shutdown() { shuttingDown = true; workspace.closeScopedOutbox(); workspace.close(); server.close(); for (const c of clients) c.destroy(); fs.rmSync(connection, { force: true }); fs.rmSync(lockPath, { force: true }); setTimeout(() => process.exit(0), 500); }
+  function shutdown() { shuttingDown = true; workspace.closeScopedOutbox(); workspace.close(); server.close(); for (const c of clients) c.destroy(); fs.rmSync(connection, { force: true }); releaseLock(lockPath, lock); setTimeout(() => process.exit(0), 500); }
   process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 }
 if (typeof module === 'undefined' || require.main === module) main().catch(() => process.exit(1));

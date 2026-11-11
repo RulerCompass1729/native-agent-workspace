@@ -3,6 +3,7 @@
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const cp = require('node:child_process');
 const { processIdentity, processMayBeAlive } = require('../../app/platform.cjs');
+const { parseLock } = require('../../app/service-lock.cjs');
 const roots = new Map(), processes = new Map(), services = new Map(), applications = new Map(), unverified = new Map();
 let teardown, closing, inspectionError, released = false;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -69,7 +70,7 @@ function ownService(profile) {
     if (![...roots.keys()].some(root => inside(root, real))) return;
     info = JSON.parse(fs.readFileSync(path.join(real, 'connection.json'), 'utf8'));
     if (info.protocol !== 1 || path.basename(info.endpoint || '') !== 'desktop.sock' || !Number.isSafeInteger(info.pid) || info.pid < 2 || info.pid === process.pid) return;
-    if (fs.readFileSync(path.join(real, 'service.lock'), 'utf8').trim() !== String(info.pid)) return;
+    if (parseLock(fs.readFileSync(path.join(real, 'service.lock'), 'utf8'))?.pid !== info.pid) return;
     const folder = canonical(path.dirname(info.endpoint));
     if (path.dirname(folder) !== canonical('/tmp') || !/^naw-service-[A-Za-z0-9]{6}$/.test(path.basename(folder))) return;
     identity = processIdentity(info.pid); if (!identity) { uncertain(info.pid); return; }
