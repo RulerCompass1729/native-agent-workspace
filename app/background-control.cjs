@@ -12,7 +12,9 @@ const MAX_PENDING_PER_ACTOR = 32, MAX_PENDING = 128;
 const REFUSAL_WINDOW_MS = 60000, MAX_REFUSAL_SUMMARIES = 128;
 const REFUSAL_RETRY_HINT = 'invoke or snapshot: new operation_id or compacted refused ID is a fresh request.';
 const refusalRetry = () => ({ retryWithNewOperationId: true, retryHint: REFUSAL_RETRY_HINT });
-const summarizedReasons = new Set(['confirmation-limit', 'originating-session-unavailable']);
+const admissionReasons = new Set(['confirmation-limit', 'originating-session-unavailable']);
+const preconditionReasons = new Set(['invalid-file-path-count', 'file-preview-changed', 'conversation-access-denied', 'space-file-membership-required', 'conversation-target-unavailable']);
+const summarizedReasons = new Set([...admissionReasons, 'another-operation-running', 'explicit-paths-required', ...preconditionReasons]);
 const positiveCount = n => Number.isSafeInteger(n) && n > 0;
 const nextCount = n => { if (!Number.isSafeInteger(n) || n < 0 || n >= Number.MAX_SAFE_INTEGER) throw Error('Refusal counter is exhausted'); return n + 1; };
 const terminalReads = new Set(['terminalSnapshot', 'observe', 'terminal']);
@@ -73,7 +75,7 @@ const parameters = {
   chooseFolder: [], newWindow: ['sessionId?; returns an independent hidden view_id'], copy: ['text; independent clipboard only'], pasteText: [],
   stageImages: ['sessionId', 'nativeId', 'files'], pasteNativeContent: ['sessionId', 'nativeId'], previewImage: ['source'], expandImage: ['token'], copyImage: ['token'], releaseImage: ['token'],
 };
-const tool = { name: 'workspace_control', description: 'Operate NAW in the background without moving the desktop pointer or changing the human window. Discover commands with catalog, inspect the independent view with snapshot, invoke an exact existing application command, and read durable receipts. Native permissions and human confirmations remain required. Refused invoke and snapshot requests may be summarized; reusing a summarized refused ID is a new request through current admission and any required human confirmation. Executed, uncertain and human-cancelled IDs never replay. Refused-ID receipt aliases retain at most 512 recent IDs, 128 per NAW session, while their summary remains; expired aliases return no receipt. Never resend an uncertain operation. This tool does not authorize new work.',
+const tool = { name: 'workspace_control', description: 'Operate NAW in the background without moving the desktop pointer or changing the human window. Discover commands with catalog, inspect the independent view with snapshot, invoke an exact existing application command, and read durable receipts. Native permissions and human confirmations remain required. Refused invoke and snapshot requests may be summarized; reusing a summarized refused ID is a new request through current admission and any required human confirmation. Executed, uncertain and human-cancelled IDs never replay. After execution and a successful audit, receipts may retain only audit routing and native target identities in guard; commands, IDs and results stay intact. Refused-ID receipt aliases retain at most 512 recent IDs, 128 per NAW session, while their summary remains; expired aliases return no receipt. Never resend an uncertain operation. This tool does not authorize new work.',
   inputSchema: { type: 'object', additionalProperties: false, properties: {
     action: { type: 'string', enum: ['catalog', 'snapshot', 'invoke', 'receipt'] },
     view_id: { type: 'string', maxLength: 160 },
@@ -99,7 +101,7 @@ class ConfirmationRequired extends Error {
 }
 class PreconditionRefused extends Error {
   constructor(error, reason) {
-    if (!['file-preview-changed', 'invalid-file-path-count'].includes(reason)) throw Error('Invalid file precondition reason');
+    if (!preconditionReasons.has(reason)) throw Error('Invalid operation precondition reason');
     super(error.message); this.reason = reason;
   }
 }
@@ -240,6 +242,19 @@ class BackgroundControl {
       // actual result separately and make the incomplete audit visible.
       this.commit(d => { const r = d.records.find(r => r.id === id && this.key(r.actor) === this.key(actor));
         Object.assign(r, { resultState: r.state, state: 'unconfirmed', auditError: String(error.message).slice(0, 2048), error: 'The maintenance space event could not be saved; inspect the recorded result and do not repeat.' }); });
+      return this.receipt(actor, id);
+    }
+    // Only after the handler AND its audit succeeded can the consent snapshot
+    // expire. Delivery still needs the original native identities. Keep every
+    // command, result and ID, plus cancelled/pending/unknown guards, unchanged.
+    const saved = this.data.records.find(r => r.id === id && this.key(r.actor) === this.key(actor)), guard = saved?.guard;
+    if (['complete', 'received', 'awaiting-native'].includes(saved?.state) && guard && typeof guard === 'object' &&
+        (!guard.sessions || Array.isArray(guard.sessions) && guard.sessions.every(s => s && typeof s === 'object'))) {
+      const compact = { ...(guard.auditRooms ? { auditRooms: guard.auditRooms } : {}),
+        ...(guard.sessions ? { sessions: guard.sessions.map(s => ({ id: s.id, nativeId: s.nativeId })) } : {}) };
+      // An already empty ordinary guard is not worth another durable write.
+      const empty = Object.keys(guard).every(k => ['auditRooms', 'sessions'].includes(k) || k === 'rooms' && Array.isArray(guard.rooms) && !guard.rooms.length) && isDeepStrictEqual(guard.sessions, compact.sessions);
+      if (!empty && !isDeepStrictEqual(guard, compact)) this.commit(d => { d.records.find(r => r.id === id && this.key(r.actor) === this.key(actor)).guard = compact; });
     }
     return this.receipt(actor, id);
   }
@@ -343,18 +358,19 @@ class BackgroundControl {
       if (previous) return { ...this.receipt(sender, previous.id), duplicate: true, retry: false };
     }
     // Receipt aliases explain compacted refusals; they never bind a new invoke.
-    const existing = this.receipt(sender, args.operation_id, null, true);
-    if (existing) {
+    const duplicate = async existing => {
       if (!isDeepStrictEqual(existing.command, args)) throw Error('operation_id already belongs to a different command');
       await this.publish(existing, context);
       if (privateRead(args)) { await context.refresh?.(); await valid(); }
       return { ...this.takeReceipt(sender, args.operation_id, context), duplicate: true, retry: false };
-    }
+    };
+    const existing = this.receipt(sender, args.operation_id, null, true);
+    if (existing) return duplicate(existing);
     const handler = !['backgroundDecision', 'uiReady'].includes(args.method) && this.handlers.get(args.method);
     const key = this.key(sender);
     const actor = operation.actor({ ...sender, callId: identity.callId, turnId: identity.turnId, operationId: args.operation_id });
     const refuse = reason => {
-      if (summarizedReasons.has(reason)) return this.recordRefusal(actor, args, context, reason);
+      if (admissionReasons.has(reason) || reason === 'another-operation-running' && operation.maintenanceAction(args.method, args.arguments, actor)) return this.recordRefusal(actor, args, context, reason);
       const refusal = { ...refusalDetails(reason), method: args.method };
       if (!operation.maintenanceAction(args.method, args.arguments, actor)) return refusal;
       const guard = controlGuard(context, args);
@@ -369,12 +385,20 @@ class BackgroundControl {
     // Busy decisions reserve their actor before awaits. Refresh only an idle
     // independent view, then check the reservation again before saving intent.
     await context.refresh?.(); await valid();
+    // Another call may have bound this ID while refresh was awaiting. Never
+    // summarize or replace its intent, including when its handler is running.
+    const refreshed = this.receipt(sender, args.operation_id, null, true);
+    if (refreshed) return duplicate(refreshed);
     if (this.inflight.has(key)) return refuse('another-operation-running');
     const guard = controlGuard(context, args);
     if (operation.maintenanceAction(args.method, args.arguments, actor)) {
       const reason = this.confirmationRefusal(actor, args, context, guard);
       if (reason) return refuse(reason);
     }
+    // The real folder handler's first action is this single-path open dialog.
+    // Refuse before entering it; arbitrary handlers may have effects before a
+    // selector, so their selector errors must retain their original records.
+    if (args.method === 'chooseFolder' && args.paths?.length !== 1) return this.recordRefusal(actor, args, context, 'explicit-paths-required');
     // Save intent before calling ANY mutation, including an independent draft.
     this.commit(d => d.records.push({ id: args.operation_id, actor, command: args, guard, state: 'running', at: this.now() }));
     return this.execute(actor, args, context, valid);
@@ -463,7 +487,10 @@ class BackgroundControl {
         refusal = { state: 'unconfirmed', reason: 'follow-up-confirmation-refused', confirmationRefusal: refusal.reason, retry: false };
         state = 'unconfirmed'; error = 'A follow-up confirmation was refused after approval; inspect the original operation and do not repeat it.';
       }
-      if (refusal && summarizedReasons.has(refusal.reason)) return this.recordRefusal(actor, args, context, refusal.reason);
+      if (refusal && (admissionReasons.has(refusal.reason) || preconditionError && !approved)) {
+        const result = await this.recordRefusal(actor, args, context, refusal.reason);
+        return { ...result, ...(preconditionError ? { error } : {}) };
+      }
       const privateValue = value !== undefined && privateRead(args), readValue = privateValue ? clone(value) : null;
       const target = privateValue ? readTarget(this.data.records.find(r => r.id === args.operation_id && this.key(r.actor) === key), readValue) : null;
       this.commit(d => {

@@ -1,5 +1,28 @@
 # Review and issue record
 
+**N-E refusal growth and pre-consent outcomes, 2026-11-11 (review pending):**
+Missing folder paths, a busy maintenance request and known file/read-policy
+preconditions now share the existing counted, bounded refusal summaries and
+receipt aliases. Folder path count is checked before its handler; arbitrary
+entered selectors keep their exact records. A concurrent call rechecks the ID
+after refresh, so its busy refusal cannot erase another call's running intent.
+Initial, explicitly typed confirmation-constructor refusals are not executed.
+Approved or previously entered handlers retain their original ID and outcome;
+effects followed by a policy failure remain unknown and never replay.
+
+After successful execution and audit, completed/received/awaiting-native guards
+retain audit routing and native target identities, rather than the whole consent
+snapshot. Full commands, IDs, results and delivery remain. This reduces visible
+receipt metadata; it does not change invocation arguments or deduplication.
+Pending, cancelled and uncertain guards are preserved, including an audit failure
+after execution. The real delivery consumer still rejects a replacement native
+identity after restart. The representative guard falls from 1,733 to 122 bytes.
+Ordinary commands and results still grow with executed IDs. They cannot be
+discarded under the refusal rule: changing their retention or replay contract
+requires a separate decision. The 32MiB hard limit still retains existing data
+and refuses new intent before its handler; no unlimited-history claim is made.
+Path-based file-read membership (N-B) is unchanged and still awaits the person.
+
 **Mod readiness file visibility, 2026-11-11 (incremental review pending):**
 The integration run exposed a gap in the new timeout test: the shell creates
 and truncates child-ready before writing its PID, so existence alone could

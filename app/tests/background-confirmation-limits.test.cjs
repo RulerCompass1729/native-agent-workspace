@@ -185,6 +185,7 @@ test('failed refresh while admitting a dialog leaves a refusal, not a running op
 });
 for (const provider of ['claude', 'codex']) test(`${provider}: 33 real chooseFolder calls without paths leave normal confirmations available`, async t => {
   const f = fixture(t, provider);
+  f.controller.now = () => 60000; // All refusals belong to the same explicit minute bucket.
   vm.runInContext(part("  register('chooseFolder',", "  register('newWindow',"), f.scope);
   const results = [];
   for (let n = 0; n < 33; n++) results.push(await f.controller.call(f.binding(), { action: 'invoke', method: 'chooseFolder', arguments: [], operation_id: 'folder-' + n }));
@@ -193,6 +194,8 @@ for (const provider of ['claude', 'codex']) test(`${provider}: 33 real chooseFol
     assert.equal(result.state, 'not-executed'); assert.equal(result.reason, 'explicit-paths-required'); assert.equal(result.confirmation, undefined);
   }
   assert.equal(f.notices.length, 1); assert.equal(f.controller.data.records.filter(r => r.state === 'confirmation-required').length, 1);
+  assert.equal(f.controller.data.records.length, 1); assert.equal(f.controller.data.refusals.length, 1);
+  assert.equal(f.controller.data.refusals[0].refusalSummary.count, 33);
   assert.equal((await f.controller.decide(stop.actor.id, stop.actor.nativeId, stop.id, 0)).state, 'cancelled');
   const chosen = await f.controller.call(f.binding(), { action: 'invoke', method: 'chooseFolder', arguments: [], operation_id: 'folder-with-path', paths: [f.dir] });
   assert.equal(chosen.state, 'complete'); assert.equal(chosen.value, f.dir); assert.equal(f.notices.length, 1);
