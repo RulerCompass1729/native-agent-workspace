@@ -7775,3 +7775,38 @@ Codex version lists become one gate per capability (history, steer, terminal bri
 Author-run: the real 0.166 → 0.167 pair opens every capability and records only the new approval kind; synthetic versions show an unused change opens all, a used change closes only its capabilities, and annotation-named fields, changed defaults and new variants of filtered unions are all seen; the installed 0.167 binary under the no-network sandbox matches the stored baseline. Full suite 3993/0.
 
 Independent read-only review (one session, two rounds): CHANGES (three false-pass paths: annotation stripping hid real fields, defaults were ignored, union filtering hid new variants; plus rule-bound decisions, record detail and visibility), then PASS on `754f4e0`. Carried to the next checkpoint (non-blocking): the notification guard also needs `case` and array forms (four display-only methods are unlisted), a failed decision write is not logged, capacity may need the item notifications in its manifest, and a version whose only change is on the permission surface still reads verified while nothing shows its records to a person.
+## Renderer history retention under continuing output (2026-11-09)
+
+Owner: renderer author. Severity: high memory pressure. Base: `dbe02b7`.
+In the isolated source GUI, a two-megabyte synthetic history and fifty mounted
+rows grew from 21.9 to 133.0 MiB of live renderer heap after fifty short new
+messages, measured after garbage collection. Synthetic heap snapshots identify
+two independent retainers: row event/Markdown callbacks share the complete
+history closure with the paging reload callback; each repaint also adds an async
+waiter for an unresolved terminal snapshot and retains that render's session.
+Fixing either path alone still fails the memory bound.
+
+The paging callback now has a separate closure; row labels capture only the
+session name/provider values they need. Passive terminal mounts share one wait
+per native connection and display entry. An explicit action still uses the
+existing awaitable operation; replacement connections bypass the old wait, and
+old completion cannot clear the new one. This changes no provider or input gate.
+
+Author-run synthetic GUI: fifty updates with a held terminal, then two hundred
+after recovery, keep live heap at 21.9 to 21.6 MiB, with the original history,
+draft and focus preserved. Sampled GUI working sets peak at 745.5 MiB. The
+regression uses the canonical GUI lease, an isolated profile, a synthetic provider
+and a three-minute deadline; it verifies the full history remains in the service,
+no prompts are sent, and the window stays hidden and unfocusable. Run with
+`node scripts/build-ui.cjs && node scripts/test-renderer-memory.cjs`.
+The identical regression script fails its memory bound on the unmodified base.
+All nine existing paging GUI checks pass, including original-source navigation,
+reopen, selection, copying, member readers and process groups. The full unit suite
+passes 4091/4091 with no skips at concurrency two; a prior higher-concurrency run
+had six process-probe, entry-resolution and timing failures, retained privately.
+
+Independent review is pending. This checkpoint does not establish the cause of
+all system compressor accounting differences, or pass the requested eight-hour
+daily-app acceptance. The daily app was measured read-only; it was not restarted
+or debug-attached. Adoption and that timed acceptance remain with the integrator
+after user approval.

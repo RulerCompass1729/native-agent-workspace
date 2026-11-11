@@ -31,7 +31,7 @@ function setup({ view = 'chat', alive = true, solo = false, usable = true } = {}
   parking.append(form); parking.append(entry.element);
   const context = vm.createContext({
     state: { sessions: [record] }, owner: 'window', selected: 'room', mode: 'chat', disconnected: false,
-    sessionComposers: new Map([[record.id, binding]]), terminals: new Map([[record.id, entry]]),
+    sessionComposers: new Map([[record.id, binding]]), terminals: new Map([[record.id, entry]]), terminalRenderLoads: new Map(),
     soloComposer: solo ? binding : {}, composerParking: parking, terminalParking: parking,
     getSessionComposer: () => binding, node: () => new Element(),
     composerCurrent: value => value === binding && Boolean(binding.visible),
@@ -45,6 +45,7 @@ function setup({ view = 'chat', alive = true, solo = false, usable = true } = {}
     $: () => soloHost, revealTerminalCursor: () => calls.push('reveal'),
   });
   vm.runInContext(take('function renderColumnInput(', '// T-135:') + '\n' +
+    take('function renderTerminal(', 'async function ensureTerminal(') + '\n' +
     take('function columnTerminalBinding(', 'const queuedInputs') + '\n' +
     take('function terminalCanInput(', 'function canCaptureTerminal('), context);
   return { context, record, host, parking, soloHost, form, binding, entry, calls,

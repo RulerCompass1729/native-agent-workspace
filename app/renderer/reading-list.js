@@ -665,10 +665,18 @@ function processGroupRows(view, rows, plans, explorations, room, key) {
   for (const [id, group] of view.groups) if (!retained.has(id)) { group.item.remove(); view.groups.delete(id); }
   return output;
 }
+// Only the current paging callback owns a complete source history. Define it
+// outside messageList so retained row callbacks cannot share its closure and
+// keep one old full snapshot per row after subsequent IPC updates.
+function readingReload(view, el, messages, room, key, context) {
+  return () => { if (view.key === key && el.isConnected) messageList(el, messages, room, key, context); };
+}
 function messageList(el, messages, room = false, key = 'room', context = {}) {
   // A member reader observes its own session without selecting it or claiming
   // its input. Existing solo/shared callers retain their original context.
   const session = context.session || (room ? null : current()), sourceMessages = messages;
+  // Row labels need these scalar facts, never the session's full message array.
+  const sessionName = session?.name, sessionProvider = session?.provider;
   const view = readingView(el, key);
   view.session = session;
   const selection = window.getSelection(), selected = selection && !selection.isCollapsed && el.contains(selection.anchorNode)
@@ -698,7 +706,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   if (!room && (view.pageRange?.firstId !== range.firstId || view.pageRange?.lastId !== range.lastId || intent.position.follow && contentChanged && followRenderGuard(view))) view.pageChanging = true;
   view.pageRange = range; view.pageRequest = null;
   const turnMarks = readingTurnMarks(messages.slice(range.start, range.end), room, originals);
-  view.reload = () => { if (view.key === key && el.isConnected) messageList(el, sourceMessages, room, key, context); };
+  view.reload = readingReload(view, el, sourceMessages, room, key, context);
   view.loadMessage = id => {
     if (view.key !== key || !el.isConnected || view.loadingPage || !view.pageData.indices.has(id)) return false;
     if (readingEntry(view, id)) return true;
@@ -806,12 +814,12 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (wake) {
         const target = state.sessions.find(s => s.id === wake.recipientId);
         const recipient = target ? participantLabel(target, state.sessions) : wake.recipientId;
-        return `${wake.senderName || session.name || wake.senderId} → ${recipient}${recipient === wake.recipientId ? '' : ' · ' + wake.recipientId}`;
+        return `${wake.senderName || sessionName || wake.senderId} → ${recipient}${recipient === wake.recipientId ? '' : ' · ' + wake.recipientId}`;
       }
       if (m.nativeBlock && m.kind === 'input' && m.inputMode === 'native-inline') return uiText('reading.nativeSession');
       if (!room && m.commandSource === 'userShell') return uiText('reading.you'); // the person's own `!` command
       if (!room && m.role === 'system' && !m.sessionId) return ui.displayText(m.name, m.uiNameMessage) || uiText('reading.nativeSession');
-      return (room ? roomMessageLabel(m) : ui.displayText(m.name, m.uiNameMessage)) || (m.role === 'user' ? uiText('reading.you') : session?.provider === 'claude' ? 'Claude' : 'Codex');
+      return (room ? roomMessageLabel(m) : ui.displayText(m.name, m.uiNameMessage)) || (m.role === 'user' ? uiText('reading.you') : sessionProvider === 'claude' ? 'Claude' : 'Codex');
     };
     const name = messageName();
     const messageTime = readingMessageClock(m);
@@ -1047,7 +1055,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     entry.images?.update(m.images || [], uploadedSpaceImages
       ? { kind: 'space-message', roomId: state.room?.id || 'shared', messageId: m.id }
       : { kind: room ? 'room' : 'session', ...(room ? { roomId: state.room?.id || 'shared' } : {}), sessionId: room ? m.sessionId : session?.id, nativeId: m.nativeId, messageId: m.id },
-      () => room ? m.name || messageName() : session?.name || messageName(), uploadedSpaceImages ? 'preview' : m.status);
+      () => room ? m.name || messageName() : sessionName || messageName(), uploadedSpaceImages ? 'preview' : m.status);
     if (uploadedSpaceImages && hasImages) {
       if (!entry.imageReceipt) { entry.imageReceipt = node('p', undefined, 'native-image-note'); entry.body.after(entry.imageReceipt); }
       ui.display.text(entry.imageReceipt, m.imageReceipt?.status === 'accepted' && m.imageReceipt.basis === 'native-local-image-echo' ? 'roomImages.accepted' : 'roomImages.unconfirmed');

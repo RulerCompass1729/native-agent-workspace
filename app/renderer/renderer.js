@@ -137,6 +137,7 @@ const terminalThemes = {
 };
 let toastTimer, lastMessages = '', lastRoomMessages = '', rendering = false;
 const terminals = new Map();
+const terminalRenderLoads = new Map();
 
 // Older retained services expose a bounded progress journal, not native blocks.
 // Read its existing records inline without creating a second terminal surface.
@@ -346,7 +347,7 @@ function renderColumnInput(host, record, visible) {
     if (!nativeVisible) binding.terminalDrag = null;
     else if (!binding.terminalDrag) applyColumnTerminalHeight(binding, columnTerminalHeight(record.id));
   }
-  if (nativeVisible && nativeUsable(record) && record.terminalState?.alive) ensureTerminal(record.id).catch(error => toastError(error));
+  if (nativeVisible && nativeUsable(record) && record.terminalState?.alive) renderTerminal(record.id, true);
   syncTerminalMount(record.id);
   return nativeVisible;
 }
@@ -3840,7 +3841,7 @@ function render() {
       if (terminalVisible && alive && (mode === 'terminal' || s.terminalState?.alive || s.activeTurnId || s.messages.some(m => m.role === 'assistant'))) {
         // Mounting the same native display is passive; input still requires its
         // own focus/control claim. Never steal focus when the snapshot arrives.
-        ensureTerminal(s.id).catch(error => { if (mode === 'terminal') toastError(error); });
+        renderTerminal(s.id);
       }
     }
     if (inRoom) {
@@ -3975,6 +3976,26 @@ async function switchMode(next, takeControl = false) {
     if (queued && !delivered) releaseHeldTerminal(s.id, entry);
     if (pendingMode?.revision === revision) { pendingMode = undefined; render(); }
   }
+}
+// Repaints observe one pending mount per native connection. Adding a new async
+// waiter in render() on every state update would retain that render's complete
+// session history until a slow/blocked terminal snapshot finally arrives.
+// Explicit user actions still await ensureTerminal directly.
+function renderTerminal(id, column = false) {
+  const { nativeId, connectionRevision = 0 } = state.sessions.find(s => s.id === id) || {};
+  const pending = terminalRenderLoads.get(id);
+  if (pending && pending.nativeId === nativeId && pending.generation === connectionRevision && pending.entry === terminals.get(id)) {
+    pending.column ||= column;
+    syncTerminalMount(id);
+    return;
+  }
+  const load = { nativeId, generation: connectionRevision, column };
+  terminalRenderLoads.set(id, load);
+  const operation = ensureTerminal(id);
+  load.entry = terminals.get(id);
+  operation.catch(error => {
+    if (terminalRenderLoads.get(id) === load && (load.column || mode === 'terminal')) toastError(error);
+  }).finally(() => { if (terminalRenderLoads.get(id) === load) terminalRenderLoads.delete(id); });
 }
 async function ensureTerminal(id, explicit = false) {
   const record = state.sessions.find(s => s.id === id);
