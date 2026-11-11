@@ -726,7 +726,7 @@ class RoomState {
   }
   rotationEvent(ids, phase, oldName, detail, receiptId) {
     if (receiptId !== undefined && (typeof receiptId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(receiptId))) throw Error('Invalid rotation receipt');
-    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', needsTrust: 'notice.rotation.needsTrust' };
+    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', needsTrust: 'notice.rotation.needsTrust', trustTimedOut: 'notice.rotation.trustTimedOut', trustTimeoutUnconfirmed: 'notice.rotation.trustTimeoutUnconfirmed' };
     for (const id of ids) {
       try {
         this.metadata(id);
