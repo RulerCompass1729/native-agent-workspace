@@ -7,6 +7,8 @@ const fail = (code = 'ERR_BUTLER_BUSINESS_DATA') => { throw Object.assign(Error(
 const obviousSecret = /\b(?:DEEPSEEK_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY)\s*[=:]\s*\S+|Authorization\s*:\s*Bearer\s+\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----/iu;
 const id = (v, limit = 200) => typeof v === 'string' && v.length > 0 && v.length <= limit && !/[\s\u0000-\u001f\u007f]/u.test(v) && !obviousSecret.test(v);
 const EVENT_KINDS = ['request', 'queue-empty', 'ready', 'decision', 'failure', 'blocked', 'recovery'];
+const QUEUE_STATUSES = ['queued', 'sent', 'waiting', 'done', 'failed', 'cancelled'];
+const MAX_BUSINESS_INDEX_BYTES = 128 * 1024;
 const PAYLOAD_LIMITS = { text: 12000, title: 400, spaceId: 200, spaceName: 200, memberName: 200,
   memberId: 200, itemId: 200, outcome: 200, reason: 2000, decisionKind: 200, questionKey: 600, supersedes: 200 };
 function text(v, limit = 12000, code) {
@@ -28,26 +30,39 @@ function validateEvent(value) {
   for (const key of Object.keys(value.payload)) payload[key] = text(value.payload[key], PAYLOAD_LIMITS[key]);
   return { eventId: value.eventId, kind: value.kind, sourceRef, payload };
 }
-function catalogRows(catalog) {
+// The default model context is an index, not an implicit request for every
+// queue body, delivery or member's private session. Archive reads are explicit.
+function readableCatalogRows(catalog, { includeArchived = false } = {}) {
   const code = 'ERR_BUTLER_CATALOG';
-  if (!Array.isArray(catalog) || catalog.length > 200) fail(code);
+  if (!Array.isArray(catalog) || catalog.length > 200 || typeof includeArchived !== 'boolean') fail(code);
   const ids = new Set();
   try {
-    return catalog.filter(s => { if (!plain(s)) fail(code); return !s.archived && s.writable === true; }).map(s => {
-      if (!id(s.id) || ids.has(s.id)) fail(code); ids.add(s.id);
-      if (!Array.isArray(s.members) || s.members.length > 100 || !Array.isArray(s.queue) || s.queue.length > 300) fail(code);
-      // Project only approved business fields. Never enumerate space/member
-      // values, which may include private conversation or environment getters.
-      return { id: s.id, name: text(s.name, 200, code), members: s.members.map(m => {
-        if (!plain(m) || !id(m.id) || !id(m.state)) fail(code);
-        return { id: m.id, name: text(m.name, 200, code), state: m.state };
-      }), queue: s.queue.map(q => {
-        if (!plain(q) || !id(q.id) || !['queued', 'sent', 'waiting', 'done', 'failed', 'cancelled'].includes(q.status)) fail(code);
-        return { id: q.id, text: text(q.text, 12000, code), status: q.status };
-      }) };
+    const rows = catalog.flatMap(s => {
+      if (!plain(s)) fail(code);
+      const archived = Boolean(s.archived);
+      if (archived && !includeArchived) return [];
+      const spaceId = s.id;
+      if (!id(spaceId) || ids.has(spaceId)) fail(code); ids.add(spaceId);
+      const queue = s.queue;
+      if (!Array.isArray(queue) || queue.length > 300) fail(code);
+      const queueCounts = Object.fromEntries(QUEUE_STATUSES.map(status => [status, 0]));
+      for (const item of queue) {
+        if (!plain(item)) fail(code);
+        const status = item.status;
+        if (!QUEUE_STATUSES.includes(status)) fail(code);
+        queueCounts[status]++;
+      }
+      // Do not enumerate source values or inspect members, task/reply text,
+      // private messages, environment or unrelated delivery metadata.
+      return [{ id: spaceId, name: text(s.name, 200, code), writable: !archived && s.writable === true, queueCounts }];
     });
+    if (Buffer.byteLength(JSON.stringify(rows)) > MAX_BUSINESS_INDEX_BYTES) fail(code);
+    return rows;
   } catch { fail(code); }
 }
+// Compatibility name for existing callers; it now means readable metadata.
+const catalogRows = readableCatalogRows;
+function writableCatalogRows(catalog) { return readableCatalogRows(catalog).filter(row => row.writable === true); }
 function businessEvents(events) {
   if (!Array.isArray(events) || events.length > 100) fail();
   // Persisted ledger rows also have sequence/time. They stay local; no other
@@ -75,7 +90,7 @@ function buildInput({ batchId, events, catalog, questions = [] }) {
     if (q.decisionSource !== undefined) result.decisionSource = text(q.decisionSource, 600, code);
     return result;
   });
-  return { version: 1, mode: 'record-only', batchId, events: normalizedEvents, spaces: catalogRows(catalog), pendingQuestions };
+  return { version: 1, mode: 'record-only', batchId, events: normalizedEvents, spaces: readableCatalogRows(catalog), pendingQuestions };
 }
 function interpretResult(value, { events, catalog, questions = [] }) {
   const code = 'ERR_BUTLER_RESULT', questionCode = 'ERR_BUTLER_QUESTION_SOURCE';
@@ -85,19 +100,25 @@ function interpretResult(value, { events, catalog, questions = [] }) {
   }
   fields(value, ['actions'], ['actions'], code);
   if (!Array.isArray(value.actions) || value.actions.length > 100) fail(code);
-  const sources = sourcesByRef(businessEvents(events)), spaces = catalogRows(catalog);
+  const sources = sourcesByRef(businessEvents(events)), spaces = readableCatalogRows(catalog);
+  const writableSpaces = spaces.filter(space => space.writable === true);
+  let includingArchived;
+  // An explicit non-queue reference can name a previously requested archive.
+  // Queue validation never requests those metadata, nor any archived bodies.
+  const readableSpace = spaceId => spaces.some(space => space.id === spaceId) ||
+    (includingArchived ||= readableCatalogRows(catalog, { includeArchived: true })).some(space => space.id === spaceId);
   if (!Array.isArray(questions)) fail(questionCode);
   const normalize = a => {
     fields(a, ['kind', 'sourceRef', 'text', 'spaceId', 'decisionKind', 'evidenceRevision', 'supersedes'], ['kind', 'sourceRef', 'text'], code);
     if (!['queue', 'open', 'archive', 'question', 'report'].includes(a.kind) || !sources.has(a.sourceRef)) fail(code);
     const result = { kind: a.kind, sourceRef: a.sourceRef, text: text(a.text, a.kind === 'queue' ? 6000 : 12000, code) };
     if (a.spaceId !== undefined) {
-      if (!id(a.spaceId) || !spaces.some(s => s.id === a.spaceId)) fail(code);
+      if (!id(a.spaceId) || !(a.kind === 'queue' ? writableSpaces.some(space => space.id === a.spaceId) : readableSpace(a.spaceId))) fail(code);
       result.spaceId = a.spaceId;
     }
     if (a.kind === 'queue' && !result.spaceId) {
-      if (spaces.length !== 1) result.kind = 'question';
-      else result.spaceId = spaces[0].id;
+      if (writableSpaces.length !== 1) result.kind = 'question';
+      else result.spaceId = writableSpaces[0].id;
     }
     if (result.kind === 'question') {
       const hosts = sources.get(a.sourceRef), { questionKey, decisionKind } = hosts[0].payload;
@@ -146,4 +167,5 @@ function rotationCandidates(selection, records) {
   if (roomIds(record).length || !record.runner || Object.keys(selection.runner).some(k => record.runner[k] !== selection.runner[k])) return [];
   return [record.id];
 }
-module.exports = { validateEvent, catalogRows, buildInput, interpretResult, rotationCandidates };
+module.exports = { validateEvent, catalogRows, readableCatalogRows, writableCatalogRows, MAX_BUSINESS_INDEX_BYTES,
+  buildInput, interpretResult, rotationCandidates };

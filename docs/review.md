@@ -8769,3 +8769,56 @@ for the source and final evidence closure (private evidence:
 `.local/usage-review/review.jsonl` and `close.jsonl`). No person entry is wired by this
 change. This is source accounting, not real billing, provider, installed,
 activation or working-day acceptance. Owner: butler outcome owner.
+## B4 readable business data and writable targets (2026-11-10)
+
+Requested outcome: only the designated butler may read every space's queue body
+and structured delivery records; it must never receive session bodies, including
+its own history. Reading an archive or readonly space must not grant queue writes.
+Default context is now an active-space index. Archived business data is explicitly
+requested. The read capability binds exact instance/revision authority and exposes
+one dispatcher without a general-control fallback or ordinary-approval escape.
+Ordinary nonmember/secretary S2 projection and all person-only gates stay unchanged.
+
+Author findings and fixes: the previous catalog excluded readonly/archive data and
+mixed read visibility with queue targets; new policy counterexamples failed before
+this change. The capability excludes reply/free-text/control-audit/session data,
+keeps typed READY references after queue trimming, and returns explicit missing
+legacy evidence. Row, byte, scan, space, queue and time-window limits bound reads.
+A model must page explicitly; a stale cursor is refused rather than silently
+changing its source. Identity changes invalidate old capability closures.
+
+Verification: first targeted synthetic checks 91 pass; full isolated suite
+4852 pass on `5994010`, zero fail or skip. The mechanical rebase onto `1e4f5bf`
+preserves the business implementation and tests; its 473 related checks include
+archive-placement regressions. Direct dependency changes are limited to the
+upstream RoomState member-placement repair; metadata, queue and typed-delivery
+read paths are unchanged. A combined full suite on that final rebase was not
+rerun. Earlier environment failures came from placing synthetic non-repository
+fixtures inside a Git worktree; they remain recorded and do not count as passes.
+
+Independent session `28fa0350-5b84-4d95-9a3b-bf66894f0c3b` approved the original
+source and identity-rebase source scopes. Its final `APPROVE_SCOPED` closes the
+rebased source/test evidence (private evidence: `.local/review-business/final.jsonl`;
+original `finish.jsonl` and `rebase.jsonl`). Integration still needs its combined
+full suite; no final-base full result is invented here.
+This source checkpoint does not qualify the DSH runtime, tool registration,
+installed operation, model compatibility or a working-day trial. The record
+period and activation remain off. Owner: butler outcome owner.
+
+
+### B4 business rebase after the audit API integration (2026-11-11)
+
+The integrator requested replay of `a0509e6` onto `a0cf238`, retaining both package
+entries. The six business source/test files are byte-identical to `a0509e6`.
+The package list keeps `butler-review-projection.cjs` and adds
+`butler-business.cjs`; both review histories and the audit API documentation are
+retained. The new Ledger API and other upstream dependency changes remain intact.
+The earlier verification counts above describe the preceding `1e4f5bf` checkpoint.
+
+Current author-run combination: 526 related checks and 5034 full isolated unit
+checks pass, zero fail or skip; UI source build exits zero. The original approved
+business implementation is reused without a new source change. At the
+integrator's request, an additional independent review of the model-visible data
+scope and designated-instance gate is still pending before integration. This
+replay does not claim that future review, live tool wiring or activation passed.
+Record period and activation remain off.

@@ -13,7 +13,8 @@ test('outbound context contains only approved business fields, never private nat
   const source = { ...space };
   Object.defineProperty(source, 'messages', { enumerable: true, get() { throw Error('Private history must not be read'); } });
   const result = buildInput({ batchId: 'batch-a', events: [event], catalog: [source], questions: [] });
-  assert.equal(result.mode, 'record-only'); assert.deepEqual(result.spaces, [{ id: space.id, name: space.name, members: space.members, queue: [] }]);
+  assert.equal(result.mode, 'record-only'); assert.deepEqual(result.spaces, [{ id: space.id, name: space.name, writable: true,
+    queueCounts: { queued: 0, sent: 0, waiting: 0, done: 0, failed: 0, cancelled: 0 } }]);
   for (const extra of ['environment', 'nativeHistory', 'privateMessages']) assert.throws(() => buildInput({ batchId: 'batch-a', events: [{ ...event, payload: { ...event.payload, [extra]: 'synthetic' } }], catalog: [space] }));
   const assignment = ['DEEPSEEK_API_KEY', 'synthetic-only'].join('=');
   assert.throws(() => buildInput({ batchId: 'batch-a', events: [{ ...event, payload: { text: assignment } }], catalog: [space] }));
@@ -63,7 +64,8 @@ test('catalog and open-question context use ledger limits and omit all private g
   const question = { questionId: 'q'.repeat(200), sourceRef: 's'.repeat(600), decisionSource: 'd'.repeat(600), decisionKind: 'k'.repeat(200), text: 't'.repeat(12000), status: 'open' };
   Object.defineProperty(question, 'conversation', { enumerable: true, get() { throw Error('Private question context'); } });
   const result = buildInput({ batchId: 'batch-a', events: [event], catalog: [catalog], questions: [question] });
-  assert.equal(result.spaces[0].name.length, 200);assert.equal(result.spaces[0].members[0].name.length, 200);assert.equal(result.spaces[0].queue[0].text.length, 12000);
+  assert.equal(result.spaces[0].name.length, 200); assert.equal(result.spaces[0].queueCounts.queued, 1);
+  assert.equal(Object.hasOwn(result.spaces[0], 'members'), false); assert.equal(Object.hasOwn(result.spaces[0], 'queue'), false);
   assert.deepEqual(result.pendingQuestions, [{ questionId: question.questionId, sourceRef: question.sourceRef, decisionSource: question.decisionSource, decisionKind: question.decisionKind, text: question.text }]);
   const archived = { archived: true, writable: true };Object.defineProperty(archived, 'messages', { enumerable: true, get() { throw Error('Archived private history'); } });
   assert.deepEqual(catalogRows([archived]), []);
@@ -72,10 +74,8 @@ test('catalog and open-question context use ledger limits and omit all private g
 });
 test('context capacity failures are typed before a batch needs to start', () => {
   for (const catalog of [Array.from({ length: 201 }, () => space), [{ ...space, name: 'n'.repeat(201) }],
-    [{ ...space, members: Array.from({ length: 101 }, () => space.members[0]) }],
-    [{ ...space, members: [{ ...space.members[0], name: 'm'.repeat(201) }] }],
     [{ ...space, queue: Array.from({ length: 301 }, (_, i) => ({ id: 'q-' + i, status: 'done', text: 'Recorded' })) }],
-    [{ ...space, queue: [{ id: 'q', status: 'queued', text: 'q'.repeat(12001) }] }]]) assert.throws(() => catalogRows(catalog), { code: 'ERR_BUTLER_CATALOG' });
+    [{ ...space, queue: [{ status: 'unknown' }] }], [{ ...space, queue: null }]]) assert.throws(() => catalogRows(catalog), { code: 'ERR_BUTLER_CATALOG' });
   const question = { questionId: 'q', sourceRef: event.sourceRef, decisionKind: 'approval', text: 'Pending', status: 'open' };
   for (const questions of [[{ ...question, text: 'q'.repeat(12001) }], Array.from({ length: 501 }, () => question)]) assert.throws(() => buildInput({ batchId: 'batch-a', events: [event], catalog: [space], questions }), { code: 'ERR_BUTLER_CATALOG' });
 });

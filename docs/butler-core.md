@@ -62,7 +62,11 @@ rewrites or reuses the old binding.
   another notification. A new fact must be a matching host event after the answer. Reserved deliveries recover as unknown without resend; completed but unreserved
   questions and reports resume without waiting for another model batch. READY
   reports include every READY source even if the model omits its report.
-- `butler-policy.cjs` builds only approved business context and validates a small
+- `butler-business.cjs` provides a designated, read-only capability for bounded
+  queue and structured-delivery queries. Its sole tool dispatcher rejects all
+  conversation/history/general-control methods, even with ordinary approval.
+  Production DSH wiring remains unqualified; see [the business boundary](butler-business.md).
+- `butler-policy.cjs` builds only an active-space business index and validates a small
   proposal vocabulary. A queue proposal has no executor. Ambiguous spaces become
   a pending decision only when the source has the host's canonical question key
   and decision type; otherwise that candidate is suspended for review.
@@ -117,10 +121,12 @@ usage accounting, installed operation or a working-day trial. Those gates remain
 closed until the DSH host and its business-only tool boundary are integrated and
 verified. No other model adapter is added here.
 
+The business-only input/tool capability is implemented in source, but is not
+proof that a live runtime exposes only that dispatcher.
+
 The desktop pairs the dedicated NativeHost/service driver and name-only profile
 checks with the existing backend, without preparing or starting it. Native provider compatibility remains
-unverified. The next source stage needs restricted automatic context and tool execution,
-the remaining direct person-request ingress and controller binding, the
+unverified. The next source stage needs direct person-request ingress and controller binding, the
 person-only designation menu/dialog and review-table renderer, a production queue transaction adapter
 and the non-member rotation/create-plan hooks. The core's pure
 rotation candidate filter and role successor are not a claim that those hooks
