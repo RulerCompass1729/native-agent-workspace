@@ -8,7 +8,7 @@
 .sidebar-layout #archive-button { display: flex; padding: 5px 8px; font: inherit; }
 .sidebar-layout #archive-label { margin: 0; }
 .sidebar-layout #archive-group-body { padding-inline: 8px; }
-.sidebar-layout .archive-item { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 0; overflow-wrap: anywhere; }
+.sidebar-layout .archive-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 4px 0; overflow-wrap: anywhere; }
 .sidebar-layout .archive-item strong { font-size: 12px; }
 .sidebar-layout .archive-item small, .archive-explanation { font-size: 11px; line-height: 1.5; color: var(--muted); }
 .sidebar-layout .archive-item button { flex: none; margin: 0; font-size: 11px; padding: 4px 8px; align-self: flex-start; }
