@@ -2,8 +2,9 @@
 // Read-only questions about a repository, for checking what an integrator reports (B6, E2b).
 // Nothing here writes, merges, fetches or takes the merge lock. Every name is a plain
 // argument after --end-of-options, and git runs without the person's configuration and without
-// the repository's hooks, diff and text drivers, signature program, file monitor and optional
-// locks. A question git cannot answer comes back as null: the caller treats that as "not verified".
+// the repository's hooks, diff and text drivers, signature program, file monitor, grafts and
+// optional locks; a change of a submodule is read as its two commit ids, never by running git
+// inside the submodule. A question git cannot answer comes back as null: the caller treats that as "not verified".
 // The reader does not judge the repository it is pointed at (its includes, alternates or linked
 // metadata): whoever connects it chooses the repository and checks it first.
 const { execFile } = require('node:child_process');
@@ -14,15 +15,19 @@ const FULL = /^[0-9a-f]{40}$/u;
 const RANGE_LIMIT = 500;                 // commits in one range
 const OUTPUT_LIMIT = 64 * 1024 * 1024;   // bytes of patch text read for one range
 
-// A repository may ask for signatures to be shown, which runs the signature program it names.
-const CONTROLS = [...worktree.controls, 'log.showSignature=false'];
+// A repository may ask for signatures to be shown, which runs the signature program it names,
+// and for submodule changes to be shown as a diff, which runs git inside the submodule with that
+// submodule's own drivers.
+const CONTROLS = [...worktree.controls, 'log.showSignature=false', 'diff.submodule=short'];
+// A grafts file can change what git answers about ancestry.
+const environment = () => ({ ...worktree.gitEnvironment(), GIT_GRAFT_FILE: '/dev/null' });
 // Output is bytes: patch text is not always valid UTF-8, and decoding it would make different changes look alike.
 function run(repo, args, { input, timeout = 15000 } = {}) {
   return new Promise(resolve => {
     const binary = worktree.available();
     if (!binary) { resolve({ code: null, stdout: Buffer.alloc(0) }); return; }
     const argv = ['--no-optional-locks', ...CONTROLS.flatMap(value => ['-c', value]), ...args];
-    const child = execFile(binary, argv, { cwd: repo, env: worktree.gitEnvironment(), encoding: 'buffer', timeout, maxBuffer: OUTPUT_LIMIT, windowsHide: true },
+    const child = execFile(binary, argv, { cwd: repo, env: environment(), encoding: 'buffer', timeout, maxBuffer: OUTPUT_LIMIT, windowsHide: true },
       (error, stdout) => resolve({ code: error ? (Number.isInteger(error.code) ? error.code : null) : 0, stdout: Buffer.isBuffer(stdout) ? stdout : Buffer.alloc(0) }));
     child.stdin.on('error', () => {});
     child.stdin.end(input || '');
@@ -57,7 +62,7 @@ function reader(repo) {
     const commits = text(listed).split('\n').filter(Boolean);
     if (commits.length > RANGE_LIMIT || commits.some(id => !FULL.test(id))) return null;
     if (!commits.length) return [];
-    const patches = await run(repo, ['log', '--patch', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--no-color', '--no-renames', '--full-index', '--format=commit %H',
+    const patches = await run(repo, ['log', '--patch', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color', '--no-renames', '--full-index', '--format=commit %H',
       `--max-count=${RANGE_LIMIT}`, '--end-of-options', `${base}..${tip}`]);
     if (patches.code !== 0) return null;
     const ids = await run(repo, ['patch-id', '--stable'], { input: patches.stdout });

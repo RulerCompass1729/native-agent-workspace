@@ -154,11 +154,55 @@ test('reading runs none of the repository\'s own programs and writes nothing', a
   try { assert.equal(await read.commit(next), next); } finally { if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved; }
 });
 
-test('the reader is not connected: no part of the app loads it or the handoff record yet', () => {
-  const app = path.join(__dirname, '..');
-  for (const file of fs.readdirSync(app).filter(name => /\.(?:c?js|mjs)$/.test(name) && !['integrator-git.cjs', 'integrator-handoff.cjs'].includes(name))) {
-    assert.ok(!/integrator-(?:git|handoff)/.test(fs.readFileSync(path.join(app, file), 'utf8')), file);
-  }
+test('the reader is not connected: nothing in the app or its scripts loads it or the handoff record yet', () => {
+  const root = path.join(__dirname, '../..');
+  const sources = directory => fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) return ['node_modules', 'tests', 'dist', '.git'].includes(entry.name) ? [] : sources(file);
+    return /\.(?:c?js|mjs|html)$/.test(entry.name) ? [file] : [];
+  });
+  const files = [...sources(path.join(root, 'app')), ...sources(path.join(root, 'scripts'))].filter(file => !/integrator-(?:git|handoff)\.cjs$/.test(file));
+  assert.ok(files.length > 100 && files.some(file => file.endsWith('renderer.js')) && files.some(file => file.includes(`${path.sep}scripts${path.sep}`)), 'The scan covers the app, its subfolders and the scripts');
+  // The two module names as a program would load them (the lock script's folder of release records has another name).
+  for (const file of files) assert.ok(!/integrator-(?:git|handoff)(?:\.cjs)?['"`]/.test(fs.readFileSync(file, 'utf8')), path.relative(root, file));
+});
+
+test('a change of a submodule is read as its two commit ids; git is not run inside the submodule', async t => {
+  const { read, base, git, repo, temporary } = fixture(t);
+  // A library with a program of its own for diffs, checked out as a submodule of the repository.
+  const marker = path.join(temporary, 'submodule-program-ran'), program = path.join(temporary, 'submodule-program.sh');
+  fs.writeFileSync(program, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, { mode: 0o700 });
+  const library = path.join(temporary, 'library'); fs.mkdirSync(library);
+  const inLibrary = (...args) => execFileSync(worktree.available(), ['-c', 'user.name=Synthetic fixture', '-c', 'user.email=fixture@example.com', '-c', 'commit.gpgsign=false', '-c', 'protocol.file.allow=always', ...args],
+    { cwd: library, env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  inLibrary('init', '--quiet', '--initial-branch=main'); fs.writeFileSync(path.join(library, 'part.txt'), 'one\n'); inLibrary('add', '--', 'part.txt'); inLibrary('commit', '--quiet', '-m', 'Synthetic library one');
+  git('-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'add', library, 'library'); git('commit', '--quiet', '-m', 'Synthetic add library');
+  const added = git('rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(library, 'part.txt'), 'two\n'); inLibrary('commit', '--quiet', '-am', 'Synthetic library two');
+  git('-C', 'library', '-c', 'protocol.file.allow=always', 'pull', '--quiet', 'origin', 'main'); git('commit', '--quiet', '-am', 'Synthetic move library');
+  const moved = git('rev-parse', 'HEAD');
+  git('config', 'diff.submodule', 'diff'); git('-C', 'library', 'config', 'diff.external', program);
+  fs.rmSync(marker, { force: true });
+  const range = await read.changes(base, moved);
+  assert.deepEqual(range.map(entry => entry.commit), [moved, added]);
+  assert.ok(range.every(entry => /^[0-9a-f]{40}$/.test(entry.change)) && range[0].change !== range[1].change, 'Each submodule change has its own id');
+  assert.equal(fs.existsSync(marker), false, 'The submodule\'s program did not run');
+  // The same range read the ordinary way does run it: the trap is real.
+  execFileSync(worktree.available(), ['log', '--patch', `${base}..${moved}`], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  assert.equal(fs.existsSync(marker), true, 'An unprotected read would have run it');
+});
+
+test('a grafts file does not change what the reader answers about ancestry', async t => {
+  const { read, base, commit, git, repo } = fixture(t);
+  const next = commit('a.txt', 'a\n');
+  git('checkout', '--quiet', '-b', 'side', base); const side = commit('b.txt', 'b\n');
+  assert.equal(await read.isAncestor(next, side), false);
+  // A graft that claims the side commit descends from the other one.
+  fs.mkdirSync(path.join(repo, '.git/info'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.git/info/grafts'), `${side} ${next}\n`);
+  assert.doesNotThrow(() => git('merge-base', '--is-ancestor', next, side), 'git itself now believes the graft');
+  assert.equal(await read.isAncestor(next, side), false, 'The reader is not told otherwise by the graft');
+  assert.deepEqual((await read.changes(base, side)).map(entry => entry.commit), [side]);
 });
 
 test('the reader only reads: its source has no writing git command', () => {

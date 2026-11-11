@@ -161,15 +161,16 @@ function handoffText(handoffId, entries, options = {}) {
 //   MERGED <commit> as <main commit> tests <passed>/<total> [review <id>]
 //   RETURNED <commit> <reason>
 //   HELD <commit> <reason>
-// Backticks and asterisks around the parts, a list mark or a number in front, extra spaces and
-// one final full stop are tolerated; a quoted line (>) is someone else's line and is not read.
+// Backticks and asterisks around the parts, a list mark or a number in front, a colon after the
+// first word, extra spaces and one final full stop are tolerated; a quoted line (>) is someone
+// else's line and is not read.
 // The last line about a delivery counts. A line that begins like a result but cannot be read,
 // or whose commit names none or several of the deliveries, is counted as ignored.
 function parseResults(text, entries) {
   const results = {};
   let ignored = 0;
   for (const raw of (typeof text === 'string' ? text : '').split(/\r\n|[\n\r]/u)) {
-    const line = raw.replace(/[`*]/gu, '').replace(/\s+/gu, ' ').trim().replace(/^(?:[-•–—]|\d{1,3}[.)、）]) ?/u, '').replace(/[.。]$/u, '');
+    const line = raw.replace(/[`*]/gu, '').replace(/\s+/gu, ' ').trim().replace(/^(?:[-•–—]|\d{1,3}[.)、）]) ?/u, '').replace(/^(MERGED|RETURNED|HELD)[:：] ?/u, '$1 ').replace(/[.。]$/u, '');
     if (!/^(?:MERGED|RETURNED|HELD)(?: |$)/u.test(line)) continue;
     const match = /^(MERGED|RETURNED|HELD) ([0-9a-fA-F]{7,40})(?: (.*))?$/u.exec(line);
     if (!match) { ignored += 1; continue; }
@@ -270,11 +271,18 @@ function planSettle(state, seen) {
   const controlChanged = Number.isSafeInteger(handoff.control) && (session.controlRevision || 0) !== handoff.control;
   if (reply.humanAfter || controlChanged) return settle('waiting', 'person-intervened');
   if (!reply.last.trim()) return settle('waiting', 'no-reply');
-  // The lines about each delivery are read from everything the integrator wrote after the handoff,
-  // so a closing remark after them loses nothing; the last line about a delivery counts.
-  const results = parseResults(reply.text, state.ready.filter(entry => handoff.keys.includes(entry.key)));
-  // The first line of the last message decides the handoff's state; the lines are read either way.
-  return startsWithDecision(reply.last) ? settle('waiting', '', { decision: true, question: decisionLine(reply.last), results }) : settle('done', '', { results });
+  // The integrator's answer is its last message that reads like one: it has a result line for a
+  // delivery of this handoff, or it asks the person to decide. A closing remark after the answer
+  // loses nothing, and lines from an earlier message (written while it worked) are not mixed in.
+  const inside = state.ready.filter(entry => handoff.keys.includes(entry.key));
+  const parts = Array.isArray(reply.parts) && reply.parts.length ? reply.parts : [reply.last];
+  let answer = reply.last, results = parseResults(answer, inside);
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const parsed = parseResults(parts[index], inside);
+    if (startsWithDecision(parts[index]) || Object.keys(parsed.results).length) { answer = parts[index]; results = parsed; break; }
+  }
+  // The first line of the answer decides the handoff's state; its lines are read either way.
+  return startsWithDecision(answer) ? settle('waiting', '', { decision: true, question: decisionLine(answer), results }) : settle('done', '', { results });
 }
 
 // What may happen next, from the stored state and what the caller observes. Pure: it changes nothing.
@@ -518,7 +526,11 @@ class IntegrationHandoffs {
         const word = result?.kind === 'held' ? heldReason(result.reason) : '';
         // With a decision asked, a delivery without a line, or one held for the conflict itself,
         // stays inside the waiting handoff: it is the person's to release or to leave held.
-        if (asking && (!result || word === 'conflict')) { fact(entry, 'waiting', { reason: conflict }); continue; }
+        if (asking && (!result || word === 'conflict')) {
+          // What the integrator wrote about the conflict is kept beside the delivery.
+          if (result && result.reason !== word) entry.note = label(result.reason, 200);
+          fact(entry, 'waiting', { reason: conflict }); continue;
+        }
         handoff.keys = handoff.keys.filter(candidate => candidate !== entry.key);
         if (!result) {
           if (entry.resends === 1) held(entry, 'no-result');

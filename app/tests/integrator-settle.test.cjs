@@ -72,7 +72,10 @@ test('the reply names each delivery by its own commit; decoration, list marks an
     [key('a')]: { kind: 'merged', as: MAIN2, tests: { passed: 2, total: 2 } }, [key('b')]: { kind: 'returned', reason: 'needs a rebase' },
     [key('c')]: { kind: 'held', reason: 'review-off' }, [key('d')]: { kind: 'held', reason: 'checkpoint-invalid' } } });
   // A line that begins like a result but cannot be read is counted, not passed over in silence.
-  assert.deepEqual(parseResults(`MERGED everything, all green\nHELD\n4. RETURNED abc short\nMERGED: ${commitOf('a')}\nMERGEDX ${commitOf('a')}`, entries), { ignored: 3, results: {} });
+  assert.deepEqual(parseResults(`MERGED everything, all green\nHELD\n4. RETURNED abc short\nMERGEDX ${commitOf('a')}\nHELDER ${commitOf('b')} x`, entries), { ignored: 3, results: {} });
+  // A colon after the first word is tolerated; a MERGED line without its parts stays a claim that is never taken as merged.
+  assert.deepEqual(parseResults(`MERGED: ${commitOf('a')}\nRETURNED：${commitOf('b')} needs a rebase\n- HELD: ${commitOf('c')} review-off`, entries), { ignored: 0, results: {
+    [key('a')]: { kind: 'merged', malformed: true }, [key('b')]: { kind: 'returned', reason: 'needs a rebase' }, [key('c')]: { kind: 'held', reason: 'review-off' } } });
   // The last line about a delivery counts; a reason may be missing; a MERGED line that cannot be read stays a claim.
   assert.deepEqual(parseResults(`HELD ${commitOf('a')} review-off\nRETURNED ${commitOf('a')}\nMERGED ${commitOf('b')} as main tests ok\nHELD ${commitOf('c')} lock-held:Claude 终端 two`, entries).results, {
     [key('a')]: { kind: 'returned', reason: 'unspecified' }, [key('b')]: { kind: 'merged', malformed: true }, [key('c')]: { kind: 'held', reason: 'lock-held:Claude 终端 two' } });
@@ -118,15 +121,31 @@ test('a handoff settles by the queue\'s own times and fall-backs', t => {
   // A reply: its first line decides between done and a decision for the person; the result lines are read either way.
   assert.deepEqual(backlog.plan(later(answered('tag-1', reply))), settle('done', '', { results: parsed }));
   assert.deepEqual(backlog.plan(later(answered('tag-1', '需要你决定：两件冲突，建议交给一人合成一份\n' + reply))), settle('waiting', '', { decision: true, question: '两件冲突，建议交给一人合成一份', results: parsed }));
-  // The result lines are read from everything the integrator wrote after the handoff; the last message's first line decides.
-  const several = text => integratorSession({ messages: [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW }, { id: 'r1', role: 'assistant', text: reply, time: NOW + 1 }, { id: 'r2', role: 'assistant', text, time: NOW + 2 }] });
-  assert.deepEqual(backlog.plan(later(several('All done.'))), settle('done', '', { results: parsed }));
-  assert.deepEqual(backlog.plan(later(several(`RETURNED ${commitOf('a')} the suite failed after all`))), settle('done', '', { results: { ignored: 0, results: { [key('a')]: { kind: 'returned', reason: 'the suite failed after all' } } } }), 'The last line about a delivery counts');
-  assert.deepEqual(backlog.plan(later(several('需要你决定：先合哪一件'))), settle('waiting', '', { decision: true, question: '先合哪一件', results: parsed }));
+  // The answer is the integrator's last message that reads like one (a result line, or a decision asked):
+  // a closing remark after it loses nothing, and a later answer replaces an earlier one whole.
+  const several = (first, second) => integratorSession({ messages: [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW }, { id: 'r1', role: 'assistant', text: first, time: NOW + 1 }, { id: 'r2', role: 'assistant', text: second, time: NOW + 2 }] });
+  assert.deepEqual(backlog.plan(later(several(reply, 'All done.'))), settle('done', '', { results: parsed }));
+  assert.deepEqual(backlog.plan(later(several('需要你决定：先合哪一件\n' + reply, 'That is all from me.'))), settle('waiting', '', { decision: true, question: '先合哪一件', results: parsed }), 'A remark after the answer does not hide that it asked the person');
+  assert.deepEqual(backlog.plan(later(several(reply, `RETURNED ${commitOf('a')} the suite failed after all`))), settle('done', '', { results: { ignored: 0, results: { [key('a')]: { kind: 'returned', reason: 'the suite failed after all' } } } }));
+  assert.deepEqual(backlog.plan(later(several(reply, '需要你决定：先合哪一件'))), settle('waiting', '', { decision: true, question: '先合哪一件', results: { ignored: 0, results: {} } }), 'A later answer is not filled in from an earlier message');
+  assert.deepEqual(backlog.plan(later(several('Working on it.', 'Still nothing to report.'))), settle('done', '', { results: { ignored: 0, results: {} } }));
   // Planning changed nothing, and advance does not settle by itself: git has to be asked first.
   assert.equal(backlog.snapshot().handoff.status, 'sent');
   assert.equal(backlog.advance(later(answered('tag-1', reply)), NOW).kind, 'settle');
   assert.equal(backlog.snapshot().handoff.status, 'sent');
+});
+
+test('a line written while the integrator still worked is not mixed into its later answer', t => {
+  const { backlog } = fixture(t);
+  handed(backlog, ['a', 'b']);
+  // Mid-work it wrote that a was returned; its answer then names only b. The earlier line is not a's result.
+  const session = integratorSession({ messages: [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW },
+    { id: 'r1', role: 'assistant', text: `RETURNED ${commitOf('a')} the suite failed, trying once more`, time: NOW + 1 },
+    { id: 'r2', role: 'assistant', text: `MERGED ${commitOf('b')} as ${MAIN2} tests 9/9`, time: NOW + 2 }, { id: 'r3', role: 'assistant', text: 'Done.', time: NOW + 3 }] });
+  const action = backlog.plan(later(session));
+  assert.deepEqual(Object.keys(action.results.results), [key('b')]);
+  const result = backlog.settle(action, { handoffId: action.handoffId, verified: ok(['b']), mainHead: MAIN2 }, NOW + 60000);
+  assert.deepEqual(outcomes(result), { a: 'again', b: 'merged' }, 'a has no result: it is handed once more, not recorded as returned');
 });
 
 test('a verified merge is recorded once and registers the main commit to install once', t => {
@@ -371,6 +390,7 @@ test('a decision for the person: lines given are recorded, the rest stays inside
   assert.deepEqual(asked.notify, [again]); assert.equal(asked.question, '仍然冲突');
   const held = backlog.snapshot().handoff;
   assert.deepEqual([held.status, held.reason, held.keys, held.question], ['waiting', again, [key('c'), key('d')], '仍然冲突']);
+  assert.deepEqual(backlog.snapshot().ready.filter(entry => entry.state === 'handed').map(entry => entry.note), [undefined, 'conflict with lane/c'], 'What the integrator wrote about the conflict is kept');
   backlog.noteReady(ready('e'), NOW);
   assert.deepEqual(backlog.advance(later(integratorSession()), NOW + 110000), { kind: 'none', why: 'handoff-waiting' });
   // The person's retry on that conflict, from the list of open questions, ends the handoff as "handoff dealt with, retry" does.
