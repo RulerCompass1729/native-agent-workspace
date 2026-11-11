@@ -250,6 +250,31 @@ test('a session the caller names as engaged gets no queued item and is not rotat
   }
 });
 
+test('B2/B6: integration and trust holds are both busy while an unrelated member still gets work', () => {
+  const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
+  const sessions = ['integrator', 'successor', 'healthy'].map(id => member(id));
+  const holds = { engaged: ['integrator'], heldSessions: new Set(['successor']) };
+  assert.deepEqual(plan(rooms, sessions, holds), [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'healthy' }]);
+  for (const assignee of ['integrator', 'successor']) {
+    assert.deepEqual(plan([{ ...rooms[0], queue: [item('1', { assignee })] }], sessions, holds), []);
+  }
+  const old = sessions.slice(0, 2).map(s => ({ ...s, createdAt: NOW - 25 * HOUR, messages: heavyMessages() }));
+  assert.deepEqual(plan([{ ...rooms[0], queue: [] }], old, holds), [], 'neither reservation can be rotated away');
+  assert.deepEqual(plan(rooms, sessions, { ...holds, quarantineUnknown: true }), [], 'unknown trust identity cannot be overridden by the other hold');
+});
+
+test('B2/B6: the vacancy projection retains both integration and trust holds', () => {
+  const input = { rooms: [{ id: 'shared', name: 'Team', queue: [] }],
+    sessions: ['integrator', 'successor', 'healthy'].map(id => member(id)), wakePolicy: AWAKE,
+    idleSince: settledSince(['integrator', 'successor', 'healthy']), now: NOW,
+    engaged: ['integrator'], heldSessions: new Set(['successor']) };
+  const vacant = rules.queueVacancies(input)[0];
+  assert.deepEqual(vacant.candidateIds, ['healthy']);
+  assert.deepEqual(vacant.availableIds, ['healthy']);
+  assert.equal(vacant.active, true);
+  assert.equal(rules.queueVacancies({ ...input, quarantineUnknown: true })[0].active, false);
+});
+
 test('an old, quiet space member is rotated even with no work queued; a recent conversation is not cut off', () => {
   const finished = item('1', { status: 'done', sentTo: 'a', sentAt: NOW - 2 * HOUR, tag: 't1' });
   const rooms = [{ id: 'shared', name: 'Team', queue: [finished] }];
@@ -462,7 +487,7 @@ function fakeMembership(room, client) {
     const session = client.state.sessions.find(s => s.id === id);
     if (join) {
       session.roomIds = [roomId];
-      session.roomId = roomId;
+      session.roomId = roomId === 'shared' ? roomId : null;
     } else {
       session.roomIds = [];
       session.roomId = null;
@@ -2236,9 +2261,10 @@ test('B2 receipt: legacy failed cleanup is unknown and never manufactures anothe
   assert.deepEqual(resumed.notifications, []);
 });
 
-test('B2 receipt: malformed new receipt fields fail closed instead of dropping a potentially live successor', t => {
+test('B2 receipt: malformed new receipt fields do not throw away an unrelated valid rotation', t => {
   const f = trustTimeoutSetup(t); expiredTrustCleanup(f);
   const valid = structuredClone(f.record), file = path.join(f.dir, 'queue-dispatch.json');
+  const unrelated = { phase: 'kept', oldNativeId: 'native-unrelated', name: 'Unrelated', roomIds: ['shared'], keptAt: NOW };
   const damaged = [
     r => { r.trustNoticeId = 'damaged'; }, r => { r.newId = r.oldId; }, r => { r.roomIds = null; }, r => { r.newCwd = 'relative'; },
     r => { r.trustOwner.controlRevision = -1; }, r => { delete r.trustOwner.draftRevision; }, r => { r.trustOwner.nativeId = null; },
@@ -2249,9 +2275,241 @@ test('B2 receipt: malformed new receipt fields fail closed instead of dropping a
   ];
   for (const mutate of damaged) {
     const record = structuredClone(valid); mutate(record);
-    fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: record } }), { mode: 0o600 });
-    assert.throws(() => rules.readRotations(file, NOW), /invalid.*receipt.*state/i);
+    fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: record, unrelated } }), { mode: 0o600 });
+    let rotations;
+    assert.doesNotThrow(() => { rotations = rules.readRotations(file, NOW); });
+    assert.deepEqual(rotations.unrelated, unrelated, 'one bad trust record does not hide another rotation');
   }
+});
+
+// Enter through the product's wait/save path before corrupting its primary file.
+// No test knows how the independent successor quarantine is stored.
+async function trustFaultSetup(t) {
+  const healthy = member('healthy-worker');
+  const f = trustTimeoutSetup(t, { sessions: [healthy] });
+  const otherRoom = f.room.create('Unaffected team');
+  healthy.roomIds = [otherRoom]; healthy.roomId = null;
+  f.client.state.rooms.push({ id: otherRoom, revision: 0, run: null, messages: [] });
+  f.fresh.roomIds = ['shared']; f.fresh.roomId = 'shared';
+  f.record.phase = 'joining';
+  await f.dispatcher.waitForDirectoryTrust(f.old.id, f.record, NOW, f.fresh);
+  const unrelated = { phase: 'kept', oldNativeId: healthy.nativeId, name: healthy.name, roomIds: [otherRoom], keptAt: NOW };
+  f.dispatcher.rotations.unrelated = unrelated; f.dispatcher.save();
+  const heldItem = f.room.queueAdd('must stay with the quarantined successor', f.fresh.id);
+  const healthyItem = f.room.queueAdd('unrelated space continues', healthy.id, otherRoom);
+  f.fresh.state = 'idle'; f.fresh.nativeStartupPrompt = null;
+  return { ...f, healthy, otherRoom, unrelated, heldItem, healthyItem };
+}
+
+async function assertFaultDoesNotStopOtherSpace(t, f) {
+  const restored = restoreTrustFixture(t, f);
+  await restored.dispatcher.start();
+  assert.equal(f.client.sends(f.healthy.id).length, 1, 'a different space really receives its queued task');
+  assert.equal(restored.room.queueItems(f.otherRoom).find(i => i.id === f.healthyItem).status, 'sent');
+  assert.equal(f.client.sends(f.fresh.id).length, 0, 'the unhanded successor remains quarantined');
+  assert.equal(restored.room.queueItems('shared').find(i => i.id === f.heldItem).status, 'queued');
+  await restored.dispatcher.dispatch({ kind: 'dispatch', roomId: 'shared', itemId: f.heldItem, sessionId: f.fresh.id });
+  assert.equal(f.client.sends(f.fresh.id).length, 0, 'a stale direct dispatch cannot bypass restored quarantine');
+  await assert.rejects(restored.dispatcher.send(f.fresh, 'synthetic integration handoff', 'integration-handoff'), error => error.notSent === true);
+  assert.equal(f.client.sends(f.fresh.id).length, 0, 'the shared send boundary also fences non-queue automatic senders');
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor', 'create', 'approve', 'answer', 'input'].includes(c[0])), false,
+    'unreadable bookkeeping grants no native cleanup or input authority');
+  assert.ok(restored.notifications.length > 0, 'the person is told about the quarantined record');
+  const notices = restored.notifications.length;
+  restored.dispatcher.dirty = true; await restored.dispatcher.schedule();
+  assert.equal(restored.notifications.length, notices, 'the same unresolved fault does not notify on each pass');
+  const again = restoreTrustFixture(t, restored);
+  await again.dispatcher.start();
+  assert.equal(f.client.sends(f.fresh.id).length, 0, 'quarantine also survives a second restart');
+  assert.equal(again.notifications.length, 0, 'restarting does not repeat the same fault notice');
+  return again;
+}
+
+for (const [name, damage] of [
+  ['owner revision', r => { r.trustOwner.controlRevision = -1; }],
+  ['notice effects', r => { r.trustEffects.os = 'delivered'; }],
+  ['cleanup state', r => { r.phase = 'failed'; r.failedAt = NOW; r.reason = 'native-directory-trust-timeout'; r.trustCleanup = { v: 2 }; }],
+  ['missing successor id', r => { delete r.newId; }],
+  ['repointed successor id', r => { r.newId = 'healthy-worker'; }],
+  ['unknown phase', r => { r.phase = 'damaged-phase'; }],
+]) test(`B2 fault isolation: a malformed ${name} holds only its original successor and keeps a valid record`, async t => {
+  const f = await trustFaultSetup(t);
+  const stored = JSON.parse(fs.readFileSync(f.dispatcher.file, 'utf8')); damage(stored.rotations.a);
+  fs.writeFileSync(f.dispatcher.file, JSON.stringify(stored), { mode: 0o600 });
+  const restored = await assertFaultDoesNotStopOtherSpace(t, f);
+  assert.deepEqual(restored.dispatcher.rotations.unrelated, f.unrelated);
+});
+
+for (const [name, damage] of [
+  ['truncated JSON', file => fs.writeFileSync(file, '{"version":1,"rotations":', { mode: 0o600 })],
+  ['invalid top-level shape', file => fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: [] }), { mode: 0o600 })],
+  ['missing primary file', file => fs.unlinkSync(file)],
+  ['unsafe primary permissions', file => fs.chmodSync(file, 0o644)],
+  ['a primary symlink', file => { const target = file + '.owned-target'; fs.renameSync(file, target); fs.symlinkSync(target, file); }],
+]) test(`B2 fault isolation: ${name} cannot make a previously quarantined successor eligible`, async t => {
+  const f = await trustFaultSetup(t); damage(f.dispatcher.file);
+  await assertFaultDoesNotStopOtherSpace(t, f);
+});
+
+test('B2 fault isolation: one persistently throwing cleanup does not block an ordinary joining rotation or another space', async t => {
+  const f = await trustFaultSetup(t); expiredTrustCleanup(f);
+  const old = member('ordinary-old', { cwd: '/synthetic/ordinary', roomIds: [f.otherRoom], roomId: null });
+  const successor = member('ordinary-successor', { cwd: old.cwd, roomIds: [], roomId: null });
+  f.client.state.sessions.push(old, successor);
+  const ordinary = { phase: 'joining', oldId: old.id, oldNativeId: old.nativeId, oldControl: 0, provider: 'claude', cwd: old.cwd,
+    newCwd: old.cwd, newId: successor.id, newName: successor.name, name: old.name, roomIds: [f.otherRoom], createdNewAt: NOW,
+    requestedAt: NOW - 1000, handoff: 'saved ordinary handoff' };
+  f.dispatcher.rotations[old.id] = ordinary;
+  const resume = f.dispatcher.resumeTrustCleanup.bind(f.dispatcher); let errors = 0;
+  f.dispatcher.resumeTrustCleanup = async (id, ...args) => {
+    if (id === f.old.id) { errors++; throw Error('Synthetic persistent cleanup fault'); }
+    return resume(id, ...args);
+  };
+  await f.dispatcher.start();
+  assert.ok(errors > 0); assert.equal(ordinary.phase, 'created', 'ordinary same-directory joining is still advanced');
+  assert.deepEqual(successor.roomIds, [f.otherRoom]);
+  assert.equal(f.client.sends(f.healthy.id).length, 1); assert.equal(f.client.sends(f.fresh.id).length, 0);
+  successor.state = 'starting';
+  const next = member('another-worker', { roomIds: [f.otherRoom], roomId: null }); f.client.state.sessions.push(next);
+  f.room.queueAdd('a later pass still dispatches', next.id, f.otherRoom);
+  f.dispatcher.dirty = true; await f.dispatcher.schedule();
+  assert.equal(f.client.sends(next.id).length, 1, 'a later pass is not starved by the same cleanup fault');
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor', 'input', 'approve', 'answer'].includes(c[0]) && c[1] === f.fresh.id), false);
+});
+
+test('B2 fault isolation: a real cleanup save failure leaves other-space queue dispatch working', async t => {
+  const f = await trustFaultSetup(t); expiredTrustCleanup(f, 'confirmed', 1); f.fresh.state = 'ended';
+  f.dispatcher.save = () => { throw Error('Synthetic rotation-store write failure'); };
+  await f.dispatcher.start();
+  assert.equal(f.client.sends(f.healthy.id).length, 1, 'RoomState can still persist and deliver the unrelated task');
+  f.fresh.state = 'idle';
+  await f.dispatcher.dispatch({ kind: 'dispatch', roomId: 'shared', itemId: f.heldItem, sessionId: f.fresh.id });
+  assert.equal(f.client.sends(f.fresh.id).length, 0);
+  assert.deepEqual(f.fresh.roomIds, ['shared'], 'membership is untouched when its started marker cannot be saved');
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor', 'create', 'input', 'approve', 'answer'].includes(c[0])), false);
+});
+
+async function assertUnknownIdentityIsHeld(t, f, recoversFromPrimary = false) {
+  const restored = restoreTrustFixture(t, f);
+  await restored.dispatcher.start();
+  assert.equal(f.client.sends().length, 0, 'no unproven identity is treated as safe after losing the anchor');
+  assert.equal(restored.room.queueItems('shared').find(i => i.id === f.heldItem).status, 'queued');
+  await restored.dispatcher.dispatch({ kind: 'dispatch', roomId: 'shared', itemId: f.heldItem, sessionId: f.fresh.id });
+  assert.equal(f.client.sends(f.fresh.id).length, 0);
+  assert.equal(restored.notifications.filter(kind => kind === 'trustStateUnknown').length, 1);
+  restored.dispatcher.dirty = true; await restored.dispatcher.schedule();
+  assert.equal(restored.notifications.filter(kind => kind === 'trustStateUnknown').length, 1, 'the unknown identity notice is not repeated each pass');
+  const again = restoreTrustFixture(t, restored); await again.dispatcher.start();
+  assert.equal(again.notifications.length, 0, 'the unknown identity notice is not repeated after restart');
+  if (recoversFromPrimary) {
+    assert.equal(f.client.sends(f.healthy.id).length, 1, 'a valid primary reconstructs identities on restart and frees the unrelated worker');
+    assert.equal(f.client.sends(f.fresh.id).length, 0, 'the reconstructed successor stays held');
+  }
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor', 'create', 'input', 'approve', 'answer'].includes(c[0])), false);
+}
+
+for (const [field, damaged] of [['holds', 'damaged'], ['faults', { damaged: 'invalid receipt' }], ['notices', { 'fault:@unknown': false }]]) test(`B2 fault isolation boundary: malformed auxiliary ${field} holds unproven sessions and reports one unknown notice`, async t => {
+  const f = await trustFaultSetup(t);
+  f.room.saveDirectoryTrustIsolation({ ...f.room.directoryTrustIsolation(), [field]: damaged });
+  await assertUnknownIdentityIsHeld(t, f, true);
+});
+
+test('B2 fault isolation boundary: a rejected primary record without an independent anchor cannot authorize its successor hint', async t => {
+  const f = await trustFaultSetup(t);
+  const metadata = JSON.parse(fs.readFileSync(f.room.file, 'utf8')); delete metadata.directoryTrustIsolation;
+  fs.writeFileSync(f.room.file, JSON.stringify(metadata), { mode: 0o600 });
+  const primary = JSON.parse(fs.readFileSync(f.dispatcher.file, 'utf8')); primary.rotations.a.trustOwner.controlRevision = -1;
+  fs.writeFileSync(f.dispatcher.file, JSON.stringify(primary), { mode: 0o600 });
+  await assertUnknownIdentityIsHeld(t, f);
+});
+
+test('B2 fault isolation boundary: a saved completed cleanup recovers its matching hold release after a crash', async t => {
+  const f = await trustFaultSetup(t); expiredTrustCleanup(f, 'confirmed', 1);
+  f.record.trustCleanup.rooms.shared = 'confirmed'; f.record.trustCleanup.notices = trustEffects('attempted'); saveTrustFixture(f);
+  assert.ok(f.room.directoryTrustIsolation().holds[f.fresh.id], 'the independent hold still predates its release');
+  const restored = restoreTrustFixture(t, f);
+  await restored.dispatcher.start();
+  assert.equal(f.client.sends(f.fresh.id).length, 1, 'the completed matching receipt does not create a permanent silent hold');
+  assert.equal(f.client.sends(f.healthy.id).length, 1);
+  assert.deepEqual(restored.notifications, []);
+  assert.equal(Object.hasOwn(new RoomState(f.dir).directoryTrustIsolation().holds, f.fresh.id), false, 'the recovered release is persisted');
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor', 'create', 'input', 'approve', 'answer'].includes(c[0])), false);
+});
+
+test('B2 fault isolation boundary: a valid confirmed handoff receipt recovers its matching hold release after a crash', async t => {
+  const f = await trustFaultSetup(t);
+  Object.assign(f.record, { phase: 'handed', handoffConfirmed: true, handoffTag: 'accepted-handoff-tag', handedAt: NOW }); saveTrustFixture(f);
+  assert.ok(f.room.directoryTrustIsolation().holds[f.fresh.id]);
+  const restored = restoreTrustFixture(t, f);
+  // Test restoration without advancing the ordinary handed phase or stopping its old session.
+  await restored.dispatcher.dispatch({ kind: 'dispatch', roomId: 'shared', itemId: f.heldItem, sessionId: f.fresh.id });
+  assert.equal(f.client.sends(f.fresh.id).length, 1);
+  assert.equal(Object.hasOwn(new RoomState(f.dir).directoryTrustIsolation().holds, f.fresh.id), false);
+  assert.deepEqual(restored.notifications, []);
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor', 'create', 'input', 'approve', 'answer'].includes(c[0])), false);
+});
+
+test('B2 fault isolation boundary: an auxiliary save failure during cleanup does not poison an ordinary joining save', async t => {
+  const f = await trustFaultSetup(t); expiredTrustCleanup(f);
+  const old = member('ordinary-old', { cwd: '/synthetic/ordinary', roomIds: [f.otherRoom], roomId: null });
+  const successor = member('ordinary-successor', { cwd: old.cwd, roomIds: [], roomId: null }); f.client.state.sessions.push(old, successor);
+  const ordinary = { phase: 'joining', oldId: old.id, oldNativeId: old.nativeId, oldControl: 0, provider: 'claude', cwd: old.cwd,
+    newCwd: old.cwd, newId: successor.id, newName: successor.name, name: old.name, roomIds: [f.otherRoom], createdNewAt: NOW,
+    requestedAt: NOW - 1000, handoff: 'saved ordinary handoff' };
+  f.dispatcher.rotations[old.id] = ordinary;
+  const save = f.dispatcher.save.bind(f.dispatcher), resume = f.dispatcher.resumeTrustCleanup.bind(f.dispatcher); let insideCleanup = false;
+  f.dispatcher.resumeTrustCleanup = async (...args) => { insideCleanup = true; try { return await resume(...args); } finally { insideCleanup = false; } };
+  f.dispatcher.save = () => { if (insideCleanup) throw Error('Synthetic cleanup marker save failure'); return save(); };
+  f.room.saveDirectoryTrustIsolation = () => { throw Error('Synthetic persistent auxiliary save failure'); };
+  await f.dispatcher.start();
+  assert.equal(ordinary.phase, 'created', 'the already-persisted hold does not prevent an unrelated same-directory save');
+  assert.deepEqual(successor.roomIds, [f.otherRoom]);
+  assert.equal(f.client.sends(f.healthy.id).length, 1); assert.equal(f.client.sends(f.fresh.id).length, 0);
+  assert.equal(f.record.trustCleanup.stop.state, 'pending'); assert.equal(f.record.trustCleanup.stop.attempts, 0);
+  assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor', 'create', 'input', 'approve', 'answer'].includes(c[0])), false,
+    'no cleanup native mutation precedes its failed started-marker save');
+});
+
+for (const contents of ['{"version":', '{"version":2,"rotations":{}}']) test(`B2 fault recovery: ordinary queue dispatch survives an unreadable primary without any saved trust identity (${contents})`, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-no-trust-history-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const room = new RoomState(dir), client = new FakeClient([member('ordinary-worker')]);
+  fs.writeFileSync(path.join(dir, 'queue-dispatch.json'), contents, { mode: 0o600 });
+  room.queueAdd('ordinary work without migration', 'ordinary-worker');
+  const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now: () => NOW, settleMs: 0, tickMs: 3600000 });
+  t.after(() => dispatcher.close()); await dispatcher.start();
+  assert.equal(client.sends('ordinary-worker').length, 1);
+  assert.equal(room.directoryTrustIsolation(), undefined, 'the default path does not latch a new trust hold');
+});
+
+test('B2 fault recovery: the held successor accepts only its matching created-stage rotation handoff', async t => {
+  const f = await trustFaultSetup(t); f.record.phase = 'created'; f.dispatcher.save();
+  assert.ok(f.room.directoryTrustIsolation().holds[f.fresh.id]);
+  await assert.rejects(f.dispatcher.send(f.fresh, 'ordinary automatic work', 'integration-handoff'), error => error.notSent === true);
+  assert.equal(f.client.sends(f.fresh.id).length, 0);
+  await f.dispatcher.send(f.fresh, 'the saved rotation handoff', `rotation-handoff:${f.old.id}`);
+  assert.equal(f.client.sends(f.fresh.id).length, 1, 'quarantine permits the specific handoff needed to complete this rotation');
+});
+
+test('B2 fault recovery: restoring a valid primary re-evaluates unknown identities but keeps its successor held', async t => {
+  const f = await trustFaultSetup(t), primary = fs.readFileSync(f.dispatcher.file, 'utf8');
+  const metadata = JSON.parse(fs.readFileSync(f.room.file, 'utf8')); delete metadata.directoryTrustIsolation;
+  fs.writeFileSync(f.room.file, JSON.stringify(metadata), { mode: 0o600 });
+  const bad = JSON.parse(primary); bad.rotations.a.trustOwner.controlRevision = -1;
+  fs.writeFileSync(f.dispatcher.file, JSON.stringify(bad), { mode: 0o600 });
+  const held = restoreTrustFixture(t, f); await held.dispatcher.start();
+  assert.equal(f.client.sends().length, 0); assert.equal(held.notifications.filter(n => n === 'trustStateUnknown').length, 1);
+  await held.dispatcher.close();
+  fs.writeFileSync(f.dispatcher.file, JSON.stringify({ version: 1, rotations: {} }), { mode: 0o600 });
+  const empty = restoreTrustFixture(t, f); await empty.dispatcher.start();
+  assert.equal(f.client.sends().length, 0, 'an empty rewritten primary cannot prove lost identities');
+  await empty.dispatcher.close();
+  fs.writeFileSync(f.dispatcher.file, primary, { mode: 0o600 });
+  const recovered = restoreTrustFixture(t, f); await recovered.dispatcher.start();
+  assert.equal(f.client.sends(f.healthy.id).length, 1, 'unrelated work resumes from restored identity evidence');
+  assert.equal(f.client.sends(f.fresh.id).length, 0, 'recovery does not authorize the unhanded successor');
+  assert.equal(recovered.room.directoryTrustIsolation().unknown, false);
+  assert.equal(recovered.notifications.filter(n => n === 'trustStateUnknown').length, 0);
 });
 
 for (const action of ['log', 'space', 'os']) for (const boundary of ['before', 'after']) test(`B2 receipt: timeout ${action} ${boundary}-call interruption never replays that cleanup notice`, async t => {
@@ -2326,7 +2584,7 @@ test('B2 receipt boundary: a stop applied before its confirmation save is observ
 test('B2 receipt boundary: an unsuccessful started-stop write cannot launch the native mutation', async t => {
   const f = trustTimeoutSetup(t); expiredTrustCleanup(f); const save = f.dispatcher.save.bind(f.dispatcher);
   f.dispatcher.save = () => { if (f.record.trustCleanup.stop.state === 'started') throw Error('synthetic stop-state write failure'); return save(); };
-  await assert.rejects(f.at(NOW + 1), /stop-state write failure/);
+  await assert.doesNotReject(f.at(NOW + 1), 'one cleanup write failure is isolated from the dispatcher pass');
   assert.equal(f.record.trustCleanup.stop.state, 'pending'); assert.equal(f.record.trustCleanup.stop.attempts, 0);
   assert.equal(f.client.calls.some(c => ['stop', 'stopUnusedSuccessor'].includes(c[0])), false);
 });
@@ -2362,7 +2620,7 @@ test('B2 receipt boundary: a failed leave-state save leaves native membership un
   const f = trustTimeoutSetup(t); expiredTrustCleanup(f, 'confirmed', 1); f.fresh.state = 'ended'; f.fresh.roomIds = ['shared']; f.fresh.roomId = 'shared'; saveTrustFixture(f);
   let leaves = 0; f.room.membership = async () => { leaves++; }; const save = f.dispatcher.save.bind(f.dispatcher);
   f.dispatcher.save = () => { if (f.record.trustCleanup.rooms.shared === 'started') throw Error('synthetic leave-state write failure'); return save(); };
-  await assert.rejects(f.at(NOW + 1), /leave-state write failure/);
+  await assert.doesNotReject(f.at(NOW + 1), 'one cleanup write failure is isolated from the dispatcher pass');
   assert.equal(f.record.trustCleanup.rooms.shared, 'pending'); assert.equal(leaves, 0); assert.deepEqual(f.fresh.roomIds, ['shared']);
 });
 
@@ -2390,4 +2648,69 @@ test('B2 receipt isolation: a new unrelated exchange that starts during the stop
   assert.equal(leaves, 0, 'the room run is checked after the asynchronous stop, before membership can pause it');
   assert.deepEqual(f.client.state.rooms[0].run, unrelatedRun());
   assert.equal(f.record.trustCleanup.rooms.shared, 'pending'); assert.equal(f.old.state, 'idle');
+});
+
+function sharedWarningSetup(t, damage, primary) {
+  const { dir, room } = roomSetup(t);
+  room.rename('Shared metadata before damage');
+  const otherRoom = room.create('Independent healthy space');
+  const worker = member('warning-worker', { cwd: '/synthetic/project', roomIds: [otherRoom], roomId: null });
+  const old = member('warning-old', { cwd: '/synthetic/project', roomIds: [otherRoom], roomId: null,
+    createdAt: NOW - 30 * HOUR, lastActivityAt: NOW - HOUR, messages: heavyMessages() });
+  const queued = room.queueAdd('continue independent work', worker.id, otherRoom);
+  const priorEvents = room.metadata(otherRoom).events.map(event => event.id);
+  const file = path.join(dir, 'queue-dispatch.json');
+  const ordinary = { phase: 'kept', oldNativeId: 'native-unrelated-rest', name: 'Unrelated resting member', roomIds: [otherRoom], keptAt: NOW };
+  if (primary === 'ordinary') fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { 'unrelated-rest': ordinary } }), { mode: 0o600 });
+  else if (primary === 'ordinary-rejected') fs.writeFileSync(file, JSON.stringify({ version: 1,
+    rotations: { 'unrelated-rest': ordinary, 'rejected-ordinary': { phase: 'invalid-phase', oldNativeId: 'native-rejected', name: 'Rejected ordinary record', roomIds: [otherRoom] } } }), { mode: 0o600 });
+  else if (primary === 'unreadable') fs.writeFileSync(file, '{"version":', { mode: 0o600 });
+  if (damage === 'corrupt shared JSON') fs.writeFileSync(room.file, '{"version":', { mode: 0o600 });
+  else fs.chmodSync(room.file, 0o644);
+  const damagedBytes = fs.readFileSync(room.file, 'utf8'), loaded = new RoomState(dir);
+  assert.ok(loaded.warning, 'the warning comes from an actual failed shared metadata read');
+  assert.equal(loaded.spacesWarning, '', 'the other-space store remains valid');
+  const client = new FakeClient([worker, old]);
+  client.state.rooms.push({ id: otherRoom, revision: 0, run: null, messages: [] });
+  fakeMembership(loaded, client);
+  const notifications = [], dispatcher = new rules.QueueDispatcher({ roomState: loaded, dataDir: dir,
+    connect: async () => client, now: () => NOW, settleMs: 0, tickMs: 3600000,
+    sampleProcesses: async () => '', samplePressure: async () => '1', notify: kind => notifications.push(kind) });
+  dispatcher.idleSince.set(worker.id, NOW - 60000);
+  t.after(() => dispatcher.close());
+  return { dir, room: loaded, client, dispatcher, worker, old, otherRoom, queued, priorEvents, notifications, damagedBytes };
+}
+
+for (const damage of ['corrupt shared JSON', 'unsafe shared permissions']) for (const primary of ['missing', 'ordinary', 'ordinary-rejected']) test(`B2 shared warning: ${damage} with ${primary} primary does not quarantine another space`, async t => {
+  const f = sharedWarningSetup(t, damage, primary);
+  await f.dispatcher.start();
+  assert.equal(f.client.sends(f.worker.id).length, 0, 'the existing shared-record permission check continues to refuse queue delivery');
+  assert.throws(() => f.room.assertAvailable(f.worker.id, true, f.otherRoom), error => error.message === f.room.warning &&
+    error.uiMessage?.key === f.room.warningUiMessage.key, 'the shared warning is still the reason queue delivery is refused');
+  assert.equal(f.client.sends(f.old.id).length, 1, 'the other space can request its normal content rotation');
+  assert.match(f.client.sends(f.old.id)[0][2], /【NAW 换会话】/);
+  assert.equal(f.dispatcher.rotations[f.old.id].phase, 'requested');
+  assert.equal(f.notifications.includes('trustStateUnknown'), false, 'ordinary metadata damage does not invent migration quarantine');
+  if (typeof f.dispatcher.trustAdmission === 'function') assert.equal(f.dispatcher.trustAdmission().quarantineUnknown, false);
+  assert.ok(f.room.warning, 'the shared-store warning remains visible');
+  const persisted = new RoomState(f.dir), other = persisted.metadata(f.otherRoom);
+  assert.ok(persisted.warning); assert.equal(persisted.spacesWarning, '');
+  assert.equal(other.queue.find(item => item.id === f.queued).status, 'queued');
+  for (const id of f.priorEvents) assert.ok(other.events.some(event => event.id === id), 'existing other-space events survive');
+  assert.equal(other.events.some(event => event.uiMessage?.key === 'notice.queue.dispatched'), false);
+  assert.ok(other.events.some(event => event.uiMessage?.key === 'notice.rotation.requested'));
+  assert.equal(f.client.calls.some(call => call[0] !== 'dispatch' || call[1] !== f.old.id), false, 'only the already-authorized rotation request reaches a native session');
+  assert.equal(fs.readFileSync(f.room.file, 'utf8'), f.damagedBytes, 'normal work does not repair or overwrite the unreadable shared store');
+});
+
+test('B2 shared warning: an unreadable primary plus shared metadata damage still holds unproven sessions', async t => {
+  const f = sharedWarningSetup(t, 'corrupt shared JSON', 'unreadable');
+  await f.dispatcher.start();
+  assert.equal(f.client.calls.length, 0, 'unreadable migration evidence cannot authorize dispatch, creation, stop, or native input');
+  assert.deepEqual(f.notifications, ['trustStateUnknown']);
+  assert.ok(f.room.warning);
+  const persisted = new RoomState(f.dir), other = persisted.metadata(f.otherRoom);
+  assert.equal(other.queue.find(item => item.id === f.queued).status, 'queued');
+  assert.deepEqual(other.events.map(event => event.id), f.priorEvents);
+  assert.equal(fs.readFileSync(f.room.file, 'utf8'), f.damagedBytes);
 });

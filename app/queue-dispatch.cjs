@@ -165,6 +165,27 @@ function trustRecoveryPending(record) {
 function quarantinedSuccessor(record) {
   return trustFailure(record) && !cleanupComplete(record);
 }
+const dictionary = value => value && typeof value === 'object' && !Array.isArray(value);
+const trustRecord = record => dictionary(record) && (record.phase === 'waiting-trust' ||
+  ['trustOwner', 'trustEffects', 'trustCleanup', 'trustNoticeId'].some(key => Object.hasOwn(record, key)));
+const movedSuccessor = record => dictionary(record) && validId(record.newId) &&
+  typeof record.newCwd === 'string' && record.newCwd !== record.cwd;
+const validTrustFault = fault => dictionary(fault) && validId(fault.reason) && validTrustReceipt(fault.receiptId);
+function trustIsolation(raw) {
+  const valid = dictionary(raw) && raw.version === 1 && dictionary(raw.holds) &&
+    dictionary(raw.faults) && Object.values(raw.faults).every(validTrustFault) &&
+    dictionary(raw.notices) && Object.values(raw.notices).every(value => value === true) && typeof raw.unknown === 'boolean';
+  return { version: 1, holds: dictionary(raw?.holds) ? { ...raw.holds } : {},
+    faults: dictionary(raw?.faults) ? Object.fromEntries(Object.entries(raw.faults).filter(([, fault]) => validTrustFault(fault))) : {},
+    notices: dictionary(raw?.notices) ? Object.fromEntries(Object.entries(raw.notices).filter(([, value]) => value === true)) : {},
+    unknown: raw !== undefined && (!valid || raw.unknown),
+    ...(raw !== undefined && !valid ? { unreadable: raw } : raw?.unreadable !== undefined ? { unreadable: raw.unreadable } : {}) };
+}
+function validTrustHold(hold) {
+  const label = text => typeof text === 'string' && text.length <= 960 && !/[\u0000-\u001f]/u.test(text);
+  return dictionary(hold) && validId(hold.oldId) && (hold.receiptId === null || validTrustReceipt(hold.receiptId)) &&
+    Array.isArray(hold.roomIds) && hold.roomIds.every(validId) && label(hold.name) && label(hold.newName);
+}
 
 function validText(value, limit) {
   if (typeof value !== 'string') {
@@ -641,7 +662,7 @@ function recordCount(session) {
 
 // Why a member is due for rotation now: 'content', 'memory' or null.
 function rotationReason(session, now, options, rotations) {
-  if (!['claude', 'codex'].includes(session.provider) || rotations[session.id]) {
+  if (!['claude', 'codex'].includes(session.provider) || rotations[session.id] || options.blockedRotations?.has(session.id)) {
     return null;
   }
   // A kept old session already has a successor carrying its work; the person ends it when done.
@@ -696,6 +717,8 @@ function queueVacancies(input) {
   const busy = new Set((input.actions || []).filter(action => ['dispatch', 'rotate'].includes(action.kind)).map(action => action.sessionId));
   // The same sessions the planner was told are engaged (B6: the holder of an open handoff) are not vacant either.
   for (const id of Array.isArray(input.engaged) ? input.engaged : []) busy.add(id);
+  for (const id of input.heldSessions || []) busy.add(id);
+  if (input.quarantineUnknown) for (const session of input.sessions || []) busy.add(session.id);
   for (const [id, rotation] of Object.entries(input.rotations || {})) {
     if (quarantinedSuccessor(rotation) && rotation.newId !== id) busy.add(rotation.newId);
     if (rotation && !RESTING_PHASES.includes(rotation.phase)) {
@@ -730,6 +753,7 @@ function planDispatch(input) {
   const quietMs = input.quietMs ?? QUIET_BEFORE_ROTATE_MS;
   const quietMemoryMs = input.quietMemoryMs ?? QUIET_MEMORY_MS;
   const rotationOptions = {
+    blockedRotations: input.blockedRotations,
     contentLimits,
     handedOff: input.handedOff,
     waitingModel: input.waitingModel,
@@ -758,6 +782,8 @@ function planDispatch(input) {
   // Sessions the caller says are engaged in something else of NAW's own (B6: the session an open
   // integration handoff was sent to) start out busy: no queued item, no rotation.
   const busy = new Set(Array.isArray(input.engaged) ? input.engaged : []);
+  for (const id of input.heldSessions || []) busy.add(id);
+  if (input.quarantineUnknown) for (const session of sessions) busy.add(session.id);
   let rotationSlots = MAX_ACTIVE_ROTATIONS;
   for (const id of Object.keys(rotations)) {
     const record = rotations[id];
@@ -1424,28 +1450,34 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-// A private, owner-only file with well-formed records; anything else is ignored.
-function readRotations(file, now) {
+// Read each owner-only record independently; rejected rows retain their identity
+// for quarantine rather than disabling unrelated queues or authorizing cleanup.
+function readRotations(file, now, faults = {}) {
+  faults.rejected = {};
+  const reject = (id, record) => Object.defineProperty(faults.rejected, id, { value: record, enumerable: true, configurable: true, writable: true });
+  const unreadable = reason => { faults.error = reason; return {}; };
   let stat;
   try {
     stat = fs.lstatSync(file);
-  } catch {
-    return {};
+  } catch (error) {
+    return unreadable(error.code === 'ENOENT' ? 'missing' : 'unreadable');
   }
+  faults.identity = { dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, uid: stat.uid };
   const ownerOnly = (stat.mode & 0o077) === 0;
   const mine = !process.getuid || stat.uid === process.getuid();
   if (!stat.isFile() || !ownerOnly || !mine) {
-    return {};
+    return unreadable('unsafe');
   }
   let data;
   try {
     data = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
-    return {};
+    return unreadable('invalid-json');
   }
   if (!data || data.version !== 1 || !data.rotations || typeof data.rotations !== 'object' || Array.isArray(data.rotations)) {
-    return {};
+    return unreadable('invalid-envelope');
   }
+  if (data.quarantinedRotations && typeof data.quarantinedRotations === 'object' && !Array.isArray(data.quarantinedRotations)) faults.rejected = { ...data.quarantinedRotations };
   const result = {};
   for (const oldId of Object.keys(data.rotations)) {
     const record = data.rotations[oldId];
@@ -1456,30 +1488,30 @@ function readRotations(file, now) {
           !['claude', 'codex'].includes(record.provider) || !Array.isArray(record.roomIds) || !record.roomIds.every(validId) ||
           new Set(record.roomIds).size !== record.roomIds.length || typeof record.name !== 'string' || !validTrustReceipt(record.trustNoticeId) ||
           !validTime(record.trustWaitingAt) || typeof record.newCwd !== 'string' || !path.isAbsolute(record.newCwd) || record.newCwd === record.cwd || record.newCwd.includes('\0') || record.newCwd.length > 4096)) {
-      throw Error('Invalid trust receipt state');
+      reject(oldId, record); continue;
     }
     if (!validId(oldId) || !record || typeof record !== 'object' || !ROTATION_PHASES.includes(record.phase)) {
-      continue;
+      reject(oldId, record); continue;
     }
     if (!validId(record.oldNativeId || '') || !Array.isArray(record.roomIds) || typeof record.name !== 'string') {
-      continue;
+      reject(oldId, record); continue;
     }
-    if (record.phase === 'waiting-trust' && (!validId(record.newId) || !validTrustReceipt(record.trustNoticeId) || !validTime(record.trustWaitingAt) || !['claude', 'codex'].includes(record.provider) || !record.newCwd || record.newCwd === record.cwd)) continue;
-    if (record.trustNoticeId !== undefined && !validTrustReceipt(record.trustNoticeId)) continue;
-    if (record.trustNotified !== undefined && typeof record.trustNotified !== 'boolean') continue;
-    if (record.trustWaitingAt !== undefined && !validTime(record.trustWaitingAt)) continue;
+    if (record.phase === 'waiting-trust' && (!validId(record.newId) || !validTrustReceipt(record.trustNoticeId) || !validTime(record.trustWaitingAt) || !['claude', 'codex'].includes(record.provider) || !record.newCwd || record.newCwd === record.cwd)) { reject(oldId, record); continue; }
+    if (record.trustNoticeId !== undefined && !validTrustReceipt(record.trustNoticeId)) { reject(oldId, record); continue; }
+    if (record.trustNotified !== undefined && typeof record.trustNotified !== 'boolean') { reject(oldId, record); continue; }
+    if (record.trustWaitingAt !== undefined && !validTime(record.trustWaitingAt)) { reject(oldId, record); continue; }
     if (record.newId !== undefined && !validId(record.newId)) {
-      continue;
+      reject(oldId, record); continue;
     }
-    if (record.newCwd !== undefined && (typeof record.newCwd !== 'string' || !path.isAbsolute(record.newCwd) || record.newCwd.includes('\0') || record.newCwd.length > 4096)) continue;
+    if (record.newCwd !== undefined && (typeof record.newCwd !== 'string' || !path.isAbsolute(record.newCwd) || record.newCwd.includes('\0') || record.newCwd.length > 4096)) { reject(oldId, record); continue; }
     if (record.newWorktree !== undefined) {
-      try { gitWorktree.planShape(record.newWorktree); } catch { continue; }
-      if (record.newCwd !== record.newWorktree.cwd) continue;
+      try { gitWorktree.planShape(record.newWorktree); } catch { reject(oldId, record); continue; }
+      if (record.newCwd !== record.newWorktree.cwd) { reject(oldId, record); continue; }
     }
     if ((record.trustOwner !== undefined && record.trustOwner !== null && !validTrustProof(record.trustOwner, record.provider)) ||
         (record.trustEffects !== undefined && !validNoticeEffects(record.trustEffects, record.roomIds)) ||
         (record.trustCleanup !== undefined && (!trustFailure(record) || record.newId === oldId || !validTrustCleanup(record.trustCleanup, record)))) {
-      throw Error('Invalid trust receipt state');
+      reject(oldId, record); continue;
     }
     if (record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS && !trustRecoveryPending(record)) {
       continue;
@@ -1491,7 +1523,7 @@ function readRotations(file, now) {
     if (record.phase === 'kept' && now - (record.keptAt || 0) > ROTATE_AFTER_MS) {
       continue;
     }
-    result[oldId] = record;
+    Object.defineProperty(result, oldId, { value: record, enumerable: true, configurable: true, writable: true });
   }
   return result;
 }
@@ -1566,17 +1598,161 @@ class QueueDispatcher {
       this.dirty = true;
       if (this.observeQueueState) this.observeVacancyReadiness(snapshot, this.now());
     };
-    this.rotations = readRotations(this.file, this.now());
+    this.rotationRead = {};
+    this.rotations = readRotations(this.file, this.now(), this.rotationRead);
+    this.rejectedRotations = { ...this.rotationRead.rejected };
+    this.isolation = trustIsolation(this.roomState.directoryTrustIsolation?.());
+    this.persistedTrustHolds = { ...this.isolation.holds };
+    this.isolationDirty = false;
+    this.faultedRotations = new Set();
+    this.faultNoticed = new Set();
     this.notify = options.notify || (() => {});
     this.logFile = path.join(options.dataDir, 'rotation-log.jsonl');
     this.log = this.loadLog();
     this.chainsCache = null;
+    this.restoreTrustIsolation();
     // B6: the engine is built last, for a dispatcher that is complete. One that cannot be built
     // does not take the queue with it: the dispatcher runs without an engine, keeps the fault and
     // tells the person.
     if (typeof options.integration === 'function') {
       try { this.integration = options.integration(this); } catch (error) { this.integrationFault(error); }
     }
+  }
+
+  // Successor identity is in independent existing room metadata. A damaged
+  // rotation row cannot move that identity to a different idle member.
+  isolationWrite() {
+    this.roomState.saveDirectoryTrustIsolation(this.isolation);
+    this.persistedTrustHolds = { ...this.isolation.holds };
+    this.isolationDirty = false;
+  }
+  holdTrustSuccessor(oldId, record) {
+    if (!movedSuccessor(record) || record.newId === oldId || record.handoffConfirmed || cleanupComplete(record)) return;
+    const hold = { oldId, receiptId: record.trustNoticeId || null, roomIds: [...record.roomIds],
+      name: record.name || oldId, newName: record.newName || record.newId };
+    if (!validTrustHold(hold)) throw Error('Invalid directory trust hold');
+    const id = record.newId, prior = this.isolation.holds[id];
+    if (this.isolation.unknown || Object.hasOwn(this.isolation.faults, id) ||
+        prior && (!validTrustHold(prior) || prior.oldId !== oldId)) throw Error('Directory trust isolation needs a decision');
+    if (JSON.stringify(prior) !== JSON.stringify(hold)) {
+      this.isolation.holds = { ...this.isolation.holds, [id]: hold }; this.isolationDirty = true;
+    }
+  }
+  faultTrustSuccessor(id, reason) {
+    if (!Object.hasOwn(this.isolation.faults, id)) {
+      this.isolation.faults = { ...this.isolation.faults, [id]: { reason, receiptId: randomUUID() } };
+      this.isolationDirty = true;
+    }
+    const oldId = this.isolation.holds[id]?.oldId;
+    if (validId(oldId)) this.faultedRotations.add(oldId);
+  }
+  restoreTrustIsolation() {
+    const saved = this.roomState.directoryTrustIsolation?.();
+    // With neither an index nor a readable trust row there is no evidence of
+    // a migration in this installation. Preserve the ordinary legacy fallback.
+    // A saved unknown decision can be re-evaluated after a complete, valid
+    // primary record is restored; an automatically written empty store is not
+    // identity evidence and cannot lift that hold.
+    if (saved?.unknown === true && !this.roomState.warning && !this.rotationRead.error &&
+        !Object.keys(this.rejectedRotations).length && Object.values(this.rotations).some(movedSuccessor) &&
+        Object.entries(this.isolation.holds).every(([id, hold]) => validTrustHold(hold) &&
+          this.rotations[hold.oldId]?.newId === id && (this.rotations[hold.oldId].trustNoticeId || null) === hold.receiptId)) {
+      this.isolation.unknown = false;
+      delete this.isolation.faults['@unknown']; delete this.isolation.notices['fault:@unknown'];
+      this.isolationDirty = true;
+    }
+    const indexed = Object.entries(this.isolation.holds);
+    for (const [id, hold] of indexed) {
+      if (!validId(id)) { this.isolation.unknown = true; this.isolationDirty = true; continue; }
+      const record = validId(hold?.oldId) && this.rotations[hold.oldId];
+      if (!validTrustHold(hold) || !record || record.newId !== id || !movedSuccessor(record) ||
+          (record.trustNoticeId || null) !== hold.receiptId) {
+        this.faultTrustSuccessor(id, this.rotationRead.error ? 'rotation-store-unreadable' : 'record-invalid');
+      } else if (Object.hasOwn(this.isolation.faults, id)) this.faultedRotations.add(hold.oldId);
+      else if (cleanupComplete(record) && !trustRecoveryPending(record) || record.handoffConfirmed === true &&
+          ['handed', 'done', 'kept'].includes(record.phase) && validId(record.handoffTag) && validTime(record.handedAt)) {
+        // A crash between the primary confirmation and its hold release is
+        // recoverable only for this exact, still-valid saved identity pair.
+        try { this.releaseTrustSuccessor(record); }
+        catch { this.faultTrustSuccessor(id, 'release-unconfirmed'); }
+      } else if (record.handoffConfirmed) this.faultTrustSuccessor(id, 'record-invalid');
+    }
+    for (const [oldId, record] of Object.entries(this.rejectedRotations)) {
+      if (indexed.some(([, hold]) => hold?.oldId === oldId)) { this.faultedRotations.add(oldId); continue; }
+      if (!trustRecord(record) && !movedSuccessor(record)) continue;
+      // A rejected row's newId may itself be the damaged field. Without an
+      // independent identity anchor, treating that hint as authoritative could
+      // quarantine an innocent member and release the real successor.
+      this.isolation.unknown = true; this.isolationDirty = true;
+      this.faultedRotations.add(oldId);
+    }
+    // A shared-room read failure alone must not invent migration quarantine.
+    // Existing availability and archive checks still apply independently.
+    const migrationEvidence = Object.values(this.rotations).some(record => trustRecord(record) || movedSuccessor(record)) ||
+      Object.values(this.rejectedRotations).some(record => trustRecord(record) || movedSuccessor(record)) ||
+      Boolean(this.rotationRead.error && this.rotationRead.error !== 'missing');
+    if (this.roomState.warning && migrationEvidence) {
+      this.isolation.unknown = true; this.isolationDirty = true;
+    }
+    if (Object.keys(this.isolation.faults).some(id => id !== '@unknown' && !Object.hasOwn(this.isolation.holds, id))) {
+      this.isolation.unknown = true; this.isolationDirty = true;
+    }
+    for (const [oldId, record] of Object.entries(this.rotations)) {
+      if (this.faultedRotations.has(oldId)) {
+        this.rejectedRotations = { ...this.rejectedRotations, [oldId]: record }; delete this.rotations[oldId]; continue;
+      }
+      try { this.holdTrustSuccessor(oldId, record); }
+      catch { this.faultedRotations.add(oldId); this.isolation.unknown = true; this.isolationDirty = true; }
+    }
+    if (this.isolation.unknown) this.faultTrustSuccessor('@unknown', 'isolation-identity-unreadable');
+    if (this.isolationDirty) {
+      try { this.isolationWrite(); } catch { /* In-memory exclusion remains; no native authority is added. */ }
+    }
+  }
+  trustAdmission() {
+    return { heldSessions: new Set(Object.keys(this.isolation.holds)),
+      blockedRotations: this.faultedRotations, quarantineUnknown: this.isolation.unknown };
+  }
+  async notifyTrustFaults() {
+    let changed = false;
+    for (const [id, fault] of Object.entries(this.isolation.faults)) {
+      const key = `fault:${id}`;
+      if (Object.hasOwn(this.isolation.notices, key) || this.faultNoticed.has(key)) continue;
+      this.isolation.notices = { ...this.isolation.notices, [key]: true }; this.isolationDirty = true;
+      // Saving first gives at most one attempt, not guaranteed delivery. If
+      // saving is unavailable, still tell this running app once.
+      try { this.isolationWrite(); } catch { /* Other spaces must keep working. */ }
+      this.faultNoticed.add(key);
+      changed = true;
+      const hold = this.isolation.holds[id], known = validTrustHold(hold);
+      const record = { oldId: known ? hold.oldId : 'NAW', newId: id, name: known ? hold.name : 'NAW', newName: known ? hold.newName : id };
+      const outcome = id === '@unknown' ? 'trustStateUnknown' : 'trustStateInvalid';
+      const spaces = known ? hold.roomIds : ['shared', ...this.roomState.spaces.rooms.map(room => room.id)];
+      try { this.roomState.rotationEvent(spaces, outcome, this.label(record.oldId, record.name), this.label(id, record.newName), validTrustReceipt(fault?.receiptId) ? fault.receiptId : undefined); } catch { /* OS notice still gets its attempt. */ }
+      try { await this.notify(outcome, record); } catch { /* Never re-arm a saved attempt. */ }
+    }
+    if (changed) try { await this.broadcast(); } catch { /* Keep the saved notice attempt and exclusion. */ }
+  }
+  async isolateTrustRecovery(oldId, record) {
+    this.faultedRotations.add(oldId);
+    if (validId(record?.newId) && record.newId !== oldId) {
+      if (!Object.hasOwn(this.isolation.holds, record.newId)) {
+        this.isolation.holds = { ...this.isolation.holds, [record.newId]: {
+          oldId, receiptId: validTrustReceipt(record.trustNoticeId) ? record.trustNoticeId : null,
+          roomIds: Array.isArray(record.roomIds) ? record.roomIds : [], name: record.name || oldId, newName: record.newName || record.newId } };
+      }
+      this.faultTrustSuccessor(record.newId, 'cleanup-failed');
+    } else { this.isolation.unknown = true; this.faultTrustSuccessor('@unknown', 'isolation-identity-unreadable'); }
+    this.isolationDirty = true;
+    try { this.isolationWrite(); } catch { /* Memory still fences the affected record. */ }
+    await this.notifyTrustFaults();
+  }
+  releaseTrustSuccessor(record) {
+    const id = record.newId, hold = this.isolation.holds[id];
+    if (!validTrustHold(hold) || Object.hasOwn(this.isolation.faults, id) || hold.receiptId !== (record.trustNoticeId || null)) return;
+    const prior = this.isolation.holds, holds = { ...prior }; delete holds[id];
+    this.isolation.holds = holds; this.isolationDirty = true;
+    try { this.isolationWrite(); } catch (error) { this.isolation.holds = prior; throw error; }
   }
 
   // The append-only rotation record: every session id and native id involved.
@@ -1674,12 +1850,38 @@ class QueueDispatcher {
   }
 
   save() {
+    for (const [oldId, record] of Object.entries(this.rotations)) {
+      if (!this.faultedRotations.has(oldId)) this.holdTrustSuccessor(oldId, record);
+    }
+    if (this.isolationDirty) {
+      try { this.isolationWrite(); }
+      catch (error) {
+        // An unpersisted new hold must stop that trust operation before native
+        // side effects. An old fault's unavailable notice/index write must not
+        // stop an unrelated same-directory rotation from saving its own step.
+        const unanchored = Object.entries(this.rotations).some(([oldId, record]) =>
+          !this.faultedRotations.has(oldId) && movedSuccessor(record) && !record.handoffConfirmed && !cleanupComplete(record) &&
+          JSON.stringify(this.isolation.holds[record.newId]) !== JSON.stringify(this.persistedTrustHolds[record.newId]));
+        if (unanchored) throw error;
+      }
+    }
+    // Keep unreadable bytes (or the unsafe link itself) for recovery before
+    // replacing the primary store. Never follow a symlink or clobber a writer.
+    if (this.rotationRead.error && this.rotationRead.error !== 'missing') {
+      const current = fs.lstatSync(this.file), prior = this.rotationRead.identity;
+      if (!prior || ['dev', 'ino', 'size', 'mtimeMs', 'uid'].some(key => current[key] !== prior[key]) ||
+          process.getuid && current.uid !== process.getuid()) throw Error('Rotation store changed during recovery');
+      fs.renameSync(this.file, `${this.file}.unreadable.${randomUUID()}`);
+      this.rotationRead.error = null;
+    }
     const temp = `${this.file}.${randomUUID()}.tmp`;
-    fs.writeFileSync(temp, JSON.stringify({ version: 1, rotations: this.rotations }), { mode: 0o600 });
+    fs.writeFileSync(temp, JSON.stringify({ version: 1, rotations: this.rotations,
+      ...(Object.keys(this.rejectedRotations).length ? { quarantinedRotations: this.rejectedRotations } : {}) }), { mode: 0o600 });
     fs.renameSync(temp, this.file);
   }
 
   async start() {
+    await this.notifyTrustFaults();
     this.timer = setInterval(() => this.schedule(), this.tickMs);
     if (this.timer.unref) {
       this.timer.unref();
@@ -1776,7 +1978,7 @@ class QueueDispatcher {
   activeRotations() {
     const ids = [];
     for (const id of Object.keys(this.rotations)) {
-      if (this.rotations[id] && !RESTING_PHASES.includes(this.rotations[id].phase)) {
+      if (this.rotations[id] && !this.faultedRotations.has(id) && !RESTING_PHASES.includes(this.rotations[id].phase)) {
         ids.push(id);
       }
     }
@@ -1785,7 +1987,7 @@ class QueueDispatcher {
 
   // Metadata only, no session state: is there anything to send, settle or rotate?
   hasOpenWork() {
-    if (this.activeRotations().length || Object.values(this.rotations).some(trustRecoveryPending)) {
+    if (this.activeRotations().length || Object.entries(this.rotations).some(([id, record]) => !this.faultedRotations.has(id) && trustRecoveryPending(record))) {
       return true;
     }
     // Integration work that can move without the person keeps the passes going: a space record
@@ -1931,7 +2133,7 @@ class QueueDispatcher {
     }
     this.listen(this.client);
     const rotating = this.activeRotations().length > 0;
-    const recoveringTrust = Object.values(this.rotations).some(trustRecoveryPending);
+    const recoveringTrust = Object.entries(this.rotations).some(([id, record]) => !this.faultedRotations.has(id) && trustRecoveryPending(record));
     const due = this.dirty || rotating || recoveringTrust || now - this.lastFullPass >= FULL_PASS_MS || this.settlingSoon(now) || now === this.lastMaintenance;
     if (!due) {
       return;
@@ -1963,7 +2165,8 @@ class QueueDispatcher {
       memory: sample.memory,
       memoryLimit: sample.limit,
       memoryMinAgeMs: this.memoryMinAgeMs,
-      rotations: this.rotations,
+      rotations: Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id))),
+      ...this.trustAdmission(),
       engaged,
     });
     for (const action of actions) {
@@ -1980,7 +2183,9 @@ class QueueDispatcher {
     }
     if (this.observeQueueState) await this.observeQueueState(queueVacancies({ ...current.snapshot,
       idleSince: this.vacancySince, humanAt: this.humanAt, now: current.now,
-      settleMs: this.settleMs, humanQuietMs: this.humanQuietMs, rotations: this.rotations, actions, engaged }));
+      settleMs: this.settleMs, humanQuietMs: this.humanQuietMs,
+      rotations: Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id))),
+      actions, engaged, ...this.trustAdmission() }));
     if (this.integration && !this.closed) await this.integrate();
   }
 
@@ -2062,9 +2267,11 @@ class QueueDispatcher {
 
   // Read fresh state once, right before sending; skip quietly if the member moved on.
   async freshReady(sessionId) {
+    if (this.isolation.unknown || Object.hasOwn(this.isolation.holds, sessionId)) return null;
     if (Object.values(this.rotations).some(record => quarantinedSuccessor(record) && record.newId === sessionId)) return null;
     await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
     const current = this.view();
+    if (this.isolation.unknown || Object.hasOwn(this.isolation.holds, sessionId)) return null;
     if (Object.values(this.rotations).some(record => quarantinedSuccessor(record) && record.newId === sessionId)) return null;
     const session = current.snapshot.sessions.find(s => s.id === sessionId);
     if (!session || !sessionReady(session, current.snapshot.wakePolicy).ready) {
@@ -2090,6 +2297,16 @@ class QueueDispatcher {
 
   // The backend's own NAW input: no takeover, no human-input semantics.
   async send(session, text, itemId) {
+    if (this.isolation.unknown) throw Object.assign(Error('directory-trust-identity-unknown'), { notSent: true });
+    if (Object.hasOwn(this.isolation.holds, session.id)) {
+      // Other automatic senders use this same boundary. Only the rotation's
+      // own validated handoff may enter its held successor, never a queue or
+      // integration message that bypassed the queue planner.
+      const handoff = Object.entries(this.rotations).some(([id, record]) => !this.faultedRotations.has(id) &&
+        record.phase === 'created' && record.newId === session.id && itemId === `rotation-handoff:${id}` &&
+        this.isolation.holds[session.id].receiptId === (record.trustNoticeId || null));
+      if (!handoff) throw Object.assign(Error('directory-trust-successor-held'), { notSent: true });
+    }
     const entry = this.preflight(session);
     const call = entry.client.call('dispatch', session.id, text, session.nativeId, itemId);
     const result = await withTimeout(call, CALL_TIMEOUT_MS, 'send-timeout');
@@ -2302,9 +2519,9 @@ class QueueDispatcher {
   async advanceRotations(snapshot, now) {
     for (const [oldId, record] of Object.entries(this.rotations)) {
       if (this.closed) return;
-      if (trustRecoveryPending(record)) {
+      if (!this.faultedRotations.has(oldId) && trustRecoveryPending(record)) {
         try { await this.resumeTrustCleanup(oldId, record, snapshot, now); }
-        catch (error) { if (!this.closed) throw error; }
+        catch { if (!this.closed) await this.isolateTrustRecovery(oldId, record); }
       }
     }
     for (const oldId of this.activeRotations()) {
@@ -2316,8 +2533,16 @@ class QueueDispatcher {
         // A closing window rejects its pending RPC; the next app must resume
         // the persisted creating receipt, not inherit a shutdown failure.
         if (!this.closed) {
+          if (this.isolationDirty && Object.hasOwn(this.isolation.holds, record.newId)) {
+            await this.isolateTrustRecovery(oldId, record); continue;
+          }
           try { await this.failRotation(oldId, record, error.message || 'rotation-failed', now, snapshot); }
-          catch (cleanupError) { if (!this.closed) throw cleanupError; }
+          catch (cleanupError) {
+            if (!this.closed) {
+              if (trustRecord(record)) await this.isolateTrustRecovery(oldId, record);
+              else throw cleanupError;
+            }
+          }
         }
       }
     }
@@ -2503,6 +2728,7 @@ class QueueDispatcher {
         : (timedOut && cleanup.stop.state !== 'confirmed' ? 'trustTimeoutUnconfirmed' : 'trustCleanupUnconfirmed'));
     }
     await this.trustNotices(oldId, record, cleanup.notices, cleanup.outcome || 'trustCleanupUnconfirmed', 'failed', cleanup.id);
+    if (cleanupComplete(record)) this.releaseTrustSuccessor(record);
     await this.broadcast();
   }
 
@@ -2678,6 +2904,7 @@ class QueueDispatcher {
         record.newNativeId = fresh.nativeId;
       }
       this.save();
+      this.releaseTrustSuccessor(record);
       // Ending a session pauses running collaborations; wait until none is running, but not forever.
       let collaborating = false;
       for (const room of snapshot.rooms || []) {
