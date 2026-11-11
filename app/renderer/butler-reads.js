@@ -36,8 +36,11 @@
     const valid = page => page && Array.isArray(page.records) && Number.isSafeInteger(page.throughSequence) && page.throughSequence >= 0 && typeof page.truncated === 'boolean' &&
       Number.isSafeInteger(page.nextAfterSequence) && page.nextAfterSequence >= 0;
     const ask = async request => { const page = await api.butlerReview('reads', request); if (!valid(page)) throw Error('unreadable'); return page; };
-    // Whatever goes wrong while drawing what was read, the dialog never stays on "reading". It says that the page
+    // Whatever goes wrong while drawing what was read, the dialog does not stay on "reading". It says that the page
     // could not show what it read: the log was read, so this is not "the log cannot be read", and not an empty log.
+    // Only that case is caught here. A failure while drawing "reading", "cannot be read" or this sentence itself is
+    // thrown on: when the page is being opened the window shows its failure view; from Refresh or "earlier records"
+    // nothing catches it.
     function draw() { try { paint(); } catch (error) { if (state !== 'ready') throw error; state = 'broken'; paint(); } }
     function paint() {
       const loading = state === 'loading';

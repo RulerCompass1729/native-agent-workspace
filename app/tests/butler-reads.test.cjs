@@ -169,7 +169,8 @@ test('whatever fails while drawing what was read, the dialog says the page could
   for (const wrong of [zh('butler.reads.unavailable'), zh('butler.reads.unavailableHelp'), zh('butler.reads.empty'), '还没有读过']) assert.equal(f.dialog.text().includes(wrong), false, wrong);
   assert.deepEqual([f.rows().length, f.button('refresh').disabled, f.button('refresh').textContent, f.today().hidden, f.full().hidden, f.listed().hidden], [0, false, '再读一次', true, true, true]);
   broken = false; await f.button('refresh').fire('click'); assert.deepEqual([f.dialog.dataset.readsState, f.rows().length], ['records', 5]);
-  // The same for a clock that cannot be read when the log arrives.
+  // Not the same for a clock that cannot be read when the log arrives: that is still said as a log that cannot be
+  // read, though it was read. The window's clock is Date.now, which does not throw, so nothing reaches this today.
   const g = fixture(few(t), { now: () => { throw Error('no clock'); } }); await g.reads.open(); assert.equal(g.dialog.dataset.readsState, 'unavailable');
 });
 
@@ -428,7 +429,8 @@ test('a read log page that could not be set up says so and why, in the page\'s o
     w.butlerEntry.options.openReads();
     const dialog = w.elements['butler-reads-dialog'] || w.page.added[0];
     assert.ok(dialog, 'There is a page to say it in, made if the window has none'); assert.equal(dialog.open, true);
-    assert.deepEqual([dialog.dataset.readsState, dialog.dataset.readsFailure, dialog.className.includes('butler-reads') || Boolean(w.elements['butler-reads-dialog'])], ['page-failed', reason, true]);
+    // The page's own element when the window has it; one made to look like it when it has not.
+    assert.deepEqual([dialog.dataset.readsState, dialog.dataset.readsFailure, reason === 'element' ? dialog.className.split(' ').includes('butler-reads') && dialog.id === 'butler-reads-dialog' : dialog === w.elements['butler-reads-dialog']], ['page-failed', reason, true]);
     const [title, text, actions] = dialog.children;
     assert.deepEqual([title.tag, title.textContent, text.textContent, text.attributes.role, actions.children.map(button => [button.dataset.action, button.textContent])], ['h2', '大管家读过什么', sentences[reason], 'alert', [['done', '完成']]]);
     assert.equal(dialog.attributes['aria-labelledby'], title.id); assert.equal(w.page.activeElement, actions.children[0], 'The focus is on Done');

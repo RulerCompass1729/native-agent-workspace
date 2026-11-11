@@ -11490,3 +11490,33 @@ Not verified, or known:
   nothing says why. The dispatch limited this change to the read log page.
 - The sentences are new text the person has not seen. They are on the
   screenshots kept with the private evidence.
+- A failure while drawing "reading", "cannot be read" or the drawing-failure
+  sentence itself is not caught when it comes from Refresh or "earlier
+  records": the page can then be left half drawn. When the page is being
+  opened, the window's failure view takes over. No way to provoke it is known.
+- A clock that cannot be read as the log arrives is still said as "the log
+  cannot be read", though the log was read. The window's clock does not throw.
+- If the file the page's program loads its view from is missing, the reason
+  given is "setting it up failed", which is true and less exact than it could
+  be.
+- After a failure at opening, the failure view stays for the life of that
+  window even if the cause was passing; the sentence says to reopen NAW.
+
+Independent read-only review (one fresh session, the code as rebased onto
+main; the CLI reported the model as claude-opus-5-5): `PASS_WITH_NOTES`,
+nothing blocking. It followed each of the six ways the page can fail to a
+statement on the page, found no effect on the daily window with the switch
+closed, and checked the sentence about the log file against the page's one
+call, the main process's answer and the log's read. Its notes are the four
+items above and three about the tests; of those, one assertion that could
+not fail in two of three cases now checks what it names, and a comment that
+claimed more than the code does is narrowed. Those two edits and this record
+were made after the review and change no behaviour. The reviewer read the
+run results from before the rebase; the code patch is the same after it
+(same patch id), and the full suite and the window check were run again on
+the rebased commit by the author.
+
+One failure was seen once in a full run made while the reviewer was reading
+on the same machine: a background-conversation test about a refused
+operation's summary id, in files this change does not touch. That file
+passed alone three times, and the full run made alone passes.
