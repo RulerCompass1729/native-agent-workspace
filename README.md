@@ -176,6 +176,14 @@ interrupted task.
 
 `npm test` runs local regression checks without model calls. `npm run test:reading` checks selection, scrolling and reading recovery with synthetic output in the actual hidden application. `npm run test:desktop` checks the hidden Electron lifecycle without sending prompts; it reuses a single private test profile and refuses a second test runner. Visible desktop and physical input acceptance remain separate checks. See [test policy](docs/testing.md).
 
+Directory-trust waits during a gated session-directory migration use the same
+10-minute default as an ordinary new session's startup deadline. Set
+`NAW_QUEUE_DIRECTORY_TRUST_TIMEOUT_MS` to a positive decimal safe integer in milliseconds
+before starting the app to change this limit; missing or invalid values use
+600000 ms. It is read at application startup and uses the saved wait start, so
+restarting does not restart the budget. Automatic directory migration remains
+disabled while its native trust checks are incomplete.
+
 ## Local macOS app build
 
 `npm run package:mac` produces an Apple Silicon drag-to-install `.dmg`

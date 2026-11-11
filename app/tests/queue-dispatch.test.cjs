@@ -734,7 +734,7 @@ async function projectRotation(t, extra = {}) {
     if (method === 'create') extra.afterCreate?.(client.state.sessions.find(session => session.id === result));
     return result;
   };
-  const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now: () => NOW, settleMs: 0, tickMs: 3600000, creationDefaults: () => extra.defaults || { repository: '/synthetic/repo', directory: null }, migrateDirectories: extra.enabled !== false, notify: extra.notify });
+  const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now: () => NOW, settleMs: 0, tickMs: 3600000, creationDefaults: () => extra.defaults || { repository: '/synthetic/repo', directory: null }, migrateDirectories: extra.enabled !== false, notify: extra.notify, directoryTrustTimeoutMs: extra.directoryTrustTimeoutMs });
   t.after(() => dispatcher.close());
   await dispatcher.start(); await dispatcher.schedule();
   return { client, dispatcher, dir, record: dispatcher.rotations.a, automatic };
@@ -1747,12 +1747,12 @@ for (const recordedDirectory of [false, true]) test(`B2: joining ${recordedDirec
 const trustPrompt = provider => ({ kind: 'directory-trust', provider, source: 'native-terminal' });
 test('B2: a migrated successor asking directory trust pauses before joining, does not accept or send, and announces once', async t => {
   const notices = [];
-  const { client, dispatcher, record } = await projectRotation(t, { notify: (kind, value) => notices.push([kind, value.newId]), record: { oldControl: 0 }, afterCreate(fresh) { fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('claude'); } });
+  const { client, dispatcher, record } = await projectRotation(t, { directoryTrustTimeoutMs: 48 * HOUR, notify: (kind, value) => notices.push([kind, value.newId]), record: { oldControl: 0 }, afterCreate(fresh) { fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('claude'); } });
   const room = dispatcher.roomState, id = room.queueAdd('still owned by old member', 'a');
   assert.equal(record.phase, 'waiting-trust');
   assert.equal(client.state.sessions.find(s => s.id === record.newId).roomIds.length, 0, 'it has not joined or acquired the old queue');
   for (const elapsed of [1, 11 * 60000, 24 * HOUR]) await dispatcher.advanceRotations(client.snapshot(), NOW + elapsed);
-  assert.equal(record.phase, 'waiting-trust', 'human trust has no generic ready timeout');
+  assert.equal(record.phase, 'waiting-trust', 'the explicitly configured two-day trust deadline has not expired');
   assert.equal(client.calls.some(c => ['stop', 'dispatch', 'approve', 'answer', 'input'].includes(c[0])), false);
   assert.equal(room.queueItems('shared').find(item => item.id === id).assignee, 'a');
   const decisions = room.value.events.filter(e => e.uiMessage?.key === 'notice.rotation.needsTrust');
@@ -1791,7 +1791,7 @@ test('B2: a trust wait observed after joining returns only queued assignments to
   await dispatcher.advanceRotations(client.snapshot(), NOW + 1000);
   assert.equal(room.queueItems('shared').find(item => item.id === id).assignee, 'a');
   room.queueCancel(id);
-  await dispatcher.advanceRotations(client.snapshot(), NOW + 20 * 60000);
+  await dispatcher.advanceRotations(client.snapshot(), NOW + 4 * 60000);
   assert.equal(room.queueItems('shared').find(item => item.id === id).status, 'cancelled');
   assert.equal(client.sends(record.newId).length, 0);
 });
@@ -1852,4 +1852,142 @@ test('B2: persisted directory-trust wait validates its successor and decision re
   const damaged = structuredClone(room.value); damaged.events.at(-1).rotationReceipt = { invalid: true };
   fs.writeFileSync(room.file, JSON.stringify(damaged), { mode: 0o600 });
   assert.ok(new RoomState(dir).warning, 'malformed saved decision metadata is rejected on reload');
+});
+
+// Load the same persisted waiting receipt as production; no native create or model is needed.
+function trustTimeoutSetup(t, options = {}) {
+  const { dir, room } = roomSetup(t), notifications = [];
+  const old = member('a', { cwd: '/synthetic/old' });
+  const fresh = member('trust-successor', { state: 'starting', cwd: '/synthetic/new', roomIds: [], roomId: null, nativeStartupPrompt: trustPrompt('claude') });
+  const client = new FakeClient([old, fresh, ...(options.sessions || [])]); fakeMembership(room, client);
+  const record = { phase: 'waiting-trust', oldId: old.id, oldNativeId: old.nativeId, oldControl: 0,
+    requestedAt: NOW - 60000, provider: old.provider, cwd: old.cwd, name: old.name, roomIds: ['shared'],
+    newId: fresh.id, newCwd: fresh.cwd, newName: 'Agent a · successor', createdNewAt: NOW, handoff: 'Synthetic saved work',
+    trustWaitingAt: options.waitingAt ?? NOW, trustNoticeId: projectPlan().nonce, trustNotified: true };
+  room.rotationEvent(record.roomIds, 'needsTrust', old.name, record.newName, record.trustNoticeId);
+  fs.writeFileSync(path.join(dir, 'queue-dispatch.json'), JSON.stringify({ version: 1, rotations: { a: record } }), { mode: 0o600 });
+  let now = NOW;
+  const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: dir, now: () => now,
+    connect: async () => client, settleMs: 0, tickMs: 3600000, directoryTrustTimeoutMs: options.timeoutMs,
+    notify: kind => notifications.push(kind) });
+  dispatcher.client = client; dispatcher.idleSince.set(old.id, NOW - 60000); t.after(() => dispatcher.close());
+  return { dir, room, client, old, fresh, notifications, dispatcher, record: dispatcher.rotations.a,
+    async at(time) { now = time; await dispatcher.advanceRotations(client.snapshot(), now); } };
+}
+
+test('B2 timeout: a positive configured deadline waits through its last millisecond, then fails and stops only the successor once', async t => {
+  const f = trustTimeoutSetup(t, { timeoutMs: '2500' }), queued = f.room.queueAdd('old work survives', f.fresh.id);
+  const call = f.client.call.bind(f.client);
+  f.client.call = async (method, ...args) => {
+    if (method === 'stop') assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir, 'queue-dispatch.json'))).rotations.a.phase, 'failed', 'persist failure before asking native to stop');
+    return call(method, ...args);
+  };
+  await f.at(NOW + 2499);
+  assert.equal(f.record.phase, 'waiting-trust'); assert.equal(f.client.calls.some(c => c[0] === 'stop'), false);
+  await f.at(NOW + 2500);
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'native-directory-trust-timeout');
+  assert.equal(f.fresh.state, 'ended'); assert.equal(f.old.state, 'idle');
+  assert.equal(f.room.queueItems('shared').find(i => i.id === queued).assignee, f.old.id);
+  assert.deepEqual(f.client.calls.filter(c => c[0] === 'stop'), [['stop', f.fresh.id]]);
+  assert.deepEqual(f.notifications, ['trustTimedOut']);
+  assert.equal(f.room.value.events.filter(e => e.uiMessage?.key === 'notice.rotation.trustTimedOut').length, 1);
+  await f.at(NOW + 10 * 60000);
+  assert.deepEqual(f.notifications, ['trustTimedOut']);
+  assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 1);
+  assert.equal(f.client.calls.some(c => ['approve', 'answer', 'input'].includes(c[0])), false);
+});
+
+test('B2 timeout: omitted and invalid settings use the existing ten-minute readiness limit', async t => {
+  for (const timeoutMs of [undefined, null, '', 'not-a-number', 'NaN', 'Infinity', '0', '-1', '1.5', 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    await t.test(String(timeoutMs), async t => {
+      const f = trustTimeoutSetup(t, { timeoutMs });
+      await f.at(NOW + 600000 - 1); assert.equal(f.record.phase, 'waiting-trust');
+      await f.at(NOW + 600000); assert.equal(f.record.phase, 'failed');
+      assert.equal(f.record.reason, 'native-directory-trust-timeout');
+      assert.deepEqual(f.notifications, ['trustTimedOut']);
+    });
+  }
+});
+
+test('B2 timeout: restarting applies the current limit to the original wait, and failed cleanup is not replayed', async t => {
+  const f = trustTimeoutSetup(t, { timeoutMs: '1000' });
+  await f.at(NOW + 599); assert.equal(f.record.phase, 'waiting-trust'); f.dispatcher.close();
+  const notices = [], room = new RoomState(f.dir); fakeMembership(room, f.client);
+  const restore = (now, timeoutMs) => {
+    const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: f.dir, now: () => now, settleMs: 0,
+      directoryTrustTimeoutMs: timeoutMs, notify: kind => notices.push(kind) });
+    dispatcher.client = f.client; t.after(() => dispatcher.close()); return dispatcher;
+  };
+  const resumed = restore(NOW + 600, '500');
+  assert.equal(resumed.rotations.a.trustWaitingAt, NOW);
+  await resumed.advanceRotations(f.client.snapshot(), NOW + 600);
+  assert.equal(resumed.rotations.a.phase, 'failed', 'shorter current configuration must not start a fresh wait');
+  assert.deepEqual(notices, ['trustTimedOut']); resumed.close();
+  const again = restore(NOW + 1600, '2000');
+  await again.advanceRotations(f.client.snapshot(), NOW + 1600);
+  assert.deepEqual(notices, ['trustTimedOut']);
+  assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 1);
+  assert.equal(room.value.events.filter(e => e.uiMessage?.key === 'notice.rotation.trustTimedOut').length, 1);
+});
+
+test('B2 timeout: native readiness before expiry continues the saved successor and creates no replacement', async t => {
+  const f = trustTimeoutSetup(t, { timeoutMs: 1000 });
+  f.fresh.state = 'idle'; f.fresh.nativeStartupPrompt = null; f.dispatcher.idleSince.set(f.fresh.id, NOW - 60000);
+  await f.at(NOW + 999); assert.equal(f.record.phase, 'created');
+  await f.at(NOW + 999); assert.equal(f.record.phase, 'handed');
+  assert.equal(f.client.sends(f.fresh.id).length, 1);
+  assert.equal(f.client.calls.some(c => ['stop', 'create'].includes(c[0])), false);
+  assert.deepEqual(f.notifications, []);
+});
+
+test('B2 timeout: expiry frees the original queue member and the global rotation slot', async t => {
+  const other = member('b', { messages: heavyMessages(), lastActivityAt: NOW - HOUR });
+  const f = trustTimeoutSetup(t, { timeoutMs: 1000, sessions: [other] }), queued = f.room.queueAdd('continue the original task', f.old.id);
+  const actions = () => plan([{ id: 'shared', name: 'Team', queue: f.room.queueItems('shared') }], f.client.state.sessions,
+    { now: NOW + 1000, rotations: f.dispatcher.rotations, quietMs: 0 });
+  assert.equal(actions().some(a => a.kind === 'rotate'), false, 'the pending wait owns the global slot');
+  await f.at(NOW + 1000);
+  assert.deepEqual(f.dispatcher.activeRotations(), []);
+  const ready = actions(), dispatch = ready.find(a => a.kind === 'dispatch' && a.sessionId === f.old.id), rotate = ready.find(a => a.kind === 'rotate' && a.sessionId === other.id);
+  assert.ok(dispatch); assert.ok(rotate, 'another member may rotate after this wait is released');
+  await f.dispatcher.dispatch(dispatch);
+  assert.equal(f.room.queueItems('shared').find(i => i.id === queued).status, 'sent');
+  assert.equal(f.client.sends(f.old.id).length, 1, 'the old native session receives its queued work');
+  await f.dispatcher.requestHandoff(rotate);
+  assert.equal(f.dispatcher.rotations[other.id].phase, 'requested');
+  assert.equal(f.client.sends(other.id).length, 1);
+  assert.equal(f.client.calls.some(c => c[0] === 'stop' && c[1] === f.old.id), false);
+});
+
+test('B2 timeout: a refused successor stop reports unconfirmed cleanup once and retains the original session', async t => {
+  const f = trustTimeoutSetup(t, { timeoutMs: 1 }), call = f.client.call.bind(f.client);
+  f.client.call = async (method, ...args) => {
+    if (method === 'stop') { f.client.calls.push([method, ...args]); throw Error('synthetic stop refusal'); }
+    return call(method, ...args);
+  };
+  await f.at(NOW + 1);
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'native-directory-trust-timeout-stop-unconfirmed');
+  assert.equal(f.fresh.state, 'starting', 'a rejected stop is not evidence of native termination');
+  assert.equal(f.old.state, 'idle'); assert.deepEqual(f.notifications, ['trustTimeoutUnconfirmed']);
+  assert.equal(f.room.value.events.filter(e => e.uiMessage?.key === 'notice.rotation.trustTimeoutUnconfirmed').length, 1);
+  await f.at(NOW + 2);
+  assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 1);
+  assert.deepEqual(f.notifications, ['trustTimeoutUnconfirmed']);
+});
+
+test('B2 timeout: a successor stop that never confirms reaches the existing bounded RPC timeout', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = trustTimeoutSetup(t, { timeoutMs: 1 }), call = f.client.call.bind(f.client);
+  let stopReached; const stopped = new Promise(resolve => { stopReached = resolve; });
+  f.client.call = (method, ...args) => {
+    if (method === 'stop') { f.client.calls.push([method, ...args]); stopReached(); return new Promise(() => {}); }
+    return call(method, ...args);
+  };
+  const expired = f.at(NOW + 1);
+  assert.equal(await Promise.race([stopped.then(() => true), expired.then(() => false)]), true, 'expiry asks the successor to stop');
+  t.mock.timers.tick(60000); await expired;
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'native-directory-trust-timeout-stop-unconfirmed');
+  assert.equal(f.fresh.state, 'starting'); assert.equal(f.old.state, 'idle');
+  assert.deepEqual(f.notifications, ['trustTimeoutUnconfirmed']);
+  assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 1);
 });

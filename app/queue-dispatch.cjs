@@ -1410,6 +1410,12 @@ class QueueDispatcher {
     this.creationDefaults = options.creationDefaults || (() => ({}));
     // Native first-directory trust must be qualified before unattended moves.
     this.migrateDirectories = options.migrateDirectories === true;
+    // Trust must not bypass the existing ten-minute startup readiness budget.
+    // The production environment supplies decimal milliseconds; invalid limits
+    // fall back instead of disabling cleanup. Keep the saved wait start.
+    const trustTimeout = typeof options.directoryTrustTimeoutMs === 'string' && /^\d+$/.test(options.directoryTrustTimeoutMs)
+      ? Number(options.directoryTrustTimeoutMs) : options.directoryTrustTimeoutMs;
+    this.directoryTrustTimeoutMs = Number.isSafeInteger(trustTimeout) && trustTimeout > 0 ? trustTimeout : NEW_SESSION_READY_MS;
     this.broadcast = options.broadcast || (async () => {});
     this.observeQueueState = options.observeQueueState || null;
     this.file = path.join(options.dataDir, 'queue-dispatch.json');
@@ -2115,6 +2121,7 @@ class QueueDispatcher {
   // Undo what a failed rotation started; the old member keeps its session and work.
   async failRotation(oldId, record, reason, now) {
     const phase = record.phase;
+    const trustTimedOut = phase === 'waiting-trust' && reason === 'native-directory-trust-timeout';
     record.phase = 'failed';
     record.failedAt = now;
     record.reason = reason;
@@ -2136,21 +2143,26 @@ class QueueDispatcher {
         await withTimeout(this.client.call('stop', record.newId), CALL_TIMEOUT_MS, 'stop-timeout');
       } catch {
         // Left for the person; it holds no handoff and no queued work.
+        if (trustTimedOut) {
+          record.reason = reason = 'native-directory-trust-timeout-stop-unconfirmed';
+          this.save();
+        }
       }
     }
     if (!record.oldId) {
       record.oldId = oldId;
     }
     this.appendLog('failed', record, { reason });
-    this.roomState.rotationEvent(record.roomIds, 'failed', this.label(oldId, record.name), reason);
-    this.notify('failed', record);
+    const outcome = trustTimedOut ? (reason === 'native-directory-trust-timeout-stop-unconfirmed' ? 'trustTimeoutUnconfirmed' : 'trustTimedOut') : 'failed';
+    this.roomState.rotationEvent(record.roomIds, outcome, this.label(oldId, record.name), trustTimedOut ? this.label(record.newId, record.newName) : reason);
+    this.notify(outcome, record);
     await this.broadcast();
   }
 
   // One durable decision per successor. Never send an answer to native here.
   async waitForDirectoryTrust(oldId, record, now) {
     record.phase = 'waiting-trust';
-    record.trustWaitingAt ||= now;
+    record.trustWaitingAt ??= now;
     record.trustNoticeId ||= randomUUID();
     record.reason = 'native-directory-trust';
     this.save();
@@ -2175,6 +2187,7 @@ class QueueDispatcher {
     if (record.phase === 'waiting-trust') {
       if (old && !this.untouched(old, record, replyAfter(old, record.tag, record.requestedAt))) throw Error('person-active');
       if (!successor || ['ended', 'background', 'recoverable', 'error'].includes(successor.state)) throw Error('new-session-directory-trust-unavailable');
+      if (now - record.trustWaitingAt >= this.directoryTrustTimeoutMs) throw Error('native-directory-trust-timeout');
       if (successor.nativeStartupPrompt?.kind === 'directory-trust') {
         if (!record.trustNotified) await this.waitForDirectoryTrust(oldId, record, now);
         return;

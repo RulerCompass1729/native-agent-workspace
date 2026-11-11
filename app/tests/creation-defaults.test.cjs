@@ -99,11 +99,12 @@ test('a defaults save error cannot turn an already-created session into a failed
 test('B2: production startup keeps directory migration closed even when the test env switch is set', async () => {
   for (const [backgroundTest, flag, enabled] of [[false, undefined, false], [false, '1', false], [true, undefined, false], [true, '1', true]]) {
     let options;
-    const sandbox = { queueDispatcher: null, backgroundTest, process: { env: { NAW_TEST_QUEUE_DIRECTORY_MIGRATION: flag } }, roomState: {}, dataDir: '/synthetic/private', windows: new Map(),
+    const sandbox = { queueDispatcher: null, backgroundTest, process: { env: { NAW_TEST_QUEUE_DIRECTORY_MIGRATION: flag, NAW_QUEUE_DIRECTORY_TRUST_TIMEOUT_MS: '12000' } }, roomState: {}, dataDir: '/synthetic/private', windows: new Map(),
       connect() {}, sessionLabels: { labels: new Map() }, broadcastRoom() {}, notifyRotation() {}, creationDefaults: { get() { return {}; } }, butlerIngress: null,
       QueueDispatcher: class { constructor(value) { options = value; } async start() { return this; } } };
     await vm.runInNewContext(section('async function startQueueDispatcher()', 'async function broadcastRoom()') + '\nstartQueueDispatcher()', sandbox);
     assert.ok(options, 'production startup constructed the dispatcher');
+    assert.equal(options.directoryTrustTimeoutMs, '12000', 'the wait limit is configurable in production without enabling migration');
     assert.equal(options.migrateDirectories === true, enabled, JSON.stringify({ backgroundTest, flag }));
   }
 });
