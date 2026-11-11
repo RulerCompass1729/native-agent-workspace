@@ -1,5 +1,37 @@
 # Review and issue record
 
+**S2 bounded refusal summaries, 2026-11-11 (delta review pending):**
+confirmation-limit and originating-session-unavailable now retain one counted
+summary per native actor, reason and minute, with at most 128 recent summaries
+in the operation file and 128 summary events per space. They retain method names,
+counts and timing, never request arguments or a full consent snapshot. Space
+counters include only requests audited in that space; duplicate or older audit
+deliveries do not change a newer count. Other history and legacy records remain.
+
+Review rejected the unpublished retry-prefix candidate: one transient refusal
+changed every later invoke and blocked implicit foreign snapshots. The correction
+uses option B: no operation-ID prefix rule. Reusing a compacted, proven
+not-executed ID is a new request through current admission and any required human
+confirmation. The tool description and refusal hint explain this for invoke and
+snapshot. Ordinary send, viewState and queue intake keep their unique-ID protocol.
+Existing ordinary and legacy per-ID records retain their exact command binding,
+including executed, uncertain, cancelled and pending operations across restart.
+An already approved operation is never compacted after a later confirmation
+refusal: effects may have occurred, so its original intent, decision and unknown
+outcome remain durable and cannot replay. Counterexamples reproduce one effect
+followed by a quota refusal and verify retention and no second effect.
+No model, provider permission or human-window behavior changes.
+
+This bounds those two refusal classes, not all ordinary operation history. At
+32 MiB a write fails before replacing the existing file. A new intent then does
+not run; a handler that already ran before its final save failed has an unknown
+result and cannot be replayed. Pickup cannot expose a read body without saving
+consumption first. Failed summary saves roll back their counters and perform no
+new action. Legacy history is not deleted to create space. The real 32 MiB probe
+and counter/replay regressions require incremental independent review. Nonblocking
+follow-ups remain: per-actor summary retention fairness, original-ID receipt
+aliases for compacted refusals, and growth of other ordinary refusal classes.
+
 **S2 selector-card quota repair, 2026-11-11 (delta review pending):**
 only answerable message confirmations consume the 32/128 pending-card bound,
 along with existing maintenance intents already running. Legacy open/save

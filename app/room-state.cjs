@@ -489,6 +489,7 @@ class RoomState {
     return record?.id || null;
   }
   recordControlOperation(record, rooms = [DEFAULT_ROOM_ID]) {
+    if (record.refusalSummary) return this.recordControlRefusal(record, rooms);
     const action = require('./background-operation.cjs').maintenanceAction(record.command.method, record.command.arguments, record.actor);
     if (!action) return;
     const states = { 'confirmation-required': 'waiting', complete: 'complete', cancelled: 'cancelled', unconfirmed: 'unconfirmed', running: 'running', 'not-executed': 'refused' };
@@ -508,6 +509,31 @@ class RoomState {
       const events = previous ? value.events.map(e => e.id === id ? next : e) : [...value.events, next];
       // Audit-only changes do not edit notes or invalidate a merge preview's
       // source cut. They stay in the source space rather than copied snapshots.
+      this.commit({ ...value, events }, room);
+    }
+  }
+  recordControlRefusal(record, rooms) {
+    const summary = record.refusalSummary;
+    if (record.state !== 'not-executed' || !['confirmation-limit', 'originating-session-unavailable'].includes(summary.reason) || !orderId(record.actor.id) || !['claude', 'codex'].includes(record.actor.provider)) throw Error('Invalid refusal audit');
+    const id = `control-refusal:${record.actor.provider}:${record.actor.nativeId}:${record.id}`;
+    const name = require('./background-operation.cjs').visibleText(record.actor.name);
+    const available = rooms.filter(id => roomId(id) && (id === DEFAULT_ROOM_ID || this.spaces.rooms.some(r => r.id === id)));
+    if (!available.length) throw Error('The refusal audit space is unavailable');
+    for (const room of new Set(available)) {
+      const count = summary.rooms?.[room];
+      if (!count || !Number.isSafeInteger(count.count) || count.count < 1 || !Number.isSafeInteger(count.sequence) || count.sequence < 1) throw Error('Invalid refusal count');
+      const value = this.metadata(room), previous = value.events.find(e => e.id === id);
+      if ((previous?.controlAudit?.refusalSummary?.sequence || 0) >= count.sequence) continue;
+      const event = { id, role: 'system', kind: 'control-audit', sessionId: record.actor.id, name, time: previous?.time ?? record.at,
+        ...uiNotice(summary.reason === 'confirmation-limit' ? 'notice.background.refusalLimit' : 'notice.background.refusalActor', { name, count: count.count, command: count.lastMethod }),
+        controlAudit: { operationId: record.id, actor: { id: record.actor.id, nativeId: record.actor.nativeId, name, provider: record.actor.provider },
+          method: 'backgroundRefusal', action: 'refusedRequests', state: 'not-executed',
+          refusalSummary: { reason: summary.reason, count: count.count, sequence: count.sequence, lastMethod: count.lastMethod, windowStart: summary.windowStart, windowEnd: summary.windowEnd } } };
+      let events = [...value.events.filter(e => e.id !== id), event];
+      const retained = new Set(events.filter(e => e.controlAudit?.refusalSummary).slice(-128).map(e => e.id));
+      events = events.filter(e => !e.controlAudit?.refusalSummary || retained.has(e.id));
+      // Only this bounded summary format is retained. Other space records and
+      // legacy audit events are not a cleanup target.
       this.commit({ ...value, events }, room);
     }
   }
