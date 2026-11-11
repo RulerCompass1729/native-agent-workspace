@@ -70,6 +70,8 @@ const CREATE_TIMEOUT_MS = 120000;
 const TICK_MS = 3000;
 // Without any state change, look again at least this often.
 const FULL_PASS_MS = 30000;
+// How long the designated integrator's session must be missing from every pass before it counts as gone.
+const INTEGRATOR_ABSENT_MS = 10 * 60 * 1000;
 const DECISION_MARKERS = ['需要你决定：', '需要你决定:', 'Needs your decision:'];
 // Input written by NAW or another agent, not by the person.
 const AUTOMATIC_ORIGINS = ['naw-dispatch', 'agent-wake', 'capacity-recovery', 'agent-control', 'room'];
@@ -1418,6 +1420,17 @@ class QueueDispatcher {
     this.directoryTrustTimeoutMs = Number.isSafeInteger(trustTimeout) && trustTimeout > 0 ? trustTimeout : NEW_SESSION_READY_MS;
     this.broadcast = options.broadcast || (async () => {});
     this.observeQueueState = options.observeQueueState || null;
+    // B6: the engine that hands delivered work to the person's designated integrator. The caller
+    // builds it for this dispatcher, because it sends through the dispatcher's own send. Absent
+    // unless given: without it nothing below runs.
+    this.integration = typeof options.integration === 'function' ? options.integration(this) : null;
+    this.integrationUnreadable = options.integrationUnreadable || (() => {});
+    this.integrationFailed = options.integrationFailed || (() => {});
+    // The last failure of an engine pass, kept so that it is not lost: { message, at, count }.
+    // The person is told once per kind of failure in a run, so a new kind after a recovery is told too.
+    this.integrationError = null;
+    this.integrationTold = new Set();
+    this.integratorAbsent = new Map();
     this.file = path.join(options.dataDir, 'queue-dispatch.json');
     this.now = options.now || Date.now;
     this.settleMs = options.settleMs ?? IDLE_SETTLE_MS;
@@ -1673,6 +1686,12 @@ class QueueDispatcher {
     if (this.activeRotations().length) {
       return true;
     }
+    // Integration work that can move without the person keeps the passes going: a space record
+    // that changed since it was last looked through, a handoff awaiting its answer, a delivery
+    // for a designated integrator, a record or notice still owed.
+    if (this.integration && this.integration.hasWork(this.integrationRooms())) {
+      return true;
+    }
     const rooms = [this.roomState.value];
     for (const room of this.roomState.spaces.rooms) {
       rooms.push(room);
@@ -1855,6 +1874,65 @@ class QueueDispatcher {
     if (this.observeQueueState) await this.observeQueueState(queueVacancies({ ...current.snapshot,
       idleSince: this.vacancySince, humanAt: this.humanAt, now: current.now,
       settleMs: this.settleMs, humanQuietMs: this.humanQuietMs, rotations: this.rotations, actions }));
+    if (this.integration && !this.closed) await this.integrate();
+  }
+
+  // What the integration engine is shown: the sessions as the dispatcher sees them, with its own
+  // idle and typing clocks. A session list cannot say by itself that it is complete (a backend
+  // may be away for a moment), so a session that is missing from it counts as gone only after it
+  // has been missing from every pass for a while. A session that is in the list is the record's
+  // to judge (archived, or another native session under that id).
+  integrationView(current) {
+    const sessions = current.snapshot.sessions, now = current.now;
+    const present = new Set(sessions.map(session => session.id));
+    for (const id of this.integratorAbsent.keys()) if (present.has(id)) this.integratorAbsent.delete(id);
+    return { sessions, wakePolicy: current.snapshot.wakePolicy, now, idleSince: this.idleSince, humanAt: this.humanAt,
+      settleMs: this.settleMs, humanQuietMs: this.humanQuietMs, review: 'off',
+      complete: sessionId => {
+        if (typeof sessionId !== 'string') return false;
+        if (present.has(sessionId)) return true;
+        if (!this.integratorAbsent.has(sessionId)) this.integratorAbsent.set(sessionId, now);
+        return now - this.integratorAbsent.get(sessionId) >= INTEGRATOR_ABSENT_MS;
+      } };
+  }
+
+  // B6: one pass of the integration engine. The engine decides and records; the dispatcher gives
+  // it the spaces' records as they are now (a delivery recorded earlier in this pass is in them),
+  // its view, and a fresh look. A pass that fails keeps what its earlier steps recorded; the next
+  // pass goes on from there. The failure is kept and the person is told once per run.
+  integrationRooms() {
+    return [{ ...this.roomState.value, id: 'shared' }, ...this.roomState.spaces.rooms];
+  }
+
+  async integrate() {
+    const rooms = this.integrationRooms();
+    const look = async () => {
+      await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
+      return this.integrationView(this.view());
+    };
+    let result;
+    try {
+      result = await this.integration.pass(rooms, this.integrationView(this.view()), look);
+    } catch (error) {
+      const message = String(error?.message || error).slice(0, 300);
+      this.integrationError = { message, at: this.now(), count: (this.integrationError?.count || 0) + 1 };
+      if (!this.integrationTold.has(message) && this.integrationTold.size < 20) {
+        this.integrationTold.add(message);
+        try { this.integrationFailed(error); } catch { /* The notice is best effort. */ }
+      }
+      return;
+    }
+    if (result.kind === 'unreadable') {
+      // Told once per run; nothing is taken in or handed out until the person has looked at the record.
+      if (!this.integrationWarned) {
+        this.integrationWarned = true;
+        try { this.integrationUnreadable(); } catch { /* The warning is best effort. */ }
+      }
+    }
+    const handed = result.handed && ['opened', 'refused', 'unconfirmed', 'ask-integrator'].includes(result.handed.kind);
+    if (result.taken?.stored.length || result.settled?.kind === 'settled' || handed || result.told?.shown || result.told?.told.length) {
+      this.broadcast().catch(() => {});
+    }
   }
 
   settle(action, snapshot) {
@@ -2447,6 +2525,7 @@ module.exports = {
   QUIET_BEFORE_ROTATE_MS,
   NOT_SENT_ATTEMPTS,
   NATIVE_DRAFT_KEY,
+  INTEGRATOR_ABSENT_MS,
   validateQueue,
   newItem,
   trimQueue,

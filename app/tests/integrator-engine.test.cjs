@@ -376,6 +376,78 @@ test('the release of what was held for a missing integrator is decided on the fr
   assert.deepEqual(f.states(), { a: 'held:integrator-missing:integrator', b: 'held:integrator-missing:integrator', c: 'deliverable' });
 });
 
+test('there is work only when something can move without the person', async t => {
+  const f = fixture(t);
+  f.engine.intake([]);
+  assert.equal(f.engine.hasWork(), false);
+  // A delivery waits. With nobody designated, or a designation that cannot be read, only the person can move it.
+  f.engine.intake([space([fact('a')])]);
+  f.designated = null; assert.equal(f.engine.hasWork(), false);
+  f.designated = Error('unreadable'); assert.equal(f.engine.hasWork(), false);
+  f.designated = INTEGRATOR; assert.equal(f.engine.hasWork(), true);
+  // The question about nobody being designated is owed until it is told.
+  f.designated = null;
+  await f.handOut(view());
+  assert.equal(f.engine.hasWork(), true, 'A notice is owed');
+  assert.equal(f.handoffs.reserveNotice('integrator-unset').reserved && f.handoffs.confirmNotice('integrator-unset').confirmed, true);
+  assert.equal(f.engine.hasWork(), false);
+  // A sent handoff awaits its answer; its space record is owed until written; a waiting handoff is the person's.
+  f.designated = INTEGRATOR;
+  const opened = await f.handOut(view());
+  assert.equal(f.engine.hasWork(), true);
+  f.handoffs.markShown(f.handoffs.showable());
+  assert.equal(f.engine.hasWork(), true, 'Sent and awaiting its answer');
+  const silent = { integrator: INTEGRATOR, complete: true, now: NOW + 60000, idleSince: new Map([['integrator', NOW + 60000 - rules.IDLE_SETTLE_MS]]),
+    session: integratorSession({ messages: [{ id: f.handoffs.snapshot().handoff.tag, role: 'user', text: 'handoff', time: NOW }] }) };
+  f.handoffs.settle(f.handoffs.plan(silent), {}, NOW + 60000);
+  assert.equal(f.handoffs.snapshot().handoff.status, 'waiting');
+  assert.equal(f.engine.hasWork(), true, 'The space record and the notice for the waiting handoff are owed');
+  f.handoffs.markShown(f.handoffs.showable());
+  assert.equal(f.handoffs.reserveNotice('no-reply').reserved && f.handoffs.confirmNotice('no-reply').confirmed, true);
+  assert.equal(f.engine.hasWork(), false, 'A handoff that waits for the person needs no passes');
+  assert.equal(opened.kind, 'opened');
+  // Deliveries held because an integrator was gone are work once somebody is designated: a returning integrator releases them.
+  const h = fixture(t);
+  h.engine.intake([space([fact('a')])]);
+  h.handoffs.hold(key('a'), 'integrator-missing:earlier', NOW);
+  h.handoffs.reserveNotice('integrator-missing:earlier'); h.handoffs.confirmNotice('integrator-missing:earlier'); h.handoffs.markShown(h.handoffs.showable());
+  h.designated = null; assert.equal(h.engine.hasWork(), false);
+  h.designated = INTEGRATOR; assert.equal(h.engine.hasWork(), true);
+  // What only the person can change stops counting after the attempt that met it, and counts again after one that did not.
+  const p = fixture(t);
+  p.engine.intake([space([fact('a')])]);
+  for (const [name, blocked] of [['automatic messages off', view({ wakePolicy: { enabled: false } })], ['paused', view({ sessions: [integratorSession({ wakeDisabled: true })] })],
+    ['its backend needs an update', view({ sessions: [integratorSession({ serviceCapabilities: [] })] })], ['in a space, the person was asked', view({ sessions: [integratorSession({ roomIds: ['shared'] })] })]]) {
+    await p.handOut(blocked);
+    if (name.startsWith('in a space')) { p.handoffs.reserveNotice('integrator-in-space'); p.handoffs.confirmNotice('integrator-in-space'); }
+    assert.equal(p.engine.hasWork(), false, name);
+    // The person designates another session: that ends the block at once, without waiting for another pass.
+    p.designated = { sessionId: 'another', nativeId: 'native-another' };
+    assert.equal(p.engine.hasWork(), true, name + ', then another designation');
+    p.designated = INTEGRATOR;
+    assert.equal(p.engine.hasWork(), false, name + ', back to the blocked one');
+    await p.handOut(view({ sessions: [integratorSession({ state: 'working' })] }));
+    assert.equal(p.engine.hasWork(), true, name + ', then only at work');
+  }
+  // A space whose record changed since it was last looked through may hold a new delivery: that is work,
+  // whatever else waits, until the intake has looked.
+  const g = fixture(t);
+  g.designated = null;
+  const record = space([fact('a')]);
+  assert.equal(g.engine.hasWork([record]), true, 'Never looked through yet');
+  g.engine.intake([record]);
+  assert.equal(g.engine.hasWork([record]), false);
+  record.events.push({ id: 'chat-1', role: 'user', text: 'not a delivery', time: NOW + 2 });
+  assert.equal(g.engine.hasWork([record]), true);
+  g.engine.intake([record]);
+  assert.equal(g.engine.hasWork([record]), false);
+  assert.equal(g.engine.hasWork([record, space([], 'space-2')]), true, 'Another space that was never looked through');
+  for (const odd of [undefined, null, 'rooms', [null, {}, { id: 'x' }, { events: [] }]]) assert.equal(g.engine.hasWork(odd), false, JSON.stringify(odd));
+  // After a restart nothing was looked through yet, so the first pass looks.
+  const restarted = new IntegratorEngine({ handoffs: new IntegrationHandoffs(g.directory), designation: () => null, mainHead: async () => MAIN, send: async () => 'x' });
+  assert.equal(restarted.hasWork([record]), true);
+});
+
 test('an unreadable record stops the engine: nothing is taken in, handed out or sent', async t => {
   const f = fixture(t);
   f.engine.intake([space([fact('a')])]);

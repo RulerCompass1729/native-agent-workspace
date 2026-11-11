@@ -174,7 +174,7 @@ test('reading runs none of the repository\'s own programs and writes nothing', a
   try { assert.equal(await read.commit(next), next); } finally { if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved; }
 });
 
-test('the reader is not connected: nothing in the app or its scripts loads it, the handoff record or the engine yet', () => {
+test('the reader, the handoff record and the engine are loaded by the main process only, and the packaging list names them', () => {
   const root = path.join(__dirname, '../..');
   const sources = directory => fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
     const file = path.join(directory, entry.name);
@@ -184,7 +184,8 @@ test('the reader is not connected: nothing in the app or its scripts loads it, t
   const files = [...sources(path.join(root, 'app')), ...sources(path.join(root, 'scripts'))].filter(file => !/integrator-(?:git|handoff|engine)\.cjs$/.test(file));
   assert.ok(files.length > 100 && files.some(file => file.endsWith('renderer.js')) && files.some(file => file.includes(`${path.sep}scripts${path.sep}`)), 'The scan covers the app, its subfolders and the scripts');
   // The two module names as a program would load them (the lock script's folder of release records has another name).
-  for (const file of files) assert.ok(!/integrator-(?:git|handoff|engine)(?:\.cjs)?['"`]/.test(fs.readFileSync(file, 'utf8')), path.relative(root, file));
+  const naming = files.filter(file => /integrator-(?:git|handoff|engine)(?:\.cjs)?['"`]/.test(fs.readFileSync(file, 'utf8'))).map(file => path.relative(root, file)).sort();
+  assert.deepEqual(naming, ['app/main.cjs', 'scripts/package-mac.cjs']);
   // Among themselves only the engine may come to load the record; neither loads the reader.
   for (const name of ['integrator-handoff.cjs', 'integrator-engine.cjs']) assert.ok(!fs.readFileSync(path.join(root, 'app', name), 'utf8').includes('integrator-git'), name);
 });
