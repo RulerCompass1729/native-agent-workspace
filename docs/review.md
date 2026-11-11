@@ -12,6 +12,26 @@ Both providers have regressions for 33 actual chooseFolder requests followed by
 a working message confirmation, legacy global/per-actor exhaustion after
 restart, and a missing save path. Existing admitted message cards still count.
 
+**S2 file preconditions and desktop archive fingerprints, 2026-11-11 (delta review pending):**
+hosted file operations validate path cardinality and the owned export token before
+asking the person, and repeat these checks at approval. This uses only request
+shape and in-memory state: no file stat or content read before consent. Local
+open/save and runtime executable selection require one explicit path; runtime
+reset keeps its path-free confirmation. Space-file imports require paths, while
+file-ID reads keep the existing member and one-use rules. Missing/consumed export
+tokens ask no futile question. Human windows and the undecided path-read policy
+remain unchanged. Both providers have sixteen pre-confirmation counterexamples;
+valid paths still ask before file metadata, reset and space-file reading work.
+
+Non-maintenance background consent fingerprints now project sessions through
+RoomState.apply, as admission, actor checks and maintenance fingerprints already
+do. A real standalone target archive does not change backend state or membership;
+the old raw-session fingerprint therefore allowed its pending stop to execute.
+Both providers reproduce that failure and now reject the stale consent before
+the target RPC. The no-profile connection-update fallback remains unchanged:
+all five production callers pass RoomState, so only the isolated test helper uses
+that fallback. Backend migration safety still examines all backend sessions.
+
 **S2 shared confirmation admission, 2026-11-11 (delta review pending):**
 all requests that reach a background human dialog now share the same native
 actor eligibility and 32-per-actor / 128-global pending-card bound. This also

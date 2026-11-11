@@ -456,6 +456,45 @@ function spaceExportFixture(t, provider) {
   vm.runInContext(part("  register('openLocalFile',", "  register('chooseFolder',"), f.sandbox);
   return f;
 }
+for (const provider of ['claude', 'codex']) for (const [method, args] of [
+  ['openLocalFile', ['agent']], ['saveLocalFile', ['preview-token']], ['runtimeLocation', ['codex']], ['spaceFiles', ['shared']],
+]) for (const count of method === 'spaceFiles' ? [0] : [0, 2]) test(`${provider} ${method}: invalid path count ${count} refuses before human confirmation`, async t => {
+  const f = spaceExportFixture(t, provider), c = await f.controller.view(f.actor);
+  if (method === 'runtimeLocation') f.config.handlers.set(method, () => { throw Error('Handler must not run before consent'); });
+  c.filePreview = { token: 'preview-token', name: 'Local.txt', bytes: Buffer.from('LOCAL'), text: 'LOCAL' };
+  const paths = count ? [path.join(f.dir, 'one.txt'), path.join(f.dir, 'two.txt')] : [];
+  const result = await f.controller.call(f.binding, { ...command(method, args), paths });
+  assert.equal(result.state, 'unconfirmed'); assert.equal(result.confirmation, undefined); assert.equal(f.notices.length, 0); assert.equal(f.fileReads, 0);
+  assert.equal((await f.controller.call(f.binding, { ...command(method, args, result.id), paths })).duplicate, true);
+});
+for (const provider of ['claude', 'codex']) test(`${provider}: an expired export token never asks for a decision`, async t => {
+  const f = spaceExportFixture(t, provider);
+  const result = await f.controller.call(f.binding, { ...command('saveLocalFile', ['expired']), paths: [path.join(f.dir, 'copy.txt')] });
+  assert.equal(result.state, 'unconfirmed'); assert.equal(result.confirmation, undefined); assert.equal(f.notices.length, 0);
+  assert.equal(fs.existsSync(path.join(f.dir, 'copy.txt')), false);
+});
+test('valid explicit file selection asks before target metadata or content is read', async t => {
+  const f = spaceExportFixture(t, 'codex'), file = path.join(f.dir, 'chosen.txt'); fs.writeFileSync(file, 'LOCAL');
+  const statSync = fs.statSync; let metadataReads = 0;
+  const mocked = t.mock.method(fs, 'statSync', (target, ...args) => { if (target === file) metadataReads++; return statSync(target, ...args); });
+  const pending = await f.controller.call(f.binding, { ...command('openLocalFile', ['agent']), paths: [file] });
+  assert.equal(pending.state, 'confirmation-required'); assert.equal(metadataReads, 0); assert.equal(f.fileReads, 0); mocked.mock.restore();
+  assert.equal((await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1)).state, 'complete'); assert.equal(f.fileReads, 1);
+});
+test('runtime location reset and space-file reads do not require picker paths', async t => {
+  const f = spaceExportFixture(t, 'codex'); f.config.handlers.set('runtimeLocation', () => true);
+  const reset = await f.controller.call(f.binding, command('runtimeLocation', ['codex', true])); assert.equal(reset.state, 'confirmation-required');
+  assert.equal((await f.controller.decide(f.actor.id, f.actor.nativeId, reset.id, 1)).state, 'complete');
+  const read = await f.controller.call(f.binding, command('spaceFiles', ['shared', 'space-file'])); assert.equal(read.state, 'confirmation-required');
+  assert.equal((await f.controller.decide(f.actor.id, f.actor.nativeId, read.id, 1)).state, 'complete');
+  const invalidReference = await f.controller.call(f.binding, command('spaceFiles', ['shared', null]));
+  assert.equal(invalidReference.state, 'confirmation-required', 'null remains a file-reference read, not an import');
+});
+test('multiple space import paths remain eligible for one human decision', async t => {
+  const f = spaceExportFixture(t, 'codex');
+  const request = { ...command('spaceFiles', ['shared']), paths: [path.join(f.dir, 'one.txt'), path.join(f.dir, 'two.txt')] };
+  assert.equal((await f.controller.call(f.binding, request)).state, 'confirmation-required'); assert.equal(f.fileReads, 0);
+});
 for (const provider of ['claude', 'codex']) for (const when of ['before-pickup', 'after-pickup', 'after-leaving']) test(`${provider}: a space-file read has no reusable export preview ${when}`, async t => {
   const f = spaceExportFixture(t, provider), c = await f.controller.view(f.actor);
   const read = await f.controller.call(f.binding, command('spaceFiles', ['shared', 'space-file']));
@@ -467,10 +506,10 @@ for (const provider of ['claude', 'codex']) for (const when of ['before-pickup',
   }
   if (when === 'after-leaving') f.state.sessions[0].roomIds = [];
   const target = path.join(f.dir, 'export.txt');
+  const notices = f.notices.length;
   const pending = await f.controller.call(f.binding, { ...command('saveLocalFile', [token]), paths: [target] });
-  assert.equal(pending.state, 'confirmation-required');
-  const result = await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
-  assert.equal(result.state, 'unconfirmed'); assert.equal(fs.existsSync(target), false);
+  assert.equal(pending.state, 'unconfirmed'); assert.equal(pending.confirmation, undefined); assert.equal(f.notices.length, notices);
+  assert.equal(fs.existsSync(target), false);
   assert.equal(c.filePreview, null); assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('SPACE_FILE_PRIVATE_BODY'), false);
 });
 test('a person still previews and saves a space file in their own window', async t => {
