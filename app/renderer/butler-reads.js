@@ -36,18 +36,21 @@
     const valid = page => page && Array.isArray(page.records) && Number.isSafeInteger(page.throughSequence) && page.throughSequence >= 0 && typeof page.truncated === 'boolean' &&
       Number.isSafeInteger(page.nextAfterSequence) && page.nextAfterSequence >= 0;
     const ask = async request => { const page = await api.butlerReview('reads', request); if (!valid(page)) throw Error('unreadable'); return page; };
-    // Whatever goes wrong while drawing what was read, the person is told the log could not be read: the dialog never
-    // stays on "reading".
-    function draw() { try { paint(); } catch (error) { if (state !== 'ready') throw error; state = 'unavailable'; paint(); } }
+    // Whatever goes wrong while drawing what was read, the dialog does not stay on "reading". It says that the page
+    // could not show what it read: the log was read, so this is not "the log cannot be read", and not an empty log.
+    // Only that case is caught here. A failure while drawing "reading", "cannot be read" or this sentence itself is
+    // thrown on: when the page is being opened the window shows its failure view; from Refresh or "earlier records"
+    // nothing catches it.
+    function draw() { try { paint(); } catch (error) { if (state !== 'ready') throw error; state = 'broken'; paint(); } }
     function paint() {
       const loading = state === 'loading';
       older.disabled = refresh.disabled = loading;
       if (state !== 'ready') {
         today.hidden = full.hidden = listed.hidden = foot.hidden = true; quiet(today); quiet(full); quiet(listed); quiet(foot); list.replaceChildren(); older.hidden = true; below();
-        note.hidden = false; say(note, state === 'unavailable' ? 'butler.reads.unavailable' : 'butler.reads.loading');
+        note.hidden = false; say(note, state === 'unavailable' ? 'butler.reads.unavailable' : state === 'broken' ? 'butler.reads.pageFailed.draw' : 'butler.reads.loading');
         // The rule is general; a log this window cannot read does not prove the butler's own writes fail.
         help.hidden = state !== 'unavailable'; if (state === 'unavailable') say(help, 'butler.reads.unavailableHelp'); else quiet(help);
-        say(refresh, state === 'unavailable' ? 'butler.reads.retry' : 'butler.reads.refresh');
+        say(refresh, state === 'unavailable' || state === 'broken' ? 'butler.reads.retry' : 'butler.reads.refresh');
         dialog.dataset.readsState = state; return;
       }
       // The count line is true as of the moment the log was read; Refresh reads again.

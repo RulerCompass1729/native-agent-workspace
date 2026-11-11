@@ -31,12 +31,50 @@ const sessionStatus = (record, recoveryBadge = false) => {
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 const mobileSetup = window.nativeWorkspaceMobileSetup.bind({ container: $('mobile-setup'), document, api, getSessions: () => state?.sessions || [], text: (key, params) => uiText(key, params), display: ui.display });
 // The butler's parts are optional to this window: if one cannot be set up (its module or its element is missing),
-// the window starts without it instead of not starting at all. A read log that was not set up says so when asked for.
+// the window starts without it instead of not starting at all.
+// A read log page that could not be set up: asked for, it says that the page failed and why, in the page's own
+// place. It is the interface that failed, not the log, so it never reads as "nothing was read" or "the log cannot
+// be read". reason: 'module' (the page's program is not in this window), 'element' (its place in the page is
+// missing), 'setup' (setting it up failed), 'open' (it was set up and failed when it was asked for).
+function failedButlerReads(reason) {
+  let dialog = null, made = false, parts = [];
+  const close = () => { if (dialog?.open) dialog.close(); };
+  return { failed: reason,
+    open() {
+      try {
+        if (!dialog) {
+          dialog = $('butler-reads-dialog');
+          if (!dialog) { dialog = node('dialog', undefined, 'butler-reads'); dialog.id = 'butler-reads-dialog'; dialog.setAttribute('closedby', 'any'); ($('butler-dialog') || document.body).after(dialog); made = true; }
+        }
+        const title = node('h2'), text = node('p', undefined, 'butler-reads-note'), actions = node('div', undefined, 'dialog-actions'), done = node('button');
+        title.id = 'butler-reads-dialog-title'; dialog.setAttribute('aria-labelledby', title.id); text.setAttribute('role', 'alert');
+        done.type = 'button'; done.dataset.action = 'done'; done.addEventListener('click', close);
+        ui.display.text(title, 'butler.reads.title'); ui.display.text(text, 'butler.reads.pageFailed.' + reason); ui.display.text(done, 'common.done');
+        for (const part of parts) ui.display.unbind(part);
+        parts = [title, text, done]; actions.append(done); dialog.replaceChildren(title, text, actions);
+        dialog.dataset.readsState = 'page-failed'; dialog.dataset.readsFailure = reason;
+        if (!dialog.open) dialog.showModal();
+        done.focus();
+      } catch (error) { console.error(error); toastError(uiError('error.butler.readsPage')); }
+    },
+    dispose() { close(); for (const part of parts) ui.display.unbind(part); parts = []; if (dialog) { if (made) dialog.remove(); else dialog.replaceChildren(); } } };
+}
 // The read log names a space by this window's own name for it; the log itself holds ids only.
-let butlerReads = { open() { toastError(uiError('error.butler.readAuditUnavailable')); }, dispose() {} };
+let butlerReads;
 try { butlerReads = window.nativeWorkspaceButlerReads.bind({ dialog: $('butler-reads-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display,
   spaceName: id => { const room = spaceRecord(id); return room ? spaceName(room) : null; } }); }
-catch (error) { console.error(error); }
+catch (error) { console.error(error); butlerReads = failedButlerReads(!window.nativeWorkspaceButlerReads ? 'module' : !$('butler-reads-dialog') ? 'element' : 'setup'); }
+// Asking for the page. A page that was set up can still fail as it opens (its element gone from the window, an
+// error before anything is drawn): that must not end in nothing on the screen, so the failure view takes its place.
+function openButlerReads() {
+  const failed = error => {
+    console.error(error);
+    try { butlerReads.dispose(); } catch { /* What is left of it is replaced below. */ }
+    butlerReads = failedButlerReads('open'); butlerReads.open();
+  };
+  try { const opening = butlerReads.open(); if (typeof opening?.catch === 'function') opening.catch(failed); }
+  catch (error) { failed(error); }
+}
 // The existing butler view owns visibility and state; the record table has no second sidebar entry.
 const butlerReviewAdapter = window.nativeWorkspaceButlerReviewAdapter.create({ api, text: uiText });
 const butlerReviewView = window.nativeWorkspaceButlerReview.create({ dialog: $('butler-review-dialog'),
@@ -66,7 +104,7 @@ $('butler-review-dialog').addEventListener('close', returnFromButlerReview);
 // The butler's row is drawn only from a view the main process gives this window; this version gives none.
 let butlerEntry = { start() {}, refresh() {}, dispose() {} };
 try { butlerEntry = window.nativeWorkspaceButlerEntry.bind({ row: $('butler-row'), dialog: $('butler-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display, showError: ui.showError, openReview: openButlerReview,
-  openReads: () => butlerReads.open(),
+  openReads: () => openButlerReads(),
   // Another window may have changed the designation: the entry asks again when this one comes back to the front.
   front: listener => { window.addEventListener('focus', listener); return () => window.removeEventListener('focus', listener); } }); }
 catch (error) { console.error(error); }

@@ -11481,3 +11481,94 @@ The person agreed (task board, 11-11) that deliveries on hold are shown in the s
 - A task given back that is returned again carries both reasons, one after the other.
 - Giving back does not change the count of returns of a branch: a branch returned more than twice is still the person's to decide.
 - A member who leaves the space after the task was given back keeps it assigned, as with any assigned task; the panel shows such a task as without a member.
+## Butler read log: a page that fails says so (2026-11-11, behind the closed entry)
+
+Requested (the integrator's dispatch): when the read log page cannot be bound,
+the window shows nothing, and the person takes that for "no records". Show the
+failure and its reason on the page, never as "no records", and make this
+page's window check catch it. The entry's switch stays closed; only the read
+log page and its checks change.
+
+Reproduced first, in the product's own hidden window with the entry's test
+switch on and the page's program kept out of the window: the window started,
+and choosing "what it has read" from the entry showed a notice for a few
+seconds saying the log could not be read right now, and no page. That sentence
+is the one used when the log file itself cannot be read, so it also blamed the
+wrong thing. A second silent case was found on the way: a page that was set up
+and then threw as it was asked for showed nothing at all.
+
+What happens now:
+- A page that could not be set up opens, when asked for, as a page in the read
+  log's own place with one sentence that says which of three things happened
+  (its program is not in this window; its place in the page is missing;
+  setting it up failed), that this is a fault of the interface, that it does
+  not mean the butler read nothing, and what to do. If the page has no place
+  in the window, one is made for it.
+- A page that was set up and fails as it is asked for, at the call or later,
+  is torn down and replaced by the same view with a fourth reason.
+- A failure while drawing what was read says that the log was read and the
+  page could not show it. It used to say the log could not be read.
+- If the failure view itself cannot be shown, a notice says it is the page
+  that failed. Nothing in any of these reads as an empty or unreadable log,
+  and no error text reaches the screen; the error goes to the console.
+
+The sentences first said "the log file has not been touched". The window
+cannot know that, so it now says what the code supports: this page only
+displays the log, so its failing to open does not change the log file. That
+rests on three facts, each tested: the page's program makes one kind of call,
+the read; the main process answers it with the log's read and nothing else;
+and that read leaves the file byte for byte as it was, with no lock left.
+
+Checks (author-run, no model):
+- Unit tests run the window's own setup lines with each part missing, and
+  with pages that fail at the call, later, and at teardown. 49 deliberate
+  faults in the changed lines and sentences; a first run let one through (the
+  test's stand-in for a dialog accepted being shown twice) and showed that a
+  teardown that throws had no test. Both are fixed; all are caught.
+- The hidden-window check has a second launch that asks for the page from the
+  entry, as a person would, in four cases (the program missing and the place
+  in the page gone, each in both languages and at both widths), then opens
+  the real log with nothing broken. Five deliberate faults, each caught by
+  that check, the first being the reported one.
+- Counts for the full suite and the three hidden-window checks are in the
+  commit message.
+
+Not verified, or known:
+- Two of the four reasons are reached only in unit tests. In this window the
+  page is built and set up in one step, so the check cannot take the page's
+  place away before the setup, and a setup that throws with both parts present
+  has no way to be provoked from outside.
+- The entry's own setup failure is unchanged: the row is then absent, and
+  nothing says why. The dispatch limited this change to the read log page.
+- The sentences are new text the person has not seen. They are on the
+  screenshots kept with the private evidence.
+- A failure while drawing "reading", "cannot be read" or the drawing-failure
+  sentence itself is not caught when it comes from Refresh or "earlier
+  records": the page can then be left half drawn. When the page is being
+  opened, the window's failure view takes over. No way to provoke it is known.
+- A clock that cannot be read as the log arrives is still said as "the log
+  cannot be read", though the log was read. The window's clock does not throw.
+- If the file the page's program loads its view from is missing, the reason
+  given is "setting it up failed", which is true and less exact than it could
+  be.
+- After a failure at opening, the failure view stays for the life of that
+  window even if the cause was passing; the sentence says to reopen NAW.
+
+Independent read-only review (one fresh session, the code as rebased onto
+main; the CLI reported the model as claude-opus-5-5): `PASS_WITH_NOTES`,
+nothing blocking. It followed each of the six ways the page can fail to a
+statement on the page, found no effect on the daily window with the switch
+closed, and checked the sentence about the log file against the page's one
+call, the main process's answer and the log's read. Its notes are the four
+items above and three about the tests; of those, one assertion that could
+not fail in two of three cases now checks what it names, and a comment that
+claimed more than the code does is narrowed. Those two edits and this record
+were made after the review and change no behaviour. The reviewer read the
+run results from before the rebase; the code patch is the same after it
+(same patch id), and the full suite and the window check were run again on
+the rebased commit by the author.
+
+One failure was seen once in a full run made while the reviewer was reading
+on the same machine: a background-conversation test about a refused
+operation's summary id, in files this change does not touch. That file
+passed alone three times, and the full run made alone passes.
