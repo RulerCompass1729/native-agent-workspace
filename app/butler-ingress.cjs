@@ -1,0 +1,137 @@
+'use strict';
+// Local business facts only. This intake has no native/model, timer, queue-write
+// or lifecycle dependency. The working-day recording trial remains off.
+const { createHash } = require('node:crypto');
+const { ButlerLedger } = require('./butler-ledger.cjs');
+const { validateEvent } = require('./butler-policy.cjs');
+const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const unavailable = () => Object.assign(Error('Butler source unavailable'), { code: 'BUTLER_SOURCE_UNAVAILABLE' });
+const clipped = (value, limit) => typeof value === 'string' && value ? value.slice(0, limit) : undefined;
+
+function queueOutcomeSource(outcome) {
+  if (!outcome || !(outcome.status === 'failed' || outcome.status === 'waiting' && !outcome.reason)) return null;
+  const { roomId, itemId, eventId } = outcome;
+  const sourceRef = `queue-outcome:${roomId}:${eventId}`;
+  const decision = outcome.status === 'waiting';
+  const payload = { spaceId: roomId, itemId };
+  if (clipped(outcome.memberId, 200)) payload.memberId = clipped(outcome.memberId, 200);
+  if (clipped(outcome.memberName, 200)) payload.memberName = clipped(outcome.memberName, 200);
+  if (clipped(outcome.task, 6000)) payload.text = clipped(outcome.task, 6000);
+  if (decision) {
+    payload.questionKey = `queue-decision:${roomId}:${itemId}`;
+    payload.decisionKind = 'queue-decision';
+    payload.title = clipped(outcome.question, 400) || clipped(outcome.task, 400) || 'Queue decision';
+  } else if (clipped(outcome.reason, 2000)) payload.reason = clipped(outcome.reason, 2000);
+  const event = { eventId: `butler-source:${hash([roomId, eventId])}`, sourceRef, kind: decision ? 'decision' : 'failure', payload };
+  try { return validateEvent(event); }
+  catch {
+    // Keep a safe source reference instead of copying rejected business text.
+    return validateEvent({ eventId: event.eventId, sourceRef, kind: 'blocked', payload: { spaceId: roomId, itemId, reason: 'input-rejected' } });
+  }
+}
+
+// Auxiliary B4 data is interpreted after the space has loaded. A damaged or
+// newly rejected source cannot change the availability of its original space.
+function storedQueueSource(roomId, event) {
+  const parent = [roomId, event.id], sourceRef = `queue-outcome:${roomId}:${event.id}`;
+  try {
+    const value = validateEvent(event.butlerSource);
+    if (value.eventId !== `butler-source:${hash(parent)}` || value.sourceRef !== sourceRef ||
+        value.payload.spaceId !== roomId || !value.payload.itemId || !['decision', 'failure', 'blocked'].includes(value.kind) ||
+        value.kind === 'blocked' && value.payload.reason !== 'input-rejected' ||
+        value.kind === 'decision' && (!value.payload.title || value.payload.decisionKind !== 'queue-decision' ||
+          value.payload.questionKey !== `queue-decision:${roomId}:${value.payload.itemId}`)) throw unavailable();
+    return value;
+  } catch {
+    const rejected = { eventId: `butler-source-rejected:${hash(parent)}`, sourceRef, kind: 'blocked',
+      payload: { spaceId: roomId, itemId: event.id, reason: 'source-invalid' } };
+    try { return validateEvent(rejected); }
+    catch { return validateEvent({ eventId: rejected.eventId, sourceRef: `room-event:${hash(parent)}`,
+      kind: 'blocked', payload: { reason: 'source-invalid' } }); }
+  }
+}
+
+class ButlerIngress {
+  constructor(directory, { roomState, ledger = new ButlerLedger(directory) } = {}) {
+    if (!roomState || typeof roomState.butlerSources !== 'function') throw unavailable();
+    this.roomState = roomState; this.ledger = ledger; this.errors = new Map();
+    for (const event of ledger.snapshot().events) this.sourceStatus(event);
+  }
+  sourceStatus(event) {
+    if (event.kind === 'blocked' && ['input-rejected', 'source-invalid'].includes(event.payload.reason)) this.errors.set(event.sourceRef, 'source-rejected');
+    else this.errors.delete(event.sourceRef);
+  }
+  status() {
+    const errorCode = [...this.errors.values()].includes('source-unavailable') ? 'source-unavailable' : this.errors.size ? 'source-rejected' : null;
+    return { intake: errorCode ? 'blocked' : 'ready', errorCode,
+      activation: 'off', recordPeriod: 'off' };
+  }
+  record(event) {
+    const scope = event?.sourceRef || 'unknown-source';
+    try {
+      validateEvent(event);
+      this.ledger.ingest(event);
+      if (event.kind === 'decision') {
+        const reserved = this.ledger.reserveQuestion({ sourceRef: event.sourceRef, decisionKind: event.payload.decisionKind,
+          text: event.payload.title || event.payload.text });
+        // B1 owns the direct notification. An intake receipt cannot prove that
+        // the operating system delivered it, and must never cause another ask.
+        if (reserved.shouldNotify) this.ledger.ackDelivery(reserved.deliveryId, 'unknown');
+      }
+      if (['decision', 'failure', 'blocked'].includes(event.kind)) this.ledger.consumeRecorded([event.eventId]);
+      this.sourceStatus(event);
+      return { status: 'recorded', eventId: event.eventId };
+    } catch { this.errors.set(scope, 'source-unavailable'); throw unavailable(); }
+  }
+  captureOutcome(roomId, eventId) {
+    const scope = `queue-outcome:${roomId}:${eventId}`;
+    try {
+      const event = this.roomState.metadata(roomId).events.find(value => value.id === eventId);
+      return event && Object.hasOwn(event, 'butlerSource') ? this.record(storedQueueSource(roomId, event)) : { status: 'ignored' };
+    } catch { this.errors.set(scope, 'source-unavailable'); throw unavailable(); }
+  }
+  recover() {
+    try {
+      let count = 0;
+      for (const delivery of this.ledger.snapshot().deliveries) {
+        if (delivery.status === 'reserved') this.ledger.ackDelivery(delivery.deliveryId, 'unknown');
+      }
+      let failed = false;
+      for (const event of this.roomState.butlerSources()) {
+        try { this.record(event); count++; } catch { failed = true; }
+      }
+      if (failed) throw unavailable();
+      this.errors.delete('source-store'); return { status: 'recorded', count };
+    } catch { this.errors.set('source-store', 'source-unavailable'); throw unavailable(); }
+  }
+  observeQueues(states) {
+    let failed = false;
+    for (const value of states) {
+      const scope = `queue-vacancy:${value.roomId}`;
+      try {
+        // Settling after an app restart is unknown, not evidence that a
+        // previously recorded empty episode ended while the app was closed.
+        if (!value.active && value.candidateIds?.length) continue;
+        const payload = { spaceId: value.roomId };
+        if (clipped(value.name, 200)) payload.spaceName = clipped(value.name, 200);
+        let rejected = false;
+        try { validateEvent({ eventId: 'vacancy-projection', kind: 'queue-empty', sourceRef: scope, payload }); }
+        catch {
+          delete payload.spaceName; rejected = true;
+          validateEvent({ eventId: 'vacancy-projection', kind: 'queue-empty', sourceRef: scope, payload });
+        }
+        this.ledger.observeSource(scope, value.active, payload);
+        if (rejected) this.errors.set(scope, 'source-rejected'); else this.errors.delete(scope);
+      } catch { this.errors.set(scope, 'source-unavailable'); failed = true; }
+    }
+    if (failed) throw unavailable();
+  }
+}
+
+function bindQueueOutcomes(roomState, ingress, notify) {
+  roomState.onQueueOutcome = outcome => {
+    try { ingress?.captureOutcome(outcome.roomId, outcome.eventId); }
+    finally { notify(outcome); }
+  };
+}
+module.exports = { ButlerIngress, queueOutcomeSource, storedQueueSource, bindQueueOutcomes };

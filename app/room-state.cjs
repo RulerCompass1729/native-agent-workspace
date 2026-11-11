@@ -6,6 +6,7 @@ const { validateName } = require('./session-labels.cjs');
 const { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
 const { captureSource, prepareBatch, assertCurrentSources, sameOperation, validateBatch } = require('./space-merge.cjs');
 const queueRules = require('./queue-dispatch.cjs');
+const { queueOutcomeSource, storedQueueSource } = require('./butler-ingress.cjs');
 const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f]/u.test(id);
 const memberOrder = value => Array.isArray(value) && value.length <= 10000 ? [...new Set(value.filter(orderId))] : [];
 const contentEvents = events => events.filter(e => !(e.kind === 'control-audit' && e.controlAudit));
@@ -65,6 +66,7 @@ function validateRoom(data) {
   if (!data || data.version !== 1 || validateName(data.name) !== data.name || typeof data.notes !== 'string' || data.notes.length > 8000 || !Number.isSafeInteger(data.revision) || data.revision < 0 || !Array.isArray(data.events)) throw Error('Invalid room');
   for (const e of data.events) if (!e || typeof e.id !== 'string' || e.role !== 'system' || typeof e.text !== 'string' || !Number.isFinite(e.time) || (e.sessionId !== undefined && typeof e.sessionId !== 'string')) throw Error('Invalid event');
   if (data.events.some(e => e.controlAudit !== undefined && (e.kind !== 'control-audit' || !validControlAudit(e.controlAudit)))) throw Error('Invalid maintenance event');
+  // B4 metadata is auxiliary; intake policy must not disable this space.
   for (const key of ['archivedSessions', 'restoreMembers']) if (data[key] !== undefined && (!Array.isArray(data[key]) || data[key].some(id => !orderId(id)))) throw Error('Invalid archive');
   if (data.sessionArchives !== undefined && (!data.sessionArchives || typeof data.sessionArchives !== 'object' || Array.isArray(data.sessionArchives) || Object.keys(data.sessionArchives).length > 10000 ||
       Object.entries(data.sessionArchives).some(([id, p]) => !orderId(id) || !validSessionArchive(p)))) throw Error('Invalid session archive placement');
@@ -89,6 +91,15 @@ function copyQueue(queue) {
     copy.push({ ...item, ...(item.creator ? { creator: { ...item.creator } } : {}) });
   }
   return copy;
+}
+
+// Internal intake records stay in local space storage, including malformed
+// records kept for recovery. They are not part of a renderer event projection.
+function displayEvents(events) {
+  return events.map(event => {
+    if (!Object.hasOwn(event, 'butlerSource')) return event;
+    const display = { ...event }; delete display.butlerSource; return display;
+  });
 }
 
 // One desktop-profile writer, independent of retained provider services.
@@ -476,6 +487,14 @@ class RoomState {
     if (value.files.some(f => f.id === fileId)) this.update({ files: value.files.filter(f => f.id !== fileId) }, { kind: 'files', ...uiNotice('notice.room.fileRemoved') }, id);
   }
   // Task queue (queue-dispatch.cjs). The person or designated secretary adds; NAW sends.
+  // These compact sources live with the durable space event. Recovery does not
+  // depend on a notification callback, a retained queue item or native history.
+  butlerSources() {
+    if (this.warning || this.spacesWarning) throw Object.assign(Error(this.warning || this.spacesWarning), {
+      uiMessage: this.warning ? this.warningUiMessage : this.spacesWarningUiMessage });
+    return structuredClone([{ id: DEFAULT_ROOM_ID, events: this.value.events }, ...this.spaces.rooms].flatMap(room => room.events
+      .filter(event => Object.hasOwn(event, 'butlerSource')).map(event => storedQueueSource(room.id, event))));
+  }
   queueItems(id) {
     const value = this.metadata(id);
     if (Array.isArray(value.queue)) {
@@ -610,12 +629,22 @@ class RoomState {
       const params = { text, name, reason: reason || '' };
       event = { kind: 'queue', sessionId: item.sentTo, ...uiNotice('notice.queue.failed', params) };
     }
+    const needsPerson = status === 'failed' || status === 'waiting' && !reason;
+    const decisionQuestion = question ?? queueRules.shortText(item.text);
+    if (event && needsPerson) {
+      // The event and its B4 source must share this exact persisted identity.
+      // update() retains an explicitly supplied ID when it constructs the row.
+      event.id = randomUUID();
+      const source = queueOutcomeSource({ roomId: id, itemId, eventId: event.id, status, reason,
+        memberId: item.sentTo, memberName: name, task: item.text, question: decisionQuestion });
+      if (source) event.butlerSource = source;
+    }
     const eventId = this.queueReplace(id, itemId, next, event);
-    if (eventId && (status === 'failed' || status === 'waiting' && !reason)) {
+    if (eventId && needsPerson) {
       try {
         this.onQueueOutcome?.({ roomId: id, itemId, eventId, status, reason, memberId: item.sentTo,
           memberName: name, task: queueRules.shortText(item.text, 40), reply,
-          question: question ?? queueRules.shortText(item.text) });
+          question: decisionQuestion });
       } catch { /* Notification failure cannot undo the persisted space record. */ }
     }
   }
@@ -916,12 +945,12 @@ class RoomState {
     const metadata = [{ ...this.value, id: DEFAULT_ROOM_ID }, ...this.spaces.rooms];
     const rooms = metadata.map(value => {
       const backend = (snapshot.rooms || [snapshot.room]).find(r => r?.id === value.id || value.id === DEFAULT_ROOM_ID && r && !r.id);
-      return { ...(backend || { id: value.id, revision: 0, run: null, messages: [] }), id: value.id, name: value.name, notes: value.notes, metadataRevision: value.revision, events: value.events, archived: value.archived, memberOrder: [...value.memberOrder], files: value.files.map(f => ({ ...f })), queue: copyQueue(value.queue),
+      return { ...(backend || { id: value.id, revision: 0, run: null, messages: [] }), id: value.id, name: value.name, notes: value.notes, metadataRevision: value.revision, events: displayEvents(value.events), archived: value.archived, memberOrder: [...value.memberOrder], files: value.files.map(f => ({ ...f })), queue: copyQueue(value.queue),
         ...(value.merge ? { merge: { operationId: value.merge.batch.operationId, binding: value.merge.batch.binding, stage: value.merge.stage,
           imported: value.merge.imported, failures: [...value.merge.failures], failuresUiMessage: value.merge.failuresUiMessage || null, undoKeptTarget: Boolean(value.merge.undoKeptTarget),
           sources: value.merge.sources.map(source => ({ id: source.id, name: value.merge.batch.sources.find(original => original.id === source.id)?.name, status: source.status, error: source.error || '', errorUiMessage: source.errorUiMessage || null })),
           notes: value.merge.batch.blocks.filter(block => block.notes !== null && block.notes !== '').map(block => ({ roomId: block.roomId, name: block.name, text: block.notes })),
-          events: value.merge.batch.blocks.filter(block => block.events.length).map(block => ({ roomId: block.roomId, name: block.name, events: structuredClone(block.events) })) } } : {}) };
+          events: value.merge.batch.blocks.filter(block => block.events.length).map(block => ({ roomId: block.roomId, name: block.name, events: structuredClone(displayEvents(block.events)) })) } } : {}) };
     });
     return { ...snapshot, sessions: snapshot.sessions.map(s => ({ ...s, archived: this.value.archivedSessions.includes(s.id) })), roomStorageWarning: this.warning || this.spacesWarning, roomStorageWarningUiMessage: this.warning ? this.warningUiMessage : this.spacesWarningUiMessage, rooms, room: rooms.find(r => r.id === selected) || { id: selected, name: '空间资料未能读取', unavailable: true, archived: true, messages: [], events: [], files: [], notes: '', memberOrder: [], metadataRevision: 0 } };
   }

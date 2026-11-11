@@ -17,6 +17,7 @@ const { ImagePreviews, imageSource } = require('./native-images.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary } = require('./queue-secretary.cjs');
+const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { CreationDefaults } = require('./creation-defaults.cjs');
 const { readingState } = require('./reading-state.cjs');
 const { ViewStore, validViews, dropRetiredViewFields } = require('./view-store.cjs');
@@ -84,7 +85,7 @@ const queueOutcomeSeen = new Set(), queueOutcomeNotifications = new Map();
 let pendingReveal = null;
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
-let dataDir, sessionLabels, roomState, queueSecretary, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
+let dataDir, sessionLabels, roomState, queueSecretary, butlerIngress, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
 let applicationBuild, applicationMenu;
 let mobileBroker;
@@ -423,7 +424,8 @@ function displayState(snapshot, context) {
   try { secretary = queueSecretary?.current() || null; } catch { secretaryWarning = displayText('error.queue.secretaryState'); }
   const warning = [outboxWarning, secretaryWarning].filter(Boolean).join('\n');
   return { ...display, queueSecretary: secretary, ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
-    switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [] };
+    switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
+    butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
 }
 function reportViewStorage(warning, uiMessage = null) {
   if (viewStorageWarning === warning) return;
@@ -460,6 +462,8 @@ async function startQueueDispatcher() {
       broadcast: broadcastRoom,
       notify: notifyRotation,
       creationDefaults: snapshot => creationDefaults.get(snapshot?.sessions || []),
+      // Passive local facts only; no controller or native/model runner is bound.
+      observeQueueState: states => butlerIngress?.observeQueues(states),
     };
     if (backgroundTest && process.env.NAW_TEST_QUEUE_DIRECTORY_MIGRATION === '1') options.migrateDirectories = true;
     // Only a verified isolated test run may lower the record limit, the memory limit
@@ -946,7 +950,9 @@ async function boot() {
   }
   sessionLabels = new SessionLabels(dataDir);
   roomState = new RoomState(dataDir);
-  roomState.onQueueOutcome = notifyQueueOutcome;
+  try { butlerIngress = new ButlerIngress(dataDir, { roomState }); butlerIngress.recover(); }
+  catch { /* Sources stay in the committed room events; status remains blocked. */ }
+  bindQueueOutcomes(roomState, butlerIngress, notifyQueueOutcome);
   queueSecretary = new QueueSecretary(dataDir);
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
   creationDefaults = new CreationDefaults(dataDir, { defaultWorkspace, newWorkspaceRoot: `${path.resolve(defaultWorkspace)}-sessions` });
