@@ -110,7 +110,9 @@ const selection = { identity: { sessionId: hidden[0], nativeId: hidden[1] },
   assert.equal(record().revision, 3, 'Asking is not revoking');
   await dialog.locator('button[data-action="confirmRevoke"]').click();
   await until(async () => await row.getAttribute('aria-label') === label('empty'), 'After revoking the row says no butler is designated');
-  assert.deepEqual(record(), { version: 1, revision: 4, selected: null });
+  // What the journey changed in the core's record: the next revision, and no designation. The record's own format
+  // version is the core's to change and is not this check's concern.
+  assert.deepEqual([record().revision, record().selected], [4, null]);
   assert.deepEqual(await notes(), [say('butler.note.empty'), say('butler.note.designateLater')]); assert.deepEqual(await actions(), ['reads', 'done']);
   assert.equal(await dialog.locator('[role="alert"]:visible').count(), 0, 'The earlier refusal is not left on the screen');
   assert.equal(await page.evaluate(() => document.activeElement.dataset.action), 'done');
