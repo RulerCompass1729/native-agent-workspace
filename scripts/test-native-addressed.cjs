@@ -4,23 +4,30 @@ const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real Electron + native Claude/Codex; fixed loopback responses exercise tool
 // calls and transport, not model judgement. No paid inference or global settings.
-const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { execFileSync } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs');
 const { connect } = require('../app/service-client.cjs');
+const loopback = require('./fixtures/loopback-model.cjs'), codexQualification = require('../app/codex-qualification.cjs');
 const root = path.resolve(__dirname, '..'), base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-addressed-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work');
 const homes = { claude: path.join(base, 'claude'), codex: path.join(base, 'codex') };
 for (const dir of [profile, cwd, ...Object.values(homes)]) fs.mkdirSync(dir, { mode: 0o700 });
 const binaries = Object.fromEntries(['claude', 'codex'].map(p => [p, fs.realpathSync(executable(p))]));
 const versions = Object.fromEntries(Object.entries(binaries).map(([p, file]) => [p, execFileSync(file, ['--version'], { encoding: 'utf8' }).trim()]));
-const nativeVersion = process.env.NAW_CODEX_VERSION || '0.163.0';
-assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
-assert.match(versions.claude, /^2\.1\.(309|310|311)\b/); assert.equal(versions.codex, 'codex-cli ' + nativeVersion);
+// The addressed tool is offered by the product on the Codex versions it has qualified for it; follow that gate.
+// NAW_CODEX_VERSION, when given, must name the installed version.
+const nativeVersion = versions.codex.replace(/^codex-cli /, '');
+assert.ok(codexQualification.allows('addressedTool', nativeVersion), `Codex is not qualified for the addressed tool: ${versions.codex}`);
+if (process.env.NAW_CODEX_VERSION) assert.equal(nativeVersion, process.env.NAW_CODEX_VERSION);
+// Claude: 2.1.309-311 are the versions this script was written on; exact 2.1.322 is the version it runs on inside
+// the loopback fixture (2026-11-10).
+assert.match(versions.claude, /^2\.1\.(309|310|311|322(?=\s|$))\b/, 'Verify the native contract on this Claude version before sending a test task');
 let app, page, ids = {}, held, release, sequence = 0;
 const counts = { claude: 0, codex: 0 }, errors = [], checks = [];
 let tokenCountRequests = 0;
+const trustPresses = [], startup = [];
 const deny = process.env.NAW_TEST_NATIVE_DENY === '1';
 const three = process.env.NAW_TEST_THREE_MEMBERS === '1';
 const peer = process.env.NAW_TEST_PEER_DIRECTED === '1';
@@ -38,10 +45,13 @@ function claudeBlock(res, index, content) {
   event(res, 'content_block_delta', { index, delta: content.type === 'text' ? { type: 'text_delta', text: content.text } : { type: 'input_json_delta', partial_json: JSON.stringify(content.input) } });
   event(res, 'content_block_stop', { index });
 }
-const server = http.createServer((req, res) => {
-  let body = ''; req.on('data', b => body += b); req.on('end', async () => {
+// One B11 loopback fixture per provider: each real CLI runs in its own sandbox and reaches only its own fixture's
+// port on 127.0.0.1. Both use the same fixed responses below.
+const respond = owner => async (req, res, body) => {
+  {
     const provider = req.url.endsWith('/responses') ? 'codex' : req.url.startsWith('/v1/messages') && !req.url.includes('count_tokens') ? 'claude' : null;
     if (req.url.includes('count_tokens')) tokenCountRequests++;
+    if (provider && provider !== owner) throw Error(`${owner} fixture received a ${provider} request`);
     if (!provider) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"input_tokens":100,"data":[]}'); return; }
     const number = ++counts[provider], input = JSON.parse(body);
     fs.writeFileSync(path.join(base, `${provider}-${number}-request.json`), body);
@@ -91,8 +101,11 @@ const server = http.createServer((req, res) => {
       event(res, 'response.output_item.done', { output_index: 0, item });
       event(res, 'response.completed', { response: { ...response, status: 'completed', output: [item] } }); res.end();
     }
-  });
-});
+  }
+};
+const fixtures = Object.fromEntries(['claude', 'codex'].map(p => [p, loopback.create({ directory: base, provider: p, respond: respond(p) })]));
+const clean = () => { for (const fixture of Object.values(fixtures)) fixture.assertClean(); };
+const summaries = () => Object.fromEntries(Object.entries(fixtures).map(([p, fixture]) => [p, fixture.summary()]));
 async function launch() {
   app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root],
     ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}),
@@ -105,26 +118,61 @@ async function create(provider, key = provider) {
   const previous = new Set((await snapshot()).sessions.map(s => s.id));
   const created = async () => (await snapshot()).sessions.find(s => s.provider === provider && !previous.has(s.id));
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#session-name').fill(three ? '核查员' : provider === 'claude' ? '预算方案' : '预算核查'); await createIn(page, provider === 'claude' ? 'terminal' : 'chat');
+  await page.locator('#session-name').fill(three ? '核查员' : provider === 'claude' ? '预算方案' : '预算核查');
+  // NAW starts each session in its own folder; it must be inside this test's owned base.
+  const chosen = await page.locator('#chosen-folder').innerText(), owned = [path.resolve(base), fs.realpathSync(base)].find(dir => chosen.startsWith(dir + path.sep));
+  assert.ok(owned, 'Only owned fixture folders'); const canonicalChosen = fs.realpathSync(base) + chosen.slice(owned.length);
+  await createIn(page, provider === 'claude' ? 'terminal' : 'chat');
   if (provider === 'claude') {
-    await until(async () => /Yes, I trust this folder|Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()) || (await created())?.chatAvailable, 'Native Claude startup');
-    if ((await page.locator('#terminal-area').innerText()).includes('Yes, I trust this folder')) {
-      assert.ok((await page.locator('#terminal-area').innerText()).includes(fs.realpathSync(cwd)));
-      await page.locator('#terminal-area .xterm-helper-textarea').waitFor({ state: 'visible' });
+    // Read and type only in this session's own terminal, so that with two Claude sessions the question answered
+    // is always the new session's own.
+    await until(async () => Boolean(await created()), 'New session listed');
+    const terminal = page.locator(`[data-terminal-id="${(await created()).id}"]`), shown = () => terminal.innerText().catch(() => '');
+    const seen = text => ({ trust: text.includes('Yes, I trust this folder'), key: text.includes('Do you want to use this API key'), banner: text.includes('Claude Code v2') });
+    const note = (step, extra = {}) => startup.push({ session: key, step, ...extra });
+    // Give the terminal the keyboard without a pointer click on its screen, so the native question receives
+    // nothing but the keys below.
+    const focusTerminal = async () => {
+      await terminal.locator('.xterm-helper-textarea').focus();
+      await until(async () => terminal.locator('.xterm-helper-textarea').evaluate(el => el === document.activeElement), 'Native terminal input focused');
+    };
+    note('created', { area: seen(await page.locator('#terminal-area').innerText()), own: seen(await shown()) });
+    await terminal.waitFor({ state: 'visible' });
+    await until(async () => /Yes, I trust this folder|Do you want to use this API key|Claude Code v2/.test(await shown()) || (await created())?.chatAvailable, 'Native Claude startup');
+    note('first question or banner', { own: seen(await shown()) });
+    if ((await shown()).includes('Yes, I trust this folder')) {
+      assert.ok((await shown()).replace(/\s/g, '').includes(canonicalChosen.replace(/\s/g, '')), 'Native trust question names only the exact owned folder');
+      await terminal.locator('.xterm-helper-textarea').waitFor({ state: 'visible' });
       await until(async () => !(await page.locator('#terminal-paste').isDisabled()), 'Native terminal input ready');
-      await page.locator('#terminal-area .xterm-screen').click();
-      await until(async () => page.locator('#terminal-area .xterm-helper-textarea').evaluate(el => el === document.activeElement), 'Native terminal input focused');
-      const selectedTrust = async () => /[❯›>]\s*(?:\d+[.)]\s*)?Yes, I trust this folder/.test(await page.locator('#terminal-area').innerText());
-      if (!(await selectedTrust())) await page.keyboard.press('ArrowDown');
-      await until(selectedTrust, 'Exact native trust choice selected');
-      await page.keyboard.press('Enter');
+      await focusTerminal();
+      const selectedTrust = async () => /[❯›>]\s*(?:\d+[.)]\s*)?Yes, I trust this folder/.test(await shown());
+      // The native default is "No, exit". Claude 2.1.322 redraws this question within about a second of showing it
+      // and forgets keys pressed before that (measured: an immediate key is lost, or Yes is selected and then reset;
+      // after 1.5 s one press and Enter are taken). So read it first, as a person does; then press, look, and press
+      // again only if nothing moved. Enter is pressed only while Yes is shown as selected, and the question must close.
+      await sleep(1500);
+      for (let round = 0; round < 3 && (await shown()).includes('Yes, I trust this folder'); round++) {
+        let presses = 0;
+        for (; presses < 5 && !(await selectedTrust()); presses++) { await page.keyboard.press('ArrowDown'); await until(selectedTrust, 'moved', 3000).catch(() => {}); }
+        assert.ok(await selectedTrust(), 'Exact native trust choice selected'); trustPresses.push(presses);
+        note('trust answered', { round, presses, choice: (await shown()).split('\n').filter(line => /No, exit|Yes, I trust/.test(line)) });
+        await page.keyboard.press('Enter');
+        await until(async () => !(await shown()).includes('Yes, I trust this folder'), 'closed', 5000).catch(() => {});
+      }
+      assert.ok(!(await shown()).includes('Yes, I trust this folder'), 'Native trust question closes after the answer');
     }
-    await until(async () => /Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()) || (await created())?.chatAvailable, 'Native key choice');
-    if ((await page.locator('#terminal-area').innerText()).includes('Do you want to use this API key')) { await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.press('ArrowUp'); await sleep(200); await page.keyboard.press('Enter'); }
+    await until(async () => /Do you want to use this API key|Claude Code v2/.test(await shown()) || (await created())?.chatAvailable, 'Native key choice');
+    note('key question or banner', { own: seen(await shown()) });
+    if ((await shown()).includes('Do you want to use this API key')) { await focusTerminal(); await page.keyboard.press('ArrowUp'); await sleep(200); await page.keyboard.press('Enter'); }
   }
   await until(async () => { const s = await created(); return s?.state === 'idle' && s.chatAvailable && s.addressedSendAvailable; }, `${provider} addressed tool connected`, 60000);
   const s = await created(); ids[key] = s.id;
   await joinSpace(page); return s;
+}
+// Usage is a header button where there is room for it; otherwise an item in the session's or the space's own ⋯ menu.
+async function openUsage() {
+  if (await page.locator('#usage-button').isVisible()) await page.locator('#usage-button').click();
+  else { await page.locator(await page.locator('#session-header-more').isVisible() ? '#session-header-more' : '#room-header-more').click(); await page.getByRole('menuitem', { name: '用量', exact: true }).click(); }
 }
 async function start(first, text) {
   const previousRun = (await snapshot()).room.run?.id;
@@ -137,8 +185,9 @@ async function start(first, text) {
   await until(async () => { const run = (await snapshot()).room.run; return run?.id && run.id !== previousRun; }, 'The authorized native round is visible');
 }
 (async () => {
-  console.log('Evidence:', base); await new Promise(r => server.listen(0, '127.0.0.1', r));
-  const address = `http://127.0.0.1:${server.address().port}`;
+  console.log('Evidence:', base);
+  for (const fixture of Object.values(fixtures)) { await fixture.start(); await fixture.preflight(); }
+  const address = fixtures.codex.endpoint;
   fs.writeFileSync(path.join(homes.codex, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local fixture"\nbase_url = "${address}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
   fs.writeFileSync(path.join(homes.claude, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
   if (deny) {
@@ -148,9 +197,9 @@ async function start(first, text) {
   }
   const shims = {};
   for (const p of ['claude', 'codex']) {
-    const env = p === 'codex' ? { CODEX_HOME: homes[p] } : { ANTHROPIC_BASE_URL: address, ANTHROPIC_API_KEY: 'local-fixture', CLAUDE_CONFIG_DIR: homes[p], CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' };
     shims[p] = path.join(base, `${p}-local`);
-    fs.writeFileSync(shims[p], '#!/usr/bin/python3\nimport os,sys\nfor key in ["OPENAI_API_KEY","CODEX_API_KEY","ANTHROPIC_AUTH_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]: os.environ.pop(key,None)\n' + `os.environ.update(${JSON.stringify(env)})\n` + `os.execv(${JSON.stringify(binaries[p])},[${JSON.stringify(p)}]+sys.argv[1:]+${JSON.stringify(p === 'claude' ? ['--model', 'haiku', '--debug-file', path.join(base, 'claude-debug.log'), ...(manual ? ['--permission-mode', 'default'] : [])] : [])})\n`, { mode: 0o700 });
+    fixtures[p].wrapper(binaries[p], { file: shims[p], env: p === 'codex' ? { CODEX_HOME: homes[p] } : { CLAUDE_CONFIG_DIR: homes[p] },
+      args: p === 'claude' ? ['--model', 'haiku', '--debug-file', path.join(base, 'claude-debug.log'), ...(manual ? ['--permission-mode', 'default'] : [])] : [] });
   }
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify(shims), { mode: 0o600 });
   if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
@@ -174,7 +223,9 @@ async function start(first, text) {
     const identities = [claude, codex, second].map(s => [s.id, s.nativeId, s.pid]);
     for (const member of [claude, codex, second]) {
       const link = page.locator(`[data-session-id="${member.id}"]`);
-      assert.ok((await link.innerText()).includes(member.id.slice(0, 6)), 'Same-name sidebar distinguishes native sessions');
+      // Since the compact sidebar rows (2026-11-01) the row text shows the name only; the short id that tells
+      // same-name sessions apart is in the row's hover title, its accessible name and the session menu.
+      assert.ok((await link.getAttribute('title')).includes(member.id.slice(0, 6)), 'Same-name sidebar row identifies its exact session on hover');
       assert.ok((await link.getAttribute('aria-label')).includes(member.id.slice(0, 6)));
       assert.ok((await page.locator(`[data-session-menu="${member.id}"]`).getAttribute('aria-label')).includes(member.id.slice(0, 6)));
     }
@@ -288,7 +339,7 @@ async function start(first, text) {
     for (const member of [claude, second]) assert.ok(historyCopy.includes(member.id.slice(0, 6)), 'Copied history preserves removed authors');
     fs.writeFileSync(path.join(base, 'three-forgotten.json'), JSON.stringify(await snapshot(), null, 2));
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'three-native-addressed.png') }); }
-    console.log(JSON.stringify({ versions, crossService: peer, checks: [...checks, 'Three same-name native participants route by ID instead of roster order', 'Authorized handoffs continue while the interface is closed', 'Reopening restores native identities, history and unsent draft without replay', 'Member filtering and departure preserve the original terminal and shared records', 'Same-name sidebar, menus, member dialog, native notices, copied history and archive show exact identity; rename restores compact labels', 'Removing ended local session references preserves shared author and recipient identities'], counts, paidModelCalls: 0, evidence: base }, null, 2));
+    clean(); console.log(JSON.stringify({ versions, fixtures: summaries(), trustPresses, startup, crossService: peer, checks: [...checks, 'Three same-name native participants route by ID instead of roster order', 'Authorized handoffs continue while the interface is closed', 'Reopening restores native identities, history and unsent draft without replay', 'Member filtering and departure preserve the original terminal and shared records', 'Same-name sessions keep their exact identity in the sidebar row (hover title and accessible name), menus, member dialog, native notices, copied history and archive', 'Removing ended local session references preserves shared author and recipient identities'], counts, paidModelCalls: 0, evidence: base }, null, 2));
     return;
   }
   const identities = [claude, codex].map(s => [s.id, s.nativeId, s.pid]);
@@ -302,7 +353,7 @@ async function start(first, text) {
     assert.deepEqual(counts, { claude: 2, codex: 0 }); assert.deepEqual(errors, []);
     assert.equal(state.room.messages.filter(m => m.addressed).length, 0);
     assert.match(fs.readFileSync(path.join(base, 'claude-2-request.json'), 'utf8'), /Synthetic native policy denial/);
-    console.log(JSON.stringify({ versions, checks: ['Native PreToolUse denial overrides the named tool allowance; no peer input; room pauses'], counts, paidModelCalls: 0, evidence: base }, null, 2)); return;
+    clean(); console.log(JSON.stringify({ versions, fixtures: summaries(), trustPresses, startup, checks: ['Native PreToolUse denial overrides the named tool allowance; no peer input; room pauses'], counts, paidModelCalls: 0, evidence: base }, null, 2)); return;
   }
   assert.equal(state.room.run.status, 'completed'); assert.equal(state.room.run.steps, 3); assert.equal(state.diagnostics.dispatches, 3);
   assert.deepEqual(counts, { claude: 3, codex: 2 });
@@ -316,14 +367,14 @@ async function start(first, text) {
     const before = { ...counts };
     await fillRoomMessage(page, '用量查看期间保留的草稿'); await sleep(400);
     const recipient = (await snapshot()).viewState.roomRecipient;
-    await page.locator('#usage-button').click();
+    await openUsage();
     assert.equal(await page.locator('#privacy-dialog').getAttribute('data-mode'), 'usage');
     assert.equal(await page.locator('[data-usage-session]').count(), 2);
     assert.match(await page.locator(`[data-usage-session="${codex.id}"]`).innerText(), /累计 token：输入/);
     await page.locator('#refresh-trust').click(); await page.locator('#close-privacy').click();
     assert.equal(await roomBody(page), '用量查看期间保留的草稿');
     assert.equal((await snapshot()).viewState.roomRecipient, recipient);
-    await page.locator(`[data-session-id="${codex.id}"]`).click(); await page.locator('#usage-button').click();
+    await page.locator(`[data-session-id="${codex.id}"]`).click(); await openUsage();
     assert.equal(await page.locator('[data-usage-session]').count(), 1);
     assert.equal(await page.locator('[data-usage-session]').getAttribute('data-usage-session'), codex.id);
     assert.match(await page.locator('#trust-status').innerText(), /本机读数时间/);
@@ -372,8 +423,9 @@ async function start(first, text) {
     assert.equal(state.sessions.find(s => s.provider === 'claude').nativePermissionMode, 'default', 'Claude reported manual mode');
     checks.push('In manual mode the pre-allowed directed tool ran with no native prompt');
   }
-  console.log(JSON.stringify({ versions, checks, counts, paidModelCalls: 0, evidence: base }, null, 2));
+  clean(); console.log(JSON.stringify({ versions, fixtures: summaries(), trustPresses, startup, checks, counts, paidModelCalls: 0, evidence: base }, null, 2));
 })().catch(async error => {
+  fs.writeFileSync(path.join(base, 'startup.json'), JSON.stringify(startup, null, 2));
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); fs.writeFileSync(path.join(base, 'failure.json'), JSON.stringify(await snapshot().catch(() => ({})), null, 2)); }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
 }).finally(testScratch.cleanup(async () => {
@@ -386,5 +438,5 @@ async function start(first, text) {
       await until(() => owned.every(x => !processMayBeAlive(x)), 'Owned test service exits', 15000);
     } finally { client.close(); }
   } catch (error) { console.error('Cleanup:', error.message); process.exitCode = 1; }
-  server.closeAllConnections(); await new Promise(r => server.close(r));
+  for (const fixture of Object.values(fixtures)) await fixture.stop();
 }));
