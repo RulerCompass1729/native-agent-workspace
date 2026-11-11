@@ -36,7 +36,7 @@ header { min-height: 74px; padding: 14px 24px; }
 .conversation-pane-toolbar button { padding: 3px 6px; min-height: 26px; font-size: 11px; }
 .compact-session-surface .native-pane-toolbar, .compact-room-surface .native-pane-toolbar { padding: 3px 8px; min-height: 32px; gap: 5px; }
 .compact-session-surface #terminal-controls { gap: 4px; }
-.compact-session-surface #terminal-controls button, .compact-session-surface .native-pane-toolbar > button { padding: 3px 6px; min-height: 26px; font-size: 11px; }
+.compact-session-surface #terminal-controls button, .compact-session-surface .native-pane-toolbar > button, .compact-session-surface .native-pane-actions > button { padding: 3px 6px; min-height: 26px; font-size: 11px; }
 .compact-session-surface #terminal-display { display: none; }
 .compact-session-surface #terminal-selection-hint { font-size: 10px; line-height: 1.4; }
 .compact-session-surface .native-pane-toolbar strong { font-size: 11px; }
@@ -423,6 +423,27 @@ header h1, header p { overflow-wrap: anywhere; }
 .native-pane-toolbar strong{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .private-label{font-size:11px;color:var(--muted);margin-right:auto;white-space:nowrap}
 .native-pane-toolbar button{padding:4px 7px;font-size:12px;min-height:28px}
+/* T-163: the terminal pane's header. The hint-and-buttons group and the three buttons after it (more,
+   maximise, close) used to be separate items of the row, so in a short row whole buttons dropped to a second
+   row one by one: a lone close button in Chinese at 850 wide, "more, maximise, close" in English at the
+   default size, and the header grew from 33 to 64px. In the compact session layout they now sit together in
+   .native-pane-actions, on the right, in whatever room the title leaves. Inside it the hint gives way first:
+   it wraps onto a second line, breaking only at spaces so that a word such as 右键菜单 is not split, before
+   anything else changes; the buttons never shrink or wrap. When even that does not fit, the whole group
+   moves to a second row.
+   The group cannot wrap inside itself, so it is only formed where it fits on a row of its own: a header of
+   300px or more (it needs 249px in Chinese and 261px in English). In a narrower header (the divider dragged
+   until the terminal pane is at its narrowest) and in the layout that is not compact, the wrapper lays out
+   nothing and its children are items of the row as they always were. The header is the size container the
+   condition asks. */
+.native-pane-toolbar{container-type:inline-size}
+.native-pane-actions{display:contents}
+@container (min-width:300px){
+  .compact-session-surface .native-pane-toolbar .native-pane-actions{display:flex;align-items:center;justify-content:flex-end;gap:inherit;flex:1 1 0;min-width:min-content}
+  .compact-session-surface .native-pane-actions>#terminal-controls{flex:0 1 auto;flex-wrap:nowrap;min-width:min-content}
+  .compact-session-surface .native-pane-actions #terminal-selection-hint{flex:0 1 auto;min-width:8em;text-align:right;line-height:1.25;word-break:keep-all}
+  .compact-session-surface .native-pane-actions button{flex:none}
+}
 .native-pane #terminal-area{padding:8px;min-height:100px}
 .reading-controls{display:flex;gap:4px}
 .reading-controls button{font-size:12px;padding:5px 9px;background:transparent;border-color:transparent}
