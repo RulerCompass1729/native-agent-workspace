@@ -27,7 +27,7 @@ assert.match(versions.claude, /^2\.1\.(309|310|311|322(?=\s|$))\b/, 'Verify the 
 let app, page, ids = {}, held, release, sequence = 0;
 const counts = { claude: 0, codex: 0 }, errors = [], checks = [];
 let tokenCountRequests = 0;
-const trustPresses = [], startup = [], knownGaps = new Set();
+const trustPresses = [], startup = [];
 const deny = process.env.NAW_TEST_NATIVE_DENY === '1';
 const three = process.env.NAW_TEST_THREE_MEMBERS === '1';
 const peer = process.env.NAW_TEST_PEER_DIRECTED === '1';
@@ -231,12 +231,9 @@ async function start(first, text) {
     const identities = [claude, codex, second].map(s => [s.id, s.nativeId, s.pid]);
     for (const member of [claude, codex, second]) {
       const link = page.locator(`[data-session-id="${member.id}"]`);
-      // Requirement (issue U22 in docs/review.md): same-name sessions can be told apart in the sidebar. Since the
-      // compact rows (2026-11-01) the row text shows the name only, for every session, so this fails on the
-      // current product. Whether a same-name row shows its short id again is the person's decision
-      // (docs/product.md, row V13). Until then the requirement stands: the gap is reported in this run's output
-      // and the rest of the journey still runs.
-      if (!(await link.innerText()).includes(member.id.slice(0, 6))) knownGaps.add('Same-name sidebar rows do not show which session is which (requirement U22; awaiting the person, docs/product.md V13)');
+      // U22: same-name sessions are told apart in the sidebar. Each row shows its own short id beside the name.
+      assert.ok((await link.innerText()).includes(member.id.slice(0, 6)), 'Same-name sidebar distinguishes native sessions');
+      assert.equal(await link.locator('.session-short-id').isVisible(), true, 'The short id of a same-name row is shown');
       assert.ok((await link.getAttribute('aria-label')).includes(member.id.slice(0, 6)));
       assert.ok((await page.locator(`[data-session-menu="${member.id}"]`).getAttribute('aria-label')).includes(member.id.slice(0, 6)));
     }
@@ -317,9 +314,9 @@ async function start(first, text) {
     await page.locator(`[data-session-menu="${second.id}"]`).click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click();
     await page.locator('#rename-name').fill('材料核对'); await page.locator('#confirm-rename').click();
     await until(async () => (await page.locator(`[data-session-id="${second.id}"]`).getAttribute('aria-label')).includes('材料核对'), 'Rename propagates');
-    // The other half of U22. It cannot fail while no row shows a short id (see the known gap above); it means
-    // something again once same-name rows show theirs.
+    // The other half of U22: once its name is unique, the row no longer shows its short id.
     assert.ok(!(await page.locator(`[data-session-id="${second.id}"]`).innerText()).includes(second.id.slice(0, 6)), 'Unique name stays compact');
+    assert.equal(await page.locator(`[data-session-id="${second.id}"] .session-short-id`).isVisible(), false);
     assert.deepEqual((await snapshot()).sessions.map(s => [s.id, s.nativeId, s.pid]), identities);
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
     assert.match(await page.locator('#room-messages').innerText(), /材料核对/);
@@ -352,11 +349,8 @@ async function start(first, text) {
     for (const member of [claude, second]) assert.ok(historyCopy.includes(member.id.slice(0, 6)), 'Copied history preserves removed authors');
     fs.writeFileSync(path.join(base, 'three-forgotten.json'), JSON.stringify(await snapshot(), null, 2));
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'three-native-addressed.png') }); }
-    clean(); for (const gap of knownGaps) console.error('KNOWN GAP, not a pass for that requirement:', gap);
-    console.log(JSON.stringify({ versions, fixtures: summaries(), trustPresses, startup, crossService: peer, knownGaps: [...knownGaps], checks: [...checks, 'Three same-name native participants route by ID instead of roster order', 'Authorized handoffs continue while the interface is closed', 'Reopening restores native identities, history and unsent draft without replay', 'Member filtering and departure preserve the original terminal and shared records', 'Same-name sessions keep their exact identity in accessible names, menus, member dialog, native notices, copied history and archive', 'Removing ended local session references preserves shared author and recipient identities'], counts, paidModelCalls: 0, evidence: base }, null, 2));
-    // A standing requirement that fails is not a pass: exit 3 means every other check passed and the known gap(s)
-    // above still fail, so a tally by exit code does not count this run as a plain pass.
-    if (knownGaps.size) { console.error('Exit 3: every other check passed; the known gap(s) above still fail.'); process.exitCode = 3; }
+    clean();
+    console.log(JSON.stringify({ versions, fixtures: summaries(), trustPresses, startup, crossService: peer, checks: [...checks, 'Three same-name native participants route by ID instead of roster order', 'Authorized handoffs continue while the interface is closed', 'Reopening restores native identities, history and unsent draft without replay', 'Member filtering and departure preserve the original terminal and shared records', 'Same-name sessions show their own short id in the sidebar row and keep their exact identity in accessible names, menus, member dialog, native notices, copied history and archive; a unique name stays compact', 'Removing ended local session references preserves shared author and recipient identities'], counts, paidModelCalls: 0, evidence: base }, null, 2));
     return;
   }
   const identities = [claude, codex].map(s => [s.id, s.nativeId, s.pid]);

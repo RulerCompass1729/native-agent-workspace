@@ -50,6 +50,29 @@ async function capture(name) {
   fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true, mode: 0o700 });
   await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, name + '.png') });
 }
+// U22: a row shows its short id beside the name only when another listed session has the same name.
+const idShown = (p, id) => p.locator(`[data-session-row="${id}"] .session-short-id`).isVisible();
+async function sameName(expected, label) {
+  for (const p of [page, peer]) for (const [index, id] of ids.entries()) {
+    await until(async () => await idShown(p, id) === expected[index], `${label}: the short id of row ${index + 1} is ${expected[index] ? 'shown' : 'not shown'}`);
+  }
+}
+async function besideName(id, short, label) {
+  const row = page.locator(`[data-session-row="${id}"]`);
+  const box = await row.evaluate(element => {
+    const edges = node => { const b = node.getBoundingClientRect(); return { left: b.left, right: b.right, top: b.top, bottom: b.bottom }; };
+    return { link: edges(element.querySelector('.session-link')), title: edges(element.querySelector('.session-title')), id: edges(element.querySelector('.session-short-id')) };
+  });
+  assert.ok(box.id.left >= box.title.right - 1 && box.id.right <= box.link.right + 1, `${label}: the short id follows the name inside the row ${JSON.stringify(box)}`);
+  assert.ok(box.id.top < box.title.bottom && box.id.bottom > box.title.top, `${label}: the short id is on the name's line`);
+  assert.ok(box.title.right - box.title.left >= 24, `${label}: the name keeps room`);
+  assert.ok((await row.locator('.session-link').innerText()).includes(short), `${label}: the row's visible text carries the short id`);
+}
+async function interfaceLanguage(value) {
+  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption(value);
+  await until(async () => await page.locator('#ui-language').getAttribute('aria-busy') === 'false' && await page.locator('#setup-title').innerText() === (value === 'en' ? 'Settings' : '设置'), 'The interface language control accepts the requested language');
+  await page.locator('#close-setup').click(); await page.locator('#setup-dialog').waitFor({ state: 'hidden' });
+}
 async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Fixture service ready'); client = await connect(profile, 'sidebar-test-observer'); await launch(); await revealDefaultSpace(page);
   await page.locator('#composer').getByRole('button', { name: '继续原生会话', exact: true }).click();
@@ -68,7 +91,36 @@ async function run() {
   await page.locator(`[data-session-menu="${ids[2]}"]`).click();
   assert.equal(await page.getByRole('menuitem', { name: '复制完整原生 ID', exact: true }).count(), 0);
   await page.keyboard.press('Escape');
-  checks.push('Always-visible collision-expanded NAW IDs distinguish duplicate names; header and exact full NAW/native copy agree without changing system clipboard');
+  checks.push('Collision-expanded NAW IDs distinguish duplicate names in every row\'s accessible name; header and exact full NAW/native copy agree without changing system clipboard');
+
+  // U22: 学习 and 学习 show their own short ids beside the name; the uniquely named 常用 does not.
+  const surface = page.locator('[data-native-surface="sidebar"]'), unique = page.locator(`[data-session-row="${ids[2]}"] .session-link`);
+  const sameNameView = async label => {
+    await sameName([true, true, false], label);
+    await besideName(ids[0], 'abcdef0', label); await besideName(ids[1], 'abcdef1', label);
+    assert.ok(!(await unique.innerText()).includes('123456'), `${label}: a unique name stays without its short id`);
+    await capture('same-name-' + label.replace(/[^a-z0-9]+/gi, '-').toLowerCase());
+  };
+  assert.notEqual(await surface.getAttribute('data-collapsed'), 'true');
+  await sameNameView('Chinese regular window');
+  await interfaceLanguage('en');
+  assert.equal(await page.locator('#new-session').innerText().then(text => /New session/.test(text)), true, 'The interface is in English');
+  await sameNameView('English regular window');
+  // A small window: first one where the sidebar is still open, then the narrow rail, which shows every row's id as before.
+  const browserWindow = await app.browserWindow(page), regular = await browserWindow.evaluate(win => win.getContentSize());
+  await browserWindow.evaluate(win => win.setContentSize(1100, 620));
+  await until(async () => (await browserWindow.evaluate(win => win.getContentSize()))[0] === 1100, 'Small window');
+  await delay(500);   // the shell decides between the open sidebar and the rail from the new width
+  assert.equal(await surface.getAttribute('data-collapsed'), 'false', 'This small window still has the open sidebar');
+  await sameNameView('English small window');
+  await browserWindow.evaluate(win => win.setContentSize(950, 620));
+  await until(async () => await surface.getAttribute('data-collapsed') === 'true', 'The narrow rail');
+  for (const id of ids) assert.equal(await idShown(page, id), true, 'The rail shows every row\'s short id, as before');
+  await browserWindow.evaluate((win, size) => win.setContentSize(size[0], size[1]), regular);
+  await until(async () => await surface.getAttribute('data-collapsed') !== 'true', 'The open sidebar returns');
+  await interfaceLanguage('zh');
+  await sameNameView('Chinese small-window return');
+  checks.push('Same-name rows show their own short id beside the name in Chinese and English, in a regular and a small window; a unique name stays compact; the rail is unchanged');
 
   await dragTo(page.locator(`[data-session-id="${ids[2]}"]`), page.locator(`[data-session-row="${ids[0]}"]`), 0.2);
   await expectOrder([ids[2], ids[0], ids[1]]);
@@ -116,7 +168,14 @@ async function run() {
   await until(async () => (await peer.locator(`[data-session-row="${ids[0]}"]`).innerText()).includes('改名后仍是原会话'), 'Peer rename');
   assert.equal(await page.locator(`[data-session-row="${ids[0]}"] .session-short-id`).innerText(), 'abcdef0');
   assert.deepEqual(identity((await snapshot()).sessions.find(s => s.id === ids[0])), original);
-  checks.push('Keyboard collapse/expand, live overview, rename and profile broadcasts preserve selected native identity/owner and unsent draft');
+  // U22: with the rename no two listed sessions share a name, so no row shows a short id; naming it 学习 again brings both back.
+  await sameName([false, false, false], 'After the rename');
+  await menu(ids[0], '重命名…'); await page.locator('#rename-name').fill('学习'); await page.locator('#confirm-rename').click();
+  await sameName([true, true, false], 'Named the same again');
+  await menu(ids[0], '重命名…'); await page.locator('#rename-name').fill('改名后仍是原会话'); await page.locator('#confirm-rename').click();
+  await sameName([false, false, false], 'Renamed apart again');
+  assert.deepEqual(identity((await snapshot()).sessions.find(s => s.id === ids[0])), original);
+  checks.push('Keyboard collapse/expand, live overview, rename and profile broadcasts preserve selected native identity/owner and unsent draft; a rename shows or hides the same-name short ids in both windows');
 
   // Fail the actual metadata disk replacement. No optimistic reorder/collapse
   // may become visible or replace the existing names on a failed save.
