@@ -30,7 +30,7 @@ const OPEN_STATES = ['deliverable', 'held', 'handed'];
 const STATES = [...OPEN_STATES, 'merged', 'returned', 'superseded'];
 // Reasons that exist once for the whole backlog, and those that exist once per subject.
 const GLOBAL_REASONS = ['review-off', 'review-cap', 'checkpoint-invalid', 'merge-unverified', 'send-unconfirmed',
-  'record-missing', 'send-refused', 'no-result', 'no-reply', 'person-intervened', 'held-other', 'backlog-full', 'integrator-unset'];
+  'record-missing', 'send-refused', 'no-result', 'no-reply', 'person-intervened', 'held-other', 'backlog-full', 'integrator-unset', 'integrator-in-space', 'main-unreadable'];
 const SUBJECT_REASONS = ['lock-held', 'integrator-missing', 'conflict', 'returned-limit', 'installable'];
 const RETURN_LIMIT = 2;       // a branch returned more often than this is the person's to decide, not suggested again
 // The reasons an integrator may write on a HELD line; anything else is kept as "held for another reason".
@@ -42,7 +42,7 @@ const HELD_WORDS = ['review-off', 'review-cap', 'checkpoint-invalid'];
 // A question (a main commit that may be installed, a branch returned too often) has no deliveries
 // under it and ends only with the person's answer.
 const question = reason => reason.startsWith('installable:') || reason.startsWith('returned-limit:');
-const standing = reason => ['review-off', 'review-cap', 'integrator-unset', 'backlog-full'].includes(reason) || reason.startsWith('lock-held:') ||
+const standing = reason => ['review-off', 'review-cap', 'integrator-unset', 'integrator-in-space', 'backlog-full'].includes(reason) || reason.startsWith('lock-held:') ||
   reason.startsWith('integrator-missing:') || question(reason);
 // Why a handoff waits for the person. These last at least as long as that handoff is the open one.
 const waitingOn = (handoff, key) => Boolean(handoff) && (key === `conflict:${handoff.id}` || handoff.status === 'waiting' && handoff.reason === key);
@@ -50,6 +50,18 @@ const waitingOn = (handoff, key) => Boolean(handoff) && (key === `conflict:${han
 // started but never confirmed (a crash in between) is left unknown and is not sent again.
 const NOTICE_STATES = ['pending', 'reserved', 'done'];
 const REVIEW_STATES = ['off', 'on', 'cap'];
+const SHOWN_LIMIT = 500;
+// What a delivery's space should currently say about it, as one short label; null when there is
+// nothing to say (it waits to be handed out, or a newer delivery replaced it). A space record is
+// written when this label differs from the one last written.
+function showLabel(state, entry) {
+  const handoff = state.handoff;
+  if (entry.state === 'handed' && handoff?.keys.includes(entry.key)) return handoff.status === 'waiting' ? `waiting:${handoff.id}:${handoff.reason}` : `handed:${handoff.id}`;
+  if (entry.state === 'held') return `held:${entry.reason}`;
+  if (entry.state === 'merged') return `merged:${entry.mergedAs}`;
+  if (entry.state === 'returned') return 'returned';
+  return null;
+}
 
 function fail(message) { const error = new Error(message); error.code = 'HANDOFF_STATE'; return error; }
 const CONTROL = /[\u0000-\u001f\u007f\u2028\u2029]/gu;
@@ -73,7 +85,7 @@ function reasonKey(value) {
 const calendarDay = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) &&
   new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 
-function empty() { return { version: 1, seq: 0, ready: [], handoff: null, reasons: {}, refusals: 0, seen: [], capDay: null, returns: {} }; }
+function empty() { return { version: 1, seq: 0, ready: [], handoff: null, reasons: {}, refusals: 0, seen: [], capDay: null, returns: {}, since: null }; }
 
 function checkEntry(entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry) || !plain(entry.key, 300) || !plain(entry.roomId, 100) || !plain(entry.itemId, 100) ||
@@ -81,7 +93,7 @@ function checkEntry(entry) {
       optional(entry.memberId, 100) === null || optional(entry.memberName, 200) === null || optional(entry.spaceName, 200) === null || optional(entry.text, 200) === null ||
       (entry.state === 'held') !== (reasonKey(entry.reason) !== null) || (entry.state !== 'held' && entry.reason !== undefined) ||
       !(entry.closedAt === undefined || Number.isFinite(entry.closedAt) && !OPEN_STATES.includes(entry.state)) ||
-      !(entry.resends === undefined || entry.resends === 1) || optional(entry.note, 200) === null ||
+      !(entry.resends === undefined || entry.resends === 1) || optional(entry.note, 200) === null || optional(entry.shown, SHOWN_LIMIT) === null ||
       (entry.state === 'merged') !== sha(entry.mergedAs) || (entry.state !== 'merged' && entry.mergedAs !== undefined) ||
       !(entry.tests === undefined || Number.isSafeInteger(entry.tests?.passed) && Number.isSafeInteger(entry.tests?.total)) || optional(entry.review, 100) === null) throw fail('Invalid delivery record');
 }
@@ -90,7 +102,8 @@ function checkState(data) {
       !Array.isArray(data.ready) || !data.reasons || typeof data.reasons !== 'object' || Array.isArray(data.reasons) ||
       !Number.isSafeInteger(data.refusals) || data.refusals < 0 || !Array.isArray(data.seen) || data.seen.length > SEEN_KEPT || data.seen.some(key => !plain(key, 300)) ||
       !(data.capDay === null || calendarDay(data.capDay)) || !data.returns || typeof data.returns !== 'object' || Array.isArray(data.returns) ||
-      Object.entries(data.returns).some(([key, count]) => !plain(key, 320) || !Number.isSafeInteger(count) || count < 1)) throw fail('Invalid handoff record');
+      Object.entries(data.returns).some(([key, count]) => !plain(key, 320) || !Number.isSafeInteger(count) || count < 1) ||
+      !(data.since === undefined || data.since === null || Number.isFinite(data.since))) throw fail('Invalid handoff record');
   const keys = new Set();
   for (const [index, entry] of data.ready.entries()) {
     checkEntry(entry);
@@ -104,6 +117,7 @@ function checkState(data) {
   if (handoff === null) { if (handed.length) throw fail('A handed delivery has no handoff'); }
   else if (!handoff || typeof handoff !== 'object' || !plain(handoff.id, 100) || !['sent', 'waiting'].includes(handoff.status) || !identity(handoff.integrator) ||
       !sha(handoff.mainHead) || !Number.isFinite(handoff.sentAt) || !(handoff.tag === null || plain(handoff.tag, 200)) ||
+      !(handoff.headUnreadAt === undefined || Number.isFinite(handoff.headUnreadAt)) ||
       (handoff.status === 'waiting') !== (handoff.reason !== undefined) || (handoff.reason !== undefined && reasonKey(handoff.reason) === null) || optional(handoff.question, 200) === null ||
       // A handoff that waits for the person keeps its place even when every delivery in it already has its outcome.
       !Array.isArray(handoff.keys) || !handoff.keys.length && handoff.status !== 'waiting' || new Set(handoff.keys).size !== handoff.keys.length ||
@@ -307,6 +321,9 @@ function plan(state, input) {
     const reason = `integrator-missing:${integrator.sessionId}`;
     return state.reasons[reason]?.open ? none('integrator-asked') : { kind: 'ask-integrator', reason };
   }
+  // The integrator stays outside every space: a member is sent queue work. One that was put into a
+  // space after it was designated is handed nothing, and the person is asked once.
+  if (seen.inSpace === true) return state.reasons['integrator-in-space']?.open ? none('integrator-asked') : { kind: 'ask-integrator', reason: 'integrator-in-space' };
   const verdict = sessionReady(session, seen.wakePolicy);
   if (!verdict.ready) return none(verdict.reason);
   // Engaged in something NAW itself is doing with it, such as a session rotation or a running space exchange.
@@ -424,6 +441,43 @@ class IntegrationHandoffs {
   }
 
   plan(input) { this.usable(); return plan(this.state, input); }
+  // Main's head could not be read while this sent handoff's answer waited to be checked. The
+  // first time is kept with the handoff, so the wait for it is bounded across restarts too.
+  headUnreadSince(handoffId, now = Date.now()) {
+    this.usable();
+    const open = this.state.handoff;
+    if (!open || open.id !== handoffId || open.status !== 'sent' || !Number.isFinite(now)) throw fail('No such open handoff');
+    if (Number.isFinite(open.headUnreadAt)) return open.headUnreadAt;
+    const next = this.draft();
+    next.handoff.headUnreadAt = now;
+    this.commit(next);
+    return now;
+  }
+  // What git says about each MERGED line of a planned settlement of the open handoff, asked
+  // through the given reader. Reads the record; changes nothing.
+  async verify(read, action, mainHead) { this.usable(); return verifyResults(read, this.state, action, mainHead); }
+
+  // The moment this record began to take in deliveries. Deliveries NAW recorded before it were
+  // dealt with by hand and are never handed out. Set once, at the first intake.
+  begin(now = Date.now()) {
+    this.usable();
+    if (Number.isFinite(this.state.since)) return this.state.since;
+    if (!Number.isFinite(now) || now <= 0) throw fail('Invalid time');
+    const next = this.draft();
+    next.since = now;
+    this.commit(next);
+    return now;
+  }
+  // Read-only looks at the record that copy nothing: whether a delivery is already known, which
+  // reasons hold deliveries, and where things stand.
+  knows(key) { this.usable(); return this.state.seen.includes(key) || this.state.ready.some(entry => entry.key === key); }
+  reasonsHeld() { this.usable(); return [...new Set(this.state.ready.filter(entry => entry.state === 'held').map(entry => entry.reason))]; }
+  summary() {
+    this.usable();
+    const count = state => this.state.ready.filter(entry => entry.state === state).length, handoff = this.state.handoff;
+    return { deliverable: count('deliverable'), held: count('held'), handed: count('handed'), since: this.state.since ?? null,
+      handoff: handoff ? { id: handoff.id, status: handoff.status, confirmed: handoff.tag !== null, sentAt: handoff.sentAt, integrator: { ...handoff.integrator } } : null };
+  }
 
   // Decide from what the caller observes now and record the decision in the same step, so a
   // handoff can only open for the integrator and main head that were just checked and an old
@@ -445,7 +499,7 @@ class IntegrationHandoffs {
     next.handoff = { id: action.handoffId, status: 'sent', keys: action.keys, integrator: action.integrator, mainHead: action.mainHead, sentAt: now, tag: null };
     // An integrator took a handoff: the question about a missing one is over, and what was held
     // because that session was gone waits for the next handoff.
-    const ended = ['integrator-unset', `integrator-missing:${action.integrator.sessionId}`];
+    const ended = ['integrator-unset', 'integrator-in-space', `integrator-missing:${action.integrator.sessionId}`];
     this.release(next, reason => ended.includes(reason), true);
     this.commit(next);
     return action;
@@ -467,12 +521,14 @@ class IntegrationHandoffs {
   // That is not a handoff: the deliveries wait again. After the queue's limit of refusals in a
   // row they are held for the person instead of being tried for ever. Only the code that just
   // saw the refusal may call this; an unconfirmed send found after a restart is not a refusal.
-  sendRefused(handoffId, now = Date.now()) {
+  // A refusal because the person left a prompt unsent in that session is not counted (counts:
+  // false): as for a queue item, the deliveries wait for as long as the person takes.
+  sendRefused(handoffId, now = Date.now(), options = {}) {
     const next = this.draft();
     if (next.handoff?.id !== handoffId || next.handoff.status !== 'sent' || next.handoff.tag !== null) throw fail('No such unsent handoff');
     const keys = next.handoff.keys;
     next.handoff = null;
-    next.refusals += 1;
+    if (options?.counts !== false) next.refusals += 1;
     const limit = next.refusals >= NOT_SENT_ATTEMPTS;
     if (limit) next.refusals = 0;
     let notify = null;
@@ -509,6 +565,9 @@ class IntegrationHandoffs {
     let install = null, question = null;
     // The checks count only for the handoff and main head they were made for.
     const bound = Boolean(checked) && checked.handoffId === handoff.id && sha(checked.mainHead);
+    // The caller could not read main's head at all (after waiting for it): that is NAW's own
+    // trouble with git, not a claim that failed, and the person is told so.
+    const unread = Boolean(checked) && checked.handoffId === handoff.id && checked.mainUnreadable === true && !bound;
     if (action.status === 'failed') {
       if (!['send-unconfirmed', 'record-missing', `integrator-missing:${handoff.integrator.sessionId}`].includes(action.reason)) throw fail('Unknown failure');
       next.handoff = null;
@@ -544,7 +603,7 @@ class IntegrationHandoffs {
             entry.state = 'merged'; entry.closedAt = now; entry.mergedAs = verdict.as; entry.tests = result.tests; delete entry.resends;
             if (result.review) entry.review = label(result.review, 100);
             merged += 1; fact(entry, 'merged', { as: verdict.as, tests: result.tests, ...(entry.review ? { review: entry.review } : {}) });
-          } else held(entry, 'merge-unverified');
+          } else held(entry, unread && result.malformed !== true ? 'main-unreadable' : 'merge-unverified');
         } else if (result.kind === 'returned') {
           entry.state = 'returned'; entry.closedAt = now; entry.note = result.reason; delete entry.resends;
           // The redo is a new task only the person or their secretary may add: it is suggested, and after
@@ -620,7 +679,7 @@ class IntegrationHandoffs {
     const entry = next.ready.find(candidate => candidate.key === key);
     if (!entry || entry.state !== 'deliverable') throw fail('This delivery cannot be held');
     // Conditions and questions that have no deliveries under them cannot hold one.
-    if (reasonKey(reason) === null || ['integrator-unset', 'backlog-full'].includes(reason) || question(reason)) throw fail('Unknown reason');
+    if (reasonKey(reason) === null || ['integrator-unset', 'integrator-in-space', 'backlog-full'].includes(reason) || question(reason)) throw fail('Unknown reason');
     const notify = this.leave(next, entry, 'held', reason, now);
     this.commit(next);
     return { notify, state: entry.state };
@@ -642,6 +701,49 @@ class IntegrationHandoffs {
     record.notice = 'done';
     this.commit(next);
     return { confirmed: true };
+  }
+  // What the person is told about one reason: how many deliveries it concerns and where the
+  // first of them was delivered, never their text. A reason a handoff waits on names the
+  // integrator's session, where its question can be read.
+  noticeInfo(reason) {
+    this.usable();
+    if (!this.state.reasons[reason]) return null;
+    const handoff = this.state.handoff, waits = Boolean(handoff) && handoff.status === 'waiting' && handoff.reason === reason;
+    let about = [...(waits ? this.state.ready.filter(entry => handoff.keys.includes(entry.key)) : []), ...this.state.ready.filter(entry => entry.state === 'held' && entry.reason === reason)];
+    // A condition with no deliveries under it concerns what waits to be handed out; a question concerns none.
+    if (!about.length && !waits && !question(reason)) about = this.state.ready.filter(entry => entry.state === 'deliverable');
+    return { reason, count: about.length, roomId: about[0]?.roomId ?? null, itemId: about[0]?.itemId ?? null, ...(waits ? { sessionId: handoff.integrator.sessionId } : {}) };
+  }
+  // The deliveries whose space does not yet say where they stand, with what to say. Writing the
+  // space record and marking it written are two steps (the caller writes, then marks), so a
+  // crash in between writes it once more; the label lets the writer recognise a repeat.
+  showable() {
+    this.usable();
+    const list = [];
+    for (const entry of this.state.ready) {
+      const label = showLabel(this.state, entry);
+      if (label === null || label === entry.shown) continue;
+      const handoff = this.state.handoff, inside = entry.state === 'handed';
+      list.push({ key: entry.key, roomId: entry.roomId, itemId: entry.itemId, branch: entry.branch, commit: entry.commit, label,
+        outcome: inside ? (handoff.status === 'waiting' ? 'waiting' : 'handed') : entry.state,
+        ...(inside ? { handoffId: handoff.id } : {}), ...(inside && handoff.status === 'waiting' ? { reason: handoff.reason } : {}),
+        ...(entry.state === 'held' ? { reason: entry.reason } : {}), ...(entry.state === 'merged' ? { as: entry.mergedAs } : {}),
+        ...(entry.tests ? { tests: { ...entry.tests } } : {}), ...(entry.review ? { review: entry.review } : {}), ...(entry.note ? { note: entry.note } : {}),
+        ...(entry.memberId ? { memberId: entry.memberId } : {}), ...(entry.memberName ? { memberName: entry.memberName } : {}), ...(entry.text ? { text: entry.text } : {}) });
+    }
+    return list;
+  }
+  // The caller wrote these space records. Only a label that is still the delivery's current one is kept.
+  markShown(written) {
+    const next = this.draft();
+    let changed = 0;
+    for (const item of Array.isArray(written) ? written : []) {
+      const entry = next.ready.find(candidate => candidate.key === item?.key);
+      if (!entry || !plain(item.label, SHOWN_LIMIT) || showLabel(next, entry) !== item.label || entry.shown === item.label) continue;
+      entry.shown = item.label; changed += 1;
+    }
+    if (changed) this.commit(next);
+    return { marked: changed };
   }
   // Open reasons the person has not been told about yet (after a restart, for example), and
   // those whose notice was started but never confirmed: a report lists these as unknown.

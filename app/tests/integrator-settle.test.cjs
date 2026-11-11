@@ -484,6 +484,7 @@ test('finished outcomes are trimmed by when they ended', t => {
   const kept = backlog.snapshot();
   assert.ok(kept.ready.some(entry => entry.itemId === 'a' && entry.state === 'returned'), 'The delivery that arrived first and ended last keeps its outcome');
   assert.deepEqual(kept.seen, [key('m-0')]);
+  assert.deepEqual([backlog.knows(key('m-0')), backlog.knows(key('m-1')), backlog.knows(key('never'))], [true, true, false], 'A trimmed delivery is still known');
 });
 
 // A reader with fixed answers, to reach each check alone.
