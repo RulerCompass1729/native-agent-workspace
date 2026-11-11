@@ -30,13 +30,30 @@ def main():
             raise ValueError("Oversized terminal configuration")
     line, pending = pending.split(b"\n", 1)
     config = json.loads(line)
-    pid, fd = pty.fork()
+    # forkpty's parent can return before the child has made its own session.
+    # Do not publish started or send group signals until that child-side work
+    # is done. EOF also releases the parent if setup fails before the receipt.
+    ready_read, ready_write = os.pipe()
+    try:
+        pid, fd = pty.fork()
+    except BaseException:
+        os.close(ready_read)
+        os.close(ready_write)
+        raise
     if pid == 0:
+        os.close(ready_read)
+        os.write(ready_write, b"1")
+        os.close(ready_write)
         os.chdir(config["cwd"])
         environment = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor")
         environment.update(config.get("env", {}))
         os.execvpe(config["argv"][0], config["argv"], environment)
+    os.close(ready_write)
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+    try:
+        os.read(ready_read, 1)
+    finally:
+        os.close(ready_read)
     emit({"type": "started", "pid": pid})
     selector = selectors.DefaultSelector()
     selector.register(fd, selectors.EVENT_READ, "pty")

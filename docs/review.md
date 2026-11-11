@@ -1,5 +1,24 @@
 # Review and issue record
 
+**PTY stop during startup, 2026-11-11 (independent review pending):**
+The display restart test failed again after its unrelated test-only stop bound
+was widened. The host published started immediately after the parent returned
+from PTY fork, before the child necessarily established its session. A stop or
+input EOF in that gap called killpg(childPid), got ESRCH, and was silently lost.
+An owned-child readiness pipe now gates started and queued commands. Child
+setup failure closes the pipe and still reaches waitpid; it cannot hang waiting
+for an acknowledgement. SIGTERM policy, default stop time and confirmed-exit
+criteria are unchanged; stream EOF alone still does not prove native exit.
+
+Controlled standard-library fork scheduling reproduces all three failures:
+stop at started, queued stop, and input EOF. Each old run reports missing group,
+then actual native output, then SIGALRM from its test safety alarm instead of
+the requested SIGTERM. After the fix each is reaped by SIGTERM. Existing ignored
+termination and native-display activity tests remain in the affected group.
+This proves a production race with the observed symptom; the historical flaky
+log has no group identity and cannot uniquely establish that occurrence's cause.
+
+
 **S2 bounded refusal summaries, 2026-11-11 (delta review pending):**
 confirmation-limit and originating-session-unavailable now retain one counted
 summary per native actor, reason and minute, with at most 128 recent summaries
