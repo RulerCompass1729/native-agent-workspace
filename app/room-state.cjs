@@ -529,7 +529,7 @@ class RoomState {
           method: 'backgroundRefusal', action: 'refusedRequests', state: 'not-executed',
           refusalSummary: { reason: summary.reason, count: count.count, sequence: count.sequence, lastMethod: count.lastMethod, windowStart: summary.windowStart, windowEnd: summary.windowEnd } } };
       let events = [...value.events.filter(e => e.id !== id), event];
-      const retained = new Set(events.filter(e => e.controlAudit?.refusalSummary).slice(-128).map(e => e.id));
+      const retained = new Set(require('./background-operation.cjs').retainRefusalRows(events.filter(e => e.controlAudit?.refusalSummary), 128, 32).map(e => e.id));
       events = events.filter(e => !e.controlAudit?.refusalSummary || retained.has(e.id));
       // Only this bounded summary format is retained. Other space records and
       // legacy audit events are not a cleanup target.

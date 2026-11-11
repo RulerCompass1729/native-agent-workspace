@@ -10,6 +10,8 @@ const clone = v => JSON.parse(JSON.stringify(v));
 const MAX_RECORD_BYTES = 32 * 1024 * 1024;
 const MAX_PENDING_PER_ACTOR = 32, MAX_PENDING = 128;
 const REFUSAL_WINDOW_MS = 60000, MAX_REFUSAL_SUMMARIES = 128;
+const REFUSAL_RETRY_HINT = 'invoke or snapshot: new operation_id or compacted refused ID is a fresh request.';
+const refusalRetry = () => ({ retryWithNewOperationId: true, retryHint: REFUSAL_RETRY_HINT });
 const summarizedReasons = new Set(['confirmation-limit', 'originating-session-unavailable']);
 const positiveCount = n => Number.isSafeInteger(n) && n > 0;
 const nextCount = n => { if (!Number.isSafeInteger(n) || n < 0 || n >= Number.MAX_SAFE_INTEGER) throw Error('Refusal counter is exhausted'); return n + 1; };
@@ -71,7 +73,7 @@ const parameters = {
   chooseFolder: [], newWindow: ['sessionId?; returns an independent hidden view_id'], copy: ['text; independent clipboard only'], pasteText: [],
   stageImages: ['sessionId', 'nativeId', 'files'], pasteNativeContent: ['sessionId', 'nativeId'], previewImage: ['source'], expandImage: ['token'], copyImage: ['token'], releaseImage: ['token'],
 };
-const tool = { name: 'workspace_control', description: 'Operate NAW in the background without moving the desktop pointer or changing the human window. Discover commands with catalog, inspect the independent view with snapshot, invoke an exact existing application command, and read durable receipts. Native permissions and human confirmations remain required. Refused invoke and snapshot requests may be summarized; reusing a summarized refused ID is a new request through current admission and any required human confirmation. Executed, uncertain and human-cancelled IDs never replay. Never resend an uncertain operation. This tool does not authorize new work.',
+const tool = { name: 'workspace_control', description: 'Operate NAW in the background without moving the desktop pointer or changing the human window. Discover commands with catalog, inspect the independent view with snapshot, invoke an exact existing application command, and read durable receipts. Native permissions and human confirmations remain required. Refused invoke and snapshot requests may be summarized; reusing a summarized refused ID is a new request through current admission and any required human confirmation. Executed, uncertain and human-cancelled IDs never replay. Refused-ID receipt aliases retain at most 512 recent IDs, 128 per NAW session, while their summary remains; expired aliases return no receipt. Never resend an uncertain operation. This tool does not authorize new work.',
   inputSchema: { type: 'object', additionalProperties: false, properties: {
     action: { type: 'string', enum: ['catalog', 'snapshot', 'invoke', 'receipt'] },
     view_id: { type: 'string', maxLength: 160 },
@@ -98,7 +100,7 @@ class ConfirmationRequired extends Error {
 function refusalDetails(reason) {
   return { state: 'not-executed', reason, retry: false, ...(reason === 'originating-session-unavailable' ? {
     retryWithNewOperationId: true,
-    retryHint: 'Refresh the originating session, then use a new operation_id. This refused operation_id will not execute.',
+    retryHint: REFUSAL_RETRY_HINT,
   } : {}) };
 }
 const compactRefusal = row => { row.guard = { auditRooms: row.guard?.auditRooms || ['shared'] }; };
@@ -106,7 +108,7 @@ class BackgroundControl {
   constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now, readCopyBytes = MAX_RECORD_BYTES }) {
     if (!Number.isSafeInteger(readCopyBytes) || readCopyBytes < 1 || readCopyBytes > MAX_RECORD_BYTES) throw Error('Invalid read copy budget');
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
-    this.data = { version: 1, records: [], views: {}, refusals: [], refusalActors: {} }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
+    this.data = { version: 1, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
     this.confirmation = confirmation; this.audit = audit;
     this.confirmationPending = confirmationPending;
     this.project = project;
@@ -117,13 +119,16 @@ class BackgroundControl {
       this.data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       if (this.data.version !== 1 || !Array.isArray(this.data.records) || this.data.records.some(r => !token(r.id) || !r.actor || !r.command || !token(r.state))) throw Error('Invalid background operation record');
       this.data.views ||= {};
-      this.data.refusals ||= []; this.data.refusalActors ||= {};
+      this.data.refusals ||= []; this.data.refusalActors ||= {}; this.data.refusalReceipts ||= [];
       const object = v => v && typeof v === 'object' && !Array.isArray(v);
       const counter = v => object(v) && token(v.id) && positiveCount(v.count) && object(v.rooms) && Object.entries(v.rooms).every(([id, r]) => validRoomId(id) && object(r) && positiveCount(r.count) && positiveCount(r.sequence) && token(r.lastMethod));
       if (!object(this.data.refusalActors) || Object.values(this.data.refusalActors).some(v => !object(v) || !positiveCount(v.sequence) || !Number.isSafeInteger(v.windowStart) || v.windowStart < 0 || !object(v.counts) || Object.entries(v.counts).some(([reason, c]) => !summarizedReasons.has(reason) || !counter(c))) ||
           !Array.isArray(this.data.refusals) || this.data.refusals.length > MAX_REFUSAL_SUMMARIES || this.data.refusals.some(r => !token(r.id) || !r.actor || r.state !== 'not-executed' || !r.command || !summarizedReasons.has(r.refusalSummary?.reason) || !counter(r.refusalSummary) || !this.data.refusalActors[this.key(r.actor)])) throw Error('Invalid refusal summaries');
+      if (!Array.isArray(this.data.refusalReceipts) || this.data.refusalReceipts.length > 512 || this.data.refusalReceipts.some(a => !token(a.id) || !token(a.actor?.id) || !token(a.actor?.nativeId) || !['claude', 'codex'].includes(a.actor?.provider) || !token(a.summaryId) || !this.data.refusals.some(r => r.id === a.summaryId && this.key(r.actor) === this.key(a.actor)))) throw Error('Invalid refusal receipts');
       // A process died after recording intent. No automatic replay.
-      if (this.data.records.some(r => r.state === 'running' || ['available', 'pending'].includes(r.readState) || privateRead(r.command) && Object.hasOwn(r, 'value') ||
+      if (this.data.refusals.some(r => Object.hasOwn(r, 'retryHint') && r.retryHint !== REFUSAL_RETRY_HINT) || operation.retainRefusalRows(this.data.refusals, 128, 32).length !== this.data.refusals.length ||
+          operation.retainRefusalRows(this.data.refusalReceipts, 512, 128).length !== this.data.refusalReceipts.length ||
+          this.data.records.some(r => r.state === 'running' || ['available', 'pending'].includes(r.readState) || privateRead(r.command) && Object.hasOwn(r, 'value') ||
           Array.isArray(r.guard?.sessions) && r.guard.sessions.some(s => ['approval', 'nativeApproval'].some(k => s?.[k] != null && s[k] !== digest(s[k]))))) this.commit(d => {
         for (const r of d.records) {
           if (r.state === 'running') r.state = 'unconfirmed';
@@ -135,6 +140,13 @@ class BackgroundControl {
   commit(change) {
     if (this.failed) throw Error('Background operation storage is unavailable');
     const next = clone(this.data); change(next);
+    next.refusals = operation.retainRefusalRows(next.refusals, 128, 32);
+    // Rewrite obsolete hints without adding fields to old, potentially full
+    // files. New summaries already carry the same hint as their direct reply.
+    for (const row of next.refusals) if (Object.hasOwn(row, 'retryHint')) row.retryHint = REFUSAL_RETRY_HINT;
+    const summaries = new Set(next.refusals.map(r => this.key(r.actor) + ':' + r.id));
+    const exact = new Set(next.records.map(r => this.key(r.actor) + ':' + r.id));
+    next.refusalReceipts = operation.retainRefusalRows(next.refusalReceipts.filter(a => summaries.has(this.key(a.actor) + ':' + a.summaryId) && !exact.has(this.key(a.actor) + ':' + a.id)), 512, 128);
     // Read bodies never belong to the durable operation log, including legacy
     // values loaded from an earlier build. A bounded, one-use cache holds them.
     for (const r of next.records) {
@@ -176,9 +188,13 @@ class BackgroundControl {
     await this.view(sender, viewId);
     return { view_id: viewId, visible: false };
   }
-  receipt(sender, id, context = null) {
+  receipt(sender, id, context = null, exact = false) {
     const own = r => r.id === id && this.key(r.actor) === this.key(sender);
-    const record = this.data.records.find(own) || this.data.refusals.find(own);
+    let record = this.data.records.find(own) || this.data.refusals.find(own);
+    if (!record && !exact) {
+      const alias = this.data.refusalReceipts.find(own);
+      if (alias) record = this.data.refusals.find(r => r.id === alias.summaryId && this.key(r.actor) === this.key(sender));
+    }
     return record ? this.project(clone(record), context) : null;
   }
   rememberRead(actor, id, value) {
@@ -248,9 +264,11 @@ class BackgroundControl {
       const prior = d.refusals.find(r => r.id === id);
       const record = { id, actor: { id: actor.id, nativeId: actor.nativeId, provider: actor.provider, name: actor.name },
         command: { action: 'invoke', method: 'backgroundRefusal', arguments: [], operation_id: id },
-        ...refusalDetails(reason), at: prior?.at ?? now, finishedAt: now, guard: { auditRooms: Object.keys(count.rooms).sort() },
+        ...refusalDetails(reason), ...refusalRetry(), at: prior?.at ?? now, finishedAt: now, guard: { auditRooms: Object.keys(count.rooms).sort() },
         refusalSummary: { ...clone(count), reason, windowStart: start, windowEnd: start + REFUSAL_WINDOW_MS, sequence: state.sequence } };
-      d.refusals = [...d.refusals.filter(r => r.id !== id), record].slice(-MAX_REFUSAL_SUMMARIES);
+      d.refusals = [...d.refusals.filter(r => r.id !== id), record];
+      d.refusalReceipts = [...d.refusalReceipts.filter(r => !(r.id === args.operation_id && this.key(r.actor) === key)),
+        { id: args.operation_id, actor: { id: actor.id, nativeId: actor.nativeId, provider: actor.provider }, summaryId: id }];
     });
     const summary = clone(this.data.refusals.find(r => r.id === id)); let auditError;
     try { await this.publish(summary, context); }
@@ -258,8 +276,7 @@ class BackgroundControl {
       auditError = 'The refusal summary space event could not be saved';
       this.commit(d => { const row = d.refusals.find(r => r.id === id); if (row) row.auditError = 'The refusal summary space event could not be saved'; });
     }
-    return { ...refusalDetails(reason), retryWithNewOperationId: true,
-      retryHint: 'For invoke or snapshot, use a new operation_id after the source recovers or a confirmation slot is free. Reusing a compacted refused ID is a new request through current admission and any required confirmation.',
+    return { ...refusalDetails(reason), ...refusalRetry(),
       id: args.operation_id, actor, method: args.method,
       guard: { auditRooms: rooms }, summaryId: id, count: summary.refusalSummary.count,
       ...(auditError ? { auditError } : {}) };
@@ -319,7 +336,8 @@ class BackgroundControl {
         isDeepStrictEqual({ ...r.command, operation_id: args.operation_id }, args) && isDeepStrictEqual(r.guard, guard));
       if (previous) return { ...this.receipt(sender, previous.id), duplicate: true, retry: false };
     }
-    const existing = this.receipt(sender, args.operation_id);
+    // Receipt aliases explain compacted refusals; they never bind a new invoke.
+    const existing = this.receipt(sender, args.operation_id, null, true);
     if (existing) {
       if (!isDeepStrictEqual(existing.command, args)) throw Error('operation_id already belongs to a different command');
       await this.publish(existing, context);
