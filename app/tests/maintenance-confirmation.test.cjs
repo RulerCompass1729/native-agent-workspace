@@ -74,6 +74,36 @@ for (const mode of ['forgotten', 'native-replaced', 'archived', 'context-pending
   assert.equal(next.state, 'confirmation-required'); assert.equal(f.writes.length, 0);
   assert.equal(f.controller.data.records.find(r => r.id === 'template-0').state, 'confirmation-required', 'History is retained and never replayed or silently approved');
 });
+for (const provider of ['claude', 'codex']) for (const mode of ['missing', 'native-replaced', 'archived', 'context-pending', 'missing-roster']) test(`${provider}: a running ${mode} requester is refused before any maintenance confirmation`, async t => {
+  const f = fixture(t, provider), notices = []; f.controller.confirmationPending = row => notices.push(row);
+  const fingerprint = f.context.fingerprint;
+  const sessions = f.context.client.snapshot().sessions, self = sessions.find(s => s.id === f.binding.sender.id);
+  if (mode === 'missing') sessions.splice(sessions.indexOf(self), 1);
+  if (mode === 'native-replaced') self.nativeId = 'replacement-native';
+  if (mode === 'archived') self.archived = true;
+  if (mode === 'context-pending') self.nativeContextPending = true;
+  if (mode === 'missing-roster') f.context.fingerprint = () => ({});
+  const rejected = { action: 'invoke', method: 'spaceCreate', arguments: ['No unusable prompt'], operation_id: 'invalid-requester' };
+  const first = await f.controller.call(f.binding, rejected);
+  assert.equal(first.state, 'not-executed'); assert.equal(first.reason, 'originating-session-unavailable');
+  assert.equal(first.confirmation, undefined); assert.equal(f.writes.length, 0); assert.equal(notices.length, 0);
+  assert.equal(f.controller.data.records.filter(r => r.state === 'confirmation-required').length, 0);
+  assert.equal((await f.controller.call(f.binding, rejected)).duplicate, true);
+  for (let n = 0; n < 33; n++) {
+    const next = await f.controller.call(f.binding, { ...rejected, operation_id: 'blocked-' + n });
+    assert.equal(next.state, 'not-executed'); assert.equal(next.confirmation, undefined);
+  }
+  assert.equal(notices.length, 0); assert.equal(f.writes.length, 0);
+  assert.equal(f.controller.data.records.filter(r => r.state === 'confirmation-required').length, 0);
+  assert.equal(f.room.value.events.at(-1).controlAudit.state, 'not-executed');
+  await assert.rejects(f.controller.decide(f.binding.sender.id, f.binding.sender.nativeId, first.id, 1), /no longer current/);
+  const restored = { ...self, nativeId: f.binding.sender.nativeId, archived: false, nativeContextPending: false };
+  if (mode === 'missing') sessions.push(restored); else Object.assign(self, restored);
+  f.context.fingerprint = fingerprint;
+  assert.equal((await f.controller.call(f.binding, rejected)).state, 'not-executed', 'Restoring the actor cannot replay an already refused ID');
+  const fresh = await f.controller.call(f.binding, { ...rejected, operation_id: 'fresh-after-restoration' });
+  assert.equal(fresh.state, 'confirmation-required'); assert.equal(notices.length, 1);
+});
 for (const provider of ['claude', 'codex']) for (const [index, [method, args]] of cases.entries()) test(`${provider} ${method}[${index}]: pending and cancel have no effect, human approval executes once`, async t => {
   const f = fixture(t, provider), command = { action: 'invoke', operation_id: 'refuse', method, arguments: args };
   const pending = await f.controller.call(f.binding, command);
@@ -93,7 +123,7 @@ test('read-only merge phases and unrelated queue metadata do not acquire a maint
   for (const phase of ['queueAdd', 'queueCancel', 'queueResolve', 'notes', 'memberOrder']) assert.equal(operation.maintenanceAction('spaceAction', ['shared', phase, []]), null);
 });
 test('a confirmed operation refuses a changed fingerprint and records the refusal', async t => {
-  const f = fixture(t); let placement = 1; f.context.fingerprint = () => ({ placement });
+  const f = fixture(t), fingerprint = f.context.fingerprint; let placement = 1; f.context.fingerprint = () => ({ ...fingerprint(), placement });
   await f.controller.call(f.binding, { action: 'invoke', operation_id: 'changed', method: 'archiveSession', arguments: ['target'] });
   placement++;
   assert.equal((await f.controller.decide('agent', 'native-agent', 'changed', 1)).state, 'unconfirmed');
@@ -175,9 +205,9 @@ test(`actual main input wrapper preserves own pending-approval protection withou
   assert.equal(f.writes.length, 1);
 });
 test('the independent view is refreshed before saving a consent fingerprint', async t => {
-  const f = fixture(t); let generation = 0;
+  const f = fixture(t), fingerprint = f.context.fingerprint; let generation = 0;
   f.context.refresh = async () => { generation = 1; };
-  f.context.fingerprint = () => { const read = { generation }; generation = 1; return read; };
+  f.context.fingerprint = () => { const read = { ...fingerprint(), generation }; generation = 1; return read; };
   const r = await f.controller.call(f.binding, { action: 'invoke', operation_id: 'fresh-view', method: 'openLocalFile', arguments: [] });
   assert.equal(r.state, 'confirmation-required'); assert.equal(r.guard.generation, 1); assert.equal(f.writes.length, 0);
 });

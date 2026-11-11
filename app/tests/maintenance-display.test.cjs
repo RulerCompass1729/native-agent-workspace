@@ -38,7 +38,8 @@ test('human approval sees escaped rows while the input handler receives the exac
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-consent-display-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const payload = 'echo safe\u202e; hidden\u2066\u200b\u2028', writes = [], actor = { id: 'agent', nativeId: 'native', name: 'Agent\u202e', provider: 'codex' };
-  const c = { background: true, ...context({ sessions: [{ id: 'target', name: 'Target', provider: 'codex' }], rooms: [] }), checkActor() {}, view: {} };
+  const c = { background: true, ...context({ sessions: [{ ...actor }, { id: 'target', nativeId: 'native-target', name: 'Target', provider: 'codex' }], rooms: [] }), checkActor() {}, view: {} };
+  c.fingerprint = () => ({ sessions: c.client.snapshot().sessions.map(s => ({ id: s.id, nativeId: s.nativeId })) });
   const controller = new BackgroundControl({ dataDir: dir, context: () => c, handlers: new Map([['input', (_c, _id, text) => writes.push(text)]]), confirmation: productionConfirmation(), audit() {} });
   const args = { action: 'invoke', method: 'input', arguments: ['target', payload], operation_id: 'input' };
   const pending = await controller.call({ sender: actor, identity: { callId: 'call', turnId: 'turn' }, valid: () => true }, args);

@@ -1,5 +1,15 @@
 # Review and issue record
 
+**S2 requester admission, 2026-11-11 (delta review pending):**
+the pending-count filter must not exempt an ineligible requester from its own
+limit. Before creating any new maintenance intent, the refreshed consent roster
+must contain that actor ID with the same native ID, unarchived and without a
+pending native context. Missing or unreadable roster data grants no admission.
+Refusal creates no confirmation or notification and retains its operation ID;
+restoring eligibility cannot replay that refusal. A fresh ID can request consent
+after restoration. Existing receipts and duplicate records keep their prior
+semantics and do not create additional prompts.
+
 **S2 secretary terminal role gate, 2026-11-10 (delta review pending):**
 the secretary's metadata-only rule also covers another session's terminal text.
 Hosted `terminalSnapshot`, `observe` and `terminal` refuse a secretary before
@@ -15,7 +25,7 @@ The pending-confirmation bound counts only actors in the refreshed consent
 roster with the same native identity, unarchived and without a pending native
 context. Forgotten, replaced and archived actors' historical requests retain
 their operation IDs but no longer reserve invisible global slots. A missing
-roster conservatively retains the earlier count. Space-file membership and the
+requester roster refuses a new maintenance intent. Space-file membership and the
 secretary role are also checked during confirmation construction, so a forbidden
 request returns no confirmation, notification or referenced file name. The later
 file-read and pickup checks remain. Path-based file permissions are a separate

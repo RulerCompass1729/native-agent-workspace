@@ -270,6 +270,9 @@ class BackgroundControl {
     if (this.inflight.has(key)) return refuse('another-operation-running');
     const guard = controlGuard(context, args);
     if (operation.maintenanceAction(args.method, args.arguments, actor)) {
+      const requester = Array.isArray(guard?.sessions) && guard.sessions.find(s => s.id === actor.id);
+      if (!requester || requester.nativeId !== actor.nativeId || requester.archived || requester.nativeContextPending)
+        return refuse('originating-session-unavailable');
       // No timer or automatic decision: old confirmations remain answerable.
       // Count intent already running too, so parallel actors cannot overbook.
       // The refreshed roster excludes invisible requests from forgotten,

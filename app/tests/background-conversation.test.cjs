@@ -117,7 +117,7 @@ test('a cancelled read does not suppress an independent view or another actor', 
   const opened = await f.controller.call(f.binding, command('newWindow', ['other']));
   const independent = await f.controller.call(f.binding, { action: 'snapshot', view_id: opened.value.view_id });
   assert.equal(independent.state, 'confirmation-required'); assert.notEqual(independent.id, cancelled.id);
-  const otherBinding = { ...f.binding, sender: { ...f.actor, nativeId: 'another-actor-native' } };
+  const otherBinding = { ...f.binding, sender: { ...f.actor, id: 'third', nativeId: 'native-third', name: 'Third actor' } };
   const c = await f.controller.view(otherBinding.sender); c.view.selected = 'other';
   const other = await f.controller.call(otherBinding, { action: 'snapshot' });
   assert.equal(other.state, 'confirmation-required'); assert.notEqual(other.id, cancelled.id);
