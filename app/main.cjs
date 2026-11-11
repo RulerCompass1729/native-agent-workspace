@@ -2289,7 +2289,7 @@ function integrationEngine(dispatcher) {
     reader: { commit: ask('commit'), isAncestor: ask('isAncestor'), changes: ask('changes') },
     send: (session, text, handoffId) => dispatcher.send(session, text, handoffId), typing: sessionId => dispatcher.noteHuman(sessionId),
     record: fact => roomState.recordHandoff(fact), notify: info => notifyHandoff(info),
-    holderRecord: fact => roomState.recordHandoffHolder(fact), nameOf: session => dispatcher.name(session),
+    holderRecord: fact => roomState.recordHandoffHolder(fact), nameOf: session => dispatcher.name(session), holderLines: () => roomState.handoffHolderLines(),
     repository: () => (repository.usable() ? true : null), open });
   // The person's own entry gets the record only when the engine exists: an engine that could not
   // be built leaves the entry answering "not enabled" instead of changing a record nothing reads.

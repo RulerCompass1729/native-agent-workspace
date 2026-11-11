@@ -74,7 +74,8 @@ const FULL_PASS_MS = 30000;
 const INTEGRATOR_ABSENT_MS = 10 * 60 * 1000;
 const DECISION_MARKERS = ['需要你决定：', '需要你决定:', 'Needs your decision:'];
 // Input written by NAW or another agent, not by the person.
-const AUTOMATIC_ORIGINS = ['naw-dispatch', 'agent-wake', 'capacity-recovery', 'agent-control', 'room'];
+// Read by the integration handoff as well; frozen, so that no module that reads it can change it for the queue.
+const AUTOMATIC_ORIGINS = Object.freeze(['naw-dispatch', 'agent-wake', 'capacity-recovery', 'agent-control', 'room']);
 // Refusals raised before the backend wrote anything: the item is still unsent.
 const NATIVE_DRAFT_KEY = 'error.submission.nativeDraft';
 // A terminal that is no longer open: only its owner may reopen it, and nothing unsent remains.
@@ -689,6 +690,14 @@ function rotationReason(session, now, options, rotations) {
     return null;
   }
   return 'memory';
+}
+
+// Whether an engine pass changed anything a window shows: a delivery taken in, a handoff settled,
+// handed out or asked about, a space record or a notice. A result of the wrong shape throws
+// here on purpose: the caller keeps that as a fault of the engine's step.
+function integrationChanged(result) {
+  const handed = result.handed && ['opened', 'refused', 'unconfirmed', 'ask-integrator'].includes(result.handed.kind);
+  return Boolean(result.taken?.stored.length || result.settled?.kind === 'settled' || handed || result.told?.shown || result.told?.told.length);
 }
 
 // The sessions NAW itself is doing something with, for the integration handoff: one in a session
@@ -2244,13 +2253,12 @@ class QueueDispatcher {
           try { this.integrationUnreadable(); } catch { /* The warning is best effort. */ }
         }
       }
-      const handed = result.handed && ['opened', 'refused', 'unconfirmed', 'ask-integrator'].includes(result.handed.kind);
-      if (result.taken?.stored.length || result.settled?.kind === 'settled' || handed || result.told?.shown || result.told?.told.length) {
-        this.broadcast().catch(() => {});
-      }
+      if (integrationChanged(result)) this.broadcast().catch(() => {});
       // The step went through: a fault kept from before stays readable, marked as over.
       if (this.integrationError && !this.integrationError.recoveredAt) this.integrationError.recoveredAt = this.now();
     } catch (error) {
+      // A pass that faulted after it had changed something a window shows: the windows are told all the same.
+      if (error?.done) { try { if (integrationChanged(error.done)) this.broadcast().catch(() => {}); } catch { /* The fault below is what is kept. */ } }
       this.integrationFault(error);
     }
   }
