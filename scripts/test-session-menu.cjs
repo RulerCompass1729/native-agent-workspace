@@ -25,6 +25,10 @@ const snapshot = () => page.evaluate(() => workspace.initial());
 const more = (id, p = page) => p.locator(`[data-session-menu="${id}"]`);
 const link = id => page.locator(`[data-session-id="${id}"]`);
 const item = (name, p = page) => p.getByRole('menuitem', { name, exact: true });
+// An opened session menu puts the keyboard on its first action that can be used (the product's own rule). Which
+// action that is follows the menu: since the secretary action was added it leads, before 重命名….
+const firstAction = (p = page) => p.locator('.naw-session-menu [role="menuitem"]:not(:disabled)').first();
+const FIRST_ACTION = '设为秘书（可替我加到队列）';
 const stable = s => s.sessions.map(x => [x.id, x.nativeId, x.pid, x.state, x.roomId, x.messages]);
 async function until(fn, label) {
   for (let i = 0; i < 100; i++) { if (await fn()) return; await new Promise(r => setTimeout(r, 100)); }
@@ -50,7 +54,9 @@ async function run() {
   const before = await snapshot();
   assert.ok(before.sessions.every(s => s.state === 'ended'));
   await more(b.id).click(); await item('重命名…').waitFor({ state: 'visible' });
-  await until(async () => item('重命名…').evaluate(el => el === document.activeElement), 'Mouse menu autofocus');
+  await until(async () => firstAction().evaluate(el => el === document.activeElement), 'Mouse menu autofocus');
+  assert.equal(await firstAction().innerText(), FIRST_ACTION, 'The first action of the session menu');
+  assert.equal(await item('重命名…').evaluate(el => el === document.activeElement), false, 'Rename is no longer the first action');
   assert.equal((await snapshot()).viewState.selected, a.id, 'Menu must not select its target');
   assert.equal(await page.locator('.session-row button button').count(), 0);
   const anchor = await more(b.id).elementHandle();
@@ -100,7 +106,8 @@ async function run() {
 
   await more(b.id).focus(); await page.keyboard.press('Enter');
   await item('重命名…').waitFor({ state: 'visible' });
-  await until(async () => item('重命名…').evaluate(el => el === document.activeElement), 'Keyboard menu autofocus');
+  await until(async () => firstAction().evaluate(el => el === document.activeElement), 'Keyboard menu autofocus');
+  assert.equal(await firstAction().innerText(), FIRST_ACTION);
   await require('./check-theme.cjs').checkTheme(page);
   await page.emulateMedia({ colorScheme: 'light' }); await screenshot('session-menu-light');
   await page.emulateMedia({ colorScheme: 'dark' });
