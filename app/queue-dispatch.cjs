@@ -1686,8 +1686,12 @@ class QueueDispatcher {
       this.isolation.unknown = true; this.isolationDirty = true;
       this.faultedRotations.add(oldId);
     }
-    // An existing safety store that cannot be read never proves an empty hold.
-    if (this.roomState.warning) {
+    // A shared-room read failure alone must not invent migration quarantine.
+    // Existing availability and archive checks still apply independently.
+    const migrationEvidence = Object.values(this.rotations).some(record => trustRecord(record) || movedSuccessor(record)) ||
+      Object.values(this.rejectedRotations).some(record => trustRecord(record) || movedSuccessor(record)) ||
+      Boolean(this.rotationRead.error && this.rotationRead.error !== 'missing');
+    if (this.roomState.warning && migrationEvidence) {
       this.isolation.unknown = true; this.isolationDirty = true;
     }
     if (Object.keys(this.isolation.faults).some(id => id !== '@unknown' && !Object.hasOwn(this.isolation.holds, id))) {

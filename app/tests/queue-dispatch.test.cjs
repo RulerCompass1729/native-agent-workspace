@@ -2649,3 +2649,68 @@ test('B2 receipt isolation: a new unrelated exchange that starts during the stop
   assert.deepEqual(f.client.state.rooms[0].run, unrelatedRun());
   assert.equal(f.record.trustCleanup.rooms.shared, 'pending'); assert.equal(f.old.state, 'idle');
 });
+
+function sharedWarningSetup(t, damage, primary) {
+  const { dir, room } = roomSetup(t);
+  room.rename('Shared metadata before damage');
+  const otherRoom = room.create('Independent healthy space');
+  const worker = member('warning-worker', { cwd: '/synthetic/project', roomIds: [otherRoom], roomId: null });
+  const old = member('warning-old', { cwd: '/synthetic/project', roomIds: [otherRoom], roomId: null,
+    createdAt: NOW - 30 * HOUR, lastActivityAt: NOW - HOUR, messages: heavyMessages() });
+  const queued = room.queueAdd('continue independent work', worker.id, otherRoom);
+  const priorEvents = room.metadata(otherRoom).events.map(event => event.id);
+  const file = path.join(dir, 'queue-dispatch.json');
+  const ordinary = { phase: 'kept', oldNativeId: 'native-unrelated-rest', name: 'Unrelated resting member', roomIds: [otherRoom], keptAt: NOW };
+  if (primary === 'ordinary') fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { 'unrelated-rest': ordinary } }), { mode: 0o600 });
+  else if (primary === 'ordinary-rejected') fs.writeFileSync(file, JSON.stringify({ version: 1,
+    rotations: { 'unrelated-rest': ordinary, 'rejected-ordinary': { phase: 'invalid-phase', oldNativeId: 'native-rejected', name: 'Rejected ordinary record', roomIds: [otherRoom] } } }), { mode: 0o600 });
+  else if (primary === 'unreadable') fs.writeFileSync(file, '{"version":', { mode: 0o600 });
+  if (damage === 'corrupt shared JSON') fs.writeFileSync(room.file, '{"version":', { mode: 0o600 });
+  else fs.chmodSync(room.file, 0o644);
+  const damagedBytes = fs.readFileSync(room.file, 'utf8'), loaded = new RoomState(dir);
+  assert.ok(loaded.warning, 'the warning comes from an actual failed shared metadata read');
+  assert.equal(loaded.spacesWarning, '', 'the other-space store remains valid');
+  const client = new FakeClient([worker, old]);
+  client.state.rooms.push({ id: otherRoom, revision: 0, run: null, messages: [] });
+  fakeMembership(loaded, client);
+  const notifications = [], dispatcher = new rules.QueueDispatcher({ roomState: loaded, dataDir: dir,
+    connect: async () => client, now: () => NOW, settleMs: 0, tickMs: 3600000,
+    sampleProcesses: async () => '', samplePressure: async () => '1', notify: kind => notifications.push(kind) });
+  dispatcher.idleSince.set(worker.id, NOW - 60000);
+  t.after(() => dispatcher.close());
+  return { dir, room: loaded, client, dispatcher, worker, old, otherRoom, queued, priorEvents, notifications, damagedBytes };
+}
+
+for (const damage of ['corrupt shared JSON', 'unsafe shared permissions']) for (const primary of ['missing', 'ordinary', 'ordinary-rejected']) test(`B2 shared warning: ${damage} with ${primary} primary does not quarantine another space`, async t => {
+  const f = sharedWarningSetup(t, damage, primary);
+  await f.dispatcher.start();
+  assert.equal(f.client.sends(f.worker.id).length, 0, 'the existing shared-record permission check continues to refuse queue delivery');
+  assert.throws(() => f.room.assertAvailable(f.worker.id, true, f.otherRoom), error => error.message === f.room.warning &&
+    error.uiMessage?.key === f.room.warningUiMessage.key, 'the shared warning is still the reason queue delivery is refused');
+  assert.equal(f.client.sends(f.old.id).length, 1, 'the other space can request its normal content rotation');
+  assert.match(f.client.sends(f.old.id)[0][2], /【NAW 换会话】/);
+  assert.equal(f.dispatcher.rotations[f.old.id].phase, 'requested');
+  assert.equal(f.notifications.includes('trustStateUnknown'), false, 'ordinary metadata damage does not invent migration quarantine');
+  if (typeof f.dispatcher.trustAdmission === 'function') assert.equal(f.dispatcher.trustAdmission().quarantineUnknown, false);
+  assert.ok(f.room.warning, 'the shared-store warning remains visible');
+  const persisted = new RoomState(f.dir), other = persisted.metadata(f.otherRoom);
+  assert.ok(persisted.warning); assert.equal(persisted.spacesWarning, '');
+  assert.equal(other.queue.find(item => item.id === f.queued).status, 'queued');
+  for (const id of f.priorEvents) assert.ok(other.events.some(event => event.id === id), 'existing other-space events survive');
+  assert.equal(other.events.some(event => event.uiMessage?.key === 'notice.queue.dispatched'), false);
+  assert.ok(other.events.some(event => event.uiMessage?.key === 'notice.rotation.requested'));
+  assert.equal(f.client.calls.some(call => call[0] !== 'dispatch' || call[1] !== f.old.id), false, 'only the already-authorized rotation request reaches a native session');
+  assert.equal(fs.readFileSync(f.room.file, 'utf8'), f.damagedBytes, 'normal work does not repair or overwrite the unreadable shared store');
+});
+
+test('B2 shared warning: an unreadable primary plus shared metadata damage still holds unproven sessions', async t => {
+  const f = sharedWarningSetup(t, 'corrupt shared JSON', 'unreadable');
+  await f.dispatcher.start();
+  assert.equal(f.client.calls.length, 0, 'unreadable migration evidence cannot authorize dispatch, creation, stop, or native input');
+  assert.deepEqual(f.notifications, ['trustStateUnknown']);
+  assert.ok(f.room.warning);
+  const persisted = new RoomState(f.dir), other = persisted.metadata(f.otherRoom);
+  assert.equal(other.queue.find(item => item.id === f.queued).status, 'queued');
+  assert.deepEqual(other.events.map(event => event.id), f.priorEvents);
+  assert.equal(fs.readFileSync(f.room.file, 'utf8'), f.damagedBytes);
+});
