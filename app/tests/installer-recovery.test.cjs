@@ -322,3 +322,13 @@ test('a slot owner write failure never deletes foreign contents that appeared in
   assert.equal(r.status, 'recovery-required'); assert.equal(f.opened(), 0);
   assert.equal(fs.readFileSync(path.join(f.c.slot, 'foreign'), 'utf8'), 'preserve');
 });
+
+test('archiving a real-sized bundle has a separate bounded deadline; launch and inspection keep theirs', t => {
+  const cp = require('node:child_process'), { createPlatform } = require('../../scripts/install-platform.cjs'), calls = [];
+  t.mock.method(cp, 'execFileSync', (file, args, options) => { calls.push({ file, args, timeout: options.timeout }); return ''; });
+  const platform = createPlatform({});
+  platform.run('/usr/bin/ditto', ['-c', '-k', '--keepParent', '/synthetic/old.app', '/synthetic/old.zip']);
+  platform.run('/usr/bin/unzip', ['-t', '/synthetic/old.zip']);
+  platform.run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '/synthetic/old.app']);
+  assert.deepEqual(calls.map(c => c.timeout), [300000, 60000, 60000]);
+});

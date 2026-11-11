@@ -1,7 +1,10 @@
 'use strict';
 const cp = require('node:child_process'), fs = require('node:fs'), crypto = require('node:crypto'), assert = require('node:assert/strict');
 function createPlatform(config) {
-  const run = (file, args) => cp.execFileSync(file, args, { encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024 });
+  // Signed bundles have tens of thousands of entries; archival is not a GUI-start deadline.
+  const run = (file, args) => cp.execFileSync(file, args, { encoding: 'utf8',
+    timeout: file === '/usr/bin/ditto' && args[0] === '-c' && args[1] === '-k' ? 300000 : 60000,
+    maxBuffer: 4 * 1024 * 1024 });
   const helper = action => {
     const digest = crypto.createHash('sha256').update(fs.readFileSync(config.swift.path)).digest('hex');
     if (digest !== config.swift.sha256) throw Object.assign(Error('Swift helper changed'), { code: 'helper-pin-mismatch' });
