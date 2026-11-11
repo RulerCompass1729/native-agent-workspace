@@ -6,14 +6,30 @@ const assert = require('node:assert/strict');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const digest = file => sha(fs.readFileSync(file));
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-const errorRecord = e => ({ code: e.code || 'check-failed', message: e.message });
+const errorRecord = e => ({ code: e.code || 'check-failed', message: e.message, ...(e.temporaryCleanup ? { temporaryCleanup: e.temporaryCleanup } : {}) });
 function atomic(file, bytes, mode = 0o600) {
   const tmp = file + '.' + crypto.randomUUID();
-  const fd = fs.openSync(tmp, 'wx', mode);
-  try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-  fs.renameSync(tmp, file);
-  const dir = fs.openSync(path.dirname(file), 'r');
-  try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
+  let fd, owned;
+  try {
+    fd = fs.openSync(tmp, 'wx', mode); owned = fs.fstatSync(fd);
+    fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
+    fs.renameSync(tmp, file);
+    const dir = fs.openSync(path.dirname(file), 'r');
+    try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
+  } catch (error) {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* Preserve the original failure. */ } }
+    if (owned) {
+      try {
+        let current;
+        try { current = fs.lstatSync(tmp); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        if (current) {
+          assert.ok(current.dev === owned.dev && current.ino === owned.ino, 'Temporary file changed ownership');
+          fs.unlinkSync(tmp);
+        }
+      } catch (cleanup) { error.temporaryCleanup = { path: tmp, code: cleanup.code || 'check-failed', message: cleanup.message }; }
+    }
+    throw error;
+  }
 }
 function regular(file) {
   const s = fs.lstatSync(file);
@@ -37,6 +53,16 @@ function ownedDirectory(dir, privateOnly = false) {
   assert.equal(fs.realpathSync(dir), dir, 'Symlinked directory refused');
   if (privateOnly) assert.equal(s.mode & 0o077, 0, 'Private directory required');
 }
+function validateDestination(c) {
+  const parent = path.dirname(c.resultDir); ownedDirectory(parent, true);
+  assert.ok(parent.split(path.sep).some(part => part.endsWith('.noindex')), 'Result parent must be under .noindex');
+  const device = fs.statSync(parent).dev;
+  for (const target of [path.dirname(c.app), c.app, c.candidate])
+    assert.equal(fs.statSync(target).dev, device, 'App, candidate and result must be on the same volume');
+  let present = false;
+  try { fs.lstatSync(c.resultDir); present = true; } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  assert.equal(present, false, 'Result destination already exists');
+}
 function loadApproval(file, expectedHash, resultDir, apply) {
   assert.match(expectedHash, /^[a-f0-9]{64}$/); regular(file);
   const bytes = fs.readFileSync(file); assert.equal(sha(bytes), expectedHash, 'Approval document changed');
@@ -47,7 +73,7 @@ function loadApproval(file, expectedHash, resultDir, apply) {
   assert.equal(c.resultDir, resultDir, 'Result destination is not the approved one');
   for (const a of ['app', 'candidate', 'data', 'resultDir']) for (const b of ['app', 'candidate', 'data', 'resultDir']) if (a < b) disjoint(c[a], c[b]);
   for (const target of [c.app, c.candidate, c.data, c.release]) ownedDirectory(target, target === c.data);
-  ownedDirectory(path.dirname(c.slot), true); ownedDirectory(resultDir, true);
+  ownedDirectory(path.dirname(c.slot), true); validateDestination(c);
   for (const key of ['app', 'candidate', 'data', 'resultDir']) disjoint(c.slot, c[key]);
   for (const app of [c.app, c.candidate]) assert.ok(app.endsWith('.app'));
   assert.match(c.bundleId, /^[a-zA-Z0-9.-]+$/);
@@ -83,6 +109,13 @@ function receiptSnapshot(file) {
   try { const s = regular(file); assert.equal(s.mode & 0o077, 0); return { bytes: fs.readFileSync(file), mode: s.mode & 0o777 }; }
   catch (e) { if (e.code === 'ENOENT') return null; throw e; }
 }
+function receiptVersion(snapshot) {
+  if (!snapshot) return null;
+  try {
+    const version = JSON.parse(snapshot.bytes).version;
+    return typeof version === 'string' && version.length <= 128 && /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(version) ? version : null;
+  } catch { return null; }
+}
 function restoreReceipt(file, before, written) {
   const current = receiptSnapshot(file);
   // Do not overwrite a receipt that another actor changed during this attempt.
@@ -98,7 +131,7 @@ async function runInstall(c, { platform, inspector, apply = false }) {
   const result = path.join(c.resultDir, 'result.json'), journal = path.join(c.resultDir, 'journal.json');
   const rollback = path.join(c.resultDir, 'rollback.noindex/previous.app'), receipt = path.join(c.data, 'installation.json');
   let archiveAttempted = false;
-  let lease = null, before = null, baseline = null, originalReceipt, writtenReceipt = null, quitRequested = false, quitConfirmed = false, movedOld = false;
+  let lease = null, slotIdentity = null, before = null, baseline = null, originalReceipt, writtenReceipt = null, quitRequested = false, quitConfirmed = false, movedOld = false;
   const save = () => atomic(journal, JSON.stringify(record, null, 2) + '\n');
   const stage = name => { record.stage = name; save(); };
   const instances = (checkArguments = false) => {
@@ -156,11 +189,11 @@ async function runInstall(c, { platform, inspector, apply = false }) {
     verifyBundle(c.app, c.oldVersion, c.oldSignature); verifyBundle(c.candidate, c.newVersion, c.newSignature);
     const gui = instances(true); before = await inspector.capture(); originalReceipt = receiptSnapshot(receipt);
     record.oldGuiPids = gui.map(r => r.pid); record.before = before.state;
-    record.originalReceipt = originalReceipt ? { sha256: sha(originalReceipt.bytes), absent: false } : { sha256: null, absent: true };
+    record.originalReceipt = { sha256: originalReceipt ? sha(originalReceipt.bytes) : null, absent: !originalReceipt, version: receiptVersion(originalReceipt) };
     if (!apply) { record.status = 'check-passed'; }
     else {
       assert.equal(c.applyAllowed, true, 'Apply requires approval');
-      fs.mkdirSync(c.slot); lease = crypto.randomUUID();
+      fs.mkdirSync(c.slot); slotIdentity = fs.lstatSync(c.slot); lease = crypto.randomUUID();
       fs.writeFileSync(path.join(c.slot, 'owner.json'), JSON.stringify({ pid: process.pid, token: lease, owner: 'reviewed-installer' }), { flag: 'wx', mode: 0o600 });
       const last = await inspector.capture(); inspector.retained(before, last);
       assert.deepEqual(instances(true).map(r => r.pid), record.oldGuiPids, 'GUI changed before quit');
@@ -231,11 +264,24 @@ async function runInstall(c, { platform, inspector, apply = false }) {
     }
   } finally {
     if (lease) {
-      try { assert.equal(JSON.parse(fs.readFileSync(path.join(c.slot, 'owner.json'))).token, lease); fs.unlinkSync(path.join(c.slot, 'owner.json')); fs.rmdirSync(c.slot); }
+      try {
+        const current = fs.lstatSync(c.slot);
+        assert.ok(current.dev === slotIdentity.dev && current.ino === slotIdentity.ino, 'Installer slot changed');
+        let owner;
+        try { owner = JSON.parse(fs.readFileSync(path.join(c.slot, 'owner.json'))); }
+        catch (e) { if (e.code !== 'ENOENT') throw e; }
+        if (owner) { assert.equal(owner.token, lease); fs.unlinkSync(path.join(c.slot, 'owner.json')); }
+        // rmdir refuses any foreign/partial contents; never recursively remove a lease.
+        fs.rmdirSync(c.slot);
+      }
       catch (e) { record.errors.push({ stage: 'release-slot', ...errorRecord(e) }); record.status = 'recovery-required'; }
     }
     record.finishedAt = new Date().toISOString();
-    try { record.observed = { appVersion: fs.existsSync(c.app) ? appVersion(c.app) : null, gui: platform.bundleApps(), rollbackBundlePresent: fs.existsSync(rollback), installationSha256: fs.existsSync(receipt) ? digest(receipt) : null }; }
+    try {
+      const observedReceipt = receiptSnapshot(receipt);
+      record.observed = { appVersion: fs.existsSync(c.app) ? appVersion(c.app) : null, gui: platform.bundleApps(), rollbackBundlePresent: fs.existsSync(rollback),
+        installationSha256: observedReceipt ? sha(observedReceipt.bytes) : null, installationVersion: receiptVersion(observedReceipt) };
+    }
     catch (e) { record.observationError = errorRecord(e); }
     // A write failure propagates to the CLI, which reports persistence failure explicitly.
     try { atomic(result, JSON.stringify(record, null, 2) + '\n'); }
@@ -249,8 +295,8 @@ async function main(args) {
     const options = {};
     for (let i = 0; i < args.length; i++) { if (args[i] === '--apply') options.apply = true; else { assert.ok(['--approval', '--approval-sha256', '--result-dir'].includes(args[i]), 'Unknown option'); assert.ok(!Object.hasOwn(options, args[i]), 'Duplicate option'); options[args[i]] = args[++i]; } }
     resultDir = options['--result-dir']; absolute(resultDir); ownedDirectory(path.dirname(resultDir), true);
-    fs.mkdirSync(resultDir, { mode: 0o700 }); created = true;
     const c = loadApproval(options['--approval'], options['--approval-sha256'], resultDir, options.apply);
+    fs.mkdirSync(resultDir, { mode: 0o700 }); created = true;
     const platform = require(c.code.platform.path).createPlatform(c);
     // No release code is loaded until the clean committed tree is checked.
     platform.checkRelease(c);

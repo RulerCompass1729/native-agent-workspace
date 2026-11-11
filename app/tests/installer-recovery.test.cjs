@@ -5,13 +5,13 @@ const { runInstall, restoreReceipt, loadApproval, digest } = require('../../scri
 function fixture(t, fault) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'installer-unit-'))); fs.chmodSync(dir, 0o700);
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const c = { app: path.join(dir, 'App.app'), candidate: path.join(dir, 'Candidate.app'), data: path.join(dir, 'data'), resultDir: path.join(dir, 'result'), slot: path.join(dir, 'slot'), newVersion: '2.0.0', oldVersion: '1.0.0', commit: 'a'.repeat(40), bundleId: 'test.synthetic', executableName: 'app', guiTimeoutMs: 10, applyAllowed: true, oldSignature: { cdhash: 'old', requirement: 'old-signature' }, newSignature: { cdhash: 'new', requirement: 'new-signature' } };
+  const c = { app: path.join(dir, 'App.app'), candidate: path.join(dir, 'Candidate.app'), data: path.join(dir, 'data'), resultDir: path.join(dir, 'results.noindex/result'), slot: path.join(dir, 'slot'), newVersion: '2.0.0', oldVersion: '1.0.0', commit: 'a'.repeat(40), bundleId: 'test.synthetic', executableName: 'app', guiTimeoutMs: 10, applyAllowed: true, oldSignature: { cdhash: 'old', requirement: 'old-signature' }, newSignature: { cdhash: 'new', requirement: 'new-signature' } };
   c.executable = path.join(c.app, 'Contents/MacOS/app');
   for (const [app, version] of [[c.app, c.oldVersion], [c.candidate, c.newVersion]]) {
     fs.mkdirSync(path.join(app, 'Contents/Resources/app'), { recursive: true }); fs.mkdirSync(path.join(app, 'Contents/MacOS'));
     fs.writeFileSync(path.join(app, 'Contents/Resources/app/package.json'), JSON.stringify({ version })); fs.writeFileSync(path.join(app, 'Contents/MacOS/app'), version);
   }
-  fs.mkdirSync(c.data, { mode: 0o700 }); fs.mkdirSync(c.resultDir, { mode: 0o700 });
+  fs.mkdirSync(c.data, { mode: 0o700 }); fs.mkdirSync(path.dirname(c.resultDir), { mode: 0o700 }); fs.mkdirSync(c.resultDir, { mode: 0o700 });
   const receipt = path.join(c.data, 'installation.json'), original = Buffer.from('{"version":"1.0.0","extra":"preserved"}\n');
   fs.writeFileSync(receipt, original, { mode: 0o600 });
   let running = true, captureCount = 0, openCount = 0;
@@ -103,7 +103,7 @@ test('an occupied slot stays untouched and prevents the quit', async t => {
   assert.equal(fs.readFileSync(path.join(f.c.slot, 'owner.json'), 'utf8'), 'another-owner');
 });
 test('changed Swift source is rejected using the independently pinned approval before any launch', t => {
-  const f = fixture(t), c = f.c;
+  const f = fixture(t), c = f.c; fs.rmdirSync(c.resultDir);
   c.format = 1; c.release = path.join(f.dir, 'release'); fs.mkdirSync(c.release);
   c.operatorSha256 = digest(require.resolve('../../scripts/install-daily.cjs'));
   const filePin = (name, value) => { const file = path.join(f.dir, name); fs.writeFileSync(file, value); return { path: file, sha256: digest(file) }; };
@@ -123,6 +123,19 @@ test('changed Swift source is rejected using the independently pinned approval b
     fs.writeFileSync(c.coldLaunch.path, JSON.stringify({ pass: true, commit: c.commit, cdhash: c.newSignature.cdhash, ...delta })); c.coldLaunch.sha256 = digest(c.coldLaunch.path);
     fs.writeFileSync(approval, JSON.stringify(c)); assert.throws(() => loadApproval(approval, digest(approval), c.resultDir, true), /Cold-launch/);
   }
+  // All remaining checks run on a fully pinned otherwise valid approval.
+  fs.writeFileSync(c.coldLaunch.path, JSON.stringify({ pass: true, commit: c.commit, cdhash: c.newSignature.cdhash })); c.coldLaunch.sha256 = digest(c.coldLaunch.path);
+  const approve = () => { fs.writeFileSync(approval, JSON.stringify(c)); return () => loadApproval(approval, digest(approval), c.resultDir, true); };
+  fs.mkdirSync(c.resultDir); assert.throws(approve(), /already exists/); fs.rmdirSync(c.resultDir);
+  const approvedResult = c.resultDir;
+  c.resultDir = path.join(f.dir, 'unindexed-result'); assert.throws(approve(), /under .noindex/); c.resultDir = approvedResult;
+  const stat = fs.statSync;
+  t.mock.method(fs, 'statSync', (file, ...args) => { const row = stat(file, ...args); return file === path.dirname(c.resultDir) ? { ...row, dev: row.dev + 1 } : row; });
+  assert.throws(approve(), /same volume/); t.mock.restoreAll();
+  const lstat = fs.lstatSync;
+  t.mock.method(fs, 'lstatSync', (file, ...args) => { if (file === c.resultDir) throw Object.assign(Error('Cannot inspect destination'), { code: 'EACCES' }); return lstat(file, ...args); });
+  assert.throws(approve(), { code: 'EACCES' });
+
 });
 test('partial bundle removal failure never overwrites the already complete rollback archive', async t => {
   const f = fixture(t); let archived = 0; const run = f.platform.run;
@@ -232,4 +245,80 @@ for (const reopenFails of [false, true]) test(`a quit error after the old GUI ex
   const result = await runInstall(f.c, { ...f, apply: true });
   assert.equal(result.status, reopenFails ? 'recovery-required' : 'rolled-back');
   assert.equal(f.opened(), 1); assert.deepEqual(fs.readFileSync(f.receipt), f.original);
+});
+
+for (const changed of ['backend', 'session']) test(`rollback refuses a recovered GUI whose ${changed} changed`, async t => {
+  const f = fixture(t, 'pre-launch'), capture = f.inspector.capture;
+  f.inspector.capture = async () => { const snapshot = await capture(); if (f.opened()) snapshot.state[changed] = 'different'; return snapshot; };
+  const r = await runInstall(f.c, { ...f, apply: true });
+  assert.equal(r.status, 'recovery-required'); assert.equal(r.errors.at(-1).stage, 'verify-rollback');
+  assert.equal(r.recoveredGuiPid, undefined); assert.deepEqual(fs.readFileSync(f.receipt), f.original);
+});
+for (const permission of [false, undefined, 'true']) test(`runInstall refuses non-boolean approval (${permission}) before quit`, async t => {
+  const f = fixture(t), stat = fs.statSync(f.receipt, { bigint: true }); let quits = 0;
+  f.c.applyAllowed = permission; f.platform.quit = () => { quits++; };
+  const r = await runInstall(f.c, { ...f, apply: true });
+  assert.equal(r.status, 'unchanged'); assert.match(r.errors[0].message, /Apply requires approval/);
+  assert.equal(quits, 0); assert.equal(f.opened(), 0); assert.equal(fs.existsSync(f.c.slot), false);
+  assert.equal(fs.statSync(f.receipt, { bigint: true }).ino, stat.ino); assert.deepEqual(fs.readFileSync(f.receipt), f.original);
+});
+test('the production platform rehashes Swift before every list or quit use', t => {
+  const f = fixture(t), cp = require('node:child_process'), { createPlatform } = require('../../scripts/install-platform.cjs');
+  const source = path.join(f.dir, 'helper.swift'); fs.writeFileSync(source, 'reviewed');
+  const platform = createPlatform({ swift: { path: source, sha256: digest(source) } }); let calls = 0;
+  t.mock.method(cp, 'execFileSync', () => { calls++; return '[]'; });
+  assert.deepEqual(platform.bundleApps(), []); assert.equal(calls, 1);
+  fs.writeFileSync(source, 'changed');
+  assert.throws(() => platform.quit(), { code: 'helper-pin-mismatch' });
+  assert.throws(() => platform.bundleApps(), { code: 'helper-pin-mismatch' }); assert.equal(calls, 1);
+});
+test('receipt rename failure removes only its temporary file and verifies pre-launch recovery', async t => {
+  const f = fixture(t), rename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (from, to) => { if (to === f.receipt) throw Object.assign(Error('Receipt rename failed'), { code: 'EIO' }); return rename(from, to); });
+  const r = await runInstall(f.c, { ...f, apply: true });
+  assert.equal(r.status, 'rolled-back'); assert.equal(r.exposure, false); assert.deepEqual(fs.readFileSync(f.receipt), f.original);
+  assert.deepEqual(fs.readdirSync(f.c.data), ['installation.json']);
+});
+test('failure writing an empty new slot owner releases that exact slot', async t => {
+  const f = fixture(t), write = fs.writeFileSync;
+  t.mock.method(fs, 'writeFileSync', (file, ...rest) => { if (file === path.join(f.c.slot, 'owner.json')) throw Object.assign(Error('Owner write failed'), { code: 'ENOSPC' }); return write(file, ...rest); });
+  const r = await runInstall(f.c, { ...f, apply: true });
+  assert.equal(r.status, 'unchanged'); assert.equal(fs.existsSync(f.c.slot), false); assert.equal(f.opened(), 0);
+});
+test('results report the original and observed installation versions from the receipt', async t => {
+  const f = fixture(t), r = await runInstall(f.c, { ...f, apply: true });
+  assert.equal(r.originalReceipt.version, '1.0.0'); assert.equal(r.observed.installationVersion, '2.0.0');
+  assert.equal(r.observed.installationSha256, digest(f.receipt));
+});
+test('CLI rejects untrusted approval before creating its result destination', t => {
+  const f = fixture(t), cp = require('node:child_process'), approval = path.join(f.dir, 'invalid.json');
+  fs.rmdirSync(f.c.resultDir); fs.writeFileSync(approval, '{}');
+  const out = cp.spawnSync(process.execPath, [require.resolve('../../scripts/install-daily.cjs'), '--approval', approval, '--approval-sha256', 'a'.repeat(64), '--result-dir', f.c.resultDir, '--apply'], { encoding: 'utf8' });
+  assert.equal(out.status, 1); assert.equal(JSON.parse(out.stderr).status, 'unchanged');
+  assert.equal(fs.existsSync(f.c.resultDir), false); assert.deepEqual(fs.readFileSync(f.receipt), f.original);
+});
+
+test('atomic writes never remove a preexisting temporary name', t => {
+  const f = fixture(t), crypto = require('node:crypto'), { atomic } = require('../../scripts/install-daily.cjs');
+  t.mock.method(crypto, 'randomUUID', () => 'collision');
+  const temp = f.receipt + '.collision'; fs.writeFileSync(temp, 'another writer');
+  assert.throws(() => atomic(f.receipt, 'new'), { code: 'EEXIST' });
+  assert.equal(fs.readFileSync(temp, 'utf8'), 'another writer'); assert.deepEqual(fs.readFileSync(f.receipt), f.original);
+});
+test('atomic write cleanup failures retain the original error and name the remaining temporary file', t => {
+  const f = fixture(t), rename = fs.renameSync, unlink = fs.unlinkSync, { atomic } = require('../../scripts/install-daily.cjs');
+  t.mock.method(fs, 'renameSync', (from, to) => { if (to === f.receipt) throw Object.assign(Error('rename failure'), { code: 'EIO' }); return rename(from, to); });
+  t.mock.method(fs, 'unlinkSync', file => { if (file.startsWith(f.receipt + '.')) throw Object.assign(Error('cleanup failure'), { code: 'EACCES' }); return unlink(file); });
+  assert.throws(() => atomic(f.receipt, 'new'), e => e.code === 'EIO' && e.temporaryCleanup.code === 'EACCES' && fs.existsSync(e.temporaryCleanup.path));
+  assert.deepEqual(fs.readFileSync(f.receipt), f.original);
+});
+test('a slot owner write failure never deletes foreign contents that appeared in the slot', async t => {
+  const f = fixture(t), write = fs.writeFileSync;
+  t.mock.method(fs, 'writeFileSync', (file, ...rest) => {
+    if (file === path.join(f.c.slot, 'owner.json')) { write(path.join(f.c.slot, 'foreign'), 'preserve'); throw Object.assign(Error('Owner write failed'), { code: 'ENOSPC' }); }
+    return write(file, ...rest);
+  });
+  const r = await runInstall(f.c, { ...f, apply: true });
+  assert.equal(r.status, 'recovery-required'); assert.equal(f.opened(), 0);
+  assert.equal(fs.readFileSync(path.join(f.c.slot, 'foreign'), 'utf8'), 'preserve');
 });
