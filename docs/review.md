@@ -10562,7 +10562,7 @@ boundary and is not a safe recovery procedure.
 
 **Left open.**
 - The second half: a handoff whose integrator is found in a space should wait for the person instead of being read, because messages can reach a member in other ways than the queue (a space exchange, say).
-- The vacancy list that the butler reads still shows such a session as free.
+- The vacancy list that the butler reads still showed such a session as free. (Changed: see "the vacancy list leaves out the holder".)
 - When the record cannot be read, or the engine could not be built over a record that still holds an open handoff from an earlier run, nobody is named and the queue can send that session work; once the record is read again, what it wrote would count as the handoff's answer.
 - Messages from outside the queue (an agent's wake, a continuation after a limit, a space exchange) can still reach the holder. The reviewer's proposal for the second half: end the answer at the first automatic message after the handoff, instead of only waiting when the integrator is found in a space.
 ## Installer failure terminals (candidate only)
@@ -10619,3 +10619,13 @@ review. Read-only review and approved fixture cleanup do not authorize daily use
 - A wake that leaves only a question behind costs one more round.
 - The queue's own settlement of a member's item still reads everything after the item, and its reader still does not know the handoff marker.
 - Not exercised with a real provider: whether a native record really replaces NAW's copy of the handoff message, and with which origin.
+
+## B6 integration handoff: the vacancy list leaves out the holder — 2026-11-11
+
+**Why.** The queue's planner no longer gives work to the session that holds an open handoff, but the list of vacant members that the dispatcher hands to the butler's passive observation was built without that knowledge: an integrator put into a space while its handoff is open was listed as free there. The integrator's reviewer asked that the two use one rule, or that the difference be written down.
+
+**What changed.** A pass asks the engine once who holds an open handoff and gives the same names to the planner and to the vacancy list; a named session is neither sent work nor listed as vacant. With the switch closed nobody is named and both are as before. The third place, the "engaged" names the engine itself is given when it wants to open a handoff, does not need the holder: while a handoff is open no second one is opened at all.
+
+**Checks.** One test on the real dispatcher (the integrator answers with a question, is put into the space, and is missing from the space's vacancy list while its handoff waits; after the person deals with the handoff it is listed) and on the list itself (a named session is not vacant; nobody named, or something that is not a list, changes nothing). Four deliberate breakages each turned it red. The full unit suite and both real-window journeys (the handoff with the switch open, the daily queue with it closed) pass on the delivered head; the counts are in the delivery note.
+
+**Independent review (passed).** The author lane's own reviewer (headless session 980f8974) confirmed that nothing changes with the switch closed, that asking once in a pass is the same for the planner, and that the engine's own "engaged" names do not need the holder. It noted that the vacancy list can be one pass behind when the person deals with the handoff in the meantime; the list is a passive view.
