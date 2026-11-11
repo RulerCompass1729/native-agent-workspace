@@ -849,7 +849,10 @@ the entries are first added to `runtime-locations.removed.json` beside it (the
 last twenty removals, each entry with its path and whether its program still
 existed, so it can be put back), then the file is rewritten empty, and the
 backend reads the shared Settings file. If the record or the file cannot be
-written, nothing is taken out and the file is used as it is. An invalid private
+written, nothing is taken out and the file is used as it is. A record that is
+there but cannot be read is not written over: it is renamed to
+`runtime-locations.removed.json.<time>.unreadable` beside it and a new record is
+started. An invalid private
 file still blocks cold workspace opening until it is fixed or removed; the
 error identifies the backend file. The shared file is never changed this way: a
 program the person selected in Settings stays selected and shows as not found.
