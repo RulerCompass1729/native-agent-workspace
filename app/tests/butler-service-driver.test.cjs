@@ -37,7 +37,8 @@ server.listen(process.argv.at(-1).slice(7));
   const runtimeConfig = path.join(root, 'runtime.json');
   fs.writeFileSync(runtimeConfig, JSON.stringify({ codex: binary }), { mode: 0o600 });
   process.env.NAW_RUNTIME_CONFIG = runtimeConfig;
-  const directory = path.join(root, 'butler'), backend = new ButlerBackend(directory, { runtimeVersion: 'butler-fixture' });
+  const directory = path.join(root, 'butler'), backend = new ButlerBackend(directory, { runtimeVersion: 'butler-fixture',
+    configuration: { profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro' } });
   backend.prepare();
   const proof = JSON.parse(fs.readFileSync(backend.file)).binding;
   t.after(() => {

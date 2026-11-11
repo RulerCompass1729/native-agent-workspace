@@ -142,7 +142,7 @@ function interpretResult(value, { events, catalog, questions = [] }) {
 function rotationCandidates(selection, records) {
   if (!selection || selection.mode !== 'record-only' || !plain(selection.runner) || !Array.isArray(records)) return [];
   const record = records.find(s => s.id === selection.identity?.sessionId && s.nativeId === selection.identity?.nativeId);
-  if (!record || record.provider !== 'codex' || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) return [];
+  if (!record || record.provider !== 'dsh' || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) return [];
   if (roomIds(record).length || !record.runner || Object.keys(selection.runner).some(k => record.runner[k] !== selection.runner[k])) return [];
   return [record.id];
 }

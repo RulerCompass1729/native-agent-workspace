@@ -151,7 +151,7 @@ test('the real typed source can notify a dormant-controller fixture with one non
   const runner = { runnerRef: 'butler:synthetic-runner', backendRef: 'butler:synthetic-backend', purpose: 'butler', profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro' };
   const role = new ButlerRole(f.directory, { authorizePerson: value => value === person });
   role.set(person, { identity: { sessionId: 'synthetic-butler', nativeId: 'synthetic-native' }, runner, budget: { limitMicros: 100 } }, 0);
-  const records = [{ id: 'synthetic-butler', nativeId: 'synthetic-native', provider: 'codex', state: 'idle', roomIds: [], runner }];
+  const records = [{ id: 'synthetic-butler', nativeId: 'synthetic-native', provider: 'dsh', state: 'idle', roomIds: [], runner }];
   const timers = new Map(), calls = [], reports = [];
   const controller = new ButlerController({ role, ledger: f.ledger, backend: { ensure: async () => ({ ready: true, binding: runner }) },
     view: () => ({ records, spaces: [{ id: f.roomId, name: 'Synthetic space', archived: false, writable: true, members: [], queue: [] }] }),

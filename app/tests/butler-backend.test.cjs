@@ -4,9 +4,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { ButlerBackend } = require('../butler-backend.cjs');
+const { ButlerBackend, butlerBinding } = require('../butler-backend.cjs');
 
 const qualified = () => ({ tools: true, context: true, provider: true, s2: true });
+const syntheticConfiguration = { profile: 'fixture-choice', provider: 'fixture-vendor', model: 'fixture-model' };
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function setup(t, overrides = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-backend-'));
@@ -18,7 +19,7 @@ function setup(t, overrides = {}) {
     recover: async value => { calls.push(['recover', value]); return live ? { status: 'present', binding: live } : { status: 'absent' }; },
     start: async value => { calls.push(['start', value]); live = { ...value }; return { status: 'present', binding: live }; },
   };
-  const options = { runtimeVersion: 'alpha.synthetic', credentialPresent: () => true, qualify: qualified,
+  const options = { runtimeVersion: 'alpha.synthetic', configuration: { ...syntheticConfiguration }, credentialPresent: () => true, qualify: qualified,
     driver, now: () => 100, id: () => `synthetic-${++serial}`, ...overrides };
   return { root, directory, calls, driver, options, backend: new ButlerBackend(directory, options),
     raw: () => JSON.parse(fs.readFileSync(path.join(directory, 'backend.json'), 'utf8')) };
@@ -32,7 +33,7 @@ test('prepare reserves its own private store and immutable runner without changi
   const prepared = f.backend.prepare(), first = f.raw();
   assert.equal(prepared.state, 'prepared'); assert.equal(prepared.ready, false);
   assert.deepEqual({ purpose: prepared.binding.purpose, profile: prepared.binding.profile, provider: prepared.binding.provider, model: prepared.binding.model },
-    { purpose: 'butler', profile: 'deepseek-pro', provider: 'deepseek', model: 'deepseek-v4-pro' });
+    { purpose: 'butler', ...syntheticConfiguration });
   assert.equal(prepared.binding.runtimeVersion, 'alpha.synthetic');
   assert.ok(first.binding.startNonce);
   assert.deepEqual(new ButlerBackend(f.directory, f.options).prepare(), prepared);
@@ -143,7 +144,7 @@ test('reopening after an uncertain start recovers the same nonce without fallbac
   assert.equal(f.calls.filter(call => call[0] === 'start').length, 1);
   assert.equal(fs.readFileSync(f.backend.file, 'utf8').includes('synthetic-secret-value'), false);
   assert.equal(JSON.stringify(reopened.snapshot()).includes('synthetic-secret-value'), false);
-  for (const [, proof] of f.calls) assert.equal(proof.provider, 'deepseek');
+  for (const [, proof] of f.calls) assert.equal(proof.provider, syntheticConfiguration.provider);
 });
 
 test('a confirmed absent failed start can retry only after recovery using the saved nonce', async t => {
@@ -240,3 +241,69 @@ for (const kind of ['record-symlink', 'record-hardlink', 'record-mode', 'store-s
     assert.deepEqual(f.calls, []);
     if (kind.startsWith('record')) assert.equal(fs.readFileSync(f.backend.file, 'utf8'), saved);
   });
+
+for (const configuration of [undefined, null]) test(`unset configuration ${configuration} cannot prepare, qualify or start`, async t => {
+  let presenceChecks = 0, qualificationChecks = 0, clockCalls = 0;
+  const f = setup(t, { configuration, credentialPresent: () => { presenceChecks++; return true; },
+    qualify: () => { qualificationChecks++; return qualified(); }, now: () => { clockCalls++; return 100; } });
+  assert.equal(f.backend.snapshot().prepared, false);
+  assert.deepEqual(f.backend.snapshot().blocked, ['configuration-unset']);
+  assert.throws(() => f.backend.prepare(), { code: 'configuration-unset' });
+  assert.deepEqual(await f.backend.ensure(), { ready: false, blocked: ['configuration-unset'] });
+  assert.equal(presenceChecks, 0); assert.equal(qualificationChecks, 0); assert.equal(clockCalls, 0);
+  assert.deepEqual(f.calls, []); assert.equal(fs.existsSync(f.directory), false);
+});
+
+test('configuration is an explicit bounded data record with no credential fields or executable getters', t => {
+  const f = setup(t);
+  for (const configuration of [[], {}, { ...syntheticConfiguration, credentials: 'not-a-configuration-name' },
+    { ...syntheticConfiguration, provider: '' }, { ...syntheticConfiguration, profile: 'fixture profile' },
+    { ...syntheticConfiguration, model: 'x'.repeat(121) }, { ...syntheticConfiguration, model: {} }]) {
+    assert.throws(() => new ButlerBackend(f.directory, { ...f.options, configuration }), { code: 'configuration-invalid' });
+  }
+  let reads = 0;
+  const configuration = { ...syntheticConfiguration };
+  Object.defineProperty(configuration, 'model', { enumerable: true, get() { reads++; throw Error('A configuration getter must not execute'); } });
+  assert.throws(() => new ButlerBackend(f.directory, { ...f.options, configuration }), { code: 'configuration-invalid' });
+  assert.equal(reads, 0); assert.equal(fs.existsSync(f.directory), false); assert.deepEqual(f.calls, []);
+});
+
+test('configuration is copied privately and cannot change between reservation and driver use', async t => {
+  const configuration = { ...syntheticConfiguration }, f = setup(t, { configuration });
+  f.backend.prepare(); const before = f.raw().binding;
+  configuration.profile = 'changed-profile'; configuration.provider = 'changed-vendor'; configuration.model = 'changed-model';
+  f.backend.configuration = { profile: 'replacement', provider: 'replacement', model: 'replacement' };
+  assert.equal((await f.backend.ensure()).ready, true);
+  assert.deepEqual(f.raw().binding, before);
+  for (const [, proof] of f.calls) for (const key of ['profile', 'provider', 'model']) assert.equal(proof[key], syntheticConfiguration[key]);
+});
+
+for (const key of ['profile', 'provider', 'model']) test(`a changed host ${key} cannot read, overwrite or start the persisted runner`, async t => {
+  const f = setup(t); f.backend.prepare(); const original = fs.readFileSync(f.backend.file), listing = fs.readdirSync(f.backend.store);
+  const other = new ButlerBackend(f.directory, { ...f.options, configuration: { ...syntheticConfiguration, [key]: 'different-selection' } });
+  assert.throws(() => other.read(), { code: 'binding-mismatch' });
+  assert.throws(() => other.snapshot(), { code: 'binding-mismatch' });
+  assert.throws(() => other.prepare(), { code: 'binding-mismatch' });
+  await assert.rejects(other.ensure(), { code: 'binding-mismatch' });
+  assert.deepEqual(fs.readFileSync(f.backend.file), original); assert.deepEqual(fs.readdirSync(f.backend.store), listing);
+  assert.deepEqual(f.calls, []);
+});
+
+test('a missing host configuration can inspect fixed metadata but cannot adopt an existing reservation', async t => {
+  const f = setup(t); f.backend.prepare(); const bytes = fs.readFileSync(f.backend.file);
+  const absent = new ButlerBackend(f.directory, { ...f.options, configuration: undefined });
+  assert.equal(absent.snapshot().ready, false); assert.equal(absent.snapshot().qualified, false);
+  assert.deepEqual(absent.snapshot().blocked, ['configuration-unset']);
+  assert.throws(() => absent.prepare(), { code: 'configuration-unset' });
+  assert.deepEqual(await absent.ensure(), { ready: false, blocked: ['configuration-unset'] });
+  assert.deepEqual(fs.readFileSync(f.backend.file), bytes); assert.deepEqual(f.calls, []);
+});
+
+test('general binding validation accepts host configuration names while retaining purpose and store restrictions', t => {
+  const f = setup(t); f.backend.prepare(); const original = f.raw().binding;
+  assert.deepEqual(butlerBinding(original), original);
+  assert.deepEqual(butlerBinding({ ...original, profile: 'opaque:choice-2', provider: 'other-vendor', model: 'other-model.v2' }),
+    { ...original, profile: 'opaque:choice-2', provider: 'other-vendor', model: 'other-model.v2' });
+  for (const change of [{ purpose: 'ordinary' }, { store: 'other-store' }, { store: '../elsewhere' }])
+    assert.throws(() => butlerBinding({ ...original, ...change }), { code: 'binding-mismatch' });
+});

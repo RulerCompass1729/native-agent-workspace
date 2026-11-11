@@ -1,4 +1,14 @@
-# Dedicated butler service dependency
+# Dormant legacy butler service dependency
+
+The current execution target is a designated DSH butler instance. This document
+records the earlier dormant native service dependency, not the production target.
+Its existing factory explicitly supplies the former profile/provider/model names;
+the shared backend no longer defaults to them. A new DSH factory must pass its
+actual `configuration: { profile, provider, model }`, keep its own exact persistent
+instance proof and reject foreign/unknown stores. Do not relabel a Codex process
+as DSH or reuse its liveness claim. Role and rotation authorization now require the
+actual designated DSH record, with the same IDs, binding and revision checks.
+The core `run(input, expected)` return envelope is unchanged.
 
 This checkpoint provides the dedicated service driver for the dormant
 [butler core](butler-core.md). It does not activate the butler or qualify native

@@ -1,5 +1,5 @@
 'use strict';
-// A person-designated, dedicated Codex runner. This record grants only the B4
+// A person-designated, dedicated DSH butler instance. This record grants only the B4
 // record-only role; it never grants queue-secretary or lifecycle powers.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -14,6 +14,7 @@ const plain = value => value && typeof value === 'object' && !Array.isArray(valu
 const fields = (value, allowed, required = allowed) => plain(value) && Object.keys(value).every(key => allowed.includes(key)) && required.every(key => Object.hasOwn(value, key));
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(value);
 const copy = value => structuredClone(value);
+const configurationName = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,119}$/.test(value);
 const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino;
 const revision = value => Number.isSafeInteger(value) && value >= 0;
 function identity(value) {
@@ -22,8 +23,8 @@ function identity(value) {
 }
 function runner(value) {
   if (!fields(value, ['runnerRef', 'backendRef', 'purpose', 'profile', 'provider', 'model']) ||
-      !id(value.runnerRef) || !id(value.backendRef) || value.purpose !== 'butler' || value.profile !== 'deepseek-pro' ||
-      value.provider !== 'deepseek' || value.model !== 'deepseek-v4-pro') fail('ERR_BUTLER_INVALID');
+      !id(value.runnerRef) || !id(value.backendRef) || value.purpose !== 'butler' ||
+      !['profile', 'provider', 'model'].every(key => configurationName(value[key]))) fail('ERR_BUTLER_INVALID');
   return { runnerRef: value.runnerRef, backendRef: value.backendRef, purpose: value.purpose, profile: value.profile, provider: value.provider, model: value.model };
 }
 function budget(value) {
@@ -165,7 +166,7 @@ class ButlerRole {
     const current = this.current(entries);
     if (!current || current.selectionRevision !== expected.selectionRevision || current.runner.runnerRef !== expected.runnerRef ||
         !Array.isArray(records) || !records.includes(actorRecord) || actorRecord?.id !== current.identity.sessionId ||
-        actorRecord.nativeId !== current.identity.nativeId || actorRecord.provider !== 'codex' || actorRecord.archived ||
+        actorRecord.nativeId !== current.identity.nativeId || actorRecord.provider !== 'dsh' || actorRecord.archived ||
         actorRecord.nativeContextPending || !['idle', 'working', 'approval'].includes(actorRecord.state)) fail('ERR_BUTLER_UNAUTHORIZED');
     try {
       if (roomIds(actorRecord).length || JSON.stringify(runner(actorRecord.runner)) !== JSON.stringify(current.runner)) fail('ERR_BUTLER_UNAUTHORIZED');

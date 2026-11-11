@@ -15,7 +15,7 @@ function fixture(t, { epoch = true, ask } = {}) {
   const person = Symbol('person'), role = new ButlerRole(directory, { authorizePerson: actor => actor === person });
   role.set(person, { identity: { sessionId: 'publication-session', nativeId: 'publication-native' }, runner,
     budget: { limitMicros: 100 } }, 0);
-  const records = [{ id: 'publication-session', nativeId: 'publication-native', provider: 'codex', state: 'idle', roomIds: [], runner }];
+  const records = [{ id: 'publication-session', nativeId: 'publication-native', provider: 'dsh', state: 'idle', roomIds: [], runner }];
   const open = () => new ButlerLedger(directory, { authorizePerson: actor => actor === person });
   const ledger = open(), asks = [], blocked = []; let runs = 0;
   if (epoch) ledger.openQuestionMetricEpoch('publication-epoch');

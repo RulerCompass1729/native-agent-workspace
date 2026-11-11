@@ -8458,3 +8458,27 @@ Limits. A running backend is not repaired: an own entry whose program disappears
 Author-run, no native program started and no model called: unit tests with fake programs, including a real start of NAW's own backend service with gone entries (both providers available afterwards, the file emptied, the repair recorded, and a program removed and restored while it runs seen at the next initial state); 22 single-line mutations each caught; full suite 4652/0. One hidden GUI run on real Electron: with a Settings selection for Codex that is gone, the alert shows the Chinese text, the English text after switching language, and goes when the selection is set back to automatic discovery; the same run with the Settings refresh removed fails at that last step. Two earlier suite runs are kept: one never finished (the new start test removed its folder before closing its backend), one had seven failures in existing tests whose fake hosts and source harness lacked the new call.
 
 Independent read-only review (one session, two rounds; the CLI reported the model as claude-opus-5-5): CHANGES, then PASS on `58a3b16` (`4a66fdc` after the rebase onto `5033176`). Taken: a repair that could not be written stopped the start; the record was overwritten and written in place; the private conclusion page said Settings always clears the alert. Withdrawn by the reviewer after reading the earlier source: that an unreadable own file newly stops a start (it always did; now tested at the service start). Noted, not changed: resolving on every initial state lets an initial request change the resolved programs between a session's check and the shared Codex server's start, which matters only if the program changes in that window; the read-only check can pass for a backend whose folder is not writable.
+
+## B4 designated DSH identity without additional powers (2026-11-10)
+
+Requested outcome: accept only the person's designated DSH butler instance,
+without expanding its action set, record-only mode, default-off state or any
+person-only gate. The execution-harness predicate changes from Codex to DSH;
+session/native IDs, exact actual record, runner/backend binding, revision,
+membership, liveness and persisted successor checks remain. Shared role/backend
+configuration no longer assumes one model vendor. Explicit host metadata does
+not qualify a provider or grant tools; missing/mismatched configuration refuses
+reuse/start rather than selecting a fallback.
+
+Author-run before/after comparison loads the actual preceding Role/Policy source
+and current source. Old Codex and new DSH have the same five proposals, all with
+effect none, ten denied control kinds, record-only mode, default queue grant false,
+null assignee and zero adapter writes. Each rejects the opposite harness, another
+instance and forged person calls. Permanent regressions cover those boundaries
+and model-authored grants/effects/identity fields. Backend configuration counter-
+examples failed before this change and pass after it. No native/model trial or
+runtime qualification is claimed. Related isolated checks: 414 pass; full unit
+suite: 4820 pass, zero fail or skip. Independent review approved this exact
+identity/configuration scope and explicitly confirmed unchanged available actions.
+The live DSH record producer and its runtime permissions remain separate gates.
+Owner: butler outcome owner; the formal DSH host/driver integration remains separate.
