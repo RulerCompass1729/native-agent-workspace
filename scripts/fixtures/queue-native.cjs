@@ -5,6 +5,7 @@ const { EventEmitter } = require('node:events');
 const path = require('node:path');
 const appRoot = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..');
 const { NativeHost } = require(path.join(appRoot, 'app/adapters.cjs'));
+const { Workspace } = require(path.join(appRoot, 'app/workspace.cjs'));
 
 const sends = [];
 const turns = new Map();
@@ -60,8 +61,35 @@ function release(id, reply) {
   return true;
 }
 
+// Stuck records (B6 E4): a synthetic permission prompt, and its five minutes made to have passed.
+// A prompt is reported the way a bridged Claude reports one: the runtime holds it as nativeApproval
+// and the state becomes approval; no request object reaches the backend.
+// The real one-shot timer is covered by unit tests; here only the wait's start is moved back and
+// the backend is told its state changed, so the desktop sees what it would see at the limit.
+let workspace = null;
+const noteWait = Workspace.prototype.noteWait;
+Workspace.prototype.noteWait = function (...args) { workspace = this; return noteWait.apply(this, args); };
+function stuck(request) {
+  const runtime = runtimes.get(request.session);
+  if (!runtime) return false;
+  if (request.method === 'approval') {
+    runtime.nativeApproval = { nativeOnly: true, observedAt: Date.now(), requests: [{ id: 'permission:1', title: 'Bash', input: 'synthetic command', incomplete: false }] };
+    runtime.emit('state', 'approval'); return true;
+  }
+  if (request.method === 'approval-resolved') { runtime.nativeApproval = null; runtime.emit('state', 'working'); return true; }
+  const wait = workspace?.stuckWaits.get(request.session + ':approval');
+  if (!wait) return false;
+  wait.since -= 5 * 60 * 1000 + 2000;
+  workspace.changed();
+  return true;
+}
+
 process.on('message', request => {
   if (request.method === 'fail-next-send') failNext.add(request.session);
+  if (['approval', 'approval-resolved', 'age-waits'].includes(request.method)) {
+    process.send({ requestId: request.id, done: stuck(request), sends: sends.map(({ id, text }) => ({ id, text })) });
+    return;
+  }
   let released = null;
   if (request.method === 'release') {
     released = release(request.session, request.reply);

@@ -46,6 +46,11 @@ function interruptActivity(s) {
   if (running.length || reported) return uiActivity('notice.activity.interruptWaitsForBackground', { count: running.length || reported });
   return uiActivity('notice.activity.interruptRequested');
 }
+// B6 E4: an interrupt the native side still has not confirmed, or a permission prompt nobody has
+// answered, counts as stuck once it has lasted this long. One timer per wait sends state again at
+// that moment, and only if the wait is still on. Nothing polls, and nothing is stopped, approved
+// or sent because of it; the space record is written by the desktop (room-state.cjs recordStuck).
+const STUCK_AFTER_MS = 5 * 60 * 1000;
 const { OperatorControl } = require('./operator-control.cjs');
 const { GoalContinuation } = require('./goal-continuation-runner.cjs');
 // Pointer motion with no button held (SGR any-event mouse tracking, e.g. fullscreen Claude)
@@ -118,6 +123,8 @@ class Workspace extends EventEmitter {
     this.forwards = new Map(); this.pendingDrafts = new Map();
     this.sharedReplies = new SharedReplies(this);
     this.approvalRoutes = new Map();
+    // Waits that may become stuck, in memory only: a restart leaves no interrupt or approval pending.
+    this.stuckWaits = new Map();
     this.stops = new Map();
     this.progress = new Map(); this.observedTerminals = new Map();
     this.nativeHistory = new NativeHistory(host); this.historyQueue = Promise.resolve(); this.pendingNativeImports = 0;
@@ -192,10 +199,67 @@ class Workspace extends EventEmitter {
     return Object.keys(usage).length || account ? { ...usage, ...(account ? { account } : {}) } : null;
   }
   snapshot() {
-    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
+    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, ...this.stuckFor(s), usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
+  }
+  // kind is 'interrupt' or 'approval'.
+  // An interrupt waits for as long as the turn it was sent to keeps running. A later tool or status
+  // notice does not end it. With a native turn identity, the wait ends when that turn is no longer the
+  // current one; without one, at the native interrupt or a completion (endUnidentifiedWait).
+  // A confirmation wait lasts exactly as long as a prompt is open: a Codex request that blocks, a Claude
+  // prompt the bridge reports (nativeApproval), or more requests than can be shown. The approval state
+  // alone is not used: without the bridge it outlasts the prompt, so such a session is never marked.
+  // A Codex request left behind by a backend that exited, or by a turn that is over, is not a prompt.
+  stuckWaiting(s, kind, wait) {
+    const runtime = this.runtimes?.get(s.id);
+    if (kind === 'interrupt') return ['working', 'approval'].includes(s.state) && (wait?.turn == null || (runtime?.turnId || null) === wait.turn);
+    return s.approvalOverflow === true || Boolean(runtime?.nativeApproval) ||
+      Array.isArray(s.approvals) && ['working', 'approval'].includes(s.state) && Boolean(runtime) && !runtime.backendExitConfirmed && !runtime.transportDisconnected &&
+        s.approvals.some(approval => approval?.params?.isBlocking !== false);
+  }
+  // Called where a wait begins or continues; the first call of a wait fixes when it began.
+  noteWait(s, kind, turn = null) {
+    const key = `${s.id}:${kind}`;
+    if (this.stuckWaits.has(key)) return;
+    const wait = { id: s.id, kind, since: Date.now(), due: false, timer: null, turn };
+    wait.timer = setTimeout(() => {
+      // The timer itself says the time has passed; the wall clock is not asked again, since it
+      // may read a moment short and nothing would ask a second time.
+      wait.timer = null; wait.due = true;
+      const current = this.sessions.get(wait.id);
+      if (!this.closed && current && this.stuckWaits.get(key) === wait && this.stuckWaiting(current, kind, wait)) this.changed();
+    }, STUCK_AFTER_MS);
+    wait.timer.unref?.();
+    this.stuckWaits.set(key, wait);
+  }
+  endWait(s, kind) {
+    const key = `${s.id}:${kind}`, wait = this.stuckWaits.get(key);
+    if (wait) { clearTimeout(wait.timer); this.stuckWaits.delete(key); }
+  }
+  // A completion can be reported while its turn goes on, or for an earlier turn; it ends only a
+  // wait that has no turn identity to go by.
+  endUnidentifiedWait(s) {
+    if (this.stuckWaits.get(`${s.id}:interrupt`)?.turn == null) this.endWait(s, 'interrupt');
+  }
+  stuckFor(s, now = Date.now()) {
+    const stuck = [];
+    for (const kind of ['interrupt', 'approval']) {
+      const wait = this.stuckWaits?.get(`${s.id}:${kind}`);
+      if (wait && this.stuckWaiting(s, kind, wait) && (wait.due || now - wait.since >= STUCK_AFTER_MS || kind === 'approval' && s.approvalOverflow === true)) {
+        // What holds the interrupt is read now, from what NAW observed, not from a notice that may have been replaced.
+        stuck.push({ kind, since: wait.since, key: `stuck:${s.id}:${kind}:${wait.since}`, ...(kind === 'interrupt' ? { held: interruptActivity(s)[1] } : {}) });
+      }
+    }
+    return stuck.length ? { stuck } : {};
   }
   changed() {
+    // A wait that has ended is forgotten at the first change after it, with its timer. An open
+    // permission prompt starts its wait at the first change that shows it, whatever reported it.
+    for (const [key, wait] of this.stuckWaits) {
+      const current = this.sessions.get(wait.id);
+      if (!current || !this.stuckWaiting(current, wait.kind, wait)) { clearTimeout(wait.timer); this.stuckWaits.delete(key); }
+    }
     for (const s of this.sessions.values()) {
+      if (this.stuckWaiting(s, 'approval')) this.noteWait(s, 'approval');
       // An unnamed row shows its first request until a native title arrives.
       if (s.autoName && !s.nameSource) {
         const first = s.messages.find(m => m.role === 'user' && typeof m.text === 'string' && m.text.trim());
@@ -784,7 +848,7 @@ class Workspace extends EventEmitter {
       this.deliveryStatus(tag, 'submitted'); this.changed();
     });
     on('interrupted', ({ tag }) => {
-      this.cancelCapacity(s.id);
+      this.cancelCapacity(s.id); this.endUnidentifiedWait(s);
       if (tag) {
         if (s.pendingTag === tag) s.pendingTag = null;
         this.forwards.delete(tag); this.sharedReplies.close(tag, '原生已中断本轮', uiActivity('notice.run.turnInterrupted')[1]);
@@ -803,7 +867,7 @@ class Workspace extends EventEmitter {
     on('delta', item => { this.sharedReplies.record(s, applyCodexDelta(s, item)); this.changed(); });
     on('messageItem', item => { this.sharedReplies.record(s, applyCodexMessage(s, item)); this.changed(); });
     on('complete', info => {
-      this.cancelCapacity(s.id);
+      this.cancelCapacity(s.id); this.endUnidentifiedWait(s);
       // Only the adapter's verified native identity can authorize a forward.
       // An untagged completion can clear bookkeeping, never share its body.
       const forwardTag = info.tag || (s.provider === 'claude' ? s.pendingTag : null);
@@ -1368,8 +1432,12 @@ class Workspace extends EventEmitter {
     // neither waits on the hook nor opens the dialog; then the turn is aborted.
     if (this.claudeAsks.get(id)) this.releaseQuestion(s, null, { stop: true });
     if (runtime.nativeAbortRequest && runtime.nativeAbortCurrent?.(runtime.nativeAbortRequest)) return runtime.nativeAbortRequest.done;
+    // The turn this interrupt is for; a turn that began while the native side was asked is not waiting on it.
+    const turn = runtime.turnId || null;
     s.controlRevision++; this.pause('真人中断当前回复', undefined, false, uiActivity('notice.run.humanInterrupt')[1]); const result = await runtime.interrupt();
-    setActivity(s, ...(result?.interrupted ? ['', null] : interruptActivity(s))); this.changed();
+    setActivity(s, ...(result?.interrupted ? ['', null] : interruptActivity(s)));
+    if (!result?.interrupted && (runtime.turnId || null) === turn) this.noteWait(s, 'interrupt', turn);
+    this.changed();
   }
   expireRun(run = this.activeRun()) {
     // The interval is only a wake-up aid. Native delivery/completion must also
@@ -1756,7 +1824,11 @@ class Workspace extends EventEmitter {
     this.progress.delete(id); this.observedTerminals.delete(id);
     if (!this.storageWarning && removeCachedImages(this.dataDir, id, this.sharedImageKeys()).failed) return { imagesLeft: true };
   }
-  close() { this.closed = true; clearTimeout(this.saveTimer); clearInterval(this.deadlineTimer); this.persist(); this.host.close(); }
+  close() {
+    this.closed = true; clearTimeout(this.saveTimer); clearInterval(this.deadlineTimer);
+    for (const wait of this.stuckWaits.values()) clearTimeout(wait.timer);
+    this.stuckWaits.clear(); this.persist(); this.host.close();
+  }
 }
 
 module.exports = { Workspace, cleanText, isTerminalResponse, createSettings, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS };

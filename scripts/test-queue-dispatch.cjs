@@ -458,6 +458,146 @@ async function decisionNoticeScenario(a, b) {
   console.log(JSON.stringify({ decisionNotification: (await notices())[0], failure, eventId: decision.id, dedup: true, exactRowFocused: true, draftPreserved: true, clipboardUnchanged: true, nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
 }
 
+// B6 step 1: what NAW records by itself, as the person sees it in the space record.
+// A member's delivery line, and a queue with nothing left to send. Records only.
+async function monitorScenario(a) {
+  assert.equal(process.env.NAW_TEST_DECISION_NOTICE, '1', 'Runs with the notification fixture, so nothing reaches the OS');
+  const english = process.env.NAW_TEST_UI_LANGUAGE === 'en';
+  const notices = () => app.evaluate(() => globalThis.decisionNotifications.map(n => n.options));
+  const shared = async () => (await snapshot()).rooms.find(r => r.id === 'shared');
+  const facts = async kind => (await shared()).events.filter(event => event.monitor?.kind === kind);
+  // The row for this record is in the space record, readable, with the text of the interface language.
+  const shown = async (event, text, label) => {
+    if (await page.locator('#queue-dialog').isVisible()) {
+      await page.locator('#close-queue').click();
+      await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
+    }
+    await page.waitForFunction(id => document.querySelector('#room-messages [data-message-id="' + id + '"]'), event.id);
+    const row = await page.evaluate(id => {
+      const element = document.querySelector('#room-messages [data-message-id="' + id + '"]');
+      element.scrollIntoView({ block: 'center' });
+      const box = element.getBoundingClientRect(), list = document.querySelector('#room-messages').getBoundingClientRect();
+      return { text: element.innerText, width: box.width, height: box.height, inside: box.top >= list.top - 1 && box.bottom <= list.bottom + 1 };
+    }, event.id);
+    assert.ok(row.text.includes(text), `${label}: the row reads ${JSON.stringify(row.text)}, expected ${JSON.stringify(text)}`);
+    assert.ok(row.width > 0 && row.height > 0 && row.inside, `${label}: the row is not on screen: ${JSON.stringify(row)}`);
+  };
+
+  // 1) A finished item whose reply ends with a delivery line: one delivery record, and one record that the queue ran dry.
+  await addItem('Delivery task', a);
+  await expectSend(1, a, /Delivery task/, 'delivery task dispatched');
+  await release(a, 'Finished the change.\nREADY lane/member-a 0123abc');
+  await until(async () => (await itemByText('Delivery task')).status === 'done', 'Delivery settled');
+  assert.deepEqual((await itemByText('Delivery task')).ready, { branch: 'lane/member-a', commit: '0123abc' });
+  const [delivery] = await facts('ready'), [dry] = await facts('queue-dry');
+  assert.equal((await facts('ready')).length, 1); assert.equal((await facts('queue-dry')).length, 1);
+  await shown(delivery, english ? '队员甲 delivered READY: lane/member-a 0123abc (Delivery task)' : '队员甲 交付 READY：lane/member-a 0123abc（Delivery task）', 'delivery record');
+  await shown(dry, english ? 'This space has no queued work left' : '这个空间的活清空了', 'queue-dry record');
+  await capture('monitor-delivery-' + (english ? 'en' : 'zh'));
+  passed.push('A delivery line is kept on the item and recorded once; the emptied queue is recorded once');
+
+  // 2) A delivery that first needs the person: the line waits with the item, and is recorded when the person marks it handled.
+  await addItem('Decision delivery', a);
+  await expectSend(2, a, /Decision delivery/, 'decision delivery dispatched');
+  await release(a, (english ? 'Needs your decision: merge now?' : '需要你决定：现在合并吗？') + '\nREADY lane/member-a-2 abc1234');
+  await until(async () => (await itemByText('Decision delivery')).status === 'waiting', 'Decision settled');
+  assert.deepEqual((await itemByText('Decision delivery')).ready, { branch: 'lane/member-a-2', commit: 'abc1234' });
+  assert.equal((await facts('ready')).length, 1, 'Not a delivery while the person has not dealt with it');
+  const waitingDry = (await facts('queue-dry'))[1];
+  assert.equal((await facts('queue-dry')).length, 2);
+  await shown(waitingDry, english ? 'No work is left to send in this space. Waiting for you: 1' : '这个空间没有可派的活了，还有 1 项等你处理', 'queue-dry record with a waiting item');
+  await until(async () => (await notices()).length === 1, 'One decision notification', 5000);
+  const decision = (await shared()).events.findLast(event => event.uiMessage?.key === 'notice.queue.waiting');
+  assert.equal(decision.monitor, undefined);
+  const waitingId = (await itemByText('Decision delivery')).id;
+  await page.locator('#room-queue').click();
+  await page.locator('#queue-dialog').waitFor();
+  await page.locator(`#queue-list [data-queue-item="${waitingId}"]`).getByRole('button', { name: english ? 'Handled' : '已处理', exact: true }).click();
+  await until(async () => (await itemByText('Decision delivery')).status === 'done', 'Handled');
+  const late = (await facts('ready'))[1];
+  assert.equal((await facts('ready')).length, 2);
+  assert.equal((await facts('queue-dry')).length, 2, 'Handling the last waiting item is not a second record for the same round');
+  await shown(late, english ? '队员甲 delivered READY: lane/member-a-2 abc1234 (Decision delivery)' : '队员甲 交付 READY：lane/member-a-2 abc1234（Decision delivery）', 'delivery record after the person handled it');
+  await capture('monitor-handled-' + (english ? 'en' : 'zh'));
+  passed.push('A delivery that needed a decision was recorded only after the person marked it handled');
+
+  // 3) Another dispatcher pass and a page reload record nothing more, and nothing but the decision asked for the person.
+  await page.reload(); await page.locator('#new-session').waitFor(); await delay(3500);
+  assert.equal((await facts('ready')).length, 2); assert.equal((await facts('queue-dry')).length, 2);
+  assert.equal((await notices()).length, 1, 'Deliveries and an empty queue never notify');
+  assert.equal((await sends()).length, 2, 'Nothing was sent to a member because of these records');
+  assert.deepEqual(errors, []);
+  console.log(JSON.stringify({ passed, facts: (await shared()).events.filter(event => event.monitor).map(event => event.monitor.key), notifications: (await notices()).length,
+    syntheticDispatches: (await sends()).length, nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
+}
+
+// B6 step 1 (E4): a member that waits on a permission request for five minutes is recorded in its
+// space once, and once more when it no longer waits. Records only: nothing is sent or notified.
+async function stuckScenario(a) {
+  assert.equal(process.env.NAW_TEST_DECISION_NOTICE, '1', 'Runs with the notification fixture, so nothing reaches the OS');
+  const english = process.env.NAW_TEST_UI_LANGUAGE === 'en';
+  const notices = () => app.evaluate(() => globalThis.decisionNotifications.map(n => n.options));
+  const shared = async () => (await snapshot()).rooms.find(r => r.id === 'shared');
+  const facts = async kind => (await shared()).events.filter(event => event.monitor?.kind === kind);
+  const member = async () => (await snapshot()).sessions.find(s => s.id === a);
+  const shown = async (event, text, label) => {
+    if (await page.locator('#queue-dialog').isVisible()) {
+      await page.locator('#close-queue').click();
+      await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
+    }
+    await page.waitForFunction(id => document.querySelector('#room-messages [data-message-id="' + id + '"]'), event.id);
+    const row = await page.evaluate(id => {
+      const element = document.querySelector('#room-messages [data-message-id="' + id + '"]');
+      element.scrollIntoView({ block: 'center' });
+      const box = element.getBoundingClientRect(), list = document.querySelector('#room-messages').getBoundingClientRect();
+      return { text: element.innerText, width: box.width, height: box.height, inside: box.top >= list.top - 1 && box.bottom <= list.bottom + 1 };
+    }, event.id);
+    assert.ok(row.text.includes(text), `${label}: the row reads ${JSON.stringify(row.text)}, expected ${JSON.stringify(text)}`);
+    assert.ok(row.width > 0 && row.height > 0 && row.inside, `${label}: the row is not on screen: ${JSON.stringify(row)}`);
+  };
+
+  // 1) A working member gets a permission request. Before five minutes nothing is recorded.
+  await addItem('Stuck task', a);
+  await expectSend(1, a, /Stuck task/, 'stuck task dispatched');
+  assert.equal((await fixture('approval', a)).done, true);
+  await until(async () => (await member()).state === 'approval', 'Permission prompt shown');
+  await delay(1500);
+  assert.equal((await member()).stuck, undefined, 'Not stuck before the limit');
+  assert.equal((await facts('stuck')).length, 0);
+
+  // 2) At five minutes the backend marks it and the space records it once.
+  assert.equal((await fixture('age-waits', a)).done, true);
+  await until(async () => (await facts('stuck')).length === 1, 'Stuck recorded');
+  const [mark] = (await member()).stuck, [record] = await facts('stuck');
+  assert.equal(mark.kind, 'approval'); assert.equal(record.monitor.key, mark.key); assert.equal(record.sessionId, a);
+  await shown(record, english ? '队员甲 has waited 5 min for a native confirmation' : '队员甲 等原生确认已经 5 分钟', 'stuck record');
+  await capture('stuck-recorded-' + (english ? 'en' : 'zh'));
+  await page.reload(); await page.locator('#new-session').waitFor(); await delay(3500);
+  assert.equal((await facts('stuck')).length, 1, 'Later states and a reloaded page do not record it again');
+  passed.push('A permission request left for five minutes was recorded once in the member space');
+
+  // 3) When it is answered, the end is recorded once, with how long it lasted.
+  assert.equal((await fixture('approval-resolved', a)).done, true);
+  await until(async () => (await facts('stuck-ended')).length === 1, 'End recorded');
+  const [ended] = await facts('stuck-ended');
+  assert.equal(ended.monitor.key, mark.key); assert.equal((await member()).stuck, undefined);
+  await openSpace();
+  await shown(ended, english ? '队员甲 no longer waits for a native confirmation (5 min in all)' : '队员甲 不再等原生确认（共等了 5 分钟）', 'end record');
+  await capture('stuck-ended-' + (english ? 'en' : 'zh'));
+  await delay(3500);
+  assert.equal((await facts('stuck')).length, 1); assert.equal((await facts('stuck-ended')).length, 1);
+  passed.push('Its end was recorded once with the time it lasted');
+
+  // 4) Records only.
+  assert.equal((await notices()).length, 0, 'A stuck member never notifies');
+  assert.equal((await sends()).length, 1, 'Nothing was sent to the member because of these records');
+  await release(a, 'Stuck task done');
+  await until(async () => (await itemByText('Stuck task')).status === 'done', 'Stuck task settled');
+  assert.deepEqual(errors, []);
+  console.log(JSON.stringify({ passed, facts: (await shared()).events.filter(event => event.monitor).map(event => event.monitor.kind + ' ' + (event.monitor.cause || '')),
+    notifications: (await notices()).length, syntheticDispatches: (await sends()).length, nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
+}
+
 async function run() {
   console.log('Fixture profile:', profile);
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon');
@@ -467,6 +607,8 @@ async function run() {
   const a = await createMember('队员甲');
   const b = await createMember('队员乙');
   await openSpace();
+  if (process.env.NAW_TEST_QUEUE_MONITOR === '1') return monitorScenario(a);
+  if (process.env.NAW_TEST_STUCK_RECORD === '1') return stuckScenario(a);
   if (process.env.NAW_TEST_DECISION_NOTICE === '1') return decisionNoticeScenario(a, b);
 
   // 1) Two idle members each get exactly one item; NAW, not the person, sends them.

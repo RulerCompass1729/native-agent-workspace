@@ -430,6 +430,8 @@ function bindClient(context) {
     const display = displayState(data, context);
     pushState(context, display); notifyToolWait(data, win); notifyCapacity(display, win);
   } });
+  // B6 E4: what the backend marks as stuck is recorded in the session's spaces. Records only.
+  client.on('state', data => { try { if (roomState.recordStuck(data?.sessions, s => sessionLabels.labels.get(s.id) || s.name)) broadcastRoom().catch(() => {}); } catch { /* A record that cannot be written never holds state. */ } });
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('progress', data => send('workspace:progress', data));
   client.on('closed', () => { if (context.client === client) { const notice = uiError('error.warning.serviceDisconnected'); send('workspace:disconnected', notice.message, notice.uiMessage); } });

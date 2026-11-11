@@ -282,14 +282,17 @@ test('dispatch and decision outcomes are written once to the space record with t
   room.queueSetDelivery('shared', id, 'tag-1', 4);
   assert.equal(room.value.queue[0].control, 4);
   room.queueSettle('shared', id, 'waiting', '', 'Claude 2');
-  const events = room.value.events;
+  // What NAW noticed by itself (queue-monitor-events.test.cjs) is recorded beside these, not instead of them.
+  const outcomes = () => room.value.events.filter(event => !event.monitor);
+  const events = outcomes();
   assert.equal(events[1].text, 'NAW 派活：改一下按钮 → Claude 2');
   assert.equal(events[1].sessionId, 'agent-a');
   assert.equal(events[2].text, 'Claude 2 需要你决定：改一下按钮');
   room.queueResolve(id);
   assert.equal(room.value.queue[0].status, 'done');
-  assert.equal(room.value.events.length, 4);
-  assert.equal(room.value.events[3].text, '已处理：改一下按钮');
+  assert.equal(outcomes().length, 4);
+  assert.equal(outcomes()[3].text, '已处理：改一下按钮');
+  assert.deepEqual(room.value.events.filter(event => event.monitor).map(event => event.monitor.kind), ['queue-dry']);
 });
 
 test('a settled item keeps one bounded line of the reply, it survives a reload, and the space record does not repeat it', t => {

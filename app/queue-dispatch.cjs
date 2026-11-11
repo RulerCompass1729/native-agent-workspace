@@ -175,6 +175,9 @@ function validateItem(item) {
   if (item.reply !== undefined && !validText(item.reply, ITEM_REPLY_LIMIT)) {
     throw Error('Invalid queue reply');
   }
+  if (item.ready !== undefined && !validReady(item.ready)) {
+    throw Error('Invalid queue delivery line');
+  }
   return { ...item, ...(Object.hasOwn(item, 'creator') ? { creator: validateCreator(item.creator) } : {}) };
 }
 
@@ -743,6 +746,10 @@ function planDispatch(input) {
       if (line) {
         action.reply = line;
       }
+      const ready = reply ? readyLine(reply.last) : null;
+      if (ready) {
+        action.ready = ready;
+      }
       actions.push(action);
       if (status !== 'done') {
         busy.add(member.id);
@@ -916,17 +923,52 @@ function decisionLine(reply, task = '') {
   return shortText(question || task, 60);
 }
 
+// A member that delivers code writes one line in its reply: READY <branch> <commit>.
+// The names later become git arguments, so only this shape of them is ever stored. A build
+// that later keeps more beside them must stay readable here, so other keys are not refused.
+const READY_BRANCH = /^[A-Za-z0-9._\/-]{1,200}$/u;
+const READY_COMMIT = /^[0-9a-f]{7,40}$/u;
+function validReady(ready) {
+  return Boolean(ready) && typeof ready === 'object' && !Array.isArray(ready) &&
+    typeof ready.branch === 'string' && READY_BRANCH.test(ready.branch) && !ready.branch.includes('..') && !ready.branch.startsWith('-') &&
+    typeof ready.commit === 'string' && READY_COMMIT.test(ready.commit);
+}
+
+// The last whole line with that shape, wherever it stands in the reply, or null. Nothing else
+// in the reply is read, and what the line names is checked again before anything acts on it.
+function readyLine(reply) {
+  if (typeof reply !== 'string') {
+    return null;
+  }
+  const lines = plainReply(reply).split(/\r\n|[\n\r\u2028\u2029]/u);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const parts = lines[i].trim().split(' ');
+    if (parts.length !== 3 || parts[0] !== 'READY') {
+      continue;
+    }
+    const ready = { branch: parts[1], commit: parts[2].toLowerCase() };
+    if (validReady(ready)) {
+      return ready;
+    }
+  }
+  return null;
+}
+
 // One storable line of a member's reply. A terminal reply can carry escape sequences, which the
 // queue item's own validation rejects, so they go before the length is cut.
 function replyLine(text) {
   if (typeof text !== 'string') {
     return '';
   }
-  const plain = text
+  return shortText(plainReply(text).replace(/[\u0000-\u001f\u007f]+/gu, ' '), ITEM_REPLY_LIMIT);
+}
+
+// Terminal escape sequences out, line breaks kept.
+function plainReply(text) {
+  return text
     .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/gu, ' ')
     .replace(/\u001b\[[0-?]*[ -\/]*[@-~]/gu, ' ')
     .replace(/\u001b[@-Z\\-_]/gu, ' ');
-  return shortText(plain.replace(/[\u0000-\u001f\u007f]+/gu, ' '), ITEM_REPLY_LIMIT);
 }
 
 // The same rules as workspace.cjs isTerminalResponse (a unit test keeps them equal),
@@ -1804,7 +1846,7 @@ class QueueDispatcher {
     if (session) {
       name = this.name(session);
     }
-    this.roomState.queueSettle(action.roomId, action.itemId, action.status, action.reason || '', name, action.reply || '', action.question);
+    this.roomState.queueSettle(action.roomId, action.itemId, action.status, action.reason || '', name, action.reply || '', action.question, action.ready);
     this.broadcast().catch(() => {});
   }
 
@@ -2346,6 +2388,8 @@ module.exports = {
   handoffText,
   shortText,
   decisionLine,
+  readyLine,
+  validReady,
   notSent,
   readRotations,
   processMemory,

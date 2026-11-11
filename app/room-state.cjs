@@ -83,6 +83,34 @@ function validateRoom(data) {
   return room;
 }
 
+// What NAW notices about a queue from the write that changed it (B6 E1 and E2). Both are
+// records only: no model, no message and no notification follows from them here.
+// - A delivery line (READY <branch> <commit>) is recorded once, when its item becomes done.
+// - A queue that runs dry is recorded by the write that took its last queued or sent item
+//   away, and by no other write. The space counts these, so each record has its own key and
+//   a restart, a later write or an older build that added items cannot repeat one.
+const queueRound = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
+const toSend = item => ['queued', 'sent'].includes(item.status);
+function queueFacts(room, roomId, previous, next, queue) {
+  const facts = [], fields = {};
+  if (previous && next && previous.status !== 'done' && next.status === 'done' && next.ready) {
+    // The name NAW recorded when it sent this member its item; a member holds one item at a time.
+    const name = room.events.findLast(e => e.sessionId === next.sentTo && e.uiMessage?.key === 'notice.queue.dispatched')?.uiMessage?.params?.name;
+    const params = { text: queueRules.shortText(next.text), branch: next.ready.branch, commit: next.ready.commit.slice(0, 12) };
+    facts.push({ kind: 'queue', ...(next.sentTo ? { sessionId: next.sentTo } : {}),
+      ...(name ? uiNotice('notice.queue.ready', { ...params, name }) : uiNotice('notice.queue.readyUnnamed', params)),
+      monitor: { kind: 'ready', key: `ready:${roomId}:${next.id}`, itemId: next.id, branch: next.ready.branch, commit: next.ready.commit } });
+  }
+  if (previous && next && toSend(previous) && !toSend(next) && !queue.some(toSend)) {
+    const round = queueRound(room.queueDryRound) + 1, waiting = queue.filter(item => item.status === 'waiting').length;
+    fields.queueDryRound = round;
+    // 'queue-dry' is this record's own kind; B4's ledger kind 'queue-empty' has another definition.
+    facts.push({ kind: 'queue', ...(waiting ? uiNotice('notice.queue.dryWaiting', { count: waiting }) : uiNotice('notice.queue.dry')),
+      monitor: { kind: 'queue-dry', key: `queue-dry:${roomId}:${round}`, round, waiting } });
+  }
+  return { facts, fields };
+}
+
 // A detached copy of a space queue for display and dispatch decisions.
 function copyQueue(queue) {
   const copy = [];
@@ -90,7 +118,7 @@ function copyQueue(queue) {
     return copy;
   }
   for (const item of queue) {
-    copy.push({ ...item, ...(item.creator ? { creator: { ...item.creator } } : {}) });
+    copy.push({ ...item, ...(item.creator ? { creator: { ...item.creator } } : {}), ...(item.ready ? { ready: { ...item.ready } } : {}) });
   }
   return copy;
 }
@@ -438,11 +466,15 @@ class RoomState {
     });
   }
 
-  update(fields, event, id = DEFAULT_ROOM_ID) {
+  update(fields, event, id = DEFAULT_ROOM_ID, facts = []) {
     const value = this.metadata(id);
     if (value.revision === Number.MAX_SAFE_INTEGER) throw uiError("error.room.dataVersionLimit");
-    const record = event ? { id: randomUUID(), role: 'system', time: Date.now(), ...event } : null;
-    const events = record ? [...value.events, record] : (fields.events || value.events);
+    const time = Date.now(), record = event ? { id: randomUUID(), role: 'system', time, ...event } : null;
+    // Facts noticed in this write are saved with it, before its own event: that event stays the
+    // last one and keeps its ID, which the decision notification and its readers rely on.
+    // An event or a fact is added to the stored events; fields.events applies only without them.
+    const noticed = facts.map(fact => ({ id: randomUUID(), role: 'system', time, ...fact }));
+    const events = record || noticed.length ? [...value.events, ...noticed, ...(record ? [record] : [])] : (fields.events || value.events);
     this.commit({ ...value, ...fields, revision: value.revision + 1, events }, id);
     return record?.id || null;
   }
@@ -524,14 +556,18 @@ class RoomState {
   queueReplace(id, itemId, next, event) {
     this.writable(id);
     const queue = [];
+    let previous = null;
     for (const item of this.queueItems(id)) {
       if (item.id === itemId) {
+        previous = item;
         queue.push(next);
       } else {
         queue.push(item);
       }
     }
-    return this.update({ queue: queueRules.validateQueue(queue) }, event, id);
+    const checked = queueRules.validateQueue(queue);
+    const noticed = queueFacts(this.metadata(id), id, previous, next, checked);
+    return this.update({ queue: checked, ...noticed.fields }, event, id, noticed.facts);
   }
   queueAdd(text, assignee, id = DEFAULT_ROOM_ID, creator) {
     this.writable(id);
@@ -619,7 +655,7 @@ class RoomState {
     this.queueReplace(id, itemId, next);
   }
   // reply is the member's own answer, kept so the queue row can show what came back.
-  queueSettle(id, itemId, status, reason, name, reply = '', question) {
+  queueSettle(id, itemId, status, reason, name, reply = '', question, ready) {
     const item = this.queueFind(id, itemId);
     if (item.status !== 'sent') {
       throw uiError("error.queue.notSent");
@@ -630,6 +666,9 @@ class RoomState {
     }
     if (reply) {
       next.reply = reply;
+    }
+    if (ready) {
+      next.ready = ready;
     }
     // Only outcomes that need the person are written to the space record.
     let event;
@@ -688,6 +727,90 @@ class RoomState {
       const event = { kind: 'rotation', ...uiNotice(keys[phase], params) };
       this.update({}, event, id);
     }
+  }
+  // B6 E4. The backend marks a session stuck (workspace.cjs stuckFor): an interrupt that has
+  // not taken effect, or a permission prompt nobody answered. Each mark is recorded once in
+  // every space the session is a member of, and once more when it is gone. Records only: the
+  // session is not stopped, approved, messaged or notified about. Returns whether it wrote.
+  // A session that was deleted while marked keeps its mark open; nothing is written for it.
+  stuckOpen() {
+    const open = new Map();
+    for (const room of [{ ...this.value, id: DEFAULT_ROOM_ID }, ...this.spaces.rooms]) {
+      for (const event of room.events) {
+        const fact = event.monitor;
+        if (!fact || typeof fact.key !== 'string') continue;
+        if (fact.kind === 'stuck') {
+          const entry = open.get(fact.key) || { sessionId: fact.sessionId, cause: fact.cause, since: fact.since, rooms: new Set() };
+          entry.rooms.add(room.id); open.set(fact.key, entry);
+        } else if (fact.kind === 'stuck-ended') {
+          const entry = open.get(fact.key);
+          if (entry) { entry.rooms.delete(room.id); if (!entry.rooms.size) open.delete(fact.key); }
+        }
+      }
+    }
+    return open;
+  }
+  recordStuck(sessions, name = session => session.name, now = Date.now()) {
+    if (!Array.isArray(sessions) || this.warning || this.spacesWarning) return false;
+    const current = new Map();
+    for (const session of sessions) {
+      if (!session || !orderId(session.id) || !Array.isArray(session.stuck)) continue;
+      for (const mark of session.stuck) {
+        if (mark && ['interrupt', 'approval'].includes(mark.kind) && Number.isSafeInteger(mark.since) && mark.since > 0 &&
+            mark.key === `stuck:${session.id}:${mark.kind}:${mark.since}`) current.set(mark.key, { session, mark });
+      }
+    }
+    // Rebuilt from the saved records once, so a restart of the desktop repeats nothing.
+    this.stuckRecorded ||= this.stuckOpen();
+    if (!current.size && !this.stuckRecorded.size) return false;
+    const minutes = since => Math.max(1, Math.round((now - since) / 60000));
+    // true: written. null: no such space any more, or it is archived. false: busy now, try again later.
+    const write = (room, event) => {
+      try { if (this.metadata(room).archived) return null; } catch { return null; }
+      try { this.writable(room); this.update({}, event, room); return true; } catch { return false; }
+    };
+    let wrote = false;
+    for (const [key, { session, mark }] of current) {
+      const entry = this.stuckRecorded.get(key) || { sessionId: session.id, cause: mark.kind, since: mark.since, rooms: new Set(), left: new Set() };
+      let member = [];
+      try { member = roomIds(session); } catch { /* Unreadable membership: nowhere to record. */ }
+      // Spaces that were busy at the last state are tried again; archived or missing ones are left.
+      const todo = member.filter(room => !entry.rooms.has(room) && !entry.left?.has(room));
+      if (!todo.length) continue;
+      const who = { name: name(session) || session.id }, held = mark.kind === 'interrupt' && mark.held && typeof mark.held === 'object' ? mark.held : null;
+      const count = Number.isSafeInteger(held?.params?.count) && held.params.count > 0 ? held.params.count : 1;
+      let notice;
+      if (mark.kind === 'approval') {
+        notice = session.approvalOverflow === true ? uiNotice('notice.monitor.approvalOverflow', who) : uiNotice('notice.monitor.approvalWaiting', { ...who, minutes: minutes(mark.since) });
+      } else if (held?.key === 'notice.activity.interruptWaitsForSubagent' && typeof held.params?.name === 'string') {
+        // The sub-agent's name goes into a record other members can read: one bounded line of it.
+        notice = uiNotice('notice.monitor.interruptHeldSubagent', { ...who, minutes: minutes(mark.since), agent: queueRules.shortText(held.params.name, 80), count });
+      } else if (held?.key === 'notice.activity.interruptWaitsForBackground') {
+        notice = uiNotice('notice.monitor.interruptHeldBackground', { ...who, minutes: minutes(mark.since), count });
+      } else notice = uiNotice('notice.monitor.interruptHeld', { ...who, minutes: minutes(mark.since) });
+      for (const room of todo) {
+        const result = write(room, { kind: 'monitor', sessionId: session.id, ...notice,
+          monitor: { kind: 'stuck', key, cause: mark.kind, sessionId: session.id, since: mark.since } });
+        if (result) { entry.rooms.add(room); wrote = true; } else if (result === null) (entry.left ||= new Set()).add(room);
+      }
+      if (entry.rooms.size) this.stuckRecorded.set(key, entry);
+    }
+    const present = new Map(sessions.filter(session => session && orderId(session.id)).map(session => [session.id, session]));
+    for (const [key, entry] of this.stuckRecorded) {
+      const session = present.get(entry.sessionId);
+      // A session missing from this state may only be on a backend that is not connected now.
+      if (current.has(key) || !session) continue;
+      const notice = uiNotice(entry.cause === 'approval' ? 'notice.monitor.approvalEnded' : 'notice.monitor.interruptEnded',
+        { name: name(session) || session.id, minutes: minutes(entry.since) });
+      for (const room of [...entry.rooms]) {
+        const result = write(room, { kind: 'monitor', sessionId: entry.sessionId, ...notice,
+          monitor: { kind: 'stuck-ended', key, cause: entry.cause, sessionId: entry.sessionId, since: entry.since, ended: now } });
+        if (result !== false) entry.rooms.delete(room);
+        if (result) wrote = true;
+      }
+      if (!entry.rooms.size) this.stuckRecorded.delete(key);
+    }
+    return wrote;
   }
   moveMember(change, records, room = DEFAULT_ROOM_ID) {
     this.writable(room);
