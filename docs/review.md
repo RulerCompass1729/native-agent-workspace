@@ -9848,12 +9848,12 @@ Owner: the author of this change. Evidence: a new hidden check, `scripts/test-me
 
 **Who NAW itself is busy with.** The record refuses to hand out to an integrator that NAW itself is doing something with, but the dispatcher never said who that is, so the check could not fire. The view now names them by the queue planner's own rule: a session in a running space exchange, one a queue item was sent to whose answer is awaited, one in a session rotation that is not at rest, its unconfirmed successor, and a successor whose folder was not trusted until its cleanup is confirmed. The rule is a third copy beside the planner's and the vacancy list's, which are left untouched because they run in the daily app.
 
-**Independent review (passed).** The reviewer confirmed that with the switch closed the dispatcher is unchanged, that nothing relied on the engine being built early, that no state exists where something can move and "is there work" says no (a space after the full one, room appearing with an unchanged record, a newer delivery arriving while full, a restart), and that the "engaged" rule is the queue's own. Its three remarks on these notes are taken in above and below.
+**Independent review (passed).** This is the author lane's own reviewer (headless session 980f8974, read-only tools); the integrator's reviewer checked the same commit separately. The reviewer confirmed that with the switch closed the dispatcher is unchanged, that nothing relied on the engine being built early, that no state exists where something can move and "is there work" says no (a space after the full one, room appearing with an unchanged record, a newer delivery arriving while full, a restart), and that the "engaged" rule is the queue's own. Its three remarks on these notes are taken in above and below.
 
 **Checks.** Unit tests on the real dispatcher, engine, record and space record: an engine that cannot be built (the queue works, told once, the builder is given a complete dispatcher); a result without its list, no result at all and a failing announcement (each kept and told once, the queue goes on, what the pass did is kept); an integrator in a running exchange is handed nothing until it ends, and the view names each kind of engaged session; an unreadable record is not work, from the start and after passes, and is still told once; a full backlog with nothing new is not work, a changed space record is, room in the backlog is. Twenty-two deliberate breakages each turned tests red; one that only removes housekeeping stays green, as expected. The real-window journey passes on the changed code. The full unit suite passes on the delivered head; the count is in the delivery note.
 
 **Left open.**
-- With no engine the person's entry says "not enabled", not "failed to start"; the notice is the only place that says so.
+- With no engine the person's entry said "not enabled", not "failed to start", and the notice was the only place that said so. (Changed: see "the engine's faults in the person's overview".)
 - The build fault is told through a system notification while the app starts. It is not exercised in the real app: nothing there can make the builder fail without a test-only fault.
 - With no window open and no queue work, an unreadable record is told only when a window opens.
 - An integrator that stays engaged until the person acts is handed nothing and nothing says why: a queue item sent to it that waits for the person, or a successor session whose folder was not trusted (the person is told about the trust question, not about the handoffs behind it). This joins the long-unready integrator in the list above.
@@ -10243,3 +10243,15 @@ inventory verified; worktree fingerprint unchanged after each invocation):
   two wording suggestions were applied as given and not sent back: "usually"
   before "those that return more items", and the sentence above about the
   file while NAW runs.
+
+## B6 integration handoff: the engine's faults in the person's overview — 2026-11-11
+
+**Why.** The dispatcher keeps the last fault of the engine's own step (it could not be built, or a pass failed) and tells the person once. That notice is sent at most once: it is marked as told before it is shown, so one that fails to show while the app starts is never repeated, and nothing in the main process read the kept fault. The integrator's reviewer asked that it be readable in the person's overview before the switch is opened.
+
+**What changed.** The overview the person's `handoff` entry returns now carries `engineFault`, a copy of the dispatcher's kept fault (its message, when, how often), beside the record's own fault. When the switch is open but the engine could not be built there is no record: looking then returns that the handoffs did not start, with the fault; every action is refused as "failed to start" instead of "not enabled"; nothing is created. With the switch closed, or with no dispatcher at all, the entry answers "not enabled" as before. An agent's call is still refused in the entry's first line.
+
+**Checks.** One unit test on the real entry and overview from `main.cjs`: a kept pass fault is shown as a copy and looking announces nothing; with no record and a kept build fault, looking says why and each action is refused in the new words; an agent is refused first; no dispatcher at all is "not enabled". Eight deliberate breakages each turned tests red. The real-window journey passes on the changed code; the full unit suite passes on the delivered head (the count is in the delivery note).
+
+**Independent review.** The author lane's own reviewer (headless session 980f8974); its result is in the delivery note.
+
+**Left open.** No screen shows the overview yet; the prototype for it is with the person.
