@@ -224,8 +224,20 @@ class ButlerRole {
         const next = { version: 1, revision: this.#state.revision + 1, selected }; let proof;
         if (selected) {
           try {
-            try { this.#storedProof(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-            proof = initialRotationProof(next, this.#logPrefix);
+            let stored;
+            try { stored = this.#storedProof(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+            const disk = stored?.prefix, memory = this.#logPrefix; let prefix = disk || memory;
+            // A new human selection changes identity, not already verified bytes.
+            // The retained proof may predate revoke or an interrupted selection.
+            if (disk && memory) {
+              if (disk.length === memory.length) {
+                if (disk.digest !== memory.digest) fail('ERR_BUTLER_STATE');
+              } else {
+                this.#read(this.#logFile, MAX_LOG, disk); // Verify both before choosing the longer constraint.
+                prefix = disk.length > memory.length ? disk : memory;
+              }
+            }
+            proof = initialRotationProof(next, prefix);
             // The public selector stays unchanged until its new proof is durable.
             this.#replace(this.#proofFile, proof, directoryFd);
           } catch { throw proofWriteFailure(); }
