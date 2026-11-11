@@ -59,6 +59,8 @@ class IntegratorEngine {
     this.headWaitMs = options.headWaitMs ?? HEAD_WAIT_MS;
     // How far each space's record was looked through by the last intake (kept while the app runs).
     this.looked = new Map();
+    // Where a space's record stood when one of its deliveries was left out of a full backlog.
+    this.leftOut = new Map();
     // Why the last attempt to hand out stopped, when only the person can change that; null otherwise.
     this.blocked = null;
   }
@@ -72,7 +74,9 @@ class IntegratorEngine {
   // a waiting handoff) needs no passes: the person's step starts them again.
   hasWork(rooms) {
     try {
-      if (Array.isArray(rooms) && rooms.some(room => room && typeof room.id === 'string' && Array.isArray(room.events) && this.looked.get(room.id) !== mark(room))) return true;
+      // A record that cannot be read moves nothing until the person has looked at it.
+      if (this.unreadable()) return false;
+      if (Array.isArray(rooms) && rooms.some(room => room && typeof room.id === 'string' && Array.isArray(room.events) && this.unlooked(room))) return true;
       const summary = this.handoffs.summary();
       if (summary.handoff?.status === 'sent') return true;
       // Deliveries to hand out, or held because an integrator was gone, can move when somebody is
@@ -87,6 +91,15 @@ class IntegratorEngine {
     } catch { return false; }
   }
 
+  // Whether a space's record is worth looking through: it changed since the last intake. One with
+  // a delivery that was left out of a full backlog is worth it only when its record has changed
+  // since then or the backlog has room again; the same look would otherwise repeat without end.
+  unlooked(room) {
+    const now = mark(room);
+    if (this.looked.get(room.id) === now) return false;
+    return this.leftOut.get(room.id) !== now || !this.handoffs.full();
+  }
+
   // Take in the deliveries recorded in the given spaces. Each is a READY fact NAW wrote into its
   // space when a queue item was done. One that is older than this record was dealt with by hand
   // and is not handed out; one already known changes nothing and writes nothing.
@@ -95,6 +108,7 @@ class IntegratorEngine {
     const since = this.handoffs.begin(this.now());
     for (const room of Array.isArray(rooms) ? rooms : []) {
       if (!room || typeof room.id !== 'string' || !Array.isArray(room.events)) continue;
+      let left = false;
       for (const event of room.events) {
         const monitor = event?.monitor;
         if (!monitor || monitor.kind !== 'ready') continue;
@@ -110,11 +124,12 @@ class IntegratorEngine {
           report.skipped += 1; continue;
         }
         if (result.stored) { report.stored.push(monitor.key); report.superseded.push(...result.superseded); }
-        else if (result.why === 'backlog-full') report.full = true;
+        else if (result.why === 'backlog-full') { report.full = true; left = true; }
       }
-      // This space's record has been looked through up to here. A delivery left out because the
-      // backlog was full is looked for again.
-      if (!report.full) this.looked.set(room.id, mark(room));
+      // This space's record has been looked through up to here, unless one of its own deliveries
+      // was left out because the backlog was full: that one is looked for again (see unlooked()).
+      if (left) this.leftOut.set(room.id, mark(room));
+      else { this.looked.set(room.id, mark(room)); this.leftOut.delete(room.id); }
     }
     return report;
   }

@@ -670,6 +670,26 @@ function rotationReason(session, now, options, rotations) {
   return 'memory';
 }
 
+// The sessions NAW itself is doing something with, for the integration handoff: one in a session
+// rotation that is not at rest (and a successor it has not confirmed), one in a running space
+// exchange, and one a queue item was sent to whose answer is still awaited. The same rule as the
+// planner's and the vacancy projection's own, which are left as they are.
+function engagedSessions(rotations, rooms) {
+  const busy = new Set();
+  for (const [id, rotation] of Object.entries(rotations || {})) {
+    if (quarantinedSuccessor(rotation) && rotation.newId !== id) busy.add(rotation.newId);
+    if (rotation && !RESTING_PHASES.includes(rotation.phase)) {
+      busy.add(id);
+      if (rotation.newId && !rotation.handoffConfirmed) busy.add(rotation.newId);
+    }
+  }
+  for (const room of Array.isArray(rooms) ? rooms : []) {
+    if (room?.run?.status === 'running' && Array.isArray(room.run.ids)) for (const id of room.run.ids) busy.add(id);
+    for (const item of room?.queue || []) if (['sent', 'waiting'].includes(item.status) && item.sentTo) busy.add(item.sentTo);
+  }
+  return busy;
+}
+
 // A business-only projection, using the same readiness and human quiet gates
 // as dispatch. No history or native output leaves the dispatcher through it.
 function queueVacancies(input) {
@@ -1493,11 +1513,12 @@ class QueueDispatcher {
     this.observeQueueState = options.observeQueueState || null;
     // B6: the engine that hands delivered work to the person's designated integrator. The caller
     // builds it for this dispatcher, because it sends through the dispatcher's own send. Absent
-    // unless given: without it nothing below runs.
-    this.integration = typeof options.integration === 'function' ? options.integration(this) : null;
+    // unless given: without it nothing below runs. It is built at the end of this constructor.
+    this.integration = null;
     this.integrationUnreadable = options.integrationUnreadable || (() => {});
     this.integrationFailed = options.integrationFailed || (() => {});
-    // The last failure of an engine pass, kept so that it is not lost: { message, at, count }.
+    // The last failure of the engine (while it was built, or in a pass), kept so that it is not
+    // lost: { message, at, count }.
     // The person is told once per kind of failure in a run, so a new kind after a recovery is told too.
     this.integrationError = null;
     this.integrationTold = new Set();
@@ -1546,6 +1567,12 @@ class QueueDispatcher {
     this.logFile = path.join(options.dataDir, 'rotation-log.jsonl');
     this.log = this.loadLog();
     this.chainsCache = null;
+    // B6: the engine is built last, for a dispatcher that is complete. One that cannot be built
+    // does not take the queue with it: the dispatcher runs without an engine, keeps the fault and
+    // tells the person.
+    if (typeof options.integration === 'function') {
+      try { this.integration = options.integration(this); } catch (error) { this.integrationFault(error); }
+    }
   }
 
   // The append-only rotation record: every session id and native id involved.
@@ -1958,8 +1985,9 @@ class QueueDispatcher {
     const sessions = current.snapshot.sessions, now = current.now;
     const present = new Set(sessions.map(session => session.id));
     for (const id of this.integratorAbsent.keys()) if (present.has(id)) this.integratorAbsent.delete(id);
+    const engaged = engagedSessions(this.rotations, current.snapshot.rooms);
     return { sessions, wakePolicy: current.snapshot.wakePolicy, now, idleSince: this.idleSince, humanAt: this.humanAt,
-      settleMs: this.settleMs, humanQuietMs: this.humanQuietMs, review: 'off',
+      settleMs: this.settleMs, humanQuietMs: this.humanQuietMs, review: 'off', busy: sessionId => engaged.has(sessionId),
       complete: sessionId => {
         if (typeof sessionId !== 'string') return false;
         if (present.has(sessionId)) return true;
@@ -1976,34 +2004,39 @@ class QueueDispatcher {
     return [{ ...this.roomState.value, id: 'shared' }, ...this.roomState.spaces.rooms];
   }
 
+  // A fault of the engine: kept, and told to the person once per kind of fault while the app runs.
+  integrationFault(error) {
+    const message = String(error?.message || error).slice(0, 300);
+    this.integrationError = { message, at: this.now(), count: (this.integrationError?.count || 0) + 1 };
+    if (!this.integrationTold.has(message) && this.integrationTold.size < 20) {
+      this.integrationTold.add(message);
+      try { this.integrationFailed(error); } catch { /* The notice is best effort. */ }
+    }
+  }
+
   async integrate() {
-    const rooms = this.integrationRooms();
-    const look = async () => {
-      await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
-      return this.integrationView(this.view());
-    };
-    let result;
+    // Everything here is guarded, also what is done with the pass's result: a result that cannot
+    // be read is a fault like a pass that throws, not something the queue's loop swallows.
     try {
-      result = await this.integration.pass(rooms, this.integrationView(this.view()), look);
+      const rooms = this.integrationRooms();
+      const look = async () => {
+        await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
+        return this.integrationView(this.view());
+      };
+      const result = await this.integration.pass(rooms, this.integrationView(this.view()), look);
+      if (result.kind === 'unreadable') {
+        // Told once per run; nothing is taken in or handed out until the person has looked at the record.
+        if (!this.integrationWarned) {
+          this.integrationWarned = true;
+          try { this.integrationUnreadable(); } catch { /* The warning is best effort. */ }
+        }
+      }
+      const handed = result.handed && ['opened', 'refused', 'unconfirmed', 'ask-integrator'].includes(result.handed.kind);
+      if (result.taken?.stored.length || result.settled?.kind === 'settled' || handed || result.told?.shown || result.told?.told.length) {
+        this.broadcast().catch(() => {});
+      }
     } catch (error) {
-      const message = String(error?.message || error).slice(0, 300);
-      this.integrationError = { message, at: this.now(), count: (this.integrationError?.count || 0) + 1 };
-      if (!this.integrationTold.has(message) && this.integrationTold.size < 20) {
-        this.integrationTold.add(message);
-        try { this.integrationFailed(error); } catch { /* The notice is best effort. */ }
-      }
-      return;
-    }
-    if (result.kind === 'unreadable') {
-      // Told once per run; nothing is taken in or handed out until the person has looked at the record.
-      if (!this.integrationWarned) {
-        this.integrationWarned = true;
-        try { this.integrationUnreadable(); } catch { /* The warning is best effort. */ }
-      }
-    }
-    const handed = result.handed && ['opened', 'refused', 'unconfirmed', 'ask-integrator'].includes(result.handed.kind);
-    if (result.taken?.stored.length || result.settled?.kind === 'settled' || handed || result.told?.shown || result.told?.told.length) {
-      this.broadcast().catch(() => {});
+      this.integrationFault(error);
     }
   }
 
