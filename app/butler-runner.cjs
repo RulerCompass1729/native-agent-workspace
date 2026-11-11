@@ -39,4 +39,17 @@ function spawnRunner(binary, args, binding, python) {
   });
   return { child, preflight };
 }
-module.exports = { credentialPresent, checkProfile, spawnRunner };
+// The legacy exports above serve existing dedicated-service records only. The
+// desktop factory now uses DSH; no normal Claude/Codex startup path is changed.
+function dshCredentialPresent() {
+  const result = spawnSync(pythonExecutable(), ['-I', path.join(__dirname, 'butler-dsh-launch.py'), '--presence'],
+    { encoding: 'utf8', timeout: 3000, maxBuffer: 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+  try { return result.status === 0 && JSON.parse(result.stdout).credentialPresent === true; } catch { return false; }
+}
+function spawnDshRunner(executablePath, home) {
+  // Python preserves the inherited provider environment entries without copying
+  // their values into JS options, arguments, configuration or diagnostic logs.
+  return spawn(pythonExecutable(), ['-I', path.join(__dirname, 'butler-dsh-launch.py'), executablePath,
+    path.join(__dirname, 'butler-dsh-host.mjs'), home], { detached: true, stdio: ['pipe', 'pipe', 'ignore'] });
+}
+module.exports = { credentialPresent, checkProfile, spawnRunner, dshCredentialPresent, spawnDshRunner };

@@ -8703,3 +8703,42 @@ and versioned historical replay remain gates before a working-day trial or a
 future projection change. Native/GUI/provider behavior and the C2 renderer remain
 outside this source approval. Activation and record period stay off.
 Owner: butler outcome owner.
+
+### Dormant DSH runner integration (2026-11-11, Codex 5)
+
+The requested checkpoint replaces only the dedicated butler factory with DSH.
+Ordinary native services, all four qualification defaults, activation and the
+recording trial stay unchanged/off. Model verification uses only fixed loopback
+fixtures with synthetic credentials and an isolated home. Core identity/config
+changes reuse the independently reviewed Codex 6 checkpoints 47f8fcc and 5994010.
+
+Independent headless review session 41212ac8-29f8-4c92-b535-6c9e3fda1259
+returned NOT APPROVED on the first candidate. Its five blocking findings were:
+
+| Trigger / impact | Fix and evidence | Owner / state |
+| --- | --- | --- |
+| Malformed host packet plus changed owner could throw outside the request promise or reject an unawaited close | Validate packets; idempotent close returns cleanup receipt and preserves unknown owner. Original-driver regression fails; fixed targeted suite passes. | C5, independently closed; packaged runtime pending |
+| A later request failed after settled usage and partial tokens could be priced as the whole batch | Count actual requests and require completed turn plus all usage rows. Real two-request HTTP failure and eight-request cap retain unknown usage; no price callback. | C5, independently closed; packaged runtime pending |
+| Import hook might not intercept packaged module resolution | Require actual intercepted import before ready, reject alternate provider URL. Hook-negative unit check passes; package runtime acceptance required. | C5, independently closed; packaged runtime pending |
+| Inherited endpoint could forward credentials outside bound provider | Drop inherited endpoint/proxy environment, pin official production endpoint; explicit loopback-only fixture seam. Poisoned inherited endpoint never receives fixture traffic. | C5, independently closed; packaged runtime pending |
+| Missing expected MCP tool was not an exact-set failure | Require exact tool schema set in host and ready receipt. Real empty MCP server refuses startup with zero requests. | C5, independently closed; packaged runtime pending |
+
+Additional author-run witnesses cover real child-process SIGSTOP/forced close,
+MCP credential absence, default unknown pricing blocking the next batch with a
+notice, three batches across real DSH session rotation and host restart,
+per-attempt usage, no event replay, absent anonymous headers, no new ID file and
+an unread pre-existing FIFO at the ID path. These prove isolated protocol/core
+behaviour, not daily activation, live provider compatibility or S2 qualification.
+Raw first failures, fixes and independent review output remain in private lane
+evidence. Final full-suite/package counts and review verdict are recorded below
+when complete; this entry itself does not claim approval.
+
+
+The same reviewer closed F1-F5 with scoped code approval, package evidence pending.
+The controller fixture's publish receipt lacked its delivery ID; it now returns
+the exact ID and asserts three sent delivery receipts. Missing-tool startup now
+reports exactly mcp-unavailable, not any host failure. The later integrator
+request to rebase onto 1e4f5bf adds a desktop-only status adapter: runtime-version
+mismatch reads as blocked, while core ensure still refuses and preserves bytes.
+The new upgrade test failed with binding-mismatch on the preceding factory.
+These small deltas and final package evidence await the same reviewer.

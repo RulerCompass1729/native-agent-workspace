@@ -8,7 +8,7 @@ const path = require('node:path');
 const childProcess = require('node:child_process');
 const { ButlerBackend } = require('../butler-backend.cjs');
 const { createDedicatedBackend } = require('../butler-backend-host.cjs');
-const dedicated = require('../butler-service-driver.cjs');
+const dedicated = require('../butler-dsh-driver.cjs');
 
 const flags = ['tools', 'context', 'provider', 's2'];
 function fixture(t) {
@@ -41,7 +41,7 @@ test('dedicated host construction, snapshots and reopening have no launch, prese
   assert.deepEqual(fs.readdirSync(f.root), []);
   const backend = f.make();
   assert.ok(backend instanceof ButlerBackend);
-  assert.ok(backend.driver instanceof dedicated.ButlerServiceDriver);
+  assert.ok(backend.driver instanceof dedicated.ButlerDshDriver);
   assert.equal(backend.driver.store, backend.store);
   assert.equal(backend.store, path.join(f.directory, 'store'));
   assert.equal(backend.runtimeVersion, 'host.synthetic');
@@ -56,7 +56,7 @@ test('dedicated host construction, snapshots and reopening have no launch, prese
   assert.deepEqual(fs.readdirSync(f.root), []);
 });
 
-test('the dormant legacy desktop boundary supplies its own explicit configuration and ignores caller replacements', async t => {
+test('the dormant DSH desktop boundary supplies its own explicit configuration and ignores caller replacements', async t => {
   const f = fixture(t), backend = f.make({ configuration: { profile: 'different', provider: 'fixture-vendor', model: 'fixture-model' } });
   const calls = blockDriver(backend);
   assertClosed(await backend.ensure());
@@ -121,7 +121,7 @@ test('factory caller cannot inject a qualification function or replacement drive
   const backend = f.make({ qualify: () => { qualificationCalls++; return Object.fromEntries(flags.map(flag => [flag, true])); },
     driver: { recover: async () => { replacementCalls++; }, start: async () => { replacementCalls++; } } });
   const calls = blockDriver(backend);
-  assert.ok(backend.driver instanceof dedicated.ButlerServiceDriver);
+  assert.ok(backend.driver instanceof dedicated.ButlerDshDriver);
   assertClosed(await backend.ensure());
   assert.equal(qualificationCalls, 0);
   assert.equal(replacementCalls, 0);
@@ -129,7 +129,7 @@ test('factory caller cannot inject a qualification function or replacement drive
   assert.deepEqual(f.calls(), { presence: 1, launch: 0 });
 });
 
-test('an unsafe existing record is left untouched by construction and rejected when explicitly read', t => {
+test('an unsafe existing record stays untouched and reads as blocked', t => {
   const f = fixture(t);
   fs.mkdirSync(f.directory, { mode: 0o700 });
   const file = path.join(f.directory, 'backend.json'), original = '{"synthetic":"unsafe-mode"}';
@@ -137,9 +137,25 @@ test('an unsafe existing record is left untouched by construction and rejected w
   fs.chmodSync(file, 0o644);
   const backend = f.make();
   assert.equal(fs.readFileSync(file, 'utf8'), original);
-  assert.throws(() => backend.read(), error => error.code === 'unsafe-record');
+  assert.equal(backend.read().state, 'blocked');
+  assert.deepEqual(backend.snapshot().blocked, ['unsafe-record']);
   assert.equal(fs.readFileSync(file, 'utf8'), original);
   assert.equal(fs.statSync(file).mode & 0o777, 0o644);
   assert.deepEqual(fs.readdirSync(f.directory), ['backend.json']);
   assert.deepEqual(f.calls(), { presence: 0, launch: 0 });
+});
+
+test('runtime upgrade is shown as blocked without rewriting, launching or accepting the old binding', async t => {
+  const f = fixture(t), original = f.make(); original.prepare();
+  const bytes = fs.readFileSync(original.file), reopened = f.make({ runtimeVersion: 'new.synthetic' });
+  for (const method of ['read', 'snapshot']) {
+    const state = reopened[method]();
+    assert.equal(state.state, 'blocked'); assert.equal(state.ready, false);
+    assert.deepEqual(state.blocked, ['binding-mismatch']); assert.equal(state.binding, null);
+  }
+  await assert.rejects(reopened.ensure(), e => e.code === 'binding-mismatch');
+  assert.deepEqual(fs.readFileSync(original.file), bytes);
+  assert.deepEqual(f.calls(), { presence: 0, launch: 0 });
+  // Only the display boundary converts errors; core authority checks still throw.
+  assert.throws(() => new ButlerBackend(f.directory, { runtimeVersion: 'new.synthetic' }).read(), e => e.code === 'binding-mismatch');
 });
