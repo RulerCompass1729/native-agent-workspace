@@ -10080,3 +10080,39 @@ fixture's reserved headroom; all four live cases still pass. Product source and
 the full-suite tests are unchanged since that complete run. Unsupported pipeline
 failures or unbounded model output still rely on the final hard guard; the
 admission promise does not cover those paths.
+
+## Installer failure terminals (candidate only)
+
+User outcome: an application update failure must leave an honest terminal receipt
+and a recoverable application/data state. No daily app/data or existing pinned
+version-specific installer is changed by this delivery.
+
+| Finding / trigger | Severity | Owner / state | Reproduction and verification |
+| --- | --- | --- | --- |
+| Post-launch backend/draft verification throws outside recovery | High | Closed; independent checkpoint 2504039d | Real synthetic GUI + release backend: old operator left new app, old launchable copy and no result. Candidate records recovery-required, archives old copy, retains new writes. |
+| Old relaunch fails; new installation receipt survives rollback | High | Closed; independent checkpoint 2504039d | Real missing old executable and real GUI crash. Candidate verifies old GUI/backend state and restores exact original receipt before any new-code exposure. |
+| Old backend reads new-version writes after automatic downgrade | High | Closed; independent checkpoint 2504039d | Actual old→new→old bootstrap preserved the new draft instead of restoring its backup. Candidate refuses automatic downgrade after any new launch attempt. |
+| Approval and Swift source could change without a checked pin | High | Closed; independent checkpoint 2504039d | Whole approval hash supplied separately; installer/support/Swift/archive pins checked before use. Tampering tests refuse before quit. |
+| Retrying archive after partial removal could replace a complete archive | High | Closed; independent checkpoint 2504039d | Added failing partial-removal regression; archive/remove now runs once and preserves the existing archive on failure. |
+| Result write failure lost the mutation/exposure context | Medium | Closed; independent checkpoint 2504039d | Added failing persistence regression; caller receives the actual outcome and explicit write failure. |
+
+Evidence: private installer-failures logs (frozen-operator failures, six real-process
+candidate scenarios, actual storage downgrade, unit red/green). Unit fixtures do
+not prove signed daily-window acceptance. No model/provider turn was started by
+these tests; independent review is accounted for separately.
+
+Installer review checkpoint 2504039d: initial independent review blocked the
+candidate because numeric executable identity fields were rejected by the real
+appBuildInfo reader. Its direct readback test failed, then passed with bigint
+identity strings; the pinned release reader was checked byte-identical. Author
+comparison also restored pinned cold-launch proof and ordinary GUI argv checks
+(both had red regressions). Actual isolated cases now verify the receipt reader,
+profile-argument refusal, old recovery and cleanup failure. Result records expose
+receipt restoration and successful verification separately. Incremental review closed the receipt and quit-race findings; the final full run
+passed 5871/5871 with no skips. No daily authorization is implied.
+
+The final quit-race regression failed with an unnecessary rollback, then passed
+when argument checks moved out of exit polling. The same independent reviewer
+closed that note after the incremental diff; targeted checks passed 33/33. Final
+full-suite counts and unchanged source/index were verified by the author after
+review. Read-only review and approved fixture cleanup do not authorize daily use.
