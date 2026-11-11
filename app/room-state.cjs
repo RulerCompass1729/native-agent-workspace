@@ -7,6 +7,7 @@ const { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, placemen
 const { captureSource, prepareBatch, assertCurrentSources, sameOperation, validateBatch } = require('./space-merge.cjs');
 const queueRules = require('./queue-dispatch.cjs');
 const { queueOutcomeSource, storedQueueSource } = require('./butler-ingress.cjs');
+const { queueReadySource } = require('./butler-ready.cjs');
 const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f]/u.test(id);
 const memberOrder = value => Array.isArray(value) && value.length <= 10000 ? [...new Set(value.filter(orderId))] : [];
 const contentEvents = events => events.filter(e => !(e.kind === 'control-audit' && e.controlAudit));
@@ -99,7 +100,8 @@ function queueFacts(room, roomId, previous, next, queue) {
     const params = { text: queueRules.shortText(next.text), branch: next.ready.branch, commit: next.ready.commit.slice(0, 12) };
     facts.push({ kind: 'queue', ...(next.sentTo ? { sessionId: next.sentTo } : {}),
       ...(name ? uiNotice('notice.queue.ready', { ...params, name }) : uiNotice('notice.queue.readyUnnamed', params)),
-      monitor: { kind: 'ready', key: `ready:${roomId}:${next.id}`, itemId: next.id, branch: next.ready.branch, commit: next.ready.commit } });
+      monitor: { kind: 'ready', key: `ready:${roomId}:${next.id}`, itemId: next.id, branch: next.ready.branch, commit: next.ready.commit },
+      butlerSource: queueReadySource(roomId, next, name) });
   }
   if (previous && next && toSend(previous) && !toSend(next) && !queue.some(toSend)) {
     const round = queueRound(room.queueDryRound) + 1, waiting = queue.filter(item => item.status === 'waiting').length;
@@ -476,6 +478,11 @@ class RoomState {
     const noticed = facts.map(fact => ({ id: randomUUID(), role: 'system', time, ...fact }));
     const events = record || noticed.length ? [...value.events, ...noticed, ...(record ? [record] : [])] : (fields.events || value.events);
     this.commit({ ...value, ...fields, revision: value.revision + 1, events }, id);
+    // The queue change, complete task source and typed fact are durable before
+    // intake can see them. A failed auxiliary consumer cannot undo this write.
+    for (const fact of noticed) if (fact.monitor?.kind === 'ready' && fact.butlerSource) {
+      try { this.onButlerReady?.(id, fact.id); } catch { /* The stored source is replayable. */ }
+    }
     return record?.id || null;
   }
   recordControlOperation(record, rooms = [DEFAULT_ROOM_ID]) {

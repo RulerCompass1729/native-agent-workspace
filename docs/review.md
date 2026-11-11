@@ -8387,3 +8387,56 @@ Requested outcome: the delivery record of B6 step 1 only appears if a member wri
 Independent review, two rounds in one session. The first asked for a change: the dispatch sentence forbade quotes and list markers but not backticks or bold, which is how both providers usually write branch names and commit hashes, and such a line is dropped without a word. The sentence now names backticks, bold and the closing period, says the line does not go first (a decision request must stay first to hold the member), asks for the newest commit on the branch and gives the length. A test checks that each form the sentence forbids is named in it and is not recognised.
 
 Owner: the author of this change. Evidence: full unit checks pass with no failures; the delivery scenario and the full queue journey pass in a hidden window with synthetic members and no model. Not verified: whether a real Claude or Codex member follows the sentence, since no model run was in scope. Proposed separately to the specification's author: recognising a line wrapped in a code span or bold, with runs of spaces or a closing period, so that a slip does not lose a delivery. Not done here: the two other parts of this item, the sentence about the integrator handoff and the integrator's steps, which describe something not yet wired.
+## B4 typed READY source and shared review sample policy (2026-11-10)
+
+Requested outcome: a typed queue handoff retains its full original task and enters
+the dormant butler ledger once, including after queue trimming and restart. The
+existing B6 monitor and queue change remain one durable write; intake runs only
+after that write. No additional reply parser or private-history scan is added.
+Malformed auxiliary data blocks intake without making its space unavailable.
+Activation and the working-day record period remain off.
+
+The person's acceptance rule uses distinct admitted suggestions once, excluding
+suspensions; a shared Node/browser policy requires ten before an agreement
+conclusion and compares nine tenths exactly after explicit confirmation. This
+checkpoint does not implement a canonical suggestion projection, durable human
+review, actual question-delivery measurement or overall working-day acceptance.
+
+Author evidence: typed-source tests 31 pass; actual RoomState/intake/ledger binding
+16 pass (7 pass / 9 fail on the prior binding); shared policy 13 pass. Related
+no-model sandbox checks: 340 pass, zero fail or skip. Full isolated unit suite:
+4633 pass, zero fail or skip. Existing B6 dependency tests/review are reused;
+new integration and changed product paths are included in this checkpoint review.
+Independent review approved this exact scoped checkpoint, with no blocking
+findings. Browser loading and the canonical suggestion projection remain later
+work; damaged-monitor recovery is not a universal repair promise. Owner: butler
+outcome owner. Installed use remains pending integration and the separately
+authorized working-day trial.
+
+## B4 actual outward question delivery counter (2026-11-10)
+
+Requested outcome: the record table must distinguish actual repeated questions
+shown to the person from blocked model candidates; an unmeasured send cannot
+be certified as zero. The existing ledger now journals physical send intents,
+actual display receipts, measurement epochs and explicit frozen windows. B1
+notifications share the ingress writer; the dormant controller exposes a trusted
+observer for its future ask adapter. Generic sent receipts remain logical only.
+Passive measurement does not activate the butler or start its working-day period.
+
+Reproduced before fixing: the old ledger lacks all 26 measurement API cases; the
+old controller has no physical observation (9 of 10 cases fail); the old Main
+notifier has no show observation. Author-found counterexample: a later facts
+version could be attributed to the prior answered question. The canonical
+version boundary now rejects that mismatch before a successor is even reserved,
+while allowing another source for the same still-open question.
+
+Verification covers actual Main notification code with synthetic OS events,
+canonical source linkage, B1 continuity on write/intake failure, controller intent
+before outward send, no resend after restart, cross-channel repeats, idempotent
+ACKs, new facts, frozen prefixes and incomplete coverage after unclean restart.
+Related no-model sandbox checks: 399 pass, zero fail or skip; full isolated unit
+suite: 4692 pass, zero fail or skip. Independent review approved this scoped
+measurement checkpoint, with no blocking findings. Unresolved physical sends
+remain unknown and may prevent a future trial from certifying zero; synthetic
+checks do not qualify installed OS display. Owner: butler outcome owner. The real
+working day and production activation remain unqualified.

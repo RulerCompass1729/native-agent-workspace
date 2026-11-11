@@ -95,7 +95,7 @@ Codex flag and does not infer provider compatibility from a saved profile name.
 The desktop pairs the dedicated NativeHost/service driver and name-only profile
 checks with the existing backend, without preparing or starting it. Native provider compatibility remains
 unverified. The next source stage needs restricted automatic context and tool execution,
-the remaining typed user-request/READY ingress and controller binding, the
+the remaining direct person-request ingress and controller binding, the
 person-only menu/dialog and review table, a production queue transaction adapter
 and the non-member rotation/create-plan hooks. The core's pure
 rotation candidate filter and role successor are not a claim that those hooks
@@ -118,6 +118,32 @@ After those gates and integration, a real working day in record-only mode needs
 the person's review: at least nine tenths agreement and zero repeat questions,
 with the actual sample count. Synthetic tests cannot pass that acceptance or
 enable queue-only/lifecycle execution.
+The rate counts distinct admitted suggestions once, even when they appear
+repeatedly. Suspended candidates are listed separately and excluded from its
+denominator. Complete occurrences and sources remain available for audit;
+unreviewed suggestions are never assumed to agree. Fewer than ten distinct
+suggestions means insufficient samples, with no agreement conclusion. No durable
+review or canonical suggestion projection is implemented in this checkpoint.
+
+Both host code and the record-table renderer must use the same arithmetic from
+`butler-review-policy.js`, rather than copy a sample threshold:
+
+```js
+const { MIN_REVIEW_SUGGESTIONS, agreementSummary } = require('./butler-review-policy.js');
+const quality = agreementSummary({ distinctSuggestions, agreedSuggestions, confirmed });
+```
+
+The browser export is `NativeButlerReviewPolicy`. `MIN_REVIEW_SUGGESTIONS` is 10.
+`quality.status` is `insufficient-samples` below that value, `unreviewed` before
+explicit confirmation, and `reviewed` otherwise. The first two return null for
+both `agreementRate` and `agreementMeetsThreshold`; the reviewed case calculates
+the rate and compares the nine-tenths threshold exactly. Callers provide the
+deduplicated admitted-suggestion counts, excluding suspensions. This arithmetic
+does not establish actual question delivery, a full working day, overall
+acceptance or authority to activate the butler. Logical delivery reservations
+and blocked candidates cannot certify zero repeat questions. The delivery
+measurement below is required before the working-day trial; its unknown result
+cannot satisfy that trial.
 
 ## Source checks
 
@@ -131,17 +157,21 @@ the intake ledger owner; this checkpoint does not qualify concurrent writers.
 
 ## Passive intake boundaries
 
-An ordinary completed queue item is not a READY handoff. No task-board, private
-conversation or terminal text is scanned to infer one. Typed READY and direct
-person-request ingress remain a later checkpoint; existing synthetic controller
-READY batching is not a claim that a production READY producer is connected.
+An ordinary completed queue item is not a READY handoff. B6's typed completion
+fact now retains a compact source with the complete original queue task, branch
+and commit in the same durable write. Only after that write does its intake
+callback admit the source to the existing ledger. Recovery uses the retained
+source even after its queue item is trimmed; no task-board, private conversation
+or additional terminal parser is used. Earlier B6 monitor rows without that
+auxiliary source remain in space history and are not backfilled from short text.
+Direct person-request ingress and a live controller binding remain later work.
 When a trusted intake has already committed an event, its future controller
 binding must call `notifyPersisted(eventId)`, which reads that exact pending
 event from the ledger. Calling `receive` with the event again retains its
 existing duplicate semantics and does not start a READY window. Notifications
 reuse the original event time and one non-extending timer; they cannot admit new
 text, repeat a consumed event, or authorize a failed batch retry. This is a
-dormant source interface, not an activation switch or a connected producer.
+dormant scheduling interface, not an activation switch or a live controller binding.
 A persisted recovery event also grants no retry authority; sending that same ID
 through `receive` remains a duplicate. A future host must use a separate,
 explicitly authorized retry path rather than replaying a notification.
@@ -169,3 +199,80 @@ capacity; there is no automatic history deletion or paid drain. An explicit clea
 of space history can remove sources not yet copied to the ledger. The ledger is
 a separate audit record, and this checkpoint does not change history-deletion
 semantics or qualify a data-erasure workflow.
+
+## Actual question delivery measurement
+
+`ButlerLedger.questionSendMetrics(window)` counts managed, formal outward asks,
+not candidate text, a logical reservation, a transport's `sent`, or opening an
+already displayed question. The B1 OS notifier is connected; dormant controller
+asks use the same ledger. Activation and the working-day record period stay off.
+Raw native candidate audit remains separate and is not silently reclassified as
+a question sent to the person.
+
+Every outward operation first journals a host-generated unique `attemptId` with
+canonical `questionId`, `deliveryId`, `sourceEventId`, and channel `notification`
+or `butler-ask`. For B1, `sourceEventId` is the ledger source (`butler-source:…`),
+not the original space event UUID. `ButlerIngress.record` returns those IDs for
+decisions; `bindQueueOutcomes` supplies that receipt as the notifier's second
+argument even when intake fails (then undefined). B1 still displays on intake or
+measurement failure, with incomplete attribution or coverage.
+
+The OS adapter counts Electron's actual `show` event. Electron documents this as
+emitted when the notification is shown; `show()` returns void, and does not prove
+display or reading ([Notification API](https://www.electronjs.org/docs/latest/api/notification#event-show)).
+`failed` is known not displayed; no event or an uncertain exception stays unknown.
+A second unexpected display event creates a coverage gap. A future trusted ask
+adapter receives `ask(question, observe)` and calls `observe('shown')` only from
+its actual user-visible display receipt, or `failed`/`unknown` as appropriate.
+The callback is never model-authored. A generic return value cannot certify
+actual delivery. Without a durable intent the controller does not ask. Duplicate
+ACKs of one attempt are idempotent; a second shown attempt for the same canonical
+question, including across channels or restarts, counts as a repeated ask. New
+host-validated facts after an answer can establish a new question version.
+
+| Field | Meaning in the selected journal window |
+| --- | --- |
+| `shownAttempts` | Actual display receipts, including unattributed displays |
+| `knownRepeatedSends` | Confirmed repeated displays of a canonical question; a lower bound when coverage is incomplete |
+| `repeatedQuestions` | The actual repeated-ask count only with complete coverage; otherwise `null` (unverified) |
+| `unknownAttempts`, `unattributedAttempts` | Unresolved physical sends and sends without a validated canonical question/source |
+| `duplicateQuestionCandidatesBlocked` | Model question candidates blocked by the pending-question rules; not outward asks |
+| `suspendedQuestionCandidates` | Suspended question candidates, separately audited |
+| `coverage` | `complete`, `incomplete`, or `unavailable`; never infer zero from the latter two |
+| `unobservedDecisionSources`, `unobservedLogicalDeliveries`, `uncertainBaselineQuestions` | Missing instrumentation or uncertain earlier delivery of a question actually shown in this window |
+
+Windows use physical journal positions `(afterSequence, throughSequence]`, not
+business event `sequence`, timestamps or batch counts. Projections expose
+`physicalSeq` (and `completedPhysicalSeq` on completed batches); event `sequence`
+keeps its original business-event meaning. Use the **existing ingress writer**
+for an active measurement; opening a second ledger does not inherit its authority:
+
+```js
+const ledger = butlerIngress.ledger;
+const throughSequence = ledger.snapshot().sequence;
+ledger.checkpointQuestionMetrics(throughSequence);
+const metrics = ledger.questionSendMetrics({ afterSequence, throughSequence });
+// Record-table repeat row: metrics.repeatedQuestions === null -> unverified.
+// Candidate-block row: metrics.duplicateQuestionCandidatesBlocked.
+```
+
+The host opens one durable measurement epoch at startup, closes it on normal quit,
+and reuses its writer across startup retries. The review-period owner must persist
+`afterSequence` when that period starts and freeze `throughSequence` alongside the
+review snapshot. An explicit checkpoint certifies only the observed prefix for a
+later read; it does not fix unknown sends or authorize the trial. No heartbeat is
+used. A fresh reader or restarted writer cannot adopt a previous open epoch or
+ACK its sends. Unclean suffixes, failed writes and unconfirmed physical intents
+stay unknown after restart. Known historical prefixes remain available. Unrelated
+legacy logical receipts do not poison a new window, but an uncertain earlier
+showing of the same question does. Old unresolved physical intents remain unknown
+because they may display late. `snapshot()` contains only replayable data arrays
+(`questionSends`, `questionMetricEpochs`, `questionMetricGaps`); it does not contain
+a dynamic metric that a fresh reader could misrepresent as complete.
+
+The working-day record table must preserve `null` as unverified; actual repeat 0
+is one separate gate alongside a full day, at least ten distinct admitted
+suggestions and the person's confirmed agreement. No installed OS notification,
+real working day or enabled production ask adapter is qualified by synthetic
+EventEmitter/unit checks. All future formal outward ask channels must use this
+measurement before they can participate in acceptance.

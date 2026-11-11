@@ -13,6 +13,9 @@ const PAYLOAD_LIMITS = { text: 12000, title: 400, spaceId: 200, spaceName: 200, 
   memberId: 200, itemId: 200, outcome: 200, reason: 2000, decisionKind: 200, questionKey: 600, supersedes: 200 };
 const MAX_FILE_BYTES = 32 * 1024 * 1024, MAX_RECORD_BYTES = 2 * 1024 * 1024, MAX_BATCH = 100;
 const FILE_NAME = 'butler-ledger.jsonl';
+const QUESTION_SEND_CHANNELS = ['notification', 'butler-ask'];
+const QUESTION_METRIC_GAPS = ['source-unavailable', 'write-failed', 'delivery-unconfirmed', 'unattributed',
+  'unobserved-send', 'epoch-unavailable', 'unexpected-display'];
 
 function invalid(message, code = 'BUTLER_LEDGER_INVALID') {
   return Object.assign(new Error(message), { code });
@@ -124,7 +127,8 @@ function normalizeResult(value) {
 function initialState() {
   return { sequence: 0, eventSequence: 0, events: [], eventIndex: new Map(), processed: new Set(),
     batches: new Map(), activeBatchId: null, actions: new Map(), questions: new Map(), questionHead: new Map(),
-    deliveries: new Map(), reports: new Map(), reported: new Set(), attempts: new Map(), suspended: new Map(), quarantined: new Map(), quarantinedEvents: new Set(), sourceStates: new Map() };
+    deliveries: new Map(), reports: new Map(), reported: new Set(), attempts: new Map(), suspended: new Map(), quarantined: new Map(), quarantinedEvents: new Set(), sourceStates: new Map(),
+    questionMetricEpochs: new Map(), questionMetricGaps: [], questionSends: new Map() };
 }
 function pending(state) { return state.events.filter(event => !state.processed.has(event.eventId) && !state.quarantinedEvents.has(event.eventId)); }
 function cursor(state, covered) {
@@ -176,7 +180,7 @@ function planQuestion(state, input, time) {
   const questionId = stableId('question', questionKey);
   requireValue(!state.questions.has(questionId), 'Question identity conflict', 'BUTLER_QUESTION_EVIDENCE');
   const question = { questionId, questionKey, decisionSource: context.decisionSource, sourceRef: existing?.sourceRef || input.sourceRef, decisionKind: context.decisionKind,
-    evidenceRevision: evidence.eventId, evidenceEventIds: [evidence.eventId], text: input.text, status: 'open', createdAt: time,
+    evidenceRevision: evidence.eventId, evidenceEventIds: [evidence.eventId], text: input.text, status: 'open', createdAt: time, physicalSeq: state.sequence + 1,
     ...(existing ? { supersedes: existing.questionId } : {}) };
   state.questions.set(questionId, question); state.questionHead.set(baseKey, questionId);
   return { question, duplicate: false };
@@ -205,9 +209,106 @@ function activeBatch(state, id) {
 function reserve(state, kind, targetId, time) {
   const deliveryId = stableId('delivery', [kind, targetId]);
   if (state.deliveries.has(deliveryId)) return state.deliveries.get(deliveryId);
-  const delivery = { deliveryId, kind, targetId, status: 'reserved', reservedAt: time };
+  const delivery = { deliveryId, kind, targetId, status: 'reserved', reservedAt: time, physicalSeq: state.sequence + 1, acknowledgements: [] };
   state.deliveries.set(deliveryId, delivery);
   return delivery;
+}
+function questionSendInput(value, includesEpoch = false) {
+  object(value, ['attemptId', 'questionId', 'deliveryId', 'sourceEventId', 'channel', ...(includesEpoch ? ['epochId'] : [])], ['attemptId', 'channel']);
+  requireValue(QUESTION_SEND_CHANNELS.includes(value.channel), 'Unsupported question send channel', 'BUTLER_QUESTION_SEND_STATE');
+  const result = { attemptId: idString(value.attemptId), channel: value.channel };
+  for (const field of ['questionId', 'deliveryId', 'sourceEventId']) result[field] = value[field] == null ? null : idString(value[field]);
+  return result;
+}
+function metricIntervals(state, ownedEpoch, ownedGap) {
+  return [...state.questionMetricEpochs.values()].map(epoch => {
+    const gap = state.questionMetricGaps.some(item => item.epochId === epoch.epochId);
+    let through = epoch.checkpoints.at(-1)?.throughSequence || 0;
+    if (!gap && epoch.status === 'closed') through = epoch.closedPhysicalSeq;
+    else if (!gap && epoch.epochId === ownedEpoch && !ownedGap) through = state.sequence;
+    return [epoch.physicalSeq, through];
+  }).filter(([from, through]) => through >= from).sort((a, b) => a[0] - b[0]);
+}
+function coveredWindow(intervals, after, through) {
+  if (after === through) return intervals.some(([start, end]) => start <= through && end >= through);
+  let next = after + 1;
+  for (const [start, end] of intervals) {
+    if (start > next) return false;
+    if (end >= next) next = end + 1;
+    if (next > through) return true;
+  }
+  return false;
+}
+function sendAt(send, through) {
+  const acknowledgements = send.acknowledgements.filter(ack => ack.physicalSeq <= through);
+  return { ...send, status: acknowledgements.at(-1)?.status || 'intent',
+    shown: acknowledgements.find(ack => ack.status === 'shown') };
+}
+function questionSource(event, question, state) {
+  const evidence = question && state.eventIndex.get(question.evidenceRevision);
+  if (!(event && evidence && event.sequence >= evidence.sequence && event.payload.questionKey === question.decisionSource &&
+    event.payload.decisionKind === question.decisionKind)) return false;
+  // A resolved question's version ends at its first valid later facts change.
+  // This boundary already exists before a replacement question is reserved.
+  // Merely receiving another source while the same question is open does not
+  // create a version or prevent attribution to that canonical question.
+  return !safeInteger(question.resolvedSequence) || !state.events.some(next => next.sequence > question.resolvedSequence &&
+    next.sequence <= event.sequence && next.payload.questionKey === question.decisionSource &&
+    next.payload.decisionKind === question.decisionKind && next.payload.outcome === 'facts-changed' && next.payload.supersedes === question.questionId);
+}
+function questionMetrics(state, { afterSequence = 0, throughSequence = state.sequence } = {}, { ownedEpoch, ownedGap, failed }) {
+  requireValue(safeInteger(afterSequence) && safeInteger(throughSequence) && afterSequence <= throughSequence && throughSequence <= state.sequence,
+    'Invalid question metric window', 'BUTLER_QUESTION_METRIC_WINDOW');
+  const inWindow = seq => seq > afterSequence && seq <= throughSequence;
+  const intervals = metricIntervals(state, failed ? null : ownedEpoch, ownedGap);
+  const sends = [...state.questionSends.values()].filter(send => send.physicalSeq <= throughSequence).map(send => sendAt(send, throughSequence));
+  const shown = sends.filter(send => send.shown).sort((a, b) => a.shown.physicalSeq - b.shown.physicalSeq);
+  const currentShown = shown.filter(send => inWindow(send.shown.physicalSeq)), seen = new Set();
+  let knownRepeatedSends = 0;
+  for (const send of shown) if (send.attributed) {
+    if (seen.has(send.questionId) && inWindow(send.shown.physicalSeq)) knownRepeatedSends++;
+    seen.add(send.questionId);
+  }
+  const currentQuestions = new Set(currentShown.filter(send => send.attributed).map(send => send.questionId));
+  const relevantSends = sends.filter(send => inWindow(send.physicalSeq) || send.shown && inWindow(send.shown.physicalSeq) ||
+    ['intent', 'unknown'].includes(send.status));
+  const unknownAttempts = relevantSends.filter(send => ['intent', 'unknown'].includes(send.status)).length;
+  const unattributedAttempts = relevantSends.filter(send => !send.attributed).length;
+  const observedSource = event => sends.some(send => send.attributed && send.sourceEventId === event.eventId);
+  const observedDelivery = delivery => sends.some(send => send.attributed && send.deliveryId === delivery.deliveryId);
+  const decisions = state.events.filter(event => event.kind === 'decision' && event.physicalSeq <= throughSequence);
+  const deliveries = [...state.deliveries.values()].filter(delivery => delivery.kind === 'question' && delivery.physicalSeq <= throughSequence);
+  const unobservedDecisionSources = decisions.filter(event => inWindow(event.physicalSeq) && !observedSource(event)).length;
+  const unobservedLogicalDeliveries = deliveries.filter(delivery => (inWindow(delivery.physicalSeq) ||
+    delivery.acknowledgements.some(ack => inWindow(ack.physicalSeq))) && !observedDelivery(delivery)).length;
+  const uncertainBaseline = new Set();
+  for (const questionId of currentQuestions) {
+    const question = state.questions.get(questionId);
+    // Old unmeasured decisions do not poison unrelated future questions. They
+    // matter when this exact canonical question is actually shown again.
+    if (decisions.some(event => event.physicalSeq <= afterSequence && questionSource(event, question, state) && !sends.some(send => send.attributed &&
+        send.sourceEventId === event.eventId && send.physicalSeq <= afterSequence))) uncertainBaseline.add(questionId);
+    if (deliveries.some(delivery => delivery.targetId === questionId && delivery.physicalSeq <= afterSequence &&
+      (!intervals.some(([start, end]) => start <= delivery.physicalSeq && end >= delivery.physicalSeq) ||
+        !sends.some(send => send.attributed && send.deliveryId === delivery.deliveryId && send.physicalSeq <= afterSequence)))) uncertainBaseline.add(questionId);
+    if (sends.some(send => send.questionId === questionId && send.physicalSeq <= afterSequence && ['intent', 'unknown'].includes(send.status))) uncertainBaseline.add(questionId);
+    if (sends.some(send => !send.attributed && send.physicalSeq <= afterSequence &&
+      (send.questionId === questionId || send.sourceEventId && (question.evidenceEventIds.includes(send.sourceEventId) ||
+        questionSource(state.eventIndex.get(send.sourceEventId), question, state)) ||
+        send.sourceEventId === null && question.physicalSeq <= send.physicalSeq))) uncertainBaseline.add(questionId);
+  }
+  let duplicateQuestionCandidatesBlocked = 0, suspendedQuestionCandidates = 0;
+  for (const batch of state.batches.values()) if (inWindow(batch.completedPhysicalSeq)) {
+    duplicateQuestionCandidatesBlocked += batch.actions.filter(action => action.kind === 'question' && action.duplicateQuestion).length;
+    suspendedQuestionCandidates += batch.suspended.filter(candidate => candidate.kind === 'question').length;
+  }
+  const unavailable = failed || !state.questionMetricEpochs.size;
+  const complete = !unavailable && coveredWindow(intervals, afterSequence, throughSequence) && !unknownAttempts && !unattributedAttempts &&
+    !unobservedDecisionSources && !unobservedLogicalDeliveries && !uncertainBaseline.size;
+  return { afterSequence, throughSequence, shownAttempts: currentShown.length, knownRepeatedSends, unknownAttempts, unattributedAttempts,
+    duplicateQuestionCandidatesBlocked, suspendedQuestionCandidates, unobservedDecisionSources, unobservedLogicalDeliveries,
+    uncertainBaselineQuestions: uncertainBaseline.size, coverage: unavailable ? 'unavailable' : complete ? 'complete' : 'incomplete',
+    repeatedQuestions: complete ? knownRepeatedSends : null };
 }
 const CANDIDATE_ERRORS = new Set(['BUTLER_ACTION_SOURCE', 'BUTLER_UNKNOWN_EVIDENCE', 'BUTLER_QUESTION_SOURCE', 'BUTLER_QUESTION_EVIDENCE']);
 function suspendedAction(input, index, reason, batchSources) {
@@ -227,7 +328,7 @@ function reduce(state, record) {
     case 'event': {
       const input = normalizeEvent(data), previous = state.eventIndex.get(input.eventId);
       requireValue(!previous, 'Duplicate event record');
-      const event = { ...input, sequence: ++state.eventSequence, time };
+      const event = { ...input, sequence: ++state.eventSequence, physicalSeq: record.sequence, time };
       state.events.push(event); state.eventIndex.set(event.eventId, event); break;
     }
     case 'source-transition': {
@@ -243,7 +344,7 @@ function reduce(state, record) {
         const input = normalizeEvent(data.event);
         requireValue(input.kind === 'queue-empty' && input.sourceRef === sourceRef &&
           input.eventId === stableId('queue-empty', [sourceRef, generation]) && !state.eventIndex.has(input.eventId), 'Invalid source event');
-        event = { ...input, sequence: state.eventSequence + 1, time };
+        event = { ...input, sequence: state.eventSequence + 1, physicalSeq: record.sequence, time };
       }
       // The episode marker and its business event are committed by one journal
       // row, so a crash cannot consume the transition without its pending event.
@@ -274,7 +375,7 @@ function reduce(state, record) {
       const selection = normalizeSelection(data.selection), batchId = idString(data.batchId);
       requireValue(Array.isArray(data.eventIds) && data.eventIds.length > 0 && data.eventIds.length <= MAX_BATCH &&
         canonical(data.eventIds) === canonical(pending(state).slice(0, data.eventIds.length).map(event => event.eventId)), 'Batch must cover the pending prefix');
-      state.batches.set(batchId, { batchId, selection, eventIds: [...data.eventIds], status: 'running', attempt: 1, startedAt: time });
+      state.batches.set(batchId, { batchId, selection, eventIds: [...data.eventIds], status: 'running', attempt: 1, startedAt: time, physicalSeq: record.sequence });
       state.activeBatchId = batchId; break;
     }
     case 'batch-fail': {
@@ -340,7 +441,7 @@ function reduce(state, record) {
         // refer to the filtered actions list; the stage disambiguates them.
         requireValue(candidate.sourceRef === undefined || batchSources.has(candidate.sourceRef), 'Suspended source is outside its batch', 'BUTLER_ACTION_SOURCE');
         const item = { ...candidate, candidateId: stableId('candidate', [batch.batchId, candidate.stage, candidate.index]),
-          batchId: batch.batchId, status: 'suspended', effect: 'none', time };
+          batchId: batch.batchId, status: 'suspended', effect: 'none', time, physicalSeq: record.sequence };
         state.suspended.set(item.candidateId, item); suspended.push(item);
       };
       for (const candidate of result.suspended || []) suspend(candidate);
@@ -360,7 +461,7 @@ function reduce(state, record) {
           input.kind === 'question' ? question.question.questionId : null]);
         const previous = state.actions.get(actionId);
         const action = { ...input, actionId, effect: 'none', ...(question ? { questionId: question.question.questionId,
-          duplicateQuestion: question.duplicate } : {}), duplicate: Boolean(previous), batchId: batch.batchId, time };
+          duplicateQuestion: question.duplicate } : {}), duplicate: Boolean(previous), batchId: batch.batchId, time, physicalSeq: record.sequence };
         if (!previous) state.actions.set(actionId, action);
         actions.push(action);
       }
@@ -373,7 +474,8 @@ function reduce(state, record) {
         state.reports.set(reportId, { reportId, batchId: batch.batchId, eventIds: [...batch.eventIds], readyEvents,
           text: [...trustedReady, ...reportActions.map(action => action.text)].join('\n'), status: 'pending', createdAt: time });
       }
-      batch.status = 'completed'; batch.completedAt = time; batch.actions = actions; batch.suspended = suspended; batch.result = result;
+      batch.status = 'completed'; batch.completedAt = time; batch.completedPhysicalSeq = record.sequence;
+      batch.actions = actions; batch.suspended = suspended; batch.result = result;
       batch.resultFingerprint = stableId('result', result);
       for (const eventId of batch.eventIds) state.processed.add(eventId);
       state.activeBatchId = null; break;
@@ -411,10 +513,61 @@ function reduce(state, record) {
       requireValue(delivery && ['sent', 'unknown'].includes(data.status), 'Invalid delivery acknowledgement');
       requireValue(delivery.status !== 'sent', 'A sent delivery cannot be downgraded');
       delivery.status = data.status; delivery.acknowledgedAt = time;
+      delivery.acknowledgements.push({ status: data.status, physicalSeq: record.sequence, time });
       if (delivery.kind === 'report') {
         const report = state.reports.get(delivery.targetId); report.status = data.status;
         if (data.status === 'sent') for (const eventId of report.eventIds) state.reported.add(eventId);
       }
+      break;
+    }
+    case 'question-metric-open': {
+      object(data, ['epochId'], ['epochId']); const epochId = idString(data.epochId);
+      requireValue(!state.questionMetricEpochs.has(epochId), 'Question metric epoch already exists', 'BUTLER_QUESTION_METRIC_EPOCH');
+      state.questionMetricEpochs.set(epochId, { epochId, status: 'open', physicalSeq: record.sequence, openedAt: time, checkpoints: [] });
+      break;
+    }
+    case 'question-metric-checkpoint': {
+      object(data, ['epochId', 'throughSequence'], ['epochId', 'throughSequence']);
+      const epoch = state.questionMetricEpochs.get(idString(data.epochId));
+      requireValue(epoch?.status === 'open' && safeInteger(data.throughSequence) && data.throughSequence >= epoch.physicalSeq &&
+        data.throughSequence <= state.sequence && data.throughSequence > (epoch.checkpoints.at(-1)?.throughSequence || 0) &&
+        !state.questionMetricGaps.some(gap => gap.epochId === epoch.epochId), 'Question metric prefix cannot be certified', 'BUTLER_QUESTION_METRIC_EPOCH');
+      epoch.checkpoints.push({ throughSequence: data.throughSequence, physicalSeq: record.sequence, time });
+      break;
+    }
+    case 'question-metric-close': {
+      object(data, ['epochId'], ['epochId']);
+      const epoch = state.questionMetricEpochs.get(idString(data.epochId));
+      requireValue(epoch?.status === 'open', 'Question metric epoch is not open', 'BUTLER_QUESTION_METRIC_EPOCH');
+      epoch.status = 'closed'; epoch.closedPhysicalSeq = record.sequence; epoch.closedAt = time;
+      break;
+    }
+    case 'question-metric-gap': {
+      object(data, ['epochId', 'reason'], ['epochId', 'reason']);
+      const epoch = state.questionMetricEpochs.get(idString(data.epochId));
+      requireValue(epoch?.status === 'open' && QUESTION_METRIC_GAPS.includes(data.reason), 'Invalid question metric gap', 'BUTLER_QUESTION_METRIC_EPOCH');
+      state.questionMetricGaps.push({ epochId: epoch.epochId, reason: data.reason, physicalSeq: record.sequence, time });
+      break;
+    }
+    case 'question-send-begin': {
+      object(data, ['epochId', 'attemptId', 'questionId', 'deliveryId', 'sourceEventId', 'channel'],
+        ['epochId', 'attemptId', 'questionId', 'deliveryId', 'sourceEventId', 'channel']);
+      const epoch = state.questionMetricEpochs.get(idString(data.epochId)), input = questionSendInput(data, true);
+      requireValue(epoch?.status === 'open' && !state.questionSends.has(input.attemptId), 'Invalid question send intent', 'BUTLER_QUESTION_SEND_STATE');
+      const question = state.questions.get(input.questionId), event = state.eventIndex.get(input.sourceEventId), delivery = state.deliveries.get(input.deliveryId);
+      const attributed = Boolean(questionSource(event, question, state) &&
+        (input.deliveryId === null || delivery?.kind === 'question' && delivery.targetId === question.questionId));
+      state.questionSends.set(input.attemptId, { ...input, epochId: epoch.epochId, attributed, status: 'intent', physicalSeq: record.sequence,
+        startedAt: time, acknowledgements: [] });
+      break;
+    }
+    case 'question-send-ack': {
+      object(data, ['attemptId', 'status'], ['attemptId', 'status']);
+      const send = state.questionSends.get(idString(data.attemptId));
+      requireValue(send && ['shown', 'failed', 'unknown'].includes(data.status) && send.status !== 'shown' && send.status !== data.status &&
+        !(send.status === 'failed' && data.status === 'unknown'), 'Invalid question send receipt', 'BUTLER_QUESTION_SEND_STATE');
+      send.status = data.status;
+      send.acknowledgements.push({ status: data.status, physicalSeq: record.sequence, time });
       break;
     }
     default: throw invalid('Unknown ledger record type');
@@ -429,6 +582,8 @@ function safeFile(stat) {
 
 class ButlerLedger {
   #authorizePerson;
+  #ownedQuestionMetricEpoch = null;
+  #questionMetricGap = false;
   constructor(directory, { now = Date.now, id = randomUUID, authorizePerson = () => false } = {}) {
     requireValue(typeof directory === 'string' && path.isAbsolute(directory), 'Butler directory must be absolute');
     requireValue(typeof now === 'function' && typeof id === 'function' && typeof authorizePerson === 'function', 'Invalid ledger clock, identity generator or person verifier');
@@ -655,12 +810,82 @@ class ButlerLedger {
     if (delivery.status === status) return clone(delivery);
     this.#append('delivery-ack', { deliveryId, status }); return clone(this.state.deliveries.get(deliveryId));
   }
+  openQuestionMetricEpoch(epochId) {
+    this.healthy(); epochId = idString(epochId);
+    const own = this.state.questionMetricEpochs.get(this.#ownedQuestionMetricEpoch);
+    if (own?.status === 'open' && own.epochId === epochId) return clone(own);
+    requireValue(own?.status !== 'open' && !this.state.questionMetricEpochs.has(epochId),
+      'Question metric epoch cannot be adopted or replaced', 'BUTLER_QUESTION_METRIC_EPOCH');
+    this.#append('question-metric-open', { epochId });
+    this.#ownedQuestionMetricEpoch = epochId; this.#questionMetricGap = false;
+    return clone(this.state.questionMetricEpochs.get(epochId));
+  }
+  #questionMetricEpoch() {
+    this.healthy();
+    const epoch = this.state.questionMetricEpochs.get(this.#ownedQuestionMetricEpoch);
+    requireValue(epoch?.status === 'open', 'This writer owns no open question metric epoch', 'BUTLER_QUESTION_METRIC_EPOCH');
+    return epoch;
+  }
+  checkpointQuestionMetrics(throughSequence = this.state.sequence) {
+    const epoch = this.#questionMetricEpoch();
+    requireValue(!this.#questionMetricGap && safeInteger(throughSequence) && throughSequence >= epoch.physicalSeq && throughSequence <= this.state.sequence,
+      'Question metric prefix cannot be certified', 'BUTLER_QUESTION_METRIC_EPOCH');
+    const previous = epoch.checkpoints.at(-1);
+    if (previous?.throughSequence === throughSequence) return clone({ epochId: epoch.epochId, ...previous });
+    this.#append('question-metric-checkpoint', { epochId: epoch.epochId, throughSequence });
+    return clone({ epochId: epoch.epochId, ...this.state.questionMetricEpochs.get(epoch.epochId).checkpoints.at(-1) });
+  }
+  closeQuestionMetricEpoch() {
+    const epoch = this.#questionMetricEpoch();
+    this.#append('question-metric-close', { epochId: epoch.epochId });
+    return clone(this.state.questionMetricEpochs.get(epoch.epochId));
+  }
+  markQuestionMetricGap(reason) {
+    requireValue(QUESTION_METRIC_GAPS.includes(reason), 'Invalid question metric gap', 'BUTLER_QUESTION_METRIC_EPOCH');
+    // Set before the append: even a failed append cannot make this writer claim
+    // complete coverage. A previously durable open epoch protects the restart.
+    this.#questionMetricGap = true;
+    const epoch = this.#questionMetricEpoch();
+    this.#append('question-metric-gap', { epochId: epoch.epochId, reason });
+    return clone(this.state.questionMetricGaps.at(-1));
+  }
+  beginQuestionSend(value) {
+    const input = questionSendInput(value), epoch = this.#questionMetricEpoch();
+    const previous = this.state.questionSends.get(input.attemptId);
+    if (previous) {
+      requireValue(previous.epochId === epoch.epochId && Object.keys(input).every(key => input[key] === previous[key]),
+        'Question send identity cannot be reused', 'BUTLER_QUESTION_SEND_STATE');
+      return clone(previous);
+    }
+    this.#append('question-send-begin', { epochId: epoch.epochId, ...input });
+    return clone(this.state.questionSends.get(input.attemptId));
+  }
+  ackQuestionSend(attemptId, status) {
+    const epoch = this.#questionMetricEpoch(); attemptId = idString(attemptId);
+    requireValue(['shown', 'failed', 'unknown'].includes(status), 'Invalid question send receipt', 'BUTLER_QUESTION_SEND_STATE');
+    const previous = this.state.questionSends.get(attemptId);
+    requireValue(previous?.epochId === epoch.epochId, 'This writer does not own the question send', 'BUTLER_QUESTION_SEND_STATE');
+    if (previous.status === status) return clone(previous);
+    if (previous.status === 'shown' || previous.status === 'failed' && status === 'unknown') {
+      this.markQuestionMetricGap('delivery-unconfirmed'); return clone(previous);
+    }
+    const conflict = previous.status === 'failed' && status === 'shown';
+    this.#append('question-send-ack', { attemptId, status });
+    if (conflict) this.markQuestionMetricGap('delivery-unconfirmed');
+    return clone(this.state.questionSends.get(attemptId));
+  }
+  questionSendMetrics(window = {}) {
+    object(window, ['afterSequence', 'throughSequence']);
+    return questionMetrics(this.state, window, { ownedEpoch: this.#ownedQuestionMetricEpoch, ownedGap: this.#questionMetricGap, failed: this.failed });
+  }
   snapshot() {
     this.healthy();
     return clone({ version: 1, sequence: this.state.sequence, events: this.state.events, pendingEvents: pending(this.state), batches: [...this.state.batches.values()],
       activeBatch: this.state.activeBatchId ? this.state.batches.get(this.state.activeBatchId) : null,
       actions: [...this.state.actions.values()], questions: [...this.state.questions.values()], deliveries: [...this.state.deliveries.values()],
-      reports: [...this.state.reports.values()], attempts: [...this.state.attempts.values()], suspended: [...this.state.suspended.values()], quarantined: [...this.state.quarantined.values()], sourceStates: [...this.state.sourceStates.values()], cursors: { processed: cursor(this.state, this.state.processed), reported: cursor(this.state, this.state.reported) } });
+      reports: [...this.state.reports.values()], attempts: [...this.state.attempts.values()], suspended: [...this.state.suspended.values()], quarantined: [...this.state.quarantined.values()], sourceStates: [...this.state.sourceStates.values()],
+      questionSends: [...this.state.questionSends.values()], questionMetricEpochs: [...this.state.questionMetricEpochs.values()], questionMetricGaps: this.state.questionMetricGaps,
+      cursors: { processed: cursor(this.state, this.state.processed), reported: cursor(this.state, this.state.reported) } });
   }
 }
 module.exports = { ButlerLedger };

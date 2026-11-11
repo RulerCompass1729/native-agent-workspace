@@ -18,6 +18,7 @@ const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary } = require('./queue-secretary.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
+const { showQuestionNotification } = require('./butler-question-notification.cjs');
 const { createDedicatedBackend } = require('./butler-backend-host.cjs');
 const { CreationDefaults } = require('./creation-defaults.cjs');
 const { readingState } = require('./reading-state.cjs');
@@ -302,14 +303,17 @@ function notifyBackgroundConfirmation(record) {
     notification.show();
   } catch { queueOutcomeNotifications.delete(key); }
 }
-function notifyQueueOutcome(outcome) {
+function notifyQueueOutcome(outcome, source) {
   const { roomId, eventId, status, reason, memberId, memberName, task, reply, question } = outcome;
-  if (!eventId || queueOutcomeSeen.has(eventId) || !(status === 'failed' || status === 'waiting' && !reason)) return;
+  if (quitting || !eventId || queueOutcomeSeen.has(eventId) || !(status === 'failed' || status === 'waiting' && !reason)) return;
   queueOutcomeSeen.add(eventId);
   if (queueOutcomeSeen.size > 200) queueOutcomeSeen.delete(queueOutcomeSeen.values().next().value);
   let notification;
   try {
-    if (!Notification.isSupported()) return;
+    if (!Notification.isSupported()) {
+      if (status === 'waiting') showQuestionNotification(null, butlerIngress?.ledger, source);
+      return;
+    }
     const room = { ...roomState.metadata(roomId), id: roomId };
     const recordedName = room.events?.findLast(e => e.sessionId === memberId && e.uiMessage?.key === 'notice.queue.dispatched')?.uiMessage?.params?.name;
     const name = [memberName, recordedName].find(value => value && value !== memberId) || displayText('identity.historicalMember');
@@ -321,7 +325,8 @@ function notifyQueueOutcome(outcome) {
     if (queueOutcomeNotifications.size > 50) queueOutcomeNotifications.delete(queueOutcomeNotifications.keys().next().value);
     notification.once('close', () => queueOutcomeNotifications.delete(eventId));
     notification.once('click', () => { queueOutcomeNotifications.delete(eventId); revealRecord({ roomId, eventId }); });
-    notification.show();
+    if (status === 'waiting') showQuestionNotification(notification, butlerIngress?.ledger, source);
+    else notification.show();
   } catch { queueOutcomeNotifications.delete(eventId); }
 }
 function revealRecord(target) {
@@ -1000,7 +1005,15 @@ async function boot() {
   }
   sessionLabels = new SessionLabels(dataDir);
   roomState = new RoomState(dataDir);
-  try { butlerIngress = new ButlerIngress(dataDir, { roomState }); butlerIngress.recover(); }
+  try {
+    // One writer owns the display-measurement epoch. It neither starts a model
+    // nor opens the separate working-day recording period.
+    if (!butlerIngress) {
+      butlerIngress = new ButlerIngress(dataDir, { roomState });
+      butlerIngress.ledger.openQuestionMetricEpoch(randomUUID());
+    } else butlerIngress.roomState = roomState;
+    butlerIngress.recover();
+  }
   catch { /* Sources stay in the committed room events; status remains blocked. */ }
   bindQueueOutcomes(roomState, butlerIngress, notifyQueueOutcome);
   try { butlerBackend = createDedicatedBackend(path.join(dataDir, 'butler-native'), {
@@ -1722,7 +1735,10 @@ app.on('before-quit', event => {
   } else { quitting = true; dsh?.stop(); }
 });
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.
-app.on('will-quit', () => { queueDispatcher?.close(); });
+app.on('will-quit', () => {
+  queueDispatcher?.close();
+  try { butlerIngress?.ledger.closeQuestionMetricEpoch(); } catch { /* An unclosed epoch remains unverified. */ }
+});
 // A session rotation is announced to the person; the space record and log keep the ids.
 function notifyRotation(outcome, record) {
   const keys = { done: 'os.rotationDoneBody', saved: 'os.rotationSavedBody', kept: 'os.rotationKeptBody', keptUnsaved: 'os.rotationKeptUnsavedBody', failed: 'os.rotationFailedBody' };

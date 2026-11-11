@@ -4,6 +4,7 @@
 const { createHash } = require('node:crypto');
 const { ButlerLedger } = require('./butler-ledger.cjs');
 const { validateEvent } = require('./butler-policy.cjs');
+const { storedReadySource } = require('./butler-ready.cjs');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const unavailable = () => Object.assign(Error('Butler source unavailable'), { code: 'BUTLER_SOURCE_UNAVAILABLE' });
 const clipped = (value, limit) => typeof value === 'string' && value ? value.slice(0, limit) : undefined;
@@ -33,6 +34,10 @@ function queueOutcomeSource(outcome) {
 // Auxiliary B4 data is interpreted after the space has loaded. A damaged or
 // newly rejected source cannot change the availability of its original space.
 function storedQueueSource(roomId, event) {
+  const source = event.butlerSource;
+  if (event.monitor?.kind === 'ready' || source?.kind === 'ready' ||
+      typeof source?.eventId === 'string' && source.eventId.startsWith('butler-ready:') ||
+      typeof source?.sourceRef === 'string' && source.sourceRef.startsWith('queue-ready:')) return storedReadySource(roomId, event);
   const parent = [roomId, event.id], sourceRef = `queue-outcome:${roomId}:${event.id}`;
   try {
     const value = validateEvent(event.butlerSource);
@@ -71,16 +76,18 @@ class ButlerIngress {
     try {
       validateEvent(event);
       this.ledger.ingest(event);
+      let questionReceipt;
       if (event.kind === 'decision') {
         const reserved = this.ledger.reserveQuestion({ sourceRef: event.sourceRef, decisionKind: event.payload.decisionKind,
           text: event.payload.title || event.payload.text });
         // B1 owns the direct notification. An intake receipt cannot prove that
         // the operating system delivered it, and must never cause another ask.
         if (reserved.shouldNotify) this.ledger.ackDelivery(reserved.deliveryId, 'unknown');
+        questionReceipt = { questionId: reserved.question.questionId, deliveryId: reserved.deliveryId };
       }
       if (['decision', 'failure', 'blocked'].includes(event.kind)) this.ledger.consumeRecorded([event.eventId]);
       this.sourceStatus(event);
-      return { status: 'recorded', eventId: event.eventId };
+      return { status: 'recorded', eventId: event.eventId, ...questionReceipt };
     } catch { this.errors.set(scope, 'source-unavailable'); throw unavailable(); }
   }
   captureOutcome(roomId, eventId) {
@@ -129,9 +136,13 @@ class ButlerIngress {
 }
 
 function bindQueueOutcomes(roomState, ingress, notify) {
+  // B6's typed completion fact is separate from B1 decision/failure delivery.
+  // No controller or model is notified while the host remains dormant.
+  roomState.onButlerReady = (roomId, eventId) => ingress?.captureOutcome(roomId, eventId);
   roomState.onQueueOutcome = outcome => {
-    try { ingress?.captureOutcome(outcome.roomId, outcome.eventId); }
-    finally { notify(outcome); }
+    let receipt;
+    try { receipt = ingress?.captureOutcome(outcome.roomId, outcome.eventId); }
+    finally { notify(outcome, receipt); }
   };
 }
 module.exports = { ButlerIngress, queueOutcomeSource, storedQueueSource, bindQueueOutcomes };

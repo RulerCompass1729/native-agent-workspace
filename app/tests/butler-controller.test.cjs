@@ -12,7 +12,11 @@ function fixture(t, options = {}) {
   const records = [{ id: 'butler-a', nativeId: 'native-a', provider: 'codex', state: 'idle', roomIds: [], runner }];
   const spaces = [{ id: 'shared', name: 'Example space', archived: false, writable: true, members: [], queue: [] }];
   let time = Date.UTC(2026, 10, 9); const now = () => time;
-  const newLedger = () => new ButlerLedger(directory, { now, authorizePerson: actor => actor === person });
+  let epoch = 0;
+  const newLedger = () => {
+    const value = new ButlerLedger(directory, { now, authorizePerson: actor => actor === person });
+    value.openQuestionMetricEpoch('controller-test-epoch-' + ++epoch); return value;
+  };
   const ledger = newLedger(), calls = [], invocations = [], timers = new Map(), blocked = [], reports = [], questions = [];
   const run = async (input, selection) => {
     calls.push(input); invocations.push({ input, selection });
