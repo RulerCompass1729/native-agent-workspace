@@ -449,6 +449,49 @@ function spaceFileFixture(t, provider = 'codex') {
   vm.runInContext(part("  register('spaceFiles',", "  register('createDefaults',"), f.sandbox);
   Object.defineProperty(f, 'fileReads', { get: () => reads }); return f;
 }
+function spaceExportFixture(t, provider) {
+  const f = spaceFileFixture(t, provider);
+  Object.assign(f.sandbox, { path, textExtensions: require('../local-files.cjs').extensions, saveCopy: require('../local-files.cjs').saveCopy,
+    showDialog: (c, kind, options) => require('../background-control.cjs').dialog(c, kind, options) });
+  vm.runInContext(part("  register('openLocalFile',", "  register('chooseFolder',"), f.sandbox);
+  return f;
+}
+for (const provider of ['claude', 'codex']) for (const when of ['before-pickup', 'after-pickup', 'after-leaving']) test(`${provider}: a space-file read has no reusable export preview ${when}`, async t => {
+  const f = spaceExportFixture(t, provider), c = await f.controller.view(f.actor);
+  const read = await f.controller.call(f.binding, command('spaceFiles', ['shared', 'space-file']));
+  assert.equal((await f.controller.decide(f.actor.id, f.actor.nativeId, read.id, 1)).state, 'complete');
+  let token = 'preview-token';
+  if (when !== 'before-pickup') {
+    const pickup = (await f.controller.call(f.binding, { action: 'receipt', operation_id: read.id })).receipt;
+    assert.equal(pickup.value.text, 'SPACE_FILE_PRIVATE_BODY'); assert.equal(pickup.readState, 'consumed'); token = pickup.value.token;
+  }
+  if (when === 'after-leaving') f.state.sessions[0].roomIds = [];
+  const target = path.join(f.dir, 'export.txt');
+  const pending = await f.controller.call(f.binding, { ...command('saveLocalFile', [token]), paths: [target] });
+  assert.equal(pending.state, 'confirmation-required');
+  const result = await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
+  assert.equal(result.state, 'unconfirmed'); assert.equal(fs.existsSync(target), false);
+  assert.equal(c.filePreview, null); assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('SPACE_FILE_PRIVATE_BODY'), false);
+});
+test('a person still previews and saves a space file in their own window', async t => {
+  const f = spaceExportFixture(t, 'codex'), c = await f.controller.view(f.actor); c.background = false;
+  const target = path.join(f.dir, 'human-copy.txt');
+  f.sandbox.showDialog = async (_c, kind) => { assert.equal(kind, 'save'); return { canceled: false, filePath: target }; };
+  const preview = await f.config.handlers.get('spaceFiles')(c, 'shared', 'space-file');
+  assert.equal(c.filePreview.bytes.toString(), 'SPACE_FILE_PRIVATE_BODY');
+  assert.equal(await f.config.handlers.get('saveLocalFile')(c, preview.token), true);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'SPACE_FILE_PRIVATE_BODY');
+});
+test('explicit path-based background previews keep their existing human-approved export path', async t => {
+  const f = spaceExportFixture(t, 'codex'), original = path.join(f.dir, 'chosen.txt'), target = path.join(f.dir, 'path-copy.txt');
+  fs.writeFileSync(original, 'SPACE_FILE_PRIVATE_BODY'); f.state.sessions[0].roomIds = [];
+  const pending = await f.controller.call(f.binding, { ...command('openLocalFile', ['agent']), paths: [original] });
+  assert.equal((await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1)).state, 'complete');
+  const preview = (await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt.value;
+  const save = await f.controller.call(f.binding, { ...command('saveLocalFile', [preview.token]), paths: [target] });
+  assert.equal((await f.controller.decide(f.actor.id, f.actor.nativeId, save.id, 1)).state, 'complete');
+  assert.equal(fs.readFileSync(target, 'utf8'), 'SPACE_FILE_PRIVATE_BODY');
+});
 for (const provider of ['claude', 'codex']) for (const role of ['member', 'nonmember', 'secretary']) test(`${provider} space file: ${role} cannot exceed current space authority after confirmation`, async t => {
   const f = spaceFileFixture(t, provider);
   if (role === 'nonmember') f.state.sessions[0].roomIds = [];
