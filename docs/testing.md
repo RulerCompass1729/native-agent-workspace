@@ -1497,7 +1497,8 @@ When the Claude launcher points at a version NAW has not qualified, NAW runs the
 four mod test files once in the background with that version
 (`app/claude-mod-check.cjs`): `claude plugin test` on a private copy of the mod,
 under a system sandbox with no network or local socket, no keychain, no write
-outside the run's own folder and no read of the person's Claude configuration, with
+outside the run's own folder and no read of `~/.claude` or `~/.claude.json` (a
+configuration folder kept elsewhere is not covered), with
 a private home and configuration directory and a 60-second limit. No session starts
 and no model is called. The result is kept in `claude-mod-check.json` in the data
 directory, one record per version: the pass and fail counts, the failed test names
@@ -1505,10 +1506,11 @@ and the engine's message, or why the run did not happen. That file is the only
 output in daily use. It qualifies nothing and does not end the temporary fallback: a
 pass says only that the engine calls those tests reach still exist in that version.
 Adding a version to the qualified list stays a manual step, which can start from
-this record. A run that ended by itself, with or without a test summary, is kept
-until a NAW update changes the mod or its tests. A run that did not start, or that
-was stopped at the limit, is tried again after the next NAW start; one that NAW
-stopped because it was closing leaves no record. If the service is killed during
+this record. A run that ended with an exit code, with or without a test summary, is
+kept until a NAW update changes the mod or its tests. A run that did not start, that
+was stopped at the limit, or that was ended by a signal (a crash) is tried again
+after the next NAW start; one that NAW stopped because it was closing leaves no
+record. If the service is killed during
 the one or two seconds of the run, nothing stops the sandboxed program. The test files
 are named in three places that a unit test compares: `claude-mod-check.cjs`, the
 runtime copy in `service-client.cjs` (a folder beside the mod, so the folder a

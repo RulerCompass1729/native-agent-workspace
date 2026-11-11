@@ -80,7 +80,8 @@ test('the run cannot reach the network, a local socket, the keychain or the pers
     `! /usr/bin/touch '${privateDir}/beside' 2>/dev/null; ok "no write beside its own folder" $?`, `! /bin/rm '${sock}' 2>/dev/null; ok "no removal beside its own folder" $?`,
     `! /bin/cat '${home}/.claude/settings.json' >/dev/null 2>&1; ok "the Claude configuration folder is unreadable" $?`, `! /bin/cat '${home}/.claude.json' >/dev/null 2>&1; ok "the Claude state file is unreadable" $?`,
     `/bin/cat '${home}/other' >/dev/null 2>&1; ok "other files stay readable" $?`,
-    // As the loopback fixture proves it: with the keychain service denied, a search for an item that does not exist cannot even be created.
+    // The probe scripts/fixtures/loopback-model.cjs uses: with the keychain service denied, a search for an item that
+    // does not exist cannot even be created. Its control is the mutation that removes the denial.
     '/usr/bin/security find-generic-password -s naw-mod-check-nonexistent-item 2>&1 | /usr/bin/grep -q SecKeychainSearchCreateFromAttributes; ok "the keychain service is unreachable" $?',
     'echo probe > /dev/null; ok "/dev stays writable" $?', '/usr/bin/touch "$HOME/inside" "$TMPDIR/inside" "$3/inside"; ok "its own folder stays writable" $?', 'summary'].join('\n'));
   const record = await check.run({ ...f.options, privateDir });
@@ -205,7 +206,8 @@ test('NAW runs the check once when a session starts under an unqualified launche
 test('closing NAW ends a running check and keeps no record of it', mac, async t => {
   const f = fixture(t, '/bin/sleep 30'), stop = new AbortController();
   const pending = check.checkOnce({ file: f.file, ...f.options, signal: stop.signal });
-  const running = () => execFileSync('/bin/ps', ['-axo', 'command='], { encoding: 'utf8' }).split('\n').some(line => line.includes(f.program));
+  // The program itself, after the sandbox has started it: the sandbox's own command line names the program too.
+  const running = () => execFileSync('/bin/ps', ['-axo', 'command='], { encoding: 'utf8' }).split('\n').some(line => line.includes(f.program) && !line.includes('sandbox-exec'));
   for (let i = 0; i < 100 && !running(); i++) await sleep(30);
   assert.equal(running(), true, 'The program is running');
   const before = Date.now(); stop.abort();

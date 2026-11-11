@@ -8,7 +8,8 @@
 //
 // The run starts no session and sends nothing. `plugin test` runs under a system sandbox that
 // denies all network (local sockets included) and the keychain, allows no write outside the run's
-// own folder and no read of the person's Claude configuration, with a private home and
+// own folder and no read of ~/.claude or ~/.claude.json (a configuration folder the person keeps
+// elsewhere is not covered; it can be read but nothing read can leave), with a private home and
 // configuration directory, on a private copy of the mod, with a time limit. When the sandbox
 // cannot be applied or cannot start the program, nothing runs, the record says so, and the next
 // NAW start tries again. If NAW's service is killed during the run, nothing stops the sandboxed
