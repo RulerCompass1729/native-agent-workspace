@@ -9685,8 +9685,9 @@ base `e09fdd9`: 5467 pass, zero fail/skip. Independent headless session
 finding, conditional on that green full run. Only Read/Grep/Glob were exposed,
 with no MCP. HEAD, index and worktree were unchanged by review. The test proves
 the reported aliases on the current macOS filesystem; it makes no cross-platform
-or installed-launch claim. Symlink replacement races and ancestor/descendant
-profile relationships remain outside this same-directory repair. Raw red/green,
+or installed-launch claim. The later integrated `d9d80c7` path-pin and parent-boundary
+repair covers replacement of the caller's symlink and both ancestor directions;
+see “Isolated-profile path pin and parent boundaries” below. Raw red/green,
 full output and review evidence are linked from the private lane handoff.
 ### B2-TRUST-2 / 2: durable attempts and interrupted cleanup — 2026-11-11
 
@@ -10007,3 +10008,43 @@ Future factory acceptance must also establish the plain base instance, default
 clock and unoverridden human reader, and the single Main-owned object reused
 by both read paths. The module-local private-brand/physical-root checks do not
 authenticate an arbitrary caller-supplied reference as Main's actual directory.
+## Isolated-profile OS account reference (2026-11-11, source checkpoint)
+
+The owner's separate owned packaged-Electron 44.9.0 before-ready probe found that
+`--user-data-dir` moves Electron's `userData` reference, while changing `HOME`
+changes `os.homedir()` but not that Electron reference. `os.userInfo().homedir`
+stayed stable in all three cases. This establishes the additional macOS default
+reference; it is not proof of the repaired startup or its downstream consumers.
+
+Only the macOS requested-test branch now adds the OS-account home plus
+`Library/Application Support/Native Agent Workspace` to the existing Electron
+reference. Both references use the same device/inode and bidirectional ancestry
+checks. An unavailable or non-absolute OS-account home fails closed. Ordinary
+startup never calls the OS-account getter; non-macOS keeps its existing reference.
+The parent, owner, private-mode, resolved-path pin and test-permission decisions
+otherwise remain unchanged. Ordinary startup rejects test-only access; a verified
+isolated test may still use an installed binary.
+
+Actual-bootstrap tests on synthetic private directories reproduce seven new
+failures on the old code (20 tests: 13 pass, 7 fail), then pass 20/20 after this
+change, without skips. The earlier 12 checks remain green, including real case
+and Data-volume aliases, symlink replacement, both ancestry directions and
+ownership. The new cases cover a moved Electron reference with an OS-normal
+profile, its parent/child and real aliases, HOME redirection, missing-normal
+ancestry and OS-account lookup failures. Related whole-Main VM callers pass
+137/137; the separately selected actual headed-startup VM test passes 1/1.
+The other tests in its file were not selected. The empty-environment UI build
+exits zero. These are author-run
+checks in an empty-credential, network-denied sandbox, not provider or GUI runs.
+
+New-code CLI/HOME launch and actual runtime `setPath` consumer verification remain
+open with the owner. The complete author-run suite passes 5,797/5,797, with zero failures,
+cancellations or skips; raw output is retained as `profile-os-home/full.log` in
+the private lane. Fresh separate headless reviewer57DD5EB7-8606-49A0-9A12-65EAB682B86D
+returns APPROVE_SCOPED on this source delta. Only Read/Grep/Glob were exposed,
+with no MCP; HEAD, index and worktree matched the review snapshot. The reviewer
+read author-run red/green evidence and did not rerun tests. Source was unchanged
+for the subsequent green full run. Remounted FUSE/SMB content with a
+different device/inode and later replacement of resolved path components through
+a writable parent remain known limitations; this delta does not claim to prevent
+them. Raw red/green and build evidence are retained in the private lane handoff.

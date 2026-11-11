@@ -63,7 +63,9 @@ test('headed startup isolates before windows and rejects unsafe test flags befor
       ipcMain: { handle: noop },
       BrowserWindow: class { constructor(options) { this.options = options; calls.push(['window']); } showInactive() { calls.push(['inactive']); } show() { calls.push(['show']); } focus() { calls.push(['focus']); } isDestroyed() { return false; } isMinimized() { return false; } },
     };
-    const context = vm.createContext({ require: n => n === 'electron' ? electron : nativeRequire(n), __dirname: path.dirname(main), process: { env, argv: outcome === 'normal-hidden' ? ['electron', '--background'] : [], ppid: parent, platform: 'darwin', getuid: process.getuid, exit: () => { throw Error('TEST_EXIT'); } }, URL, setInterval: () => ({ unref: noop }), console: { error: noop } });
+    const context = vm.createContext({ require: n => n === 'electron' ? electron : n === 'node:os' ? {
+      userInfo: () => ({ homedir: path.join(temp, 'SyntheticOSHome') }), homedir() { throw Error('No environment-derived home lookup'); },
+    } : nativeRequire(n), __dirname: path.dirname(main), process: { env, argv: outcome === 'normal-hidden' ? ['electron', '--background'] : [], ppid: parent, platform: 'darwin', getuid: process.getuid, exit: () => { throw Error('TEST_EXIT'); } }, URL, setInterval: () => ({ unref: noop }), console: { error: noop } });
     const load = () => vm.runInContext(fs.readFileSync(main, 'utf8'), context);
     if (outcome === 'reject') { assert.throws(load, /TEST_EXIT/, label); assert.deepEqual(calls, [], label); continue; }
     load();

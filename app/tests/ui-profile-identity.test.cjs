@@ -15,12 +15,17 @@ function fixture(t) {
 }
 function run(normal, profile, options = {}) {
   const env = options.noFlags ? {} : { NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: '321', NAW_TEST_BUTLER_ENTRY: '1', NAW_TEST_INTEGRATION_HANDOFF: '1' };
+  if (options.homeEnv) env.HOME = options.homeEnv;
   let runtimeProfile = normal;
   const setPaths = [];
-  const context = { fs, path, Object, Number, Boolean, console: { error() {} }, app: {
+  const context = { fs, path, Object, Number, Boolean, console: { error() {} }, os: {
+    userInfo() { options.onUserInfo?.(); if (options.userInfoError) throw Error('Synthetic OS account lookup failure');
+      return { homedir: Object.hasOwn(options, 'osHome') ? options.osHome : path.join(path.dirname(normal), 'SyntheticOSHome') }; },
+    homedir() { throw Error('Environment-derived home must not define the normal reference'); },
+  }, app: {
     getPath(name) { assert.equal(name, 'userData'); if (options.getPathError) throw options.getPathError; return runtimeProfile; },
     setPath(name, value) { assert.equal(name, 'userData'); if (options.pinError && setPaths.length) throw Error('Synthetic pin failure'); setPaths.push(value); runtimeProfile = value; },
-  }, process: { env, ppid: options.parent ?? 321, getuid: options.noUid ? undefined : () => options.owner ?? process.getuid(),
+  }, process: { env, platform: options.platform || 'darwin', ppid: options.parent ?? 321, getuid: options.noUid ? undefined : () => options.owner ?? process.getuid(),
     exit(status) { assert.equal(status, 1); throw Object.assign(Error('isolated-startup-refused'), { code: 'SYNTHETIC_EXIT' }); } } };
   return { ...vm.runInNewContext(bootstrap + '\n({ backgroundTest, butlerEntryEnabled });', context),
     runtimeProfile: context.app.getPath('userData'), setPaths };
@@ -119,4 +124,57 @@ test('a distinct directory with a shared text prefix stays eligible, and pin fai
   const f = fixture(t), sibling = f.normal + '-separate'; fs.mkdirSync(sibling, { mode: 0o700 });
   assert.equal(run(f.normal, sibling).backgroundTest, true);
   assert.throws(() => run(f.normal, f.isolated, { pinError: true }), { code: 'SYNTHETIC_EXIT' });
+});
+
+function osReference(f, create = true) {
+  const home = path.join(f.directory, 'AccountHome'), normal = path.join(home, 'Library', 'Application Support', 'Native Agent Workspace');
+  fs.mkdirSync(create ? normal : home, { recursive: true, mode: 0o700 });
+  return { home, normal };
+}
+
+test('a CLI-moved Electron reference cannot permit the OS account normal profile', t => {
+  const f = fixture(t), account = osReference(f);
+  assert.throws(() => run(f.normal, account.normal, { osHome: account.home }), { code: 'SYNTHETIC_EXIT' });
+});
+
+test('a CLI-moved Electron reference cannot permit a private parent of the OS account normal profile', t => {
+  const f = fixture(t), account = osReference(f);
+  assert.throws(() => run(f.normal, path.dirname(account.normal), { osHome: account.home }), { code: 'SYNTHETIC_EXIT' });
+});
+
+test('a CLI-moved Electron reference cannot permit a private child of the OS account normal profile', t => {
+  const f = fixture(t), account = osReference(f), child = path.join(account.normal, 'PrivateTestChild'); fs.mkdirSync(child, { mode: 0o700 });
+  assert.throws(() => run(f.normal, child, { osHome: account.home }), { code: 'SYNTHETIC_EXIT' });
+});
+
+test('the OS reference uses real same-inode case and Data-volume aliases even when Electron moved elsewhere', t => {
+  const f = fixture(t), account = osReference(f), aliases = realAliases(account.normal);
+  assert.ok(aliases.length > 0);
+  for (const { alias } of aliases) assert.throws(() => run(f.normal, alias, { osHome: account.home }), { code: 'SYNTHETIC_EXIT' });
+});
+
+test('HOME redirection is not the OS account reference, while a genuinely separate private test profile still works', t => {
+  const f = fixture(t), account = osReference(f), homeEnv = path.join(f.directory, 'RedirectedHOME');
+  assert.throws(() => run(f.normal, account.normal, { osHome: account.home, homeEnv }), { code: 'SYNTHETIC_EXIT' });
+  assert.equal(run(f.normal, f.isolated, { osHome: account.home, homeEnv }).backgroundTest, true);
+});
+
+test('an absent OS normal path still excludes its existing private test ancestor', t => {
+  const f = fixture(t), account = osReference(f, false);
+  assert.throws(() => run(f.normal, account.home, { osHome: account.home }), { code: 'SYNTHETIC_EXIT' });
+});
+
+test('unavailable or non-absolute OS account home fails closed only for the macOS test gate', t => {
+  const f = fixture(t);
+  for (const options of [{ userInfoError: true }, { osHome: null }, { osHome: '' }, { osHome: 'relative-home' }])
+    assert.throws(() => run(f.normal, f.isolated, options), { code: 'SYNTHETIC_EXIT' });
+  let calls = 0;
+  assert.equal(run(f.normal, f.isolated, { platform: 'linux', userInfoError: true, onUserInfo: () => calls++ }).backgroundTest, true);
+  assert.equal(calls, 0);
+});
+
+test('ordinary macOS startup never calls the OS account getter or gains a test permission', t => {
+  const f = fixture(t); let calls = 0;
+  const result = run(f.normal, f.isolated, { noFlags: true, userInfoError: true, onUserInfo: () => calls++ });
+  assert.equal(calls, 0); assert.equal(result.backgroundTest, false); assert.equal(result.butlerEntryEnabled, false);
 });
