@@ -3,12 +3,21 @@
 // the app. It takes in the deliveries NAW recorded in spaces, and when the session the person
 // designated as integrator can take a message, it opens one handoff and sends it.
 //
+// When the integrator has answered, it settles the handoff: what the answer says about a merge
+// is checked with git first. Then it tells: each delivery's space gets a record of where the
+// delivery stands, and the person gets one notice per reason.
+//
 // Everything it touches is passed in: the record, who is designated, a fresh look at the
-// sessions, main's head, and the send itself. It calls no model, runs no program, merges
-// nothing and takes no lock. Settling a handoff and telling the person are not here.
+// sessions, main's head, a git reader, the send, the writer of space records and the notice.
+// It calls no model, runs no program, merges nothing and takes no lock.
 // It is not connected to the app yet.
 const { validReady, notSent, NATIVE_DRAFT_KEY } = require('./queue-dispatch.cjs');
 const { roomIds } = require('./collaboration-spaces.cjs');
+
+// How long an answer with merge lines waits for main's head to become readable before it is
+// settled without it (its merges are then held for the person as "main could not be read").
+const HEAD_WAIT_MS = 10 * 60 * 1000;
+const FULL_ID = /^[0-9a-f]{40}$/u;
 
 if (typeof NATIVE_DRAFT_KEY !== 'string') throw Error('The dispatcher no longer names the unsent-prompt refusal');
 // Stands in for main's head while only asking whether a handoff would open; git is read only then.
@@ -24,13 +33,21 @@ class IntegratorEngine {
   //   failure leaves it unknown.
   // - typing(sessionId): told when the send was refused because the person left a prompt unsent
   //   in that session, so the caller leaves the session alone for a while, as after typing.
+  // - reader: the read-only git reader ({ commit, isAncestor, changes }) for checking merges.
+  // - record(fact): writes one delivery's space record, at once or as a promise; it may be asked
+  //   to write the same fact (same key and label) again after a crash and must then write nothing new.
+  // - notify(info): tells the person about one reason ({ reason, count, roomId, itemId, sessionId? }).
   constructor(options) {
     this.handoffs = options.handoffs;
     this.designation = options.designation;
     this.mainHead = options.mainHead;
     this.send = options.send;
     this.typing = options.typing || (() => {});
+    this.reader = options.reader || null;
+    this.record = options.record || (() => {});
+    this.notify = options.notify || (async () => {});
     this.now = options.now || Date.now;
+    this.headWaitMs = options.headWaitMs ?? HEAD_WAIT_MS;
   }
   // The record cannot be read: nothing is taken in or handed out until the person has looked at it.
   unreadable() { return this.handoffs.failed === true; }
@@ -140,6 +157,97 @@ class IntegratorEngine {
     }
   }
 
+  // What the record's plan needs to settle the open handoff, from what the caller sees.
+  settleInput(view, handoff) {
+    let integrator;
+    try { integrator = this.designation(); } catch { integrator = undefined; }
+    const session = (Array.isArray(view?.sessions) ? view.sessions : []).find(candidate => candidate?.id === handoff.integrator.sessionId);
+    return { integrator, session, complete: view?.complete === true, now: view?.now, idleSince: view?.idleSince, settleMs: view?.settleMs, unconfirmedMs: view?.unconfirmedMs };
+  }
+
+  // Settle the open handoff if it can be settled now. An answer that reports merges is checked
+  // with git first; because that takes a moment, the answer is read again on a fresh look and
+  // settled only if it still says the same. Returns { kind: 'settled', status, facts, notify,
+  // install, question, ignored } or { kind: 'none', why }.
+  async settle(view, look) {
+    const handoffs = this.handoffs;
+    const open = handoffs.summary().handoff;
+    if (!open) return none('no-handoff');
+    const action = handoffs.plan(this.settleInput(view, open));
+    if (action.kind !== 'settle') return action;
+    let checked = {};
+    const merges = Object.values(action.results?.results || {}).some(result => result.kind === 'merged' && result.malformed !== true);
+    if (merges) {
+      let mainHead = null;
+      try { mainHead = await this.mainHead(); } catch { /* Unknown: handled just below. */ }
+      if (typeof mainHead !== 'string' || !FULL_ID.test(mainHead)) {
+        // Main's head cannot be read just now. The answer waits a bounded while, counted from the
+        // first time this was seen for this handoff and kept in the record, so a restart does not
+        // begin it again. After that it is settled without git: its merges are held for the
+        // person as "main could not be read" instead of the one place staying taken in silence.
+        const now = this.now();
+        if (now - handoffs.headUnreadSince(open.id, now) < this.headWaitMs) return none('main-unknown');
+        checked = { handoffId: open.id, mainUnreadable: true };
+      } else checked = this.reader ? await handoffs.verify(this.reader, action, mainHead) : {};
+      let fresh = null;
+      try { fresh = await look(); } catch { /* No fresh view: nothing is settled from the older one. */ }
+      if (!fresh) return none('not-ready-now');
+      const again = handoffs.plan(this.settleInput(fresh, open));
+      if (JSON.stringify(again) !== JSON.stringify(action)) return none('changed-while-checking');
+    }
+    const result = handoffs.settle(action, checked, this.now());
+    return { kind: 'settled', handoffId: action.handoffId, ...result };
+  }
+
+  // Tell where things stand: a space record for every delivery whose space does not say it yet,
+  // and one notice for every reason the person has not been told about.
+  // - A space record is written, then marked written. A crash in between writes it again; the
+  //   writer recognises the repeat by its key and label. A space always ends up saying where the
+  //   delivery stands now; a state that was passed through between two tellings is not told.
+  // - A notice is marked as started before it is shown and as done after. A crash in between
+  //   leaves it started: it is not shown again and is reported as unknown.
+  async tell() {
+    const handoffs = this.handoffs, written = [];
+    for (const fact of handoffs.showable()) {
+      try { await this.record(fact); } catch { break; }
+      written.push({ key: fact.key, label: fact.label });
+    }
+    if (written.length) handoffs.markShown(written);
+    const told = [];
+    for (const reason of handoffs.pendingNotices()) {
+      const info = handoffs.noticeInfo(reason);
+      if (!info || !handoffs.reserveNotice(reason).reserved) continue;
+      try { await this.notify(info); } catch { continue; }
+      if (handoffs.confirmNotice(reason).confirmed) told.push(reason);
+    }
+    return { shown: written.length, told, unknown: handoffs.unknownNotices() };
+  }
+
+  // One whole pass, in order: take in, settle what is open, hand out, tell. A record that
+  // cannot be read stops the pass, and the caller is given what the pass did before that, to show
+  // the person. Any other failure of the first three steps still lets the telling happen (a
+  // notice must not wait for an unrelated fault), and is then thrown to the caller.
+  async pass(rooms, view, look) {
+    if (this.unreadable()) return { kind: 'unreadable' };
+    const done = {};
+    let failure = null;
+    try {
+      done.taken = this.intake(rooms);
+      done.settled = await this.settle(view, look);
+      done.handed = await this.handOut(view, look);
+    } catch (error) {
+      if (this.unreadable()) return { kind: 'unreadable', ...done };
+      failure = error;
+    }
+    try { done.told = await this.tell(); }
+    catch (error) {
+      if (this.unreadable()) return { kind: 'unreadable', ...done };
+      failure ||= error;
+    }
+    if (failure) throw Object.assign(failure, { done });
+    return { kind: 'passed', ...done };
+  }
+
   // A designated integrator whose session is here: what was held because that integrator, or an
   // earlier one, was gone may be handed again. This only says whether that is so in the given view.
   releasable(input) {
@@ -149,4 +257,4 @@ class IntegratorEngine {
   }
 }
 
-module.exports = { IntegratorEngine };
+module.exports = { IntegratorEngine, HEAD_WAIT_MS };

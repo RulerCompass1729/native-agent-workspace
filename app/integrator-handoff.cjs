@@ -30,7 +30,7 @@ const OPEN_STATES = ['deliverable', 'held', 'handed'];
 const STATES = [...OPEN_STATES, 'merged', 'returned', 'superseded'];
 // Reasons that exist once for the whole backlog, and those that exist once per subject.
 const GLOBAL_REASONS = ['review-off', 'review-cap', 'checkpoint-invalid', 'merge-unverified', 'send-unconfirmed',
-  'record-missing', 'send-refused', 'no-result', 'no-reply', 'person-intervened', 'held-other', 'backlog-full', 'integrator-unset', 'integrator-in-space'];
+  'record-missing', 'send-refused', 'no-result', 'no-reply', 'person-intervened', 'held-other', 'backlog-full', 'integrator-unset', 'integrator-in-space', 'main-unreadable'];
 const SUBJECT_REASONS = ['lock-held', 'integrator-missing', 'conflict', 'returned-limit', 'installable'];
 const RETURN_LIMIT = 2;       // a branch returned more often than this is the person's to decide, not suggested again
 // The reasons an integrator may write on a HELD line; anything else is kept as "held for another reason".
@@ -50,6 +50,18 @@ const waitingOn = (handoff, key) => Boolean(handoff) && (key === `conflict:${han
 // started but never confirmed (a crash in between) is left unknown and is not sent again.
 const NOTICE_STATES = ['pending', 'reserved', 'done'];
 const REVIEW_STATES = ['off', 'on', 'cap'];
+const SHOWN_LIMIT = 500;
+// What a delivery's space should currently say about it, as one short label; null when there is
+// nothing to say (it waits to be handed out, or a newer delivery replaced it). A space record is
+// written when this label differs from the one last written.
+function showLabel(state, entry) {
+  const handoff = state.handoff;
+  if (entry.state === 'handed' && handoff?.keys.includes(entry.key)) return handoff.status === 'waiting' ? `waiting:${handoff.id}:${handoff.reason}` : `handed:${handoff.id}`;
+  if (entry.state === 'held') return `held:${entry.reason}`;
+  if (entry.state === 'merged') return `merged:${entry.mergedAs}`;
+  if (entry.state === 'returned') return 'returned';
+  return null;
+}
 
 function fail(message) { const error = new Error(message); error.code = 'HANDOFF_STATE'; return error; }
 const CONTROL = /[\u0000-\u001f\u007f\u2028\u2029]/gu;
@@ -81,7 +93,7 @@ function checkEntry(entry) {
       optional(entry.memberId, 100) === null || optional(entry.memberName, 200) === null || optional(entry.spaceName, 200) === null || optional(entry.text, 200) === null ||
       (entry.state === 'held') !== (reasonKey(entry.reason) !== null) || (entry.state !== 'held' && entry.reason !== undefined) ||
       !(entry.closedAt === undefined || Number.isFinite(entry.closedAt) && !OPEN_STATES.includes(entry.state)) ||
-      !(entry.resends === undefined || entry.resends === 1) || optional(entry.note, 200) === null ||
+      !(entry.resends === undefined || entry.resends === 1) || optional(entry.note, 200) === null || optional(entry.shown, SHOWN_LIMIT) === null ||
       (entry.state === 'merged') !== sha(entry.mergedAs) || (entry.state !== 'merged' && entry.mergedAs !== undefined) ||
       !(entry.tests === undefined || Number.isSafeInteger(entry.tests?.passed) && Number.isSafeInteger(entry.tests?.total)) || optional(entry.review, 100) === null) throw fail('Invalid delivery record');
 }
@@ -105,6 +117,7 @@ function checkState(data) {
   if (handoff === null) { if (handed.length) throw fail('A handed delivery has no handoff'); }
   else if (!handoff || typeof handoff !== 'object' || !plain(handoff.id, 100) || !['sent', 'waiting'].includes(handoff.status) || !identity(handoff.integrator) ||
       !sha(handoff.mainHead) || !Number.isFinite(handoff.sentAt) || !(handoff.tag === null || plain(handoff.tag, 200)) ||
+      !(handoff.headUnreadAt === undefined || Number.isFinite(handoff.headUnreadAt)) ||
       (handoff.status === 'waiting') !== (handoff.reason !== undefined) || (handoff.reason !== undefined && reasonKey(handoff.reason) === null) || optional(handoff.question, 200) === null ||
       // A handoff that waits for the person keeps its place even when every delivery in it already has its outcome.
       !Array.isArray(handoff.keys) || !handoff.keys.length && handoff.status !== 'waiting' || new Set(handoff.keys).size !== handoff.keys.length ||
@@ -428,6 +441,21 @@ class IntegrationHandoffs {
   }
 
   plan(input) { this.usable(); return plan(this.state, input); }
+  // Main's head could not be read while this sent handoff's answer waited to be checked. The
+  // first time is kept with the handoff, so the wait for it is bounded across restarts too.
+  headUnreadSince(handoffId, now = Date.now()) {
+    this.usable();
+    const open = this.state.handoff;
+    if (!open || open.id !== handoffId || open.status !== 'sent' || !Number.isFinite(now)) throw fail('No such open handoff');
+    if (Number.isFinite(open.headUnreadAt)) return open.headUnreadAt;
+    const next = this.draft();
+    next.handoff.headUnreadAt = now;
+    this.commit(next);
+    return now;
+  }
+  // What git says about each MERGED line of a planned settlement of the open handoff, asked
+  // through the given reader. Reads the record; changes nothing.
+  async verify(read, action, mainHead) { this.usable(); return verifyResults(read, this.state, action, mainHead); }
 
   // The moment this record began to take in deliveries. Deliveries NAW recorded before it were
   // dealt with by hand and are never handed out. Set once, at the first intake.
@@ -537,6 +565,9 @@ class IntegrationHandoffs {
     let install = null, question = null;
     // The checks count only for the handoff and main head they were made for.
     const bound = Boolean(checked) && checked.handoffId === handoff.id && sha(checked.mainHead);
+    // The caller could not read main's head at all (after waiting for it): that is NAW's own
+    // trouble with git, not a claim that failed, and the person is told so.
+    const unread = Boolean(checked) && checked.handoffId === handoff.id && checked.mainUnreadable === true && !bound;
     if (action.status === 'failed') {
       if (!['send-unconfirmed', 'record-missing', `integrator-missing:${handoff.integrator.sessionId}`].includes(action.reason)) throw fail('Unknown failure');
       next.handoff = null;
@@ -572,7 +603,7 @@ class IntegrationHandoffs {
             entry.state = 'merged'; entry.closedAt = now; entry.mergedAs = verdict.as; entry.tests = result.tests; delete entry.resends;
             if (result.review) entry.review = label(result.review, 100);
             merged += 1; fact(entry, 'merged', { as: verdict.as, tests: result.tests, ...(entry.review ? { review: entry.review } : {}) });
-          } else held(entry, 'merge-unverified');
+          } else held(entry, unread && result.malformed !== true ? 'main-unreadable' : 'merge-unverified');
         } else if (result.kind === 'returned') {
           entry.state = 'returned'; entry.closedAt = now; entry.note = result.reason; delete entry.resends;
           // The redo is a new task only the person or their secretary may add: it is suggested, and after
@@ -670,6 +701,49 @@ class IntegrationHandoffs {
     record.notice = 'done';
     this.commit(next);
     return { confirmed: true };
+  }
+  // What the person is told about one reason: how many deliveries it concerns and where the
+  // first of them was delivered, never their text. A reason a handoff waits on names the
+  // integrator's session, where its question can be read.
+  noticeInfo(reason) {
+    this.usable();
+    if (!this.state.reasons[reason]) return null;
+    const handoff = this.state.handoff, waits = Boolean(handoff) && handoff.status === 'waiting' && handoff.reason === reason;
+    let about = [...(waits ? this.state.ready.filter(entry => handoff.keys.includes(entry.key)) : []), ...this.state.ready.filter(entry => entry.state === 'held' && entry.reason === reason)];
+    // A condition with no deliveries under it concerns what waits to be handed out; a question concerns none.
+    if (!about.length && !waits && !question(reason)) about = this.state.ready.filter(entry => entry.state === 'deliverable');
+    return { reason, count: about.length, roomId: about[0]?.roomId ?? null, itemId: about[0]?.itemId ?? null, ...(waits ? { sessionId: handoff.integrator.sessionId } : {}) };
+  }
+  // The deliveries whose space does not yet say where they stand, with what to say. Writing the
+  // space record and marking it written are two steps (the caller writes, then marks), so a
+  // crash in between writes it once more; the label lets the writer recognise a repeat.
+  showable() {
+    this.usable();
+    const list = [];
+    for (const entry of this.state.ready) {
+      const label = showLabel(this.state, entry);
+      if (label === null || label === entry.shown) continue;
+      const handoff = this.state.handoff, inside = entry.state === 'handed';
+      list.push({ key: entry.key, roomId: entry.roomId, itemId: entry.itemId, branch: entry.branch, commit: entry.commit, label,
+        outcome: inside ? (handoff.status === 'waiting' ? 'waiting' : 'handed') : entry.state,
+        ...(inside ? { handoffId: handoff.id } : {}), ...(inside && handoff.status === 'waiting' ? { reason: handoff.reason } : {}),
+        ...(entry.state === 'held' ? { reason: entry.reason } : {}), ...(entry.state === 'merged' ? { as: entry.mergedAs } : {}),
+        ...(entry.tests ? { tests: { ...entry.tests } } : {}), ...(entry.review ? { review: entry.review } : {}), ...(entry.note ? { note: entry.note } : {}),
+        ...(entry.memberId ? { memberId: entry.memberId } : {}), ...(entry.memberName ? { memberName: entry.memberName } : {}), ...(entry.text ? { text: entry.text } : {}) });
+    }
+    return list;
+  }
+  // The caller wrote these space records. Only a label that is still the delivery's current one is kept.
+  markShown(written) {
+    const next = this.draft();
+    let changed = 0;
+    for (const item of Array.isArray(written) ? written : []) {
+      const entry = next.ready.find(candidate => candidate.key === item?.key);
+      if (!entry || !plain(item.label, SHOWN_LIMIT) || showLabel(next, entry) !== item.label || entry.shown === item.label) continue;
+      entry.shown = item.label; changed += 1;
+    }
+    if (changed) this.commit(next);
+    return { marked: changed };
   }
   // Open reasons the person has not been told about yet (after a restart, for example), and
   // those whose notice was started but never confirmed: a report lists these as unknown.
