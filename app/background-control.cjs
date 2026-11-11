@@ -97,6 +97,12 @@ function validate(value) {
 class ConfirmationRequired extends Error {
   constructor(value) { super('This operation needs the existing human confirmation'); this.confirmation = clone(value); }
 }
+class PreconditionRefused extends Error {
+  constructor(error, reason) {
+    if (!['file-preview-changed', 'invalid-file-path-count'].includes(reason)) throw Error('Invalid file precondition reason');
+    super(error.message); this.reason = reason;
+  }
+}
 function refusalDetails(reason) {
   return { state: 'not-executed', reason, retry: false, ...(reason === 'originating-session-unavailable' ? {
     retryWithNewOperationId: true,
@@ -386,7 +392,7 @@ class BackgroundControl {
   }
   async perform(actor, args, context, valid, approved) {
     const key = this.key(actor), handler = this.handlers.get(args.method);
-      let state, value, error, confirmation, delivery, refusal;
+      let state, value, error, confirmation, delivery, refusal, preconditionError, handlerEntered = false;
       try {
         await valid();
         if (this.closed) throw Error('Background control is closing');
@@ -398,7 +404,13 @@ class BackgroundControl {
           let terminalTarget = null;
           if (action) {
             if (typeof this.confirmation !== 'function' || typeof this.audit !== 'function') throw Error('Human maintenance confirmation or event storage is unavailable');
-            const answer = await dialog(context, 'message', this.confirmation(actor, args, action, context));
+            let options;
+            try { options = this.confirmation(actor, args, action, context); }
+            catch (error) {
+              if (error instanceof PreconditionRefused && !row.handlerStarted) preconditionError = error;
+              throw error;
+            }
+            const answer = await dialog(context, 'message', options);
             if (answer.response !== 1) return { cancelled: true };
             request.maintenanceApproved = true;
             // If the event writer is broken, fail before an approved mutation.
@@ -413,6 +425,7 @@ class BackgroundControl {
               if (terminalReads.has(args.method)) terminalTarget = target;
             }
           }
+          handlerEntered = true;
           if (!terminalTarget) return handler(context, ...args.arguments);
           const result = await handler(context, ...args.arguments), frozen = result === undefined ? undefined : clone(result);
           await context.refresh?.(); await valid();
@@ -423,7 +436,8 @@ class BackgroundControl {
         delivery = await context.delivery?.(args, value, actor, row.guard);
         state = delivery ? delivery.nativeReceived ? 'received' : 'awaiting-native' : 'complete';
       } catch (e) {
-        if (e instanceof ConfirmationRequired && e.confirmation?.kind === 'message') {
+        if (preconditionError && e === preconditionError) { refusal = refusalDetails(e.reason); state = refusal.state; error = e.message.slice(0, 2048); }
+        else if (e instanceof ConfirmationRequired && e.confirmation?.kind === 'message') {
           // Refresh first; the quota decision and pending-row commit below have
           // no await between them. Concurrent actors cannot both take slot128.
           try {
@@ -445,7 +459,7 @@ class BackgroundControl {
       }
       // A prior approval may already have allowed effects. Keep that original
       // operation and its unknown outcome instead of summarizing it as not run.
-      if (refusal && approved) {
+      if (refusal && approved && !preconditionError) {
         refusal = { state: 'unconfirmed', reason: 'follow-up-confirmation-refused', confirmationRefusal: refusal.reason, retry: false };
         state = 'unconfirmed'; error = 'A follow-up confirmation was refused after approval; inspect the original operation and do not repeat it.';
       }
@@ -456,10 +470,13 @@ class BackgroundControl {
         const row = d.records.find(r => r.id === args.operation_id && this.key(r.actor) === key);
         d.views[key + ':' + (args.view_id || 'default')] = clone(context.view);
         delete row.confirmation;
+        // Only a resumable handler needs this marker. A later approval cannot
+        // claim non-execution if an earlier handler may already have had effects.
+        if (handlerEntered && state === 'confirmation-required') row.handlerStarted = true;
         Object.assign(row, { state, finishedAt: this.now(), ...(privateValue ? { readTarget: target, readState: row.readAuthorization ? 'pending' : 'consumed',
           ...(!row.readAuthorization ? { readConsumedAt: this.now() } : {}) } : value === undefined ? {} : { value: clone(value) }),
           ...(delivery ? { delivery } : {}), ...(error ? { error } : {}), ...(confirmation ? { confirmation } : {}) });
-        if (refusal) { Object.assign(row, refusal); if (!approved) compactRefusal(row); }
+        if (refusal) { Object.assign(row, refusal); if (!approved || preconditionError) compactRefusal(row); }
       });
       const result = await this.finishAudit(actor, args.operation_id, context);
       if (result.state === 'confirmation-required' && result.confirmation?.kind === 'message' && !Object.hasOwn(result, 'confirmationNotifiedAt') && this.confirmationPending) {
@@ -505,7 +522,7 @@ class BackgroundControl {
   rows(sessionId) {
     return this.data.records.filter(r => r.actor.id === sessionId).map(r => ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
       name: operation.visibleText(r.actor.name), time: r.at, status: ['running', 'awaiting-native'].includes(r.state) ? 'working' : ['complete', 'received', 'cancelled'].includes(r.state) ? 'complete' : 'error',
-      text: operation.visibleText(`${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`),
+      text: operation.visibleText(`${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', 'not-executed': '未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`),
       backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state,
         confirmation: r.confirmation ? { ...r.confirmation, options: visibleOptions(r.confirmation.options) } : null,
         resultNotice: r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null } }));
@@ -547,4 +564,4 @@ function dialog(context, kind, options, nativeDialog) {
   }
   throw new ConfirmationRequired({ kind, options });
 }
-module.exports = { BackgroundControl, ConfirmationRequired, validate, tool, dialog };
+module.exports = { BackgroundControl, ConfirmationRequired, PreconditionRefused, validate, tool, dialog };

@@ -63,7 +63,13 @@ open/save and runtime executable selection require one explicit path; runtime
 reset keeps its path-free confirmation. Space-file imports require paths, while
 file-ID reads keep the existing member and one-use rules. Missing/consumed export
 tokens ask no futile question. Human windows and the undecided path-read policy
-remain unchanged. Both providers have sixteen pre-confirmation counterexamples;
+remain unchanged. These explicit path/token preconditions now return not-executed
+with a reason and a compact audit-room guard, preserving exact operation-ID
+receipts and duplicate binding. Only typed errors thrown by the maintenance
+confirmation callback qualify, before any handler has run. Handler errors and
+resumptions after possible earlier effects stay unconfirmed; a resumable handler
+records that boundary in its existing pending-row save. Both providers have
+sixteen pre-confirmation counterexamples;
 valid paths still ask before file metadata, reset and space-file reading work.
 
 Non-maintenance background consent fingerprints now project sessions through
