@@ -6,6 +6,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { validateEvent } = require('./butler-policy.cjs');
+const { projectReview } = require('./butler-review-projection.cjs');
+const { agreementSummary } = require('./butler-review-policy.js');
 
 const EVENT_KINDS = ['request', 'queue-empty', 'ready', 'decision', 'failure', 'blocked', 'recovery'];
 const ACTION_KINDS = ['queue', 'open', 'archive', 'question', 'report'];
@@ -16,6 +18,7 @@ const FILE_NAME = 'butler-ledger.jsonl';
 const QUESTION_SEND_CHANNELS = ['notification', 'butler-ask'];
 const QUESTION_METRIC_GAPS = ['source-unavailable', 'write-failed', 'delivery-unconfirmed', 'unattributed',
   'unobserved-send', 'epoch-unavailable', 'unexpected-display'];
+const REVIEW_PROVENANCE = Object.freeze({ kind: 'audit', recordPeriod: 'off', activation: 'off' });
 
 function invalid(message, code = 'BUTLER_LEDGER_INVALID') {
   return Object.assign(new Error(message), { code });
@@ -128,7 +131,7 @@ function initialState() {
   return { sequence: 0, eventSequence: 0, events: [], eventIndex: new Map(), processed: new Set(),
     batches: new Map(), activeBatchId: null, actions: new Map(), questions: new Map(), questionHead: new Map(),
     deliveries: new Map(), reports: new Map(), reported: new Set(), attempts: new Map(), suspended: new Map(), quarantined: new Map(), quarantinedEvents: new Set(), sourceStates: new Map(),
-    questionMetricEpochs: new Map(), questionMetricGaps: [], questionSends: new Map() };
+    questionMetricEpochs: new Map(), questionMetricGaps: [], questionSends: new Map(), reviews: new Map() };
 }
 function pending(state) { return state.events.filter(event => !state.processed.has(event.eventId) && !state.quarantinedEvents.has(event.eventId)); }
 function cursor(state, covered) {
@@ -309,6 +312,59 @@ function questionMetrics(state, { afterSequence = 0, throughSequence = state.seq
     duplicateQuestionCandidatesBlocked, suspendedQuestionCandidates, unobservedDecisionSources, unobservedLogicalDeliveries,
     uncertainBaselineQuestions: uncertainBaseline.size, coverage: unavailable ? 'unavailable' : complete ? 'complete' : 'incomplete',
     repeatedQuestions: complete ? knownRepeatedSends : null };
+}
+function snapshotState(state) {
+  return { version: 1, sequence: state.sequence, events: state.events, pendingEvents: pending(state), batches: [...state.batches.values()],
+    activeBatch: state.activeBatchId ? state.batches.get(state.activeBatchId) : null,
+    actions: [...state.actions.values()], questions: [...state.questions.values()], deliveries: [...state.deliveries.values()],
+    reports: [...state.reports.values()], attempts: [...state.attempts.values()], suspended: [...state.suspended.values()],
+    quarantined: [...state.quarantined.values()], sourceStates: [...state.sourceStates.values()],
+    questionSends: [...state.questionSends.values()], questionMetricEpochs: [...state.questionMetricEpochs.values()],
+    questionMetricGaps: state.questionMetricGaps, reviews: [...state.reviews.values()],
+    cursors: { processed: cursor(state, state.processed), reported: cursor(state, state.reported) } };
+}
+function reviewContent(value) {
+  return { projectionVersion: value.projectionVersion, window: value.window, provenance: value.provenance,
+    frozen: value.frozen, questionMetrics: value.questionMetrics };
+}
+function reviewSummary(frozen, confirmation) {
+  const groups = new Map(), candidates = new Set();
+  for (const row of frozen.rows) {
+    if (row.suspended) { candidates.add(row.candidateId); continue; }
+    groups.set(row.suggestionId, (groups.get(row.suggestionId) ?? true) && row.assessable === true);
+  }
+  const marked = new Set(confirmation?.disagreedSuggestionIds || []);
+  let agreedSuggestions = 0, disagreedSuggestions = 0, unableSuggestions = 0, pendingSuggestions = 0;
+  for (const [suggestionId, assessable] of groups) {
+    if (!assessable) unableSuggestions++;
+    else if (!confirmation) pendingSuggestions++;
+    else if (marked.has(suggestionId)) disagreedSuggestions++;
+    else agreedSuggestions++;
+  }
+  return { distinctSuggestions: groups.size, agreedSuggestions, disagreedSuggestions, unableSuggestions, pendingSuggestions,
+    markedSuggestions: marked.size, suspendedCandidates: candidates.size, disagreedCandidates: confirmation?.disagreedCandidateIds.length || 0,
+    ...agreementSummary({ distinctSuggestions: groups.size, agreedSuggestions, confirmed: confirmation !== null }) };
+}
+function reviewRequest(value, review, includesId = false) {
+  const keys = ['contentDigest', 'expectedRevision', 'disagreedSuggestionIds', 'disagreedCandidateIds', 'allRead'];
+  object(value, [...keys, ...(includesId ? ['reviewId'] : [])], keys);
+  requireValue(value.contentDigest === review.contentDigest, 'Frozen review content changed', 'BUTLER_REVIEW_DIGEST');
+  requireValue(safeInteger(value.expectedRevision) && value.allRead === true, 'An explicit complete review is required', 'BUTLER_REVIEW_INVALID');
+  const allowedSuggestions = new Set(review.frozen.rows.filter(row => !row.suspended).map(row => row.suggestionId));
+  const allowedCandidates = new Set(review.frozen.rows.filter(row => row.suspended).map(row => row.candidateId));
+  const marks = (values, allowed) => {
+    requireValue(Array.isArray(values) && values.length <= allowed.size, 'Invalid review marks', 'BUTLER_REVIEW_INVALID');
+    const result = values.map(value => idString(value));
+    requireValue(new Set(result).size === result.length && result.every(value => allowed.has(value)), 'Review mark is outside the frozen set', 'BUTLER_REVIEW_INVALID');
+    return result.sort();
+  };
+  return { contentDigest: value.contentDigest, expectedRevision: value.expectedRevision,
+    disagreedSuggestionIds: marks(value.disagreedSuggestionIds, allowedSuggestions),
+    disagreedCandidateIds: marks(value.disagreedCandidateIds, allowedCandidates), allRead: true };
+}
+function confirmationRequest(confirmation) {
+  return { contentDigest: confirmation.contentDigest, expectedRevision: confirmation.expectedRevision,
+    disagreedSuggestionIds: confirmation.disagreedSuggestionIds, disagreedCandidateIds: confirmation.disagreedCandidateIds, allRead: confirmation.allRead };
 }
 const CANDIDATE_ERRORS = new Set(['BUTLER_ACTION_SOURCE', 'BUTLER_UNKNOWN_EVIDENCE', 'BUTLER_QUESTION_SOURCE', 'BUTLER_QUESTION_EVIDENCE']);
 function suspendedAction(input, index, reason, batchSources) {
@@ -568,6 +624,43 @@ function reduce(state, record) {
         !(send.status === 'failed' && data.status === 'unknown'), 'Invalid question send receipt', 'BUTLER_QUESTION_SEND_STATE');
       send.status = data.status;
       send.acknowledgements.push({ status: data.status, physicalSeq: record.sequence, time });
+      break;
+    }
+    case 'review-freeze': {
+      object(data, ['reviewId', 'projectionVersion', 'window', 'provenance', 'frozen', 'questionMetrics', 'contentDigest', 'metricEpochId'],
+        ['reviewId', 'projectionVersion', 'window', 'provenance', 'frozen', 'questionMetrics', 'contentDigest', 'metricEpochId']);
+      const reviewId = idString(data.reviewId);
+      requireValue(!state.reviews.has(reviewId) && data.projectionVersion === 1, 'Invalid frozen review identity or version', 'BUTLER_REVIEW_INVALID');
+      object(data.window, ['afterSequence', 'throughSequence'], ['afterSequence', 'throughSequence']);
+      requireValue(safeInteger(data.window.afterSequence) && data.window.afterSequence <= state.sequence && data.window.throughSequence === state.sequence,
+        'Review must freeze the exact current head', 'BUTLER_REVIEW_INVALID');
+      requireValue(canonical(data.provenance) === canonical(REVIEW_PROVENANCE), 'Review cannot certify a working-day trial', 'BUTLER_REVIEW_INVALID');
+      if (data.metricEpochId !== null) {
+        const epoch = state.questionMetricEpochs.get(idString(data.metricEpochId));
+        requireValue(epoch?.status === 'open' && !state.questionMetricGaps.some(gap => gap.epochId === epoch.epochId),
+          'Question metric prefix cannot be certified', 'BUTLER_QUESTION_METRIC_EPOCH');
+        // The person-triggered freeze and its writer's prefix certificate share
+        // one append. A failed/oversized freeze cannot leave a false receipt.
+        epoch.checkpoints.push({ throughSequence: state.sequence, physicalSeq: record.sequence, time });
+      }
+      const frozen = projectReview(snapshotState(state), { afterSequence: data.window.afterSequence, maxBytes: MAX_RECORD_BYTES });
+      const metrics = questionMetrics(state, data.window, { ownedEpoch: null, ownedGap: false, failed: false });
+      requireValue(canonical(data.frozen) === canonical(frozen) && canonical(data.questionMetrics) === canonical(metrics),
+        'Frozen review differs from its journal prefix', 'BUTLER_REVIEW_INVALID');
+      requireValue(data.contentDigest === stableId('review-content', reviewContent(data)), 'Invalid frozen review digest', 'BUTLER_REVIEW_DIGEST');
+      state.reviews.set(reviewId, { reviewId, ...clone(reviewContent(data)), contentDigest: data.contentDigest,
+        createdAt: time, physicalSeq: record.sequence, revision: 0, confirmation: null, confirmations: [], summary: reviewSummary(frozen, null) });
+      break;
+    }
+    case 'review-confirm': {
+      const review = state.reviews.get(idString(data.reviewId));
+      requireValue(review, 'Unknown frozen review', 'BUTLER_REVIEW_NOT_FOUND');
+      const input = reviewRequest(data, review, true);
+      requireValue(input.expectedRevision === review.revision && review.revision < Number.MAX_SAFE_INTEGER,
+        'Review confirmation is stale', 'BUTLER_REVIEW_REVISION');
+      const confirmation = { ...input, revision: review.revision + 1, physicalSeq: record.sequence, confirmedAt: time };
+      const summary = reviewSummary(review.frozen, confirmation);
+      review.revision = confirmation.revision; review.confirmation = confirmation; review.confirmations.push(confirmation); review.summary = summary;
       break;
     }
     default: throw invalid('Unknown ledger record type');
@@ -878,14 +971,62 @@ class ButlerLedger {
     object(window, ['afterSequence', 'throughSequence']);
     return questionMetrics(this.state, window, { ownedEpoch: this.#ownedQuestionMetricEpoch, ownedGap: this.#questionMetricGap, failed: this.failed });
   }
+  #reviewPerson(person) {
+    let authorized = false;
+    try { authorized = this.#authorizePerson(person) === true; } catch {}
+    requireValue(authorized, 'Only a verified person can review butler records', 'BUTLER_PERSON_ONLY');
+  }
+  freezeReview(options = {}, person) {
+    this.#reviewPerson(person); this.healthy(); object(options, ['afterSequence']);
+    const afterSequence = options.afterSequence === undefined ? 0 : options.afterSequence;
+    const latest = [...this.state.reviews.values()].at(-1);
+    if (latest?.window.afterSequence === afterSequence) {
+      // Audit records cannot change business evidence or display receipts. Reuse
+      // the saved view only when they account for the complete journal suffix.
+      // Counting all reviews also handles a late confirmation of an older view.
+      let auditRecords = 0;
+      for (const review of this.state.reviews.values()) {
+        if (review.physicalSeq > latest.window.throughSequence) auditRecords++;
+        for (const confirmation of review.confirmations) {
+          if (confirmation.physicalSeq > latest.window.throughSequence) auditRecords++;
+        }
+      }
+      if (auditRecords === this.state.sequence - latest.window.throughSequence) return clone(latest);
+    }
+    const window = { afterSequence, throughSequence: this.state.sequence };
+    const frozen = projectReview(snapshotState(this.state), { afterSequence, maxBytes: MAX_RECORD_BYTES });
+    const questionMetrics = this.questionSendMetrics(window);
+    const epoch = this.state.questionMetricEpochs.get(this.#ownedQuestionMetricEpoch);
+    const metricEpochId = epoch?.status === 'open' && !this.#questionMetricGap &&
+      !this.state.questionMetricGaps.some(gap => gap.epochId === epoch.epochId) ? epoch.epochId : null;
+    const content = { projectionVersion: frozen.projectionVersion, window, provenance: { ...REVIEW_PROVENANCE }, frozen, questionMetrics };
+    const reviewId = idString('review:' + this.id()), contentDigest = stableId('review-content', content);
+    this.#append('review-freeze', { reviewId, ...content, contentDigest, metricEpochId });
+    return clone(this.state.reviews.get(reviewId));
+  }
+  review(reviewId, person) {
+    this.#reviewPerson(person); this.healthy(); reviewId = idString(reviewId);
+    const review = this.state.reviews.get(reviewId);
+    requireValue(review, 'Unknown frozen review', 'BUTLER_REVIEW_NOT_FOUND');
+    return clone(review);
+  }
+  latestReview(person) {
+    this.#reviewPerson(person); this.healthy();
+    return clone([...this.state.reviews.values()].at(-1) || null);
+  }
+  confirmReview(reviewId, value, person) {
+    this.#reviewPerson(person); this.healthy(); reviewId = idString(reviewId);
+    const review = this.state.reviews.get(reviewId);
+    requireValue(review, 'Unknown frozen review', 'BUTLER_REVIEW_NOT_FOUND');
+    const input = reviewRequest(value, review);
+    if (review.confirmations.some(confirmation => canonical(confirmationRequest(confirmation)) === canonical(input))) return clone(review);
+    requireValue(input.expectedRevision === review.revision, 'Review confirmation is stale', 'BUTLER_REVIEW_REVISION');
+    this.#append('review-confirm', { reviewId, ...input });
+    return clone(this.state.reviews.get(reviewId));
+  }
   snapshot() {
     this.healthy();
-    return clone({ version: 1, sequence: this.state.sequence, events: this.state.events, pendingEvents: pending(this.state), batches: [...this.state.batches.values()],
-      activeBatch: this.state.activeBatchId ? this.state.batches.get(this.state.activeBatchId) : null,
-      actions: [...this.state.actions.values()], questions: [...this.state.questions.values()], deliveries: [...this.state.deliveries.values()],
-      reports: [...this.state.reports.values()], attempts: [...this.state.attempts.values()], suspended: [...this.state.suspended.values()], quarantined: [...this.state.quarantined.values()], sourceStates: [...this.state.sourceStates.values()],
-      questionSends: [...this.state.questionSends.values()], questionMetricEpochs: [...this.state.questionMetricEpochs.values()], questionMetricGaps: this.state.questionMetricGaps,
-      cursors: { processed: cursor(this.state, this.state.processed), reported: cursor(this.state, this.state.reported) } });
+    return clone(snapshotState(this.state));
   }
 }
 module.exports = { ButlerLedger };

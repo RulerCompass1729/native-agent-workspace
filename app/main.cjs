@@ -18,6 +18,7 @@ const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary } = require('./queue-secretary.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
+const { ButlerLedger } = require('./butler-ledger.cjs');
 const { showQuestionNotification } = require('./butler-question-notification.cjs');
 const { createDedicatedBackend } = require('./butler-backend-host.cjs');
 const { CreationDefaults } = require('./creation-defaults.cjs');
@@ -784,6 +785,11 @@ function runningRelays(client) {
   for (const entry of client.entries) for (const room of [entry.state.room, ...(Array.isArray(entry.state.rooms) ? entry.state.rooms : [])]) if (room?.run?.status === 'running') for (const id of room.run.ids || []) ids.add(id);
   return ids;
 }
+function isCurrentHumanContext(context) {
+  try { return Boolean(context && !context.background && !context.win.isDestroyed() &&
+    windows.get(context.win.webContents.id) === context); }
+  catch { return false; }
+}
 function showDialog(c, kind, options) {
   const method = { message: 'showMessageBox', open: 'showOpenDialog', save: 'showSaveDialog' }[kind];
   return background.dialog(c, kind, options, (win, value) => dialog[method](win, value));
@@ -1023,7 +1029,8 @@ async function boot() {
     // One writer owns the display-measurement epoch. It neither starts a model
     // nor opens the separate working-day recording period.
     if (!butlerIngress) {
-      butlerIngress = new ButlerIngress(dataDir, { roomState });
+      const ledger = new ButlerLedger(dataDir, { authorizePerson: isCurrentHumanContext });
+      butlerIngress = new ButlerIngress(dataDir, { roomState, ledger });
       butlerIngress.ledger.openQuestionMetricEpoch(randomUUID());
     } else butlerIngress.roomState = roomState;
     butlerIngress.recover();
@@ -1304,6 +1311,38 @@ async function boot() {
   });
   register('nativeHistory', (c, options) => c.client.call('nativeHistory', options));
   register('importHistory', (c, nativeId, options) => c.client.call('importHistory', nativeId, options));
+  register('butlerReview', (c, action, ...args) => {
+    if (!isCurrentHumanContext(c)) throw Object.assign(Error('Only the current person window can review butler records'), { code: 'BUTLER_PERSON_ONLY' });
+    const invalid = () => { throw Object.assign(Error('Invalid butler review request'), { code: 'BUTLER_REVIEW_REQUEST' }); };
+    const token = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\s\u0000-\u001f\u007f]/u.test(value);
+    if (!['availability', 'latest', 'read', 'freeze', 'confirm'].includes(action)) invalid();
+    if (['availability', 'latest', 'freeze'].includes(action)) { if (args.length) invalid(); }
+    else if (action === 'read') { if (args.length !== 1 || !token(args[0])) invalid(); }
+    else {
+      const value = args[0], fields = ['reviewId', 'contentDigest', 'expectedRevision', 'disagreedSuggestionIds', 'disagreedCandidateIds', 'allRead'];
+      if (args.length !== 1 || !value || typeof value !== 'object' || Array.isArray(value) ||
+          Object.keys(value).length !== fields.length || fields.some(key => !Object.hasOwn(value, key)) ||
+          Object.keys(value).some(key => !fields.includes(key)) || !token(value.reviewId) || !token(value.contentDigest) ||
+          !Number.isSafeInteger(value.expectedRevision) || value.expectedRevision < 0 || value.allRead !== true ||
+          !Array.isArray(value.disagreedSuggestionIds) || !value.disagreedSuggestionIds.every(token) ||
+          !Array.isArray(value.disagreedCandidateIds) || !value.disagreedCandidateIds.every(token)) invalid();
+    }
+    const ledger = butlerIngress?.ledger;
+    let available = Boolean(ledger && ['healthy', 'freezeReview', 'latestReview', 'review', 'confirmReview'].every(name => typeof ledger[name] === 'function'));
+    if (action === 'availability') {
+      if (available) { try { ledger.healthy(); } catch { available = false; } }
+      return { available, activation: 'off', recordPeriod: 'off' };
+    }
+    if (!available) throw Object.assign(Error('Butler review storage is unavailable'), { code: 'BUTLER_REVIEW_UNAVAILABLE' });
+    if (action === 'latest') return ledger.latestReview(c);
+    if (action === 'read') return ledger.review(args[0], c);
+    if (action === 'freeze') return ledger.freezeReview({ afterSequence: 0 }, c);
+    const { reviewId, ...request } = args[0];
+    return ledger.confirmReview(reviewId, request, c);
+  });
+  // Review records belong only to the person's renderer IPC, never the agent
+  // catalog/invoke map. The handler still checks every direct IPC caller.
+  applicationHandlers.delete('butlerReview');
   register('queueSecretary', async (c, id) => {
     if (c.background) throw uiError('error.queue.personOnly');
     if (id === null) queueSecretary.set(null);

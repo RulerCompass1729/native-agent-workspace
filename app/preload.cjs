@@ -35,6 +35,7 @@ function apiFailure(result) {
 }
 api.createDefaults = async () => { const result = await ipcRenderer.invoke('workspace:createDefaults'); if (!result.ok) throw apiFailure(result); return result.value; };
 api.gitWorktreePreview = async (...args) => { const result = await ipcRenderer.invoke('workspace:gitWorktreePreview', ...args); if (!result.ok) throw apiFailure(result); return result.value; };
+api.butlerReview = async (...args) => { const result = await ipcRenderer.invoke('workspace:butlerReview', ...args); if (!result.ok) throw apiFailure(result); return result.value; };
 for (const name of ['mobilePairing', 'mobileRevoke']) {
   api[name] = async (...args) => { const result = await ipcRenderer.invoke(`workspace:${name}`, ...args); if (!result.ok) throw apiFailure(result); return result.value; };
 }
