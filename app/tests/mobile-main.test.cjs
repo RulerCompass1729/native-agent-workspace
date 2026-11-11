@@ -38,7 +38,7 @@ function fixture() {
   }
   // Main state the current register() and before-quit read; no outbox broker in this fixture.
   const context = vm.createContext({ primary: true, quitting: false, dataDir: '/synthetic/profile', Error, AbortController, now: 1000, setTimeout(fn, ms) { const id = ++timerSeq; timers.set(id, { fn, ms }); return id; }, clearTimeout(id) { timers.delete(id); },
-    applicationHandlers: new Map(), uiLocale: require('../ui-locale.js'), uiError: require('../ui-errors.cjs').uiError, butlerBackend: null, butlerClosing: false, outboxClosing: false, outboxQuitFailed: false, outboxBroker: null, backgroundControl: null,
+    applicationHandlers: new Map(), uiLocale: require('../ui-locale.js'), uiError: require('../ui-errors.cjs').uiError, butlerBackend: null, butlerClosing: false, butlerQuitAttempted: false, outboxClosing: false, outboxQuitFailed: false, outboxBroker: null, backgroundControl: null,
     require(name) {
       if (name === './mobile-broker.cjs') return { MobileBroker: Broker };
       if (name === './mobile-http.cjs') return { createMobileHandler(value) { calls.push({ method: 'fixedHandler', origin: value.origin, actor: value.actor }); return () => {}; } };

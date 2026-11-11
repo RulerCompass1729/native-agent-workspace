@@ -23,7 +23,7 @@ class ButlerDshDriver {
     if (fixtureEndpoint !== null && (typeof fixtureEndpoint !== 'string' || !/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(fixtureEndpoint) || Number(new URL(fixtureEndpoint).port) > 65535)) throw failure('endpoint-invalid');
     this.fixtureEndpoint = fixtureEndpoint;
     this.nativeId = null; this.pending = new Map(); this.starting = null; this.active = false;
-    this.closing = null; this.lastError = null; this.generation = 0;
+    this.closing = null; this.lastError = null; this.generation = 0; this.shuttingDown = false;
   }
   readOwner() {
     let fd;
@@ -61,7 +61,9 @@ class ButlerDshDriver {
     }
     return { status: 'absent' };
   }
+  beginShutdown() { this.shuttingDown = true; ++this.generation; }
   start(value) {
+    if (this.shuttingDown) return Promise.reject(failure('closing'));
     if (this.starting || this.closing) return Promise.reject(failure('backend-busy'));
     this.starting = this.launch(value, ++this.generation).finally(() => { this.starting = null; });
     return this.starting;

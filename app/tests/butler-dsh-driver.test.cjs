@@ -69,3 +69,15 @@ test('close cancels a start waiting for ownership recovery before it can spawn',
   release({ status: 'absent' }); await result;
   assert.equal(spawns, 0); assert.equal(fs.existsSync(f.driver.file), false);
 });
+
+test('desktop shutdown permanently refuses starts, including after a close receipt', async t => {
+  const f = fixture(t), runner = require('../butler-runner.cjs');
+  let probes = 0;
+  t.mock.method(runner, 'dshCredentialPresent', () => { probes++; return true; });
+  assert.equal(typeof f.driver.beginShutdown, 'function');
+  f.driver.beginShutdown();
+  await assert.rejects(f.driver.start(f.proof), error => error.code === 'closing');
+  await f.driver.close();
+  await assert.rejects(f.driver.start(f.proof), error => error.code === 'closing');
+  assert.equal(probes, 0); assert.equal(f.driver.child, null);
+});

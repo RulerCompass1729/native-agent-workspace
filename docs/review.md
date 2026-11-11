@@ -8987,3 +8987,36 @@ notes: an immediate dispose rejection (rather than a hang) can bypass later MCP
 disposal, and an unkillable owned process can leave close pending; production MCP
 connection/qualification must cover these before activation. No GUI or activation
 completion is claimed.
+
+
+### B4 preactivation: desktop quit deadline, feedback and start seal (2026-11-11)
+
+The earlier host deadline is retained. Desktop waiting now has its own five-second
+limit; a failed or missing close receipt clears the wait, reports uncertainty and
+continues through the existing outbox/view-save shutdown checks. A synchronous
+per-driver seal rejects starts throughout shutdown, including the gap after a
+receipt. Dormant drivers add no wait or notice. Four old-code failures cover the
+missing deadline, silent failure and startup seal. Fixed-key notices go through
+the existing toast and OS surfaces in Chinese/English; a hidden isolated GUI
+witness verified both toasts through the real preload, with no focus or model use.
+
+The actual before-quit source also ran against a real ButlerDshDriver and an
+isolated DSH host/MCP: SIGSTOP exercised close()/stop() and the owned group kill.
+The test inspected the active MCP server's PPID/PGID from the parent; both match
+the host PID, whose own PGID equals its PID. A transient startup MCP had already
+exited before inspection and is recorded as such. Source confirms rc.2
+mcp-client supplies stdio command/args/env/cwd and the pinned MCP transport's
+cross-spawn options contain no detached flag. The fixture records no credentials.
+
+Repeated mobile revocation changes its invalidation generation but keeps enabled
+false, pairing/device null and old cookies/tickets rejected. It only disconnects
+that broker; a regression covers two revocations. Re-saving views on the later
+quit preserves edits, and a failed save still cancels before any start seal.
+All activation/qualification defaults remain off; no daily app is changed.
+
+Final verification: 88 targeted checks and 5253/5253 full checks, no skips.
+Independent reviewer 6aa80590-93f5-4a53-b2ad-2facea317f7e approved this scope
+conditional on a zero-failure final suite and staging the new notice test; both
+conditions were checked before commit. The five-second cap is only the dedicated
+butler wait, not the existing outbox cleanup. A later cancelled quit retains the
+start seal until relaunch, as requested.

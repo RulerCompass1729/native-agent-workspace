@@ -68,7 +68,14 @@ children. The isolated launcher checks the actual process-group ID before exec;
 a host without that proof refuses startup. This deadline still applies after the
 desktop dies. Desktop quit waits for this dedicated driver to stop; it preserves
 ordinary native sessions. Closing also cancels a start waiting on recovery, so a
-late startup cannot escape shutdown. `close()` is idempotent and
+late startup cannot escape shutdown. Once desktop quit passes view-save validation,
+the driver synchronously refuses all subsequent starts, even after a close receipt.
+The desktop waits at most five seconds for this dedicated close. A missing or
+negative receipt shows an unconfirmed-shutdown notice and continues quit; it never
+claims cleanup succeeded or removes an unconfirmed owner record. Late receipts do
+not schedule another quit. Notices use the existing in-window toast and OS
+notification channels in the selected language. With no running/pending butler,
+quit adds no asynchronous wait or notice. `close()` is idempotent and
 returns a receipt; unknown/changed ownership is preserved and reported as
 `cleanupConfirmed: false`. A crash before a trustworthy owner identity was saved
 requires manual identity reconciliation; elapsed time never authorizes takeover.
