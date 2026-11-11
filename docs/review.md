@@ -9023,3 +9023,147 @@ Targeted checks: 18/18; final full suite: 5117/5117, no skips. Independent
 review 3a61fbda-f4a6-4bd1-ae7d-c3c5abc40c84 approved after reading the raw
 red/green and packaged-runtime evidence. Remaining input-size/token-budget work
 is explicitly a separate preactivation item; this checkpoint does not close it.
+
+## Butler user entry: renderer part behind a closed switch (2026-11-11)
+
+Scope: the person-facing entry of the butler, renderer only. One sidebar row above
+"new session" and one dialog (`app/renderer/butler-entry.js`), drawn by a pure
+function over a view the main process gives a person window
+(`app/butler-entry-view.js`). The switch is closed: no main-process code puts an
+`entry` into the window state's `butler` field and the preload exposes no
+`butler` call, so no window shows the row and no action can be reached. A unit
+test checks the two places where they would be added today (the `main.cjs` line
+that builds the field, and an `api.butler =` assignment in the preload); whoever
+opens the switch changes that test on purpose. No
+main, preload, daemon or core file changed. No model call, no DeepSeek contact,
+no permission gate changed.
+
+Basis (the person's approved sentences): the butler is the only part of NAW that
+calls a model, "独立进程、单独计量、看得见、能关、默认是空的"; it can read queue
+text and delivery records of every space and never session conversations;
+designating or revoking it is the person's alone.
+
+Prototype and stand-in review (before implementation): a prototype outside the
+product, every screen built from snapshots of the real core modules, went
+through four looks by an independent session acting as the user
+(`APPROVE_WITH_CHANGES` three times, then `APPROVE`). Private evidence:
+`.local/evidence/butler-entry-20261111/standin/`.
+
+Partner answers that changed the design: no activation switch exists in the
+core; `Backend.ready` is not a running model; the record period is off; no
+shared daily-usage readout exists and the renderer must not recompute the
+budget; a recheck is presence-only. So the entry shows "ready, record period not
+started" instead of "running", shows "today's usage is not verified" when the
+main process gives no total, and offers only actions the main process names.
+
+Independent review of the implementation, session
+`21c88395-5e70-456e-9023-39c480d6ea46` (Read, Grep, Glob only; tool inventory
+verified; worktree fingerprint unchanged after each invocation):
+
+- First verdict `APPROVE_WITH_CHANGES`; nothing blocked delivery behind the
+  closed switch. Findings and what was done:
+  - R1, the confirmation was not bound to the call. The designate call now
+    carries what the page stated (profile, provider, model, limit, day boundary,
+    whether it would start). Refusing a mismatch is the main process's side and
+    is not built: open, owner core.
+  - R2, "checks passed" was shown when `startable` was merely not false. Ready
+    now requires `startable === true`.
+  - R3, an "off / turn on" vocabulary the core does not have. Removed from the
+    view contract, the actions, the states and the catalog.
+  - S1, an amount could be shown lower than it is. What was spent now rounds up
+    at the fourth decimal; the reminder line rounds down.
+  - S2, a confirmation whose action stops being offered did nothing silently.
+    The person is now taken back.
+  - Missing fact: nobody had compared the "sent to DeepSeek" sentence with the
+    core. What the core can put before the model also includes the person's
+    answers to the butler's questions, failure and block reasons, and the
+    status, times and internal ids of the records it reads. The sentence now
+    lists them, a test compares it with the real shapes the core returns, and
+    row V20 of 「与愿景的张力」 asks the person.
+- Delta verdict `APPROVE`, on condition that the full suite is run once more on
+  the tree that is committed (done, see below). Suggestions taken: the line
+  never shown higher than it is; block reasons named; the shape test runs
+  `buildInput` instead of matching source text. Not taken: an extra guard in
+  `run()` for a designate call without its confirmation, because no path
+  reaches it and no test could exercise it.
+- Second delta (those suggestions and the two public documents): `APPROVE`.
+  Its three wording points on the documents are applied.
+- Rebase onto main `812c090`, which had gained the core's shared usage reading
+  (`app/butler-usage.cjs`) and its one read capability
+  (`app/butler-business.cjs`) with an index-only default request. The shape
+  test failed on the new base as intended. Adapted: the view now takes the
+  shared reading as `usage` instead of a shape of its own (sums that leave
+  runs out are shown as lower bounds, an unreadable reading as "not verified");
+  the sentence adds branch names, commit ids and times; the shape test runs
+  both `buildInput` and the real read capability on a scratch room state. The
+  two tension rows were renumbered V19 and V20 and reworded to quote only what
+  this document already publishes. Reviewer verdict on this adaptation:
+  `APPROVE` (third delta, same session), with the closed-switch conclusion
+  confirmed on this main. Its suggestions taken: the usage line carries the
+  reading's own UTC day instead of saying "today", and the count of runs with
+  incomplete usage is worded as a lower bound. Not taken: a failed delivery in
+  the shape test, because such a row needs the ingress binding and its fields
+  are a subset of a ready row's today; do it when the core changes delivery
+  rows. Passed on to the core's owner: hand the entry a reading for the current
+  UTC day.
+- Later rebases, onto main `8274350` and then `bdcc1ed`, only placed this
+  section after main's new ones; no other file of the change differs from what
+  the third delta saw.
+- Fourth delta, asked for by the integrator: rows V19 and V20 against the
+  private record of the person's decisions, clause by clause. Verdict
+  `APPROVE_WITH_CHANGES`: deliver the reworded rows, not the first version
+  renumbered (that version carried a wrong date, presented a sentence of the
+  design record as the person's quote, would have published two decisions this
+  document does not publish, and named member states, which the default request
+  no longer carries). Its three exact wording changes are applied: V19 says the
+  line's name and the core's stopping disagree, and ties the choice to V16
+  without naming an amount; V20 offers "name what is not to be sent" instead of
+  cutting down to the read sentence, and says the butler does not run rather
+  than that nothing is sent.
+- Required by the integrator's document reviewer (`1add213a`,
+  `CHANGES_REQUIRED` on the two rows as of `c3db79e`): the rows described the
+  code correctly but left out decisions the person had already made, so the
+  questions started from the wrong baseline. Applied with the wording the
+  integrator gave: V19 now cites the person's 2026-11-10 20:51 agreement to a
+  daily "提醒线" of USD 2 per UTC day and the V12 "stop at the cap" rule that
+  V16 keeps in force; the line near the top of the section and V16 no longer
+  say that no amount was approved; V20 now starts from the 2026-11-09 consent
+  record and the 2026-11-10 decisions and names only what goes beyond them.
+  These quotes of the person's decisions were not in this document before; the
+  integrator placed them, and the earlier fourth-delta advice to keep them out
+  until the person authorises their publication is superseded by that
+  instruction, to be confirmed with the person before any push. Deviations from
+  the given wording, for that reviewer to check: "两处" became "三处"; the
+  clause "和 V16 一起定（…本行不写金额）" was removed because the row now names
+  the amount; V20's last option replaces the fourth-delta wording; the optional
+  sentence on the core's other protective refusals and two evidence references
+  were added.
+
+Author-run evidence on the committed tree, no model call: the two new test
+files pass 21 of 21; the full suite passes with zero failures or skips (count in
+the commit message); 36 deliberate faults in the two modules are each caught by
+those tests; the hidden real-Electron check `scripts/test-butler-entry.cjs`
+passes: with the switch closed the row takes no room, the sidebar says nothing
+about a butler and the window has no butler call; with a view handed in by the
+script (no main-process code gives one) the product's own module, stylesheet and
+catalog draw the whole task and eight further states in both languages at 1280
+and at 860 wide (sidebar as a rail), nothing clipped, no dialog scrolling
+inside, actions on one line. Private evidence:
+`.local/evidence/butler-entry-20261111/impl/`.
+
+Limits of that evidence: the Electron check mounts its own row and dialog beside
+the product's hidden ones and passes plain text formatting, so the real display
+bindings are exercised on a visible view only in the unit test (with the real
+`createDisplayBindings`); the dark theme was not looked at; the record table
+entry is not connected.
+
+Required before the switch is opened (not part of this delivery):
+- Main process: the person-only entry, and refusing a designation whose third
+  argument does not match what it would select. Owner: butler outcome owner.
+- 「能关」: today the only way to stop having a butler is to revoke it. Turning it
+  off while keeping the designation needs a core switch with a stop receipt.
+- The person's answers on rows V19 and V20 and on the model name behind
+  "DeepSeek pro".
+- The partners' confirmation of the view contract documented at the top of
+  `app/butler-entry-view.js`.
+Owner of the renderer entry: Claude · NAW 开发 · 续.
