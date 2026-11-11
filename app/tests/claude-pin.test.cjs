@@ -79,21 +79,70 @@ test('the fallback lasts seven days per fallback version, then the launcher is u
   const expired = at(T0 + pin.LIMIT_MS);
   assert.equal(expired.binary, i.launcher); assert.equal(expired.version, '2.1.999');
   assert.deepEqual(expired.pin, { requested: '2.1.999', pinned: '2.1.322', since: '2026-11-10T00:00:00.000Z', until: '2026-11-17T00:00:00.000Z', expired: true });
-  // When the vendor removes that version, the next older qualified one starts its own period.
+  // When the vendor removes the fallback version, NAW goes back to the launcher: never further down.
   fs.rmSync(i.file('2.1.322'));
-  const next = at(T0 + pin.LIMIT_MS + 1000);
-  assert.equal(next.binary, i.file('2.1.321')); assert.equal(next.pin.expired, undefined); assert.equal(next.pin.pinned, '2.1.321');
+  assert.deepEqual(at(T0 + pin.LIMIT_MS + 1000), { binary: i.launcher, version: '2.1.999', pin: null });
+  assert.deepEqual(at(T0 + 1000), { binary: i.launcher, version: '2.1.999', pin: null }, 'Also inside the period');
+});
+
+test('the clock survives a restart, a newer qualified version starts its own period, and an untrustworthy record means no fallback', t => {
+  const i = install(t, ['2.1.321', '2.1.322', '2.1.999'], '2.1.999');
+  const at = now => pin.choose({ launcher: i.launcher, fresh: true, stateFile: i.stateFile, now });
+  // A period recorded by an earlier run of the service keeps its start.
+  fs.writeFileSync(i.stateFile, JSON.stringify({ pinned: '2.1.322', since: T0 }));
+  assert.equal(at(T0 + 3 * 24 * 3600 * 1000).pin.since, '2026-11-10T00:00:00.000Z');
+  assert.equal(at(T0 + pin.LIMIT_MS).pin.expired, true);
+  // The recorded fallback was an older version; a newer one is qualified and installed now.
+  fs.writeFileSync(i.stateFile, JSON.stringify({ pinned: '2.1.321', since: T0 }));
+  const newer = at(T0 + pin.LIMIT_MS + 5);
+  assert.equal(newer.binary, i.file('2.1.322')); assert.equal(newer.pin.since, new Date(T0 + pin.LIMIT_MS + 5).toISOString());
+  for (const bad of ['{', '{"pinned":"2.1.322"}', JSON.stringify({ pinned: '2.1.322', since: T0 + 10 * pin.LIMIT_MS }), JSON.stringify({ pinned: 'x', since: T0 })]) {
+    fs.writeFileSync(i.stateFile, bad);
+    assert.deepEqual(at(T0 + 1000), { binary: i.launcher, version: '2.1.999', pin: null }, bad);
+    assert.equal(fs.readFileSync(i.stateFile, 'utf8'), bad, 'An untrustworthy record is left as it is');
+  }
+});
+
+test('a resume also checks which version last wrote the session itself', t => {
+  const i = install(t, ['2.1.322', '2.1.999'], '2.1.999');
+  const resume = lastWritten => pin.choose({ launcher: i.launcher, fresh: false, lastVersion: '2.1.322', lastWritten, stateFile: i.stateFile, now: T0 });
+  assert.equal(resume(undefined).binary, i.file('2.1.322'), 'No transcript yet: NAW\'s own record decides');
+  assert.equal(resume('2.1.322').binary, i.file('2.1.322')); assert.equal(resume('2.1.320').binary, i.file('2.1.322'));
+  for (const newerOrUnknown of ['2.1.999', '2.1.323', null, '', 'x']) assert.deepEqual(resume(newerOrUnknown), { binary: i.launcher, version: '2.1.999', pin: null }, String(newerOrUnknown));
+  // A new session has nothing to reopen.
+  assert.equal(pin.choose({ launcher: i.launcher, fresh: true, lastWritten: '2.1.999', stateFile: i.stateFile, now: T0 }).binary, i.file('2.1.322'));
+
+  // Reading it from a synthetic transcript: only the version field of each entry counts.
+  const root = path.join(i.dir, 'projects'), cwd = '/tmp/some.dir/work', id = randomUUID();
+  const file = path.join(root, '-tmp-some-dir-work', `${id}.jsonl`);
+  assert.equal(pin.lastWrittenVersion({ cwd, nativeId: id, root }), undefined);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const row = (version, extra = {}) => JSON.stringify({ type: 'user', sessionId: id, ...(version ? { version } : {}), ...extra });
+  fs.writeFileSync(file, [row('2.1.322'), row(null), row('2.1.322', { message: { content: 'text that says "version":"9.9.9"' } })].join('\n') + '\n');
+  assert.equal(pin.lastWrittenVersion({ cwd, nativeId: id, root }), '2.1.322');
+  fs.appendFileSync(file, row('2.1.999') + '\n' + row('2.1.322') + '\n');
+  assert.equal(pin.lastWrittenVersion({ cwd, nativeId: id, root }), '2.1.999', 'An outside resume by a newer version is seen even if an older one wrote after it');
+  fs.writeFileSync(file, 'cut-off first line "version":"2.1.999"}\n' + row(null) + '\n');
+  assert.equal(pin.lastWrittenVersion({ cwd, nativeId: id, root }), null, 'A transcript that names no version is unknown');
+  assert.equal(pin.lastWrittenVersion({ cwd, nativeId: 'not-an-id', root }), null);
 });
 
 test('NAW starts a new Claude session with the fallback program and records it; a resume of unknown origin keeps the launcher', async t => {
   const { Claude } = require('../adapters.cjs');
   const i = install(t, ['2.1.322', '2.1.999'], '2.1.999');
-  const host = { binaries: { claude: i.launcher }, privateDir: i.dir, hookTargets: new Map(), hookSocket: path.join(i.dir, 'hook.sock'), submitSocket: path.join(i.dir, 'submit.sock') };
+  // The per-start socket folder and the persistent data folder are different places, as in the real service.
+  const data = path.join(i.dir, 'data'), sockets = path.join(i.dir, 'sockets'); fs.mkdirSync(data); fs.mkdirSync(sockets);
+  const host = { binaries: { claude: i.launcher }, privateDir: sockets, dataDir: data, hookTargets: new Map(), hookSocket: path.join(sockets, 'hook.sock'), submitSocket: path.join(sockets, 'submit.sock') };
   const start = async record => { const r = new Claude(record, host); await new Promise(resolve => r.terminal.once('closed', resolve)); r.submission.close(); return fs.readFileSync(i.ran, 'utf8').trim().split('\n'); };
   const fresh = { id: randomUUID(), nativeId: randomUUID(), name: 'New', cwd: i.dir };
   let argv = await start(fresh);
   assert.equal(argv[0], '2.1.322'); assert.ok(argv.includes('--session-id'));
   assert.equal(fresh.nativeLaunchVersion, '2.1.322'); assert.equal(fresh.nativePin.requested, '2.1.999'); assert.equal(fresh.nativePin.pinned, '2.1.322');
+  assert.ok(fs.existsSync(path.join(data, 'claude-pin.json')), 'The clock is kept with the persistent data');
+  assert.equal(fs.existsSync(path.join(sockets, 'claude-pin.json')), false);
+  const { NativeHost } = require('../adapters.cjs');
+  assert.equal(new NativeHost(sockets, data).codexQualificationFile, path.join(data, 'codex-qualification.json'));
+  assert.equal(new NativeHost(sockets).dataDir, sockets, 'A host given one folder keeps using it');
   // The same session resumed later stays on the fallback version.
   argv = await start({ ...fresh, recovering: true });
   assert.equal(argv[0], '2.1.322'); assert.ok(argv.includes('--resume'));

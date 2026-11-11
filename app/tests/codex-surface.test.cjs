@@ -182,8 +182,9 @@ test('5. every Codex method NAW calls is either in the manifest or knowingly ung
   assert.match(fs.readFileSync(path.join(app, 'adapters.cjs'), 'utf8'), /message\.method\.endsWith\('\/requestUserInput'\)/);
   assert.ok(surface.PERMISSION.includes('item/tool/requestUserInput'));
   for (const method of baseline().serverRequests) assert.ok(surface.PERMISSION.includes(method) || surface.MANIFEST.addressedTool.some(i => i.method === method), `${method} is not classified`);
-  // Every Codex notification NAW names anywhere in its source, in any form (===, case, array),
-  // either feeds a gated capability (manifest) or is knowingly display or status only.
+  // Every Codex notification NAW names as a single-quoted literal in app/*.cjs (the forms in use: ===, case,
+  // array) either feeds a gated capability (manifest) or is knowingly display or status only. A name built
+  // another way (template, prefix test, another folder) is not seen by this scan.
   const displayOnly = ['account/rateLimits/updated', 'account/updated', 'error', 'warning', 'item/commandExecution/outputDelta', 'item/fileChange/patchUpdated',
     'item/mcpToolCall/progress', 'item/plan/delta', 'item/reasoning/summaryPartAdded', 'item/reasoning/summaryTextDelta', 'serverRequest/resolved',
     'thread/closed', 'thread/goal/cleared', 'thread/goal/updated', 'thread/name/updated', 'thread/settings/updated', 'thread/tokenUsage/updated'];

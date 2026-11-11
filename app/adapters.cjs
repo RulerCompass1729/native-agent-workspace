@@ -591,8 +591,11 @@ class Claude extends EventEmitter {
     const identity = record.recovering ? ['--resume', record.nativeId]
       : record.forkPicker ? ['--resume', '--fork-session', '--session-id', record.nativeId] : ['--session-id', record.nativeId];
     // An unqualified new Claude version: start with the newest qualified one still installed (claude-pin.cjs).
-    const launch = require('./claude-pin.cjs').choose({ launcher: host.binaries.claude, fresh: !record.recovering && !record.forkPicker,
-      lastVersion: record.nativeLaunchVersion, stateFile: path.join(host.privateDir, 'claude-pin.json') });
+    const claudePin = require('./claude-pin.cjs'), fresh = !record.recovering && !record.forkPicker;
+    const launch = claudePin.choose({ launcher: host.binaries.claude, fresh, lastVersion: record.nativeLaunchVersion,
+      // Someone may have resumed this session elsewhere since: its own transcript says which version wrote last.
+      lastWritten: fresh ? undefined : claudePin.lastWrittenVersion({ cwd: record.cwd, nativeId: record.nativeId }),
+      stateFile: path.join(host.dataDir || host.privateDir, 'claude-pin.json') });
     if (launch.version) record.nativeLaunchVersion = launch.version; else delete record.nativeLaunchVersion;
     if (launch.pin) record.nativePin = launch.pin; else delete record.nativePin;
     this.terminal = new Terminal([launch.binary, ...identity, ...(record.autoName ? [] : ['--name', record.name]), '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message,mcp__native_workspace__workspace_sessions,mcp__native_workspace__workspace_open,mcp__native_workspace__workspace_report', '--plugin-dir', path.join(__dirname, 'claude-bridge'), ...posture], record.cwd, {
@@ -2598,12 +2601,13 @@ async function workspaceMcpProof(runtime, identity, args, socket) {
 }
 
 class NativeHost {
-  constructor(privateDir) {
-    this.privateDir = privateDir; this.hookSocket = path.join(privateDir, 'hooks.sock');
+  constructor(privateDir, dataDir = privateDir) {
+    // privateDir is the per-start socket folder; dataDir persists across restarts.
+    this.privateDir = privateDir; this.dataDir = dataDir; this.hookSocket = path.join(privateDir, 'hooks.sock');
     this.submitSocket = path.join(privateDir, 'submit.sock');
     this.codexSocket = path.join(privateDir, 'codex.sock'); this.hookTargets = new Map(); this.codexTargets = new Map();
-    // Automatic Codex version decisions (B3) live beside the private service state.
-    this.codexQualificationFile = path.join(privateDir, 'codex-qualification.json'); codexQualification.load(this.codexQualificationFile);
+    // Automatic Codex version decisions (B3) are kept in the persistent data directory.
+    this.codexQualificationFile = path.join(dataDir, 'codex-qualification.json'); codexQualification.load(this.codexQualificationFile);
     this.codexMessageToken = crypto.randomBytes(32).toString('hex');
     this.submissions = createSubmissionServer(this.submitSocket, this.hookTargets);
     this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() };
@@ -2780,13 +2784,14 @@ class NativeHost {
     job.done = codexQualification.qualify({ binary: this.codexBinary, version, privateDir: this.privateDir })
       .then(decision => {
         if (this.closed) return;
-        codexQualification.record(this.codexQualificationFile, decision);
+        // record() opens the version in memory before writing; a failed write is logged and targets still recheck.
+        try { codexQualification.record(this.codexQualificationFile, decision); }
+        catch (error) { console.error(`[NAW] Codex ${version} check could not be saved: ${String(error?.message).slice(0, 200)}`); }
         const held = codexQualification.held(version);
         console.error(`[NAW] Codex ${version} checked against ${decision.basis}: ${held.length ? 'held ' + held.join(', ') : 'all capabilities open'}; ${decision.records.length} record(s)`);
         for (const target of this.codexTargets.values()) target.emit('capability');
       })
-      // record() opens the version in memory before writing, so a failed write must not pass unseen.
-      .catch(error => console.error(`[NAW] Codex ${version} check could not be recorded: ${String(error?.message).slice(0, 200)}`))
+      .catch(error => console.error(`[NAW] Codex ${version} check failed: ${String(error?.message).slice(0, 200)}`))
       .finally(() => { if (this.codexQualifying === job) this.codexQualifying = null; });
   }
   async startCodex() {

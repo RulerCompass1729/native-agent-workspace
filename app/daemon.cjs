@@ -29,7 +29,8 @@ async function main() {
   const token = crypto.randomBytes(32).toString('hex');
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
   fs.mkdirSync(defaultWorkspace, { recursive: true, mode: 0o700 });
-  const host = new NativeHost(privateDir); await host.start();
+  // Version decisions and the fallback clock must outlive this process: they go to the data directory.
+  const host = new NativeHost(privateDir, dataDir); await host.start();
   // A sibling, never inside the legacy shared cwd (including NAW_WORKSPACE).
   const workspace = new Workspace(host, dataDir, `${path.resolve(defaultWorkspace)}-sessions`); const clients = new Set(), writers = new Map();
   workspace.peerLeases = new PeerLeases(workspace);
