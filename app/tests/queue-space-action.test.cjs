@@ -19,6 +19,8 @@ function spaceAction(extra = {}) {
   const calls = [];
   let handler;
   const roomState = {
+    // This stand-in space state has archived nobody.
+    apply: snapshot => snapshot,
     metadata() {},
     queueAdd(...args) {
       calls.push(['queueAdd', ...args]);
@@ -145,4 +147,33 @@ test('the actual authenticated background controller adds once without confirmat
   assert.equal(refusal.state, 'unconfirmed');
   assert.equal(f.room.queueItems().length, 1);
   await controller.close();
+});
+
+test('a session the person archived cannot be made secretary, and an archived secretary can no longer add to the queue', async t => {
+  const f = fixture(t);
+  // The backend the space record archives through: it knows the session, and never marks it archived.
+  const backend = { call: async method => (method === 'initial' ? { sessions: [f.record] } : undefined), snapshot: () => ({ sessions: [f.record] }), entries: f.c.client.entries, refresh: async () => {}, close() {} };
+  await f.handlers.get('queueSecretary')({ client: f.c.client }, 'secretary');
+  const first = await f.invoke('spaceAction', ['shared', 'queueAdd', ['before the archive', null]]);
+  assert.equal(f.room.queueItems().length, 1);
+  await f.room.archiveSession(backend, 'secretary', 'Secretary');
+  assert.deepEqual(f.room.value.archivedSessions, ['secretary']);
+  assert.equal((await f.c.client.call('initial')).sessions[0].archived, undefined, 'Only the desktop\'s own record says it is archived');
+  // The designation is still recorded, but the archived session no longer acts as secretary.
+  assert.deepEqual(f.role.current(), { sessionId: 'secretary', nativeId: 'native-secretary' });
+  await assert.rejects(f.invoke('spaceAction', ['shared', 'queueAdd', ['after the archive', null]]), error => error.uiMessage?.key === 'error.queue.secretaryOnly');
+  assert.deepEqual(f.room.queueItems().map(item => item.id), [first]);
+  // It cannot be designated again while archived; the person can still revoke it, and add tasks themselves.
+  await assert.rejects(f.handlers.get('queueSecretary')({ client: f.c.client }, 'secretary'), error => error.uiMessage?.key === 'error.queue.secretaryInvalid');
+  await f.handlers.get('queueSecretary')({}, null);
+  assert.equal(f.role.current(), null);
+  await assert.rejects(f.handlers.get('queueSecretary')({ client: f.c.client }, 'secretary'), error => error.uiMessage?.key === 'error.queue.secretaryInvalid');
+  assert.equal(f.role.current(), null);
+  await f.handlers.get('spaceAction')({}, 'shared', 'queueAdd', ['the person adds one', null]);
+  assert.equal(f.room.queueItems().length, 2);
+  // Restored, it can be designated and add again.
+  await f.room.restoreSession(backend, 'secretary', 'Secretary');
+  await f.handlers.get('queueSecretary')({ client: f.c.client }, 'secretary');
+  await f.invoke('spaceAction', ['shared', 'queueAdd', ['after the restore', null]]);
+  assert.equal(f.room.queueItems().length, 3);
 });
