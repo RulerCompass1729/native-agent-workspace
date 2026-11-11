@@ -67,11 +67,19 @@ function release(id, reply) {
 // The real one-shot timer is covered by unit tests; here only the wait's start is moved back and
 // the backend is told its state changed, so the desktop sees what it would see at the limit.
 let workspace = null;
-const noteWait = Workspace.prototype.noteWait;
-Workspace.prototype.noteWait = function (...args) { workspace = this; return noteWait.apply(this, args); };
+const bind = Workspace.prototype.bind;
+Workspace.prototype.bind = function (...args) { workspace = this; return bind.apply(this, args); };
 function stuck(request) {
   const runtime = runtimes.get(request.session);
   if (!runtime) return false;
+  // Version gate (B6 E4): the session as it is after being started on the last verified Claude version.
+  if (request.method === 'pin') {
+    const session = workspace?.sessions.get(request.session);
+    if (!session) return false;
+    session.nativePin = { pinned: '2.1.322', requested: '2.1.330', until: Date.now() + 7 * 24 * 60 * 60 * 1000, expired: false };
+    workspace.changed();
+    return true;
+  }
   if (request.method === 'approval') {
     runtime.nativeApproval = { nativeOnly: true, observedAt: Date.now(), requests: [{ id: 'permission:1', title: 'Bash', input: 'synthetic command', incomplete: false }] };
     runtime.emit('state', 'approval'); return true;
@@ -86,7 +94,7 @@ function stuck(request) {
 
 process.on('message', request => {
   if (request.method === 'fail-next-send') failNext.add(request.session);
-  if (['approval', 'approval-resolved', 'age-waits'].includes(request.method)) {
+  if (['approval', 'approval-resolved', 'age-waits', 'pin'].includes(request.method)) {
     process.send({ requestId: request.id, done: stuck(request), sends: sends.map(({ id, text }) => ({ id, text })) });
     return;
   }
