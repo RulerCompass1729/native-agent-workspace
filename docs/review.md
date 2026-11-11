@@ -7991,3 +7991,31 @@ The bound in the previous section was installed and did not hold: with seven ses
 Source finding: workspace control creates one hidden window per agent session that has used it and keeps it until the app quits. That window owns the agent's connection and dialogs and never loads a document, yet the client wiring forwarded every state change, terminal chunk and progress line to it, and the broadcasts to all windows included it. Runtime evidence in the same minimal Electron program as before: 297 sends of 10 MB to a hidden window with no document raised system anonymous memory plus compressor contents by 2.3 GB while the program's processes accounted for 0.07 GB, there was no release beyond the machine's noise during an eight second hold (0.47 GB against noise of up to 0.9 GB), and 2.1 GB came back when the program quit. Observed in the daily app: the growth comes in episodes, does not drain, and ends with the window process. Inferred, not yet observed: that an episode starts when agent sessions first use workspace control after a window restart and scales with the number of background windows; the readings now record the number of backend connections of the window's main process, twelve per background window, so the next episode can confirm or refute this.
 
 Owner: the integrator. Repair: one function, `sendToPage`, sends to a window's page and refuses a background window; the state push refuses it as well; the client wiring does not compute a display state for it. The remaining direct sends go to windows that always have a page. Correction to the previous section: the unbounded push to a slow ready page is real and now bounded, but it was not the main cause of the exhaustion, and the claim that it was is withdrawn. Not covered: each background connection still receives every backend's complete state over its sockets, which costs processing time in the main process but is owned memory, and the number of background windows grows with each distinct actor view until the app quits; daily acceptance is still the unowned-memory reading over a working day.
+
+
+## Reader rename freshness and snapshot reachability (2026-11-10)
+
+The focused reader's render signature omitted the current session name. After a
+rename-only state update, the wake sender fallback and image accessibility label
+kept the old scalar name until another message changed the signature. The
+signature now includes the name; original recorded wake sender names remain
+historical facts. Row bodies, image preview tokens, copy focus and raw messages
+are preserved.
+
+The rename regression executes the actual focused-reader invalidation block.
+It fails on the previous code without new messages and passes after the change.
+A separate subprocess with explicit garbage collection keeps fifty real reader
+rows and their callbacks alive across identical-content snapshots. It requires
+the old session, original and filtered histories, and context to be collected.
+In-memory negative controls that capture each heavyweight binding demonstrate
+that the reachability guard detects retention. This is not a string-pattern
+assertion or a measurement of the machine's memory-pressure incident.
+
+Author-run: 126 related reading/locale/terminal/image checks pass with zero
+failures or skips. Private synthetic regressions for session, messages and
+context each make the no-retention assertion fail. A source-backed hidden GUI
+renames a synthetic session without appending a message: the wake fallback and
+image owner label update, while original messages and body/image DOM nodes
+remain. The unavailable-image wrapper is sufficient for this label check; it is
+not native wake delivery, successful image preview, installed or VoiceOver
+qualification. No provider/model calls or native inputs; owned resources close.
