@@ -7991,3 +7991,21 @@ The bound in the previous section was installed and did not hold: with seven ses
 Source finding: workspace control creates one hidden window per agent session that has used it and keeps it until the app quits. That window owns the agent's connection and dialogs and never loads a document, yet the client wiring forwarded every state change, terminal chunk and progress line to it, and the broadcasts to all windows included it. Runtime evidence in the same minimal Electron program as before: 297 sends of 10 MB to a hidden window with no document raised system anonymous memory plus compressor contents by 2.3 GB while the program's processes accounted for 0.07 GB, there was no release beyond the machine's noise during an eight second hold (0.47 GB against noise of up to 0.9 GB), and 2.1 GB came back when the program quit. Observed in the daily app: the growth comes in episodes, does not drain, and ends with the window process. Inferred, not yet observed: that an episode starts when agent sessions first use workspace control after a window restart and scales with the number of background windows; the readings now record the number of backend connections of the window's main process, twelve per background window, so the next episode can confirm or refute this.
 
 Owner: the integrator. Repair: one function, `sendToPage`, sends to a window's page and refuses a background window; the state push refuses it as well; the client wiring does not compute a display state for it. The remaining direct sends go to windows that always have a page. Correction to the previous section: the unbounded push to a slow ready page is real and now bounded, but it was not the main cause of the exhaustion, and the claim that it was is withdrawn. Not covered: each background connection still receives every backend's complete state over its sockets, which costs processing time in the main process but is owned memory, and the number of background windows grows with each distinct actor view until the app quits; daily acceptance is still the unowned-memory reading over a working day.
+
+
+### Butler native configuration evidence
+
+A bounded real Codex app-server experiment uses fixed loopback responses only.
+The tested switches can yield an empty tool registry under the observed metadata,
+and forced shell/patch/image/web/MCP calls are rejected. Counterexamples retain
+global AGENTS loading and catalog-driven patch registration; read-only permits
+reading an outside file, while a named native profile denies it and outbound TCP.
+No full tool ceiling, live provider policy, activation or working-day acceptance
+is claimed. The previous dedicated binding alone is not context isolation.
+
+Independent review approved that scoped conclusion. Its non-blocking observations
+were addressed with an actual positive project-instruction control, exact call-ID
+rejection assertions, server-request/reply separation, and explicit wording about
+the direct native sandbox probes and the fresh empty global-instruction home.
+Native version changes, inherited configuration/catalogs and production adoption
+remain explicit qualification gates; all automatic security flags stay false.
