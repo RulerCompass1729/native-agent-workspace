@@ -132,9 +132,10 @@ async function run() {
   await launch();
   await revealDefaultSpace(page);
   const member = await createSession('队员甲', true);
+  const second = await createSession('队员乙', true);
   const integrator = await createSession('集成者', false);
-  assert.ok(integrator.nativeId && member.nativeId, 'The synthetic sessions have native ids');
-  // The integrator works in a real repository: main, and the member's delivery on its own branch.
+  assert.ok(integrator.nativeId && member.nativeId && second.nativeId, 'The synthetic sessions have native ids');
+  // The integrator works in a real repository: main, and each member's delivery on its own branch.
   // Git runs only in the folder this run's own profile gave the session, never anywhere else.
   const folder = integrator.cwd;
   assert.equal(path.dirname(folder), path.resolve(profile) + '-sessions', 'The integrator works in this run\'s own temporary folder');
@@ -147,45 +148,57 @@ async function run() {
   commit('synthetic-base.txt', 'base\n');
   git('checkout', '--quiet', '-b', 'lane/a');
   const delivery = commit('synthetic-delivery.txt', 'delivered\n');
+  git('checkout', '--quiet', '-b', 'lane/b', 'main');
+  const other = commit('synthetic-second.txt', 'delivered too\n');
   git('checkout', '--quiet', 'main');
   commit('synthetic-other.txt', 'main moved on\n');
 
-  // 1) The person queues a task; the member gets it and delivers.
+  // 1) The person queues one task for each member; each gets its own and the first delivers.
   await page.locator('#room-nav').click();
-  await page.evaluate(() => workspace.spaceAction('shared', 'queueAdd', ['修好列表', null]));
-  await until(async () => (await sends()).some(send => send.id === member.id && /【NAW 派活】[\s\S]*修好列表/.test(send.text)), 'The task reaches the member');
+  await page.evaluate(id => workspace.spaceAction('shared', 'queueAdd', ['修好列表', id]), member.id);
+  await page.evaluate(id => workspace.spaceAction('shared', 'queueAdd', ['补上说明', id]), second.id);
+  await until(async () => (await sends()).some(send => send.id === member.id && /【NAW 派活】[\s\S]*修好列表/.test(send.text)), 'The first task reaches the first member');
+  await until(async () => (await sends()).some(send => send.id === second.id && /【NAW 派活】[\s\S]*补上说明/.test(send.text)), 'The second task reaches the second member');
   await release(member.id, `做完了。\nREADY lane/a ${delivery}`);
-  await until(async () => (await spaceEvents()).some(text => text.includes('READY') && text.includes('lane/a')), 'The delivery is recorded in the space');
+  await until(async () => (await spaceEvents()).some(text => text.includes('READY') && text.includes('lane/a')), 'The first delivery is recorded in the space');
   // Nobody is designated: nothing is handed to anyone, and the person is asked once.
   await until(async () => (await notices()).some(options => options.body === '1 件交付在等集成，但还没有指定集成者'), 'The person is asked to designate an integrator');
   assert.equal((await overview()).summary.deliverable, 1);
+  // The second member delivers while nobody is designated: it waits too, and the person is not asked again.
+  await release(second.id, `写完了。\nREADY lane/b ${other}`);
+  await until(async () => (await overview()).summary.deliverable === 2, 'The second delivery waits as well');
   assert.equal((await sends()).filter(send => send.text.includes('【NAW 集成交接】')).length, 0);
-  passed.push('A delivery with nobody designated waits, and the person is asked once');
+  assert.equal((await notices()).filter(options => options.title === 'NAW · 集成交接要你处理').length, 1, 'Asked once for two waiting deliveries');
+  passed.push('Two members\' deliveries wait while nobody is designated, and the person is asked once');
 
   // 2) The person designates the integrator; one handoff goes to it, and the space says so.
   await page.evaluate(id => workspace.integrator(id), integrator.id);
   await until(async () => (await sends()).some(send => send.id === integrator.id && send.text.startsWith('【NAW 集成交接】')), 'The handoff reaches the integrator');
   const handoff = (await sends()).find(send => send.text.startsWith('【NAW 集成交接】'));
-  assert.ok(handoff.text.includes(delivery) && handoff.text.includes('lane/a') && handoff.text.includes('独审：现在关着'), 'The handoff names the delivery and says reviews are off');
-  await until(async () => (await spaceEvents()).some(text => text.includes('已交给集成者')), 'The space says the delivery was handed out');
+  for (const [branch, commit] of [['lane/a', delivery], ['lane/b', other]]) assert.ok(handoff.text.includes(commit) && handoff.text.includes(branch), `The handoff names ${branch}`);
+  assert.ok(handoff.text.includes('独审：现在关着'), 'The handoff says reviews are off');
+  const handed = branch => text => text.includes('已交给集成者') && text.includes(branch);
+  await until(async () => { const events = await spaceEvents(); return events.some(handed('lane/a')) && events.some(handed('lane/b')); }, 'The space says both deliveries were handed out');
   // The person reads it where space notices are shown: the space's shared record.
   await page.locator('#room-record').click();
-  await until(async () => (await page.locator('#room-messages').innerText()).includes('已交给集成者'), 'The person sees the handed-out notice in the space\'s shared record');
+  await until(async () => { const shown = await page.locator('#room-messages').innerText(); return shown.includes(`（lane/a ${delivery.slice(0, 12)}）已交给集成者`) && shown.includes(`（lane/b ${other.slice(0, 12)}）已交给集成者`); }, 'The person sees both handed-out notices in the space\'s shared record');
   await capture('handed-out');
-  passed.push('After the designation one handoff went to the integrator through the dispatcher, and the space says so');
+  passed.push('After the designation one handoff with both deliveries went to the integrator, and the space says so for each');
 
-  // 3) The integrator does its work in git and answers; NAW checks the merge in the real repository.
+  // 3) The integrator merges one delivery in git and returns the other; NAW checks the merge in the real repository.
   git('cherry-pick', delivery);
   const head = git('rev-parse', 'HEAD');
-  await release(integrator.id, `合好了。\nMERGED ${delivery.slice(0, 9)} as ${head.slice(0, 9)} tests 12/12`);
+  const note = '和 main 上的改动对不上，基于新的 main 重做';
+  await release(integrator.id, `合了一件，退回一件。\nMERGED ${delivery.slice(0, 9)} as ${head.slice(0, 9)} tests 12/12\nRETURNED ${other.slice(0, 9)} ${note}`);
   await until(async () => (await spaceEvents()).some(text => text.includes('已合入 main') && text.includes(head.slice(0, 12)) && text.includes('12/12')), 'The space says the delivery was merged', 90000);
   await until(async () => (await notices()).some(options => options.body === `main 已合入新的交付（${head.slice(0, 12)}），可以安装`), 'The person is told the new main can be installed');
   const merged = await overview();
   assert.deepEqual([merged.summary.deliverable, merged.summary.held, merged.summary.handed, merged.summary.handoff], [0, 0, 0, null]);
   assert.ok(merged.reasons.some(reason => reason.reason === `installable:${head}`));
-  await until(async () => (await page.locator('#room-messages').innerText()).includes(`已合入 main：${head.slice(0, 12)}，测试 12/12`), 'The person sees the merge in the space\'s shared record');
+  await until(async () => { const shown = await page.locator('#room-messages').innerText(); return shown.includes(`（lane/a ${delivery.slice(0, 12)}）已合入 main：${head.slice(0, 12)}，测试 12/12`) && shown.includes(`（lane/b ${other.slice(0, 12)}）被集成者退回：${note}`); }, 'The person sees the merge and the return in the space\'s shared record');
+  assert.ok(!(await spaceEvents()).some(text => text.includes('lane/b') && text.includes('已合入 main')), 'The returned delivery is never said to be merged');
   await capture('merged');
-  passed.push('The integrator\'s answer was checked against the real repository; the space says merged and the person is told main can be installed');
+  passed.push('The integrator\'s answer was checked against the real repository; the space says one merged and one returned, and the person is told main can be installed');
 
   // 4) The person answers the install question from their own window; exactly one handoff was ever sent.
   assert.deepEqual(await page.evaluate(reason => workspace.handoff('answer', reason), `installable:${head}`), { answered: true });
@@ -193,11 +206,11 @@ async function run() {
   await delay(8000);
   const all = await sends();
   assert.equal(all.filter(send => send.text.startsWith('【NAW 集成交接】')).length, 1, 'One handoff, sent once');
-  assert.equal(all.filter(send => send.id === member.id).length, 1, 'The member got its one task and never a handoff');
+  for (const each of [member, second]) assert.equal(all.filter(send => send.id === each.id).length, 1, 'Each member got its one task and never a handoff');
   const shown = (await notices()).map(options => options.title + ' | ' + options.body);
   assert.equal(shown.filter(text => text.startsWith('NAW · 集成交接要你处理')).length, 2, 'Two notices: nobody designated, then installable');
-  assert.ok(!shown.some(text => text.includes('修好列表')), 'No notice carries the task text');
-  passed.push('The install question was answered from the person\'s window; one handoff and two notices in all, none with task text');
+  assert.ok(!shown.some(text => text.includes('修好列表') || text.includes('补上说明')), 'No notice carries a task\'s text');
+  passed.push('The install question was answered through the window\'s entry; one handoff and two notices in all, none with task text');
 
   assert.deepEqual(errors, []);
   assert.equal(app.windows().length, 1);
