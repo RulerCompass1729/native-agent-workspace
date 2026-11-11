@@ -108,11 +108,17 @@ test('shutdown prevents new B1 notifications after the owned epoch is closed', t
   assert.equal(f.notifications.length, 0); assert.equal(f.ledger.snapshot().questionSends.length, 0);
 });
 
-test('Main retries reuse the same epoch owner and quit closes it without starting a model', () => {
+test('Main retries reuse the same epoch owner and quit closes it without starting a model', t => {
   let created = 0, opened = 0, recovered = 0, closed = 0, dispatcherClosed = 0;
-  const context = { butlerIngress: null, roomState: { id: 'first' }, dataDir: 'synthetic', randomUUID: () => 'synthetic-epoch',
-    ButlerIngress: class { constructor(_dir, { roomState }) { created++; this.roomState = roomState;
-      this.ledger = { openQuestionMetricEpoch: () => opened++, closeQuestionMetricEpoch: () => closed++ }; }
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-question-main-epoch-')); fs.chmodSync(dataDir, 0o700);
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const { ButlerLedger } = require('../butler-ledger.cjs');
+  const context = { butlerIngress: null, roomState: { id: 'first' }, dataDir, randomUUID: () => 'synthetic-epoch',
+    ButlerLedger, isCurrentHumanContext: () => false,
+    ButlerIngress: class { constructor(_dir, { roomState, ledger }) { created++; this.roomState = roomState; this.ledger = ledger;
+      const open = ledger.openQuestionMetricEpoch.bind(ledger), close = ledger.closeQuestionMetricEpoch.bind(ledger);
+      ledger.openQuestionMetricEpoch = (...args) => { opened++; return open(...args); };
+      ledger.closeQuestionMetricEpoch = (...args) => { closed++; return close(...args); }; }
       recover() { recovered++; } } };
   vm.createContext(context);
   const boot = section('    // One writer owns the display-measurement epoch.', '\n    butlerIngress.recover();') + '\n    butlerIngress.recover();';

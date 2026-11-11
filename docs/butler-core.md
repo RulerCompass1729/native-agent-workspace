@@ -27,9 +27,9 @@ cannot reuse or rewrite an existing reservation. All four qualification defaults
 remain false. The old dormant native factory supplies its former values only at
 that legacy boundary; the DSH factory is a separate integration by its owner.
 The legacy runner rejects any different configuration triple before its spawn
-work. With explicit host configuration, backend `read()` and `snapshot()` throw
-`binding-mismatch` when a persisted reservation belongs to a different runtime or
-configuration. A future host/UI caller
+work. Backend `read()` and `snapshot()` throw `binding-mismatch` for a persisted
+runtime mismatch, even without host configuration. With configuration supplied,
+a different configuration also throws. A future host/UI caller
 must catch that refusal and show a blocked state; upgrading never silently
 rewrites or reuses the old binding.
 
@@ -121,7 +121,7 @@ The desktop pairs the dedicated NativeHost/service driver and name-only profile
 checks with the existing backend, without preparing or starting it. Native provider compatibility remains
 unverified. The next source stage needs restricted automatic context and tool execution,
 the remaining direct person-request ingress and controller binding, the
-person-only menu/dialog and review table, a production queue transaction adapter
+person-only designation menu/dialog and review-table renderer, a production queue transaction adapter
 and the non-member rotation/create-plan hooks. The core's pure
 rotation candidate filter and role successor are not a claim that those hooks
 are already connected. Missing or unverified provider usage/cost and reminder
@@ -133,8 +133,9 @@ Neither a new UTC day nor a new designation silently replays those uncertain
 operations. Blocked notices without a batch currently dedupe for their recorded
 scope; the host must surface rejected input, and future journal validation
 changes must preserve the recorded schema's replay rules.
-The eventual working-day review table must include suspended candidates and their
-sources; this core has no user-facing review table or suspension notification.
+The durable audit projection includes suspended candidates and their sources.
+Its person-only review API is connected below; the review-table renderer and
+installed suspension notification remain separate work.
 Host mapping must give different decisions of the same type distinct source
 references. Canonical question keys still dedupe a single decision across those
 references. Raw B1 observation errors must be surfaced by the host caller.
@@ -147,8 +148,9 @@ The rate counts distinct admitted suggestions once, even when they appear
 repeatedly. Suspended candidates are listed separately and excluded from its
 denominator. Complete occurrences and sources remain available for audit;
 unreviewed suggestions are never assumed to agree. Fewer than ten distinct
-suggestions means insufficient samples, with no agreement conclusion. No durable
-review or canonical suggestion projection is implemented in this checkpoint.
+suggestions means insufficient samples, with no agreement conclusion. The
+canonical projection and durable audit confirmation are connected below; their
+audit-only provenance cannot certify the working-day trial.
 
 Both host code and the record-table renderer must use the same arithmetic from
 `butler-review-policy.js`, rather than copy a sample threshold:
@@ -169,6 +171,109 @@ acceptance or authority to activate the butler. Logical delivery reservations
 and blocked candidates cannot certify zero repeat questions. The delivery
 measurement below is required before the working-day trial; its unknown result
 cannot satisfy that trial.
+
+## Durable person-only audit review API
+
+This source checkpoint serves the vision's attention goal: the person can resume
+one exact set of proposed work and its sources without reconstructing previous
+judgments. It records an audit review; it neither activates the butler nor opens
+the working-day recording period. The review-table renderer is a separate
+consumer of the following frozen interface.
+
+`window.workspace.butlerReview(action, ...args)` is a dedicated preload method.
+Main uses the existing Ingress ledger writer and its measurement epoch. Every
+operation requires the same live, non-background window context currently held
+by Main, including reads and availability. A claimed `kind:person` is not
+identity. The command is removed from the generic agent catalog/invoke map,
+and a trusted background renderer's direct IPC is still refused. Review records
+are not added to initial state, ordinary display state or view state.
+
+| Action | Arguments | Result |
+| --- | --- | --- |
+| `availability` | None | `{available, activation:'off', recordPeriod:'off'}` only; no ledger snapshot |
+| `latest` | None | Latest stored review or `null`, without creating a new review |
+| `read` | `reviewId` | That stored review |
+| `freeze` | None | Reuse the saved latest review when only audit records changed; otherwise freeze a new head. Main fixes `afterSequence:0` and audit-only provenance |
+| `confirm` | One request object below | Current durable review with the saved confirmation |
+
+The exact confirmation request is:
+
+```js
+{
+  reviewId, contentDigest, expectedRevision,
+  disagreedSuggestionIds: [], disagreedCandidateIds: [], allRead: true
+}
+```
+
+No renderer-supplied scope, rows, counts, provenance, identity or activation
+settings are accepted. IDs must belong to the frozen review. Personal
+confirmation is independent of `answerQuestion`; it cannot answer or withdraw
+an outstanding business decision. A new confirmation appends a revision, a stale
+competing revision fails, and repeating a previously accepted request returns
+the current stored review without rolling back a newer revision.
+
+Every returned review contains `reviewId`, `contentDigest`, `projectionVersion`,
+`window:{afterSequence,throughSequence}`, `provenance`, `frozen`,
+`questionMetrics`, `createdAt`, `physicalSeq`, `revision`, `confirmation`,
+`confirmations` and `summary`. `provenance` is exactly
+`{kind:'audit',recordPeriod:'off',activation:'off'}`. Before confirmation,
+`revision` is zero and `confirmation` is null. Each saved confirmation retains
+its digest, expected and accepted revision, disagreement IDs, all-read
+attestation, physical sequence and confirmation time; `confirmations` preserves
+that history across restart.
+
+`frozen` has `projectionVersion:1`, `sequence`, `afterSequence`,
+`throughSequence`, `rows` and `failed`. Rows retain each occurrence with `id`,
+`batchId`, business fields, complete `sources` and `batchSources`, missing
+source IDs, selection and question evidence/status when applicable. Admitted
+rows have a canonical `suggestionId`; suspended rows have a `candidateId` and
+remain outside the suggestion denominator. A missing or ambiguous source stays
+visible and unassessable. All occurrences remain visible even when several
+share one suggestion ID. For questions, identity follows the canonical question;
+other suggestions use the trusted source business key, target space and full
+business text, without trimming or inferred natural-language equivalence. If
+any occurrence of a suggestion is unassessable, that whole suggestion cannot
+count as agreed. Later source events, question changes and caller mutations do
+not rewrite the frozen evidence.
+
+`summary` contains distinct, agreed, disagreed, unable and pending suggestion
+counts, marked suggestions, suspended/disagreed candidate counts, plus the
+shared policy's `status`, `agreementRate` and `agreementMeetsThreshold`. Both
+host and renderer must import `butler-review-policy.js`; do not copy its minimum
+sample value. Suspended candidate disagreements are saved separately. Unknown
+sources remain in the admitted denominator but cannot contribute agreement.
+
+`questionMetrics` is the actual-send counter frozen at the same journal prefix.
+An owned healthy epoch's prefix certificate and the freeze share one atomic
+append. A later display cannot alter those metrics; absent or incomplete
+coverage leaves `repeatedQuestions:null`. Neither an audit confirmation nor a
+new epoch converts uncertainty into a verified zero. The existing 2 MiB record
+and 32 MiB journal limits apply: capacity failures preserve the earlier journal
+and fail explicitly, without truncating sources or claiming a saved review.
+Projection budgets each row before cloning it.
+
+The renderer should call `latest` when opening, restore its confirmation and
+revision when present, and explicitly `freeze` only when a new audit is wanted.
+A freeze may reuse the same review ID, nonzero revision, saved confirmation and
+older window if its suffix consists entirely of review freeze/confirmation
+records. Reuse writes nothing. A business or metric record, or another requested
+window, requires a fresh freeze. Real Main startup opens a new metric epoch, so
+reopening the application can require a new freeze; simply reopening a ledger
+without such an epoch is different.
+
+These are bounded audit records, not an unbounded retention scheme. A projection
+above 2 MiB is explicitly refused; repeated source changes can still fill the
+shared 32 MiB journal. Establish the recording period's bounded window before a
+working-day trial. A future change to projection or metric semantics must preserve
+v1 replay or introduce a versioned reader, with a pinned historical-journal check;
+it must not silently reinterpret saved reviews.
+Its request token must bind review ID, content digest and revision. When mapping
+UI marks, remove only the outer `suggestion:` or `candidate:` prefix; a canonical
+ID can itself start with that prefix. Keep the draft on errors, and verify the
+returned revision/confirmation against the request and current generation before
+showing it saved. A non-null confirmation alone does not prove a new draft was
+saved. This contract permits the C2 renderer to connect without reproducing
+Ledger policy or using business-question answers as review persistence.
 
 ## Source checks
 

@@ -8563,7 +8563,8 @@ examples failed before this change and pass after it. No native/model trial or
 runtime qualification is claimed. Related isolated checks: 414 pass; full unit
 suite: 4820 pass, zero fail or skip. Independent read-only review
 `1eb79fb9-a46a-408d-8ded-46f9e898a803` returned `APPROVE_SCOPED` for that patch
-(private evidence: the identity lane's `.local/instance-review/review.jsonl`).
+(private evidence: `.local/instance-review/review.jsonl`; the absolute lane path
+is in the canonical private task board entry `Codex6 独审证据定位2026-11-11`).
 Its scope finding rests on the unchanged parser, queue and controller source and
 the author-run comparison, not on the proposal regression alone. The integrator's
 separate review `bdd28c09-3625-4c83-aee6-61f5fed17f4b` returned
@@ -8641,3 +8642,44 @@ Owner: the author of this change. Evidence: 18 unit tests in `app/tests/open-pla
 - Result lines spread over several messages are not put together: only the last message that has one is read, and a delivery named only in an earlier message is handed once more. If that delivery was in fact merged, the second handoff begins with it already on main, so it then ends as an unverified merge and the person is told. A decision asked in an earlier message is dropped when a later message answers with result lines, as the last message decides for a queue item; conflict lines in that answer still tell the person once.
 - A lock owner's label is read up to a bracket or a comma. A branch or tag named like a short commit id makes that short id unusable; the full id still works.
 - If the integrator's session is rotated during a handoff, the handoff fails as "integrator missing" for the old session; the connection must treat the successor as designated.
+
+
+## B4 durable person-only audit review API (2026-11-11, source approved)
+
+Requested outcome: the person can freeze an exact complete suggestion/source
+projection, save an explicit review and restore its revision after restart,
+without answering a business question or certifying a working day. This
+checkpoint reuses the existing Ingress writer and actual-send measurement;
+activation and the working-day record period remain off.
+
+Scope: canonical occurrence projection and shared policy; append-only review
+freeze/confirmation with digest, revision and limits; strict live-human Main IPC
+and dedicated preload method. Freeze scope/provenance and all counts are host
+owned. Agent catalog/invoke, direct background IPC, forged actors and caller
+rows/counts/configuration are excluded. Review content stays outside generic
+display/view snapshots. The C2 renderer and installed working-day acceptance
+remain separate work.
+
+Author-run no-model sandbox evidence: review/store/projection/policy/IPC,
+question delivery and package-source checks pass 123; existing Ledger,
+Controller, intake, typed READY and RoomState regressions pass 198. All 321
+pass with zero failures or skips; raw logs are retained privately. The exact
+Main register/startup/review handler passes freeze/read/confirm/restart with the
+real Ingress and Ledger in the same realm, preserving full frozen source/metric
+evidence and leaving business questions unanswered. Final full suite on
+`1e4f5bf`: 4964 pass, zero fail or skip. Independent headless review
+`e190758a-a751-4cd6-9774-c7ba810d59c1` approved the API source and the incremental
+auth/reuse delta (private evidence: `.local/review-api-review-verdict.md` and
+`.local/review-api-review-delta/review.jsonl`). Initial turn-limit output was not
+accepted as a verdict; the same session returned `APPROVE_SCOPED` afterwards.
+
+Review finding: repeated manual freezes could exhaust the shared journal with
+unchanged evidence. Two counterexamples failed before the fix; all 82 related
+checks pass after it. A suffix containing only review records now reuses the
+saved latest view, including its confirmation; any other record creates a fresh
+freeze. A late confirmation of an older review is handled too. This does not
+remove the 2 MiB projection or 32 MiB journal bounds. Bounded recording windows
+and versioned historical replay remain gates before a working-day trial or a
+future projection change. Native/GUI/provider behavior and the C2 renderer remain
+outside this source approval. Activation and record period stay off.
+Owner: butler outcome owner.
