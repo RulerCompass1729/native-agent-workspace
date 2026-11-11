@@ -181,14 +181,18 @@ test('a change of a submodule is read as its two commit ids; git is not run insi
   fs.writeFileSync(path.join(library, 'part.txt'), 'two\n'); inLibrary('commit', '--quiet', '-am', 'Synthetic library two');
   git('-C', 'library', '-c', 'protocol.file.allow=always', 'pull', '--quiet', 'origin', 'main'); git('commit', '--quiet', '-am', 'Synthetic move library');
   const moved = git('rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(library, 'part.txt'), 'three\n'); inLibrary('commit', '--quiet', '-am', 'Synthetic library three');
+  git('-C', 'library', '-c', 'protocol.file.allow=always', 'pull', '--quiet', 'origin', 'main'); git('commit', '--quiet', '-am', 'Synthetic move library again');
+  const movedAgain = git('rev-parse', 'HEAD');
   git('config', 'diff.submodule', 'diff'); git('-C', 'library', 'config', 'diff.external', program);
   fs.rmSync(marker, { force: true });
-  const range = await read.changes(base, moved);
-  assert.deepEqual(range.map(entry => entry.commit), [moved, added]);
-  assert.ok(range.every(entry => /^[0-9a-f]{40}$/.test(entry.change)) && range[0].change !== range[1].change, 'Each submodule change has its own id');
+  const range = await read.changes(base, movedAgain);
+  assert.deepEqual(range.map(entry => entry.commit), [movedAgain, moved, added]);
+  assert.ok(range.every(entry => /^[0-9a-f]{40}$/.test(entry.change)));
+  assert.equal(new Set(range.map(entry => entry.change)).size, 3, 'Two different moves of the same submodule are two different changes');
   assert.equal(fs.existsSync(marker), false, 'The submodule\'s program did not run');
   // The same range read the ordinary way does run it: the trap is real.
-  execFileSync(worktree.available(), ['log', '--patch', `${base}..${moved}`], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  execFileSync(worktree.available(), ['log', '--patch', `${base}..${movedAgain}`], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   assert.equal(fs.existsSync(marker), true, 'An unprotected read would have run it');
 });
 

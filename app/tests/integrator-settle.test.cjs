@@ -146,6 +146,26 @@ test('a line written while the integrator still worked is not mixed into its lat
   assert.deepEqual(Object.keys(action.results.results), [key('b')]);
   const result = backlog.settle(action, { handoffId: action.handoffId, verified: ok(['b']), mainHead: MAIN2 }, NOW + 60000);
   assert.deepEqual(outcomes(result), { a: 'again', b: 'merged' }, 'a has no result: it is handed once more, not recorded as returned');
+  // A final answer whose lines cannot be read is still the answer: the earlier line does not stand in for it.
+  for (const final of ['MERGED all of them as abc123d tests 10/10', `HELD ${'9'.repeat(40)} review-off`, 'RETURNED: everything, see above']) {
+    const { backlog: other } = fixture(t);
+    handed(other, ['a', 'b']);
+    const unread = integratorSession({ messages: [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW },
+      { id: 'r1', role: 'assistant', text: `HELD ${commitOf('a')} review-off (will check again)`, time: NOW + 1 }, { id: 'r2', role: 'assistant', text: final, time: NOW + 2 }] });
+    const planned = other.plan(later(unread));
+    assert.deepEqual(planned.results, { ignored: 1, results: {} }, final);
+    assert.deepEqual(outcomes(other.settle(planned, {}, NOW + 60000)), { a: 'again', b: 'again' }, final);
+  }
+  // A decision first and a full answer after it: the later answer is the answer, as the last message decides for a queue item.
+  const { backlog: decided } = fixture(t);
+  const opened = handed(decided, ['a', 'b']);
+  const both = integratorSession({ messages: [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW }, { id: 'r1', role: 'assistant', text: '需要你决定：a 和 b 冲突', time: NOW + 1 },
+    { id: 'r2', role: 'assistant', text: `HELD ${commitOf('a')} conflict\nRETURNED ${commitOf('b')} needs a rebase`, time: NOW + 2 }] });
+  const later2 = decided.plan(later(both));
+  assert.equal(later2.status, 'done'); assert.equal(later2.decision, undefined);
+  const settled = decided.settle(later2, {}, NOW + 60000);
+  assert.deepEqual(outcomes(settled), { a: `held:conflict:${opened.handoffId}`, b: 'returned:needs a rebase' });
+  assert.deepEqual(settled.notify, [`conflict:${opened.handoffId}`], 'The person is still told once about the conflict');
 });
 
 test('a verified merge is recorded once and registers the main commit to install once', t => {

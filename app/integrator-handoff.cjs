@@ -271,15 +271,17 @@ function planSettle(state, seen) {
   const controlChanged = Number.isSafeInteger(handoff.control) && (session.controlRevision || 0) !== handoff.control;
   if (reply.humanAfter || controlChanged) return settle('waiting', 'person-intervened');
   if (!reply.last.trim()) return settle('waiting', 'no-reply');
-  // The integrator's answer is its last message that reads like one: it has a result line for a
-  // delivery of this handoff, or it asks the person to decide. A closing remark after the answer
-  // loses nothing, and lines from an earlier message (written while it worked) are not mixed in.
+  // The integrator's answer is its last message that reads like one: it has a line that begins
+  // like a result, or it asks the person to decide. A closing remark after the answer loses
+  // nothing, and lines from an earlier message (written while it worked) are not mixed in. An
+  // answer whose lines cannot be read is still the answer: its deliveries have no result, which
+  // is safer than taking an earlier line for one.
   const inside = state.ready.filter(entry => handoff.keys.includes(entry.key));
   const parts = Array.isArray(reply.parts) && reply.parts.length ? reply.parts : [reply.last];
   let answer = reply.last, results = parseResults(answer, inside);
   for (let index = parts.length - 1; index >= 0; index -= 1) {
     const parsed = parseResults(parts[index], inside);
-    if (startsWithDecision(parts[index]) || Object.keys(parsed.results).length) { answer = parts[index]; results = parsed; break; }
+    if (startsWithDecision(parts[index]) || Object.keys(parsed.results).length || parsed.ignored > 0) { answer = parts[index]; results = parsed; break; }
   }
   // The first line of the answer decides the handoff's state; its lines are read either way.
   return startsWithDecision(answer) ? settle('waiting', '', { decision: true, question: decisionLine(answer), results }) : settle('done', '', { results });
