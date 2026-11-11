@@ -374,6 +374,32 @@ test('the session that holds an open handoff is sent no queue item until the han
   assert.equal(dispatch.match(/input\.engaged/g).length, 2);
 });
 
+test('what the integrator writes for another automatic message is not taken as the handoff\'s answer', async t => {
+  const f = fixture(t);
+  const itemId = f.room.queueAdd('Synthetic task', null);
+  await f.pass();
+  f.reply('member-a', `READY lane/a ${COMMIT}`);
+  await f.pass();
+  assert.deepEqual([f.calls.length, f.states()], [2, { 'lane/a': 'handed' }]);
+  const first = f.handoffs.snapshot().handoff.id;
+  // Another agent wakes the integrator before it has answered; what it writes for that begins like a question for the person.
+  const integrator = f.client.state.sessions.find(candidate => candidate.id === 'integrator');
+  integrator.messages.push({ id: 'wake-1', role: 'user', text: 'Synthetic wake from another agent', origin: 'agent-wake', time: Date.now() });
+  f.reply('integrator', '需要你决定：这件另外的事怎么办？');
+  await f.pass();
+  // The handoff does not wait on that question. The delivery has no result, so it is handed once more, in a new handoff.
+  const second = f.handoffs.snapshot().handoff;
+  assert.ok(second && second.id !== first && second.status === 'sent', JSON.stringify(second));
+  assert.deepEqual(f.calls.map(call => [call.id, call.itemId]), [['member-a', itemId], ['integrator', first], ['integrator', second.id]]);
+  assert.deepEqual(f.notices.map(info => info.reason), [], 'The person is asked nothing');
+  // It answers the new handoff; that answer is read and the merge is checked.
+  f.head = HEAD2;
+  f.reply('integrator', `MERGED ${COMMIT.slice(0, 9)} as ${HEAD2.slice(0, 9)} tests 12/12`);
+  await f.pass();
+  assert.deepEqual([f.states(), f.handoffs.snapshot().handoff], [{ 'lane/a': 'merged' }, null]);
+  assert.deepEqual(f.notices.map(info => info.reason), [`installable:${HEAD2}`]);
+});
+
 test('the engine is built only behind a switch that the daily app cannot open', () => {
   const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
   // One place builds it, and that place is inside the test-only condition.

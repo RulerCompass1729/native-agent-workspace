@@ -2780,6 +2780,7 @@ module.exports = {
   planDispatch,
   replyAfter,
   startsWithDecision,
+  AUTOMATIC_ORIGINS,
   UNCONFIRMED_SEND_MS,
   dispatchText,
   handoffRequestText,
