@@ -9,6 +9,8 @@ const backgroundOperation = require('../background-operation.cjs');
 const { IntegrationHandoffs, FILE } = require('../integrator-handoff.cjs');
 const { IntegrationRepository, FILE: REPOSITORY_FILE } = require('../integrator-repository.cjs');
 const integratorGit = require('../integrator-git.cjs');
+const { RoomState } = require('../room-state.cjs');
+const { roomId: validRoomId, roomIds } = require('../collaboration-spaces.cjs');
 const { execFileSync } = require('node:child_process');
 
 // The person's own actions on an integration handoff (B6 E2b, checkpoint H7a): the real `register`
@@ -32,20 +34,25 @@ function fixture(t, enabled = true, options = {}) {
   f.dispatcher = { schedule() { f.schedules += 1; }, integrationError: null };
   // The repository choice as the engine's builder makes it in main.cjs, on a real record and the real git reader.
   f.repository = new IntegrationRepository(directory); f.unblocked = 0;
+  // The spaces' own record, in a folder of its own, and the sessions the backend lists.
+  fs.mkdirSync(path.join(directory, 'room'));
+  f.room = new RoomState(path.join(directory, 'room')); f.sessions = [];
   const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, ipcMain: { handle() {} }, integrationHandoffs: enabled ? handoffs : null, integrationFault: null, Date,
     integrationRepository: null, repository: f.repository, integratorGit, handoffs, engine: { unblock() { f.unblocked += 1; } },
+    roomState: f.room, roomIds, validRoomId, queueRules: rules, displayText: (name, params) => locale.format('en', name, params),
     broadcastRoom: async () => { f.broadcasts += 1; }, queueDispatcher: options.noDispatcher ? null : f.dispatcher });
   vm.runInContext(slice('function register(name, handler) {', 'async function replaceBackendSockets'), context);
   vm.runInContext(slice('function handoffOverview(handoffs) {', '\n// One notice for one reason of the integration handoff'), context);
   vm.runInContext(slice("  register('handoff', async (c, action, value, choice) => {", "  register('rename',"), context);
   if (enabled) vm.runInContext(slice('  integrationRepository = {', '\n  return engine;\n}'), context);
-  const client = { call: async () => ({ sessions: [] }), entries: [{ state: { sessions: [{ id: 'old' }], capabilities: [] } }], refresh: async () => {}, snapshot: () => ({ wakePolicy: { enabled: true }, sessions: [{ id: 'old' }] }) };
+  const client = f.client = { call: async () => ({ sessions: f.sessions }), entries: [{ state: { sessions: [{ id: 'old' }], capabilities: [] } }], refresh: async () => {}, snapshot: () => ({ wakePolicy: { enabled: true }, sessions: [{ id: 'old' }, ...f.sessions] }) };
   f.person = (...args) => handlers.get('handoff')({ client }, ...args);
   f.agent = (...args) => {
     const actor = { id: 'integrator', nativeId: 'native-integrator', name: 'Integrator', provider: 'claude', turnId: 'turn', callId: 'call', operationId: 'op' };
     const c = { background: true, actor, client, view: { selected: actor.id }, win: { destroy() {} }, checkActor: async () => {} };
     return backgroundOperation.run(actor, () => handlers.get('handoff')(c, ...args), { context: c, valid: async () => {} });
   };
+  f.context = context;
   f.states = () => Object.fromEntries(handoffs.snapshot().ready.map(entry => [entry.itemId, entry.state + (entry.reason ? ':' + entry.reason : '')]));
   f.bytes = () => fs.readFileSync(f.file, 'utf8');
   // Deliver the names, hand them out and let the handoff wait without a reply.
@@ -131,7 +138,7 @@ test('an agent can do none of this, whatever it names; without an originating op
   const id = f.waiting(['a']);
   f.handoffs.noteReady(ready('b'), NOW); f.handoffs.hold(key('b'), 'review-off', NOW);
   const before = f.bytes();
-  for (const args of [['list'], ['retryDelivery', key('b')], ['retryReason', 'review-off'], ['retryReason', 'no-reply'], ['resolve', id, true], ['resolve', id], ['answer', `installable:${HEAD2}`], ['made-up'], []]) {
+  for (const args of [['list'], ['retryDelivery', key('b')], ['retryReason', 'review-off'], ['retryReason', 'no-reply'], ['resolve', id, true], ['resolve', id], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('b')], ['made-up'], []]) {
     await assert.rejects(f.agent(...args), refused('error.handoff.personOnly'), JSON.stringify(args));
   }
   assert.equal(f.bytes(), before); assert.deepEqual([f.broadcasts, f.schedules], [0, 0]);
@@ -146,7 +153,7 @@ test('an agent can do none of this, whatever it names; without an originating op
 
 test('with the switch closed the person is told handoffs are not enabled, and nothing is created', async t => {
   const f = fixture(t, false);
-  for (const args of [['list'], ['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`]]) {
+  for (const args of [['list'], ['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('a')]]) {
     await assert.rejects(f.person(...args), refused('error.handoff.unavailable'), JSON.stringify(args));
   }
   assert.equal(fs.existsSync(f.file), false); assert.deepEqual([f.broadcasts, f.schedules], [0, 0]);
@@ -172,7 +179,7 @@ test('a fault the dispatcher kept for the engine is shown to the person, also wh
   assert.deepEqual(plain(unstarted), { started: false, engineFault: { message: 'Synthetic build fault', at: NOW, count: 1 } });
   unstarted.engineFault.message = 'changed by the caller';
   assert.equal(g.dispatcher.integrationError.message, 'Synthetic build fault', 'A copy here too');
-  for (const args of [['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['made-up']]) {
+  for (const args of [['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('a')], ['made-up']]) {
     await assert.rejects(g.person(...args), refused('error.handoff.notStarted'), JSON.stringify(args));
   }
   assert.equal(fs.existsSync(g.file), false); assert.deepEqual([g.broadcasts, g.schedules], [0, 0]);
@@ -241,7 +248,9 @@ test('an action that does not fit the record\'s state is refused in words, and n
   f.handoffs.noteReady(ready('b'), NOW);
   const before = f.bytes();
   const stale = [['retryDelivery', key('a')], ['retryDelivery', key('b')], ['retryDelivery', key('zz')], ['retryDelivery', undefined], ['retryReason', 'made-up'], ['retryReason', undefined],
-    ['resolve', 'H9-other', true], ['resolve', undefined], ['answer', 'review-off'], ['answer', 'installable:'], ['answer', 7], ['made-up', id], [undefined], ['constructor'], ['__proto__']];
+    ['resolve', 'H9-other', true], ['resolve', undefined], ['answer', 'review-off'], ['answer', 'installable:'], ['answer', 7], ['made-up', id], [undefined], ['constructor'], ['__proto__'],
+    // Only a returned delivery is given back: not one that is handed, waits, or is unknown.
+    ['redo', key('a')], ['redo', key('b')], ['redo', key('zz')], ['redo', undefined], ['redo', 7], ['space', undefined], ['space', 7], ['space', ''], ['space', 'a/b'], ['space', ['shared']], ['space', { id: 'shared' }]];
   for (const args of stale) await assert.rejects(f.person(...args), refused('error.handoff.invalid'), JSON.stringify(args));
   assert.equal(f.bytes(), before); assert.deepEqual([f.broadcasts, f.schedules], [0, 0]);
   // A handoff that was already dealt with (from another window, say) cannot be dealt with twice.
@@ -277,6 +286,148 @@ test('an action that does not fit the record\'s state is refused in words, and n
   assert.throws(() => k.handoffs.hold(key('zz'), 'review-off', NOW), error => error.code === 'HANDOFF_STATE' && error.stale === undefined);
 });
 
+// Deliver, hand out, and let the integrator answer with these result lines.
+const PERSON = { kind: 'person', name: 'You', sessionId: null };
+function settled(f, deliveries, reply, verified = {}) {
+  for (const delivery of deliveries) f.handoffs.noteReady(delivery, NOW);
+  const view = { integrator: INTEGRATOR, session: integratorSession(), complete: true, wakePolicy: { enabled: true }, now: NOW, idleSince: new Map([['integrator', NOW - rules.IDLE_SETTLE_MS]]), humanAt: new Map(), mainHead: MAIN };
+  const opened = f.handoffs.advance(view, NOW);
+  f.handoffs.confirmSent(opened.handoffId, { tag: 'tag-1', control: 0 }, NOW);
+  const answered = { integrator: INTEGRATOR, complete: true, now: NOW + 60000, idleSince: new Map([['integrator', NOW + 60000 - rules.IDLE_SETTLE_MS]]),
+    session: integratorSession({ messages: [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW }, { id: 'r', role: 'assistant', text: reply, time: NOW + 1 }] }) };
+  f.handoffs.settle(f.handoffs.plan(answered), { handoffId: opened.handoffId, mainHead: HEAD2, verified }, NOW + 60000);
+}
+// One returned delivery of member-b. `queued`: the task is still in the space's queue as the person wrote it.
+const FULL = 'Fix the synthetic page.\nA second line, which the delivery\'s short label does not carry.';
+function returned(f, { queued = true, member = { roomIds: ['shared'] }, delivery = {}, reason = ' needs a rebase' } = {}) {
+  const itemId = queued ? f.room.queueAdd(typeof queued === 'string' ? queued : FULL, null, 'shared', PERSON) : 'b';
+  if (member) f.sessions.push({ id: 'member-b', nativeId: 'native-b', name: 'Member b', state: 'idle', ...member });
+  const fact = { ...ready('b'), key: `ready:shared:${itemId}`, itemId, memberId: 'member-b', ...delivery };
+  for (const [name, value] of Object.entries(fact)) if (value === undefined) delete fact[name];
+  settled(f, [fact], `RETURNED ${commitOf('b')}${reason}`);
+  return { key: fact.key, itemId, last: () => f.room.queueItems('shared').at(-1), open: () => f.room.queueItems('shared').filter(item => item.status === 'queued').length };
+}
+const SAID = ' (the integrator returned branch lane/b: needs a rebase)';
+
+test('the person sees where each delivery of one space stands, and gives a returned task back to its member once', async t => {
+  const f = fixture(t), plain = value => JSON.parse(JSON.stringify(value));
+  const itemId = f.room.queueAdd(FULL, null, 'shared', PERSON), b = `ready:shared:${itemId}`;
+  f.sessions.push({ id: 'member-b', nativeId: 'native-b', name: 'Member b', state: 'idle', roomIds: ['shared'] });
+  settled(f, [ready('a'), { ...ready('b'), key: b, itemId, memberId: 'member-b' }, ready('c')],
+    `MERGED ${commitOf('a')} as ${HEAD2} tests 3/3\nRETURNED ${commitOf('b')} needs a rebase\nRETURNED ${commitOf('c')}`, { [key('a')]: { verified: true, as: HEAD2 } });
+  const before = f.bytes(), room = fs.readFileSync(f.room.file, 'utf8');
+  const seen = plain(await f.person('space', 'shared'));
+  assert.deepEqual(seen.items, {
+    a: { key: key('a'), state: 'merged', branch: 'lane/a', commit: commitOf('a'), text: 'Task a', memberName: 'Member a', mergedAs: HEAD2, tests: { passed: 3, total: 3 } },
+    [itemId]: { key: b, state: 'returned', branch: 'lane/b', commit: commitOf('b'), text: 'Task b', memberId: 'member-b', memberName: 'Member b', note: 'needs a rebase' },
+    // A line without a reason: nothing is shown as the integrator's words.
+    c: { key: key('c'), state: 'returned', branch: 'lane/c', commit: commitOf('c'), text: 'Task c', memberName: 'Member c' } });
+  assert.deepEqual(Object.keys(seen).sort(), [...Object.keys(plain(await f.person('list'))), 'items'].sort(), 'The overview, and the items of this space');
+  assert.equal(seen.started, true);
+  assert.deepEqual(plain((await f.person('space', '00000000-0000-4000-8000-000000000000')).items), {}, 'Another space sees none of them');
+  assert.deepEqual([f.bytes(), fs.readFileSync(f.room.file, 'utf8'), f.broadcasts, f.schedules], [before, room, 0, 0], 'Looking changes and announces nothing');
+  // Given back: the whole task as it was written, the branch and the integrator's words, for the member who did it.
+  const done = plain(await f.person('redo', b)), added = f.room.queueItems('shared').at(-1);
+  assert.deepEqual(done, { redone: true, itemId: added.id, assignee: 'member-b' });
+  assert.deepEqual([added.text, added.assignee, added.status, added.creator], [FULL + SAID, 'member-b', 'queued', PERSON]);
+  assert.notEqual(added.id, itemId);
+  assert.equal(plain(await f.person('space', 'shared')).items[itemId].redone, true);
+  assert.deepEqual([f.broadcasts, f.schedules], [1, 1], 'Every window is told and the dispatcher looks again');
+  // Once: a second press, here or in another window, is refused and adds nothing.
+  await assert.rejects(f.person('redo', b), refused('error.handoff.invalid'));
+  assert.deepEqual([f.room.queueItems('shared').length, f.broadcasts, f.schedules], [2, 1, 1]);
+  // Without a reason the task says so, and with no task left in the queue it is named by the delivery's label.
+  await f.person('redo', key('c'));
+  assert.deepEqual([f.room.queueItems('shared').at(-1).text, f.room.queueItems('shared').at(-1).assignee], ['Task c (the integrator returned branch lane/c; please redo it)', null]);
+  // Two presses at once add one task.
+  const g = fixture(t), twice = returned(g);
+  const results = await Promise.allSettled([g.person('redo', twice.key), g.person('redo', twice.key)]);
+  assert.deepEqual(results.map(result => result.status).sort(), ['fulfilled', 'rejected']);
+  assert.ok(refused('error.handoff.invalid')(results.find(result => result.status === 'rejected').reason));
+  assert.deepEqual([g.room.queueItems('shared').length, twice.open(), g.broadcasts], [2, 2, 1]);
+});
+
+test('a task given back goes to the member who did it only while that member can take it, and is cut to fit', async t => {
+  // Who gets it.
+  const cases = [
+    ['still in the space', {}, 'member-b'],
+    ['left the space', { member: { roomIds: [] } }, null],
+    ['ended', { member: { roomIds: ['shared'], state: 'ended' } }, null],
+    ['a membership record that cannot be read', { member: { roomIds: 'shared' } }, null],
+    ['no longer listed', { member: null }, null],
+    ['a delivery that does not say who did it', { delivery: { memberId: undefined } }, null],
+  ];
+  for (const [name, options, assignee] of cases) {
+    const f = fixture(t), one = returned(f, options);
+    assert.equal((await f.person('redo', one.key)).assignee, assignee, name);
+    assert.deepEqual([one.last().assignee, one.last().text], [assignee, FULL + SAID], name);
+  }
+  // A member the person archived (while outside every space) that the backend lists in the space again: not served by the queue, so not named.
+  const a = fixture(t), archived = returned(a, { member: { roomIds: [] } });
+  await a.room.archiveSession(a.client, 'member-b', 'Member b');
+  assert.deepEqual(a.room.value.archivedSessions, ['member-b']);
+  a.sessions.find(session => session.id === 'member-b').roomIds = ['shared'];
+  assert.equal((await a.person('redo', archived.key)).assignee, null);
+  // The task is no longer in the queue: the delivery's short label; without a label, the branch.
+  const b = fixture(t), label = returned(b, { queued: false });
+  await b.person('redo', label.key);
+  assert.equal(label.last().text, 'Task b' + SAID);
+  const c = fixture(t), bare = returned(c, { queued: false, delivery: { text: undefined } });
+  await c.person('redo', bare.key);
+  assert.equal(bare.last().text, 'lane/b' + SAID);
+  // A task as long as a task may be: cut so that the integrator's words still fit, never inside a character.
+  const room = rules.ITEM_TEXT_LIMIT - SAID.length;
+  for (const [name, long, kept] of [['plain', 'x'.repeat(rules.ITEM_TEXT_LIMIT), 'x'.repeat(room - 1) + '…'], ['exactly fits', 'x'.repeat(room), 'x'.repeat(room)],
+    ['a pair at the cut', 'x'.repeat(room - 2) + '😀' + 'y'.repeat(9), 'x'.repeat(room - 2) + '…']]) {
+    const d = fixture(t), cut = returned(d, { queued: long });
+    await d.person('redo', cut.key);
+    assert.equal(cut.last().text, kept + SAID, name);
+    assert.ok(cut.last().text.length <= rules.ITEM_TEXT_LIMIT, name);
+  }
+});
+
+test('a task that cannot be added is not marked as given back, and a mark that cannot be kept takes the task out again', async t => {
+  // The queue is full: refused in the queue's own words; the delivery can be given back once there is room.
+  const f = fixture(t), one = returned(f);
+  // (Filled in one write of the space's record, with items as the queue itself makes them.)
+  f.room.update({ queue: [...f.room.queueItems('shared'), ...Array.from({ length: rules.QUEUE_LIMIT - one.open() }, (_, index) => rules.newItem(`Synthetic task ${index}`, null, NOW, PERSON))] }, undefined, 'shared');
+  const before = f.bytes();
+  await assert.rejects(f.person('redo', one.key), refused('error.queue.full'));
+  assert.deepEqual([f.bytes(), one.open(), f.broadcasts, f.schedules], [before, rules.QUEUE_LIMIT, 0, 0]);
+  f.room.queueCancel(one.last().id, 'shared');
+  assert.equal((await f.person('redo', one.key)).redone, true);
+  assert.equal(one.open(), rules.QUEUE_LIMIT);
+  // A space that is gone: refused, and nothing is marked.
+  const g = fixture(t), gone = '00000000-0000-4000-8000-000000000000';
+  settled(g, [{ ...ready('b'), key: `ready:${gone}:b`, roomId: gone }], `RETURNED ${commitOf('b')} needs a rebase`);
+  const kept = g.bytes();
+  await assert.rejects(g.person('redo', `ready:${gone}:b`), refused('error.room.missing'));
+  assert.deepEqual([g.bytes(), g.broadcasts], [kept, 0]);
+  // The sessions cannot be read: nothing is added or marked.
+  const h = fixture(t), unread = returned(h);
+  h.client.call = async () => { throw Error('Synthetic backend failure'); };
+  await assert.rejects(h.person('redo', unread.key), /Synthetic backend failure/);
+  assert.deepEqual([unread.open(), h.handoffs.spaceView('shared')[unread.itemId].redone, h.broadcasts], [1, undefined, 0]);
+  // The record cannot be saved: the task that was just added is cancelled, the fault is said, and the delivery stays to be given back.
+  const k = fixture(t), unsaved = returned(k);
+  fs.chmodSync(k.directory, 0o500);
+  try { await assert.rejects(k.person('redo', unsaved.key), refused('error.handoff.record')); }
+  finally { fs.chmodSync(k.directory, 0o700); }
+  // (The windows are told, since the space's record changed; the dispatcher is not asked to look again.)
+  assert.deepEqual([unsaved.last().text, unsaved.last().status, unsaved.open(), k.broadcasts, k.schedules], [FULL + SAID, 'cancelled', 1, 1, 0]);
+  assert.equal(new IntegrationHandoffs(k.directory).spaceView('shared')[unsaved.itemId].redone, undefined);
+  assert.match(k.context.integrationFault.message, /./);
+  // And the task cannot be taken out again either: the person is told that it is in the queue, and the record's fault is kept.
+  const m = fixture(t), both = returned(m);
+  m.room.queueCancel = () => { throw Error('Synthetic cancel failure'); };
+  fs.chmodSync(m.directory, 0o500);
+  try { await assert.rejects(m.person('redo', both.key), refused('error.handoff.redoKept')); }
+  finally { fs.chmodSync(m.directory, 0o700); }
+  assert.deepEqual([both.last().text, both.last().status, both.open(), m.broadcasts, m.schedules], [FULL + SAID, 'queued', 2, 1, 0]);
+  assert.match(m.context.integrationFault.message, /./); assert.ok(Number.isFinite(m.context.integrationFault.at));
+  assert.equal(new IntegrationHandoffs(m.directory).spaceView('shared')[both.itemId].redone, undefined);
+});
+
 test('the entry is wired for the person\'s window, and its words exist in both languages', () => {
   const preload = fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8');
   assert.match(preload, /for \(const name of \['queueSecretary', 'integrator', 'handoff', /);
@@ -286,8 +437,14 @@ test('the entry is wired for the person\'s window, and its words exist in both l
   assert.match(source, /let integrationHandoffs = null;/);
   const builder = source.indexOf('function integrationEngine(dispatcher) {'), next = source.indexOf('\nfunction ', builder + 10), assigned = source.indexOf('  integrationHandoffs = handoffs;');
   assert.ok(assigned > builder && assigned < next);
-  for (const name of ['error.handoff.personOnly', 'error.handoff.unavailable', 'error.handoff.notStarted', 'error.handoff.invalid', 'error.handoff.record']) {
+  for (const name of ['error.handoff.personOnly', 'error.handoff.unavailable', 'error.handoff.notStarted', 'error.handoff.invalid', 'error.handoff.record', 'error.handoff.redoKept']) {
     const zh = locale.format('zh', name), en = locale.format('en', name);
     assert.ok(zh && en && zh !== en && zh !== name && en !== name, name);
+  }
+  // The task given back names the task, the branch and (when there are any) the integrator's words, in both languages.
+  for (const language of ['zh', 'en']) {
+    const said = locale.format(language, 'queue.redo.text', { text: 'TASK', branch: 'BRANCH', note: 'NOTE' }), bare = locale.format(language, 'queue.redo.plain', { text: 'TASK', branch: 'BRANCH' });
+    assert.ok(said.startsWith('TASK') && said.includes('BRANCH') && said.includes('NOTE') && !said.includes('{'), language);
+    assert.ok(bare.startsWith('TASK') && bare.includes('BRANCH') && !bare.includes('{') && bare !== said, language);
   }
 });

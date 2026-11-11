@@ -52,6 +52,7 @@ const waitingOn = (handoff, key) => Boolean(handoff) && (key === `conflict:${han
 const NOTICE_STATES = ['pending', 'reserved', 'done'];
 const REVIEW_STATES = ['off', 'on', 'cap'];
 const SHOWN_LIMIT = 500;
+const UNSPECIFIED = 'unspecified'; // what a result line without a reason is recorded with
 // What a delivery's space should currently say about it, as one short label; null when there is
 // nothing to say (it waits to be handed out, or a newer delivery replaced it). A space record is
 // written when this label differs from the one last written.
@@ -74,6 +75,7 @@ const optional = (value, limit) => value === undefined || value === null || valu
 // A label shown to the integrator: one line, bounded, unable to close the quotes around it or to imitate NAW's own markers.
 const label = (value, limit) => typeof value === 'string' ? shortText(value.replace(CONTROL, ' ').replace(/[「」【】]/gu, ' '), limit) : '';
 const sha = value => typeof value === 'string' && /^[0-9a-f]{40}$/u.test(value);
+const said = entry => Boolean(entry.note) && entry.note !== UNSPECIFIED;
 const identity = value => value && typeof value === 'object' && !Array.isArray(value) && plain(value.sessionId, 100) && plain(value.nativeId, 100)
   ? { sessionId: value.sessionId, nativeId: value.nativeId } : null;
 
@@ -99,7 +101,8 @@ function checkEntry(entry) {
       !(entry.closedAt === undefined || Number.isFinite(entry.closedAt) && !OPEN_STATES.includes(entry.state)) ||
       !(entry.resends === undefined || entry.resends === 1) || optional(entry.note, 200) === null || optional(entry.shown, SHOWN_LIMIT) === null ||
       (entry.state === 'merged') !== sha(entry.mergedAs) || (entry.state !== 'merged' && entry.mergedAs !== undefined) ||
-      !(entry.tests === undefined || Number.isSafeInteger(entry.tests?.passed) && Number.isSafeInteger(entry.tests?.total)) || optional(entry.review, 100) === null) throw fail('Invalid delivery record');
+      !(entry.tests === undefined || Number.isSafeInteger(entry.tests?.passed) && Number.isSafeInteger(entry.tests?.total)) || optional(entry.review, 100) === null ||
+      !(entry.redone === undefined || entry.redone === true && entry.state === 'returned')) throw fail('Invalid delivery record');
 }
 function checkState(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data) || data.version !== 1 || !Number.isSafeInteger(data.seq) || data.seq < 0 ||
@@ -201,8 +204,8 @@ function parseResults(text, entries) {
       // A MERGED line that cannot be read is still a claim of a merge: it is never taken as merged.
       results[key] = merged ? { kind: 'merged', as: merged[1].toLowerCase(), tests: { passed: Number(merged[2]), total: Number(merged[3]) }, ...(merged[4] ? { review: merged[4] } : {}) }
         : { kind: 'merged', malformed: true };
-    } else if (match[1] === 'RETURNED') results[key] = { kind: 'returned', reason: label(rest, 200) || 'unspecified' };
-    else results[key] = { kind: 'held', reason: label(rest, 200) || 'unspecified' };
+    } else if (match[1] === 'RETURNED') results[key] = { kind: 'returned', reason: label(rest, 200) || UNSPECIFIED };
+    else results[key] = { kind: 'held', reason: label(rest, 200) || UNSPECIFIED };
   }
   return { results, ignored };
 }
@@ -841,6 +844,43 @@ class IntegrationHandoffs {
     }
     if (close) for (const [key, reason] of Object.entries(next.reasons)) if (reason.open && match(key)) reason.open = false;
     return released;
+  }
+  // Where each delivery of one space stands, by queue item, for the person's queue panel. The
+  // states: 'queued' (waits to be handed out), 'handed' (the integrator has it), 'asking'
+  // (inside a handoff that waits for the person), 'held', 'merged', 'returned'. A returned one
+  // says whether the person already gave its task back. A delivery that a newer one replaced
+  // is left out, and so is a note that only says no reason was given. Copies only, in an object
+  // without a prototype: whatever a queue item is called, it is a key and nothing else.
+  spaceView(roomId) {
+    this.usable();
+    const handoff = this.state.handoff, items = Object.create(null);
+    for (const entry of this.state.ready) {
+      if (entry.roomId !== roomId || entry.state === 'superseded') continue;
+      const asking = entry.state === 'handed' && handoff?.status === 'waiting' && handoff.keys.includes(entry.key);
+      items[entry.itemId] = { key: entry.key, state: asking ? 'asking' : entry.state === 'deliverable' ? 'queued' : entry.state, branch: entry.branch, commit: entry.commit,
+        ...(entry.text ? { text: entry.text } : {}), ...(entry.memberId ? { memberId: entry.memberId } : {}), ...(entry.memberName ? { memberName: entry.memberName } : {}),
+        ...(entry.reason ? { reason: entry.reason } : {}), ...(said(entry) ? { note: entry.note } : {}), ...(entry.mergedAs ? { mergedAs: entry.mergedAs } : {}),
+        ...(entry.tests ? { tests: { ...entry.tests } } : {}), ...(entry.redone ? { redone: true } : {}) };
+    }
+    return items;
+  }
+  // A returned delivery whose task the person may give back to be done again: what the new task
+  // needs. Refused for anything else, and once it has been given back.
+  redoTarget(key) {
+    this.usable();
+    const entry = this.state.ready.find(candidate => candidate.key === key);
+    if (!entry || entry.state !== 'returned' || entry.redone) throw stale('This delivery cannot be given back');
+    return { key: entry.key, roomId: entry.roomId, itemId: entry.itemId, branch: entry.branch, ...(entry.text ? { text: entry.text } : {}), ...(said(entry) ? { note: entry.note } : {}),
+      ...(entry.memberId ? { memberId: entry.memberId } : {}) };
+  }
+  // The person gave it back: recorded once, so that it is not offered again.
+  markRedone(key) {
+    const next = this.draft();
+    const entry = next.ready.find(candidate => candidate.key === key);
+    if (!entry || entry.state !== 'returned' || entry.redone) throw stale('This delivery cannot be given back');
+    entry.redone = true;
+    this.commit(next);
+    return { redone: true };
   }
   // The person's "retry" on one held delivery. A standing condition stays open: the condition
   // has not changed. An event reason is over once nothing is held under it.
