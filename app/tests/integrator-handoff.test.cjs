@@ -36,7 +36,7 @@ function openHandoff(backlog, extra) {
   assert.equal(action.kind, 'open', JSON.stringify(action));
   return action;
 }
-const emptyState = (extra = {}) => ({ version: 1, seq: 0, ready: [], handoff: null, reasons: {}, refusals: 0, seen: [], capDay: null, ...extra });
+const emptyState = (extra = {}) => ({ version: 1, seq: 0, ready: [], handoff: null, reasons: {}, refusals: 0, seen: [], capDay: null, returns: {}, ...extra });
 
 test('a delivery is recorded once; an unusable one is refused, and a bad label never loses the delivery', t => {
   const { backlog, file } = fixture(t);
@@ -205,7 +205,7 @@ test('a handoff carries the deliverable deliveries under its own marker, and onl
   assert.equal(state.seq, 1);
   // One at a time: a new delivery waits.
   backlog.noteReady(ready('d'), NOW);
-  assert.deepEqual(backlog.advance(observed(), NOW + 9), { kind: 'none', why: 'handoff-open' });
+  assert.deepEqual(backlog.advance(observed(), NOW + 9), { kind: 'none', why: 'send-pending' }, 'The open handoff has the one place');
   assert.deepEqual(open().snapshot(), backlog.snapshot(), 'A restart reads the same record');
 });
 
@@ -341,7 +341,7 @@ test('a standing condition is asked about once until the condition itself change
   assert.deepEqual(backlog.hold(key('b'), 'lock-held:owner-1', NOW).notify, { reason: 'lock-held:owner-1' });
   assert.deepEqual(backlog.hold(key('c'), 'lock-held:owner-2', NOW).notify, { reason: 'lock-held:owner-2' });
   assert.equal(backlog.hold(key('d'), 'lock-held:owner-1', NOW).notify, null);
-  for (const bad of ['', 'made-up', 'lock-held', 'lock-held:', 'integrator-unset', 'backlog-full', 7]) assert.throws(() => backlog.hold(key('a'), bad, NOW), { code: 'HANDOFF_STATE' }, String(bad));
+  for (const bad of ['', 'made-up', 'lock-held', 'lock-held:', 'integrator-unset', 'backlog-full', 'installable:' + MAIN, 7]) assert.throws(() => backlog.hold(key('a'), bad, NOW), { code: 'HANDOFF_STATE' }, String(bad));
   assert.throws(() => backlog.hold(key('zz'), 'review-off', NOW), { code: 'HANDOFF_STATE' });
   assert.equal(reasonKey('conflict:H1-abcd'), 'conflict:H1-abcd'); assert.equal(reasonKey('conflict'), null); assert.equal(reasonKey('review-off:x'), null);
   assert.equal(reasonKey('lock-held:' + 'x'.repeat(201)), null);
@@ -388,11 +388,8 @@ test('an event reason is over when nothing is held under it, and the next failur
   assert.deepEqual(backlog.hold(key('c'), 'conflict:H7-abcd', NOW).notify, { reason: 'conflict:H7-abcd' });
   backlog.retryReady(key('c'));
   assert.equal(backlog.snapshot().reasons['conflict:H7-abcd'].open, false);
-  // The same for a task returned too often: the next time it goes over the limit the person is told again.
-  assert.deepEqual(backlog.hold(key('c'), 'returned-limit:lane/c', NOW).notify, { reason: 'returned-limit:lane/c' });
-  backlog.retryReady(key('c'));
-  assert.equal(backlog.snapshot().reasons['returned-limit:lane/c'].open, false);
-  assert.deepEqual(backlog.hold(key('c'), 'returned-limit:lane/c', NOW + 5).notify, { reason: 'returned-limit:lane/c' });
+  // A question has no deliveries under it, so nothing can be held under one.
+  for (const bad of ['returned-limit:lane/c', 'installable:' + MAIN]) assert.throws(() => backlog.hold(key('c'), bad, NOW), { code: 'HANDOFF_STATE' }, bad);
 });
 
 test('a notice starts once, is confirmed after it was shown, and is not sent again when its outcome is unknown', t => {
@@ -497,7 +494,7 @@ test('a record too large for the next start to accept is never written: the chan
 
 test('the backlog is bounded: a full one refuses new deliveries without dropping any and tells the person once', t => {
   const { directory, file } = fixture(t);
-  const entry = (index, state) => ({ ...ready('x'), key: key(`${state}-${index}`), itemId: `${state}-${index}`, branch: `lane/${state}-${index}`, state, notedAt: NOW + index });
+  const entry = (index, state) => ({ ...ready('x'), key: key(`${state}-${index}`), itemId: `${state}-${index}`, branch: `lane/${state}-${index}`, state, notedAt: NOW + index, ...(state === 'merged' ? { mergedAs: MAIN } : {}) });
   const full = emptyState({ ready: [...Array.from({ length: OPEN_LIMIT }, (_, index) => entry(index, 'deliverable')), ...Array.from({ length: CLOSED_KEPT + 3 }, (_, index) => entry(index, 'merged'))] });
   fs.writeFileSync(file, JSON.stringify(full), { mode: 0o600 });
   const backlog = new IntegrationHandoffs(directory);

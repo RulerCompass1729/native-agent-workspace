@@ -2385,6 +2385,8 @@ module.exports = {
   queueVacancies,
   planDispatch,
   replyAfter,
+  startsWithDecision,
+  UNCONFIRMED_SEND_MS,
   dispatchText,
   handoffRequestText,
   handoffText,
