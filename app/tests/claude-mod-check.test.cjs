@@ -36,18 +36,42 @@ function fixture(t, body) {
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const realSetTimeout = setTimeout;
 const realSleep = ms => new Promise(resolve => realSetTimeout(resolve, ms));
-async function readyFile(f, name, completed) {
+async function readyFile(f, name, completed, complete = /^ready\n$/) {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
     for (const work of fs.readdirSync(f.privateDir)) {
       const file = path.join(f.privateDir, work, 'home', name);
-      if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8').trim();
+      if (fs.existsSync(file)) {
+        const content = fs.readFileSync(file, 'utf8');
+        if (complete.test(content)) return content.trim();
+      }
     }
     assert.equal(completed.value, undefined, 'The run ended before fixture readiness: ' + JSON.stringify(completed.value));
     await realSleep(10);
   }
   assert.fail('The sandbox fixture did not reach ' + name + ' before the independent startup watchdog');
 }
+
+for (const [name, stages, pattern, expected] of [
+  ['child-ready', ['', '123', '123\n'], /^[1-9]\d*\n$/, '123'],
+  ['before-output', ['', 'rea', 'ready\n'], /^ready\n$/, 'ready'],
+]) test(`${name} is ready only after the producer completes its line`, async t => {
+  const f = fixture(t, ''), home = path.join(f.privateDir, 'controlled', 'home'); fs.mkdirSync(home, { recursive: true });
+  const file = path.join(home, name), seen = [], read = fs.readFileSync;
+  fs.writeFileSync(file, stages[0]);
+  t.mock.method(fs, 'readFileSync', (target, ...args) => {
+    const value = read(target, ...args);
+    if (target === file) {
+      seen.push(value);
+      // Advance the writer only after capturing this real read, so creation
+      // and each partial write are observed without relying on scheduling.
+      if (seen.length < stages.length) fs.writeFileSync(file, stages[seen.length]);
+    }
+    return value;
+  });
+  assert.equal(await readyFile(f, name, {}, pattern), expected);
+  assert.deepEqual(seen, stages);
+});
 
 test('the summary, the failed tests and the engine message are read from the real output format', () => {
   assert.deepEqual(check.parse(PASS), { pass: 2, fail: 0, tests: 2, files: 1, failed: [], engine: [] });
@@ -120,6 +144,8 @@ test('a failing version is recorded with its failed tests and the engine message
 test('the time limit ends the whole process group, and the result is not kept as complete', mac, async t => {
   const f = fixture(t, '/bin/sleep 30 &\nCHILD=$!\n/usr/bin/printf "fixture-started\\nchild=%s\\n" "$CHILD"\necho "$CHILD" > "$HOME/child-ready"\nwait');
   const stop = new AbortController(), completed = {};
+  const signals = [], kill = process.kill;
+  t.mock.method(process, 'kill', (pid, signal) => { signals.push({ pid, signal }); return kill.call(process, pid, signal); });
   t.signal.addEventListener('abort', () => stop.abort(), { once: true });
   // Keep the real sandbox, pipes, process group and SIGKILL. Advance only the
   // deadline after the script proves it created its child and printed the PID.
@@ -127,8 +153,10 @@ test('the time limit ends the whole process group, and the result is not kept as
   const running = f.running = check.run({ ...f.options, timeoutMs: 600, signal: stop.signal });
   running.then(value => { completed.value = value; });
   try {
-    const expectedChild = Number(await readyFile(f, 'child-ready', completed)); assert.ok(expectedChild > 1);
-    const before = Date.now(); t.mock.timers.tick(600); const record = await running;
+    const expectedChild = Number(await readyFile(f, 'child-ready', completed, /^[1-9]\d*\n$/)); assert.ok(expectedChild > 1);
+    t.mock.timers.tick(599); assert.equal(completed.value, undefined); assert.deepEqual(signals, [], 'No group signal before the full deadline');
+    const before = Date.now(); t.mock.timers.tick(1); const record = await running;
+    assert.equal(signals.length, 1); assert.ok(signals[0].pid < -1); assert.equal(signals[0].signal, 'SIGKILL');
     // A child left alive would hold the output open until it ends by itself.
     assert.ok(Date.now() - before < 5000, 'The run returns at the limit');
     assert.deepEqual([record.timedOut, record.exit, record.signal], [true, null, 'SIGKILL']);
@@ -149,13 +177,18 @@ test('the time limit ends the whole process group, and the result is not kept as
 test('a deadline before the fixture prints a child PID is incomplete with no invented output', mac, async t => {
   const f = fixture(t, 'echo ready > "$HOME/before-output"\nwhile [ ! -f "$HOME/release-startup" ]; do /bin/sleep 0.02; done\necho child=unreachable');
   const stop = new AbortController(), completed = {};
+  const signals = [], kill = process.kill;
+  t.mock.method(process, 'kill', (pid, signal) => { signals.push({ pid, signal }); return kill.call(process, pid, signal); });
   t.signal.addEventListener('abort', () => stop.abort(), { once: true });
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const running = f.running = check.run({ ...f.options, timeoutMs: 600, signal: stop.signal });
   running.then(value => { completed.value = value; });
   try {
-    await readyFile(f, 'before-output', completed); t.mock.timers.tick(600);
+    await readyFile(f, 'before-output', completed);
+    t.mock.timers.tick(599); assert.equal(completed.value, undefined); assert.deepEqual(signals, [], 'No group signal before the full deadline');
+    t.mock.timers.tick(1);
     const record = await running;
+    assert.equal(signals.length, 1); assert.ok(signals[0].pid < -1); assert.equal(signals[0].signal, 'SIGKILL');
     assert.deepEqual([record.timedOut, record.exit, record.signal, record.note], [true, null, 'SIGKILL', ''], JSON.stringify(record));
     assert.equal(check.complete(record, record.mod), false); assert.deepEqual(fs.readdirSync(f.privateDir), []);
   } finally { stop.abort(); await running; }

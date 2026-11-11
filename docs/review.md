@@ -1,5 +1,21 @@
 # Review and issue record
 
+**Mod readiness file visibility, 2026-11-11 (incremental review pending):**
+The integration run exposed a gap in the new timeout test: the shell creates
+and truncates child-ready before writing its PID, so existence alone could
+return an empty string. Readiness now requires a complete numeric line; the
+before-output marker likewise requires its complete ready line. Controlled
+real-file reads expose creation, partial content and the completed line: both
+old helpers fail, both repaired cases pass. Holding the actual sandbox script
+after file creation reproduces the PID-zero failure; the repaired test waits
+for its completed write and then passes with real process-group termination.
+Both timeout cases now check no completion and no group signal at 599ms,
+followed by exactly one real group SIGKILL at 600ms. A private loader that moves
+only the deadline to 599ms makes both tests fail. The full mod-check file passes
+13/13. Production code and all time limits are unchanged. This corrects the
+earlier readiness proof, without claiming that synthetic file scheduling
+reproduces the precise historical load. Formal independent review is pending.
+
 **Mod timeout test ordering, 2026-11-11 (author verification pending):**
 The process-group timeout test treated a 600ms spawn deadline as proof that the
 sandbox's shell had created a child and printed its PID. Holding the fake program
