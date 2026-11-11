@@ -122,24 +122,31 @@ test('a newer complete state sent by another path discards the waiting snapshot,
   assert.equal(push.status().superseded, 1);
 });
 
-test('every full-state send in the main process goes through pushState', () => {
-  const helperStart = mainSource.indexOf('function pushState(context, display)');
+test('everything sent to a window\'s page goes through sendToPage or pushState', () => {
+  const helperStart = mainSource.indexOf('function sendToPage(context, channel, ...data)');
   const helperEnd = mainSource.indexOf('function bindClient(context)');
   assert.ok(helperStart > 0 && helperEnd > helperStart);
   const outside = mainSource.slice(0, helperStart) + mainSource.slice(helperEnd);
-  assert.doesNotMatch(outside, /send\('workspace:state'/, 'no send of full state bypasses pushState');
+  // The only direct sends left are to windows that always have a page: the startup window, the focused
+  // window of a menu command, and the locale broadcast, which leaves background windows out.
+  const direct = outside.split('\n').filter(line => /webContents\.send\(/.test(line));
+  for (const line of direct) {
+    assert.match(line, /startupWindow\.webContents\.send\(|'workspace:locale'|'workspace:new'/, 'unexpected direct send: ' + line.trim().slice(0, 120));
+  }
+  assert.match(outside, /filter\(c => !c\.background\)\.map\(c => c\.win\)\]\);\n  for \(const win of targets\)/, 'the locale broadcast skips background windows');
+  assert.doesNotMatch(outside, /[^.]send\('workspace:state'/, 'no send of full state bypasses pushState');
   assert.equal((outside.match(/pushState\(context, /g) || []).length, 3, 'the state event, the room broadcast and the quit notice');
+  assert.match(outside, /if \(context\.background \|\| context\.win\.isDestroyed\(\) \|\| context\.client\.socket\.destroyed\) return;\n    const snapshot = await context\.client\.call\('initial'\);/, 'the room broadcast does not fetch state for a background window');
   assert.match(outside, /register\('uiReady', c => \{[^\n]*c\.armStatePush\?\.\(\)/);
   assert.equal((outside.match(/bindStatePush\(context\);/g) || []).length, 1, 'ordinary windows; a background window loads no document and never reports ready');
   // The reconnect refresh is the one other complete state sent to the page; nothing older may follow it.
-  const reconnect = outside.slice(outside.indexOf("context.statePush?.discardWaiting();"), outside.indexOf("context.win.webContents.send('workspace:reconnected', refreshed);"));
+  const reconnect = outside.slice(outside.indexOf("context.statePush?.discardWaiting();"), outside.indexOf("sendToPage(context, 'workspace:reconnected', refreshed);"));
   assert.ok(reconnect.length > 0 && reconnect.length < 80, 'the waiting snapshot is discarded right before the reconnect refresh is sent');
-  assert.match(outside, /ipcMain\.handle\('workspace:state-rendered'/);
 });
 
 // The actual helpers from main.cjs, run against a synthetic window.
 function mainHelpers() {
-  const helpers = mainSource.slice(mainSource.indexOf('function pushState(context, display)'), mainSource.indexOf('function bindClient(context)'));
+  const helpers = mainSource.slice(mainSource.indexOf('function sendToPage(context, channel, ...data)'), mainSource.indexOf('function bindClient(context)'));
   const handler = mainSource.slice(mainSource.indexOf("ipcMain.handle('workspace:state-rendered'"), mainSource.indexOf("ipcMain.handle('workspace:retry-startup'"));
   const sent = [];
   const pageEvents = new Map();
@@ -175,6 +182,9 @@ function mainHelpers() {
     mainFrame,
     push(value) {
       pushState(context, value);
+    },
+    sendToPage(channel, ...data) {
+      vm.runInContext('sendToPage', sandbox)(context, channel, ...data);
     },
     acknowledge(sequence, senderFrame = mainFrame, sender = webContents) {
       return handlers.get('workspace:state-rendered')({ sender, senderFrame }, sequence);
@@ -245,6 +255,68 @@ test('only the window\'s own trusted main frame can acknowledge, and a destroyed
   h.acknowledge(1);
   h.push('c');
   assert.equal(h.sent.length, 1);
+});
+
+// 2026-11-10: one hidden window per agent that had used workspace control received every state change,
+// terminal chunk and progress line. It loads no document, so nothing was ever received and the browser
+// kept all of it. A minimal program showed about 2.3 GB held for 297 sends of 10 MB until it quit.
+test('nothing is sent to a background window, armed or not', () => {
+  const h = mainHelpers();
+  h.context.background = true;
+  h.push('a');
+  h.context.armStatePush();
+  h.push('b');
+  h.sendToPage('workspace:terminal', { id: 's1', data: 'x' });
+  h.sendToPage('workspace:backend-switched', {});
+  assert.deepEqual(h.sent, []);
+
+  h.context.background = false;
+  h.sendToPage('workspace:terminal', { id: 's1', data: 'x' });
+  assert.deepEqual(h.sent.map(entry => entry.channel), ['workspace:terminal']);
+  h.destroy();
+  h.sendToPage('workspace:terminal', { id: 's1', data: 'y' });
+  assert.equal(h.sent.length, 1, 'a destroyed window is not sent to');
+});
+
+test('the actual client wiring forwards state, terminal and progress to a page and nothing to a background window', () => {
+  const { EventEmitter } = require('node:events');
+  const helpers = mainSource.slice(mainSource.indexOf('function sendToPage(context, channel, ...data)'), mainSource.indexOf('function bindClient(context)'));
+  const binding = mainSource.slice(mainSource.indexOf('function bindClient(context)'), mainSource.indexOf('\nfunction displayState('));
+  function wire(background) {
+    const sent = [];
+    let displays = 0;
+    const client = new EventEmitter();
+    const context = {
+      client,
+      background,
+      win: { isDestroyed: () => false, webContents: { send: (channel, ...data) => sent.push([channel, ...data]) } },
+    };
+    const sandbox = {
+      createStatePush,
+      context,
+      displayState: value => {
+        displays += 1;
+        return value;
+      },
+      notifyToolWait() {},
+      notifyCapacity() {},
+      uiError: () => ({ message: 'disconnected', uiMessage: null }),
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(helpers + '\n' + binding + '\nbindClient(context);', sandbox);
+    client.emit('state', { sessions: [] });
+    client.emit('terminal', { id: 's1', data: 'x' });
+    client.emit('progress', { id: 's1' });
+    client.emit('closed');
+    return { sent, displays: () => displays };
+  }
+  const page = wire(false);
+  assert.deepEqual(page.sent.map(entry => entry[0]), ['workspace:state', 'workspace:terminal', 'workspace:progress', 'workspace:disconnected']);
+  assert.equal(page.displays(), 1);
+
+  const hidden = wire(true);
+  assert.deepEqual(hidden.sent, []);
+  assert.equal(hidden.displays(), 0, 'the display state of a background window is not even computed');
 });
 
 test('the page acknowledges every numbered snapshot exactly once, also when a subscriber throws or none exists yet', () => {

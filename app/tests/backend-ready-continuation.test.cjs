@@ -49,7 +49,7 @@ function fixture(settings = { auto: true, migrate: false }) {
     displayText: (key, params) => locale.format('zh', key, params), displayLanguage: () => 'zh',
     register: (name, handler) => handlers[name] = handler,
   });
-  for (const name of ['connectionUpdateOptions', 'autoBackendSwitchOnce', 'autoBackendSwitch']) vm.runInContext(source(name), scope);
+  for (const name of ['sendToPage', 'connectionUpdateOptions', 'autoBackendSwitchOnce', 'autoBackendSwitch']) vm.runInContext(source(name), scope);
   // The baseline has no shared helper; the automatic-success assertions still expose its missing route.
   if (ast.body.some(node => node.type === 'FunctionDeclaration' && node.id.name === 'runConnectionContinuation')) vm.runInContext(source('runConnectionContinuation'), scope);
   const start = main.indexOf("  register('continueConnection',"), end = main.indexOf("  for (const action of ['resume', 'forget'])", start);

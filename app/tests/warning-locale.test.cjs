@@ -75,7 +75,8 @@ test('sandbox preload retains original event arguments and forwards optional war
 test('Main retains its no-duplicate warning receipt and clears optional display metadata on the existing clear event', () => {
   const source = read('main.cjs'), a = source.indexOf('function reportViewStorage('), b = source.indexOf('async function broadcastRoom(', a), calls = [];
   const context = vm.createContext({ windows: new Map([[1, { win: { isDestroyed: () => false, webContents: { send: (...args) => calls.push(args) } } }]]) });
-  vm.runInContext('let viewStorageWarning = null, viewStorageWarningUiMessage = null;\n' + source.slice(a, b), context);
+  const h = source.indexOf('function sendToPage('), helper = source.slice(h, source.indexOf('\n}\n', h) + 3);
+  vm.runInContext('let viewStorageWarning = null, viewStorageWarningUiMessage = null;\n' + helper + source.slice(a, b), context);
   context.notice = uiError('error.warning.viewSave');
   vm.runInContext('reportViewStorage(notice.message, notice.uiMessage); reportViewStorage(notice.message, notice.uiMessage); reportViewStorage(null);', context);
   assert.equal(calls.length, 2); assert.equal(calls[0][1], context.notice.message); assert.equal(calls[0][2], context.notice.uiMessage);
