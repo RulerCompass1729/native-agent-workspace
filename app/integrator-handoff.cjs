@@ -475,6 +475,8 @@ class IntegrationHandoffs {
   // reasons hold deliveries, and where things stand.
   knows(key) { this.usable(); return this.state.seen.includes(key) || this.state.ready.some(entry => entry.key === key); }
   reasonsHeld() { this.usable(); return [...new Set(this.state.ready.filter(entry => entry.state === 'held').map(entry => entry.reason))]; }
+  // Whether the backlog is full: a delivery that replaces none of those inside would be left out.
+  full() { this.usable(); return this.state.ready.filter(entry => OPEN_STATES.includes(entry.state)).length >= OPEN_LIMIT; }
   summary() {
     this.usable();
     const count = state => this.state.ready.filter(entry => entry.state === state).length, handoff = this.state.handoff;

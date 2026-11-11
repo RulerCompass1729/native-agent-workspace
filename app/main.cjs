@@ -2147,8 +2147,9 @@ function recordMigration(option, screens, result) {
   }
 }
 // B6: the engine that hands delivered work to the person's designated integrator, for one
-// dispatcher. It sends through the dispatcher's own send (the same path, switches and "not
-// sent" rules as a queue item), writes space records through the space state, and reads git
+// dispatcher. It sends through the dispatcher's own send (the same backend entry, the same check
+// right before sending and the same "not sent" rules as a queue item; whether the integrator
+// can take a message is the handoff record's to judge), writes space records through the space state, and reads git
 // only in the repository the designated integrator works in, whose main branch is "main".
 function integrationEngine(dispatcher) {
   // Loaded here, not at the top: with the switch closed the daily app does not even read these files.
@@ -2156,7 +2157,6 @@ function integrationEngine(dispatcher) {
   const { IntegratorEngine } = require('./integrator-engine.cjs');
   const integratorGit = require('./integrator-git.cjs');
   const handoffs = new IntegrationHandoffs(dataDir), readers = new Map();
-  integrationHandoffs = handoffs;
   const reader = () => {
     try {
       const integrator = integratorRole.current();
@@ -2169,10 +2169,14 @@ function integrationEngine(dispatcher) {
   };
   // A question git cannot be asked just now (no integrator, no folder) is answered "unknown".
   const ask = name => async (...args) => { const read = reader(); return read ? read[name](...args) : null; };
-  return new IntegratorEngine({ handoffs, designation: () => integratorRole.current(), mainHead: () => ask('branch')('main'),
+  const engine = new IntegratorEngine({ handoffs, designation: () => integratorRole.current(), mainHead: () => ask('branch')('main'),
     reader: { commit: ask('commit'), isAncestor: ask('isAncestor'), changes: ask('changes') },
     send: (session, text, handoffId) => dispatcher.send(session, text, handoffId), typing: sessionId => dispatcher.noteHuman(sessionId),
     record: fact => roomState.recordHandoff(fact), notify: info => notifyHandoff(info) });
+  // The person's own entry gets the record only when the engine exists: an engine that could not
+  // be built leaves the entry answering "not enabled" instead of changing a record nothing reads.
+  integrationHandoffs = handoffs;
+  return engine;
 }
 // What the person is shown about integration handoffs: counts, what is on hold and why, the
 // handoff that waits for them with its question, and the open questions. For the person only.

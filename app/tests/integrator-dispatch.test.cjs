@@ -48,7 +48,7 @@ function fixture(t, options = {}) {
     mainHead: async () => { f.heads += 1; return f.head; }, reader: read, send: (target, text, handoffId) => dispatcher.send(target, text, handoffId), typing: id => dispatcher.noteHuman(id),
     record: fact => room.recordHandoff(fact), notify: async info => { f.notices.push(info); } });
   f.dispatcher = new QueueDispatcher({ roomState: room, dataDir: directory, clients: () => client, now: () => Date.now() + f.skew, settleMs: 0, humanQuietMs: 0, broadcast: async () => { f.broadcasts += 1; },
-    sampleProcesses: async () => '', samplePressure: async () => '', ...(options.plain ? {} : { integration: engine, integrationUnreadable: () => { f.unreadable += 1; }, integrationFailed: error => { f.failed.push(error.message); } }) });
+    sampleProcesses: async () => '', samplePressure: async () => '', ...(options.plain ? {} : { integration: options.build || engine, integrationUnreadable: () => { f.unreadable += 1; }, integrationFailed: error => { f.failed.push(error.message); } }) });
   t.after(() => { f.dispatcher.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   f.records = () => room.metadata('shared').events.filter(event => event.monitor?.kind === 'handoff').map(event => [event.monitor.outcome, event.monitor.itemId]);
   f.states = () => Object.fromEntries(f.handoffs.snapshot().ready.map(entry => [entry.branch, entry.state + (entry.reason ? ':' + entry.reason : '')]));
@@ -232,6 +232,105 @@ test('an integrator that is not ready, or a record that cannot be read, sends no
   assert.deepEqual([g.calls.length, g.records(), g.notices], [1, [], []]);
   assert.equal(fs.readFileSync(path.join(g.directory, FILE), 'utf8'), '{', 'The record is left as it is');
   assert.equal(g.room.queueItems()[0].status, 'done', 'The queue itself goes on');
+  // Until the person has looked at the record nothing can move, so it keeps neither passes nor a connection going.
+  assert.equal(g.dispatcher.hasOpenWork(), false);
+  // With no queue work at all it is the same from the start, and the window's own check still tells the person, once.
+  const h = fixture(t);
+  fs.writeFileSync(path.join(h.directory, FILE), '{', { mode: 0o600 });
+  h.dispatcher.integration.handoffs = new IntegrationHandoffs(h.directory);
+  assert.equal(h.dispatcher.hasOpenWork(), false);
+  await h.pass();
+  assert.equal(h.unreadable, 1, 'Told by the first once-a-minute check through a window');
+  await h.pass(); await h.pass();
+  assert.deepEqual([h.unreadable, h.dispatcher.hasOpenWork(), h.calls.length], [1, false, 0]);
+});
+
+test('an engine that cannot be built leaves the queue running without it, and the person is told once', async t => {
+  const f = fixture(t, { build: () => { throw Error('Synthetic build fault'); } });
+  assert.equal(f.dispatcher.integration, null);
+  assert.deepEqual(f.failed, ['Synthetic build fault']);
+  assert.deepEqual([f.dispatcher.integrationError.message, f.dispatcher.integrationError.count], ['Synthetic build fault', 1]);
+  // The queue works as it does without an engine.
+  const itemId = f.room.queueAdd('Synthetic task', null);
+  await f.pass();
+  assert.deepEqual(f.calls.map(call => [call.id, call.itemId]), [['member-a', itemId]]);
+  f.reply('member-a', `READY lane/a ${COMMIT}`);
+  await f.pass(); await f.pass();
+  assert.equal(f.room.queueItems()[0].status, 'done');
+  assert.deepEqual([f.calls.length, f.failed.length, f.unreadable, f.records(), f.dispatcher.hasOpenWork()], [1, 1, 0, [], false]);
+  assert.equal(fs.existsSync(path.join(f.directory, FILE)), false, 'Nothing was taken in: there is no engine');
+  // The builder is given a dispatcher that is complete (it is built last).
+  let seen = null;
+  const g = fixture(t, { build: dispatcher => { seen = [typeof dispatcher.now(), dispatcher.rotations !== undefined, Array.isArray(dispatcher.log)]; return null; } });
+  assert.deepEqual([seen, g.dispatcher.integration, g.failed], [['number', true, true], null, []]);
+  // In the main process the person's entry gets the record only once the engine exists.
+  const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
+  const builder = main.slice(main.indexOf('function integrationEngine(dispatcher) {'), main.indexOf('\nfunction ', main.indexOf('function integrationEngine(dispatcher) {') + 10));
+  assert.ok(builder.indexOf('const engine = new IntegratorEngine(') > 0 && builder.indexOf('integrationHandoffs = handoffs;') > builder.indexOf('const engine = new IntegratorEngine('));
+  assert.match(builder, /\n  integrationHandoffs = handoffs;\n  return engine;\n\}\n/);
+});
+
+test('a pass whose result cannot be read is a fault like a pass that throws: kept and told once, and the queue goes on', async t => {
+  const f = fixture(t);
+  f.room.queueAdd('Synthetic task', null);
+  await f.pass();
+  f.reply('member-a', `READY lane/a ${COMMIT}`);
+  const pass = f.dispatcher.integration.pass.bind(f.dispatcher.integration);
+  // "Taken in" without its list; then no result at all.
+  let shape = { kind: 'passed', taken: {} };
+  f.dispatcher.integration.pass = async () => shape;
+  await f.pass(); await f.pass();
+  assert.equal(f.failed.length, 1, 'Told once, not on every pass');
+  assert.ok(f.dispatcher.integrationError.count >= 2 && f.dispatcher.integrationError.message === f.failed[0]);
+  assert.equal(f.room.queueItems()[0].status, 'done', 'The queue item was settled all the same');
+  shape = undefined;
+  await f.pass(); await f.pass();
+  assert.equal(f.failed.length, 2, 'Another kind of fault is told as well');
+  // Telling the windows fails outright: kept too.
+  f.dispatcher.integration.pass = pass;
+  const broadcast = f.dispatcher.broadcast;
+  f.dispatcher.broadcast = () => { throw Error('Synthetic broadcast fault'); };
+  await f.pass();
+  assert.deepEqual([f.failed.length, f.failed[2], f.dispatcher.integrationError.message], [3, 'Synthetic broadcast fault', 'Synthetic broadcast fault']);
+  // What the pass itself did is kept: the delivery was taken in and handed out.
+  f.dispatcher.broadcast = broadcast;
+  await f.pass(); await f.pass();
+  assert.deepEqual([f.states(), f.failed.length], [{ 'lane/a': 'handed' }, 3]);
+});
+
+test('an integrator NAW itself is busy with is handed nothing until that is over', async t => {
+  const f = fixture(t);
+  f.room.queueAdd('Synthetic task', null);
+  await f.pass();
+  f.reply('member-a', `READY lane/a ${COMMIT}`);
+  // Its session takes part in a running space exchange (it was taken out of the space while the exchange ran).
+  f.client.state.rooms[0].run = { status: 'running', ids: ['integrator'] };
+  await f.pass(); await f.pass();
+  assert.deepEqual([f.calls.length, f.states(), f.heads], [1, { 'lane/a': 'deliverable' }, 0], 'Nothing is sent and git is not read');
+  assert.equal(f.dispatcher.hasOpenWork(), true, 'The exchange ends by itself, so the passes go on');
+  f.client.state.rooms[0].run = null;
+  await f.pass();
+  assert.deepEqual([f.calls.length, f.states()], [2, { 'lane/a': 'handed' }]);
+  // The view names the sessions the queue's own planner leaves alone: a queue item sent and not yet answered,
+  // a session rotation that is not at rest and the successor it has not confirmed, a quarantined successor.
+  const g = fixture(t);
+  g.client.state.sessions.find(candidate => candidate.id === 'integrator').roomIds = ['shared'];
+  const itemId = g.room.queueAdd('Synthetic task', 'integrator');
+  await g.pass();
+  assert.deepEqual(g.calls.map(call => [call.id, call.itemId]), [['integrator', itemId]]);
+  const busy = () => { const view = g.dispatcher.integrationView(g.dispatcher.view()); return ['integrator', 'member-a', 'member-b', 'next'].filter(id => view.busy(id)); };
+  assert.deepEqual(busy(), ['integrator'], 'A queue item awaits its answer');
+  g.reply('integrator', 'Done.');
+  await g.pass();
+  assert.deepEqual([g.room.queueItems()[0].status, busy()], ['done', []]);
+  g.dispatcher.rotations = { 'member-a': { phase: 'requested', newId: 'next' } };
+  assert.deepEqual(busy(), ['member-a', 'next']);
+  g.dispatcher.rotations = { 'member-a': { phase: 'kept', newId: 'next', handoffConfirmed: true } };
+  assert.deepEqual(busy(), [], 'A rotation at rest engages nobody');
+  // A successor whose folder was not trusted stays engaged until its cleanup is confirmed; the session it replaced is at rest.
+  g.dispatcher.rotations = { 'member-a': { phase: 'failed', trustNoticeId: '01234567-89ab-4cde-8f01-23456789abcd', newId: 'next', cwd: '/synthetic/a', newCwd: '/synthetic/b' } };
+  assert.deepEqual(busy(), ['next']);
+  g.dispatcher.rotations = {};
 });
 
 test('the engine is built only behind a switch that the daily app cannot open', () => {
@@ -251,7 +350,10 @@ test('the engine is built only behind a switch that the daily app cannot open', 
   assert.match(main, /backgroundTest = \/\^\\d\+\$\/\.test\(process\.env\.NAW_TEST_PARENT_PID\)/);
   // The dispatcher runs the engine only when it was given one.
   const dispatch = fs.readFileSync(path.join(__dirname, '../queue-dispatch.cjs'), 'utf8');
-  assert.match(dispatch, /this\.integration = typeof options\.integration === 'function' \? options\.integration\(this\) : null;/);
+  assert.match(dispatch, /\n    this\.integration = null;\n/);
+  assert.match(dispatch, /\n    if \(typeof options\.integration === 'function'\) \{\n      try \{ this\.integration = options\.integration\(this\); \} catch \(error\) \{ this\.integrationFault\(error\); \}\n    \}\n  \}\n/);
+  assert.equal(dispatch.match(/options\.integration\(/g).length, 1, 'One place builds the engine, and a fault there is caught');
+  assert.equal(dispatch.match(/this\.integration = /g).length, 2, 'Absent at first, then the one place that builds it');
   assert.match(dispatch, /if \(this\.integration && !this\.closed\) await this\.integrate\(\);/);
   assert.match(dispatch, /if \(this\.integration && this\.integration\.hasWork\(this\.integrationRooms\(\)\)\) \{/);
   // Nothing else in the app or its scripts builds or loads the engine.

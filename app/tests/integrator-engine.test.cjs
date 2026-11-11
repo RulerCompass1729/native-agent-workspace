@@ -101,7 +101,7 @@ test('the fact the real space record writes for a finished queue item is the one
   assert.deepEqual([taken.roomId, taken.itemId, taken.branch, taken.commit, taken.memberId, taken.memberName, taken.text], ['shared', itemId, 'lane/synthetic', commitOf('s'), 'member-a', 'Synthetic member', 'Synthetic task with a long name']);
 });
 
-test('a full backlog takes nothing in, tells once, and takes the delivery in when there is room again', t => {
+test('a full backlog takes nothing in, tells once, and takes the delivery in when there is room again', async t => {
   const f = fixture(t);
   f.engine.intake([]);
   const filler = Array.from({ length: OPEN_LIMIT }, (_, index) => ({ key: key(`m-${index}`), roomId: 'space-1', itemId: `m-${index}`, branch: `lane/m-${index}`, commit: commitOf('m'), state: 'deliverable', notedAt: NOW }));
@@ -115,6 +115,48 @@ test('a full backlog takes nothing in, tells once, and takes the delivery in whe
   assert.deepEqual(handoffs.pendingNotices(), ['backlog-full'], 'Told once');
   // A newer delivery of a branch that is already inside still gets in, in the place of the one it replaces.
   assert.deepEqual(engine.intake([space([fact('n', { branch: 'lane/m-0' })])]), { stored: [key('n')], superseded: [key('m-0')], skipped: 0, full: false });
+});
+
+test('a full backlog, or a record that cannot be read, is not work that keeps passes going', async t => {
+  const f = fixture(t);
+  f.engine.intake([]);
+  const filler = Array.from({ length: OPEN_LIMIT }, (_, index) => ({ key: key(`m-${index}`), roomId: 'space-1', itemId: `m-${index}`, branch: `lane/m-${index}`, commit: commitOf('m'), state: 'deliverable', notedAt: NOW }));
+  fs.writeFileSync(f.file, JSON.stringify({ ...f.handoffs.snapshot(), ready: filler }), { mode: 0o600 });
+  const handoffs = new IntegrationHandoffs(f.directory);
+  const engine = new IntegratorEngine({ handoffs, now: () => NOW, designation: () => null, mainHead: async () => MAIN, send: async () => ({}) });
+  assert.equal(handoffs.full(), true);
+  // One space holds a delivery that does not fit; another has nothing to take.
+  const chat = (id, time = NOW + 1) => ({ id, role: 'user', time, text: 'Synthetic words' });
+  const room = space([fact('a')]), other = space([chat('c-1')], OTHER_SPACE, 'Space two');
+  assert.equal(engine.hasWork([room, other]), true, 'Not looked through yet');
+  assert.equal(engine.intake([room, other]).full, true);
+  assert.equal(engine.hasWork([room, other]), true, 'The person has not been told yet');
+  assert.deepEqual((await engine.tell()).told, ['backlog-full']);
+  assert.equal(engine.hasWork([room, other]), false, 'Full, told, nothing new and nobody designated: nothing can move');
+  assert.equal(engine.hasWork([other]), false, 'A space with nothing left out is looked through, also after the full one');
+  // The space's record changes: it may hold a newer delivery of a branch inside, so it is looked through once more.
+  const more = space([fact('a'), chat('c-2', NOW + 2)]);
+  assert.equal(engine.hasWork([more]), true);
+  assert.equal(engine.intake([more]).full, true);
+  assert.equal(engine.hasWork([more]), false);
+  // The backlog has room again (one delivery inside has left): the delivery that was left out is work, and is taken in.
+  fs.writeFileSync(f.file, JSON.stringify({ ...handoffs.snapshot(), ready: [...filler.slice(1), { ...filler[0], state: 'superseded', closedAt: NOW }] }), { mode: 0o600 });
+  engine.handoffs = new IntegrationHandoffs(f.directory);
+  assert.equal(engine.handoffs.full(), false, 'A delivery that is closed no longer counts');
+  assert.deepEqual([engine.handoffs.showable(), engine.handoffs.pendingNotices()], [[], []]);
+  assert.equal(engine.hasWork([more]), true);
+  assert.equal(engine.hasWork([other]), false, 'The space with nothing left out stays looked through');
+  assert.deepEqual(engine.intake([more]).stored, [key('a')]);
+  assert.equal(engine.hasWork([more]), false, 'Taken in; nobody is designated');
+  // A record that cannot be read: nothing can move until the person has looked at it.
+  const g = fixture(t);
+  fs.writeFileSync(g.file, '{', { mode: 0o600 });
+  const broken = new IntegratorEngine({ handoffs: new IntegrationHandoffs(g.directory), now: () => NOW, designation: () => INTEGRATOR, mainHead: async () => MAIN, send: async () => ({}) });
+  assert.equal(broken.unreadable(), true);
+  assert.throws(() => broken.handoffs.full(), { code: 'HANDOFF_STATE' }, 'Like every other look at the record');
+  assert.equal(broken.hasWork([space([fact('a')])]), false);
+  assert.deepEqual(await broken.pass([space([fact('a')])], view(), async () => view()), { kind: 'unreadable' });
+  assert.equal(broken.hasWork([space([fact('a')])]), false);
 });
 
 test('without a usable designation nothing is handed out, and the person is asked once', async t => {
