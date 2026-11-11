@@ -9590,3 +9590,30 @@ green outputs and both read-only reviews are retained privately. Product sources
 were unchanged during both reviews; only the test cleanup and audit wording
 needed the second review. This source checkpoint neither installs nor restarts
 the daily app.
+## Shared isolated-startup profile identity (2026-11-11, source checkpoint)
+
+The real startup accepted the normal private directory as an isolated test
+profile through both a case alias and a Data-volume alias: real paths had
+different spellings but the same device and inode. The shared startup decision
+now compares filesystem identity, so every test-only switch keeps the same
+normal-profile exclusion without separate per-feature guards.
+
+An absent normal profile still permits a distinct existing private test profile:
+`stat` returning `ENOENT` cannot simultaneously identify an existing alias of
+that directory. Other normal-profile lookup errors fail closed. Parent, owner,
+private-mode and directory checks are unchanged. Test-only permissions remain
+closed in ordinary startup; a verified isolated test launched from an installed binary remains
+eligible. No installed app or GUI was exercised here.
+
+Actual-bootstrap tests with real synthetic directories reproduced two failures
+before the fix (4 pass, 2 fail) and pass afterwards (6 pass, 0 fail/skip), including
+the two real APFS aliases, reverse spelling, symlink, distinct directory and
+normal-profile absence/error cases. Source build exits zero; full suite on
+base `e09fdd9`: 5467 pass, zero fail/skip. Independent headless session
+`09b83ada-8ba9-47fc-b623-4afe2f436aa7` returned APPROVE_SCOPED with no blocking
+finding, conditional on that green full run. Only Read/Grep/Glob were exposed,
+with no MCP. HEAD, index and worktree were unchanged by review. The test proves
+the reported aliases on the current macOS filesystem; it makes no cross-platform
+or installed-launch claim. Symlink replacement races and ancestor/descendant
+profile relationships remain outside this same-directory repair. Raw red/green,
+full output and review evidence are linked from the private lane handoff.

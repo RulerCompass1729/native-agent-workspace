@@ -56,11 +56,11 @@ const testParent = Number(process.env.NAW_TEST_PARENT_PID);
 // Existing headed launchers supply both a real parent and a private profile.
 // Set macOS activation policy before ready/window creation, not after firstWindow.
 const testRequested = Object.hasOwn(process.env, 'NAW_TEST_PARENT_PID');
-function canonicalNormalProfile(target) {
-  try { return fs.realpathSync(target); }
+function normalProfileIdentity(target) {
+  try { return fs.statSync(target); }
   catch (error) {
     if (error.code !== 'ENOENT') throw error;
-    return path.join(canonicalNormalProfile(path.dirname(target)), path.basename(target));
+    return null;
   }
 }
 let backgroundTest = false;
@@ -68,7 +68,8 @@ if (testRequested) {
   try {
     const profile = process.env.NAW_DATA_DIR && fs.realpathSync(path.resolve(process.env.NAW_DATA_DIR));
     const info = profile && fs.statSync(profile);
-    backgroundTest = /^\d+$/.test(process.env.NAW_TEST_PARENT_PID) && Number.isSafeInteger(testParent) && testParent > 1 && process.ppid === testParent && Boolean(profile) && profile !== canonicalNormalProfile(normalDataDir) && info.isDirectory() && typeof process.getuid === 'function' && info.uid === process.getuid() && (info.mode & 0o077) === 0;
+    const normalInfo = normalProfileIdentity(normalDataDir);
+    backgroundTest = /^\d+$/.test(process.env.NAW_TEST_PARENT_PID) && Number.isSafeInteger(testParent) && testParent > 1 && process.ppid === testParent && Boolean(profile) && (!normalInfo || info.dev !== normalInfo.dev || info.ino !== normalInfo.ino) && info.isDirectory() && typeof process.getuid === 'function' && info.uid === process.getuid() && (info.mode & 0o077) === 0;
   } catch { /* An unverifiable profile must never fall through to foreground. */ }
   if (!backgroundTest) { console.error('Invalid isolated headed-test parent/profile; no window opened.'); process.exit(1); }
 }
