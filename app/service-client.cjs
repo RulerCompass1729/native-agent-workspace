@@ -71,8 +71,10 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
   if (!runtimeConfig || path.resolve(localLocations) !== path.resolve(runtimeConfig)) {
     try {
       fs.lstatSync(localLocations);
-      require('./runtime-locations.cjs').readLocations(localLocations);
-      runtimeConfig = localLocations;
+      // A backend's own file is used while it has an entry. An entry whose program is gone is dropped now,
+      // while no native server of this backend is running, so the backend does not start with a provider
+      // it cannot run and nothing in Settings to repair it (runtime-locations.cjs).
+      runtimeConfig = require('./runtime-locations.cjs').backendLocations(dataDir, runtimeConfig, { repair: true }).file;
     } catch (error) { if (error.code !== 'ENOENT') throw uiError("error.service.locationsUnreadable", { arg1: localLocations }); }
   }
   const pluginFiles = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.js'];

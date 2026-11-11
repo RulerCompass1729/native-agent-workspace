@@ -1,10 +1,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { readLocations, isExecutable } = require('./runtime-locations.cjs');
-function executable(name, acceptable = () => true) {
+const { readLocations, isExecutable, backendLocations } = require('./runtime-locations.cjs');
+// locations: the configured locations to use instead of this process's own file (a check of another backend).
+function executable(name, acceptable = () => true, locations = null) {
   let configured;
-  try { configured = readLocations()[name]; } catch { return undefined; }
+  try { configured = (locations || readLocations())[name]; } catch { return undefined; }
   // An explicitly selected but missing program must not silently switch to a
   // different installation. Show the setting as unavailable until repaired.
   if (configured) return isExecutable(configured) && acceptable(configured) ? configured : undefined;
@@ -12,12 +13,26 @@ function executable(name, acceptable = () => true) {
   candidates.push(path.join(require('node:os').homedir(), '.local/bin', name), `/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`, `/usr/bin/${name}`);
   return candidates.find(p => { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile() && acceptable(p); } catch { return false; } });
 }
-function pythonExecutable() {
+function pythonExecutable(locations = null) {
   // Finder's PATH can find the developer-tools installer shim before a real
   // Python installed by python.org. Skip the shim while searching, not after
   // choosing it, so installation followed by Recheck works without restarting.
   return executable('python3', python => process.platform !== 'darwin' ||
-    python !== '/usr/bin/python3' || fs.existsSync('/Library/Developer/CommandLineTools/usr/bin/python3'));
+    python !== '/usr/bin/python3' || fs.existsSync('/Library/Developer/CommandLineTools/usr/bin/python3'), locations);
+}
+// What the backend in <dataDir>/<key> would run for each program if it started now, without changing anything:
+// its own locations file (an entry whose program is gone is dropped at a real start), else the shared Settings
+// file, else discovery on this process's PATH. Used to check an update before it is installed.
+function backendPrograms(dataDir, key = '.') {
+  const shared = path.join(dataDir, 'runtime-locations.json');
+  const result = backendLocations(path.join(dataDir, key), shared, { repair: false });
+  const locations = result.locations || readLocations(shared), own = Boolean(result.locations);
+  const programs = {};
+  for (const name of ['claude', 'codex', 'python3']) {
+    const found = name === 'python3' ? pythonExecutable(locations) : executable(name, undefined, locations);
+    programs[name] = { available: Boolean(found), path: found || locations[name] || null, source: locations[name] ? (own ? 'own' : 'settings') : found ? 'found' : 'missing' };
+  }
+  return { backend: key, wouldDrop: result.removed, programs, ok: Object.values(programs).every(program => program.available) };
 }
 function nativeEnvironment(extra = {}) {
   const env = { ...process.env, ...extra };
@@ -60,4 +75,4 @@ function processMayBeAlive(identity) {
   return !identity.started || !current || current.started === identity.started;
 }
 
-module.exports = { executable, pythonExecutable, nativeEnvironment, processIdentity, processMayBeAlive };
+module.exports = { executable, pythonExecutable, nativeEnvironment, processIdentity, processMayBeAlive, backendPrograms };

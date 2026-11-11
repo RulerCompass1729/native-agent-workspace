@@ -1348,6 +1348,9 @@ async function boot() {
       const result = await showDialog(c, 'open', { title: displayText('os.chooseProgram'), buttonLabel: displayText('os.useProgram'), properties: ['openFile', 'showHiddenFiles'] });
       if (!result.canceled && result.filePaths.length === 1) setLocation(process.env.NAW_RUNTIME_CONFIG, key, result.filePaths[0]);
     }
+    // The backends resolve their programs again, so the notice about a program the active backend cannot
+    // run appears or goes with this change, not at the next session start.
+    try { pushState(c, displayState(await c.client.refresh(), c)); } catch { /* the setting is saved; the next state shows it */ }
     return preflight();
   });
   register('dataDirectory', c => c.background ? { path: dataDir } : shell.openPath(dataDir));

@@ -202,6 +202,12 @@ class WorkspaceClient extends EventEmitter {
       { message: this.control.legacyInput?.storageWarning, uiMessage: this.control.legacyInput?.storageWarningUiMessage },
       ...(this.control.legacyInput?.sharedReplies?.storageError ? [uiError('error.warning.sharedReplyUnsaved')] : [])].filter(part => part.message);
     const storageDisplay = uiError('error.warningLines', { warnings: warningParts.map(part => part.message).join('\n') }, { parts: warningParts, param: 'warnings', separator: '\n' });
+    // The backend that takes new sessions cannot run a provider: shown as a standing notice, not left to fail at
+    // the next session start. Only a backend that resolves its programs again on every initial state is believed.
+    const programNames = { claude: 'Claude Code', codex: 'Codex', python: 'Python 3' };
+    const programs = this.active.state.capabilities?.includes('programAvailabilityV1') ? this.active.state.available : null;
+    const missingPrograms = programs ? Object.keys(programNames).filter(key => programs[key] === false) : [];
+    const programDisplay = missingPrograms.length ? uiError('error.warning.programsMissing', { programs: missingPrograms.map(key => programNames[key]).join(', ') }) : null;
     const operators = this.entries.filter(e => e.state.capabilities?.includes('operatorControl1a'));
     const operatorPolicy = operators.length ? { enabled: operators.every(e => !e.closed && !e.closing && !this.control.maintenance.has(e.key) && e.state.operatorPolicy?.enabled === true && !e.state.operatorPolicy?.error),
       error: operators.find(e => e.state.operatorPolicy?.error)?.state.operatorPolicy.error || null, domains: operators.flatMap(e => e.state.operatorPolicy?.domains || []) } : null;
@@ -209,6 +215,7 @@ class WorkspaceClient extends EventEmitter {
       rooms, room: rooms.find(r => r.id === roomId) || { id: roomId, revision: 0, run: null, messages: [] },
       diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.localDispatchCount?.() ?? this.control.legacyInput?.records.length ?? 0) },
       storageWarning: storageDisplay.message || null, storageWarningUiMessage: storageDisplay.uiMessage || null,
+      programWarning: programDisplay?.message || null, programWarningUiMessage: programDisplay?.uiMessage || null,
       storageRetryable: this.entries.some(e => e.state.storageRetryable && e.state.capabilities?.includes('retrySave')),
       services: this.entries.map(e => ({ version: e.state.runtimeVersion, active: e === this.active, sessions: e.state.sessions.length })),
       peerHandoffsAvailable: this.active.state.capabilities?.includes(PEER_HANDOFFS) === true,
