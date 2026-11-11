@@ -90,14 +90,14 @@ async function cleanup() {
     await until(async () => !(await page.locator('#terminal-paste').isDisabled()), 'Native terminal input ready', 15000);
     await page.locator('#terminal-area .xterm-screen >> visible=true').click();
     await until(() => page.evaluate(() => Boolean(document.activeElement?.classList.contains('xterm-helper-textarea') && document.activeElement.closest('#terminal-area'))), 'Native terminal input focused', 15000);
-    if (/Yes, I trust this folder/.test(text)) {
-      assert.ok(text.replace(/\s*\n\s*/g, '').includes(fs.realpathSync(base)), 'Trust is answered only for the owned temporary folder');
-      await page.keyboard.press('ArrowDown');
-      await until(async () => /❯\s*Yes, I trust this folder/.test(await terminalText()), 'Native trust choice moved to Yes', 5000);
-    } else {
-      await page.keyboard.press('ArrowUp');
-      await until(async () => (await terminalText()).includes('❯ Yes'), 'Native key choice moved to Yes', 5000);
-    }
+    // A native question that has just appeared can drop a key (run 9: the key was written to the native
+    // terminal and the choice stayed). As a person would, press again only while the screen still shows
+    // the other choice, at most three times, and confirm only once the screen shows Yes selected.
+    const trust = /Yes, I trust this folder/.test(text);
+    if (trust) assert.ok(text.replace(/\s*\n\s*/g, '').includes(fs.realpathSync(base)), 'Trust is answered only for the owned temporary folder');
+    const chosen = async () => trust ? /❯\s*Yes, I trust this folder/.test(await terminalText()) : (await terminalText()).includes('❯ Yes');
+    for (let press = 0; press < 3 && !(await chosen()); press++) { await page.keyboard.press(trust ? 'ArrowDown' : 'ArrowUp'); await until(chosen, 'choice', 2500).catch(() => {}); }
+    assert.ok(await chosen(), trust ? 'Native trust choice moved to Yes' : 'Native key choice moved to Yes');
     await page.keyboard.press('Enter');
     await until(async () => await ready() || (await terminalText()) !== text, 'Native question answered', 20000);
     await sleep(800);
