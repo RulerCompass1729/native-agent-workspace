@@ -129,12 +129,15 @@ test('a restarted native display clears only its own obsolete exit notice', asyn
   const record = { cwd: require('node:os').tmpdir(), activity: '' };
   const r = new Codex(record, {});
   r.on('activity', text => { record.activity = text; });
-  t.after(async () => { if (r.terminal?.alive) await r.terminal.stop(); });
+  // The product gives a native program five seconds to exit. That limit is not what this test is about, and a busy
+  // machine can take longer to let a child go: wait for the exit itself, with a wide bound.
+  const stop = terminal => terminal.stop(60_000);
+  t.after(async () => { if (r.terminal?.alive) await stop(r.terminal); });
   let terminal = r.makeTerminal([process.execPath, '-e', 'process.exit(0)']);
   await once(terminal, 'closed'); assert.match(record.activity, /原生终端已退出/);
   terminal = r.makeTerminal([process.execPath, '-e', 'setInterval(() => {}, 1000)']);
   await once(terminal, 'started'); assert.equal(record.activity, '');
-  await terminal.stop(); record.activity = '保留其他原生确认状态';
+  await stop(terminal); record.activity = '保留其他原生确认状态';
   terminal = r.makeTerminal([process.execPath, '-e', 'setInterval(() => {}, 1000)']);
   await once(terminal, 'started'); assert.equal(record.activity, '保留其他原生确认状态');
 });
