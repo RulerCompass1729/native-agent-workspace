@@ -1,5 +1,14 @@
 # Review and issue record
 
+**S2 space-file export buffer, 2026-11-11 (delta review pending):**
+hosted spaceFiles reads no longer retain their bytes in the context's reusable
+file preview. Their approved text stays only in the existing one-use read cache;
+neither before nor after pickup can saveLocalFile export that token, including
+after the caller leaves the space. The person's own preview/save flow and the
+separately human-approved path-based openLocalFile flow are unchanged. Actual
+handler regressions cover both hosted providers, pickup timing, membership loss
+and real attempted writes; the path-based permission decision remains out of scope.
+
 **S2 requester admission, 2026-11-11 (delta review pending):**
 the pending-count filter must not exempt an ineligible requester from its own
 limit. Before creating any new maintenance intent, the refreshed consent roster

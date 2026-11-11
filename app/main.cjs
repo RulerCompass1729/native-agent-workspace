@@ -1347,7 +1347,8 @@ async function boot() {
       const preview = await readPreview(file.path);
       await assertSpaceFileReader(c, roomId);
       if (c.win.isDestroyed() || !roomState.metadata(roomId).files.some(f => f.id === fileId && f.path === file.path)) throw uiError("error.main.spaceFileListChanged");
-      c.filePreview = preview;
+      // Hosted space reads use the one-use read cache, never an export buffer.
+      c.filePreview = c.background ? null : preview;
       return { token: preview.token, name: preview.name, text: preview.text, size: preview.bytes.length };
     }
     roomState.assertAvailable(null, true, roomId);
