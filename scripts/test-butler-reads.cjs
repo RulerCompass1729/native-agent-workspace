@@ -113,6 +113,7 @@ const all = () => { const records = []; let after = 0, through = 0;
     const flat = view.days.flatMap(day => day.rows);
     for (const index of [0, 5, 6, 7, 8, 20, 49]) assert.deepEqual(await cells(index), expect(flat[index]), `${tag} row ${index}`);
     const text = await dialog().innerText();
+    assert.match(text, language === 'zh' ? /因容量不足被扣下、未发给模型的页仍计入每天 64 页/ : /Pages withheld for lack of capacity still count toward the daily 64 pages, even though they were not sent to the model/);
     assert.equal(/butler-session-synthetic|butler-native-synthetic|butler-runner-synthetic|synthetic-\d|naw:space/.test(text), false, 'No session, runner or record reference reaches the page');
     assert.equal(await page.evaluate(() => window.butlerReadsCheck.dialog.querySelector('.butler-reads-wrap').dataset.more), 'true', 'Rows below the fold are announced');
     await look('reads');

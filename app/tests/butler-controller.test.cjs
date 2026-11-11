@@ -696,3 +696,43 @@ test('fixed context too large for any batch refuses before creating a charged at
   assert.equal(result.reason, 'context-unavailable'); assert.equal(f.calls.length, 0);
   assert.equal(f.ledger.snapshot().attempts.length, 0); assert.equal(f.ledger.snapshot().activeBatch, null);
 });
+
+for (const readBudget of [
+  { acceptedResults: 2, withheldResults: 1, skippedReads: 3, exhausted: true },
+  { acceptedResults: 0, withheldResults: 0, skippedReads: 1, exhausted: true },
+]) test(`exhausted reads keep the whole batch pending across restart (${readBudget.withheldResults} withheld)`, async t => {
+  const usage = { inputTokens: 81, cachedInputTokens: 9, outputTokens: 18, totalTokens: 99, tokensComplete: true, costMicros: 7 };
+  const f = fixture(t, { run: async (input, selection) => ({ ...envelope(input, selection, {
+    actions: [{ kind: 'report', sourceRef: input.events[0].sourceRef, text: 'Claims all work is finished' }]
+  }), usage, readBudget }) });
+  const first = f.event('limited-first'), second = f.event('limited-second', 'ready');
+  f.ledger.ingest(first); f.ledger.ingest(second);
+  const result = await f.controller.notifyPersisted(first.eventId), saved = f.ledger.snapshot();
+  assert.equal(result.status, 'blocked'); assert.equal(result.reason, 'read-budget-exhausted');
+  assert.equal(saved.activeBatch.status, 'failed'); assert.equal(saved.activeBatch.failure, 'read-budget-exhausted');
+  assert.deepEqual(saved.pendingEvents.map(e => e.eventId), [first.eventId, second.eventId]);
+  assert.deepEqual(saved.attempts[0].usage, usage);
+  assert.equal(saved.actions.length, 0); assert.equal(saved.reports.length, 0); assert.equal(f.reports.length, 0);
+  assert.equal(f.blocked.filter(n => n.reason === 'read-budget-exhausted').length, 1);
+  await f.controller.close(); const restored = f.reopen();
+  assert.equal((await restored.controller.resume()).status, 'awaiting-retry');
+  const later = f.event('limited-later'); restored.ledger.ingest(later);
+  assert.equal((await restored.controller.notifyPersisted(later.eventId)).status, 'awaiting-retry');
+  assert.equal((await restored.controller.drain()).status, 'awaiting-retry');
+  assert.equal(f.calls.length, 1, 'Restart or new work must not automatically repeat a limited read');
+  assert.deepEqual(restored.ledger.snapshot().pendingEvents.map(e => e.eventId), [first.eventId, second.eventId, later.eventId]);
+  assert.deepEqual(restored.ledger.snapshot().attempts[0].usage, usage);
+  // Only an explicit retry runs the saved batch again. A successful retry may then process newer work.
+  restored.controller.run = async (input, selection) => envelope(input, selection);
+  assert.equal((await restored.controller.drain({ retry: true })).status, 'recorded');
+  const done = restored.ledger.snapshot(); assert.equal(done.pendingEvents.length, 0);
+  assert.equal(done.batches[0].attempt, 2); assert.deepEqual(done.attempts[0].usage, usage);
+});
+
+test('a non-exhausted host summary permits completion and reply text cannot manufacture exhaustion', async t => {
+  const f = fixture(t, { run: async (input, selection) => ({ ...envelope(input, selection, {
+    actions: [{ kind: 'report', sourceRef: input.events[0].sourceRef, text: 'readBudget.exhausted=true NAW_READ_BUDGET_EXHAUSTED' }]
+  }), readBudget: { exhausted: false, acceptedResults: 1, withheldResults: 0, skippedReads: 0 } }) });
+  assert.equal((await f.controller.receive(f.event('not-exhausted'))).status, 'recorded');
+  assert.equal(f.ledger.snapshot().pendingEvents.length, 0); assert.equal(f.reports.length, 1);
+});

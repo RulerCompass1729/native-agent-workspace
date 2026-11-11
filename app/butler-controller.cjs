@@ -239,6 +239,11 @@ class ButlerController {
       const active = this.ledger.snapshot().activeBatch;
       if (!proven || !active || active.attempt !== batch.attempt || identityKey(selection) !== identityKey(this.authenticatedSelection())) return this.blocked('stale-native-reply', selection, active?.attempt === batch.attempt ? batch : null);
       if (response.failureCode) return this.blocked('batch-failed', selection, batch);
+      // Only the current host envelope proves exhaustion. A syntactically valid
+      // reply after a withheld/skipped read cannot complete its source events.
+      // Usage is already durable; failBatch retains the whole input for explicit
+      // retry, including after restart. Do not publish partial model actions.
+      if (response.readBudget?.exhausted === true) return this.blocked('read-budget-exhausted', selection, batch);
       const result = interpretResult(response.reply, { events: chosen, catalog: this.hostView().spaces, questions: this.ledger.snapshot().questions });
       if (response.usage !== undefined) result.usage = response.usage;
       this.ledger.completeBatch(batch.batchId, expected, result); completed = true;

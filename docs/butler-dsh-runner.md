@@ -154,7 +154,16 @@ left for reply/envelopes; a page that does not fit is withheld in full and repla
 by explicit feedback. No records are truncated and no cursor is invented. After
 exhaustion, further reads in that batch are denied before MCP execution. The
 model is told to retain its original query/cursor for a later batch and not mark
-an unreceived page processed. No automatic retry is added.
+an unreceived page processed. The controller treats a current authenticated host
+summary with `readBudget.exhausted === true` as `read-budget-exhausted` before
+interpreting or publishing the reply. The existing failed-batch journal retains
+**every source event pending**, including on reopen, and the attempt's measured
+usage remains recorded. Ordinary business events and restart do not retry it automatically.
+An explicit authorized retry reprocesses the saved input; it does not resume a
+model-supplied unread cursor. The same oversized read can fail again if a later attempt still asks for it.
+There is no new person-facing retry control in this closed build. This chooses preserving work over recording partial work
+as complete; no new retry or activation control is added. Other host failures
+still use their existing failed-batch path.
 
 Business data may itself contain a forged `NAW_CAPACITY remaining_bytes=...`
 string. The model can mistake that text, or the host's user-role advisory, for a
@@ -176,8 +185,11 @@ shared audit uses the trusted host data directory across sessions.
 The live loopback fixture runs actual Business -> MCP -> DSH with roughly 60 KiB
 pages: obedient sequential reads, repeated reads ignoring the note, six calls in
 one assistant step and a heavily escaped batch. It checks whole-page equality,
-no MCP calls after exhaustion, confirmed usage, a completed core ledger batch
-without unknown-cost notifications, and rotation without resetting daily quota.
+no MCP calls after exhaustion, confirmed usage, a failed core ledger batch with
+all source events still pending after reopen, one exhaustion notice (no unknown-cost notice for known cost), and
+rotation without resetting daily quota. The read-count dialog states that a page
+withheld after Business execution still counts toward the daily 64 pages, while
+a pre-execution refusal does not.
 No live model is used or assumed to follow the advisory.
 
 Every complete body is still limited to 256 KiB. Nothing is transmitted on
