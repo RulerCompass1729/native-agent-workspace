@@ -5,7 +5,7 @@
   'use strict';
   const COLUMNS = ['time', 'what', 'space', 'count', 'revision'];
   function bind({ dialog, document, api, text, display, now = Date.now, spaceName, zone }) {
-    const { readsView, tailRequest, olderRequest, PAGE, RECORDS_PER_PAGE } = global.nativeWorkspaceButlerReadsView || require('../butler-reads-view.js');
+    const { readsView, tailRequest, olderRequest, PAGE, RECORDS_PER_PAGE, PAGES_PER_DAY } = global.nativeWorkspaceButlerReadsView || require('../butler-reads-view.js');
     const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
     const format = text || ((key, params) => locale.format('zh', key, params));
     const say = (el, key, params) => { if (display) display.text(el, key, params); else el.textContent = format(key, params); return el; };
@@ -23,7 +23,12 @@
     const older = control('butler.reads.older', 'older', () => loadOlder()), refresh = control('butler.reads.refresh', 'refresh', () => load()), done = control('common.done', 'done', () => dialog.close());
     older.className = 'subtle butler-apart';
     actions.append(older, refresh, done);
-    dialog.append(title, make('p', 'quiet', 'butler.reads.intro', { limit: RECORDS_PER_PAGE }), today, full, listed, note, help, wrap, foot, actions);
+    // What a line does and does not show, under what a line is. It is on the page without a click, whatever was
+    // read: these two limits are what the person needs to decide how far to rely on the log. The two paragraphs
+    // share one box, which is the part that gives way when the window is too small for everything.
+    const about = make('div', 'butler-reads-about');
+    about.append(make('p', 'quiet', 'butler.reads.intro', { limit: RECORDS_PER_PAGE }), make('p', 'quiet butler-reads-limits', 'butler.reads.limits', { limit: PAGES_PER_DAY }));
+    dialog.append(title, about, today, full, listed, note, help, wrap, foot, actions);
 
     let records = [], through = null, storage = null, state = 'idle', ticket = 0, olderFailed = false, readAt = 0;
     // One decimal, never rounded down: the file is not shown emptier than it is.

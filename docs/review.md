@@ -11227,3 +11227,65 @@ The author retains the complete whole-suite and scans as separate conditions.
 - Hidden real Electron qualification passed three independent profiles: normal upgrade installed; damaged new executable before launch restored and verified the old app; the new GUI writing a changed unsent draft after launch was caught and retained as recovery-required. The real Electron GUI was quit through the exact-PID test helper and directly relaunched with renderer-only arguments; backend identity/settings, installation record, views and unsent drafts were checked; all provider/model dispatch counts stayed zero and all owned GUI/backend processes and registrations were cleaned. New GUI finished launching in about 4.7 seconds and backend verification completed about 8 seconds after launch on the normal path. Renderer observation occurred after the synchronous archive; it is not a startup-duration measurement.
 - Hardened bundles intentionally disable the Node inspector. The qualification uses the existing renderer-only launcher for the initial GUI, exact owned-PID termination, and direct renderer-only relaunch; there is no main-process patch or changed signed bundle except the explicitly corrupted pre-launch fault copy. Initial generic Electron connection attempts and preparation timeouts are retained as fixture failures, not claimed passes.
 - Additional integrator items remain queued: slow-quit grace observation; a reviewed later cleanup operation for occupied old copies and their LaunchServices registration; the status table; real cancelled-quit side effects and an occupied real-package backend. Daily policy choice, exact daily approval and daily use remain unapproved. Incremental native review approved the exact archive-deadline diff with nonblocking notes after inspecting raw baseline/fixed results (8 reads). The measured total normal run was about 212 seconds, so the five-minute archive cap is a finite margin, not a promise against all future load. Test launch handling substitutes the production instance/argument/LaunchServices path to coexist safely with the daily app; that daily launch path and a real cold-launch qualification are not claimed here. The fixture-only cold-proof reference is not daily acceptance.
+
+## Butler read log: what a line shows and what it does not (2026-11-11, text only, behind the closed entry)
+
+Requested (the integrator's dispatch, from the log author's own note): two
+honest statements on the read log dialog. A line is a page NAW approved, not
+proof that the other side received it; and the log is not a tamper-proof
+ledger against programs of the same user or a changed clock. The wording was
+to go through the stand-in reviewer first, and only the dialog's text changes.
+
+What is on the page now, as a second quiet paragraph under the introduction,
+in every state of the dialog: a line means NAW approved giving the page to the
+butler (every page is logged before it is given) and does not show that the
+model service received it; the log is not tamper-proof: any program running
+under the person's account can delete or change it, and deleting it or
+changing the system clock gets around the limit of 64 pages a day.
+
+Stand-in review (a fresh read-only session standing in for the person, on
+screenshots of the product's own dialog with two placements, always visible
+and one line that opens): `APPROVE_WITH_CHANGES`, always visible. Its three
+required changes are applied as given. The draft said "while NAW is not
+running", which named a smaller risk than the source shows: a program of the
+same user can add well-formed lines while NAW runs. Deletion gets around the
+daily limit as well as the clock does. "Approved" stays, never "gave". Two of
+its suggestions are taken ("the model service", and that every page is logged
+before it is given); one is not, for length: that a changed clock also makes
+the logged times wrong.
+
+One layout rule changed with it, because the added text (and a sentence added
+to the introduction meanwhile on main) left no record in sight in the smallest
+window with the long warning of a file at its limit, in English. The list now
+keeps room for about two records. It still gives way first; when that is not
+enough, the explanation at the top gives way too and scrolls in its own box,
+so the count, the warning, the records and the actions stay in sight. The
+hidden-window check now fails when no whole record is in sight, when the
+explanation is cut in an ordinary state, or when it is out of sight; the
+earlier check passed with no record in sight.
+
+Each claim is tested on the real modules, not only as text: the 65th page of a
+day is refused; a well-formed line appended by another program is read as the
+log's own; the clock moved to another day gives a fresh allowance; a log
+deleted while the application is closed is empty at the next start with a
+fresh allowance; and the page is returned only after its line is written.
+
+Checks (author-run, no model): the full unit suite passes with no failure and
+every deliberate fault in the read log's activation changes, this paragraph
+and its layout rule is caught (counts in the commit message); the three
+hidden-window checks pass, the read log's in both languages and at both
+widths. No independent code review of this commit: it adds one paragraph of
+text whose claims the stand-in checked against the source, tests that run
+those claims, and a layout rule the window check now enforces.
+
+Known, and left for the next change of these texts:
+- In the smallest window with the long warning of a file at its limit, the
+  explanation scrolls in its own box and its second paragraph, the one added
+  here, is not in sight until it is scrolled. The stand-in saw the paragraph
+  always in sight; it did not see this state after the layout change.
+- With a file at its limit the page says both that a program can delete the
+  file (which gets around the daily limit) and "do not delete this file
+  yourself". Both are true; side by side they may read as a hint.
+- The dialog is behind the entry: a person deciding whether to switch the
+  butler on has not necessarily seen these two limits. The designation
+  confirmation is where that decision is made.
