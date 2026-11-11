@@ -1,4 +1,5 @@
 const { uiError, uiNotice, setWarning } = require('./ui-errors.cjs');
+const { spaceWords } = require('./integrator-words.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
@@ -835,6 +836,25 @@ class RoomState {
     this.update({}, { kind: 'monitor', sessionId: opened.sessionId, ...uiNotice(joined ? 'notice.monitor.opened' : 'notice.monitor.openedNotPlaced', { name: opened.name, initiator: opened.initiator }),
       monitor: { kind: 'opened', key, sessionId: opened.sessionId, initiatorId: opened.initiatorId, joined } }, room);
     return { recorded: true, joined };
+  }
+  // B6 E2b: where a delivery stands with the integrator (handed out, merged, returned, on hold,
+  // waiting for the person), written into the space that delivered it. One record per state:
+  // the same delivery and label again writes nothing, so a repeat after a crash is harmless.
+  // A space that no longer exists has nothing to write to; a space that is being updated is
+  // refused for now (the caller tries again).
+  recordHandoff(fact) {
+    const words = spaceWords(fact);
+    if (!words || typeof fact.key !== 'string' || typeof fact.label !== 'string' || !fact.key || !fact.label) return { recorded: false, why: 'no-words' };
+    let value;
+    try { value = this.metadata(fact.roomId); }
+    catch (error) { if (error?.uiMessage?.key === 'error.room.missing' || error?.uiMessage?.key === 'error.main.invalidSpace') return { recorded: false, why: 'space-missing' }; throw error; }
+    const key = `handoff:${fact.key}:${fact.label}`;
+    if (value.events.some(event => event.monitor?.kind === 'handoff' && event.monitor.key === key)) return { recorded: false, why: 'known' };
+    this.writable(fact.roomId);
+    this.update({}, { kind: 'monitor', ...(typeof fact.memberId === 'string' && fact.memberId ? { sessionId: fact.memberId } : {}), ...uiNotice(words.key, words.params),
+      monitor: { kind: 'handoff', key, itemId: fact.itemId, outcome: fact.outcome, branch: fact.branch, commit: fact.commit,
+        ...(fact.handoffId ? { handoffId: fact.handoffId } : {}), ...(fact.reason ? { reason: fact.reason } : {}), ...(fact.as ? { as: fact.as } : {}) } }, fact.roomId);
+    return { recorded: true };
   }
   // B6 E4, the version gate. A member whose native version NAW has not verified keeps working with
   // fewer features. The session's own header says so; this records it once in each of its spaces,

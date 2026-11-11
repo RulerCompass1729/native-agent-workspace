@@ -8954,3 +8954,23 @@ independent review before merging; no additional activation path is introduced.
 - A clock set back lengthens the wait for main's head by that much.
 - Which space record is written for each label, and which notice, belong to the step that connects the engine.
 - The record is written once more for each notice shown and for each batch of space records.
+
+## B6 integration handoff, checkpoint H6a: the words — 2026-11-11
+
+**What this adds.** The sentences a delivery's space and the person are given about an integration handoff, in Chinese and English, and the writer that puts a delivery's state into its space. Nothing is connected yet: no code path produces a handoff in the app, so none of these sentences can appear.
+
+**Which sentence.** `app/integrator-words.cjs` only maps. Each reason has the sentence that fits what the person does next. The three troubles with the message itself are told apart: sent but never confirmed; refused several times before it was sent (automatic messages may be off); delivered, but the reply could not be read (look in the integrator's session). One delivery without a result line is "no result for it"; no answer at all is its own sentence, and its notice says why it matters: the waiting handoff holds the only place, so later deliveries wait. A space record has one sentence for handed out, merged, returned, fifteen for on hold and four for waiting for the person (one of them without a cause, for a reason that has no waiting sentence); it names the delivery by its task label, or by its branch when it has none. A reason from a later version still gets a sentence, showing the integrator's own words or the reason's name. A notice says how many deliveries a reason concerns; it is built from the record's notice information, which holds no task text. A waiting handoff with nothing left inside is worded as a question in the integrator's session, not as "0 deliveries". The person's own typing has no notice.
+
+**Writing the space record.** `RoomState.recordHandoff` writes one record per delivery and state into the space that delivered it, with a key made of the delivery and its label; the same key again writes nothing, also after a restart, which is what the engine's telling relies on after a crash. A space that no longer exists has nothing to write to and does not hold up the records of other spaces; a space that is being updated refuses for now and is tried again.
+
+**Independent review (passed, with three wording findings, then changed).** A reply that could not be read was worded as a message that was never delivered, which could lead the person to hand out work that is already merged; a refused send was worded as unconfirmed, although the next step is to turn automatic messages back on; the notice for no reply did not say that the handoff holds the only place. Each has its own sentence now. A waiting reason without a sentence no longer falls back to "met a conflict". The reviewer also confirmed that the renderer shows these records as ordinary system notices and that no other reader of space records takes them for its own kind.
+
+**Checks.** Five unit tests: every reason kind of the record has a sentence group (the list is read from the record's own source); each sentence in both languages; the notices; the writer against a real space record, including the repeat, a second space, a missing space and a space being updated. Eighteen deliberate breakages each turned tests red. The packaging list names the new module. The full unit suite passes on the delivered head; the count is in the delivery note.
+
+**Left open.**
+- English notices put the count after a colon so that one and many read the same.
+- Several notices say what happened but not yet what to do, because the person's actions (retry, open reviews) do not exist yet; they are to be reworded when those actions are added.
+- The notice about a branch returned too often names the branch, not its space.
+- A space that is being updated, or a spaces file that cannot be read, holds back the later records of that pass until it can be written again.
+- A space record names the delivery's task label; it is written into that delivery's own space only.
+- Which notification is raised, and what a click reveals, belong to the step that connects the engine.
