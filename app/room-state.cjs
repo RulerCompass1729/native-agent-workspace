@@ -885,6 +885,26 @@ class RoomState {
         ...(fact.handoffId ? { handoffId: fact.handoffId } : {}), ...(fact.reason ? { reason: fact.reason } : {}), ...(fact.as ? { as: fact.as } : {}) } }, fact.roomId);
     return { recorded: true };
   }
+  // B6: a member that holds an open integration handoff gets no work from this space's queue
+  // until the handoff is closed. Said once in the space, per handoff and per state of it (still
+  // open, or waiting for the person). A repeat, a missing space and a space that is being
+  // updated are treated as in recordHandoff; an archived space is told nothing.
+  recordHandoffHolder(fact) {
+    if (!fact || typeof fact.sessionId !== 'string' || !fact.sessionId || typeof fact.handoffId !== 'string' || !fact.handoffId) return { recorded: false, why: 'no-words' };
+    const state = fact.waiting === true ? 'waiting' : 'sent';
+    let value;
+    try { value = this.metadata(fact.roomId); }
+    catch (error) { if (error?.uiMessage?.key === 'error.room.missing' || error?.uiMessage?.key === 'error.main.invalidSpace') return { recorded: false, why: 'space-missing' }; throw error; }
+    // An archived space has no queue at work: there is nothing to say.
+    if (value.archived) return { recorded: false, why: 'space-archived' };
+    const key = `handoff-holder:${fact.handoffId}:${fact.sessionId}:${state}`;
+    if (value.events.some(event => event.monitor?.kind === 'handoff-holder' && event.monitor.key === key)) return { recorded: false, why: 'known' };
+    this.writable(fact.roomId);
+    const name = typeof fact.name === 'string' && fact.name.trim() ? fact.name.trim().slice(0, 60) : fact.sessionId;
+    this.update({}, { kind: 'monitor', sessionId: fact.sessionId, ...uiNotice(`notice.handoff.holder.${state}`, { name }),
+      monitor: { kind: 'handoff-holder', key, handoffId: fact.handoffId, state } }, fact.roomId);
+    return { recorded: true };
+  }
   // B6 E4, the version gate. A member whose native version NAW has not verified keeps working with
   // fewer features. The session's own header says so; this records it once in each of its spaces,
   // per session and version, and never again for that version. Records only. Because a record is

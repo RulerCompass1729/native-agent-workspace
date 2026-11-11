@@ -262,13 +262,15 @@ async function verifyResults(read, state, action, mainHead) {
 }
 
 // How the rows after the handoff message read:
-// - typed: the person wrote there. Judged as the queue's reply reader judges it (a message's
-//   origin, or NAW's marker on a native row without one), except that the handoff's own message
-//   (it begins with the marker and the handoff's id) is never the person's, also where a native
-//   row took the place of NAW's copy of it.
+// - typed: the person stepped in. Judged as the queue's reply reader judges the person's typing
+//   (a message's origin, or NAW's marker on a native row without one), with two differences:
+//   the handoff's own message (it begins with the marker and the handoff's id) is never the
+//   person's, also where a native row took the place of NAW's copy of it; and a message that
+//   reached the session through a space is the person's step too (they wrote to it there, or
+//   started the exchange that did).
 // - own: how many of the integrator's messages came before the first automatic message from
-//   someone else (a queue item, another agent's wake or control, a space exchange, a rotation
-//   request). A continuation after a limit is not from someone else: it resumes the same work.
+//   someone else (a queue item, another agent's wake or control message, a rotation request).
+//   A continuation after a limit is not from someone else: it resumes the same work.
 function rowsAfter(session, handoff) {
   const messages = Array.isArray(session?.messages) ? session.messages : [];
   let index = -1;
@@ -286,7 +288,7 @@ function rowsAfter(session, handoff) {
     if (text.trimStart().startsWith(MARKER + handoff.id)) continue;
     let automatic = AUTOMATIC_ORIGINS.includes(message.origin);
     if (message.origin === undefined) automatic = text.includes('【NAW 派活】') || text.includes('【NAW 换会话】');
-    if (!automatic) typed = true;
+    if (!automatic || message.origin === 'room') typed = true;
     else if (message.origin !== 'capacity-recovery') other = true;
   }
   return { typed, own };
@@ -325,25 +327,22 @@ function planSettle(state, seen) {
   // nothing, and lines from an earlier message (written while it worked) are not mixed in. An
   // answer whose lines cannot be read is still the answer: its deliveries have no result, which
   // is safer than taking an earlier line for one.
-  // What it wrote after an automatic message from someone else may answer that message. Such a
-  // message is used only when nothing before it reads like an answer, and then only by its
-  // result lines for this handoff's own deliveries (they name the delivery, and a merge is
-  // checked with git anyway): a question for the person in it is not this handoff's question,
-  // and lines it has for other commits do not make it the answer.
+  // After an automatic message from someone else the integrator may be answering that message.
+  // A question for the person and result lines for this handoff's own deliveries still count
+  // wherever they stand: the question is put to the person rather than dropped, a merge is
+  // checked with git, and a returned or held delivery is named by its own commit. But lines
+  // that cannot be read do not make such a later message the answer: they may be about
+  // something else, and would hide the answer given before.
   const inside = state.ready.filter(entry => handoff.keys.includes(entry.key));
   const parts = Array.isArray(reply.parts) && reply.parts.length ? reply.parts : [reply.last];
   const before = Math.min(rows.own, parts.length);
-  let answer = reply.last, results = parseResults(answer, inside), mine = before === parts.length, found = false;
-  for (let index = before - 1; index >= 0 && !found; index -= 1) {
+  let answer = reply.last, results = parseResults(answer, inside);
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
     const parsed = parseResults(parts[index], inside);
-    if (startsWithDecision(parts[index]) || Object.keys(parsed.results).length || parsed.ignored > 0) { answer = parts[index]; results = parsed; mine = true; found = true; }
-  }
-  for (let index = parts.length - 1; index >= before && !found; index -= 1) {
-    const parsed = parseResults(parts[index], inside);
-    if (Object.keys(parsed.results).length) { answer = parts[index]; results = parsed; mine = false; found = true; }
+    if (startsWithDecision(parts[index]) || Object.keys(parsed.results).length || (index < before && parsed.ignored > 0)) { answer = parts[index]; results = parsed; break; }
   }
   // The first line of the answer decides the handoff's state; its lines are read either way.
-  return mine && startsWithDecision(answer) ? settle('waiting', '', { decision: true, question: decisionLine(answer), results }) : settle('done', '', { results });
+  return startsWithDecision(answer) ? settle('waiting', '', { decision: true, question: decisionLine(answer), results }) : settle('done', '', { results });
 }
 
 // What may happen next, from the stored state and what the caller observes. Pure: it changes nothing.
