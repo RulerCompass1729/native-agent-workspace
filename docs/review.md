@@ -8771,3 +8771,20 @@ when an app upgrade makes the saved runtime binding mismatch. No automatic
 migration is supplied here. Future status UI must localize the display-only
 blocked reasons, including unavailable/unsafe state. Ordinary native services
 and qualification defaults remain unchanged.
+
+
+### DSH runner rebase and package allowlist layout (2026-11-11)
+
+The runner was rebased from 1e4f5bf onto 908005f. The resolved package list keeps
+all six runner-only entries and main's butler-review-projection entry: 125 unique
+files in total. The DSH host/driver/privacy code and dependency lock are unchanged
+from the previously scoped-approved checkpoint. Existing review records from
+both branches are retained.
+
+The list is now alphabetized, one entry per line. A captured pre-format fixture
+checks the exact multiset, including duplicate counts; the existing main require
+walk still checks runtime source reachability. Removing either side's new file
+or inserting a duplicate makes the equality guard fail. Related checks: 468 pass,
+zero fail/skip. New-base full-suite and actual package closure results are kept
+with the lane handoff. The integrator requested this change and owns the combined
+independent review before merging; no additional activation path is introduced.
