@@ -143,6 +143,7 @@ async function build() {
       'integrator-engine.cjs',
       'integrator-git.cjs',
       'integrator-handoff.cjs',
+      'integrator-repository.cjs',
       'integrator-role.cjs',
       'integrator-words.cjs',
       'legacy-claude.cjs',

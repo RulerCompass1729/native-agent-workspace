@@ -18,7 +18,7 @@ const say = (language, words) => locale.format(language, words.key, words.params
 // Every reason the record can produce, with the sentence group it belongs to.
 const REASONS = { 'review-off': 'reviewOff', 'review-cap': 'reviewCap', 'checkpoint-invalid': 'checkpointInvalid', 'merge-unverified': 'unverified', 'main-unreadable': 'mainUnreadable',
   'send-unconfirmed': 'notDelivered', 'send-refused': 'sendRefused', 'record-missing': 'replyUnread', 'no-result': 'noAnswer', 'no-reply': 'noReply', 'person-intervened': 'personTyped',
-  'held-other': 'other', 'integrator-unset': 'integratorUnset', 'integrator-in-space': 'integratorInSpace', 'backlog-full': 'backlogFull',
+  'held-other': 'other', 'integrator-unset': 'integratorUnset', 'integrator-in-space': 'integratorInSpace', 'backlog-full': 'backlogFull', 'repository-unset': 'repositoryUnset',
   'lock-held:Claude 终端': 'lockHeld', 'integrator-missing:session-9': 'integratorGone', 'conflict:H2-12345678': 'conflict', [`installable:${HEAD}`]: 'installable', 'returned-limit:shared:lane/a': 'returnedLimit' };
 
 test('every reason the record knows has a sentence group; anything else has none', () => {
@@ -114,6 +114,7 @@ test('the person\'s notice says how many deliveries and why, in both languages, 
   }
   for (const bad of [null, {}, { reason: 'made-up', count: 1 }, { reason: 7 }]) assert.equal(personWords(bad), null);
   assert.equal(say('en', personWords({ reason: 'review-off', count: -3 })), 'Reviews are off, and deliveries need an independent review. Waiting: 0');
+  assert.equal(say('zh', personWords({ reason: 'repository-unset', count: 2 })), '2 件交付在等集成，但没有可用的主仓库：还没有指定，或者指定的那个现在通不过检查');
   // A notice is built from the record's own notice info, which holds no task text to begin with.
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-words-')); fs.chmodSync(directory, 0o700);
   try {

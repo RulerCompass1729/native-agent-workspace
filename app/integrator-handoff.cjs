@@ -30,7 +30,8 @@ const OPEN_STATES = ['deliverable', 'held', 'handed'];
 const STATES = [...OPEN_STATES, 'merged', 'returned', 'superseded'];
 // Reasons that exist once for the whole backlog, and those that exist once per subject.
 const GLOBAL_REASONS = ['review-off', 'review-cap', 'checkpoint-invalid', 'merge-unverified', 'send-unconfirmed',
-  'record-missing', 'send-refused', 'no-result', 'no-reply', 'person-intervened', 'held-other', 'backlog-full', 'integrator-unset', 'integrator-in-space', 'main-unreadable'];
+  'record-missing', 'send-refused', 'no-result', 'no-reply', 'person-intervened', 'held-other', 'backlog-full', 'integrator-unset', 'integrator-in-space', 'main-unreadable',
+  'repository-unset'];
 const SUBJECT_REASONS = ['lock-held', 'integrator-missing', 'conflict', 'returned-limit', 'installable'];
 const RETURN_LIMIT = 2;       // a branch returned more often than this is the person's to decide, not suggested again
 // The reasons an integrator may write on a HELD line; anything else is kept as "held for another reason".
@@ -42,7 +43,7 @@ const HELD_WORDS = ['review-off', 'review-cap', 'checkpoint-invalid'];
 // A question (a main commit that may be installed, a branch returned too often) has no deliveries
 // under it and ends only with the person's answer.
 const question = reason => reason.startsWith('installable:') || reason.startsWith('returned-limit:');
-const standing = reason => ['review-off', 'review-cap', 'integrator-unset', 'integrator-in-space', 'backlog-full'].includes(reason) || reason.startsWith('lock-held:') ||
+const standing = reason => ['review-off', 'review-cap', 'integrator-unset', 'integrator-in-space', 'backlog-full', 'repository-unset'].includes(reason) || reason.startsWith('lock-held:') ||
   reason.startsWith('integrator-missing:') || question(reason);
 // Why a handoff waits for the person. These last at least as long as that handoff is the open one.
 const waitingOn = (handoff, key) => Boolean(handoff) && (key === `conflict:${handoff.id}` || handoff.status === 'waiting' && handoff.reason === key);
@@ -369,6 +370,10 @@ function plan(state, input) {
   // The integrator stays outside every space: a member is sent queue work. One that was put into a
   // space after it was designated is handed nothing, and the person is asked once.
   if (seen.inSpace === true) return state.reasons['integrator-in-space']?.open ? none('integrator-asked') : { kind: 'ask-integrator', reason: 'integrator-in-space' };
+  // "main" is read only in the repository the person chose. With none that can be read (none
+  // chosen, or the chosen one no longer passes its checks) nothing is handed out, and the person
+  // is asked once. Said with null; a caller that does not say reads main as before.
+  if (seen.repository === null) return state.reasons['repository-unset']?.open ? none('integrator-asked') : { kind: 'ask-integrator', reason: 'repository-unset' };
   const verdict = sessionReady(session, seen.wakePolicy);
   if (!verdict.ready) return none(verdict.reason);
   // Engaged in something NAW itself is doing with it, such as a session rotation or a running space exchange.
@@ -546,7 +551,7 @@ class IntegrationHandoffs {
     next.handoff = { id: action.handoffId, status: 'sent', keys: action.keys, integrator: action.integrator, mainHead: action.mainHead, sentAt: now, tag: null };
     // An integrator took a handoff: the question about a missing one is over, and what was held
     // because that session was gone waits for the next handoff.
-    const ended = ['integrator-unset', 'integrator-in-space', `integrator-missing:${action.integrator.sessionId}`];
+    const ended = ['integrator-unset', 'integrator-in-space', 'repository-unset', `integrator-missing:${action.integrator.sessionId}`];
     this.release(next, reason => ended.includes(reason), true);
     this.commit(next);
     return action;
@@ -726,7 +731,7 @@ class IntegrationHandoffs {
     const entry = next.ready.find(candidate => candidate.key === key);
     if (!entry || entry.state !== 'deliverable') throw fail('This delivery cannot be held');
     // Conditions and questions that have no deliveries under them cannot hold one.
-    if (reasonKey(reason) === null || ['integrator-unset', 'integrator-in-space', 'backlog-full'].includes(reason) || question(reason)) throw fail('Unknown reason');
+    if (reasonKey(reason) === null || ['integrator-unset', 'integrator-in-space', 'backlog-full', 'repository-unset'].includes(reason) || question(reason)) throw fail('Unknown reason');
     const notify = this.leave(next, entry, 'held', reason, now);
     this.commit(next);
     return { notify, state: entry.state };
@@ -836,6 +841,7 @@ class IntegrationHandoffs {
   //   the cap again does not ask twice.
   // - 'lock-released' with the owner whose lock was let go.
   // - 'integrator-designated': the person designated an integrator.
+  // - 'repository-chosen': the person chose a main repository.
   reasonCleared(kind, subject) {
     const next = this.draft();
     let match, close = true;
@@ -847,6 +853,8 @@ class IntegrationHandoffs {
       next.capDay = subject; match = reason => reason === 'review-cap'; close = false;
     } else if (kind === 'lock-released' && plain(subject, 200) && reasonKey(`lock-held:${subject}`)) match = reason => reason === `lock-held:${subject}`;
     else if (kind === 'integrator-designated') match = reason => reason === 'integrator-unset' || reason.startsWith('integrator-missing:');
+    // The person chose a main repository: the question about a missing one is over, so losing it later asks again.
+    else if (kind === 'repository-chosen') match = reason => reason === 'repository-unset';
     else throw fail('Unknown change');
     const released = this.release(next, match, close);
     this.commit(next);

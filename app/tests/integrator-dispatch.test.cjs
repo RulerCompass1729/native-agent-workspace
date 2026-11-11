@@ -49,7 +49,9 @@ function fixture(t, options = {}) {
   const engine = dispatcher => new IntegratorEngine({ handoffs: f.handoffs, now: () => Date.now() + f.skew, designation: () => { if (f.designated instanceof Error) throw f.designated; return f.designated; },
     mainHead: async () => { f.heads += 1; return f.head; }, reader: read, send: (target, text, handoffId) => dispatcher.send(target, text, handoffId), typing: id => dispatcher.noteHuman(id),
     record: fact => room.recordHandoff(fact), notify: async info => { f.notices.push(info); },
-    holderRecord: fact => room.recordHandoffHolder(fact), nameOf: target => dispatcher.name(target) });
+    holderRecord: fact => room.recordHandoffHolder(fact), nameOf: target => dispatcher.name(target),
+    // Only a test that sets f.repository asks the question; the others read main as before.
+    ...(options.repository ? { repository: () => { if (f.repository instanceof Error) throw f.repository; return f.repository; } } : {}) });
   f.dispatcher = new QueueDispatcher({ roomState: room, dataDir: directory, clients: () => client, now: () => Date.now() + f.skew, settleMs: 0, humanQuietMs: 0, broadcast: async () => { f.broadcasts += 1; },
     sampleProcesses: async () => '', samplePressure: async () => '', ...(options.observe ? { observeQueueState: options.observe } : {}), ...(options.plain ? {} : { integration: options.build || engine, integrationUnreadable: () => { f.unreadable += 1; }, integrationFailed: error => { f.failed.push(error.message); } }) });
   t.after(() => { f.dispatcher.close(); fs.rmSync(directory, { recursive: true, force: true }); });
@@ -276,7 +278,8 @@ test('an engine that cannot be built leaves the queue running without it, and th
   const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
   const builder = main.slice(main.indexOf('function integrationEngine(dispatcher) {'), main.indexOf('\nfunction ', main.indexOf('function integrationEngine(dispatcher) {') + 10));
   assert.ok(builder.indexOf('const engine = new IntegratorEngine(') > 0 && builder.indexOf('integrationHandoffs = handoffs;') > builder.indexOf('const engine = new IntegratorEngine('));
-  assert.match(builder, /\n  integrationHandoffs = handoffs;\n  return engine;\n\}\n/);
+  assert.match(builder, /\n  integrationHandoffs = handoffs;\n  integrationRepository = \{\n/);
+  assert.match(builder, /\n  \};\n  return engine;\n\}\n/);
 });
 
 test('a pass whose result cannot be read is a fault like a pass that throws: kept and told once, and the queue goes on', async t => {
@@ -493,7 +496,7 @@ test('a member that holds an open handoff: its space is told once that the queue
   g.dispatcher.integration.handoffs = new IntegrationHandoffs(g.directory);
   assert.equal(g.dispatcher.integration.holder(), null);
   // The main process gives the engine the space record's writer and the dispatcher's names.
-  assert.match(fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8'), /\n    holderRecord: fact => roomState\.recordHandoffHolder\(fact\), nameOf: session => dispatcher\.name\(session\) \}\);\n/);
+  assert.match(fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8'), /\n    holderRecord: fact => roomState\.recordHandoffHolder\(fact\), nameOf: session => dispatcher\.name\(session\),\n    repository: \(\) => \(repository\.usable\(\) \? true : null\), open \}\);\n/);
   // A name that is missing falls back to the session's id; the sentences exist in both languages.
   assert.equal(f.room.recordHandoffHolder({ roomId: 'shared', sessionId: 'integrator', handoffId: 'H9-00000000' }).recorded, true);
   assert.ok(told()[2][2].startsWith('integrator 正在处理一份集成交接'));
@@ -507,6 +510,36 @@ test('a member that holds an open handoff: its space is told once that the queue
   }
 });
 
+test('with no main repository that can be read the deliveries wait and the person is asked once; after they choose one the handoff goes out', async t => {
+  const f = fixture(t, { repository: true });
+  f.repository = null;
+  const itemId = f.room.queueAdd('Synthetic task', null);
+  await f.pass();
+  f.reply('member-a', `READY lane/a ${COMMIT}`);
+  await f.pass(); await f.pass(); await f.pass();
+  assert.deepEqual([f.calls.length, f.states(), f.heads], [1, { 'lane/a': 'deliverable' }, 0], 'Nothing is sent and git is not read');
+  assert.deepEqual(f.notices, [{ reason: 'repository-unset', count: 1, roomId: 'shared', itemId }]);
+  assert.equal(f.dispatcher.hasOpenWork(), false, 'Only the person can change it');
+  // A repository record that cannot be read is the same to the engine: no repository that can be read.
+  f.repository = Error('Synthetic record failure');
+  f.dispatcher.lastMaintenance = 0;
+  await f.pass();
+  assert.deepEqual([f.calls.length, f.notices.length], [1, 1]);
+  // The person chooses one, as the entry does it: the question is closed and the engine tries again at once.
+  const choose = () => { f.handoffs.reasonCleared('repository-chosen'); f.dispatcher.integration.unblock(); };
+  f.repository = true; choose();
+  assert.equal(f.dispatcher.hasOpenWork(), true, 'It is work again without waiting for another reason to pass');
+  // It is lost again before any handoff opened (the folder fails a check): the person is asked again.
+  f.repository = null;
+  await f.pass(); await f.pass();
+  assert.deepEqual([f.calls.length, f.notices.map(info => info.reason)], [1, ['repository-unset', 'repository-unset']]);
+  // Chosen again: the next pass hands the delivery out, and main is read there.
+  f.repository = true; choose();
+  await f.pass();
+  assert.deepEqual([f.calls.length, f.states(), f.handoffs.snapshot().reasons['repository-unset'].open], [2, { 'lane/a': 'handed' }, false]);
+  assert.ok(f.heads > 0);
+});
+
 test('the engine is built only behind a switch that the daily app cannot open', () => {
   const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
   // One place builds it, and that place is inside the test-only condition.
@@ -514,11 +547,14 @@ test('the engine is built only behind a switch that the daily app cannot open', 
   assert.match(main, /if \(backgroundTest && process\.env\.NAW_TEST_INTEGRATION_HANDOFF === '1'\) \{\n      options\.integration = dispatcher => integrationEngine\(dispatcher\);\n      options\.integrationUnreadable = \(\) => notifyHandoff\(null\);\n      options\.integrationFailed = \(\) => notifyHandoff\(undefined\);\n    \}/);
   // The three modules are loaded inside that function only: with the switch closed the daily app does not read them.
   const builder = main.indexOf('function integrationEngine(dispatcher) {'), next = main.indexOf('\nfunction ', builder + 10);
-  for (const name of ['integrator-handoff', 'integrator-engine', 'integrator-git']) {
+  for (const name of ['integrator-handoff', 'integrator-engine', 'integrator-git', 'integrator-repository']) {
     const places = [...main.matchAll(new RegExp(`require\\('\\./${name}\\.cjs'\\)`, 'g'))].map(match => match.index);
     assert.equal(places.length, 1, name); assert.ok(places[0] > builder && places[0] < next, name);
   }
-  assert.equal(main.match(/new IntegratorEngine\(/g).length, 1); assert.equal(main.match(/new IntegrationHandoffs\(/g).length, 1);
+  assert.equal(main.match(/new IntegratorEngine\(/g).length, 1); assert.equal(main.match(/new IntegrationHandoffs\(/g).length, 1); assert.equal(main.match(/new IntegrationRepository\(/g).length, 1);
+  // git is read only in the repository the person chose: the builder never looks at a session's working folder.
+  const built = main.slice(builder, next);
+  assert.ok(built.includes('const folder = repository.usable();') && !/\.cwd\b/.test(built) && !/integratorRole\.current\(\)\s*;\s*\n\s*const session/.test(built));
   assert.equal(main.match(/NAW_TEST_INTEGRATION_HANDOFF/g).length, 1);
   // backgroundTest is the app's own judgement that this is an isolated test run with its own data folder.
   assert.match(main, /backgroundTest = \/\^\\d\+\$\/\.test\(process\.env\.NAW_TEST_PARENT_PID\)/);
@@ -535,7 +571,7 @@ test('the engine is built only behind a switch that the daily app cannot open', 
   const walk = folder => { for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
     const file = path.join(folder, entry.name);
     if (entry.isDirectory()) { if (!['node_modules', '.git', '.local', 'tests', 'dist'].includes(entry.name)) walk(file); }
-    else if (/\.(cjs|mjs|js)$/.test(entry.name) && !/^integrator-(engine|handoff|git)\.cjs$/.test(entry.name) && /require\(['"]\.\/integrator-(engine|handoff|git)\.cjs['"]\)/.test(fs.readFileSync(file, 'utf8'))) loaders.push(path.relative(root, file));
+    else if (/\.(cjs|mjs|js)$/.test(entry.name) && !/^integrator-(engine|handoff|git|repository)\.cjs$/.test(entry.name) && /require\(['"]\.\/integrator-(engine|handoff|git|repository)\.cjs['"]\)/.test(fs.readFileSync(file, 'utf8'))) loaders.push(path.relative(root, file));
   } };
   walk(path.join(root, 'app')); walk(path.join(root, 'scripts'));
   assert.deepEqual(loaders, ['app/main.cjs']);

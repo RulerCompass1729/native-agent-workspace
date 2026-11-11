@@ -43,6 +43,11 @@ class IntegratorEngine {
   // - typing(sessionId): told when the send was refused because the person left a prompt unsent
   //   in that session, so the caller leaves the session alone for a while, as after typing.
   // - reader: the read-only git reader ({ commit, isAncestor, changes }) for checking merges.
+  // - repository(): whether there is a main repository that can be read now: true, or null for
+  //   none (none chosen, or the chosen one fails its checks). Absent, main is read as given.
+  // - open(): one checked look at that repository for a whole settlement: { mainHead(), reader },
+  //   or null when it cannot be read now. Every git question of the settlement then goes to the
+  //   same folder, checked once. Absent, mainHead and reader above are used.
   // - record(fact): writes one delivery's space record, at once or as a promise; it may be asked
   //   to write the same fact (same key and label) again after a crash and must then write nothing new.
   // - notify(info): tells the person about one reason ({ reason, count, roomId, itemId, sessionId? }).
@@ -56,6 +61,8 @@ class IntegratorEngine {
     this.send = options.send;
     this.typing = options.typing || (() => {});
     this.reader = options.reader || null;
+    this.repository = options.repository || null;
+    this.open = options.open || null;
     this.record = options.record || (() => {});
     this.notify = options.notify || (async () => {});
     this.holderRecord = options.holderRecord || null;
@@ -161,8 +168,17 @@ class IntegratorEngine {
     if (session && session.nativeId === integrator.nativeId) { try { inSpace = roomIds(session).length > 0; } catch { membership = false; } }
     return { membership, input: { integrator, session, inSpace, complete: complete(view, usable ? integrator.sessionId : undefined), wakePolicy: view?.wakePolicy, now: view?.now,
       idleSince: view?.idleSince, humanAt: view?.humanAt, settleMs: view?.settleMs, humanQuietMs: view?.humanQuietMs,
-      busy: Boolean(session) && typeof view?.busy === 'function' && view.busy(session.id) === true, review: view?.review, checkpoint: view?.checkpoint } };
+      busy: Boolean(session) && typeof view?.busy === 'function' && view.busy(session.id) === true, review: view?.review, checkpoint: view?.checkpoint,
+      // Asked only when the caller has such a thing; a failure to say counts as "none that can be read".
+      ...(this.repository ? { repository: this.readable() } : {}) } };
   }
+
+  // The person changed something only they can change (they chose a main repository): the next
+  // look tries again at once instead of waiting for a pass that runs for another reason.
+  unblock() { this.blocked = null; }
+
+  // Whether the person's main repository can be read now: true, or null.
+  readable() { try { return this.repository() === true ? true : null; } catch { return null; } }
 
   // Open one handoff and send it, if the integrator can take it now.
   // - `view` is what the caller sees at this moment: { sessions, complete, wakePolicy, now,
@@ -251,8 +267,16 @@ class IntegratorEngine {
     let checked = {};
     const merges = Object.values(action.results?.results || {}).some(result => result.kind === 'merged' && result.malformed !== true);
     if (merges) {
-      let mainHead = null;
-      try { mainHead = await this.mainHead(); } catch { /* Unknown: handled just below. */ }
+      // One look at the repository for the whole settlement. A repository that cannot be read
+      // now gives no head, which is handled just below like any head that cannot be read; it is
+      // never taken for a commit that does not exist.
+      let mainHead = null, reader = this.reader;
+      if (this.open) {
+        let repository = null;
+        try { repository = await this.open(); } catch { /* Cannot be read now. */ }
+        reader = repository ? repository.reader : null;
+        if (repository) { try { mainHead = await repository.mainHead(); } catch { /* Unknown: handled just below. */ } }
+      } else { try { mainHead = await this.mainHead(); } catch { /* Unknown: handled just below. */ } }
       if (typeof mainHead !== 'string' || !FULL_ID.test(mainHead)) {
         // Main's head cannot be read just now. The answer waits a bounded while, counted from the
         // first time this was seen for this handoff and kept in the record, so a restart does not
@@ -261,7 +285,7 @@ class IntegratorEngine {
         const now = this.now();
         if (now - handoffs.headUnreadSince(open.id, now) < this.headWaitMs) return none('main-unknown');
         checked = { handoffId: open.id, mainUnreadable: true };
-      } else checked = this.reader ? await handoffs.verify(this.reader, action, mainHead) : {};
+      } else checked = reader ? await handoffs.verify(reader, action, mainHead) : {};
       let fresh = null;
       try { fresh = await look(); } catch { /* No fresh view: nothing is settled from the older one. */ }
       if (!fresh) return none('not-ready-now');

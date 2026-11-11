@@ -12,7 +12,7 @@ const PLAIN = {
   'send-unconfirmed': 'notDelivered', 'send-refused': 'sendRefused', 'record-missing': 'replyUnread',
   // No line for one delivery in an answer; no answer at all (which keeps the one place taken).
   'no-result': 'noAnswer', 'no-reply': 'noReply', 'person-intervened': 'personTyped', 'held-other': 'other',
-  'integrator-unset': 'integratorUnset', 'integrator-in-space': 'integratorInSpace', 'backlog-full': 'backlogFull',
+  'integrator-unset': 'integratorUnset', 'integrator-in-space': 'integratorInSpace', 'backlog-full': 'backlogFull', 'repository-unset': 'repositoryUnset',
 };
 const WITH_SUBJECT = { 'lock-held': 'lockHeld', 'integrator-missing': 'integratorGone', conflict: 'conflict', installable: 'installable', 'returned-limit': 'returnedLimit' };
 // What a held delivery, and one inside a waiting handoff, can be told.
