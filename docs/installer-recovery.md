@@ -55,7 +55,12 @@ that path and its error while preserving the original write error. A failed leas
 owner write releases only the same empty directory, never foreign contents.
 
 The displaced bundle is inventoried (paths, bytes and file hashes), archived and
-checked with `unzip -t` before removing that exact copy. A targeted `lsof` check
+checked with `unzip -t` before removing that exact copy. Creating this archive has
+a separate five-minute maximum: a real signed bundle with over 25,000 entries
+exceeded the former generic 60-second command limit after upgrade verification.
+GUI waiting remains bounded to 20 seconds and backend activation to 60 seconds;
+other platform commands keep their 60-second bound. An archive timeout still
+preserves the old copy and reports cleanup failure, never partial deletion. A targeted `lsof` check
 before archiving and again before removal refuses a bundle still in use, including
 a mapped backend executable, or one whose use cannot be determined. If archive/removal fails,
 the report explicitly flags the remaining launchable backup. A verified install
