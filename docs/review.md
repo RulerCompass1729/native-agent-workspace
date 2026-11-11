@@ -8243,7 +8243,7 @@ Owner: the author of this checkpoint. Evidence: 20 unit tests in `app/tests/stuc
 
 **Result on the fixture** (one run each on the committed tree, no paid model, no credential violation):
 - Pass: the default round (Claude → Codex → Claude, pause, private continuation, full reopening), native denial, a long human-only final reply, manual permission mode, usage readings, two services (peer).
-- Pass except one requirement: the three-member journeys (alone, with usage, with two services). Everything they check passes except that same-name sessions can be told apart in the sidebar. That requirement fails on the current product; the run reports it as a known gap and goes on. See the open question below.
+- Pass except one requirement: the three-member journeys (alone, with usage, with two services). Everything they check passes except that same-name sessions can be told apart in the sidebar. That requirement fails on the current product; the run reports it as a known gap, goes on, and ends with exit code 3 instead of 0, so it is not counted as a plain pass. See the open question below.
 
 **Open question for the person (docs/product.md, row V13).** Issue U22 (closed) required that same-name sessions can be told apart in the sidebar. The compact rows of 2026-11-01 show the name only, for every session, so two Claude sessions with one name look the same there. The short id is still in the row's hover title and accessible name, the session menu and the header of the open session. Nothing shows that the person accepted dropping it from the row. The requirement stays in force: the script keeps its check, reports the gap, and its companion check ("a unique name stays compact") cannot fail until same-name rows show a short id again. The product is not changed here.
 
@@ -8254,4 +8254,6 @@ Owner: the author of this checkpoint. Evidence: 20 unit tests in `app/tests/stuc
 
 **Not run:** Claude 2.1.309 to 311 (not installed). What ended the second Claude session of run 4 within 165 ms is not proven; an Enter landing after Claude's redraw fits it.
 
-The three scripts named as not done in the entry above (native-concurrent, native-retained-claude, native-history-existing) are being handled in another lane's batch.
+The three scripts named as not done in the entry above (native-concurrent, native-retained-claude, native-history-existing) were handled in another lane's batch.
+
+**native-retained-codex is a known limitation, decided.** The person answered on 2026-11-10: Codex 0.163.0 will not be installed. The script stays ported and unverified, and nobody needs to ask again. It becomes runnable if 0.163.0 is on disk, or if the product opens a retained host's shared Codex replies to another version (`app/legacy-codex.cjs` `sharedReplyAvailable`).

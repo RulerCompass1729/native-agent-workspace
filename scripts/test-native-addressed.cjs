@@ -354,6 +354,9 @@ async function start(first, text) {
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'three-native-addressed.png') }); }
     clean(); for (const gap of knownGaps) console.error('KNOWN GAP, not a pass for that requirement:', gap);
     console.log(JSON.stringify({ versions, fixtures: summaries(), trustPresses, startup, crossService: peer, knownGaps: [...knownGaps], checks: [...checks, 'Three same-name native participants route by ID instead of roster order', 'Authorized handoffs continue while the interface is closed', 'Reopening restores native identities, history and unsent draft without replay', 'Member filtering and departure preserve the original terminal and shared records', 'Same-name sessions keep their exact identity in accessible names, menus, member dialog, native notices, copied history and archive', 'Removing ended local session references preserves shared author and recipient identities'], counts, paidModelCalls: 0, evidence: base }, null, 2));
+    // A standing requirement that fails is not a pass: exit 3 means every other check passed and the known gap(s)
+    // above still fail, so a tally by exit code does not count this run as a plain pass.
+    if (knownGaps.size) { console.error('Exit 3: every other check passed; the known gap(s) above still fail.'); process.exitCode = 3; }
     return;
   }
   const identities = [claude, codex].map(s => [s.id, s.nativeId, s.pid]);
