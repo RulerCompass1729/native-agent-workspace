@@ -21,16 +21,16 @@ function pythonExecutable(locations = null) {
     python !== '/usr/bin/python3' || fs.existsSync('/Library/Developer/CommandLineTools/usr/bin/python3'), locations);
 }
 // What the backend in <dataDir>/<key> would run for each program if it started now, without changing anything:
-// its own locations file (an entry whose program is gone is dropped at a real start), else the shared Settings
-// file, else discovery on this process's PATH. Used to check an update before it is installed.
+// the shared Settings file, else discovery on this process's PATH. Entries of the backend's own locations file
+// are taken out at a real start (runtime-locations.cjs) and are listed as wouldDrop. Used to check an update
+// before it is installed.
 function backendPrograms(dataDir, key = '.') {
   const shared = path.join(dataDir, 'runtime-locations.json');
-  const result = backendLocations(path.join(dataDir, key), shared, { repair: false });
-  const locations = result.locations || readLocations(shared), own = Boolean(result.locations);
+  const result = backendLocations(path.join(dataDir, key), shared, { repair: false }), locations = readLocations(shared);
   const programs = {};
   for (const name of ['claude', 'codex', 'python3']) {
     const found = name === 'python3' ? pythonExecutable(locations) : executable(name, undefined, locations);
-    programs[name] = { available: Boolean(found), path: found || locations[name] || null, source: locations[name] ? (own ? 'own' : 'settings') : found ? 'found' : 'missing' };
+    programs[name] = { available: Boolean(found), path: found || locations[name] || null, source: locations[name] ? 'settings' : found ? 'found' : 'missing' };
   }
   return { backend: key, wouldDrop: result.removed, programs, ok: Object.values(programs).every(program => program.available) };
 }

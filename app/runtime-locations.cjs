@@ -27,39 +27,50 @@ function setLocation(file, key, value) {
   if (value === null) delete data[key]; else data[key] = value;
   save(file, data);
 }
-// The locations a backend started in dataDir uses. A backend may keep its own file, which overrides the
-// shared Settings file while it has an entry. Settings edits only the shared file, so an own entry whose
-// program no longer exists (vendors remove old versions) left that provider unavailable with nothing to
-// show it or to repair it. Such an entry is dropped: with repair the file is rewritten without it and what
-// was dropped is kept beside it; without repair nothing is written and only the result is computed. An own
-// file left with no entry is no override, so the shared file applies again. An own entry whose program
-// still exists is kept, whatever its version. The shared file is never changed here: a program the person
-// selected in Settings stays selected and shows as missing. An own file that cannot be read is an error, as
-// it was before; one that cannot be rewritten is used as it is, so the repair never stops a backend that
-// started before it existed.
+// The locations a backend started in dataDir uses: the shared Settings file, and nothing else.
+// A backend's own file used to override it. Settings edits only the shared file, so nothing in the interface
+// showed or could change such an entry; one naming a version the vendor had removed left the backend unable
+// to run that provider, and one naming a version that still existed kept the backend on it, which is what
+// the person asked about on 2026-11-10 (「为啥不把 agent 更新到最新」). So when a backend starts,
+// every entry of its own file is taken out: with repair the entries are first added to the record beside the
+// file (the last twenty removals, each entry with whether its program still existed, so they can be put
+// back), then the file is rewritten empty; without repair nothing is written and only the result is
+// computed. If the record or the file cannot be written, nothing is taken out and the file is used as it
+// is, as before, so this never stops a backend that started before it existed and never loses an entry.
+// A record that exists but cannot be read is not written over: it is moved aside under a dated name and a
+// new one is started; if it cannot be moved, nothing is taken out.
+// An own file that cannot be read is an error, as it was before. The shared file is never changed here: a
+// program the person selected in Settings stays selected and shows as missing. A service started by hand,
+// with no Settings file known, keeps using its own file.
 // Returns { file, locations, removed }: file is what the backend reads (undefined when there is none);
-// locations is given when the own file applies, otherwise read file; removed lists { key, path }.
+// locations is given only when the own file applies, otherwise read file; removed lists { key, path, existed }.
 function backendLocations(dataDir, shared, { repair = false } = {}) {
   const own = path.join(dataDir, 'runtime-locations.json');
   let present = false;
-  if (!shared || path.resolve(own) !== path.resolve(shared)) { try { fs.lstatSync(own); present = true; } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+  try { fs.lstatSync(own); present = true; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  // The root backend's own file is the Settings file itself, whatever the two paths are spelled like (a linked
+  // folder, another letter case): the same file is never treated as a backend's own.
+  if (present && shared) { try { const a = fs.statSync(own), b = fs.statSync(shared); if (a.dev === b.dev && a.ino === b.ino) present = false; } catch { /* one of them is not there: not the same file */ } }
   if (!present) return { file: shared || undefined, locations: null, removed: [] };
   const entries = readLocations(own);
-  // No Settings file is known (a service started by hand): the own file is used as it is, as before.
   if (!shared) return { file: own, locations: entries, removed: [] };
-  const removed = Object.entries(entries).filter(([, value]) => !isExecutable(value)).map(([key, value]) => ({ key, path: value }));
-  const kept = Object.fromEntries(Object.entries(entries).filter(([, value]) => isExecutable(value)));
+  const removed = Object.entries(entries).map(([key, value]) => ({ key, path: value, existed: isExecutable(value) }));
   if (repair && removed.length) {
-    try { save(own, kept); } catch { return { file: own, locations: entries, removed: [] }; }
-    // The record is for whoever checks an update afterwards: the last twenty repairs, oldest first. Failing
-    // to write it must not stop the backend.
     const record = path.join(dataDir, 'runtime-locations.removed.json');
     try {
-      let earlier = [];
-      try { const kept = JSON.parse(fs.readFileSync(record, 'utf8')); if (Array.isArray(kept?.removals)) earlier = kept.removals; } catch { /* none yet, or unreadable: start again */ }
+      let earlier = [], text = null;
+      try { text = fs.readFileSync(record, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') text = undefined; }
+      if (text !== null) {
+        let kept; try { kept = JSON.parse(text); } catch { /* unreadable */ }
+        if (Array.isArray(kept?.removals)) earlier = kept.removals;
+        // Earlier removals exist only here: a record that cannot be used is kept under another name, never written over.
+        else fs.renameSync(record, `${record}.${new Date().toISOString().replace(/[:.]/g, '-')}.unreadable`);
+      }
+      // The record first: an entry is never taken out of the file without being kept here.
       save(record, { removals: [...earlier, { at: new Date().toISOString(), removed }].slice(-20) });
-    } catch { /* the locations file itself is already repaired */ }
+      save(own, {});
+    } catch { return { file: own, locations: entries, removed: [] }; }
   }
-  return Object.keys(kept).length ? { file: own, locations: kept, removed } : { file: shared, locations: null, removed };
+  return { file: shared, locations: null, removed };
 }
 module.exports = { readLocations, setLocation, isExecutable, backendLocations };

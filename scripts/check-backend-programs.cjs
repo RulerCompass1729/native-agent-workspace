@@ -8,6 +8,10 @@
 // so pass the backend the update is predicted to activate. Discovery uses the PATH an application gets when
 // it is opened from the Finder or the Dock (plus the usual install folders the app itself adds), not this
 // shell's: a program found that way is found by the installed app; --path gives another PATH to assume.
+// "wouldDrop" lists the entries of that backend's own locations file, which its next start takes out and keeps
+// in a record beside the file; they do not count for "ok". (If that start cannot write the record or the file,
+// it keeps using the own file instead; the check after the update, `available` in the backend's initial state,
+// shows that.)
 // Prints one JSON object and exits 0 when "ok" is true, 1 when a program is missing, 2 on a usage error.
 const path = require('node:path');
 const args = process.argv.slice(2), take = flag => { const at = args.indexOf(flag); return at < 0 ? undefined : args.splice(at, 2)[1]; };
