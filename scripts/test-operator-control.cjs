@@ -55,6 +55,64 @@ async function readableCard(card, label) {
   geometry.push({ label, card: outer, body }); fs.writeFileSync(path.join(evidence, 'geometry.json'), JSON.stringify(geometry, null, 2));
   assert.ok(outer && body && body.width >= outer.width * 0.6, 'Report body must remain readable beside its controls');
 }
+// B5: the person names a space in the grant form. The session created under that grant then joins the space by
+// itself and is recorded there; the task stays undelivered. Synthetic backend, no model, no native process.
+async function spaceGrantJourney(card, args) {
+  const desk = () => page.evaluate(() => workspace.initial());
+  const space = card.locator('select').nth(1), consent = card.locator('input[type=checkbox]'), sentence = card.locator('label').filter({ has: page.locator('input[type=checkbox]') }).locator('span');
+  assert.equal(await space.inputValue(), '', 'The form starts with no space, as a grant has always been');
+  assert.equal(await sentence.innerText(), '允许上面厂商、目录及权限在我填的额度和期限内建会话；会产生厂商用量。首条任务和报告通知当前不会投递。');
+  await card.locator('input[type=number]').nth(0).fill('1'); await card.locator('input[type=number]').nth(1).fill('1');
+  const expiry = new Date(Date.now() + 3600000); expiry.setMinutes(expiry.getMinutes() - expiry.getTimezoneOffset()); await card.locator('input[type=datetime-local]').fill(expiry.toISOString().slice(0, 16));
+  await consent.check();
+  await space.selectOption('shared');
+  assert.equal(await consent.isChecked(), false, 'Choosing a space clears the tick: it is a different consent');
+  const name = await space.locator('option[value="shared"]').innerText();
+  assert.equal(await sentence.innerText(), `允许上面厂商、目录及权限在我填的额度和期限内建会话，建出的会话加入「${name}」成为那里的成员，并接那里排队的活；会产生厂商用量。首条任务和报告通知当前不会投递。`);
+  await card.scrollIntoViewIfNeeded(); await capture('space-01-form-zh');
+  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('en');
+  await until(() => card.getByRole('button', { name: 'Save grant and create this session', exact: true }).count(), 'Grant labels repaint to English');
+  const english = await space.locator('option[value="shared"]').innerText();
+  assert.equal(await sentence.innerText(), `Allow creation for this provider, directory and permission within my quotas and expiry; the sessions created join “${english}” as members and are sent the work queued there. Provider usage may incur costs. Initial tasks and report notifications are not delivered in this phase.`);
+  assert.equal(await space.inputValue(), 'shared'); assert.equal(await card.locator('input[type=number]').nth(0).inputValue(), '1');
+  // Nothing in the card keeps the earlier language, the new field and sentence included.
+  const leftover = await card.evaluate(form => {
+    const box = form.closest('.operator-controls');
+    const texts = [...box.querySelectorAll('*')].filter(element => !element.childElementCount).map(element => element.textContent);
+    return texts.concat([...box.querySelectorAll('[aria-label]')].map(element => element.getAttribute('aria-label'))).filter(text => /[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]/.test(text));
+  });
+  assert.deepEqual(leftover, [], 'Nothing in the card stays in Chinese after the switch to English');
+  await page.locator('#close-setup').click(); await card.scrollIntoViewIfNeeded(); await capture('space-02-form-en');
+  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('zh'); await page.locator('#close-setup').click();
+  await card.getByRole('button', { name: '记录许可并建此会话', exact: true }).click();
+  // The cleared tick is a required field, so the form itself refuses to submit: nothing is saved, nothing created.
+  await wait(800);
+  assert.equal(await consent.evaluate(element => element.validity.valueMissing), true);
+  assert.equal((await state()).sessions.length, 1); assert.equal((await state()).operatorPolicy.domains.length, 0, 'Not saved without the tick');
+  await consent.check(); await card.getByRole('button', { name: '记录许可并建此会话', exact: true }).click();
+  await until(async () => (await state()).sessions.length === 2, 'Exactly one session created');
+  const [domain] = (await state()).operatorPolicy.domains;
+  assert.equal(domain.space, 'shared'); assert.equal(domain.daily, 1);
+  const executor = (await state()).sessions.find(s => s.id !== source).id;
+  await until(async () => (await desk()).rooms.find(room => room.id === 'shared').events.some(event => event.monitor?.kind === 'opened' && event.monitor.sessionId === executor && event.monitor.joined === true), 'The desktop joined it to the space and recorded it');
+  await until(async () => require('../app/collaboration-spaces.cjs').roomIds(await session(executor)).includes('shared'), 'The new session is a member');
+  const created = await tool(source, 'open', args);
+  assert.equal(created.status, 'created'); assert.equal(created.sessionId, executor); assert.equal(created.space, 'shared'); assert.equal(created.placement, 'joined'); assert.equal(created.delivery, 'pending-1b');
+  const openRowId = 'operator:open:' + JSON.stringify([(await session(source)).nativeId, args.action_id]);
+  const row = page.locator('#messages [data-message-id=' + JSON.stringify(openRowId) + ']');
+  await until(async () => (await row.innerText()).includes(`建出的会话加入「${name}」`), 'The saved grant shows the space');
+  await until(async () => (await row.innerText()).includes(`新会话已加入「${name}」`), 'The row says what the desktop did with the new session');
+  await row.scrollIntoViewIfNeeded(); await capture('space-03-created-and-joined');
+  // Over quota: a second open is refused in the backend; nothing is created or placed.
+  await tool(source, 'open', { ...args, action_id: 'gui-space-two' }).then(() => assert.fail('over quota'), error => assert.match(error.message, /quota is exhausted/));
+  await wait(1500);
+  assert.equal((await state()).sessions.length, 2);
+  assert.equal((await desk()).rooms.find(room => room.id === 'shared').events.filter(event => event.monitor?.kind === 'opened').length, 1);
+  const stats = await fixture('stats'); assert.equal(stats.sends.length, 0); assert.equal(stats.inputs.length, 0); assert.equal(stats.modelCalls, 0); assert.equal(stats.nativeProcesses, 0);
+  assert.equal(await page.locator('#message-input').inputValue(), 'ORIGINAL UNSENT INITIATOR DRAFT'); assert.deepEqual(errors, []); assert.deepEqual(hashes(), sourceBefore);
+  checks.push('The person chose a space in the grant form under its own consent sentence (Chinese and English); the session created under the grant joined that space by itself and was recorded; the task stayed undelivered; over quota nothing was created');
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks, sourceBefore, sourceAfter: hashes(), launchCount, activeSeconds: (Date.now() - activeStartedAt) / 1000, pictures, profile, trace, stats, errors }, null, 2));
+}
 async function run() {
   fs.mkdirSync(pictures, { recursive: true });
   profile = scratch.directory(path.join(os.tmpdir(), 'naw-operator-')); cwd = path.join(profile, 'workspace'); fs.mkdirSync(cwd, { mode: 0o700 }); cwd = fs.realpathSync(cwd);
@@ -73,6 +131,7 @@ async function run() {
   const args = { action_id: 'gui-one', provider: 'claude', cwd, task: 'Synthetic pending creation task', permission: 'default' };
   const pending = await tool(source, 'open', args); assert.equal(pending.status, 'pending-authorization');
   const card = page.locator('.operator-grant'); await card.waitFor();
+  if (process.env.NAW_TEST_OPERATOR_SPACE === '1') return spaceGrantJourney(card, args);
   await card.locator('input[type=number]').nth(0).fill('2'); await card.locator('input[type=number]').nth(1).fill('2');
   const expiry = new Date(Date.now() + 3600000); expiry.setMinutes(expiry.getMinutes() - expiry.getTimezoneOffset()); await card.locator('input[type=datetime-local]').fill(expiry.toISOString().slice(0, 16));
   await card.locator('input[type=checkbox]').check();

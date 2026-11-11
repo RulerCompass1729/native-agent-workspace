@@ -56,7 +56,7 @@ async function fixture(t) {
     ['person', { background: false, client, win: { isDestroyed: () => false } }]]);
   const sandbox = { roomState, windows, roomIds: spaces.roomIds, placementRevision: spaces.placementRevision, Date: { now: () => clock }, setTimeout: (run, delay) => { timers.push({ run, delay }); return { unref() {} }; },
     sessionLabels: { labels: new Map([[id, 'Lead']]) }, broadcastRoom: async () => { broadcasts += 1; }, queueDispatcher: { schedule: () => { schedules += 1; } } };
-  vm.createContext(sandbox); vm.runInContext(main.slice(start, end) + '\nthis.placeOpened = placeOpened; this.OPEN_RETRY_MS = OPEN_RETRY_MS;', sandbox);
+  vm.createContext(sandbox); vm.runInContext(main.slice(start, end) + '\nthis.placeOpened = placeOpened; this.OPEN_RETRY_MS = OPEN_RETRY_MS; this.openAttempts = openAttempts;', sandbox);
   const grant = (extra = {}) => w.operatorAction(id, 'grant', { providers: ['claude'], directories: [root], permission: 'default', daily: 2, concurrent: 2, expiresAt: Date.now() + 60000, ...extra });
   const identity = () => ({ nativeId: s.nativeId, turnId: r.liveTurn.id, promptId: r.liveTurn.promptId, callId: randomUUID() });
   const open = (extra = {}) => r.operatorCall(identity(), 'workspace_open', { action_id: randomUUID(), provider: 'claude', cwd: root, name: 'Opened', task: 'Synthetic first task', permission: 'default', ...extra });
@@ -64,7 +64,7 @@ async function fixture(t) {
   const facts = (room = space) => roomState.metadata(room).events.filter(event => event.monitor?.kind === 'opened');
   return { w, id, s, r, root, roomState, space, elsewhere, client, grant, open, place, facts, joins, calls, sandbox,
     failJoins: n => { joinFails = n; }, failPlaced: n => { placedFails = n; }, failRecords: n => { recordFails = n; }, counts: () => ({ broadcasts, schedules }),
-    proofs, timers, windows, during: act => { duringJoin = act; }, advance: ms => { clock += ms; } };
+    proofs, timers, windows, during: act => { duringJoin = act; }, advance: ms => { clock += ms; }, now: () => clock };
 }
 const listed = f => f.w.snapshot().operatorPolicy.placements;
 
@@ -291,6 +291,67 @@ test('the placement calls are the desktop\'s own: no agent tool reaches them, an
   f.w.close();
   const again = new Workspace({ binaries: {}, close() {} }, f.root); t.after(() => again.close());
   assert.deepEqual(again.operator.policy().placements, []); assert.equal(again.operator.data.actions[key].placement.joined, true);
+});
+
+test('a saved space or placement result that the journal could not have written disables the interface at the next start', async t => {
+  const f = await fixture(t); f.grant({ space: f.space });
+  await f.open({ action_id: 'saved-shape' }); await f.place();
+  const key = Object.keys(f.w.operator.data.actions)[0], file = f.w.operator.file;
+  assert.equal(f.w.operator.data.actions[key].placement.joined, true);
+  f.w.close();
+  const good = fs.readFileSync(file, 'utf8');
+  const restart = change => {
+    const data = JSON.parse(good); change(data); fs.writeFileSync(file, JSON.stringify(data), { mode: 0o600 });
+    const w = new Workspace({ binaries: {}, close() {} }, f.root), policy = w.operator.policy(); w.close(); return policy;
+  };
+  const unchanged = restart(() => {});
+  assert.equal(unchanged.error, null, 'What the journal wrote itself is read back'); assert.equal(unchanged.domains[0].space, f.space);
+  const domain = data => Object.values(data.domains)[0], placement = data => data.actions[key].placement;
+  for (const [label, change] of [
+    ['a space that is not a space id', data => { domain(data).space = '../outside'; }],
+    ['a space of another type', data => { domain(data).space = 7; }],
+    ['an empty space', data => { domain(data).space = null; }],
+    ['a result that is not a record', data => { data.actions[key].placement = 'joined'; }],
+    ['a result with a field the journal never writes', data => { placement(data).queued = true; }],
+    ['free text as the reason', data => { Object.assign(placement(data), { joined: false, error: 'Free text\nwith lines' }); }],
+    ['not joined and no reason', data => { placement(data).joined = false; }],
+    ['a result with no time', data => { delete placement(data).at; }],
+    ['a result for another space than the grant names', data => { placement(data).space = 'shared'; }],
+    ['a result on an action that created nothing', data => { data.actions[key].status = 'cancelled'; }],
+  ]) {
+    const policy = restart(change);
+    assert.match(String(policy.error), /could not be read; the interface is disabled/, label); assert.equal(policy.enabled, false, label); assert.deepEqual(policy.placements, [], label);
+  }
+});
+
+test('retry counts are dropped a minute after a placement is no longer listed, and kept while it is', async t => {
+  // Out of retries, and the result was saved: the placement is no longer listed, so its count goes.
+  const f = await fixture(t); f.grant({ space: f.space });
+  await f.open({ action_id: 'out-of-retries' }); f.failJoins(99);
+  for (let state = 0; state < 12; state += 1) await f.place(60000);
+  assert.deepEqual(listed(f), []); assert.equal(f.sandbox.openAttempts.size, 0);
+  // The grant ended between two tries: the count stays for a minute past its delay, then goes.
+  const g = await fixture(t), grantId = g.grant({ space: g.space });
+  await g.open({ action_id: 'revoked-between-tries' }); g.failJoins(1); await g.place();
+  g.w.operatorAction(g.id, 'revoke', grantId); await g.place(100);
+  assert.equal(g.sandbox.openAttempts.size, 1); assert.equal(g.joins.length, 0);
+  await g.place(62000);
+  assert.equal(g.sandbox.openAttempts.size, 0); assert.equal(g.joins.length, 0);
+  // A state that lacks the placement for a moment (another window, a backend reconnecting) does not restart the tries.
+  const k = await fixture(t); k.grant({ space: k.space });
+  await k.open({ action_id: 'briefly-unlisted' }); k.failJoins(99); await k.place();
+  const tried = () => k.calls.filter(([, action]) => action === 'placement').length;
+  assert.equal(tried(), 1);
+  for (let state = 0; state < 10; state += 1) { k.advance(50); await k.sandbox.placeOpened(k.client, { operatorPolicy: { placements: [] }, sessions: [] }, k.now()); await k.place(50); }
+  assert.equal(tried(), 1, 'Still waiting for the first delay');
+  // Out of retries but the result could not be saved: it is still listed, the count stays, and nothing more is tried.
+  const h = await fixture(t); h.grant({ space: h.space });
+  await h.open({ action_id: 'result-not-saved' }); h.failJoins(99); h.failPlaced(99);
+  for (let state = 0; state < 12; state += 1) await h.place(60000);
+  const tries = h.calls.filter(([, action]) => action === 'placement').length;
+  assert.equal(listed(h).length, 1); assert.equal(h.sandbox.openAttempts.size, 1);
+  for (let state = 0; state < 5; state += 1) await h.place(60000);
+  assert.equal(h.calls.filter(([, action]) => action === 'placement').length, tries, 'Nothing more is tried');
 });
 
 test('from an agent\'s context the desktop refuses a grant that names a space and both placement calls, before any confirmation is shown', () => {

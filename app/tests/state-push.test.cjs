@@ -301,7 +301,7 @@ test('the actual client wiring forwards state, terminal and progress to a page a
       notifyToolWait() {},
       notifyCapacity() {},
       // The state listener's record and placement steps have their own suites (stuck-records, open-placement).
-      placeOpened: async () => {},
+      placeOpened: async () => {}, carryGrants: async () => {},
       uiError: () => ({ message: 'disconnected', uiMessage: null }),
     };
     vm.createContext(sandbox);

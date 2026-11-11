@@ -212,7 +212,9 @@ class WorkspaceClient extends EventEmitter {
     const operatorPolicy = operators.length ? { enabled: operators.every(e => !e.closed && !e.closing && !this.control.maintenance.has(e.key) && e.state.operatorPolicy?.enabled === true && !e.state.operatorPolicy?.error),
       error: operators.find(e => e.state.operatorPolicy?.error)?.state.operatorPolicy.error || null, domains: operators.flatMap(e => e.state.operatorPolicy?.domains || []),
       // B5: sessions created under a grant that names a space, until the desktop has placed them (operator-control.cjs).
-      placements: operators.flatMap(e => e.state.operatorPolicy?.placements || []) } : null;
+      placements: operators.flatMap(e => e.state.operatorPolicy?.placements || []),
+      // B5: holders whose session has ended, until the desktop has carried their grant to the replacing session or found no one to carry it to.
+      successions: operators.flatMap(e => e.state.operatorPolicy?.successions || []) } : null;
     return { ...this.active.state, operatorPolicy, nativeImageCacheRoots: snapshotImageRoots(this.entries.map(e => e.state.nativeImageCacheRoot).filter(Boolean)), wakePolicy: this.entries.find(e => e.state.capabilities?.includes('agentWakeV1'))?.state.wakePolicy, sessions, capabilities,
       rooms, room: rooms.find(r => r.id === roomId) || { id: roomId, revision: 0, run: null, messages: [] },
       diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.localDispatchCount?.() ?? this.control.legacyInput?.records.length ?? 0) },
