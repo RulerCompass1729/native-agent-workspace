@@ -7,7 +7,8 @@ const { uiError } = require('./ui-errors.cjs');
 const fs = require('node:fs'), path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { connectService } = require('./service-connection.cjs');
-const { processMayBeAlive, processIdentity } = require('./platform.cjs');
+const { processMayBeAlive } = require('./platform.cjs');
+const { parseLock, ownerMayBeAlive, lockIdentity } = require('./service-lock.cjs');
 
 const RECORD = 'backend-switch.json', SETTINGS = 'backend-switch-settings.json';
 const STATE_LABELS = { working: 'error.planWorking', starting: 'error.planStarting', stopping: 'error.planStopping', approval: 'error.planApproval', disconnected: 'error.planDisconnected', error: 'error.planError' };
@@ -191,16 +192,16 @@ function clearRecord(dataDir, key) {
 // Confirm the old service's process identity before requesting maintenance.
 // Retirement itself must pass its conditional, service-side shutdown guard.
 function serviceProcess(directory, pid, commandLine) {
-  const lock = Number(fs.readFileSync(path.join(directory, 'service.lock'), 'utf8'));
-  if (lock !== pid) throw uiError("error.backendSwitchProcessMismatch");
+  const lock = parseLock(fs.readFileSync(path.join(directory, 'service.lock'), 'utf8'));
+  if (lock?.pid !== pid) throw uiError("error.backendSwitchProcessMismatch");
   const command = commandLine(pid);
   if (typeof command !== 'string' || !command.includes(path.join(directory, 'runtimes') + path.sep) || !/daemon\.cjs/.test(command)) throw uiError("error.backendSwitchProcessUnconfirmed");
-  return processIdentity(pid);
+  return lockIdentity(pid);
 }
 const psCommand = pid => execFileSync('/bin/ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' });
 async function waitGone(directory, pid, identity, ms = 15000) {
   for (let i = 0; i < ms / 100; i++) {
-    if (!processMayBeAlive(identity || { pid }) && !fs.existsSync(path.join(directory, 'service.lock'))) return;
+    if (!ownerMayBeAlive(identity || { pid }, directory, 'service') && !fs.existsSync(path.join(directory, 'service.lock'))) return;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   throw uiError("error.backendSwitchOldPending");
@@ -319,7 +320,7 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
         : sessionPlan(record, record.state).carry;
       if (!ok) throw uiError("error.backendSwitchSessionChanged", { name: record.name || record.id });
     }
-    if (state.servicePid !== pid || processIdentity(pid)?.started !== identity?.started) throw uiError("error.backendSwitchProcessChanged");
+    if (state.servicePid !== pid || lockIdentity(pid)?.started !== identity?.started) throw uiError("error.backendSwitchProcessChanged");
     if (!state.sessions.every(s => ['ended', 'background'].includes(s.state))) serviceProcess(directory, pid, commandLine);
   } catch (error) {
     // Put back what this flow stopped, on the same old service and owners.

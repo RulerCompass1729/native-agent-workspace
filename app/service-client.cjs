@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const { readLayout, writeLayout } = require('./service-layout.cjs');
 const { WorkspaceClient } = require('./workspace-client.cjs');
 const { processMayBeAlive } = require('./platform.cjs');
+const { lockIdentity, readLock, createLock, releaseLock, ownerMayBeAlive } = require('./service-lock.cjs');
 
 const { ServiceClient, connectService } = require('./service-connection.cjs');
 async function connect(dataDir, owner) {
@@ -19,11 +20,10 @@ async function connect(dataDir, owner) {
     const client = new WorkspaceClient(entries, layout.active, dataDir); client.snapshot(); return client;
   } catch (error) { for (const e of entries) e.client.close(); throw error; }
 }
-async function waitForShutdown(client, dataDir, pid) {
+async function waitForShutdown(client, dataDir, identity) {
   const lock = path.join(dataDir, 'service.lock');
   for (let i = 0; i < 30; i++) {
-    let alive = false;
-    if (Number.isSafeInteger(pid) && pid > 1) { try { process.kill(pid, 0); alive = true; } catch (error) { alive = error.code !== 'ESRCH'; } }
+    const alive = ownerMayBeAlive(identity, dataDir, 'service');
     if (client.socket.destroyed && !fs.existsSync(lock) && !alive) return;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -44,19 +44,18 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
       if (!allowEndedServiceRestart && state.sessions.some(s => processMayBeAlive(s.processIdentity) || processMayBeAlive(s.serverIdentity))) return state;
       // Install a newer backend only after every native session has confirmed
       // its end. An active/unknown fleet never becomes an update casualty.
+      const identity = lockIdentity(state.servicePid) || { pid: state.servicePid };
       stopping = true; await c.call('shutdown');
-      await waitForShutdown(c, dataDir, state.servicePid);
+      await waitForShutdown(c, dataDir, identity);
     } finally { c.close(); }
   } catch (error) { if (stopping) throw error; }
   const lock = path.join(dataDir, 'service.lock');
   if (fs.existsSync(lock)) {
-    const pid = Number(fs.readFileSync(lock, 'utf8'));
-    if (!Number.isSafeInteger(pid) || pid < 2) throw uiError("error.service.recordCorrupted");
-    let alive = true; try { process.kill(pid, 0); } catch (error) { alive = error.code !== 'ESRCH'; }
-    if (alive) throw uiError("error.service.existingBackendUnreachable");
-    fs.rmSync(lock); // Dead PID only; never kill or replace a live owner.
+    const record = readLock(lock);
+    if (!record) throw uiError("error.service.recordCorrupted");
+    if (ownerMayBeAlive(record, dataDir, 'service') || !releaseLock(lock, record)) throw uiError("error.service.existingBackendUnreachable");
   }
-  const names = ['ui-errors.cjs', 'ui-locale.js', 'ui-messages.js', 'service-transport.cjs', 'daemon.cjs', 'adapters.cjs', 'native-computer-use.cjs', 'computer-use-outbox-native.cjs', 'scoped-outbox-runtime.cjs', 'background-control.cjs', 'background-operation.cjs', 'background-control-native.cjs', 'computer-use-outbox-tool.cjs', 'operator-control.cjs', 'terminal-keyboard.cjs', 'terminal-continuation.js', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'backend-switch.cjs', 'goal-continuation.cjs', 'goal-continuation-runner.cjs', 'git-worktree.cjs', 'collaboration-spaces.cjs', 'space-merge.cjs', 'session-labels.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'native-blocks.cjs', 'native-images.cjs', 'space-images.cjs', 'local-images.cjs', 'shared-replies.cjs', 'session-wake.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'codex-qualification.cjs', 'claude-pin.cjs', 'codex-surface.cjs', 'codex-surface/0.167.0.json', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs', 'claude-compat-plugin.cjs'];
+  const names = ['service-lock.cjs', 'ui-errors.cjs', 'ui-locale.js', 'ui-messages.js', 'service-transport.cjs', 'daemon.cjs', 'adapters.cjs', 'native-computer-use.cjs', 'computer-use-outbox-native.cjs', 'scoped-outbox-runtime.cjs', 'background-control.cjs', 'background-operation.cjs', 'background-control-native.cjs', 'computer-use-outbox-tool.cjs', 'operator-control.cjs', 'terminal-keyboard.cjs', 'terminal-continuation.js', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'backend-switch.cjs', 'goal-continuation.cjs', 'goal-continuation-runner.cjs', 'git-worktree.cjs', 'collaboration-spaces.cjs', 'space-merge.cjs', 'session-labels.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'native-blocks.cjs', 'native-images.cjs', 'space-images.cjs', 'local-images.cjs', 'shared-replies.cjs', 'session-wake.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'codex-qualification.cjs', 'claude-pin.cjs', 'codex-surface.cjs', 'codex-surface/0.167.0.json', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs', 'claude-compat-plugin.cjs'];
   const localLocations = path.join(dataDir, 'runtime-locations.json');
   let runtimeConfig = process.env.NAW_RUNTIME_CONFIG;
   // Keep Settings reachable when the root backend shares the global file.
@@ -100,12 +99,11 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const lockFile = path.join(dataDir, 'services.lock');
   if (fs.existsSync(lockFile)) {
-    const pid = Number(fs.readFileSync(lockFile, 'utf8'));
-    if (!Number.isSafeInteger(pid) || pid < 2) throw uiError("error.service.invalidStartupRecord");
-    try { process.kill(pid, 0); throw uiError("error.service.connecting"); }
-    catch (error) { if (error.code !== 'ESRCH') throw error; fs.rmSync(lockFile); }
+    const record = readLock(lockFile);
+    if (!record) throw uiError("error.service.invalidStartupRecord");
+    if (ownerMayBeAlive(record, dataDir, 'startup') || !releaseLock(lockFile, record)) throw uiError("error.service.connecting");
   }
-  const lock = fs.openSync(lockFile, 'wx', 0o600); fs.writeFileSync(lock, String(process.pid)); fs.closeSync(lock);
+  const lock = createLock(lockFile, 'startup', dataDir);
   try {
     const layout = readLayout(dataDir), states = new Map();
     const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
@@ -147,12 +145,13 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
       try {
         const current = await client.call('initial');
         if (!emptyService(current)) continue;
+        const identity = lockIdentity(current.servicePid) || { pid: current.servicePid };
         await client.call('shutdown');
-        await waitForShutdown(client, path.join(dataDir, key), current.servicePid);
+        await waitForShutdown(client, path.join(dataDir, key), identity);
       } finally { client.close(); }
       layout.entries = layout.entries.filter(entry => entry !== key); writeLayout(dataDir, layout);
     }
-  } finally { fs.rmSync(lockFile, { force: true }); }
+  } finally { releaseLock(lockFile, lock); }
 }
 function continuationStatus(state, id) {
   const notReady = (key, params) => { const error = uiError(key, params); return { ready: false, reason: error.message, reasonUiMessage: error.uiMessage || null }; };

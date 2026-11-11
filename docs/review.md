@@ -7918,3 +7918,48 @@ When the launcher is a link into the vendor's `versions` folder and its version 
 Author-run: unit tests cover each rule with fake programs; full suite 4114/0. One real-CLI trial under the loopback fixture (real Claude 2.1.322, launcher pointing at a failing unqualified stub): the session started with 2.1.322, bound as usual and showed the notice; no request reached the fixture. The first attempt failed only on the script's handling of the native trust prompt and is kept. The trial covers a new session only; resume, expiry and restart are covered by unit tests. A synthetic print-mode turn confirmed that transcript entries written by 2.1.322 carry `version`.
 
 Independent read-only review (one session, three rounds): CHANGES (the clock was stored in the per-start socket folder and restarted with the service; removal of the fallback version moved NAW further down; a session resumed elsewhere by a newer version could be reopened by the older one), CHANGES (a transcript missing at the computed path counted as no outside writer), then PASS on `678bc1e`. Open: whether the seven days should run per fallback version (built) or per episode; the details are in the hover text only; a real-CLI resume is unverified.
+## Reboot recovery when a lock PID is reused (2026-11-10)
+
+Owner: service lifecycle author. Severity: startup unavailable. Base: `6a92546`.
+After a reboot, a persisted PID can belong to a root helper or the newly launched
+GUI. Previously both service locks treated that PID as their live owner and
+refused startup. The two numeric-self-PID cold-boot reproductions fail on
+`dbe02b7`, the main revision when reproduction began, and pass with this repair.
+Later rebases brought the candidate to `6a92546`.
+
+New locks record PID, process start time, role, canonical data directory and an
+ownership token. Start time is read under a fixed locale and timezone. Numeric
+legacy records use the live command and data directory; an unreadable or
+ambiguous owner remains protected. Startup, service shutdown waiting and backend
+switch waiting use the same birth identity. A release checks the file identity
+and complete record before removing it. Both runtime and application payloads
+include the helper, and fixture cleanup reads both record formats.
+
+Author-run: both lock kinds recover with an actual unrelated root process whose
+liveness probe returns EPERM. A real test-owned daemon paused with SIGSTOP stays
+protected for both lock kinds and both old/new formats, retaining its record,
+connection and process identity. Each kind of numeric lock naming the actual
+GUI process also boots through normal main/service startup in a hidden isolated
+source GUI. Both trials have zero sessions, dispatches and model calls, and their
+owned processes and profiles are released. These GUI trials ran at `b6c430a`;
+the final rebase to `6a92546` retains the later packaging entries. The full suite
+passes 4306/4306 with no failures or skips at concurrency two. The UI build also
+passes. An earlier full run caught a missing packaging entry and an unbuilt UI;
+the repaired payload tests and subsequent full suites pass.
+
+Independent read-only review approves the lock implementation with no blocker.
+The source, real-process counterexamples and full-suite totals were inspected;
+the tests remain author-run. This is a local candidate, not an installation or a
+completed rollout. Product tests made no paid model requests. The daily
+application and native parents were not stopped or restarted.
+
+Legacy startup locks naming a GUI/Node process without a provable data directory
+remain conservative, including a helper of the newly launched GUI. Such a
+number-only record can still report that the service is connecting; new records
+use process birth identity. Releases predating this lock format cannot read a
+JSON lock left by an unclean exit, so rolling back to those releases can also
+refuse startup. Recovery requires a compatible version or explicit operator
+verification of a stale lock; the old release must not blindly remove it.
+A moved/deleted recorded directory keeps the lock held while its PID is alive.
+The change does not claim to make comparison plus unlink atomic against
+arbitrary same-user writers, or to solve the separate memory investigation.
