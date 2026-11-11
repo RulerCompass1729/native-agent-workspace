@@ -20,13 +20,15 @@ const ready = name => ({ key: key(name), roomId: 'shared', itemId: name, branch:
 const integratorSession = (extra = {}) => ({ id: 'integrator', nativeId: 'native-integrator', provider: 'claude', state: 'idle', background: 0, scheduled: 0, backgroundStale: false,
   chatAvailable: true, liveDraft: '', controlRevision: 0, serviceCapabilities: [rules.CAPABILITY], fleet: [], messages: [], ...extra });
 function slice(start, end) { const a = source.indexOf(start), b = source.indexOf(end, a + start.length); assert.ok(a > 0 && b > a, start); return source.slice(a, b); }
-function fixture(t, enabled = true) {
+function fixture(t, enabled = true, options = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-integrator-actions-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const handoffs = new IntegrationHandoffs(directory);
   const handlers = new Map(), f = { directory, file: path.join(directory, FILE), handoffs, handlers, broadcasts: 0, schedules: 0 };
+  // The dispatcher as the entry sees it: its schedule, and the engine fault it kept (none unless a test sets one).
+  f.dispatcher = { schedule() { f.schedules += 1; }, integrationError: null };
   const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, ipcMain: { handle() {} }, integrationHandoffs: enabled ? handoffs : null, integrationFault: null, Date,
-    broadcastRoom: async () => { f.broadcasts += 1; }, queueDispatcher: { schedule() { f.schedules += 1; } } });
+    broadcastRoom: async () => { f.broadcasts += 1; }, queueDispatcher: options.noDispatcher ? null : f.dispatcher });
   vm.runInContext(slice('function register(name, handler) {', 'async function replaceBackendSockets'), context);
   vm.runInContext(slice('function handoffOverview(handoffs) {', '\n// One notice for one reason of the integration handoff'), context);
   vm.runInContext(slice("  register('handoff', async (c, action, value, choice) => {", "  register('rename',"), context);
@@ -143,6 +145,37 @@ test('with the switch closed the person is told handoffs are not enabled, and no
   assert.equal(fs.existsSync(f.file), false); assert.deepEqual([f.broadcasts, f.schedules], [0, 0]);
 });
 
+test('a fault the dispatcher kept for the engine is shown to the person, also when the engine never started', async t => {
+  // The engine runs and one of its passes failed: the overview carries the fault, as a copy.
+  const f = fixture(t);
+  assert.deepEqual([(await f.person('list')).started, (await f.person('list')).engineFault], [true, null]);
+  f.dispatcher.integrationError = { message: 'Synthetic pass fault', at: NOW, count: 3 };
+  const seen = await f.person('list');
+  // (What the entry returns was made in the entry's own context: compared by content.)
+  const plain = value => JSON.parse(JSON.stringify(value));
+  assert.deepEqual(plain(seen.engineFault), { message: 'Synthetic pass fault', at: NOW, count: 3 });
+  seen.engineFault.message = 'changed by the caller';
+  assert.equal(f.dispatcher.integrationError.message, 'Synthetic pass fault');
+  assert.deepEqual([f.broadcasts, f.schedules], [0, 0], 'Looking changes and announces nothing');
+  // The switch is open but the engine could not be built: there is no record. Looking says why;
+  // every action is refused as "did not start", not as "not enabled"; nothing is created.
+  const g = fixture(t, false);
+  g.dispatcher.integrationError = { message: 'Synthetic build fault', at: NOW, count: 1 };
+  const unstarted = await g.person('list');
+  assert.deepEqual(plain(unstarted), { started: false, engineFault: { message: 'Synthetic build fault', at: NOW, count: 1 } });
+  unstarted.engineFault.message = 'changed by the caller';
+  assert.equal(g.dispatcher.integrationError.message, 'Synthetic build fault', 'A copy here too');
+  for (const args of [['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['made-up']]) {
+    await assert.rejects(g.person(...args), refused('error.handoff.notStarted'), JSON.stringify(args));
+  }
+  assert.equal(fs.existsSync(g.file), false); assert.deepEqual([g.broadcasts, g.schedules], [0, 0]);
+  // An agent is refused first, whatever the state.
+  await assert.rejects(g.agent('list'), refused('error.handoff.personOnly'));
+  // No dispatcher at all (it could not start): as with the switch closed.
+  const h = fixture(t, false, { noDispatcher: true });
+  for (const args of [['list'], ['retryDelivery', key('a')]]) await assert.rejects(h.person(...args), refused('error.handoff.unavailable'), JSON.stringify(args));
+});
+
 test('an action that does not fit the record\'s state is refused in words, and nothing changes', async t => {
   const f = fixture(t);
   const id = f.waiting(['a']);
@@ -194,7 +227,7 @@ test('the entry is wired for the person\'s window, and its words exist in both l
   assert.match(source, /let integrationHandoffs = null;/);
   const builder = source.indexOf('function integrationEngine(dispatcher) {'), next = source.indexOf('\nfunction ', builder + 10), assigned = source.indexOf('  integrationHandoffs = handoffs;');
   assert.ok(assigned > builder && assigned < next);
-  for (const name of ['error.handoff.personOnly', 'error.handoff.unavailable', 'error.handoff.invalid', 'error.handoff.record']) {
+  for (const name of ['error.handoff.personOnly', 'error.handoff.unavailable', 'error.handoff.notStarted', 'error.handoff.invalid', 'error.handoff.record']) {
     const zh = locale.format('zh', name), en = locale.format('en', name);
     assert.ok(zh && en && zh !== en && zh !== name && en !== name, name);
   }

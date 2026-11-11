@@ -1518,7 +1518,7 @@ class QueueDispatcher {
     this.integrationUnreadable = options.integrationUnreadable || (() => {});
     this.integrationFailed = options.integrationFailed || (() => {});
     // The last failure of the engine (while it was built, or in a pass), kept so that it is not
-    // lost: { message, at, count }.
+    // lost: { message, at, count }, and recoveredAt once a later step went through.
     // The person is told once per kind of failure in a run, so a new kind after a recovery is told too.
     this.integrationError = null;
     this.integrationTold = new Set();
@@ -2035,6 +2035,8 @@ class QueueDispatcher {
       if (result.taken?.stored.length || result.settled?.kind === 'settled' || handed || result.told?.shown || result.told?.told.length) {
         this.broadcast().catch(() => {});
       }
+      // The step went through: a fault kept from before stays readable, marked as over.
+      if (this.integrationError && !this.integrationError.recoveredAt) this.integrationError.recoveredAt = this.now();
     } catch (error) {
       this.integrationFault(error);
     }

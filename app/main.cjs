@@ -1577,7 +1577,14 @@ async function boot() {
   register('handoff', async (c, action, value, choice) => {
     if (c.background) throw uiError('error.handoff.personOnly');
     const handoffs = integrationHandoffs;
-    if (!handoffs) throw uiError('error.handoff.unavailable');
+    if (!handoffs) {
+      // No engine. Either the switch is closed, or the engine could not be built: then the person
+      // is shown why when they look, and no action can be done.
+      const fault = queueDispatcher?.integrationError;
+      if (!fault) throw uiError('error.handoff.unavailable');
+      if (action === 'list') return { started: false, engineFault: { ...fault } };
+      throw uiError('error.handoff.notStarted');
+    }
     let result;
     try {
       if (action === 'list') return handoffOverview(handoffs);
@@ -2194,7 +2201,11 @@ function handoffOverview(handoffs) {
   const snapshot = handoffs.snapshot(), open = snapshot.handoff;
   const brief = entry => ({ key: entry.key, roomId: entry.roomId, itemId: entry.itemId, branch: entry.branch, commit: entry.commit,
     ...(entry.text ? { text: entry.text } : {}), ...(entry.memberName ? { memberName: entry.memberName } : {}), ...(entry.note ? { note: entry.note } : {}) });
-  return { summary: handoffs.summary(),
+  // engineFault is the dispatcher's last fault of the engine's own step ({ message, at, count },
+  // and recoveredAt when a later step went through): the person may have missed its one notice,
+  // so it stays readable here.
+  const engineFault = queueDispatcher?.integrationError;
+  return { started: true, engineFault: engineFault ? { ...engineFault } : null, summary: handoffs.summary(),
     held: handoffs.held().map(group => ({ reason: group.reason, count: group.count, entries: group.entries.map(brief) })),
     waiting: open && open.status === 'waiting' ? { handoffId: open.id, reason: open.reason, question: open.question || '', sessionId: open.integrator.sessionId,
       entries: snapshot.ready.filter(entry => open.keys.includes(entry.key)).map(brief) } : null,
