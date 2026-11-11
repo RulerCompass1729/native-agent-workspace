@@ -327,7 +327,11 @@ class Workspace extends EventEmitter {
     // An agent's MCP endpoint never accepts these authorization operations.
     if (action === 'enabled') return this.operator.settings(id, value);
     this.get(id);
-    if (action === 'revoke' && !this.operator.data.domains[value]?.initiators.some(i => i.id === id)) throw Error('Authorization domain belongs to another initiator');
+    // B5: a grant carried to a replacing session can still be revoked from the card of the session it came from.
+    const domain = action === 'revoke' ? this.operator.data.domains[value] : null;
+    if (action === 'revoke' && !domain?.initiators.some(i => i.id === id) && !domain?.carried?.some(c => c.from.id === id)) throw Error('Authorization domain belongs to another initiator');
+    // (The desktop's own step; main.cjs refuses it from an agent's context.)
+    if (action === 'succession') return this.operator.succession(id, value);
     if (['authorize', 'dismiss', 'placement', 'placed'].includes(action) && this.operator.data.actions[value?.key]?.initiatorId !== id) throw Error('Creation confirmation belongs to another initiator');
     if (action === 'placement') return this.operator.placement(value?.key);
     if (action === 'placed') return this.operator.placed(value?.key, value?.result);

@@ -64,7 +64,16 @@ function insertRows(original, additions) {
 }
 function validateJournal(data) {
   if (data.version !== 1 || ['sessions', 'domains', 'requests', 'dispatches', 'actions', 'reports', 'calls'].some(k => !data[k] || Array.isArray(data[k]) || typeof data[k] !== 'object') || !Array.isArray(data.audit) || typeof data.enabled !== 'boolean' || !Number.isSafeInteger(data.sequence) || data.sequence < 0) fail('Invalid operator journal');
-  for (const setting of Object.values(data.sessions)) if (!setting || typeof setting.enabled !== 'boolean' || typeof setting.nativeId !== 'string') fail('Invalid operator setting');
+  // B5: what the journal itself writes when a grant follows a replaced session, in exactly these shapes.
+  const record = value => value && typeof value === 'object' && !Array.isArray(value);
+  const holder = value => record(value) && Object.keys(value).sort().join() === 'id,nativeId' && typeof value.id === 'string' && value.id && typeof value.nativeId === 'string' && value.nativeId;
+  const carriedFrom = value => record(value) && Object.keys(value).sort().join() === 'at,id,nativeId' && holder({ id: value.id, nativeId: value.nativeId }) && Number.isSafeInteger(value.at);
+  const succession = value => record(value) && Number.isSafeInteger(value.at) && typeof value.carried === 'boolean' && (!Object.hasOwn(value, 'told') || value.told === true) &&
+    Object.keys(value).every(k => ['at', 'carried', 'told', value.carried ? 'to' : 'reason'].includes(k)) && (value.carried ? holder(value.to) : typeof value.reason === 'string' && /^[a-z-]{1,60}$/.test(value.reason));
+  for (const setting of Object.values(data.sessions)) if (!setting || typeof setting.enabled !== 'boolean' || typeof setting.nativeId !== 'string' ||
+    Object.hasOwn(setting, 'enabledAt') && !Number.isSafeInteger(setting.enabledAt) || Object.hasOwn(setting, 'carriedFrom') && !carriedFrom(setting.carriedFrom) ||
+    Object.hasOwn(setting, 'succession') && !succession(setting.succession)) fail('Invalid operator setting');
+  for (const domain of Object.values(data.domains)) if (domain && Object.hasOwn(domain, 'carried') && (!Array.isArray(domain.carried) || domain.carried.some(c => !record(c) || Object.keys(c).sort().join() !== 'at,from,to' || !holder(c.from) || !holder(c.to) || !Number.isSafeInteger(c.at)))) fail('Invalid operator grant');
   for (const [id, domain] of Object.entries(data.domains)) {
     if (domain?.id !== id || !Array.isArray(domain.initiators) || !domain.initiators.length || domain.initiators.some(i => !i || typeof i.id !== 'string' || typeof i.nativeId !== 'string') ||
       !Array.isArray(domain.providers) || !domain.providers.length || domain.providers.some(p => !['claude', 'codex'].includes(p)) ||
@@ -100,6 +109,9 @@ class OperatorControl {
       this.data = saved;
       // Recovery preserves results but never replays an uncertain creation.
       for (const action of Object.values(saved.actions)) if (action.status === 'creating') action.status = 'unconfirmed';
+      // B5: a setting turned on before that time was recorded gets it now. Any replacement logged after this
+      // moment is certainly later than the turning on, so nothing older can be taken for a replacement of it.
+      for (const setting of Object.values(saved.sessions)) if (setting.enabled && !Number.isSafeInteger(setting.enabledAt)) setting.enabledAt = Date.now();
     } catch (error) { if (error.code !== 'ENOENT') this.error = 'Operator records could not be read; the interface is disabled.'; }
   }
   commit(change) {
@@ -122,7 +134,7 @@ class OperatorControl {
     this.data = next; this.w.emit('change'); return result;
   }
   policy() { return { enabled: !this.error && this.data.enabled, error: this.error,
-    sessions: copy(this.data.sessions), domains: Object.values(this.data.domains).map(copy), placements: this.placements() }; }
+    sessions: copy(this.data.sessions), domains: Object.values(this.data.domains).map(copy), placements: this.placements(), successions: this.successions() }; }
   // B5: a grant may name one space, chosen by the person. A session created under such a grant is
   // listed here until the desktop, which alone owns spaces, has placed it and written the result
   // back. Only while the grant is still in force: revoking it, its expiry, turning the interface
@@ -132,7 +144,7 @@ class OperatorControl {
   placing(action, data = this.data) {
     const domain = data.domains[action.domainId], initiator = this.w.sessions.get(action.initiatorId);
     return Boolean(domain?.space && !domain.revokedAt && domain.expiresAt > Date.now() && data.enabled && initiator && !initiator.archived &&
-      data.sessions[action.initiatorId]?.enabled && data.sessions[action.initiatorId].nativeId === initiator.nativeId && initiator.nativeId === action.initiatorNativeId);
+      this.held(action.initiatorId, data) && data.sessions[action.initiatorId].nativeId === initiator.nativeId && initiator.nativeId === action.initiatorNativeId);
   }
   placements() {
     if (this.error) return [];
@@ -165,6 +177,91 @@ class OperatorControl {
       return copy(a.placement);
     });
   }
+  // B5: the person's grant follows a session NAW replaced, one finished replacement at a time. A holder whose
+  // session has ended is listed here until what became of its grant is decided and the person has been told.
+  // The desktop, which owns the rotation log, looks for the one unambiguous successor and names it; this
+  // journal checks everything it can see itself and re-binds the interface setting and the grants to that
+  // session, or saves why it did not. Either outcome is final: a grant that stayed is never moved later behind
+  // a notice that said it stayed. Nothing else changes: quotas are counted per grant, so they continue; a
+  // revoked or expired grant stays revoked or expired; each open still checks the holder's permission posture.
+  successions() {
+    if (this.error || !this.data.enabled) return [];
+    const listed = [];
+    for (const [id, setting] of Object.entries(this.data.sessions)) {
+      const s = this.w.sessions.get(id), outcome = setting.succession;
+      if (!s) continue;
+      if (outcome && !outcome.told) listed.push({ id, nativeId: setting.nativeId, outcome: copy(outcome) });
+      else if (this.undecided(setting) && s.state === 'ended' && s.nativeId === setting.nativeId) listed.push({ id, nativeId: setting.nativeId });
+    }
+    return listed;
+  }
+  // A holder is open for a decision when it has the interface and nothing was decided for it, or what was
+  // decided is older than the person's turning its interface on again: that is a holder anew, and only a
+  // replacement logged after that moment concerns it.
+  undecided(setting) { return Boolean(setting?.enabled && (!setting.succession || Number.isSafeInteger(setting.enabledAt) && setting.succession.at < setting.enabledAt)); }
+  // Desktop only (workspace.cjs operatorAction), in three steps: 'carry' to the successor the log names,
+  // 'refuse' for what only the desktop can see (an ambiguous log, an archived successor), and 'told' once the
+  // person can read the outcome in a space. An answer with saved: false decided nothing.
+  succession(oldId, value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.nativeId !== 'string' || !value.nativeId || !['carry', 'refuse', 'told'].includes(value.step)) fail('Invalid succession');
+    const keys = Object.keys(value).sort().join(), to = value.to;
+    if (value.step === 'carry' && (keys !== 'loggedAt,nativeId,step,to' || !Number.isSafeInteger(value.loggedAt) || !to || typeof to !== 'object' || Object.keys(to).sort().join() !== 'id,nativeId' ||
+          typeof to.id !== 'string' || !to.id || typeof to.nativeId !== 'string' || !to.nativeId || to.id === oldId || to.nativeId === value.nativeId) ||
+        value.step === 'refuse' && (keys !== 'loggedAt,nativeId,reason,step' || value.loggedAt !== null && !Number.isSafeInteger(value.loggedAt) || !['ambiguous', 'successor-unavailable'].includes(value.reason)) ||
+        value.step === 'told' && keys !== 'nativeId,step') fail('Invalid succession');
+    const undecided = reason => ({ carried: false, reason, saved: false });
+    if (this.error || !this.data.enabled) return undecided('interface-off');
+    const setting = this.data.sessions[oldId], old = this.w.sessions.get(oldId);
+    if (!setting || setting.nativeId !== value.nativeId) return undecided('not-held');
+    const saved = outcome => ({ ...copy(outcome), saved: true });
+    if (value.step === 'told') {
+      if (!setting.succession) return undecided('not-decided');
+      if (!setting.succession.told) this.commit(data => { data.sessions[oldId].succession.told = true; });
+      return saved(this.data.sessions[oldId].succession);
+    }
+    // Decided once: asked again, the journal says what it decided and changes nothing.
+    if (setting.succession && !this.undecided(setting)) return saved(setting.succession);
+    if (!setting.enabled) return undecided('not-held');
+    // The replacement is finished only when the old session has ended; a holder still running keeps its grant.
+    if (!old || old.nativeId !== value.nativeId || old.state !== 'ended') return undecided('old-in-use');
+    // A replacement logged before the person turned this holder's interface on is not a replacement of this
+    // holder: nothing is decided and nothing is said, as for a holder the person simply stopped. A line whose
+    // time is unknown is not given that benefit.
+    if (!Number.isSafeInteger(setting.enabledAt) || Number.isSafeInteger(value.loggedAt) && value.loggedAt < setting.enabledAt) return undecided('not-replaced');
+    const refuse = reason => this.commit(data => {
+      data.sessions[oldId].succession = { at: Date.now(), carried: false, reason };
+      this.audit(data, { id: oldId, nativeId: value.nativeId }, null, 'operator_succession', 'not-carried', { reason, ...(to ? { targetId: to.id } : {}), by: 'desktop' });
+      return saved(data.sessions[oldId].succession);
+    });
+    if (value.step === 'refuse') return refuse(value.reason);
+    const next = this.w.sessions.get(to.id);
+    // The journal and its quota counts live in this backend; a successor elsewhere cannot continue them.
+    if (!next) return refuse('successor-elsewhere');
+    if (next.provider !== 'claude' || next.nativeId !== to.nativeId || next.nativeContextPending) return refuse('successor-mismatch');
+    // The person already decided something for that session; that decision stands.
+    if (Object.hasOwn(this.data.sessions, to.id)) return refuse('successor-has-setting');
+    return this.commit(data => {
+      const at = Date.now(), from = { id: oldId, nativeId: value.nativeId }, holder = { id: to.id, nativeId: to.nativeId };
+      // The successor holds the interface from the moment the replacement was logged, so a replacement of the
+      // successor itself, logged after that, can be followed in its turn.
+      data.sessions[to.id] = { enabled: true, nativeId: to.nativeId, enabledAt: value.loggedAt, carriedFrom: { ...from, at } };
+      // One holder: the old session, if the person brings it back, no longer has the interface. Its grants are
+      // not revoked by this: they have moved.
+      data.sessions[oldId] = { ...data.sessions[oldId], enabled: false, succession: { at, carried: true, to: { ...holder } } };
+      const moved = [];
+      for (const domain of Object.values(data.domains)) {
+        if (!domain.initiators.some(i => i.id === oldId && i.nativeId === value.nativeId)) continue;
+        domain.initiators = domain.initiators.map(i => i.id === oldId && i.nativeId === value.nativeId ? { ...holder } : i);
+        (domain.carried ||= []).push({ from: { ...from }, to: { ...holder }, at }); moved.push(domain.id);
+      }
+      this.audit(data, from, null, 'operator_succession', 'carried', { targetId: to.id, targetNativeId: to.nativeId, domains: moved, by: 'desktop' });
+      return saved(data.sessions[oldId].succession);
+    });
+  }
+  // A holder whose grant went on to its successor is not a holder the person turned off: what it had already
+  // started (a report from a session it opened, a session waiting to join its space) still counts under the
+  // grant, which is still checked for itself.
+  held(id, data = this.data) { const setting = data.sessions[id]; return Boolean(setting && (setting.enabled || setting.succession?.carried === true)); }
   actor(s, r, identity) {
     if (s.provider !== 'claude' || this.w.runtimes.get(s.id) !== r || !r.operatorAvailable || r.retainedReader || r.stopped || r.disposed || r.transportDisconnected || this.w.closed || s.nativeContextPending ||
         identity?.nativeId !== s.nativeId || typeof identity.callId !== 'string' || !identity.callId || identity.callId.length > 160 ||
@@ -178,7 +275,7 @@ class OperatorControl {
   eligible(dispatch, data = this.data, now = Date.now()) {
     const domain = data.domains[dispatch?.domainId], request = data.requests[dispatch?.requestId];
     return Boolean(data.enabled && dispatch && !dispatch.revokedAt && !request?.closed && domain && !domain.revokedAt && domain.expiresAt > now &&
-      data.sessions[request?.initiatorId]?.enabled && data.sessions[request.initiatorId].nativeId === request.initiatorNativeId &&
+      this.held(request?.initiatorId, data) && data.sessions[request.initiatorId].nativeId === request.initiatorNativeId &&
       this.w.sessions.get(request.initiatorId)?.nativeId === request.initiatorNativeId);
   }
   audit(data, s, identity, tool, result, extra = {}) {
@@ -190,9 +287,14 @@ class OperatorControl {
     if (s && enabled && s.provider !== 'claude') fail('Only Claude initiators are supported in phase 1a');
     return this.commit(data => {
       if (id === null) data.enabled = enabled;
-      else data.sessions[id] = { enabled, nativeId: s.nativeId };
+      // B5: when it was turned on is kept, so a replacement logged before that is never taken for a replacement of
+      // this holder. Where the setting came from, and what a replacement decided for this session, stay on record:
+      // a decision that was made is not made a second time because the person toggled the switch.
+      else data.sessions[id] = { enabled, nativeId: s.nativeId, ...(enabled ? { enabledAt: Date.now() } : {}),
+        ...(data.sessions[id]?.carriedFrom ? { carriedFrom: data.sessions[id].carriedFrom } : {}), ...(data.sessions[id]?.succession ? { succession: data.sessions[id].succession } : {}) };
       if (!enabled) {
-        for (const domain of Object.values(data.domains)) if (id === null || domain.initiators.some(i => i.id === id)) domain.revokedAt = Date.now();
+        // Turning a session off also reaches a grant that has since gone on to the session that replaced it.
+        for (const domain of Object.values(data.domains)) if (id === null || domain.initiators.some(i => i.id === id) || domain.carried?.some(c => c.from.id === id)) domain.revokedAt = Date.now();
         for (const dispatch of Object.values(data.dispatches)) if (id === null || dispatch.executorId === id) dispatch.revokedAt = Date.now();
       }
       return true;

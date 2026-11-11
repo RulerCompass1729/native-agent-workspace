@@ -643,6 +643,98 @@ async function versionScenario(a, b) {
 // space. That member then opens a session; the desktop joins it to the space and the next queued item reaches
 // it. Over quota nothing is created. No model, no native process; the opener's own task is neither delivered
 // nor queued.
+// B5: the person's creation grant follows a member NAW replaced. The replacement is the real one, by the
+// main-process dispatcher; the members are synthetic and nothing calls a model. The person's part (interface
+// on, one grant) is done through the desktop's own API before anything is replaced, and nothing after it.
+async function successionScenario(a) {
+  assert.equal(process.env.NAW_TEST_DECISION_NOTICE, '1', 'Runs with the notification fixture, so nothing reaches the OS');
+  const english = process.env.NAW_TEST_UI_LANGUAGE === 'en';
+  const notices = () => app.evaluate(() => globalThis.decisionNotifications.map(n => n.options));
+  const shared = async () => (await snapshot()).rooms.find(r => r.id === 'shared');
+  const carried = async () => (await shared()).events.filter(event => event.monitor?.kind === 'carried');
+  const act = (id, action, value) => page.evaluate(([session, name, payload]) => workspace.operatorAction(session, name, payload), [id, action, value]);
+  const cwd = fs.realpathSync(profile);
+  const open = (session, action) => fixture('open', session, JSON.stringify({ action_id: action, provider: 'claude', cwd, name: 'Helper ' + action, task: 'Not delivered', permission: 'default' }));
+  assert.equal((await fixture('operator-ready', a)).done, true, 'The synthetic initiator has a native identity');
+  await act(null, 'enabled', true); await act(a, 'enabled', true);
+  const grant = await act(a, 'grant', { providers: ['claude'], directories: [cwd], permission: 'default', daily: 2, concurrent: 5, expiresAt: Date.now() + 3600000 });
+  const first = await open(a, 'by-the-old-member');
+  assert.equal(first.done, true, first.error); assert.equal(first.result.status, 'created'); assert.equal(first.result.domainId, grant);
+  // The member does one item, which is enough for the test build's size limit, and NAW replaces it.
+  await addItem('Warm-up', a); await expectSend(1, a, /Warm-up/, 'first item to the holder');
+  await release(a, 'Warm-up done');
+  await relaunch({ NAW_TEST_QUEUE_CONTENT_LIMIT: '2' });
+  await openSpace();
+  await addItem('After the replacement', a);
+  await expectSend(2, a, /【NAW 换会话】[\s\S]*只写交接/, 'handoff request to the old member');
+  assert.equal((await carried()).length, 0, 'Nothing is carried while the old member is still running');
+  await release(a, '交接：授权还剩一个名额。');
+  await until(async () => (await snapshot()).sessions.some(s => s.name === '队员甲 · 续'), 'New member created', DISPATCH_LIMIT_MS);
+  const fresh = (await snapshot()).sessions.find(s => s.name === '队员甲 · 续').id;
+  await until(async () => (await snapshot()).sessions.find(s => s.id === a).state === 'ended', 'Old member ended');
+  const elapsed = await until(async () => (await carried()).length === 1, 'The grant went with the new member and the space says so', DISPATCH_LIMIT_MS);
+  timings.push({ label: 'grant carried after the old member ended', ms: elapsed });
+  const [record] = await carried();
+  assert.equal(record.monitor.carried, true); assert.equal(record.monitor.oldId, a); assert.equal(record.monitor.newId, fresh);
+  const state = await snapshot();
+  assert.equal(state.sessions.find(s => s.id === fresh).operatorEnabled, true); assert.equal(state.sessions.find(s => s.id === a).operatorEnabled, false, 'One holder');
+  const domain = state.operatorPolicy.domains.find(d => d.id === grant);
+  assert.deepEqual(domain.initiators.map(i => i.id), [fresh]); assert.equal(domain.revokedAt, undefined); assert.equal(state.operatorPolicy.domains.length, 1, 'The same grant, not a new one');
+  if (await page.locator('#queue-dialog').isVisible()) {
+    await page.locator('#close-queue').click();
+    await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
+  }
+  await page.waitForFunction(id => document.querySelector('#room-messages [data-message-id="' + id + '"]'), record.id);
+  const row = await page.evaluate(id => {
+    const element = document.querySelector('#room-messages [data-message-id="' + id + '"]');
+    element.scrollIntoView({ block: 'center' });
+    const box = element.getBoundingClientRect(), list = document.querySelector('#room-messages').getBoundingClientRect();
+    return { text: element.innerText, width: box.width, height: box.height, inside: box.top >= list.top - 1 && box.bottom <= list.bottom + 1 };
+  }, record.id);
+  const said = english ? /After 队员甲\S* was replaced, 队员甲 · 续\S* holds the agent control interface permission and the session-creation grants you gave it; quotas and expiry are unchanged/
+    : /队员甲\S* 换会话后，你给它的 agent 控制接口许可和建会话授权由 队员甲 · 续\S* 接续；额度和到期时间不变/;
+  assert.match(row.text, said, `the row reads ${JSON.stringify(row.text)}`);
+  assert.ok(row.width > 0 && row.height > 0 && row.inside, `the row is not on screen: ${JSON.stringify(row)}`);
+  await capture('grant-carried-' + (english ? 'en' : 'zh'));
+  passed.push('After NAW replaced the member that held the grant, the new member holds it and the space says so');
+  // The new member opens under the same grant with no new approval; the old member's session still counts.
+  assert.equal((await fixture('operator-ready', fresh)).done, true);
+  const before = (await snapshot()).sessions.length;
+  const second = await open(fresh, 'by-the-new-member');
+  assert.equal(second.done, true, second.error); assert.equal(second.result.status, 'created', 'No new approval'); assert.equal(second.result.domainId, grant);
+  const third = await open(fresh, 'one-too-many');
+  assert.equal(third.done, false); assert.match(third.error, /quota is exhausted/);
+  assert.equal((await snapshot()).sessions.length, before + 1, 'Two a day across the old member and the new one');
+  // The old member's card of the grant says which session holds it now.
+  await page.locator(`#session-list .session-link[data-session-id="${a}"]`).click();
+  if (await page.locator('#chat-tab').isVisible()) await page.locator('#chat-tab').click();
+  const oldNative = (await snapshot()).sessions.find(s => s.id === a).nativeId;
+  const card = page.locator('#messages [data-message-id=' + JSON.stringify('operator:open:' + JSON.stringify([oldNative, 'by-the-old-member'])) + ']');
+  await card.waitFor();
+  const holds = english ? 'After a session replacement, this grant is now held by “队员甲 · 续”' : '换会话后，这份授权现由「队员甲 · 续」持有';
+  await until(async () => (await card.innerText()).includes(holds), `the old member's card names the holder: ${JSON.stringify(await card.innerText())}`);
+  await card.scrollIntoViewIfNeeded(); await capture('grant-holder-on-old-card-' + (english ? 'en' : 'zh'));
+  passed.push('The old member\'s card of the grant names the session that holds it now');
+  // The person's off switch on the old member still reaches the grant: its menu's revoke, by a real click.
+  await page.locator(`[data-session-menu="${a}"]`).click();
+  await page.getByRole('menuitem', { name: english ? 'Revoke this session’s creation grants' : '撤销此会话的建会话许可', exact: true }).click();
+  await until(async () => Boolean((await snapshot()).operatorPolicy.domains.find(d => d.id === grant).revokedAt), 'Revoked from the old member\'s menu');
+  const refused = await open(fresh, 'after-the-revoke');
+  assert.equal(refused.done, true, refused.error); assert.equal(refused.result.status, 'pending-authorization', 'The new member has to be given a grant again');
+  assert.equal((await snapshot()).sessions.length, before + 1, 'Nothing was opened after the revoke');
+  passed.push('Revoked from the old member\'s menu, the grant the new member held is gone');
+  // A reload and a few more states carry and say nothing more.
+  await page.reload(); await page.locator('#new-session').waitFor(); await delay(3500);
+  assert.equal((await carried()).length, 1);
+  // The replacement tells the person about itself, as it always has; carrying the grant adds no notification of its own.
+  const told = await notices();
+  assert.equal(told.some(notice => /授权|grant/i.test(JSON.stringify(notice))), false, `the carry notified: ${JSON.stringify(told)}`);
+  assert.deepEqual(errors, []);
+  passed.push('The new member opened a session under the same grant without a new approval; the third open of the day stopped');
+  console.log(JSON.stringify({ passed, notifications: told.map(notice => notice.title || notice.body || ''), syntheticDispatches: (await sends()).length,
+    nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
+}
+
 async function openScenario(a, b) {
   assert.equal(process.env.NAW_TEST_DECISION_NOTICE, '1', 'Runs with the notification fixture, so nothing reaches the OS');
   const english = process.env.NAW_TEST_UI_LANGUAGE === 'en';
@@ -725,6 +817,7 @@ async function run() {
   if (process.env.NAW_TEST_STUCK_RECORD === '1') return stuckScenario(a);
   if (process.env.NAW_TEST_VERSION_GATE === '1') return versionScenario(a, b);
   if (process.env.NAW_TEST_OPEN_WORK === '1') return openScenario(a, b);
+  if (process.env.NAW_TEST_GRANT_SUCCESSION === '1') return successionScenario(a);
   if (process.env.NAW_TEST_DECISION_NOTICE === '1') return decisionNoticeScenario(a, b);
 
   // 1) Two idle members each get exactly one item; NAW, not the person, sends them.

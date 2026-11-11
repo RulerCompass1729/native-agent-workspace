@@ -43,6 +43,30 @@ function successor(selected, entries) {
   }
 }
 
+// Where a session's standing went, by the same log and the same rule as the selection, one step at a time:
+// the session that replaced it, with the time that replacement was logged, or the same session when no
+// finished, unambiguous replacement exists. `replaced` says whether the log holds a replacement of it at
+// all, and `spaces` where those were recorded. A chain is walked by asking again for the session returned.
+function follow(logFile, value) {
+  const from = identity(value);
+  let entries = [];
+  try {
+    const text = readPrivate(logFile, 32 * 1024 * 1024);
+    entries = text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
+  } catch (error) { if (error.code !== 'ENOENT') throw uiError('error.queue.secretaryState'); }
+  const edges = entries.filter(entry => ['done', 'kept'].includes(entry?.event) && entry.old?.id === from.sessionId);
+  const spaces = [...new Set(edges.flatMap(entry => Array.isArray(entry.spaces) ? entry.spaces.filter(id => typeof id === 'string') : []))];
+  // When it stays, `at` is the latest time any replacement of it was logged, if every such line has one.
+  const times = edges.map(entry => entry.time);
+  const stays = { ...from, at: times.length && times.every(Number.isSafeInteger) ? Math.max(...times) : null, replaced: edges.length > 0, spaces };
+  // The selection rule decides whether it moved at all. When it did, every line about this session names the
+  // same finished replacement, so the first of them is the step taken.
+  if (successor(from, entries).sessionId === from.sessionId) return stays;
+  const step = edges[0];
+  if (!Number.isSafeInteger(step.time)) return stays;
+  return { sessionId: step.new.id, nativeId: step.new.nativeId, at: step.time, replaced: true, spaces };
+}
+
 class QueueSecretary {
   constructor(directory) {
     this.file = path.join(directory, 'queue-secretary.json');
@@ -88,4 +112,4 @@ class QueueSecretary {
     return { kind: 'secretary', name: labels.get(record.id) || record.name, sessionId: record.id };
   }
 }
-module.exports = { QueueSecretary, successor };
+module.exports = { QueueSecretary, successor, follow };

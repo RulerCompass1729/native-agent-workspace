@@ -2057,7 +2057,9 @@ function renderOperatorControls(entry, message, context = {}) {
   const cancelKey = allowed && op.requestId && !op.old && (op.actionable || op.creation) && op.state !== 'closed'
     ? JSON.stringify([initiatorId, initiator.nativeId, op.requestId, op.version, context.passive === true]) : '';
   if (entry.operatorCancelKey !== cancelKey) clearCancel();
-  const key = JSON.stringify([op, allowed, disconnected, context.passive === true, state.sessions.map(s => [s.id, s.nativeId, s.archived])]);
+  // B5: who holds the grant, and whether it is revoked, can change without this card's own record changing.
+  const grant = state.operatorPolicy?.domains.find(d => d.id === op.actual?.domainId);
+  const key = JSON.stringify([op, allowed, disconnected, context.passive === true, state.sessions.map(s => [s.id, s.nativeId, s.archived, s.name]), grant ? [grant.initiators.map(i => i.id), Boolean(grant.revokedAt)] : null]);
   if (key === entry.operatorKey) return;
   entry.operatorKey = key;
   const controls = entry.operatorControls || node('div', undefined, 'operator-controls');
@@ -2088,6 +2090,12 @@ function renderOperatorControls(entry, message, context = {}) {
     const domain = state.operatorPolicy?.domains.find(d => d.id === op.actual.domainId);
     if (domain) {
       controls.append(uiNode('p', 'operator.grantSummary', { id: domain.id, daily: domain.daily, concurrent: domain.concurrent, expires: new Date(domain.expiresAt).toLocaleString() }));
+      // B5: after NAW replaced the session that held this grant, the card says which session holds it now.
+      if (domain.carried?.length) {
+        const holder = node('p');
+        ui.display.text(holder, 'operator.grantHolder', () => ({ name: domain.initiators.map(i => state.sessions.find(s => s.id === i.id)?.name || uiText('operator.holderGone')).join(' / ') }));
+        controls.append(holder);
+      }
       add('operator.revokeDomain', () => act('revoke', domain.id), Boolean(domain.revokedAt));
     }
   }
@@ -2307,7 +2315,7 @@ function openSessionMenu(id, point, rowKey = id) {
       else if (action === 'integrator-set' || action === 'integrator-revoke') attempt(() => chooseIntegrator(id, action === 'integrator-revoke'));
       else if (action === 'wake-session') attempt(() => api.wakePolicy(id, Boolean(state.sessions.find(s => s.id === id)?.wakeDisabled)));
       else if (action === 'operator-session') attempt(() => setOperatorEnabled(id, !state.sessions.find(s => s.id === id)?.operatorEnabled));
-      else if (action === 'operator-revoke') attempt(async () => { for (const domain of state.operatorPolicy?.domains || []) if (!domain.revokedAt && domain.initiators.some(i => i.id === id)) await api.operatorAction(id, 'revoke', domain.id); toastMessage('operator.disabledNote'); });
+      else if (action === 'operator-revoke') attempt(async () => { for (const domain of state.operatorPolicy?.domains || []) if (!domain.revokedAt && (domain.initiators.some(i => i.id === id) || domain.carried?.some(c => c.from.id === id))) await api.operatorAction(id, 'revoke', domain.id); toastMessage('operator.disabledNote'); });
       else if (action === 'update-backend') attempt(() => updateSessionBackend(id));
       else if (action === 'up' || action === 'down') attempt(() => group ? moveRoomMember(id, action === 'up' ? visible[index - 1]?.id : visible[index + 1]?.id, action === 'down', group) : moveSidebarSession(id, action === 'up' ? visible[index - 1]?.id : visible[index + 1]?.id, action === 'down'));
       else if (action === 'copy-id' || action === 'copy-native-id') attempt(() => api.copy(action === 'copy-id' ? id : state.sessions.find(s => s.id === id)?.nativeId));

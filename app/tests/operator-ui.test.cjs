@@ -18,7 +18,7 @@ function fixture(message) {
  vm.runInContext(renderer.slice(renderer.indexOf('function renderOperatorControls('),renderer.indexOf('const roomMenuKey =')),context);
  context.entry=entry;context.message={time:Date.now(),operator:message}; vm.runInContext('renderOperatorControls(entry,message)',context);
  const walk=el=>el.children.flatMap(child=>[child,...walk(child)]);
- return {box,entry,walk:()=>walk(box),update(delta={}){context.message={...context.message,operator:delta===null?null:{...context.message.operator,...delta}};vm.runInContext('renderOperatorControls(entry,message)',context);},disconnect(){context.disconnected=true;this.update();},refresh(){language='en';display.refresh(box);}};
+ return {box,entry,context,walk:()=>walk(box),update(delta={}){context.message={...context.message,operator:delta===null?null:{...context.message.operator,...delta}};vm.runInContext('renderOperatorControls(entry,message)',context);},disconnect(){context.disconnected=true;this.update();},refresh(){language='en';display.refresh(box);}};
 }
 test('actual grant card keeps fields and consent through the actual DSH language repaint',()=>{
  const f=fixture({initiatorId:'s',initiatorNativeId:'n',creation:'pending-authorization',args:{provider:'claude',permission:'default'},actual:{actionId:'a',permission:'default',model:'unknown'}});
@@ -90,4 +90,22 @@ for(const [label,message,expected] of [
  const texts=f.walk().map(el=>el.textContent);
  for(const text of expected)assert.ok(texts.includes(text),text);
  if(label==='a pending grant')assert.equal(f.walk().filter(el=>el.tagName==='select')[0].getAttribute('aria-label'),'New session permission: ');
+});
+// B5: a grant follows the session NAW replaced. The card of the grant then says which session holds it now.
+test('after NAW replaced its holder, the card of a grant says which session holds it now, and is drawn again when that changes',()=>{
+ const domain={id:'d',daily:2,concurrent:1,expiresAt:Date.UTC(2027,0,1),initiators:[{id:'s',nativeId:'n'}]};
+ const f=fixture({initiatorId:'s',initiatorNativeId:'n',creation:'created',args:{provider:'claude',permission:'default'},actual:{actionId:'a',permission:'default',model:'unknown',domainId:'d'}});
+ f.context.state.operatorPolicy.domains.push(domain);f.update({version:2});
+ const holder=()=>f.walk().filter(el=>el.tagName==='p').map(el=>el.textContent).find(text=>/持有|held by/.test(text));
+ const revoke=()=>f.walk().find(el=>el.tagName==='button'&&/^(撤销此授权域|Revoke this grant)$/.test(el.textContent));
+ assert.equal(holder(),undefined,'A grant that never moved says nothing about holders');assert.equal(revoke().disabled,false);
+ // The grant goes on to the session that replaced this one. The card's own record is unchanged; it is drawn again because the holder changed.
+ f.context.state.sessions.push({id:'t',nativeId:'m',provider:'claude',name:'Lead · 续'});
+ domain.initiators=[{id:'t',nativeId:'m'}];domain.carried=[{from:{id:'s',nativeId:'n'},to:{id:'t',nativeId:'m'},at:1}];
+ f.update();
+ assert.equal(holder(),'换会话后，这份授权现由「Lead · 续」持有');assert.equal(revoke().disabled,false,'It can still be revoked from this card');
+ f.context.state.sessions[1].name='Renamed';f.update();assert.equal(holder(),'换会话后，这份授权现由「Renamed」持有');
+ f.refresh();assert.equal(holder(),'After a session replacement, this grant is now held by “Renamed”');
+ f.context.state.sessions.pop();f.update();assert.equal(holder(),'After a session replacement, this grant is now held by “a session that is no longer listed”');
+ domain.revokedAt=1;f.update();assert.equal(revoke().disabled,true,'Revoked elsewhere, the card shows it');
 });

@@ -17,7 +17,7 @@ const { readPreview, saveCopy, extensions: textExtensions, openMessageFile } = r
 const { ImagePreviews, imageSource } = require('./native-images.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
-const { QueueSecretary } = require('./queue-secretary.cjs');
+const { QueueSecretary, follow: followRotation } = require('./queue-secretary.cjs');
 const { IntegratorRole } = require('./integrator-role.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
@@ -383,6 +383,74 @@ async function placeOpened(client, snapshot, now = Date.now()) {
     } finally { openPlacing.delete(key); }
   }
 }
+// B5: after NAW replaced a session, the person's creation grant goes with it, one finished replacement at a
+// time. The backend lists holders whose session has ended. This step looks in the rotation log for the one
+// unambiguous successor (the rule the secretary, integrator and steward designations follow) and names it to
+// the backend that owns the journal, which checks the rest and re-binds the grant or saves why it did not;
+// what only the desktop can see (an ambiguous log, an archived successor) it reports as a refusal. The
+// outcome is final there. A holder stays listed until the person can read the outcome in a space, so a
+// notice that could not be written is written later, and one that was written is never contradicted.
+const grantCarrying = new Set(), grantChecked = new Map(), GRANT_RETRY_MS = 30000;
+async function carryGrants(client, snapshot, now = Date.now()) {
+  const listed = Array.isArray(snapshot?.operatorPolicy?.successions) ? snapshot.operatorPolicy.successions : [];
+  for (const id of [...grantChecked.keys()]) if (!grantCarrying.has(id) && !listed.some(holder => holder?.id === id)) grantChecked.delete(id);
+  for (const holder of listed) {
+    if (typeof holder?.id !== 'string' || typeof holder.nativeId !== 'string' || grantCarrying.has(holder.id)) continue;
+    const logFile = path.join(dataDir, 'rotation-log.jsonl');
+    let stamp = 'none';
+    try { const stat = fs.statSync(logFile); stamp = `${stat.size}:${stat.mtimeMs}`; } catch { /* No rotation has been logged. */ }
+    const seen = `${holder.nativeId}\n${stamp}`, checked = grantChecked.get(holder.id);
+    // Nothing to decide for this state of the log; or something failed, and it is tried again half a minute later.
+    if (checked && (checked.retryAt ? now < checked.retryAt : checked.seen === seen)) continue;
+    grantCarrying.add(holder.id);
+    const call = value => client.call('operatorAction', holder.id, 'succession', { nativeId: holder.nativeId, ...value });
+    const nothing = () => grantChecked.set(holder.id, { seen });
+    try {
+      const sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
+      let outcome = holder.outcome && typeof holder.outcome === 'object' ? holder.outcome : null, next = null;
+      // A log that cannot be read decides nothing; it is read again when it changes.
+      try { next = followRotation(logFile, { sessionId: holder.id, nativeId: holder.nativeId }); } catch { if (!outcome) { nothing(); continue; } }
+      if (!outcome) {
+        // Stopped by the person, not replaced: nothing to carry and nothing to say.
+        if (!next.replaced) { nothing(); continue; }
+        const target = next.sessionId === holder.id ? null : sessions.find(s => s.id === next.sessionId);
+        // Replaced, but not by one finished, unambiguous successor; or by one the person has archived, which
+        // only the desktop knows. The grant stays where it was.
+        const answer = next.sessionId === holder.id ? await call({ step: 'refuse', reason: 'ambiguous', loggedAt: next.at })
+          : !target || roomState.value.archivedSessions.includes(target.id) ? await call({ step: 'refuse', reason: 'successor-unavailable', loggedAt: next.at })
+            : await call({ step: 'carry', to: { id: next.sessionId, nativeId: next.nativeId }, loggedAt: next.at });
+        if (!answer || typeof answer.carried !== 'boolean') throw Error('Unexpected succession result');
+        // No longer a holder, or running again: nothing was decided and there is nothing to say.
+        if (answer.saved !== true) { nothing(); continue; }
+        outcome = answer;
+      }
+      if (typeof outcome.carried !== 'boolean' || !Number.isSafeInteger(outcome.at)) throw Error('Unexpected succession outcome');
+      // Said where the successor is; failing that, where the replacement was recorded; failing that, in the default space.
+      const label = (id, fallback) => sessionLabels.labels.get(id) || sessions.find(s => s.id === id)?.name || fallback || id;
+      const heir = outcome.carried ? sessions.find(s => s.id === outcome.to?.id) : null, rooms = new Set();
+      try { for (const room of heir ? roomIds(heir) : []) rooms.add(room); } catch { /* Unreadable membership: fall back to where the replacement was recorded. */ }
+      if (!rooms.size) for (const room of next?.spaces || []) rooms.add(room);
+      if (!rooms.size) rooms.add('shared');
+      const carried = { oldId: holder.id, at: outcome.at, old: label(holder.id), carried: outcome.carried,
+        ...(outcome.carried ? { newId: outcome.to.id, new: label(outcome.to.id) } : { reason: String(outcome.reason || 'refused').slice(0, 60) }) };
+      let said = false, wrote = false;
+      const say = room => { try { if (roomState.recordCarried(room, carried).recorded) wrote = true; said = true; } catch { /* That space is gone, archived or busy; another may still say it. */ } };
+      for (const room of rooms) say(room);
+      // None of them could take it, for the second time: the default space, rather than waiting on spaces
+      // that may never come back.
+      if (!said && checked?.untold && !rooms.has('shared')) say('shared');
+      if (wrote) await broadcastRoom();
+      // Not said anywhere yet: the holder stays listed and this is tried again.
+      if (!said) { grantChecked.set(holder.id, { retryAt: now + GRANT_RETRY_MS, untold: true }); continue; }
+      await call({ step: 'told' });
+      grantChecked.delete(holder.id);
+    } catch {
+      // The backend could not answer. Whatever it had decided is in its journal and is picked up again with
+      // a later state, no sooner than half a minute from now; nothing polls.
+      grantChecked.set(holder.id, { retryAt: now + GRANT_RETRY_MS });
+    } finally { grantCarrying.delete(holder.id); }
+  }
+}
 function auditBackgroundOperation(record) {
   roomState.recordControlOperation(record, record.guard?.auditRooms || ['shared']);
   // Consent depends on the durable event, never on every window completing a
@@ -579,6 +647,7 @@ function bindClient(context) {
     const name = s => sessionLabels.labels.get(s.id) || s.name, wrote = ['recordStuck', 'recordVersionGates'].map(writer => { try { return roomState[writer](data?.sessions, name); } catch { return false; } });
     if (wrote.some(Boolean)) broadcastRoom().catch(() => {});
     if (!context.background) placeOpened(client, data).catch(() => {});
+    if (!context.background) carryGrants(client, data).catch(() => {});
   });
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('progress', data => send('workspace:progress', data));
@@ -927,6 +996,7 @@ function register(name, handler) {
       // B5: which space a grant sends new sessions to is chosen only by the person in the desktop, and saving
       // where a session went is the desktop's own step. An agent can do neither, with or without confirmation.
       if (name === 'operatorAction' && (['placement', 'placed'].includes(args[1]) || args[1] === 'grant' && args[2] && typeof args[2] === 'object' && Object.hasOwn(args[2], 'space'))) throw uiError('error.operator.personOnlySpace');
+      if (name === 'operatorAction' && args[1] === 'succession') throw uiError('error.operator.desktopOnly');
       if (backgroundOperation.deliveryTargets(name, args)) {
         await c.client.refresh();
         backgroundOperation.assertDeliveryPolicy(c.client.snapshot(), name, args);
