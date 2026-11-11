@@ -8256,4 +8256,4 @@ Owner: the author of this checkpoint. Evidence: 20 unit tests in `app/tests/stuc
 
 The three scripts named as not done in the entry above (native-concurrent, native-retained-claude, native-history-existing) were handled in another lane's batch.
 
-**native-retained-codex is a known limitation, decided.** The person answered on 2026-11-10: Codex 0.163.0 will not be installed. The script stays ported and unverified, and nobody needs to ask again. It becomes runnable if 0.163.0 is on disk, or if the product opens a retained host's shared Codex replies to another version (`app/legacy-codex.cjs` `sharedReplyAvailable`).
+**native-retained-codex is a known limitation, decided.** The person answered on 2026-11-10, relayed by the integrator: Codex 0.163.0 will not be installed. The script stays ported and unverified, and nobody needs to ask again. It becomes runnable if 0.163.0 is on disk, or if the product opens a retained host's shared Codex replies to another version (`app/legacy-codex.cjs` `sharedReplyAvailable`); in that second case the script's exact version check changes with the product.
