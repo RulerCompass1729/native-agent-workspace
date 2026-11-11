@@ -1558,7 +1558,15 @@ function revealTerminalCursor(entry) {
     if (surface && cell && line) { surface.scrollLeft = Math.max(0, (buffer.cursorX + 1) * cell - surface.clientWidth); surface.scrollTop = Math.max(0, (buffer.cursorY + 1) * line - surface.clientHeight); }
   });
 }
+// A Claude session temporarily started with an older qualified version (claude-pin.cjs).
+function claudePinText(s, detail = false) {
+  const pin = s?.provider === 'claude' ? s.nativePin : null;
+  if (!pin) return '';
+  const date = new Date(pin.until).toLocaleDateString(ui.language.getSnapshot().active, { month: 'numeric', day: 'numeric' });
+  return uiText(`native.claudePin${pin.expired ? 'Expired' : 'ned'}${detail ? 'Detail' : ''}`, { pinned: pin.pinned, requested: pin.requested, date });
+}
 function nativeVersionText(s) {
+  if (s?.provider === 'claude') return claudePinText(s, true);
   if (s?.provider !== 'codex') return '';
   const status = disconnected && s.nativeVersion ? 'last-known' : s.nativeVersionStatus;
   if (status === 'last-known') return uiText('native.versionLast', { version: s.nativeVersion });
@@ -3842,7 +3850,7 @@ function render() {
       }
       // The graphic follows the same layout state as the accessible name.
       $('terminal-maximize').toggleAttribute('data-restore', terminalLayout === 'maximized'); $('chat-maximize').toggleAttribute('data-restore', !terminalVisible);
-      ui.display.computed($('session-status'), 'text', () => `${s.archived ? uiText('native.archived') : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? uiText('native.codexUnverified', { version: s.nativeVersion || uiText('native.versionMissing') }) : ''}${s.activity ? ' · ' + (s.activityUiMessage ? ui.displayText(s.activity, s.activityUiMessage) : s.activity) : ''}${!own && s.owner ? uiText('native.otherWindow') : ''}${terminals.get(s.id)?.viewInput ? uiText('native.inputBuffered') : terminalUnclaimed(s, own, terminalVisible) ? uiText('native.terminalUnclaimed') : ''}`);
+      ui.display.computed($('session-status'), 'text', () => `${s.archived ? uiText('native.archived') : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? uiText('native.codexUnverified', { version: s.nativeVersion || uiText('native.versionMissing') }) : ''}${claudePinText(s)}${s.activity ? ' · ' + (s.activityUiMessage ? ui.displayText(s.activity, s.activityUiMessage) : s.activity) : ''}${!own && s.owner ? uiText('native.otherWindow') : ''}${terminals.get(s.id)?.viewInput ? uiText('native.inputBuffered') : terminalUnclaimed(s, own, terminalVisible) ? uiText('native.terminalUnclaimed') : ''}`);
       ui.display.computed($('session-status'), 'title', () => nativeVersionText(s));
       $('take-control').hidden = own || !alive;
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');

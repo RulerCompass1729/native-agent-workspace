@@ -590,7 +590,12 @@ class Claude extends EventEmitter {
     // session into this row's pre-assigned ID; recovery always resumes that ID.
     const identity = record.recovering ? ['--resume', record.nativeId]
       : record.forkPicker ? ['--resume', '--fork-session', '--session-id', record.nativeId] : ['--session-id', record.nativeId];
-    this.terminal = new Terminal([host.binaries.claude, ...identity, ...(record.autoName ? [] : ['--name', record.name]), '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message,mcp__native_workspace__workspace_sessions,mcp__native_workspace__workspace_open,mcp__native_workspace__workspace_report', '--plugin-dir', path.join(__dirname, 'claude-bridge'), ...posture], record.cwd, {
+    // An unqualified new Claude version: start with the newest qualified one still installed (claude-pin.cjs).
+    const launch = require('./claude-pin.cjs').choose({ launcher: host.binaries.claude, fresh: !record.recovering && !record.forkPicker,
+      lastVersion: record.nativeLaunchVersion, stateFile: path.join(host.privateDir, 'claude-pin.json') });
+    if (launch.version) record.nativeLaunchVersion = launch.version; else delete record.nativeLaunchVersion;
+    if (launch.pin) record.nativePin = launch.pin; else delete record.nativePin;
+    this.terminal = new Terminal([launch.binary, ...identity, ...(record.autoName ? [] : ['--name', record.name]), '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message,mcp__native_workspace__workspace_sessions,mcp__native_workspace__workspace_open,mcp__native_workspace__workspace_report', '--plugin-dir', path.join(__dirname, 'claude-bridge'), ...posture], record.cwd, {
       NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket, NAW_SUBMIT_SOCKET: host.submitSocket,
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
@@ -2780,7 +2785,8 @@ class NativeHost {
         console.error(`[NAW] Codex ${version} checked against ${decision.basis}: ${held.length ? 'held ' + held.join(', ') : 'all capabilities open'}; ${decision.records.length} record(s)`);
         for (const target of this.codexTargets.values()) target.emit('capability');
       })
-      .catch(() => {})
+      // record() opens the version in memory before writing, so a failed write must not pass unseen.
+      .catch(error => console.error(`[NAW] Codex ${version} check could not be recorded: ${String(error?.message).slice(0, 200)}`))
       .finally(() => { if (this.codexQualifying === job) this.codexQualifying = null; });
   }
   async startCodex() {

@@ -27,7 +27,9 @@ function statusFixture(record) {
   const statement = renderer.split('\n').find(line => line.includes("ui.display.computed($('session-status'), 'text'"));
   assert.ok(statement);
   const terminalGuard = renderer.slice(renderer.indexOf('function terminalUnclaimed('), renderer.indexOf('function terminalCanInput('));
-  vm.runInNewContext(terminalGuard + statement, { terminalVisible: false, s: record, ui, uiText, $: () => element, sessionStatus: () => 'IDLE', disconnected: false, own: true, terminals: new Map() });
+  // The status line also names a temporary Claude fallback version; take the real function with it.
+  const pinText = renderer.slice(renderer.indexOf('function claudePinText('), renderer.indexOf('function nativeVersionText('));
+  vm.runInNewContext(terminalGuard + pinText + statement, { terminalVisible: false, s: record, ui, uiText, $: () => element, sessionStatus: () => 'IDLE', disconnected: false, own: true, terminals: new Map() });
   return { element, switch(value) { language = value; display.refresh(root); } };
 }
 

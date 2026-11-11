@@ -182,15 +182,17 @@ test('5. every Codex method NAW calls is either in the manifest or knowingly ung
   assert.match(fs.readFileSync(path.join(app, 'adapters.cjs'), 'utf8'), /message\.method\.endsWith\('\/requestUserInput'\)/);
   assert.ok(surface.PERMISSION.includes('item/tool/requestUserInput'));
   for (const method of baseline().serverRequests) assert.ok(surface.PERMISSION.includes(method) || surface.MANIFEST.addressedTool.some(i => i.method === method), `${method} is not classified`);
-  // Every Codex notification the adapter branches on either feeds a gated capability (manifest) or is knowingly ungated display.
-  const ungatedNotifications = ['account/updated', 'item/commandExecution/outputDelta', 'item/fileChange/patchUpdated', 'item/plan/delta', 'serverRequest/resolved',
+  // Every Codex notification NAW names anywhere in its source, in any form (===, case, array),
+  // either feeds a gated capability (manifest) or is knowingly display or status only.
+  const displayOnly = ['account/rateLimits/updated', 'account/updated', 'error', 'warning', 'item/commandExecution/outputDelta', 'item/fileChange/patchUpdated',
+    'item/mcpToolCall/progress', 'item/plan/delta', 'item/reasoning/summaryPartAdded', 'item/reasoning/summaryTextDelta', 'serverRequest/resolved',
     'thread/closed', 'thread/goal/cleared', 'thread/goal/updated', 'thread/name/updated', 'thread/settings/updated', 'thread/tokenUsage/updated'];
-  const notifications = new Set(Object.keys(JSON.parse(JSON.stringify(baseline().entries))).filter(k => k.startsWith('ServerNotification:')).map(k => k.slice(19)));
-  for (const m of fs.readFileSync(path.join(app, 'adapters.cjs'), 'utf8').matchAll(/method ?=== ?'([a-zA-Z]+(?:\/[a-zA-Z]+)+)'/g)) {
-    const method = m[1];
-    if (manifest.has(method) || ungated.includes(method) || surface.PERMISSION.includes(method) || method === 'item/tool/call') continue;
-    assert.ok(ungatedNotifications.includes(method) || notifications.has(method), `${method} is handled but neither gated nor knowingly ungated`);
-  }
+  const sources = fs.readdirSync(app).filter(n => n.endsWith('.cjs') && n !== 'codex-surface.cjs').map(n => fs.readFileSync(path.join(app, n), 'utf8')).join('\n');
+  const names = baseline().serverNotifications; assert.ok(names.length > 50);
+  const handled = names.filter(n => sources.includes(`'${n}'`));
+  assert.ok(handled.length >= 20, 'The scan finds the notifications NAW handles');
+  for (const method of handled) assert.ok(manifest.has(method) || displayOnly.includes(method), `${method} is handled but neither gated nor knowingly display-only`);
+  for (const method of displayOnly) assert.ok(handled.includes(method), `${method} is listed as display-only but no longer handled`);
 });
 
 test('the stored baseline records its provenance', () => {

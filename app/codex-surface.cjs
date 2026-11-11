@@ -84,7 +84,9 @@ function extract(dir, version) {
   for (const method of PERMISSION) add({ schema: 'ServerRequest', method });
   // NAW relays every server request, so a new request type is a permission-surface change.
   const serverRequests = Object.keys(schemas.ServerRequest.entries).sort();
-  return { version, serverRequests, entries: JSON.parse(JSON.stringify(entries)) };
+  // Every notification name, so a test can require each one NAW handles to be classified.
+  const serverNotifications = Object.keys(schemas.ServerNotification.entries).sort();
+  return { version, serverRequests, serverNotifications, entries: JSON.parse(JSON.stringify(entries)) };
 }
 
 // Annotations that are not contract. Inside a properties or definitions map the keys are
@@ -194,11 +196,11 @@ function pack(surface, provenance) {
     return { root: lean(x.root), definitions: Object.keys(x.definitions) };
   };
   const entries = Object.fromEntries(Object.entries(surface.entries).map(([key, e]) => [key, e && { ...part(e), ...(e.response ? { response: part(e.response) } : {}) }]));
-  return { version: surface.version, provenance, serverRequests: surface.serverRequests, definitions, entries };
+  return { version: surface.version, provenance, serverRequests: surface.serverRequests, serverNotifications: surface.serverNotifications, definitions, entries };
 }
 function unpack(stored) {
   const part = x => x && { root: x.root, definitions: Object.fromEntries(x.definitions.map(n => [n, stored.definitions[n]])) };
-  return { version: stored.version, serverRequests: stored.serverRequests, entries: Object.fromEntries(Object.entries(stored.entries).map(([key, e]) => [key, e && { ...part(e), ...(e.response ? { response: part(e.response) } : {}) }])) };
+  return { version: stored.version, serverRequests: stored.serverRequests, serverNotifications: stored.serverNotifications, entries: Object.fromEntries(Object.entries(stored.entries).map(([key, e]) => [key, e && { ...part(e), ...(e.response ? { response: part(e.response) } : {}) }])) };
 }
 
 module.exports = { VARIANTS, MANIFEST, PERMISSION, extract, classify, compareEntry, decide, pack, unpack };

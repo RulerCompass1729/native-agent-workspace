@@ -41,7 +41,6 @@ const { spawn } = require('node:child_process');
 const surface = require('./codex-surface.cjs');
 const BASELINE = '0.167.0';
 const baselineFile = path.join(__dirname, 'codex-surface', `${BASELINE}.json`);
-// Stored decisions are valid only for the baseline and manifest they were made against.
 // Stored decisions are valid only for the baseline, the manifest and the comparison rules they were made with.
 const basisSha = () => crypto.createHash('sha256').update(fs.readFileSync(baselineFile)).update(fs.readFileSync(path.join(__dirname, 'codex-surface.cjs'))).digest('hex');
 const semver = v => typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v);
