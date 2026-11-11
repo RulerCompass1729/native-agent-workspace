@@ -30,6 +30,8 @@ const sessionStatus = (record, recoveryBadge = false) => {
 };
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 const mobileSetup = window.nativeWorkspaceMobileSetup.bind({ container: $('mobile-setup'), document, api, getSessions: () => state?.sessions || [], text: (key, params) => uiText(key, params), display: ui.display });
+// The butler's row is drawn only from a view the main process gives this window; this version gives none.
+const butlerEntry = window.nativeWorkspaceButlerEntry.bind({ row: $('butler-row'), dialog: $('butler-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display, showError: ui.showError });
 let newDirectory = false, creatingSession = false;
 let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
 let latestViewStorage, latestViewStorageUiMessage;
@@ -3806,6 +3808,7 @@ const nativeActivityClock = setInterval(() => {
 }, 1000);
 function render() {
   if (!state || rendering) return;
+  butlerEntry.render(state.butler?.entry);
   captureReadingViews();
   rendering = true;
   let removedRoomFocus;
@@ -4421,6 +4424,7 @@ function writeTerminal(entry, event) {
 }
 const disposers = [
   () => mobileSetup.dispose(),
+  () => butlerEntry.dispose(),
   disposeToastKeyboard,
   api.onProgress(updateLegacyProgress),
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
