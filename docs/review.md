@@ -9489,7 +9489,7 @@ cumulative fixture; the fifth fails the whole batch and remains unpriced.
 - The repository that is read is chosen explicitly as the canonical checkout, not taken from the integrator's working folder (a separate clone there would have another "main"), and it gets the worktree helper's checks (includes, alternates, linked metadata) first.
 - The engine's pass gets a time budget or its own loop, so that slow git checks or a slow send cannot hold the queue's passes up.
 - While a handoff is in progress the dispatcher makes full passes, which also plan session rotations more often than the once-a-minute check does when there is no queue work; that is to be separated.
-- An integrator that is put into a space while a handoff is open could be sent queue items, and its replies to those could be read as the handoff's answer; the open handoff must then wait for the person.
+- An integrator that is put into a space while a handoff is open could be sent queue items, and its replies to those could be read as the handoff's answer; the open handoff must then wait for the person. (First half done: the queue sends it nothing and does not rotate it while its handoff is open; see "the session that holds an open handoff". The handoff itself does not wait yet.)
 - The notices are reworded to say what the person can do, once those actions exist.
 - An integrator that stays unable to take a message for a long time for a reason that is not the person's to change by a switch (its session has ended, say) is not reported yet; the record already lists deliveries that waited more than four hours, and nothing reads that list.
 - With no window open, a block that only the person can lift is looked at again only when a window opens or queue work arrives.
@@ -10549,3 +10549,19 @@ protection. Once a branch/cycle/kept disagreement is observed, this object refus
 that selection until valid history can agree, the person changes the designation,
 or the process is restarted; a restart can again expose the original resolver
 boundary and is not a safe recovery procedure.
+
+## B6 integration handoff: the session that holds an open handoff gets no queue work — 2026-11-11
+
+**What could go wrong.** The integrator's answer is everything it writes after the handoff message. An integrator is in no space, so the queue never sends it anything. But the person can put it into a space while a handoff is open. The queue's planner runs before the engine in every pass, so the moment the integrator went idle the planner could send it a queued task, before the handoff was settled; what it then wrote for that task would be read as the handoff's answer (a reply that begins "needs your decision" would even be taken as the handoff's question). It could also be rotated into a new session, and the answer lost.
+
+**What changed.** The engine names the session that an open handoff was sent to (sent or waiting for the person; nobody when the record cannot be read). The dispatcher passes that to the queue's planner, where the session starts out busy: it is given no queued item, also not one assigned to it by name, and it is not rotated; an item it was sent before is still settled. When the handoff is closed (settled, or dealt with by the person) the queue treats the session like any other member again. With the switch closed nothing is passed, and the planner's one changed line builds the same empty set as before.
+
+**Checks.** A planner test (an engaged session gets no item and no rotation; the item goes to another member or waits; an earlier item is settled; nothing named, or something that is not a list, plans as before) and a test on the real dispatcher and record (the integrator is put into the space with a task queued for it by name; it answers the handoff with a question; nothing but the handoff was sent to it; after the person deals with the handoff the task goes out; an unreadable record names nobody). Six deliberate breakages each turned tests red. The full unit suite and the two real-window journeys (the handoff with the switch open, the daily queue with it closed) pass on the delivered head; the counts are in the delivery note.
+
+**Independent review (passed).** The author lane's own reviewer (headless session 980f8974). It confirmed that the planner is unchanged when nobody is named, that the busy set is read wherever a session could be given an item or be rotated while earlier items are still settled, that a rotation in progress and an open handoff cannot coexist for one session, and that within one pass no queue item can reach the holder before the handoff is settled. It asked that the commit wait for the daily queue journey in the real window, and added the last two points below.
+
+**Left open.**
+- The second half: a handoff whose integrator is found in a space should wait for the person instead of being read, because messages can reach a member in other ways than the queue (a space exchange, say).
+- The vacancy list that the butler reads still shows such a session as free.
+- When the record cannot be read, or the engine could not be built over a record that still holds an open handoff from an earlier run, nobody is named and the queue can send that session work; once the record is read again, what it wrote would count as the handoff's answer.
+- Messages from outside the queue (an agent's wake, a continuation after a limit, a space exchange) can still reach the holder. The reviewer's proposal for the second half: end the answer at the first automatic message after the handoff, instead of only waiting when the integrator is found in a space.

@@ -753,7 +753,9 @@ function planDispatch(input) {
     return !humanRecent(session.id, humanAt, now, humanQuietMs);
   }
   const actions = [];
-  const busy = new Set();
+  // Sessions the caller says are engaged in something else of NAW's own (B6: the session an open
+  // integration handoff was sent to) start out busy: no queued item, no rotation.
+  const busy = new Set(Array.isArray(input.engaged) ? input.engaged : []);
   let rotationSlots = MAX_ACTIVE_ROTATIONS;
   for (const id of Object.keys(rotations)) {
     const record = rotations[id];
@@ -1957,6 +1959,9 @@ class QueueDispatcher {
       memoryLimit: sample.limit,
       memoryMinAgeMs: this.memoryMinAgeMs,
       rotations: this.rotations,
+      // B6: the session that holds an open handoff gets no queue work and is not rotated, so
+      // what it writes until the handoff is closed is the handoff's answer alone.
+      engaged: this.integration ? this.integration.holding() : undefined,
     });
     for (const action of actions) {
       if (this.closed) {
