@@ -72,9 +72,9 @@ class ButlerBusiness {
   #role; #roomState; #view; #readAudit;
   constructor({ role, roomState, view, readAudit }) {
     if (!role || typeof role.authorize !== 'function' || !roomState || typeof roomState.metadata !== 'function' || typeof view !== 'function') fail('ERR_BUTLER_BUSINESS_OPTIONS');
-    if (readAudit !== undefined && !(readAudit instanceof ButlerReadAudit) || typeof role.file !== 'string' || !path.isAbsolute(role.file)) fail('ERR_BUTLER_BUSINESS_OPTIONS');
+    if (!(readAudit instanceof ButlerReadAudit) || typeof role.file !== 'string' || !path.isAbsolute(role.file)) fail('ERR_BUTLER_BUSINESS_OPTIONS');
     this.#role = role; this.#roomState = roomState; this.#view = view;
-    this.#readAudit = readAudit || new ButlerReadAudit(path.dirname(role.file));
+    this.#readAudit = readAudit;
   }
   #records() {
     const state = this.#view();

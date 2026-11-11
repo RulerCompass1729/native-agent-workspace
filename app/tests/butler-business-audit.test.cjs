@@ -83,7 +83,7 @@ test('a non-synchronous or missing audit receipt cannot approve a page', t => {
   }
 });
 
-test('64 pages exhaust the same UTC-day allowance across rebind, role replacement and audit reconstruction', t => {
+test('64 pages exhaust the shared audit allowance across rebind, role replacement and business reconstruction', t => {
   const f = fixture(t), cap = f.bind();
   for (let index = 0; index < 64; index++) assert.equal(cap.invoke('readBusiness', query).records.length, 1);
   assert.throws(() => f.bind().invoke('readBusiness', query), { code: 'ERR_BUTLER_BUSINESS_READ_LIMIT' });
@@ -91,7 +91,7 @@ test('64 pages exhaust the same UTC-day allowance across rebind, role replacemen
   f.role.set(f.person, { identity: { sessionId: actor.id, nativeId: actor.nativeId }, runner }, 1); f.records[0] = actor;
   assert.throws(() => f.bind().invoke('readBusiness', query), { code: 'ERR_BUTLER_BUSINESS_READ_LIMIT' });
   const reopened = new ButlerBusiness({ role: f.role, roomState: f.room, view: () => ({ records: f.records }),
-    readAudit: new ButlerReadAudit(f.directory, { now: () => NOW }) });
+    readAudit: f.audit });
   assert.throws(() => reopened.bind(actor, { selectionRevision: 2, runnerRef: runner.runnerRef }).invoke('readBusiness', query),
     { code: 'ERR_BUTLER_BUSINESS_READ_LIMIT' });
   const first = f.audit.read(f.person), last = f.audit.read(f.person, { afterSequence: first.nextAfterSequence });
@@ -109,4 +109,45 @@ test('in-process proxy queries are refused before traps or record preparation', 
   assert.throws(() => cap.invoke('readBusiness', input), { code: 'ERR_BUTLER_BUSINESS_QUERY' });
   assert.equal(traps, 0);
   assert.equal(fs.existsSync(path.join(f.directory, 'butler-business-reads.jsonl')), false);
+});
+
+test('the host must explicitly choose an actual read audit; a missing audit cannot silently select the role directory', t => {
+  const f = fixture(t), options = { role: f.role, roomState: f.room, view: () => ({ records: f.records }) };
+  const before = fs.readdirSync(f.directory);
+  for (const readAudit of [undefined, null, {}, { recordPage: () => ({ sequence: 1 }) }])
+    assert.throws(() => new ButlerBusiness({ ...options, readAudit }), { code: 'ERR_BUTLER_BUSINESS_OPTIONS' });
+  assert.throws(() => new ButlerBusiness(options), { code: 'ERR_BUTLER_BUSINESS_OPTIONS' });
+  for (const file of ['relative-role.json', '', undefined])
+    assert.throws(() => new ButlerBusiness({ ...options, role: { authorize() {}, file }, readAudit: f.audit }),
+      { code: 'ERR_BUTLER_BUSINESS_OPTIONS' });
+  assert.deepEqual(fs.readdirSync(f.directory), before);
+});
+
+test('a nested role uses only the explicitly shared human-readable audit and keeps its quota after role and business replacement', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-business-shared-audit-')); fs.chmodSync(root, 0o700);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const roleDirectory = path.join(root, 'instances', 'nested-role'), sharedDirectory = path.join(root, 'shared-main');
+  fs.mkdirSync(roleDirectory, { recursive: true, mode: 0o700 }); fs.mkdirSync(sharedDirectory, { mode: 0o700 });
+  const person = Symbol('synthetic shared person'), role = new ButlerRole(roleDirectory, { authorizePerson: value => value === person });
+  const audit = new ButlerReadAudit(sharedDirectory, { authorizePerson: value => value === person, now: () => NOW });
+  const actor = { id: 'first-instance', nativeId: 'first-native', provider: 'dsh', state: 'idle', roomIds: [], runner }, records = [actor];
+  role.set(person, { identity: { sessionId: actor.id, nativeId: actor.nativeId }, runner }, 0);
+  const room = new RoomState(root); room.queueAdd(BODY, null);
+  const create = () => new ButlerBusiness({ role, roomState: room, view: () => ({ records }), readAudit: audit });
+  const bind = business => business.bind(records[0], { selectionRevision: role.current().selectionRevision, runnerRef: runner.runnerRef });
+  assert.equal(bind(create()).invoke('readBusiness', query).records[0].text, BODY);
+  assert.equal(audit.read(person).records[0].actor.sessionId, actor.id);
+  assert.equal(fs.existsSync(path.join(sharedDirectory, 'butler-business-reads.jsonl')), true);
+  assert.equal(fs.existsSync(path.join(roleDirectory, 'butler-business-reads.jsonl')), false);
+  assert.equal(fs.existsSync(path.join(root, 'instances', 'butler-business-reads.jsonl')), false);
+  const next = { ...actor, id: 'next-instance', nativeId: 'next-native' }; records[0] = next;
+  role.set(person, { identity: { sessionId: next.id, nativeId: next.nativeId }, runner }, 1);
+  const replacement = bind(create());
+  for (let index = 1; index < 64; index++) assert.equal(replacement.invoke('readBusiness', query).records[0].text, BODY);
+  assert.throws(() => bind(create()).invoke('readBusiness', query), { code: 'ERR_BUTLER_BUSINESS_READ_LIMIT' });
+  const first = audit.read(person), last = audit.read(person, { afterSequence: first.nextAfterSequence });
+  assert.equal(first.records.length + last.records.length, 64); assert.equal(last.throughSequence, 64);
+  assert.equal(first.records[1].actor.sessionId, next.id);
+  assert.equal(fs.existsSync(path.join(roleDirectory, 'butler-business-reads.jsonl')), false);
+  assert.equal(fs.readFileSync(path.join(sharedDirectory, 'butler-business-reads.jsonl'), 'utf8').includes(BODY), false);
 });

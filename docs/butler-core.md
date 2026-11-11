@@ -486,6 +486,13 @@ raw cursors. A quota or audit failure returns no page. The review IPC's new
 `reads` operation exposes only this metadata to the current person window, using
 the same opaque window verifier; it has no agent catalog entry. See
 [the exact audit and quota contract](butler-business.md#read-audit-and-page-allowance).
+The host must explicitly pass its shared `ButlerReadAudit` instance; there is no
+implicit audit directory based on the role record's path. Reconstructed business
+capabilities and the human reader use that shared store.
+Human reads also return journal byte counts and a fixed 75% (24 MiB) engineering
+prewarning. The 32 MiB cap, UTC allowance and retained records stay unchanged.
+An optional trusted-host callback emits only capacity metadata after a successful
+operation and lock cleanup; it adds no timer or UI delivery claim.
 This neither changes the USD reminder/budget policy nor approves activation,
 legacy automatic context or a real provider trial.
 

@@ -9682,3 +9682,40 @@ Author-run baseline tests against the exact pre-change dispatcher and RoomState 
 Production migration remains closed. Real trust-page state ordering, detection outside starting and actual Chat successor coverage remain B2-TRUST-2 items 3 and 4. Claude Chat creates a terminal; Codex Chat does not. No native qualification, installed daily-app acceptance or safe downgrade support is claimed by this checkpoint.
 
 The reviewer leaves the following non-blocking conditions before migration can open. Unknown cleanup currently has no terminal resolution: a deleted row, changed native identity, missing proof or archived space can retain quarantine and prevent the original from auto-rotating indefinitely. It also keeps the existing three-second tick doing full passes and holding a service connection; define bounded passive observation and an explicit resolution. A later observed stopped state must not authorize removing a successor the person has since adopted: recheck unused control/draft/history before late departure. Failures after a completed trust wait but before confirmed handoff conservatively use this guarded path and can leave the successor quarantined instead of stopping it. Ready/prompt flapping can repeatedly start new clocks, so actual native ordering remains a prerequisite, not an assumption. End-to-end departure with the dispatcher's scoped client still needs runtime coverage (the GUI prompt precedes joining); synthetic stop coverage does not qualify real adapter behavior. Invalid durable receipt state currently disables dispatch fail-closed without a visible explanation; add an actionable recovery notice before enabling migration. These remain owned by Codex3 as pre-opening follow-ups, alongside items3/4; none permits opening the gate.
+
+## B4 audit-capacity and shared-store boundary (2026-11-11, source checkpoint)
+
+Integrator review `786f4ba2` of `2b926f4` approved source with pre-activation notes:
+no human log screen, no capacity warning, and a future host could accidentally
+write beside its role file while Main reads another store. This checkpoint
+removes the silent default: ButlerBusiness requires an actual explicitly supplied
+shared Audit. A missing-audit counterexample fails on the preceding constructor;
+real nested-role/shared-main fixtures write only the shared log, preserve human
+access and share the 64-page allowance across replacement/reconstruction. No
+production Business caller exists yet; actual host injection still needs joint
+runtime proof, not an assumption from this API.
+
+The existing human read result adds five capacity-only fields. Fixed 75% (24 MiB)
+prewarning leaves the 32 MiB cap, 64/day allowance and all retained records unchanged.
+An optional trusted callback receives a frozen count-only copy after successful
+operation and lock cleanup, once per object; notification failures cannot undo
+approval or poison storage. A new reader can warn again. Failed/rejected reads
+are not newly recorded, no timer/model call or automatic archive/delete is added.
+The human UI must consume this contract before activation; a callback is not
+proof the person saw a warning. Offline same-user deletion and system-clock
+boundaries remain explicit.
+
+Literal tests now pin business page envelopes and unavailable decision/failure
+rows. These preserve the fixed wrapper's no-extra-field contract. Source tests
+use an actual replay-valid journal crossing 24 MiB, not mocked stat sizes. Earlier
+new-feature red 66 total / 59 pass / 7 fail and missing-audit red 43 total / 42 pass / 1 fail are retained.
+Combined relevant checks: 90 pass, zero fail/skip in the strict empty-credential
+sandbox. Source build exits zero; full suite on base `416bd74`: 5421 pass, zero
+fail/skip. Independent headless session `5ecfb875-28db-4ddd-93b2-8c12b23ed983`
+approved this exact source checkpoint with no blocking finding, conditioned on
+the final full run and publication guards. The full-run condition is met. Only
+Read/Grep/Glob were exposed with no MCP; HEAD, index and worktree were unchanged
+by review. The UI, real host injection and warning delivery are not qualified.
+A host callback should remain fast; the UI should also read `storage.warning`
+rather than rely on a once-per-process notification. Raw failure/fix/full output
+and review evidence remain in the private handoff named on the task board.
