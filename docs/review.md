@@ -12021,3 +12021,13 @@ is false when it is the rotation log that cannot be read (the promise is
 removed); the landing rule is narrower than "a new start lands on the
 butler" for a person with two windows (put to the person); and the record
 said "in the moment" where a retry can make it longer (corrected above).
+
+## B6 queue panel: nobody designated is counted — 2026-11-11
+
+The person's decision, through the integrator's recommendation (task board, 11-11 19:25): the button that opens a space's queue panel also carries a number while nobody is designated as integrator.
+
+**Before.** With deliveries of the space waiting and no integrator designated, the panel said how to designate one, and the opener said only "Queue": the prototype had it so. Yet something did wait for the person there.
+
+**Now.** While nobody is designated and at least one delivery of this space waits to be handed out, that is one thing that waits for the person, however many deliveries wait for it (designating is one step). It is added to what the rows need. With nothing in line, nothing is counted.
+
+**Checks.** `handoff-queue.test.cjs`: one delivery or several in line count one; none in line counts nothing; together with a delivery on hold, two; a question left open about an integrator that is no longer designated adds nothing more. Four deliberate breakages each turned a test red. The real-window script's first stage now expects "Queue · 1 waiting for you" there.

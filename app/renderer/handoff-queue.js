@@ -78,6 +78,8 @@
     const live = counts.queued + counts.handed > 0;
     const block = { head, faults, none: integrator ? null : { count: counts.queued }, stops: inSpace && live && kind !== 'inSpace' ? [{ key: 'queue.handoff.stopped.inSpace', params: {} }] : [], repository: null, ask: null };
     if (block.stops.length) result.need += 1;
+    // Nobody designated while deliveries of this space wait for that: designating an integrator is the person's step, and is counted as one.
+    if (block.none && block.none.count > 0) result.need += 1;
     // Where merges are checked, once there is an integrator. Nothing chosen, or a folder that cannot be read now, stops every handoff: the person's to mend.
     if (view.repository && integrator) {
       block.repository = { root: view.repository.root || '', problem: view.repository.problem || '', need: unread && live, who: called };

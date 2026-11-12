@@ -224,7 +224,8 @@ async function run() {
   assert.ok(nobody.block.includes(say('queue.handoff.none')) && nobody.block.includes(say('queue.handoff.noneCount', { n: 3 })), nobody.block);
   for (const [index, task] of TASKS.slice(0, 3).entries()) assert.equal(rowOf(nobody, task).status, say('queue.handoff.row.queuedNone', { name: NAMES[index] }));
   frontFirst(nobody, 'Nobody designated');
-  assert.deepEqual([nobody.opener, nobody.wide, nobody.rows.flatMap(row => row.buttons)], [say('queue.title'), false, []], 'Nothing here waits for a step in this panel');
+  // Designating an integrator is the one thing that waits for the person, and the opener counts it; no row has a step of its own.
+  assert.deepEqual([nobody.opener, nobody.wide, nobody.rows.flatMap(row => row.buttons)], [say('queue.titleNeed', { n: 1 }), false, []]);
   await shot('nobody-designated');
   await closePanel();
   passed.push('With nobody designated each delivered task says so on its own row, and the panel says how to designate');
