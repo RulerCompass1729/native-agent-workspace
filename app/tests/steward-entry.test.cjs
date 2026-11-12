@@ -39,7 +39,9 @@ function fixture(t, { landingOwner = null } = {}) {
       // As the workspace does: the message is recorded, waiting, and Claude answers only once its running turn has taken it.
       return new Promise((resolve, reject) => { queued.push({ resolve, reject }); setImmediate(() => {
         const session = sessions.find(session => session.id === args[0]);
-        (session.messages ||= []).push({ id: `row-${queued.length}`, role: 'user', inputMode: 'queue', status: 'awaiting-native' }); client.emit('state');
+        // Another message queued at the same moment comes first: it is not taken for this one.
+        (session.messages ||= []).push({ id: `other-${queued.length}`, role: 'user', inputMode: 'queue', status: 'awaiting-native', text: 'the person\'s own' }); client.emit('state');
+        setImmediate(() => { session.messages.push({ id: `row-${queued.length}`, role: 'user', inputMode: 'queue', status: 'awaiting-native', text: args[1].trim() }); client.emit('state'); });
       }); });
     } });
   vm.runInContext(cut('function register(name, handler) {', 'async function replaceBackendSockets'), context);
@@ -141,7 +143,7 @@ test('designating sends the duty statement into the session as the person\'s mes
   // A Claude session in a turn is queued after it; the person's own text is sent and kept for the next time. The answer
   // comes once the message stands waiting in its conversation, not when the running turn ends and takes it.
   assert.deepEqual(await f.call('other', '只做排期，不做执行。'), { duty: { state: 'queued' } });
-  assert.deepEqual([f.queued.length, f.sessions.find(s => s.id === 'other').messages.map(m => m.status), f.client.listenerCount('state')], [1, ['awaiting-native'], 0]);
+  assert.deepEqual([f.queued.length, f.sessions.find(s => s.id === 'other').messages.map(m => m.id), f.client.listenerCount('state')], [1, ['other-1', 'row-1'], 0]);
   assert.deepEqual(f.submitted[1], [true, 'queue', 'other', header + '\n只做排期，不做执行。', 'native-other']);
   assert.equal(new StewardRole(f.directory).duty, '只做排期，不做执行。');
   // Confirming the same butler again sends it again; null goes back to the default.

@@ -1861,7 +1861,8 @@ async function boot() {
       // that row keeps its own state (as the composer's queued message does). A refusal before then is said here.
       if (method === 'queue') await new Promise((resolve, reject) => {
         const settle = (done, value) => { c.client.off('state', look); done(value); };
-        const look = () => { if (rows().some(m => !before.has(m.id) && m.inputMode === 'queue' && m.status === 'awaiting-native')) settle(resolve); };
+        // This message, not one the person queued at the same moment: its own text (the workspace trims what it records).
+        const look = () => { if (rows().some(m => !before.has(m.id) && m.inputMode === 'queue' && m.status === 'awaiting-native' && [text, text.trim()].includes(m.text))) settle(resolve); };
         c.client.on('state', look);
         sending.then(() => settle(resolve), error => settle(reject, error));
         look();
