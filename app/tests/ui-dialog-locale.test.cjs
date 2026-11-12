@@ -48,7 +48,7 @@ function fixture() {
   const rooms = ['shared', otherRoom].map((id, i) => ({ id, name: 'RAW SPACE 中文 ' + i, metadataRevision: 7,
     notes: 'ORIGINAL NOTES 中文 {name}', messages: [{ id: 'record-' + i, name: 'RAW AUTHOR', role: 'assistant', status: 'complete', text: 'ORIGINAL BODY 中文 <native>{key}' }], files: [{ id: 'file-' + i, name: '原名.txt', path: '/synthetic/raw-' + i }], events: [] }));
   const state = { room: rooms[0], rooms, sessions: people, capabilities: ['spaceMergeV1'], viewState: { sharedDraft: '@RAW 中文 UNSENT' } };
-  const context = vm.createContext({ mobileSetup: { open() {}, close() {} }, spaceName: room => spaces.untouchedDefault(room) ? uiText('space.defaultName') : room?.name, $, uiText, uiError: locale.createError, node, document, state, structuredClone, Intl,
+  const context = vm.createContext({ mobileSetup: { open() {}, close() {} }, fitRoomTabs() {}, spaceName: room => spaces.untouchedDefault(room) ? uiText('space.defaultName') : room?.name, $, uiText, uiError: locale.createError, node, document, state, structuredClone, Intl,
     ui: { display, language: { getSnapshot: () => ({ active: language }) } },
     window: { nativeWorkspaceSpaces: spaces, nativeWorkspaceContextSnapshot: require('../renderer/coordinator-context.js') },
     button: (text, action, cls) => { const el = node('button', text, cls); el.onclick = action; return el; },

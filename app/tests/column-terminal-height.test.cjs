@@ -47,7 +47,9 @@ test('the actual column budget reserves the conversation even when less than the
   const calls = { persist: 0, fit: [], reveal: 0 }, attributes = {};
   const nativeHost = { style: {}, get offsetHeight() { return Number.parseInt(this.style.height, 10) || 112; } };
   const reader = { clientHeight: 250, querySelector: () => ({ offsetHeight: 12 }) };
-  const input = { closest: () => reader, get offsetHeight() { return nativeHost.offsetHeight + 68; } };
+  // The hint under the input (T-163): two lines now; the column says how many it may show.
+  const properties = {}, hint = { offsetHeight: 32 }, style = { getPropertyValue: key => properties[key] || '', setProperty: (key, value) => { properties[key] = value; } };
+  const input = { closest: () => reader, querySelector: selector => selector === '.session-compose-hint' ? hint : null, style, get offsetHeight() { return nativeHost.offsetHeight + 68; } };
   const binding = { id: 'small', columnHost: input, nativeHost, nativeSash: { setAttribute(k, v) { attributes[k] = v; } } };
   const context = vm.createContext({
     COLUMN_TERMINAL: { initial: 112, min: 64, most: 4000, step: 16, conversation: 80 },
@@ -60,6 +62,8 @@ test('the actual column budget reserves the conversation even when less than the
   assert.equal(context.applyColumnTerminalHeight(binding, context.columnTerminalHeight('small')), 90);
   assert.equal(reader.clientHeight - input.offsetHeight - 12, 80, 'The redraw keeps the computed conversation allowance');
   assert.equal(attributes['aria-valuemax'], '90');
+  // 250px column: 80 conversation, 64 terminal, 36 for the rest of the input without its hint, 12 footer: 58px, three lines.
+  assert.equal(properties['--column-hint-lines'], '3', 'The hint may show the lines that fit beside the conversation and the smallest terminal');
   assert.equal(context.columnTerminalHeights.small, 300, 'The saved choice is not overwritten on redraw');
   assert.equal(calls.persist, 0); assert.deepEqual(calls.fit, []);
   reader.clientHeight = 500;
@@ -230,6 +234,8 @@ test('the actual overview measures column heights after its final header and sha
     focusedRoomMember: () => false, roomSurface: 'overview', disconnected: false,
     roomOverview: { toolbar: {}, update() { context.applyColumnTerminalHeight(binding, 112); } },
     renderHeaderLayout() { limits.max = 64; }, current: () => null, selected: 'room',
+    // T-163: the header's row is fitted once the page has shown or hidden the overview's own controls in it.
+    fitRoomTabs() { calls.fittedWithToolbar = context.roomOverview.toolbar.hidden; },
     $: element,
   });
   const refresh = renderer.indexOf('function refreshColumnTerminalHeights(');
@@ -238,6 +244,7 @@ test('the actual overview measures column heights after its final header and sha
   vm.runInContext(renderer.slice(begin, renderer.indexOf('const nativeUsable =', begin)), context);
   context.renderRoomOverview();
   assert.equal(binding.nativeHost.style.height, '64px', 'Late layout must replace the earlier 96px budget');
+  assert.equal(calls.fittedWithToolbar, false, 'The header row is fitted after the layout controls are shown, not before');
   assert.equal(binding.terminalHeight, 64);
   assert.deepEqual(calls.fit, [], 'Passive layout never resizes the native grid');
   assert.equal(calls.persist, 0, 'Passive layout keeps the saved preference');

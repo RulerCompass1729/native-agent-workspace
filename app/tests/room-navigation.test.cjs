@@ -21,7 +21,7 @@ function harness(){
  }
  const $=id=>{if(!nodes.has(id))nodes.set(id,new Element(id==='room-filter'?'select':'div'));return nodes.get(id)};
  const bound=localeUI('en'),node=(tag,text,cls)=>{const el=new Element(tag);if(text!==undefined)el.textContent=text;el.className=cls||'';return el};
- const ctx=vm.createContext({...bound,$,node,document,structuredClone,
+ const ctx=vm.createContext({...bound,$,node,document,structuredClone,fitRoomTabs(){},
   uiNode:(tag,key,vars)=>{const el=node(tag);bound.ui.display.text(el,key,vars);return el},button:(label,fn)=>Object.assign(node('button',label),{click:fn}),draggableSession(){},
   spaceId:'shared',selected:'room',roomSurface:'overview',roomSession:'a',mode:'terminal',terminalLayout:'split',roomOverview:null,
   roomViews:{},roomRecordScope:'',roomRecordReturn:null,roomFilterHistory:null,roomRecordSelections:new Map(),roomReturnReading:null,roomHistories:new Map(),roomMention:null,roomMentionHistory:{},
