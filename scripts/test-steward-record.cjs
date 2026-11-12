@@ -74,8 +74,8 @@ async function run() {
   await page.locator('#message-input').waitFor(); await size(1280, 800);
   const say = (key, params) => locale.format('zh', key, params);
 
-  // The person makes the session the butler (and the queue secretary, so it may queue work at all).
-  await page.evaluate(id => workspace.steward(id), butler); await page.evaluate(id => workspace.queueSecretary(id), butler);
+  // The person makes the session the butler; it may queue work without also being the secretary (batch 4).
+  await page.evaluate(id => workspace.steward(id), butler);
   await until(async () => await page.locator('#steward-slot .session-row').count() === 1, 'The butler sits at the top');
   const rpc = mcp(); await rpc('initialize');
   async function control(args) {
@@ -85,13 +85,15 @@ async function run() {
     await fixture('backgroundComplete', butler, { callId: proof.callId, arguments: args });
     return { value: JSON.parse(result.content[0].text), isError: result.isError };
   }
-  // 1. Four steps: reading NAW's state, queueing a task, a person-only queue action, and a command that does not exist.
-  //    Reading the command list is not a step.
+  // 1. Four steps: reading NAW's state, queueing a task, cancelling it (the butler may, batch 4), and a command that
+  //    does not exist. Reading the command list is not a step.
   await control({ action: 'catalog' });
   const snap = await control({ action: 'snapshot' }); assert.equal(snap.value.state, 'complete');
   const queued = await control(invoke('spaceAction', ['shared', 'queueAdd', ['首页换新标题', null]])); assert.equal(queued.value.state, 'complete', JSON.stringify(queued));
   const cancel = await control(invoke('spaceAction', ['shared', 'queueCancel', [queued.value.value]]));
-  assert.notEqual(cancel.value.state, 'complete', 'Cancelling stays the person\'s');
+  assert.equal(cancel.value.state, 'complete', 'The butler may cancel');
+  const item = (await page.evaluate(() => workspace.initial())).room.queue.find(i => i.id === queued.value.value);
+  assert.deepEqual([item.status, item.addedBy, item.finishedBy, item.creator.kind], ['cancelled', 'steward', 'steward', 'secretary'], 'Each said to be the butler\'s, in a form older builds read');
   const unknown = await control(invoke('madeUpCommand', []));
   assert.deepEqual([unknown.value.state, unknown.value.reason], ['not-executed', 'unknown-command']);
   save('calls', { snap: snap.value.state, queued: queued.value, cancel: cancel.value, unknown: unknown.value });
@@ -109,13 +111,12 @@ async function run() {
     say('stewardRecord.step.snapshot'),
     say('stewardRecord.role.designated', { name: 'Codex 管家' })], JSON.stringify(seen.rows));
   assert.equal(seen.rows[0][2], say('stewardRecord.reason.unknown-command'), 'A refusal NAW did not save as an operation is in the record');
-  assert.notEqual(seen.rows[1][2], say('stewardRecord.result.complete'));
-  if (cancel.value.error) assert.ok(seen.rows[1][2].includes(cancel.value.error.slice(0, 40)), 'NAW\'s own words for the refusal are shown: ' + seen.rows[1][2]);
+  assert.equal(seen.rows[1][2], say('stewardRecord.result.complete'));
   assert.equal(seen.rows[2][2], say('stewardRecord.result.complete')); assert.equal(seen.rows[3][2], say('stewardRecord.result.complete'));
-  assert.ok(seen.attention >= 2, 'The refused rows stand out');
+  assert.ok(seen.attention >= 1, 'The refused row stands out');
   assert.ok(seen.note.includes(say('stewardRecord.note')));
   await shot('zh-1280-steward-record');
-  checks.push('The butler\'s menu offers 「大管家的记录」 first; it lists reading the state, the queued task, the person-only cancel and the unknown command, newest first, each with how it ended; reading the command list is not a step');
+  checks.push('The butler queues and cancels a task without being the secretary, both said to be the butler\'s; its menu offers 「大管家的记录」 first, listing reading the state, the queued task, the cancel and the unknown command, newest first, each with how it ended; reading the command list is not a step');
 
   // 3. The record is the person's: an agent call for it is not a command, and the butler's calls left the record on disk.
   const asAgent = await control(invoke('stewardRecord', []));

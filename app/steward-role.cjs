@@ -1,7 +1,8 @@
 'use strict';
 // The one session the person designated as the butler they talk to (大管家), for all of NAW. A record only: it
-// names which session sits at the top of the sidebar and where the window lands when the app starts. It grants no
-// tools, no queue powers and no permission. Only the person sets or clears it. After a session rotation the record
+// names which session sits at the top of the sidebar and where the window lands when the app starts, and whose
+// calls main.cjs treats as the butler's (stewardCaller: adding, cancelling and resolving queue items, steward step 2
+// batch 4). It grants no tools of its own. Only the person sets or clears it. After a session rotation the record
 // follows the written log to the successor, by the same rules as the queue secretary and the integrator; the code
 // below is the integrator's record (integrator-role.cjs) with its own file and its own error, kept apart so that
 // neither role can write the other's record.

@@ -5344,7 +5344,8 @@ function queueRow(item, memberIds) {
   }
   const body = node('div', undefined, 'queue-text');
   const creator = item.creator;
-  const creatorKey = creator?.kind === 'secretary' ? 'queue.creator.secretary' : creator?.kind === 'person' ? 'queue.creator.person' : 'queue.creator.unknown';
+  // The butler's own items say so (steward step 2, batch 4); the creator form stays what older builds read.
+  const creatorKey = item.addedBy === 'steward' && creator?.kind === 'secretary' ? 'queue.creator.steward' : creator?.kind === 'secretary' ? 'queue.creator.secretary' : creator?.kind === 'person' ? 'queue.creator.person' : 'queue.creator.unknown';
   const creatorParams = creator?.kind === 'secretary' ? { name: creator.name, sessionId: creator.sessionId } : undefined;
   body.append(uiNode('div', creatorKey, creatorParams, 'queue-creator quiet'), node('div', text));
   let name = '';
@@ -5357,8 +5358,9 @@ function queueRow(item, memberIds) {
   if (item.status === 'queued' && item.assignee && !memberIds.has(item.assignee)) {
     statusKey = 'queue.status.orphan';
   }
+  if (item.finishedBy === 'steward' && item.status === 'cancelled') statusKey = 'queue.status.cancelledBySteward';
   let statusParams;
-  if (statusKey !== 'queue.status.orphan' && statusKey !== 'queue.status.queued' && statusKey !== 'queue.status.cancelled') {
+  if (statusKey !== 'queue.status.orphan' && statusKey !== 'queue.status.queued' && statusKey !== 'queue.status.cancelled' && statusKey !== 'queue.status.cancelledBySteward') {
     statusParams = () => ({ name });
   }
   const status = uiNode('span', statusKey, statusParams, 'queue-status');

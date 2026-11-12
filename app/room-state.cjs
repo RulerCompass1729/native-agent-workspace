@@ -620,7 +620,8 @@ class RoomState {
     const noticed = queueFacts(this.metadata(id), id, previous, next, checked);
     return this.update({ queue: checked, ...noticed.fields }, event, id, noticed.facts);
   }
-  queueAdd(text, assignee, id = DEFAULT_ROOM_ID, creator) {
+  // `by` is 'steward' when the butler acts (steward step 2, batch 4): kept on the item, which older builds read as it is.
+  queueAdd(text, assignee, id = DEFAULT_ROOM_ID, creator, by = null) {
     this.writable(id);
     if (this.metadata(id).archived) {
       throw uiError("error.queue.archived");
@@ -628,6 +629,7 @@ class RoomState {
     let item;
     try {
       item = queueRules.newItem(text, assignee ?? null, Date.now(), creator);
+      if (by === 'steward') item = { ...item, addedBy: 'steward' };
     } catch {
       throw uiError("error.queue.invalid");
     }
@@ -644,7 +646,8 @@ class RoomState {
     const queue = queueRules.trimQueue([...items, item]);
     const params = { text: queueRules.shortText(text) };
     let notice = 'notice.queue.added';
-    if (item.creator) {
+    if (by === 'steward') { notice = 'notice.queue.addedBySteward'; params.name = item.creator.name; }
+    else if (item.creator) {
       if (item.creator.kind === 'secretary') {
         notice = 'notice.queue.addedBySecretary';
         params.name = item.creator.name;
@@ -655,22 +658,22 @@ class RoomState {
     this.update({ queue }, event, id);
     return item.id;
   }
-  queueCancel(itemId, id = DEFAULT_ROOM_ID) {
+  queueCancel(itemId, id = DEFAULT_ROOM_ID, by = null) {
     const item = this.queueFind(id, itemId);
     if (item.status !== 'queued') {
       throw uiError("error.queue.notCancellable");
     }
-    const next = { ...item, status: 'cancelled', finishedAt: Date.now() };
-    const event = { kind: 'queue', ...uiNotice('notice.queue.cancelled', { text: queueRules.shortText(item.text) }) };
+    const next = { ...item, status: 'cancelled', finishedAt: Date.now(), ...(by === 'steward' ? { finishedBy: 'steward' } : {}) };
+    const event = { kind: 'queue', ...uiNotice(by === 'steward' ? 'notice.queue.cancelledBySteward' : 'notice.queue.cancelled', { text: queueRules.shortText(item.text) }) };
     this.queueReplace(id, itemId, next, event);
   }
-  queueResolve(itemId, id = DEFAULT_ROOM_ID) {
+  queueResolve(itemId, id = DEFAULT_ROOM_ID, by = null) {
     const item = this.queueFind(id, itemId);
     if (item.status !== 'waiting') {
       throw uiError("error.queue.notWaiting");
     }
-    const event = { kind: 'queue', ...uiNotice('notice.queue.resolved', { text: queueRules.shortText(item.text) }) };
-    this.queueReplace(id, itemId, { ...item, status: 'done', finishedAt: Date.now() }, event);
+    const event = { kind: 'queue', ...uiNotice(by === 'steward' ? 'notice.queue.resolvedBySteward' : 'notice.queue.resolved', { text: queueRules.shortText(item.text) }) };
+    this.queueReplace(id, itemId, { ...item, status: 'done', finishedAt: Date.now(), ...(by === 'steward' ? { finishedBy: 'steward' } : {}) }, event);
   }
   queueMarkSent(id, itemId, sessionId, name, now) {
     const item = this.queueFind(id, itemId);

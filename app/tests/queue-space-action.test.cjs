@@ -45,6 +45,7 @@ function spaceAction(extra = {}) {
     backgroundOperation,
     queueSecretary: { creator() { throw uiError('error.queue.secretaryOnly'); } },
     sessionLabels: { labels: new Map() },
+    stewardCaller: async () => null,
     ...extra,
   });
   vm.runInContext(source.slice(start, end), context);
@@ -64,7 +65,7 @@ test('the person\'s window adds, resolves and cancels queue items', async () => 
   assert.equal(await handler({}, 'shared', 'queueAdd', ['task', null]), 'item-1');
   await handler({}, 'shared', 'queueResolve', ['item-1']);
   await handler({}, 'shared', 'queueCancel', ['item-1']);
-  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['queueAdd', 'task', null, 'shared', { kind: 'person', name: 'You', sessionId: null }], ['queueResolve', 'item-1', 'shared'], ['queueCancel', 'item-1', 'shared']]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['queueAdd', 'task', null, 'shared', { kind: 'person', name: 'You', sessionId: null }, null], ['queueResolve', 'item-1', 'shared', null], ['queueCancel', 'item-1', 'shared', null]]);
 });
 
 // Exercise the real register wrapper as well as its handler. Queue metadata is
@@ -76,7 +77,7 @@ function registered(extra) {
     applicationHandlers: handlers, backgroundOperation, uiError,
     ipcMain: { handle: (name, handler) => ipc.set(name, handler) },
     validRoomId: () => true, broadcastRoom: async () => {},
-    queueDispatcher: { schedule() {} }, ...extra,
+    queueDispatcher: { schedule() {} }, stewardCaller: async () => null, ...extra,
   });
   const start = source.indexOf('function register(name, handler) {');
   vm.runInContext(source.slice(start, source.indexOf('async function replaceBackendSockets', start)), context);
@@ -176,4 +177,48 @@ test('a session the person archived cannot be made secretary, and an archived se
   await f.handlers.get('queueSecretary')({ client: f.c.client }, 'secretary');
   await f.invoke('spaceAction', ['shared', 'queueAdd', ['after the restore', null]]);
   assert.equal(f.room.queueItems().length, 3);
+});
+
+// Steward step 2, batch 4 (the person, 2026-11-12 06:4x: 「这些事难道你不能做吗」): the butler adds, cancels and marks
+// handled, each under its own name; everyone else keeps the rules above.
+test('the butler adds, cancels and resolves queue items, each said to be the butler\'s', async () => {
+  const { handler, calls } = spaceAction({ stewardCaller: async c => c.background ? { id: 'butler', name: 'Claude manager' } : null });
+  const c = { background: true, client: { call: async () => ({ sessions: [] }) } };
+  assert.equal(await handler(c, 'shared', 'queueAdd', ['task', null]), 'item-1');
+  await handler(c, 'shared', 'queueCancel', ['item-1']); await handler(c, 'shared', 'queueResolve', ['item-1']);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['queueAdd', 'task', null, 'shared', { kind: 'secretary', name: 'Claude manager', sessionId: 'butler' }, 'steward'],
+    ['queueCancel', 'item-1', 'shared', 'steward'], ['queueResolve', 'item-1', 'shared', 'steward']]);
+});
+test('the room state keeps who acted on the item, in a form older builds still read', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-steward-queue-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const room = new RoomState(dir), creator = { kind: 'secretary', name: 'Claude manager', sessionId: 'butler' };
+  const a = room.queueAdd('first', null, 'shared', creator, 'steward'), b = room.queueAdd('second', null, 'shared', creator, 'steward');
+  assert.equal(room.value.events.at(-1).uiMessage.key, 'notice.queue.addedBySteward');
+  room.queueCancel(a, 'shared', 'steward');
+  assert.equal(room.value.events.at(-1).uiMessage.key, 'notice.queue.cancelledBySteward');
+  const items = new RoomState(dir).queueItems();
+  assert.deepEqual(items.map(i => [i.addedBy, i.finishedBy ?? null, i.status]), [['steward', 'steward', 'cancelled'], ['steward', null, 'queued']]);
+  // The creator form is one an older build accepts (it reads person or secretary only) and leaves the new fields alone.
+  assert.ok(items.every(i => ['person', 'secretary'].includes(i.creator.kind) && Object.keys(i.creator).sort().join() === 'kind,name,sessionId'));
+  assert.throws(() => require('../queue-dispatch.cjs').validateQueue([{ ...items[0], addedBy: 'someone' }]), /actor/);
+  void b;
+});
+test('stewardCaller: only the designated session, as it is now, outside every space', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
+  const start = source.indexOf('async function stewardCaller(c) {'), end = source.indexOf('function conversationReaderAllowed(actor) {', start);
+  const actor = { id: 'butler', nativeId: 'native-butler' }, record = { id: 'butler', nativeId: 'native-butler', name: 'Butler', state: 'idle', roomIds: [] };
+  let steward = { sessionId: 'butler', nativeId: 'native-butler' }, sessions = [record];
+  const context = vm.createContext({ backgroundOperation: { current: () => actor }, stewardOf: () => { if (steward instanceof Error) throw steward; return steward; },
+    roomState: { apply: s => s }, roomIds: s => { if (s.roomIds === 'broken') throw Error('broken'); return s.roomIds; }, sessionLabels: { labels: new Map([['butler', 'Claude manager']]) } });
+  vm.runInContext(source.slice(start, end), context);
+  const call = (background = true) => context.stewardCaller({ background, client: { call: async () => ({ sessions }) } });
+  assert.deepEqual(JSON.parse(JSON.stringify(await call())), { id: 'butler', name: 'Claude manager' });
+  assert.equal(await call(false), null, 'the person\'s own window is not the butler');
+  steward = { sessionId: 'butler', nativeId: 'older-native' }; assert.equal(await call(), null, 'another native session of it');
+  steward = Error('unreadable'); assert.equal(await call(), null, 'a designation that cannot be read');
+  steward = null; assert.equal(await call(), null);
+  steward = { sessionId: 'butler', nativeId: 'native-butler' };
+  for (const change of [{ roomIds: ['shared'] }, { roomIds: 'broken' }, { archived: true }, { state: 'ended' }, { nativeContextPending: true }, { nativeId: 'other' }]) {
+    sessions = [{ ...record, ...change }]; assert.equal(await call(), null, JSON.stringify(change));
+  }
 });
