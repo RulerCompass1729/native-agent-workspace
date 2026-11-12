@@ -71,8 +71,11 @@ async function run() {
   // No wait-for-focus after these clicks: reproduce the person's actual sequence.
   await page.locator('#chat-tab').click(); await page.keyboard.type('-GUI-NOW');
   assert.equal(await page.locator('#message-input').inputValue(), 'FIRST-A-GUI-NOW');
+  const typedBase = (await fixture()).inputs.length;
   await page.locator('#terminal-tab').click(); await page.keyboard.type('A-NOW');
-  await until(async () => (await fixture()).inputs.some(x => x.id === id && x.data === 'A'), 'Immediate native text');
+  // Keys typed before the view claim finishes are held and sent together after it; after it, one by one. Either way
+  // all of them arrive, in order, once.
+  await until(async () => (await fixture()).inputs.slice(typedBase).filter(x => x.id === id).map(x => x.data).join('') === 'A-NOW', 'Immediate native text');
   await page.locator(`[data-session-id="${other}"]`).click(); await page.locator('#terminal-tab').click();
   await until(async () => (await fixture()).pending.includes(other), 'Second terminal initial attachment'); await fixture('release', other);
   const otherInput = page.locator(`[data-terminal-id="${other}"] .xterm-helper-textarea`);
