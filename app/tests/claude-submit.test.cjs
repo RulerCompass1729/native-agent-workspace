@@ -277,3 +277,12 @@ test('read receipts are emitted only in their exact shape', () => {
   assert.deepEqual(reads, [{ tag: 'held', uuid: ROW, turnId: 'running-turn' }]);
   channel.close();
 });
+test('a mid-turn request carries its mid-turn text to the mod; an ordinary one never does', async t => {
+  const channel = new SubmissionChannel(20); t.after(() => channel.close());
+  const first = poll(channel), framed = channel.request('plain', 'framed', () => true, true, true, '[frame]\nplain');
+  assert.deepEqual(first.value, { id: 'framed', text: 'plain', midturn: true, midturnText: '[frame]\nplain' });
+  await assert.rejects(framed, error => error.notSent === true);
+  const second = poll(channel), ordinary = channel.request('plain', 'ordinary', () => true, true, false, '[frame]\nplain');
+  assert.deepEqual(second.value, { id: 'ordinary', text: 'plain' });
+  await assert.rejects(ordinary, error => error.notSent === true);
+});

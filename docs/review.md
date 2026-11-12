@@ -12598,3 +12598,56 @@ Independent review 1 (fresh read-only session, 24 tool calls, reported USD 1.48)
 
 The same session read that change (10 tool calls, reported USD 2.15 cumulative): `CHANGES`. The reused-id half was closed, but `view()` did not carry the duplicate mark to the dialog, so a repeat still read 「完成」 twice (the tests checked `entries()` and a hand-made view); and a snapshot of another session, which NAW runs as `initial` and which asks the person, kept 「等你确认」 after the answer, since the method check compared it with no method (an implicit one had no operation id to look up at all). Fixed: the view carries the mark; a snapshot is compared as `initial`, and the id NAW gave it is kept on its outcome line. A test builds the view from recorded calls; it fails on the previous commit and passes now. Known and kept: a rotation log that cannot be read refuses every butler the person designates until the file is fixed (the entry already warns that the designation cannot be read); role lines deleted before this commit carry no session (never installed). Full suite 6369 pass, 0 fail; the window check passes.
 The same session read that change (8 turns, reported USD 2.51 cumulative): `PASS_WITH_NOTES`. Both are closed; the outcome's id is used only for a snapshot that had none, never looks up another session's or another command's record, and no returned value is written. Its notes: outcome lines written by the two earlier commits of this batch lack fields the line check now requires, which would stop the record from loading; those commits ran only against isolated test profiles and were never installed, so nothing reads such lines. Still open from earlier rounds, as recorded above: the broker's `unconfirmed` for a refused call, a broken rotation log refusing whoever is designated, a successor's messages counted from its start. The review of this batch ends here.
+
+## A space message read mid-turn says where it came from (2.1.322, batch 1 follow-up) — 2026-11-12
+
+The person's choice, 11-12 11:15: 「按你推荐的来」. This was option (b) for a space message read mid-turn by the batch above: put a short line in front saying who sent it from which space, and how to answer.
+
+**Now.**
+- When the running turn takes a space message at a tool boundary, the model reads one frame line before the text the person or agent wrote. The line is in the style of NAW's other agent-facing frames (`[Workspace message from …]`).
+  - The app builds the line (`spaceMidturnText` in `workspace.cjs`).
+  - It travels as `midturnText` beside the plain text: adapter, then channel (`/next` carries it only for a mid-turn request), then bridge, which appends it at the boundary.
+  - Authorization stays against the plain text the record holds.
+- An agent sending through background control (the steward) gets: `[Workspace space message from <name> · <session id> in the space "<space>", delivered into your running turn. To answer <name>, call mcp__native_workspace__workspace_message with recipient_id <session id>.]`. Such an answer reaches the sender after the replying member's turn completes; an interrupted or failed turn, or pausing that member, drops it. The person sees it as its own row in the spaces the two share, or, when they share none, in the replier's spaces (`mirrorWake`), not as a reply to the space message. The "To answer" sentence is left out if cleaning changed the sender's ID, so a recipient ID that does not exist is never offered (NAW makes these IDs; not seen in practice).
+- When the person sends from the space, the line says only who sent it, "the person", and from which space. It does not suggest `workspace_message`: that tool takes a session ID, so it cannot reach the person. This is the one place the person's wording (「要回复请用 workspace_message 发到空间」) was not followed literally, because no such route exists for the person.
+- The line says nothing about where this turn's output goes. A turn that an earlier space message started (a forward, or a queued space message that ran as its own turn) keeps that message's grant, so its later output is posted to that space as that message's reply. A turn no space message started keeps its output in the session.
+- Not framed:
+  - a private queued message (the person's own words, as before);
+  - a message that runs as its own turn because the turn ended first (its reply is shared into the space as before);
+  - any version without mid-turn delivery.
+- Names and the sender's ID are cleaned before they go into the line. Control, line-separator, invisible and direction characters, quotes and square brackets become spaces, and each value is cut to 80 characters. A name or ID therefore cannot end the frame or add a line. Input stops at 16,000 characters (`cleanText`), far below the bridge's 100,000-character limit for mid-turn text, so the frame always fits.
+- The record marks such a row `deliveredFramed: 'space'`.
+- The space row's status said 「送进了正在进行的回合，回复留在原会话」. For the case above that is not always true, so it now says 「送进了正在进行的回合，不单独回复到空间」 (English: "Delivered into the running turn; no separate reply in the space"). It is the same in the grant's closing notice.
+
+**Correction to the batch above.** Its "Now" and "Left open" say that from a space "that turn's output stays in the session" and "the turn's output stays private". That is true only when no earlier space message started the turn (see above). The mid-turn message's own grant closes either way.
+
+**Checks.**
+- Node tests:
+  - the channel sends the frame only for a mid-turn request;
+  - the adapter passes it only when the bridge may hold the message;
+  - the record frames a space message from the person and one from a background-control sender, and leaves a private one and another version plain;
+  - a turn an earlier space message started keeps sharing after a mid-turn space message, and the frame says nothing about it;
+  - names and the sender ID cannot break out of the frame (quotes, brackets, newlines, NEL, direction controls).
+- Bridge engine tests (2 new):
+  - the app's text is appended, while authorization stays against the plain text;
+  - a framed message whose turn ends first is submitted plain.
+- Breakages: 11 (F1–F11), each caught by its intended test (`mutate-5.log`, `mutate-6.log`, `mutate-7.log`, raw output in `mutate-out/`).
+- Real window, real 2.1.322:
+  - from the space, the request the model reads carries exactly the person's frame line, then the text, after the tool result (`test-native-midturn.cjs` with `NAW_MIDTURN_SHARED=1`);
+  - privately, the text arrives unchanged;
+  - the space row says 「送进了正在进行的回合，不单独回复到空间」;
+  - the space fallback journey still shares the own-turn reply.
+- Main e673782's compatibility copy of the hook is recognised for upgrade.
+
+**Independent review.** The batch-1 reviewer session's first read of this change was BLOCK (`review-3-result.md`). The frame said "Your output in this turn stays in your own session and is not posted to the space". That is false when an earlier space message's grant is still open on the turn: `workspace.cjs` space queue does not bump `controlRevision`, `shared-replies.cjs` keeps such a grant valid, and its rows keep being posted. The sentence is gone, and the case has a test. Its notes:
+- "to answer there" overclaimed where the answer is shown; it now says "to answer <name>".
+- The sender ID went into the line uncleaned; it is now cleaned.
+- NEL and direction controls survived the cleaning; they are now removed.
+- The `deliveredFramed` mark could overclaim for text over 100,000 characters; input cannot exceed 16,000, so the length check was dropped instead.
+
+The same session read that increment (`review-4-result.md`, PASS_WITH_NOTES): the blocking finding is fixed, and every remaining statement in both lines and the two status lines holds wherever it shows. Its notes:
+- A code comment and a window-check label still carried the old claim; both are reworded.
+- "Reaches the sender" overstated delivery; the wording above now says when it is dropped.
+- A sender ID that cleaning changed would have been offered as a recipient; that sentence is now left out (F11).
+- The member's answer by `workspace_message` shows in the space as its own row, not as a reply; noted above.
+The review of this change ends here.

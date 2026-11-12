@@ -1361,16 +1361,18 @@ class Claude extends EventEmitter {
     if (!this.midturnRows?.has(read.tag) || this.midturnRows.get(read.tag) !== read.uuid) return;
     this.midturnRows.delete(read.tag); this.emit('midturnRead', read);
   }
-  async queue(text, tag, guard) {
+  // midturnText: what the running turn reads instead, if it takes the message at a tool boundary.
+  async queue(text, tag, guard, midturnText) {
     if (!this.queueAvailable || this.queued || this.submission.pending || !guard()) throw Object.assign(uiError("error.nativeWaitingInputUnavailable"), { notSent: true });
-    const pending = this.queued = { tag, text, guard, nativeId: this.record.nativeId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
+    const pending = this.queued = { tag, text, guard, midturnText, nativeId: this.record.nativeId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
     try { return await this.deliver(pending, true); }
     finally { if (this.queued === pending) this.queued = null; }
   }
   async deliver(pending, queued = false) {
     const { text, tag, guard } = pending;
     try {
-      const receipt = await this.submission.request(text, tag, guard, queued, queued && this.nativeMidturnAppend === true);
+      const midturn = queued && this.nativeMidturnAppend === true;
+      const receipt = await this.submission.request(text, tag, guard, queued, midturn, midturn ? pending.midturnText : undefined);
       pending.accepted = true;
       if (receipt?.mode === 'append') {
         // Stored in the running turn: no prompt of its own, so it heads no turn and binds no reply.

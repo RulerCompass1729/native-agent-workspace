@@ -32,7 +32,7 @@ for (const allowed of [false, true]) {
 // 2.1.322: a queued app message held for the running root turn's next tool boundary
 // (measured on the real CLI: appended there, the same turn's next request reads it).
 const midturnSession = '22222222-2222-4222-8222-222222222222';
-async function midturn($, on, options: { version?: string; granted?: boolean; hold?: boolean; allowed?: boolean; deny?: boolean; draft?: string; holdGate?: Promise<unknown>; authorizeGate?: Promise<unknown>; endOnAuthorize?: boolean } = {}) {
+async function midturn($, on, options: { version?: string; granted?: boolean; hold?: boolean; allowed?: boolean; deny?: boolean; draft?: string; holdGate?: Promise<unknown>; authorizeGate?: Promise<unknown>; endOnAuthorize?: boolean; midturnText?: string } = {}) {
   const raise = $, clock = mock.clock(on), calls = [], submitted = [], rows = [];
   // A refusing bottom stands for a plugin above that refuses the mod's own row.
   const stored = options.deny ? { appended: () => rows } : mock.session(on);
@@ -62,7 +62,7 @@ async function midturn($, on, options: { version?: string; granted?: boolean; ho
     let value: object = { observed: true };
     if (route === '/next') {
       if (delivered) await clock.sleep(1);
-      else { await gate; delivered = true; value = { id: 'app-held', text: 'HELD_TEXT', midturn: true }; }
+      else { await gate; delivered = true; value = { id: 'app-held', text: 'HELD_TEXT', midturn: true, ...(options.midturnText ? { midturnText: options.midturnText } : {}) }; }
     } else if (route === '/root-bind') value = { lease: 'synthetic-lease', observationEpoch: 'synthetic-epoch', nativeBlocks: true, nativeMidturnAppend: options.granted !== false };
     else if (route === '/hold') { await options.holdGate; value = { held: options.hold !== false }; }
     else if (route === '/authorize') {
@@ -247,4 +247,22 @@ for (const during of ['draft', 'input'] as const) test(`2.1.322: ${during === 'd
   openAuthorize(); await out; await f.clock.settle();
   expect(f.held()).toEqual([]);
   expect(f.results()).toEqual([expect.objectContaining({ id: 'app-held', status: during === 'draft' ? 'draft' : 'blocked', ...(during === 'input' ? { reason: 'input-changed' } : {}) })]);
+});
+
+test('2.1.322: the running turn reads the app\'s mid-turn text; a turn of its own gets the plain text', async ($, on) => {
+  const framed = '[Workspace space message from the person in the space "S", delivered into your running turn.]\nHELD_TEXT';
+  const f = await midturn($, on, { midturnText: framed });
+  await $.turn.start({ turnId: 'running-turn' });
+  f.release(); await f.clock.settle();
+  await tool($); await f.clock.settle();
+  expect(f.held().map(row => row.message.content)).toEqual([[{ type: 'text', text: framed }]]);
+  // Authorized against the plain text the app recorded.
+  expect(f.calls.find(c => c.route === '/authorize').body.text).toBe('HELD_TEXT');
+});
+test('2.1.322: a framed message whose turn ends first is submitted plain', async ($, on) => {
+  const f = await midturn($, on, { midturnText: '[frame]\nHELD_TEXT' });
+  await $.turn.start({ turnId: 'running-turn' });
+  f.release(); await f.clock.settle();
+  await $.turn.complete({ turnId: 'running-turn', ...ended }); await f.clock.settle();
+  expect(f.submitted.map(e => e.text)).toEqual(['HELD_TEXT']); expect(f.held()).toEqual([]);
 });

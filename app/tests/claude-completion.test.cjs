@@ -136,7 +136,7 @@ test('2.1.322 mid-turn queue: the append receipt heads no turn, adopts no reply,
   f.runtime.submission.request = (...args) => { asked = args; return Promise.resolve({ mode: 'append', uuid: '44444444-4444-4444-8444-444444444444', turnId: 'running', promptId: null }); };
   const submitted = [], reads = []; f.runtime.on('submitted', tag => submitted.push(tag)); f.runtime.on('midturnRead', read => reads.push(read));
   const receipt = await f.runtime.queue('steer text', 'queue-id', () => true);
-  assert.deepEqual(asked.slice(0, 2).concat(asked.slice(3)), ['steer text', 'queue-id', true, true]);
+  assert.deepEqual([asked[0], asked[1], asked[3], asked[4]], ['steer text', 'queue-id', true, true]);
   assert.equal(receipt.mode, 'append'); assert.deepEqual(submitted, ['queue-id']);
   assert.ok(!f.runtime.pending, 'no reply is adopted'); assert.equal(f.runtime.queued, null);
   f.runtime.midturnRead({ tag: 'queue-id', uuid: '55555555-5555-4555-8555-555555555555', turnId: 'running' });
@@ -150,4 +150,12 @@ test('2.1.322 mid-turn queue: the append receipt heads no turn, adopts no reply,
   f.runtime.submission.request = (...args) => { asked = args; return Promise.resolve({ promptId: null }); };
   await f.runtime.queue('plain', 'plain-id', () => true);
   assert.equal(asked[4], false);
+});
+test('2.1.322 mid-turn queue passes its mid-turn text on only when the bridge may hold it', async () => {
+  const f = fixture(); f.runtime.nativeQueue = true; f.runtime.rootLease = 'root'; f.runtime.chatAvailable = true; f.runtime.submission.pending = null;
+  let asked; f.runtime.submission.request = (...args) => { asked = args; return Promise.resolve({ promptId: null }); };
+  f.runtime.nativeMidturnAppend = true; await f.runtime.queue('plain', 'one', () => true, '[frame]\nplain');
+  assert.equal(asked[4], true); assert.equal(asked[5], '[frame]\nplain');
+  f.runtime.nativeMidturnAppend = false; await f.runtime.queue('plain', 'two', () => true, '[frame]\nplain');
+  assert.equal(asked[4], false); assert.equal(asked[5], undefined);
 });

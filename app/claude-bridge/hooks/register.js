@@ -706,7 +706,9 @@ async function listen($, ownGeneration) {
 // 'taken' (dispatched or refused at a tool boundary), 'ended' (the root turn ended first,
 // or none was running), 'dropped' (the app did not keep it), 'stopped'.
 async function holdMidturn($, message, binding, ownGeneration) {
-  const held = { id: message.id, text: message.text, binding: rootBinding, connection: binding, generation: ownGeneration, personRevision, outcome: null };
+  // The running turn reads the app's own text for it when there is one (a space message's frame).
+  const appendText = typeof message.midturnText === 'string' && message.midturnText && message.midturnText.length <= 100000 ? message.midturnText : message.text;
+  const held = { id: message.id, text: message.text, appendText, binding: rootBinding, connection: binding, generation: ownGeneration, personRevision, outcome: null };
   held.done = new Promise(resolve => { held.resolve = outcome => { if (!held.outcome) { held.outcome = outcome; resolve(held); } }; });
   if (!rootBinding?.nativeMidturnAppend || rootBinding.lease !== binding.lease || rootIdle) { held.resolve('ended'); return held.done; }
   heldMidturn = held;
@@ -728,7 +730,7 @@ async function takeMidturn($, binding) {
   const held = heldMidturn;
   if (!held || held.binding !== binding || binding !== rootBinding || stopped || generation !== held.generation || rootIdle) return;
   heldMidturn = null;
-  const { id, text, connection } = held;
+  const { id, text, appendText, connection } = held;
   try {
     if (personRevision !== held.personRevision) return await request($, '/result', { id, status: 'blocked', reason: 'input-changed' }, connection);
     if ((await $.prompt.read()).text) return await request($, '/result', { id, status: 'draft' }, connection);
@@ -740,7 +742,7 @@ async function takeMidturn($, binding) {
     // Nothing is stored yet: a session or context that changed during that round trip still means not sent.
     if (binding !== rootBinding || stopped || generation !== held.generation) return await request($, '/result', { id, status: 'blocked', reason: 'context-changed' }, connection);
     let stored;
-    try { stored = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } }); }
+    try { stored = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: appendText }] } }); }
     catch { return await request($, '/result', { id, status: 'unconfirmed', reason: 'native-append' }, connection); }
     const uuid = typeof stored?.uuid === 'string' && /^[a-f0-9-]{36}$/i.test(stored.uuid) ? stored.uuid : null;
     // A refusal stores nothing; a row without its id is not proof either way.
