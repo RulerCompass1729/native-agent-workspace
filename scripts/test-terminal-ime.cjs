@@ -68,6 +68,37 @@ async function run() {
     await page.keyboard.press('Enter');
     await until(async () => (await fixture()).inputs.slice(before).map(x => x.data).join('') === committed + '\r', 'Separate Enter sends one CR');
   }
+  // 463cce73: a busy page handles the next composition before its 0 ms timers, so xterm hands over the committed
+  // phrase after that composition began. The phrase reaches the native side once and is not reported as unsent; a
+  // phrase the native side refuses is still kept in the notice. Real input commands while the page is busy, then the
+  // same order dispatched in one task.
+  const recoveryText = () => page.evaluate(id => { const p = document.querySelector(`[data-terminal-id="${id}"] .terminal-input-recovery`); return p && !p.hidden ? p.querySelector('textarea').value : null; }, id);
+  const composeEvents = (steps) => input.evaluate((el, steps) => { for (const [type, data] of steps) { if (type === 'compositionupdate') el.value += data; el.dispatchEvent(new CompositionEvent(type, { data, bubbles: true, cancelable: true })); } }, steps);
+  const commitThenCompose = text => composeEvents([['compositionstart', ''], ['compositionupdate', text], ['compositionend', text], ['compositionstart', '']]);
+  const endComposition = text => composeEvents([['compositionupdate', text], ['compositionend', text]]);
+  const fastBase = (await fixture()).inputs.length;
+  const busy = page.evaluate(() => { const end = performance.now() + 400; while (performance.now() < end); });
+  await delay(30);
+  const queued = [cdp.send('Input.imeSetComposition', { text: 'ren wu', selectionStart: 6, selectionEnd: 6 }), cdp.send('Input.insertText', { text: '任务' }), cdp.send('Input.imeSetComposition', { text: 'x', selectionStart: 1, selectionEnd: 1 })];
+  await busy; await Promise.all(queued);
+  await cdp.send('Input.insertText', { text: '下' });
+  await commitThenCompose('一步'); await endComposition('好');
+  // Two commits before xterm hands either over: it hands both over as one piece.
+  await composeEvents([['compositionstart', ''], ['compositionupdate', '两段'], ['compositionend', '两段'], ['compositionstart', ''], ['compositionupdate', '合一'], ['compositionend', '合一']]);
+  await until(async () => (await fixture()).inputs.slice(fastBase).map(x => x.data).join('') === '任务下一步好两段合一', 'Phrases committed just before the next composition arrive once, in order');
+  await delay(100);
+  assert.equal(await recoveryText(), null, 'A delivered phrase is not reported as unsent');
+  await fixture('hold-input', id);
+  const refusedBase = (await fixture()).inputs.length;
+  await commitThenCompose('拒收');
+  await until(async () => (await fixture()).waitingInputs.includes(id), 'Refused phrase held');
+  await fixture('fail-input', id);
+  await until(async () => await recoveryText() === '拒收', 'A refused phrase is kept in the notice');
+  await endComposition('后');
+  await until(async () => (await fixture()).inputs.slice(refusedBase).map(x => x.data).join('') === '后', 'Typing after a refused phrase still reaches the terminal');
+  await page.locator(`[data-terminal-id="${id}"] .terminal-input-recovery button`).last().click();
+  await until(() => input.evaluate(el => document.activeElement === el), 'Terminal focused after closing the notice');
+  passed.push('A phrase committed just before the next composition is sent once without an unsent notice; a refused one is kept');
   // No wait-for-focus after these clicks: reproduce the person's actual sequence.
   await page.locator('#chat-tab').click(); await page.keyboard.type('-GUI-NOW');
   assert.equal(await page.locator('#message-input').inputValue(), 'FIRST-A-GUI-NOW');
