@@ -1,6 +1,11 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+// The butler's read log is kept in blocks under history/butler-reads (record-history.cjs).
+const readLogStore = directory => path.join(directory, 'history', 'butler-reads');
+const hasReadLog = directory => fs.existsSync(path.join(directory, 'history')) || fs.existsSync(path.join(directory, 'butler-business-reads.jsonl'));
+const readLogText = directory => { const store = readLogStore(directory); return fs.existsSync(store) ? fs.readdirSync(store).filter(name => name.endsWith('.jsonl')).sort().map(name => fs.readFileSync(path.join(store, name), 'utf8')).join('') : ''; };
+const readLogBlocks = directory => { const store = readLogStore(directory); return fs.existsSync(store) ? fs.readdirSync(store).filter(name => name.endsWith('.jsonl')).map(name => fs.lstatSync(path.join(store, name))) : []; };
 const { ButlerBusiness, MAX_BYTES, MAX_LIMIT, MAX_WINDOW, MAX_SCAN_RECORDS, MAX_SPACES } = require('../butler-business.cjs');
 const { RoomState } = require('../room-state.cjs');
 const { ButlerRole } = require('../butler-role.cjs');
@@ -66,7 +71,7 @@ test('dedicated catalog and invoke expose only the read capability, with no appr
     assert.throws(() => read(capability, query), code('ERR_BUTLER_BUSINESS_QUERY'));
   const result = read(capability, { kind: 'spaces' });
   assert.equal(result.activation, 'off'); assert.equal(result.recordPeriod, 'off'); assert.equal(f.role.current().mode, 'record-only');
-  assert.deepEqual(fs.readdirSync(f.directory).sort(), [...files, 'butler-business-reads.jsonl'].sort());
+  assert.deepEqual(fs.readdirSync(f.directory).sort(), [...files, 'history'].sort()); assert.ok(readLogText(f.directory).length > 0);
   assert.deepEqual(fs.readFileSync(f.role.file), roleBefore);
 });
 

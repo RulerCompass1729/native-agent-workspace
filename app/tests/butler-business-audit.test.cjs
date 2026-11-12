@@ -1,6 +1,11 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+// The butler's read log is kept in blocks under history/butler-reads (record-history.cjs).
+const readLogStore = directory => path.join(directory, 'history', 'butler-reads');
+const hasReadLog = directory => fs.existsSync(path.join(directory, 'history')) || fs.existsSync(path.join(directory, 'butler-business-reads.jsonl'));
+const readLogText = directory => { const store = readLogStore(directory); return fs.existsSync(store) ? fs.readdirSync(store).filter(name => name.endsWith('.jsonl')).sort().map(name => fs.readFileSync(path.join(store, name), 'utf8')).join('') : ''; };
+const readLogBlocks = directory => { const store = readLogStore(directory); return fs.existsSync(store) ? fs.readdirSync(store).filter(name => name.endsWith('.jsonl')).map(name => fs.lstatSync(path.join(store, name))) : []; };
 const { ButlerBusiness } = require('../butler-business.cjs');
 const { ButlerReadAudit } = require('../butler-read-audit.cjs');
 const { ButlerRole } = require('../butler-role.cjs');
@@ -39,7 +44,7 @@ test('each successful business page has a durable metadata receipt before return
   assert.equal(row.actor.selectionRevision, 1); assert.equal(row.time, NOW);
   assert.deepEqual(row.query, { kind: 'queue', spaceId: 'shared', limit: 20 });
   assert.deepEqual(row.result, { count: 1, recordRefs: ['naw:space:shared/item:synthetic-item'], scanned: 1, truncated: false });
-  const raw = fs.readFileSync(path.join(f.directory, 'butler-business-reads.jsonl'), 'utf8');
+  const raw = readLogText(f.directory);
   assert.equal(raw.includes(BODY), false); assert.equal(raw.includes(f.room.value.name), false);
   for (const field of ['text', 'reply', 'name', 'cursor', 'question', 'reason', 'headers', 'env'])
     assert.equal(Object.hasOwn(row.query, field) || Object.hasOwn(row.result, field), false);
@@ -53,17 +58,17 @@ test('unknown tools, ordinary consent and revoked identity return no data and cr
   assert.throws(() => cap.invoke('readBusiness', { ...query, approved: true }), { code: 'ERR_BUTLER_BUSINESS_QUERY' });
   f.role.revoke(f.person, 1);
   assert.throws(() => cap.invoke('readBusiness', query), { code: 'ERR_BUTLER_UNAUTHORIZED' });
-  assert.equal(fs.existsSync(path.join(f.directory, 'butler-business-reads.jsonl')), false);
+  assert.equal(hasReadLog(f.directory), false);
   assert.equal(f.privateReads(), 0);
 });
 
 test('audit write failure withholds the business body and cannot expose a raw storage error', t => {
   const f = fixture(t), cap = f.bind(), sync = fs.fsyncSync;
-  const auditFile = path.join(f.directory, 'butler-business-reads.jsonl'); let fired = 0;
+  let fired = 0;
   t.mock.method(fs, 'fsyncSync', fd => {
-    const opened = fs.fstatSync(fd); let audit;
-    try { audit = fs.lstatSync(auditFile); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    if (audit && opened.dev === audit.dev && opened.ino === audit.ino) { fired++; throw Error('Synthetic private storage detail'); }
+    // The block the page's line goes into, whichever it is.
+    const opened = fs.fstatSync(fd);
+    if (readLogBlocks(f.directory).some(audit => opened.isFile() && opened.dev === audit.dev && opened.ino === audit.ino)) { fired++; throw Error('Synthetic private storage detail'); }
     return sync(fd);
   });
   assert.throws(() => cap.invoke('readBusiness', query), error =>
@@ -110,7 +115,7 @@ for (const kind of ['subclass', 'own']) test(`a same-root ${kind} recordPage ove
   assert.equal(rows.at(-1).pageOfDay, 64);
   assert.ok(rows.every(row => row.actor.sessionId === f.actor.id && row.actor.nativeId === f.actor.nativeId &&
     row.query.kind === 'queue' && row.result.recordRefs[0] === 'naw:space:shared/item:synthetic-item'));
-  assert.equal(fs.readFileSync(path.join(f.directory, 'butler-business-reads.jsonl'), 'utf8').includes(BODY), false);
+  assert.equal(readLogText(f.directory).includes(BODY), false);
 });
 
 test('overwriting or redefining the base directory predicate cannot authorize a different audit root', t => {
@@ -169,7 +174,7 @@ test('in-process proxy queries are refused before traps or record preparation', 
   });
   assert.throws(() => cap.invoke('readBusiness', input), { code: 'ERR_BUTLER_BUSINESS_QUERY' });
   assert.equal(traps, 0);
-  assert.equal(fs.existsSync(path.join(f.directory, 'butler-business-reads.jsonl')), false);
+  assert.equal(hasReadLog(f.directory), false);
 });
 
 test('the host must explicitly choose an actual read audit; a missing audit cannot silently select the role directory', t => {
@@ -195,9 +200,9 @@ test('a nested role uses only the explicitly shared human-readable audit and kee
   const bind = business => business.bind(records[0], { selectionRevision: role.current().selectionRevision, runnerRef: runner.runnerRef });
   assert.equal(bind(create()).invoke('readBusiness', query).records[0].text, BODY);
   assert.equal(audit.read(person).records[0].actor.sessionId, actor.id);
-  assert.equal(fs.existsSync(path.join(sharedDirectory, 'butler-business-reads.jsonl')), true);
-  assert.equal(fs.existsSync(path.join(roleDirectory, 'butler-business-reads.jsonl')), false);
-  assert.equal(fs.existsSync(path.join(root, 'instances', 'butler-business-reads.jsonl')), false);
+  assert.equal(hasReadLog(sharedDirectory), true);
+  assert.equal(hasReadLog(roleDirectory), false);
+  assert.equal(hasReadLog(path.join(root, 'instances')), false);
   const next = { ...actor, id: 'next-instance', nativeId: 'next-native' }; records[0] = next;
   role.set(person, { identity: { sessionId: next.id, nativeId: next.nativeId }, runner }, 1);
   const replacement = bind(create());
@@ -206,8 +211,8 @@ test('a nested role uses only the explicitly shared human-readable audit and kee
   const first = audit.read(person), last = audit.read(person, { afterSequence: first.nextAfterSequence });
   assert.equal(first.records.length + last.records.length, 64); assert.equal(last.throughSequence, 64);
   assert.equal(first.records[1].actor.sessionId, next.id);
-  assert.equal(fs.existsSync(path.join(roleDirectory, 'butler-business-reads.jsonl')), false);
-  assert.equal(fs.readFileSync(path.join(sharedDirectory, 'butler-business-reads.jsonl'), 'utf8').includes(BODY), false);
+  assert.equal(hasReadLog(roleDirectory), false);
+  assert.equal(readLogText(sharedDirectory).includes(BODY), false);
 });
 
 test('a real audit from another private directory cannot approve a page outside the trusted Main dataDir', t => {
@@ -218,7 +223,7 @@ test('a real audit from another private directory cannot approve a page outside 
     roomState: { metadata() { touched++; throw Error('Business body must stay unread'); } }, view() { touched++; throw Error('Actor view must stay unread'); } }),
   { code: 'ERR_BUTLER_BUSINESS_OPTIONS' });
   assert.equal(touched, 0); assert.deepEqual(fs.readdirSync(other), before);
-  assert.equal(fs.existsSync(path.join(f.directory, 'butler-business-reads.jsonl')), false);
+  assert.equal(hasReadLog(f.directory), false);
 });
 
 test('the trusted dataDir must be explicit, absolute, existing, owned and mode 700 before any body or audit write', t => {
@@ -228,7 +233,7 @@ test('the trusted dataDir must be explicit, absolute, existing, owned and mode 7
   const options = { role: f.role, readAudit: f.audit, roomState: { metadata() { touched++; } }, view() { touched++; } };
   for (const dataDir of [undefined, null, '', 'relative', {}, file, unsafe, path.join(f.directory, 'missing')])
     assert.throws(() => new ButlerBusiness({ ...options, dataDir }), { code: 'ERR_BUTLER_BUSINESS_OPTIONS' });
-  assert.equal(touched, 0); assert.equal(fs.existsSync(path.join(f.directory, 'butler-business-reads.jsonl')), false);
+  assert.equal(touched, 0); assert.equal(hasReadLog(f.directory), false);
 });
 
 test('prototype, proxy and overridden instance checks cannot disguise a different audit root', t => {
@@ -239,7 +244,7 @@ test('prototype, proxy and overridden instance checks cannot disguise a differen
   const options = { dataDir: f.directory, role: f.role, roomState: f.room, view: () => ({ records: f.records }) };
   for (const readAudit of [wrong, new LyingAudit(other), Object.create(ButlerReadAudit.prototype), new Proxy(f.audit, {}), { recordPage: () => ({ sequence: 1, pageOfDay: 1 }), matchesDataDir: () => true }])
     assert.throws(() => new ButlerBusiness({ ...options, readAudit }), { code: 'ERR_BUTLER_BUSINESS_OPTIONS' });
-  assert.equal(fs.existsSync(path.join(other, 'butler-business-reads.jsonl')), false);
+  assert.equal(hasReadLog(other), false);
 });
 
 test('physical aliases of the trusted Main directory keep the same audit, and role.file is not a directory selector', t => {
@@ -265,7 +270,7 @@ test('directory changes after construction or binding refuse reads before prepar
   let bodyReads = 0; Object.defineProperty(f.room.value.queue[0], 'text', { get() { bodyReads++; throw Error('Body must remain unread'); } });
   assert.throws(() => business.bind(f.actor, f.expected), { code: 'ERR_BUTLER_BUSINESS_AUDIT' });
   assert.throws(() => cap.invoke('readBusiness', query), { code: 'ERR_BUTLER_BUSINESS_AUDIT' });
-  assert.equal(bodyReads, 0); assert.equal(fs.existsSync(path.join(f.directory, 'butler-business-reads.jsonl')), false);
+  assert.equal(bodyReads, 0); assert.equal(hasReadLog(f.directory), false);
 });
 
 test('owner or mode changes of the correct shared root fail before a bound read and do not create an audit file', t => {
@@ -278,7 +283,7 @@ test('owner or mode changes of the correct shared root fail before a bound read 
     { code: 'ERR_BUTLER_BUSINESS_OPTIONS' });
   assert.throws(() => cap.invoke('readBusiness', query), { code: 'ERR_BUTLER_BUSINESS_AUDIT' });
   mocked.mock.restore();
-  assert.equal(fs.existsSync(path.join(f.directory, 'butler-business-reads.jsonl')), false);
+  assert.equal(hasReadLog(f.directory), false);
 });
 
 test('a directory descriptor cleanup error is a fixed binding refusal rather than an upstream exception', t => {
@@ -288,7 +293,7 @@ test('a directory descriptor cleanup error is a fixed binding refusal rather tha
     { code: 'ERR_BUTLER_BUSINESS_OPTIONS' });
   assert.equal(closes, 1);
   mocked.mock.restore();
-  assert.equal(fs.existsSync(path.join(f.directory, 'butler-business-reads.jsonl')), false);
+  assert.equal(hasReadLog(f.directory), false);
 });
 
 test('the existing synthetic Business-page producer explicitly supplies the trusted directory and actual shared audit', t => {

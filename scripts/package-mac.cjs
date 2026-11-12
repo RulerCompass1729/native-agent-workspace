@@ -179,6 +179,7 @@ async function build() {
       'queue-secretary.cjs',
       'reader-cache.cjs',
       'reading-state.cjs',
+      'record-history.cjs',
       'renderer/fleet-observation.js',
       'room-mention.js',
       'room-state.cjs',

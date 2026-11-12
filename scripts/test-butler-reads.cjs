@@ -28,7 +28,9 @@ async function cleanup() {
 // The log as the core would write it: synthetic identities and space ids, times around now so that the newest
 // records fall on the current UTC day whatever the hour.
 const MINUTE = 60 * 1000, DAY = 24 * 3600 * 1000, NOW = Date.now(), SPACE = '11111111-1111-4111-8111-111111111111', token = {};
-const logFile = path.join(profile, 'butler-business-reads.jsonl');
+// The log as this version keeps it: blocks in history/butler-reads, every one kept, named by first number and UTC day.
+const store = path.join(profile, 'history', 'butler-reads');
+const blocks = () => fs.existsSync(store) ? fs.readdirSync(store).filter(name => /^\d{9,12}-\d{4}-\d{2}-\d{2}\.jsonl$/.test(name)).sort() : [];
 let clock = NOW;
 const audit = new ButlerReadAudit(profile, { authorizePerson: value => value === token, now: () => clock });
 function write(at, kind, { spaceId = null, count = 1, more = false, revision = 3 } = {}) {
@@ -57,7 +59,7 @@ const all = () => { const records = []; let after = 0, through = 0;
     return { dialog: Boolean(dialog) && !dialog.open && dialog.getClientRects().length === 0, bound: Boolean(dialog?.querySelector('h2')), row: row.hidden, module: typeof window.nativeWorkspaceButlerReads?.bind,
       text: /大管家|Butler|读过什么|has read/.test([...document.querySelector('.sidebar').children].filter(part => part.id !== 'steward-entry' && part.getClientRects().length).map(part => part.innerText).join('\n') + document.querySelector('main').innerText) }; });
   assert.deepEqual(await closed(), { dialog: true, bound: true, row: true, module: 'function', text: false });
-  assert.equal(fs.existsSync(logFile), false, 'Starting the app writes no read log');
+  assert.deepEqual([fs.existsSync(path.join(profile, 'history')), fs.existsSync(path.join(profile, 'butler-business-reads.jsonl'))], [false, false], 'Starting the app writes no read log');
   checks.push('With the entry closed (every ordinary launch) the read log dialog is in the page, shut and invisible, and nothing offers it');
 
   // 2. A real log, read through the real person-only call.
@@ -65,6 +67,7 @@ const all = () => { const records = []; let after = 0, through = 0;
   for (let index = 0; index < 58; index++) write(midnight - DAY + 10 * MINUTE + index * 24 * MINUTE, index % 3 === 2 ? 'deliveries' : index % 3 ? 'queue' : 'spaces', { spaceId: index % 2 ? SPACE : 'shared', count: index % 5, more: index % 7 === 0 && index % 5 > 0, revision: 2 });
   for (let index = 0; index < 6; index++) write(midnight + index * MINUTE, index % 2 ? 'queue' : 'spaces', { spaceId: SPACE, count: 2 });
   const { records, through } = all(); assert.equal(through, 64);
+  assert.equal(blocks().length, 2, 'Two UTC days are two blocks');
   const mount = language => page.evaluate(lang => {
     const dialog = document.createElement('dialog'); dialog.id = 'butler-reads-dialog-check'; dialog.className = 'butler-reads'; dialog.setAttribute('closedby', 'any');
     document.getElementById('butler-reads-dialog').after(dialog);
@@ -73,7 +76,7 @@ const all = () => { const records = []; let after = 0, through = 0;
   }, language);
   const unmount = () => page.evaluate(() => { const { reads, dialog } = window.butlerReadsCheck; reads.dispose(); dialog.remove(); delete window.butlerReadsCheck; });
   const dialog = () => page.locator('#butler-reads-dialog-check'), settled = state => page.waitForFunction(value => window.butlerReadsCheck.dialog.dataset.readsState === value, state);
-  const rows = () => dialog().locator('tbody tr:not(.butler-reads-day)'), days = () => dialog().locator('tr.butler-reads-day').allInnerTexts().then(list => list.map(value => value.trim()));
+  const rows = () => dialog().locator('tbody tr:not(.butler-reads-day):not(.butler-reads-gap-row)'), days = () => dialog().locator('tr.butler-reads-day').allInnerTexts().then(list => list.map(value => value.trim()));
   // `tight`: a small window with a long warning, where the explanation at the top may scroll in its own box so
   // that the count, the warning and the records keep their room. Everywhere else only the list scrolls.
   const fits = (label, tight = false, own = false) => page.evaluate(([name, tight, own]) => {
@@ -114,7 +117,7 @@ const all = () => { const records = []; let after = 0, through = 0;
     assert.equal(await page.evaluate(() => document.activeElement.dataset.action), 'done', 'Opening puts the focus on Done');
     assert.equal((await dialog().locator('.butler-reads-today').innerText()).trim(), say('butler.reads.today', { from: view.today.from, pages: 6, left: 58, limit: 64, resets: view.today.resets }));
     assert.equal((await dialog().locator('p.quiet:not(.butler-reads-limits)').nth(1).innerText()).trim(), say('butler.reads.listed', { total: 64, shown: 50 }));
-    assert.equal(await dialog().locator('.butler-reads-storage').isVisible(), false, 'A small log file is not warned about');
+    assert.equal(await dialog().locator('.butler-reads-storage').isVisible(), false, 'A log under the reminder line is not warned about');
     // What a line shows and does not show is on the page without a click, right under what a line is.
     assert.equal((await dialog().locator('p.butler-reads-limits').innerText()).trim(), say('butler.reads.limits', { limit: 64 }));
     assert.equal(await dialog().evaluate(el => el.querySelector('p.butler-reads-limits').previousElementSibling === el.querySelector('p.quiet')), true);
@@ -145,13 +148,13 @@ const all = () => { const records = []; let after = 0, through = 0;
     await unmount();
     checks.push(`${tag}: a real log of 64 pages over two UTC days is read through the real call and shown newest first; earlier records on request`);
   }
-  // The log file filling up. A real file of 24 MiB is not written here: the records are the real ones through the
-  // real call, and only the core's report of how full the file is is replaced on its way to the dialog.
-  // Four states: the core's prewarning; a file at its cap (which the log still reads from, for the person); an
-  // answer without the report, where the dialog says it cannot tell how full the file is; and a newest record this
-  // version does not understand, where it says it cannot tell the day's count.
-  for (const language of ['zh', 'en']) for (const [state, change, key, params] of [['nearly-full', { used: 25 * 1048576 + 1 }, 'storageWarning', { used: '25.1', max: '32' }],
-    ['full', { used: 32 * 1048576 }, 'storageFull', { used: '32', max: '32' }], ['report-missing', { drop: true }, 'storageUnknown'], ['newest-not-understood', { newest: true }, null]]) {
+  // The log past the person's reminder line. Half a gigabyte is not written here: the records are the real ones
+  // through the real call, and only the core's report of how large the log is is replaced on its way to the dialog.
+  // Three states: past the line (every record is still kept and the butler still logged, so it is a reminder, not a
+  // warning of a stop); an answer without the report, where the dialog says it cannot tell how large the log is; and
+  // a newest record this version does not understand, where it says it cannot tell the day's count.
+  for (const language of ['zh', 'en']) for (const [state, change, key, params] of [['over-line', { used: 512 * 1048576 + 1 }, 'storageOver', { used: '512.1', line: '512' }],
+    ['report-missing', { drop: true }, 'storageUnknown'], ['newest-not-understood', { newest: true }, null]]) {
     const say = (key, params) => locale.format(language, key, params);
     await page.evaluate(([lang, change]) => {
       const dialog = document.createElement('dialog'); dialog.id = 'butler-reads-dialog-check'; dialog.className = 'butler-reads'; dialog.setAttribute('closedby', 'any');
@@ -159,7 +162,7 @@ const all = () => { const records = []; let after = 0, through = 0;
       const api = { butlerReview: async (...args) => { const answer = await window.workspace.butlerReview(...args); if (!answer.storage || answer.storage.warning !== false) throw Error('The real answer must carry an unwarned report');
         if (change.drop) { const { storage, ...rest } = answer; return rest; }
         if (change.newest) return { ...answer, records: answer.records.map(record => record.sequence === answer.throughSequence ? { ...record, version: 2 } : record) };
-        return { ...answer, storage: { ...answer.storage, usedBytes: change.used, remainingBytes: answer.storage.maxBytes - change.used, warning: true } }; } };
+        return { ...answer, storage: { ...answer.storage, usedBytes: change.used, warning: true } }; } };
       const reads = window.nativeWorkspaceButlerReads.bind({ dialog, document, api, text: (key, params) => window.nativeWorkspaceLocale.format(lang, key, params), spaceName: id => id === 'shared' ? 'Shared (this window)' : null });
       window.butlerReadsCheck = { reads, dialog };
     }, [language, change]);
@@ -184,14 +187,36 @@ const all = () => { const records = []; let after = 0, through = 0;
     const problem = await fits(`${language}-860 reads-file-${state}`, true); if (problem) problems.push(problem); await shot(`reads-file-${state}-${language}-860`);
     await dialog().locator('button[data-action="done"]').click(); await dialog().waitFor({ state: 'hidden' }); await unmount();
   }
-  checks.push('The core\'s warning that the log file is filling up, a file already at its cap, a missing report ("cannot tell how full") and a newest record that is not understood ("cannot tell the day\'s count") are each said, in both languages');
+  checks.push('A log past the reminder line (all kept, still logging), a missing report ("cannot tell how large") and a newest record that is not understood ("cannot tell the day\'s count") are each said, in both languages');
+  // A block that cannot be read, for real: yesterday's sealed block changed on disk. The running app shows it as one
+  // row in its place, with its numbers and day, the other records as usual; put back exactly, it reads again.
+  {
+    const say = (key, params) => locale.format('zh', key, params), sealed = path.join(store, blocks()[0]), kept = fs.readFileSync(sealed);
+    assert.ok(blocks()[0].startsWith('000000001-'), 'The first block holds the first record');
+    fs.appendFileSync(sealed, 'x');
+    await mount('zh'); await page.evaluate(() => { window.butlerReadsCheck.reads.open(); }); await settled('records');
+    const yesterday = new Date(midnight - DAY).toISOString().slice(0, 10), holeRows = () => dialog().locator('tr.butler-reads-gap-row td');
+    assert.deepEqual((await holeRows().allInnerTexts()).map(value => value.trim()), [say('butler.reads.gap', { from: 15, through: 58, count: 44, days: yesterday })]);
+    assert.equal(await rows().count(), 6, 'Today\'s records are shown as usual');
+    assert.equal((await dialog().locator('.butler-reads-today').innerText()).trim(), say('butler.reads.today', { from: readsView({ records, through, now: Date.now() }).today.from, pages: 6, left: 58, limit: 64, resets: readsView({ records, through, now: Date.now() }).today.resets }));
+    // Earlier: the rest of the same block joins the same row.
+    await dialog().locator('button[data-action="older"]').click(); await until(async () => (await holeRows().allInnerTexts()).some(value => value.includes('1–58') || value.includes('1\u201358')), 'The earlier part of the block joins its row');
+    assert.deepEqual((await holeRows().allInnerTexts()).map(value => value.trim()), [say('butler.reads.gap', { from: 1, through: 58, count: 58, days: yesterday })]);
+    assert.equal(await dialog().locator('button[data-action="older"]').isVisible(), false, 'Nothing older is left to ask for');
+    await holeRows().first().scrollIntoViewIfNeeded();
+    const problem = await fits('zh-860 reads-gap'); if (problem) problems.push(problem); await shot('reads-gap-zh-860');
+    fs.writeFileSync(sealed, kept, { mode: 0o600 });
+    await dialog().locator('button[data-action="refresh"]').click(); await until(async () => await holeRows().count() === 0 && await rows().count() === 50, 'The block put back reads again');
+    await dialog().locator('button[data-action="done"]').click(); await dialog().waitFor({ state: 'hidden' }); await unmount();
+    checks.push('A sealed block changed on disk is one row in its place with its numbers and UTC day (also across two pages), the rest shown as usual; put back exactly, it reads again in the running app');
+  }
   // Last, because it cannot be undone while the app runs: the log is damaged. It is said to be unreadable, with the
   // rule and what to do; nothing is shown as if it were the log; and putting the file back does not help until NAW
   // is reopened, which is what the dialog says.
   {
     const say = (key, params) => locale.format('zh', key, params);
     await mount('zh'); await page.evaluate(() => { window.butlerReadsCheck.reads.open(); }); await settled('records');
-    const kept = fs.readFileSync(logFile); fs.appendFileSync(logFile, 'not a record\n');
+    const logFile = path.join(store, blocks().at(-1)), kept = fs.readFileSync(logFile); fs.appendFileSync(logFile, 'not a record\n');
     await dialog().locator('button[data-action="refresh"]').click(); await settled('unavailable');
     assert.deepEqual((await dialog().locator('.butler-reads-note:visible').allInnerTexts()).map(value => value.trim()), [say('butler.reads.unavailable'), say('butler.reads.unavailableHelp')]);
     assert.equal(await rows().count(), 0); assert.equal(await dialog().locator('.butler-reads-today').isVisible(), false);

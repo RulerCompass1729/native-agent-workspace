@@ -49,9 +49,10 @@ const few = t => records(t, page => { const morning = NOW - 2 * 3600 * 1000;
   page(morning + 9 * MINUTE, 'deliveries', { spaceId: SPACE, count: 4 }); page(morning + 80 * MINUTE, 'queue', { spaceId: 'shared', count: 0 }); });
 // Twenty-five minutes apart: at most 58 pages fall into one UTC day, under the core's 64.
 const many = (t, pages = 96) => records(t, page => { for (let index = 0; index < pages; index++) page(MIDNIGHT - DAY + 600 * 1000 + index * 25 * MINUTE, index % 2 ? 'queue' : 'spaces', { spaceId: SPACE }); });
-const HEALTHY = () => ({ usedBytes: 4096, maxBytes: 32 * 1048576, remainingBytes: 32 * 1048576 - 4096, warningThresholdBytes: 24 * 1048576, warning: false });
-// `storage`: the core's report of how full the file is, given with every read; null leaves it out of the answer.
-function fixture(log, { fail = () => false, display, text, storage = HEALTHY, now = () => NOW, spaceName = id => ({ shared: '默认空间', [SPACE]: '发版准备' })[id], breakTable = () => false } = {}) {
+const HEALTHY = () => ({ usedBytes: 4096, remindBytes: 512 * 1048576, blocks: 1, unreadableBlocks: 0, warning: false });
+// `storage`: the core's report of how large the log is, given with every read; null leaves it out of the answer.
+// `gaps`: positions of the log in blocks that cannot be read, as the core reports them.
+function fixture(log, { fail = () => false, display, text, storage = HEALTHY, gaps = [], now = () => NOW, spaceName = id => ({ shared: '默认空间', [SPACE]: '发版准备' })[id], breakTable = () => false } = {}) {
   const page = { activeElement: null, created: [], createElement(tag) { if (tag === 'table' && breakTable()) throw Error('The page cannot build a table'); page.created.push(tag); return new Element(tag, page); } }, dialog = new Element('dialog', page), body = new Element('body', page); dialog.id = 'butler-reads-dialog'; body.append(dialog);
   const calls = [], state = { log, pending: null };
   // Anything but the one existing person-only call is a failure of this test.
@@ -63,8 +64,18 @@ function fixture(log, { fail = () => false, display, text, storage = HEALTHY, no
       // true: the call fails. { answer }: the call returns that instead of a page. Anything else: the real paging below.
       const failure = fail(calls.length, options); if (failure === true) throw Error('/PRIVATE_IPC_PATH'); if (failure && Object.hasOwn(failure, 'answer')) return failure.answer;
       const afterSequence = options.afterSequence ?? 0, limit = options.limit ?? 50, through = state.log.length;
-      const found = state.log.filter(record => record.sequence > afterSequence).slice(0, limit), nextAfterSequence = found.at(-1)?.sequence ?? afterSequence;
-      return { records: found, throughSequence: through, nextAfterSequence, truncated: nextAfterSequence < through, ...(storage ? { storage: storage() } : {}) };
+      // Positions in order, a gap taking its positions like lines do (the core's own paging).
+      const holes = gaps.filter(item => item.throughSequence > afterSequence), found = [], held = []; let next = afterSequence, taken = 0;
+      for (const record of state.log.filter(item => item.sequence > afterSequence)) {
+        while (holes.length && holes[0].fromSequence < record.sequence && taken < limit) { const item = holes.shift(), from = Math.max(item.fromSequence, next + 1), to = Math.min(item.throughSequence, from + limit - taken - 1); held.push({ ...item, fromSequence: from, throughSequence: to, count: to - from + 1 }); taken += to - from + 1; next = to; }
+        if (taken >= limit) break;
+        if (gaps.some(item => item.fromSequence <= record.sequence && record.sequence <= item.throughSequence)) continue;
+        found.push(record); taken++; next = record.sequence;
+      }
+      // A gap after the last line the log could read.
+      while (holes.length && taken < limit) { const item = holes.shift(), from = Math.max(item.fromSequence, next + 1), to = Math.min(item.throughSequence, from + limit - taken - 1); held.push({ ...item, fromSequence: from, throughSequence: to, count: to - from + 1 }); taken += to - from + 1; next = to; }
+      const nextAfterSequence = next;
+      return { records: found, ...(gaps.length ? { gaps: held } : {}), throughSequence: through, nextAfterSequence, truncated: nextAfterSequence < through, ...(storage ? { storage: storage() } : {}) };
     };
   } });
   const reads = bind({ dialog, document: page, api, now, zone: () => -480, display, text, spaceName });
@@ -109,6 +120,16 @@ test('a long log shows its newest fifty first and earlier ones on request, askin
   assert.equal(f.rows()[0][0], '11-11 07:45'); assert.equal(f.rows()[95][0], '11-09 16:10', 'Newest first, oldest last');
   // Refresh starts again from the newest.
   await f.button('refresh').fire('click'); assert.deepEqual(f.requests().slice(3), [{ afterSequence: 0, limit: 50 }, { afterSequence: 46, limit: 50 }]); assert.equal(f.rows().length, 50);
+});
+
+test('earlier records that are all in a block that cannot be read come as that block, not as a failure', async t => {
+  const f = fixture(many(t), { gaps: [{ fromSequence: 1, throughSequence: 46, count: 46, days: ['2026-11-09', '2026-11-10'] }] }); await f.reads.open();
+  assert.deepEqual([f.rows().length, f.button('older').hidden], [50, false]);
+  await f.button('older').fire('click');
+  assert.deepEqual(f.requests().slice(2), [{ afterSequence: 0, limit: 46 }]);
+  const holes = f.dialog.all().filter(node => node.className === 'butler-reads-gap').map(body => body.children[0].children[0].textContent);
+  assert.deepEqual(holes, [zh('butler.reads.gap', { from: 1, through: 46, count: 46, days: '2026-11-09 – 2026-11-10' })]);
+  assert.deepEqual([f.rows().length, f.button('older').hidden, f.notes().includes(zh('butler.reads.olderFailed'))], [50, true, false]);
 });
 
 test('one opening reads the log at most twice; pages written meanwhile are said, not chased', async t => {
@@ -220,43 +241,65 @@ test('a newest record that was read but is not understood is not called "not rea
   assert.equal(f.dialog.text().includes('刷新」再读'), false);
 });
 
-test('the log file filling up is said beside the day\'s count, in the core\'s own words about when', async t => {
-  const MIB = 1024 * 1024, report = used => ({ usedBytes: used, maxBytes: 32 * MIB, remainingBytes: 32 * MIB - used, warningThresholdBytes: 24 * MIB, warning: used >= 24 * MIB });
+test('past the person\'s reminder line the size of the log is said beside the day\'s count, with that nothing is deleted or stopped', async t => {
+  const MIB = 1024 * 1024, LINE = 512 * MIB, report = (used, extra = {}) => ({ usedBytes: used, remindBytes: LINE, blocks: 3, unreadableBlocks: 0, warning: used > LINE, ...extra });
   const log = few(t);
-  // A report without the core's warning: nothing is said.
-  for (const storage of [undefined, () => report(5 * MIB), () => report(24 * MIB - 1), () => ({ ...report(30 * MIB), warning: false })]) {
+  // Up to the line, nothing is said: the log is kept whole and there is no cap to warn of.
+  for (const storage of [undefined, () => report(5 * MIB), () => report(LINE)]) {
     const f = fixture(log, { storage }); await f.reads.open(); assert.deepEqual([f.full().hidden, f.full().textContent, f.dialog.dataset.readsState, f.rows().length], [true, '', 'records', 5]);
   }
-  // No report, or one that does not add up, is not "all is well": the dialog says it cannot tell how full the file is.
-  const unknown = '记录文件有多满现在判断不了：这次读到的容量报告缺失或对不上。文件到上限后大管家读不到任何队列、交付记录和空间列表，不管这一天还剩多少页。';
+  // No report, or one that does not add up, is not "all is well": the dialog says it cannot tell how large the log is.
+  const unknown = '这份记录有多大现在判断不了：这次读到的报告缺失或对不上。';
   assert.equal(zh('butler.reads.storageUnknown'), unknown);
-  for (const storage of [null, () => ({ usedBytes: 9, maxBytes: 2, remainingBytes: 0, warning: true }), () => 'nearly full', () => ({ ...report(5 * MIB), warning: 'false' }), () => ({ ...report(5 * MIB), usedBytes: -1 }), () => ({}), () => null]) {
+  for (const storage of [null, () => ({ usedBytes: 9, remindBytes: 2, blocks: 1, unreadableBlocks: 0, warning: false }), () => 'over', () => report(5 * MIB, { warning: 'false' }), () => report(5 * MIB, { usedBytes: -1 }),
+    () => report(5 * MIB, { unreadableBlocks: 4 }), () => report(5 * MIB, { remindBytes: 0 }), () => ({}), () => null,
+    // The report of the old single file is not this log's: it does not add up here.
+    () => ({ usedBytes: 4096, maxBytes: 32 * MIB, remainingBytes: 32 * MIB - 4096, warningThresholdBytes: 24 * MIB, warning: false })]) {
     const f = fixture(log, { storage }); await f.reads.open();
     assert.deepEqual([f.full().hidden, f.full().textContent, f.full().attributes.role, f.dialog.dataset.readsState, f.rows().length], [false, unknown, 'status', 'records', 5]);
     assert.equal(f.today().textContent, '从 11-10 16:00 起已读 5 页，还剩 59 页。每天最多 64 页，11-11 16:00 重新计。', 'The day\'s count is still given');
   }
-  let used = 24 * MIB; const f = fixture(log, { storage: () => report(used) }); await f.reads.open();
+  let used = LINE + 1; const f = fixture(log, { storage: () => report(used) }); await f.reads.open();
   assert.equal(f.full().hidden, false); assert.equal(f.full().attributes.role, 'status');
-  assert.equal(f.full().textContent, zh('butler.reads.storageWarning', { used: '24', max: '32' })); assert.ok(f.full().textContent.startsWith('记录文件快满了：已用 24 MiB，上限 32 MiB。到上限后大管家读不到任何'));
-  assert.equal(f.today().textContent, '从 11-10 16:00 起已读 5 页，还剩 59 页。每天最多 64 页，11-11 16:00 重新计。', 'The day\'s count is still given; the warning says why it may not be usable');
-  // Shown to one decimal and never emptier than it is.
-  for (const [bytes, shown] of [[24 * MIB + 1, '24.1'], [25.04 * MIB, '25.1'], [31.5 * MIB, '31.5']]) { used = Math.floor(bytes); await f.button('refresh').fire('click'); assert.equal(f.full().textContent, zh('butler.reads.storageWarning', { used: shown, max: '32' }), String(bytes)); }
-  // At the cap, or closer to it than the largest record, it is not "nearly": the butler's reads can be refused, and at the cap all are.
-  for (const [bytes, shown, key] of [[32 * MIB - 128 * 1024, '31.9', 'storageWarning'], [32 * MIB - 128 * 1024 + 1, '31.9', 'storageFull'], [31.99 * MIB, '32', 'storageFull'], [32 * MIB, '32', 'storageFull']]) {
-    used = Math.floor(bytes); await f.button('refresh').fire('click'); assert.equal(f.full().textContent, zh(`butler.reads.${key}`, { used: shown, max: '32' }), String(bytes)); }
-  assert.ok(f.full().textContent.startsWith('记录文件已经到上限，或离上限不到一条记录的最大长度：已用 32 MiB，上限 32 MiB。从这里起大管家的读取可能被拒绝（一页的记录放不下就拒绝，通常先是返回条数多的页），到上限后全部被拒绝，')); assert.equal(f.full().textContent.includes('快满'), false);
-  // What the sentence says about when a page is refused is the core's own rule: a page's record must fit in what is left.
-  assert.ok(fs.readFileSync(path.join(__dirname, '..', 'butler-read-audit.cjs'), 'utf8').includes("if (bytes.length > MAX_RECORD_BYTES || (loaded.identity?.size || 0) + bytes.length > MAX_FILE_BYTES) fail('CAPACITY');"));
-  // A full file is said even if a report should ever carry no warning with it.
-  const odd = fixture(log, { storage: () => ({ ...report(32 * MIB), warning: false }) }); await odd.reads.open(); assert.equal(odd.full().textContent, zh('butler.reads.storageFull', { used: '32', max: '32' }));
-  // The report is the newest answer's: once the file is no longer warned about, or cannot be read, the sentence goes.
+  assert.equal(f.full().textContent, '这份记录已有 512.1 MiB，超过 512 MiB 的提醒线。旧记录全部保留，不会自动删除，大管家也照常记录。');
+  assert.equal(f.today().textContent, '从 11-10 16:00 起已读 5 页，还剩 59 页。每天最多 64 页，11-11 16:00 重新计。');
+  // Shown to one decimal and never smaller than it is.
+  for (const [bytes, shown] of [[600 * MIB + 1, '600.1'], [1024 * MIB, '1024'], [2048.04 * MIB, '2048.1']]) { used = Math.floor(bytes); await f.button('refresh').fire('click'); assert.equal(f.full().textContent, zh('butler.reads.storageOver', { used: shown, line: '512' }), String(bytes)); }
+  // Nothing in it speaks of a cap, a full file or refused reads: past the line the core refuses nothing and deletes nothing.
+  for (const word of ['上限', '满', '拒绝', '删掉', '读不到任何']) assert.equal(f.full().textContent.includes(word), false, word);
+  // The report is the newest answer's: back under the line, or no answer, and the sentence goes.
   used = 3 * MIB; await f.button('refresh').fire('click'); assert.equal(f.full().hidden, true);
-  used = 26 * MIB; await f.button('refresh').fire('click'); assert.equal(f.full().hidden, false); f.dialog.close();
-  const g = fixture(log, { storage: () => report(26 * MIB), fail: count => count > 1 }); await g.reads.open(); assert.equal(g.full().hidden, false);
+  used = LINE + MIB; await f.button('refresh').fire('click'); assert.equal(f.full().hidden, false); f.dialog.close();
+  const g = fixture(log, { storage: () => report(LINE + MIB), fail: count => count > 1 }); await g.reads.open(); assert.equal(g.full().hidden, false);
   await g.button('refresh').fire('click'); assert.deepEqual([g.dialog.dataset.readsState, g.full().hidden, g.full().textContent], ['unavailable', true, '']);
   // The report that comes with earlier records is newer than the one the dialog opened with.
   let size = 3 * MIB; const h = fixture(many(t), { storage: () => report(size) }); await h.reads.open(); assert.equal(h.full().hidden, true);
-  size = 27 * MIB; await h.button('older').fire('click'); assert.equal(h.full().textContent, zh('butler.reads.storageWarning', { used: '27', max: '32' }));
+  size = LINE + 27 * MIB; await h.button('older').fire('click'); assert.equal(h.full().textContent, zh('butler.reads.storageOver', { used: '539', line: '512' }));
+  // The line is the shared module's, the one the person set: 0.5 GiB.
+  assert.equal(require('../record-history.cjs').REMIND_TOTAL_BYTES, LINE);
+});
+
+test('a block that cannot be read is one row in its place, with its numbers and days, and never reads as empty or as an unreadable log', async t => {
+  const log = few(t), gap = { fromSequence: 2, throughSequence: 3, count: 2, days: ['2026-11-10'] };
+  const f = fixture(log, { gaps: [gap] }); await f.reads.open();
+  const holes = () => f.dialog.all().filter(node => node.className === 'butler-reads-gap').map(body => body.children[0].children[0]);
+  assert.deepEqual(holes().map(cell => [cell.textContent, cell.attributes.colspan]), [['第 2–3 条（UTC 2026-11-10，共 2 条）现在读不到：这一块不见了、和记录清单对不上，或已损坏。NAW 没有动它，其他记录照常显示。', '5']]);
+  assert.equal(f.rows().length, 3, 'The other three lines are drawn');
+  // In its place: between the newer and the older lines, not at the end.
+  const table = f.dialog.all().find(node => node.tag === 'table'), order = table.children.slice(1).map(body => body.className || 'day');
+  assert.deepEqual(order, ['day', 'butler-reads-gap', 'day']);
+  assert.equal(f.dialog.dataset.readsState, 'records');
+  for (const wrong of [zh('butler.reads.empty'), zh('butler.reads.unavailable')]) assert.equal(f.dialog.text().includes(wrong), false, wrong);
+  // The newest position in a block that cannot be read: today's count cannot be told, and the reason is that block.
+  const newest = fixture(log, { gaps: [{ fromSequence: 5, throughSequence: 5, count: 1, days: ['2026-11-11'] }] }); await newest.reads.open();
+  assert.equal(newest.today().textContent, zh('butler.reads.todayUnknownGap', { from: '11-10 16:00', limit: 64, resets: '11-11 16:00' }));
+  // A log whose every position is in such a block is not "cannot be read": its rows are said.
+  const all = fixture(log, { gaps: [{ fromSequence: 1, throughSequence: 5, count: 5, days: ['2026-11-10', '2026-11-11'] }] }); await all.reads.open();
+  assert.deepEqual([all.dialog.dataset.readsState, all.rows().length], ['records', 0]);
+  assert.ok(all.dialog.text().includes('第 1–5 条（UTC 2026-11-10 – 2026-11-11，共 5 条）现在读不到'));
+  // A gap this version does not know is counted as not understood, never drawn as something else.
+  const odd = fixture(log, { gaps: [{ fromSequence: 3, throughSequence: 2, count: 0, days: [] }] }); await odd.reads.open();
+  assert.equal(odd.dialog.all().filter(node => node.className === 'butler-reads-gap').length, 0);
 });
 
 test('closing drops what was read, and an answer that arrives afterwards is not drawn', async t => {
@@ -276,9 +319,10 @@ test('every sentence is in the catalog in both languages, the catalog has no oth
   const asked = new Set(), record = language => (key, params) => { asked.add(key); return locale.format(language, key, params); };
   const log = few(t), long = many(t), full = records(t, page => { for (let index = 0; index < 64; index++) page(MIDNIGHT + MINUTE + index * 8 * MINUTE, 'deliveries', { spaceId: SPACE }); });
   const plain = records(t, page => { page(NOW - MINUTE, 'spaces'); page(NOW - 30000, 'deliveries', { spaceId: SPACE }); });
-  const nearlyFull = () => ({ usedBytes: 25 * 1048576, maxBytes: 32 * 1048576, remainingBytes: 7 * 1048576, warningThresholdBytes: 24 * 1048576, warning: true });
-  const atCap = () => ({ usedBytes: 32 * 1048576, maxBytes: 32 * 1048576, remainingBytes: 0, warningThresholdBytes: 24 * 1048576, warning: true });
-  for (const [value, options, after] of [[log], [[]], [full], [plain], [log, { storage: nearlyFull }], [log, { storage: atCap }], [log, { fail: () => true }], [log.map(r => ({ ...r, version: 2 }))], [log.map((r, i) => i ? r : { ...r, version: 2 })],
+  const over = () => ({ usedBytes: 600 * 1048576, remindBytes: 512 * 1048576, blocks: 20, unreadableBlocks: 0, warning: true });
+  const unknownSize = () => ({ usedBytes: 1 });
+  const holes = [{ fromSequence: 2, throughSequence: 3, count: 2, days: ['2026-11-10'] }], newestHole = [{ fromSequence: 5, throughSequence: 5, count: 1, days: ['2026-11-11'] }];
+  for (const [value, options, after] of [[log], [[]], [full], [plain], [log, { storage: over }], [log, { storage: unknownSize }], [log, { gaps: holes }], [log, { gaps: newestHole }], [log, { fail: () => true }], [log.map(r => ({ ...r, version: 2 }))], [log.map((r, i) => i ? r : { ...r, version: 2 })],
     [long, { fail: count => count > 1 && { answer: { records: long.slice(40, 60), throughSequence: 96, nextAfterSequence: 60, truncated: true } } }],
     [long, { fail: (count, options) => options.limit === 46 }, f => f.button('older').fire('click')], [log, { breakTable: () => true }]]) {
     const f = fixture(value, { ...options, text: record('zh') }); const opening = f.reads.open(); asked.add('butler.reads.loading'); await opening; if (after) await after(f);
@@ -331,7 +375,7 @@ test('what a line shows and does not show is on the page without a click, in eve
   assert.ok(invoke.indexOf('ButlerReadAudit.record(this.#readAudit') > 0 && invoke.indexOf('ButlerReadAudit.record(this.#readAudit') < invoke.indexOf('return page;'));
   const { ButlerReadAudit } = require('../butler-read-audit.cjs');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-reads-limits-')); fs.chmodSync(dir, 0o700); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const person = {}, file = path.join(dir, 'butler-business-reads.jsonl'); let clock = NOW;
+  const person = {}, store = path.join(dir, 'history', 'butler-reads'), file = path.join(store, '000000001-2026-11-11.jsonl'); let clock = NOW;
   const open = () => new ButlerReadAudit(dir, { authorizePerson: actor => actor === person, now: () => clock });
   const page = audit => audit.recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 1, runnerRef: 'butler-runner-synthetic' },
     query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } });
@@ -344,8 +388,8 @@ test('what a line shows and does not show is on the page without a click, in eve
   const forged = audit.read(person, { afterSequence: 64, limit: 50 }); assert.equal(forged.throughSequence, 65); assert.equal(forged.records[0].day, new Date(NOW - DAY * 400).toISOString().slice(0, 10));
   // The clock moved to another day: the same log gives a fresh allowance.
   clock = NOW + DAY; assert.equal(page(audit).pageOfDay, 1);
-  // The file deleted while NAW is closed: the next start has an empty log and a fresh allowance for the same day.
-  clock = NOW; fs.rmSync(file); const fresh = open();
+  // The log deleted while NAW is closed (its folder): the next start has an empty log and a fresh allowance for the same day.
+  clock = NOW; fs.rmSync(path.join(dir, 'history'), { recursive: true }); const fresh = open();
   assert.deepEqual([fresh.read(person, {}).throughSequence, fresh.read(person, {}).records.length], [0, 0]); assert.equal(page(fresh).pageOfDay, 1);
 });
 
@@ -408,12 +452,13 @@ test('a read log page that could not be set up says so and why, in the page\'s o
   // and that read leaves the file byte for byte as it was, with no lock left beside it.
   { const { ButlerReadAudit } = require('../butler-read-audit.cjs'), person = {};
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-reads-page-')); fs.chmodSync(dir, 0o700); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-    const audit = new ButlerReadAudit(dir, { authorizePerson: actor => actor === person, now: () => NOW }), file = path.join(dir, 'butler-business-reads.jsonl');
+    const audit = new ButlerReadAudit(dir, { authorizePerson: actor => actor === person, now: () => NOW }), store = path.join(dir, 'history', 'butler-reads');
+    const files = () => fs.readdirSync(store).sort().map(name => [name, fs.readFileSync(path.join(store, name), 'hex'), fs.statSync(path.join(store, name)).mtimeMs]);
     for (let index = 0; index < 3; index++) audit.recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 1, runnerRef: 'butler-runner-synthetic' },
       query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } });
-    const before = [fs.readFileSync(file, 'hex'), fs.statSync(file).mtimeMs, fs.readdirSync(dir).sort()];
+    const before = [files(), fs.readdirSync(dir).sort()];
     assert.equal(audit.read(person, { limit: 50 }).records.length, 3); assert.equal(audit.read(person, { afterSequence: 1, limit: 1 }).records.length, 1);
-    assert.deepEqual([fs.readFileSync(file, 'hex'), fs.statSync(file).mtimeMs, fs.readdirSync(dir).sort()], before); assert.deepEqual(before[2], ['butler-business-reads.jsonl']); }
+    assert.deepEqual([files(), fs.readdirSync(dir).sort()], before); assert.deepEqual(before[1], ['history']); assert.deepEqual(before[0].map(([name]) => name), ['000000001-2026-11-11.jsonl', 'manifest.json']); }
   const sentences = { module: '这一页打不开：这个窗口里缺少显示读取记录的那部分程序。' + tail, element: '这一页打不开：页面里缺少放读取记录的位置。' + tail, setup: '这一页打不开：准备这一页的时候出了错。' + tail,
     open: '这一页打不开：打开它的时候出了错。' + tail };
   const tailEn = 'This is a fault of the interface. It does not mean the butler read nothing. This page only displays the log, so its failing to open does not change the log file. Reopen NAW and try once more; if it still does not open, pass this sentence to whoever maintains NAW for you.';

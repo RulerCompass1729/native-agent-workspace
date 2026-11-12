@@ -1,6 +1,11 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+// The butler's read log is kept in blocks under history/butler-reads (record-history.cjs).
+const readLogStore = directory => path.join(directory, 'history', 'butler-reads');
+const hasReadLog = directory => fs.existsSync(path.join(directory, 'history')) || fs.existsSync(path.join(directory, 'butler-business-reads.jsonl'));
+const readLogText = directory => { const store = readLogStore(directory); return fs.existsSync(store) ? fs.readdirSync(store).filter(name => name.endsWith('.jsonl')).sort().map(name => fs.readFileSync(path.join(store, name), 'utf8')).join('') : ''; };
+const readLogBlocks = directory => { const store = readLogStore(directory); return fs.existsSync(store) ? fs.readdirSync(store).filter(name => name.endsWith('.jsonl')).map(name => fs.lstatSync(path.join(store, name))) : []; };
 const auditExports = require('../butler-read-audit.cjs');
 const { ButlerRole } = require('../butler-role.cjs');
 const { RoomState } = require('../room-state.cjs');
@@ -76,7 +81,7 @@ test('replacing the exported constructor before Business loads cannot replace it
     assert.equal(calls.constructed, 0);
     assert.equal(rows.at(-1).pageOfDay, 64);
     assert.ok(rows.every(row => row.actor.sessionId === actor.id && row.actor.nativeId === actor.nativeId && row.query.kind === 'queue'));
-    assert.equal(fs.readFileSync(path.join(directory, 'butler-business-reads.jsonl'), 'utf8').includes(BODY), false);
+    assert.equal(readLogText(directory).includes(BODY), false);
     assert.equal(Object.isExtensible(audit), true, 'Instances keep their existing composition behavior');
   } finally {
     Object.defineProperty(auditExports, 'ButlerReadAudit', descriptor);

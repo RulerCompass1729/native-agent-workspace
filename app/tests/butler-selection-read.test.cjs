@@ -1,6 +1,11 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+// The butler's read log is kept in blocks under history/butler-reads (record-history.cjs).
+const readLogStore = directory => path.join(directory, 'history', 'butler-reads');
+const hasReadLog = directory => fs.existsSync(path.join(directory, 'history')) || fs.existsSync(path.join(directory, 'butler-business-reads.jsonl'));
+const readLogText = directory => { const store = readLogStore(directory); return fs.existsSync(store) ? fs.readdirSync(store).filter(name => name.endsWith('.jsonl')).sort().map(name => fs.readFileSync(path.join(store, name), 'utf8')).join('') : ''; };
+const readLogBlocks = directory => { const store = readLogStore(directory); return fs.existsSync(store) ? fs.readdirSync(store).filter(name => name.endsWith('.jsonl')).map(name => fs.lstatSync(path.join(store, name))) : []; };
 const { ButlerRole } = require('../butler-role.cjs');
 const { ButlerPerson } = require('../butler-person.cjs');
 const { ButlerBusiness } = require('../butler-business.cjs');
@@ -207,10 +212,10 @@ for (const operation of ['catalog', 'page']) test(`an existing Business ${operat
   const f = fixture(t), roomState = new RoomState(f.directory), readAudit = new ButlerReadAudit(f.directory, { authorizePerson: actor => actor === person });
   const bound = new ButlerBusiness({ role: f.role, roomState, readAudit, dataDir: f.directory, view: () => ({ records: f.records }) }).bind(f.actor, expected);
   assert.equal(bound.invoke('readBusiness', { kind: 'spaces' }).readOnly, true);
-  const log = path.join(f.directory, 'butler-business-reads.jsonl'), before = fs.readFileSync(log), restore = oneReadFault(t, f.role.file);
+  const before = readLogText(f.directory), restore = oneReadFault(t, f.role.file);
   try { assert.throws(() => operation === 'catalog' ? bound.catalog() : bound.invoke('readBusiness', { kind: 'spaces' }), stateError); }
   finally { restore(); }
-  assert.deepEqual(fs.readFileSync(log), before);
+  assert.equal(readLogText(f.directory), before);
   assert.equal(bound.catalog().readOnly, true);
 });
 

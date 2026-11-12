@@ -125,7 +125,8 @@ installed use and the secretary-to-butler cutover remain future acceptance work.
 ## Read audit and page allowance
 
 Every successful `readBusiness` page must first append and fsync a metadata record
-in the private `butler-business-reads.jsonl`. The same lock checks the fixed
+in the private read log, `history/butler-reads/` in the data folder (the layout is
+under "Kept whole, in blocks" below). The same lock checks the fixed
 **64-page UTC-day allowance** and commits its next counter. The maximum page is
 64 KiB, so this bounds approved business pages to 4 MiB per UTC day. Empty and
 repeated pages count. All selections, session handoffs and restarts share that
@@ -159,10 +160,11 @@ person's metadata reader. An audit and a claimed directory that agree with each
 other but both point somewhere else are not qualified. This checkpoint does not
 add that production factory and does not claim that its injection is proven.
 
-Quota exhaustion, missing durability, lock contention, unsafe paths and damaged
-logs withhold the page. A failed write is never repaired by truncating old records.
-The journal is capped at 32 MiB and each metadata line at 128 KiB; old data is not
-automatically deleted. A stale lock after a crash remains a blocking condition;
+Quota exhaustion, missing durability, lock contention, unsafe paths and a damaged
+block being written withhold the page. A failed write is never repaired by
+truncating old records. Each block holds at most 32 MiB and each metadata line at
+most 128 KiB; the log as a whole has no cap and nothing is deleted by itself. A
+stale lock after a crash remains a blocking condition;
 there is no automatic takeover. Recovery requires a maintainer to inspect that
 exact lock and its live writer, preserve the journal, and follow the existing
 approval/review gate before any removal. Deleting the journal to reset usage is
@@ -172,24 +174,63 @@ This adds audit metadata only; the business data stays read-only.
 
 Only a verified person can page the metadata through the existing review API:
 `workspace.butlerReview('reads', { afterSequence: 0, limit: 20 })`. It returns
-`{records, throughSequence, nextAfterSequence, truncated, storage}`. These positions
+`{records, gaps, throughSequence, nextAfterSequence, truncated, storage}`. These positions
 belong to the read log, independently of the suggestion ledger's sequence. Human log
 reads do not consume model pages. The command is absent from the agent catalog;
 an ordinary cross-session consent cannot grant it.
 
-`storage` contains only `usedBytes`, `maxBytes`, `remainingBytes`,
-`warningThresholdBytes` and a literal `warning` Boolean. The byte counts describe
-this validated metadata journal, not device free space. The hard cap remains
-32 MiB. The prewarning threshold is the engineering default of **75% (24 MiB)**,
-not a product approval, a spending threshold or a time-to-full estimate. Neither
-the threshold nor the cap is a model option. There is no automatic archive,
-prune, rotation, deletion or counter reset. Oversized or invalid journals still
-fail closed; capacity status does not make an unreadable journal readable.
+`storage` contains only `usedBytes`, `remindBytes`, `blocks`, `unreadableBlocks`
+and a literal `warning` Boolean, true when `usedBytes` is past `remindBytes`. The
+byte counts are the blocks' sizes as the manifest records them, not device free
+space. `remindBytes` is the person's 0.5 GiB reminder line (2026-11-11), shared
+with every record kept this way in `app/record-history.cjs`; past it the log keeps
+recording. It is not a model option, a spending threshold or a time-to-full
+estimate. There is no automatic archive, prune, rotation, deletion or counter reset.
+
+### Kept whole, in blocks
+
+The person, 2026-11-11: keep every record, split it into small blocks (for
+example by day), and remind them past 30 days or 0.5 GiB; the butler's read log
+is kept the same way. `history/butler-reads/` holds:
+
+- blocks named by the global number of their first line and the UTC day they were
+  opened (`000000001-2026-11-11.jsonl`). A sealed block has its byte count and
+  SHA-256 in the manifest; only the last block is open.
+- `manifest.json`: every block with its numbers, line count per UTC day, size,
+  times, checksum and status (`open`, `sealed`, `unreadable`), written whole
+  through a synced temporary file and rename. The day's page count is the sum of
+  the manifest's counts for that day, so a page never rescans earlier blocks.
+- `migration.json`, only while an older version's single file is being taken in.
+
+An older version's `butler-business-reads.jsonl` is taken in on the first read or
+write after the update: renamed unchanged into the folder as a sealed block,
+numbered after everything already logged, its pages counted toward their days.
+An older version does not know the folder: if the person goes back, it shows an
+empty log and starts its own count for the day from zero in a new single file.
+This version takes that file in on its next start and counts its pages toward
+their days, so after coming back the day's allowance is not reset; while on the
+older version it is. (No butler is connected in either version yet.) A stop
+between the steps of taking in is finished from `migration.json` on the next
+start. A block is sealed when a page arrives on a later UTC day than the block
+was opened on, or would take it past 32 MiB; a block opened for a page whose
+write then failed is empty and is dropped rather than sealed.
+
+A sealed block whose bytes no longer match its checksum, or that is missing, is
+marked `unreadable` and reported to the person as a gap (`{fromSequence,
+throughSequence, count, days}`) in its place; the other blocks read as usual and
+the block itself is not touched. Put back exactly as it was sealed, it reads
+again. A gap takes positions toward a read's limit, so paging still moves past
+it. The open block is held to what this running instance last wrote: found
+changed, the log fails closed for this instance (pages are withheld), and a new
+instance (NAW reopened) sets it aside as unreadable and opens a new block. A lost
+or invalid manifest is built again from the blocks, which requires every block to
+read; otherwise the log fails closed. A manifest changed consistently by another
+program running as the person is not detected; this log is not tamper-proof.
 
 A trusted host may supply `onCapacityWarning(storage)` when constructing
 `ButlerReadAudit`. It receives a frozen copy of those same five fields, without
 actor, query, body or filesystem paths. On the first successful record or
-verified human read at/above the threshold, the callback runs only after the
+verified human read past the reminder line, the callback runs only after the
 operation and lock cleanup succeed. Synchronous throws and rejected promises do
 not change a successful audit/page outcome. It fires at most once per object;
 a reconstructed object's first human read of an already large journal can warn

@@ -12137,3 +12137,79 @@ The person, on alpha.235: 「在原生终端界面输入的时候卡卡的」, �
 - Not measured: painting (the window is hidden), the installed app's real history sizes, twelve backends, and a single fold or unfold in the sidebar (it draws the whole page once, like a snapshot).
 
 **Independent review.** A fresh read-only session (`claude-opus-5-5`): CHANGES_REQUIRED for the record only. The cause given for the page receiving more snapshots was stated as measured; it is now labelled inferred, and the superseded counts that were then measured are given. It also found that the two runs first compared could not be told apart by their code (main had moved under the run labelled main); both were run again with bundle hashes recorded, and the figures above are those. Its notes on the time zone and on a test that failed just after midnight are taken. The same session read the rerun: the code and test approved, two figures (memory per agent window, the cost of reading the language) did not match the new runs; both are corrected above.
+
+## Records kept whole, in blocks: the butler's read log (batch 1 of 3, 2026-11-11)
+
+The person, 2026-11-11, about the operations history: 「历史记录保持这个，我的理解应该是
+全保留，然后切分成小块（比如按天保持），然后超过 30 天/或者整个记录大小超过 0.5G 这样的，
+界面有个小铃铛弹提醒，看如何处理」; about the butler's read log: 「一样」. The secretary
+queued the work in three batches; this is the first: a shared module, the read log
+moved onto it behind the closed butler switch, and the read log page showing what
+it now has to show. The bell and the operations record are batches 2 and 3.
+
+What changed:
+- `app/record-history.cjs` (new): where blocks live (`history/<record>/`), their
+  names (first global number and the UTC day opened), the manifest and its
+  checks, private atomic JSON writes, and the reminders (age past 30 days on a
+  block's newest line, the whole past 0.5 GiB, blocks that cannot be read),
+  worked out from the manifest alone. Nothing here deletes, compresses or merges.
+- `app/butler-read-audit.cjs`: the single file capped at 32 MiB becomes blocks of
+  at most 32 MiB, sealed with a checksum when a page arrives on a later UTC day or
+  would not fit. The day's allowance is summed from the manifest across blocks. An
+  older version's single file is renamed in as a sealed block, numbered after
+  what is there, with an intent file for a stop between steps. A sealed block that
+  is missing or no longer matches is a gap (`gaps` in the read) in its place; put
+  back exactly, it reads again. The running app still fails closed when the block
+  it is writing changes under it. The `storage` report is now `usedBytes,
+  remindBytes, blocks, unreadableBlocks, warning` (warning = past 0.5 GiB). A block
+  opened for a page whose write failed is dropped rather than sealed empty.
+- The read log page: a gap is one row in its place (touching gaps are one row, a
+  day is split around one), today's count says it cannot be told when the newest
+  position is in a gap, and the size line is the reminder line, not a cap.
+- Packaging lists the new module; `docs/butler-business.md` describes the layout.
+
+Sentences the person can see (zh; en follows):
+- new `butler.reads.storageOver`: 「这份记录已有 {used} MiB，超过 {line} MiB 的提醒线。
+  旧记录全部保留，不会自动删除，大管家也照常记录。」
+- new `butler.reads.gap`: 「第 {from}–{through} 条（UTC {days}，共 {count} 条）现在读不到：
+  这一块不见了、和记录清单对不上，或已损坏。NAW 没有动它，其他记录照常显示。」
+- new `butler.reads.todayUnknownGap`: 「从 {from} 起已读多少页现在判断不了：最新的记录所在
+  的那一块现在读不到。每天最多 {limit} 页，{resets} 重新计。」
+- changed `butler.reads.storageUnknown`: 「这份记录有多大现在判断不了：这次读到的报告缺失或
+  对不上。」
+- changed `butler.reads.unavailableHelp`: points at 「数据目录里的读取记录（history/butler-reads
+  文件夹）」.
+- removed: the near-full and full warnings (there is no cap any more).
+
+Evidence: the full suite, 6288 tests, all pass (run before four tests were added;
+the two files they are in were run again, 88 pass). The new and changed unit tests
+cover the core (63), the shared rules (5), the view and the page. 33 deliberate
+faults in the core, the shared rules, the view, the page and the sentences are all
+caught by the unit tests (29 on the first run; the four missed ones each got a
+test). The read log window check runs on the real window with a real two-day log:
+the reminder line, a missing report, a damaged sealed block shown as one row across
+two pages and reading again when put back, and a damaged open block; three window
+faults are caught. The entry's window check and the DSH read budget check (a local
+loopback server, a fixture key, no provider) pass. No native program, no model.
+
+Not verified, or known:
+- Going back to an older version: it does not know the folder, shows an empty log
+  and starts the day's count from zero in a new single file. Coming back, this
+  version takes that file in and counts its pages, so the allowance is whole
+  again; while on the older version it is not. No butler is connected in either.
+- A block taken in from an older version keeps its own page-of-day numbers inside
+  it, so a day's header on the read log page can show the older version's own
+  count for that day; the allowance itself sums every block.
+- After a block is shown as a gap, the line above the list still says how many
+  records are shown ("the newest 6"), not that every position is accounted for.
+- A lost or invalid manifest is rebuilt only when every block reads; otherwise the
+  log fails closed. A manifest changed consistently by a program running as the
+  person is not detected: this log is not tamper-proof (as before).
+- A read may finish a taking-in or update the manifest (setting a block aside,
+  counting a line written before a stop): reads write.
+- An open block set aside as unreadable has no checksum and stays set aside even
+  if put back.
+- A page now takes about 41 ms to log on this machine, against about 21 ms before
+  (two manifest writes, each synced).
+- The bell, the reminder dialog and export are batch 3; nothing here reminds the
+  person outside the read log page, whose entry is still closed.

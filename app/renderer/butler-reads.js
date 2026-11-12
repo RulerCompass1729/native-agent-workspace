@@ -30,10 +30,10 @@
     about.append(make('p', 'quiet', 'butler.reads.intro', { limit: RECORDS_PER_PAGE }), make('p', 'quiet butler-reads-limits', 'butler.reads.limits', { limit: PAGES_PER_DAY }));
     dialog.append(title, about, today, full, listed, note, help, wrap, foot, actions);
 
-    let records = [], through = null, storage = null, state = 'idle', ticket = 0, olderFailed = false, readAt = 0;
+    let records = [], gaps = [], through = null, storage = null, state = 'idle', ticket = 0, olderFailed = false, readAt = 0;
     // One decimal, never rounded down: the file is not shown emptier than it is.
     const mib = bytes => { const tenths = Math.ceil(bytes / 104857.6); return tenths % 10 ? (tenths / 10).toFixed(1) : String(tenths / 10); };
-    const valid = page => page && Array.isArray(page.records) && Number.isSafeInteger(page.throughSequence) && page.throughSequence >= 0 && typeof page.truncated === 'boolean' &&
+    const valid = page => page && Array.isArray(page.records) && (page.gaps === undefined || Array.isArray(page.gaps)) && Number.isSafeInteger(page.throughSequence) && page.throughSequence >= 0 && typeof page.truncated === 'boolean' &&
       Number.isSafeInteger(page.nextAfterSequence) && page.nextAfterSequence >= 0;
     const ask = async request => { const page = await api.butlerReview('reads', request); if (!valid(page)) throw Error('unreadable'); return page; };
     // Whatever goes wrong while drawing what was read, the dialog does not stay on "reading". It says that the page
@@ -54,27 +54,24 @@
         dialog.dataset.readsState = state; return;
       }
       // The count line is true as of the moment the log was read; Refresh reads again.
-      const view = readsView({ records, through, now: readAt, spaceNames: spaceName, storage, ...(zone ? { zone } : {}) });
+      const view = readsView({ records, gaps, through, now: readAt, spaceNames: spaceName, storage, ...(zone ? { zone } : {}) });
       help.hidden = true; quiet(help);
-      dialog.dataset.readsState = view.shown ? 'records' : 'empty'; dialog.dataset.readsLevel = view.today.level;
+      dialog.dataset.readsState = view.shown || view.gaps.length ? 'records' : 'empty'; dialog.dataset.readsLevel = view.today.level;
       say(refresh, 'butler.reads.refresh');
       // Today's count is the core's own running count, known only with the newest record on screen. When it cannot
       // be told, that is said with the reason: a missing line would read as "nothing to report".
       today.hidden = false;
-      if (view.today.pages === null) say(today, view.reached ? 'butler.reads.todayUnknownNewest' : 'butler.reads.todayUnknownReach', { from: view.today.from, limit: view.today.limit, resets: view.today.resets });
+      if (view.today.pages === null) say(today, view.today.inGap ? 'butler.reads.todayUnknownGap' : view.reached ? 'butler.reads.todayUnknownNewest' : 'butler.reads.todayUnknownReach', { from: view.today.from, limit: view.today.limit, resets: view.today.resets });
       else if (view.today.level === 'full') say(today, 'butler.reads.todayFull', { from: view.today.from, limit: view.today.limit, resets: view.today.resets });
       else if (!view.today.pages) say(today, 'butler.reads.todayNone', { from: view.today.from, limit: view.today.limit, resets: view.today.resets });
       else say(today, 'butler.reads.today', { from: view.today.from, pages: view.today.pages, left: view.today.left, limit: view.today.limit, resets: view.today.resets });
-      // The core's own warning that the log file is filling up. A full file stops the butler's reads whatever the day's
-      // count says, so this is said beside that count.
-      // Close to the cap is not the same as at it: closer than the largest single record, the butler's reads can
-      // already be refused, and at the cap they all are. The sentence says that instead of "nearly".
-      // A report that is missing or does not add up is not "all is well": how full the file is cannot be told, and
-      // that is said, because a full file stops the butler whatever the day's count shows.
-      const warned = !view.storage || view.storage.warning || view.storage.full;
+      // The log is kept whole: there is no cap, only the line the person set at which they are reminded. Past it this
+      // is said beside the day's count, with that nothing is deleted and the butler is not stopped by it. A report that
+      // is missing or does not add up is not "all is well": how large the log is cannot be told, and that is said.
+      const warned = !view.storage || view.storage.over;
       full.hidden = !warned;
       if (!view.storage) say(full, 'butler.reads.storageUnknown');
-      else if (warned) say(full, view.storage.full ? 'butler.reads.storageFull' : 'butler.reads.storageWarning', { used: mib(view.storage.usedBytes), max: mib(view.storage.maxBytes) });
+      else if (warned) say(full, 'butler.reads.storageOver', { used: mib(view.storage.usedBytes), line: mib(view.storage.remindBytes) });
       else quiet(full);
       // How much of the log is listed, so a short list is not taken for the whole of it.
       listed.hidden = !view.shown;
@@ -85,17 +82,23 @@
       else if (view.unreadable) say(listed, 'butler.reads.listedSome', { total: view.total, shown: view.shown, count: view.unreadable });
       else say(listed, view.shown === view.total ? 'butler.reads.listedAll' : 'butler.reads.listed', { total: view.total, shown: view.shown });
       const notes = [];
-      if (!view.shown && !view.unreadable) notes.push(['butler.reads.empty']);
+      if (!view.shown && !view.unreadable && !view.gaps.length) notes.push(['butler.reads.empty']);
       if (view.unreadable && (!view.shown || !view.reached)) notes.push(['butler.reads.unreadable', { count: view.unreadable }]);
       note.hidden = !notes.length; if (notes.length) say(note, ...notes[notes.length - 1]); else quiet(note);
       // Said where the earlier rows would have appeared: under the list.
       foot.hidden = !olderFailed; if (olderFailed) say(foot, 'butler.reads.olderFailed'); else quiet(foot);
-      if (!view.shown) list.replaceChildren();
+      if (!view.shown && !view.gaps.length) list.replaceChildren();
       else {
         const table = make('table', 'butler-reads-table'), head = make('thead'), headRow = make('tr');
         for (const column of COLUMNS) { const cell = make('th', '', `butler.reads.column.${column}`); cell.setAttribute('scope', 'col'); headRow.append(cell); }
         head.append(headRow); table.append(head);
+        // A block that could not be read is one row in its place among the days, never left out.
+        const holes = [...view.gaps], hole = item => {
+          const body = make('tbody', 'butler-reads-gap'), row = make('tr', 'butler-reads-gap-row'), cell = make('td', '', 'butler.reads.gap', { from: item.from, through: item.through, count: item.count, days: item.first === item.last ? item.first : `${item.first} – ${item.last}` });
+          cell.setAttribute('colspan', String(COLUMNS.length)); row.append(cell); body.append(row); table.append(body);
+        };
         for (const group of view.days) {
+          while (holes.length && holes[0].from > group.rows[0].sequence) hole(holes.shift());
           const body = make('tbody'), dayRow = make('tr', 'butler-reads-day'), dayCell = make('th', '', group.whole ? 'butler.reads.day' : 'butler.reads.dayAtLeast', { from: group.from, through: group.through, day: group.day, pages: group.pages });
           dayCell.setAttribute('colspan', String(COLUMNS.length)); dayCell.setAttribute('scope', 'rowgroup'); dayRow.append(dayCell); body.append(dayRow);
           for (const row of group.rows) {
@@ -113,6 +116,7 @@
           }
           table.append(body);
         }
+        while (holes.length) hole(holes.shift());
         list.replaceChildren(table);
       }
       older.hidden = !view.hasOlder; below();
@@ -124,27 +128,31 @@
     async function load() {
       const mine = ++ticket; state = 'loading'; olderFailed = false; draw();
       try {
-        let page = await ask({ afterSequence: 0, limit: PAGE }), got = page.records;
-        if (page.truncated) { page = await ask(tailRequest(page.throughSequence)); got = page.records; }
+        let page = await ask({ afterSequence: 0, limit: PAGE }), got = page.records, holes = page.gaps || [];
+        if (page.truncated) { page = await ask(tailRequest(page.throughSequence)); got = page.records; holes = page.gaps || []; }
         if (mine !== ticket) return;
-        // A log that says it has records and gives none was not read.
-        if (!got.length && page.throughSequence > 0) throw Error('unreadable');
-        records = got; through = page.throughSequence; storage = page.storage ?? null; readAt = now(); state = 'ready';
+        // A log that says it has records and gives none was not read. A block that could not be read is said, not this.
+        if (!got.length && !holes.length && page.throughSequence > 0) throw Error('unreadable');
+        records = got; gaps = holes; through = page.throughSequence; storage = page.storage ?? null; readAt = now(); state = 'ready';
       } catch { if (mine !== ticket) return; state = 'unavailable'; }
       draw();
     }
     async function loadOlder() {
-      if (state !== 'ready' || !records.length) return;
-      const request = olderRequest(Math.min(...records.map(record => record.sequence)));
+      if (state !== 'ready' || !records.length && !gaps.length) return;
+      const request = olderRequest(Math.min(...records.map(record => record.sequence), ...gaps.map(item => item.fromSequence)));
       if (!request) return;
       const mine = ++ticket; older.disabled = true; olderFailed = false;
       // An earlier page that comes back empty was not read either.
-      try { const page = await ask(request); if (mine !== ticket) return; if (!page.records.length) throw Error('unreadable'); records = page.records.concat(records); if (page.storage) storage = page.storage; }
+      try {
+        const page = await ask(request); if (mine !== ticket) return;
+        if (!page.records.length && !(page.gaps || []).length) throw Error('unreadable');
+        records = page.records.concat(records); gaps = (page.gaps || []).concat(gaps); if (page.storage) storage = page.storage;
+      }
       catch { if (mine !== ticket) return; olderFailed = true; }
       draw();
     }
     function open() { if (!dialog.open) dialog.showModal(); done.focus(); return load(); }
-    const closed = () => { ticket++; records = []; through = null; storage = null; state = 'idle'; olderFailed = false; list.replaceChildren(); };
+    const closed = () => { ticket++; records = []; gaps = []; through = null; storage = null; state = 'idle'; olderFailed = false; list.replaceChildren(); };
     dialog.addEventListener('close', closed);
     return { open, load, loadOlder, dispose() { ticket++; dialog.removeEventListener('close', closed); if (dialog.open) dialog.close(); dialog.replaceChildren(); } };
   }
