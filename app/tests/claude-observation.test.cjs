@@ -1128,9 +1128,6 @@ test('missing display identity or a display gap never falls back to raw Stop tex
     r.on('complete', info => complete.push(info));
     await f.invoke('classic.UserPromptSubmit', { session_id: r.record.nativeId, prompt_id: promptId });
   await f.invoke('turn.start', { turnId });
-    // The start is delivered first, so the gap below falls inside this turn. A gap declared before a clean start
-    // only concerns earlier turns (claude-display-gap-recovery.test.cjs).
-    await f.clock.shift()();
   const e = { session_id: r.record.nativeId, prompt_id: promptId, turn_id: randomUUID(), message_id: randomUUID(), index: 0, final: true, delta: 'PRIVATE' };
     await f.invoke('classic.MessageDisplay', e, async () => ({ displayContent: 'MASKED' }));
     await f.invoke('turn.complete', { turnId, reason: 'answer', answer: gap ? 'PRIVATE' : 'OTHER' });

@@ -56,11 +56,12 @@ async function mod() {
   const prompts = new Map();
   const f = {
     r, ends, poll, flush, lose(count = 1) { lose = count; },
-    async start(turnId) { const promptId = randomUUID(); prompts.set(turnId, promptId);
-      await invoke('classic.UserPromptSubmit', { session_id: r.record.nativeId, prompt_id: promptId }); await invoke('turn.start', { turnId }); await flush(); },
-    async display(turnId, text, { index = 0, message = randomUUID() } = {}) {
-      await invoke('classic.MessageDisplay', { session_id: r.record.nativeId, prompt_id: prompts.get(turnId), turn_id: turnId, message_id: message, index, final: true, delta: text }, async () => ({})); await flush(); return message; },
-    async end(turnId, reason = 'answer', answer = '') { await invoke('turn.complete', { turnId, reason, answer }); await flush(); },
+    // `wait: true` leaves the row queued in the bridge, as under a backlog.
+    async start(turnId, { wait = false } = {}) { const promptId = randomUUID(); prompts.set(turnId, promptId);
+      await invoke('classic.UserPromptSubmit', { session_id: r.record.nativeId, prompt_id: promptId }); await invoke('turn.start', { turnId }); if (!wait) await flush(); },
+    async display(turnId, text, { index = 0, message = randomUUID(), wait = false } = {}) {
+      await invoke('classic.MessageDisplay', { session_id: r.record.nativeId, prompt_id: prompts.get(turnId), turn_id: turnId, message_id: message, index, final: true, delta: text }, async () => ({})); if (!wait) await flush(); return message; },
+    async end(turnId, reason = 'answer', answer = '', { wait = false } = {}) { await invoke('turn.complete', { turnId, reason, answer }); if (!wait) await flush(); },
     control(turnId, callId = randomUUID()) {
       return native.rootCall(r, { arguments: controlArgs('steward-read', 'rename', ['target', 'name']), turnId, promptId: r.liveTurn?.promptId, callId, epoch: r.observationEpoch,
         sessionId: r.record.nativeId, lease: r.rootLease }, new AbortController().signal, () => true);
@@ -107,12 +108,41 @@ test('a start that itself carries the gap does not restore anything; the clean s
 test('a replayed or repeated start after a gap does not restore control', () => {
   const r = adapter(), emit = value => r.observeRoot({ block: true, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: (r.rootObservation?.sequence || 0) + 1, ...value });
   emit({ id: 'control:turn-start', kind: 'control', turnId: 'seen', promptId: randomUUID(), status: 'running' });
-  r.observeRootGap({ sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch });
+  r.observeRootGap({ sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, gapThrough: r.rootObservation.sequence });
   emit({ id: 'control:turn-start', kind: 'control', turnId: 'history', promptId: randomUUID(), status: 'running', replayed: true });
   assert.equal(r.displayGap, true, 'history is not a fresh observation');
   emit({ id: 'control:turn-start', kind: 'control', turnId: 'seen', promptId: randomUUID(), status: 'running' });
   assert.equal(r.displayGap, true, 'a start for a turn already seen is not a new turn');
   assert.equal(r.liveTurn, null);
+});
+
+test('a gap declared without the sequence it covers (an older bridge) holds until a rebind, as before', () => {
+  const r = adapter(), emit = value => r.observeRoot({ block: true, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: (r.rootObservation?.sequence || 0) + 1, ...value });
+  r.observeRootGap({ sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch });
+  emit({ id: 'control:turn-start', kind: 'control', turnId: 'clean', promptId: randomUUID(), status: 'running' });
+  assert.equal(r.displayGap, true);
+  r.bindRoot({ sessionId: r.record.nativeId, nativeBlocks: true });
+  assert.equal(r.displayGap, false);
+  emit({ id: 'control:turn-start', kind: 'control', turnId: 'after-rebind', promptId: randomUUID(), status: 'running' });
+  assert.equal(r.displayGap, false, 'the floor went with the old binding');
+});
+
+// Review 1 of this batch: a row of a turn dropped as it is made, while that turn's start still waits in the bridge,
+// is declared on an older row or on the poll; the start then arrives with no gap flag of its own.
+for (const via of ['poll', 'older-row']) test(`a start that waited while a row of its own turn was dropped restores nothing (${via})`, async () => {
+  const f = await mod();
+  await f.start('previous');
+  if (via === 'older-row') await f.end('previous', 'answer', '', { wait: true });
+  await f.start('dropped-in', { wait: true });
+  await f.display('dropped-in', 'x'.repeat(600000), { wait: true }); // over the bridge's row limit: dropped, never numbered
+  if (via === 'poll') await f.poll();
+  await f.flush();
+  assert.equal(f.r.displayGap, true, 'the start waited behind the loss');
+  assert.throws(() => f.control('dropped-in'), /Native root control call is unavailable/);
+  await f.display('dropped-in', 'Rest.\n'); await f.end('dropped-in', 'answer', 'Rest.');
+  assert.deepEqual(f.ends.filter(([id]) => id === 'dropped-in'), [['dropped-in', 'incomplete']]);
+  await f.start('next');
+  assert.equal(f.r.displayGap, false, 'the next start is numbered above the loss');
 });
 
 test('a gap during the recovered turn takes it away again; its end is never reported as completed', async () => {
@@ -192,7 +222,8 @@ async function wakeFixture(t) {
   const block = (turnId, index, text, id = 'display:' + turnId) => emit({ id, kind: 'response', turnId, promptId: r.liveTurn?.promptId, index, delta: text, status: 'complete' });
   const end = turnId => emit({ id: `turn:${turnId}`, kind: 'turn', turnId, status: 'complete', text: '' });
   const call = (text = 'Take the next queue item.') => r.addressedCall({ nativeId: s.nativeId, turnId: r.turnId, promptId: r.liveTurn.promptId, callId: randomUUID() }, { recipient_id: b, message: text });
-  const gap = () => r.observeRootGap({ sessionId: s.nativeId, lease: r.rootLease, epoch: r.observationEpoch });
+  // Declared as the bridge does: covering every row numbered so far.
+  const gap = () => r.observeRootGap({ sessionId: s.nativeId, lease: r.rootLease, epoch: r.observationEpoch, gapThrough: r.rootObservation?.sequence || 0 });
   const settle = async () => { for (let i = 0; i < 8; i++) await tick(); };
   const wakes = () => s.messages.filter(m => m.wake);
   return { r, s, start, block, end, call, gap, settle, wakes, writes };

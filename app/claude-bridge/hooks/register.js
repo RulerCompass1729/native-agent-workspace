@@ -299,8 +299,14 @@ let observationRequests = 0;
 let observerReconnect = false;
 let observerRebinding = null;
 let observerBindRequest = null;
+// A loss is declared on the next row or poll delivered, which can be older than the lost row (a row dropped as it
+// is made, while older rows still wait). `gapThrough` is the last sequence numbered when anything was lost: only a
+// turn whose start is numbered above it began after every loss (steward step 2, batch 0).
 function markObservationGap(binding) {
-  if (binding && binding.lease === rootBinding?.lease) { observationGap = true; observationGapRevision++; }
+  if (binding && binding.lease === rootBinding?.lease) {
+    observationGap = true; observationGapRevision++;
+    rootBinding.gapThrough = Math.max(rootBinding.gapThrough || 0, rootBinding.observationSequence || 0);
+  }
 }
 
 function enqueueBlock($, row, binding = rootBinding) {
@@ -464,14 +470,14 @@ async function flushObservations($) {
         if (stopped || binding !== rootBinding) continue;
       }
       const row = entry.row;
-      const gap = observationGap, revision = observationGapRevision;
+      const gap = observationGap, revision = observationGapRevision, gapThrough = binding.gapThrough || 0;
       try {
         // The native HTTP API exposes no abort option. Bound outstanding calls
         // as well as our wait: a stalled old root cannot hold the new queue, nor
         // can repeated timeouts accumulate unbounded host requests.
         if (observationRequests >= 2) throw Error('Observation transport busy');
         observationRequests++;
-        const sending = request($, '/observation', { ...row, gap }, binding).finally(() => { observationRequests--; });
+        const sending = request($, '/observation', { ...row, gap, ...(gap ? { gapThrough } : {}) }, binding).finally(() => { observationRequests--; });
         let timer;
         const deadline = new Promise((_, reject) => { timer = $.clock.after(1500, () => reject(Error('Observation timeout'))); });
         let observed;
@@ -554,7 +560,7 @@ async function refreshLegacyObserver($, ownGeneration) {
     // Preserve native display/prompt links only for this same live root. Command
     // listeners hold a separate connection value: their old receipt/grant must
     // still go to its old credential, never to this new observer.
-    Object.assign(previous, binding, { lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
+    Object.assign(previous, binding, { lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0, gapThrough: 0,
       nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: false,
       nativeMedia: nativeBlocks && nativeMediaVersion(version) && result.nativeMedia === true });
     nativeReadImages.clear();
@@ -595,7 +601,7 @@ async function request($, route, body, binding) {
   const gapRevision = observationGapRevision;
   const response = await $.http.fetch('http://localhost' + route, {
     socketPath, method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Workspace-Token': token },
-    body: JSON.stringify({ ...body, sessionId, ...(lease ? { lease } : {}), ...(reportGap ? { observationGap: true, epoch: rootBinding.observationEpoch } : {}) }),
+    body: JSON.stringify({ ...body, sessionId, ...(lease ? { lease } : {}), ...(reportGap ? { observationGap: true, epoch: rootBinding.observationEpoch, gapThrough: rootBinding.gapThrough || 0 } : {}) }),
   });
   if (!response.ok) { const error = new Error('Workspace connection refused'); error.status = response.status; throw error; }
   if (reportGap && lease === rootBinding?.lease && gapRevision === observationGapRevision) observationGap = false;
@@ -697,7 +703,7 @@ async function bindRoot($, ownGeneration) {
     nativeNarration: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version) }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
-  rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
+  rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0, gapThrough: 0,
     nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
     nativeMedia: nativeBlocks && nativeMediaVersion(version) && result.nativeMedia === true,
     nativeQueuedPromptLinks: nativeBlocks && !legacyOnly && result.nativeQueuedPromptLinks === true,
@@ -741,7 +747,7 @@ async function syncRoot($) {
         source: transition.source, model: transition.model }, rootBinding);
       if (typeof result.lease !== 'string') throw Error('Root lease missing');
       rootEnds.delete(rootBinding.sessionId);
-      rootBinding = { ...rootBinding, sessionId: transition.nextSessionId, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
+      rootBinding = { ...rootBinding, sessionId: transition.nextSessionId, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0, gapThrough: 0,
         nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
         nativeMedia: nativeBlocks && rootBinding.nativeMedia && result.nativeMedia === true,
         nativeTurnRecords: nativeBlocks && rootBinding.nativeTurnRecords === true && result.nativeTurnRecords === true,
