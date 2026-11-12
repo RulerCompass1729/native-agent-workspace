@@ -34,6 +34,19 @@ function backendPrograms(dataDir, key = '.') {
   }
   return { backend: key, wouldDrop: result.removed, programs, ok: Object.values(programs).every(program => program.available) };
 }
+// What an agent program sets for the commands it runs, to describe its own session: who it is, how to reach it,
+// where it keeps its files. None of these is a setting a person makes; those (CLAUDE_CODE_SUBAGENT_MODEL,
+// CLAUDE_CODE_EFFORT_LEVEL, CODEX_HOME and the like) are kept. Sources: Claude Code's documented list and the
+// child-environment list of 2.1.322; the per-thread and per-call names of Codex 0.167.1.
+const LAUNCHER_SESSION = [
+  // Which session it is and how it was entered.
+  'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_BRIDGE_SESSION_ID',
+  // Its process, its executable, its effort level at that moment, and its background job's folder.
+  'CLAUDE_PID', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_EFFORT', 'CLAUDE_JOB_DIR',
+  // Its message inbox, and the token that proves a sender belongs to it.
+  'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
+  'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_TOOL_CALL_ID', 'CODEX_CI',
+];
 function nativeEnvironment(extra = {}) {
   const env = { ...process.env, ...extra };
   // Finder launches with a small PATH; preserve the user's order and append
@@ -41,11 +54,14 @@ function nativeEnvironment(extra = {}) {
   env.PATH = [...new Set([...(env.PATH || '').split(path.delimiter).filter(Boolean), path.join(require('node:os').homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'])].join(path.delimiter);
   delete env.ELECTRON_RUN_AS_NODE;
   // A NAW started from an agent's command tool must not pass that agent's
-  // session identity on. Codex marks its non-interactive tool shell CODEX_CI=1
+  // session on. Codex marks its non-interactive tool shell CODEX_CI=1
   // and sets NO_COLOR=1 there, which would leave every native terminal colourless;
   // a person's own NO_COLOR (no such marker) is kept.
   if (env.CODEX_CI === '1') delete env.NO_COLOR;
-  for (const key of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_CHILD_SESSION', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_TOOL_CALL_ID', 'CODEX_CI']) delete env[key];
+  for (const key of LAUNCHER_SESSION) delete env[key];
+  // AI_AGENT says an agent is running this process. Claude Code writes claude-code_… (earlier claude-code/…)
+  // and itself replaces only such a value; any other value is someone's own and is kept.
+  if (/^claude-code[_/]/.test(env.AI_AGENT || '')) delete env.AI_AGENT;
   // Native programs run in this app's terminal, not the one NAW was started from.
   // The launcher terminal's identity would choose their keyboard protocol, clipboard,
   // colours and image protocol for a terminal they are not in.
