@@ -53,14 +53,17 @@ function readTarget(record, value) {
   const session = value?.sessions?.find(s => s.id === id);
   let name = session?.name || (id === record.actor.id ? record.actor.name : null);
   if (!name) try { name = JSON.parse(record.confirmation?.options?.detail).references?.find(r => r.kind === 'session' && r.id === id)?.name; } catch { /* Legacy receipts may have no named reference. */ }
+  // How far an approved read of another conversation went: how many of its messages it held, up to which one's time.
+  const messages = record.readAuthorization?.sessionId === id && Array.isArray(session?.messages) ? session.messages : null;
+  const through = messages?.findLast(m => Number.isSafeInteger(m?.time))?.time;
   return { sessionId: id, nativeId: record.readAuthorization?.nativeId || session?.nativeId || record.guard?.sessions?.find(s => s.id === id)?.nativeId || (id === record.actor.id ? record.actor.nativeId : null),
-    ...(typeof name === 'string' ? { name: operation.visibleText(name) } : {}) };
+    ...(typeof name === 'string' ? { name: operation.visibleText(name) } : {}), ...(messages ? { messages: messages.length, ...(through !== undefined ? { through } : {}) } : {}) };
 }
 const token = v => typeof v === 'string' && v.length > 0 && v.length <= 160 && !/[\x00-\x1f\x7f]/.test(v);
 // Parameters use the existing application's names and order. All values still
 // pass its normal validators. Snapshot supplies current native/turn identities.
 const parameters = {
-  initial: ['Selected foreign conversation requires confirmation; read the resulting operation receipt after approval.'], preflight: [], dataDirectory: [], retrySave: [], reconnect: [], connectionUpdates: [], quitService: [],
+  initial: ['Selected foreign conversation requires confirmation; read the resulting operation receipt after approval. The designated butler in no space reads it without confirmation and gets it in the same answer.'], preflight: [], dataDirectory: [], retrySave: [], reconnect: [], connectionUpdates: [], quitService: [],
   interfaceSettings: ['action: describe|update', 'namespace: locale|client-ui-theme (update only)', 'patch (update only)', 'current revision from describe (update only)'],
   prepareInput: ['sessionId'], observe: ['sessionId'], unobserve: ['sessionId'], claim: ['sessionId', 'mode: chat|terminal'],
   terminal: ['sessionId'], terminalSnapshot: ['sessionId'], input: ['sessionId', 'exact terminal input'], resize: ['sessionId', 'cols', 'rows'],
@@ -127,7 +130,7 @@ function refusalDetails(reason) {
 const compactRefusal = row => { row.guard = { auditRooms: row.guard?.auditRooms || ['shared'] }; };
 class BackgroundControl {
   constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now, readCopyBytes = MAX_RECORD_BYTES,
-    retireAfter = RETIRE_AFTER, retireHold = () => false }) {
+    retireAfter = RETIRE_AFTER, retireHold = () => false, unasked = () => false }) {
     if (!Number.isSafeInteger(readCopyBytes) || readCopyBytes < 1 || readCopyBytes > MAX_RECORD_BYTES) throw Error('Invalid read copy budget');
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
     this.data = { version: STATE_VERSION, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
@@ -138,6 +141,9 @@ class BackgroundControl {
     try { this.loadHistory(); }
     catch (error) { this.failed = true; throw Error('The background operation history cannot be read; no operation is run', { cause: error }); }
     this.confirmation = confirmation; this.audit = audit;
+    // Whether a read of another session's conversation runs without the person's confirmation: main.cjs answers yes
+    // only for the designated butler in no space (the person, 2026-11-12 14:24). Its preconditions are still checked.
+    this.unasked = unasked;
     this.confirmationPending = confirmationPending;
     this.project = project;
     this.readCopies = new Map(); this.readBytes = 0; this.readCopyBytes = readCopyBytes;
@@ -613,11 +619,16 @@ class BackgroundControl {
               if (error instanceof PreconditionRefused && !row.handlerStarted) preconditionError = error;
               throw error;
             }
-            const answer = await dialog(context, 'message', options);
-            if (answer.response !== 1) return { cancelled: true };
+            const unasked = action === 'readConversation' && this.unasked(actor, args, action, context) === true;
+            if (!unasked) {
+              const answer = await dialog(context, 'message', options);
+              if (answer.response !== 1) return { cancelled: true };
+            }
             request.maintenanceApproved = true;
+            // Marked on the record itself: its audit line and the read's release say it was not confirmed by the person.
+            if (unasked) this.commit(data => { data.records.find(r => r.id === row.id && this.key(r.actor) === key).unasked = true; });
             // If the event writer is broken, fail before an approved mutation.
-            await this.publish({ ...row, state: 'running' }, context);
+            await this.publish({ ...row, state: 'running', ...(unasked ? { unasked: true } : {}) }, context);
             if (spaceFileRead(args)) {
               this.commit(data => { data.records.find(r => r.id === row.id && this.key(r.actor) === key).readAuthorization = { roomId: args.arguments[0], fileId: args.arguments[1] }; });
             } else if (action === 'readConversation' || terminalReads.has(args.method)) {
@@ -694,7 +705,11 @@ class BackgroundControl {
         if (!notified) try { await this.confirmationPending(this.receipt(actor, result.id)); } catch { /* The durable confirmation remains available. */ }
       }
       if (privateValue && result.state === 'complete') {
-        if (result.readAuthorization) this.rememberRead(actor, args.operation_id, readValue);
+        if (result.readAuthorization) {
+          this.rememberRead(actor, args.operation_id, readValue);
+          // Nobody is waited for: what was read goes back in this same answer, taken as a receipt would take it.
+          if (result.unasked === true) return { ...this.takeReceipt(actor, args.operation_id, context), retry: false };
+        }
         else return { ...this.project({ ...this.receipt(actor, args.operation_id), value: readValue }, context), retry: false };
       }
       if (privateValue && result.state !== 'complete') this.commit(d => {

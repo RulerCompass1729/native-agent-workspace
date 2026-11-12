@@ -183,7 +183,9 @@ function cachedSteward(role) {
 // What the person's 「大管家的记录」 shows, newest first: the butler's steps through workspace_control, its messages
 // (workspace_message, which the backend keeps on the sender's own conversation, counted only while that session held
 // the role), and the role lines. Names come from the current state; nothing here is a value an operation returned.
-function view(record, snapshot, { current = null, stateOf = () => null, limit = 300, now = Date.now() } = {}) {
+// `readOf(step)` names the conversation a read step read and how far ({ sessionId, name, messages, through, unasked }),
+// from NAW's record of that operation; a step without one is said as it was asked.
+function view(record, snapshot, { current = null, stateOf = () => null, readOf = () => null, limit = 300, now = Date.now() } = {}) {
   const sessions = new Map((snapshot?.sessions || []).map(s => [s.id, s])), rooms = new Map([snapshot?.room, ...(snapshot?.rooms || [])].filter(Boolean).map(r => [r.id || 'shared', r]));
   const nameOf = id => typeof id === 'string' && sessions.has(id) ? sessions.get(id).name : null;
   const spaceOf = id => typeof id === 'string' && rooms.has(id) ? rooms.get(id).name || id : null;
@@ -196,6 +198,16 @@ function view(record, snapshot, { current = null, stateOf = () => null, limit = 
       Object.assign(out, { space: spaceOf(args[0]) || (typeof args[0] === 'string' ? args[0] : null), spaceAction: typeof args[1] === 'string' ? args[1].slice(0, 40) : null });
       if (args[1] === 'queueAdd' && Array.isArray(args[2])) Object.assign(out, { text: cut(args[2][0]), target: nameOf(args[2][1]) });
     } else if (Array.isArray(args)) out.target = nameOf(args[0]);
+    // A read of another session's conversation (a snapshot NAW ran as `initial`, or one of its images): whom it read,
+    // from what NAW actually ran rather than what was asked, and how far.
+    if (entry.action === 'snapshot' || ['initial', 'previewImage'].includes(entry.method)) {
+      let read = null; try { read = entry.operationId ? readOf(entry) : null; } catch { read = null; }
+      if (read && typeof read.sessionId === 'string' && read.sessionId) {
+        out.read = { target: nameOf(read.sessionId) || (typeof read.name === 'string' ? read.name : null) || read.sessionId.slice(0, 8), image: entry.method === 'previewImage',
+          messages: Number.isSafeInteger(read.messages) ? read.messages : null, through: Number.isSafeInteger(read.through) ? read.through : null, unasked: read.unasked === true };
+        delete out.target;
+      }
+    }
     return out;
   });
   // Messages: the wake rows on each session while it held the role.
