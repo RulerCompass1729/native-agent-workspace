@@ -40,11 +40,12 @@ const { createOutboxBroker } = require('./computer-use-outbox-broker.cjs');
 const { bindOriginalOutbox, bindClaudeOutbox, bindOriginalControl, bindClaudeControl } = require('./computer-use-outbox-owner.cjs');
 const { createStockOutboxView } = require('./computer-use-outbox-view.cjs');
 const background = require('./background-control.cjs');
+const recordReminders = require('./record-reminders.cjs');
 const backgroundOperation = require('./background-operation.cjs');
 const queueRules = require('./queue-dispatch.cjs');
 const { QueueDispatcher } = queueRules;
 const applicationHandlers = new Map();
-let backgroundControl, backgroundUnavailable = false;
+let backgroundControl, backgroundUnavailable = false, operationsHistoryUnreadable = false;
 let butlerClosing = false, butlerQuitAttempted = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
@@ -1383,8 +1384,8 @@ async function boot() {
       windows.set(id, context); bindClient(context);
       win.on('closed', () => { windows.delete(id); client.close(); });
       return context;
-    } }); backgroundUnavailable = false;
-  } catch { backgroundUnavailable = true; }
+    } }); backgroundUnavailable = false; operationsHistoryUnreadable = false;
+  } catch (error) { backgroundUnavailable = true; operationsHistoryUnreadable = /history cannot be read/.test(String(error?.message)); }
   if (loaded.changed) saveViews();
   process.env.NAW_RUNTIME_CONFIG = path.join(dataDir, 'runtime-locations.json');
   await ensureService(dataDir, process.execPath);
@@ -1654,6 +1655,30 @@ async function boot() {
     }
   });
   applicationHandlers.delete('butler');
+  // The bell's reminders about records kept whole, and what the person can do about them. The person's window only;
+  // no agent command (removed from the agent catalog below), and nothing here deletes a block.
+  register('records', async (c, action, ...args) => {
+    if (!isCurrentHumanContext(c)) throw uiError('error.records.personOnly');
+    const name = args[0], unavailable = operationsHistoryUnreadable ? ['operations'] : [];
+    if (action !== 'status' && action !== 'chooseFolder' && !recordReminders.RECORDS.includes(name)) throw uiError('error.records.unknown');
+    try {
+      if (action === 'status' && args.length === 0) return recordReminders.status(dataDir, Date.now(), { unavailable });
+      if (action === 'acknowledge' && args.length === 3) { recordReminders.acknowledge(dataDir, name, args[1], args[2]); return recordReminders.status(dataDir, Date.now(), { unavailable }); }
+      if (action === 'blocks' && args.length === 1) return recordReminders.blocks(dataDir, name, Date.now());
+      if (action === 'chooseFolder' && args.length === 0) {
+        const result = await showDialog(c, 'open', { title: displayText('records.export.chooseTitle'), properties: ['openDirectory', 'createDirectory'] });
+        if (result.canceled || c.win.isDestroyed() || !result.filePaths?.[0]) return null;
+        c.recordsFolder = result.filePaths[0]; return { folder: c.recordsFolder };
+      }
+      if (action === 'export' && args.length === 2) {
+        if (!c.recordsFolder) throw uiError('error.records.noFolder');
+        return recordReminders.exportBlocks(dataDir, name, args[1], c.recordsFolder);
+      }
+      if (action === 'reveal' && args.length === 2) { shell.showItemInFolder(recordReminders.location(dataDir, name, args[1])); return true; }
+    } catch (error) { if (error?.uiMessage) throw error; throw uiError('error.records.failed', { reason: String(error?.message || '').slice(0, 300) }); }
+    throw uiError('error.records.unknown');
+  });
+  applicationHandlers.delete('records');
   register('queueSecretary', async (c, id) => {
     if (c.background) throw uiError('error.queue.personOnly');
     if (id === null) queueSecretary.set(null);
