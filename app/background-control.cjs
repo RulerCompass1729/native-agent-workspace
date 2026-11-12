@@ -129,8 +129,8 @@ class BackgroundControl {
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
     this.data = { version: STATE_VERSION, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
     // Settled records, loaded whole: by session, and by the key a receipt or a repeated operation id is looked up with.
-    this.archive = new history.BlockLog(dataDir, 'operations', checkArchived); this.archived = new Map(); this.archivedBySession = new Map(); this.archivedIds = new Set();
-    try { for (const record of this.archive.load()) this.remember(record); }
+    this.archive = new history.BlockLog(dataDir, 'operations', checkArchived);
+    try { this.loadHistory(); }
     catch (error) { this.failed = true; throw Error('The background operation history cannot be read; no operation is run', { cause: error }); }
     this.confirmation = confirmation; this.audit = audit;
     this.confirmationPending = confirmationPending;
@@ -176,6 +176,31 @@ class BackgroundControl {
         }
       });
     } catch (e) { this.failed = true; throw e; }
+  }
+  // Every settled record, and what deleted blocks held (operation ids that must never run again), read whole.
+  loadHistory() {
+    this.archived = new Map(); this.archivedBySession = new Map(); this.archivedIds = new Set(); this.deleted = new Map();
+    for (const record of this.archive.load()) this.remember(record);
+    for (const item of this.archive.kept()) {
+      const key = this.key(item.actor) + ':' + item.id;
+      if (!this.archived.has(key)) this.deleted.set(key, item);
+      this.archivedIds.add(item.id);
+    }
+  }
+  // Blocks the person exported and NAW checked, deleted at the person's word. What each held is kept without its
+  // contents: who asked, the operation id, when and how it ended. Such an id is never run again.
+  deleteBlocks(names) {
+    if (this.failed || this.closed) throw Error('Background operation storage is unavailable');
+    const keep = r => ({ id: r.id, actor: { id: r.actor.id, nativeId: r.actor.nativeId, provider: r.actor.provider }, at: r.at, state: r.state });
+    try { this.archive.delete(names, keep, this.now()); this.loadHistory(); }
+    catch (error) { this.failed = true; throw Error('The background operation history could not be changed; no operation is run', { cause: error }); }
+    this.changed();
+  }
+  // An operation id whose record the person deleted: never run again, and said so.
+  deletedReply(sender, id) {
+    const gone = this.deleted.get(this.key(sender) + ':' + id);
+    return gone ? { id, state: 'not-executed', reason: 'record-deleted', deletedAt: gone.deletedAt, at: gone.at, retry: false,
+      error: 'This operation was recorded; its record was exported and then deleted by the person. It is not run again.' } : null;
   }
   // A settled record held in memory; a later version of the same record replaces it.
   remember(record) {
@@ -401,7 +426,8 @@ class BackgroundControl {
     await valid();
     if (args.action === 'catalog') return { state: 'complete', commands: this.catalog(), background: true };
     if (args.action === 'receipt') {
-      const saved = this.receipt(sender, args.operation_id);
+      const saved = this.receipt(sender, args.operation_id), gone = !saved && this.deletedReply(sender, args.operation_id);
+      if (gone) return { state: 'complete', receipt: gone, retry: false };
       let context = null;
       if (saved) {
         context = await this.view(sender, saved.command.view_id);
@@ -452,6 +478,8 @@ class BackgroundControl {
     };
     const existing = this.receipt(sender, args.operation_id, null, true);
     if (existing) return duplicate(existing);
+    const gone = this.deletedReply(sender, args.operation_id);
+    if (gone) return { ...gone, duplicate: true };
     const handler = !['backgroundDecision', 'uiReady'].includes(args.method) && this.handlers.get(args.method);
     const key = this.key(sender);
     const actor = operation.actor({ ...sender, callId: identity.callId, turnId: identity.turnId, operationId: args.operation_id });
@@ -475,6 +503,8 @@ class BackgroundControl {
     // summarize or replace its intent, including when its handler is running.
     const refreshed = this.receipt(sender, args.operation_id, null, true);
     if (refreshed) return duplicate(refreshed);
+    const goneSince = this.deletedReply(sender, args.operation_id);
+    if (goneSince) return { ...goneSince, duplicate: true };
     if (this.inflight.has(key)) return refuse('another-operation-running');
     const guard = controlGuard(context, args);
     if (operation.maintenanceAction(args.method, args.arguments, actor)) {

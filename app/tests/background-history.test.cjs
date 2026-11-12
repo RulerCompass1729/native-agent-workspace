@@ -163,3 +163,34 @@ test('a stop while an older file is being kept does not leave a version 1 state 
   assert.equal(f.state().version, 1, 'The older file is left as it was');
   assert.equal((await f.reopen().call(binding, invoke('old', 'forward', ['old']))).duplicate, true); assert.equal(f.state().version, 2);
 });
+
+test('deleting a settled block the person exported keeps its operation ids: never run again, and said so; a later version elsewhere stays', async t => {
+  const f = setup(t);
+  await f.controller.call(binding, invoke('op-1', 'forward', ['one']));
+  assert.equal((await f.controller.call(binding, invoke('send-1', 'send', ['other', 'hello']))).state, 'awaiting-native');
+  f.at(START + 2 * DAY); await f.controller.call(binding, invoke('op-2', 'forward', ['two']));
+  f.at(START + 4 * DAY); await f.controller.call(binding, invoke('op-3', 'forward', ['three']));
+  // Confirmed only now: its later version goes into the newer block, which stays.
+  f.receive(); await f.controller.call(binding, { action: 'receipt', operation_id: 'send-1' });
+  const first = f.blocks()[0];
+  assert.deepEqual(f.lines().map(line => [line.sequence, line.value.id, line.value.state]), [[1, 'op-1', 'complete'], [2, 'send-1', 'awaiting-native'], [3, 'op-2', 'complete'], [4, 'send-1', 'received']]);
+  assert.deepEqual(f.blocks().length, 2);
+  f.controller.deleteBlocks([first]);
+  for (const controller of [f.controller, f.reopen()]) {
+    const again = await controller.call(binding, invoke('op-1', 'forward', ['one']));
+    assert.deepEqual([again.state, again.reason, again.duplicate, again.retry], ['not-executed', 'record-deleted', true, false]);
+    assert.equal((await controller.call(binding, { action: 'receipt', operation_id: 'op-1' })).receipt.reason, 'record-deleted');
+    // The send's later version was in a block that stays: it is still there, received.
+    assert.equal((await controller.call(binding, { action: 'receipt', operation_id: 'send-1' })).receipt.state, 'received');
+    assert.deepEqual(controller.rows('agent').map(row => row.backgroundOperation.id).sort(), ['op-2', 'op-3', 'send-1']);
+  }
+  // Asked while the same agent is busy with another operation, the answer is still that the record was deleted.
+  let release; const held = new Promise(resolve => { release = resolve; }); f.config.handlers.set('hold', async () => { await held; return 'held'; });
+  const busy = f.controller.call(binding, invoke('hold-1', 'hold'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await f.controller.call(binding, invoke('op-1', 'forward', ['one']))).reason, 'record-deleted');
+  release(); await busy;
+  assert.deepEqual(f.runs, ['one', 'hello', 'two', 'three'], 'Nothing ran again');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.store, 'manifest.json'))).blocks.at(-1).lastSequence, 4, 'The numbering does not go back');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.store, 'manifest.json'))).blocks[0].status, 'deleted');
+});

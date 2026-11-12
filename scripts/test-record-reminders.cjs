@@ -40,7 +40,10 @@ async function launch(dir) {
   page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
   client = await connectService(dir, 'record-reminders-test');
   // Inside the app's main process only: the folder dialog answers with the scratch folder; Finder is not opened.
-  await application.evaluate(({ dialog, shell }, folder) => { globalThis.revealed = []; dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); shell.showItemInFolder = target => { globalThis.revealed.push(target); }; }, out);
+  await application.evaluate(({ dialog, shell }, folder) => { globalThis.revealed = []; globalThis.asked = [];
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); shell.showItemInFolder = target => { globalThis.revealed.push(target); };
+    // The person's final "删除" in the native confirmation, answered here; what it asked is kept for the check.
+    dialog.showMessageBox = async (_window, options) => { globalThis.asked.push({ message: options.message, buttons: options.buttons }); return { response: 1 }; }; }, out);
 }
 async function stop() { shown = null; await application.close(); application = null; try { await client.call('shutdown'); } catch { /* gone */ } client.close(); client = null; }
 const size = async (width, height) => { await application.evaluate(({ BrowserWindow }, [w, h]) => { for (const win of BrowserWindow.getAllWindows()) win.setContentSize(w, h); }, [width, height]); await until(async () => await page.evaluate(w => innerWidth === w, width), `Window ${width} wide`, 10000); };
@@ -84,24 +87,43 @@ const fits = label => page.evaluate(name => {
     assert.deepEqual([await dialog.locator('input[type="checkbox"]').count(), await dialog.locator('input[type="checkbox"]:checked').count()], [32, 2]);
     assert.equal(await dialog.locator('button[data-action="run"]').isDisabled(), true);
     const exportProblem = await fits(`${lang}-${width} export`); if (exportProblem) problems.push(exportProblem); await shot(`export-${lang}-${width}`);
-    if (lang === 'zh' && width === 1280) {
-      await dialog.locator('button[data-action="choose"]').click(); await until(async () => !(await dialog.locator('button[data-action="run"]').isDisabled()), 'A folder chosen');
-      await dialog.locator('button[data-action="run"]').click();
-      await until(async () => (await dialog.innerText()).includes('大小和校验值都核对过'), 'Exported and checked');
-      const store = path.join(dir, 'history', 'butler-reads'), copies = fs.readdirSync(path.join(out, 'butler-reads')).sort();
-      assert.equal(copies.length, 2);
-      for (const name of copies) assert.deepEqual(fs.readFileSync(path.join(out, 'butler-reads', name)), fs.readFileSync(path.join(store, name)), `${name} copied as it is`);
-      await shot('exported-zh-1280'); checks.push('Export from the dialog copies the two old blocks, byte for byte, into the folder chosen; the copies are checked; nothing in NAW changes');
-    }
+    assert.equal(await dialog.locator('button[data-action="delete"]').isVisible(), false, 'No delete before a checked export');
     await dialog.locator('button[data-action="back"]').click(); await dialog.locator('button[data-action="acknowledge"]').waitFor();
     await page.keyboard.press('Escape'); await dialog.waitFor({ state: 'hidden' });
   }
   checks.push('A read log past 30 days: the bell with 1, its dialog and the export view, in both languages, at 1280 and 860 wide');
-  // "知道了": the bell goes, and stays gone after a restart.
+  // Export the two old blocks, then delete them: the native confirmation is asked, the files go, their entries stay
+  // (numbers, days, counts, when), the read says so, and the bell goes because nothing past 30 days is left.
   await size(1280, 800); await language('zh'); await bell.click(); await dialog.waitFor({ state: 'visible' });
+  await dialog.locator('button[data-action="export"]').click(); await dialog.locator('input[type="checkbox"]').first().waitFor();
+  await dialog.locator('button[data-action="choose"]').click(); await until(async () => !(await dialog.locator('button[data-action="run"]').isDisabled()), 'A folder chosen');
+  await dialog.locator('button[data-action="run"]').click();
+  await until(async () => (await dialog.innerText()).includes('大小和校验值都核对过'), 'Exported and checked');
+  const store = path.join(dir, 'history', 'butler-reads'), copies = fs.readdirSync(path.join(out, 'butler-reads')).sort();
+  assert.equal(copies.length, 2);
+  for (const name of copies) assert.deepEqual(fs.readFileSync(path.join(out, 'butler-reads', name)), fs.readFileSync(path.join(store, name)), `${name} copied as it is`);
+  assert.equal(await dialog.locator('button[data-action="delete"]').innerText(), say('zh', 'records.delete.button', { count: 2 }));
+  await shot('exported-zh-1280'); checks.push('Export from the dialog copies the two old blocks, byte for byte, into the folder chosen; the copies are checked; nothing in NAW changes');
+  await dialog.locator('button[data-action="delete"]').click();
+  await until(async () => (await dialog.innerText()).includes(say('zh', 'records.delete.done', { count: 2 })), 'Deleted');
+  assert.deepEqual(await application.evaluate(() => globalThis.asked), [{ message: say('zh', 'records.delete.question', { count: 2 }), buttons: [say('zh', 'records.delete.cancel'), say('zh', 'records.delete.confirm')] }]);
+  for (const name of copies) assert.equal(fs.existsSync(path.join(store, name)), false, `${name} is gone from NAW`);
+  for (const name of copies) assert.ok(fs.existsSync(path.join(out, 'butler-reads', name)), `${name} is still in the export`);
+  const manifest = JSON.parse(fs.readFileSync(path.join(store, 'manifest.json'))), gone = manifest.blocks.filter(block => block.status === 'deleted');
+  assert.deepEqual(gone.map(block => [block.name, block.count]), copies.map(name => [name, 1]));
+  const read = new ButlerReadAudit(dir, { authorizePerson: value => value === 'person' }).read('person');
+  assert.deepEqual(read.gaps.map(item => [item.fromSequence, item.throughSequence, Number.isSafeInteger(item.deletedAt)]), [[1, 1, true], [2, 2, true]], 'Read back, the two are said to be deleted, in their places');
+  assert.equal(read.records.length, 31);
+  await until(async () => !(await bell.isVisible()), 'The bell goes'); await shot('deleted-zh-1280');
+  checks.push('Deleting the exported blocks asks the native confirmation; their files go from NAW (the export keeps them), their entries stay marked deleted, and the bell goes');
+  await page.keyboard.press('Escape'); await stop();
+  // "知道了", on another record 33 days long: the bell goes, and stays gone after a restart.
+  const kept = profile('kept'); readLog(kept); await launch(kept); await size(1280, 800); await language('zh');
+  bell = page.locator('#records-button'); dialog = page.locator('#records-dialog');
+  await bell.waitFor({ state: 'visible' }); await bell.click(); await dialog.waitFor({ state: 'visible' });
   await dialog.locator('button[data-action="acknowledge"]').click(); await until(async () => !(await bell.isVisible()), 'The bell goes');
   assert.ok((await dialog.innerText()).includes(say('zh', 'records.nothing'))); await shot('acknowledged-zh-1280');
-  await page.keyboard.press('Escape'); await stop(); await launch(dir); await sleep(800);
+  await page.keyboard.press('Escape'); await stop(); await launch(kept); await sleep(800);
   assert.equal(await page.locator('#records-button').isVisible(), false, 'Still put away after a restart');
   checks.push('"知道了" puts the reminder away, also after a restart'); await stop();
 

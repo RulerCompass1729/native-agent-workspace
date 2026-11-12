@@ -492,6 +492,31 @@ class ButlerReadAudit {
   }
   // The person's read: positions after `afterSequence`, up to `limit` of them, in order. A block that cannot be
   // read is one gap (its numbers, its days, how many lines), never left out and never shown as nothing.
+  // Sealed blocks the person exported (and NAW checked), deleted at the person's word. Each keeps its manifest entry,
+  // marked deleted with the time: its numbers, days and counts stay, so the day's allowance and the numbering do not
+  // change; its file goes. Only the person; never a block being written.
+  deleteBlocks(person, names) {
+    let permitted = false; try { permitted = this.#authorizePerson(person) === true; } catch {}
+    if (!permitted) fail('PERSON');
+    if (!Array.isArray(names) || !names.length || names.length > 4096 || new Set(names).size !== names.length || !names.every(name => history.parseBlockName(name))) fail('INPUT');
+    return this.#locked(() => {
+      const prepared = this.#prepare();
+      if (!prepared) fail('INPUT');
+      const { store } = prepared, blocks = prepared.manifest.blocks.map(block => ({ ...block, days: { ...block.days } }));
+      const chosen = names.map(name => blocks.find(block => block.name === name && block.status === 'sealed'));
+      if (chosen.some(block => !block)) fail('INPUT');
+      for (const block of chosen) {
+        const scan = this.#scan(path.join(store, block.name), { first: block.firstSequence - block.offset, maxBytes: block.origin === 'native' ? history.BLOCK_MAX_BYTES : LEGACY_MAX_BYTES, tail: block.origin === 'native', local: block.origin === 'legacy',
+          startDays: daysBefore(blocks, blocks.indexOf(block)) });
+        if (scan.bytes !== block.bytes || scan.sha256 !== block.sha256) fail('STATE');
+      }
+      const at = this.#now();
+      for (const block of chosen) Object.assign(block, { status: 'deleted', deletedAt: at });
+      this.#writeManifest(store, { blocks });
+      for (const block of chosen) history.removeFile(store, block.name);
+      return { deleted: chosen.map(block => block.name), at };
+    });
+  }
   read(person, options = {}) {
     let permitted = false; try { permitted = this.#authorizePerson(person) === true; } catch {}
     if (!permitted) fail('PERSON');
@@ -527,6 +552,12 @@ class ButlerReadAudit {
         if (block.lastSequence <= next || block.count === 0) continue;
         let scan = null;
         const wanted = limit - taken;
+        // A block the person exported and then deleted: a gap that says so; its pages still count toward their days.
+        if (block.status === 'deleted') {
+          const from = Math.max(next + 1, block.firstSequence), to = Math.min(block.lastSequence, from + (limit - taken) - 1);
+          gaps.push({ fromSequence: from, throughSequence: to, count: to - from + 1, days: Object.keys(block.days).sort(), deletedAt: block.deletedAt });
+          taken += to - from + 1; next = to; continue;
+        }
         // A block set aside as unreadable is tried again when its checksum is known: one put back exactly as it was
         // sealed reads again. One that was still open when it was set aside has no checksum and stays set aside.
         if (block.status !== 'unreadable' || block.sha256) {

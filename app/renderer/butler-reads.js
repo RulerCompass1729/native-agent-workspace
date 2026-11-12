@@ -97,7 +97,7 @@
         head.append(headRow); table.append(head);
         // A block that could not be read is one row in its place among the days, never left out.
         const holes = [...view.gaps], hole = item => {
-          const body = make('tbody', 'butler-reads-gap'), row = make('tr', 'butler-reads-gap-row'), cell = make('td', '', 'butler.reads.gap', { from: item.from, through: item.through, count: item.count, days: item.first === item.last ? item.first : `${item.first} – ${item.last}` });
+          const body = make('tbody', 'butler-reads-gap'), row = make('tr', 'butler-reads-gap-row'), cell = make('td', '', item.deletedAt === null || item.deletedAt === undefined ? 'butler.reads.gap' : 'butler.reads.gapDeleted', { from: item.from, through: item.through, count: item.count, when: item.when || '—', days: item.first === item.last ? item.first : `${item.first} – ${item.last}` });
           cell.setAttribute('colspan', String(COLUMNS.length)); row.append(cell); body.append(row); table.append(body);
         };
         for (const group of view.days) {

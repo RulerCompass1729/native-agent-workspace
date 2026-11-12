@@ -116,3 +116,23 @@ test('a block log keeps a cut-short last line and seals its block, builds a lost
   fs.chmodSync(path.join(store, 'manifest.json'), 0o600); fs.rmSync(path.join(store, '000000002-2026-11-01.jsonl'));
   assert.throws(() => new history.BlockLog(dir, 'operations', check).load(), /Unreadable/);
 });
+
+test('a block log deletes only sealed blocks that match, keeps a list without contents first, and never reads them again', t => {
+  const dir = folder(t), check = () => {}, day1 = Date.UTC(2026, 10, 1, 12);
+  const log = new history.BlockLog(dir, 'operations', check);
+  log.append([{ time: day1, value: { id: 'a', body: 'secret a' } }, { time: day1, value: { id: 'b', body: 'secret b' } }], day1);
+  log.append([{ time: day1 + DAY, value: { id: 'c', body: 'secret c' } }], day1 + DAY);
+  const store = path.join(dir, 'history', 'operations'), [first, open] = log.manifest.blocks.map(block => block.name);
+  assert.throws(() => log.delete([open], value => ({ id: value.id }), day1 + DAY), /sealed/, 'Never the block being written');
+  assert.deepEqual(log.delete([first], value => ({ id: value.id }), day1 + 2 * DAY), [{ name: first, kept: [{ id: 'a' }, { id: 'b' }] }]);
+  assert.equal(fs.existsSync(path.join(store, first)), false);
+  assert.equal(fs.readFileSync(path.join(store, first + '.kept.json'), 'utf8').includes('secret'), false, 'The list holds no contents');
+  const again = new history.BlockLog(dir, 'operations', check);
+  assert.deepEqual(again.load().map(value => value.id), ['c']);
+  assert.deepEqual(again.kept(), [{ id: 'a', deletedAt: day1 + 2 * DAY }, { id: 'b', deletedAt: day1 + 2 * DAY }]);
+  assert.deepEqual(again.manifest.blocks.map(block => [block.status, block.count, history.totalBytes({ blocks: [block] })]), [['deleted', 2, 0], ['open', 1, again.manifest.blocks[1].bytes]]);
+  assert.deepEqual(history.reminders(again.manifest, day1 + 40 * DAY).map(item => [item.kind, item.blocks]), [['age', 1]], 'A deleted block is not reminded of');
+  // The list gone too: what those ids were cannot be known, and the load stops.
+  fs.rmSync(path.join(store, first + '.kept.json'));
+  const lost = new history.BlockLog(dir, 'operations', check); lost.load(); assert.throws(() => lost.kept(), /Unreadable/);
+});

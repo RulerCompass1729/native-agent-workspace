@@ -12360,3 +12360,73 @@ reproduced as a test first, and what was done:
 A test now covers a cancellation that settles after a later change of selection,
 the one case the ordering by creation time decides. 21 faults in all, the 6 for
 these caught.
+
+The same session read the changes after its findings: `PASS_WITH_NOTES`, findings
+1–4 fixed and each broken by a fault, no new way to run an id twice, lose a record
+or stop background control when nothing is wrong. Its two notes: background
+control stopped because the history is shorter than recorded had no supported way
+back (the bell, batch 3, now says to put the folder back and reopen NAW, and
+deleting blocks keeps their ids first); and a save refused as too large can keep a
+moved record's change while the rest is dropped (nothing runs twice or is lost).
+
+## Records kept whole, in blocks: the bell, reminders, export and deleting exported blocks (batch 3 of 3, 2026-11-12)
+
+The person's words are in the batch 1 section; the design's section 9 was taken
+as recommended on 2026-11-11 ("暂时按你推荐的来", relayed by the integrator, who
+looked at the pictures): "知道了 / 导出 / 导出核对通过后才能删除", a content-free
+list kept after deleting, each record counted on its own, and a reminder that
+comes back only one notch worse.
+
+What changed:
+- A bell above Settings in the sidebar, there only while something is due, with
+  the count; in the narrow rail it is an icon with the count.
+- `app/record-reminders.cjs`: per record, from its manifest: blocks past 30 days
+  (one notch = 30 more such blocks, about a month, not every day), the whole past
+  0.5 GiB (an older version's kept file counted), blocks that cannot be read, and
+  the operations record not loaded at start. "知道了" is kept in
+  `history/reminders.json`. Export copies the chosen sealed blocks, as they are,
+  into `<folder>/<record>/`, never over a different file and never into NAW's own
+  folder, and checks each copy's size and checksum. It deletes nothing.
+- Deleting: only blocks exported and checked in this window; the copies are
+  checked again before and after the person's native confirmation; then through
+  each record's owner. The read log marks the blocks deleted (numbers, days and
+  pages stay, so the day's allowance holds) and shows them on its page as deleted,
+  with when. The operations record first keeps a list of what each block held
+  without contents (who asked, the operation id, when, how it ended), then marks
+  it deleted; such an id is refused with `record-deleted` and never run again; a
+  later version of a record kept in another block stays.
+- `records` is a person-only channel removed from the agent catalog, like the
+  butler's.
+
+Sentences the person can see: the `records.*` keys and `butler.reads.gapDeleted`
+in `app/ui-messages.js` (zh and en), among them 「NAW 不会自己删除任何记录。下面这些
+到线了，怎么处理由你决定。」, 「删除之后，这些块的内容只在你导出的文件夹里。NAW 只留一份
+不含内容的清单（哪些块、哪些编号、多少条、什么时候删的），所以执行过的操作不会被再执行一次，
+大管家每天读过的页也照算。」 and, for the operations record that could not be loaded,
+「……把数据目录里的 history/operations 文件夹放回原样，再重新打开 NAW，就会恢复。」
+
+Evidence: the full suite, 6334 tests, all pass. 24 deliberate faults in the
+reminders, the page, the block log, the operations module, the read log, its view
+and page, and the main process are all caught (23 on the first run; the missed
+one, a deleted id asked while the agent is busy, got a test). The bell window
+check runs on the real app and service: no bell with nothing due; the bell, its
+dialog and the export view in both languages at 1280 and 860 wide; export of the
+two old blocks byte for byte; the delete with its native confirmation, the files
+gone from NAW and kept in the export, their entries marked deleted and read back
+as deleted; "知道了" kept across a restart; an operations block changed on disk
+said, with "show in Finder" (17 screenshots). The read log page check and the
+background control check pass. The OS-language test now checks the two new
+native dialogs (language, the folder shown as it is, Cancel the default). No
+native program, no model.
+
+Not verified, or known:
+- Reminders are worked out when a window starts and after the person's own
+  actions; nothing polls, so a line crossed while NAW runs shows at the next start.
+- A manifest lost after blocks were deleted cannot be rebuilt (the numbers no
+  longer follow on): the record stops, as for any missing block.
+- After deleting, an earlier cancellation in a deleted block is gone: the person
+  may be asked once more for a snapshot they cancelled long ago.
+- The native confirmation and the folder chooser are answered inside the app's
+  main process in the window check; the person's own clicks on them are not
+  driven.
+- Deleting cannot be undone; the export is then the only copy of the contents.

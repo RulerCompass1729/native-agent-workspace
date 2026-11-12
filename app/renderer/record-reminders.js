@@ -68,13 +68,13 @@
       const status = make('p', 'records-note'); status.setAttribute('role', 'status');
       dialog.append(title, make('p', 'quiet', 'records.export.intro'));
       let blocks = []; try { blocks = await api.records('blocks', record); } catch (error) { status.textContent = format('records.export.failed', { reason: error?.message || '—' }); }
-      const list = make('div', 'records-blocks'), boxes = [];
+      const list = make('div', 'records-blocks'), boxes = [], rows = new Map();
       for (const block of blocks) {
         const row = make('label', 'records-block'), box = make('input'), day = make('span', 'records-day'), about = make('span', 'records-about'), bytes = make('span', 'records-size');
         box.type = 'checkbox'; box.checked = block.old; box.value = block.name; boxes.push(box);
         day.textContent = block.first === block.last ? block.first : `${block.first} – ${block.last}`; if (block.old) day.className += ' records-old';
         about.textContent = format('records.export.count', { count: block.count }) + (block.old ? ' · ' + format('records.export.old') : '');
-        bytes.textContent = size(block.bytes); row.append(box, day, about, bytes); list.append(row);
+        bytes.textContent = size(block.bytes); row.append(box, day, about, bytes); list.append(row); rows.set(block.name, row);
       }
       if (!blocks.length && !status.textContent) say(status, 'records.export.none');
       const where = make('div', 'records-folder'), label = make('span', 'quiet', 'records.export.to'), folder = make('span', 'records-path', 'records.export.noFolder');
@@ -84,7 +84,18 @@
       });
       where.append(label, folder, choose);
       const actions = make('div', 'dialog-actions'), back = control('records.export.back', 'back', () => draw()), run = control('records.export.run', 'run', () => go(), { count: 0 });
-      run.className = 'primary'; actions.append(back, run);
+      // Deleting comes only after a checked export of exactly these blocks; until then it is not there.
+      let exported = [];
+      const about = make('p', 'quiet', 'records.delete.about'), remove = control('records.delete.button', 'delete', async () => {
+        remove.disabled = true;
+        try {
+          const done = await api.records('delete', record, exported);
+          if (done?.deleted?.length) { for (const name of done.deleted) if (rows.has(name)) rows.get(name).hidden = true; say(status, 'records.delete.done', { count: done.deleted.length }); remove.hidden = true; about.hidden = true; await refresh(); }
+          else remove.disabled = false;
+        } catch (error) { say(status, 'records.delete.failed', { reason: error?.message || '—' }); remove.disabled = false; }
+      }, { count: 0 });
+      about.hidden = true; remove.hidden = true; remove.className = 'records-apart';
+      run.className = 'primary'; actions.append(remove, back, run);
       const update = () => { const count = boxes.filter(box => box.checked).length; say(run, 'records.export.run', { count }); run.disabled = !count || folder.dataset.chosen !== 'true'; };
       for (const box of boxes) box.addEventListener('change', update);
       async function go() {
@@ -93,9 +104,12 @@
           const result = await api.records('export', record, names);
           say(status, 'records.export.done', { count: result.exported.length, size: size(result.bytes), folder: result.folder });
           for (const box of boxes) box.disabled = true; choose.disabled = true; run.hidden = true;
+          // Only now, and only these blocks: what deleting them keeps, then the button (the main process asks once more).
+          exported = result.exported.map(item => item.name);
+          say(remove, 'records.delete.button', { count: exported.length }); remove.hidden = false; about.hidden = false;
         } catch (error) { say(status, 'records.export.failed', { reason: error?.message || '—' }); update(); }
       }
-      dialog.append(list, where, status, actions); update();
+      dialog.append(list, where, status, about, actions); update();
     }
     async function open() { await refresh(); draw(); if (!dialog.open) dialog.showModal(); }
     button.addEventListener('click', () => { open(); });

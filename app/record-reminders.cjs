@@ -112,6 +112,20 @@ function exportBlocks(dataDir, name, names, folder) {
   history.syncDirectory(target);
   return { folder: target, exported, bytes: exported.reduce((sum, item) => sum + item.bytes, 0) };
 }
+// The copies of these blocks in `folder` are there and still match the record (size and checksum), checked again
+// right before the person can remove the blocks from NAW.
+function verifyExport(dataDir, name, names, folder) {
+  record(name);
+  const manifest = manifestOf(dataDir, name);
+  if (!manifest || !Array.isArray(names) || !names.length) throw Error('The record cannot be read');
+  for (const item of names) {
+    const block = manifest.blocks.find(entry => entry.name === item && entry.status === 'sealed');
+    if (!block) throw Error('Only sealed blocks can be removed');
+    let copy; try { copy = fs.readFileSync(path.join(folder, item)); } catch { throw Error(`The exported copy of ${item} is not there`); }
+    if (copy.length !== block.bytes || history.sha256().update(copy).digest('hex') !== block.sha256) throw Error(`The exported copy of ${item} does not match`);
+  }
+  return true;
+}
 // Where a record's blocks are, for the person to look (the block itself when it is there).
 function location(dataDir, name, block) {
   const store = storeOf(dataDir, name);
@@ -119,4 +133,4 @@ function location(dataDir, name, block) {
   return fs.existsSync(store) ? store : path.join(dataDir, history.HISTORY_DIR);
 }
 
-module.exports = Object.freeze({ RECORDS, KINDS, status, acknowledge, blocks, exportBlocks, location });
+module.exports = Object.freeze({ RECORDS, KINDS, status, acknowledge, blocks, exportBlocks, verifyExport, location });

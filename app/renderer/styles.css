@@ -1054,3 +1054,6 @@ dialog .records-block input[type=checkbox] { margin: 0; width: auto; }
 .records-folder { display: flex; align-items: center; gap: 10px; margin: 14px 0 6px; }
 .records-path { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
 dialog p.records-note { color: var(--ink); }
+.records-dialog .records-apart { margin-right: auto; }
+.records-dialog .records-apart[hidden] { display: none; }
+.records-block[hidden] { display: none; }

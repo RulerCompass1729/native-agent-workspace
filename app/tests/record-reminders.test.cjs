@@ -95,7 +95,7 @@ class Element {
 }
 function page(t, dir, now = NOW) {
   const document = { createElement: tag => new Element(tag) }, button = new Element('button'), badge = new Element('span'), dialog = new Element('dialog'), calls = [];
-  const out = folder(t); let chosen = null;
+  const out = folder(t); let chosen = null, deleteAnswer = () => ({ deleted: [] });
   const api = { records: async (action, ...args) => {
     calls.push([action, ...args]);
     if (action === 'status') return reminders.status(dir, now);
@@ -104,11 +104,12 @@ function page(t, dir, now = NOW) {
     if (action === 'chooseFolder') { chosen = out; return { folder: out }; }
     if (action === 'export') return reminders.exportBlocks(dir, args[0], args[1], chosen);
     if (action === 'reveal') return true;
+    if (action === 'delete') return deleteAnswer();
     throw Error('unknown');
   } };
   const view = bind({ button, badge, dialog, document, api, text: zh });
   const find = action => dialog.all().find(node => node.tag === 'button' && node.dataset.action === action);
-  return { view, button, badge, dialog, calls, out, find, text: () => dialog.all().map(node => node.textContent).filter(Boolean).join('\n') };
+  return { view, button, badge, dialog, calls, out, find, answer: hook => { deleteAnswer = hook; }, text: () => dialog.all().filter(node => !node.hidden).map(node => node.textContent).filter(Boolean).join('\n') };
 }
 
 test('the bell is there only while something is due; its dialog says what, and "知道了" puts it away', async t => {
@@ -159,5 +160,28 @@ test('the main process keeps the reminders to the person\'s own window and out o
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.cjs'), 'utf8'), at = main.indexOf("register('records',");
   assert.ok(at > 0); assert.ok(main.slice(at, at + 200).includes("if (!isCurrentHumanContext(c)) throw uiError('error.records.personOnly');"));
   assert.ok(main.includes("applicationHandlers.delete('records');"));
-  assert.ok(!/remove|unlink|rmSync|delete/i.test(fs.readFileSync(path.join(__dirname, '..', 'record-reminders.cjs'), 'utf8').replace(/nothing here deletes|deletes, compresses|NAW never deletes/g, '')), 'Nothing in the reminders module removes a file');
+  assert.ok(!/\b(unlinkSync|rmSync|rmdirSync|removeFile|unlink|rm)\(/.test(fs.readFileSync(path.join(__dirname, '..', 'record-reminders.cjs'), 'utf8')), 'Nothing in the reminders module removes a file');
+  // Deleting goes through each record's owner, only after a checked export in this window, checked again around the
+  // person's own confirmation.
+  const remove = main.slice(main.indexOf("if (action === 'delete' && args.length === 2) {"), main.indexOf("applicationHandlers.delete('records');"));
+  for (const part of ["names.some(item => !exported.names.has(item))) throw uiError('error.records.notExported');", "await showDialog(c, 'message',", "if (answer.response !== 1 || c.win.isDestroyed()) return { deleted: [] };",
+    'backgroundControl.deleteBlocks(names);', 'butlerReadAudit.deleteBlocks(c, names);']) assert.ok(remove.includes(part), part);
+  assert.equal(remove.split('recordReminders.verifyExport(dataDir, name, names, exported.folder);').length - 1, 2, 'Checked before asking and again after the answer');
+});
+
+test('after a checked export the dialog offers to delete exactly those blocks; the person\'s "no" leaves everything', async t => {
+  const dir = folder(t); readLog(dir, 33);
+  const p = page(t, dir); let answer = { deleted: [] }; const asked = [];
+  await p.view.open(); p.find('export').fire('click'); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(p.find('delete').hidden, true, 'Not there before an export');
+  await p.find('choose').fire('click'); await p.find('run').fire('click');
+  const remove = p.find('delete');
+  assert.deepEqual([remove.hidden, remove.textContent], [false, zh('records.delete.button', { count: 2 })]);
+  assert.ok(p.text().includes(zh('records.delete.about')));
+  p.answer(() => answer); await remove.fire('click'); asked.push(p.calls.at(-1));
+  assert.deepEqual(asked[0].slice(0, 2), ['delete', 'butler-reads']); assert.equal(asked[0][2].length, 2);
+  assert.deepEqual([remove.hidden, remove.disabled], [false, false], 'Cancelled: still offered');
+  answer = { deleted: asked[0][2] }; await remove.fire('click');
+  assert.ok(p.text().includes(zh('records.delete.done', { count: 2 }))); assert.equal(remove.hidden, true);
+  assert.equal(p.dialog.all().filter(node => node.tag === 'label' && !node.hidden).length, 30, 'The deleted blocks leave the list');
 });

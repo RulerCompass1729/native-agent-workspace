@@ -65,11 +65,6 @@ let butlerReads;
 try { butlerReads = window.nativeWorkspaceButlerReads.bind({ dialog: $('butler-reads-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display,
   spaceName: id => { const room = spaceRecord(id); return room ? spaceName(room) : null; } }); }
 catch (error) { console.error(error); butlerReads = failedButlerReads(!window.nativeWorkspaceButlerReads ? 'module' : !$('butler-reads-dialog') ? 'element' : 'setup'); }
-// The bell: reminders about records kept whole, asked for once as the window starts (nothing polls).
-let recordReminders = null;
-try { recordReminders = window.nativeWorkspaceRecordReminders.bind({ button: $('records-button'), badge: $('records-badge'), dialog: $('records-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display });
-  recordReminders.refresh(); }
-catch (error) { console.error(error); }
 // Asking for the page. A page that was set up can still fail as it opens (its element gone from the window, an
 // error before anything is drawn): that must not end in nothing on the screen, so the failure view takes its place.
 function openButlerReads() {
@@ -181,6 +176,11 @@ try { butlerEntry = window.nativeWorkspaceButlerEntry.bind({ row: $('butler-row'
   front: listener => { window.addEventListener('focus', listener); return () => window.removeEventListener('focus', listener); } }); }
 catch (error) { console.error(error); butlerEntry = failedButlerEntry(!window.nativeWorkspaceButlerEntry ? 'module' : !$('butler-row') || !$('butler-dialog') ? 'element' : 'setup'); }
 let newDirectory = false, creatingSession = false;
+// The bell: reminders about records kept whole, asked for once as the window starts (nothing polls).
+let recordReminders = null;
+try { recordReminders = window.nativeWorkspaceRecordReminders.bind({ button: $('records-button'), badge: $('records-badge'), dialog: $('records-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display });
+  recordReminders.refresh(); }
+catch (error) { console.error(error); }
 let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
 let latestViewStorage, latestViewStorageUiMessage;
 let roomSession = '', selectionRevision = 0, pendingMode;

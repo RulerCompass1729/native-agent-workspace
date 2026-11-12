@@ -154,6 +154,8 @@ test('a block that cannot be read is shown in its place, once, and makes no coun
   assert.deepEqual(split.days.map(day => day.rows.map(row => row.sequence)), [[6, 5], [2, 1]]);
   assert.deepEqual(split.days.map(day => day.whole), [false, false], 'A day that may go on into the hole is not said to be whole');
   assert.equal(view(kept, [hole(3, 4), hole(3, 4)]).gaps.length, 1, 'The same hole twice is shown once');
+  // A deleted block next to one that cannot be read stays a row of its own.
+  assert.deepEqual(view(kept, [hole(4, 4), { ...hole(3, 3), deletedAt: NOW - DAY }]).gaps.map(item => [item.from, item.through, item.deletedAt !== null]), [[4, 4, false], [3, 3, true]]);
   // The newest position in a hole: the end of the log was reached, and today's count cannot be told.
   const top = view(records.filter(record => record.sequence < 6), [hole(6, 6)]);
   assert.deepEqual([top.reached, top.newest, top.today.pages, top.today.level, top.today.inGap], [true, false, null, 'unknown', true]);

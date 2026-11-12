@@ -47,9 +47,9 @@
   function gap(value, through) {
     if (!value || !count(value.fromSequence) || value.fromSequence < 1 || !count(value.throughSequence) || value.throughSequence < value.fromSequence ||
         count(through) && value.throughSequence > through || value.count !== value.throughSequence - value.fromSequence + 1 ||
-        !Array.isArray(value.days) || !value.days.length || !value.days.every(day)) return null;
+        !Array.isArray(value.days) || !value.days.length || !value.days.every(day) || value.deletedAt !== undefined && !count(value.deletedAt)) return null;
     const days = [...value.days].sort();
-    return { gap: true, from: value.fromSequence, through: value.throughSequence, count: value.count, first: days[0], last: days[days.length - 1] };
+    return { gap: true, from: value.fromSequence, through: value.throughSequence, count: value.count, first: days[0], last: days[days.length - 1], deletedAt: value.deletedAt ?? null };
   }
   // records: every record loaded so far, in any order; the newest one must be among them for today's count.
   // through: the log's highest sequence (throughSequence). now: the window's clock. spaceNames: id -> name the
@@ -70,11 +70,13 @@
     const holes = [], covered = new Set();
     for (const value of Array.isArray(gaps) ? gaps : []) { const item = gap(value, through); if (item && !covered.has(item.from)) { covered.add(item.from); holes.push(item); } else if (!item) unreadable++; }
     holes.sort((a, b) => b.from - a.from);
+    for (const item of holes) item.when = item.deletedAt === null ? null : local(item.deletedAt);
     // Holes that touch (one block asked for over two pages, or two damaged blocks side by side) are one row.
     for (let index = holes.length - 1; index > 0; index--) {
       const newer = holes[index - 1], older = holes[index];
-      if (older.through + 1 !== newer.from) continue;
-      holes.splice(index - 1, 2, { gap: true, from: older.from, through: newer.through, count: older.count + newer.count, first: older.first < newer.first ? older.first : newer.first, last: older.last > newer.last ? older.last : newer.last });
+      // Only holes of the same kind: a block the person deleted is not one that cannot be read.
+      if (older.through + 1 !== newer.from || older.deletedAt !== newer.deletedAt) continue;
+      holes.splice(index - 1, 2, { gap: true, from: older.from, through: newer.through, count: older.count + newer.count, first: older.first < newer.first ? older.first : newer.first, last: older.last > newer.last ? older.last : newer.last, deletedAt: older.deletedAt });
     }
     // The newest position may be in a block that cannot be read: it was reached, and today's count cannot be told.
     const newestHole = holes.find(item => count(through) && item.through === through);

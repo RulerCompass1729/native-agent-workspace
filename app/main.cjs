@@ -1672,7 +1672,24 @@ async function boot() {
       }
       if (action === 'export' && args.length === 2) {
         if (!c.recordsFolder) throw uiError('error.records.noFolder');
-        return recordReminders.exportBlocks(dataDir, name, args[1], c.recordsFolder);
+        const result = recordReminders.exportBlocks(dataDir, name, args[1], c.recordsFolder);
+        // Only blocks exported and checked in this window may be removed afterwards.
+        const prior = c.recordsExported?.[name]?.folder === result.folder ? c.recordsExported[name].names : [];
+        c.recordsExported = { ...(c.recordsExported || {}), [name]: { folder: result.folder, names: new Set([...prior, ...result.exported.map(item => item.name)]) } };
+        return result;
+      }
+      if (action === 'delete' && args.length === 2) {
+        const names = args[1], exported = c.recordsExported?.[name];
+        if (!exported || !Array.isArray(names) || !names.length || names.some(item => !exported.names.has(item))) throw uiError('error.records.notExported');
+        recordReminders.verifyExport(dataDir, name, names, exported.folder);
+        const answer = await showDialog(c, 'message', { type: 'warning', buttons: [displayText('records.delete.cancel'), displayText('records.delete.confirm')], defaultId: 0, cancelId: 0,
+          message: displayText('records.delete.question', { count: names.length }), detail: displayText('records.delete.detail', { folder: exported.folder }) });
+        if (answer.response !== 1 || c.win.isDestroyed()) return { deleted: [] };
+        recordReminders.verifyExport(dataDir, name, names, exported.folder);
+        if (name === 'operations') { if (!backgroundControl) throw uiError('error.records.unavailable'); backgroundControl.deleteBlocks(names); }
+        else { if (!butlerReadAudit) throw uiError('error.records.unavailable'); butlerReadAudit.deleteBlocks(c, names); }
+        for (const item of names) exported.names.delete(item);
+        return { deleted: names };
       }
       if (action === 'reveal' && args.length === 2) { shell.showItemInFolder(recordReminders.location(dataDir, name, args[1])); return true; }
     } catch (error) { if (error?.uiMessage) throw error; throw uiError('error.records.failed', { reason: String(error?.message || '').slice(0, 300) }); }

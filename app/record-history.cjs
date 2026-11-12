@@ -48,14 +48,17 @@ function parseBlockName(name) {
 // One block as the manifest describes it. `offset` is added to the numbers a block holds to give their global
 // numbers: 0 for blocks this version writes, more for a single file an older version wrote and that was taken in
 // after others. `days` counts the block's lines per UTC day. `sha256` is set when the block is sealed.
+// A block the person exported (checked) and then deleted keeps its entry, status `deleted`, with when (`deletedAt`):
+// its numbers, days and counts stay, so numbering, a day's count and what was recorded are not lost with its file.
 const BLOCK_KEYS = ['name', 'firstSequence', 'lastSequence', 'offset', 'count', 'bytes', 'oldestTime', 'newestTime', 'days', 'sha256', 'status', 'origin'];
 function blockEntry(value) {
-  if (!exact(value, BLOCK_KEYS)) throw Error('Invalid block entry');
+  const deleted = plain(value) && value.status === 'deleted';
+  if (!exact(value, deleted ? [...BLOCK_KEYS, 'deletedAt'] : BLOCK_KEYS) || deleted && !integer(value.deletedAt)) throw Error('Invalid block entry');
   const parsed = parseBlockName(value.name);
   if (!parsed || value.firstSequence !== parsed.firstSequence || !integer(value.lastSequence) || !integer(value.offset) || value.offset >= value.firstSequence ||
       !integer(value.count) || value.lastSequence !== value.firstSequence + value.count - 1 || !integer(value.bytes) || value.bytes > BLOCK_MAX_BYTES ||
-      !['open', 'sealed', 'unreadable'].includes(value.status) || !['native', 'legacy'].includes(value.origin) ||
-      (value.origin === 'native' && value.offset !== 0) || (value.status === 'sealed') !== isHash(value.sha256) && value.status !== 'unreadable' ||
+      !['open', 'sealed', 'unreadable', 'deleted'].includes(value.status) || !['native', 'legacy'].includes(value.origin) ||
+      (value.origin === 'native' && value.offset !== 0) || (['sealed', 'deleted'].includes(value.status)) !== isHash(value.sha256) && value.status !== 'unreadable' ||
       (value.sha256 !== null && !isHash(value.sha256)) || !plain(value.days)) throw Error('Invalid block entry');
   let sum = 0;
   for (const [day, count] of Object.entries(value.days)) { if (!isDay(day) || !integer(count) || count < 1) throw Error('Invalid block entry'); sum += count; }
@@ -76,7 +79,8 @@ function manifestValue(value, record) {
   return { version: 1, record, blocks };
 }
 const lastSequence = manifest => manifest.blocks.length ? manifest.blocks[manifest.blocks.length - 1].lastSequence : 0;
-const totalBytes = manifest => manifest.blocks.reduce((sum, block) => sum + block.bytes, 0);
+// What the record takes on disk: a deleted block's file is gone.
+const totalBytes = manifest => manifest.blocks.reduce((sum, block) => sum + (block.status === 'deleted' ? 0 : block.bytes), 0);
 
 // The directory of one record, made private when missing. Returns its path; never follows a link.
 function ensureDirectory(parent, name) {
@@ -136,7 +140,7 @@ const sha256 = () => createHash('sha256');
 // polled; the caller asks when it starts, when it seals a block and when something fails.
 function reminders(manifest, now) {
   const due = [], cutoff = now - REMIND_AGE_DAYS * DAY_MS;
-  const old = manifest.blocks.filter(block => block.count > 0 && block.newestTime !== null && block.newestTime < cutoff);
+  const old = manifest.blocks.filter(block => block.status !== 'deleted' && block.count > 0 && block.newestTime !== null && block.newestTime < cutoff);
   if (old.length) due.push({ kind: 'age', blocks: old.length, bytes: old.reduce((sum, block) => sum + block.bytes, 0),
     oldestDay: old.map(block => Object.keys(block.days).sort()[0]).sort()[0], newestDay: old.map(block => Object.keys(block.days).sort().at(-1)).sort().at(-1) });
   const bytes = totalBytes(manifest);
@@ -216,6 +220,7 @@ class BlockLog {
     manifest = { blocks: manifest.blocks.map(item => ({ ...item })) };
     for (const [index, block] of manifest.blocks.entries()) {
       if (block.status === 'unreadable') throw Error('Unreadable history block');
+      if (block.status === 'deleted') continue;
       if (block.status === 'sealed') {
         const scan = this.#scan(block.name, block.firstSequence, true);
         if (scan.bytes !== block.bytes || scan.sha256 !== block.sha256 || scan.count !== block.count) throw Error('Unreadable history block');
@@ -236,6 +241,36 @@ class BlockLog {
     }
     if (changed) this.#write(manifest); else this.#manifest = manifestValue({ version: 1, record: this.#record, blocks: manifest.blocks }, this.#record);
     return values;
+  }
+  // What the deleted blocks held, without their contents: the lists kept beside the manifest when they were deleted.
+  // One that is missing stops the load, as a block that cannot be read does.
+  kept() {
+    const out = [];
+    for (const block of this.#manifest.blocks.filter(item => item.status === 'deleted')) {
+      let value; try { value = readPrivateJson(path.join(this.#store, `${block.name}.kept.json`), MANIFEST_MAX_BYTES); } catch { value = null; }
+      if (!value || value.version !== 1 || value.name !== block.name || !Array.isArray(value.kept) || value.kept.length !== block.count) throw Error('Unreadable history block');
+      out.push(...value.kept.map(item => ({ ...item, deletedAt: block.deletedAt })));
+    }
+    return out;
+  }
+  // Sealed blocks the person exported and NAW checked, deleted at the person's word: first a list of what each held
+  // (`keep` picks what must outlive the contents, such as an operation id), then the manifest marks it deleted, then
+  // its file goes. A stop in between leaves the file, already marked deleted and never read again.
+  delete(names, keep, now) {
+    if (this.#failed) throw Error('History record is unavailable');
+    const manifest = { blocks: this.#manifest.blocks.map(item => ({ ...item, days: { ...item.days } })) };
+    const chosen = names.map(name => manifest.blocks.find(block => block.name === name && block.status === 'sealed'));
+    if (!names.length || chosen.some(block => !block)) throw Error('Only sealed blocks can be deleted');
+    const lists = chosen.map(block => {
+      const scan = this.#scan(block.name, block.firstSequence, true);
+      if (scan.bytes !== block.bytes || scan.sha256 !== block.sha256) throw Error('A block does not match its record');
+      return { block, kept: scan.values.map(keep) };
+    });
+    for (const { block, kept } of lists) writePrivateJson(this.#store, `${block.name}.kept.json`, { version: 1, name: block.name, kept });
+    for (const block of chosen) Object.assign(block, { status: 'deleted', deletedAt: now });
+    this.#write(manifest);
+    for (const block of chosen) removeFile(this.#store, block.name);
+    return lists.map(({ block, kept }) => ({ name: block.name, kept }));
   }
   // Values added at the end, each with its own time; written and synced before this returns. A failure leaves the
   // record unusable for this run (the caller fails closed); what reached the disk is taken in at the next start.

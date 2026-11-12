@@ -675,6 +675,24 @@ test('an open block grown past its size from outside is set aside by a new insta
   assert.equal(fs.statSync(block).size, 32 * 1024 * 1024 + 1, 'It is left as it is');
 });
 
+test('the person deletes sealed blocks: their numbers, days and pages stay counted, the read says when, and nothing else can delete', t => {
+  const f = fixture(t); f.audit.recordPage(page()); f.audit.recordPage(page());
+  f.at(NOW + DAY); f.audit.recordPage(page());
+  const [first, open] = f.manifest().blocks.map(block => block.name), used = f.audit.read(f.person).storage.usedBytes;
+  assert.throws(() => f.audit.deleteBlocks({}, [first]), code('PERSON'));
+  assert.throws(() => f.audit.deleteBlocks(f.person, [open]), code('INPUT'), 'Never the block being written');
+  f.at(NOW + DAY + 1000); assert.deepEqual(f.audit.deleteBlocks(f.person, [first]), { deleted: [first], at: NOW + DAY + 1000 });
+  assert.equal(fs.existsSync(path.join(f.store, first)), false);
+  for (const audit of [f.audit, f.reopen()]) {
+    const read = audit.read(f.person);
+    assert.deepEqual(read.gaps, [{ fromSequence: 1, throughSequence: 2, count: 2, days: ['2026-11-11'], deletedAt: NOW + DAY + 1000 }]);
+    assert.deepEqual(read.records.map(row => row.sequence), [3]);
+    assert.ok(read.storage.usedBytes < used, 'Its file no longer takes room');
+  }
+  // The day's pages still count: back on that day, the next page is its third.
+  f.at(NOW); assert.equal(f.reopen().recordPage(page()).pageOfDay, 3);
+});
+
 test('a log put back to an earlier state under the running app stops it, and does not give the day back', t => {
   const f = fixture(t); f.audit.recordPage(page());
   const earlier = new Map(fs.readdirSync(f.store).map(name => [name, fs.readFileSync(path.join(f.store, name))]));

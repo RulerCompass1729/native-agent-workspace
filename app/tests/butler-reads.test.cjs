@@ -302,6 +302,10 @@ test('a block that cannot be read is one row in its place, with its numbers and 
   const all = fixture(log, { gaps: [{ fromSequence: 1, throughSequence: 5, count: 5, days: ['2026-11-10', '2026-11-11'] }] }); await all.reads.open();
   assert.deepEqual([all.dialog.dataset.readsState, all.rows().length, all.listed().hidden, all.listed().textContent], ['records', 0, false, zh('butler.reads.listedGap', { total: 5, shown: 0, missing: 5 })]);
   assert.ok(all.dialog.text().includes('第 1–5 条（UTC 2026-11-10 – 2026-11-11，共 5 条）现在读不到'));
+  // A block the person exported and deleted is said as such, with when, in its place; it is not "cannot be read".
+  const gone = fixture(log, { gaps: [{ ...gap, deletedAt: NOW - DAY }] }); await gone.reads.open();
+  const goneRows = gone.dialog.all().filter(node => node.className === 'butler-reads-gap').map(body => body.children[0].children[0].textContent);
+  assert.deepEqual(goneRows, [zh('butler.reads.gapDeleted', { from: 2, through: 3, count: 2, days: '2026-11-10', when: '11-10 01:30' })]);
   // A gap this version does not know is counted as not understood, never drawn as something else.
   const odd = fixture(log, { gaps: [{ fromSequence: 3, throughSequence: 2, count: 0, days: [] }] }); await odd.reads.open();
   assert.equal(odd.dialog.all().filter(node => node.className === 'butler-reads-gap').length, 0);
@@ -326,8 +330,9 @@ test('every sentence is in the catalog in both languages, the catalog has no oth
   const plain = records(t, page => { page(NOW - MINUTE, 'spaces'); page(NOW - 30000, 'deliveries', { spaceId: SPACE }); });
   const over = () => ({ usedBytes: 600 * 1048576, remindBytes: 512 * 1048576, blocks: 20, unreadableBlocks: 0, warning: true });
   const unknownSize = () => ({ usedBytes: 1 });
+  const deletedHole = [{ fromSequence: 2, throughSequence: 3, count: 2, days: ['2026-11-10'], deletedAt: NOW - DAY }];
   const holes = [{ fromSequence: 2, throughSequence: 3, count: 2, days: ['2026-11-10'] }], newestHole = [{ fromSequence: 5, throughSequence: 5, count: 1, days: ['2026-11-11'] }];
-  for (const [value, options, after] of [[log], [[]], [full], [plain], [log, { storage: over }], [log, { storage: unknownSize }], [log, { gaps: holes }], [log, { gaps: newestHole }], [log, { fail: () => true }], [log.map(r => ({ ...r, version: 2 }))], [log.map((r, i) => i ? r : { ...r, version: 2 })],
+  for (const [value, options, after] of [[log], [[]], [full], [plain], [log, { storage: over }], [log, { storage: unknownSize }], [log, { gaps: holes }], [log, { gaps: deletedHole }], [log, { gaps: newestHole }], [log, { fail: () => true }], [log.map(r => ({ ...r, version: 2 }))], [log.map((r, i) => i ? r : { ...r, version: 2 })],
     [long, { fail: count => count > 1 && { answer: { records: long.slice(40, 60), throughSequence: 96, nextAfterSequence: 60, truncated: true } } }],
     [long, { fail: (count, options) => options.limit === 46 }, f => f.button('older').fire('click')], [log, { breakTable: () => true }]]) {
     const f = fixture(value, { ...options, text: record('zh') }); const opening = f.reads.open(); asked.add('butler.reads.loading'); await opening; if (after) await after(f);
