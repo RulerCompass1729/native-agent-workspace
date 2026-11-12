@@ -73,4 +73,14 @@ function personWords(info) {
   return { title, key, params: { count } };
 }
 
-module.exports = { spaceWords, personWords, group };
+// The short cause on a held delivery's row in the queue panel: { key, params }. A reason without a
+// sentence of its own is shown as the integrator's own words; with no words either, as not given.
+function rowWords(item) {
+  const found = group(item?.reason);
+  const name = found && HELD.includes(found.name) ? found.name : 'other';
+  if (name === 'lockHeld') return { key: 'queue.handoff.why.lockHeld', params: { owner: found.subject } };
+  if (name !== 'other') return { key: `queue.handoff.why.${name}`, params: {} };
+  return typeof item?.note === 'string' && item.note ? { key: 'queue.handoff.why.other', params: { note: item.note } } : { key: 'queue.handoff.why.unknown', params: {} };
+}
+
+module.exports = { spaceWords, personWords, rowWords, group };

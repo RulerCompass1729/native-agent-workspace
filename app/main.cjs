@@ -686,7 +686,9 @@ function displayState(snapshot, context, read = null) {
   let integrator = null, integratorWarning = '';
   try { integrator = integratorRole?.current() || null; } catch { integratorWarning = displayText('error.integrator.state'); }
   const warning = [outboxWarning, secretaryWarning, integratorWarning].filter(Boolean).join('\n');
-  const result = { ...display, queueSecretary: secretary, integrator, ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
+  // The page asks about handoffs only where they are enabled (or could not start): elsewhere the state is as it always was.
+  const handoffEnabled = queueDispatcher?.integration || queueDispatcher?.integrationError ? { handoffEnabled: true } : {};
+  const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
   return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected, conversationAccess(context.actor, snapshot)) : result;
@@ -1676,7 +1678,7 @@ async function boot() {
       // is shown why when they look, and no action can be done.
       const fault = queueDispatcher?.integrationError;
       if (!fault) throw uiError('error.handoff.unavailable');
-      if (action === 'list') return { started: false, engineFault: { ...fault } };
+      if (action === 'list' || action === 'space') return { started: false, engineFault: { ...fault } };
       throw uiError('error.handoff.notStarted');
     }
     let result;
@@ -1685,10 +1687,18 @@ async function boot() {
       // One space's view for its queue panel: the overview, and where each delivery of that space stands by queue item.
       if (action === 'space') {
         if (typeof value !== 'string' || !validRoomId(value)) throw uiError('error.handoff.invalid');
-        return { ...handoffOverview(handoffs), items: handoffs.spaceView(value) };
+        const items = handoffs.spaceView(value);
+        for (const item of Object.values(items)) if (item.state === 'held') item.why = require('./integrator-words.cjs').rowWords(item);
+        return { ...handoffOverview(handoffs), items };
       }
       if (action === 'repository') return integrationRepository.show();
       if (action === 'setRepository') result = await integrationRepository.choose(value);
+      else if (action === 'chooseRepository') {
+        // The folder is picked in the system's own dialog, so the page names no path.
+        const picked = await chooseRepositoryFolder(c);
+        if (picked.canceled || typeof picked.filePaths?.[0] !== 'string') return { canceled: true };
+        result = await integrationRepository.choose(picked.filePaths[0]);
+      }
       else if (action === 'retryDelivery') result = handoffs.retryReady(value);
       else if (action === 'retryReason') result = handoffs.retryReason(value);
       else if (action === 'resolve') result = handoffs.resolveHandoff(value, { retry: choice === true });
@@ -2378,4 +2388,8 @@ function notifyHandoff(info) {
   const notification = new Notification({ title: displayText(words.title), body: displayText(words.key, words.params) });
   notification.once('click', () => focusOrOpen());
   notification.show();
+}
+// The system's folder dialog for the project folder where merges are checked (B6), opened for the person's window by the handoff entry.
+function chooseRepositoryFolder(c) {
+  return showDialog(c, 'open', { title: displayText('os.chooseRepository'), properties: ['openDirectory'] });
 }

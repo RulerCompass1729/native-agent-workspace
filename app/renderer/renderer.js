@@ -4041,7 +4041,7 @@ function render() {
     $('reconnect-button').hidden = !disconnected;
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
     renderSessions(); renderCreateSpaces();
-    renderArchives(); renderSpaceNavigation(); renderSpaceFiles(); renderQueue();
+    renderArchives(); renderSpaceNavigation(); renderSpaceFiles(); renderQueue(); noteHandoffState();
     if ($('session-chain-dialog').open) renderSessionChain();
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
@@ -4920,9 +4920,188 @@ let queueSpace = null;
 const QUEUE_FINISHED_SHOWN = 10;
 function openQueue() {
   queueSpace = spaceId;
+  queueOrder = null; queueOrderFresh = false; queueOpens += 1;
+  queueHandoffError(null);
   $('queue-list').dataset.signature = '';
   renderQueue();
   openTransientDialog('queue-dialog');
+  loadHandoff();
+}
+// B6: the integration handoff in the queue panel. The view is the person's own (the main process
+// refuses an agent's call) and is read for the space on screen, only where the state says that
+// handoffs are enabled; elsewhere nothing is asked and the panel stays as it was.
+let handoffView = null, handoffReading = null, handoffAgain = false, handoffTimer = null, handoffKey = '', queueOrder = null, queueOrderFresh = false, queueOpens = 0;
+const handoffSpace = () => ($('queue-dialog').open && queueSpace ? queueSpace : spaceId);
+// One read at a time; a call during a read asks for one more after it, and gets the read that is under way.
+function loadHandoff() {
+  if (state.handoffEnabled !== true || typeof api.handoff !== 'function' || disconnected) return Promise.resolve();
+  if (handoffReading) { handoffAgain = true; return handoffReading; }
+  handoffReading = readHandoff().finally(() => {
+    handoffReading = null;
+    if (handoffAgain) { handoffAgain = false; scheduleHandoff(); }
+  });
+  return handoffReading;
+}
+async function readHandoff() {
+  const id = handoffSpace();
+  // The rows' places are fixed by a view whose read began after the panel was opened, not by an older one.
+  const opened = $('queue-dialog').open && id === queueSpace ? queueOpens : 0;
+  try { handoffView = { roomId: id, view: await api.handoff('space', id) }; }
+  catch { handoffView = { roomId: id, view: null, failed: true }; }
+  if (opened && opened === queueOpens && $('queue-dialog').open) queueOrderFresh = true;
+  renderQueue(); renderQueueNeed();
+}
+function scheduleHandoff() {
+  if (handoffTimer) return;
+  handoffTimer = setTimeout(() => { handoffTimer = null; loadHandoff(); }, 250);
+}
+// With every state: the view is read again when this space's record or the integrator changed, and each time while the panel is open.
+function noteHandoffState() {
+  if (state.handoffEnabled !== true) return;
+  const id = handoffSpace();
+  const key = JSON.stringify([id, spaceRecord(id)?.metadataRevision ?? null, state.integrator?.sessionId || null, disconnected]);
+  if (key !== handoffKey || $('queue-dialog').open) { handoffKey = key; scheduleHandoff(); }
+  renderQueueNeed();
+}
+function queueHandoffModel(id) {
+  if (state.handoffEnabled !== true || !handoffView || handoffView.roomId !== id) return null;
+  const members = [];
+  for (const record of state.sessions) {
+    if (inSpace(record, id) && !record.archived && record.state !== 'ended') members.push(record.id);
+  }
+  return window.nativeWorkspaceHandoffQueue.model({ view: handoffView.view, failed: handoffView.failed === true, queue: spaceRecord(id)?.queue || [], sessions: state.sessions, members,
+    integrator: state.integrator || null, unnamed: uiText('identity.historicalMember'), generic: uiText('queue.handoff.theIntegrator') });
+}
+// The button that opens the panel says how many things in this space wait for the person.
+function renderQueueNeed() {
+  if (state.handoffEnabled !== true) return;
+  const need = queueHandoffModel(spaceId)?.need || 0, opener = $('room-queue');
+  if (opener.dataset.need === String(need)) return;
+  opener.dataset.need = String(need);
+  if (need) ui.display.text(opener, 'queue.titleNeed', { n: need });
+  else ui.display.text(opener, 'queue.title');
+}
+// One of the person's own steps on a handoff; whatever comes of it, the panel shows the state afterwards.
+async function queueHandoffAct(...args) {
+  try { return await api.handoff(...args); }
+  finally {
+    // A refresh that fails does not hide what came of the step itself; the next state carries it.
+    try { updateState(await api.initial()); } catch { /* Said by the connection's own notice. */ }
+    // The view that shows the outcome is one read after the step: not a read that was already under way.
+    if (handoffReading) await handoffReading.catch(() => {});
+    await loadHandoff().catch(() => {});
+  }
+}
+// A step that is refused says so inside the panel: a toast would lie behind it, where it can be neither read nor closed.
+// The refusals that mean "this folder will not do": only they are headed by "choose another".
+const QUEUE_FOLDER_REFUSALS = ['error.handoff.repositoryNotMain', 'error.handoff.repositoryUnsafe', 'error.handoff.repositoryNoMain'];
+function queueHandoffError(error, headline) {
+  const line = $('queue-handoff-error');
+  ui.display.unbind(line); line.replaceChildren();
+  line.hidden = !error;
+  if (!error) return;
+  if (!headline || !QUEUE_FOLDER_REFUSALS.includes(error?.uiMessage?.key)) { ui.showError(line, error); return; }
+  // What it means for the person first; the cause, in smaller words, under it.
+  const cause = node('div', undefined, 'quiet queue-handoff-small');
+  ui.showError(cause, error);
+  line.append(uiNode('div', headline, undefined, 'queue-handoff-refused'), cause);
+}
+function queueHandoffButton(key, params, kind, action, refused) {
+  const control = node('button', undefined, 'small');
+  control.type = 'button';
+  ui.display.text(control, key, params);
+  control.dataset.handoffAction = kind;
+  control.disabled = disconnected;
+  // One press at a time: the button waits for its own step.
+  control.addEventListener('click', async () => {
+    queueHandoffError(null);
+    control.disabled = true;
+    try { await action(); } catch (error) { queueHandoffError(error, refused); }
+    control.disabled = disconnected;
+  });
+  return control;
+}
+// The state of a task's delivery on the task's own row: the status line, why it waits, and the person's step.
+function queueHandoffRow(row, handoff) {
+  if (!handoff) return;
+  ui.display.text(row.querySelector('.queue-status'), handoff.status.key, handoff.status.params);
+  row.dataset.handoff = handoff.where;
+  if (handoff.why) row.append(uiNode('div', handoff.why.key, handoff.why.params, 'queue-outcome queue-handoff-why'));
+  const act = handoff.action;
+  if (act) row.querySelector('.queue-actions').append(queueHandoffButton(act.label.key, act.label.params, act.kind, () => queueHandoffAct(act.kind === 'send' ? 'retryDelivery' : 'redo', act.key)));
+}
+// A delivery that still waits for the person although the queue no longer lists its task.
+function queueOrphanRow(orphan, handoff) {
+  const row = node('div', undefined, 'queue-row');
+  const body = node('div', undefined, 'queue-text');
+  body.append(uiNode('div', 'queue.handoff.orphan', undefined, 'queue-creator quiet'), node('div', orphan.text));
+  row.dataset.queueItem = orphan.itemId;
+  row.dataset.status = 'done';
+  row.append(node('span', undefined, 'queue-status'), body, node('span', undefined, 'queue-actions'));
+  queueHandoffRow(row, handoff);
+  return row;
+}
+// The block on top of the panel: who integrates, what stops the handoffs, and what the integrator waits for.
+function renderQueueHandoff(block) {
+  const host = $('queue-handoff');
+  host.hidden = !block;
+  if (!block) { host.replaceChildren(); return; }
+  const head = node('div', undefined, 'queue-handoff-head'), side = node('span', undefined, 'quiet');
+  block.head.forEach((part, index) => { if (index) side.append(' · '); side.append(uiNode('span', part.key, part.params)); });
+  head.append(uiNode('h3', 'queue.handoff.title'), side);
+  const parts = [head];
+  for (const fault of block.faults) { const line = uiNode('p', fault.key, fault.params, 'queue-handoff-line'); line.dataset.handoff = 'fault'; parts.push(line); }
+  if (block.none) {
+    parts.push(uiNode('p', 'queue.handoff.none', undefined, 'queue-handoff-line'));
+    if (block.none.count) parts.push(uiNode('p', 'queue.handoff.noneCount', { n: block.none.count }, 'quiet queue-handoff-small'));
+  }
+  for (const stop of block.stops) parts.push(uiNode('p', stop.key, stop.params, 'queue-handoff-line'));
+  const repository = block.repository;
+  if (repository) {
+    // The words on the left, the button on the right: a long path wraps inside its own column.
+    const line = node('div', undefined, repository.need ? 'queue-handoff-repository' : 'queue-handoff-repository quiet'), words = node('div');
+    line.dataset.handoff = 'repository';
+    if (repository.root) {
+      const parts = repository.root.split('/').filter(Boolean);
+      const path = uiNode('div', 'queue.handoff.repository', { root: parts.length > 2 ? '…/' + parts.slice(-2).join('/') : repository.root }, 'queue-handoff-path');
+      path.title = repository.root;
+      words.append(path);
+    }
+    if (repository.problem) words.append(uiNode('div', repository.problem));
+    else if (!repository.root) words.append(uiNode('div', 'queue.handoff.repositoryNone', { who: repository.who }));
+    line.append(words, queueHandoffButton(repository.root ? 'queue.handoff.repositoryChange' : 'queue.handoff.repositoryChoose', undefined, 'repository', () => queueHandoffAct('chooseRepository'), 'queue.handoff.repositoryRefused'));
+    parts.push(line);
+  }
+  const ask = block.ask;
+  if (ask) {
+    const box = node('div', undefined, 'queue-handoff-ask'), words = ask.kind === 'asks' ? 'asks' : 'other';
+    box.dataset.handoff = 'ask';
+    box.append(uiNode('div', 'queue.handoff.ask.' + ask.kind, { name: ask.name }, 'queue-status'));
+    if (ask.question) box.append(node('div', ask.question, 'queue-handoff-question'));
+    box.append(uiNode('div', 'queue.handoff.guide.' + words, { name: ask.name }, 'quiet queue-handoff-small'));
+    if (ask.about.length) {
+      box.append(uiNode('div', 'queue.handoff.about', () => ({ list: ask.about.map(item => (item.member ? uiText('queue.handoff.aboutItem', item) : item.text)).join(uiText('queue.handoff.aboutSeparator')) }), 'quiet queue-handoff-small'));
+    }
+    const buttons = node('div', undefined, 'queue-handoff-buttons');
+    const open = queueHandoffButton('queue.handoff.open', { name: ask.name }, 'open', async () => { $('queue-dialog').close(); await select(ask.sessionId); });
+    open.disabled = disconnected || !ask.known;
+    buttons.append(open);
+    // The other spaces whose deliveries the handoff is about, as far as their panels can be opened: each by its own name.
+    const others = () => ask.elsewhere.map(id => spaceRecord(id)).filter(room => room && !room.archived && spaceName(room)).map(room => uiText('queue.handoff.spaceQuoted', { name: spaceName(room) }));
+    const named = () => ({ spaces: others().join(uiText('queue.handoff.aboutSeparator')) });
+    // The person's steps on a handoff are offered where its deliveries are shown; and here too when no such panel can be opened.
+    if (ask.here || !others().length) {
+      if (!ask.here) box.append(uiNode('div', 'queue.handoff.elsewhereGone', undefined, 'quiet queue-handoff-small'));
+      else if (others().length) box.append(uiNode('div', 'queue.handoff.elsewhereToo', named, 'quiet queue-handoff-small'));
+      buttons.append(queueHandoffButton('queue.handoff.again.' + words, undefined, 'again', () => queueHandoffAct('resolve', ask.handoffId, true)),
+        queueHandoffButton('queue.handoff.keep', undefined, 'keep', () => queueHandoffAct('resolve', ask.handoffId, false)));
+      box.append(buttons, uiNode('div', 'queue.handoff.after.' + words, { name: ask.name }, 'quiet queue-handoff-small'));
+    } else {
+      box.append(uiNode('div', 'queue.handoff.elsewhere', named, 'quiet queue-handoff-small'), buttons);
+    }
+    parts.push(box);
+  }
+  host.replaceChildren(...parts);
 }
 function queueMemberName(id) {
   const record = state.sessions.find(s => s.id === id);
@@ -4960,7 +5139,7 @@ function queueOutcomeNode(item) {
   }
   return null;
 }
-function queueShownItems(room) {
+function queueShownItems(room, keep = []) {
   const open = [];
   const finished = [];
   for (const item of room.queue || []) {
@@ -4970,7 +5149,9 @@ function queueShownItems(room) {
       finished.push(item);
     }
   }
-  return open.concat(finished.slice(-QUEUE_FINISHED_SHOWN));
+  // A finished task whose delivery still waits for the person stays in the list however old it is.
+  const older = finished.slice(0, Math.max(0, finished.length - QUEUE_FINISHED_SHOWN)).filter(item => keep.includes(item.id));
+  return open.concat(older, finished.slice(-QUEUE_FINISHED_SHOWN));
 }
 function queueRow(item, memberIds) {
   const row = node('div', undefined, 'queue-row');
@@ -5083,14 +5264,35 @@ function renderQueue() {
     }
   }
   renderRotationChains();
-  const items = queueShownItems(room);
+  const handoff = queueHandoffModel(queueSpace);
+  const items = queueShownItems(room, handoff ? handoff.keep : []);
+  // What needs the person comes first when the panel opens; while it stays open nothing changes place.
+  // The places are kept as soon as a view read after the opening is here, also when it shows nothing new.
+  let placed = null;
+  if (handoff) {
+    const ids = [...items.map(item => item.id), ...handoff.orphans.map(orphan => orphan.itemId)];
+    placed = window.nativeWorkspaceHandoffQueue.order(queueOrderFresh ? queueOrder : null, ids, new Set(ids.filter(id => handoff.rows[id]?.front)));
+    // (Not from a view that could not be read: it lists no row that waits for the person.)
+    if (queueOrderFresh && handoffView.failed !== true) queueOrder = placed;
+  }
   const list = $('queue-list');
-  const signature = JSON.stringify([items, memberSignature, needUpdate]);
+  const signature = JSON.stringify(handoff ? [items, memberSignature, needUpdate, handoff, disconnected, placed] : [items, memberSignature, needUpdate]);
   if (list.dataset.signature === signature) return;
   list.dataset.signature = signature;
+  renderQueueHandoff(handoff ? handoff.block : null);
   const rows = [];
   for (const item of items) {
-    rows.push(queueRow(item, memberIds));
+    const row = queueRow(item, memberIds);
+    if (handoff) {
+      queueHandoffRow(row, handoff.rows[item.id]);
+    }
+    rows.push(row);
+  }
+  if (placed) {
+    for (const orphan of handoff.orphans) {
+      rows.push(queueOrphanRow(orphan, handoff.rows[orphan.itemId]));
+    }
+    rows.sort((a, b) => placed.indexOf(a.dataset.queueItem) - placed.indexOf(b.dataset.queueItem));
   }
   list.replaceChildren(...rows);
   if (!rows.length) {

@@ -178,14 +178,14 @@ async function run() {
   // 2) The person designates the integrator; one handoff goes to it, and the space says so.
   await page.evaluate(id => workspace.integrator(id), integrator.id);
   // No main repository is chosen yet: "main" is read nowhere, least of all in the integrator's own folder. Nothing is handed out, and the person is asked once.
-  await until(async () => (await notices()).some(options => options.body === '2 件交付在等集成，但没有可用的主仓库：还没有指定，或者指定的那个现在通不过检查'), 'The person is asked to choose the main repository');
+  await until(async () => (await notices()).some(options => options.body === '2 件交付在等集成，但没有可用的项目文件夹：还没有选，或者选的那个现在通不过检查'), 'The person is asked to choose the main repository');
   assert.equal((await sends()).filter(send => send.text.includes('【NAW 集成交接】')).length, 0);
   assert.deepEqual(await page.evaluate(() => workspace.handoff('repository')), { root: null, problem: null });
   // The person chooses it from their own window: this run's temporary repository, by its real path (a path through a link is refused).
   const main = fs.realpathSync(repo);
   // A folder inside the repository is refused in words, and so is the integrator's own session folder, which is no repository.
   const refusal = target => page.evaluate(async value => { try { await workspace.handoff('setRepository', value); return null; } catch (error) { return String(error?.uiMessage?.key || error?.message || error); } }, target);
-  for (const [target, words] of [[path.join(main, '.git'), /repositoryNotMain|最上层文件夹/], [fs.realpathSync(folder), /repositoryUnsafe|不是一个 Git 仓库/]]) assert.match(String(await refusal(target)), words, target);
+  for (const [target, words] of [[path.join(main, '.git'), /repositoryNotMain|最上层的文件夹/], [fs.realpathSync(folder), /repositoryUnsafe|不是一个 Git 仓库/]]) assert.match(String(await refusal(target)), words, target);
   assert.deepEqual(await page.evaluate(() => workspace.handoff('repository')), { root: null, problem: null }, 'A refused folder is not recorded');
   assert.deepEqual(await page.evaluate(root => workspace.handoff('setRepository', root), main), { root: main });
   await until(async () => (await sends()).some(send => send.id === integrator.id && send.text.startsWith('【NAW 集成交接】')), 'The handoff reaches the integrator');

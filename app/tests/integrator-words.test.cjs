@@ -6,7 +6,7 @@ const path = require('node:path');
 const locale = require('../ui-locale.js');
 const { RoomState } = require('../room-state.cjs');
 const { IntegrationHandoffs } = require('../integrator-handoff.cjs');
-const { spaceWords, personWords, group } = require('../integrator-words.cjs');
+const { spaceWords, personWords, rowWords, group } = require('../integrator-words.cjs');
 
 // The sentences a delivery's space and the person are given about an integration handoff (B6 E2b,
 // checkpoint H6a). Synthetic deliveries; nothing is sent, shown or connected.
@@ -114,7 +114,7 @@ test('the person\'s notice says how many deliveries and why, in both languages, 
   }
   for (const bad of [null, {}, { reason: 'made-up', count: 1 }, { reason: 7 }]) assert.equal(personWords(bad), null);
   assert.equal(say('en', personWords({ reason: 'review-off', count: -3 })), 'Reviews are off, and deliveries need an independent review. Waiting: 0');
-  assert.equal(say('zh', personWords({ reason: 'repository-unset', count: 2 })), '2 件交付在等集成，但没有可用的主仓库：还没有指定，或者指定的那个现在通不过检查');
+  assert.equal(say('zh', personWords({ reason: 'repository-unset', count: 2 })), '2 件交付在等集成，但没有可用的项目文件夹：还没有选，或者选的那个现在通不过检查');
   // A notice is built from the record's own notice info, which holds no task text to begin with.
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-words-')); fs.chmodSync(directory, 0o700);
   try {
@@ -159,6 +159,32 @@ test('the space record is written once per delivery and state, into the space th
   assert.throws(() => room.recordHandoff(fact({ label: 'handed:H2-00000000', handoffId: 'H2-00000000' })), error => error.uiMessage?.key === 'error.room.updatingDraftRetained');
   room.gates.clear();
   assert.deepEqual(room.recordHandoff(fact({ label: 'handed:H2-00000000', handoffId: 'H2-00000000' })), { recorded: true });
+});
+
+test('a held delivery\'s row in the queue panel says its cause in one short sentence, in both languages, without the task\'s text', () => {
+  const OWN = ['reviewOff', 'reviewCap', 'lockHeld', 'checkpointInvalid', 'unverified', 'mainUnreadable', 'notDelivered', 'sendRefused', 'replyUnread', 'noAnswer', 'noReply', 'personTyped', 'integratorGone', 'conflict'];
+  const seen = new Set();
+  for (const [reason, name] of Object.entries(REASONS)) {
+    const words = rowWords({ reason, note: 'the integrator wrote this', text: TASK });
+    const expected = OWN.includes(name) ? name : 'other';
+    assert.equal(words.key, `queue.handoff.why.${expected}`, reason);
+    assert.deepEqual(words.params, name === 'lockHeld' ? { owner: 'Claude 终端' } : expected === 'other' ? { note: 'the integrator wrote this' } : {}, reason);
+    for (const language of ['zh', 'en']) {
+      // (The panel adds what it calls the integrator: its session's name, known to the page.)
+      const said = locale.format(language, words.key, { ...words.params, who: 'Riley' });
+      assert.ok(said && said !== words.key && !said.includes('{') && !said.includes(TASK), `${language} ${reason}`);
+      if (name === 'conflict') assert.ok(said.includes('Riley'), `${language}: the row says whose session to go to`);
+      if (name === 'lockHeld') assert.ok(said.includes('Claude 终端'));
+      if (expected === 'other') assert.ok(said.includes('the integrator wrote this'));
+    }
+    seen.add(expected);
+  }
+  assert.deepEqual([...seen].sort(), [...OWN, 'other'].sort(), 'Every sentence of a held row is reached by some reason');
+  // A reason without a sentence of its own and without the integrator's words says only that none was given, never the record's name for it.
+  for (const item of [{ reason: 'held-other' }, { reason: 'integrator-unset' }, { reason: 'made-up' }, { reason: 'held-other', note: '' }, { reason: 'held-other', note: 7 }, { reason: 7 }, {}, null, undefined]) {
+    assert.deepEqual(rowWords(item), { key: 'queue.handoff.why.unknown', params: {} }, JSON.stringify(item));
+  }
+  assert.notEqual(say('zh', rowWords({})), say('en', rowWords({})));
 });
 
 test('the words module only maps: it loads nothing, and only the space record and the main process\'s notice load it', () => {
