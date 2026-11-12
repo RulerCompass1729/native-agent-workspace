@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
 const { uiError } = require('../ui-errors.cjs');
 const { roomIds } = require('../collaboration-spaces.cjs');
 const { StewardRole, DUTY_MAX, validDuty } = require('../steward-role.cjs');
@@ -24,13 +25,23 @@ function fixture(t, { landingOwner = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-steward-entry-'));
   t.after(() => { try { fs.chmodSync(directory, 0o700); } catch {} fs.rmSync(directory, { recursive: true, force: true }); });
   const role = new StewardRole(directory), room = new RoomState(directory);
-  const handlers = new Map(), broadcasts = [], memberships = [], submitted = [];
+  const handlers = new Map(), broadcasts = [], memberships = [], submitted = [], queued = [];
   // The real membership function is not under test here: only whether it is reached.
   const roomState = { apply: snapshot => room.apply(snapshot), metadata() {}, serial: action => action(), membership: async (_client, id, join, _label, space) => { memberships.push([id, join, space ?? null]); } };
   const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, roomIds, stewardRole: role, roomState, landingOwner, validRoomId: id => typeof id === 'string' && id.length > 0,
     queueDispatcher: null, sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); },
     // What designating sends: the person's own input, as the composer gives it, in the person's language.
-    validDuty, displayText: key => locale.format('zh', key), submit: async (c, method, ...args) => { if (context.refuseSubmit) throw context.refuseSubmit; submitted.push([c === person, method, ...args]); }, refuseSubmit: null });
+    validDuty, displayText: key => locale.format('zh', key), uiLocale: locale, refuseSubmit: null,
+    submit: async (c, method, ...args) => {
+      if (context.refuseSubmit) throw context.refuseSubmit;
+      submitted.push([c === person, method, ...args]);
+      if (method !== 'queue') return;
+      // As the workspace does: the message is recorded, waiting, and Claude answers only once its running turn has taken it.
+      return new Promise((resolve, reject) => { queued.push({ resolve, reject }); setImmediate(() => {
+        const session = sessions.find(session => session.id === args[0]);
+        (session.messages ||= []).push({ id: `row-${queued.length}`, role: 'user', inputMode: 'queue', status: 'awaiting-native' }); client.emit('state');
+      }); });
+    } });
   vm.runInContext(cut('function register(name, handler) {', 'async function replaceBackendSockets'), context);
   vm.runInContext(cut('function keepStewardOutside(id, join) {', 'function conversationReaderAllowed(actor) {'), context);
   vm.runInContext(cut("  register('steward', async (c, id, duty = null) => {", "  // B6: the person's own actions on an integration handoff"), context);
@@ -50,7 +61,7 @@ function fixture(t, { landingOwner = null } = {}) {
     { id: 'background', nativeId: 'native-background', name: 'Background', state: 'background', roomIds: [] },
     { id: 'broken', nativeId: 'native-broken', name: 'Broken membership', state: 'idle', roomIds: 'shared' },
   ];
-  const client = { call: async () => ({ sessions }), entries: [{ state: { sessions: [{ id: 'old' }], capabilities: [] } }], refresh: async () => {}, snapshot: () => ({ wakePolicy: { enabled: true }, sessions }) };
+  const client = Object.assign(new EventEmitter(), { call: async () => ({ sessions }), entries: [{ state: { sessions: [{ id: 'old' }], capabilities: [] } }], refresh: async () => {}, snapshot: () => ({ wakePolicy: { enabled: true }, sessions }) });
   const person = { client, view: { owner: 'first-window' } };
   const agent = id => {
     const record = sessions.find(session => session.id === id);
@@ -58,7 +69,7 @@ function fixture(t, { landingOwner = null } = {}) {
     const c = { background: true, actor, client, view: { selected: id, owner: 'first-window' }, win: { destroy() {} }, checkActor: async () => {} };
     return (name, args) => backgroundOperation.run(actor, () => handlers.get(name)(c, ...args), { context: c, valid: async () => {} });
   };
-  return { directory, role, handlers, broadcasts, memberships, submitted, sessions, person, agent, context, file: path.join(directory, 'steward.json'), call: (...args) => handlers.get('steward')(person, ...args) };
+  return { directory, role, handlers, broadcasts, memberships, submitted, queued, client, sessions, person, agent, context, file: path.join(directory, 'steward.json'), call: (...args) => handlers.get('steward')(person, ...args) };
 }
 
 test('nobody is the butler until the person designates one session; the record survives a restart, follows a finished replacement, and can be cleared', t => {
@@ -127,8 +138,10 @@ test('designating sends the duty statement into the session as the person\'s mes
   assert.deepEqual(await f.call('outside'), { duty: { state: 'sent' } });
   assert.deepEqual(f.submitted, [[true, 'send', 'outside', header + '\n' + standard, 'native-outside']]);
   assert.deepEqual(JSON.parse(fs.readFileSync(f.file, 'utf8')), { version: 1, selected: { sessionId: 'outside', nativeId: 'native-outside' } });
-  // A Claude session in a turn is queued after it; the person's own text is sent and kept for the next time.
+  // A Claude session in a turn is queued after it; the person's own text is sent and kept for the next time. The answer
+  // comes once the message stands waiting in its conversation, not when the running turn ends and takes it.
   assert.deepEqual(await f.call('other', '只做排期，不做执行。'), { duty: { state: 'queued' } });
+  assert.deepEqual([f.queued.length, f.sessions.find(s => s.id === 'other').messages.map(m => m.status), f.client.listenerCount('state')], [1, ['awaiting-native'], 0]);
   assert.deepEqual(f.submitted[1], [true, 'queue', 'other', header + '\n只做排期，不做执行。', 'native-other']);
   assert.equal(new StewardRole(f.directory).duty, '只做排期，不做执行。');
   // Confirming the same butler again sends it again; null goes back to the default.
@@ -139,6 +152,16 @@ test('designating sends the duty statement into the session as the person\'s mes
   f.context.refuseSubmit = Error('The session closed');
   const refused = await f.call('outside');
   assert.deepEqual([refused.duty, f.role.current().sessionId], [{ state: 'not-sent', error: { message: 'The session closed' } }, 'outside']);
+  // A queue refused before the message is recorded is said, in the form a thrown error is shown in.
+  f.context.refuseSubmit = uiError('error.workspace.nativeWaitingInputUnavailable');
+  const unqueued = await f.call('other');
+  assert.deepEqual([unqueued.duty.state, unqueued.duty.error.message, unqueued.duty.error.uiMessage, f.client.listenerCount('state')],
+    ['not-sent', f.context.refuseSubmit.message, locale.displayMessage(f.context.refuseSubmit.uiMessage), 0]);
+  // A refusal after the row stands is that row's own state; it is not an unhandled failure here.
+  f.queued[0].reject(Object.assign(Error('Closed'), { notSent: true }));
+  f.context.refuseSubmit = Object.assign(Error(''), { uiMessage: { version: 1, key: 'error.steward.dutyBusy' } });
+  const incomplete = uiError('error.main.operationIncomplete');
+  assert.deepEqual((await f.call('outside')).duty, { state: 'not-sent', error: { message: incomplete.message, uiMessage: incomplete.uiMessage } }, 'No message: the same fallback as a thrown error');
   // Revoking sends nothing. Text that is empty or too long is refused before anything changes.
   f.context.refuseSubmit = null; assert.equal(await f.call(null), null); assert.equal(f.submitted.length, 3);
   const before = fs.readFileSync(f.file, 'utf8');
@@ -156,6 +179,12 @@ test('the duty statement is bounded so that the record stays readable by every b
   assert.ok(fs.statSync(f.file).size <= 4096, String(fs.statSync(f.file).size));
   assert.deepEqual([new StewardRole(f.directory).current(), new StewardRole(f.directory).duty], [long, most]);
   assert.throws(() => f.role.set(long, most + '说'), key('error.steward.dutyInvalid'));
+  // JSON writes a lone surrogate as six bytes: such ids with the longest statement would pass the old limit, so the
+  // whole file is measured, and the record on disk stays as it was.
+  const before = fs.readFileSync(f.file, 'utf8'), odd = { sessionId: '\ud800'.repeat(100), nativeId: '\udfff'.repeat(100) };
+  assert.throws(() => f.role.set(odd, most), key('error.steward.dutyInvalid'));
+  assert.deepEqual([fs.readFileSync(f.file, 'utf8'), f.role.duty], [before, most]);
+  f.role.set(odd, '短'); assert.ok(fs.statSync(f.file).size <= 4096); assert.deepEqual(new StewardRole(f.directory).current(), odd);
   // Tabs and new lines are text; other control characters are not.
   assert.equal(validDuty('一\n二\t三\r\n'), true); assert.equal(validDuty('a\u001bb'), false);
   for (const duty of ['', 5, null, 'a\u0007']) {

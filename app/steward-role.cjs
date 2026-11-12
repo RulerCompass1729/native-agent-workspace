@@ -17,7 +17,7 @@ const validId = value => typeof value === 'string' && value.length > 0 && value.
 // The duty statement the person last chose to send the butler (steward step 2, batch 4; the activation checklist,
 // item 6): a prompt, not a permission. Absent means the default text of the person's language. Bounded in bytes so the
 // whole file stays under the 4096 bytes every build reads (an older build takes a longer file for a broken record).
-const DUTY_MAX = 3200;
+const DUTY_MAX = 3200, RECORD_MAX = 4096;
 const validDuty = value => typeof value === 'string' && value.trim().length > 0 && Buffer.byteLength(JSON.stringify(value)) <= DUTY_MAX && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value);
 function identity(value) {
   if (!value || Array.isArray(value) || Object.keys(value).sort().join(',') !== 'nativeId,sessionId' || !validId(value.sessionId) || !validId(value.nativeId)) throw Error('Invalid steward identity');
@@ -41,7 +41,7 @@ class StewardRole {
     this.duty = null;
     this.failed = false;
     try {
-      const data = JSON.parse(readPrivate(this.file, 4096));
+      const data = JSON.parse(readPrivate(this.file, RECORD_MAX));
       if (data.version !== 1 || !Object.hasOwn(data, 'selected') || Object.hasOwn(data, 'duty') && !validDuty(data.duty)) throw Error('Invalid steward record');
       this.selected = data.selected === null ? null : identity(data.selected);
       this.duty = data.duty ?? null;
@@ -63,11 +63,14 @@ class StewardRole {
   set(value, duty = this.duty) {
     const selected = value === null ? null : identity(value);
     if (duty !== null && !validDuty(duty)) throw uiError('error.steward.dutyInvalid');
+    // The ids are bounded in characters, and JSON writes a lone surrogate as six bytes: the whole file is what counts.
+    const body = JSON.stringify({ version: 1, selected, ...(duty === null ? {} : { duty }) });
+    if (Buffer.byteLength(body) > RECORD_MAX) throw uiError('error.steward.dutyInvalid');
     const temp = `${this.file}.${randomUUID()}.tmp`;
     let fd;
     try {
       fd = fs.openSync(temp, 'wx', 0o600);
-      fs.writeFileSync(fd, JSON.stringify({ version: 1, selected, ...(duty === null ? {} : { duty }) }));
+      fs.writeFileSync(fd, body);
       fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
       fs.renameSync(temp, this.file);
       const directory = fs.openSync(path.dirname(this.file), 'r');

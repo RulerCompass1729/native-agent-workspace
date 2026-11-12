@@ -1854,10 +1854,24 @@ async function boot() {
     try {
       const method = record.state === 'working' && record.provider === 'claude' ? 'queue' : record.state === 'idle' ? 'send' : null;
       if (!method) throw uiError('error.steward.dutyBusy');
-      await submit(c, method, record.id, text, record.nativeId);
+      const rows = () => c.client.snapshot().sessions.find(s => s.id === record.id)?.messages || [], before = new Set(rows().map(m => m.id));
+      const sending = submit(c, method, record.id, text, record.nativeId);
+      // Claude answers a queued message only when its running turn has ended and taken it. The person is not kept
+      // waiting that long: once the message stands in the butler's conversation, waiting there, it is queued, and
+      // that row keeps its own state (as the composer's queued message does). A refusal before then is said here.
+      if (method === 'queue') await new Promise((resolve, reject) => {
+        const settle = (done, value) => { c.client.off('state', look); done(value); };
+        const look = () => { if (rows().some(m => !before.has(m.id) && m.inputMode === 'queue' && m.status === 'awaiting-native')) settle(resolve); };
+        c.client.on('state', look);
+        sending.then(() => settle(resolve), error => settle(reject, error));
+        look();
+      });
+      else await sending;
       return { duty: { state: method === 'queue' ? 'queued' : 'sent' } };
     } catch (error) {
-      return { duty: { state: 'not-sent', error: { message: String(error?.message ?? ''), ...(error?.uiMessage ? { uiMessage: error.uiMessage } : {}) } } };
+      // Shown as a thrown error would be (the IPC reply's own step): the person's language, the same fallback.
+      const message = String(error?.message ?? ''), uiMessage = message ? uiLocale.displayMessage(error?.uiMessage) : uiError('error.main.operationIncomplete').uiMessage;
+      return { duty: { state: 'not-sent', error: { message: message || uiError('error.main.operationIncomplete').message, ...(uiMessage ? { uiMessage } : {}) } } };
     }
   });
   // B6: the person's own actions on an integration handoff: retry one delivery or everything
