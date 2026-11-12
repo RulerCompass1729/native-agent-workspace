@@ -789,6 +789,11 @@ class Claude extends EventEmitter {
         if (!this.seenRootTurns.has(message.turnId)) {
           this.seenRootTurns.add(message.turnId);
           while (this.seenRootTurns.size > 256) this.seenRootTurns.delete(this.seenRootTurns.values().next().value);
+          // Steward step 2, batch 0: after a gap, a fresh start that carries no gap of its own is where NAW sees whole
+          // again, as after a bind. The bridge declares each lost row on the next row or poll it delivers, and an older
+          // sequence is refused, so every later row of this turn arrives or comes as a new gap. Proofs the gap marked
+          // stay incomplete; only turns started from here can be whole, and grant control or a reported end.
+          if (!message.replayed && !message.gap) this.displayGap = false;
           this.rootTurn = message.replayed || message.gap ? null : { id: message.turnId, promptId: message.promptId, status: 'working' };
           // T-138: the started root turn, kept apart from rootTurn (permission and input boundaries clear
           // that sharing authority); `announced` is how many prompts UserPromptSubmit had announced by then.
@@ -903,6 +908,11 @@ class Claude extends EventEmitter {
       if (this.rootTurn.completed && !incomplete && !turn.incomplete) {
         if (this.startedRootTurn?.id === turnId) this.startedRootTurn.endReported = true; // never a second, boundary end (T-141)
         this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId, status: 'completed' });
+      } else if (this.rootTurn.completed && this.startedRootTurn?.id === turnId && !this.startedRootTurn.endReported) {
+        // Ended but not seen whole (a display index missing, a turn too large to prove): reported once, never as
+        // completed, so a wake staged in it is withdrawn with that reason instead of staying 已登记 for good.
+        this.startedRootTurn.endReported = true;
+        this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId, status: 'incomplete' });
       }
       if (status === 'failed' && message.failedRequest === true && !incomplete && !turn.incomplete && /^[a-f0-9-]{36}$/i.test(message.errorMessageId || '')) this.rootTurn.errorMessageId = message.errorMessageId;
       if (status === 'failed' && message.failedRequest === true && !incomplete && !turn.incomplete && message.failureCause === 'usageCredits') this.rootTurn.failureCause = 'usageCredits';

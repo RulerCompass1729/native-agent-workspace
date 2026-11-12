@@ -12503,3 +12503,27 @@ that stopped part way (reworded: "没能打开", "NAW 不会去修它"); and one
 covers both causes of a record not loaded, so a change of cause between two
 starts stays quiet until a start loads it (narrow, recorded). The review of this
 batch ends here.
+
+## The steward after one observation gap: control and automatic messages come back at the next clean turn (steward step 2, batch 0, 2026-11-12)
+
+The person, 2026-11-11 19:08: 「大管家权限最高,应该啥都可以看到和操作」; 21:2x: 「大管家还未彻底开发完成,那自然也是优先级最高的」; 2026-11-12 06:4x, asked by the steward to press a queue button: 「啥?我点啥?这些事难道你不能做吗」.
+
+Measured on the steward's own Claude session (relayed by the integrator): from 2026-11-11 22:10 every `workspace_control` call failed `Native root control call is unavailable`, new turns included; on 2026-11-12 06:4x a `workspace_message` it sent stayed staged and was never sent or withdrawn.
+
+Source chain: `observeRootGap` sets `displayGap`; `background-control-native.cjs` `rootCall` and `claude-submit.cjs` `rootOutboxProof` require it unset; every turn after it started its display proof incomplete (`incomplete: this.displayGap`), so the turn-end branch never emitted `nativeTurnEnd`, and `session-wake.complete()` never ran for a wake staged in it. Only a rebind or a followed context switch cleared it; a compaction did not.
+
+When NAW can say again that it saw a turn whole: at the first fresh root turn start after the gap that carries no gap of its own (not replayed, current lease and epoch, a turn id not seen before). The bridge declares every lost row on the next row or poll it delivers (`register.js` `markObservationGap`; the flag clears only after a delivery that carried it), and the adapter refuses any sequence not above the last, so each later row of that turn either arrives or comes as a new gap, exactly as after a bind. Proofs the gap marked stay incomplete. A start that carries the gap restores nothing; the next clean start does. A later gap takes control away again.
+
+The other half: a turn whose end was observed but which was not seen whole for another reason (a display index missing, more than 64 blocks or 500000 characters) also emitted no end at all, so its wake hung the same way. Its end is now reported once as `incomplete`, never as `completed`; the wake is withdrawn with its own sentence (`notice.wake.turnIncompleteCancelled`: 「发送方这一轮的原生内容没能确认完整；自动消息未投递。」). The other consumers already treat any status other than `completed` as abnormal: the operator report marks the turn abnormal, a scheduled capacity continuation is cancelled, and the outbox waits end.
+
+A wake staged before a gap was already withdrawn at the gap, with the gap as its reason (`pauseParticipant` → `cancelParticipant`); a test now holds that. No wake can be staged in the gap turn after it, since the gap clears the live turn.
+
+Changed test: `missing display identity or a display gap never falls back to raw Stop text` declared its gap at the adapter before any of that turn's rows arrived, which by the rule above concerns only earlier turns. Its start is now delivered first, so the gap falls inside the turn it means.
+
+Evidence: `app/tests/claude-display-gap-recovery.test.cjs` (8 tests: the real bridge over a failing transport, and an end-to-end wake with the adapter observing the turn's end itself; the session-wake fixture's `finish()` emits the end by hand and never met this gate). On a clean main checkout 6 fail and 2 pass (the two that pass are the gap-before-staging and replay negatives); on this branch 8 pass. Full suite 6344 pass, 0 fail.
+
+Not verified, or known:
+- No real native gap was reproduced, and no model was run.
+- A turn that fails without a capacity failure still emits no end, so a wake staged in it stays staged (probe: still staged after the next turn starts). An interrupted turn's wake is withdrawn. Not fixed here; it needs either a report beside the deferred capacity reads or withdrawal at the next turn start.
+- A wake in a turn too large to prove is now withdrawn, not delivered. Whether display size should matter for wake authority (only a lost row can hide a person's input) is a separate decision.
+- A wake already left staged in daily data becomes 「未确认」 at the next start (the existing reopen rule) and is not sent.
