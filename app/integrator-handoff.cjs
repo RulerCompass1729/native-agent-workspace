@@ -27,7 +27,7 @@ const HANDOFF_LIMIT = 40;     // deliveries one handoff carries; the rest wait f
 const AGED_MS = 4 * 60 * 60 * 1000;
 const MARKER = '【NAW 集成交接】';
 const OPEN_STATES = ['deliverable', 'held', 'handed'];
-const STATES = [...OPEN_STATES, 'merged', 'returned', 'superseded'];
+const STATES = [...OPEN_STATES, 'merged', 'returned', 'superseded', 'dropped'];
 // Reasons that exist once for the whole backlog, and those that exist once per subject.
 const GLOBAL_REASONS = ['review-off', 'review-cap', 'checkpoint-invalid', 'merge-unverified', 'send-unconfirmed',
   'record-missing', 'send-refused', 'no-result', 'no-reply', 'person-intervened', 'held-other', 'backlog-full', 'integrator-unset', 'integrator-in-space', 'main-unreadable',
@@ -65,6 +65,7 @@ function showLabel(state, entry) {
   if (entry.state === 'held') return `held:${entry.reason}`;
   if (entry.state === 'merged') return `merged:${entry.mergedAs}`;
   if (entry.state === 'returned') return 'returned';
+  if (entry.state === 'dropped') return 'dropped';
   return null;
 }
 
@@ -912,8 +913,8 @@ class IntegrationHandoffs {
   }
   // Where each delivery of one space stands, by queue item, for the person's queue panel. The
   // states: 'queued' (waits to be handed out), 'handed' (the integrator has it), 'asking'
-  // (inside a handoff that waits for the person), 'held', 'merged', 'returned'. A returned one
-  // says whether the person already gave its task back. A delivery that a newer one replaced
+  // (inside a handoff that waits for the person), 'held', 'merged', 'returned', 'dropped' (the
+  // person said it is not needed). A returned one says whether the person already gave its task back. A delivery that a newer one replaced
   // is left out, and so is a note that only says no reason was given. Copies only, in an object
   // without a prototype: whatever a queue item is called, it is a key and nothing else.
   spaceView(roomId) {
@@ -946,6 +947,19 @@ class IntegrationHandoffs {
     entry.redone = true;
     this.commit(next);
     return { redone: true };
+  }
+  // The person's "not needed" on a delivery that waits for them: one on hold, or one that was returned and
+  // not given back. It is set aside: not handed out, checked, confirmed or given back any more, it waits
+  // for nobody, and its space is told. Refused for anything else. There is no way back; a newer delivery
+  // of the branch is a new delivery.
+  drop(key, now = Date.now()) {
+    const next = this.draft();
+    const entry = next.ready.find(candidate => candidate.key === key);
+    if (!entry || !(entry.state === 'held' || entry.state === 'returned' && !entry.redone)) throw stale('This delivery cannot be set aside');
+    entry.state = 'dropped'; entry.closedAt = now;
+    delete entry.reason; delete entry.claim; delete entry.resends; delete entry.note;
+    this.commit(next);
+    return { dropped: true };
   }
   // The claim kept with a held delivery, for the person's second step on it. The caller names the step by
   // the hold it is for: 'main-unreadable' ("check again": git could not be read) unless it says

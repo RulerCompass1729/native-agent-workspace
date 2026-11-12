@@ -1733,6 +1733,8 @@ async function boot() {
         result = await integrationRepository.choose(picked.filePaths[0]);
       }
       else if (action === 'retryDelivery') result = handoffs.retryReady(value);
+      // "Not needed": a delivery on hold, or one that was returned and not given back, is set aside for good.
+      else if (action === 'drop') result = handoffs.drop(value);
       else if (action === 'retryReason') result = handoffs.retryReason(value);
       else if (action === 'resolve') result = handoffs.resolveHandoff(value, { retry: choice === true });
       else if (action === 'answer') result = handoffs.answer(value);

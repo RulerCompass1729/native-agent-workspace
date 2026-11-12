@@ -44,6 +44,7 @@ function spaceWords(fact) {
     return { key: 'notice.handoff.merged', params: { ...base, as: short(fact.as), passed, total } };
   }
   if (fact.outcome === 'returned') return { key: 'notice.handoff.returned', params: { ...base, note: text(fact.note, '—') } };
+  if (fact.outcome === 'dropped') return { key: 'notice.handoff.dropped', params: base };
   if (fact.outcome !== 'held' && fact.outcome !== 'waiting') return null;
   const found = group(fact.reason);
   const allowed = fact.outcome === 'held' ? HELD : WAITING;

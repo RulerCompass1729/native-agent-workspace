@@ -29,15 +29,76 @@ test('where handoffs are not enabled, or a space has no delivery, the panel says
   assert.equal(faulted.need, 0);
 });
 
+test('a row that waits for the person can be set aside: asked once more in the row first, and afterwards it says so and waits for nobody', () => {
+  const held = item('d', 'held', { reason: 'merge-unverified', why: { key: 'queue.handoff.why.unverified', params: {} } }), back = item('e', 'returned', { note: 'needs a rebase' });
+  const kept = item('k', 'held', { reason: 'main-unreadable', recheck: true, why: { key: 'queue.handoff.why.mainUnreadable', params: {} } });
+  const all = { a: item('a', 'queued'), b: item('b', 'handed'), c: item('c', 'merged', { mergedAs: 'd'.repeat(40) }), d: held, e: back, f: item('f', 'returned', { redone: true }), k: kept };
+  const step = (kind, id) => ({ kind, key: `ready:shared:${id}`, label: { key: 'queue.handoff.' + kind, params: {} } });
+  // "Not needed" is offered on the rows that wait for the person, apart from their own steps, and on no other row.
+  const shown = draw(view(all));
+  assert.deepEqual(plain(Object.fromEntries(Object.entries(shown.rows).map(([id, row]) => [id, [row.aside, row.ask]]))),
+    { a: [[], null], b: [[], null], c: [[], null], d: [[step('drop', 'd')], null], e: [[step('drop', 'e')], null], f: [[], null], k: [[step('drop', 'k')], null] });
+  assert.deepEqual([shown.rows.d.action.kind, shown.rows.d.more, shown.rows.e.action.kind, shown.rows.k.action.kind, shown.rows.k.more.kind, shown.need], ['send', null, 'redo', 'recheck', 'send', 3]);
+  // (Also with nobody designated, where a delivery on hold has no other step.)
+  const idle = draw(view({ d: held }), { integrator: null }).rows.d;
+  assert.deepEqual(plain([idle.action, idle.aside]), [null, [step('drop', 'd')]]);
+  // Pressed: that row asks once more, with "keep it" before "yes". Its own steps and its reason stay; the count is what it was.
+  const name = shown.rows.d.status.params.name;
+  const asked = draw(view(all), { dropping: 'ready:shared:d' });
+  assert.deepEqual(plain([asked.rows.d.ask, asked.rows.d.aside, asked.rows.d.action, asked.rows.d.more, asked.rows.d.why, asked.rows.d.need, asked.need]), [
+    { key: 'queue.handoff.dropAsk.held', params: { who: 'Riley' } }, [step('dropCancel', 'd'), step('dropNow', 'd')], plain(shown.rows.d.action), null,
+    { key: 'queue.handoff.why.unverified', params: { who: 'Riley' } }, true, 3]);
+  assert.deepEqual(plain([asked.rows.e, asked.rows.k]), plain([shown.rows.e, shown.rows.k]), 'The other rows are as they were');
+  // A returned row asks in its own words; a row with two steps of its own keeps both beside the question.
+  assert.equal(draw(view(all), { dropping: 'ready:shared:e' }).rows.e.ask.key, 'queue.handoff.dropAsk.returned');
+  const two = draw(view(all), { dropping: 'ready:shared:k' }).rows.k;
+  assert.deepEqual([two.action.kind, two.more.kind, two.aside.map(act => act.kind)], ['recheck', 'send', ['dropCancel', 'dropNow']]);
+  // A press remembered for a row that no longer waits for the person, or for no row at all, changes nothing, and is
+  // forgotten: it must not come back, unpressed, when that delivery waits for the person again later.
+  const { pressed } = require('../renderer/handoff-queue.js');
+  for (const other of ['ready:shared:c', 'ready:shared:a', 'ready:shared:f', 'ready:shared:zz', '', null, 7]) {
+    assert.deepEqual(plain(draw(view(all), { dropping: other })), plain(shown), String(other));
+    assert.equal(pressed(draw(view(all), { dropping: other }), other), '', String(other));
+  }
+  assert.deepEqual([pressed(asked, 'ready:shared:d'), pressed(null, 'ready:shared:d'), pressed(draw(null), 'ready:shared:d'), pressed(draw(view(all), { failed: true, dropping: 'ready:shared:d' }), 'ready:shared:d')],
+    ['ready:shared:d', '', '', '']);
+  // Set aside: the row says so, has no step, waits for nobody and is no longer kept in front.
+  const gone = draw(view({ ...all, d: item('d', 'dropped') }));
+  assert.deepEqual(plain([gone.rows.d, gone.need, gone.keep.includes('d')]), [
+    { where: 'dropped', status: { key: 'queue.handoff.row.dropped', params: { name, who: 'Riley' } }, why: null, action: null, more: null, ask: null, aside: [], need: false, front: false }, 2, false]);
+  for (const language of ['zh', 'en']) {
+    for (const key of ['queue.handoff.drop', 'queue.handoff.dropNow', 'queue.handoff.dropCancel', 'queue.handoff.row.dropped', 'queue.handoff.dropAsk.held', 'queue.handoff.dropAsk.returned']) {
+      const said = locale.format(language, key, { who: 'Riley', name: 'Member A' });
+      assert.ok(said && said !== key && !said.includes('{'), `${language} ${key}`);
+      // The question names no member: the task may be redone by anyone, and the member who did it may be gone.
+      if (key.startsWith('queue.handoff.dropAsk.')) assert.ok(!said.includes('Member A'), `${language} ${key}`);
+    }
+    // On a row where the integrator says "merged", "not needed" must not read as "nothing left to do": the question says
+    // that the delivery is then not recorded as merged. A returned task was never said to be merged.
+    const merged = language === 'zh' ? '不会记为已合入' : 'recorded as merged';
+    assert.deepEqual([locale.format(language, 'queue.handoff.dropAsk.held', { who: 'Riley' }).includes(merged), locale.format(language, 'queue.handoff.dropAsk.returned', { who: 'Riley' }).includes(merged)], [true, false], language);
+    {
+    }
+  }
+});
+
 test('each delivered task says where it stands, in the name of whoever holds it', () => {
   const items = { a: item('a', 'queued'), b: item('b', 'handed'), c: item('c', 'merged', { mergedAs: 'd'.repeat(40) }), d: item('d', 'held', { reason: 'merge-unverified', why: { key: 'queue.handoff.why.unverified', params: {} } }),
     e: item('e', 'returned', { note: 'needs a rebase' }), f: item('f', 'returned', { redone: true, note: 'again' }), g: item('g', 'returned', { memberId: 'gone', memberName: '' }) };
-  // Nobody designated: what was delivered waits for that.
+  // Nobody designated: what was delivered waits for that, and designating somebody is one thing that waits for the person,
+  // however many deliveries wait for it.
   const none = draw(view({ a: items.a }), { integrator: null });
-  assert.deepEqual([where(none), plain(none.block.none), plain(none.block.head), none.need], [{ a: 'queuedNone' }, { count: 1 }, [], 0]);
+  assert.deepEqual([where(none), plain(none.block.none), plain(none.block.head), none.need], [{ a: 'queuedNone' }, { count: 1 }, [], 1]);
+  const several = draw(view({ a: items.a, a2: item('a2', 'queued'), c: items.c }), { integrator: null });
+  assert.deepEqual([plain(several.block.none), several.need], [{ count: 2 }, 1]);
+  // (Nothing in line for an integrator: nothing to designate one for.)
+  const settled = draw(view({ c: items.c }), { integrator: null });
+  assert.deepEqual([plain(settled.block.none), settled.need], [{ count: 0 }, 0]);
   // A delivery on hold with nobody designated still waits for the person, but there is nobody to send it to again.
   const idle = draw(view({ d: items.d }), { integrator: null });
   assert.deepEqual([idle.rows.d.action, idle.rows.d.need, plain(idle.rows.d.why), idle.need], [null, true, { key: 'queue.handoff.why.unverified', params: { who: 'the integrator' } }, 1]);
+  // Both at once are two things.
+  assert.equal(draw(view({ a: items.a, d: items.d }), { integrator: null }).need, 2);
   // A hold that keeps the merge that was reported is checked again, with or without an integrator; it is not sent again.
   const kept = item('d', 'held', { reason: 'main-unreadable', recheck: true, why: { key: 'queue.handoff.why.mainUnreadable', params: {} } });
   for (const integrator of [INTEGRATOR, null]) {
@@ -58,7 +119,7 @@ test('each delivered task says where it stands, in the name of whoever holds it'
     { key: 'queue.handoff.why.conflictIdle', params: { who: 'the integrator' } }, { key: 'queue.handoff.why.conflict', params: {} }]);
   // One step at a time: the main repository is asked for once there is an integrator, and is not counted before.
   const bare = draw(view({ a: items.a }, { repository: { root: null, problem: null } }), { integrator: null });
-  assert.deepEqual([none.block.repository, bare.block.repository, where(bare), bare.need], [null, null, { a: 'queuedNone' }, 0]);
+  assert.deepEqual([none.block.repository, bare.block.repository, where(bare), bare.need], [null, null, { a: 'queuedNone' }, 1]);
   // Designated and free; busy with a handoff; waiting for the person.
   assert.deepEqual(where(draw(view({ a: items.a }))), { a: 'queuedNext' });
   const busy = draw(view(items, { summary: { handoff: sent } }));
@@ -146,9 +207,10 @@ test('what stops every handoff is said on top and counted, and waiting rows poin
   // A delivery the integrator already has waits for the repository as well: its merge cannot be checked.
   const handedOut = draw(view({ b: item('b', 'handed') }, { summary: { handoff: sent }, repository: { root: '/synthetic/main', problem: 'error.handoff.repositoryUnsafe' } }));
   assert.deepEqual([handedOut.block.repository.need, handedOut.need], [true, 1]);
-  // A question left open about an integrator that is no longer designated stops nothing and is not said.
+  // A question left open about an integrator that is no longer designated stops nothing and is not said: what waits for
+  // the person there is the one thing "nobody is designated", counted once.
   const left = draw(view(items, { reasons: [{ reason: 'integrator-in-space', notice: 'shown' }] }), { integrator: null });
-  assert.deepEqual([plain(left.block.stops), where(left), left.need], [[], { a: 'queuedNone' }, 0]);
+  assert.deepEqual([plain(left.block.stops), where(left), left.need], [[], { a: 'queuedNone' }, 1]);
 });
 
 test('a row that waits for the person stays in the list however old its task is, and comes first when the panel opens', () => {
