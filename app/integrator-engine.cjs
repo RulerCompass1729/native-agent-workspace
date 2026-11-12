@@ -400,6 +400,21 @@ class IntegratorEngine {
     return result.outcome === 'unanswered' ? { ...result, head: true } : result;
   }
 
+  // The designated integrator's session as the person knows it by name, when it is in the given view; null otherwise.
+  // The name goes into a system notice: characters that are not shown but can change how the rest of the
+  // line is laid out (controls, formatting marks, line separators) are taken out, and a "name" that is
+  // only the session's id is no name.
+  designatedName(view) {
+    try {
+      const designated = this.designation();
+      const session = designated && (Array.isArray(view?.sessions) ? view.sessions : []).find(candidate => candidate?.id === designated.sessionId && candidate.nativeId === designated.nativeId);
+      // (No session, or a name that is no text: there is nothing to clean, which ends below as "no name".)
+      const given = session ? this.nameOf(session) : null;
+      const name = given.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '').trim().slice(0, 80);
+      return name && name !== session.id ? name : null;
+    } catch { return null; }
+  }
+
   // Tell where things stand: a space record for every delivery whose space does not say it yet,
   // and one notice for every reason the person has not been told about.
   // - A space record is written, then marked written. A crash in between writes it again; the
@@ -421,6 +436,8 @@ class IntegratorEngine {
     const told = [];
     for (const reason of handoffs.pendingNotices()) {
       const info = handoffs.noticeInfo(reason);
+      // What waited long is said with the name of the session it waits for, so that the person knows where to look first.
+      if (info && reason === 'waited-long') { const name = this.designatedName(view); if (name) info.name = name; }
       if (!info || !handoffs.reserveNotice(reason).reserved) continue;
       try { await this.notify(info); } catch { continue; }
       if (handoffs.confirmNotice(reason).confirmed) told.push(reason);
@@ -488,6 +505,8 @@ class IntegratorEngine {
       done.taken = this.intake(rooms);
       done.settled = await this.settle(view, look, git);
       done.handed = await this.handOut(view, look, git);
+      // What is still not handed out long after it arrived is said to the person (after the hand-out: what just went out does not wait).
+      done.aged = this.handoffs.noteAged(this.now());
     } catch (error) {
       if (this.unreadable()) return { kind: 'unreadable', ...done };
       failure = error;

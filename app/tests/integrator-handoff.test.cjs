@@ -629,6 +629,77 @@ test('deliveries that have waited more than four hours are listed apart', t => {
   assert.equal(AGED_MS, 4 * 60 * 60 * 1000);
 });
 
+test('deliveries still not handed out after four hours are said to the person once, unless something else already tells them why nothing is handed out', t => {
+  const LONG = NOW + AGED_MS + 1;
+  const told = backlog => { backlog.reserveNotice('waited-long'); backlog.confirmNotice('waited-long'); };
+  const { backlog, file, open } = fixture(t);
+  // Nothing waits, or not that long yet: nothing is said and nothing is written.
+  assert.deepEqual(backlog.noteAged(NOW), { changed: false, notify: [] });
+  backlog.noteReady(ready('a'), NOW); backlog.noteReady(ready('b'), NOW + 10);
+  const before = fs.readFileSync(file, 'utf8');
+  assert.deepEqual(backlog.noteAged(NOW + AGED_MS), { changed: false, notify: [] }, 'Exactly four hours is not more than four hours');
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  // More than four hours: said once, as a condition of its own, with how many wait now.
+  assert.deepEqual(backlog.noteAged(LONG), { changed: true, notify: ['waited-long'] });
+  assert.deepEqual([backlog.pendingNotices(), backlog.noticeInfo('waited-long')], [['waited-long'], { reason: 'waited-long', count: 2, roomId: 'space-1', itemId: 'a' }]);
+  assert.deepEqual(backlog.noteAged(LONG + 5), { changed: false, notify: [] });
+  assert.deepEqual(open().noteAged(LONG + 6), { changed: false, notify: [] }, 'Also after a restart');
+  told(backlog);
+  assert.deepEqual(backlog.pendingNotices(), []);
+  // Handed out, they no longer wait: the condition is over.
+  const handoff = openHandoff(backlog, { now: LONG + 10, idleSince: new Map([[INTEGRATOR.sessionId, LONG + 10 - rules.IDLE_SETTLE_MS]]) });
+  backlog.confirmSent(handoff.handoffId, { tag: 'tag-1', control: 0 }, LONG + 10);
+  assert.deepEqual([backlog.noteAged(LONG + 20), backlog.openReasons().map(reason => reason.reason)], [{ changed: true, notify: [] }, []]);
+  assert.deepEqual(backlog.noteAged(LONG + 21), { changed: false, notify: [] });
+  // A delivery that arrived long ago and is still not handed out, behind a handoff that is being worked on: said again.
+  backlog.noteReady(ready('c'), NOW + 20);
+  assert.deepEqual(backlog.noteAged(LONG + 30), { changed: true, notify: ['waited-long'] });
+  told(backlog);
+  // It lasts for as long as something waits that long, whatever comes and goes meanwhile: the handoff begins to wait
+  // for the person, the person retries the reason, other deliveries arrive.
+  backlog.settle({ kind: 'settle', handoffId: handoff.handoffId, status: 'waiting', reason: 'no-reply' }, {}, LONG + 40);
+  assert.deepEqual(backlog.noteAged(LONG + 41), { changed: false, notify: [] });
+  assert.deepEqual(backlog.retryReason('waited-long', LONG + 42), { released: [] });
+  backlog.noteReady(ready('d'), LONG + 43);
+  assert.deepEqual([backlog.noteAged(LONG + 44), backlog.openReasons().filter(reason => reason.reason === 'waited-long').map(reason => reason.notice)], [{ changed: false, notify: [] }, ['done']]);
+
+  // What already tells the person why nothing is handed out keeps it from beginning: they were asked about the
+  // integrator or the repository, or a handoff waits for them. When that is over and the delivery still waits, it begins.
+  const asked = [
+    ['nobody designated', { integrator: null }, 'integrator-unset', record => record.reasonCleared('integrator-designated')],
+    ['the designated session is gone', { session: undefined }, 'integrator-missing:integrator', record => record.reasonCleared('integrator-designated')],
+    // (That question is over only when a handoff opens, and then the delivery no longer waits.)
+    ['the integrator is in a space', { inSpace: true }, 'integrator-in-space', null],
+    ['no repository is chosen', { repository: null }, 'repository-unset', record => record.reasonCleared('repository-chosen')],
+  ];
+  for (const [name, seen, reason, over] of asked) {
+    const other = fixture(t).backlog;
+    other.noteReady(ready('a'), NOW);
+    assert.deepEqual(other.advance(observed(seen), NOW + 1).reason, reason, name);
+    assert.deepEqual([other.noteAged(LONG), other.openReasons().map(open => open.reason)], [{ changed: false, notify: [] }, [reason]], name);
+    if (!over) continue;
+    over(other);
+    assert.deepEqual(other.openReasons().map(open => open.reason), [], name);
+    assert.deepEqual(other.noteAged(LONG + 6), { changed: true, notify: ['waited-long'] }, name);
+  }
+  const waits = fixture(t).backlog;
+  waits.noteReady(ready('a'), NOW);
+  const first = openHandoff(waits);
+  waits.confirmSent(first.handoffId, { tag: 'tag-1', control: 0 }, NOW);
+  waits.noteReady(ready('b'), NOW);
+  waits.settle({ kind: 'settle', handoffId: first.handoffId, status: 'waiting', reason: 'no-reply' }, {}, NOW + 60000);
+  assert.deepEqual(waits.noteAged(LONG), { changed: false, notify: [] }, 'A handoff that waits for the person has told them');
+  waits.resolveHandoff(first.handoffId, { retry: false });
+  assert.deepEqual([states(waits), waits.noteAged(LONG + 1)], [{ a: 'held:no-reply', b: 'deliverable' }, { changed: true, notify: ['waited-long'] }]);
+  // Only what waits to be handed out counts: not what the integrator has, and not what is on hold (that has its own reason).
+  const others = fixture(t).backlog;
+  others.noteReady(ready('a'), NOW); others.noteReady(ready('b'), NOW);
+  others.hold(key('b'), 'review-off', NOW);
+  const taken = openHandoff(others);
+  others.confirmSent(taken.handoffId, { tag: 'tag-1', control: 0 }, NOW);
+  assert.deepEqual([states(others), others.noteAged(LONG)], [{ a: 'handed', b: 'held:review-off' }, { changed: false, notify: [] }]);
+});
+
 test('planning is pure, and the module only records: no timer, process, network, git, lock or model', () => {
   const state = emptyState({ seq: 3, ready: [{ ...ready('a'), state: 'deliverable', notedAt: NOW }] });
   const frozen = structuredClone(state), input = observed();

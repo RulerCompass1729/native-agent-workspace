@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const rules = require('../queue-dispatch.cjs');
-const { IntegrationHandoffs, FILE } = require('../integrator-handoff.cjs');
+const { IntegrationHandoffs, FILE, AGED_MS } = require('../integrator-handoff.cjs');
 const { IntegratorEngine, HEAD_WAIT_MS } = require('../integrator-engine.cjs');
 
 // Settling a handoff and telling the person, through the engine (B6 E2b, checkpoint H5). Synthetic
@@ -629,6 +629,60 @@ test('a notice that may not have been shown is not shown again and is reported a
     record: () => {}, notify: async info => { g.notices.push(info); } });
   assert.deepEqual(await restarted.tell(), { shown: 1, told: [], unknown: ['review-off'] });
   assert.deepEqual(g.notices, []);
+});
+
+test('a delivery that still waits to be handed out after four hours: the pass tells the person once, and it is over when the delivery is handed out', async t => {
+  const f = fixture(t);
+  const rooms = [space([fact('a')])], LONG = NOW + AGED_MS + 20;
+  const pass = (now, session) => { f.clock = now; const view = at(now, [session]); return f.engine.pass(rooms, view, f.look(view)); };
+  // The integrator is at work on something else the whole time: the delivery is taken in and waits.
+  const working = integratorSession({ state: 'working', name: '  Riley  ' });
+  const first = await pass(NOW, working);
+  assert.deepEqual([first.taken.stored, first.handed.kind, first.aged, f.notices], [[key('a')], 'none', { changed: false, notify: [] }, []]);
+  // Four hours later it still waits: said once, in the same pass.
+  f.head = MAIN;
+  const late = await pass(LONG, working);
+  // (With the name of the session it waits for, as the person knows it.)
+  assert.deepEqual([late.handed.kind, late.aged, late.told.told, f.notices.map(info => [info.reason, info.count, info.name])], ['none', { changed: true, notify: ['waited-long'] }, ['waited-long'], [['waited-long', 1, 'Riley']]]);
+  const again = await pass(LONG + 60000, working);
+  assert.deepEqual([again.aged, again.told.told, f.notices.length], [{ changed: false, notify: [] }, [], 1]);
+  // The integrator can take it: handed out before the look at what waits, so the condition is over in that pass.
+  const taken = await pass(LONG + 120000, integratorSession());
+  assert.deepEqual([taken.handed.kind, taken.aged, f.handoffs.openReasons().map(reason => reason.reason)], ['opened', { changed: true, notify: [] }, []]);
+  // A session without a name the person would know, one that is not in the view, another native session under that id, or a
+  // designation that cannot be read: the notice goes out without a name. No other notice gets one.
+  const longName = 'N'.repeat(200);
+  for (const [name, session, designation, expected] of [
+    ['no name', integratorSession({ state: 'working' }), undefined, undefined],
+    ['a name of blanks', integratorSession({ state: 'working', name: '   ' }), undefined, undefined],
+    ['a name that is no text', integratorSession({ state: 'working', name: 7 }), undefined, undefined],
+    ['another native session', integratorSession({ state: 'working', name: 'Riley', nativeId: 'native-other' }), undefined, undefined],
+    ['a very long name', integratorSession({ state: 'working', name: longName }), undefined, longName.slice(0, 80)],
+    // Characters that are not shown but can turn the rest of a line around, or break it, are taken out.
+    ['a name with marks in it', integratorSession({ state: 'working', name: `R${String.fromCodePoint(0x2028)}i${String.fromCodePoint(0x202e)}l${String.fromCodePoint(0x2029)}e${String.fromCodePoint(0x2066)}${String.fromCodePoint(7)}y${String.fromCodePoint(0x200b)}` }), undefined, 'Riley'],
+    ['a name of marks only', integratorSession({ state: 'working', name: `${String.fromCodePoint(0x202e)}${String.fromCodePoint(0x2069)} ` }), undefined, undefined],
+    // A session with neither a label nor a name is "named" by its id: that is no name to show.
+    ['the id as the name', integratorSession({ state: 'working', name: 'integrator' }), undefined, undefined],
+  ]) {
+    const g = fixture(t);
+    g.engine.intake([space([fact('a')])]);
+    g.clock = LONG;
+    const view = at(LONG, [session]);
+    await g.engine.pass([space([fact('a')])], view, g.look(view));
+    assert.deepEqual(g.notices.filter(info => info.reason === 'waited-long').map(info => [info.count, info.name]), expected === undefined && name === 'another native session' ? [] : [[1, expected]], name);
+  }
+  // A notice for another reason carries no name, although the session has one.
+  const other = fixture(t, { reader: reader({ isAncestor: async () => false }) });
+  await other.handed(['a']);
+  other.clock = LATER;
+  const named = at(LATER, [{ ...answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9`), name: 'Riley' }]);
+  await other.engine.pass([], named, other.look(named));
+  assert.deepEqual(other.notices.map(info => [info.reason, Object.hasOwn(info, 'name')]), [['merge-unverified', false]]);
+  assert.equal(f.engine.designatedName({ sessions: null }), null);
+  // The name is that of the designated native session: another one that sits under the same id is not it.
+  assert.deepEqual([f.engine.designatedName(at(LONG, [integratorSession({ name: 'Riley' })])), f.engine.designatedName(at(LONG, [integratorSession({ name: 'Riley', nativeId: 'native-other' })]))], ['Riley', null]);
+  f.engine.designation = () => { throw Error('Synthetic record failure'); };
+  assert.equal(f.engine.designatedName(at(LONG, [working])), null);
 });
 
 // The app's bound on how long a question to git is waited for, as the main process gives it to the engine.
