@@ -66,7 +66,7 @@ function osOptions(language, codex = true, prefix = 'os.decision') {
     value: { name: 'RAW 中文 {space}' }, status: { reason: 'RAW 中文 native status' }, codex,
     names: 'RAW 中文 backend names', option: { switch: { stops: [{ name: 'RAW 中文 session' }], endsCodex: codex, reason: 'RAW 中文 background detail' } },
     textExtensions: ['txt', 'md'], record: { cwd: raw, actor: { name: 'RAW 中文 agent' }, command: { method: 'openLocalFile' } }, action: 'openLocalFile', snapshot: { defaultWorkspace: '/unused' },
-    preview: { name: 'RAW 中文.txt' }, ext: '.txt', path,
+    preview: { name: 'RAW 中文.txt' }, ext: '.txt', path, exported: { folder: '/synthetic/RAW 中文 export' },
     key: 'os.butlerQuitWaiting', prefix, name: 'RAW 中文 member', space: 'RAW 中文 space', task: 'RAW 中文 task', question: 'RAW 中文 question',
     notice: { key: 'os.rotationDoneBody', params: { old: 'RAW 中文 old', new: 'RAW 中文 new', reason: '' } },
     migrationNotice: { key: 'os.migrationSavedBody', params: { names: 'RAW 中文 session' } },
@@ -74,8 +74,22 @@ function osOptions(language, codex = true, prefix = 'os.decision') {
     words: require('../integrator-words.cjs').personWords({ reason: 'lock-held:RAW 中文 owner', count: 2 }),
   })) }));
 }
+// The two surfaces of the records bell, set aside where the checks below count positions.
+const ordinary = (list, language) => list.filter(option => option.value.title !== locale.format(language, 'records.export.chooseTitle') &&
+  option.value.message !== locale.format(language, 'records.delete.question', { count: 'RAW 中文 backend names'.length }));
 test('all existing OS option groups use the chosen language while raw names, picker scope and cancel safeguards stay intact', () => {
-  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 22);
+  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 24);
+  // Records kept whole (the bell): the folder an export goes to, and the last confirmation before exported blocks are
+  // deleted, whose safe answer, Cancel, is the default; the folder is shown as it is.
+  for (const [list, language] of [[en, 'en'], [zh, 'zh']]) {
+    const choose = list.findIndex(option => option.value.title === locale.format(language, 'records.export.chooseTitle'));
+    assert.ok(choose >= 0); assert.deepEqual(list[choose].value.properties, ['openDirectory', 'createDirectory']); list.splice(choose, 1);
+    const remove = list.findIndex(option => option.value.message === locale.format(language, 'records.delete.question', { count: 'RAW 中文 backend names'.length }));
+    assert.ok(remove >= 0); const value = list[remove].value;
+    assert.deepEqual([list[remove].type, value.buttons, value.defaultId, value.cancelId], ['showMessageBox', [locale.format(language, 'records.delete.cancel'), locale.format(language, 'records.delete.confirm')], 0, 0]);
+    assert.ok(value.detail.includes('/synthetic/RAW 中文 export')); list.splice(remove, 1);
+  }
+  assert.equal(en.length, 22);
   // The last surface is the folder dialog for the project where merges are checked (B6, the queue panel): a title, and folders only.
   assert.deepEqual([en[21].type, en[21].value], ['showOpenDialog', { title: 'Choose the project folder: the top folder of the project the integrator merges into', properties: ['openDirectory'] }]);
   assert.deepEqual([zh[21].type, zh[21].value], ['showOpenDialog', { title: '选择项目文件夹：集成者把活合进去的那个项目最上层的文件夹', properties: ['openDirectory'] }]);
@@ -107,8 +121,8 @@ test('all existing OS option groups use the chosen language while raw names, pic
   assert.equal(zh[1].value.title, 'NAW · 自动继续已达上限'); assert.equal(zh[1].value.body, '会话已自动继续 3 次，仍需处理。请在侧栏检查标记的会话。');
   assert.deepEqual(decision, { title: 'NAW · Needs your decision', body: 'RAW 中文 member · RAW 中文 space: RAW 中文 question' });
   assert.deepEqual(zh[2].value, { title: 'NAW · 需要你决定', body: 'RAW 中文 member · RAW 中文 space：RAW 中文 question' });
-  assert.deepEqual(osOptions('en', true, 'os.queueFailed')[3].value, { title: 'NAW · Task not delivered', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space; not resent automatically' });
-  assert.deepEqual(osOptions('zh', true, 'os.queueFailed')[3].value, { title: 'NAW · 派活没有完成', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space；不会自动重发' });
+  assert.deepEqual(ordinary(osOptions('en', true, 'os.queueFailed'), 'en')[3].value, { title: 'NAW · Task not delivered', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space; not resent automatically' });
+  assert.deepEqual(ordinary(osOptions('zh', true, 'os.queueFailed'), 'zh')[3].value, { title: 'NAW · 派活没有完成', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space；不会自动重发' });
   assert.equal(space.message, 'Clear shared records for “RAW 中文 {space}”?'); assert.deepEqual(space.buttons, ['Cancel', 'Clear shared records']);
   assert.equal(files.title, 'Local files for “RAW 中文 {space}”'); assert.deepEqual(files.filters, [{ name: 'Text files', extensions: ['txt', 'md'] }]);
   assert.equal(program.buttonLabel, 'Use this program'); assert.equal(shared.message, 'Clear shared workspace records?');
@@ -116,7 +130,7 @@ test('all existing OS option groups use the chosen language while raw names, pic
   assert.deepEqual(update.buttons, ['Keep current connection', 'Checked; update connection']); assert.ok(update.detail.includes('background or child tasks'));
   assert.deepEqual(forget.buttons, ['Cancel', 'Remove record']); assert.ok(forget.detail.includes('drafts'));
   assert.equal(stop.message, 'Disconnect this Codex session?'); assert.deepEqual(stop.buttons, ['Keep session', 'Disconnect']);
-  const claude = osOptions('en', false)[12].value; assert.equal(claude.message, 'End this native session?'); assert.deepEqual(claude.buttons, ['Keep session', 'End session']); assert.notEqual(stop.detail, claude.detail);
+  const claude = ordinary(osOptions('en', false), 'en')[12].value; assert.equal(claude.message, 'End this native session?'); assert.deepEqual(claude.buttons, ['Keep session', 'End session']); assert.notEqual(stop.detail, claude.detail);
   assert.equal(material.defaultPath, '/synthetic/RAW 中文 {name}'); assert.equal(save.defaultPath, 'RAW 中文-copy.txt'); assert.equal(folder.title, 'Choose a working directory for this session');
   const nativeFacts = row => { const { title, body, message, detail, buttons, buttonLabel, filters, ...other } = row.value; return { ...other, ...(filters ? { filterExtensions: filters.map(filter => filter.extensions) } : {}) }; };
   assert.deepEqual(en.map(nativeFacts), zh.map(nativeFacts));

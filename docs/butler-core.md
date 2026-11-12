@@ -497,8 +497,9 @@ Runtime acceptance still requires the actual Main factory to inject its real
 `dataDir` and the single `butlerReadAudit` also used by the person's reader.
 Two matching but incorrect directory arguments do not establish correctness;
 that production factory injection remains unverified in this checkpoint.
-Human reads also return journal byte counts and a fixed 75% (24 MiB) engineering
-prewarning. The 32 MiB cap, UTC allowance and retained records stay unchanged.
+Human reads also return the log's size against the person's 0.5 GiB reminder line
+(2026-11-11). The log is kept whole in blocks of at most 32 MiB with no cap on the
+whole; the UTC allowance and retained records stay unchanged.
 An optional trusted-host callback emits only capacity metadata after a successful
 operation and lock cleanup; it adds no timer or UI delivery claim.
 This neither changes the USD reminder/budget policy nor approves activation,

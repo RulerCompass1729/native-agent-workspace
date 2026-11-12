@@ -2,7 +2,7 @@
 // Synthetic identities and space ids; nothing is started and no model is called.
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
-const { readsView, tailRequest, olderRequest, PAGES_PER_DAY, RECORDS_PER_PAGE, RECORD_BYTES, NEAR_LEFT, PAGE, KINDS } = require('../butler-reads-view.js');
+const { readsView, tailRequest, olderRequest, PAGES_PER_DAY, RECORDS_PER_PAGE, NEAR_LEFT, PAGE, KINDS } = require('../butler-reads-view.js');
 const { ButlerReadAudit, MAX_PAGES_PER_UTC_DAY } = require('../butler-read-audit.cjs');
 
 const NOW = Date.UTC(2026, 10, 11, 9, 30), DAY = 24 * 3600 * 1000, MINUTE = 60 * 1000, MIDNIGHT = Date.UTC(2026, 10, 11);
@@ -21,7 +21,7 @@ function log(t) {
   const all = () => { const records = []; let after = 0, through = 0;
     for (;;) { const result = audit.read(person, { afterSequence: after, limit: 50 }); records.push(...result.records); through = result.throughSequence; if (!result.truncated) break; after = result.nextAfterSequence; }
     return { records, through }; };
-  return { audit, page, fill, all };
+  return { audit, page, fill, all, dir };
 }
 
 test('the view shows the core\'s own limits', () => {
@@ -29,17 +29,17 @@ test('the view shows the core\'s own limits', () => {
   const read = name => fs.readFileSync(path.join(__dirname, '..', name), 'utf8');
   // The most records one page can hold, and the most a person's read of the log may ask for at once.
   assert.equal(Number(read('butler-read-audit.cjs').match(/const MAX_LIMIT = (\d+),/)[1]), RECORDS_PER_PAGE);
-  // The most one record can take: with less room than this the core can already refuse a page, whose record must fit.
-  assert.ok(read('butler-read-audit.cjs').includes('MAX_RECORD_BYTES = 128 * 1024;')); assert.equal(RECORD_BYTES, 128 * 1024);
+  // The reminder line is the shared one the person set (0.5 GiB), not a number of this page's own.
+  assert.equal(require('../record-history.cjs').REMIND_TOTAL_BYTES, 512 * 1024 * 1024);
   assert.ok(read('main.cjs').includes('value.limit > ' + PAGE + ')'), 'The main process accepts a page of this size and no larger');
   assert.deepEqual([...KINDS], ['spaces', 'queue', 'deliveries']); assert.ok(NEAR_LEFT > 0 && NEAR_LEFT < PAGES_PER_DAY);
 });
 
 test('nothing read yet: no rows, the whole allowance left, and the counting day named in local time', t => {
   const { records, through } = log(t).all();
-  assert.deepEqual(readsView({ records, through, now: NOW, spaceNames: names, zone: pacific }), { today: { day: '2026-11-11', pages: 0, left: 64, limit: 64, level: 'ok', from: '11-10 16:00', resets: '11-11 16:00' },
-    days: [], total: 0, shown: 0, newest: true, reached: true, unreadable: 0, storage: null, hasOlder: false });
-  assert.deepEqual(readsView({ records, through, now: NOW, zone: beijing }).today, { day: '2026-11-11', pages: 0, left: 64, limit: 64, level: 'ok', from: '11-11 08:00', resets: '11-12 08:00' });
+  assert.deepEqual(readsView({ records, through, now: NOW, spaceNames: names, zone: pacific }), { today: { day: '2026-11-11', pages: 0, left: 64, limit: 64, level: 'ok', inGap: false, from: '11-10 16:00', resets: '11-11 16:00' },
+    days: [], gaps: [], total: 0, shown: 0, newest: true, reached: true, unreadable: 0, storage: null, hasOlder: false });
+  assert.deepEqual(readsView({ records, through, now: NOW, zone: beijing }).today, { day: '2026-11-11', pages: 0, left: 64, limit: 64, level: 'ok', inGap: false, from: '11-11 08:00', resets: '11-12 08:00' });
 });
 
 test('each record is one row of what the log holds, newest first, with nothing else from it', t => {
@@ -47,7 +47,7 @@ test('each record is one row of what the log holds, newest first, with nothing e
   l.page(morning, 'spaces', { count: 2, archived: true }); l.page(morning + 2 * MINUTE, 'queue', { spaceId: SPACES.a, count: 12 }); l.page(morning + 5 * MINUTE, 'queue', { spaceId: SPACES.b, count: 20, more: true });
   l.page(morning + 9 * MINUTE, 'deliveries', { spaceId: SPACES.a, count: 4 }); l.page(morning + 31 * MINUTE, 'queue', { spaceId: SPACES.gone, count: 1, revision: 4 }); l.page(morning + 80 * MINUTE, 'queue', { spaceId: 'shared', count: 0, revision: 4 });
   const { records, through } = l.all(), view = readsView({ records, through, now: NOW, spaceNames: names, zone: pacific });
-  assert.deepEqual(view.today, { day: '2026-11-11', pages: 6, left: 58, limit: 64, level: 'ok', from: '11-10 16:00', resets: '11-11 16:00' });
+  assert.deepEqual(view.today, { day: '2026-11-11', pages: 6, left: 58, limit: 64, level: 'ok', inGap: false, from: '11-10 16:00', resets: '11-11 16:00' });
   assert.deepEqual([view.total, view.shown, view.newest, view.unreadable, view.hasOlder, view.days.length], [6, 6, true, 0, false, 1]);
   assert.deepEqual({ ...view.days[0], rows: undefined }, { day: '2026-11-11', from: '11-10 16:00', through: '11-11 16:00', pages: 6, whole: true, rows: undefined });
   assert.deepEqual(view.days[0].rows, [
@@ -100,7 +100,7 @@ test('what the dialog says about an unreadable log is true of the core', t => {
   // "If reading again still fails … once it is repaired, NAW has to be reopened": a log found damaged stays
   // unreadable for the object that found it, even after the file is put back; a new object reads it.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-reads-damaged-')); fs.chmodSync(dir, 0o700); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const make = () => new ButlerReadAudit(dir, { authorizePerson: actor => actor === person, now: () => NOW }), running = make(), file = path.join(dir, 'butler-business-reads.jsonl');
+  const make = () => new ButlerReadAudit(dir, { authorizePerson: actor => actor === person, now: () => NOW }), running = make(), file = path.join(dir, 'history', 'butler-reads', '000000001-2026-11-11.jsonl');
   running.recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 1, runnerRef: 'butler-runner-synthetic' }, query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } });
   assert.equal(running.read(person, { afterSequence: 0, limit: 50 }).throughSequence, 1);
   const kept = fs.readFileSync(file); fs.appendFileSync(file, 'not a record\n');
@@ -112,10 +112,65 @@ test('what the dialog says about an unreadable log is true of the core', t => {
   assert.equal(make().read(person, { afterSequence: 0, limit: 50 }).throughSequence, 1, 'A reopened app reads the repaired log');
 });
 
+test('after going back to an older version and returning, today\'s count is the one the allowance keeps', t => {
+  // This version logs 3 pages; an older version, gone back to, logs 60 more the same day in its own single file,
+  // counted from 1; this version then takes that file in. Written here by the product's own module into a second
+  // folder, whose first block is byte for byte what an older version's single file is.
+  const l = log(t); l.fill(NOW - 3600 * 1000, 3, { step: MINUTE });
+  const older = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-reads-older-')); fs.chmodSync(older, 0o700); t.after(() => fs.rmSync(older, { recursive: true, force: true }));
+  let clock = NOW - 1800 * 1000; const other = new ButlerReadAudit(older, { now: () => clock });
+  for (let index = 0; index < 60; index++) { clock += 1000; other.recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 3, runnerRef: 'butler-runner-synthetic' },
+    query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } }); }
+  const file = path.join(older, 'history', 'butler-reads', '000000001-2026-11-11.jsonl');
+  fs.copyFileSync(file, path.join(l.dir, 'butler-business-reads.jsonl')); fs.chmodSync(path.join(l.dir, 'butler-business-reads.jsonl'), 0o600);
+  const fresh = new ButlerReadAudit(l.dir, { authorizePerson: actor => actor === person, now: () => NOW }), records = [];
+  let after = 0; for (;;) { const page = fresh.read(person, { afterSequence: after, limit: 50 }); records.push(...page.records); if (!page.truncated) break; after = page.nextAfterSequence; }
+  const view = readsView({ records, through: 63, now: NOW, zone: pacific });
+  assert.deepEqual([view.today.pages, view.today.left, view.days.length, view.days[0].pages], [63, 1, 1, 63]);
+  fresh.recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 3, runnerRef: 'butler-runner-synthetic' },
+    query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } });
+  assert.throws(() => fresh.recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 3, runnerRef: 'butler-runner-synthetic' },
+    query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } }), { code: 'ERR_BUTLER_READ_LIMIT' }, 'The one page left was the only one');
+  // Gone back once more, the older version counts the day from 1 again and logs a page: the day now holds 65. Its
+  // line is shown like any other, and the day is full.
+  const again = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-reads-older-')); fs.chmodSync(again, 0o700); t.after(() => fs.rmSync(again, { recursive: true, force: true }));
+  new ButlerReadAudit(again, { now: () => NOW }).recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 3, runnerRef: 'butler-runner-synthetic' },
+    query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } });
+  fs.copyFileSync(path.join(again, 'history', 'butler-reads', '000000001-2026-11-11.jsonl'), path.join(l.dir, 'butler-business-reads.jsonl')); fs.chmodSync(path.join(l.dir, 'butler-business-reads.jsonl'), 0o600);
+  const back = new ButlerReadAudit(l.dir, { authorizePerson: actor => actor === person, now: () => NOW }), all = [];
+  after = 0; for (;;) { const page = back.read(person, { afterSequence: after, limit: 50 }); all.push(...page.records); if (!page.truncated) break; after = page.nextAfterSequence; }
+  const full = readsView({ records: all, through: 65, now: NOW, zone: pacific });
+  assert.deepEqual([full.shown, full.unreadable, full.today.pages, full.today.left, full.today.level, full.days[0].pages], [65, 0, 65, 0, 'full', 65]);
+});
+
+test('a block that cannot be read is shown in its place, once, and makes no count look whole', t => {
+  const l = log(t); l.fill(NOW - 3600 * 1000, 6);
+  const { records, through } = l.all(), view = (rows, gaps) => readsView({ records: rows, gaps, through, now: NOW, zone: pacific });
+  const hole = (from, to, days = ['2026-11-11']) => ({ fromSequence: from, throughSequence: to, count: to - from + 1, days });
+  const kept = records.filter(record => ![3, 4].includes(record.sequence));
+  // Two holes that touch (one block over two pages) are one row, and the day is split around it.
+  const split = view(kept, [hole(4, 4), hole(3, 3)]);
+  assert.deepEqual(split.gaps.map(item => [item.from, item.through, item.count, item.first, item.last]), [[3, 4, 2, '2026-11-11', '2026-11-11']]);
+  assert.deepEqual(split.days.map(day => day.rows.map(row => row.sequence)), [[6, 5], [2, 1]]);
+  assert.deepEqual(split.days.map(day => day.whole), [false, false], 'A day that may go on into the hole is not said to be whole');
+  assert.equal(view(kept, [hole(3, 4), hole(3, 4)]).gaps.length, 1, 'The same hole twice is shown once');
+  // A deleted block next to one that cannot be read stays a row of its own.
+  assert.deepEqual(view(kept, [hole(4, 4), { ...hole(3, 3), deletedAt: NOW - DAY }]).gaps.map(item => [item.from, item.through, item.deletedAt !== null]), [[4, 4, false], [3, 3, true]]);
+  // The newest position in a hole: the end of the log was reached, and today's count cannot be told.
+  const top = view(records.filter(record => record.sequence < 6), [hole(6, 6)]);
+  assert.deepEqual([top.reached, top.newest, top.today.pages, top.today.level, top.today.inGap], [true, false, null, 'unknown', true]);
+  // A hole at the bottom is the start of the log; one in the middle leaves older records to ask for.
+  assert.equal(view(records.filter(record => record.sequence > 2), [hole(1, 2)]).hasOlder, false);
+  assert.equal(view(records.filter(record => record.sequence > 4), [hole(3, 4)]).hasOlder, true);
+  // A hole that does not add up, or lies past the end of the log, is counted as not understood and not shown.
+  for (const bad of [hole(3, 2), { ...hole(3, 4), count: 3 }, hole(6, 7), { ...hole(3, 3), days: [] }, { ...hole(3, 3), days: ['today'] }, null])
+    assert.deepEqual((value => [value.gaps.length, value.unreadable])(view(records, [bad])), [0, 1], JSON.stringify(bad));
+});
+
 test('a record this version does not understand is counted and left out, never guessed at', t => {
   const l = log(t); l.fill(NOW - 3600 * 1000, 4);
   const { records, through } = l.all(), good = records[0];
-  const broken = [{ ...good, version: 2 }, { ...good, sequence: 0 }, { ...good, sequence: '1' }, { ...good, time: -1 }, { ...good, day: '2026-11-12' }, { ...good, day: 'today' }, { ...good, pageOfDay: 0 }, { ...good, pageOfDay: 65 },
+  const broken = [{ ...good, version: 2 }, { ...good, sequence: 0 }, { ...good, sequence: '1' }, { ...good, time: -1 }, { ...good, day: '2026-11-12' }, { ...good, day: 'today' }, { ...good, pageOfDay: 0 },
     { ...good, query: { ...good.query, kind: 'notes' } }, { ...good, query: null }, { ...records[1], query: { ...records[1].query, spaceId: '' } }, { ...records[1], query: { ...records[1].query, spaceId: 7 } },
     { ...good, query: { kind: 'deliveries', spaceId: 'shared', limit: 50 } }, { ...good, query: { kind: 'deliveries', spaceId: 'shared', limit: 50, fromTime: 9, throughTime: 3 } },
     { ...good, result: { ...good.result, count: -1 } }, { ...good, result: { ...good.result, truncated: 'no' } }, { ...good, result: null }, { ...good, actor: null }, { ...good, actor: { ...good.actor, selectionRevision: '3' } }, null, 'record', 7];
@@ -182,24 +237,22 @@ test('a day\'s page count is its whole count only when the day\'s last record is
   assert.deepEqual(readsView({ records: again, through: 4, now: NOW, zone: pacific }).days.map(day => [day.day, day.pages, day.whole]), [['2026-11-10', 3, true], ['2026-11-11', 1, true], ['2026-11-10', 2, false]]);
 });
 
-test('how full the log file is comes from the core\'s own report and its own warning, or is not said at all', t => {
+test('how large the log is comes from the core\'s own report and its own reminder line, or is not said at all', t => {
   const l = log(t); l.page(NOW - MINUTE, 'spaces');
   const answer = l.audit.read(person, { afterSequence: 0, limit: 50 });
-  // The report as the core gives it with every read of the log.
-  assert.deepEqual(Object.keys(answer.storage).sort(), ['maxBytes', 'remainingBytes', 'usedBytes', 'warning', 'warningThresholdBytes']);
-  assert.deepEqual([answer.storage.maxBytes, answer.storage.warningThresholdBytes, answer.storage.warning, answer.storage.usedBytes > 0], [32 * 1024 * 1024, 24 * 1024 * 1024, false, true]);
+  // The report as the core gives it with every read of the log: every block is kept, so there is no cap, only the line.
+  assert.deepEqual(Object.keys(answer.storage).sort(), ['blocks', 'remindBytes', 'unreadableBlocks', 'usedBytes', 'warning']);
+  assert.deepEqual([answer.storage.remindBytes, answer.storage.warning, answer.storage.blocks, answer.storage.unreadableBlocks, answer.storage.usedBytes > 0], [512 * 1024 * 1024, false, 1, 0, true]);
   const view = value => readsView({ records: answer.records, through: answer.throughSequence, now: NOW, zone: pacific, storage: value }).storage;
-  assert.deepEqual(view(answer.storage), { usedBytes: answer.storage.usedBytes, maxBytes: 32 * 1024 * 1024, warning: false, full: false });
-  // The warning is the core's: this view has no threshold of its own.
-  const nearly = { ...answer.storage, usedBytes: 25 * 1024 * 1024, remainingBytes: 7 * 1024 * 1024, warning: true };
-  assert.deepEqual(view(nearly), { usedBytes: 25 * 1024 * 1024, maxBytes: 32 * 1024 * 1024, warning: true, full: false });
-  // Nearly full and full are different things: closer to the cap than the largest record, a read can be refused.
-  const at = left => view({ ...answer.storage, usedBytes: 32 * 1024 * 1024 - left, remainingBytes: left, warning: true }).full;
-  assert.deepEqual([at(RECORD_BYTES + 1), at(RECORD_BYTES), at(RECORD_BYTES - 1), at(1), at(0)], [false, false, true, true, true]);
-  assert.equal(view({ ...nearly, warning: false }).warning, false, 'A file the core does not warn about is not warned about here, however full');
+  assert.deepEqual(view(answer.storage), { usedBytes: answer.storage.usedBytes, remindBytes: 512 * 1024 * 1024, over: false, blocks: 1, unreadable: 0 });
+  // Over the line is the core's word: this view has no line of its own, and the core's word has to match its numbers.
+  const over = { ...answer.storage, usedBytes: 513 * 1024 * 1024, blocks: 17, warning: true };
+  assert.deepEqual(view(over), { usedBytes: 513 * 1024 * 1024, remindBytes: 512 * 1024 * 1024, over: true, blocks: 17, unreadable: 0 });
+  assert.equal(view({ ...over, usedBytes: 512 * 1024 * 1024 }), null, 'Exactly at the line is not over it, so a report that says so does not add up');
+  assert.equal(view({ ...over, warning: false }), null, 'A report whose word and numbers disagree says nothing');
   // No report, or one that does not add up, says nothing rather than something wrong.
-  for (const value of [undefined, null, {}, 'full', { ...nearly, warning: 'true' }, { ...nearly, warning: 1 }, { ...nearly, usedBytes: -1 }, { ...nearly, remainingBytes: 1 }, { ...nearly, maxBytes: 0, usedBytes: 0, remainingBytes: 0 },
-    { usedBytes: 1, maxBytes: 2, warning: true }, { ...nearly, usedBytes: '26214400' }]) assert.equal(view(value), null);
+  for (const value of [undefined, null, {}, 'over', { ...over, warning: 'true' }, { ...over, warning: 1 }, { ...over, usedBytes: -1 }, { ...over, remindBytes: 0 }, { ...over, unreadableBlocks: 18 },
+    { ...over, blocks: 1.5 }, { usedBytes: 1, remindBytes: 2, warning: false }, { ...over, usedBytes: '537919488' }]) assert.equal(view(value), null);
 });
 
 test('the log pages forward only, so the newest and the earlier records are asked for by position', () => {

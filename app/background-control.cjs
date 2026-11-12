@@ -6,8 +6,19 @@ const { randomUUID, createHash } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const operation = require('./background-operation.cjs');
 const { roomId: validRoomId, roomIds } = require('./collaboration-spaces.cjs');
+const history = require('./record-history.cjs');
 const clone = v => JSON.parse(JSON.stringify(v));
 const MAX_RECORD_BYTES = 32 * 1024 * 1024;
+// Records kept whole (the person, 2026-11-11: 「全保留，然后切分成小块（比如按天保持）」). A record that has settled (it
+// ended more than a day ago and nothing about it is still pending) moves from the state file, rewritten on every
+// change, into the day's block under history/operations, which is only added to. Every record stays loaded, so
+// receipts, repeated operation ids, the conversation rows and an earlier cancellation work as before. The state
+// file is version 2: an older version refuses it (its background control is then unavailable) rather than starting
+// empty and running an operation id again.
+const STATE_VERSION = 2, SETTLE_MS = 24 * 3600 * 1000;
+const settledStates = new Set(['complete', 'received', 'awaiting-native', 'cancelled', 'not-executed', 'unconfirmed']);
+const recordTime = r => Number.isSafeInteger(r.finishedAt) ? r.finishedAt : r.at;
+const checkArchived = r => { if (!r || !token(r.id) || !r.actor || !token(r.actor.id) || !r.command || !token(r.state)) throw Error('Invalid archived operation'); };
 const MAX_PENDING_PER_ACTOR = 32, MAX_PENDING = 128;
 const REFUSAL_WINDOW_MS = 60000, MAX_REFUSAL_SUMMARIES = 128;
 const REFUSAL_RETRY_HINT = 'invoke or snapshot: new operation_id or compacted refused ID is a fresh request.';
@@ -116,16 +127,22 @@ class BackgroundControl {
   constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now, readCopyBytes = MAX_RECORD_BYTES }) {
     if (!Number.isSafeInteger(readCopyBytes) || readCopyBytes < 1 || readCopyBytes > MAX_RECORD_BYTES) throw Error('Invalid read copy budget');
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
-    this.data = { version: 1, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
+    this.data = { version: STATE_VERSION, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
+    // Settled records, loaded whole: by session, and by the key a receipt or a repeated operation id is looked up with.
+    this.archive = new history.BlockLog(dataDir, 'operations', checkArchived);
+    try { this.loadHistory(); }
+    catch (error) { this.failed = true; throw Error('The background operation history cannot be read; no operation is run', { cause: error }); }
     this.confirmation = confirmation; this.audit = audit;
     this.confirmationPending = confirmationPending;
     this.project = project;
     this.readCopies = new Map(); this.readBytes = 0; this.readCopyBytes = readCopyBytes;
-    try {
-      const st = fs.lstatSync(this.file);
+    let st = null;
+    try { st = fs.lstatSync(this.file); } catch (e) { if (e.code !== 'ENOENT') { this.failed = true; throw e; } }
+    if (st) try {
       if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1 || st.uid !== process.getuid() || st.mode & 0o077 || st.size > MAX_RECORD_BYTES) throw Error('Unsafe background operation record');
-      this.data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      if (this.data.version !== 1 || !Array.isArray(this.data.records) || this.data.records.some(r => !token(r.id) || !r.actor || !r.command || !token(r.state))) throw Error('Invalid background operation record');
+      const text = fs.readFileSync(this.file, 'utf8');
+      this.data = JSON.parse(text);
+      if (![1, STATE_VERSION].includes(this.data.version) || !Array.isArray(this.data.records) || this.data.records.some(r => !token(r.id) || !r.actor || !r.command || !token(r.state))) throw Error('Invalid background operation record');
       this.data.views ||= {};
       this.data.refusals ||= []; this.data.refusalActors ||= {}; this.data.refusalReceipts ||= [];
       const object = v => v && typeof v === 'object' && !Array.isArray(v);
@@ -133,6 +150,21 @@ class BackgroundControl {
       if (!object(this.data.refusalActors) || Object.values(this.data.refusalActors).some(v => !object(v) || !positiveCount(v.sequence) || !Number.isSafeInteger(v.windowStart) || v.windowStart < 0 || !object(v.counts) || Object.entries(v.counts).some(([reason, c]) => !summarizedReasons.has(reason) || !counter(c))) ||
           !Array.isArray(this.data.refusals) || this.data.refusals.length > MAX_REFUSAL_SUMMARIES || this.data.refusals.some(r => !token(r.id) || !r.actor || r.state !== 'not-executed' || !r.command || !summarizedReasons.has(r.refusalSummary?.reason) || !counter(r.refusalSummary) || !this.data.refusalActors[this.key(r.actor)])) throw Error('Invalid refusal summaries');
       if (!Array.isArray(this.data.refusalReceipts) || this.data.refusalReceipts.length > 512 || this.data.refusalReceipts.some(a => !token(a.id) || !token(a.actor?.id) || !token(a.actor?.nativeId) || !['claude', 'codex'].includes(a.actor?.provider) || !token(a.summaryId) || !this.data.refusals.some(r => r.id === a.summaryId && this.key(r.actor) === this.key(a.actor)))) throw Error('Invalid refusal receipts');
+      // The blocks must reach as far as the state file knows they did: a history folder moved away or shortened is not
+      // an empty history, and an operation id in it must not run again.
+      if (this.data.version === STATE_VERSION && (!Number.isSafeInteger(this.data.historyThrough ?? 0) || (this.data.historyThrough ?? 0) > history.lastSequence(this.archive.manifest)))
+        throw Error('The background operation history cannot be read; it ends before what this record knows of', { cause: Object.assign(Error('History is shorter than recorded'), { code: 'HISTORY_SHORT' }) });
+      // A record that reached its block before the state file was written again: the block's copy holds.
+      this.data.records = this.data.records.filter(r => !this.archived.has(this.key(r.actor) + ':' + r.id));
+      // An older version's file: its bytes are kept beside the blocks, then it becomes this version's state file,
+      // its settled records moving to the blocks (one already there is kept as first recorded).
+      if (this.data.version === 1) {
+        this.keepLegacy(text); this.data.version = STATE_VERSION;
+        const keys = [...this.data.records.map(r => this.key(r.actor) + ':' + r.id)];
+        this.commit(() => {});
+        const present = new Set([...this.archived.keys(), ...this.data.records.map(r => this.key(r.actor) + ':' + r.id)]);
+        if (keys.some(key => !present.has(key))) { this.failed = true; throw Error('The background operation record could not be moved without loss'); }
+      }
       // A process died after recording intent. No automatic replay.
       if (this.data.refusals.some(r => Object.hasOwn(r, 'retryHint') && r.retryHint !== REFUSAL_RETRY_HINT) || operation.retainRefusalRows(this.data.refusals, 128, 32).length !== this.data.refusals.length ||
           operation.retainRefusalRows(this.data.refusalReceipts, 512, 128).length !== this.data.refusalReceipts.length ||
@@ -143,7 +175,71 @@ class BackgroundControl {
           if (['available', 'pending'].includes(r.readState)) { r.readState = 'expired'; r.readReason = 'restart'; }
         }
       });
-    } catch (e) { if (e.code !== 'ENOENT') { this.failed = true; throw e; } }
+    } catch (e) { this.failed = true; throw e; }
+  }
+  // Every settled record, and what deleted blocks held (operation ids that must never run again), read whole.
+  loadHistory() {
+    this.archived = new Map(); this.archivedBySession = new Map(); this.archivedIds = new Set(); this.deleted = new Map();
+    for (const record of this.archive.load()) this.remember(record);
+    for (const item of this.archive.kept()) {
+      const key = this.key(item.actor) + ':' + item.id;
+      if (!this.archived.has(key)) this.deleted.set(key, item);
+      this.archivedIds.add(item.id);
+    }
+  }
+  // Blocks the person exported and NAW checked, deleted at the person's word. What each held is kept without its
+  // contents: who asked, the operation id, when and how it ended. Such an id is never run again.
+  deleteBlocks(names) {
+    if (this.failed || this.closed) throw Error('Background operation storage is unavailable');
+    const keep = r => ({ id: r.id, actor: { id: r.actor.id, nativeId: r.actor.nativeId, provider: r.actor.provider }, at: r.at, state: r.state });
+    try { this.archive.delete(names, keep, this.now()); }
+    catch (error) {
+      // Refused before anything was written: nothing changed, and background control goes on.
+      if (error.code === 'REFUSED') throw error;
+      this.failed = true; throw Error('The background operation history could not be changed; no operation is run', { cause: error });
+    }
+    try { this.loadHistory(); }
+    catch (error) { this.failed = true; throw Error('The background operation history could not be changed; no operation is run', { cause: error }); }
+    this.changed();
+  }
+  // An operation id whose record the person deleted: never run again, and said so.
+  deletedReply(sender, id) {
+    const gone = this.deleted.get(this.key(sender) + ':' + id);
+    // The outcome it had when it was deleted: a refusal-like "not-executed" would invite running it again under a new id.
+    return gone ? { id, state: gone.state, reason: 'record-deleted', deletedAt: gone.deletedAt, at: gone.at, retry: false,
+      error: 'This operation was recorded with the state given; its record was exported and then deleted by the person. It is not run again.' } : null;
+  }
+  // A settled record held in memory; a later version of the same record replaces it.
+  remember(record) {
+    const key = this.key(record.actor) + ':' + record.id, prior = this.archived.get(key);
+    this.archived.set(key, record); this.archivedIds.add(record.id);
+    const rows = this.archivedBySession.get(record.actor.id) || [];
+    if (prior) rows[rows.indexOf(prior)] = record; else rows.push(record);
+    this.archivedBySession.set(record.actor.id, rows);
+  }
+  // A settled record that changes later (a send confirmed on a later receipt) is added to its block again.
+  reappend(record) {
+    if (this.failed) throw Error('Background operation storage is unavailable');
+    try { this.archive.append([{ time: recordTime(record), value: record }], this.now()); }
+    catch (error) { this.failed = true; throw Error('Background operation save is unconfirmed; no automatic replay', { cause: error }); }
+    this.remember(record); this.changed();
+  }
+  // The older version's file kept as it was, beside the blocks (not read again).
+  keepLegacy(text) {
+    const store = history.ensureDirectory(history.ensureDirectory(path.dirname(this.file), history.HISTORY_DIR), 'operations'), bytes = Buffer.from(text);
+    const digest = history.sha256().update(bytes).digest('hex');
+    for (let n = 1; n < 10000; n++) {
+      const name = `legacy-${String(n).padStart(4, '0')}.json`, target = path.join(store, name);
+      let present = null; try { present = fs.readFileSync(target); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (present) { if (history.sha256().update(present).digest('hex') === digest) return; continue; }
+      const temporary = `${target}.${randomUUID()}.tmp`;
+      try {
+        const fd = fs.openSync(temporary, 'wx', 0o600);
+        try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        fs.renameSync(temporary, target); history.syncDirectory(store); return;
+      } finally { fs.rmSync(temporary, { force: true }); }
+    }
+    throw Error('No place for the older background operation record');
   }
   commit(change) {
     if (this.failed) throw Error('Background operation storage is unavailable');
@@ -154,7 +250,7 @@ class BackgroundControl {
     for (const row of next.refusals) if (Object.hasOwn(row, 'retryHint')) row.retryHint = REFUSAL_RETRY_HINT;
     const summaries = new Set(next.refusals.map(r => this.key(r.actor) + ':' + r.id));
     const exact = new Set(next.records.map(r => this.key(r.actor) + ':' + r.id));
-    next.refusalReceipts = operation.retainRefusalRows(next.refusalReceipts.filter(a => summaries.has(this.key(a.actor) + ':' + a.summaryId) && !exact.has(this.key(a.actor) + ':' + a.id)), 512, 128);
+    next.refusalReceipts = operation.retainRefusalRows(next.refusalReceipts.filter(a => summaries.has(this.key(a.actor) + ':' + a.summaryId) && !exact.has(this.key(a.actor) + ':' + a.id) && !this.archived.has(this.key(a.actor) + ':' + a.id)), 512, 128);
     // Read bodies never belong to the durable operation log, including legacy
     // values loaded from an earlier build. A bounded, one-use cache holds them.
     for (const r of next.records) {
@@ -165,6 +261,21 @@ class BackgroundControl {
       }
       if (privateRead(r.command) && ['available', 'consumed', 'expired'].includes(r.readState) && !['running', 'confirmation-required'].includes(r.state)) compactRead(r);
     }
+    // Settled records go to their block first, synced; only then does the state file stop holding them.
+    const now = this.now(), moving = next.records.filter(r => settledStates.has(r.state) && !['available', 'pending'].includes(r.readState) &&
+      Number.isSafeInteger(recordTime(r)) && recordTime(r) < now - SETTLE_MS);
+    // (A state record never shares an id with a settled one: loading drops such a copy, and a repeated id is a duplicate.)
+    if (moving.length) {
+      try { this.archive.append(moving.map(r => ({ time: recordTime(r), value: r })), now); }
+      catch (error) { this.failed = true; throw Error('Background operation save is unconfirmed; no automatic replay', { cause: error }); }
+      for (const r of moving) this.remember(clone(r));
+      next.records = next.records.filter(r => !moving.includes(r));
+      // In their block now: they leave this run's state too, whatever happens to the rest of this save.
+      const moved = new Set(moving.map(r => this.key(r.actor) + ':' + r.id));
+      this.data = { ...this.data, records: this.data.records.filter(r => !moved.has(this.key(r.actor) + ':' + r.id)) };
+    }
+    // How far the history goes: a state file that knows of more than the blocks hold stops the next start.
+    next.historyThrough = history.lastSequence(this.archive.manifest);
     const text = JSON.stringify(next);
     if (Buffer.byteLength(text) > MAX_RECORD_BYTES) throw Error('Background operation record is full; existing records are retained');
     const temporary = `${this.file}.${randomUUID()}.tmp`; let renamed = false;
@@ -198,7 +309,7 @@ class BackgroundControl {
   }
   receipt(sender, id, context = null, exact = false) {
     const own = r => r.id === id && this.key(r.actor) === this.key(sender);
-    let record = this.data.records.find(own) || this.data.refusals.find(own);
+    let record = this.data.records.find(own) || this.archived.get(this.key(sender) + ':' + id) || this.data.refusals.find(own);
     if (!record && !exact) {
       const alias = this.data.refusalReceipts.find(own);
       if (alias) record = this.data.refusals.find(r => r.id === alias.summaryId && this.key(r.actor) === this.key(sender));
@@ -271,7 +382,7 @@ class BackgroundControl {
       state.sequence = nextCount(state.sequence);
       delete state.prefix; // The unpublished prefix-based candidate is no longer a protocol rule.
       if (!state.counts[reason]) {
-        do { id = 'refusal:' + randomUUID(); } while (id === args.operation_id || [...d.records, ...d.refusals].some(r => r.id === id));
+        do { id = 'refusal:' + randomUUID(); } while (id === args.operation_id || this.archivedIds.has(id) || [...d.records, ...d.refusals].some(r => r.id === id));
         state.counts[reason] = { id, count: 0, rooms: {} };
       }
       const count = state.counts[reason]; id = count.id; count.count = nextCount(count.count);
@@ -322,13 +433,18 @@ class BackgroundControl {
     await valid();
     if (args.action === 'catalog') return { state: 'complete', commands: this.catalog(), background: true };
     if (args.action === 'receipt') {
-      const saved = this.receipt(sender, args.operation_id);
+      const saved = this.receipt(sender, args.operation_id), gone = !saved && this.deletedReply(sender, args.operation_id);
+      if (gone) return { state: 'complete', receipt: gone, retry: false };
       let context = null;
       if (saved) {
         context = await this.view(sender, saved.command.view_id);
         if (privateRead(saved.command)) { await context.refresh?.(); await valid(); }
         const delivery = await context.delivery?.(saved.command, saved.value, saved.actor, saved.guard);
-        if (delivery) this.commit(d => { const r = d.records.find(r => r.id === saved.id && this.key(r.actor) === this.key(sender)); r.delivery = delivery; if (delivery.nativeReceived) r.state = 'received'; });
+        const archived = this.archived.get(this.key(sender) + ':' + saved.id);
+        // A settled send is added again only when what is known about it changed: agents may ask often.
+        const changedRecord = archived && delivery && { ...clone(archived), delivery, ...(delivery.nativeReceived ? { state: 'received' } : {}) };
+        if (changedRecord && !isDeepStrictEqual(changedRecord, archived)) this.reappend(changedRecord);
+        else if (delivery && !archived) this.commit(d => { const r = d.records.find(r => r.id === saved.id && this.key(r.actor) === this.key(sender)); r.delivery = delivery; if (delivery.nativeReceived) r.state = 'received'; });
       }
       return { state: 'complete', receipt: this.takeReceipt(sender, args.operation_id, context), retry: false };
     }
@@ -346,13 +462,16 @@ class BackgroundControl {
     if (args.method === 'initial') args = { ...args, arguments: [target || sender.id] };
     if (implicitSnapshot) {
       const sameView = r => this.key(r.actor) === this.key(sender) && (r.command.view_id || 'default') === (args.view_id || 'default');
-      const changedSelection = this.data.records.findLastIndex(r => sameView(r) && r.state === 'complete' && r.command.method === 'viewState' &&
+      // Settled records of this view first, in the order they were made, then the state file's.
+      const settledOwn = (this.archivedBySession.get(sender.id) || []).filter(sameView), records = settledOwn.length ?
+        [...settledOwn, ...this.data.records].map((r, index) => ({ r, index })).sort((a, b) => (a.r.at - b.r.at) || (a.index - b.index)).map(item => item.r) : this.data.records;
+      const changedSelection = records.findLastIndex(r => sameView(r) && r.state === 'complete' && r.command.method === 'viewState' &&
         Object.hasOwn(r.command.arguments?.[0] || {}, 'selected') && r.command.arguments[0].selected !== target);
       const guard = controlGuard(context, args);
       // A cancellation is the person's answer, not a request to prompt again.
       // Explicit IDs may ask again. Navigating away or changing the bound
       // consent target releases an implicit cancellation, including after restart.
-      const previous = this.data.records.findLast((r, index) => sameView(r) &&
+      const previous = records.findLast((r, index) => sameView(r) &&
         (r.state === 'confirmation-required' || r.state === 'cancelled' && index > changedSelection) &&
         isDeepStrictEqual({ ...r.command, operation_id: args.operation_id }, args) && isDeepStrictEqual(r.guard, guard));
       if (previous) return { ...this.receipt(sender, previous.id), duplicate: true, retry: false };
@@ -366,6 +485,8 @@ class BackgroundControl {
     };
     const existing = this.receipt(sender, args.operation_id, null, true);
     if (existing) return duplicate(existing);
+    const gone = this.deletedReply(sender, args.operation_id);
+    if (gone) return { ...gone, duplicate: true };
     const handler = !['backgroundDecision', 'uiReady'].includes(args.method) && this.handlers.get(args.method);
     const key = this.key(sender);
     const actor = operation.actor({ ...sender, callId: identity.callId, turnId: identity.turnId, operationId: args.operation_id });
@@ -389,6 +510,8 @@ class BackgroundControl {
     // summarize or replace its intent, including when its handler is running.
     const refreshed = this.receipt(sender, args.operation_id, null, true);
     if (refreshed) return duplicate(refreshed);
+    const goneSince = this.deletedReply(sender, args.operation_id);
+    if (goneSince) return { ...goneSince, duplicate: true };
     if (this.inflight.has(key)) return refuse('another-operation-running');
     const guard = controlGuard(context, args);
     if (operation.maintenanceAction(args.method, args.arguments, actor)) {
@@ -547,7 +670,7 @@ class BackgroundControl {
     });
   }
   rows(sessionId) {
-    return this.data.records.filter(r => r.actor.id === sessionId).map(r => ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
+    return [...(this.archivedBySession.get(sessionId) || []), ...this.data.records.filter(r => r.actor.id === sessionId)].map(r => ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
       name: operation.visibleText(r.actor.name), time: r.at, status: ['running', 'awaiting-native'].includes(r.state) ? 'working' : ['complete', 'received', 'cancelled'].includes(r.state) ? 'complete' : 'error',
       text: operation.visibleText(`${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', 'not-executed': '未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`),
       backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state,

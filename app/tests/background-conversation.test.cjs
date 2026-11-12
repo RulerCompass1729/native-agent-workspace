@@ -138,6 +138,40 @@ test('cancellation survives unrelated view edits, but a new selection or consent
   const replaced = await f.controller.call(f.binding, { action: 'snapshot' });
   assert.equal(replaced.state, 'confirmation-required'); assert.notEqual(replaced.id, next);
 });
+test('a cancellation that has settled into its block is still the person\'s answer, also after a restart; a new selection still releases it', async t => {
+  const DAY = 24 * 3600 * 1000; let clock = Date.UTC(2026, 10, 1, 12);
+  const f = fixture(t); f.controller.now = () => clock; await f.select('other');
+  const cancel = async controller => {
+    const row = await controller.call(f.binding, { action: 'snapshot' });
+    assert.equal(row.state, 'confirmation-required');
+    await controller.decide('agent', 'native-agent', row.id, 0); return row.id;
+  };
+  const id = await cancel(f.controller);
+  clock += 2 * DAY; await f.controller.call(f.binding, command('viewState', [{ selected: 'other', mode: 'terminal' }]));
+  assert.equal(f.controller.data.records.some(r => r.id === id), false, 'The cancellation has moved to its block');
+  assert.equal((await f.controller.call(f.binding, { action: 'snapshot' })).id, id);
+  const reopened = new BackgroundControl(f.config); reopened.now = () => clock;
+  assert.equal((await reopened.call(f.binding, { action: 'snapshot' })).id, id);
+  clock += 2 * DAY; await reopened.call(f.binding, command('viewState', [{ selected: 'third', mode: 'chat' }]));
+  clock += 2 * DAY; await reopened.call(f.binding, command('viewState', [{ selected: 'other', mode: 'chat' }]));
+  const next = await cancel(reopened); assert.notEqual(next, id);
+});
+
+test('a cancellation that settles after a later change of selection is still released by it, as when nothing had settled', async t => {
+  const DAY = 24 * 3600 * 1000, MINUTE = 60000; let clock = Date.UTC(2026, 10, 1, 12);
+  const f = fixture(t); f.controller.now = () => clock; await f.select('other');
+  clock += MINUTE; const asked = await f.controller.call(f.binding, { action: 'snapshot' }); assert.equal(asked.state, 'confirmation-required');
+  clock += MINUTE; await f.select('third'); clock += MINUTE; await f.select('other');
+  // The person answers the earlier question only now; the two selections settle a day before the cancellation does.
+  clock += 10 * MINUTE; await f.controller.decide('agent', 'native-agent', asked.id, 0);
+  clock += DAY - 5 * MINUTE; f.controller.commit(() => {});
+  assert.equal(f.controller.data.records.some(r => r.id === asked.id), true, 'The cancellation has not settled yet');
+  clock += DAY; f.controller.commit(() => {});
+  assert.equal(f.controller.data.records.some(r => r.id === asked.id), false, 'Now it has, after the selections');
+  const again = await f.controller.call(f.binding, { action: 'snapshot' });
+  assert.equal(again.state, 'confirmation-required'); assert.notEqual(again.id, asked.id);
+});
+
 test('a cancelled read does not suppress an independent view or another actor', async t => {
   const f = fixture(t); await f.select('other');
   const cancelled = await f.controller.call(f.binding, { action: 'snapshot' });

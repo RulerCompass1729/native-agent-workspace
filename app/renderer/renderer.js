@@ -176,6 +176,11 @@ try { butlerEntry = window.nativeWorkspaceButlerEntry.bind({ row: $('butler-row'
   front: listener => { window.addEventListener('focus', listener); return () => window.removeEventListener('focus', listener); } }); }
 catch (error) { console.error(error); butlerEntry = failedButlerEntry(!window.nativeWorkspaceButlerEntry ? 'module' : !$('butler-row') || !$('butler-dialog') ? 'element' : 'setup'); }
 let newDirectory = false, creatingSession = false;
+// The bell: reminders about records kept whole, asked for once as the window starts (nothing polls).
+let recordReminders = null;
+try { recordReminders = window.nativeWorkspaceRecordReminders.bind({ button: $('records-button'), badge: $('records-badge'), dialog: $('records-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display });
+  recordReminders.refresh(); }
+catch (error) { console.error(error); }
 let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
 let latestViewStorage, latestViewStorageUiMessage;
 let roomSession = '', selectionRevision = 0, pendingMode;

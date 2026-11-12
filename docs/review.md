@@ -12137,3 +12137,369 @@ The person, on alpha.235: 「在原生终端界面输入的时候卡卡的」, �
 - Not measured: painting (the window is hidden), the installed app's real history sizes, twelve backends, and a single fold or unfold in the sidebar (it draws the whole page once, like a snapshot).
 
 **Independent review.** A fresh read-only session (`claude-opus-5-5`): CHANGES_REQUIRED for the record only. The cause given for the page receiving more snapshots was stated as measured; it is now labelled inferred, and the superseded counts that were then measured are given. It also found that the two runs first compared could not be told apart by their code (main had moved under the run labelled main); both were run again with bundle hashes recorded, and the figures above are those. Its notes on the time zone and on a test that failed just after midnight are taken. The same session read the rerun: the code and test approved, two figures (memory per agent window, the cost of reading the language) did not match the new runs; both are corrected above.
+
+## Records kept whole, in blocks: the butler's read log (batch 1 of 3, 2026-11-11)
+
+The person, 2026-11-11, about the operations history: 「历史记录保持这个，我的理解应该是
+全保留，然后切分成小块（比如按天保持），然后超过 30 天/或者整个记录大小超过 0.5G 这样的，
+界面有个小铃铛弹提醒，看如何处理」; about the butler's read log: 「一样」. The secretary
+queued the work in three batches; this is the first: a shared module, the read log
+moved onto it behind the closed butler switch, and the read log page showing what
+it now has to show. The bell and the operations record are batches 2 and 3.
+
+What changed:
+- `app/record-history.cjs` (new): where blocks live (`history/<record>/`), their
+  names (first global number and the UTC day opened), the manifest and its
+  checks, private atomic JSON writes, and the reminders (age past 30 days on a
+  block's newest line, the whole past 0.5 GiB, blocks that cannot be read),
+  worked out from the manifest alone. Nothing here deletes, compresses or merges.
+- `app/butler-read-audit.cjs`: the single file capped at 32 MiB becomes blocks of
+  at most 32 MiB, sealed with a checksum when a page arrives on a later UTC day or
+  would not fit. The day's allowance is summed from the manifest across blocks. An
+  older version's single file is renamed in as a sealed block, numbered after
+  what is there, with an intent file for a stop between steps. A sealed block that
+  is missing or no longer matches is a gap (`gaps` in the read) in its place; put
+  back exactly, it reads again. The running app still fails closed when the block
+  it is writing changes under it. The `storage` report is now `usedBytes,
+  remindBytes, blocks, unreadableBlocks, warning` (warning = past 0.5 GiB). A block
+  opened for a page whose write failed is dropped rather than sealed empty.
+- The read log page: a gap is one row in its place (touching gaps are one row, a
+  day is split around one), today's count says it cannot be told when the newest
+  position is in a gap, and the size line is the reminder line, not a cap.
+- Packaging lists the new module; `docs/butler-business.md` describes the layout.
+- After the review (below): taken-in lines are read with the day's running count;
+  stops during taking-in recover; the manifest is rebuilt only when missing or
+  unparsable; a cut-short last line no longer hides its block; nothing is moved
+  or created over a file already there.
+
+Sentences the person can see (zh; en follows):
+- new `butler.reads.storageOver`: 「这份记录已有 {used} MiB，超过 {line} MiB 的提醒线。
+  旧记录全部保留，不会自动删除，大管家也照常记录。」
+- new `butler.reads.gap`: 「第 {from}–{through} 条（UTC {days}，共 {count} 条）现在读不到：
+  这一块不见了、和记录清单对不上，或已损坏。NAW 没有动它，其他记录照常显示。」
+- new `butler.reads.todayUnknownGap`: 「从 {from} 起已读多少页现在判断不了：最新的记录所在
+  的那一块现在读不到。每天最多 {limit} 页，{resets} 重新计。」
+- changed `butler.reads.storageUnknown`: 「这份记录有多大现在判断不了：这次读到的报告缺失或
+  对不上。」
+- new `butler.reads.listedGap`: 「共 {total} 条，下面显示了其中 {shown} 条；另外 {missing} 条在
+  现在读不到的块里，在下面标出的位置。」
+- changed `butler.reads.unavailableHelp`: points at 「数据目录里的读取记录（history/butler-reads
+  文件夹，以及旧版本留在数据目录最上层的 butler-business-reads.jsonl）」.
+- removed: the near-full and full warnings (there is no cap any more).
+
+Evidence: the full suite, 6288 tests, all pass (run before the review; after it,
+the nine related files were run with their output kept: 200 pass). 50 deliberate
+faults in the core, the shared rules, the view, the page and the sentences are
+all caught by the unit tests (17 of them added after the two review rounds; the
+last 4, and 3 whose code changed, were run alone). The read log
+window check runs on the real window with a real two-day log: the reminder line,
+a missing report, a damaged sealed block shown as one row across two pages and
+reading again when put back, and a damaged open block; three window faults are
+caught. The entry's window check and the DSH read budget check (a local loopback
+server, a fixture key, no provider) pass. No native program, no model.
+
+Not verified, or known:
+- Going back to an older version: it does not know the folder, shows an empty log
+  and starts the day's count from zero in a new single file. Coming back, this
+  version takes that file in and counts its pages, so the allowance is whole
+  again; while on the older version it is not. No butler is connected in either.
+- An older version's file with a line cut short is not taken in: the log stops,
+  as it stopped that version. A day an older version took past 64 pages shows
+  more than 64 read and nothing left.
+- A missing or unparsable manifest is rebuilt only when every block reads;
+  otherwise the log fails closed. A rebuild cannot know about a newest block that
+  is gone too, and takes the blocks as they are now. A manifest changed
+  consistently by a program running as the person is not detected: this log is
+  not tamper-proof (as before).
+- A read may finish a taking-in or update the manifest (setting a block aside,
+  counting a line written before a stop): reads write.
+- An open block set aside as unreadable (other than a cut-short last line) has no
+  checksum and stays set aside even if put back.
+- A page now takes about 41 ms to log on this machine, against about 21 ms before
+  (two manifest writes, each synced).
+- The bell, the reminder dialog and export are batch 3; nothing here reminds the
+  person outside the read log page, whose entry is still closed.
+
+Independent read-only review (one fresh session on the rebased commit; the CLI
+reported the model as claude-opus-5-5): `PASS_WITH_NOTES`. It found no path that
+loses or rewrites a stored record or starts the day's count again within this
+version, and the fail-closed paths real. Its notes, each reproduced as a test
+first, and what was done:
+1. After going back to an older version and returning, today's count on the page
+   was too low (the taken-in lines kept the older version's own page numbers):
+   3 pages here and 60 there showed "60 read, 4 left" while one page was left.
+   The read now gives each taken-in line the day's running count across the log;
+   a view test over the real core shows 63 read, 1 left, and the next page after
+   the last is refused.
+2. "the newest N are below" was false when a gap sat among the rows. With a gap
+   the line now says how many are shown and how many are in blocks that cannot be
+   read, marked in their places (new sentence `butler.reads.listedGap`: 「共 {total}
+   条，下面显示了其中 {shown} 条；另外 {missing} 条在现在读不到的块里，在下面标出的
+   位置。」).
+3. Some stops during taking-in never recovered: moved, then an older version
+   started a new file; planned, then an older version wrote on to the file; a
+   plan beside a damaged or missing manifest. Now the moved block is checked
+   first, a plan the file outgrew before any move is dropped and the file taken
+   in as it is, and the manifest is read or built before a plan is finished. A
+   move or a new block never goes over a file already there (it stops instead).
+4. Any error reading the manifest rebuilt it. Now only a missing manifest or one
+   that does not parse is built again; one that cannot be opened safely stops the
+   log. A rebuild still cannot know about a newest block that is gone.
+5. A crash during an append made the whole open block a gap for good. A block
+   whose last line was cut short is now sealed with that line left as it is (its
+   page was never released), its other lines read, and the next page goes into a
+   new block; sealed, it is held to its checksum. A block holding only a cut-short
+   line held no page: it is moved aside under a name that is not a block's. An
+   empty block holding anything else stops the log.
+6. An open block grown past 32 MiB from outside stopped every later start; a new
+   instance now sets it aside. The help for an unreadable log now also names the
+   older version's file at the top of the data folder.
+Its remark that fault 1 of the window list showed no error: that fault was the
+one missed, replaced by a fault in the code path the window check exercises.
+The same session then read the changes: `PASS_WITH_NOTES`, fixes 1–6 hold, no
+new way to lose a record, release a refused page or restart a day's count. Its
+notes, each now a test: a day past 64 pages (possible only after going back to
+an older version) hid its later lines as "not understood" (they are shown, and
+the day is full); an empty block holding a whole line and a cut-short one
+stopped the log (it is sealed like any other); an empty leftover file kept a
+block's place taken or stopped a rebuild (it holds nothing and is cleared, or
+skipped).
+A third read of those changes: `PASS_WITH_NOTES`, all three hold and open no way
+to lose a record, release a refused page or restart a day's count. Two minor
+notes, recorded and not changed: with the manifest lost, a newest block emptied
+to 0 bytes from outside is now skipped by the rebuild (its pages leave the day's
+count; before, the log stopped), the same class as the known limit about a
+newest block that is gone; and on a day past 64 pages, today's line says the 64
+are used up without saying how many more were read (the day's header shows it).
+The review of this batch ends here. After rebasing onto main ace4975 the full
+suite passed again (6307 tests), and so did the DSH read budget check.
+
+## Records kept whole, in blocks: the executed-operations record (batch 2 of 3, 2026-11-12)
+
+The person's words are in the batch 1 section. This batch keeps every executed
+operation an agent asked NAW to run (`background-operations.json`), which until now
+was one document rewritten whole on each change and refused new operations at
+32 MiB.
+
+What changed:
+- `app/record-history.cjs`: `BlockLog`, an append-only record in the shared block
+  layout, read back whole at start. A value that changes later is added again and
+  the later line holds. A sealed block that no longer matches or is missing, or a
+  line that does not read, stops the load; a last line cut short by a stop is kept
+  and its block sealed.
+- `app/background-control.cjs`: a record that ended more than a day ago with
+  nothing pending (not running, not awaiting a decision, no unread copy) moves
+  from the state file into the day's block under `history/operations/`. Every
+  record stays loaded: receipts, a repeated operation id, the conversation rows
+  and an earlier cancellation look in both. A send confirmed on a later receipt
+  is added again. The state file is version 2; an older version's version 1 file
+  is kept byte for byte as `legacy-NNNN.json` and taken in (an id already recorded
+  keeps its first record).
+- `app/service-client.cjs` copies the new module into the service runtime; a new
+  test checks that every module the daemon loads is copied. The real-window
+  background control check now also treats the person-only `butler` channel as
+  outside the agent catalog (it is removed there since 7347c1c; the check had
+  not been updated and failed on main too).
+
+Design choice, against the design page's section 2: no `.keys` index. All
+records are loaded instead, so nothing an agent or the person sees changes. The
+failure measured was the 32 MiB stop and the whole-file rewrite; the memory and
+start time this costs grow with the record and were not measured at size. The
+person is reminded at 0.5 GiB.
+
+Rollback, run with real code: main ace4975's own module (a separate worktree)
+recorded an operation, this version took the file in two days later, and the
+older module then refused the version 2 file ("Invalid background operation
+record", not "missing"), so it cannot start empty and run the id again. In the
+older `main.cjs` that refusal sets background control unavailable and the app
+runs. Evidence: `rollback-run.log`.
+
+Evidence: the full suite, 6318 tests, all pass. The five operations and records
+test files: 210 pass. 16 deliberate faults in the operations module and the block
+log are all caught (a seventeenth showed a check that could never act; the check
+was removed). The real-window background control check passes (10 checks,
+including a real restart where an old operation is not sent again). No native
+program, no model.
+
+Not verified, or known:
+- Going back to an older version: its background control is unavailable until
+  the person comes back to this version. Nothing else in the app is affected.
+- A block that cannot be read stops background control for the whole app run
+  (as a damaged file did before); the bell (batch 3) tells the person.
+- Memory and start time grow with the whole record (all of it is loaded).
+- An open block's contents changed in place by another program are not detected
+  until it is sealed; this record is not tamper-proof.
+- The real-window check runs within one day, so nothing settles there; settling,
+  taking in, a later receipt and a stop between the two writes are unit-tested.
+
+Independent read-only review (one fresh session, in a separate checkout of the
+commit; the CLI reported the model as claude-opus-5-5): `CHANGES`, one blocking
+finding. It found no path that runs an operation id twice. Its findings, each
+reproduced as a test first, and what was done:
+1. (blocking) Every receipt on a settled send added another full copy of the
+   record, because the delivery check answers on every call; polling alone would
+   grow the record toward the bell. Now a settled record is added again only when
+   what is known about it changed; three unchanged receipts and one after a
+   restart add nothing.
+2. A save refused as too large, after settled records had gone to their block,
+   left them in the state too, so they were written again and a later receipt's
+   change could be lost. They now leave the state as soon as their block has
+   them.
+3. A missing file met while keeping an older version's file was taken for "no
+   state file", leaving a version 1 file an older version would start on. Only a
+   missing state file is a fresh start now; anything else stops background
+   control.
+4. A history folder moved away or emptied read as an empty history, so its ids
+   could run again. The state file now records how far the blocks go
+   (`historyThrough`), and a history that ends earlier stops background control.
+5. The comment said the older file counts toward the size; it does not here (the
+   bell, batch 3, counts it). Comment corrected.
+6. Each save built a set of every settled key; it now looks them up directly. The
+   older file is kept byte for byte, so a file from a much older build may still
+   hold bodies later builds strip; it is private, as the file was.
+A test now covers a cancellation that settles after a later change of selection,
+the one case the ordering by creation time decides. 21 faults in all, the 6 for
+these caught.
+
+The same session read the changes after its findings: `PASS_WITH_NOTES`, findings
+1–4 fixed and each broken by a fault, no new way to run an id twice, lose a record
+or stop background control when nothing is wrong. Its two notes: background
+control stopped because the history is shorter than recorded had no supported way
+back (the bell, batch 3, now says to put the folder back and reopen NAW, and
+deleting blocks keeps their ids first); and a save refused as too large can keep a
+moved record's change while the rest is dropped (nothing runs twice or is lost).
+
+## Records kept whole, in blocks: the bell, reminders, export and deleting exported blocks (batch 3 of 3, 2026-11-12)
+
+The person's words are in the batch 1 section; the design's section 9 was taken
+as recommended on 2026-11-11 ("暂时按你推荐的来", relayed by the integrator, who
+looked at the pictures): "知道了 / 导出 / 导出核对通过后才能删除", a content-free
+list kept after deleting, each record counted on its own, and a reminder that
+comes back only one notch worse.
+
+What changed:
+- A bell above Settings in the sidebar, there only while something is due, with
+  the count; in the narrow rail it is an icon with the count.
+- `app/record-reminders.cjs`: per record, from its manifest: blocks past 30 days
+  (one notch = 30 more such blocks, about a month, not every day), the whole past
+  0.5 GiB (an older version's kept file counted), blocks that cannot be read, and
+  the operations record not loaded at start. "知道了" is kept in
+  `history/reminders.json`. Export copies the chosen sealed blocks, as they are,
+  into `<folder>/<record>/`, never over a different file and never into NAW's own
+  folder, and checks each copy's size and checksum. It deletes nothing.
+- Deleting: only blocks exported and checked in this window; the copies are
+  checked again before and after the person's native confirmation; then through
+  each record's owner. The read log marks the blocks deleted (numbers, days and
+  pages stay, so the day's allowance holds) and shows them on its page as deleted,
+  with when. The operations record first keeps a list of what each block held
+  without contents (who asked, the operation id, when, how it ended), then marks
+  it deleted; such an id is refused with `record-deleted` and never run again; a
+  later version of a record kept in another block stays.
+- `records` is a person-only channel removed from the agent catalog, like the
+  butler's.
+
+Sentences the person can see: the `records.*` keys and `butler.reads.gapDeleted`
+in `app/ui-messages.js` (zh and en), among them 「NAW 不会自己删除任何记录。下面这些
+到线了，怎么处理由你决定。」, 「删除之后，这些块的内容只在你导出的文件夹里。NAW 只留一份
+不含内容的清单（哪些块、哪些编号、多少条、什么时候删的），所以执行过的操作不会被再执行一次，
+大管家每天读过的页也照算。」 and, for the operations record that could not be loaded,
+「……把数据目录里的 history/operations 文件夹放回原样，再重新打开 NAW，就会恢复。」
+
+Evidence: the full suite, 6335 tests, all pass (after the review below). 32 deliberate faults in the
+reminders, the page, the block log, the operations module, the read log, its view
+and page, and the main process are all caught (23 of the first 24; the missed
+one, a deleted id asked while the agent is busy, got a test; 8 more for the
+review's findings). The bell window
+check runs on the real app and service: no bell with nothing due; the bell, its
+dialog and the export view in both languages at 1280 and 860 wide; export of the
+two old blocks byte for byte; the delete with its native confirmation, the files
+gone from NAW and kept in the export, their entries marked deleted and read back
+as deleted; "知道了" kept across a restart; an operations block changed on disk
+said, with "show in Finder" (17 screenshots). The read log page check and the
+background control check pass. The OS-language test now checks the two new
+native dialogs (language, the folder shown as it is, Cancel the default). No
+native program, no model.
+
+Not verified, or known:
+- Reminders are worked out when a window starts, after the person's own actions,
+  and when the main process says a record changed: a block of the operations
+  record sealed or added, or the record not loaded at start (design section 6).
+  Not done: the read log's own sealing and "today's count cannot be told" do not
+  ring the bell (the butler is still switched off; to do when its entry opens),
+  and a failure of background control while NAW runs shows at the next start.
+- A manifest lost after blocks were deleted cannot be rebuilt (the numbers no
+  longer follow on): the record stops, as for any missing block.
+- After deleting, an earlier cancellation in a deleted block is gone: the person
+  may be asked once more for a snapshot they cancelled long ago.
+- The native confirmation and the folder chooser are answered inside the app's
+  main process in the window check; the person's own clicks on them are not
+  driven.
+- Deleting cannot be undone; the export is then the only copy of the contents,
+  except that an older version's operations file kept beside the blocks is not
+  part of a deletion.
+- A file under a deleted block's name (a stop between marking and removing, or a
+  copy put back by hand) is left alone: never read, never removed by NAW, and not
+  counted in the record's size; after such a stop, "NAW no longer holds these
+  blocks" is not quite true for that one file. If the manifest is then lost too,
+  a rebuild can take that block back in (its ids with it, so nothing runs twice).
+- "Unreadable" is one reminder for unreadable blocks and an unreadable manifest:
+  after "知道了" for blocks, a manifest that later cannot be read stays quiet while
+  those blocks are still unreadable.
+- Deleting a block that holds a later version of a record whose earlier version
+  is in a block kept brings the earlier state back (for example `awaiting-native`
+  instead of `received`); the id is still known, so nothing runs twice, and the
+  next receipt updates it.
+
+Independent read-only review (the same session as batch 2, in a separate checkout
+of the commit): `CHANGES`, one blocking finding. It found the delete path
+person-only, limited to blocks exported and checked in the same window, checked
+twice, never touching the block being written, and export never writing over a
+file or into NAW's own folder. Its findings, each now a test, and what was done:
+1. (blocking) A deleted operations block's list without contents had no size
+   limit when written but an 8 MiB limit when read, so deleting a big block (the
+   one an older file was taken into is the likeliest) would stop background
+   control for good. The list now has one limit (64 MiB) for both, checked
+   before anything is written; a block of 60000 records deletes and reads back.
+2. A deleted operation id answered `not-executed`, the state of a refusal an
+   agent may retry under a new id. It now answers with the outcome recorded when
+   it was deleted, with `reason: record-deleted`.
+3. "知道了" silenced its condition for good, and "background control not loaded"
+   shared a key with unreadable blocks. An acknowledgement now lasts while its
+   condition does, and "not loaded" is its own reminder.
+4. The delete explanation said the contents would be only in the export; an
+   older version's operations file kept beside the blocks is not deleted, and
+   more is kept for operations than the sentence said. Reworded.
+5. A link where a copy should be (even to NAW's own block) passed the export
+   check and the check before deleting. A copy must now be a file of its own.
+6. Deleting a later version can bring back an earlier one: recorded above.
+Its remark that the window check left no result file: the check's result is the
+JSON line at the end of its log (`gui-12.log`), now also saved as `result.json`
+beside its screenshots.
+The same session read those changes: `CHANGES`. Findings 1–5 held, but the step
+that removed a deleted block's leftover file at start would also have removed a
+copy the person moved back by hand, which would make "NAW 不会自己删除任何记录"
+untrue. That step is gone: such a file is left alone (a test puts one back and
+restarts twice). It also noted that a delete refused before anything is written
+stopped background control for the run; such a refusal now changes nothing and
+stops nothing (tested with the block still being written).
+A last read of that change: `PASS_WITH_NOTES`. The blocking finding is gone, only
+refusals made before any write are marked as such, and every error after the
+first write still stops background control. Its two notes are in the list above.
+The review of this batch ends here.
+After that, checked against the design's section 6 ("只在启动时、封存一块时、出错时
+计算"): a sealed or added operations block now sends a records-changed event that
+the bell answers by working its reminders out again, and any failure to load the
+operations record at start is its own reminder, with a sentence for its cause
+(its history folder, or anything else such as an unfinished taking-in). Full
+suite 6336, the 3 faults for this caught (35 in all), the bell window check
+passes.
+The same session read that change: `PASS_WITH_NOTES`. Nothing polls (the event
+goes out only when the number of operations blocks changes) and nothing reaches
+an agent's background view. Its notes: the read log's own sealing and a failure
+while NAW runs do not ring the bell (both in the list above as not done); the
+sentence for a record not loaded for another reason said "could not be read" and
+"NAW has not touched it", which is not true of a write that failed or a taking-in
+that stopped part way (reworded: "没能打开", "NAW 不会去修它"); and one "知道了"
+covers both causes of a record not loaded, so a change of cause between two
+starts stays quiet until a start loads it (narrow, recorded). The review of this
+batch ends here.

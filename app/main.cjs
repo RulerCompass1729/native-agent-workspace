@@ -40,11 +40,13 @@ const { createOutboxBroker } = require('./computer-use-outbox-broker.cjs');
 const { bindOriginalOutbox, bindClaudeOutbox, bindOriginalControl, bindClaudeControl } = require('./computer-use-outbox-owner.cjs');
 const { createStockOutboxView } = require('./computer-use-outbox-view.cjs');
 const background = require('./background-control.cjs');
+const recordReminders = require('./record-reminders.cjs');
 const backgroundOperation = require('./background-operation.cjs');
 const queueRules = require('./queue-dispatch.cjs');
 const { QueueDispatcher } = queueRules;
 const applicationHandlers = new Map();
-let backgroundControl, backgroundUnavailable = false;
+// Why background control did not load at start ('history': its blocks; 'other': anything else), for the bell.
+let backgroundControl, backgroundUnavailable = false, operationsUnavailable = null, operationsBlocks = -1;
 let butlerClosing = false, butlerQuitAttempted = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
@@ -599,6 +601,13 @@ async function assertSpaceFileReader(context, roomId) {
 // lives. With one such window per agent that had used workspace control, and every state change, terminal
 // chunk and progress line sent to each, that memory, which no process accounts for, grew until the machine
 // ran out (2026-11-10). Everything sent to a window's page goes through here or through pushState.
+// The bell works its reminders out again when a block of the operations record is sealed or added, not by polling.
+function recordsChanged() {
+  let count = -1; try { count = backgroundControl?.archive?.manifest.blocks.length ?? -1; } catch { /* Read again next time. */ }
+  if (count === operationsBlocks && backgroundControl) return;
+  operationsBlocks = count;
+  for (const c of windows.values()) sendToPage(c, 'workspace:records-changed');
+}
 function sendToPage(context, channel, ...data) {
   if (context.background || context.win.isDestroyed()) {
     return;
@@ -1289,7 +1298,7 @@ async function boot() {
   viewStore = new ViewStore(dataDir);
   const loaded = dropRetiredViewFields(viewStore.load());
   views = loaded.views;
-  try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: () => { broadcastRoom().catch(() => {}); },
+  try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: () => { broadcastRoom().catch(() => {}); recordsChanged(); },
     confirmationPending: notifyBackgroundConfirmation,
     project: projectBackgroundRecord,
     confirmation: (actor, command, action, context) => {
@@ -1383,8 +1392,8 @@ async function boot() {
       windows.set(id, context); bindClient(context);
       win.on('closed', () => { windows.delete(id); client.close(); });
       return context;
-    } }); backgroundUnavailable = false;
-  } catch { backgroundUnavailable = true; }
+    } }); backgroundUnavailable = false; operationsUnavailable = null;
+  } catch (error) { backgroundUnavailable = true; operationsUnavailable = /history cannot be read/.test(String(error?.message)) ? 'history' : 'other'; recordsChanged(); }
   if (loaded.changed) saveViews();
   process.env.NAW_RUNTIME_CONFIG = path.join(dataDir, 'runtime-locations.json');
   await ensureService(dataDir, process.execPath);
@@ -1654,6 +1663,47 @@ async function boot() {
     }
   });
   applicationHandlers.delete('butler');
+  // The bell's reminders about records kept whole, and what the person can do about them. The person's window only;
+  // no agent command (removed from the agent catalog below), and nothing here deletes a block.
+  register('records', async (c, action, ...args) => {
+    if (!isCurrentHumanContext(c)) throw uiError('error.records.personOnly');
+    const name = args[0], unavailable = operationsUnavailable ? { operations: operationsUnavailable } : {};
+    if (action !== 'status' && action !== 'chooseFolder' && !recordReminders.RECORDS.includes(name)) throw uiError('error.records.unknown');
+    try {
+      if (action === 'status' && args.length === 0) return recordReminders.status(dataDir, Date.now(), { unavailable });
+      if (action === 'acknowledge' && args.length === 3) { recordReminders.acknowledge(dataDir, name, args[1], args[2]); return recordReminders.status(dataDir, Date.now(), { unavailable }); }
+      if (action === 'blocks' && args.length === 1) return recordReminders.blocks(dataDir, name, Date.now());
+      if (action === 'chooseFolder' && args.length === 0) {
+        const result = await showDialog(c, 'open', { title: displayText('records.export.chooseTitle'), properties: ['openDirectory', 'createDirectory'] });
+        if (result.canceled || c.win.isDestroyed() || !result.filePaths?.[0]) return null;
+        c.recordsFolder = result.filePaths[0]; return { folder: c.recordsFolder };
+      }
+      if (action === 'export' && args.length === 2) {
+        if (!c.recordsFolder) throw uiError('error.records.noFolder');
+        const result = recordReminders.exportBlocks(dataDir, name, args[1], c.recordsFolder);
+        // Only blocks exported and checked in this window may be removed afterwards.
+        const prior = c.recordsExported?.[name]?.folder === result.folder ? c.recordsExported[name].names : [];
+        c.recordsExported = { ...(c.recordsExported || {}), [name]: { folder: result.folder, names: new Set([...prior, ...result.exported.map(item => item.name)]) } };
+        return result;
+      }
+      if (action === 'delete' && args.length === 2) {
+        const names = args[1], exported = c.recordsExported?.[name];
+        if (!exported || !Array.isArray(names) || !names.length || names.some(item => !exported.names.has(item))) throw uiError('error.records.notExported');
+        recordReminders.verifyExport(dataDir, name, names, exported.folder);
+        const answer = await showDialog(c, 'message', { type: 'warning', buttons: [displayText('records.delete.cancel'), displayText('records.delete.confirm')], defaultId: 0, cancelId: 0,
+          message: displayText('records.delete.question', { count: names.length }), detail: displayText('records.delete.detail', { folder: exported.folder }) });
+        if (answer.response !== 1 || c.win.isDestroyed()) return { deleted: [] };
+        recordReminders.verifyExport(dataDir, name, names, exported.folder);
+        if (name === 'operations') { if (!backgroundControl) throw uiError('error.records.unavailable'); backgroundControl.deleteBlocks(names); }
+        else { if (!butlerReadAudit) throw uiError('error.records.unavailable'); butlerReadAudit.deleteBlocks(c, names); }
+        for (const item of names) exported.names.delete(item);
+        return { deleted: names };
+      }
+      if (action === 'reveal' && args.length === 2) { shell.showItemInFolder(recordReminders.location(dataDir, name, args[1])); return true; }
+    } catch (error) { if (error?.uiMessage) throw error; throw uiError('error.records.failed', { reason: String(error?.message || '').slice(0, 300) }); }
+    throw uiError('error.records.unknown');
+  });
+  applicationHandlers.delete('records');
   register('queueSecretary', async (c, id) => {
     if (c.background) throw uiError('error.queue.personOnly');
     if (id === null) queueSecretary.set(null);
