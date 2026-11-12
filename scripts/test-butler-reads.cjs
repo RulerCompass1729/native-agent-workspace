@@ -250,6 +250,8 @@ const all = () => { const records = []; let after = 0, through = 0;
     assert.equal((await own.locator('h2').innerText()).trim(), say('butler.reads.title'));
     assert.deepEqual((await own.locator('p').allInnerTexts()).map(value => value.trim()), [say(`butler.reads.pageFailed.${reason}`)]);
     assert.equal(await own.locator('p[role="alert"]').count(), 1);
+    // It is in the page's own place for this dialog, made there if the page had none: the page's styles reach only there.
+    assert.equal(await page.evaluate(() => { const d = document.getElementById('butler-reads-dialog'), before = document.getElementById('butler-review-dialog'); return d.parentElement === before.parentElement && d.previousElementSibling === before && document.querySelectorAll('#butler-reads-dialog').length === 1; }), true, 'Among the page\'s own dialogs');
     assert.equal(await page.locator('#toast').isVisible(), false, 'Not a toast');
     assert.equal(await page.evaluate(() => document.activeElement?.dataset?.action), 'done', 'The focus is on Done');
     // Nothing on it looks like a log: no count, no list, no "nothing read yet", no "the log cannot be read".

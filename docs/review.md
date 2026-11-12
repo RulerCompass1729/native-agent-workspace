@@ -11572,3 +11572,102 @@ One failure was seen once in a full run made while the reviewer was reading
 on the same machine: a background-conversation test about a refused
 operation's summary id, in files this change does not touch. That file
 passed alone three times, and the full run made alone passes.
+
+## Butler entry: a row that cannot be set up says so (2026-11-11, behind the closed entry)
+
+Requested (the integrator's dispatch, from the last item of the section
+above): when the entry itself cannot be set up, leave a row that says it is
+the interface and why, where the whole row used to vanish. Only the butler
+entry, the read log page and their checks change; the switch stays closed.
+
+Reproduced first, in the product's own hidden window with the entry's test
+switch on, so that the main process answers this window with an entry. With
+the entry's program kept out of the window, with the view it draws from kept
+out, and with its row or its dialog not found, the row stayed hidden and
+nothing was said; the error went to the console only.
+
+What happens now. The window's stand-in for an entry that could not be set up
+follows the entry's own rule: nothing is shown until the main process has
+answered that this window has an entry. It asks the one question the entry
+asks, once.
+- With the switch closed the question is refused, nothing more is asked and
+  the window is as it was: no row, no dialog, no notice.
+- With an entry, the row stays in its place, drawn as the entry's row is, and
+  says "interface fault". Chosen, it opens a dialog that names which of three
+  things happened (the entry's program is not in this window; the row or its
+  dialog is missing from the page; setting it up failed), says this does not
+  mean that no butler is designated and does not change the designation, and
+  says what cannot be done until it is fixed: this window cannot show the
+  butler's state, and a butler cannot be designated or revoked here. The
+  dialog offers the read log, which needs no entry, and Done.
+- A row or dialog the page lacks is made in the page's own place for it. If
+  even that cannot be done, a notice says it is the interface.
+
+Found on the way, in the first screenshots: a dialog made by the stand-in was
+put in the document body and came out bare, because the page's styles reach
+only the workspace's own container. The window check passed it. Made dialogs
+now go beside the page's own dialogs, and the check compares place, width and
+look. The same applied to the read log's made dialog of the previous section
+when the entry's dialog was missing too; that line is changed the same way.
+
+The sentence "does not change the designation" rests on three tested facts:
+the stand-in makes one kind of call, the state; the main process answers it
+with the core's look at the state; and that look leaves the designation
+record byte for byte as it was, designated or not.
+
+Checks (author-run, no model):
+- Unit tests run the window's own setup lines for each missing part, against
+  every answer the main process can give. 68 deliberate faults, all caught.
+- The open-switch window check keeps each of four parts out of the window as
+  it loads and asks as a person would, in both languages and at both widths.
+  The closed-switch check does the same and requires the window to be as it
+  was. Ten deliberate faults across the two, all caught, the first being the
+  reported one and the second the bare dialog.
+- Counts for the full suite and the three window checks are in the commit
+  message.
+
+Not verified, or known:
+- A person who has designated a butler cannot turn it off from this window
+  while the row is in this state; the sentence says so. This version can
+  start no butler. Before a version that can, the failure row needs its own
+  way to turn the butler off, or the person needs another one.
+- The stand-in asks once. If that one question fails for a reason other than
+  the two refusals that mean "no entry" and the one an open entry gives,
+  nothing is shown until NAW is reopened. The entry itself asks again when
+  the window comes back to the front.
+- After a setup that succeeded: if the entry's dialog is later gone from the
+  page, choosing the row does nothing; if its row is gone, nothing marks it.
+  Both were seen in the reproduction and are outside "cannot be set up".
+- The new sentences and the row's word are text the person has not seen.
+  They are on the screenshots kept with the private evidence.
+- A failure dialog whose building fails half way is built again at each
+  choice of the row; what it bound is released at teardown.
+
+Independent read-only review (one fresh session, the commit as rebased onto
+main; the CLI reported the model as claude-opus-5-5): `PASS_WITH_NOTES`,
+nothing blocking. It followed the closed switch through every refusal and
+found the window as it was, apart from one question to the main process
+where the old code asked none after a failed setup: the same question a
+working entry asks at every start, refused before any core code runs. It
+followed each setup failure with an entry to a row and a dialog, found no
+effect on a window whose entry sets up normally, and checked the sentences
+against the stand-in's one call and the core's read.
+
+Its notes, and what was done:
+- The stand-in shows its row on any answer, where the entry hides for an
+  answer it does not understand. Not changed, on purpose: the main process
+  answers only a window that has an entry, the row draws nothing from the
+  answer, and a row that vanished is what it is there to prevent. The reason
+  is now in the code, and two such answers are in the unit test.
+- One unit check guarded a list the stand-in does not use. It now ties the
+  stand-in's rule to the entry's line for the same refusal.
+- The closed-switch window check looked once after a fixed wait. It now
+  looks three times over a second and a half.
+- The English sentence for a missing row or dialog said "from the window"
+  where the Chinese says the page. It says "from the page" now. With a row
+  made by the stand-in, the sentence says the row's place is missing while a
+  row is on the screen; that is true of the page and is left as it is.
+- The single question and the half-built dialog are in the list above.
+These edits were made after the review; none changes what the product does
+except the one English word. The full suite and the window checks were run
+again on the result.

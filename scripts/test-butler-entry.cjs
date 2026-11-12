@@ -7,6 +7,8 @@ const testScratch = require('./fixtures/test-scratch.cjs');
 //    ones, in both languages and at two window widths (1280, and 860 where the sidebar is a rail; the window's
 //    minimum is 850); `butler` here answers the question for the entry with what the script handed in and only
 //    records what the dialog would ask the main process to do.
+//    Also here: with the switch closed, an entry that cannot be set up changes nothing in the window. No row, no
+//    notice: the main process refuses the one question, as it does for the entry itself.
 // The entry with its switch open, through the real main process, is scripts/test-butler-entry-open.cjs.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
@@ -73,6 +75,38 @@ const gallery = [
   // The window asked once as it started and was refused; coming back to the front does not make a row appear.
   await page.evaluate(() => { window.dispatchEvent(new Event('focus')); }); await sleep(300);
   assert.deepEqual(await closed(), { row: true, rowBeforeNew: true, dialog: true, entry: 'function', text: false, module: 'function', view: '{"visible":false}' });
+  // The same closed switch with a part of the entry kept out of the window as it loads. The window's stand-in for the
+  // entry asks the main process once, is refused, and shows nothing: no row, no dialog, no notice, no word of a butler.
+  await page.addInitScript(() => {
+    const mode = sessionStorage.getItem('naw-test-entry-failure');
+    const hide = name => Object.defineProperty(window, name, { configurable: true, get() { return undefined; }, set() {} });
+    if (mode === 'module') hide('nativeWorkspaceButlerEntry');
+    if (mode === 'view') hide('nativeWorkspaceButlerEntryView');
+    // The element is taken out of the page the first time the window looks for it, which is at its setup.
+    if (mode === 'row' || mode === 'dialog') { const real = Document.prototype.getElementById, id = mode === 'row' ? 'butler-row' : 'butler-dialog'; let taken = false;
+      Document.prototype.getElementById = function (wanted) { const found = real.call(this, wanted); if (wanted !== id || taken || !found) return found; taken = true; found.remove(); return null; }; }
+  });
+  const load = async mode => {
+    await page.evaluate(value => sessionStorage.setItem('naw-test-entry-failure', value), mode); await page.reload();
+    await until(async () => await page.locator('#new-session').count().catch(() => 0), 'Main window after reload', 30000);
+  };
+  // What was kept out really is out: the program, the view it draws from, or the element as the setup found it.
+  const keptOut = () => page.evaluate(() => [typeof window.nativeWorkspaceButlerEntry?.bind, typeof window.nativeWorkspaceButlerEntryView?.entryView]);
+  for (const [mode, out] of [['module', ['undefined', 'function']], ['view', ['function', 'undefined']], ['row', ['function', 'function']], ['dialog', ['function', 'function']]]) {
+    await load(mode);
+    assert.deepEqual(await keptOut(), out, mode);
+    // Looked at three times over a second and a half: the refusal has no sign of its own to wait for.
+    for (const wait of [400, 500, 600]) { await sleep(wait);
+    const quiet = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#butler-row')].map(row => row.hidden && row.getClientRects().length === 0), dialogs: [...document.querySelectorAll('#butler-dialog')].map(dialog => dialog.open),
+      text: /大管家|Butler/.test(document.querySelector('.sidebar').innerText), toast: document.getElementById('toast').hidden === false && document.getElementById('toast').getClientRects().length > 0, open: document.querySelectorAll('dialog[open]').length }));
+    assert.deepEqual(quiet, { rows: mode === 'row' ? [] : [true], dialogs: mode === 'dialog' ? [] : [false], text: false, toast: false, open: 0 }, `Closed switch, ${mode} kept out: the window is as it was`); }
+    await page.evaluate(() => { window.dispatchEvent(new Event('focus')); }); await sleep(200);
+    assert.equal(await page.evaluate(() => /大管家|Butler/.test(document.querySelector('.sidebar').innerText) || document.querySelectorAll('#butler-row:not([hidden])').length > 0), false, mode);
+  }
+  for (const name of ['butler.json', 'butler-native']) assert.equal(fs.existsSync(path.join(profile, name)), false, 'Still nothing about a butler is written: ' + name);
+  await load('none');
+  assert.deepEqual(await closed(), { row: true, rowBeforeNew: true, dialog: true, entry: 'function', text: false, module: 'function', view: '{"visible":false}' });
+  checks.push('With the entry closed, an entry that cannot be set up (its program, its view, its row or its dialog kept out of the window) changes nothing: no row, no dialog, no notice, nothing written');
   // The hidden row takes no room: "new session" sits where it sits without it.
   const gapWith = await page.evaluate(() => document.getElementById('new-session').getBoundingClientRect().top);
   const gapWithout = await page.evaluate(() => { const row = document.getElementById('butler-row'), parent = row.parentNode, next = row.nextSibling; row.remove(); const top = document.getElementById('new-session').getBoundingClientRect().top; parent.insertBefore(row, next); return top; });

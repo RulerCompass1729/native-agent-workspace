@@ -31,7 +31,7 @@ const sessionStatus = (record, recoveryBadge = false) => {
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 const mobileSetup = window.nativeWorkspaceMobileSetup.bind({ container: $('mobile-setup'), document, api, getSessions: () => state?.sessions || [], text: (key, params) => uiText(key, params), display: ui.display });
 // The butler's parts are optional to this window: if one cannot be set up (its module or its element is missing),
-// the window starts without it instead of not starting at all.
+// the window starts without it instead of not starting at all, and what took its place says so when it is its turn.
 // A read log page that could not be set up: asked for, it says that the page failed and why, in the page's own
 // place. It is the interface that failed, not the log, so it never reads as "nothing was read" or "the log cannot
 // be read". reason: 'module' (the page's program is not in this window), 'element' (its place in the page is
@@ -44,7 +44,8 @@ function failedButlerReads(reason) {
       try {
         if (!dialog) {
           dialog = $('butler-reads-dialog');
-          if (!dialog) { dialog = node('dialog', undefined, 'butler-reads'); dialog.id = 'butler-reads-dialog'; dialog.setAttribute('closedby', 'any'); ($('butler-dialog') || document.body).after(dialog); made = true; }
+          // Made in the page's own place for it, after the record table's dialog: the page's styles reach only there.
+          if (!dialog) { dialog = node('dialog', undefined, 'butler-reads'); dialog.id = 'butler-reads-dialog'; dialog.setAttribute('closedby', 'any'); $('butler-review-dialog').after(dialog); made = true; }
         }
         const title = node('h2'), text = node('p', undefined, 'butler-reads-note'), actions = node('div', undefined, 'dialog-actions'), done = node('button');
         title.id = 'butler-reads-dialog-title'; dialog.setAttribute('aria-labelledby', title.id); text.setAttribute('role', 'alert');
@@ -101,13 +102,79 @@ function disposeButlerReview() {
   butlerReviewView.dispose(); butlerReviewAdapter.dispose();
 }
 $('butler-review-dialog').addEventListener('close', returnFromButlerReview);
+// The butler's row when the entry could not be set up. Like the entry, it shows nothing until the main process has
+// answered that this window has an entry: with the switch closed its one question is refused, nothing more is
+// asked and the window is as it was. With an entry, the row stays in its place and says that it is the interface
+// that failed; its dialog says why and what cannot be done from here, and still opens the read log, which needs no
+// entry. It asks for the state and for nothing else. reason: 'module' (the entry's program is not in this window),
+// 'element' (the row or its dialog is missing from the page), 'setup' (setting it up failed).
+function failedButlerEntry(reason) {
+  let row = null, dialog = null, done = null, asked = false, gone = false, parts = [];
+  const made = [];
+  const close = () => { if (dialog?.open) dialog.close(); };
+  const label = () => uiText('butler.rowLabel', { state: uiText('butler.row.failed') });
+  const unseen = (cls, text) => { const part = node('span', text, cls); part.setAttribute('aria-hidden', 'true'); return part; };
+  const said = (tag, key, cls) => { const part = node(tag, undefined, cls); ui.display.text(part, key); parts.push(part); return part; };
+  const control = (key, action, press) => { const part = said('button', key); part.type = 'button'; part.dataset.action = action; part.addEventListener('click', press); return part; };
+  function open() {
+    try {
+      if (!done) {
+        dialog = $('butler-dialog');
+        // Made in the page's own place for it, before the record table's dialog: the page's styles reach only there.
+        if (!dialog) { dialog = node('dialog', undefined, 'butler-dialog'); dialog.id = 'butler-dialog'; dialog.setAttribute('closedby', 'any'); $('butler-review-dialog').before(dialog); made.push(dialog); }
+        const title = said('h2', 'butler.name'), text = said('p', 'butler.entryFailed.' + reason, 'butler-note'), actions = node('div', undefined, 'dialog-actions');
+        title.id = 'butler-dialog-title'; dialog.setAttribute('aria-labelledby', title.id); text.setAttribute('role', 'alert');
+        // Reading the log changes nothing and needs no entry: the person can still see what the butler was given.
+        const finish = control('common.done', 'done', close);
+        actions.append(control('butler.action.reads', 'reads', () => { close(); openButlerReads(); }), finish);
+        dialog.replaceChildren(title, text, actions); dialog.dataset.butlerState = 'failed'; dialog.dataset.butlerFailure = reason;
+        done = finish;
+      }
+      if (!dialog.open) dialog.showModal();
+      done.focus();
+    } catch (error) { console.error(error); toastError(uiError('error.butler.entryRow')); }
+  }
+  function show() {
+    row = $('butler-row');
+    if (!row) { row = node('button', undefined, 'butler-row'); row.id = 'butler-row'; row.type = 'button'; row.setAttribute('aria-haspopup', 'dialog'); $('new-session').before(row); made.push(row); }
+    const state = node('span', undefined, 'butler-state');
+    state.append(unseen('butler-dot'), said('span', 'butler.row.failed'));
+    // Whatever a setup that failed half way left in the row goes.
+    row.replaceChildren(unseen('rail-icon', '◆'), said('span', 'butler.name', 'rail-label'), state);
+    row.dataset.butlerState = 'failed'; row.dataset.butlerFailure = reason;
+    for (const slot of ['aria-label', 'title']) ui.display.computed(row, slot, label);
+    row.addEventListener('click', open); row.hidden = false;
+  }
+  return { failed: reason,
+    // The window's one question, asked once: is there an entry in this window at all? An answer, or the refusal an
+    // open entry gives when the state cannot be verified, says there is. Any other refusal shows nothing.
+    // The answer itself is not looked at. The entry hides for an answer it does not understand, because it would
+    // have to draw from it; this row draws nothing from it, and a row that vanished is what it is here to prevent.
+    start() {
+      if (asked) return undefined;
+      asked = true;
+      return (async () => {
+        try { await api.butler('status'); }
+        catch (error) { let key; try { key = error?.uiMessage?.key; } catch { /* No key: an unknown failure. */ } if (key !== 'error.butler.unavailable') return; }
+        if (gone) return;
+        try { show(); } catch (error) { console.error(error); toastError(uiError('error.butler.entryRow')); }
+      })();
+    },
+    refresh() {},
+    dispose() {
+      gone = true; close(); for (const part of parts) ui.display.unbind(part); parts = [];
+      if (row) { row.removeEventListener('click', open); for (const slot of ['aria-label', 'title']) ui.display.unbind(row, slot); row.hidden = true; row.replaceChildren(); }
+      if (dialog) dialog.replaceChildren();
+      for (const part of made) part.remove();
+    } };
+}
 // The butler's row is drawn only from a view the main process gives this window; this version gives none.
-let butlerEntry = { start() {}, refresh() {}, dispose() {} };
+let butlerEntry;
 try { butlerEntry = window.nativeWorkspaceButlerEntry.bind({ row: $('butler-row'), dialog: $('butler-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display, showError: ui.showError, openReview: openButlerReview,
   openReads: () => openButlerReads(),
   // Another window may have changed the designation: the entry asks again when this one comes back to the front.
   front: listener => { window.addEventListener('focus', listener); return () => window.removeEventListener('focus', listener); } }); }
-catch (error) { console.error(error); }
+catch (error) { console.error(error); butlerEntry = failedButlerEntry(!window.nativeWorkspaceButlerEntry ? 'module' : !$('butler-row') || !$('butler-dialog') ? 'element' : 'setup'); }
 let newDirectory = false, creatingSession = false;
 let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
 let latestViewStorage, latestViewStorageUiMessage;
