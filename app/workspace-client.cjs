@@ -948,11 +948,14 @@ class WorkspaceClient extends EventEmitter {
   // manual input, shared-reply authority or bindings that other views hold: close() above
   // counts as a change of control for every view. Refused, and nothing closed, while this
   // view is the last one (the native input bridge would close with it), while a run or a
-  // directed discussion is running (the connection that started it holds it), or while the
-  // shared pause list points at this view's connections.
+  // directed discussion is running (the connection that started it holds it), while the
+  // shared pause list points at this view's connections, while a backend is being updated
+  // (its new sockets are being handed to every view), or while a retained Claude session's
+  // reader reads through this view's connection.
   retire() {
     if (this.closing) return true;
-    if (this.control.clients <= 1 || [...this.control.armed.values()].some(arm => this.entries.includes(arm.entry)) ||
+    if (this.control.clients <= 1 || this.control.maintenance.size || [...this.control.armed.values()].some(arm => this.entries.includes(arm.entry)) ||
+        [...(this.control.legacyInput?.targets?.values() || [])].some(target => this.entries.includes(target.readsThrough)) ||
         this.entries.some(e => backendRooms(e.state).some(r => r?.run?.status === 'running') || e.state.peerLeases?.some(p => p.status === 'running'))) return false;
     this.retired = true; this.closing = true; this.socket.destroyed = true;
     for (const observer of this.legacyObservers.values()) observer.dispose(); this.legacyObservers.clear();

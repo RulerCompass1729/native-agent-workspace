@@ -78,6 +78,10 @@ test('nothing closes under a call, an outbox request, a reservation or a record 
   f.clock.now += 10 * MINUTE;
   assert.equal(f.controller.retireIdle(), 0, 'An outbox request under way holds every window');
   hold = false;
+  // A reservation (decide reserves before it opens the window) holds every window too.
+  f.controller.inflight.set('reserved', Promise.resolve());
+  assert.equal(f.controller.retireIdle(), 0, 'An operation reserved holds every window');
+  f.controller.inflight.clear();
   f.controller.data.records.push({ id: 'ask', actor: { ...sender }, command: invoke('ask', 'hold'), state: 'confirmation-required', at: f.clock.now });
   assert.equal(f.controller.retireIdle(), 1, 'Only the other agent\'s window closes');
   assert.equal(f.contexts[0].win.destroyed, false); assert.equal(f.contexts[1].win.destroyed, true);
@@ -112,6 +116,22 @@ test('a window stays when it cannot be handed on or its connection refuses to cl
   assert.equal(f.contexts.length, 1, 'The same window goes on serving');
 });
 
+test('a window that failed to open is tried again on the next call, with what was kept', async t => {
+  const f = setup(t, new Map([['initial', () => ({})]]));
+  t.after(() => f.controller.close());
+  await f.controller.call(binding(), { action: 'snapshot' });
+  f.contexts[0].clipboardText = 'KEPT';
+  f.clock.now += 6 * MINUTE;
+  assert.equal(f.controller.retireIdle(), 1);
+  const open = f.controller.context;
+  let failures = 1;
+  f.controller.context = (...args) => failures-- > 0 ? Promise.reject(Error('backend updating')) : open(...args);
+  await assert.rejects(f.controller.call(binding(), { action: 'snapshot' }), /backend updating/);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await f.controller.call(binding(), { action: 'snapshot' })).state, 'complete', 'Not cached as failed');
+  assert.equal(f.contexts.at(-1).clipboardText, 'KEPT');
+});
+
 function clients() {
   const scope = Symbol();
   const real = { owner: 'view', capabilities: [], sessions: [{ id: 'one', nativeId: 'n1', provider: 'claude', state: 'idle' }], room: { revision: 0, messages: [], run: null } };
@@ -137,7 +157,7 @@ test('retiring a view leaves the manual authority other views hold; closing one 
   human.close();
 });
 
-test('a view is not retired while it is the last one, a run or discussion is running, or a pause points at it', () => {
+test('a view is not retired while it is the last one, a run or discussion is running, a pause points at it, a backend is updating or a reader reads through it', () => {
   const { open } = clients();
   const only = open();
   assert.equal(only.retire(), false, 'The native input bridge would close with the last view');
@@ -151,6 +171,12 @@ test('a view is not retired while it is the last one, a run or discussion is run
   only.control.armed.set('one', { entry: only.entries[0], roomId: 'shared' });
   assert.equal(only.retire(), false);
   only.control.armed.clear();
+  only.control.maintenance.add('one');
+  assert.equal(only.retire(), false, 'A backend update hands new sockets to every view');
+  only.control.maintenance.clear();
+  only.control.legacyInput = { targets: new Map([['one', { readsThrough: only.entries[0] }]]), close() {} };
+  assert.equal(only.retire(), false, 'A retained Claude reader reads through this view');
+  only.control.legacyInput.targets.set('one', { readsThrough: human.entries[0] });
   assert.equal(only.retire(), true);
   human.close();
 });

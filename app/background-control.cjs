@@ -306,8 +306,9 @@ class BackgroundControl {
       const kept = this.kept.get(key); this.kept.delete(key);
       const opening = Promise.resolve(this.context(sender, this.data.views[key] && clone(this.data.views[key]), kept));
       this.contexts.set(key, opening);
+      // A window that failed to open is not kept as failed: the agent's next call tries again.
       opening.then(context => { if (this.contexts.get(key) === opening) this.opened.set(key, { context, actor: sender }); },
-        () => { if (kept && !this.kept.has(key)) this.kept.set(key, kept); });
+        () => { if (this.contexts.get(key) === opening) this.contexts.delete(key); if (kept && !this.kept.has(key)) this.kept.set(key, kept); });
       // An error here must not reach the main process's event loop: the window simply stays.
       if (!this.sweeper) { this.sweeper = setInterval(() => { try { this.retireIdle(); } catch {} }, RETIRE_EVERY); this.sweeper.unref?.(); }
     }
@@ -328,7 +329,7 @@ class BackgroundControl {
     if (this.closed || this.busy || this.inflight.size || this.retireHold()) return 0;
     const waiting = new Set(this.data.records.filter(r => ['running', 'confirmation-required'].includes(r.state)).map(r => this.key(r.actor)));
     let retired = 0;
-    for (const [key, { context, actor }] of [...this.opened]) {
+    for (const [key, { context, actor }] of [...this.opened]) try {
       if (waiting.has(this.key(actor))) continue;
       let stale = false;
       try { const record = context.confirmationActors?.().find(s => s.id === actor.id); stale = !!context.confirmationActors && (!record || record.nativeId !== actor.nativeId || record.archived); } catch {}
@@ -342,8 +343,10 @@ class BackgroundControl {
       if (!context.client.retire()) continue;
       this.contexts.delete(key); this.opened.delete(key); this.used.delete(key);
       if (!stale) this.kept.set(key, kept);
-      if (!context.win?.isDestroyed?.()) context.win?.destroy?.();
       retired++;
+      if (!context.win?.isDestroyed?.()) context.win?.destroy?.();
+    } catch {
+      // This window stays, or its hidden window is left to app quit; the others are still looked at.
     }
     return retired;
   }

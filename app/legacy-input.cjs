@@ -261,6 +261,8 @@ class LegacyInput extends EventEmitter {
       if (this.readerUnavailable(record) && !target.initialized) { target.close(); throw uiError("error.legacy.readerUnavailable"); }
     } catch (error) { this.readerFailures.set(record.id, record.nativeId); this.emit('change'); throw error; }
     target.markReader = () => this.saveLink(entry, record, true);
+    // The reader above reads through this view's connection; that view is not retired while it does.
+    target.readsThrough = entry;
     const { token, submission } = target;
     Object.assign(target, { server, descriptor: path.join(directory, `gui-${record.nativeId}.json`) });
     target.beforeAuthorize = async () => { if (!target.refresh) throw Error('No active send'); await target.refresh(); };
