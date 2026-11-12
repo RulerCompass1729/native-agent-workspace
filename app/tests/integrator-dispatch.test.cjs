@@ -280,6 +280,18 @@ test('an engine that cannot be built leaves the queue running without it, and th
   assert.ok(builder.indexOf('const engine = new IntegratorEngine(') > 0 && builder.indexOf('integrationHandoffs = handoffs;') > builder.indexOf('const engine = new IntegratorEngine('));
   assert.match(builder, /\n  integrationHandoffs = handoffs;\n  integrationRepository = \{\n/);
   assert.match(builder, /\n  \};\n  return engine;\n\}\n/);
+  // The engine keeps no timer of its own: the main process gives it the bound on how long a question to git is waited for.
+  assert.match(builder, /\n  const engine = new IntegratorEngine\(\{ handoffs, within, /);
+  const from = builder.indexOf('  const within = (answer, ms, late) => new Promise('), to = builder.indexOf('\n  });\n', from);
+  assert.ok(from > 0 && to > from);
+  const within = new Function('setTimeout', 'clearTimeout', `${builder.slice(from, to + 6)}\n  return within;`);
+  const timers = [], cleared = [];
+  const bound = within((run, ms) => { const timer = setTimeout(run, ms); timers.push([timer, ms]); return timer; }, timer => { cleared.push(timer); clearTimeout(timer); });
+  const LATE = Symbol('late');
+  assert.equal(await bound(Promise.resolve('answer'), 5000, LATE), 'answer');
+  assert.equal(await bound(new Promise(() => {}), 20, LATE), LATE, 'An answer that does not come in time is given up');
+  await assert.rejects(bound(Promise.reject(Error('git failed')), 5000, LATE), /git failed/);
+  assert.deepEqual([timers.map(([, ms]) => ms), cleared.length, cleared.includes(timers[0][0]) && cleared.includes(timers[2][0])], [[5000, 20, 5000], 2, true], 'No timer is left running behind an answer');
 });
 
 test('a pass whose result cannot be read is a fault like a pass that throws: kept and told once, and the queue goes on', async t => {

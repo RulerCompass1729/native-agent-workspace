@@ -281,7 +281,10 @@ async function verifyDelivery(read, claim) {
   // (Asked only when the strict answer was "it was already on main when this handoff began", and only if the first handoff began elsewhere.)
   if (strict.verified || !['not-new', 'no-changes'].includes(strict.why) || claim.firstHead === claim.startHead) return strict;
   const earlier = await verifyMerged(read, { ready: claim.ready, as: claim.as, startHead: claim.firstHead, mainHead: claim.mainHead });
-  return earlier.verified ? { verified: false, why: 'merged-earlier', as: earlier.as } : strict;
+  if (earlier.verified) return { verified: false, why: 'merged-earlier', as: earlier.as };
+  // The strict verdict stands, and says when the second look got no answer: a caller that did not
+  // give git the time to answer (its own limit on waiting) must not take that for "not an earlier merge".
+  return earlier.why === 'git-unanswered' ? { ...strict, earlier: 'unanswered' } : strict;
 }
 // Where main was when a delivery first reached an integrator is kept with it, through every later handoff.
 // "Reached" is a send that was confirmed, and one that never was (it may have arrived all the same); a send

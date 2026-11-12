@@ -2339,7 +2339,12 @@ function integrationEngine(dispatcher) {
   const open = () => { const read = reader(); return read ? { mainHead: () => read.branch('main'), reader: { commit: read.commit, isAncestor: read.isAncestor, changes: read.changes } } : null; };
   // A question git cannot be asked just now (no repository chosen, or it fails its checks) is answered "unknown".
   const ask = name => async (...args) => { const read = reader(); return read ? read[name](...args) : null; };
-  const engine = new IntegratorEngine({ handoffs, designation: () => integratorRole.current(), mainHead: () => ask('branch')('main'),
+  // The engine keeps no timer: how long one of its passes waits for an answer from git is enforced here.
+  const within = (answer, ms, late) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(late), ms);
+    answer.then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
+  });
+  const engine = new IntegratorEngine({ handoffs, within, designation: () => integratorRole.current(), mainHead: () => ask('branch')('main'),
     reader: { commit: ask('commit'), isAncestor: ask('isAncestor'), changes: ask('changes') },
     send: (session, text, handoffId) => dispatcher.send(session, text, handoffId), typing: sessionId => dispatcher.noteHuman(sessionId),
     record: fact => roomState.recordHandoff(fact), notify: info => notifyHandoff(info),

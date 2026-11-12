@@ -631,6 +631,172 @@ test('a notice that may not have been shown is not shown again and is reported a
   assert.deepEqual(g.notices, []);
 });
 
+// The app's bound on how long a question to git is waited for, as the main process gives it to the engine.
+const within = (answer, ms, late) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => resolve(late), ms);
+  answer.then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
+});
+
+// (A pass that waited for git after all would never end here: the test gives up after twenty seconds.)
+test('one pass waits for git only so long in all: what it cut off counts as unanswered and is asked again by later passes, and the person\'s own check waits as long as it takes', { timeout: 20000 }, async t => {
+  const never = new Promise(() => {});
+  const merged = (tag, ...names) => answered(tag, names.map(name => `MERGED ${commitOf(name)} as ${HEAD2} tests 9/9`).join('\n'));
+  const pass = (f, session, rooms = []) => { const view = at(f.clock, [session]); return f.engine.pass(rooms, view, f.look(view)); };
+  // A reader whose commit lookups are answered only when the test lets them go.
+  let release;
+  const gate = new Promise(resolve => { release = resolve; }), asked = [];
+  const slow = reader({ commit: async value => { asked.push(value); await gate; return reader().commit(value); } });
+  const f = fixture(t, { within, gitAllowanceMs: 40, reader: slow });
+  await f.handed(['a']);
+  f.clock = LATER;
+  // Git does not answer the first question about the merge. The pass does not wait for it: the answer stays unsettled, as
+  // when git fails to answer, and nothing more is asked in that pass (not the merge's second commit).
+  const rooms = [space([fact('a'), fact('b')])];
+  const first = await pass(f, merged('tag-1', 'a'), rooms);
+  assert.deepEqual([first.settled, first.handed.why, asked, f.heads, f.states()], [{ kind: 'none', why: 'git-unanswered' }, 'handoff-open', [HEAD2], 1, { a: 'handed', b: 'deliverable' }]);
+  // The next pass has an allowance of its own and asks again.
+  const second = await pass(f, merged('tag-1', 'a'), rooms);
+  assert.deepEqual([second.settled, asked, f.heads], [{ kind: 'none', why: 'git-unanswered' }, [HEAD2, HEAD2], 2]);
+  // When the bounded wait is over the merge is held with what was reported. The allowance of that pass is used up by then,
+  // so main's head is not asked for the delivery that arrived meanwhile: it is handed out by the pass after.
+  f.clock = LATER + HEAD_WAIT_MS;
+  const third = await pass(f, merged('tag-1', 'a'), rooms);
+  assert.deepEqual([third.settled.kind, outcomes(third.settled), third.settled.install, f.handoffs.snapshot().ready[0].claim],
+    ['settled', { a: 'held:main-unreadable' }, null, { as: HEAD2, tests: { passed: 9, total: 9 }, startHead: MAIN }]);
+  assert.deepEqual([asked.length, f.heads, third.handed, f.sent.length], [3, 3, { kind: 'none', why: 'main-unknown', released: [] }, 1]);
+  f.head = MAIN;
+  const fourth = await pass(f, integratorSession(), rooms);
+  assert.deepEqual([fourth.handed.kind, fourth.handed.keys, f.sent.length], ['opened', [key('b')], 2]);
+  // The person's own check is no part of a pass: it waits for git, however long that takes, and records the merge.
+  f.head = HEAD2;
+  let finished = false;
+  const check = f.engine.recheck(key('a')).then(value => { finished = true; return value; });
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal(finished, false, 'Several allowances later it still waits');
+  release();
+  assert.equal((await check).outcome, 'merged');
+
+  // Answered for one merge and not for the other: nothing is settled while the wait lasts; then each as it is.
+  const base = reader();
+  const g = fixture(t, { within, gitAllowanceMs: 40, reader: reader({ changes: async (start, tip) => (tip === commitOf('b') ? never : base.changes(start, tip)) }) });
+  await g.handed(['a', 'b']);
+  g.clock = LATER;
+  assert.deepEqual([(await pass(g, merged('tag-1', 'a', 'b'))).settled, g.states()], [{ kind: 'none', why: 'git-unanswered' }, { a: 'handed', b: 'handed' }]);
+  g.clock = LATER + HEAD_WAIT_MS;
+  const mixed = await pass(g, merged('tag-1', 'a', 'b'));
+  assert.deepEqual([outcomes(mixed.settled), mixed.settled.install], [{ a: 'merged', b: 'held:main-unreadable' }, { commit: HEAD2 }]);
+
+  // Ancestry is a question like the others.
+  const anc = fixture(t, { within, gitAllowanceMs: 40, reader: reader({ isAncestor: () => never }) });
+  await anc.handed(['a']);
+  anc.clock = LATER;
+  assert.deepEqual((await pass(anc, merged('tag-1', 'a'))).settled, { kind: 'none', why: 'git-unanswered' });
+
+  // Main's head is not answered in time, by the engine's own reader or by a checked look at the repository: an unread
+  // head, which waits the bounded while and is then settled as "main could not be read". The reader is never asked.
+  for (const look of [false, true]) {
+    const refuse = reader({ commit: async () => { throw Error('The reader must not be asked'); } });
+    const h = fixture(t, { within, gitAllowanceMs: 40, reader: refuse, ...(look ? { open: () => never } : {}) });
+    await h.handed(['a']);
+    if (!look) h.head = never;
+    h.clock = LATER;
+    assert.deepEqual((await pass(h, merged('tag-1', 'a'))).settled, { kind: 'none', why: 'main-unknown' }, String(look));
+    h.clock = LATER + HEAD_WAIT_MS;
+    const unread = await pass(h, merged('tag-1', 'a'));
+    assert.deepEqual([unread.settled.kind, outcomes(unread.settled), h.handoffs.snapshot().ready[0].claim], ['settled', { a: 'held:main-unreadable' }, { as: HEAD2, tests: { passed: 9, total: 9 }, startHead: MAIN }], String(look));
+  }
+
+  // Handing out: main's head not answered in time opens nothing and sends nothing; the delivery waits for a later pass.
+  const o = fixture(t, { within, gitAllowanceMs: 40 });
+  o.head = never;
+  const waiting = await pass(o, integratorSession(), [space([fact('a')])]);
+  assert.deepEqual([waiting.handed, o.sent.length, o.handoffs.summary().handoff], [{ kind: 'none', why: 'main-unknown', released: [] }, 0, null]);
+  o.head = MAIN;
+  assert.equal((await pass(o, integratorSession(), [space([fact('a')])])).handed.kind, 'opened');
+
+  // The second look at a merge that is not new for this handoff (was it made earlier?) cut off by the allowance: that is
+  // not git's "no". The merge is not called "not found": it counts as unanswered, and in the end is held with its claim.
+  // The person's check, which waits for git, then finds the earlier merge.
+  const twice = async (options = {}) => {
+    const k = fixture(t, { within, gitAllowanceMs: 40, ...options });
+    const opened = await k.handed(['a']);
+    k.clock = LATER;
+    await k.settle(integratorSession({ messages: [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW }] }));
+    k.handoffs.resolveHandoff(opened.handoffId, { retry: true });
+    k.head = HEAD2;
+    assert.equal((await k.engine.handOut(at(LATER + 9000), async () => at(LATER + 9000))).kind, 'opened');
+    k.head = HEAD3; k.clock = LATER + 70000;
+    return k;
+  };
+  const reply = integratorSession({ messages: [{ id: 'tag-2', role: 'user', text: 'handoff', time: LATER + 9000 }, { id: 'r', role: 'assistant', text: `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9`, time: LATER + 9001 }] });
+  // git: the named commit is on main now and was on the main this handoff began on; whether it was on the first main is never answered.
+  const cut = await twice({ reader: reader({ isAncestor: (a, b) => (b === MAIN ? never : Promise.resolve(b === HEAD2 || b === HEAD3)) }) });
+  assert.deepEqual((await pass(cut, reply)).settled, { kind: 'none', why: 'git-unanswered' });
+  cut.clock += HEAD_WAIT_MS;
+  const held = await pass(cut, reply);
+  assert.deepEqual([outcomes(held.settled), cut.handoffs.snapshot().ready[0].claim], [{ a: 'held:main-unreadable' }, { as: HEAD2, tests: { passed: 9, total: 9 }, startHead: HEAD2 }]);
+  cut.engine.reader = reader({ isAncestor: async (a, b) => b === HEAD2 || b === HEAD3 });
+  assert.deepEqual([(await cut.engine.recheck(key('a'))).outcome, cut.states()], ['earlier', { a: 'held:merged-earlier' }]);
+  // The same when the time was simply over before the second look could be asked (no question had to be given up).
+  let used = 0;
+  const over = await twice({ elapsed: () => used, reader: reader({ isAncestor: async (a, b) => { if (b === HEAD2) used = 1000; return b === HEAD2 || b === HEAD3; } }) });
+  assert.deepEqual([(await pass(over, reply)).settled, over.states()], [{ kind: 'none', why: 'git-unanswered' }, { a: 'handed' }]);
+  // The same second look when git itself says quickly that it cannot answer (the first commit is gone, say) and the
+  // allowance is not used up: the strict verdict stands, as it did.
+  const gone = await twice({ gitAllowanceMs: 5000, reader: reader({ isAncestor: async (a, b) => (b === MAIN ? undefined : b === HEAD2 || b === HEAD3) }) });
+  assert.deepEqual(outcomes((await pass(gone, reply)).settled), { a: 'held:merge-unverified' });
+
+  // Git that says quickly that it cannot answer has used up nothing: that waits the bounded while and is asked again, as before.
+  const q = fixture(t, { within, gitAllowanceMs: 5000, reader: reader({ commit: async () => undefined }) });
+  await q.handed(['a']);
+  q.clock = LATER;
+  assert.deepEqual((await pass(q, merged('tag-1', 'a'))).settled, { kind: 'none', why: 'git-unanswered' });
+  assert.deepEqual(q.states(), { a: 'handed' });
+
+  // An answer that fails after the pass gave it up troubles nobody, also when the bound that was supplied does not look at it again.
+  const unhandled = [], note = reason => unhandled.push(reason);
+  process.on('unhandledRejection', note);
+  t.after(() => process.off('unhandledRejection', note));
+  for (const careless of [false, true]) {
+    let fail;
+    const failing = new Promise((_, reject) => { fail = reject; });
+    // (The careless bound only counts the time: it never looks at the answer, so it takes no failure upon itself.)
+    const bound = careless ? (answer, ms, late) => new Promise(resolve => { setTimeout(() => resolve(late), ms); }) : within;
+    const m = fixture(t, { within: bound, gitAllowanceMs: 40, reader: reader({ commit: () => failing }) });
+    await m.handed(['a']);
+    if (careless) m.head = failing;
+    m.clock = LATER;
+    assert.deepEqual((await pass(m, merged('tag-1', 'a'))).settled, { kind: 'none', why: careless ? 'main-unknown' : 'git-unanswered' });
+    fail(Error('git failed after it was given up'));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.deepEqual(unhandled, []);
+
+  // Without a bound from the app, a question that was asked is waited for; but once the allowance is over nothing more is asked.
+  let ticks = 0;
+  const later = [];
+  const n = fixture(t, { gitAllowanceMs: 10, elapsed: () => ticks, reader: reader({ commit: async value => { later.push(value); ticks += 100; return reader().commit(value); } }) });
+  await n.handed(['a']);
+  n.clock = LATER;
+  assert.deepEqual([(await pass(n, merged('tag-1', 'a'))).settled, later], [{ kind: 'none', why: 'git-unanswered' }, [HEAD2]]);
+  // And once a question was given up, nothing more is asked in that pass even if the clock says a moment is left
+  // (a timer may run out a little before the clock it is compared with).
+  let bounds = 0;
+  const early = [];
+  const e = fixture(t, { gitAllowanceMs: 40, elapsed: () => 0, within: async (answer, ms, late) => ((bounds += 1) === 2 ? late : answer),
+    reader: reader({ commit: async value => { early.push(value); return reader().commit(value); } }) });
+  await e.handed(['a']);
+  e.clock = LATER;
+  assert.deepEqual([(await pass(e, merged('tag-1', 'a'))).settled, early], [{ kind: 'none', why: 'git-unanswered' }, [HEAD2]]);
+
+  // A direct call (no pass) has no allowance.
+  const direct = fixture(t, { within, gitAllowanceMs: 40, reader: slow });
+  await direct.handed(['a']);
+  direct.clock = LATER;
+  assert.deepEqual(outcomes(await direct.settle(merged('tag-1', 'a'))), { a: 'merged' }, 'The gate was opened above: a direct call simply asks and waits');
+  assert.equal(require('../integrator-engine.cjs').GIT_ALLOWANCE_MS, 15000);
+});
+
 test('one whole pass takes in, settles, hands out and tells, in that order; an unreadable record stops it', async t => {
   const f = fixture(t);
   await f.handed(['a']);
