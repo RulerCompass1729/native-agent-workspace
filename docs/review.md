@@ -12264,3 +12264,12 @@ the day is full); an empty block holding a whole line and a cut-short one
 stopped the log (it is sealed like any other); an empty leftover file kept a
 block's place taken or stopped a rebuild (it holds nothing and is cleared, or
 skipped).
+A third read of those changes: `PASS_WITH_NOTES`, all three hold and open no way
+to lose a record, release a refused page or restart a day's count. Two minor
+notes, recorded and not changed: with the manifest lost, a newest block emptied
+to 0 bytes from outside is now skipped by the rebuild (its pages leave the day's
+count; before, the log stopped), the same class as the known limit about a
+newest block that is gone; and on a day past 64 pages, today's line says the 64
+are used up without saying how many more were read (the day's header shows it).
+The review of this batch ends here. After rebasing onto main ace4975 the full
+suite passed again (6307 tests), and so did the DSH read budget check.
