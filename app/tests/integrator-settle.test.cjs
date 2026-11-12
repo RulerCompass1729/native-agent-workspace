@@ -694,8 +694,10 @@ test('a merge made during an earlier handoff of the same delivery is never recor
   assert.deepEqual([confirmed, backlog.recheck(claim, confirmed, MAIN3, at + 70000)], [{ verified: true, as: MAIN2 }, { outcome: 'merged', notify: [`installable:${MAIN3}`], install: { commit: MAIN3 } }]);
   assert.deepEqual([states(backlog).a, backlog.snapshot().ready[0].mergedAs, backlog.snapshot().ready[0].claim], ['merged', MAIN2, undefined]);
   // What does not make an earlier merge: the first commit gone or unanswered, the changes not all there since then, a line that cannot be read, no first commit kept.
-  for (const [name, reader, expected] of [
-    ['the first commit gives no answer', fake({ isAncestor: (commit, head) => (head === START ? undefined : head === MAIN3 || head === MAIN2) }), 'not-new'],
+  // (When the second look got no answer the verdict says so beside the strict answer, for a caller that had cut the question off itself. To the record it is the strict answer.)
+  for (const [name, reader, expected, unanswered] of [
+    ['the first commit gives no answer', fake({ isAncestor: (commit, head) => (head === START ? undefined : head === MAIN3 || head === MAIN2) }), 'not-new', true],
+    ['the changes since the first commit give no answer', fake({ isAncestor: (commit, head) => head === MAIN3 || head === MAIN2, changes: (base, tip) => (base === START ? undefined : [{ commit: tip, change: 'x1' }]) }), 'not-new', true],
     ['the first commit is not behind the named one either', fake({ isAncestor: () => true }), 'not-new'],
     ['the changes since the first commit are not all in the named one', fake({ isAncestor: (commit, head) => head === MAIN3 || head === MAIN2, changes: (base, tip) => (tip === MAIN2 ? [{ commit: MAIN2, change: 'other' }] : [{ commit: tip, change: 'x1' }]) }), 'not-new'],
     // Only "it was already on main when this handoff began" is looked at again: any other failed check stands, although the earlier main would pass it.
@@ -706,7 +708,7 @@ test('a merge made during an earlier handoff of the same delivery is never recor
     again(other, ['a']);
     const line = other.plan(replied(`MERGED ${commitOf('a')} as ${MAIN2} tests 9/9`));
     const verdict = (await other.verify(reader, line, MAIN3)).verified[key('a')];
-    assert.deepEqual(verdict, { verified: false, why: expected }, name);
+    assert.deepEqual(verdict, { verified: false, why: expected, ...(unanswered ? { earlier: 'unanswered' } : {}) }, name);
     assert.deepEqual(outcomes(other.settle(line, { handoffId: line.handoffId, mainHead: MAIN3, verified: { [key('a')]: verdict } }, at + 60000)), { a: 'held:merge-unverified' }, name);
   }
   // A delivery merged with a merge commit during the first handoff and reported under a later commit: for this handoff nothing

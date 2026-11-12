@@ -17,7 +17,14 @@ const { roomIds } = require('./collaboration-spaces.cjs');
 // How long an answer with merge lines waits for main's head to become readable before it is
 // settled without it (its merges are then held for the person as "main could not be read").
 const HEAD_WAIT_MS = 10 * 60 * 1000;
+// How long one pass may wait for git, in all. The queue's next pass begins only when this one is
+// over, and one git command alone may take this long before the reader gives it up.
+const GIT_ALLOWANCE_MS = 15 * 1000;
 const FULL_ID = /^[0-9a-f]{40}$/u;
+// What a question to git gets when the pass's allowance ran out before it was answered.
+const LATE = Symbol('late');
+// Outside a pass (the person's own step, a direct call) git is waited for as long as it takes.
+const UNBOUNDED = { spent: false, ask: async question => question() };
 
 if (typeof NATIVE_DRAFT_KEY !== 'string') throw Error('The dispatcher no longer names the unsent-prompt refusal');
 // Stands in for main's head while only asking whether a handoff would open; git is read only then.
@@ -76,6 +83,13 @@ class IntegratorEngine {
     this.holderTold = null;
     this.now = options.now || Date.now;
     this.headWaitMs = options.headWaitMs ?? HEAD_WAIT_MS;
+    this.gitAllowanceMs = options.gitAllowanceMs ?? GIT_ALLOWANCE_MS;
+    // Time as it passes, for the allowance only (now() is the date that goes into the record).
+    this.elapsed = options.elapsed || (() => performance.now());
+    // within(answer, ms, late) gives the answer if it comes within ms and `late` otherwise, and
+    // takes a failure of the answer that comes after that upon itself. The engine keeps no timer
+    // of its own; without this an answer that was asked for is waited for.
+    this.within = options.within || null;
     // How far each space's record was looked through by the last intake (kept while the app runs).
     this.looked = new Map();
     // Where a space's record stood when one of its deliveries was left out of a full backlog.
@@ -196,8 +210,30 @@ class IntegratorEngine {
   // The handoff is recorded as sent before the message goes out, and it goes out once: a send
   // whose outcome is unknown is never repeated, and a crash in between leaves an unconfirmed
   // handoff that is later settled as such.
-  async handOut(view, look) {
-    const result = await this.attempt(view, look);
+  // What one pass may spend on waiting for git: every question of the pass is asked through it.
+  // - A question that is not answered within what is left gets `unanswered`, the same as a
+  //   question git fails to answer. Git may go on working on it; nobody waits for that answer.
+  // - Once the allowance has run out nothing more is asked, and `spent` says so.
+  allowance() {
+    const end = this.elapsed() + this.gitAllowanceMs;
+    const git = { spent: false };
+    git.ask = async (question, unanswered) => {
+      const left = end - this.elapsed();
+      if (git.spent || !(left > 0)) { git.spent = true; return unanswered; }
+      const asked = Promise.resolve().then(question);
+      if (!this.within) return asked;
+      // An answer that fails after it was given up on is nobody's to handle, whoever supplies the bound.
+      asked.catch(() => {});
+      const answer = await this.within(asked, left, LATE);
+      if (answer !== LATE) return answer;
+      git.spent = true;
+      return unanswered;
+    };
+    return git;
+  }
+
+  async handOut(view, look, git = UNBOUNDED) {
+    const result = await this.attempt(view, look, git);
     // Remembered for hasWork(): what only the person can change does not keep passes going. Any
     // pass that runs for another reason (a window's own check, queue work) tries again and clears it.
     const personOnly = result.kind === 'ask-integrator' || result.kind === 'none' && PERSON_ONLY.includes(result.why);
@@ -206,7 +242,7 @@ class IntegratorEngine {
     this.blocked = personOnly ? { why: result.why || result.reason, designated: who(designated) } : null;
     return result;
   }
-  async attempt(view, look) {
+  async attempt(view, look, git = UNBOUNDED) {
     const handoffs = this.handoffs;
     if (handoffs.summary().handoff) return none('handoff-open');
     const first = this.observe(view);
@@ -227,7 +263,7 @@ class IntegratorEngine {
     const again = handoffs.plan({ ...second.input, mainHead: SOME_HEAD });
     if (again.kind === 'ask-integrator') return { ...handoffs.advance(second.input, this.now()), released };
     if (again.kind !== 'open') return { ...again, released };
-    try { mainHead = await this.mainHead(); } catch { /* An unknown head opens nothing. */ }
+    try { mainHead = await git.ask(() => this.mainHead(), null); } catch { /* An unknown head opens nothing. */ }
     // The decision and its record are one step, made on the fresh view and the head just read.
     const action = handoffs.advance({ ...second.input, mainHead }, this.now());
     if (action.kind !== 'open') return { ...action, released };
@@ -269,7 +305,12 @@ class IntegratorEngine {
   // with git first; because that takes a moment, the answer is read again on a fresh look and
   // settled only if it still says the same. Returns { kind: 'settled', status, facts, notify,
   // install, question, ignored } or { kind: 'none', why }.
-  async settle(view, look) {
+  // `git` is the pass's allowance of time for git. A question it cut off is a question git did not
+  // answer, and is treated as that: the answer waits the bounded while and is asked again by later
+  // passes, each with its own allowance; after that the merges still unanswered are held for the
+  // person as "could not be checked", with what was reported kept for their own check, which waits
+  // for git as long as it takes.
+  async settle(view, look, git = UNBOUNDED) {
     const handoffs = this.handoffs;
     const open = handoffs.summary().handoff;
     if (!open) return none('no-handoff');
@@ -286,10 +327,10 @@ class IntegratorEngine {
       let mainHead = null, reader = this.reader;
       if (this.open) {
         let repository = null;
-        try { repository = await this.open(); } catch { /* Cannot be read now. */ }
+        try { repository = await git.ask(() => this.open(), null); } catch { /* Cannot be read now. */ }
         reader = repository ? repository.reader : null;
-        if (repository) { try { mainHead = await repository.mainHead(); } catch { /* Unknown: handled just below. */ } }
-      } else { try { mainHead = await this.mainHead(); } catch { /* Unknown: handled just below. */ } }
+        if (repository) { try { mainHead = await git.ask(() => repository.mainHead(), null); } catch { /* Unknown: handled just below. */ } }
+      } else { try { mainHead = await git.ask(() => this.mainHead(), null); } catch { /* Unknown: handled just below. */ } }
       if (typeof mainHead !== 'string' || !FULL_ID.test(mainHead)) {
         // Main's head cannot be read just now. The answer waits a bounded while, counted from the
         // first time this was seen for this handoff and kept in the record, so a restart does not
@@ -299,7 +340,15 @@ class IntegratorEngine {
         if (now - handoffs.headUnreadSince(open.id, now) < this.headWaitMs) return none('main-unknown');
         checked = { handoffId: open.id, mainUnreadable: true };
       } else {
-        checked = reader ? await handoffs.verify(reader, action, mainHead) : {};
+        const asked = reader && { commit: (...args) => git.ask(() => reader.commit(...args), undefined), isAncestor: (...args) => git.ask(() => reader.isAncestor(...args), undefined),
+          changes: (...args) => git.ask(() => reader.changes(...args), undefined) };
+        checked = asked ? await handoffs.verify(asked, action, mainHead) : {};
+        // A second look (against the delivery's first handoff) that this pass's allowance cut off was not git's
+        // "no": the merge may be an earlier one. It counts as unanswered, so that it is asked again, and in the
+        // end held as "could not be checked" with its claim, for the person's check to finish the look.
+        if (git.spent) {
+          for (const [key, verdict] of Object.entries(checked.verified || {})) if (verdict?.earlier === 'unanswered') checked.verified[key] = { verified: false, why: 'git-unanswered' };
+        }
         // Git read the head but did not answer a question about a merge (it failed, timed out, or the
         // repository went away meanwhile): the same trouble as a head that cannot be read. The answer waits
         // the same bounded while and is checked again; after that it is settled with those merges held as
@@ -433,10 +482,12 @@ class IntegratorEngine {
     if (this.unreadable()) return { kind: 'unreadable' };
     const done = {};
     let failure = null;
+    // Git is waited for only so long in the whole pass: the queue's next pass waits for this one.
+    const git = this.allowance();
     try {
       done.taken = this.intake(rooms);
-      done.settled = await this.settle(view, look);
-      done.handed = await this.handOut(view, look);
+      done.settled = await this.settle(view, look, git);
+      done.handed = await this.handOut(view, look, git);
     } catch (error) {
       if (this.unreadable()) return { kind: 'unreadable', ...done };
       failure = error;
@@ -460,4 +511,4 @@ class IntegratorEngine {
   }
 }
 
-module.exports = { IntegratorEngine, HEAD_WAIT_MS };
+module.exports = { IntegratorEngine, HEAD_WAIT_MS, GIT_ALLOWANCE_MS };
