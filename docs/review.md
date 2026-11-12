@@ -12794,3 +12794,25 @@ Evidence: `queue-space-action.test.cjs` (the butler in no space reads every spac
 
 Independent review (fresh read-only session, 17 turns, reported USD 0.84): `PASS_WITH_NOTES`. No one but the designated butler gains a read; a former butler loses it at once (held reads are filtered again when fetched); the butler gains no write and no way past the person's confirmation for a conversation or terminal; every read goes through the recorded funnel. Fixed from its notes: the list of spaces the butler reads now also takes the desktop's own list of spaces (a space nobody has joined has no backend room), and the window check queues and reads an item in such a space; the chooser now names events and images too and says that what the butler sees goes to the model service it runs on (the person had asked about a DeepSeek butler). Kept: a butler that is also the secretary and slipped into a space while its designation could not be read sees its own spaces as a member would (it reads others only with the person's confirmation); a designation made while one of the butler's calls runs lets that one call read as the butler with no step. Full suite 6378 pass, 0 fail.
 The same session read that change (7 turns, cumulative reported USD 1.07): `PASS_WITH_NOTES`. C and D are closed; the new list applies only to the designated butler and holds only spaces (archived and merged spaces included, as 「所有协作空间」 says). Not verified by anyone: that filtering a held read again when it is fetched can only remove content. The review of this part ends here.
+
+## Designating the butler sends its duty statement (steward step 2, batch 4, 2026-11-12)
+
+The activation checklist, item 6, taken as recommended on 2026-11-12 09:32 (「都按推荐的来」): the duty statement goes to the butler when it is designated (after each rotation is a later batch). Prototype §9: NAW sends it at designation, and the person can edit it in step 2 of the chooser.
+
+What changed: the chooser shows the statement, which the person can edit. Its label says that NAW sends it into that session as the person's message and that this uses one of that session's turns. `register('steward')` in `app/main.cjs` designates first, then sends header and text the way the composer does. An idle session gets `send`. A Claude session in a turn gets `queue`. Anything else is refused as not sent, and the designation stands. The person's own text is kept in `steward.json`, bounded so the whole file stays within the 4096 bytes every build reads. The two session menus open the chooser instead of designating directly. A not-sent statement keeps the dialog open with the reason and a 「重发职责说明」 button, or shows a toast if the dialog was closed. Commits 2d4a8ed, dae9672 and 5a840c3; 2e435b1 before them only keeps two window checks in step with the record dialog.
+
+Review findings fixed (dae9672, 5a840c3):
+- A queued Claude message is answered only when the running turn takes it (`claude-submit.cjs` `authorize`), so the chooser stayed disabled until then. It now answers "queued" once the statement's own row stands waiting in the butler's conversation, matched by its text, as the composer follows its queued row. The legacy private path records the same row with trimmed text (`legacy-input.cjs:373`, then `legacy-claude.cjs:81`).
+- Lone-surrogate ids could push the file past 4096 bytes. `set()` now measures the whole file.
+- The busy wording covered only "turn not ended". It now covers turn, approval and not connected.
+- The not-sent reason now goes through `displayMessage`, like a thrown error.
+- Kept: a `contextChanged` reply still counts as sent. Nothing shows "sent", and the row keeps its own delivery state.
+
+Evidence:
+- `steward-entry.test.cjs` 13 and `steward-ui.test.cjs` 5.
+- The queue answer comes while the submit is still pending. Against the old handler, two tests time out. Without the text match, one test fails.
+- Full suite 6414/6414 at 5a840c3.
+- Window check `test-steward-entry.cjs` at 5a840c3: 9 checks, 4 fixture sends, 0 model prompts. The not-sent screenshot was viewed.
+- No real Claude queue was run. The queue path is covered by unit tests against the source shape only.
+
+Independent review (one read-only session, 3 rounds, no blocking finding): the first round hit its turn limit; the second gave `PASS_WITH_NOTES` at 2d4a8ed; the third gave `PASS_WITH_NOTES` at 5a840c3, with every earlier note handled or kept as above. The worktree fingerprints were unchanged before and after. Cumulative reported cost: USD 1.60. The CLI was given `--model fable` and reported `claude-opus-5-5`.
