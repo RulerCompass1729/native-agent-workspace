@@ -156,6 +156,15 @@ async function stageOnce(w, s, r, native, args) {
   const readiness = target.readiness?.status === 'ready' ? 'checked' : 'deferred';
   return { status: 'staged', id: intent.id, readiness, message: '已保存，尚未投递。当前原生回合正常结束后只尝试一次；不要等待或重试。真人可随时撤销。' + (readiness === 'deferred' ? ' 收件后台不支持即时就绪检查，尚未确认它能接收。' : '') };
 }
+// Why a wake staged in a turn was withdrawn when that turn's end was reported. T-141: `boundary` is a turn whose
+// authority an input or permission boundary took mid-turn; steward step 2, batch 0: `incomplete`, one that ended
+// without NAW being able to confirm it saw all of it.
+const TURN_END_CANCELLED = Object.freeze({
+  boundary: ['发送方这一轮中途有新的输入或权限确认', 'notice.wake.turnBoundaryCancelled'],
+  incomplete: ['发送方这一轮的原生内容没能确认完整', 'notice.wake.turnIncompleteCancelled'],
+  completed: ['原生回合已正常结束，但授权校验未通过', 'notice.wake.completedTurnRevoked'],
+  other: ['原生回合未正常结束或授权已变化', 'notice.wake.turnCancelled'],
+});
 function complete(w, s, r, info) {
   for (const row of s.messages || []) {
     const intent = row.wake;
@@ -163,8 +172,8 @@ function complete(w, s, r, info) {
     const issue = info.status !== 'completed' ? { code: 'turn-not-completed' } : sourceIssue(w, s, r, intent);
     if (issue) {
       intent.cancellation = { ...issue, nativeStatus: info.status ?? null, at: Date.now() };
-      // T-141: `boundary` is a turn whose authority an input or permission boundary took mid-turn.
-      intent.status = 'cancelled'; row.text = `${info.status === 'boundary' ? '发送方这一轮中途有新的输入或权限确认' : info.status === 'completed' ? '原生回合已正常结束，但授权校验未通过' : '原生回合未正常结束或授权已变化'}；自动消息未投递。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: info.status === 'boundary' ? 'notice.wake.turnBoundaryCancelled' : info.status === 'completed' ? 'notice.wake.completedTurnRevoked' : 'notice.wake.turnCancelled', params: { body: intent.body } }, 'notice.', row.text) || undefined; durable(w); continue;
+      const [why, key] = TURN_END_CANCELLED[Object.hasOwn(TURN_END_CANCELLED, info.status) ? info.status : 'other'];
+      intent.status = 'cancelled'; row.text = `${why}；自动消息未投递。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key, params: { body: intent.body } }, 'notice.', row.text) || undefined; durable(w); continue;
     }
     intent.status = 'sending'; durable(w);
     // Persist before the one transfer. Reopening never replays sending/staged rows.

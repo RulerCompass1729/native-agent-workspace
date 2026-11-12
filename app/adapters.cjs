@@ -666,7 +666,7 @@ class Claude extends EventEmitter {
     this.nativeQueuedPromptLinks = this.nativeBlocks && message.nativeQueuedPromptLinks === true && !this.retainedReader;
     // The model's running explanation, as the native terminal drew it (T-130).
     this.nativeNarration = this.nativeBlocks && message.nativeNarration === true && !this.retainedReader;
-    this.displayProofs = new Map(); this.displayGap = false;
+    this.displayProofs = new Map(); this.displayGap = false; this.gapFloor = 0;
     return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia, nativeTurnRecords: this.nativeTurnRecords, nativeQueuedPromptLinks: this.nativeQueuedPromptLinks, nativeNarration: this.nativeNarration };
   }
   validRootBinding(message) {
@@ -713,7 +713,7 @@ class Claude extends EventEmitter {
       if (!this.nativeMedia || this.nativePromptInput || this.retainedReader || !this.validRootBinding(message) || message.epoch !== this.observationEpoch || !promptId ||
         message.mediaOnly !== true || message.status !== 'complete' || !require('./native-images.cjs').validImagePayload(message.imagePayload) ||
         !Number.isSafeInteger(message.sequence) || message.sequence <= (this.rootObservation?.sequence || 0) ||
-        Object.keys(message).some(k => !['id', 'kind', 'status', 'mediaOnly', 'imagePayload', 'block', 'sessionId', 'lease', 'epoch', 'sequence', 'gap', 'replayed'].includes(k))) throw Error('Invalid native media');
+        Object.keys(message).some(k => !['id', 'kind', 'status', 'mediaOnly', 'imagePayload', 'block', 'sessionId', 'lease', 'epoch', 'sequence', 'gap', 'gapThrough', 'replayed'].includes(k))) throw Error('Invalid native media');
       this.rootObservation = { lease: message.lease, sequence: message.sequence };
       if (!message.replayed) this.observationSeenAt = Date.now();
       if (message.gap) this.observeRootGap(message);
@@ -725,7 +725,7 @@ class Claude extends EventEmitter {
       if (!this.nativeMedia || !this.validRootBinding(message) || message.epoch !== this.observationEpoch ||
         !row || row.kind !== message.kind || !['tool', 'input'].includes(row.kind) || !['complete', 'submitted'].includes(row.status) ||
         message.status !== 'complete' || !require('./native-images.cjs').validImagePayload(message.imagePayload) ||
-        Object.keys(message).some(key => !['id', 'kind', 'status', 'mediaOnly', 'imagePayload', 'block', 'sessionId', 'lease', 'epoch', 'sequence', 'gap', 'replayed'].includes(key))) throw Error('Invalid native media');
+        Object.keys(message).some(key => !['id', 'kind', 'status', 'mediaOnly', 'imagePayload', 'block', 'sessionId', 'lease', 'epoch', 'sequence', 'gap', 'gapThrough', 'replayed'].includes(key))) throw Error('Invalid native media');
       // Media can enrich only an already accepted original. Derive all text
       // and attribution from that row, never from the metadata frame.
       message = { ...message, text: row.text, title: row.title, turnId: row.turnId,
@@ -744,7 +744,7 @@ class Claude extends EventEmitter {
         typeof message.turnId !== 'string' || !/^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId) || message.status !== 'complete' ||
         !Number.isSafeInteger(message.order) || message.order < 0 ||
         message.beforeId !== undefined && (typeof message.beforeId !== 'string' || !/^(display|tool|turn|prompt):[a-zA-Z0-9_:-]{1,160}$/.test(message.beforeId)) ||
-        Object.keys(message).some(key => !['id', 'kind', 'text', 'turnId', 'status', 'order', 'beforeId', 'block', 'sessionId', 'lease', 'epoch', 'sequence', 'gap', 'replayed'].includes(key))) ||
+        Object.keys(message).some(key => !['id', 'kind', 'text', 'turnId', 'status', 'order', 'beforeId', 'block', 'sessionId', 'lease', 'epoch', 'sequence', 'gap', 'gapThrough', 'replayed'].includes(key))) ||
       !Number.isSafeInteger(message.sequence) || message.sequence <= (this.rootObservation?.sequence || 0) ||
       !['streaming', 'running', 'complete', 'failed', 'interrupted'].includes(message.status) ||
       (message.id === 'control:model' && (message.kind !== 'control' || message.status !== 'complete' || typeof message.model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]{0,159}$/.test(message.model))) ||
@@ -763,7 +763,7 @@ class Claude extends EventEmitter {
         !/^tool:shell-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(message.id) || message.title !== 'Bash' ||
         typeof message.input !== 'string' || typeof message.text !== 'string' || !['complete', 'failed'].includes(message.status) ||
         message.incomplete !== undefined && message.incomplete !== true ||
-        Object.keys(message).some(key => !['id', 'kind', 'title', 'userShell', 'input', 'text', 'status', 'incomplete', 'block', 'sessionId', 'lease', 'epoch', 'sequence', 'gap', 'replayed'].includes(key))) ||
+        Object.keys(message).some(key => !['id', 'kind', 'title', 'userShell', 'input', 'text', 'status', 'incomplete', 'block', 'sessionId', 'lease', 'epoch', 'sequence', 'gap', 'gapThrough', 'replayed'].includes(key))) ||
       ['nativeDurationMs', 'nativeCompletedAt'].some(k => message[k] !== undefined) && (!this.nativeTurnRecords || message.kind !== 'turn' ||
         message.nativeDurationMs !== undefined && !(Number.isSafeInteger(message.nativeDurationMs) && message.nativeDurationMs >= 0) ||
         message.nativeCompletedAt !== undefined && !(Number.isFinite(message.nativeCompletedAt) && Math.abs(message.nativeCompletedAt) <= 8640000000000000)) ||
@@ -789,6 +789,11 @@ class Claude extends EventEmitter {
         if (!this.seenRootTurns.has(message.turnId)) {
           this.seenRootTurns.add(message.turnId);
           while (this.seenRootTurns.size > 256) this.seenRootTurns.delete(this.seenRootTurns.values().next().value);
+          // Steward step 2, batch 0: after a gap, a fresh start numbered above every declared loss (`gapFloor`) is where
+          // NAW sees whole again, as after a bind: that turn began after each loss, and a later one is declared on the
+          // next row or poll delivered. A start that carries a gap, or one numbered at or below a loss (a row of its own
+          // turn can be dropped while it waits), restores nothing. Proofs the gap marked stay incomplete.
+          if (!message.replayed && !message.gap && message.sequence > (this.gapFloor || 0)) this.displayGap = false;
           this.rootTurn = message.replayed || message.gap ? null : { id: message.turnId, promptId: message.promptId, status: 'working' };
           // T-138: the started root turn, kept apart from rootTurn (permission and input boundaries clear
           // that sharing authority); `announced` is how many prompts UserPromptSubmit had announced by then.
@@ -903,6 +908,11 @@ class Claude extends EventEmitter {
       if (this.rootTurn.completed && !incomplete && !turn.incomplete) {
         if (this.startedRootTurn?.id === turnId) this.startedRootTurn.endReported = true; // never a second, boundary end (T-141)
         this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId, status: 'completed' });
+      } else if (this.rootTurn.completed && this.startedRootTurn?.id === turnId && !this.startedRootTurn.endReported) {
+        // Ended but not seen whole (a display index missing, a turn too large to prove): reported once, never as
+        // completed, so a wake staged in it is withdrawn with that reason instead of staying 已登记 for good.
+        this.startedRootTurn.endReported = true;
+        this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId, status: 'incomplete' });
       }
       if (status === 'failed' && message.failedRequest === true && !incomplete && !turn.incomplete && /^[a-f0-9-]{36}$/i.test(message.errorMessageId || '')) this.rootTurn.errorMessageId = message.errorMessageId;
       if (status === 'failed' && message.failedRequest === true && !incomplete && !turn.incomplete && message.failureCause === 'usageCredits') this.rootTurn.failureCause = 'usageCredits';
@@ -1010,6 +1020,9 @@ class Claude extends EventEmitter {
     this.cancelNativeAbort(); this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear();
     if (this.startedRootTurn) this.startedRootTurn.inputRevoked = true;
     this.displayGap = true; for (const turn of this.displayProofs?.values() || []) turn.incomplete = true;
+    // The last sequence the bridge had numbered when it lost something; a declaration without one (an older bridge)
+    // holds until a rebind, as before.
+    this.gapFloor = Math.max(this.gapFloor || 0, Number.isSafeInteger(message.gapThrough) && message.gapThrough >= 0 ? message.gapThrough : Infinity);
     this.emit('progress', { id: `claude-observation-gap-${this.record.nativeId}`,
       source: 'claude-native-message', kind: 'gap', status: 'unknown', title: '部分原生消息未能同步', uiTitleMessage: uiNotice('notice.legacy.gapTitle').uiMessage,
       text: '本地观察连接或队列出现缺口，请核对原生终端。没有重发任务。', uiMessage: uiNotice('notice.legacy.gapText').uiMessage });
@@ -1051,7 +1064,7 @@ class Claude extends EventEmitter {
     this.rootLease = crypto.randomBytes(32).toString('hex');
     this.observationEpoch = crypto.randomBytes(16).toString('hex'); this.rootObservation = null;
     this.rootEnding = null; this.lastPromptId = null; this.pending = null; this.ready = true;
-    this.displayProofs = new Map(); this.displayGap = false;
+    this.displayProofs = new Map(); this.displayGap = false; this.gapFloor = 0;
     this.emit('state', 'idle'); this.emit('model', change.model, change.modelUiMessage);
     const observed = (this.contextEvents || []).filter(e => e.session_id === change.nativeId);
     this.contextEvents = (this.contextEvents || []).filter(e => e.session_id !== change.nativeId);
