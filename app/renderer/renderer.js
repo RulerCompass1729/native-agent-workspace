@@ -5017,7 +5017,7 @@ let queueSpace = null;
 const QUEUE_FINISHED_SHOWN = 10;
 function openQueue() {
   queueSpace = spaceId;
-  queueOrder = null; queueOrderFresh = false; queueOpens += 1;
+  queueOrder = null; queueOrderFresh = false; queueOpens += 1; queueDropping = '';
   queueHandoffError(null);
   $('queue-list').dataset.signature = '';
   renderQueue();
@@ -5028,6 +5028,8 @@ function openQueue() {
 // refuses an agent's call) and is read for the space on screen, only where the state says that
 // handoffs are enabled; elsewhere nothing is asked and the panel stays as it was.
 let handoffView = null, handoffReading = null, handoffAgain = false, handoffTimer = null, handoffKey = '', queueOrder = null, queueOrderFresh = false, queueOpens = 0;
+// The delivery the person pressed "not needed" on and has not yet said yes or no about (asked in its row).
+let queueDropping = '';
 const handoffSpace = () => ($('queue-dialog').open && queueSpace ? queueSpace : spaceId);
 // One read at a time; a call during a read asks for one more after it, and gets the read that is under way.
 function loadHandoff() {
@@ -5067,7 +5069,7 @@ function queueHandoffModel(id) {
     if (inSpace(record, id) && !record.archived && record.state !== 'ended') members.push(record.id);
   }
   return window.nativeWorkspaceHandoffQueue.model({ view: handoffView.view, failed: handoffView.failed === true, queue: spaceRecord(id)?.queue || [], sessions: state.sessions, members,
-    integrator: state.integrator || null, unnamed: uiText('identity.historicalMember'), generic: uiText('queue.handoff.theIntegrator') });
+    integrator: state.integrator || null, unnamed: uiText('identity.historicalMember'), generic: uiText('queue.handoff.theIntegrator'), dropping: queueDropping });
 }
 // The button that opens the panel says how many things in this space wait for the person.
 function renderQueueNeed() {
@@ -5124,8 +5126,25 @@ function queueHandoffRow(row, handoff) {
   ui.display.text(row.querySelector('.queue-status'), handoff.status.key, handoff.status.params);
   row.dataset.handoff = handoff.where;
   if (handoff.why) row.append(uiNode('div', handoff.why.key, handoff.why.params, 'queue-outcome queue-handoff-why'));
+  if (handoff.ask) row.append(uiNode('div', handoff.ask.key, handoff.ask.params, 'queue-outcome queue-handoff-why queue-handoff-ask'));
+  const item = row.dataset.queueItem;
+  // "Not needed" and "keep it" only change what the row offers; the row is drawn again, and the keyboard stays in it
+  // (on "keep it" after the first press: the step that cannot be taken back is never the one a stray Enter hits).
+  const turn = (key, focus) => () => {
+    queueDropping = key;
+    renderQueue();
+    for (const drawn of $('queue-list').querySelectorAll('.queue-row')) if (drawn.dataset.queueItem === item) drawn.querySelector(`button[data-handoff-action="${focus}"]`)?.focus();
+  };
+  const step = act => act.kind === 'drop' ? turn(act.key, 'dropCancel') : act.kind === 'dropCancel' ? turn('', 'drop')
+    : () => { queueDropping = ''; return queueHandoffAct({ send: 'retryDelivery', redo: 'redo', recheck: 'recheck', confirm: 'confirm', dropNow: 'drop' }[act.kind], act.key); };
   for (const act of [handoff.action, handoff.more]) {
-    if (act) row.querySelector('.queue-actions').append(queueHandoffButton(act.label.key, act.label.params, act.kind, () => queueHandoffAct({ send: 'retryDelivery', redo: 'redo', recheck: 'recheck', confirm: 'confirm' }[act.kind], act.key)));
+    if (act) row.querySelector('.queue-actions').append(queueHandoffButton(act.label.key, act.label.params, act.kind, step(act)));
+  }
+  // "Not needed", or the two answers to its question, under the reason and apart from the row's own steps.
+  if (handoff.aside.length) {
+    const aside = node('div', undefined, 'queue-handoff-drop');
+    for (const act of handoff.aside) aside.append(queueHandoffButton(act.label.key, act.label.params, act.kind, step(act)));
+    row.append(aside);
   }
 }
 // A delivery that still waits for the person although the queue no longer lists its task.
@@ -5363,6 +5382,8 @@ function renderQueue() {
   }
   renderRotationChains();
   const handoff = queueHandoffModel(queueSpace);
+  // (Only a window that shows handoffs ever remembers a press; elsewhere this line does nothing.)
+  if (queueDropping) queueDropping = handoff ? window.nativeWorkspaceHandoffQueue.pressed(handoff, queueDropping) : '';
   const items = queueShownItems(room, handoff ? handoff.keep : []);
   // What needs the person comes first when the panel opens; while it stays open nothing changes place.
   // The places are kept as soon as a view read after the opening is here, also when it shows nothing new.

@@ -148,7 +148,7 @@ test('an agent can do none of this, whatever it names; without an originating op
   const id = f.waiting(['a']);
   f.handoffs.noteReady(ready('b'), NOW); f.handoffs.hold(key('b'), 'review-off', NOW);
   const before = f.bytes();
-  for (const args of [['list'], ['retryDelivery', key('b')], ['retryReason', 'review-off'], ['retryReason', 'no-reply'], ['resolve', id, true], ['resolve', id], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('b')], ['recheck', key('b')], ['confirm', key('b')], ['chooseRepository'], ['made-up'], []]) {
+  for (const args of [['list'], ['retryDelivery', key('b')], ['retryReason', 'review-off'], ['retryReason', 'no-reply'], ['resolve', id, true], ['resolve', id], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('b')], ['recheck', key('b')], ['confirm', key('b')], ['drop', key('b')], ['chooseRepository'], ['made-up'], []]) {
     await assert.rejects(f.agent(...args), refused('error.handoff.personOnly'), JSON.stringify(args));
   }
   assert.equal(f.bytes(), before); assert.deepEqual([f.broadcasts, f.schedules], [0, 0]);
@@ -163,7 +163,7 @@ test('an agent can do none of this, whatever it names; without an originating op
 
 test('with the switch closed the person is told handoffs are not enabled, and nothing is created', async t => {
   const f = fixture(t, false);
-  for (const args of [['list'], ['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('a')], ['recheck', key('a')], ['confirm', key('a')], ['chooseRepository']]) {
+  for (const args of [['list'], ['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['space', 'shared'], ['redo', key('a')], ['recheck', key('a')], ['confirm', key('a')], ['drop', key('a')], ['chooseRepository']]) {
     await assert.rejects(f.person(...args), refused('error.handoff.unavailable'), JSON.stringify(args));
   }
   assert.equal(fs.existsSync(f.file), false); assert.deepEqual([f.broadcasts, f.schedules], [0, 0]);
@@ -189,7 +189,7 @@ test('a fault the dispatcher kept for the engine is shown to the person, also wh
   assert.deepEqual(plain(unstarted), { started: false, engineFault: { message: 'Synthetic build fault', at: NOW, count: 1 } });
   unstarted.engineFault.message = 'changed by the caller';
   assert.equal(g.dispatcher.integrationError.message, 'Synthetic build fault', 'A copy here too');
-  for (const args of [['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['redo', key('a')], ['recheck', key('a')], ['confirm', key('a')], ['chooseRepository'], ['made-up']]) {
+  for (const args of [['retryDelivery', key('a')], ['retryReason', 'review-off'], ['resolve', 'H1-00000000', true], ['answer', `installable:${HEAD2}`], ['redo', key('a')], ['recheck', key('a')], ['confirm', key('a')], ['drop', key('a')], ['chooseRepository'], ['made-up']]) {
     await assert.rejects(g.person(...args), refused('error.handoff.notStarted'), JSON.stringify(args));
   }
   // The queue panel looks through 'space': it is told the same, and what it draws from that says why, not "cannot be read".
@@ -538,6 +538,48 @@ test('the person checks again a merge that could not be checked; while git still
   const kept = m.bytes();
   await assert.rejects(m.person('confirm', key('a')), refused('error.handoff.invalid'));
   assert.deepEqual([m.bytes(), m.broadcasts, m.schedules], [kept, 0, 0]);
+});
+
+test('the person sets a delivery aside ("not needed"): one on hold or returned only, once, and an agent cannot', async t => {
+  const plain = value => JSON.parse(JSON.stringify(value));
+  const view = (now, messages = []) => ({ integrator: INTEGRATOR, session: integratorSession({ messages }), complete: true, wakePolicy: { enabled: true }, now,
+    idleSince: new Map([['integrator', now - rules.IDLE_SETTLE_MS]]), humanAt: new Map(), mainHead: MAIN });
+  // The integrator returned one delivery and held another; a third arrived meanwhile.
+  const f = fixture(t);
+  f.handoffs.noteReady(ready('a'), NOW); f.handoffs.noteReady(ready('b'), NOW);
+  const opened = f.handoffs.advance(view(NOW), NOW);
+  f.handoffs.confirmSent(opened.handoffId, { tag: 'tag-1', control: 0 }, NOW);
+  const reply = view(NOW + 60000, [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW }, { id: 'r', role: 'assistant', text: `RETURNED ${commitOf('a')} needs a rebase\nHELD ${commitOf('b')} review-off`, time: NOW + 1 }]);
+  f.handoffs.settle(f.handoffs.plan(reply), {}, NOW + 60000);
+  f.handoffs.noteReady(ready('c'), NOW + 60001);
+  assert.deepEqual(f.states(), { a: 'returned', b: 'held:review-off', c: 'deliverable' });
+  // Each row that waits for the person offers it, after its own step.
+  const { model } = require('../renderer/handoff-queue.js');
+  const rows = () => f.person('space', 'shared').then(seen => model({ view: plain(seen), integrator: INTEGRATOR, generic: 'the integrator' }).rows);
+  assert.deepEqual(plain(Object.fromEntries(Object.entries(await rows()).map(([id, row]) => [id, row.aside.map(act => act.kind)]))), { a: ['drop'], b: ['drop'], c: [] });
+  // An agent's call is refused; a delivery that does not wait for the person, or that nobody knows, cannot be set aside. Nothing is written.
+  const before = f.bytes();
+  await assert.rejects(f.agent('drop', key('b')), refused('error.handoff.personOnly'));
+  for (const other of [key('c'), key('zz'), undefined, 7, ['x']]) await assert.rejects(f.person('drop', other), refused('error.handoff.invalid'), String(other));
+  assert.deepEqual([f.bytes(), f.broadcasts, f.schedules], [before, 0, 0]);
+  // The person's press: set aside, every window is told and the dispatcher looks again (its pass tells the space).
+  assert.deepEqual(plain(await f.person('drop', key('b'))), { dropped: true });
+  assert.deepEqual([f.states(), f.broadcasts, f.schedules], [{ a: 'returned', b: 'dropped', c: 'deliverable' }, 1, 1]);
+  assert.deepEqual(plain(await f.person('drop', key('a'))), { dropped: true });
+  const after = await rows();
+  assert.deepEqual([f.states(), after.a.where, after.b.where, after.a.aside, after.b.need], [{ a: 'dropped', b: 'dropped', c: 'deliverable' }, 'dropped', 'dropped', [], false]);
+  // Once: a second press is refused, and so is every other step on it.
+  for (const step of ['drop', 'retryDelivery', 'redo', 'recheck', 'confirm']) await assert.rejects(f.person(step, key('b')), refused('error.handoff.invalid'), step);
+  // The record cannot be saved: a fault of the record, as for every other step.
+  const g = fixture(t);
+  g.handoffs.noteReady(ready('a'), NOW);
+  const again = g.handoffs.advance(view(NOW), NOW);
+  g.handoffs.confirmSent(again.handoffId, { tag: 'tag-1', control: 0 }, NOW);
+  g.handoffs.settle(g.handoffs.plan(view(NOW + 60000, [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW }, { id: 'r', role: 'assistant', text: `RETURNED ${commitOf('a')} needs a rebase`, time: NOW + 1 }])), {}, NOW + 60000);
+  fs.chmodSync(g.directory, 0o500);
+  try { await assert.rejects(g.person('drop', key('a')), refused('error.handoff.record')); }
+  finally { fs.chmodSync(g.directory, 0o700); }
+  assert.deepEqual([new IntegrationHandoffs(g.directory).snapshot().ready.map(entry => entry.state), g.broadcasts, g.schedules], [['returned'], 0, 0]);
 });
 
 test('the person confirms a merge that was made before its handoff began; "check again" does not act on it, and an agent can do neither', async t => {

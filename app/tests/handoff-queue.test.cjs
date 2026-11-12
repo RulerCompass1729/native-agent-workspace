@@ -29,6 +29,59 @@ test('where handoffs are not enabled, or a space has no delivery, the panel says
   assert.equal(faulted.need, 0);
 });
 
+test('a row that waits for the person can be set aside: asked once more in the row first, and afterwards it says so and waits for nobody', () => {
+  const held = item('d', 'held', { reason: 'merge-unverified', why: { key: 'queue.handoff.why.unverified', params: {} } }), back = item('e', 'returned', { note: 'needs a rebase' });
+  const kept = item('k', 'held', { reason: 'main-unreadable', recheck: true, why: { key: 'queue.handoff.why.mainUnreadable', params: {} } });
+  const all = { a: item('a', 'queued'), b: item('b', 'handed'), c: item('c', 'merged', { mergedAs: 'd'.repeat(40) }), d: held, e: back, f: item('f', 'returned', { redone: true }), k: kept };
+  const step = (kind, id) => ({ kind, key: `ready:shared:${id}`, label: { key: 'queue.handoff.' + kind, params: {} } });
+  // "Not needed" is offered on the rows that wait for the person, apart from their own steps, and on no other row.
+  const shown = draw(view(all));
+  assert.deepEqual(plain(Object.fromEntries(Object.entries(shown.rows).map(([id, row]) => [id, [row.aside, row.ask]]))),
+    { a: [[], null], b: [[], null], c: [[], null], d: [[step('drop', 'd')], null], e: [[step('drop', 'e')], null], f: [[], null], k: [[step('drop', 'k')], null] });
+  assert.deepEqual([shown.rows.d.action.kind, shown.rows.d.more, shown.rows.e.action.kind, shown.rows.k.action.kind, shown.rows.k.more.kind, shown.need], ['send', null, 'redo', 'recheck', 'send', 3]);
+  // (Also with nobody designated, where a delivery on hold has no other step.)
+  const idle = draw(view({ d: held }), { integrator: null }).rows.d;
+  assert.deepEqual(plain([idle.action, idle.aside]), [null, [step('drop', 'd')]]);
+  // Pressed: that row asks once more, with "keep it" before "yes". Its own steps and its reason stay; the count is what it was.
+  const name = shown.rows.d.status.params.name;
+  const asked = draw(view(all), { dropping: 'ready:shared:d' });
+  assert.deepEqual(plain([asked.rows.d.ask, asked.rows.d.aside, asked.rows.d.action, asked.rows.d.more, asked.rows.d.why, asked.rows.d.need, asked.need]), [
+    { key: 'queue.handoff.dropAsk.held', params: { who: 'Riley' } }, [step('dropCancel', 'd'), step('dropNow', 'd')], plain(shown.rows.d.action), null,
+    { key: 'queue.handoff.why.unverified', params: { who: 'Riley' } }, true, 3]);
+  assert.deepEqual(plain([asked.rows.e, asked.rows.k]), plain([shown.rows.e, shown.rows.k]), 'The other rows are as they were');
+  // A returned row asks in its own words; a row with two steps of its own keeps both beside the question.
+  assert.equal(draw(view(all), { dropping: 'ready:shared:e' }).rows.e.ask.key, 'queue.handoff.dropAsk.returned');
+  const two = draw(view(all), { dropping: 'ready:shared:k' }).rows.k;
+  assert.deepEqual([two.action.kind, two.more.kind, two.aside.map(act => act.kind)], ['recheck', 'send', ['dropCancel', 'dropNow']]);
+  // A press remembered for a row that no longer waits for the person, or for no row at all, changes nothing, and is
+  // forgotten: it must not come back, unpressed, when that delivery waits for the person again later.
+  const { pressed } = require('../renderer/handoff-queue.js');
+  for (const other of ['ready:shared:c', 'ready:shared:a', 'ready:shared:f', 'ready:shared:zz', '', null, 7]) {
+    assert.deepEqual(plain(draw(view(all), { dropping: other })), plain(shown), String(other));
+    assert.equal(pressed(draw(view(all), { dropping: other }), other), '', String(other));
+  }
+  assert.deepEqual([pressed(asked, 'ready:shared:d'), pressed(null, 'ready:shared:d'), pressed(draw(null), 'ready:shared:d'), pressed(draw(view(all), { failed: true, dropping: 'ready:shared:d' }), 'ready:shared:d')],
+    ['ready:shared:d', '', '', '']);
+  // Set aside: the row says so, has no step, waits for nobody and is no longer kept in front.
+  const gone = draw(view({ ...all, d: item('d', 'dropped') }));
+  assert.deepEqual(plain([gone.rows.d, gone.need, gone.keep.includes('d')]), [
+    { where: 'dropped', status: { key: 'queue.handoff.row.dropped', params: { name, who: 'Riley' } }, why: null, action: null, more: null, ask: null, aside: [], need: false, front: false }, 2, false]);
+  for (const language of ['zh', 'en']) {
+    for (const key of ['queue.handoff.drop', 'queue.handoff.dropNow', 'queue.handoff.dropCancel', 'queue.handoff.row.dropped', 'queue.handoff.dropAsk.held', 'queue.handoff.dropAsk.returned']) {
+      const said = locale.format(language, key, { who: 'Riley', name: 'Member A' });
+      assert.ok(said && said !== key && !said.includes('{'), `${language} ${key}`);
+      // The question names no member: the task may be redone by anyone, and the member who did it may be gone.
+      if (key.startsWith('queue.handoff.dropAsk.')) assert.ok(!said.includes('Member A'), `${language} ${key}`);
+    }
+    // On a row where the integrator says "merged", "not needed" must not read as "nothing left to do": the question says
+    // that the delivery is then not recorded as merged. A returned task was never said to be merged.
+    const merged = language === 'zh' ? '不会记为已合入' : 'recorded as merged';
+    assert.deepEqual([locale.format(language, 'queue.handoff.dropAsk.held', { who: 'Riley' }).includes(merged), locale.format(language, 'queue.handoff.dropAsk.returned', { who: 'Riley' }).includes(merged)], [true, false], language);
+    {
+    }
+  }
+});
+
 test('each delivered task says where it stands, in the name of whoever holds it', () => {
   const items = { a: item('a', 'queued'), b: item('b', 'handed'), c: item('c', 'merged', { mergedAs: 'd'.repeat(40) }), d: item('d', 'held', { reason: 'merge-unverified', why: { key: 'queue.handoff.why.unverified', params: {} } }),
     e: item('e', 'returned', { note: 'needs a rebase' }), f: item('f', 'returned', { redone: true, note: 'again' }), g: item('g', 'returned', { memberId: 'gone', memberName: '' }) };

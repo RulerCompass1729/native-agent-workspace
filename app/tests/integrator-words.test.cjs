@@ -56,6 +56,9 @@ test('each state of a delivery has one sentence for its space, in both languages
     seen.add(words.key);
   }
   assert.equal(seen.size, 17, 'Seventeen different sentences for a delivery on hold');
+  // What the person set aside is said as theirs, in both languages.
+  assert.equal(say('zh', spaceWords(fact({ outcome: 'dropped' }))), '「Fix the list」的交付（lane/a 616161616161）：你说不用了，不再交给集成者，也不再等你处理');
+  assert.equal(say('en', spaceWords(fact({ outcome: 'dropped' }))), 'The delivery for “Fix the list” (lane/a 616161616161): you said it is not needed; it is not handed to the integrator and no longer waits for you');
   // A delivery that was already in main's history before its handoff began is said as that, and as waiting for the person's confirmation: never as merged.
   assert.equal(say('en', spaceWords(fact({ outcome: 'held', reason: 'merged-earlier' }))), 'The delivery for “Fix the list” (lane/a 616161616161) is on hold: the integrator reports it as merged, but it was already in main\'s history before this handoff began; it is recorded only once you confirm it');
   assert.equal(say('zh', spaceWords(fact({ outcome: 'held', reason: 'merged-earlier' }))), '「Fix the list」的交付（lane/a 616161616161）先搁着：集成者说已合入，但它在这次交接开始之前就已经在 main 的历史里了，要你确认之后才记为已合入');

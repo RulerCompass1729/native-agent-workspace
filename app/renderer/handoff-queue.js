@@ -8,8 +8,9 @@
   // view: what the person's handoff entry gives for this space; failed: it could not be read;
   // queue: the space's tasks; sessions: every session; members: the ids of the sessions that can
   // take a task in this space; integrator: the designated session or null; unnamed: what a
-  // member without a name is called; generic: the word for the integrator when none is designated.
-  function model({ view = null, failed = false, queue = [], sessions = [], members = [], integrator = null, unnamed = '', generic = '' } = {}) {
+  // member without a name is called; generic: the word for the integrator when none is designated;
+  // dropping: the delivery the person has just pressed "not needed" on, which is asked about once more.
+  function model({ view = null, failed = false, queue = [], sessions = [], members = [], integrator = null, unnamed = '', generic = '', dropping = '' } = {}) {
     if (failed) return only({ key: 'queue.handoff.fault.view', params: {} });
     if (!view) return nothing();
     const name = id => sessions.find(session => session.id === id)?.name || '';
@@ -35,7 +36,7 @@
       if (item.state === 'queued') counts.queued += 1;
       if (item.state === 'handed' || item.state === 'asking') counts.handed += 1;
       const member = name(item.memberId) || item.memberName || unnamed;
-      const row = { where, status: { key: 'queue.handoff.row.' + where, params: { name: member, who } }, why: null, action: null, more: null, need: false, front: false };
+      const row = { where, status: { key: 'queue.handoff.row.' + where, params: { name: member, who } }, why: null, action: null, more: null, ask: null, aside: [], need: false, front: false };
       if (where === 'held') {
         // With nobody designated there is no session to settle a conflict in and no button to press: the cause says only that.
         const why = item.why && !integrator && item.why.key === 'queue.handoff.why.conflict' ? { key: 'queue.handoff.why.conflictIdle', params: {} } : item.why;
@@ -53,6 +54,16 @@
         // The task goes back to the member who did it while that member can take it; to anyone otherwise.
         const again = Boolean(item.memberId) && members.includes(item.memberId);
         row.action = { kind: 'redo', key: item.key, label: again ? { key: 'queue.handoff.redo', params: { name: member } } : { key: 'queue.handoff.redoAnyone', params: {} } };
+      }
+      // A row that waits for the person can also be set aside ("not needed"). That is offered apart from the row's own
+      // steps, under its reason. There is no way back, so the press is asked about once more, there: the question, and
+      // its two answers with "keep it" first.
+      if (row.need) {
+        const step = kind => ({ kind, key: item.key, label: { key: 'queue.handoff.' + kind, params: {} } });
+        if (dropping && dropping === item.key) {
+          row.ask = { key: 'queue.handoff.dropAsk.' + where, params: { who: called } };
+          row.aside = [step('dropCancel'), step('dropNow')];
+        } else row.aside = [step('drop')];
       }
       // A row that needs the person, or that the handoff waiting for them is about, comes first when the panel opens
       // and stays in the list however old its task is.
@@ -107,7 +118,13 @@
     const present = new Set(ids), kept = previous.filter(id => present.has(id)), known = new Set(kept);
     return [...kept, ...ids.filter(id => !known.has(id))];
   }
-  const api = { model, order };
+  // The press of "not needed" the window remembers, as long as a row still asks about it. Once the row
+  // stopped waiting for the person (somebody acted elsewhere) the press is forgotten: it must not come
+  // back, unpressed, for a later state of the same delivery.
+  function pressed(result, dropping) {
+    return dropping && result && Object.values(result.rows).some(row => row.ask) ? dropping : '';
+  }
+  const api = { model, order, pressed };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.nativeWorkspaceHandoffQueue = api;
 })(typeof window === 'undefined' ? globalThis : window);

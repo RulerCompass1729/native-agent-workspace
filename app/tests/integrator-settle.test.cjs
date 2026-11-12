@@ -646,6 +646,66 @@ test('finished outcomes are trimmed by when they ended', t => {
   assert.deepEqual([backlog.knows(key('m-0')), backlog.knows(key('m-1')), backlog.knows(key('never'))], [true, true, false], 'A trimmed delivery is still known');
 });
 
+test('the person\'s "not needed": a delivery on hold or returned is set aside for good, its space is told once, and nothing else can be done with it', t => {
+  const { backlog, open, file } = fixture(t);
+  const stale = { code: 'HANDOFF_STATE', stale: true };
+  // (The question whether main may be installed, opened by the merge below, is no part of this.)
+  const reasons = () => backlog.openReasons().map(reason => reason.reason).filter(reason => !reason.startsWith('installable:')).sort();
+  // One merged, one returned, two on hold under one reason, one on hold with what was reported kept, one inside a later handoff, one waiting.
+  handed(backlog, ['a', 'b', 'c', 'd', 'e']);
+  const lines = [`MERGED ${commitOf('a')} as ${MAIN2} tests 9/9`, `RETURNED ${commitOf('b')} needs a rebase`, `MERGED ${commitOf('c')} as ${MAIN2} tests 9/9`, `MERGED ${commitOf('d')} as ${MAIN2} tests 9/9`,
+    `MERGED ${commitOf('e')} as ${MAIN2} tests 9/9`].join('\n');
+  settleWith(backlog, 'tag-1', lines, { mainHead: MAIN2, verified: { ...ok(['a']), [key('c')]: { verified: false, why: 'not-on-main' }, [key('d')]: { verified: false, why: 'not-on-main' }, [key('e')]: { verified: false, why: 'git-unanswered' } } });
+  handed(backlog, ['f'], 'tag-2');
+  backlog.noteReady(ready('g'), NOW);
+  assert.deepEqual(states(backlog), { a: 'merged', b: 'returned', c: 'held:merge-unverified', d: 'held:merge-unverified', e: 'held:main-unreadable', f: 'handed', g: 'deliverable' });
+  backlog.markShown(backlog.showable().map(fact => ({ key: fact.key, label: fact.label })));
+  // Only what waits for the person can be set aside: not what is merged, handed out or waiting to be, and nothing unknown.
+  const before = fs.readFileSync(file, 'utf8');
+  for (const other of [key('a'), key('f'), key('g'), 'ready:space-1:unknown', undefined, 7]) assert.throws(() => backlog.drop(other, NOW + 70000), stale, String(other));
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  // A delivery on hold: set aside, its space is told once, and the reason stays open while another delivery is held under it.
+  assert.deepEqual(backlog.drop(key('c'), NOW + 70000), { dropped: true });
+  assert.deepEqual([states(backlog).c, backlog.snapshot().ready[2].closedAt, reasons()], ['dropped', NOW + 70000, ['main-unreadable', 'merge-unverified']]);
+  assert.deepEqual(backlog.showable().map(fact => [fact.itemId, fact.outcome, fact.label, fact.reason, fact.note]), [['c', 'dropped', 'dropped', undefined, undefined]]);
+  backlog.markShown([{ key: key('c'), label: 'dropped' }]);
+  assert.deepEqual(backlog.showable(), []);
+  assert.deepEqual(backlog.spaceView('space-1').c, { key: key('c'), state: 'dropped', branch: 'lane/c', commit: commitOf('c'), text: 'Task c', memberId: 'member-c', memberName: 'Member c' });
+  // The last one under a reason: the reason is over.
+  backlog.drop(key('d'), NOW + 70001);
+  assert.deepEqual(reasons(), ['main-unreadable']);
+  // One with the reported merge kept: the claim goes with it.
+  backlog.drop(key('e'), NOW + 70002);
+  assert.deepEqual([states(backlog).e, backlog.snapshot().ready[4].claim, reasons()], ['dropped', undefined, []]);
+  assert.throws(() => backlog.claimOf(key('e')), stale);
+  // A returned one that was not given back: its reason is not kept.
+  backlog.drop(key('b'), NOW + 70003);
+  assert.deepEqual([states(backlog).b, backlog.snapshot().ready[1].note, backlog.spaceView('space-1').b.note], ['dropped', undefined, undefined]);
+  // Set aside, nothing more can be done with it: not again, not sent, not given back.
+  for (const name of ['b', 'c', 'e']) {
+    assert.throws(() => backlog.drop(key(name), NOW + 80000), stale, name);
+    assert.throws(() => backlog.retryReady(key(name)), stale, name);
+    assert.throws(() => backlog.redoTarget(key(name)), stale, name);
+    assert.throws(() => backlog.markRedone(key(name)), stale, name);
+  }
+  assert.deepEqual(backlog.retryReason('merge-unverified', NOW + 80000), { released: [] });
+  // It is kept across a restart, and a newer delivery of the branch is a new delivery beside it.
+  assert.deepEqual(states(open()), { a: 'merged', b: 'dropped', c: 'dropped', d: 'dropped', e: 'dropped', f: 'handed', g: 'deliverable' });
+  backlog.noteReady(ready('c2', { branch: 'lane/c' }), NOW + 90000);
+  assert.deepEqual([states(backlog).c, states(backlog).c2], ['dropped', 'deliverable']);
+  // A returned delivery the person already gave back is not waiting for them any more: it cannot be set aside.
+  const other = fixture(t).backlog;
+  handed(other, ['a']);
+  settleWith(other, 'tag-1', `RETURNED ${commitOf('a')} needs a rebase`);
+  other.markRedone(key('a'));
+  assert.throws(() => other.drop(key('a'), NOW + 70000), stale);
+  // The state carries nothing of the hold: a record that says otherwise is not read.
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  data.ready.find(entry => entry.itemId === 'c').reason = 'merge-unverified';
+  fs.writeFileSync(file, JSON.stringify(data), { mode: 0o600 });
+  assert.throws(() => open().snapshot(), { code: 'HANDOFF_STATE' });
+});
+
 test('a merge made during an earlier handoff of the same delivery is never recorded by NAW itself: it is held for the person to confirm', async t => {
   const { backlog } = fixture(t);
   const at = NOW + 80000, seen = extra => observed({ now: at, idleSince: new Map([[INTEGRATOR.sessionId, at - rules.IDLE_SETTLE_MS]]), mainHead: MAIN2, ...extra });

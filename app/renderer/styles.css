@@ -666,6 +666,10 @@ header h1, header p { overflow-wrap: anywhere; }
 .queue-actions{grid-row:1;grid-column:2;display:flex;gap:6px}
 /* The integration handoff in the queue panel (B6): one block on top, and on a delivered task's row a line that says why it waits. */
 .queue-handoff-why{grid-row:4;color:inherit}
+.queue-handoff-ask{grid-row:5}
+/* "Not needed" sits under the reason, apart from the row's own steps and quieter than they are; the two answers to its question sit there too. */
+.queue-handoff-drop{grid-row:6;grid-column:1/-1;display:flex;gap:6px;justify-content:flex-end}
+.queue-handoff-drop button[data-handoff-action="drop"]{border-color:transparent;background:none;color:var(--muted);text-decoration:underline}
 #queue-handoff{margin:0 0 6px;padding-bottom:8px;border-bottom:1px solid var(--border)}
 .queue-handoff-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
 .queue-handoff-head h3{margin:0;font-size:13px;font-weight:600;white-space:nowrap}

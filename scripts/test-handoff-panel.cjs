@@ -147,7 +147,7 @@ async function shot(name) {
 const read = () => page.evaluate(() => ({
   block: document.getElementById('queue-handoff').hidden ? '' : document.getElementById('queue-handoff').innerText,
   rows: [...document.querySelectorAll('#queue-list .queue-row')].map(row => ({ id: row.dataset.queueItem, where: row.dataset.handoff || '', status: row.querySelector('.queue-status').textContent,
-    text: row.querySelector('.queue-text').innerText, why: row.querySelector('.queue-handoff-why')?.textContent || '', buttons: [...row.querySelectorAll('.queue-actions button')].map(control => control.textContent) })),
+    text: row.querySelector('.queue-text').innerText, why: row.querySelector('.queue-handoff-why')?.textContent || '', ask: row.querySelector('.queue-handoff-ask')?.textContent || '', aside: [...row.querySelectorAll('.queue-handoff-drop button')].map(control => control.textContent), buttons: [...row.querySelectorAll('.queue-actions button')].map(control => control.textContent) })),
   opener: document.getElementById('room-queue').textContent,
   wide: document.getElementById('queue-dialog').scrollWidth > document.getElementById('queue-dialog').clientWidth,
 }));
@@ -283,6 +283,8 @@ async function run() {
   frontFirst(settled, 'Settled');
   const held = rowOf(settled, TASKS[1]), returned = rowOf(settled, TASKS[2]);
   assert.deepEqual([held.status, held.why, held.buttons], [say('queue.handoff.row.held', { name: NAMES[1] }), say('queue.handoff.why.unverified'), [say('queue.handoff.send', { who: NAMES[3] })]]);
+  // Each of the two also offers "not needed", under its reason and apart from its own step.
+  assert.deepEqual([held.aside, returned.aside, rowOf(settled, TASKS[0]).aside], [[say('queue.handoff.drop')], [say('queue.handoff.drop')], []]);
   assert.deepEqual([returned.status, returned.why, returned.buttons], [say('queue.handoff.row.returned', { name: NAMES[2] }), say('queue.handoff.why.returned', { note }), [say('queue.handoff.redo', { name: NAMES[2] })]]);
   assert.deepEqual([rowOf(settled, TASKS[0]).status, rowOf(settled, TASKS[0]).buttons, settled.wide], [say('queue.handoff.row.merged', { name: NAMES[0] }), [], false]);
   await shot('settled');
@@ -415,6 +417,7 @@ async function run() {
   await release(integrator.id, `MERGED ${deliveries[4].slice(0, 9)} as ${fifth.slice(0, 9)} tests 12/12`);
   const earlier = await seen(view => rowOf(view, TASKS[4]).where === 'held' && rowOf(view, TASKS[4]).buttons.length === 2, 'The merge made meanwhile waits for the person\'s confirmation', 90000);
   assert.deepEqual([rowOf(earlier, TASKS[4]).why, rowOf(earlier, TASKS[4]).buttons], [say('queue.handoff.why.mergedEarlier', { who: NAMES[3] }), [say('queue.handoff.confirm'), say('queue.handoff.send', { who: NAMES[3] })]]);
+  assert.deepEqual(rowOf(earlier, TASKS[4]).aside, [say('queue.handoff.drop')]);
   assert.ok(!earlier.block.includes(say('queue.handoff.ask.inSpace', { name: NAMES[3] })), earlier.block);
   assert.ok(!(await spaceEvents()).some(text => text.includes('lane/e') && text.includes('已合入 main')), 'Nothing says it is merged yet');
   await shot('merged-earlier-waits-for-confirmation');
@@ -426,6 +429,38 @@ async function run() {
   assert.deepEqual(rowOf(out, TASKS[4]).buttons, []);
   await shot('confirmed-merged');
   await closePanel();
+  // The person's "not needed" on the task the integrator returned: the row asks once more, "keep it" leaves everything
+  // as it was, and after "yes" the row says so, nothing waits for the person any more, and the space is told.
+  await openPanel();
+  const waits = await seen(view => rowOf(view, TASKS[3]).where === 'returned', 'The returned task still waits for the person');
+  assert.deepEqual([rowOf(waits, TASKS[3]).buttons, rowOf(waits, TASKS[3]).aside, rowOf(waits, TASKS[3]).ask, waits.opener], [[say('queue.handoff.redo', { name: NAMES[0] })], [say('queue.handoff.drop')], '', say('queue.titleNeed', { n: 1 })]);
+  const returnedRow = '#queue-list .queue-row[data-handoff="returned"]';
+  await page.locator(`${returnedRow} button[data-handoff-action="drop"]`).click();
+  const asking = await seen(view => rowOf(view, TASKS[3]).ask !== '', 'The row asks once more');
+  // The task's own step stays where it was; the two answers are under the question, "keep it" first.
+  assert.deepEqual([rowOf(asking, TASKS[3]).ask, rowOf(asking, TASKS[3]).aside, rowOf(asking, TASKS[3]).buttons, rowOf(asking, TASKS[3]).why, asking.opener, asking.wide],
+    [say('queue.handoff.dropAsk.returned', { who: NAMES[3] }), [say('queue.handoff.dropCancel'), say('queue.handoff.dropNow')], [say('queue.handoff.redo', { name: NAMES[0] })], say('queue.handoff.why.returned', { note: note2 }),
+      say('queue.titleNeed', { n: 1 }), false]);
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.handoffAction || ''), 'dropCancel', 'The keyboard is on "keep it", not on the step that cannot be taken back');
+  // The question has lines of its own under the reason (the two once lay on top of each other).
+  // and the two answers under the question, away from the place of the row's own step.
+  const lines = await page.locator(returnedRow).evaluate(row => [row.querySelector('.queue-handoff-why:not(.queue-handoff-ask)'), row.querySelector('.queue-handoff-ask'), row.querySelector('.queue-handoff-drop'), row.querySelector('.queue-actions')]
+    .map(node => { const box = node.getBoundingClientRect(); return [box.top, box.bottom]; }));
+  assert.ok(lines[0][1] > lines[0][0] && lines[1][0] >= lines[0][1] - 0.5 && lines[2][0] >= lines[1][1] - 0.5 && lines[3][1] <= lines[0][0] + 0.5, JSON.stringify(lines));
+  await shot('not-needed-asks-once-more');
+  await page.locator(`${returnedRow} button[data-handoff-action="dropCancel"]`).click();
+  const stays = await seen(view => rowOf(view, TASKS[3]).ask === '', 'Kept: the row is as it was');
+  assert.deepEqual([rowOf(stays, TASKS[3]).buttons, rowOf(stays, TASKS[3]).aside, stays.opener], [[say('queue.handoff.redo', { name: NAMES[0] })], [say('queue.handoff.drop')], say('queue.titleNeed', { n: 1 })]);
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.handoffAction || ''), 'drop');
+  await page.locator(`${returnedRow} button[data-handoff-action="drop"]`).click();
+  await page.locator(`${returnedRow} button[data-handoff-action="dropNow"]`).click();
+  const aside = await seen(view => rowOf(view, TASKS[3]).where === 'dropped', 'Set aside by the person', 90000);
+  assert.deepEqual([rowOf(aside, TASKS[3]).status, rowOf(aside, TASKS[3]).buttons, rowOf(aside, TASKS[3]).aside, rowOf(aside, TASKS[3]).why, aside.opener], [say('queue.handoff.row.dropped', { name: NAMES[0] }), [], [], '', say('queue.title')]);
+  assert.equal(await page.locator('#queue-handoff-error').isHidden(), true);
+  await until(async () => (await spaceEvents()).some(text => text.includes('lane/d') && text.includes('不用了')), 'The space is told that the person set it aside');
+  await shot('not-needed');
+  await closePanel();
+  passed.push('"Not needed" on the returned task: the row asks once more with the keyboard on "keep it"; kept, nothing changes; confirmed, the row says so, the opener counts nothing, and the space is told');
   passed.push('With the integrator inside the space its words are not read as an answer, not even a real merge: the panel says why; moved out and handed the delivery again it reports that merge, which waits for the person\'s "Confirm merged" and is recorded only then');
 
   assert.equal(fs.existsSync(path.join(folder, '.git')), false, 'The integrator\'s own session folder never held a repository');
