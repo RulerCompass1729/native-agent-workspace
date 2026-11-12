@@ -52,8 +52,9 @@ function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout
     }
   }
 
+  // Never more than the wait itself, should the clock be set back.
   function remaining() {
-    return lastSent + wait - now();
+    return Math.min(lastSent + wait - now(), wait);
   }
 
   function push(value) {

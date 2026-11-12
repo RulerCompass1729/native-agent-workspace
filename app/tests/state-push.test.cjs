@@ -541,5 +541,15 @@ test('main hurries the waiting state before every page action\'s reply, except w
   const start = mainSource.indexOf("ipcMain.handle(`workspace:${name}`");
   const wrapper = mainSource.slice(start, mainSource.indexOf('\n}', start));
   assert.match(wrapper, /finally \{ if \(hurries\) try \{ context\.statePush\?\.flushNow\(\); \} catch/);
-  assert.match(mainSource, /const hurries = !\['input', 'resize', 'readingState', 'draft'\]\.includes\(name\);\n  ipcMain\.handle\(`workspace:\$\{name\}`/);
+  assert.match(mainSource, /const hurries = !\['input', 'resize', 'readingState', 'draft', 'viewState'\]\.includes\(name\);\n  ipcMain\.handle\(`workspace:\$\{name\}`/);
+});
+
+test('a clock set back never holds a snapshot longer than the wait', () => {
+  const { sent, push, clock } = clocked();
+  push.push('a');
+  push.acknowledged(1);
+  clock.tick(-10000);
+  push.push('b');
+  clock.tick(250);
+  assert.deepEqual(sent.at(-1), ['b', 2]);
 });

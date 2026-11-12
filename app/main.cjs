@@ -1082,7 +1082,8 @@ function register(name, handler) {
     return handler(c, ...args);
   });
   // Sent many times a second while the person types, scrolls or resizes: these do not hurry the next state.
-  const hurries = !['input', 'resize', 'readingState', 'draft'].includes(name);
+  // viewState goes with every keystroke in a space's composer; it changes the window's view, never the state.
+  const hurries = !['input', 'resize', 'readingState', 'draft', 'viewState'].includes(name);
   ipcMain.handle(`workspace:${name}`, async (event, ...args) => {
     const context = windows.get(event.sender.id);
     if (!context || event.senderFrame !== event.sender.mainFrame || !trusted(event.senderFrame.url)) throw new Error('Unexpected IPC source');
