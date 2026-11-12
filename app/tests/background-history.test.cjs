@@ -72,11 +72,15 @@ test('a settled send confirmed on a later receipt is added to its block again, a
   assert.equal((await f.controller.call(binding, invoke('send-1', 'send', ['other', 'hello']))).state, 'awaiting-native');
   f.at(START + 2 * DAY); await f.controller.call(binding, invoke('op-2', 'forward', ['two']));
   assert.deepEqual(f.lines().map(line => [line.value.id, line.value.state]), [['send-1', 'awaiting-native']]);
+  // Asked again while nothing changed: nothing is added (agents may ask often; the record grows only with what happened).
+  for (let n = 0; n < 3; n++) assert.equal((await f.controller.call(binding, { action: 'receipt', operation_id: 'send-1' })).receipt.state, 'awaiting-native');
+  assert.equal(f.lines().length, 1);
   f.receive();
   assert.equal((await f.controller.call(binding, { action: 'receipt', operation_id: 'send-1' })).receipt.state, 'received');
   assert.deepEqual(f.lines().map(line => [line.value.id, line.value.state]), [['send-1', 'awaiting-native'], ['send-1', 'received']]);
   const reopened = f.reopen();
   assert.equal((await reopened.call(binding, { action: 'receipt', operation_id: 'send-1' })).receipt.state, 'received');
+  assert.equal(f.lines().length, 2, 'Asked again after a restart, nothing changed and nothing is added');
   assert.deepEqual(reopened.rows('agent').map(row => [row.backgroundOperation.id, row.backgroundOperation.state]), [['send-1', 'received'], ['op-2', 'complete']]);
   assert.deepEqual(f.runs, ['hello', 'two']);
 });
@@ -123,4 +127,39 @@ test('a record still pending stays in the state file however old: running, await
     row('copy', 'complete', { finishedAt: old, readState: 'available' }), row('copy-pending', 'complete', { finishedAt: old, readState: 'pending' }), row('done', 'complete', { finishedAt: old })));
   assert.deepEqual(f.state().records.map(r => r.id), ['asks', 'copy', 'copy-pending']);
   assert.deepEqual(f.lines().map(line => line.value.id), ['done']);
+});
+
+test('a record that settled leaves the state file even when the rest is too large to save, and is never written twice', async t => {
+  const f = setup(t), old = START - 5 * DAY;
+  const row = (id, at, extra = {}) => ({ id, actor: { ...sender, callId: 'call', turnId: 'turn', operationId: id }, command: invoke(id, 'forward', [id]), state: 'complete', at, finishedAt: at, ...extra });
+  f.controller.commit(d => d.records.push(row('recent-big', START - 1000, { value: 'x'.repeat(20 * 1024 * 1024) })));
+  f.controller.data.records.push(row('old', old));
+  assert.throws(() => f.controller.commit(d => d.records.push(row('recent-big-2', START - 500, { value: 'y'.repeat(13 * 1024 * 1024) }))), /full/);
+  assert.deepEqual([f.controller.data.records.map(r => r.id), f.lines().map(line => line.value.id)], [['recent-big'], ['old']]);
+  f.controller.commit(() => {});
+  assert.deepEqual(f.lines().map(line => line.value.id), ['old'], 'Not written to its block again');
+  assert.deepEqual(f.reopen().rows('agent').map(row => row.backgroundOperation.id).sort(), ['old', 'recent-big']);
+});
+
+test('a history folder that is gone is not taken for an empty history: nothing is run until it is back', async t => {
+  const f = setup(t);
+  await f.controller.call(binding, invoke('op-1', 'forward', ['one'])); f.at(START + 2 * DAY);
+  await f.controller.call(binding, invoke('op-2', 'forward', ['two']));
+  assert.equal(f.state().historyThrough, 1);
+  const aside = path.join(f.dir, 'history-aside'); fs.renameSync(path.join(f.dir, 'history'), aside);
+  assert.throws(() => f.reopen(), /history cannot be read/);
+  fs.renameSync(aside, path.join(f.dir, 'history'));
+  assert.equal((await f.reopen().call(binding, invoke('op-1', 'forward', ['one']))).duplicate, true); assert.deepEqual(f.runs, ['one', 'two']);
+});
+
+test('a stop while an older file is being kept does not leave a version 1 state file behind', async t => {
+  const f = setup(t); f.controller = null;
+  const row = { id: 'old', actor: { ...sender, callId: 'call', turnId: 'turn', operationId: 'old' }, command: invoke('old', 'forward', ['old']), state: 'complete', at: START - 3 * DAY, finishedAt: START - 3 * DAY };
+  fs.writeFileSync(f.file, JSON.stringify({ version: 1, records: [row], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }), { mode: 0o600 });
+  const open = fs.openSync; let thrown = 0;
+  t.mock.method(fs, 'openSync', (target, ...rest) => { if (/legacy-\d+\.json\..*\.tmp$/.test(String(target)) && !thrown++) throw Object.assign(Error('synthetic'), { code: 'ENOENT' }); return open(target, ...rest); });
+  assert.throws(() => f.reopen(), /synthetic/);
+  t.mock.restoreAll();
+  assert.equal(f.state().version, 1, 'The older file is left as it was');
+  assert.equal((await f.reopen().call(binding, invoke('old', 'forward', ['old']))).duplicate, true); assert.equal(f.state().version, 2);
 });

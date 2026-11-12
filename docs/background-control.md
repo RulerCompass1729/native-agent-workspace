@@ -34,7 +34,9 @@ pending, views, refusal summaries. Once an operation has ended more than a day
 ago with nothing pending (no unread copy), it moves to the day's block under
 `history/operations/` (the shared layout in `app/record-history.cjs`), which is
 only added to; a later change, such as a send confirmed on a later receipt, adds
-the record again and the later line holds. All records stay loaded, so receipts,
+the record again and the later line holds (a receipt that changes nothing adds
+nothing). The state file records how far the blocks go; a history folder moved
+away or shortened stops background control instead of reading as empty. All records stay loaded, so receipts,
 a repeated operation ID and the conversation rows behave as before. A block that
 cannot be read stops background control rather than risk running an operation ID
 again. The state file is version 2. An older version refuses it, and its

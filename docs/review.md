@@ -12331,3 +12331,32 @@ Not verified, or known:
   until it is sealed; this record is not tamper-proof.
 - The real-window check runs within one day, so nothing settles there; settling,
   taking in, a later receipt and a stop between the two writes are unit-tested.
+
+Independent read-only review (one fresh session, in a separate checkout of the
+commit; the CLI reported the model as claude-opus-5-5): `CHANGES`, one blocking
+finding. It found no path that runs an operation id twice. Its findings, each
+reproduced as a test first, and what was done:
+1. (blocking) Every receipt on a settled send added another full copy of the
+   record, because the delivery check answers on every call; polling alone would
+   grow the record toward the bell. Now a settled record is added again only when
+   what is known about it changed; three unchanged receipts and one after a
+   restart add nothing.
+2. A save refused as too large, after settled records had gone to their block,
+   left them in the state too, so they were written again and a later receipt's
+   change could be lost. They now leave the state as soon as their block has
+   them.
+3. A missing file met while keeping an older version's file was taken for "no
+   state file", leaving a version 1 file an older version would start on. Only a
+   missing state file is a fresh start now; anything else stops background
+   control.
+4. A history folder moved away or emptied read as an empty history, so its ids
+   could run again. The state file now records how far the blocks go
+   (`historyThrough`), and a history that ends earlier stops background control.
+5. The comment said the older file counts toward the size; it does not here (the
+   bell, batch 3, counts it). Comment corrected.
+6. Each save built a set of every settled key; it now looks them up directly. The
+   older file is kept byte for byte, so a file from a much older build may still
+   hold bodies later builds strip; it is private, as the file was.
+A test now covers a cancellation that settles after a later change of selection,
+the one case the ordering by creation time decides. 21 faults in all, the 6 for
+these caught.

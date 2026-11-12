@@ -136,8 +136,9 @@ class BackgroundControl {
     this.confirmationPending = confirmationPending;
     this.project = project;
     this.readCopies = new Map(); this.readBytes = 0; this.readCopyBytes = readCopyBytes;
-    try {
-      const st = fs.lstatSync(this.file);
+    let st = null;
+    try { st = fs.lstatSync(this.file); } catch (e) { if (e.code !== 'ENOENT') { this.failed = true; throw e; } }
+    if (st) try {
       if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1 || st.uid !== process.getuid() || st.mode & 0o077 || st.size > MAX_RECORD_BYTES) throw Error('Unsafe background operation record');
       const text = fs.readFileSync(this.file, 'utf8');
       this.data = JSON.parse(text);
@@ -149,6 +150,10 @@ class BackgroundControl {
       if (!object(this.data.refusalActors) || Object.values(this.data.refusalActors).some(v => !object(v) || !positiveCount(v.sequence) || !Number.isSafeInteger(v.windowStart) || v.windowStart < 0 || !object(v.counts) || Object.entries(v.counts).some(([reason, c]) => !summarizedReasons.has(reason) || !counter(c))) ||
           !Array.isArray(this.data.refusals) || this.data.refusals.length > MAX_REFUSAL_SUMMARIES || this.data.refusals.some(r => !token(r.id) || !r.actor || r.state !== 'not-executed' || !r.command || !summarizedReasons.has(r.refusalSummary?.reason) || !counter(r.refusalSummary) || !this.data.refusalActors[this.key(r.actor)])) throw Error('Invalid refusal summaries');
       if (!Array.isArray(this.data.refusalReceipts) || this.data.refusalReceipts.length > 512 || this.data.refusalReceipts.some(a => !token(a.id) || !token(a.actor?.id) || !token(a.actor?.nativeId) || !['claude', 'codex'].includes(a.actor?.provider) || !token(a.summaryId) || !this.data.refusals.some(r => r.id === a.summaryId && this.key(r.actor) === this.key(a.actor)))) throw Error('Invalid refusal receipts');
+      // The blocks must reach as far as the state file knows they did: a history folder moved away or shortened is not
+      // an empty history, and an operation id in it must not run again.
+      if (this.data.version === STATE_VERSION && (!Number.isSafeInteger(this.data.historyThrough ?? 0) || (this.data.historyThrough ?? 0) > history.lastSequence(this.archive.manifest)))
+        throw Error('The background operation history cannot be read; it ends before what this record knows of', { cause: Object.assign(Error('History is shorter than recorded'), { code: 'HISTORY_SHORT' }) });
       // A record that reached its block before the state file was written again: the block's copy holds.
       this.data.records = this.data.records.filter(r => !this.archived.has(this.key(r.actor) + ':' + r.id));
       // An older version's file: its bytes are kept beside the blocks, then it becomes this version's state file,
@@ -170,7 +175,7 @@ class BackgroundControl {
           if (['available', 'pending'].includes(r.readState)) { r.readState = 'expired'; r.readReason = 'restart'; }
         }
       });
-    } catch (e) { if (e.code !== 'ENOENT') { this.failed = true; throw e; } }
+    } catch (e) { this.failed = true; throw e; }
   }
   // A settled record held in memory; a later version of the same record replaces it.
   remember(record) {
@@ -187,7 +192,7 @@ class BackgroundControl {
     catch (error) { this.failed = true; throw Error('Background operation save is unconfirmed; no automatic replay', { cause: error }); }
     this.remember(record); this.changed();
   }
-  // The older version's file kept as it was, beside the blocks (not read again, counted in the record's size).
+  // The older version's file kept as it was, beside the blocks (not read again).
   keepLegacy(text) {
     const store = history.ensureDirectory(history.ensureDirectory(path.dirname(this.file), history.HISTORY_DIR), 'operations'), bytes = Buffer.from(text);
     const digest = history.sha256().update(bytes).digest('hex');
@@ -212,8 +217,8 @@ class BackgroundControl {
     // files. New summaries already carry the same hint as their direct reply.
     for (const row of next.refusals) if (Object.hasOwn(row, 'retryHint')) row.retryHint = REFUSAL_RETRY_HINT;
     const summaries = new Set(next.refusals.map(r => this.key(r.actor) + ':' + r.id));
-    const exact = new Set([...next.records.map(r => this.key(r.actor) + ':' + r.id), ...this.archived.keys()]);
-    next.refusalReceipts = operation.retainRefusalRows(next.refusalReceipts.filter(a => summaries.has(this.key(a.actor) + ':' + a.summaryId) && !exact.has(this.key(a.actor) + ':' + a.id)), 512, 128);
+    const exact = new Set(next.records.map(r => this.key(r.actor) + ':' + r.id));
+    next.refusalReceipts = operation.retainRefusalRows(next.refusalReceipts.filter(a => summaries.has(this.key(a.actor) + ':' + a.summaryId) && !exact.has(this.key(a.actor) + ':' + a.id) && !this.archived.has(this.key(a.actor) + ':' + a.id)), 512, 128);
     // Read bodies never belong to the durable operation log, including legacy
     // values loaded from an earlier build. A bounded, one-use cache holds them.
     for (const r of next.records) {
@@ -233,7 +238,12 @@ class BackgroundControl {
       catch (error) { this.failed = true; throw Error('Background operation save is unconfirmed; no automatic replay', { cause: error }); }
       for (const r of moving) this.remember(clone(r));
       next.records = next.records.filter(r => !moving.includes(r));
+      // In their block now: they leave this run's state too, whatever happens to the rest of this save.
+      const moved = new Set(moving.map(r => this.key(r.actor) + ':' + r.id));
+      this.data = { ...this.data, records: this.data.records.filter(r => !moved.has(this.key(r.actor) + ':' + r.id)) };
     }
+    // How far the history goes: a state file that knows of more than the blocks hold stops the next start.
+    next.historyThrough = history.lastSequence(this.archive.manifest);
     const text = JSON.stringify(next);
     if (Buffer.byteLength(text) > MAX_RECORD_BYTES) throw Error('Background operation record is full; existing records are retained');
     const temporary = `${this.file}.${randomUUID()}.tmp`; let renamed = false;
@@ -398,8 +408,10 @@ class BackgroundControl {
         if (privateRead(saved.command)) { await context.refresh?.(); await valid(); }
         const delivery = await context.delivery?.(saved.command, saved.value, saved.actor, saved.guard);
         const archived = this.archived.get(this.key(sender) + ':' + saved.id);
-        if (delivery && archived) this.reappend({ ...clone(archived), delivery, ...(delivery.nativeReceived ? { state: 'received' } : {}) });
-        else if (delivery) this.commit(d => { const r = d.records.find(r => r.id === saved.id && this.key(r.actor) === this.key(sender)); r.delivery = delivery; if (delivery.nativeReceived) r.state = 'received'; });
+        // A settled send is added again only when what is known about it changed: agents may ask often.
+        const changedRecord = archived && delivery && { ...clone(archived), delivery, ...(delivery.nativeReceived ? { state: 'received' } : {}) };
+        if (changedRecord && !isDeepStrictEqual(changedRecord, archived)) this.reappend(changedRecord);
+        else if (delivery && !archived) this.commit(d => { const r = d.records.find(r => r.id === saved.id && this.key(r.actor) === this.key(sender)); r.delivery = delivery; if (delivery.nativeReceived) r.state = 'received'; });
       }
       return { state: 'complete', receipt: this.takeReceipt(sender, args.operation_id, context), retry: false };
     }
