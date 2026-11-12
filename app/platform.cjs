@@ -41,8 +41,9 @@ function backendPrograms(dataDir, key = '.') {
 const LAUNCHER_SESSION = [
   // Which session it is and how it was entered.
   'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_BRIDGE_SESSION_ID',
-  // Its process, its executable, its effort level at that moment, and its background job's folder.
-  'CLAUDE_PID', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_EFFORT', 'CLAUDE_JOB_DIR',
+  // Its process, its executable, its effort level and the skills it had invoked at that moment, and its
+  // background job's folder.
+  'CLAUDE_PID', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_EFFORT', 'CLAUDE_CODE_INVOKED_SKILLS', 'CLAUDE_JOB_DIR',
   // Its message inbox, and the token that proves a sender belongs to it.
   'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
   'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_TOOL_CALL_ID', 'CODEX_CI',

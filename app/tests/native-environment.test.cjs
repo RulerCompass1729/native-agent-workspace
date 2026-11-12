@@ -34,13 +34,13 @@ test('native programs do not inherit the launcher terminal\'s identity', () => {
 const launcherSession = {
   CLAUDE_CODE_SESSION_ATTENDED: '1', CLAUDE_PID: '4242', CLAUDE_EFFORT: 'high',
   CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/launcher-inbox.sock', CLAUDE_CODE_MESSAGING_TOKEN: 'launcher-inbox-token',
-  CLAUDE_JOB_DIR: '/tmp/launcher-job', CLAUDE_CODE_EXECPATH: '/launcher/bin/claude', CLAUDE_CODE_BRIDGE_SESSION_ID: 'launcher-bridge',
+  CLAUDE_JOB_DIR: '/tmp/launcher-job', CLAUDE_CODE_EXECPATH: '/launcher/bin/claude', CLAUDE_CODE_INVOKED_SKILLS: 'a-skill', CLAUDE_CODE_BRIDGE_SESSION_ID: 'launcher-bridge',
   AI_AGENT: 'claude-code_2-1-322_agent',
 };
 // What a person configures in a settings file or a shell profile. None of it is the launcher's session.
 const personSettings = {
-  CLAUDE_CODE_SUBAGENT_MODEL: 'haiku', CLAUDE_CODE_EFFORT_LEVEL: 'high', CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: '5',
-  CLAUDE_CODE_ENABLE_TASKS: '1', CLAUDE_CODE_TMPDIR: '/custom/tmp', CLAUDE_CONFIG_DIR: '/custom/claude', ANTHROPIC_MODEL: 'a-model', CODEX_HOME: '/custom/codex',
+  CLAUDE_CODE_SUBAGENT_MODEL: 'haiku', CLAUDE_CODE_EFFORT_LEVEL: 'high', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '4096',
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CODE_TMPDIR: '/custom/tmp', CLAUDE_CONFIG_DIR: '/custom/claude', ANTHROPIC_MODEL: 'a-model', CODEX_HOME: '/custom/codex',
 };
 function withProcessEnv(values, fn) {
   const saved = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
@@ -110,7 +110,7 @@ test('a hook token inherited from the NAW session that started this NAW is not p
   const python = pythonExecutable(); assert.ok(python, 'A real Python runtime is required');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-env-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const report = path.join(dir, 'names.json');
-  await withProcessEnv({ ...launcherNaw, NAW_TEST_ORDINARY: 'inherited' }, async () => {
+  await withProcessEnv({ ...launcherNaw, NAW_TEST_ORDINARY: 'inherited', NAW_OUTBOX_DESCRIPTOR: '/the/apps/own/outbox-owner.json' }, async () => {
     // A launch that is given nothing of its own (a native Codex terminal, the Codex app server) gets none.
     const bare = nativeEnvironment();
     for (const key of Object.keys(launcherNaw)) assert.equal(bare[key], undefined, key + ' is the launching session\'s');
@@ -122,6 +122,8 @@ test('a hook token inherited from the NAW session that started this NAW is not p
     assert.deepEqual([partial.NAW_HOOK_TOKEN, partial.NAW_HOOK_SOCKET, partial.NAW_SUBMIT_SOCKET], ['own-token', undefined, undefined]);
     // Every other name is as before: inherited when nothing is given, replaced by what is given.
     assert.equal(nativeEnvironment().NAW_TEST_ORDINARY, 'inherited'); assert.equal(nativeEnvironment({ NAW_TEST_ORDINARY: 'given' }).NAW_TEST_ORDINARY, 'given');
+    // The outbox descriptor is the app's own (it deletes an inherited one before setting it), and native programs are meant to inherit it.
+    assert.equal(nativeEnvironment().NAW_OUTBOX_DESCRIPTOR, '/the/apps/own/outbox-owner.json');
     // The real path, started the way a Codex terminal is: nothing passed with the launch.
     const terminal = new Terminal([python, '-c', 'import os,sys,json\nopen(sys.argv[1],"w").write(json.dumps(sorted(os.environ)))', report], dir);
     try {
