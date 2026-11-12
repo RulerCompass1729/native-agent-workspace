@@ -131,6 +131,10 @@ async function cleanup() {
   await until(() => calls === 2, 'The same turn makes its next request', (TOOL_SECONDS + 20) * 1000);
   const second = JSON.parse(fs.readFileSync(path.join(base, 'request-2.json'), 'utf8'));
   assert.equal(userTexts(second).filter(t => t.includes(STEER)).length, 1, 'Read once');
+  // From a space the turn is told where the message came from (the person's choice (b), 11-12); a private one stays plain.
+  const read = userTexts(second).find(t => t.includes(STEER)).trimEnd();
+  if (shared) assert.equal(read, `[Workspace space message from the person in the space "共同工作", delivered into your running turn.]\n${STEER}`);
+  else assert.equal(read, STEER);
   const last = second.messages.findLast(m => m.role === 'user');
   const lastBlocks = Array.isArray(last.content) ? last.content : [{ type: 'text', text: last.content }];
   const resultAt = lastBlocks.findIndex(b => b.type === 'tool_result' && b.tool_use_id === 'toolu_local_long_step'), steerAt = lastBlocks.findIndex(b => b.type === 'text' && b.text.includes(STEER));
@@ -148,8 +152,8 @@ async function cleanup() {
     assert.ok(!JSON.stringify(done.room.messages).includes('FIRST_NATIVE_WORK'));
     await until(async () => (await page.locator('#room-messages').innerText()).includes('已送进正在进行的回合，Claude 已读到'), 'The space says it was delivered and read');
     const record = await page.locator('#room-messages').innerText();
-    assert.ok(record.includes('送进了正在进行的回合，回复留在原会话') && !record.includes('分享已失效'), 'Said as a delivery, not as a failed share');
-    checks.push('From the space: delivered and read in the running turn; the space records that, and its reply stays in the session');
+    assert.ok(record.includes('送进了正在进行的回合，不单独回复到空间') && !record.includes('分享已失效'), 'Said as a delivery, not as a failed share');
+    checks.push('From the space: delivered and read in the running turn, with who sent it; the space records that, with no separate reply of its own');
   } else {
     const steerRow = s.messages.find(m => m.id === tag), reply = s.messages.find(m => m.text?.includes('MIDTURN_REPLY'));
     assert.ok(s.messages.indexOf(steerRow) < s.messages.indexOf(reply), 'Kept in time order, before the reply that read it');

@@ -107,6 +107,21 @@ function createSettings(provider, settings) {
   return result;
 }
 
+// A space message read inside a running Claude turn (2.1.322) gets no reply of its own, so the agent is told
+// who sent it from which space and, when an agent sent it, how to answer that agent. The person's choice (b),
+// 11-12. Nothing is claimed about where this turn's output goes: a turn an earlier space message started keeps
+// sharing it. A message that runs as its own turn keeps its plain text.
+const frameLabel = value => String(value || '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff"\[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+function spaceMidturnText(roomName, sender, text) {
+  const space = frameLabel(roomName), id = sender && frameLabel(sender.id), name = sender && frameLabel(sender.name);
+  // Only an ID that came through cleaning unchanged can be named as a recipient.
+  const answer = sender && id === sender.id ? ` To answer ${name}, call mcp__native_workspace__workspace_message with recipient_id ${id}.` : '';
+  const head = sender
+    ? `[Workspace space message from ${name} · ${id} in the space "${space}", delivered into your running turn.${answer}]`
+    : `[Workspace space message from the person in the space "${space}", delivered into your running turn.]`;
+  // Input stops at 16,000 characters (cleanText), far below the bridge's 100,000 for mid-turn text.
+  return `${head}\n${text}`;
+}
 class Workspace extends EventEmitter {
   constructor(host, dataDir, newWorkspaceRoot = path.join(dataDir, 'session-workspaces')) {
     super(); this.host = host; this.dataDir = dataDir; this.newWorkspaceRoot = newWorkspaceRoot; this.sessions = new Map(); this.runtimes = new Map(); this.drafts = new Map(); this.draftRevisions = new Map();
@@ -1337,17 +1352,20 @@ class Workspace extends EventEmitter {
     s.messages.push(message); if (clearedDraft) this.drafts.set(id, ''); this.versions.dispatches++; this.changed();
     try {
       if (roomId !== 'shared') { this.persist(); if (this.storageWarning) throw uiError("error.workspace.spaceRecordUnsaved"); }
-      const receipt = await runtime.queue(text, tag, valid);
+      const actor = backgroundOperation.current();
+      const midturnText = shared && midturn.midturn ? spaceMidturnText(room.name || roomId, actor && { id: actor.id, name: actor.name }, text) : undefined;
+      const receipt = await runtime.queue(text, tag, valid, midturnText);
       message.status = 'submitted';
       if (receipt?.mode === 'append') {
-        // Read inside the running turn at a tool boundary: it keeps its place in time. No prompt
-        // of its own can carry a shared reply, so that turn's output stays in the session.
+        // Read inside the running turn at a tool boundary: it keeps its place in time. No prompt of its own
+        // can carry a shared reply, so this message's grant closes (a grant an earlier message holds stays).
         message.deliveredInto = receipt.turnId;
+        if (midturnText) message.deliveredFramed = 'space';
         this.deliveryStatus(tag, 'submitted');
         if (shared) {
           const source = room.messages.find(row => row.id === tag);
           if (source) { source.deliveredInto = receipt.turnId; source.status = 'reply-private'; }
-          this.forwards.delete(tag); this.sharedReplies.close(tag, '送进了正在进行的回合，回复留在原会话', uiActivity('notice.sharing.midturn')[1]);
+          this.forwards.delete(tag); this.sharedReplies.close(tag, '送进了正在进行的回合，不单独回复到空间', uiActivity('notice.sharing.midturn')[1]);
         }
         this.changed();
         return tag;

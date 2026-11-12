@@ -12675,3 +12675,55 @@ Evidence: `room-state.test.cjs` (a refused join calls nothing on the backend; le
 Independent review 1 (fresh read-only session, 13 turns, reported USD 0.76): `CHANGES`. Blocking: restoring an archived space put its former members back through `changeMember` directly, without the guard, so a member the person designated after archiving the space (or after a merge archived it, through undo) would rejoin. Restoring now asks the guard for each former member and leaves out one that may not join, as it already leaves out one placed elsewhere; the space restores and says how many were left out. Also from that review: designating a session NAW opened to replace another, before it has moved in, is refused (`error.steward.invalid`), since refusing its join would make the rotation stop it. Notes kept: a merge's own moves are kept safe by its placement-revision check rather than by the guard; designating can wait behind a long membership action in the same queue (delay, never a wrong state); a refused join still pauses that space first; the guard refuses nothing while the designation cannot be read (to revisit before the butler gets wider permissions). Two new tests, each failing with its line removed. Full suite 6372 pass, 0 fail.
 The same session read that change (8 turns, cumulative reported USD 1.08): `PASS_WITH_NOTES`. Both closed; the phase list is right for joins (only creating and waiting-trust lead to joining, and neither comes back from kept or failed). Its note: a failed rotation can still stop its unused successor after the person designates it. Designating such a session is now refused too, unless that rotation had already handed it work (then it is not stopped).
 The same session read that line (4 turns, cumulative reported USD 1.23): `PASS_WITH_NOTES`. `handoffConfirmed` is the field that decides whether a failed rotation stops its new session; nothing else stops it. Its note, kept: a rotation that failed while still creating leaves a session that will never be stopped, yet it cannot be designated until the failed record expires, and the refusal says only that the session is not usable (fails safe; rare). The review of this batch ends here.
+## A space message read mid-turn says where it came from (2.1.322, batch 1 follow-up) — 2026-11-12
+
+The person's choice, 11-12 11:15: 「按你推荐的来」. This was option (b) for a space message read mid-turn by the batch above: put a short line in front saying who sent it from which space, and how to answer.
+
+**Now.**
+- When the running turn takes a space message at a tool boundary, the model reads one frame line before the text the person or agent wrote. The line is in the style of NAW's other agent-facing frames (`[Workspace message from …]`).
+  - The app builds the line (`spaceMidturnText` in `workspace.cjs`).
+  - It travels as `midturnText` beside the plain text: adapter, then channel (`/next` carries it only for a mid-turn request), then bridge, which appends it at the boundary.
+  - Authorization stays against the plain text the record holds.
+- An agent sending through background control (the steward) gets: `[Workspace space message from <name> · <session id> in the space "<space>", delivered into your running turn. To answer <name>, call mcp__native_workspace__workspace_message with recipient_id <session id>.]`. Such an answer reaches the sender after the replying member's turn completes; an interrupted or failed turn, or pausing that member, drops it. The person sees it as its own row in the spaces the two share, or, when they share none, in the replier's spaces (`mirrorWake`), not as a reply to the space message. The "To answer" sentence is left out if cleaning changed the sender's ID, so a recipient ID that does not exist is never offered (NAW makes these IDs; not seen in practice).
+- When the person sends from the space, the line says only who sent it, "the person", and from which space. It does not suggest `workspace_message`: that tool takes a session ID, so it cannot reach the person. This is the one place the person's wording (「要回复请用 workspace_message 发到空间」) was not followed literally, because no such route exists for the person.
+- The line says nothing about where this turn's output goes. A turn that an earlier space message started (a forward, or a queued space message that ran as its own turn) keeps that message's grant, so its later output is posted to that space as that message's reply. A turn no space message started keeps its output in the session.
+- Not framed:
+  - a private queued message (the person's own words, as before);
+  - a message that runs as its own turn because the turn ended first (its reply is shared into the space as before);
+  - any version without mid-turn delivery.
+- Names and the sender's ID are cleaned before they go into the line. Control, line-separator, invisible and direction characters, quotes and square brackets become spaces, and each value is cut to 80 characters. A name or ID therefore cannot end the frame or add a line. Input stops at 16,000 characters (`cleanText`), far below the bridge's 100,000-character limit for mid-turn text, so the frame always fits.
+- The record marks such a row `deliveredFramed: 'space'`.
+- The space row's status said 「送进了正在进行的回合，回复留在原会话」. For the case above that is not always true, so it now says 「送进了正在进行的回合，不单独回复到空间」 (English: "Delivered into the running turn; no separate reply in the space"). It is the same in the grant's closing notice.
+
+**Correction to the batch above.** Its "Now" and "Left open" say that from a space "that turn's output stays in the session" and "the turn's output stays private". That is true only when no earlier space message started the turn (see above). The mid-turn message's own grant closes either way.
+
+**Checks.**
+- Node tests:
+  - the channel sends the frame only for a mid-turn request;
+  - the adapter passes it only when the bridge may hold the message;
+  - the record frames a space message from the person and one from a background-control sender, and leaves a private one and another version plain;
+  - a turn an earlier space message started keeps sharing after a mid-turn space message, and the frame says nothing about it;
+  - names and the sender ID cannot break out of the frame (quotes, brackets, newlines, NEL, direction controls).
+- Bridge engine tests (2 new):
+  - the app's text is appended, while authorization stays against the plain text;
+  - a framed message whose turn ends first is submitted plain.
+- Breakages: 11 (F1–F11), each caught by its intended test (`mutate-5.log`, `mutate-6.log`, `mutate-7.log`, raw output in `mutate-out/`).
+- Real window, real 2.1.322:
+  - from the space, the request the model reads carries exactly the person's frame line, then the text, after the tool result (`test-native-midturn.cjs` with `NAW_MIDTURN_SHARED=1`);
+  - privately, the text arrives unchanged;
+  - the space row says 「送进了正在进行的回合，不单独回复到空间」;
+  - the space fallback journey still shares the own-turn reply.
+- Main e673782's compatibility copy of the hook is recognised for upgrade.
+
+**Independent review.** The batch-1 reviewer session's first read of this change was BLOCK (`review-3-result.md`). The frame said "Your output in this turn stays in your own session and is not posted to the space". That is false when an earlier space message's grant is still open on the turn: `workspace.cjs` space queue does not bump `controlRevision`, `shared-replies.cjs` keeps such a grant valid, and its rows keep being posted. The sentence is gone, and the case has a test. Its notes:
+- "to answer there" overclaimed where the answer is shown; it now says "to answer <name>".
+- The sender ID went into the line uncleaned; it is now cleaned.
+- NEL and direction controls survived the cleaning; they are now removed.
+- The `deliveredFramed` mark could overclaim for text over 100,000 characters; input cannot exceed 16,000, so the length check was dropped instead.
+
+The same session read that increment (`review-4-result.md`, PASS_WITH_NOTES): the blocking finding is fixed, and every remaining statement in both lines and the two status lines holds wherever it shows. Its notes:
+- A code comment and a window-check label still carried the old claim; both are reworded.
+- "Reaches the sender" overstated delivery; the wording above now says when it is dropped.
+- A sender ID that cleaning changed would have been offered as a recipient; that sentence is now left out (F11).
+- The member's answer by `workspace_message` shows in the space as its own row, not as a reply; noted above.
+The review of this change ends here.

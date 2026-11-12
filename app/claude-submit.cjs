@@ -23,12 +23,12 @@ class SubmissionChannel extends EventEmitter {
   }
   // midturn: the mod may hold the message for the running turn's next tool boundary
   // (it answers /hold), so the first-answer limit ends there; authorization stays at dispatch.
-  request(text, tag, guard, waitForNativeTurn = false, midturn = false) {
+  request(text, tag, guard, waitForNativeTurn = false, midturn = false, midturnText) {
     if (!this.connected) return Promise.reject(Object.assign(uiError("error.safeSubmissionNotReady"), { notSent: true }));
     if (this.pending) return Promise.reject(Object.assign(uiError("error.previousSubmissionPending"), { notSent: true }));
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.finish(uiError("error.nativeSubmissionUnconfirmed")), this.timeout);
-      this.pending = { text, tag, guard, resolve, reject, timer, delivered: false, authorized: false, waitForNativeTurn, midturn: midturn === true, held: false, deadline: Date.now() + this.timeout };
+      this.pending = { text, tag, guard, resolve, reject, timer, delivered: false, authorized: false, waitForNativeTurn, midturn: midturn === true, midturnText: midturn === true && typeof midturnText === 'string' && midturnText ? midturnText : undefined, held: false, deadline: Date.now() + this.timeout };
       this.flush();
     });
   }
@@ -37,7 +37,7 @@ class SubmissionChannel extends EventEmitter {
     if (!p || !response || p.delivered) return;
     if (!p.guard()) return this.finish(uiError("error.submissionRevokedByHuman"));
     p.delivered = true; this.poll = null;
-    response.end(JSON.stringify({ id: p.tag, text: p.text, ...(p.midturn ? { midturn: true } : {}) }));
+    response.end(JSON.stringify({ id: p.tag, text: p.text, ...(p.midturn ? { midturn: true } : {}), ...(p.midturnText ? { midturnText: p.midturnText } : {}) }));
   }
   hold(message) {
     const p = this.pending;
