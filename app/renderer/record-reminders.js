@@ -31,7 +31,7 @@
       const total = record.blocks, oldest = record.oldestDay || '—', bytes = size(record.bytes);
       if (entry.kind === 'age') return ['records.item.age', { blocks: entry.blocks, oldest: entry.oldestDay || oldest, total, size: bytes }];
       if (entry.kind === 'size') return ['records.item.size', { size: size(entry.bytes), oldest, total }];
-      if (entry.kind === 'unavailable') return [entry.cause === 'history' ? 'records.item.unavailable' : 'records.item.unavailableOther', {}];
+      if (entry.kind === 'unavailable') return [record.record === 'steward' ? (entry.cause === 'history' ? 'records.item.stewardUnavailable' : 'records.item.stewardUnavailableOther') : entry.cause === 'history' ? 'records.item.unavailable' : 'records.item.unavailableOther', {}];
       if (entry.manifest) return ['records.item.unreadableManifest', {}];
       return ['records.item.unreadable', { blocks: entry.blocks, from: entry.fromSequence, through: entry.throughSequence }];
     }

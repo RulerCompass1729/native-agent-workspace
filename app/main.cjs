@@ -20,6 +20,7 @@ const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary, follow: followRotation } = require('./queue-secretary.cjs');
 const { IntegratorRole } = require('./integrator-role.cjs');
 const { StewardRole } = require('./steward-role.cjs');
+const stewardRecords = require('./steward-record.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
 const { ButlerReadAudit } = require('./butler-read-audit.cjs');
@@ -46,7 +47,7 @@ const queueRules = require('./queue-dispatch.cjs');
 const { QueueDispatcher } = queueRules;
 const applicationHandlers = new Map();
 // Why background control did not load at start ('history': its blocks; 'other': anything else), for the bell.
-let backgroundControl, backgroundUnavailable = false, operationsUnavailable = null, operationsBlocks = -1;
+let backgroundControl, backgroundUnavailable = false, operationsUnavailable = null, operationsBlocks = -1, stewardRecord = null, stewardOf = null;
 let butlerClosing = false, butlerQuitAttempted = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
@@ -1255,7 +1256,11 @@ async function boot() {
       outboxBroker = await createOutboxBroker({ descriptorFile,
         bind: (identity, args, signal) => bindOriginalOutbox({ contexts: () => windows.values(), roomState }, identity, args, signal),
         bindControl: (identity, args, signal) => bindOriginalControl({ contexts: () => windows.values(), roomState }, identity, args, signal),
-        control: (binding, args) => { if (!backgroundControl) throw Error('Background control storage is unavailable'); return backgroundControl.call(binding, args); },
+        control: (binding, args) => {
+          if (!backgroundControl) throw Error('Background control storage is unavailable');
+          // The butler's own calls are written to 「大管家的记录」 first (steward-record.cjs); others run as they are.
+          return stewardRecord ? stewardRecord.around(binding.sender, args, () => backgroundControl.call(binding, args)) : backgroundControl.call(binding, args);
+        },
         createView: createStockOutboxView });
       process.env.NAW_OUTBOX_DESCRIPTOR = descriptorFile; outboxUnavailable = false;
     } catch { outboxUnavailable = true; } // Existing warning surface; never block ordinary app startup.
@@ -1293,6 +1298,11 @@ async function boot() {
   integratorRole = new IntegratorRole(dataDir);
   // Who the person designated as the butler they talk to. A record only: it gives that session nothing.
   stewardRole = new StewardRole(dataDir);
+  // What the butler does through NAW, under its own name (steward step 2, batch 1). One that cannot be read stops
+  // only the butler's calls, and the bell says so.
+  stewardOf = stewardRecords.cachedSteward(stewardRole);
+  stewardRecord = new stewardRecords.StewardRecord(dataDir, { steward: stewardOf, selected: () => stewardRole.selected, failed: () => recordsChanged() });
+  if (!stewardRecord.failed) try { stewardRecord.sync(stewardOf()); } catch { /* Said again when the record is opened or the butler acts. */ }
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
   creationDefaults = new CreationDefaults(dataDir, { defaultWorkspace, newWorkspaceRoot: `${path.resolve(defaultWorkspace)}-sessions` });
   viewStore = new ViewStore(dataDir);
@@ -1667,7 +1677,7 @@ async function boot() {
   // no agent command (removed from the agent catalog below), and nothing here deletes a block.
   register('records', async (c, action, ...args) => {
     if (!isCurrentHumanContext(c)) throw uiError('error.records.personOnly');
-    const name = args[0], unavailable = operationsUnavailable ? { operations: operationsUnavailable } : {};
+    const name = args[0], unavailable = { ...(operationsUnavailable ? { operations: operationsUnavailable } : {}), ...(stewardRecord?.failed ? { steward: stewardRecord.loadError ? 'history' : 'other' } : {}) };
     if (action !== 'status' && action !== 'chooseFolder' && !recordReminders.RECORDS.includes(name)) throw uiError('error.records.unknown');
     try {
       if (action === 'status' && args.length === 0) return recordReminders.status(dataDir, Date.now(), { unavailable });
@@ -1695,6 +1705,7 @@ async function boot() {
         if (answer.response !== 1 || c.win.isDestroyed()) return { deleted: [] };
         recordReminders.verifyExport(dataDir, name, names, exported.folder);
         if (name === 'operations') { if (!backgroundControl) throw uiError('error.records.unavailable'); backgroundControl.deleteBlocks(names); }
+        else if (name === 'steward') { if (!stewardRecord || stewardRecord.failed) throw uiError('error.records.unavailable'); stewardRecord.deleteBlocks(names); }
         else { if (!butlerReadAudit) throw uiError('error.records.unavailable'); butlerReadAudit.deleteBlocks(c, names); }
         for (const item of names) exported.names.delete(item);
         return { deleted: names };
@@ -1704,6 +1715,22 @@ async function boot() {
     throw uiError('error.records.unknown');
   });
   applicationHandlers.delete('records');
+  // 「大管家的记录」: the person's window only, never an agent command (removed from the agent catalog below), so the
+  // butler cannot read or shape its own record through NAW.
+  register('stewardRecord', async c => {
+    if (!isCurrentHumanContext(c)) throw uiError('error.stewardRecord.personOnly');
+    if (!stewardRecord || stewardRecord.failed) throw uiError('error.stewardRecord.unavailable');
+    let current = null, known = true;
+    try { current = stewardOf(); } catch { known = false; }
+    if (known) try { stewardRecord.sync(current); } catch { /* Shown from what is recorded. */ }
+    const snapshot = sessionLabels.apply(roomState.apply(await c.client.call('initial')));
+    const stateOf = step => {
+      let r = null; try { r = backgroundControl?.receipt({ provider: step.session.provider, id: step.session.id, nativeId: step.session.nativeId }, step.operationId) || null; } catch { r = null; }
+      return r && typeof r.state === 'string' ? { state: r.state, reason: typeof r.reason === 'string' ? r.reason : r.refusalSummary?.reason ?? null } : null;
+    };
+    return stewardRecords.view(stewardRecord, snapshot, { current: known ? current : null, stateOf });
+  });
+  applicationHandlers.delete('stewardRecord');
   register('queueSecretary', async (c, id) => {
     if (c.background) throw uiError('error.queue.personOnly');
     if (id === null) queueSecretary.set(null);
@@ -1747,6 +1774,8 @@ async function boot() {
       if (spaces.length) throw uiError('error.steward.inSpace');
       stewardRole.set({ sessionId: record.id, nativeId: record.nativeId });
     }
+    // The designation stands even if its line cannot be written; the butler's next call is then refused.
+    try { stewardRecord?.designated(id === null ? null : stewardRole.selected); } catch { /* The bell and the refused call say so. */ }
     await broadcastRoom();
   });
   // B6: the person's own actions on an integration handoff: retry one delivery or everything

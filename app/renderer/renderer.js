@@ -181,6 +181,11 @@ let recordReminders = null;
 try { recordReminders = window.nativeWorkspaceRecordReminders.bind({ button: $('records-button'), badge: $('records-badge'), dialog: $('records-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display });
   recordReminders.refresh(); }
 catch (error) { console.error(error); }
+// 「大管家的记录」, opened from the butler's own menu.
+let stewardSteps = null;
+try { stewardSteps = window.nativeWorkspaceStewardRecord.bind({ dialog: $('steward-record-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display,
+  usageLines: (provider, usage, language) => window.nativeWorkspaceUsage.usageLines(provider, usage, language), language: () => ui.language.getSnapshot().active }); }
+catch (error) { console.error(error); }
 let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
 let latestViewStorage, latestViewStorageUiMessage;
 let roomSession = '', selectionRevision = 0, pendingMode;
@@ -2444,7 +2449,7 @@ async function chooseQueueSecretary(id) {
 // changing and revoking are offered on the session that holds the designation, wherever it is now.
 function stewardAction(record) {
   if (typeof api.steward !== 'function' || !record) return [];
-  if (state.steward?.sessionId === record.id) return [{ id: 'steward-change', label: uiText('menu.stewardChange'), labelKey: 'menu.stewardChange' }, { id: 'steward-revoke', label: uiText('menu.stewardRevoke'), labelKey: 'menu.stewardRevoke' }];
+  if (state.steward?.sessionId === record.id) return [...(typeof api.stewardRecord === 'function' && stewardSteps ? [{ id: 'steward-record', label: uiText('menu.stewardRecord'), labelKey: 'menu.stewardRecord' }] : []), { id: 'steward-change', label: uiText('menu.stewardChange'), labelKey: 'menu.stewardChange' }, { id: 'steward-revoke', label: uiText('menu.stewardRevoke'), labelKey: 'menu.stewardRevoke' }];
   if (!record.nativeId || record.archived || window.nativeWorkspaceSpaces.roomIds(record).length) return [];
   return [{ id: 'steward-set', label: uiText('menu.stewardSet'), labelKey: 'menu.stewardSet' }];
 }
@@ -2544,6 +2549,7 @@ function openSessionMenu(id, point, rowKey = id) {
       else if (action === 'integrator-set' || action === 'integrator-revoke') attempt(() => chooseIntegrator(id, action === 'integrator-revoke'));
       else if (action === 'steward-set' || action === 'steward-revoke') attempt(() => chooseSteward(id, action === 'steward-revoke'));
       else if (action === 'steward-change') openStewardChooser();
+      else if (action === 'steward-record') stewardSteps?.open();
       else if (action === 'wake-session') attempt(() => api.wakePolicy(id, Boolean(state.sessions.find(s => s.id === id)?.wakeDisabled)));
       else if (action === 'operator-session') attempt(() => setOperatorEnabled(id, !state.sessions.find(s => s.id === id)?.operatorEnabled));
       else if (action === 'operator-revoke') attempt(async () => { for (const domain of state.operatorPolicy?.domains || []) if (!domain.revokedAt && (domain.initiators.some(i => i.id === id) || domain.carried?.some(c => c.from.id === id))) await api.operatorAction(id, 'revoke', domain.id); toastMessage('operator.disabledNote'); });
@@ -3660,6 +3666,7 @@ function openHeaderMenu(anchor, terminal = false) {
       else if (action === 'integrator-set' || action === 'integrator-revoke') { if (!disconnected) attempt(() => chooseIntegrator(current().id, action === 'integrator-revoke')); }
       else if (action === 'steward-set' || action === 'steward-revoke') { if (!disconnected) attempt(() => chooseSteward(current().id, action === 'steward-revoke')); }
       else if (action === 'steward-change') openStewardChooser();
+      else if (action === 'steward-record') stewardSteps?.open();
       else items.find(item => item.id === action)?.control.click();
     },
   });

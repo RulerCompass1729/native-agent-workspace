@@ -20,7 +20,7 @@ const manifestFile = (dir, record) => path.join(dir, 'history', record, 'manifes
 
 test('with nothing at a line there is nothing to remind of, and the bell is not there', t => {
   const dir = folder(t), status = reminders.status(dir, NOW);
-  assert.deepEqual([status.count, status.records.map(item => [item.record, item.blocks, item.items.length])], [0, [['operations', 0, 0], ['butler-reads', 0, 0]]]);
+  assert.deepEqual([status.count, status.records.map(item => [item.record, item.blocks, item.items.length])], [0, [['operations', 0, 0], ['butler-reads', 0, 0], ['steward', 0, 0]]]);
   assert.equal(fs.existsSync(path.join(dir, 'history')), false, 'Asking writes nothing');
 });
 
