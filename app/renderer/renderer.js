@@ -4507,23 +4507,47 @@ async function ensureTerminal(id, explicit = false) {
     if (entry.viewInput && !canCaptureTerminal(id)) {
       const error = uiError("error.inputSwitchExpired");
       cancelViewInput(entry, error); preserveUnconfirmed(data, error);
-      if (token) { token.consumed = true; token.input = Promise.reject(error); token.input.catch(() => {}); }
+      const commits = takeCommits(data, true), refused = Promise.reject(error); refused.catch(() => {});
+      if (token && !commits.includes(token)) commits.push(token);
+      for (const commit of commits) { commit.consumed = true; commit.input = refused; }
       return;
     }
     if (canCaptureTerminal(id)) {
       const pending = entry.viewInput;
       if (pending.text.length + data.length > 65536) { cancelViewInput(entry, uiError("error.bufferTooLong")); preserveUnconfirmed(data, uiError("error.inputNotSent")); render(); return; }
       pending.text += data;
-      if (token && !token.consumed) { token.consumed = true; token.input = pending.done; }
+      for (const commit of takeCommits(data, true)) { commit.consumed = true; commit.input = pending.done; }
       return;
     }
     const finishing = canFlushComposition(id, token);
     if (terminals.get(id) !== entry || (!terminalCanInput(id) && !finishing)) return;
-    if (finishing) token.consumed = true;
+    // Also on this ordinary path: the next composition may have begun before xterm handed over these commits.
+    const commits = takeCommits(data, finishing);
+    for (const commit of commits) commit.consumed = true;
     const input = api.input(id, data);
-    if (finishing) token.input = input;
-    input.catch(error => { if (finishing) preserveUnconfirmed(data, error); else toastError(error.message ? error : uiError('error.nativeInputUnconfirmed')); });
+    for (const commit of commits) commit.input = input;
+    input.catch(error => { if (commits.length) preserveUnconfirmed(data, error); else toastError(error.message ? error : uiError('error.nativeInputUnconfirmed')); });
   });
+  // Commits whose check after compositionend is still waiting, oldest first. A busy page handles the next keys before
+  // its 0 ms timers, so xterm can hand over a commit after the next composition began, or several commits in one piece.
+  // Data takes the commits whose text it holds, in order, through the newest. When no composition is open
+  // (`finishing`), data that does not hold that text still takes the newest commit, as it always did. Any other
+  // commit stays waiting, and its check says it was not sent: a paste or mouse report that arrives while the next
+  // composition is open does not stand for the phrase before it.
+  // Defined after the callback above, which only runs once input arrives.
+  entry.commits = [];
+  const takeCommits = (data, finishing) => {
+    const newest = entry.composition, taken = [];
+    let rest = data;
+    for (const commit of entry.commits) {
+      if (commit === newest || commit.consumed || commit.cancelled) continue;
+      if (!commit.text || !rest.startsWith(commit.text)) break;
+      taken.push(commit); rest = rest.slice(commit.text.length);
+    }
+    if (!newest || newest.consumed) return taken;
+    if (newest.text && rest.startsWith(newest.text)) return [...taken, newest];
+    return finishing ? [newest] : [];
+  };
   let confirmingEnter = false, blurValue, compositionSequence = 0;
   element.addEventListener('compositionstart', () => { entry.columnReading = false; entry.composing = true; compositionSequence++; entry.compositionIntent = entry.viewInput; entry.compositionOrigin = { cancelled: false }; }, true);
   element.addEventListener('compositionend', event => {
@@ -4539,10 +4563,13 @@ async function ensureTerminal(id, explicit = false) {
         }
         await token.input; resolve();
       } catch (error) { reject(error); }
-      finally { if (entry.composition === token) { entry.composition = null; render(); if (entry.fitPending) { entry.fitPending = false; fitTerminal(id); } } }
+      finally {
+        const at = entry.commits.indexOf(token); if (at >= 0) entry.commits.splice(at, 1);
+        if (entry.composition === token) { entry.composition = null; render(); if (entry.fitPending) { entry.fitPending = false; fitTerminal(id); } }
+      }
     }, 0));
     token.done.catch(() => {}); // Navigation may not be awaiting this origin.
-    entry.composition = token;
+    entry.composition = token; entry.commits.push(token);
   });
   element.addEventListener('blur', () => {
     confirmingEnter = false;
