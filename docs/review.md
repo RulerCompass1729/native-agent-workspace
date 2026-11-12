@@ -12188,9 +12188,10 @@ Sentences the person can see (zh; en follows):
 - removed: the near-full and full warnings (there is no cap any more).
 
 Evidence: the full suite, 6288 tests, all pass (run before the review; after it,
-the nine related files were run with their output kept: 200 pass). 46 deliberate
+the nine related files were run with their output kept: 200 pass). 50 deliberate
 faults in the core, the shared rules, the view, the page and the sentences are
-all caught by the unit tests (13 of them added after the review). The read log
+all caught by the unit tests (17 of them added after the two review rounds; the
+last 4, and 3 whose code changed, were run alone). The read log
 window check runs on the real window with a real two-day log: the reminder line,
 a missing report, a damaged sealed block shown as one row across two pages and
 reading again when put back, and a damaged open block; three window faults are
@@ -12203,8 +12204,8 @@ Not verified, or known:
   version takes that file in and counts its pages, so the allowance is whole
   again; while on the older version it is not. No butler is connected in either.
 - An older version's file with a line cut short is not taken in: the log stops,
-  as it stopped that version. A day an older version took past 64 pages shows its
-  later lines as not understood, and today's count as not known.
+  as it stopped that version. A day an older version took past 64 pages shows
+  more than 64 read and nothing left.
 - A missing or unparsable manifest is rebuilt only when every block reads;
   otherwise the log fails closed. A rebuild cannot know about a newest block that
   is gone too, and takes the blocks as they are now. A manifest changed
@@ -12255,3 +12256,11 @@ first, and what was done:
    older version's file at the top of the data folder.
 Its remark that fault 1 of the window list showed no error: that fault was the
 one missed, replaced by a fault in the code path the window check exercises.
+The same session then read the changes: `PASS_WITH_NOTES`, fixes 1–6 hold, no
+new way to lose a record, release a refused page or restart a day's count. Its
+notes, each now a test: a day past 64 pages (possible only after going back to
+an older version) hid its later lines as "not understood" (they are shown, and
+the day is full); an empty block holding a whole line and a cut-short one
+stopped the log (it is sealed like any other); an empty leftover file kept a
+block's place taken or stopped a rebuild (it holds nothing and is cleared, or
+skipped).

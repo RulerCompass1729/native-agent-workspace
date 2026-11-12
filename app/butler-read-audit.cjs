@@ -115,6 +115,14 @@ const addDays = (into, days) => { for (const [day, count] of Object.entries(days
 const daysBefore = (blocks, index) => blocks.slice(0, index).reduce((days, item) => addDays(days, item.days), {});
 const openDay = block => history.parseBlockName(block.name).day;
 const exists = file => { try { fs.lstatSync(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
+// Whether a block's place is free. An empty private file there (a block dropped before its file could be removed)
+// holds nothing and is removed; anything else keeps the place taken.
+function vacant(directory, name) {
+  const file = path.join(directory, name);
+  let stat; try { stat = fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+  if (!privateFile(stat) || stat.size !== 0) return false;
+  history.removeFile(directory, name); return true;
+}
 const errorOf = cause => typeof cause?.code === 'string' && cause.code.startsWith(PREFIX) || cause?.code === 'ERR_BUTLER_READ_LIMIT';
 
 class ButlerReadAudit {
@@ -267,7 +275,7 @@ class ButlerReadAudit {
   // The manifest built again from the blocks themselves, when it is missing or cannot be read. Every block must
   // read whole: the counts of a day cannot be guessed, so a block that cannot be read stops this (fail closed).
   #rebuild(store) {
-    const names = fs.readdirSync(store).map(name => ({ name, parsed: history.parseBlockName(name) })).filter(item => item.parsed)
+    const names = fs.readdirSync(store).map(name => ({ name, parsed: history.parseBlockName(name) })).filter(item => item.parsed && fs.lstatSync(path.join(store, item.name)).size > 0)
       .sort((a, b) => a.parsed.firstSequence - b.parsed.firstSequence);
     const manifest = { blocks: [] };
     for (const { name, parsed } of names) {
@@ -300,12 +308,13 @@ class ButlerReadAudit {
     let scan = null;
     try { scan = this.#scan(path.join(store, open.name), { first: open.firstSequence, startDays: daysBefore(manifest.blocks, manifest.blocks.length - 1), maxBytes: history.BLOCK_MAX_BYTES, tail: true }); }
     catch (cause) { if (![errorCode('STATE'), errorCode('CAPACITY'), 'ENOENT'].includes(cause.code)) throw cause; }
-    if (open.count === 0) {
-      if (!scan || scan.count) fail('STATE');
+    if (scan && scan.count === 0 && open.count === 0) {
       fs.renameSync(path.join(store, open.name), path.join(store, `${open.name}.${randomUUID()}.torn`)); history.syncDirectory(store);
       return null;
     }
-    return scan && scan.count >= open.count ? this.#entry(open.name, open.firstSequence, 0, 'native', scan, 'sealed') : { ...open, status: 'unreadable' };
+    if (scan && scan.count >= open.count) return this.#entry(open.name, open.firstSequence, 0, 'native', scan, 'sealed');
+    if (open.count === 0) fail('STATE');
+    return { ...open, status: 'unreadable' };
   }
   #withoutOpen(store, manifest, open) {
     const kept = this.#recoverOpen(store, manifest, open);
@@ -378,14 +387,14 @@ class ButlerReadAudit {
     manifest = this.#seal(store, manifest);
     const offset = history.lastSequence(manifest), firstDay = Object.keys(scan.days).sort()[0];
     const entry = this.#entry(history.blockName(offset + 1, firstDay), offset + 1, offset, 'legacy', scan, 'sealed');
-    if (exists(path.join(store, entry.name))) fail('STATE');
+    if (!vacant(store, entry.name)) fail('STATE');
     try { history.writePrivateJson(store, history.INTENT, { version: 1, record: RECORD, entry }); } catch { fail('WRITE'); }
     this.#moveIn(store, entry.name);
     return this.#commitIntent(store, manifest, entry);
   }
   // The older file moved into the store under its block name, never over a file already there.
   #moveIn(store, name) {
-    if (exists(path.join(store, name))) fail('STATE');
+    if (!vacant(store, name)) fail('STATE');
     fs.renameSync(this.#legacy, path.join(store, name)); history.syncDirectory(this.#directory); history.syncDirectory(store);
   }
   #commitIntent(store, manifest, entry) {
@@ -445,7 +454,7 @@ class ButlerReadAudit {
       // A new UTC day, or no room left in this block: it is sealed and a new one opened for this line.
       if (open && (day > openDay(open) || open.bytes + bytes.length > history.BLOCK_MAX_BYTES)) { manifest = this.#seal(store, manifest); open = null; scan = null; }
       if (!open) {
-        if (exists(path.join(store, history.blockName(sequence, day)))) fail('STATE');
+        if (!vacant(store, history.blockName(sequence, day))) fail('STATE');
         open = { name: history.blockName(sequence, day), firstSequence: sequence, lastSequence: sequence - 1, offset: 0, count: 0, bytes: 0,
           oldestTime: null, newestTime: null, days: {}, sha256: null, status: 'open', origin: 'native' };
         manifest = { blocks: [...manifest.blocks, open] }; this.#writeManifest(store, manifest);

@@ -605,6 +605,12 @@ test('a taking-in that stopped half way is finished from where it stopped, whate
     fs.writeFileSync(stray, 'kept by hand\n', { mode: 0o600 }); g.at(NOW + DAY);
     assert.throws(() => g.audit.recordPage(page()), code('STATE'));
     assert.equal(fs.readFileSync(stray, 'utf8'), 'kept by hand\n'); assert.deepEqual(g.manifest().blocks.map(block => block.name), ['000000001-2026-11-11.jsonl']);
+    // An empty file there holds nothing (a block dropped before its file could be removed): it is cleared.
+    fs.writeFileSync(stray, '', { mode: 0o600 });
+    assert.deepEqual(g.reopen().recordPage(page()), { sequence: 2, time: NOW + DAY, day: '2026-11-12', pageOfDay: 1 });
+    // A rebuild does not take an empty file for a block either.
+    fs.writeFileSync(path.join(g.store, '000000003-2026-11-10.jsonl'), '', { mode: 0o600 }); fs.rmSync(path.join(g.store, 'manifest.json'));
+    assert.equal(g.reopen().recordPage(page()).sequence, 3);
   });
 });
 
@@ -650,6 +656,13 @@ test('a block whose last line a stop cut short is sealed as it is, also when the
     fs.writeFileSync(path.join(g.store, 'manifest.json'), JSON.stringify({ version: 1, record: 'butler-reads', blocks: [empty] }), { mode: 0o600 });
     fs.writeFileSync(path.join(g.store, empty.name), 'not a record\n', { mode: 0o600 });
     assert.throws(() => g.reopen().recordPage(page()), code('STATE')); assert.equal(fs.readFileSync(path.join(g.store, empty.name), 'utf8'), 'not a record\n');
+    assert.equal(g.manifest().blocks[0].status, 'open', 'Nothing is recorded about it either');
+    // A whole line the manifest had not counted yet, then a cut-short one: sealed with both, the whole line counted.
+    const h = fixture(t); fs.mkdirSync(path.join(h.directory, 'history'), { mode: 0o700 }); fs.mkdirSync(h.store, { mode: 0o700 });
+    fs.writeFileSync(path.join(h.store, 'manifest.json'), JSON.stringify({ version: 1, record: 'butler-reads', blocks: [empty] }), { mode: 0o600 });
+    fs.writeFileSync(path.join(h.store, empty.name), legacyLine(1, NOW, 1) + '{"version":1,"seq', { mode: 0o600 });
+    assert.deepEqual(h.reopen().recordPage(page()), { sequence: 2, time: NOW, day: '2026-11-11', pageOfDay: 2 });
+    assert.deepEqual(h.manifest().blocks.map(entry => [entry.name, entry.status, entry.count]), [[empty.name, 'sealed', 1], ['000000002-2026-11-11.jsonl', 'open', 1]]);
   });
 });
 

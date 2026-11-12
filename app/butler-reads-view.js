@@ -21,7 +21,7 @@
   function row(record, spaceNames, local) {
     const query = record && record.query, result = record && record.result, actor = record && record.actor;
     if (!record || record.version !== 1 || !count(record.sequence) || record.sequence < 1 || !count(record.time) || !day(record.day) || record.day !== utcDay(record.time) ||
-        !count(record.pageOfDay) || record.pageOfDay < 1 || record.pageOfDay > PAGES_PER_DAY || !query || !KINDS.includes(query.kind) || !result || !count(result.count) ||
+        !count(record.pageOfDay) || record.pageOfDay < 1 || !query || !KINDS.includes(query.kind) || !result || !count(result.count) ||
         typeof result.truncated !== 'boolean' || !actor || !count(actor.selectionRevision)) return null;
     const spaceId = query.kind === 'spaces' ? null : typeof query.spaceId === 'string' && query.spaceId ? query.spaceId : undefined;
     if (spaceId === undefined) return null;
@@ -101,7 +101,9 @@
       group.whole = index === 0 ? complete : group.rows[0].sequence + 1 === later.rows[later.rows.length - 1].sequence && !days.slice(0, index).some(other => other.day === group.day); });
     // A day whose lines may go on into a block that cannot be read is not whole either.
     for (const group of days) if (holes.some(item => item.first <= group.day && group.day <= item.last)) group.whole = false;
-    const left = pages === null ? null : PAGES_PER_DAY - pages;
+    // A day can hold more than its pages when an older version, gone back to, counted the day again from 1; the
+    // core's running count says so, and nothing is left.
+    const left = pages === null ? null : Math.max(0, PAGES_PER_DAY - pages);
     return { today: { day: today, pages, left, limit: PAGES_PER_DAY, level: pages === null ? 'unknown' : left === 0 ? 'full' : left <= NEAR_LEFT ? 'near' : 'ok', inGap: Boolean(newestHole),
         // The counting day is a UTC day, which is not the person's own day: the line names its local start and end.
         from: span(today).from, resets: span(today).through },

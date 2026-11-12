@@ -131,6 +131,16 @@ test('after going back to an older version and returning, today\'s count is the 
     query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } });
   assert.throws(() => fresh.recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 3, runnerRef: 'butler-runner-synthetic' },
     query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } }), { code: 'ERR_BUTLER_READ_LIMIT' }, 'The one page left was the only one');
+  // Gone back once more, the older version counts the day from 1 again and logs a page: the day now holds 65. Its
+  // line is shown like any other, and the day is full.
+  const again = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-reads-older-')); fs.chmodSync(again, 0o700); t.after(() => fs.rmSync(again, { recursive: true, force: true }));
+  new ButlerReadAudit(again, { now: () => NOW }).recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 3, runnerRef: 'butler-runner-synthetic' },
+    query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } });
+  fs.copyFileSync(path.join(again, 'history', 'butler-reads', '000000001-2026-11-11.jsonl'), path.join(l.dir, 'butler-business-reads.jsonl')); fs.chmodSync(path.join(l.dir, 'butler-business-reads.jsonl'), 0o600);
+  const back = new ButlerReadAudit(l.dir, { authorizePerson: actor => actor === person, now: () => NOW }), all = [];
+  after = 0; for (;;) { const page = back.read(person, { afterSequence: after, limit: 50 }); all.push(...page.records); if (!page.truncated) break; after = page.nextAfterSequence; }
+  const full = readsView({ records: all, through: 65, now: NOW, zone: pacific });
+  assert.deepEqual([full.shown, full.unreadable, full.today.pages, full.today.left, full.today.level, full.days[0].pages], [65, 0, 65, 0, 'full', 65]);
 });
 
 test('a block that cannot be read is shown in its place, once, and makes no count look whole', t => {
@@ -158,7 +168,7 @@ test('a block that cannot be read is shown in its place, once, and makes no coun
 test('a record this version does not understand is counted and left out, never guessed at', t => {
   const l = log(t); l.fill(NOW - 3600 * 1000, 4);
   const { records, through } = l.all(), good = records[0];
-  const broken = [{ ...good, version: 2 }, { ...good, sequence: 0 }, { ...good, sequence: '1' }, { ...good, time: -1 }, { ...good, day: '2026-11-12' }, { ...good, day: 'today' }, { ...good, pageOfDay: 0 }, { ...good, pageOfDay: 65 },
+  const broken = [{ ...good, version: 2 }, { ...good, sequence: 0 }, { ...good, sequence: '1' }, { ...good, time: -1 }, { ...good, day: '2026-11-12' }, { ...good, day: 'today' }, { ...good, pageOfDay: 0 },
     { ...good, query: { ...good.query, kind: 'notes' } }, { ...good, query: null }, { ...records[1], query: { ...records[1].query, spaceId: '' } }, { ...records[1], query: { ...records[1].query, spaceId: 7 } },
     { ...good, query: { kind: 'deliveries', spaceId: 'shared', limit: 50 } }, { ...good, query: { kind: 'deliveries', spaceId: 'shared', limit: 50, fromTime: 9, throughTime: 3 } },
     { ...good, result: { ...good.result, count: -1 } }, { ...good, result: { ...good.result, truncated: 'no' } }, { ...good, result: null }, { ...good, actor: null }, { ...good, actor: { ...good.actor, selectionRevision: '3' } }, null, 'record', 7];
