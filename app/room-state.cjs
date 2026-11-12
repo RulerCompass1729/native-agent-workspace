@@ -1286,6 +1286,8 @@ class RoomState {
         const current = (await client.call('initial')).sessions.find(s => s.id === id), proof = this.metadata(room).restorePlacements?.[id];
         if (current && roomIds(current).length === 1 && isMember(current, room)) continue;
         if (!current || !proof || roomIds(current).length || JSON.stringify(restorePlacement(current)) !== JSON.stringify(proof)) { skipped.push(id); continue; }
+        // A former member that may not join now (the butler) is left out, as one placed elsewhere is; the space restores.
+        try { this.joinGuard?.(id); } catch { skipped.push(id); continue; }
         await this.changeMember(client, id, true, labels?.get(id), room, { nativeId: current.nativeId, placementRevision: placementRevision(current), connectionRevision: current.connectionRevision || 0 });
         const remaining = { ...this.metadata(room).restorePlacements }; delete remaining[id];
         this.update({ restoreMembers: this.metadata(room).restoreMembers.filter(value => value !== id), restorePlacements: remaining }, undefined, room);

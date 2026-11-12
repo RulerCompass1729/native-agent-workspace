@@ -28,7 +28,7 @@ function fixture(t, { landingOwner = null } = {}) {
   // The real membership function is not under test here: only whether it is reached.
   const roomState = { apply: snapshot => room.apply(snapshot), metadata() {}, serial: action => action(), membership: async (_client, id, join, _label, space) => { memberships.push([id, join, space ?? null]); } };
   const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, roomIds, stewardRole: role, roomState, landingOwner, validRoomId: id => typeof id === 'string' && id.length > 0,
-    sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); } });
+    queueDispatcher: null, sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); } });
   vm.runInContext(cut('function register(name, handler) {', 'async function replaceBackendSockets'), context);
   vm.runInContext(cut('function keepStewardOutside(id, join) {', 'function conversationReaderAllowed(actor) {'), context);
   vm.runInContext(cut("  register('steward', async (c, id) => {", "  // B6: the person's own actions on an integration handoff"), context);
@@ -117,6 +117,14 @@ test('the person designates a session outside every space, replaces it, and revo
   assert.equal(new StewardRole(f.directory).current(), null); assert.equal(f.broadcasts.length, 3);
 });
 
+test('a session NAW opened to replace another, before it has moved in, cannot be designated (steward step 2, batch 2)', async t => {
+  const f = fixture(t);
+  f.context.queueDispatcher = { rotations: { old: { phase: 'joining', newId: 'outside' } } };
+  await assert.rejects(f.call('outside'), key('error.steward.invalid')); assert.equal(fs.existsSync(f.file), false);
+  // Once the rotation is over (kept), it can.
+  f.context.queueDispatcher = { rotations: { old: { phase: 'kept' }, outside: { phase: 'kept', successorOf: 'old' } } };
+  await f.call('outside'); assert.deepEqual(f.role.selected, { sessionId: 'outside', nativeId: 'native-outside' });
+});
 test('a session that cannot hold the designation is refused, in words, and nothing is written', async t => {
   const f = fixture(t);
   await f.call('outside'); const before = fs.readFileSync(f.file, 'utf8');

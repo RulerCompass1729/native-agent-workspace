@@ -548,6 +548,11 @@ function keepStewardOutside(id, join) {
   try { steward = stewardRole?.current() || null; } catch { return; }
   if (steward && steward.sessionId === id) throw uiError('error.steward.joinSpace');
 }
+// A session NAW opened to replace another and has not finished moving in (steward step 2, batch 2): its join is still
+// to come, and refusing that join would make the rotation stop it.
+function midRotation(id) {
+  return Object.values(queueDispatcher?.rotations || {}).some(record => record?.newId === id && !['kept', 'failed'].includes(record.phase));
+}
 function conversationReaderAllowed(actor) {
   const secretary = queueSecretary?.current();
   return !secretary || secretary.sessionId !== actor.id || secretary.nativeId !== actor.nativeId;
@@ -1773,7 +1778,7 @@ async function boot() {
     else await roomState.serial(async () => {
       // The backend's own list does not say which sessions the person archived; the desktop's record does.
       const record = roomState.apply(await c.client.call('initial')).sessions.find(record => record.id === id);
-      if (!record || !record.nativeId || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) throw uiError('error.steward.invalid');
+      if (!record || !record.nativeId || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state) || midRotation(record.id)) throw uiError('error.steward.invalid');
       // The butler stays outside every space: a member is sent queue work and can be replaced by the queue.
       let spaces;
       try { spaces = roomIds(record); } catch { throw uiError('error.steward.invalid'); }
