@@ -132,7 +132,29 @@ test('a block log deletes only sealed blocks that match, keeps a list without co
   assert.deepEqual(again.kept(), [{ id: 'a', deletedAt: day1 + 2 * DAY }, { id: 'b', deletedAt: day1 + 2 * DAY }]);
   assert.deepEqual(again.manifest.blocks.map(block => [block.status, block.count, history.totalBytes({ blocks: [block] })]), [['deleted', 2, 0], ['open', 1, again.manifest.blocks[1].bytes]]);
   assert.deepEqual(history.reminders(again.manifest, day1 + 40 * DAY).map(item => [item.kind, item.blocks]), [['age', 1]], 'A deleted block is not reminded of');
+  // A stop after the manifest marked it deleted but before its file went: the file goes at the next load.
+  fs.writeFileSync(path.join(store, first), 'left by a stop', { mode: 0o600 });
+  new history.BlockLog(dir, 'operations', check).load(); assert.equal(fs.existsSync(path.join(store, first)), false);
   // The list gone too: what those ids were cannot be known, and the load stops.
   fs.rmSync(path.join(store, first + '.kept.json'));
   const lost = new history.BlockLog(dir, 'operations', check); lost.load(); assert.throws(() => lost.kept(), /Unreadable/);
+});
+
+test('a block of many small records can be deleted and read back: its list has one limit, checked before anything is written', t => {
+  const dir = folder(t), check = () => {}, day1 = Date.UTC(2026, 10, 1, 12), many = 60000;
+  const log = new history.BlockLog(dir, 'operations', check);
+  log.append(Array.from({ length: many }, (_, n) => ({ time: day1, value: { id: 'op-' + n } })), day1);
+  log.append([{ time: day1 + DAY, value: { id: 'later' } }], day1 + DAY);
+  const first = log.manifest.blocks[0].name, keep = value => ({ id: value.id, actor: { id: 'session-synthetic', nativeId: 'native-synthetic', provider: 'codex' }, at: day1, state: 'complete', pad: 'x'.repeat(60) });
+  log.delete([first], keep, day1 + 2 * DAY);
+  const store = path.join(dir, 'history', 'operations');
+  assert.ok(fs.statSync(path.join(store, first + '.kept.json')).size > history.MANIFEST_MAX_BYTES, 'Larger than a manifest may be');
+  const again = new history.BlockLog(dir, 'operations', check); again.load();
+  assert.equal(again.kept().length, many);
+  // Over the limit: refused before any list, mark or removal.
+  const big = folder(t), other = new history.BlockLog(big, 'operations', check);
+  other.append(Array.from({ length: 10 }, (_, n) => ({ time: day1, value: { id: 'op-' + n } })), day1); other.append([{ time: day1 + DAY, value: { id: 'later' } }], day1 + DAY);
+  const name = other.manifest.blocks[0].name;
+  assert.throws(() => other.delete([name], value => ({ id: value.id, pad: 'x'.repeat(history.KEPT_MAX_BYTES / 8) }), day1 + 2 * DAY), /too many/);
+  assert.deepEqual([fs.existsSync(path.join(big, 'history', 'operations', name)), fs.existsSync(path.join(big, 'history', 'operations', name + '.kept.json')), other.manifest.blocks[0].status], [true, false, 'sealed']);
 });

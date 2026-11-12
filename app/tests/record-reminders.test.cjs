@@ -54,7 +54,12 @@ test('a whole past 0.5 GiB, a block that cannot be read, a manifest that cannot 
   fs.writeFileSync(manifestFile(dir, 'operations'), '{broken', { mode: 0o600 });
   assert.deepEqual(of(reminders.status(dir, NOW), 'operations').items.map(item => [item.kind, item.manifest]), [['unreadable', true]]);
   fs.rmSync(manifestFile(dir, 'operations'));
-  assert.deepEqual(of(reminders.status(dir, NOW, { unavailable: ['operations'] }), 'operations').items.map(item => [item.kind, item.blocks, item.manifest]), [['unreadable', 0, false]]);
+  assert.deepEqual(of(reminders.status(dir, NOW, { unavailable: ['operations'] }), 'operations').items.map(item => [item.kind, item.level, item.shown]), [['unavailable', 1, true]]);
+  // "知道了" holds while the condition does; once it is no longer due, the next time it rings again.
+  reminders.acknowledge(dir, 'operations', 'unavailable', 1);
+  assert.equal(of(reminders.status(dir, NOW, { unavailable: ['operations'] }), 'operations').items[0].shown, false);
+  assert.deepEqual(of(reminders.status(dir, NOW), 'operations').items, [], 'Background control loaded again');
+  assert.equal(of(reminders.status(dir, NOW, { unavailable: ['operations'] }), 'operations').items[0].shown, true, 'A new stop rings the bell');
 });
 
 test('export copies the chosen sealed blocks as they are and checks them, never over a different file and never into NAW\'s own folder', t => {
@@ -76,6 +81,12 @@ test('export copies the chosen sealed blocks as they are and checks them, never 
   assert.throws(() => reminders.exportBlocks(dir, 'butler-reads', names, path.join(dir, 'history')), /outside/);
   assert.throws(() => reminders.exportBlocks(dir, 'butler-reads', [], out), /Choose/);
   assert.throws(() => reminders.exportBlocks(dir, 'notes', names, out), /Unknown record/);
+  // A link where a copy would be, even one to NAW's own block, is not a copy.
+  const linked = folder(t); fs.mkdirSync(path.join(linked, 'butler-reads'), { mode: 0o700 });
+  fs.symlinkSync(path.join(dir, 'history', 'butler-reads', listed[0].name), path.join(linked, 'butler-reads', listed[0].name));
+  assert.throws(() => reminders.exportBlocks(dir, 'butler-reads', [listed[0].name], linked), /does not match/);
+  assert.throws(() => reminders.verifyExport(dir, 'butler-reads', [listed[0].name], path.join(linked, 'butler-reads')), /not there/);
+  assert.equal(reminders.verifyExport(dir, 'butler-reads', names, path.join(fs.realpathSync(out), 'butler-reads')), true);
   // A block that no longer matches its record is not exported.
   fs.appendFileSync(path.join(dir, 'history', 'butler-reads', listed[2].name), 'x');
   assert.throws(() => reminders.exportBlocks(dir, 'butler-reads', [listed[2].name], folder(t)), /does not match/);

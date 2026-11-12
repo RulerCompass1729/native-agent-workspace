@@ -199,8 +199,9 @@ class BackgroundControl {
   // An operation id whose record the person deleted: never run again, and said so.
   deletedReply(sender, id) {
     const gone = this.deleted.get(this.key(sender) + ':' + id);
-    return gone ? { id, state: 'not-executed', reason: 'record-deleted', deletedAt: gone.deletedAt, at: gone.at, retry: false,
-      error: 'This operation was recorded; its record was exported and then deleted by the person. It is not run again.' } : null;
+    // The outcome it had when it was deleted: a refusal-like "not-executed" would invite running it again under a new id.
+    return gone ? { id, state: gone.state, reason: 'record-deleted', deletedAt: gone.deletedAt, at: gone.at, retry: false,
+      error: 'This operation was recorded with the state given; its record was exported and then deleted by the person. It is not run again.' } : null;
   }
   // A settled record held in memory; a later version of the same record replaces it.
   remember(record) {

@@ -18,6 +18,8 @@ const REMIND_AGE_DAYS = 30;
 const REMIND_TOTAL_BYTES = 512 * 1024 * 1024;
 const HISTORY_DIR = 'history', MANIFEST = 'manifest.json', INTENT = 'migration.json';
 const MANIFEST_MAX_BYTES = 8 * 1024 * 1024, INTENT_MAX_BYTES = 16 * 1024;
+// What a deleted block held, without contents: the same limit when it is written and when it is read.
+const KEPT_MAX_BYTES = 64 * 1024 * 1024;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const integer = value => Number.isSafeInteger(value) && value >= 0;
@@ -220,7 +222,8 @@ class BlockLog {
     manifest = { blocks: manifest.blocks.map(item => ({ ...item })) };
     for (const [index, block] of manifest.blocks.entries()) {
       if (block.status === 'unreadable') throw Error('Unreadable history block');
-      if (block.status === 'deleted') continue;
+      // Deleted at the person's word; a stop before its file went leaves the file, which goes now.
+      if (block.status === 'deleted') { if (presentFile(path.join(this.#store, block.name))) removeFile(this.#store, block.name); continue; }
       if (block.status === 'sealed') {
         const scan = this.#scan(block.name, block.firstSequence, true);
         if (scan.bytes !== block.bytes || scan.sha256 !== block.sha256 || scan.count !== block.count) throw Error('Unreadable history block');
@@ -247,7 +250,7 @@ class BlockLog {
   kept() {
     const out = [];
     for (const block of this.#manifest.blocks.filter(item => item.status === 'deleted')) {
-      let value; try { value = readPrivateJson(path.join(this.#store, `${block.name}.kept.json`), MANIFEST_MAX_BYTES); } catch { value = null; }
+      let value; try { value = readPrivateJson(path.join(this.#store, `${block.name}.kept.json`), KEPT_MAX_BYTES); } catch { value = null; }
       if (!value || value.version !== 1 || value.name !== block.name || !Array.isArray(value.kept) || value.kept.length !== block.count) throw Error('Unreadable history block');
       out.push(...value.kept.map(item => ({ ...item, deletedAt: block.deletedAt })));
     }
@@ -264,7 +267,9 @@ class BlockLog {
     const lists = chosen.map(block => {
       const scan = this.#scan(block.name, block.firstSequence, true);
       if (scan.bytes !== block.bytes || scan.sha256 !== block.sha256) throw Error('A block does not match its record');
-      return { block, kept: scan.values.map(keep) };
+      const kept = scan.values.map(keep);
+      if (Buffer.byteLength(JSON.stringify({ version: 1, name: block.name, kept })) > KEPT_MAX_BYTES) throw Error('This block holds too many records to delete at once');
+      return { block, kept };
     });
     for (const { block, kept } of lists) writePrivateJson(this.#store, `${block.name}.kept.json`, { version: 1, name: block.name, kept });
     for (const block of chosen) Object.assign(block, { status: 'deleted', deletedAt: now });
@@ -325,6 +330,6 @@ class BlockLog {
   }
 }
 
-module.exports = Object.freeze({ BLOCK_MAX_BYTES, REMIND_AGE_DAYS, REMIND_TOTAL_BYTES, HISTORY_DIR, MANIFEST, INTENT, MANIFEST_MAX_BYTES, INTENT_MAX_BYTES,
+module.exports = Object.freeze({ BLOCK_MAX_BYTES, REMIND_AGE_DAYS, REMIND_TOTAL_BYTES, HISTORY_DIR, MANIFEST, INTENT, MANIFEST_MAX_BYTES, INTENT_MAX_BYTES, KEPT_MAX_BYTES,
   privateFile, privateDirectory, blockName, parseBlockName, blockEntry, manifestValue, lastSequence, totalBytes, isDay, isHash,
   ensureDirectory, existingDirectory, syncDirectory, readPrivateJson, writePrivateJson, removeFile, sha256, reminders, BlockLog });

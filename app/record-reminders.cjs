@@ -9,7 +9,7 @@ const path = require('node:path');
 const history = require('./record-history.cjs');
 
 const RECORDS = Object.freeze(['operations', 'butler-reads']);
-const KINDS = Object.freeze(['age', 'size', 'unreadable']);
+const KINDS = Object.freeze(['age', 'size', 'unreadable', 'unavailable']);
 const ACKNOWLEDGED = 'reminders.json', ACKNOWLEDGED_MAX_BYTES = 64 * 1024;
 const record = value => { if (!RECORDS.includes(value)) throw Error('Unknown record'); return value; };
 const storeOf = (dataDir, name) => path.join(dataDir, history.HISTORY_DIR, record(name));
@@ -34,7 +34,7 @@ function acknowledged(dataDir) {
     const top = history.existingDirectory(dataDir, history.HISTORY_DIR); if (!top) return {};
     const value = history.readPrivateJson(path.join(top, ACKNOWLEDGED), ACKNOWLEDGED_MAX_BYTES);
     if (!value || value.version !== 1 || !value.acknowledged || typeof value.acknowledged !== 'object') return {};
-    return Object.fromEntries(Object.entries(value.acknowledged).filter(([key, level]) => /^(operations|butler-reads):(age|size|unreadable)$/.test(key) && Number.isSafeInteger(level) && level >= 0));
+    return Object.fromEntries(Object.entries(value.acknowledged).filter(([key, level]) => /^(operations|butler-reads):(age|size|unreadable|unavailable)$/.test(key) && Number.isSafeInteger(level) && level >= 0));
   } catch { return {}; }
 }
 
@@ -42,7 +42,7 @@ function acknowledged(dataDir) {
 // blocks are past 30 days; how many 0.5 GiB the whole has passed; how many blocks cannot be read) is above the level
 // the person last acknowledged. `unavailable` names records the app could not load at start.
 function status(dataDir, now, { unavailable = [] } = {}) {
-  const seen = acknowledged(dataDir), records = [];
+  const seen = acknowledged(dataDir), records = []; let cleared = false;
   for (const name of RECORDS) {
     const manifest = manifestOf(dataDir, name), items = [], bytes = history.totalBytes({ blocks: manifest ? manifest.blocks : [] }) + keptBytes(dataDir, name);
     if (!manifest) items.push({ kind: 'unreadable', level: 1, blocks: 0, manifest: true });
@@ -54,13 +54,16 @@ function status(dataDir, now, { unavailable = [] } = {}) {
         const level = item.kind === 'size' ? Math.floor(item.bytes / history.REMIND_TOTAL_BYTES) : item.kind === 'age' ? Math.ceil(item.blocks / 30) : item.blocks;
         items.push({ ...item, level });
       }
-      if (unavailable.includes(name) && !items.some(item => item.kind === 'unreadable')) items.push({ kind: 'unreadable', level: 1, blocks: 0, manifest: false });
+      if (unavailable.includes(name)) items.push({ kind: 'unavailable', level: 1 });
     }
     const blocks = manifest ? manifest.blocks : [];
     const days = blocks.flatMap(block => Object.keys(block.days)).sort();
     for (const item of items) item.shown = item.level > (seen[`${name}:${item.kind}`] ?? 0);
+    // "知道了" lasts while its condition does: once it is no longer due, the next time is a new one.
+    for (const kind of KINDS) if (Object.hasOwn(seen, `${name}:${kind}`) && !items.some(item => item.kind === kind)) { delete seen[`${name}:${kind}`]; cleared = true; }
     records.push({ record: name, blocks: blocks.length, bytes, oldestDay: days[0] || null, items });
   }
+  if (cleared) try { history.writePrivateJson(history.existingDirectory(dataDir, history.HISTORY_DIR), ACKNOWLEDGED, { version: 1, acknowledged: seen }); } catch { /* Kept as it was; asked again next time. */ }
   return { records, count: records.reduce((sum, item) => sum + item.items.filter(entry => entry.shown).length, 0) };
 }
 // "知道了": this reminder stays put until its level rises above what it is now.
@@ -80,6 +83,11 @@ function blocks(dataDir, name, now) {
     const days = Object.keys(block.days).sort();
     return { name: block.name, first: days[0], last: days.at(-1), count: block.count, bytes: block.bytes, old: block.newestTime !== null && block.newestTime < cutoff };
   });
+}
+// A copy is a file of its own: not a link, and not the block itself under another name.
+function separateCopy(file, source) {
+  let stat; try { stat = fs.lstatSync(file); } catch { return false; }
+  return stat.isFile() && !stat.isSymbolicLink() && !(stat.dev === source.dev && stat.ino === source.ino);
 }
 // Each chosen sealed block copied, as it is, into <folder>/<record>/, never over a different file, then read back and
 // checked against the size and checksum the manifest holds. Nothing in NAW's own folder changes.
@@ -104,6 +112,7 @@ function exportBlocks(dataDir, name, names, folder) {
     if (!history.privateFile(source) || source.size !== block.bytes) throw Error('A block does not match its record');
     try { fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL); fs.chmodSync(to, 0o600); }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
+    if (!separateCopy(to, source)) throw Error(`The copy of ${block.name} does not match; nothing more is exported`);
     const copy = fs.readFileSync(to);
     if (copy.length !== block.bytes || history.sha256().update(copy).digest('hex') !== block.sha256) throw Error(`The copy of ${block.name} does not match; nothing more is exported`);
     const fd = fs.openSync(to, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
@@ -121,6 +130,8 @@ function verifyExport(dataDir, name, names, folder) {
   for (const item of names) {
     const block = manifest.blocks.find(entry => entry.name === item && entry.status === 'sealed');
     if (!block) throw Error('Only sealed blocks can be removed');
+    let source; try { source = fs.lstatSync(path.join(storeOf(dataDir, name), item)); } catch { throw Error('The record cannot be read'); }
+    if (!separateCopy(path.join(folder, item), source)) throw Error(`The exported copy of ${item} is not there`);
     let copy; try { copy = fs.readFileSync(path.join(folder, item)); } catch { throw Error(`The exported copy of ${item} is not there`); }
     if (copy.length !== block.bytes || history.sha256().update(copy).digest('hex') !== block.sha256) throw Error(`The exported copy of ${item} does not match`);
   }

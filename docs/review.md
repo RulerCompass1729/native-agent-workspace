@@ -12405,10 +12405,11 @@ in `app/ui-messages.js` (zh and en), among them 「NAW 不会自己删除任何�
 大管家每天读过的页也照算。」 and, for the operations record that could not be loaded,
 「……把数据目录里的 history/operations 文件夹放回原样，再重新打开 NAW，就会恢复。」
 
-Evidence: the full suite, 6334 tests, all pass. 24 deliberate faults in the
+Evidence: the full suite, 6335 tests, all pass (after the review below). 31 deliberate faults in the
 reminders, the page, the block log, the operations module, the read log, its view
-and page, and the main process are all caught (23 on the first run; the missed
-one, a deleted id asked while the agent is busy, got a test). The bell window
+and page, and the main process are all caught (23 of the first 24; the missed
+one, a deleted id asked while the agent is busy, got a test; 7 more for the
+review's findings). The bell window
 check runs on the real app and service: no bell with nothing due; the bell, its
 dialog and the export view in both languages at 1280 and 860 wide; export of the
 two old blocks byte for byte; the delete with its native confirmation, the files
@@ -12429,4 +12430,37 @@ Not verified, or known:
 - The native confirmation and the folder chooser are answered inside the app's
   main process in the window check; the person's own clicks on them are not
   driven.
-- Deleting cannot be undone; the export is then the only copy of the contents.
+- Deleting cannot be undone; the export is then the only copy of the contents,
+  except that an older version's operations file kept beside the blocks is not
+  part of a deletion.
+- Deleting a block that holds a later version of a record whose earlier version
+  is in a block kept brings the earlier state back (for example `awaiting-native`
+  instead of `received`); the id is still known, so nothing runs twice, and the
+  next receipt updates it.
+
+Independent read-only review (the same session as batch 2, in a separate checkout
+of the commit): `CHANGES`, one blocking finding. It found the delete path
+person-only, limited to blocks exported and checked in the same window, checked
+twice, never touching the block being written, and export never writing over a
+file or into NAW's own folder. Its findings, each now a test, and what was done:
+1. (blocking) A deleted operations block's list without contents had no size
+   limit when written but an 8 MiB limit when read, so deleting a big block (the
+   one an older file was taken into is the likeliest) would stop background
+   control for good. The list now has one limit (64 MiB) for both, checked
+   before anything is written; a block of 60000 records deletes and reads back.
+2. A deleted operation id answered `not-executed`, the state of a refusal an
+   agent may retry under a new id. It now answers with the outcome recorded when
+   it was deleted, with `reason: record-deleted`.
+3. "知道了" silenced its condition for good, and "background control not loaded"
+   shared a key with unreadable blocks. An acknowledgement now lasts while its
+   condition does, and "not loaded" is its own reminder.
+4. The delete explanation said the contents would be only in the export; an
+   older version's operations file kept beside the blocks is not deleted, and
+   more is kept for operations than the sentence said. Reworded. A deleted
+   block's file left by a stop now goes at the next load.
+5. A link where a copy should be (even to NAW's own block) passed the export
+   check and the check before deleting. A copy must now be a file of its own.
+6. Deleting a later version can bring back an earlier one: recorded above.
+Its remark that the window check left no result file: the check's result is the
+JSON line at the end of its log (`gui-12.log`), now also saved as `result.json`
+beside its screenshots.

@@ -31,8 +31,8 @@
       const total = record.blocks, oldest = record.oldestDay || '—', bytes = size(record.bytes);
       if (entry.kind === 'age') return ['records.item.age', { blocks: entry.blocks, oldest: entry.oldestDay || oldest, total, size: bytes }];
       if (entry.kind === 'size') return ['records.item.size', { size: size(entry.bytes), oldest, total }];
+      if (entry.kind === 'unavailable') return ['records.item.unavailable', {}];
       if (entry.manifest) return ['records.item.unreadableManifest', {}];
-      if (!entry.blocks) return ['records.item.unavailable', {}];
       return ['records.item.unreadable', { blocks: entry.blocks, from: entry.fromSequence, through: entry.throughSequence }];
     }
     // The reminders: one section per record with something due, in the order the records are listed.
@@ -49,7 +49,7 @@
         for (const entry of items) {
           const [key, params] = item(record, entry), row = make('div', 'records-item'), actions = make('div', 'records-actions');
           row.dataset.kind = entry.kind; row.append(make('p', '', key, params));
-          if (entry.kind === 'unreadable') actions.append(control('records.reveal', 'reveal', () => api.records('reveal', record.record, null).catch(() => {})));
+          if (entry.kind === 'unreadable' || entry.kind === 'unavailable') actions.append(control('records.reveal', 'reveal', () => api.records('reveal', record.record, null).catch(() => {})));
           else actions.append(control('records.export', 'export', () => exportView(record.record)));
           actions.append(control('records.acknowledge', 'acknowledge', async () => {
             try { current = await api.records('acknowledge', record.record, entry.kind, entry.level); } catch { /* Shown again next time; nothing is lost. */ }

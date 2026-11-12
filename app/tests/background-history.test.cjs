@@ -178,7 +178,8 @@ test('deleting a settled block the person exported keeps its operation ids: neve
   f.controller.deleteBlocks([first]);
   for (const controller of [f.controller, f.reopen()]) {
     const again = await controller.call(binding, invoke('op-1', 'forward', ['one']));
-    assert.deepEqual([again.state, again.reason, again.duplicate, again.retry], ['not-executed', 'record-deleted', true, false]);
+    // Its recorded outcome, not "not executed": an agent must not take it for a refusal and send it again under a new id.
+    assert.deepEqual([again.state, again.reason, again.duplicate, again.retry], ['complete', 'record-deleted', true, false]);
     assert.equal((await controller.call(binding, { action: 'receipt', operation_id: 'op-1' })).receipt.reason, 'record-deleted');
     // The send's later version was in a block that stays: it is still there, received.
     assert.equal((await controller.call(binding, { action: 'receipt', operation_id: 'send-1' })).receipt.state, 'received');
