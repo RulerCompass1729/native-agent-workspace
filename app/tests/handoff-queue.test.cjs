@@ -46,6 +46,9 @@ test('each delivered task says where it stands, in the name of whoever holds it'
     // Sending stays beside it while there is an integrator: a check git can never answer must not leave the row without a step.
     assert.deepEqual(plain(row.more), integrator ? { kind: 'send', key: 'ready:shared:d', label: { key: 'queue.handoff.send', params: { who: 'Riley' } } } : null, String(Boolean(integrator)));
   }
+  // A merge made before the handoff began: the second step is the person's confirmation, a step of its own and called that.
+  const earlier = draw(view({ d: item('d', 'held', { reason: 'merged-earlier', recheck: true, why: { key: 'queue.handoff.why.mergedEarlier', params: {} } }) })).rows.d;
+  assert.deepEqual(plain([earlier.action, earlier.more.kind, earlier.why]), [{ kind: 'confirm', key: 'ready:shared:d', label: { key: 'queue.handoff.confirm', params: {} } }, 'send', { key: 'queue.handoff.why.mergedEarlier', params: { who: 'Riley' } }]);
   const plainHold = draw(view({ d: { ...kept, recheck: undefined } })).rows.d;
   assert.deepEqual([plainHold.action.kind, plainHold.more], ['send', null], 'A hold without a claim has the one step it always had');
   for (const other of Object.values(draw(view(items, { summary: { handoff: sent } })).rows)) assert.equal(other.more, null);

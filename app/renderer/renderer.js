@@ -5028,7 +5028,7 @@ function queueHandoffRow(row, handoff) {
   row.dataset.handoff = handoff.where;
   if (handoff.why) row.append(uiNode('div', handoff.why.key, handoff.why.params, 'queue-outcome queue-handoff-why'));
   for (const act of [handoff.action, handoff.more]) {
-    if (act) row.querySelector('.queue-actions').append(queueHandoffButton(act.label.key, act.label.params, act.kind, () => queueHandoffAct({ send: 'retryDelivery', redo: 'redo', recheck: 'recheck' }[act.kind], act.key)));
+    if (act) row.querySelector('.queue-actions').append(queueHandoffButton(act.label.key, act.label.params, act.kind, () => queueHandoffAct({ send: 'retryDelivery', redo: 'redo', recheck: 'recheck', confirm: 'confirm' }[act.kind], act.key)));
   }
 }
 // A delivery that still waits for the person although the queue no longer lists its task.

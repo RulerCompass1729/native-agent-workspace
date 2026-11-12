@@ -646,6 +646,163 @@ test('finished outcomes are trimmed by when they ended', t => {
   assert.deepEqual([backlog.knows(key('m-0')), backlog.knows(key('m-1')), backlog.knows(key('never'))], [true, true, false], 'A trimmed delivery is still known');
 });
 
+test('a merge made during an earlier handoff of the same delivery is never recorded by NAW itself: it is held for the person to confirm', async t => {
+  const { backlog } = fixture(t);
+  const at = NOW + 80000, seen = extra => observed({ now: at, idleSince: new Map([[INTEGRATOR.sessionId, at - rules.IDLE_SETTLE_MS]]), mainHead: MAIN2, ...extra });
+  const replied = (text, tag = 'tag-2') => seen({ session: integratorSession({ messages: [{ id: tag, role: 'user', text: 'handoff', time: at }, { id: 'reply', role: 'assistant', text, time: at + 1 }] }),
+    now: at + 60000, idleSince: new Map([[INTEGRATOR.sessionId, at + 60000 - rules.IDLE_SETTLE_MS]]) });
+  // A handoff that ends without a result the first time, and is handed again on a newer main.
+  const again = (record, names) => {
+    const first = handed(record, names);
+    record.settle(record.plan(later(answered('tag-1', null))), {}, NOW + 60000);
+    record.resolveHandoff(first.handoffId, { retry: true });
+    const second = record.advance(seen(), at);
+    record.confirmSent(second.handoffId, { tag: 'tag-2', control: 0 }, at);
+    return second;
+  };
+  // Where main was when a delivery first reached an integrator is kept with it, and a later handoff does not change it.
+  const first = handed(backlog, ['a', 'b']);
+  assert.deepEqual(backlog.snapshot().ready.map(entry => entry.firstHead), [START, START]);
+  backlog.settle(backlog.plan(later(answered('tag-1', null))), {}, NOW + 60000);
+  backlog.resolveHandoff(first.handoffId, { retry: true });
+  backlog.noteReady(ready('c'), NOW + 70000);
+  const second = backlog.advance(seen(), at);
+  assert.deepEqual(backlog.snapshot().ready.map(entry => entry.firstHead), [START, START, undefined], 'Nothing is kept before the send is known to have left');
+  backlog.confirmSent(second.handoffId, { tag: 'tag-2', control: 0 }, at);
+  assert.deepEqual([backlog.snapshot().handoff.mainHead, backlog.snapshot().ready.map(entry => entry.firstHead)], [MAIN2, [START, START, MAIN2]]);
+  // The integrator reports the merge of `a` that it made while the first handoff was open (main already held it when the second
+  // began), and names the same commit for `c`, which was first handed out on that main.
+  const reply = `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9\nMERGED ${commitOf('c')} as ${MAIN2} tests 9/9\nRETURNED ${commitOf('b')} needs a rebase`;
+  const action = backlog.plan(replied(reply));
+  assert.equal(action.kind, 'settle', JSON.stringify(action));
+  // git: MAIN2 is on main now (MAIN3) and was on the main the second handoff began on, but not on main at START.
+  const asked = [];
+  const read = fake({ isAncestor: (commit, head) => { asked.push(head); return head === MAIN3 || head === MAIN2; } });
+  const checked = await backlog.verify(read, action, MAIN3);
+  assert.deepEqual([checked.verified[key('a')], checked.verified[key('c')]], [{ verified: false, why: 'merged-earlier', as: MAIN2 }, { verified: false, why: 'not-new' }]);
+  assert.deepEqual([...new Set(asked)].sort(), [START, MAIN2, MAIN3].sort());
+  // Neither is recorded as merged. The earlier merge is held as that, with what was reported; nothing may be installed for it.
+  const result = backlog.settle(action, checked, at + 60000);
+  assert.deepEqual([outcomes(result), [...result.notify].sort(), result.install], [{ a: 'held:merged-earlier', b: 'returned:needs a rebase', c: 'held:merge-unverified' }, ['merge-unverified', 'merged-earlier'], null]);
+  assert.deepEqual([backlog.snapshot().ready[0].claim, backlog.snapshot().ready[2].claim], [{ as: MAIN2, tests: { passed: 9, total: 9 }, startHead: START }, undefined]);
+  assert.deepEqual([backlog.spaceView('space-1').a.recheck, backlog.spaceView('space-1').a.reason, backlog.spaceView('space-1').c.recheck], [true, 'merged-earlier', undefined]);
+  // The person's confirmation: the claim is judged against the main of the delivery's first handoff, and only then recorded.
+  assert.throws(() => backlog.claimOf(key('a')), { code: 'HANDOFF_STATE', stale: true }, 'Asked for as "check again", a hold that waits for confirmation gives nothing');
+  const claim = backlog.claimOf(key('a'), 'merged-earlier');
+  assert.deepEqual(claim, { key: key('a'), commit: commitOf('a'), reason: 'merged-earlier', as: MAIN2, startHead: START, tests: { passed: 9, total: 9 }, firstHead: START });
+  const confirmed = await backlog.verifyClaim(read, claim, MAIN3);
+  assert.deepEqual([confirmed, backlog.recheck(claim, confirmed, MAIN3, at + 70000)], [{ verified: true, as: MAIN2 }, { outcome: 'merged', notify: [`installable:${MAIN3}`], install: { commit: MAIN3 } }]);
+  assert.deepEqual([states(backlog).a, backlog.snapshot().ready[0].mergedAs, backlog.snapshot().ready[0].claim], ['merged', MAIN2, undefined]);
+  // What does not make an earlier merge: the first commit gone or unanswered, the changes not all there since then, a line that cannot be read, no first commit kept.
+  for (const [name, reader, expected] of [
+    ['the first commit gives no answer', fake({ isAncestor: (commit, head) => (head === START ? undefined : head === MAIN3 || head === MAIN2) }), 'not-new'],
+    ['the first commit is not behind the named one either', fake({ isAncestor: () => true }), 'not-new'],
+    ['the changes since the first commit are not all in the named one', fake({ isAncestor: (commit, head) => head === MAIN3 || head === MAIN2, changes: (base, tip) => (tip === MAIN2 ? [{ commit: MAIN2, change: 'other' }] : [{ commit: tip, change: 'x1' }]) }), 'not-new'],
+    // Only "it was already on main when this handoff began" is looked at again: any other failed check stands, although the earlier main would pass it.
+    ['the merge is new for this handoff but does not hold the delivery', fake({ isAncestor: (commit, head) => head === MAIN3,
+      changes: (base, tip) => (base === MAIN2 ? (tip === MAIN2 ? [{ commit: MAIN2, change: 'other' }] : [{ commit: tip, change: 'x1' }]) : (tip === MAIN2 ? [{ commit: MAIN2, change: 'x1' }] : [{ commit: tip, change: 'x1' }])) }), 'changes-differ'],
+  ]) {
+    const other = fixture(t).backlog;
+    again(other, ['a']);
+    const line = other.plan(replied(`MERGED ${commitOf('a')} as ${MAIN2} tests 9/9`));
+    const verdict = (await other.verify(reader, line, MAIN3)).verified[key('a')];
+    assert.deepEqual(verdict, { verified: false, why: expected }, name);
+    assert.deepEqual(outcomes(other.settle(line, { handoffId: line.handoffId, mainHead: MAIN3, verified: { [key('a')]: verdict } }, at + 60000)), { a: 'held:merge-unverified' }, name);
+  }
+  // A delivery merged with a merge commit during the first handoff and reported under a later commit: for this handoff nothing
+  // was delivered ("no changes"), and that too is looked at again against the first handoff.
+  const whole = fixture(t).backlog;
+  again(whole, ['a']);
+  const named = whole.plan(replied(`MERGED ${commitOf('a')} as ${MAIN3} tests 9/9`));
+  const inside = fake({ isAncestor: (commit, head) => head === MAIN3, changes: (base, tip) => (base === MAIN2 ? (tip === MAIN3 ? [{ commit: MAIN3, change: 'y1' }] : [])
+    : (tip === MAIN3 ? [{ commit: commitOf('a'), change: 'x1' }, { commit: MAIN3, change: 'y1' }] : [{ commit: tip, change: 'x1' }])) });
+  assert.deepEqual((await whole.verify(inside, named, MAIN3)).verified[key('a')], { verified: false, why: 'merged-earlier', as: MAIN3 });
+  // A verdict of "earlier" for another commit than the line names, or for a delivery with no first commit kept, is an unverified claim.
+  const loose = fixture(t).backlog;
+  again(loose, ['a', 'b']);
+  const lines = loose.plan(replied(`MERGED ${commitOf('a')} as ${MAIN2} tests 9/9\nMERGED ${commitOf('b')} into main`));
+  assert.deepEqual(outcomes(loose.settle(lines, { handoffId: lines.handoffId, mainHead: MAIN3, verified: { [key('a')]: { verified: false, why: 'merged-earlier', as: MAIN3 }, [key('b')]: { verified: false, why: 'merged-earlier', as: MAIN2 } } }, at + 60000)),
+    { a: 'held:merge-unverified', b: 'held:merge-unverified' });
+  const bare = fixture(t);
+  again(bare.backlog, ['a']);
+  const saved = JSON.parse(fs.readFileSync(bare.file, 'utf8'));
+  delete saved.ready[0].firstHead;
+  fs.writeFileSync(bare.file, JSON.stringify(saved), { mode: 0o600 });
+  const plain = bare.open(), mark = [], line = plain.plan(replied(`MERGED ${commitOf('a')} as ${MAIN2} tests 9/9`));
+  const strict = await plain.verify(fake({ isAncestor: (commit, head) => { mark.push(head); return head === MAIN3 || head === MAIN2; } }), line, MAIN3);
+  assert.deepEqual([strict.verified[key('a')], mark], [{ verified: false, why: 'not-new' }, [MAIN3, MAIN2]], 'A record from before the first commit was kept is judged as it was');
+  assert.deepEqual(outcomes(plain.settle(line, { ...strict, verified: { [key('a')]: { verified: false, why: 'merged-earlier', as: MAIN2 } } }, at + 60000)), { a: 'held:merge-unverified' });
+  saved.ready[0].firstHead = 'main';
+  fs.writeFileSync(bare.file, JSON.stringify(saved), { mode: 0o600 });
+  assert.throws(() => bare.open().snapshot(), { code: 'HANDOFF_STATE' });
+  // A merge that could not be checked, checked again later, may turn out to have been made earlier: the hold then waits for the
+  // person's confirmation, with the claim judged against the first handoff from then on.
+  const late = fixture(t).backlog;
+  const open = again(late, ['a']);
+  late.settle(late.plan(replied(`MERGED ${commitOf('a')} as ${MAIN2} tests 9/9`)), { handoffId: open.handoffId, mainUnreadable: true }, at + 60000);
+  assert.throws(() => late.claimOf(key('a'), 'merged-earlier'), { code: 'HANDOFF_STATE', stale: true }, 'Asked for as a confirmation, a merge that could not be checked gives nothing');
+  for (const other of ['merge-unverified', 'review-off', null, 7]) assert.throws(() => late.claimOf(key('a'), other), { code: 'HANDOFF_STATE', stale: true }, String(other));
+  const unchecked = late.claimOf(key('a'));
+  assert.deepEqual([states(late).a, unchecked.reason, unchecked.startHead, unchecked.firstHead], ['held:main-unreadable', 'main-unreadable', MAIN2, START]);
+  const second2 = await late.verifyClaim(read, unchecked, MAIN3);
+  assert.deepEqual([second2, late.recheck(unchecked, second2, MAIN3, at + 70000)], [{ verified: false, why: 'merged-earlier', as: MAIN2 }, { outcome: 'earlier', notify: ['merged-earlier'], install: null }]);
+  assert.deepEqual([states(late).a, late.snapshot().ready[0].claim], ['held:merged-earlier', { as: MAIN2, tests: { passed: 9, total: 9 }, startHead: START }]);
+  assert.throws(() => late.recheck(unchecked, second2, MAIN3, at + 70000), { code: 'HANDOFF_STATE', stale: true }, 'The claim as it was asked for is no longer the one kept');
+  // A verdict of "earlier" for another commit than the claim names, or for a delivery with no first commit kept, is an unverified claim there too.
+  for (const spoil of [record => record, record => { const data = JSON.parse(fs.readFileSync(record.file, 'utf8')); delete data.ready[0].firstHead; fs.writeFileSync(record.file, JSON.stringify(data), { mode: 0o600 }); return record; }]) {
+    const other = fixture(t), begun = again(other.backlog, ['a']);
+    other.backlog.settle(other.backlog.plan(replied(`MERGED ${commitOf('a')} as ${MAIN2} tests 9/9`)), { handoffId: begun.handoffId, mainUnreadable: true }, at + 60000);
+    const record = spoil(other).open(), kept = record.claimOf(key('a'));
+    const wrong = record.recheck(kept, { verified: false, why: 'merged-earlier', as: kept.firstHead ? MAIN3 : MAIN2 }, MAIN3, at + 70000);
+    assert.deepEqual([wrong.outcome, states(record).a, record.snapshot().ready[0].claim], ['unverified', 'held:merge-unverified', undefined], String(Boolean(kept.firstHead)));
+  }
+  assert.throws(() => late.claimOf(key('a')), { code: 'HANDOFF_STATE', stale: true });
+  const waiting = late.claimOf(key('a'), 'merged-earlier');
+  assert.deepEqual(late.recheck(waiting, await late.verifyClaim(read, waiting, MAIN3), MAIN3, at + 80000).outcome, 'merged');
+  // A "check again" that is under way when the delivery is sent again and comes back as an earlier merge: the claim it read
+  // has the same commit and the same start, and is refused all the same. It was not read as a confirmation.
+  const mixed = fixture(t).backlog;
+  const one = handed(mixed, ['a']);
+  mixed.settle(mixed.plan(later(answered('tag-1', `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9`))), { handoffId: one.handoffId, mainUnreadable: true }, NOW + 60000);
+  const underWay = mixed.claimOf(key('a'));
+  mixed.retryReady(key('a'));
+  const two = mixed.advance(seen(), at);
+  mixed.confirmSent(two.handoffId, { tag: 'tag-2', control: 0 }, at);
+  mixed.settle(mixed.plan(replied(`MERGED ${commitOf('a')} as ${MAIN2} tests 9/9`)), { handoffId: two.handoffId, mainHead: MAIN3, verified: { [key('a')]: { verified: false, why: 'merged-earlier', as: MAIN2 } } }, at + 60000);
+  const confirming = mixed.claimOf(key('a'), 'merged-earlier');
+  assert.deepEqual([states(mixed).a, [underWay.as, underWay.startHead, underWay.commit], [confirming.as, confirming.startHead, confirming.commit]], ['held:merged-earlier', [MAIN2, START, commitOf('a')], [MAIN2, START, commitOf('a')]]);
+  assert.throws(() => mixed.recheck(underWay, { verified: true, as: MAIN2 }, MAIN3, at + 70000), { code: 'HANDOFF_STATE', stale: true });
+  assert.throws(() => mixed.recheck({ ...confirming, reason: undefined }, { verified: true, as: MAIN2 }, MAIN3, at + 70000), { code: 'HANDOFF_STATE', stale: true });
+  assert.equal(states(mixed).a, 'held:merged-earlier');
+  assert.equal(mixed.recheck(confirming, { verified: true, as: MAIN2 }, MAIN3, at + 70000).outcome, 'merged');
+  // Which deliveries a handoff gives a first commit: those inside it, once its send is confirmed, or once it fails without
+  // ever having been confirmed (it may have arrived). One that came in meanwhile is not part of it; a refused send went nowhere.
+  const partial = fixture(t).backlog;
+  partial.noteReady(ready('a'), NOW);
+  const opening = partial.advance(observed(), NOW);
+  partial.noteReady(ready('b'), NOW + 1);
+  assert.deepEqual(partial.snapshot().ready.map(entry => entry.firstHead), [undefined, undefined], 'Nothing is kept before the send is known to have left');
+  partial.confirmSent(opening.handoffId, { tag: 'tag-1', control: 0 }, NOW + 2);
+  assert.deepEqual(partial.snapshot().ready.map(entry => entry.firstHead), [START, undefined]);
+  const refused = fixture(t).backlog;
+  refused.noteReady(ready('a'), NOW);
+  refused.sendRefused(refused.advance(observed(), NOW).handoffId, NOW + 1);
+  assert.deepEqual(refused.snapshot().ready.map(entry => entry.firstHead), [undefined]);
+  const lost = fixture(t).backlog;
+  lost.noteReady(ready('a'), NOW);
+  lost.advance(observed(), NOW);
+  lost.noteReady(ready('b'), NOW + 1);
+  const failing = lost.plan(observed({ now: NOW + rules.UNCONFIRMED_SEND_MS + 1 }));
+  assert.deepEqual([failing.status, failing.reason], ['failed', 'send-unconfirmed']);
+  lost.settle(failing, {}, NOW + rules.UNCONFIRMED_SEND_MS + 1);
+  assert.deepEqual([states(lost).a, lost.snapshot().ready.map(entry => entry.firstHead)], ['held:send-unconfirmed', [START, undefined]]);
+  // A newer delivery of the branch is another delivery: it has no first handoff yet.
+  const next = fixture(t).backlog;
+  handed(next, ['a']);
+  next.noteReady(ready('a2', { branch: 'lane/a' }), at);
+  assert.deepEqual(next.snapshot().ready.map(entry => entry.firstHead), [START, undefined]);
+});
+
 test('while its integrator sits in a space nothing it writes is read as the handoff\'s answer: the handoff waits for the person', t => {
   const { backlog, open } = fixture(t);
   const { handoffId } = handed(backlog, ['a', 'b']);
@@ -724,7 +881,7 @@ test('a merge that could not be checked keeps what was reported, can be checked 
   // The panel is told which rows can be checked again; what is asked for is a copy.
   assert.deepEqual(Object.values(backlog.spaceView('space-1')).map(item => item.recheck), names.map(() => true));
   const asked = backlog.claimOf(key('a'));
-  assert.deepEqual(asked, { key: key('a'), commit: commitOf('a'), as: MAIN2.slice(0, 9), startHead: START, tests: { passed: 9, total: 9 } });
+  assert.deepEqual(asked, { key: key('a'), commit: commitOf('a'), reason: 'main-unreadable', as: MAIN2.slice(0, 9), startHead: START, tests: { passed: 9, total: 9 }, firstHead: START });
   asked.tests.passed = 0;
   assert.equal(backlog.claimOf(key('a')).tests.passed, 9);
   // Git still does not answer: nothing changes, nothing is written.

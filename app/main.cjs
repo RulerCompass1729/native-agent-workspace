@@ -1703,12 +1703,13 @@ async function boot() {
       else if (action === 'retryReason') result = handoffs.retryReason(value);
       else if (action === 'resolve') result = handoffs.resolveHandoff(value, { retry: choice === true });
       else if (action === 'answer') result = handoffs.answer(value);
-      else if (action === 'recheck') {
-        // A delivery held because git could not be read: the merge that was reported for it is checked again.
-        // While git still does not answer nothing changes, and the person is told that.
+      else if (action === 'recheck' || action === 'confirm') {
+        // A delivery held with the merge that was reported for it: checked again (git could not be read), or confirmed
+        // by the person (the merge was made before the handoff began). Two steps: each is refused for a delivery held
+        // the other way. While git does not answer nothing changes, and the person is told that.
         const engine = queueDispatcher?.integration;
         if (!engine) throw uiError('error.handoff.notStarted');
-        const checked = await engine.recheck(value);
+        const checked = action === 'confirm' ? await engine.confirm(value) : await engine.recheck(value);
         // (Said differently when the folder was read but git did not answer about the merge: then the folder is not the trouble.)
         if (checked.outcome === 'unanswered') throw uiError(checked.head === true ? 'error.handoff.recheckSilent' : 'error.handoff.recheckUnanswered');
         result = { outcome: checked.outcome };

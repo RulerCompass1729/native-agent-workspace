@@ -16,7 +16,7 @@ const fact = (extra = {}) => ({ key: 'ready:shared:item-1', roomId: 'shared', it
   handoffId: 'H1-abcdef12', memberId: 'member-a', memberName: 'Member a', text: 'Fix the list', ...extra });
 const say = (language, words) => locale.format(language, words.key, words.params);
 // Every reason the record can produce, with the sentence group it belongs to.
-const REASONS = { 'review-off': 'reviewOff', 'review-cap': 'reviewCap', 'checkpoint-invalid': 'checkpointInvalid', 'merge-unverified': 'unverified', 'main-unreadable': 'mainUnreadable',
+const REASONS = { 'review-off': 'reviewOff', 'review-cap': 'reviewCap', 'checkpoint-invalid': 'checkpointInvalid', 'merge-unverified': 'unverified', 'main-unreadable': 'mainUnreadable', 'merged-earlier': 'mergedEarlier',
   'send-unconfirmed': 'notDelivered', 'send-refused': 'sendRefused', 'record-missing': 'replyUnread', 'no-result': 'noAnswer', 'no-reply': 'noReply', 'person-intervened': 'personTyped',
   'held-other': 'other', 'integrator-unset': 'integratorUnset', 'integrator-in-space': 'integratorInSpace', 'backlog-full': 'backlogFull', 'repository-unset': 'repositoryUnset',
   'lock-held:Claude 终端': 'lockHeld', 'integrator-missing:session-9': 'integratorGone', 'conflict:H2-12345678': 'conflict', [`installable:${HEAD}`]: 'installable', 'returned-limit:shared:lane/a': 'returnedLimit' };
@@ -55,7 +55,10 @@ test('each state of a delivery has one sentence for its space, in both languages
     assert.ok(zh !== en && zh.startsWith('「Fix the list」的交付') && en.startsWith('The delivery for “Fix the list”') && !/\{\w+\}/.test(zh + en), reason);
     seen.add(words.key);
   }
-  assert.equal(seen.size, 16, 'Sixteen different sentences for a delivery on hold');
+  assert.equal(seen.size, 17, 'Seventeen different sentences for a delivery on hold');
+  // A delivery that was already in main's history before its handoff began is said as that, and as waiting for the person's confirmation: never as merged.
+  assert.equal(say('en', spaceWords(fact({ outcome: 'held', reason: 'merged-earlier' }))), 'The delivery for “Fix the list” (lane/a 616161616161) is on hold: the integrator reports it as merged, but it was already in main\'s history before this handoff began; it is recorded only once you confirm it');
+  assert.equal(say('zh', spaceWords(fact({ outcome: 'held', reason: 'merged-earlier' }))), '「Fix the list」的交付（lane/a 616161616161）先搁着：集成者说已合入，但它在这次交接开始之前就已经在 main 的历史里了，要你确认之后才记为已合入');
   // A handoff that waits because its integrator sits in a space says that, for a delivery inside it and for one held from it afterwards.
   assert.equal(say('zh', spaceWords(fact({ outcome: 'waiting', reason: 'integrator-in-space' }))), '「Fix the list」的交付（lane/a 616161616161）在等你处理：集成者进了一个协作空间，它写的东西不再当作这次交接的答复');
   assert.equal(say('en', spaceWords(fact({ outcome: 'waiting', reason: 'integrator-in-space' }))), 'The delivery for “Fix the list” (lane/a 616161616161) is waiting for you: the integrator is inside a collaboration space, so what it writes is no longer read as this handoff\'s answer');
@@ -102,6 +105,7 @@ test('the person\'s notice says how many deliveries and why, in both languages, 
     [{ reason: 'send-unconfirmed', count: 1 }, '交接消息没能确认送到集成者，1 件交付搁着', 'The handoff message could not be confirmed as delivered. Deliveries on hold: 1'],
     [{ reason: 'no-result', count: 1 }, '集成者没有给出 1 件交付的结果', 'The integrator gave no result. Deliveries: 1'],
     [{ reason: 'integrator-in-space', count: 4 }, '指定的集成者在协作空间里，4 件交付先停着；请把它移出空间或另行指定', 'The designated integrator is inside a collaboration space; move it out or designate another. Deliveries paused: 4'],
+    [{ reason: 'merged-earlier', count: 2 }, '2 件交付在交接开始之前就已经在主线的历史里了，要你确认之后才记为已合入', 'Deliveries that were already in main\'s history before their handoff began are recorded as merged only once you confirm them. Waiting for you: 2'],
   ];
   for (const [info, zh, en] of cases) {
     const words = personWords(info);
@@ -166,7 +170,7 @@ test('the space record is written once per delivery and state, into the space th
 });
 
 test('a held delivery\'s row in the queue panel says its cause in one short sentence, in both languages, without the task\'s text', () => {
-  const OWN = ['reviewOff', 'reviewCap', 'lockHeld', 'checkpointInvalid', 'unverified', 'mainUnreadable', 'notDelivered', 'sendRefused', 'replyUnread', 'noAnswer', 'noReply', 'personTyped', 'integratorGone', 'integratorInSpace', 'conflict'];
+  const OWN = ['reviewOff', 'reviewCap', 'lockHeld', 'checkpointInvalid', 'unverified', 'mainUnreadable', 'mergedEarlier', 'notDelivered', 'sendRefused', 'replyUnread', 'noAnswer', 'noReply', 'personTyped', 'integratorGone', 'integratorInSpace', 'conflict'];
   const seen = new Set();
   for (const [reason, name] of Object.entries(REASONS)) {
     const words = rowWords({ reason, note: 'the integrator wrote this', text: TASK });
@@ -178,6 +182,14 @@ test('a held delivery\'s row in the queue panel says its cause in one short sent
       const said = locale.format(language, words.key, { ...words.params, who: 'Riley' });
       assert.ok(said && said !== words.key && !said.includes('{') && !said.includes(TASK), `${language} ${reason}`);
       if (name === 'conflict') assert.ok(said.includes('Riley'), `${language}: the row says whose session to go to`);
+      // A person cannot look into main: the row sends them to the integrator's session first, and says which button follows from each answer.
+      // (Merged anew, the delivery may be held this way once more: its commits were in main's history before that handoff too. The row says what to press then.)
+      if (name === 'mergedEarlier') {
+        assert.equal(said, language === 'zh'
+          ? 'Riley说这件已经合入，但这件改动在这次交接开始前就进过主线，NAW 查不出后来有没有被撤掉，所以没有自动记为已合入。不确定就先在Riley的会话里问它现在还在不在：在，按「确认已合入」；不在，按「再交给Riley」重新合。重新合之后这一行可能还会出现，那时Riley说合好了，就按「确认已合入」。'
+          : 'Riley reports this as merged, but the change was already in main\'s history before this handoff began, and NAW cannot tell whether it was undone since, so it was not recorded as merged. If you are not sure, first ask Riley in its session whether it is still there: if it is, press "Confirm merged"; if it is not, "Send to Riley again" to have it merged anew. This row may come back after that; once Riley says it is in, press "Confirm merged".');
+        for (const label of ['queue.handoff.confirm', 'queue.handoff.send']) assert.ok(said.includes(locale.format(language, label, { who: 'Riley' })), `${language}: the sentence names the button as it is written (${label})`);
+      }
       if (name === 'lockHeld') assert.ok(said.includes('Claude 终端'));
       if (expected === 'other') assert.ok(said.includes('the integrator wrote this'));
     }

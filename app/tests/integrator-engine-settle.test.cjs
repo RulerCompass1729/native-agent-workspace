@@ -349,6 +349,67 @@ test('the person\'s "check again": the claim kept with a merge that could not be
   for (const other of [key('zz'), undefined, 7]) await assert.rejects(m.engine.recheck(other), { code: 'HANDOFF_STATE', stale: true }, String(other));
 });
 
+test('a merge made during an earlier handoff of the delivery is held for the person, said as that, and recorded only by the person\'s own step', async t => {
+  // The first handoff (main at MAIN) gets no reply and waits; the person has the delivery sent again, by which time main is at HEAD2.
+  const twice = async f => {
+    const first = await f.handed(['a']);
+    f.clock = LATER;
+    await f.settle(integratorSession({ messages: [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW }] }));
+    f.handoffs.resolveHandoff(first.handoffId, { retry: true });
+    f.head = HEAD2;
+    const second = await f.engine.handOut(at(LATER + 9000), async () => at(LATER + 9000));
+    assert.deepEqual([second.kind, f.handoffs.snapshot().handoff.mainHead, f.handoffs.snapshot().ready[0].firstHead], ['opened', HEAD2, MAIN], JSON.stringify(second));
+    return second;
+  };
+  const reply = integratorSession({ messages: [{ id: 'tag-2', role: 'user', text: 'handoff', time: LATER + 9000 }, { id: 'r', role: 'assistant', text: `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9`, time: LATER + 9001 }] });
+  const settle = f => { const view = at(f.clock, [reply]); return f.engine.settle(view, f.look(view)); };
+  // git: the named commit is on main now (HEAD3) and was on the main the second handoff began on (HEAD2), but not on MAIN.
+  const earlier = () => reader({ isAncestor: async (a, b) => b === HEAD2 || b === HEAD3 });
+  const f = fixture(t);
+  await twice(f);
+  f.head = HEAD3; f.clock = LATER + 70000; f.engine.reader = earlier();
+  const result = await settle(f);
+  assert.deepEqual([outcomes(result), result.notify, result.install], [{ a: 'held:merged-earlier' }, ['merged-earlier'], null]);
+  assert.deepEqual(f.handoffs.snapshot().ready[0].claim, { as: HEAD2, tests: { passed: 9, total: 9 }, startHead: MAIN });
+  // The space and the person are told that it waits for the person; nothing says "merged", and no main is offered for installing.
+  f.records.length = 0; f.notices.length = 0;
+  await f.engine.tell();
+  assert.deepEqual([f.records.map(record => [record.itemId, record.outcome, record.reason, record.as]), f.notices.map(info => [info.reason, info.count])], [[['a', 'held', 'merged-earlier', undefined]], [['merged-earlier', 1]]]);
+  assert.deepEqual(Object.keys(f.handoffs.snapshot().reasons).filter(name => name.startsWith('installable:')), []);
+  // The person's step: asked of git against the main of the first handoff, and only then recorded.
+  const asked = [], one = earlier();
+  f.engine.reader = { commit: one.commit, isAncestor: async (a, b) => { asked.push([a, b]); return one.isAncestor(a, b); }, changes: one.changes };
+  // "Check again" is another step: it does not act on a delivery that waits for the person's confirmation, and asks git nothing.
+  await assert.rejects(f.engine.recheck(key('a')), { code: 'HANDOFF_STATE', stale: true });
+  assert.deepEqual([asked, f.states()], [[], { a: 'held:merged-earlier' }]);
+  assert.deepEqual(await f.engine.confirm(key('a')), { outcome: 'merged', notify: [`installable:${HEAD3}`], install: { commit: HEAD3 } });
+  assert.deepEqual([asked, f.states(), f.handoffs.snapshot().ready[0].mergedAs], [[[HEAD2, HEAD3], [HEAD2, MAIN]], { a: 'merged' }, HEAD2]);
+  // The person's step when the merge is no longer in main's history (main was moved back): it does not count, and is said as unverified.
+  const g = fixture(t);
+  await twice(g);
+  g.head = HEAD3; g.clock = LATER + 70000; g.engine.reader = earlier();
+  assert.deepEqual(outcomes(await settle(g)), { a: 'held:merged-earlier' });
+  g.head = MAIN;
+  assert.deepEqual(await g.engine.confirm(key('a')), { outcome: 'unverified', notify: ['merge-unverified'], install: null });
+  assert.deepEqual([g.states(), g.handoffs.snapshot().ready[0].claim], [{ a: 'held:merge-unverified' }, undefined]);
+  // A merge that could not be checked at first, checked again: found to be an earlier one, it waits for the person and is not recorded by that check.
+  const h = fixture(t);
+  await twice(h);
+  h.head = HEAD3; h.clock = LATER + 70000; h.engine.reader = reader({ commit: async () => undefined });
+  assert.equal((await settle(h)).why, 'git-unanswered');
+  h.clock += HEAD_WAIT_MS;
+  assert.deepEqual(outcomes(await settle(h)), { a: 'held:main-unreadable' });
+  h.engine.reader = earlier();
+  // (A confirmation is not what this hold waits for.)
+  await assert.rejects(h.engine.confirm(key('a')), { code: 'HANDOFF_STATE', stale: true });
+  assert.deepEqual(await h.engine.recheck(key('a')), { outcome: 'earlier', notify: ['merged-earlier'], install: null });
+  assert.deepEqual([h.states(), h.handoffs.snapshot().ready[0].claim.startHead], [{ a: 'held:merged-earlier' }, MAIN]);
+  // A second "check again", from a button that was not drawn anew, does not confirm it.
+  await assert.rejects(h.engine.recheck(key('a')), { code: 'HANDOFF_STATE', stale: true });
+  assert.deepEqual(h.states(), { a: 'held:merged-earlier' });
+  assert.equal((await h.engine.confirm(key('a'))).outcome, 'merged');
+});
+
 test('the handoff\'s own session in a space: the engine settles it as waiting without reading the answer or git; an unreadable membership settles nothing', async t => {
   const line = `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9`;
   const untouched = reader({ commit: async () => { throw Error('git must not be asked'); } });

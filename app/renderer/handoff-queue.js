@@ -44,7 +44,9 @@
         const send = integrator ? { kind: 'send', key: item.key, label: { key: 'queue.handoff.send', params: { who: called } } } : null;
         // A hold that keeps the merge that was reported is checked again first: sending it again cannot verify a
         // merge that was already made. Sending stays beside it, for a check that can never be answered.
-        row.action = item.recheck ? { kind: 'recheck', key: item.key, label: { key: 'queue.handoff.recheck', params: {} } } : send;
+        // (For a merge made before the handoff began that second step is the person's own confirmation: a step of its own, called that.)
+        const confirm = item.reason === 'merged-earlier';
+        row.action = item.recheck ? { kind: confirm ? 'confirm' : 'recheck', key: item.key, label: { key: confirm ? 'queue.handoff.confirm' : 'queue.handoff.recheck', params: {} } } : send;
         row.more = item.recheck ? send : null;
       } else if (where === 'returned') {
         row.need = true; row.why = item.note ? { key: 'queue.handoff.why.returned', params: { note: item.note } } : { key: 'queue.handoff.why.returnedPlain', params: {} };

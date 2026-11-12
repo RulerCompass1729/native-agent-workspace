@@ -6,7 +6,7 @@
 // Reasons that say the same thing to a person share one sentence.
 const PLAIN = {
   'review-off': 'reviewOff', 'review-cap': 'reviewCap', 'checkpoint-invalid': 'checkpointInvalid',
-  'merge-unverified': 'unverified', 'main-unreadable': 'mainUnreadable',
+  'merge-unverified': 'unverified', 'main-unreadable': 'mainUnreadable', 'merged-earlier': 'mergedEarlier',
   // Three different troubles with the message itself: sent but never confirmed; refused before
   // it was sent; delivered, but the reply could not be read afterwards.
   'send-unconfirmed': 'notDelivered', 'send-refused': 'sendRefused', 'record-missing': 'replyUnread',
@@ -16,7 +16,7 @@ const PLAIN = {
 };
 const WITH_SUBJECT = { 'lock-held': 'lockHeld', 'integrator-missing': 'integratorGone', conflict: 'conflict', installable: 'installable', 'returned-limit': 'returnedLimit' };
 // What a held delivery, and one inside a waiting handoff, can be told.
-const HELD = ['reviewOff', 'reviewCap', 'lockHeld', 'checkpointInvalid', 'unverified', 'mainUnreadable', 'notDelivered', 'sendRefused', 'replyUnread', 'noAnswer', 'noReply',
+const HELD = ['reviewOff', 'reviewCap', 'lockHeld', 'checkpointInvalid', 'unverified', 'mainUnreadable', 'mergedEarlier', 'notDelivered', 'sendRefused', 'replyUnread', 'noAnswer', 'noReply',
   'personTyped', 'integratorGone', 'integratorInSpace', 'conflict', 'other'];
 const WAITING = ['noReply', 'personTyped', 'integratorInSpace', 'conflict'];
 
