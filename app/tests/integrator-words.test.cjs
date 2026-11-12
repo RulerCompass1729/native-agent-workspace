@@ -16,7 +16,7 @@ const fact = (extra = {}) => ({ key: 'ready:shared:item-1', roomId: 'shared', it
   handoffId: 'H1-abcdef12', memberId: 'member-a', memberName: 'Member a', text: 'Fix the list', ...extra });
 const say = (language, words) => locale.format(language, words.key, words.params);
 // Every reason the record can produce, with the sentence group it belongs to.
-const REASONS = { 'review-off': 'reviewOff', 'review-cap': 'reviewCap', 'checkpoint-invalid': 'checkpointInvalid', 'merge-unverified': 'unverified', 'main-unreadable': 'mainUnreadable', 'merged-earlier': 'mergedEarlier',
+const REASONS = { 'review-off': 'reviewOff', 'review-cap': 'reviewCap', 'checkpoint-invalid': 'checkpointInvalid', 'merge-unverified': 'unverified', 'main-unreadable': 'mainUnreadable', 'merged-earlier': 'mergedEarlier', 'waited-long': 'waitedLong',
   'send-unconfirmed': 'notDelivered', 'send-refused': 'sendRefused', 'record-missing': 'replyUnread', 'no-result': 'noAnswer', 'no-reply': 'noReply', 'person-intervened': 'personTyped',
   'held-other': 'other', 'integrator-unset': 'integratorUnset', 'integrator-in-space': 'integratorInSpace', 'backlog-full': 'backlogFull', 'repository-unset': 'repositoryUnset',
   'lock-held:Claude 终端': 'lockHeld', 'integrator-missing:session-9': 'integratorGone', 'conflict:H2-12345678': 'conflict', [`installable:${HEAD}`]: 'installable', 'returned-limit:shared:lane/a': 'returnedLimit' };
@@ -105,6 +105,13 @@ test('the person\'s notice says how many deliveries and why, in both languages, 
     [{ reason: 'send-unconfirmed', count: 1 }, '交接消息没能确认送到集成者，1 件交付搁着', 'The handoff message could not be confirmed as delivered. Deliveries on hold: 1'],
     [{ reason: 'no-result', count: 1 }, '集成者没有给出 1 件交付的结果', 'The integrator gave no result. Deliveries: 1'],
     [{ reason: 'integrator-in-space', count: 4 }, '指定的集成者在协作空间里，4 件交付先停着；请把它移出空间或另行指定', 'The designated integrator is inside a collaboration space; move it out or designate another. Deliveries paused: 4'],
+    // What waited long says what happened first, then where to look first (by the session's name when it is known), and the last resort last.
+    [{ reason: 'waited-long', count: 3, name: 'Riley' }, '有做完的活等了 4 小时以上，还在等着交给Riley（共 3 件）。先看Riley的会话是不是一直在忙或已经结束；也可能是自动消息关了。Riley接不了，就另指定一个集成者。',
+      'Work finished over 4 hours ago is still waiting to be handed to Riley (3 waiting). First check Riley\'s session: is it still busy, or has it ended? Automatic messages may also be off. If Riley cannot take the work, designate another integrator.'],
+    [{ reason: 'waited-long', count: 3 }, '有做完的活等了 4 小时以上，还在等着交给集成者（共 3 件）。先看集成者的会话是不是一直在忙或已经结束；也可能是自动消息关了。它接不了，就另指定一个集成者。',
+      'Work finished over 4 hours ago is still waiting to be handed to the integrator (3 waiting). First check the integrator\'s session: is it still busy, or has it ended? Automatic messages may also be off. If it cannot take the work, designate another integrator.'],
+    [{ reason: 'waited-long', count: 3, name: '' }, '有做完的活等了 4 小时以上，还在等着交给集成者（共 3 件）。先看集成者的会话是不是一直在忙或已经结束；也可能是自动消息关了。它接不了，就另指定一个集成者。',
+      'Work finished over 4 hours ago is still waiting to be handed to the integrator (3 waiting). First check the integrator\'s session: is it still busy, or has it ended? Automatic messages may also be off. If it cannot take the work, designate another integrator.'],
     [{ reason: 'merged-earlier', count: 2 }, '2 件交付在交接开始之前就已经在主线的历史里了，要你确认之后才记为已合入', 'Deliveries that were already in main\'s history before their handoff began are recorded as merged only once you confirm them. Waiting for you: 2'],
   ];
   for (const [info, zh, en] of cases) {

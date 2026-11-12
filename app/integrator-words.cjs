@@ -6,7 +6,7 @@
 // Reasons that say the same thing to a person share one sentence.
 const PLAIN = {
   'review-off': 'reviewOff', 'review-cap': 'reviewCap', 'checkpoint-invalid': 'checkpointInvalid',
-  'merge-unverified': 'unverified', 'main-unreadable': 'mainUnreadable', 'merged-earlier': 'mergedEarlier',
+  'merge-unverified': 'unverified', 'main-unreadable': 'mainUnreadable', 'merged-earlier': 'mergedEarlier', 'waited-long': 'waitedLong',
   // Three different troubles with the message itself: sent but never confirmed; refused before
   // it was sent; delivered, but the reply could not be read afterwards.
   'send-unconfirmed': 'notDelivered', 'send-refused': 'sendRefused', 'record-missing': 'replyUnread',
@@ -64,6 +64,8 @@ function personWords(info) {
   const count = Number.isSafeInteger(info.count) && info.count >= 0 ? info.count : 0;
   const title = 'os.handoffTitle', key = `os.handoff.${found.name}`;
   if (found.name === 'backlogFull') return { title, key, params: {} };
+  // What waited long names the session to look at first, when its name is known.
+  if (found.name === 'waitedLong') return typeof info.name === 'string' && info.name ? { title, key, params: { count, who: info.name } } : { title, key: 'os.handoff.waitedLongPlain', params: { count } };
   if (found.name === 'installable') return { title, key, params: { commit: short(found.subject) } };
   // The subject is "<space>:<branch>" (or the branch alone); a branch name holds no colon.
   if (found.name === 'returnedLimit') return { title, key, params: { branch: found.subject.slice(found.subject.lastIndexOf(':') + 1) } };

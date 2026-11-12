@@ -31,7 +31,7 @@ const STATES = [...OPEN_STATES, 'merged', 'returned', 'superseded'];
 // Reasons that exist once for the whole backlog, and those that exist once per subject.
 const GLOBAL_REASONS = ['review-off', 'review-cap', 'checkpoint-invalid', 'merge-unverified', 'send-unconfirmed',
   'record-missing', 'send-refused', 'no-result', 'no-reply', 'person-intervened', 'held-other', 'backlog-full', 'integrator-unset', 'integrator-in-space', 'main-unreadable',
-  'repository-unset', 'merged-earlier'];
+  'repository-unset', 'merged-earlier', 'waited-long'];
 // The holds that keep the merge that was reported, for the person's second step on it: one git could not be
 // asked about (checked again), and one that was made during an earlier handoff (the person's to confirm).
 const CLAIMED = ['main-unreadable', 'merged-earlier'];
@@ -46,7 +46,7 @@ const HELD_WORDS = ['review-off', 'review-cap', 'checkpoint-invalid'];
 // A question (a main commit that may be installed, a branch returned too often) has no deliveries
 // under it and ends only with the person's answer.
 const question = reason => reason.startsWith('installable:') || reason.startsWith('returned-limit:');
-const standing = reason => ['review-off', 'review-cap', 'integrator-unset', 'integrator-in-space', 'backlog-full', 'repository-unset'].includes(reason) || reason.startsWith('lock-held:') ||
+const standing = reason => ['review-off', 'review-cap', 'integrator-unset', 'integrator-in-space', 'backlog-full', 'repository-unset', 'waited-long'].includes(reason) || reason.startsWith('lock-held:') ||
   reason.startsWith('integrator-missing:') || question(reason);
 // Why a handoff waits for the person. These last at least as long as that handoff is the open one.
 const waitingOn = (handoff, key) => Boolean(handoff) && (key === `conflict:${handoff.id}` || handoff.status === 'waiting' && handoff.reason === key);
@@ -1073,6 +1073,30 @@ class IntegrationHandoffs {
       reasons.get(entry.reason).push(structuredClone(entry));
     }
     return [...reasons].map(([reason, entries]) => ({ reason, count: entries.length, entries }));
+  }
+  // Deliveries that still wait to be handed out four hours after they arrived are said to the person
+  // once, as a condition of its own ('waited-long').
+  // - It begins only when nothing else already tells the person why nothing is handed out: they were
+  //   not asked about the integrator or the repository, and no handoff waits for them.
+  // - It is over when nothing waits that long any more, and not before, so that it is not said
+  //   again each time one of those other things comes and goes.
+  // Returns { changed, notify }.
+  noteAged(now = Date.now()) {
+    const next = this.draft();
+    const long = next.ready.some(entry => entry.state === 'deliverable' && now - entry.notedAt > AGED_MS);
+    const open = next.reasons['waited-long']?.open === true;
+    if (open && !long) {
+      next.reasons['waited-long'].open = false;
+      this.commit(next);
+      return { changed: true, notify: [] };
+    }
+    if (open || !long) return { changed: false, notify: [] };
+    const asked = Object.entries(next.reasons).some(([key, reason]) => reason.open &&
+      (['integrator-unset', 'integrator-in-space', 'repository-unset'].includes(key) || key.startsWith('integrator-missing:')));
+    if (asked || next.handoff?.status === 'waiting') return { changed: false, notify: [] };
+    const intent = this.occur(next, 'waited-long', now);
+    this.commit(next);
+    return { changed: true, notify: intent ? [intent.reason] : [] };
   }
   // Deliveries that have waited longer than four hours without an outcome.
   aged(now = Date.now(), ms = AGED_MS) {
