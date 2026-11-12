@@ -12435,7 +12435,9 @@ Not verified, or known:
   part of a deletion.
 - A file under a deleted block's name (a stop between marking and removing, or a
   copy put back by hand) is left alone: never read, never removed by NAW, and not
-  counted in the record's size.
+  counted in the record's size; after such a stop, "NAW no longer holds these
+  blocks" is not quite true for that one file. If the manifest is then lost too,
+  a rebuild can take that block back in (its ids with it, so nothing runs twice).
 - "Unreadable" is one reminder for unreadable blocks and an unreadable manifest:
   after "知道了" for blocks, a manifest that later cannot be read stays quiet while
   those blocks are still unreadable.
@@ -12476,3 +12478,7 @@ untrue. That step is gone: such a file is left alone (a test puts one back and
 restarts twice). It also noted that a delete refused before anything is written
 stopped background control for the run; such a refusal now changes nothing and
 stops nothing (tested with the block still being written).
+A last read of that change: `PASS_WITH_NOTES`. The blocking finding is gone, only
+refusals made before any write are marked as such, and every error after the
+first write still stops background control. Its two notes are in the list above.
+The review of this batch ends here.
