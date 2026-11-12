@@ -1057,3 +1057,14 @@ dialog p.records-note { color: var(--ink); }
 .records-dialog .records-apart { margin-right: auto; }
 .records-dialog .records-apart[hidden] { display: none; }
 .records-block[hidden] { display: none; }
+/* 「大管家的记录」: one row per step; the rows that wait for the person or were stopped stand out. */
+.steward-record { width: min(760px, calc(100vw - 48px)); }
+.steward-record-steps { width: 100%; border-collapse: collapse; font-size: 13px; margin: 4px 0 10px; }
+.steward-record-steps th { text-align: left; font-weight: 500; color: var(--muted); padding: 6px 8px 6px 0; border-bottom: 1px solid var(--border); }
+.steward-record-steps td { padding: 7px 8px 7px 0; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+.steward-record-time { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; width: 1%; }
+.steward-record-result { width: 11em; }
+.steward-record-steps tr.attention .steward-record-result { color: #8a4b14; font-weight: 500; }
+.steward-record-usage { display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 10px; font-size: 13px; margin: 8px 0; }
+.steward-record-usage p { margin: 0 0 4px; }
+.steward-record-error { color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }

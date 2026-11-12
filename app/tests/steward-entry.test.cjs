@@ -178,7 +178,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   // Both calls are answered by this desktop, with or without a backend that supports background control.
   assert.match(source, /name === 'handoff' \|\| name === 'steward' \|\| /); assert.match(source, /'chooseFolder', 'copy', 'landing', /);
   const preload = fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8');
-  assert.match(preload, /'runtimeLocation', 'retrySave', 'steward', 'landing'\]\) \{/);
+  assert.match(preload, /'runtimeLocation', 'retrySave', 'steward', 'stewardRecord', 'landing'\]\) \{/);
   assert.equal(source.match(/stewardRole\.set\(/g).length, 2, 'Only the entry writes the designation');
   for (const file of fs.readdirSync(path.join(__dirname, '..')).filter(name => /\.c?js$/.test(name) && !['main.cjs', 'steward-role.cjs'].includes(name))) {
     assert.ok(!/stewardRole|StewardRole|steward\.json/.test(fs.readFileSync(path.join(__dirname, '..', file), 'utf8')), file);
@@ -193,8 +193,10 @@ test('the entry is wired: the record is built from the data folder, shown in the
 
 test('every sentence exists in both languages, and the words say what the designation does and does not do', () => {
   const keys = ['menu.stewardSet', 'menu.stewardChange', 'menu.stewardRevoke', 'error.steward.invalid', 'error.steward.inSpace', 'error.steward.joinSpace', 'error.steward.state', 'error.steward.personOnly', 'steward.emptyLabel',
-    'steward.rowLabel', 'steward.rowStatus', 'steward.choose.title', 'steward.choose.intro', 'steward.choose.current', 'steward.choose.inSpace', 'steward.choose.unusable', 'steward.choose.none', 'steward.choose.confirm'];
-  for (const language of ['zh', 'en']) assert.deepEqual(Object.keys(messages[language]).filter(name => /steward/i.test(name)).sort(), [...keys].sort(), language);
+    'steward.rowLabel', 'steward.rowStatus', 'steward.choose.title', 'steward.choose.intro', 'steward.choose.current', 'steward.choose.inSpace', 'steward.choose.unusable', 'steward.choose.none', 'steward.choose.confirm',
+    // The butler's record (step 2, batch 1); its own sentences are checked in steward-record.test.cjs.
+    'menu.stewardRecord', 'error.steward.recordUnavailable', 'error.steward.designationUnreadable', 'error.stewardRecord.personOnly', 'error.stewardRecord.unavailable', 'records.name.steward', 'records.item.stewardUnavailable', 'records.item.stewardUnavailableOther'];
+  for (const language of ['zh', 'en']) assert.deepEqual(Object.keys(messages[language]).filter(name => /steward/i.test(name) && !name.startsWith('stewardRecord.')).sort(), [...keys].sort(), language);
   for (const name of keys) assert.equal(/[一-鿿]/.test(messages.en[name]), false, name);
   // It gives nothing and takes one thing away, and the person is told both before they confirm.
   assert.equal(locale.format('zh', 'steward.choose.intro'), '你主要和它说话。它固定在侧栏最上面，不再列在「会话」里。指定不给它任何新权限；当大管家期间它不能加入协作空间。只有你能指定、更换或撤销。');

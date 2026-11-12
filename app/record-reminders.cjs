@@ -8,7 +8,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const history = require('./record-history.cjs');
 
-const RECORDS = Object.freeze(['operations', 'butler-reads']);
+// The butler's own record (steward step 2, batch 1) is kept and reminded of the same way.
+const RECORDS = Object.freeze(['operations', 'butler-reads', 'steward']);
 const KINDS = Object.freeze(['age', 'size', 'unreadable', 'unavailable']);
 const ACKNOWLEDGED = 'reminders.json', ACKNOWLEDGED_MAX_BYTES = 64 * 1024;
 const record = value => { if (!RECORDS.includes(value)) throw Error('Unknown record'); return value; };
@@ -34,7 +35,7 @@ function acknowledged(dataDir) {
     const top = history.existingDirectory(dataDir, history.HISTORY_DIR); if (!top) return {};
     const value = history.readPrivateJson(path.join(top, ACKNOWLEDGED), ACKNOWLEDGED_MAX_BYTES);
     if (!value || value.version !== 1 || !value.acknowledged || typeof value.acknowledged !== 'object') return {};
-    return Object.fromEntries(Object.entries(value.acknowledged).filter(([key, level]) => /^(operations|butler-reads):(age|size|unreadable|unavailable)$/.test(key) && Number.isSafeInteger(level) && level >= 0));
+    return Object.fromEntries(Object.entries(value.acknowledged).filter(([key, level]) => new RegExp(`^(${RECORDS.join('|')}):(${KINDS.join('|')})$`).test(key) && Number.isSafeInteger(level) && level >= 0));
   } catch { return {}; }
 }
 
