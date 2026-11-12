@@ -10,7 +10,7 @@ const { IntegratorEngine, HEAD_WAIT_MS } = require('../integrator-engine.cjs');
 // Settling a handoff and telling the person, through the engine (B6 E2b, checkpoint H5). Synthetic
 // spaces, sessions and replies; the send, git, the space-record writer and the notice are stand-ins.
 const NOW = 1_800_000_000_000, LATER = NOW + 60000;
-const MAIN = 'a'.repeat(40), HEAD2 = 'b'.repeat(40);
+const MAIN = 'a'.repeat(40), HEAD2 = 'b'.repeat(40), HEAD3 = 'c'.repeat(40);
 const INTEGRATOR = { sessionId: 'integrator', nativeId: 'native-integrator' };
 const NAMES = ['a', 'b', 'c', 'd', 'e'];
 const commitOf = name => (name.charCodeAt(0).toString(16).padStart(2, '0')).repeat(20);
@@ -253,6 +253,100 @@ test('a question about a merge that git does not answer waits the same bounded w
   n.clock = LATER;
   assert.deepEqual(outcomes(await n.settle(answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9`))), { a: 'held:merge-unverified' });
   assert.equal(n.handoffs.snapshot().ready[0].state, 'held');
+});
+
+test('the person\'s "check again": the claim kept with a merge that could not be checked is asked of git against the main commit of its own handoff', async t => {
+  // A handoff whose merge check went unanswered until the wait was over: the delivery is held with what was reported.
+  const held = async (f, line = `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9`) => {
+    await f.handed(['a']);
+    f.engine.reader = reader({ commit: async () => undefined });
+    f.clock = LATER + HEAD_WAIT_MS;
+    const session = answered('tag-1', line);
+    assert.equal((await f.settle(session)).why, 'git-unanswered');
+    f.clock = LATER + 2 * HEAD_WAIT_MS;
+    assert.deepEqual(outcomes(await f.settle(session)), { a: 'held:main-unreadable' });
+    assert.deepEqual(f.handoffs.snapshot().ready[0].claim, { as: HEAD2, tests: line.includes('3/9') ? { passed: 3, total: 9 } : { passed: 9, total: 9 }, startHead: MAIN });
+  };
+  // Git answers now. Main has moved on since: the merge is still "new", because it is judged against the main commit the handoff began on.
+  const f = fixture(t);
+  await held(f);
+  const asked = [], one = reader({ isAncestor: async (a, b) => b === HEAD3 });
+  f.engine.reader = { commit: one.commit, isAncestor: async (a, b) => { asked.push([a, b]); return one.isAncestor(a, b); }, changes: one.changes };
+  f.head = HEAD3;
+  assert.deepEqual(await f.engine.recheck(key('a')), { outcome: 'merged', notify: [`installable:${HEAD3}`], install: { commit: HEAD3 } });
+  assert.deepEqual(asked, [[HEAD2, HEAD3], [HEAD2, MAIN]], 'On main now; not on main when its handoff began');
+  const merged = f.handoffs.snapshot().ready[0];
+  assert.deepEqual([merged.state, merged.mergedAs, merged.tests, merged.claim], ['merged', HEAD2, { passed: 9, total: 9 }, undefined]);
+  // Done once: there is nothing left to check again.
+  await assert.rejects(f.engine.recheck(key('a')), { code: 'HANDOFF_STATE', stale: true });
+  // Git still does not answer, or main's head cannot be read: nothing changes, and with no head git is not asked at all.
+  const g = fixture(t);
+  await held(g);
+  const before = g.bytes();
+  assert.deepEqual(await g.engine.recheck(key('a')), { outcome: 'unanswered', head: true, notify: [], install: null }, 'The head was read; git said nothing about the merge');
+  let questions = 0;
+  g.engine.reader = reader({ commit: async value => { questions += 1; return reader().commit(value); } });
+  for (const unreadable of [null, Error('git failed'), 'main', HEAD2.slice(0, 12)]) {
+    g.head = unreadable;
+    assert.deepEqual(await g.engine.recheck(key('a')), { outcome: 'unanswered', head: false, notify: [], install: null }, String(unreadable));
+  }
+  assert.deepEqual([g.bytes(), questions, g.states()], [before, 0, { a: 'held:main-unreadable' }]);
+  // Git answers "no": the claim is an unverified one from then on, and is not offered for another check.
+  g.head = HEAD2; g.engine.reader = reader({ isAncestor: async () => false });
+  assert.deepEqual(await g.engine.recheck(key('a')), { outcome: 'unverified', notify: ['merge-unverified'], install: null });
+  assert.deepEqual([g.states(), g.handoffs.snapshot().ready[0].claim], [{ a: 'held:merge-unverified' }, undefined]);
+  await assert.rejects(g.engine.recheck(key('a')), { code: 'HANDOFF_STATE', stale: true });
+  // While the check is asking git, another step registers a newer main as installable. The check then finishes for the
+  // older main it had read: the newer question stands, and the older main is not offered in its place.
+  const r = fixture(t);
+  await r.handed(['a', 'b']);
+  r.engine.reader = reader({ commit: async () => undefined });
+  r.clock = LATER + HEAD_WAIT_MS;
+  const pair = answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9\nMERGED ${commitOf('b')} as ${HEAD2} tests 9/9`);
+  await r.settle(pair); r.clock = LATER + 2 * HEAD_WAIT_MS;
+  assert.deepEqual(outcomes(await r.settle(pair)), { a: 'held:main-unreadable', b: 'held:main-unreadable' });
+  const T1 = LATER + 3 * HEAD_WAIT_MS;
+  r.clock = T1; r.head = HEAD2;
+  let meanwhile = false;
+  r.engine.reader = reader({ commit: async value => {
+    if (!meanwhile) { meanwhile = true; r.clock = T1 + 5000; assert.equal(r.handoffs.recheck(r.handoffs.claimOf(key('b')), { verified: true, as: HEAD2 }, HEAD3, T1 + 5000).install.commit, HEAD3); r.clock = T1 + 9000; }
+    return reader().commit(value);
+  } });
+  assert.deepEqual(await r.engine.recheck(key('a')), { outcome: 'merged', notify: [], install: null });
+  assert.deepEqual([r.states(), Object.entries(r.handoffs.snapshot().reasons).filter(([name, reason]) => name.startsWith('installable:') && reason.open).map(([name]) => name)], [{ a: 'merged', b: 'merged' }, [`installable:${HEAD3}`]]);
+  // A claim whose tests did not all pass can never count: it is settled without asking git.
+  const h = fixture(t);
+  await h.handed(['a']);
+  h.head = null; h.clock = LATER + HEAD_WAIT_MS * 2;
+  const failing = answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 3/9`);
+  await h.settle(failing); h.clock += HEAD_WAIT_MS;
+  assert.deepEqual(outcomes(await h.settle(failing)), { a: 'held:main-unreadable' });
+  h.head = HEAD2; h.heads = 0;
+  h.engine.reader = reader({ commit: async () => { throw Error('git must not be asked'); } });
+  assert.deepEqual(await h.engine.recheck(key('a')), { outcome: 'unverified', notify: ['merge-unverified'], install: null });
+  assert.equal(h.heads, 0, 'Main\'s head is not read either');
+  // With one checked look at the repository, that look's reader and head are the ones asked, once.
+  let looks = 0;
+  const k = fixture(t, { open: async () => { looks += 1; return { reader: reader(), mainHead: async () => HEAD2 }; }, reader: reader({ commit: async () => { throw Error('The general reader must not be asked'); } }),
+    mainHead: async () => { throw Error('The general head must not be read'); } });
+  k.engine.intake([space([fact('a')])]);
+  const opened = k.handoffs.advance({ ...at(NOW + 10), integrator: INTEGRATOR, session: integratorSession(), mainHead: MAIN, repository: true }, NOW);
+  assert.equal(opened.kind, 'open', JSON.stringify(opened));
+  k.handoffs.confirmSent(opened.handoffId, { tag: 'tag-1', control: 3 }, NOW);
+  const action = k.handoffs.plan({ ...at(LATER, [answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9`)]), integrator: INTEGRATOR, session: answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9`), repository: true });
+  k.handoffs.settle(action, { handoffId: opened.handoffId, mainUnreadable: true }, LATER);
+  looks = 0;
+  assert.equal((await k.engine.recheck(key('a'))).outcome, 'merged');
+  assert.equal(looks, 1);
+  // A look that cannot be had is no answer.
+  const m = fixture(t, { open: async () => { throw Error('The repository cannot be read now'); } });
+  m.engine.intake([space([fact('a')])]);
+  const again = m.handoffs.advance({ ...at(NOW + 10), integrator: INTEGRATOR, session: integratorSession(), mainHead: MAIN, repository: true }, NOW);
+  m.handoffs.confirmSent(again.handoffId, { tag: 'tag-1', control: 3 }, NOW);
+  m.handoffs.settle(m.handoffs.plan({ ...at(LATER), integrator: INTEGRATOR, session: answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9`), repository: true }), { handoffId: again.handoffId, mainUnreadable: true }, LATER);
+  assert.deepEqual(await m.engine.recheck(key('a')), { outcome: 'unanswered', head: false, notify: [], install: null });
+  // Only a delivery held that way can be checked again.
+  for (const other of [key('zz'), undefined, 7]) await assert.rejects(m.engine.recheck(other), { code: 'HANDOFF_STATE', stale: true }, String(other));
 });
 
 test('with one checked look at the repository per settlement, every git question goes to that look; a repository that cannot be read is an unreadable head, never an unknown commit', async t => {

@@ -35,13 +35,17 @@
       if (item.state === 'queued') counts.queued += 1;
       if (item.state === 'handed' || item.state === 'asking') counts.handed += 1;
       const member = name(item.memberId) || item.memberName || unnamed;
-      const row = { where, status: { key: 'queue.handoff.row.' + where, params: { name: member, who } }, why: null, action: null, need: false, front: false };
+      const row = { where, status: { key: 'queue.handoff.row.' + where, params: { name: member, who } }, why: null, action: null, more: null, need: false, front: false };
       if (where === 'held') {
         // With nobody designated there is no session to settle a conflict in and no button to press: the cause says only that.
         const why = item.why && !integrator && item.why.key === 'queue.handoff.why.conflict' ? { key: 'queue.handoff.why.conflictIdle', params: {} } : item.why;
         row.need = true; row.why = why ? { key: why.key, params: { ...why.params, who: called } } : null;
         // Sending it again means something once there is an integrator to send it to.
-        row.action = integrator ? { kind: 'send', key: item.key, label: { key: 'queue.handoff.send', params: { who: called } } } : null;
+        const send = integrator ? { kind: 'send', key: item.key, label: { key: 'queue.handoff.send', params: { who: called } } } : null;
+        // A hold that keeps the merge that was reported is checked again first: sending it again cannot verify a
+        // merge that was already made. Sending stays beside it, for a check that can never be answered.
+        row.action = item.recheck ? { kind: 'recheck', key: item.key, label: { key: 'queue.handoff.recheck', params: {} } } : send;
+        row.more = item.recheck ? send : null;
       } else if (where === 'returned') {
         row.need = true; row.why = item.note ? { key: 'queue.handoff.why.returned', params: { note: item.note } } : { key: 'queue.handoff.why.returnedPlain', params: {} };
         // The task goes back to the member who did it while that member can take it; to anyone otherwise.

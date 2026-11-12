@@ -1703,6 +1703,16 @@ async function boot() {
       else if (action === 'retryReason') result = handoffs.retryReason(value);
       else if (action === 'resolve') result = handoffs.resolveHandoff(value, { retry: choice === true });
       else if (action === 'answer') result = handoffs.answer(value);
+      else if (action === 'recheck') {
+        // A delivery held because git could not be read: the merge that was reported for it is checked again.
+        // While git still does not answer nothing changes, and the person is told that.
+        const engine = queueDispatcher?.integration;
+        if (!engine) throw uiError('error.handoff.notStarted');
+        const checked = await engine.recheck(value);
+        // (Said differently when the folder was read but git did not answer about the merge: then the folder is not the trouble.)
+        if (checked.outcome === 'unanswered') throw uiError(checked.head === true ? 'error.handoff.recheckSilent' : 'error.handoff.recheckUnanswered');
+        result = { outcome: checked.outcome };
+      }
       else if (action === 'redo') {
         // A returned delivery: its task goes back into the space's queue with the integrator's reason, for the member
         // who did it if that member can still take it, and the delivery is marked so that it is not offered again.

@@ -662,6 +662,113 @@ test('a merge git could not be asked about is held as "could not be checked", ne
   assert.deepEqual(outcomes(settleWith(other, 'tag-1', `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9`, { handoffId: 'H9-other', mainHead: MAIN2, verified: { [key('a')]: { verified: false, why: 'git-unanswered' } } })), { a: 'held:merge-unverified' });
 });
 
+test('a merge that could not be checked keeps what was reported, can be checked again, and loses the claim on every way out of that hold', t => {
+  const { backlog, file, open } = fixture(t);
+  const silent = names => Object.fromEntries(names.map(name => [key(name), { verified: false, why: 'git-unanswered' }]));
+  const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+  handed(backlog, names);
+  // Seven merges reported; git answered for none of them. One names its commit by a short id, one has a review note, one did not pass all its tests.
+  const reply = [`MERGED ${commitOf('a')} as ${MAIN2.slice(0, 9)} tests 9/9`, `MERGED ${commitOf('b')} as ${MAIN2} tests 9/9 review ok-by-R1`, `MERGED ${commitOf('c')} as ${MAIN2} tests 3/9`,
+    ...['d', 'e', 'f', 'g'].map(name => `MERGED ${commitOf(name)} as ${MAIN2} tests 9/9`)].join('\n');
+  settleWith(backlog, 'tag-1', reply, { mainHead: MAIN2, verified: silent(names) });
+  const claims = () => Object.fromEntries(backlog.snapshot().ready.map(entry => [entry.itemId, entry.claim]));
+  assert.deepEqual(claims().a, { as: MAIN2.slice(0, 9), tests: { passed: 9, total: 9 }, startHead: START });
+  assert.deepEqual(claims().c, { as: MAIN2, tests: { passed: 3, total: 9 }, startHead: START });
+  assert.deepEqual([states(backlog), Object.values(claims()).every(Boolean)], [Object.fromEntries(names.map(name => [name, 'held:main-unreadable'])), true]);
+  assert.deepEqual(claims().b, { as: MAIN2, tests: { passed: 9, total: 9 }, startHead: START, review: 'ok-by-R1' });
+  // The panel is told which rows can be checked again; what is asked for is a copy.
+  assert.deepEqual(Object.values(backlog.spaceView('space-1')).map(item => item.recheck), names.map(() => true));
+  const asked = backlog.claimOf(key('a'));
+  assert.deepEqual(asked, { key: key('a'), commit: commitOf('a'), as: MAIN2.slice(0, 9), startHead: START, tests: { passed: 9, total: 9 } });
+  asked.tests.passed = 0;
+  assert.equal(backlog.claimOf(key('a')).tests.passed, 9);
+  // Git still does not answer: nothing changes, nothing is written.
+  const before = fs.readFileSync(file, 'utf8');
+  assert.deepEqual(backlog.recheck(backlog.claimOf(key('a')), { verified: false, why: 'git-unanswered' }, MAIN3, NOW + 70000), { outcome: 'unanswered', notify: [], install: null });
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  // Verified for the commit the claim names: merged, with the tests that were reported, and that main commit may be installed. Kept across a restart.
+  assert.deepEqual(backlog.recheck(backlog.claimOf(key('a')), { verified: true, as: MAIN2 }, MAIN3, NOW + 70000), { outcome: 'merged', notify: [`installable:${MAIN3}`], install: { commit: MAIN3 } });
+  const merged = open().snapshot().ready[0];
+  assert.deepEqual([merged.state, merged.mergedAs, merged.tests, merged.claim, merged.reason, merged.closedAt], ['merged', MAIN2, { passed: 9, total: 9 }, undefined, undefined, NOW + 70000]);
+  // A second one for the same main commit asks nothing again; its review note goes with it.
+  assert.deepEqual(backlog.recheck(backlog.claimOf(key('b')), { verified: true, as: MAIN2 }, MAIN3, NOW + 70000), { outcome: 'merged', notify: [], install: null });
+  assert.deepEqual([backlog.snapshot().ready[1].state, backlog.snapshot().ready[1].review], ['merged', 'ok-by-R1']);
+  // Not all tests passed, another commit than the one named, no main head, or an answered "no": an unverified claim, whatever the verdict says.
+  assert.deepEqual(backlog.recheck(backlog.claimOf(key('c')), { verified: true, as: MAIN2 }, MAIN3, NOW + 70000), { outcome: 'unverified', notify: ['merge-unverified'], install: null });
+  assert.equal(backlog.recheck(backlog.claimOf(key('d')), { verified: true, as: MAIN3 }, MAIN3, NOW + 70000).outcome, 'unverified');
+  assert.equal(backlog.recheck(backlog.claimOf(key('e')), { verified: true, as: MAIN2 }, 'short', NOW + 70000).outcome, 'unverified');
+  assert.equal(backlog.recheck(backlog.claimOf(key('f')), { verified: false, why: 'not-on-main' }, MAIN3, NOW + 70000).outcome, 'unverified');
+  assert.deepEqual([states(backlog), claims().c, claims().d, claims().e, claims().f], [{ a: 'merged', b: 'merged', c: 'held:merge-unverified', d: 'held:merge-unverified', e: 'held:merge-unverified', f: 'held:merge-unverified', g: 'held:main-unreadable' },
+    undefined, undefined, undefined, undefined]);
+  // Only a delivery held that way, with its claim as it was when asked, can be checked again.
+  const mine = backlog.claimOf(key('g'));
+  for (const other of [key('a'), key('c'), key('zz'), undefined, 7]) assert.throws(() => backlog.claimOf(other), { code: 'HANDOFF_STATE', stale: true }, String(other));
+  for (const changed of [{ ...mine, as: MAIN3 }, { ...mine, startHead: MAIN3 }, { ...mine, commit: commitOf('a') }, { ...mine, key: key('a') }, null, undefined]) {
+    assert.throws(() => backlog.recheck(changed, { verified: true, as: MAIN2 }, MAIN3, NOW + 70000), { code: 'HANDOFF_STATE', stale: true }, JSON.stringify(changed));
+  }
+  assert.equal(states(backlog).g, 'held:main-unreadable');
+  // Every other way out of the hold drops the claim: the person's retry of the delivery, of the reason, and a newer delivery of the branch.
+  for (const leave of [b => b.retryReady(key('a')), b => b.retryReason('main-unreadable'), b => b.noteReady(ready('a2', { branch: 'lane/a' }), NOW + 80000)]) {
+    const other = fixture(t).backlog;
+    handed(other, ['a']);
+    settleWith(other, 'tag-1', `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9`, { mainHead: MAIN2, verified: silent(['a']) });
+    assert.ok(other.snapshot().ready[0].claim);
+    leave(other);
+    assert.deepEqual([other.snapshot().ready[0].claim, ['deliverable', 'superseded'].includes(other.snapshot().ready[0].state)], [undefined, true]);
+    assert.throws(() => other.claimOf(key('a')), { code: 'HANDOFF_STATE', stale: true });
+  }
+  // An install question opened since the check began is about a newer main, which holds this merge too: it stands,
+  // and the older main the check read is not offered in its place. One opened before the check began is replaced as usual.
+  for (const [began, expected] of [[NOW + 60000, { notify: [], install: null, open: [`installable:${MAIN3}`] }], [NOW + 80000, { notify: [`installable:${MAIN2}`], install: { commit: MAIN2 }, open: [`installable:${MAIN2}`] }]]) {
+    const race = fixture(t).backlog;
+    handed(race, ['a', 'b']);
+    settleWith(race, 'tag-1', `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9\nMERGED ${commitOf('b')} as ${MAIN2} tests 9/9`, { mainHead: MAIN2, verified: silent(['a', 'b']) });
+    assert.deepEqual(race.recheck(race.claimOf(key('a')), { verified: true, as: MAIN2 }, MAIN3, NOW + 70000).install, { commit: MAIN3 });
+    const result = race.recheck(race.claimOf(key('b')), { verified: true, as: MAIN2 }, MAIN2, NOW + 90000, began);
+    const open = Object.entries(race.snapshot().reasons).filter(([name, reason]) => name.startsWith('installable:') && reason.open).map(([name]) => name);
+    assert.deepEqual({ notify: result.notify, install: result.install, open }, expected, String(began));
+    assert.equal(states(race).b, 'merged');
+  }
+  // The person answered that newer question while the check was still asking git: the older main is not offered after it either.
+  const settledSince = fixture(t).backlog;
+  handed(settledSince, ['a', 'b']);
+  settleWith(settledSince, 'tag-1', `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9\nMERGED ${commitOf('b')} as ${MAIN2} tests 9/9`, { mainHead: MAIN2, verified: silent(['a', 'b']) });
+  settledSince.recheck(settledSince.claimOf(key('a')), { verified: true, as: MAIN2 }, MAIN3, NOW + 70000);
+  assert.deepEqual(settledSince.answer(`installable:${MAIN3}`), { answered: true });
+  const afterAnswer = settledSince.recheck(settledSince.claimOf(key('b')), { verified: true, as: MAIN2 }, MAIN2, NOW + 90000, NOW + 60000);
+  assert.deepEqual([afterAnswer.outcome, afterAnswer.notify, afterAnswer.install, Object.keys(settledSince.snapshot().reasons).filter(name => name.startsWith('installable:'))], ['merged', [], null, [`installable:${MAIN3}`]]);
+  // Only an install question counts: something else that came up since the check began (here another claim that failed) stops nothing.
+  const unrelated = fixture(t).backlog;
+  handed(unrelated, ['a', 'b']);
+  settleWith(unrelated, 'tag-1', `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9\nMERGED ${commitOf('b')} as ${MAIN2} tests 9/9`, { mainHead: MAIN2, verified: silent(['a', 'b']) });
+  assert.deepEqual(unrelated.recheck(unrelated.claimOf(key('a')), { verified: false, why: 'not-on-main' }, MAIN3, NOW + 70000).notify, ['merge-unverified']);
+  assert.deepEqual(unrelated.recheck(unrelated.claimOf(key('b')), { verified: true, as: MAIN2 }, MAIN2, NOW + 90000, NOW + 60000).install, { commit: MAIN2 });
+  // A head that could not be read at all keeps the claim the same way; a line that cannot be read keeps none.
+  const unread = fixture(t).backlog;
+  handed(unread, ['a', 'b']);
+  settleWith(unread, 'tag-1', `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9\nMERGED ${commitOf('b')} into main`, { mainUnreadable: true });
+  assert.deepEqual([states(unread), unread.snapshot().ready.map(entry => Boolean(entry.claim))], [{ a: 'held:main-unreadable', b: 'held:merge-unverified' }, [true, false]]);
+  // The claim belongs to that hold only, and has the shape it was written with: anything else is not read.
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8')), g = saved.ready.findIndex(entry => entry.itemId === 'g');
+  const broken = [entry => { entry.claim = { ...entry.claim, as: 'main' }; }, entry => { entry.claim = { ...entry.claim, startHead: 'short' }; }, entry => { entry.claim = { ...entry.claim, tests: { passed: 1 } }; },
+    entry => { entry.claim = { ...entry.claim, more: true }; }, entry => { entry.claim = []; }, entry => { entry.reason = 'merge-unverified'; }];
+  for (const [index, damage] of broken.entries()) {
+    const copy = structuredClone(saved); damage(copy.ready[g]);
+    fs.writeFileSync(file, JSON.stringify(copy), { mode: 0o600 });
+    assert.throws(() => open().snapshot(), { code: 'HANDOFF_STATE' }, String(index));
+  }
+  // A hold of that kind from before claims were kept has none: the record is read, nothing can be checked again, and the panel is not told otherwise.
+  const older = structuredClone(saved); delete older.ready[g].claim;
+  fs.writeFileSync(file, JSON.stringify(older), { mode: 0o600 });
+  const old = open();
+  assert.equal(states(old).g, 'held:main-unreadable');
+  assert.throws(() => old.claimOf(key('g')), { code: 'HANDOFF_STATE', stale: true });
+  assert.equal(old.spaceView('space-1').g.recheck, undefined);
+  const onMerged = structuredClone(saved); onMerged.ready[0].claim = saved.ready[g].claim;
+  fs.writeFileSync(file, JSON.stringify(onMerged), { mode: 0o600 });
+  assert.throws(() => open().snapshot(), { code: 'HANDOFF_STATE' });
+});
+
 // A reader with fixed answers, to reach each check alone.
 function fake(overrides = {}) {
   const full = value => value.length === 40 ? value : value.padEnd(40, '0');

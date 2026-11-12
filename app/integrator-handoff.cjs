@@ -102,7 +102,16 @@ function checkEntry(entry) {
       !(entry.resends === undefined || entry.resends === 1) || optional(entry.note, 200) === null || optional(entry.shown, SHOWN_LIMIT) === null ||
       (entry.state === 'merged') !== sha(entry.mergedAs) || (entry.state !== 'merged' && entry.mergedAs !== undefined) ||
       !(entry.tests === undefined || Number.isSafeInteger(entry.tests?.passed) && Number.isSafeInteger(entry.tests?.total)) || optional(entry.review, 100) === null ||
-      !(entry.redone === undefined || entry.redone === true && entry.state === 'returned')) throw fail('Invalid delivery record');
+      !(entry.redone === undefined || entry.redone === true && entry.state === 'returned') ||
+      !(entry.claim === undefined || entry.state === 'held' && entry.reason === 'main-unreadable' && validClaim(entry.claim))) throw fail('Invalid delivery record');
+}
+// The merge an integrator reported for a delivery that was then held because git could not be read:
+// the commit it named, its test count, and the main commit the handoff began on. Kept so that the
+// same claim can be checked again; it belongs to that hold and to nothing else.
+function validClaim(claim) {
+  return Boolean(claim) && typeof claim === 'object' && !Array.isArray(claim) && typeof claim.as === 'string' && /^[0-9a-f]{7,40}$/u.test(claim.as) && sha(claim.startHead) &&
+    Number.isSafeInteger(claim.tests?.passed) && Number.isSafeInteger(claim.tests?.total) && optional(claim.review, 100) !== null &&
+    Object.keys(claim).every(name => ['as', 'startHead', 'tests', 'review'].includes(name)) && Object.keys(claim.tests).every(name => ['passed', 'total'].includes(name));
 }
 function checkState(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data) || data.version !== 1 || !Number.isSafeInteger(data.seq) || data.seq < 0 ||
@@ -495,7 +504,7 @@ class IntegrationHandoffs {
   // A delivery leaves its place without an outcome. If a newer delivery of its branch has
   // arrived meanwhile it is void and is not handed again; otherwise it takes the given state.
   leave(next, entry, state, reason, now) {
-    delete entry.reason;
+    delete entry.reason; delete entry.claim;
     if (newer(next, next.ready.indexOf(entry))) { entry.state = 'superseded'; entry.closedAt = now; return null; }
     entry.state = state;
     if (state !== 'held') return null;
@@ -525,7 +534,7 @@ class IntegrationHandoffs {
       return { stored: false, why: 'backlog-full', superseded: [], notify };
     }
     const superseded = [];
-    for (const existing of replaced) { existing.state = 'superseded'; existing.closedAt = now; delete existing.reason; superseded.push(existing.key); }
+    for (const existing of replaced) { existing.state = 'superseded'; existing.closedAt = now; delete existing.reason; delete existing.claim; superseded.push(existing.key); }
     next.ready.push(entry);
     // Real room ends the full-backlog condition. A delivery that only took the place of the one it
     // replaced leaves the backlog as full as it was, so the condition stays and nobody is told twice.
@@ -700,7 +709,13 @@ class IntegrationHandoffs {
             if (result.review) entry.review = label(result.review, 100);
             merged += 1; fact(entry, 'merged', { as: verdict.as, tests: result.tests, ...(entry.review ? { review: entry.review } : {}) });
           // Git's own trouble (main's head could not be read, or a question about this merge went unanswered) is said as that.
-          } else held(entry, (unread || verdict?.why === 'git-unanswered') && result.malformed !== true ? 'main-unreadable' : 'merge-unverified');
+          } else {
+            held(entry, (unread || verdict?.why === 'git-unanswered') && result.malformed !== true ? 'main-unreadable' : 'merge-unverified');
+            // What was reported is kept with that hold, so that it can be checked again once git can be read.
+            if (entry.state === 'held' && entry.reason === 'main-unreadable') {
+              entry.claim = { as: result.as, tests: { passed: result.tests.passed, total: result.tests.total }, startHead: handoff.mainHead, ...(result.review ? { review: label(result.review, 100) } : {}) };
+            }
+          }
         } else if (result.kind === 'returned') {
           entry.state = 'returned'; entry.closedAt = now; entry.note = result.reason; delete entry.resends;
           // The redo is a new task only the person or their secretary may add: it is suggested, and after
@@ -850,7 +865,7 @@ class IntegrationHandoffs {
   release(next, match, close) {
     const released = [];
     for (const entry of next.ready) {
-      if (entry.state === 'held' && match(entry.reason)) { entry.state = 'deliverable'; delete entry.reason; released.push(entry.key); }
+      if (entry.state === 'held' && match(entry.reason)) { entry.state = 'deliverable'; delete entry.reason; delete entry.claim; released.push(entry.key); }
     }
     if (close) for (const [key, reason] of Object.entries(next.reasons)) if (reason.open && match(key)) reason.open = false;
     return released;
@@ -870,7 +885,7 @@ class IntegrationHandoffs {
       items[entry.itemId] = { key: entry.key, state: asking ? 'asking' : entry.state === 'deliverable' ? 'queued' : entry.state, branch: entry.branch, commit: entry.commit,
         ...(entry.text ? { text: entry.text } : {}), ...(entry.memberId ? { memberId: entry.memberId } : {}), ...(entry.memberName ? { memberName: entry.memberName } : {}),
         ...(entry.reason ? { reason: entry.reason } : {}), ...(said(entry) ? { note: entry.note } : {}), ...(entry.mergedAs ? { mergedAs: entry.mergedAs } : {}),
-        ...(entry.tests ? { tests: { ...entry.tests } } : {}), ...(entry.redone ? { redone: true } : {}) };
+        ...(entry.tests ? { tests: { ...entry.tests } } : {}), ...(entry.redone ? { redone: true } : {}), ...(entry.claim ? { recheck: true } : {}) };
     }
     return items;
   }
@@ -892,13 +907,60 @@ class IntegrationHandoffs {
     this.commit(next);
     return { redone: true };
   }
+  // The claim kept with a delivery that is held because git could not be read: what a second check needs.
+  // Refused for any other delivery.
+  claimOf(key) {
+    this.usable();
+    const entry = this.state.ready.find(candidate => candidate.key === key);
+    if (!entry || entry.state !== 'held' || entry.reason !== 'main-unreadable' || !entry.claim) throw stale('This delivery has no claim to check again');
+    return { key: entry.key, commit: entry.commit, as: entry.claim.as, startHead: entry.claim.startHead, tests: { ...entry.claim.tests }, ...(entry.claim.review ? { review: entry.claim.review } : {}) };
+  }
+  // That claim asked of git through the given reader, for the main head given. Reads only.
+  async verifyClaim(read, claim, mainHead) { this.usable(); return verifyMerged(read, { ready: claim?.commit, as: claim?.as, startHead: claim?.startHead, mainHead }); }
+  // The second check's verdict on that claim (what verifyClaim said, for the main head it was asked about).
+  // - Verified, for the commit the claim names: the delivery is merged, and that main commit may be installed.
+  // - Git still did not answer: nothing changes.
+  // - Anything else: the delivery stays on hold as an unverified claim.
+  // The claim must still be the one the check was made for; a delivery that moved on meanwhile is refused.
+  // `began` is when the check began to ask git: an install question opened since then is about a newer
+  // main, which holds this merge too. It stands, and so does the person's answer to it if they gave one
+  // meanwhile: the older main the check read is not offered after it.
+  recheck(claim, verdict, mainHead, now = Date.now(), began = now) {
+    const next = this.draft();
+    const entry = next.ready.find(candidate => candidate.key === claim?.key);
+    if (!entry || entry.state !== 'held' || entry.reason !== 'main-unreadable' || !entry.claim || entry.commit !== claim.commit || entry.claim.as !== claim.as || entry.claim.startHead !== claim.startHead) {
+      throw stale('This delivery has no such claim to check again');
+    }
+    if (verdict?.verified !== true && verdict?.why === 'git-unanswered') return { outcome: 'unanswered', notify: [], install: null };
+    const notify = [];
+    const tell = intent => { if (intent) notify.push(intent.reason); };
+    const kept = entry.claim;
+    let install = null;
+    if (verdict?.verified === true && sha(verdict.as) && verdict.as.startsWith(kept.as) && sha(mainHead) && kept.tests.total > 0 && kept.tests.passed === kept.tests.total) {
+      entry.state = 'merged'; entry.closedAt = now; entry.mergedAs = verdict.as; entry.tests = { ...kept.tests };
+      if (kept.review) entry.review = kept.review;
+      delete entry.reason; delete entry.claim; delete entry.resends;
+      // One question per main commit, as when a handoff is settled.
+      const question = `installable:${mainHead}`;
+      const since = Object.entries(next.reasons).some(([other, reason]) => other.startsWith('installable:') && reason.firstAt > began);
+      if (!next.reasons[question] && !since) {
+        for (const [other, reason] of Object.entries(next.reasons)) if (reason.open && other.startsWith('installable:')) reason.open = false;
+        tell(this.occur(next, question, now)); install = { commit: mainHead };
+      }
+      this.commit(next);
+      return { outcome: 'merged', notify, install };
+    }
+    tell(this.leave(next, entry, 'held', 'merge-unverified', now));
+    this.commit(next);
+    return { outcome: entry.state === 'held' ? 'unverified' : entry.state, notify, install };
+  }
   // The person's "retry" on one held delivery. A standing condition stays open: the condition
   // has not changed. An event reason is over once nothing is held under it.
   retryReady(key) {
     const next = this.draft();
     const entry = next.ready.find(candidate => candidate.key === key);
     if (!entry || entry.state !== 'held') throw stale('This delivery is not held');
-    entry.state = 'deliverable'; delete entry.reason;
+    entry.state = 'deliverable'; delete entry.reason; delete entry.claim;
     this.commit(next);
     return { released: [key] };
   }
