@@ -12566,6 +12566,8 @@ The person (11-11 21:2x): 「别忘了 agent 在干活的时候是可以发送�
 - The steward's private `queue` is still refused by the owner check when the person's window holds the session. That is a permission question of its own.
 - A read receipt for a row a compaction folded in before any request is reported for the request that carries the summary. Not reproduced.
 - Measured on 2.1.322 only; 2.1.321 and earlier keep the ordinary path.
+- The steward's own route (`workspace_control` → background control → `spaceAction queueShared`) reaches the same `workspace.queue`, and no deadline of its own applies to a queued input (`service-connection.cjs`). It was not run end to end against a real Claude; `scripts/test-background-control.cjs` passes, but with its synthetic producer.
+- "The person typed in the native terminal during the hold" rests on the kit's stamped `composer` origin; no real-terminal Enter during a hold was run.
 - Esc in the native terminal while a root tool runs: if the stopped tool still returns, the held message is appended into the stopped turn and read with the person's next prompt (「已送进正在进行的回合」 stays true). Not measured.
 - A held message has no time limit of its own. It ends with the turn, a session end or context change, a reload, or the connection closing. The one slot was already held until native pickup before this change.
 - The waiting hints say a message the turn outlives "is sent as the next message". A native draft or the person's own terminal input then refuses it, and that refusal is shown as its own message, as with the earlier wording.
