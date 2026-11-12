@@ -237,3 +237,19 @@ test('a record that stopped taking lines while NAW runs still shows what it hold
   const shown = view(f.record, { sessions: [] }, { current: steward });
   assert.equal(shown.writeFailed, true); assert.ok(shown.entries.some(e => e.method === 'send'));
 });
+
+// Review 2 of this batch: what the person sees comes from view(), not entries().
+test('the view says a repeat was not done again, and a snapshot that asked the person shows the answer', async t => {
+  const f = fixture(t);
+  await f.record.around(sender(), invoke('send', ['x', 'hi'], 'op-a'), async () => ({ id: 'op-a', state: 'complete' }));
+  await f.record.around(sender(), invoke('send', ['x', 'hi'], 'op-a'), async () => ({ id: 'op-a', state: 'complete', duplicate: true }));
+  await f.record.around(sender(), { action: 'snapshot' }, async () => ({ id: 'op-given', state: 'confirmation-required' }));
+  const asked = [];
+  const shown = view(f.record, { sessions: [] }, { current: steward, stateOf: step => { asked.push(step.operationId); return step.operationId === 'op-given' ? { state: 'complete', reason: null, method: 'initial' } : null; } });
+  const [snapshot, repeat, first] = shown.entries;
+  assert.deepEqual([snapshot.kind, snapshot.state], ['snapshot', 'complete'], 'the person\'s answer, found by the id NAW gave');
+  assert.deepEqual([repeat.duplicate, first.duplicate], [true, false]);
+  const { bind } = require('../renderer/steward-record.js'), dialog = bind({ dialog: { addEventListener() {} }, document: {}, api: {} });
+  assert.equal(dialog.result(repeat)[0], 'stewardRecord.result.duplicate');
+  assert.deepEqual(asked, ['op-given'], 'a final outcome is never looked up again');
+});

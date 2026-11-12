@@ -33,8 +33,8 @@ function check(value) {
   const ok = !at ? false : value?.kind === 'step' ? exact(value, ['kind', 'at', 'id', 'session', 'action', 'method', 'arguments', 'operationId']) && token(value.id) && session(value.session) &&
       ['invoke', 'snapshot'].includes(value.action) && (value.method === null || token(value.method)) && (value.arguments === null || text(value.arguments, ARGUMENTS_MAX + 1)) &&
       (value.operationId === null || token(value.operationId))
-    : value?.kind === 'outcome' ? exact(value, ['kind', 'at', 'step', 'state', 'reason', 'error', 'duplicate']) && token(value.step) && token(value.state) && (value.reason === null || token(value.reason)) &&
-      (value.error === null || text(value.error, ERROR_MAX)) && typeof value.duplicate === 'boolean'
+    : value?.kind === 'outcome' ? exact(value, ['kind', 'at', 'step', 'state', 'reason', 'error', 'duplicate', 'operationId']) && token(value.step) && token(value.state) && (value.reason === null || token(value.reason)) &&
+      (value.error === null || text(value.error, ERROR_MAX)) && typeof value.duplicate === 'boolean' && (value.operationId === null || token(value.operationId))
     : value?.kind === 'role' ? exact(value, ['kind', 'at', 'event', 'session']) && EVENTS.includes(value.event) && (value.session === null || exact(value.session, ['id', 'nativeId']) && token(value.session.id) && token(value.session.nativeId))
     : false;
   if (!ok) throw Error('Invalid steward record line');
@@ -59,8 +59,9 @@ function outcomeOf(result) {
   const state = token(result?.state) ? result.state : 'unconfirmed';
   const reason = token(result?.reason) ? result.reason : token(result?.refusalSummary?.reason) ? result.refusalSummary.reason : null;
   const error = typeof result?.error === 'string' ? result.error.slice(0, ERROR_MAX) : null;
-  // The same operation id and command again: NAW answered with the earlier one and ran nothing.
-  return { state, reason, error, duplicate: result?.duplicate === true };
+  // The same operation id and command again: NAW answered with the earlier one and ran nothing. The id NAW gave a
+  // snapshot of another session (which asks the person) is kept, so its later answer can be found.
+  return { state, reason, error, duplicate: result?.duplicate === true, operationId: token(result?.id) ? result.id : null };
 }
 
 class StewardRecord {
@@ -121,7 +122,7 @@ class StewardRecord {
     } catch { throw uiError('error.steward.recordUnavailable'); }
     let result;
     try { result = await run(); }
-    catch (error) { this.finish(id, { state: 'unconfirmed', reason: null, error: String(error?.message ?? '').slice(0, ERROR_MAX) || null, duplicate: false }); throw error; }
+    catch (error) { this.finish(id, { state: 'unconfirmed', reason: null, error: String(error?.message ?? '').slice(0, ERROR_MAX) || null, duplicate: false, operationId: null }); throw error; }
     this.finish(id, outcomeOf(result));
     return result;
   }
@@ -136,11 +137,13 @@ class StewardRecord {
     for (const value of this.lines) if (value.kind === 'outcome') outcomes.set(value.step, value);
     return this.lines.filter(value => value.kind !== 'outcome').map(value => {
       if (value.kind === 'role') return { at: value.at, kind: 'role', event: value.event, session: value.session };
-      const outcome = outcomes.get(value.id) || null;
-      const open = outcome && !outcome.error && !outcome.duplicate && OPEN.includes(outcome.state) && value.operationId;
-      let later = open ? stateOf(value) : null;
-      if (later && later.method !== undefined && later.method !== null && later.method !== value.method) later = null;
-      return { at: value.at, kind: 'step', id: value.id, session: value.session, action: value.action, method: value.method, arguments: value.arguments, operationId: value.operationId,
+      const outcome = outcomes.get(value.id) || null, operationId = value.operationId ?? outcome?.operationId ?? null;
+      const open = outcome && !outcome.error && !outcome.duplicate && OPEN.includes(outcome.state) && operationId;
+      let later = open ? stateOf({ ...value, operationId }) : null;
+      // A snapshot NAW runs as `initial`.
+      const method = value.action === 'snapshot' ? 'initial' : value.method;
+      if (later && later.method !== undefined && later.method !== null && later.method !== method) later = null;
+      return { at: value.at, kind: 'step', id: value.id, session: value.session, action: value.action, method: value.method, arguments: value.arguments, operationId,
         state: later?.state ?? outcome?.state ?? null, reason: later ? later.reason ?? null : outcome?.reason ?? null, error: outcome?.error ?? null, duplicate: outcome?.duplicate === true, recorded: Boolean(outcome) };
     });
   }
@@ -188,7 +191,7 @@ function view(record, snapshot, { current = null, stateOf = () => null, limit = 
   const entries = record.entries({ stateOf }).map(entry => {
     if (entry.kind === 'role') return { at: entry.at, kind: 'role', event: entry.event, name: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null };
     let args = null; try { args = entry.arguments === null ? null : JSON.parse(entry.arguments); } catch { args = null; }
-    const out = { at: entry.at, kind: entry.action === 'snapshot' ? 'snapshot' : 'invoke', method: entry.method, state: entry.state, reason: entry.reason, error: cut(entry.error), recorded: entry.recorded };
+    const out = { at: entry.at, kind: entry.action === 'snapshot' ? 'snapshot' : 'invoke', method: entry.method, state: entry.state, reason: entry.reason, error: cut(entry.error), duplicate: entry.duplicate, recorded: entry.recorded };
     if (entry.method === 'spaceAction' && Array.isArray(args)) {
       Object.assign(out, { space: spaceOf(args[0]) || (typeof args[0] === 'string' ? args[0] : null), spaceAction: typeof args[1] === 'string' ? args[1].slice(0, 40) : null });
       if (args[1] === 'queueAdd' && Array.isArray(args[2])) Object.assign(out, { text: cut(args[2][0]), target: nameOf(args[2][1]) });
