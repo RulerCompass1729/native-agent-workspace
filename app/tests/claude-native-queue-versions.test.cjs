@@ -30,3 +30,8 @@ test('317 and retained302 queue support is preserved; retained new versions rema
   assert.equal((await binding('2.1.302', true)).nativeQueue, true);
   assert.equal((await binding('2.1.322', true)).nativeQueue, false);
 });
+test('2.1.322 alone offers mid-turn delivery (measured); other versions and the retained mod do not', async () => {
+  assert.equal((await binding('2.1.322')).nativeMidturnAppend, true);
+  for (const version of ['2.1.321', '2.1.319', '2.1.317', '2.1.323', '2.1.322-beta']) assert.equal((await binding(version)).nativeMidturnAppend, false, version);
+  assert.equal((await binding('2.1.322', true)).nativeMidturnAppend, false);
+});

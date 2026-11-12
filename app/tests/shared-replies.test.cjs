@@ -290,3 +290,39 @@ test('a person\'s own ! command is never copied into a shared reply, even on the
   assert.ok(shared.includes('model tool output') && shared.includes('shared answer'), 'the agent\'s own turn is still shared');
   assert.ok(!shared.includes('PRIVATE_SHELL_OUTPUT') && !shared.includes('cat notes.txt'));
 });
+test('2.1.322 mid-turn shared queue: delivered into the running turn, its grant closes and that turn stays private', async t => {
+  const { w, runtimes: [a], ids, block } = await fixture(t);
+  w.get(ids[0]).state = 'working'; a.queueAvailable = true; a.midturnAvailable = true;
+  let accept, nextTag;
+  a.queue = (_text, tag) => { nextTag = tag; return new Promise(resolve => { accept = resolve; }); };
+  const done = w.queue(ids[0], 'steer while working', 'owner', {});
+  const source = w.room.messages.find(m => m.text === 'steer while working');
+  assert.equal(source.midturn, true); assert.equal(source.status, 'awaiting-native');
+  assert.equal(w.get(ids[0]).messages.find(m => m.id === nextTag).midturn, true);
+  a.emit('submitted', nextTag); accept({ mode: 'append', uuid: '66666666-6666-4666-8666-666666666666', turnId: 'running', promptId: null }); await done;
+  assert.equal(source.status, 'reply-private'); assert.equal(source.deliveredInto, 'running');
+  assert.equal(source.deliveries[0].status, 'submitted');
+  assert.equal(w.sharedReplies.grants.get(nextTag).closed, true);
+  // The running turn's later output is not this message's shared reply.
+  block(0, { id: 'display:running', kind: 'response', turnId: 'running', promptId: 'running', text: 'PRIVATE RUNNING OUTPUT', status: 'complete' });
+  assert.ok(!JSON.stringify(w.room.messages).includes('PRIVATE RUNNING OUTPUT'));
+  a.emit('midturnRead', { tag: nextTag, uuid: '66666666-6666-4666-8666-666666666666', turnId: 'running' });
+  assert.equal(source.nativeRead, true);
+});
+test('2.1.322 mid-turn private queue keeps its place in time; a fallback own turn moves after the running reply as before', async t => {
+  const { w, runtimes: [a], ids } = await fixture(t);
+  const s = w.get(ids[0]); s.state = 'working'; a.queueAvailable = true; a.midturnAvailable = true;
+  a.queue = async () => ({ mode: 'append', uuid: '77777777-7777-4777-8777-777777777777', turnId: 'running', promptId: null });
+  const tag = await w.queue(ids[0], 'first steer', 'owner');
+  s.messages.push({ id: 'later-row', role: 'assistant', text: 'later', status: 'complete' });
+  const steer = s.messages.find(m => m.id === tag);
+  assert.equal(steer.status, 'submitted'); assert.equal(steer.deliveredInto, 'running'); assert.notEqual(s.messages.at(-1), steer);
+  a.queue = async () => ({ promptId: 'own-turn', turnId: 'own-turn' });
+  let release; const later = new Promise(resolve => { release = resolve; });
+  a.queue = async () => { await later; return { promptId: 'own-turn', turnId: 'own-turn' }; };
+  const pending = w.queue(ids[0], 'second steer', 'owner');
+  s.messages.push({ id: 'reply-row', role: 'assistant', text: 'running reply', status: 'complete' });
+  release(); const second = await pending;
+  const row = s.messages.find(m => m.id === second);
+  assert.equal(row.deliveredInto, undefined); assert.equal(s.messages.at(-1), row);
+});

@@ -538,6 +538,9 @@ class Claude extends EventEmitter {
   constructor(record, host, { attachOnly = false } = {}) {
     super(); this.record = record; this.host = host; this.pending = null; this.ready = false; this.chatAvailable = false;
     this.submission = new SubmissionChannel();
+    // Rows this adapter's own mid-turn deliveries stored, until the model read them.
+    this.midturnRows = new Map();
+    this.submission.on('read', read => this.midturnRead(read));
     this.submission.on('change', () => {
       this.chatAvailable = this.submission.connected;
       if (!this.chatAvailable && this.rootTurn?.status === 'error') this.rootTurn = null;
@@ -664,10 +667,12 @@ class Claude extends EventEmitter {
     // Native `!` commands, turn-start inputs and the turn's own clock (T-99).
     this.nativeTurnRecords = this.nativeBlocks && message.nativeTurnRecords === true && !this.retainedReader;
     this.nativeQueuedPromptLinks = this.nativeBlocks && message.nativeQueuedPromptLinks === true && !this.retainedReader;
+    // 2.1.322 (measured): a queued message can enter the running turn at its next tool boundary.
+    this.nativeMidturnAppend = this.nativeBlocks && message.nativeMidturnAppend === true && !this.retainedReader;
     // The model's running explanation, as the native terminal drew it (T-130).
     this.nativeNarration = this.nativeBlocks && message.nativeNarration === true && !this.retainedReader;
     this.displayProofs = new Map(); this.displayGap = false; this.gapFloor = 0;
-    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia, nativeTurnRecords: this.nativeTurnRecords, nativeQueuedPromptLinks: this.nativeQueuedPromptLinks, nativeNarration: this.nativeNarration };
+    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia, nativeTurnRecords: this.nativeTurnRecords, nativeQueuedPromptLinks: this.nativeQueuedPromptLinks, nativeMidturnAppend: this.nativeMidturnAppend, nativeNarration: this.nativeNarration };
   }
   validRootBinding(message) {
     return Boolean(this.rootLease && !this.rootEnding && message.lease === this.rootLease && message.sessionId === this.record.nativeId);
@@ -1350,6 +1355,12 @@ class Claude extends EventEmitter {
     }
   }
   get queueAvailable() { return Boolean(!this.nativeAbortRequest && !this.nativeInputRequired && this.nativeQueue && this.rootLease && !this.rootEnding && this.ready && this.chatAvailable); }
+  // A queued message is read at the running turn's next tool boundary, or runs as its own turn.
+  get midturnAvailable() { return this.queueAvailable && this.nativeMidturnAppend === true; }
+  midturnRead(read) {
+    if (!this.midturnRows?.has(read.tag) || this.midturnRows.get(read.tag) !== read.uuid) return;
+    this.midturnRows.delete(read.tag); this.emit('midturnRead', read);
+  }
   async queue(text, tag, guard) {
     if (!this.queueAvailable || this.queued || this.submission.pending || !guard()) throw Object.assign(uiError("error.nativeWaitingInputUnavailable"), { notSent: true });
     const pending = this.queued = { tag, text, guard, nativeId: this.record.nativeId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
@@ -1359,8 +1370,15 @@ class Claude extends EventEmitter {
   async deliver(pending, queued = false) {
     const { text, tag, guard } = pending;
     try {
-      const receipt = await this.submission.request(text, tag, guard, queued);
+      const receipt = await this.submission.request(text, tag, guard, queued, queued && this.nativeMidturnAppend === true);
       pending.accepted = true;
+      if (receipt?.mode === 'append') {
+        // Stored in the running turn: no prompt of its own, so it heads no turn and binds no reply.
+        (this.midturnRows ||= new Map()).set(tag, receipt.uuid);
+        while (this.midturnRows.size > 16) this.midturnRows.delete(this.midturnRows.keys().next().value);
+        this.emit('submitted', tag);
+        return receipt;
+      }
       pending.promptId = receipt?.promptId || null;
       pending.turnId = receipt?.turnId || null;
       // The older task keeps its pending identity until native starts this one.

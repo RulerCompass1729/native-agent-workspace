@@ -128,3 +128,26 @@ test('identical human submission before authorization cancels the queued GUI req
  assert.equal(channel.authorize(response.body),false);channel.result({id:'request-1',status:'blocked'});
  await assert.rejects(sent,/未接受/);channel.close();
 });
+test('2.1.322 mid-turn queue: the append receipt heads no turn, adopts no reply, and its read is matched by row', async () => {
+  const f = fixture(); f.runtime.nativeQueue = true; f.runtime.rootLease = 'root'; f.runtime.chatAvailable = true; f.runtime.submission.pending = null;
+  f.runtime.nativeMidturnAppend = true;
+  assert.equal(f.runtime.midturnAvailable, true);
+  let asked;
+  f.runtime.submission.request = (...args) => { asked = args; return Promise.resolve({ mode: 'append', uuid: '44444444-4444-4444-8444-444444444444', turnId: 'running', promptId: null }); };
+  const submitted = [], reads = []; f.runtime.on('submitted', tag => submitted.push(tag)); f.runtime.on('midturnRead', read => reads.push(read));
+  const receipt = await f.runtime.queue('steer text', 'queue-id', () => true);
+  assert.deepEqual(asked.slice(0, 2).concat(asked.slice(3)), ['steer text', 'queue-id', true, true]);
+  assert.equal(receipt.mode, 'append'); assert.deepEqual(submitted, ['queue-id']);
+  assert.ok(!f.runtime.pending, 'no reply is adopted'); assert.equal(f.runtime.queued, null);
+  f.runtime.midturnRead({ tag: 'queue-id', uuid: '55555555-5555-4555-8555-555555555555', turnId: 'running' });
+  f.runtime.midturnRead({ tag: 'other', uuid: '44444444-4444-4444-8444-444444444444', turnId: 'running' });
+  assert.deepEqual(reads, []);
+  f.runtime.midturnRead({ tag: 'queue-id', uuid: '44444444-4444-4444-8444-444444444444', turnId: 'running' });
+  f.runtime.midturnRead({ tag: 'queue-id', uuid: '44444444-4444-4444-8444-444444444444', turnId: 'running' });
+  assert.equal(reads.length, 1);
+  // Without the measured flag the ordinary queue never asks for a hold.
+  f.runtime.nativeMidturnAppend = false; assert.equal(f.runtime.midturnAvailable, false);
+  f.runtime.submission.request = (...args) => { asked = args; return Promise.resolve({ promptId: null }); };
+  await f.runtime.queue('plain', 'plain-id', () => true);
+  assert.equal(asked[4], false);
+});

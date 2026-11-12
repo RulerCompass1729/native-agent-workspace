@@ -4,7 +4,7 @@ let readingPositions = {};
 let readingPayloadId = 0;
 function readingDeliveryStatusKey(message, delivery) {
   if (message.imageDraftVersion && message.images?.length) return message.imageReceipt?.status === 'accepted' && message.imageReceipt.basis === 'native-local-image-echo' ? 'roomImages.accepted' : 'roomImages.receiptPending';
-  return ({ submitted: 'delivery.submitted', 'awaiting-native': message.inputMode === 'queue' ? 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'delivery.unconfirmed', 'not-sent': 'delivery.notSent' }[delivery.status] || 'delivery.unknown');
+  return ({ submitted: message.deliveredInto ? message.nativeRead ? 'delivery.midturnRead' : 'delivery.midturnStored' : 'delivery.submitted', 'awaiting-native': message.inputMode === 'queue' ? message.midturn ? 'delivery.queuedMidturn' : 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'delivery.unconfirmed', 'not-sent': 'delivery.notSent' }[delivery.status] || 'delivery.unknown');
 }
 // A sender's durable notice is not a room mirror or a native tool receipt.
 function readingWakeIntent(message, room, session) {
@@ -865,7 +865,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       // A stored fragment is not proof that its native turn is still running.
       // Current activity lives in the session/progress status, not this record.
       // Only Claude rows take queued input; native sends it once the agent is idle.
-      const status = { 'awaiting-native': m.inputMode === 'queue' ? 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'reading.status.unconfirmed', 'not-sent': 'delivery.notSent', streaming: 'reading.status.streaming', running: !room && session?.provider === 'claude' && m.role === 'tool' ? 'reading.status.toolRequested' : 'reading.status.running', failed: 'reading.status.failed', declined: 'reading.status.declined', interrupted: 'reading.status.interrupted', 'reply-private': 'reading.status.private' }[m.status];
+      const status = { 'awaiting-native': m.inputMode === 'queue' ? m.midturn ? 'delivery.queuedMidturn' : 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'reading.status.unconfirmed', 'not-sent': 'delivery.notSent', streaming: 'reading.status.streaming', running: !room && session?.provider === 'claude' && m.role === 'tool' ? 'reading.status.toolRequested' : 'reading.status.running', failed: 'reading.status.failed', declined: 'reading.status.declined', interrupted: 'reading.status.interrupted', 'reply-private': m.deliveredInto ? 'reading.status.midturnPrivate' : 'reading.status.private' }[m.status];
       delete entry.wakeLabel;
       if (wake) { entry.wakeLabel = node('span'); entry.heading.append(entry.wakeLabel); }
       else if (entry.exploration) { if (entry.exploration.error) entry.heading.append(node('span', entry.exploration.error)); }

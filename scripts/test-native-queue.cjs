@@ -31,6 +31,11 @@ const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'
 // passed on exact 2.1.322 on 2026-11-10 inside the loopback fixture's sandbox. The product also qualifies queueing
 // on 318, 319 and 321, which are not installed and have not been run.
 assert.match(nativeVersion, inlineTrial ? /^2\.1\.312\b/ : noModelServer ? /^2\.1\.(308|309|310|311|316|317|318|319(?=\s|$))\b/ : /^2\.1\.(308|309|310|311|322(?=\s|$))\b/, 'Verify the updated native contract before sending a test task');
+// 2.1.322 offers mid-turn delivery: a queued message is held for the running turn's next tool boundary. This
+// journey's first turn has no tool, so it runs as its own turn when that turn ends (the fallback); the words say so.
+// The mid-turn journey itself is scripts/test-native-midturn.cjs.
+const midturn = /^2\.1\.322(?=\s|$)/.test(nativeVersion);
+const queueLabel = midturn ? '工具结束时送进本轮 ↑' : '等本轮结束后发送 ↑';
 let application, page, client, calls = 0, held, releaseFinal, pausedNative;
 let budgetError, toolMarker;
 const errors = [], checks = [];
@@ -199,7 +204,7 @@ async function cleanup() {
     if (process.env.NAW_EVIDENCE_DIR) await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-inline.png') });
     assert.deepEqual(errors, []); fixture.assertClean(); console.log(JSON.stringify({ fixture: fixture.summary(), checks: ['Real312 queued input reaches the model once and its exact native accepted rendering appears once under the original UUID'], nativeVersion, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
   }
-  await until(async () => (await page.locator('#send-button').innerText()) === '等本轮结束后发送 ↑', 'Working composer receives state');
+  await until(async () => (await page.locator('#send-button').innerText()) === queueLabel, 'Working composer receives state');
   // A draft in the native prompt makes native refuse a queued send before holding it.
   await nativeKey('x', /❯\s*x\s*$/);
   if (shared) {
@@ -207,7 +212,7 @@ async function cleanup() {
     await joinSpace(page);
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
     await inlineRecipient(page, before.id);
-    await until(async () => (await page.locator(send).innerText()) === '等本轮结束后发送 ↑', 'Shared native waiting action');
+    await until(async () => (await page.locator(send).innerText()) === queueLabel, 'Shared native waiting action');
   }
   const blocked = 'Blocked by a native draft.';
   if (shared) await fillRoomMessage(page, blocked); else await page.locator(input).fill(blocked);
@@ -243,7 +248,7 @@ async function cleanup() {
   checks.push('A recorded queued input visibly clears, then a native draft refusal marks 没有发出 and restores the untouched composer');
   // The room picks its recipient with an inline mention; a plain fill would drop it.
   if (shared) await fillRoomMessage(page, 'Do the next local task.'); else await page.locator(input).fill('Do the next local task.');
-  assert.equal(await page.locator(send).innerText(), '等本轮结束后发送 ↑');
+  assert.equal(await page.locator(send).innerText(), queueLabel);
   await page.locator(send).click();
   await until(async () => (await snapshot()).sessions[0].pendingQueue, 'Waiting native input');
   const pending = (await snapshot()).sessions[0];
@@ -261,10 +266,12 @@ async function cleanup() {
   assert.equal(waiting.pendingQueue, pending.pendingQueue); assert.equal(waiting.state, 'working');
   assert.equal(calls, 1); assert.equal(waiting.nativeId, before.nativeId); assert.equal(waiting.pid, before.pid);
   assert.equal(waiting.messages.find(m => m.id === pending.pendingQueue).status, 'awaiting-native');
-  // The GUI says why it waits (native runs a plugin's queued prompt only once idle) and where to interject.
+  // The GUI says why it waits: before 2.1.322 native runs a plugin's queued prompt only once idle, so it points to the
+  // native terminal for mid-turn input; on 2.1.322 it waits for the next tool step, or the turn's end.
   const visible = await page.locator('body').innerText();
-  assert.ok(visible.includes('排队中，等空闲后发送'), 'The queued message is labelled as waiting for idle');
-  assert.ok(shared ? (await page.locator('#run-status').innerText()).includes('想中途插话，请在它的原生终端输入') : (await page.locator('#compose-hint').innerText()).includes('想中途插话，请在原生终端输入'), 'The GUI points to the native terminal for mid-turn input');
+  assert.ok(visible.includes(midturn ? '等下一个工具结束时送进本轮' : '排队中，等空闲后发送'), 'The queued message says what it waits for');
+  assert.ok(shared ? (await page.locator('#run-status').innerText()).includes(midturn ? '等它下一个工具结束时送进正在进行的回合' : '想中途插话，请在它的原生终端输入')
+    : (await page.locator('#compose-hint').innerText()).includes(midturn ? '正等 Claude 下一个工具结束时送进本轮' : '想中途插话，请在原生终端输入'), 'The GUI says how this waiting input reaches the turn');
   assert.ok(!(await page.locator('#toast').innerText()).includes('超时'));
   fs.writeFileSync(path.join(base, 'waiting.json'), JSON.stringify(await snapshot(), null, 2));
   if (shared) {

@@ -200,7 +200,7 @@ class Workspace extends EventEmitter {
     return Object.keys(usage).length || account ? { ...usage, ...(account ? { account } : {}) } : null;
   }
   snapshot() {
-    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, ...this.stuckFor(s), usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeStartupPrompt: directoryTrustPrompt(s, this.runtimes.get(s.id)), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
+    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, ...this.stuckFor(s), usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeStartupPrompt: directoryTrustPrompt(s, this.runtimes.get(s.id)), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), midturnAvailable: Boolean(this.runtimes.get(s.id)?.midturnAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
   }
   // kind is 'interrupt' or 'approval'.
   // An interrupt waits for as long as the turn it was sent to keeps running. A later tool or status
@@ -849,6 +849,12 @@ class Workspace extends EventEmitter {
     });
     on('history', (items, turns, recovery) => { applyCodexHistory(s, items, runtime, id => this.deliveryStatus(id, 'submitted'), turns, recovery); this.changed(); });
     on('turnHistory', turns => { applyCodexTurnHistory(s, turns, runtime); this.sharedReplies.restoreTurnMetadata(s); this.changed(); });
+    on('midturnRead', ({ tag }) => {
+      // The running turn's next model request carried it (bridge-observed, 2.1.322).
+      let found = false;
+      for (const list of this.messageLists(s)) for (const m of list) if (m.id === tag && m.deliveredInto) { m.nativeRead = true; found = true; }
+      if (found) this.changed();
+    });
     on('submitted', tag => {
       const input = s.messages.find(m => m.id === tag);
       // Only this runtime's own input can certify its shared delivery.
@@ -1317,9 +1323,11 @@ class Workspace extends EventEmitter {
     // Like a native TUI queue, the recorded message leaves the composer at once.
     const clearedDraft = !backgroundOperation.current() && !shared && typeof draft === 'string' && draft.trim() === text;
     runtime.pendingQueue = tag;
-    const message = { id: tag, role: 'user', text, origin: 'human', ...backgroundOperation.message(), status: 'awaiting-native', inputMode: 'queue', time: Date.now() };
+    // midturn: read at the running turn's next tool boundary, or as its own turn if the turn ends first.
+    const midturn = runtime.midturnAvailable === true ? { midturn: true } : {};
+    const message = { id: tag, role: 'user', text, origin: 'human', ...backgroundOperation.message(), status: 'awaiting-native', inputMode: 'queue', ...midturn, time: Date.now() };
     if (shared) {
-      const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, uiNameMessage: backgroundOperation.current() ? undefined : youToName(s.name), ...backgroundOperation.message(s.name), text, status: 'awaiting-native', inputMode: 'queue', time: Date.now(), deliveryTracked: true,
+      const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, uiNameMessage: backgroundOperation.current() ? undefined : youToName(s.name), ...backgroundOperation.message(s.name), text, status: 'awaiting-native', inputMode: 'queue', ...midturn, time: Date.now(), deliveryTracked: true,
         ...(replyTo ? { replyTo } : {}), deliveries: [{ id: tag, recipientId: id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() }] };
       room.messages.push(source); this.forwards.set(tag, { roomId, member, control, replyTo });
       // No running private turn is adopted. Only the next native prompt's
@@ -1329,8 +1337,21 @@ class Workspace extends EventEmitter {
     s.messages.push(message); if (clearedDraft) this.drafts.set(id, ''); this.versions.dispatches++; this.changed();
     try {
       if (roomId !== 'shared') { this.persist(); if (this.storageWarning) throw uiError("error.workspace.spaceRecordUnsaved"); }
-      await runtime.queue(text, tag, valid);
+      const receipt = await runtime.queue(text, tag, valid);
       message.status = 'submitted';
+      if (receipt?.mode === 'append') {
+        // Read inside the running turn at a tool boundary: it keeps its place in time. No prompt
+        // of its own can carry a shared reply, so that turn's output stays in the session.
+        message.deliveredInto = receipt.turnId;
+        this.deliveryStatus(tag, 'submitted');
+        if (shared) {
+          const source = room.messages.find(row => row.id === tag);
+          if (source) { source.deliveredInto = receipt.turnId; source.status = 'reply-private'; }
+          this.forwards.delete(tag); this.sharedReplies.close(tag, '送进了正在进行的回合，回复留在原会话', uiActivity('notice.sharing.midturn')[1]);
+        }
+        this.changed();
+        return tag;
+      }
       // The receipt comes when native starts this message's own turn (on 2.1.316/2.1.317 after the running turn
       // ended, T-133). The conversation shows it there, after that turn's reply, as the native terminal does;
       // it keeps the time it was sent. The space record stays in time order, with replies naming what they answer.
