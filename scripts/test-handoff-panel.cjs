@@ -5,7 +5,7 @@
 // to the OS, and the system's folder dialog is answered by the script. The handoff switch is open
 // for this isolated run only.
 const testScratch = require('./fixtures/test-scratch.cjs');
-const { joinSpace } = require('./fixtures/space-membership.cjs');
+const { joinSpace, leaveSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const fs = require('node:fs');
@@ -129,7 +129,7 @@ async function createSession(name, join) {
 
 const locale = require('../app/ui-locale.js');
 const say = (key, params) => locale.format('zh', key, params);
-const NAMES = ['队员甲', '队员乙', '队员丙', '小周'], TASKS = ['修好列表', '补上说明', '整理配色', '加上导出'];
+const NAMES = ['队员甲', '队员乙', '队员丙', '小周'], TASKS = ['修好列表', '补上说明', '整理配色', '加上导出', '写更新说明'];
 let shots = 0;
 // The panel as the person sees it, kept as pictures when a folder for them is given.
 async function shot(name) {
@@ -204,7 +204,7 @@ async function run() {
   git('init', '--quiet', '--initial-branch=main');
   commit('synthetic-base.txt', 'base\n');
   const deliveries = [];
-  for (const letter of ['a', 'b', 'c', 'd']) { git('checkout', '--quiet', '-b', `lane/${letter}`, 'main'); deliveries.push(commit(`synthetic-${letter}.txt`, `${letter}\n`)); }
+  for (const letter of ['a', 'b', 'c', 'd', 'e']) { git('checkout', '--quiet', '-b', `lane/${letter}`, 'main'); deliveries.push(commit(`synthetic-${letter}.txt`, `${letter}\n`)); }
   git('checkout', '--quiet', 'main');
   commit('synthetic-other.txt', 'main moved on\n');
   const main = fs.realpathSync(repo);
@@ -367,6 +367,51 @@ async function run() {
   assert.deepEqual([final.rows[0].text.includes(TASKS[3]), final.opener], [true, say('queue.titleNeed', { n: 1 })]);
   await closePanel();
   passed.push('"Hold for now" keeps the asked-about delivery on hold and lets the waiting one go out; sent again and asked again, "Done, send again" hands it over once more and the return shows on its row');
+
+  // 6) A fifth delivery is with the integrator when the person puts the integrator's session into this space. From then on
+  //    nothing it writes is read as the handoff's answer: the handoff waits, and the panel says why and what to do.
+  await page.evaluate(([text, id]) => workspace.spaceAction('shared', 'queueAdd', [text, id]), [TASKS[4], members[1].id]);
+  await until(async () => (await sentTo(members[1].id)).length === 2, 'The fifth task is sent');
+  await release(members[1].id, `做完了。\nREADY lane/e ${deliveries[4]}`);
+  await until(async () => (await handoffs()).length === 6, 'The sixth handoff is sent', 90000);
+  await page.locator(`.session-link[data-session-id="${integrator.id}"]`).click();
+  await joinSpace(page);
+  await page.locator('#room-nav').click();
+  await until(async () => (await overview()).waiting?.reason === 'integrator-in-space', 'The handoff waits because its integrator sits in a space', 90000);
+  // The space's shared record says that its queue leaves that member alone while the handoff waits.
+  await until(async () => (await spaceEvents()).includes(say('notice.handoff.holder.waiting', { name: NAMES[3] })), 'The space is told that the queue leaves the integrator alone');
+  // It answers all the same, with words that would be a question to the person. They are not taken for one.
+  await release(integrator.id, '需要你决定：这句是写给空间里别人的');
+  await delay(4000);
+  await openPanel();
+  const inSpace = await seen(view => view.block.includes(say('queue.handoff.ask.inSpace', { name: NAMES[3] })) && rowOf(view, TASKS[4]).where === 'stalled', 'The panel says that the integrator is in a space');
+  for (const sentence of [say('queue.handoff.guide.inSpace', { name: NAMES[3] }), say('queue.handoff.after.inSpace', { name: NAMES[3] })]) assert.ok(inSpace.block.includes(sentence), sentence);
+  assert.ok(!inSpace.block.includes('这句是写给空间里别人的') && !inSpace.block.includes(say('queue.handoff.stopped.inSpace')), inSpace.block);
+  frontFirst(inSpace, 'Integrator in a space');
+  assert.deepEqual(await page.locator('#queue-handoff .queue-handoff-buttons button').evaluateAll(nodes => nodes.map(node => [node.dataset.handoffAction, node.textContent])),
+    [['open', say('queue.handoff.open', { name: NAMES[3] })], ['again', say('queue.handoff.again.inSpace')], ['keep', say('queue.handoff.keep')]]);
+  assert.equal((await overview()).waiting.question, '');
+  await shot('the-integrator-is-in-a-space');
+  await closePanel();
+  // The person moves it out again and says so in the panel: the delivery goes out once more, and this time the answer counts.
+  await page.locator(`.session-link[data-session-id="${integrator.id}"]`).click();
+  await leaveSpace(page);
+  await page.locator('#room-nav').click();
+  await openPanel();
+  await seen(view => view.block.includes(say('queue.handoff.ask.inSpace', { name: NAMES[3] })), 'The handoff still waits for the person\'s word');
+  await page.locator('#queue-handoff button[data-handoff-action="again"]').click();
+  await until(async () => (await handoffs()).length === 7, 'The seventh handoff is sent', 90000);
+  // The space is told once that the handoff it was told about is over.
+  await until(async () => (await spaceEvents()).includes(say('notice.handoff.holder.closed', { name: NAMES[3] })), 'The space is told that the handoff is over');
+  assert.equal((await spaceEvents()).filter(text => text === say('notice.handoff.holder.waiting', { name: NAMES[3] }) || text === say('notice.handoff.holder.closed', { name: NAMES[3] })).length, 2);
+  git('cherry-pick', deliveries[4]);
+  const fifth = git('rev-parse', 'HEAD');
+  await release(integrator.id, `MERGED ${deliveries[4].slice(0, 9)} as ${fifth.slice(0, 9)} tests 12/12`);
+  const out = await seen(view => rowOf(view, TASKS[4]).where === 'merged', 'Moved out and sent again, the delivery is merged', 90000);
+  assert.ok(!out.block.includes(say('queue.handoff.ask.inSpace', { name: NAMES[3] })), out.block);
+  await shot('moved-out-and-sent-again');
+  await closePanel();
+  passed.push('With the integrator inside the space its words are not read as an answer: the panel says why, and after it is moved out "Moved out, send again" hands the delivery over again and the merge counts');
 
   assert.equal(fs.existsSync(path.join(folder, '.git')), false, 'The integrator\'s own session folder never held a repository');
   assert.deepEqual(errors, []);

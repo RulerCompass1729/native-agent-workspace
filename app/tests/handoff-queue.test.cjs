@@ -113,6 +113,9 @@ test('a handoff that waits for the person is put on top with what it is about, a
     const apart = draw(view(others, waitingFor('conflict:H1-00000000', foreign, 'About another space')));
     assert.deepEqual([apart.block.ask, apart.need, Boolean(apart.block)], [null, others.d ? 1 : 0, true], JSON.stringify(Object.keys(others)));
   }
+  // The handoff waits because its integrator sits in a space: said as that in the block, once, with its own steps; the line about paused handoffs is not shown beside it.
+  const placed = draw(view(items, { ...waitingFor('integrator-in-space', entries), reasons: [{ reason: 'integrator-in-space', notice: 'shown' }] }));
+  assert.deepEqual([placed.block.ask.kind, placed.block.ask.question, plain(placed.block.stops), where(placed), placed.need], ['inSpace', '', [], { a: 'stalled', b: 'queuedStopped' }, 1]);
   // The integrator's session is gone: named as far as known, and the model says it cannot be opened.
   const gone = model({ view: view(items, waitingFor('no-reply', entries)), sessions: [], integrator: INTEGRATOR, unnamed: 'Someone' });
   assert.deepEqual([gone.block.ask.known, gone.block.ask.name], [false, 'Someone']);
@@ -183,7 +186,9 @@ test('every sentence the panel can show exists in both languages with the same b
   const renderer = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
   const literal = [...renderer.matchAll(/'(queue\.handoff\.[A-Za-z.]+|queue\.titleNeed)'/g)].map(match => match[1]);
   assert.ok(literal.length >= 12, String(literal.length));
-  for (const key of literal) assert.ok(key.endsWith('.') ? ['asks', 'other'].every(kind => keys.includes(key + kind)) || ['asks', 'noReply', 'typed', 'other'].every(kind => keys.includes(key + kind)) : keys.includes(key), key);
+  // (A key that ends in a dot is completed with the kind of the waiting handoff: every kind has its sentence.)
+  for (const key of literal) assert.ok(key.endsWith('.') ? (key === 'queue.handoff.ask.' ? ['asks', 'noReply', 'typed', 'inSpace', 'other'] : ['asks', 'inSpace', 'other']).every(kind => keys.includes(key + kind)) : keys.includes(key), key);
+  assert.match(renderer, /words = \['asks', 'inSpace'\]\.includes\(ask\.kind\) \? ask\.kind : 'other'/);
   // And the page is wired: the module is loaded before the renderer in the page and in the bundle, and the panel has its place.
   const html = fs.readFileSync(path.join(__dirname, '../renderer/index.html'), 'utf8'), build = fs.readFileSync(path.join(__dirname, '../../scripts/build-ui.cjs'), 'utf8');
   assert.ok(html.indexOf('src="handoff-queue.js"') > 0 && html.indexOf('src="handoff-queue.js"') < html.indexOf('src="renderer.js"'));

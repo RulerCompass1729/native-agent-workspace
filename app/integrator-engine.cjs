@@ -258,7 +258,11 @@ class IntegratorEngine {
     let integrator;
     try { integrator = this.designation(); } catch { integrator = undefined; }
     const session = (Array.isArray(view?.sessions) ? view.sessions : []).find(candidate => candidate?.id === handoff.integrator.sessionId);
-    return { integrator, session, complete: complete(view, handoff.integrator.sessionId), now: view?.now, idleSince: view?.idleSince, settleMs: view?.settleMs, unconfirmedMs: view?.unconfirmedMs };
+    // Whether the handoff's own session sits in a space now. A membership record that cannot be read says
+    // neither yes nor no: nothing is settled from such a look (`membership: false`).
+    let inSpace = false, membership = true;
+    if (session && session.nativeId === handoff.integrator.nativeId) { try { inSpace = roomIds(session).length > 0; } catch { membership = false; } }
+    return { integrator, session, inSpace, membership, complete: complete(view, handoff.integrator.sessionId), now: view?.now, idleSince: view?.idleSince, settleMs: view?.settleMs, unconfirmedMs: view?.unconfirmedMs };
   }
 
   // Settle the open handoff if it can be settled now. An answer that reports merges is checked
@@ -269,7 +273,9 @@ class IntegratorEngine {
     const handoffs = this.handoffs;
     const open = handoffs.summary().handoff;
     if (!open) return none('no-handoff');
-    const action = handoffs.plan(this.settleInput(view, open));
+    const seen = this.settleInput(view, open);
+    if (seen.membership === false) return none('membership-unknown');
+    const action = handoffs.plan(seen);
     if (action.kind !== 'settle') return action;
     let checked = {};
     const merges = Object.values(action.results?.results || {}).some(result => result.kind === 'merged' && result.malformed !== true);
@@ -306,7 +312,9 @@ class IntegratorEngine {
       let fresh = null;
       try { fresh = await look(); } catch { /* No fresh view: nothing is settled from the older one. */ }
       if (!fresh) return none('not-ready-now');
-      const again = handoffs.plan(this.settleInput(fresh, open));
+      const refreshed = this.settleInput(fresh, open);
+      if (refreshed.membership === false) return none('membership-unknown');
+      const again = handoffs.plan(refreshed);
       if (JSON.stringify(again) !== JSON.stringify(action)) return none('changed-while-checking');
     }
     const result = handoffs.settle(action, checked, this.now());
