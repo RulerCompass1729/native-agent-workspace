@@ -209,9 +209,15 @@ An older version does not know the folder: if the person goes back, it shows an
 empty log and starts its own count for the day from zero in a new single file.
 This version takes that file in on its next start and counts its pages toward
 their days, so after coming back the day's allowance is not reset; while on the
-older version it is. (No butler is connected in either version yet.) A stop
-between the steps of taking in is finished from `migration.json` on the next
-start. A block is sealed when a page arrives on a later UTC day than the block
+older version it is. (No butler is connected in either version yet.) Lines of
+a taken-in file are read back with the day's running count across the log, not
+the older version's own. A stop between the steps of taking in is finished from
+`migration.json` on the next start: a block already moved is checked against the
+plan and committed (a file an older version started meanwhile is taken in after
+it); a plan the older file outgrew before it was moved is dropped and the file
+taken in as it is; with the file in neither place the log stops. Nothing is moved
+or created over a file already in the folder. An older version's file with a line
+cut short is not taken in: the log stops, as it stopped that version. A block is sealed when a page arrives on a later UTC day than the block
 was opened on, or would take it past 32 MiB; a block opened for a page whose
 write then failed is empty and is dropped rather than sealed.
 
@@ -221,10 +227,13 @@ throughSequence, count, days}`) in its place; the other blocks read as usual and
 the block itself is not touched. Put back exactly as it was sealed, it reads
 again. A gap takes positions toward a read's limit, so paging still moves past
 it. The open block is held to what this running instance last wrote: found
-changed, the log fails closed for this instance (pages are withheld), and a new
-instance (NAW reopened) sets it aside as unreadable and opens a new block. A lost
-or invalid manifest is built again from the blocks, which requires every block to
-read; otherwise the log fails closed. A manifest changed consistently by another
+changed, the log fails closed for this instance (pages are withheld). A new
+instance (NAW reopened) seals it if only its last line was cut short by a stop
+during an append (that page was never released; the line is left as it is), moves
+aside a block holding nothing but such a line, and otherwise sets it aside as
+unreadable; the next page opens a new block. A missing manifest, or one that does
+not parse, is built again from the blocks, which requires every block to read;
+otherwise, and when the manifest cannot be opened safely, the log fails closed. A manifest changed consistently by another
 program running as the person is not detected; this log is not tamper-proof.
 
 A trusted host may supply `onCapacityWarning(storage)` when constructing

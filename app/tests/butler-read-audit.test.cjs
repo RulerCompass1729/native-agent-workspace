@@ -385,11 +385,15 @@ test('partial writes expose only fixed failure codes, poison that writer and ret
   assert.throws(() => f.audit.recordPage(page()), error => code('WRITE')(error) && error.message === error.code && !Object.hasOwn(error, 'path'));
   assert.equal(fs.existsSync(f.lock), false); t.mock.restoreAll();
   assert.throws(() => f.audit.recordPage(page()), code('STATE'));
-  // After a restart the torn block is kept as it is and set aside. The page that tore was never approved: it does not
-  // count, and the one before it still does.
+  // After a restart the block is kept as it is, its cut-short last line left alone, and sealed with it: nothing is
+  // appended after that line. The page that tore was never approved: it does not count, and the one before it still
+  // reads and counts. The next page goes into a new block.
   const block = f.file, torn = fs.readFileSync(block), reopened = f.reopen(), read = reopened.read(f.person);
-  assert.deepEqual([read.records, read.gaps], [[], [{ fromSequence: 1, throughSequence: 1, count: 1, days: ['2026-11-11'] }]]);
-  assert.deepEqual(fs.readFileSync(block), torn); assert.equal(reopened.recordPage(page()).pageOfDay, 2);
+  assert.deepEqual([read.records.map(row => row.sequence), read.gaps], [[1], []]);
+  assert.deepEqual(fs.readFileSync(block), torn); assert.deepEqual(reopened.recordPage(page()), { sequence: 2, time: NOW, day: '2026-11-11', pageOfDay: 2 });
+  assert.deepEqual(f.manifest().blocks.map(entry => [entry.name, entry.status, entry.count, entry.bytes]), [['000000001-2026-11-11.jsonl', 'sealed', 1, torn.length], ['000000002-2026-11-11.jsonl', 'open', 1, fs.statSync(path.join(f.store, '000000002-2026-11-11.jsonl')).size]]);
+  // Sealed with its cut-short line, it is held to its checksum like any other: changed again, it is a gap.
+  fs.appendFileSync(block, 'x'); assert.deepEqual(f.reopen().read(f.person).gaps, [{ fromSequence: 1, throughSequence: 1, count: 1, days: ['2026-11-11'] }]);
 });
 
 test('fsync failure never returns success, and a surviving complete intent conservatively still consumes quota', t => {
@@ -546,13 +550,17 @@ test('a single file an older version wrote after going back is taken in after ev
   // The person pages through one numbering, without a repeat or a hole.
   const first = reopened.read(f.person), second = reopened.read(f.person, { afterSequence: first.nextAfterSequence });
   assert.deepEqual([...first.records, ...second.records].map(row => row.sequence), Array.from({ length: 64 }, (_, n) => n + 1));
+  // Each line's page of the day is the day's running count across the whole log, as the allowance counts it, not the
+  // older version's own count: what the person is told today agrees with what is still let through.
+  assert.deepEqual([...first.records, ...second.records].map(row => row.pageOfDay), Array.from({ length: 64 }, (_, n) => n + 1));
   // Already past the day's count, an older file of the same day is still taken in and still counts.
   fs.writeFileSync(f.legacy, legacyLine(1, NOW, 1), { mode: 0o600 });
   assert.throws(() => f.reopen().recordPage(page()), code('LIMIT')); assert.equal(f.manifest().blocks.at(-1).origin, 'legacy');
 });
 
-test('a taking-in that stopped half way is finished from where it stopped, and a record of it that does not match stops everything', async t => {
-  for (const stop of ['before-move', 'after-move', 'mismatch', 'moved-mismatch']) await t.test(stop, t => {
+test('a taking-in that stopped half way is finished from where it stopped, whatever an older version did meanwhile, and never over another file', async t => {
+  const stops = ['before-move', 'after-move', 'changed-before-move', 'moved-then-older-file', 'manifest-damaged', 'moved-mismatch', 'neither'];
+  for (const stop of stops) await t.test(stop, t => {
     const f = fixture(t); f.audit.recordPage(page());
     const lines = legacyLine(1, NOW, 1) + legacyLine(2, NOW, 2); fs.writeFileSync(f.legacy, lines, { mode: 0o600 });
     // What the interrupted version had written: the plan, and maybe the move.
@@ -561,22 +569,97 @@ test('a taking-in that stopped half way is finished from where it stopped, and a
     fs.writeFileSync(path.join(f.store, 'manifest.json'), JSON.stringify({ version: 1, record: 'butler-reads', blocks: [sealed] }), { mode: 0o600 });
     const entry = { name: '000000002-2026-11-11.jsonl', firstSequence: 2, lastSequence: 3, offset: 1, count: 2, bytes: Buffer.byteLength(lines), oldestTime: NOW, newestTime: NOW,
       days: { '2026-11-11': 2 }, sha256: require('node:crypto').createHash('sha256').update(lines).digest('hex'), status: 'sealed', origin: 'legacy' };
-    if (stop === 'mismatch' || stop === 'moved-mismatch') entry.bytes += 1;
+    if (stop === 'moved-mismatch') entry.bytes += 1;
     fs.writeFileSync(path.join(f.store, 'migration.json'), JSON.stringify({ version: 1, record: 'butler-reads', entry }), { mode: 0o600 });
-    if (stop === 'after-move' || stop === 'moved-mismatch') fs.renameSync(f.legacy, path.join(f.store, entry.name));
-    if (stop === 'moved-mismatch') {
-      // Moved already, and what is in its place is not what the plan says: nothing is committed or started over it.
+    if (['after-move', 'moved-then-older-file', 'moved-mismatch'].includes(stop)) fs.renameSync(f.legacy, path.join(f.store, entry.name));
+    // Meanwhile an older version wrote: on to the same file before it was moved, or a new file after it was.
+    if (stop === 'changed-before-move') fs.appendFileSync(f.legacy, legacyLine(3, NOW, 3));
+    if (stop === 'moved-then-older-file') fs.writeFileSync(f.legacy, legacyLine(1, NOW, 1), { mode: 0o600 });
+    if (stop === 'manifest-damaged') fs.writeFileSync(path.join(f.store, 'manifest.json'), '{broken', { mode: 0o600 });
+    if (stop === 'neither') fs.rmSync(f.legacy);
+    if (stop === 'moved-mismatch' || stop === 'neither') {
+      // Moved, and what is in its place is not what the plan says; or the file is nowhere: nothing is committed,
+      // nothing is started as if empty.
       assert.throws(() => writer.recordPage(page()), code('STATE')); assert.equal(fs.existsSync(path.join(f.store, 'migration.json')), true);
       assert.deepEqual(f.manifest().blocks.map(block => block.name), ['000000001-2026-11-11.jsonl']); return;
     }
-    if (stop === 'mismatch') {
-      assert.throws(() => writer.recordPage(page()), code('STATE')); assert.equal(fs.existsSync(path.join(f.store, 'migration.json')), true);
-      assert.equal(fs.readFileSync(f.legacy, 'utf8'), lines); return;
-    }
-    assert.equal(writer.recordPage(page()).pageOfDay, 4);
+    const counted = { 'changed-before-move': 4, 'moved-then-older-file': 4 }[stop] || 3;
+    assert.equal(writer.recordPage(page()).pageOfDay, counted + 1);
     assert.equal(fs.existsSync(path.join(f.store, 'migration.json')), false); assert.equal(fs.existsSync(f.legacy), false);
-    assert.deepEqual(f.manifest().blocks.map(block => [block.name, block.status]), [['000000001-2026-11-11.jsonl', 'sealed'], [entry.name, 'sealed'], ['000000004-2026-11-11.jsonl', 'open']]);
+    const names = f.manifest().blocks.map(block => [block.name, block.status]);
+    if (stop === 'changed-before-move') assert.deepEqual(names, [['000000001-2026-11-11.jsonl', 'sealed'], [entry.name, 'sealed'], ['000000005-2026-11-11.jsonl', 'open']]);
+    else if (stop === 'moved-then-older-file') assert.deepEqual(names, [['000000001-2026-11-11.jsonl', 'sealed'], [entry.name, 'sealed'], ['000000004-2026-11-11.jsonl', 'sealed'], ['000000005-2026-11-11.jsonl', 'open']]);
+    else assert.deepEqual(names, [['000000001-2026-11-11.jsonl', 'sealed'], [entry.name, 'sealed'], ['000000004-2026-11-11.jsonl', 'open']]);
+    assert.equal(f.reopen().read(f.person).throughSequence, counted + 1);
   });
+  // A file already where an older file would be moved to (one left by hand, not in the manifest) is never replaced.
+  await t.test('never over another file', t => {
+    const f = fixture(t); f.audit.recordPage(page()); f.at(NOW + DAY); f.reopen();
+    const there = path.join(f.store, '000000002-2026-11-11.jsonl'); fs.writeFileSync(there, 'kept by hand\n', { mode: 0o600 });
+    fs.writeFileSync(f.legacy, legacyLine(1, NOW, 1), { mode: 0o600 });
+    assert.throws(() => f.reopen().recordPage(page()), code('STATE'));
+    assert.equal(fs.readFileSync(there, 'utf8'), 'kept by hand\n'); assert.equal(fs.readFileSync(f.legacy, 'utf8'), legacyLine(1, NOW, 1));
+    assert.equal(fs.existsSync(path.join(f.store, 'migration.json')), false, 'No plan is left behind for it');
+    // Nor is a new block made over a file already where it would go.
+    const g = fixture(t); g.audit.recordPage(page()); const stray = path.join(g.store, '000000002-2026-11-12.jsonl');
+    fs.writeFileSync(stray, 'kept by hand\n', { mode: 0o600 }); g.at(NOW + DAY);
+    assert.throws(() => g.audit.recordPage(page()), code('STATE'));
+    assert.equal(fs.readFileSync(stray, 'utf8'), 'kept by hand\n'); assert.deepEqual(g.manifest().blocks.map(block => block.name), ['000000001-2026-11-11.jsonl']);
+  });
+});
+
+test('the manifest is built again only when it is missing or does not parse, and then holds a taken-in block in its place', t => {
+  const f = fixture(t); for (let n = 0; n < 3; n++) f.audit.recordPage(page());
+  let lines = ''; for (let n = 1; n <= 60; n++) lines += legacyLine(n, NOW, n);
+  fs.writeFileSync(f.legacy, lines, { mode: 0o600 }); f.reopen().recordPage(page());
+  const before = f.manifest(), manifest = path.join(f.store, 'manifest.json'), bytes = fs.readFileSync(manifest);
+  // A manifest that cannot be opened safely (here, readable by others) stops the log; it is not replaced.
+  fs.chmodSync(manifest, 0o644);
+  assert.throws(() => f.reopen().read(f.person), code('STATE')); assert.throws(() => f.reopen().recordPage(page()), code('STATE'));
+  assert.deepEqual(fs.readFileSync(manifest), bytes); fs.chmodSync(manifest, 0o600);
+  // Lost, it is built again: the block taken in after others keeps its place, its numbering and its pages.
+  fs.rmSync(manifest);
+  assert.throws(() => f.reopen().recordPage(page()), code('LIMIT'));
+  assert.deepEqual(f.manifest().blocks.map(block => [block.name, block.origin, block.offset, block.count, block.days, block.status]),
+    before.blocks.map(block => [block.name, block.origin, block.offset, block.count, block.days, block.status]));
+});
+
+test('a block whose last line a stop cut short is sealed as it is, also when the manifest is built again, and nothing follows that line', async t => {
+  for (const lost of [false, true]) await t.test(lost ? 'manifest lost' : 'manifest kept', t => {
+    const f = fixture(t); f.audit.recordPage(page()); f.audit.recordPage(page());
+    const block = f.file; fs.appendFileSync(block, '{"version":1,"seq'); const torn = fs.readFileSync(block);
+    if (lost) fs.rmSync(path.join(f.store, 'manifest.json'));
+    assert.deepEqual(f.reopen().recordPage(page()), { sequence: 3, time: NOW, day: '2026-11-11', pageOfDay: 3 });
+    assert.deepEqual(fs.readFileSync(block), torn, 'The cut-short line is left as it is');
+    assert.deepEqual(f.manifest().blocks.map(entry => [entry.name, entry.status, entry.count]), [['000000001-2026-11-11.jsonl', 'sealed', 2], ['000000003-2026-11-11.jsonl', 'open', 1]]);
+    assert.deepEqual(f.reopen().read(f.person).records.map(row => row.sequence), [1, 2, 3]);
+  });
+  // A block that holds only a cut-short line held no page: it is moved aside under a name that is not a block's, and
+  // the next block starts at the same number.
+  await t.test('only a cut-short line', t => {
+    const f = fixture(t); fs.mkdirSync(path.join(f.directory, 'history'), { mode: 0o700 }); fs.mkdirSync(f.store, { mode: 0o700 });
+    const empty = { name: '000000001-2026-11-11.jsonl', firstSequence: 1, lastSequence: 0, offset: 0, count: 0, bytes: 0, oldestTime: null, newestTime: null, days: {}, sha256: null, status: 'open', origin: 'native' };
+    fs.writeFileSync(path.join(f.store, 'manifest.json'), JSON.stringify({ version: 1, record: 'butler-reads', blocks: [empty] }), { mode: 0o600 });
+    fs.writeFileSync(path.join(f.store, empty.name), '{"version":1,"seq', { mode: 0o600 });
+    assert.deepEqual(f.reopen().recordPage(page()), { sequence: 1, time: NOW, day: '2026-11-11', pageOfDay: 1 });
+    const aside = fs.readdirSync(f.store).filter(name => name.endsWith('.torn'));
+    assert.equal(aside.length, 1); assert.equal(fs.readFileSync(path.join(f.store, aside[0]), 'utf8'), '{"version":1,"seq');
+    assert.deepEqual(f.manifest().blocks.map(entry => [entry.name, entry.count]), [['000000001-2026-11-11.jsonl', 1]]);
+    // Something else in an empty block cannot be accounted for: the log stops.
+    const g = fixture(t); fs.mkdirSync(path.join(g.directory, 'history'), { mode: 0o700 }); fs.mkdirSync(g.store, { mode: 0o700 });
+    fs.writeFileSync(path.join(g.store, 'manifest.json'), JSON.stringify({ version: 1, record: 'butler-reads', blocks: [empty] }), { mode: 0o600 });
+    fs.writeFileSync(path.join(g.store, empty.name), 'not a record\n', { mode: 0o600 });
+    assert.throws(() => g.reopen().recordPage(page()), code('STATE')); assert.equal(fs.readFileSync(path.join(g.store, empty.name), 'utf8'), 'not a record\n');
+  });
+});
+
+test('an open block grown past its size from outside is set aside by a new instance, and stops the one that wrote it', t => {
+  const f = fixture(t); f.audit.recordPage(page()); const block = f.file;
+  fs.truncateSync(block, 32 * 1024 * 1024 + 1);
+  assert.throws(() => f.audit.recordPage(page()), error => ['ERR_BUTLER_READ_AUDIT_STATE', 'ERR_BUTLER_READ_AUDIT_CAPACITY'].includes(error.code));
+  const next = f.reopen(); assert.deepEqual(next.recordPage(page()), { sequence: 2, time: NOW, day: '2026-11-11', pageOfDay: 2 });
+  assert.deepEqual(next.read(f.person).gaps, [{ fromSequence: 1, throughSequence: 1, count: 1, days: ['2026-11-11'] }]);
+  assert.equal(fs.statSync(block).size, 32 * 1024 * 1024 + 1, 'It is left as it is');
 });
 
 test('a log put back to an earlier state under the running app stops it, and does not give the day back', t => {

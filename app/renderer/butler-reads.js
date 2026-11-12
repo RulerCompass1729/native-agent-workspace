@@ -74,16 +74,19 @@
       else if (warned) say(full, 'butler.reads.storageOver', { used: mib(view.storage.usedBytes), line: mib(view.storage.remindBytes) });
       else quiet(full);
       // How much of the log is listed, so a short list is not taken for the whole of it.
-      listed.hidden = !view.shown;
-      if (!view.shown) quiet(listed);
+      listed.hidden = !view.shown && !view.gaps.length;
+      if (listed.hidden) quiet(listed);
       // When the log's newest record was not even read, "the newest N" would not be true: say how many are shown and how
       // to get the rest. A newest record that was read but is not understood is not something Refresh can change.
       else if (!view.reached) say(listed, 'butler.reads.listedPart', { total: view.total, shown: view.shown });
+      // With a block that cannot be read, "the newest N" would not be true of what is below: say what is shown and
+      // how many are in such blocks, which are marked in their places.
+      else if (view.gaps.length) say(listed, 'butler.reads.listedGap', { total: view.total, shown: view.shown, missing: view.gaps.reduce((sum, item) => sum + item.count, 0) });
       else if (view.unreadable) say(listed, 'butler.reads.listedSome', { total: view.total, shown: view.shown, count: view.unreadable });
       else say(listed, view.shown === view.total ? 'butler.reads.listedAll' : 'butler.reads.listed', { total: view.total, shown: view.shown });
       const notes = [];
       if (!view.shown && !view.unreadable && !view.gaps.length) notes.push(['butler.reads.empty']);
-      if (view.unreadable && (!view.shown || !view.reached)) notes.push(['butler.reads.unreadable', { count: view.unreadable }]);
+      if (view.unreadable && (!view.shown || !view.reached || view.gaps.length)) notes.push(['butler.reads.unreadable', { count: view.unreadable }]);
       note.hidden = !notes.length; if (notes.length) say(note, ...notes[notes.length - 1]); else quiet(note);
       // Said where the earlier rows would have appeared: under the list.
       foot.hidden = !olderFailed; if (olderFailed) say(foot, 'butler.reads.olderFailed'); else quiet(foot);

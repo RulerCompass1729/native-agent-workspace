@@ -277,6 +277,9 @@ test('past the person\'s reminder line the size of the log is said beside the da
   size = LINE + 27 * MIB; await h.button('older').fire('click'); assert.equal(h.full().textContent, zh('butler.reads.storageOver', { used: '539', line: '512' }));
   // The line is the shared module's, the one the person set: 0.5 GiB.
   assert.equal(require('../record-history.cjs').REMIND_TOTAL_BYTES, LINE);
+  // Where to look when the log cannot be read names both places it can be: the folder of blocks and an older version's file.
+  for (const language of ['zh', 'en']) for (const place of ['history/butler-reads', 'butler-business-reads.jsonl'])
+    assert.ok(locale.format(language, 'butler.reads.unavailableHelp').includes(place), `${language}: ${place}`);
 });
 
 test('a block that cannot be read is one row in its place, with its numbers and days, and never reads as empty or as an unreadable log', async t => {
@@ -290,12 +293,14 @@ test('a block that cannot be read is one row in its place, with its numbers and 
   assert.deepEqual(order, ['day', 'butler-reads-gap', 'day']);
   assert.equal(f.dialog.dataset.readsState, 'records');
   for (const wrong of [zh('butler.reads.empty'), zh('butler.reads.unavailable')]) assert.equal(f.dialog.text().includes(wrong), false, wrong);
+  // The line above the list does not call what is shown "the newest 3": it says what is shown and what is in the gap.
+  assert.equal(f.listed().textContent, zh('butler.reads.listedGap', { total: 5, shown: 3, missing: 2 }));
   // The newest position in a block that cannot be read: today's count cannot be told, and the reason is that block.
   const newest = fixture(log, { gaps: [{ fromSequence: 5, throughSequence: 5, count: 1, days: ['2026-11-11'] }] }); await newest.reads.open();
   assert.equal(newest.today().textContent, zh('butler.reads.todayUnknownGap', { from: '11-10 16:00', limit: 64, resets: '11-11 16:00' }));
   // A log whose every position is in such a block is not "cannot be read": its rows are said.
   const all = fixture(log, { gaps: [{ fromSequence: 1, throughSequence: 5, count: 5, days: ['2026-11-10', '2026-11-11'] }] }); await all.reads.open();
-  assert.deepEqual([all.dialog.dataset.readsState, all.rows().length], ['records', 0]);
+  assert.deepEqual([all.dialog.dataset.readsState, all.rows().length, all.listed().hidden, all.listed().textContent], ['records', 0, false, zh('butler.reads.listedGap', { total: 5, shown: 0, missing: 5 })]);
   assert.ok(all.dialog.text().includes('第 1–5 条（UTC 2026-11-10 – 2026-11-11，共 5 条）现在读不到'));
   // A gap this version does not know is counted as not understood, never drawn as something else.
   const odd = fixture(log, { gaps: [{ fromSequence: 3, throughSequence: 2, count: 0, days: [] }] }); await odd.reads.open();

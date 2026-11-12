@@ -12167,6 +12167,10 @@ What changed:
   day is split around one), today's count says it cannot be told when the newest
   position is in a gap, and the size line is the reminder line, not a cap.
 - Packaging lists the new module; `docs/butler-business.md` describes the layout.
+- After the review (below): taken-in lines are read with the day's running count;
+  stops during taking-in recover; the manifest is rebuilt only when missing or
+  unparsable; a cut-short last line no longer hides its block; nothing is moved
+  or created over a file already there.
 
 Sentences the person can see (zh; en follows):
 - new `butler.reads.storageOver`: 「这份记录已有 {used} MiB，超过 {line} MiB 的提醒线。
@@ -12177,39 +12181,77 @@ Sentences the person can see (zh; en follows):
   的那一块现在读不到。每天最多 {limit} 页，{resets} 重新计。」
 - changed `butler.reads.storageUnknown`: 「这份记录有多大现在判断不了：这次读到的报告缺失或
   对不上。」
+- new `butler.reads.listedGap`: 「共 {total} 条，下面显示了其中 {shown} 条；另外 {missing} 条在
+  现在读不到的块里，在下面标出的位置。」
 - changed `butler.reads.unavailableHelp`: points at 「数据目录里的读取记录（history/butler-reads
-  文件夹）」.
+  文件夹，以及旧版本留在数据目录最上层的 butler-business-reads.jsonl）」.
 - removed: the near-full and full warnings (there is no cap any more).
 
-Evidence: the full suite, 6288 tests, all pass (run before four tests were added;
-the two files they are in were run again, 88 pass). The new and changed unit tests
-cover the core (63), the shared rules (5), the view and the page. 33 deliberate
-faults in the core, the shared rules, the view, the page and the sentences are all
-caught by the unit tests (29 on the first run; the four missed ones each got a
-test). The read log window check runs on the real window with a real two-day log:
-the reminder line, a missing report, a damaged sealed block shown as one row across
-two pages and reading again when put back, and a damaged open block; three window
-faults are caught. The entry's window check and the DSH read budget check (a local
-loopback server, a fixture key, no provider) pass. No native program, no model.
+Evidence: the full suite, 6288 tests, all pass (run before the review; after it,
+the nine related files were run with their output kept: 200 pass). 46 deliberate
+faults in the core, the shared rules, the view, the page and the sentences are
+all caught by the unit tests (13 of them added after the review). The read log
+window check runs on the real window with a real two-day log: the reminder line,
+a missing report, a damaged sealed block shown as one row across two pages and
+reading again when put back, and a damaged open block; three window faults are
+caught. The entry's window check and the DSH read budget check (a local loopback
+server, a fixture key, no provider) pass. No native program, no model.
 
 Not verified, or known:
 - Going back to an older version: it does not know the folder, shows an empty log
   and starts the day's count from zero in a new single file. Coming back, this
   version takes that file in and counts its pages, so the allowance is whole
   again; while on the older version it is not. No butler is connected in either.
-- A block taken in from an older version keeps its own page-of-day numbers inside
-  it, so a day's header on the read log page can show the older version's own
-  count for that day; the allowance itself sums every block.
-- After a block is shown as a gap, the line above the list still says how many
-  records are shown ("the newest 6"), not that every position is accounted for.
-- A lost or invalid manifest is rebuilt only when every block reads; otherwise the
-  log fails closed. A manifest changed consistently by a program running as the
-  person is not detected: this log is not tamper-proof (as before).
+- An older version's file with a line cut short is not taken in: the log stops,
+  as it stopped that version. A day an older version took past 64 pages shows its
+  later lines as not understood, and today's count as not known.
+- A missing or unparsable manifest is rebuilt only when every block reads;
+  otherwise the log fails closed. A rebuild cannot know about a newest block that
+  is gone too, and takes the blocks as they are now. A manifest changed
+  consistently by a program running as the person is not detected: this log is
+  not tamper-proof (as before).
 - A read may finish a taking-in or update the manifest (setting a block aside,
   counting a line written before a stop): reads write.
-- An open block set aside as unreadable has no checksum and stays set aside even
-  if put back.
+- An open block set aside as unreadable (other than a cut-short last line) has no
+  checksum and stays set aside even if put back.
 - A page now takes about 41 ms to log on this machine, against about 21 ms before
   (two manifest writes, each synced).
 - The bell, the reminder dialog and export are batch 3; nothing here reminds the
   person outside the read log page, whose entry is still closed.
+
+Independent read-only review (one fresh session on the rebased commit; the CLI
+reported the model as claude-opus-5-5): `PASS_WITH_NOTES`. It found no path that
+loses or rewrites a stored record or starts the day's count again within this
+version, and the fail-closed paths real. Its notes, each reproduced as a test
+first, and what was done:
+1. After going back to an older version and returning, today's count on the page
+   was too low (the taken-in lines kept the older version's own page numbers):
+   3 pages here and 60 there showed "60 read, 4 left" while one page was left.
+   The read now gives each taken-in line the day's running count across the log;
+   a view test over the real core shows 63 read, 1 left, and the next page after
+   the last is refused.
+2. "the newest N are below" was false when a gap sat among the rows. With a gap
+   the line now says how many are shown and how many are in blocks that cannot be
+   read, marked in their places (new sentence `butler.reads.listedGap`: 「共 {total}
+   条，下面显示了其中 {shown} 条；另外 {missing} 条在现在读不到的块里，在下面标出的
+   位置。」).
+3. Some stops during taking-in never recovered: moved, then an older version
+   started a new file; planned, then an older version wrote on to the file; a
+   plan beside a damaged or missing manifest. Now the moved block is checked
+   first, a plan the file outgrew before any move is dropped and the file taken
+   in as it is, and the manifest is read or built before a plan is finished. A
+   move or a new block never goes over a file already there (it stops instead).
+4. Any error reading the manifest rebuilt it. Now only a missing manifest or one
+   that does not parse is built again; one that cannot be opened safely stops the
+   log. A rebuild still cannot know about a newest block that is gone.
+5. A crash during an append made the whole open block a gap for good. A block
+   whose last line was cut short is now sealed with that line left as it is (its
+   page was never released), its other lines read, and the next page goes into a
+   new block; sealed, it is held to its checksum. A block holding only a cut-short
+   line held no page: it is moved aside under a name that is not a block's. An
+   empty block holding anything else stops the log.
+6. An open block grown past 32 MiB from outside stopped every later start; a new
+   instance now sets it aside. The help for an unreadable log now also names the
+   older version's file at the top of the data folder.
+Its remark that fault 1 of the window list showed no error: that fault was the
+one missed, replaced by a fault in the code path the window check exercises.

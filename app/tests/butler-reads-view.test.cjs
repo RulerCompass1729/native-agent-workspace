@@ -21,7 +21,7 @@ function log(t) {
   const all = () => { const records = []; let after = 0, through = 0;
     for (;;) { const result = audit.read(person, { afterSequence: after, limit: 50 }); records.push(...result.records); through = result.throughSequence; if (!result.truncated) break; after = result.nextAfterSequence; }
     return { records, through }; };
-  return { audit, page, fill, all };
+  return { audit, page, fill, all, dir };
 }
 
 test('the view shows the core\'s own limits', () => {
@@ -110,6 +110,27 @@ test('what the dialog says about an unreadable log is true of the core', t => {
   assert.throws(() => running.recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 1, runnerRef: 'butler-runner-synthetic' }, query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } }),
     { code: 'ERR_BUTLER_READ_AUDIT_STATE' }, 'A page that cannot be logged is not released');
   assert.equal(make().read(person, { afterSequence: 0, limit: 50 }).throughSequence, 1, 'A reopened app reads the repaired log');
+});
+
+test('after going back to an older version and returning, today\'s count is the one the allowance keeps', t => {
+  // This version logs 3 pages; an older version, gone back to, logs 60 more the same day in its own single file,
+  // counted from 1; this version then takes that file in. Written here by the product's own module into a second
+  // folder, whose first block is byte for byte what an older version's single file is.
+  const l = log(t); l.fill(NOW - 3600 * 1000, 3, { step: MINUTE });
+  const older = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-reads-older-')); fs.chmodSync(older, 0o700); t.after(() => fs.rmSync(older, { recursive: true, force: true }));
+  let clock = NOW - 1800 * 1000; const other = new ButlerReadAudit(older, { now: () => clock });
+  for (let index = 0; index < 60; index++) { clock += 1000; other.recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 3, runnerRef: 'butler-runner-synthetic' },
+    query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } }); }
+  const file = path.join(older, 'history', 'butler-reads', '000000001-2026-11-11.jsonl');
+  fs.copyFileSync(file, path.join(l.dir, 'butler-business-reads.jsonl')); fs.chmodSync(path.join(l.dir, 'butler-business-reads.jsonl'), 0o600);
+  const fresh = new ButlerReadAudit(l.dir, { authorizePerson: actor => actor === person, now: () => NOW }), records = [];
+  let after = 0; for (;;) { const page = fresh.read(person, { afterSequence: after, limit: 50 }); records.push(...page.records); if (!page.truncated) break; after = page.nextAfterSequence; }
+  const view = readsView({ records, through: 63, now: NOW, zone: pacific });
+  assert.deepEqual([view.today.pages, view.today.left, view.days.length, view.days[0].pages], [63, 1, 1, 63]);
+  fresh.recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 3, runnerRef: 'butler-runner-synthetic' },
+    query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } });
+  assert.throws(() => fresh.recordPage({ actor: { sessionId: 'butler-session-synthetic', nativeId: 'butler-native-synthetic', selectionRevision: 3, runnerRef: 'butler-runner-synthetic' },
+    query: { kind: 'spaces', spaceId: null, limit: 50 }, result: { count: 0, recordRefs: [], scanned: 0, truncated: false } }), { code: 'ERR_BUTLER_READ_LIMIT' }, 'The one page left was the only one');
 });
 
 test('a block that cannot be read is shown in its place, once, and makes no count look whole', t => {
