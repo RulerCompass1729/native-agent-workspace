@@ -11982,14 +11982,21 @@ Not verified, or known:
 - The butler can still end in a space by two of NAW's own joins that do not
   pass the check: placing a session NAW has just opened for a space, and
   moving a replaced member's successor in. Either needs the person to
-  designate that session in the moment between its creation and its join; so
-  does a join already on its way when the person designates. The row then
+  designate that session between its creation and a successful join, which
+  can be as long as a retry; so does a join already on its way when the
+  person designates. The row then
   stays at the top and "leave" stays offered. Before the butler is given any
   permission (step 2) there has to be one check where all joins meet.
 - With the built-in butler's switch opened in a test, or its row replaced by
   its failure row, two rows carry the butler's name. No daily launch has both.
-- A record that cannot be read shows as "not designated" beside a warning
-  that says so and that designating again restores it.
+- A designation that cannot be read shows as "not designated" beside a
+  warning that says so and that this does not mean nobody is designated.
+  Designating again cures a damaged record; it does not cure a rotation log
+  that cannot be read, so the warning promises nothing.
+- One restored window that the person had opened for one session still
+  lands on the butler, and its place is saved over: nothing tells such a
+  window from the main one. A person who always keeps two windows open never
+  lands on the butler. Both are put to the person on the page they are given.
 
 Independent read-only review (one fresh session on the rebased commit; the CLI
 reported the model as claude-opus-5-5): `CHANGES`, one blocking finding. The
@@ -12001,9 +12008,16 @@ for the landing though it may be a window the person opened for one session
 (changed: with several windows none lands); after confirming, the window
 followed the choice even when the person had dismissed the chooser (changed);
 an unreadable record read as "not designated" with a warning that said less
-(the warning now says what the row shows and what restores it); three weak
+(the warning now says what the row shows); three weak
 assertions (two rewritten, one removed); the two internal joins and the two
 rows with one name are in the list above; an archived butler was already
 there. It found no path by which the designation gives a session anything, no
 way for an agent to designate or to use the landing, the older window checks
 not weakened, and the code reshaped after the first full run sound.
+The same session then read the changes: `PASS_WITH_NOTES`, nothing blocking.
+Its three notes are taken as words only, after its look: the warning had
+promised that designating again restores an unreadable designation, which
+is false when it is the rotation log that cannot be read (the promise is
+removed); the landing rule is narrower than "a new start lands on the
+butler" for a person with two windows (put to the person); and the record
+said "in the moment" where a retry can make it longer (corrected above).

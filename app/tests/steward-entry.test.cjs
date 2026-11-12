@@ -98,7 +98,7 @@ test('a record or log that cannot be trusted is an error, never "nobody designat
   }
   const f = fixture(t); f.role.set(ONE); fs.writeFileSync(path.join(f.directory, 'rotation-log.jsonl'), 'not json\n', { mode: 0o600 });
   assert.throws(() => new StewardRole(f.directory).current(), state);
-  // What the warning tells the person to do works: designating again writes a new record over the damaged one.
+  // Designating again writes a new record over a damaged one. (A rotation log that cannot be read is not cured by it.)
   const again = fixture(t); again.role.set(ONE); fs.writeFileSync(again.file, '{broken', { mode: 0o600 });
   const damaged = new StewardRole(again.directory); assert.throws(() => damaged.current(), state);
   damaged.set({ sessionId: 'session-9', nativeId: 'native-9' }); assert.deepEqual(new StewardRole(again.directory).current(), { sessionId: 'session-9', nativeId: 'native-9' });
@@ -200,7 +200,11 @@ test('every sentence exists in both languages, and the words say what the design
   assert.equal(locale.format('zh', 'steward.choose.intro'), '你主要和它说话。它固定在侧栏最上面，不再列在「会话」里。指定不给它任何新权限；当大管家期间它不能加入协作空间。只有你能指定、更换或撤销。');
   assert.equal(locale.format('en', 'steward.choose.intro'), 'You mainly talk to it. It stays at the top of the sidebar and is no longer listed under Sessions. Designating it gives it no new permission; while it is the butler it cannot join a collaboration space. Only you can designate, change or revoke it.');
   assert.equal(/不改变它的任何权限|changes none of its permissions/.test(JSON.stringify(messages)), false);
-  assert.equal(locale.format('zh', 'error.steward.state'), '大管家的指定记录读不到；侧栏最上面显示成「未指定」。重新指定一次就能恢复。');
+  // The warning says what the row shows and that it is not "nobody". It promises no cure: a damaged record is cured by
+  // designating again, a rotation log that cannot be read is not.
+  assert.equal(locale.format('zh', 'error.steward.state'), '大管家的指定现在读不到；侧栏最上面显示成「未指定」，这不表示没有指定。');
+  assert.equal(locale.format('en', 'error.steward.state'), 'The butler designation cannot be read right now; the top of the sidebar shows \u201cNot designated\u201d, which does not mean that nobody is designated.');
+  assert.equal(/就能恢复|restores it/.test(messages.zh['error.steward.state'] + messages.en['error.steward.state']), false);
   assert.equal(locale.format('zh', 'menu.stewardSet'), '设为大管家（我主要和它说话）'); assert.equal(locale.format('zh', 'error.steward.joinSpace'), '大管家不能加入协作空间。先撤销大管家，再把这个会话加入空间。');
   assert.equal(locale.format('zh', 'steward.choose.inSpace', { space: '网站改版' }), '在协作空间「网站改版」里，先移出才能当大管家');
   assert.equal(locale.format('zh', 'steward.rowStatus', { name: 'A', status: '会话就绪' }), 'A · 会话就绪');
