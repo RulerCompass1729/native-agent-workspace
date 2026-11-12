@@ -2,7 +2,7 @@
 // stands, and what waits for the person. Display only: it reads the person's own view of the
 // handoff, the space's queue and the sessions, and decides nothing.
 (function (global) {
-  const WAITS = { 'no-reply': 'noReply', 'person-intervened': 'typed' };
+  const WAITS = { 'no-reply': 'noReply', 'person-intervened': 'typed', 'integrator-in-space': 'inSpace' };
   const nothing = () => ({ block: null, rows: Object.create(null), keep: [], orphans: [], need: 0 });
   const only = fault => ({ ...nothing(), block: { head: [], faults: [fault], none: null, stops: [], repository: null, ask: null } });
   // view: what the person's handoff entry gives for this space; failed: it could not be read;
@@ -74,7 +74,7 @@
     // What pauses every handoff, and a handoff that waits for the person, are this space's concern (said with weight, and
     // counted) only while one of its own deliveries is on its way: in line, or with the integrator.
     const live = counts.queued + counts.handed > 0;
-    const block = { head, faults, none: integrator ? null : { count: counts.queued }, stops: inSpace && live ? [{ key: 'queue.handoff.stopped.inSpace', params: {} }] : [], repository: null, ask: null };
+    const block = { head, faults, none: integrator ? null : { count: counts.queued }, stops: inSpace && live && kind !== 'inSpace' ? [{ key: 'queue.handoff.stopped.inSpace', params: {} }] : [], repository: null, ask: null };
     if (block.stops.length) result.need += 1;
     // Where merges are checked, once there is an integrator. Nothing chosen, or a folder that cannot be read now, stops every handoff: the person's to mend.
     if (view.repository && integrator) {

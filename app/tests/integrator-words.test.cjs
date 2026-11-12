@@ -46,7 +46,7 @@ test('each state of a delivery has one sentence for its space, in both languages
   ];
   for (const [input, zh, en] of cases) { const words = spaceWords(input); assert.equal(say('zh', words), zh); assert.equal(say('en', words), en); }
   // Every reason a delivery can be held under, and every reason a handoff can wait on, gives a sentence that exists and differs by language.
-  const held = Object.keys(REASONS).filter(reason => !['integrator-unset', 'integrator-in-space', 'backlog-full'].includes(reason) && !/^(installable|returned-limit):/.test(reason));
+  const held = Object.keys(REASONS).filter(reason => !['integrator-unset', 'backlog-full'].includes(reason) && !/^(installable|returned-limit):/.test(reason));
   const seen = new Set();
   for (const reason of held) {
     const words = spaceWords(fact({ outcome: 'held', reason, note: 'the integrator\'s own words' }));
@@ -55,7 +55,11 @@ test('each state of a delivery has one sentence for its space, in both languages
     assert.ok(zh !== en && zh.startsWith('「Fix the list」的交付') && en.startsWith('The delivery for “Fix the list”') && !/\{\w+\}/.test(zh + en), reason);
     seen.add(words.key);
   }
-  assert.equal(seen.size, 15, 'Fifteen different sentences for a delivery on hold');
+  assert.equal(seen.size, 16, 'Sixteen different sentences for a delivery on hold');
+  // A handoff that waits because its integrator sits in a space says that, for a delivery inside it and for one held from it afterwards.
+  assert.equal(say('zh', spaceWords(fact({ outcome: 'waiting', reason: 'integrator-in-space' }))), '「Fix the list」的交付（lane/a 616161616161）在等你处理：集成者进了一个协作空间，它写的东西不再当作这次交接的答复');
+  assert.equal(say('en', spaceWords(fact({ outcome: 'waiting', reason: 'integrator-in-space' }))), 'The delivery for “Fix the list” (lane/a 616161616161) is waiting for you: the integrator is inside a collaboration space, so what it writes is no longer read as this handoff\'s answer');
+  assert.equal(say('en', spaceWords(fact({ outcome: 'held', reason: 'integrator-in-space' }))), 'The delivery for “Fix the list” (lane/a 616161616161) is on hold: the integrator was inside a collaboration space during the handoff');
   // The three troubles with the message itself are told apart, because what the person does next differs.
   const onHold = reason => say('en', spaceWords(fact({ outcome: 'held', reason })));
   assert.equal(onHold('send-unconfirmed'), 'The delivery for “Fix the list” (lane/a 616161616161) is on hold: the handoff message could not be confirmed as delivered to the integrator');
@@ -97,7 +101,7 @@ test('the person\'s notice says how many deliveries and why, in both languages, 
     [{ reason: 'record-missing', count: 1 }, 'NAW 读不到集成者的回复，1 件交付搁着；请到它的会话里看', 'NAW could not read the integrator\'s reply; look in its session. Deliveries on hold: 1'],
     [{ reason: 'send-unconfirmed', count: 1 }, '交接消息没能确认送到集成者，1 件交付搁着', 'The handoff message could not be confirmed as delivered. Deliveries on hold: 1'],
     [{ reason: 'no-result', count: 1 }, '集成者没有给出 1 件交付的结果', 'The integrator gave no result. Deliveries: 1'],
-    [{ reason: 'integrator-in-space', count: 4 }, '指定的集成者在协作空间里，4 件交付没有交给它；请把它移出空间或另行指定', 'The designated integrator is inside a collaboration space; move it out or designate another. Deliveries not handed over: 4'],
+    [{ reason: 'integrator-in-space', count: 4 }, '指定的集成者在协作空间里，4 件交付先停着；请把它移出空间或另行指定', 'The designated integrator is inside a collaboration space; move it out or designate another. Deliveries paused: 4'],
   ];
   for (const [info, zh, en] of cases) {
     const words = personWords(info);
@@ -162,7 +166,7 @@ test('the space record is written once per delivery and state, into the space th
 });
 
 test('a held delivery\'s row in the queue panel says its cause in one short sentence, in both languages, without the task\'s text', () => {
-  const OWN = ['reviewOff', 'reviewCap', 'lockHeld', 'checkpointInvalid', 'unverified', 'mainUnreadable', 'notDelivered', 'sendRefused', 'replyUnread', 'noAnswer', 'noReply', 'personTyped', 'integratorGone', 'conflict'];
+  const OWN = ['reviewOff', 'reviewCap', 'lockHeld', 'checkpointInvalid', 'unverified', 'mainUnreadable', 'notDelivered', 'sendRefused', 'replyUnread', 'noAnswer', 'noReply', 'personTyped', 'integratorGone', 'integratorInSpace', 'conflict'];
   const seen = new Set();
   for (const [reason, name] of Object.entries(REASONS)) {
     const words = rowWords({ reason, note: 'the integrator wrote this', text: TASK });

@@ -5008,7 +5008,7 @@ function renderQueueHandoff(block) {
   }
   const ask = block.ask;
   if (ask) {
-    const box = node('div', undefined, 'queue-handoff-ask'), words = ask.kind === 'asks' ? 'asks' : 'other';
+    const box = node('div', undefined, 'queue-handoff-ask'), words = ['asks', 'inSpace'].includes(ask.kind) ? ask.kind : 'other';
     box.dataset.handoff = 'ask';
     box.append(uiNode('div', 'queue.handoff.ask.' + ask.kind, { name: ask.name }, 'queue-status'));
     if (ask.question) box.append(node('div', ask.question, 'queue-handoff-question'));

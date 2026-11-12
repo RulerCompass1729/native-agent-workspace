@@ -17,8 +17,8 @@ const PLAIN = {
 const WITH_SUBJECT = { 'lock-held': 'lockHeld', 'integrator-missing': 'integratorGone', conflict: 'conflict', installable: 'installable', 'returned-limit': 'returnedLimit' };
 // What a held delivery, and one inside a waiting handoff, can be told.
 const HELD = ['reviewOff', 'reviewCap', 'lockHeld', 'checkpointInvalid', 'unverified', 'mainUnreadable', 'notDelivered', 'sendRefused', 'replyUnread', 'noAnswer', 'noReply',
-  'personTyped', 'integratorGone', 'conflict', 'other'];
-const WAITING = ['noReply', 'personTyped', 'conflict'];
+  'personTyped', 'integratorGone', 'integratorInSpace', 'conflict', 'other'];
+const WAITING = ['noReply', 'personTyped', 'integratorInSpace', 'conflict'];
 
 // The sentence group of a reason, with the reason's subject (a lock's owner, a commit, a branch).
 function group(reason) {

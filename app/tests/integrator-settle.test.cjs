@@ -646,6 +646,51 @@ test('finished outcomes are trimmed by when they ended', t => {
   assert.deepEqual([backlog.knows(key('m-0')), backlog.knows(key('m-1')), backlog.knows(key('never'))], [true, true, false], 'A trimmed delivery is still known');
 });
 
+test('while its integrator sits in a space nothing it writes is read as the handoff\'s answer: the handoff waits for the person', t => {
+  const { backlog, open } = fixture(t);
+  const { handoffId } = handed(backlog, ['a', 'b']);
+  const inside = (session, extra = {}) => backlog.plan(later(session, { inSpace: true, ...extra }));
+  const waits = { kind: 'settle', handoffId, status: 'waiting', reason: 'integrator-in-space' };
+  // Whatever the session is doing and whatever it wrote: at work, idle without a word, with merges git would confirm, with a question, after the person typed.
+  const merges = answered('tag-1', `MERGED ${commitOf('a')} as ${MAIN2} tests 9/9\nRETURNED ${commitOf('b')} needs a rebase`);
+  const sessions = [integratorSession({ state: 'working', messages: [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW }] }), answered('tag-1', null), merges, answered('tag-1', '需要你决定：这是写给空间里别人的'),
+    answered('tag-1', 'Understood.', { controlRevision: 5 })];
+  for (const [index, session] of sessions.entries()) assert.deepEqual(inside(session), waits, String(index));
+  // Only "in a space" does that: without it each of these is read as before.
+  assert.deepEqual([backlog.plan(later(sessions[0])).why, backlog.plan(later(sessions[1])).reason, backlog.plan(later(merges)).status, backlog.plan(later(merges, { inSpace: false })).status, backlog.plan(later(sessions[4])).reason],
+    ['integrator-working', 'no-reply', 'done', 'done', 'person-intervened']);
+  // What is decided before the session is looked at stays as it was: a designation taken away or unreadable, a session that is gone.
+  assert.deepEqual([inside(merges, { integrator: null }).reason, inside(merges, { integrator: undefined }).why, inside(undefined, { session: undefined, complete: true }).reason, inside(undefined, { session: undefined, complete: false }).why],
+    ['integrator-missing:integrator', 'designation-unknown', 'integrator-missing:integrator', 'sessions-incomplete']);
+  // Settled as that: the handoff keeps its place and waits, the person is told once, each delivery's space says why, and no line of the answer is taken.
+  const result = backlog.settle(inside(merges), { handoffId, mainHead: MAIN2, verified: ok(['a']) }, NOW + 60000);
+  assert.deepEqual([result.status, outcomes(result), result.notify, result.install, result.question], ['waiting', { a: 'waiting:integrator-in-space', b: 'waiting:integrator-in-space' }, ['integrator-in-space'], null, null]);
+  const kept = open().snapshot();
+  assert.deepEqual([kept.handoff.status, kept.handoff.reason, kept.handoff.question, states(backlog)], ['waiting', 'integrator-in-space', undefined, { a: 'handed', b: 'handed' }]);
+  assert.deepEqual(backlog.noticeInfo('integrator-in-space'), { reason: 'integrator-in-space', count: 2, roomId: 'space-1', itemId: 'a', sessionId: 'integrator' });
+  assert.deepEqual([backlog.plan(later(merges)).why, backlog.plan(later(merges, { inSpace: true })).why], ['handoff-waiting', 'handoff-waiting'], 'Moving it out again does not make the old answer count');
+  assert.deepEqual(Object.values(backlog.spaceView('space-1')).map(item => item.state), ['asking', 'asking']);
+  // The person deals with it: with a retry both may be handed again; without, they are on hold under that reason until retried.
+  const retried = fixture(t).backlog, left = fixture(t).backlog;
+  for (const other of [retried, left]) { const again = handed(other, ['a', 'b']); other.settle(other.plan(later(merges, { inSpace: true })), {}, NOW + 60000); other.handoffId = again.handoffId; }
+  assert.deepEqual([retried.resolveHandoff(retried.handoffId, { retry: true }), states(retried), retried.snapshot().handoff], [{ released: [key('a'), key('b')], held: [] }, { a: 'deliverable', b: 'deliverable' }, null]);
+  assert.deepEqual([left.resolveHandoff(left.handoffId), states(left)], [{ released: [], held: [key('a'), key('b')] }, { a: 'held:integrator-in-space', b: 'held:integrator-in-space' }]);
+  // A later handoff does not take them along, whoever the integrator is by then and wherever it sits: the hold ends with the person's retry only.
+  left.noteReady(ready('c'), NOW + 70000);
+  const next = left.advance(observed({ now: NOW + 80000, idleSince: new Map([[INTEGRATOR.sessionId, NOW + 80000 - rules.IDLE_SETTLE_MS]]) }), NOW + 80000);
+  assert.deepEqual([next.kind, next.keys, states(left)], ['open', [key('c')], { a: 'held:integrator-in-space', b: 'held:integrator-in-space', c: 'handed' }]);
+  assert.deepEqual([left.retryReady(key('a')), left.retryReason('integrator-in-space'), states(left)], [{ released: [key('a')] }, { released: [key('b')] }, { a: 'deliverable', b: 'deliverable', c: 'handed' }]);
+  // The question the hand-out side asks about an integrator in a space ends when a handoff does go out, as before.
+  const asked = fixture(t).backlog;
+  asked.noteReady(ready('a'), NOW);
+  assert.deepEqual([asked.advance(observed({ inSpace: true }), NOW).reason, asked.snapshot().reasons['integrator-in-space'].open], ['integrator-in-space', true]);
+  assert.deepEqual([asked.advance(observed(), NOW).kind, asked.snapshot().reasons['integrator-in-space'].open], ['open', false]);
+  // Any other reason for a wait that is not a decision is still refused.
+  const strict = fixture(t).backlog;
+  handed(strict, ['a']);
+  assert.throws(() => strict.settle({ kind: 'settle', handoffId: strict.snapshot().handoff.id, status: 'waiting', reason: 'review-off' }, {}, NOW + 60000), { code: 'HANDOFF_STATE' });
+});
+
 test('a merge git could not be asked about is held as "could not be checked", never as a merge that was not found', t => {
   const { backlog } = fixture(t);
   handed(backlog, ['a', 'b', 'c', 'd']);

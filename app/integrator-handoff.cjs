@@ -339,6 +339,10 @@ function planSettle(state, seen) {
   if (!session || session.archived || session.id !== own.sessionId || session.nativeId !== own.nativeId) {
     return seen.complete === true ? settle('failed', `integrator-missing:${own.sessionId}`) : none('sessions-incomplete');
   }
+  // The integrator's session sits in a space: its members and the space's queue may be speaking to it,
+  // so nothing it writes, now or later, is read as this handoff's answer. The handoff waits for the
+  // person, whether the session is working or idle and whatever it has written.
+  if (seen.inSpace === true) return settle('waiting', 'integrator-in-space');
   const idle = seen.idleSince?.get(session.id);
   if (session.state !== 'idle' || session.pendingTag || !Number.isFinite(now) || !Number.isFinite(idle) || now - idle < (seen.settleMs ?? IDLE_SETTLE_MS)) return none('integrator-working');
   const reply = replyAfter(session, handoff.tag, handoff.sentAt);
@@ -604,8 +608,11 @@ class IntegrationHandoffs {
     next.handoff = { id: action.handoffId, status: 'sent', keys: action.keys, integrator: action.integrator, mainHead: action.mainHead, sentAt: now, tag: null };
     // An integrator took a handoff: the question about a missing one is over, and what was held
     // because that session was gone waits for the next handoff.
-    const ended = ['integrator-unset', 'integrator-in-space', 'repository-unset', `integrator-missing:${action.integrator.sessionId}`];
+    const ended = ['integrator-unset', 'repository-unset', `integrator-missing:${action.integrator.sessionId}`];
     this.release(next, reason => ended.includes(reason), true);
+    // The question about an integrator inside a space is over too. What the person left on hold from a
+    // handoff that waited for that reason stays on hold: that hold is theirs to end.
+    if (next.reasons['integrator-in-space']?.open) next.reasons['integrator-in-space'].open = false;
     this.commit(next);
     return action;
   }
@@ -678,7 +685,7 @@ class IntegrationHandoffs {
       next.handoff = null;
       for (const entry of entries) held(entry, action.reason);
     } else if (action.status === 'waiting' && action.decision !== true) {
-      if (!['no-reply', 'person-intervened'].includes(action.reason)) throw fail('Unknown wait');
+      if (!['no-reply', 'person-intervened', 'integrator-in-space'].includes(action.reason)) throw fail('Unknown wait');
       handoff.status = 'waiting'; handoff.reason = action.reason;
       // The person's own typing into the integrator's session is recorded but not announced to them.
       tell(this.occur(next, action.reason, now, action.reason === 'person-intervened'));

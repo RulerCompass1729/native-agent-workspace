@@ -349,6 +349,52 @@ test('the person\'s "check again": the claim kept with a merge that could not be
   for (const other of [key('zz'), undefined, 7]) await assert.rejects(m.engine.recheck(other), { code: 'HANDOFF_STATE', stale: true }, String(other));
 });
 
+test('the handoff\'s own session in a space: the engine settles it as waiting without reading the answer or git; an unreadable membership settles nothing', async t => {
+  const line = `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9`;
+  const untouched = reader({ commit: async () => { throw Error('git must not be asked'); } });
+  const f = fixture(t, { reader: untouched });
+  await f.handed(['a']);
+  f.clock = LATER;
+  const member = answered('tag-1', line); member.roomIds = ['shared'];
+  const result = await f.settle(member);
+  assert.deepEqual([result.kind, result.status, outcomes(result), result.notify, f.heads, f.looks], ['settled', 'waiting', { a: 'waiting:integrator-in-space' }, ['integrator-in-space'], 0, 0]);
+  assert.deepEqual([f.handoffs.snapshot().handoff.status, f.handoffs.snapshot().handoff.reason, f.states()], ['waiting', 'integrator-in-space', { a: 'handed' }]);
+  // Also while it is still at work, and by the older single-space field.
+  const legacy = answered('tag-1', line); delete legacy.roomIds; legacy.roomId = 'shared';
+  for (const session of [integratorSession({ state: 'working', roomIds: ['shared'], messages: [{ id: 'tag-1', role: 'user', text: 'handoff', time: NOW }] }), legacy]) {
+    const g = fixture(t, { reader: untouched });
+    await g.handed(['a']);
+    g.clock = LATER;
+    assert.deepEqual(outcomes(await g.settle(session)), { a: 'waiting:integrator-in-space' });
+  }
+  // A membership record that cannot be read says neither yes nor no: nothing is settled, by that look or by the fresh one.
+  const h = fixture(t);
+  await h.handed(['a']);
+  h.clock = LATER;
+  const unreadable = { ...answered('tag-1', line), roomIds: 'shared' };
+  assert.deepEqual(await h.settle(unreadable), { kind: 'none', why: 'membership-unknown' });
+  h.fresh = at(LATER, [unreadable]);
+  assert.deepEqual(await h.settle(answered('tag-1', line)), { kind: 'none', why: 'membership-unknown' });
+  assert.deepEqual([h.states(), h.handoffs.snapshot().handoff.status], [{ a: 'handed' }, 'sent']);
+  // The same for an answer without merges, which is settled from the first look alone.
+  const p = fixture(t);
+  await p.handed(['a']);
+  p.clock = LATER;
+  assert.deepEqual(await p.settle({ ...answered('tag-1', `RETURNED ${commitOf('a')} needs a rebase`), roomIds: 'shared' }), { kind: 'none', why: 'membership-unknown' });
+  assert.deepEqual([p.states(), p.looks], [{ a: 'handed' }, 0]);
+  // It is put into a space while git is being read: the fresh look no longer reads that answer either.
+  h.fresh = at(LATER, [member]);
+  assert.deepEqual(await h.settle(answered('tag-1', line)), { kind: 'none', why: 'changed-while-checking' });
+  h.fresh = undefined;
+  assert.deepEqual(outcomes(await h.settle(member)), { a: 'waiting:integrator-in-space' });
+  // Another native session under the designated id is not the handoff's session: its spaces say nothing about the handoff, which fails as "gone".
+  const k = fixture(t);
+  await k.handed(['a']);
+  k.clock = LATER;
+  const impostor = { ...answered('tag-1', line), nativeId: 'native-other', roomIds: 'unreadable' };
+  assert.deepEqual(outcomes(await k.settle(impostor)), { a: 'held:integrator-missing:integrator' });
+});
+
 test('with one checked look at the repository per settlement, every git question goes to that look; a repository that cannot be read is an unreadable head, never an unknown commit', async t => {
   const session = answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 3/3`);
   // The look is taken once, and its reader and head are the only ones asked: the engine's general reader and head are not.
