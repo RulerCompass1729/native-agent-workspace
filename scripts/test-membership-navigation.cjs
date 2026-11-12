@@ -168,7 +168,9 @@ async function run() {
   await until(async () => !(await snapshot()).sessions.find(s => s.id === a).archived, 'Current archived session restored');
   assert.equal((await view()).selected, a); assert.equal((await view()).mode, currentBefore.mode);
   await until(() => page.locator('#toast .toast-action').count().then(n => n === 0), 'No redundant Open after restoring current session');
-  await joinFromSolo(a); await (await row(d)).click();
+  // Since a1046f2 (2026-11-09) restoring a session puts it back in the space it was archived from; no join is needed.
+  await until(async () => (await snapshot()).sessions.find(s => s.id === a).roomId === 'shared', 'Restored session back in its space');
+  await (await row(d)).click();
   await page.locator('#room-more').click(); await page.getByRole('menuitem', { name: '归档工作区', exact: true }).click();
   await until(async () => (await snapshot()).room.archived, 'Owned room archived');
   await hold('restoreRoom', undefined); const roomRestoreCalls = await fixture('stats');
