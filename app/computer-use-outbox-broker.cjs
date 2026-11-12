@@ -158,7 +158,8 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
     // Exclusive descriptor: an occupied owner must never be replaced silently.
     fs.writeFileSync(descriptorFile, JSON.stringify({ version: 1, socketPath, capability, issuer }), { flag: 'wx', mode: 0o600 });
     descriptorIdentity = fs.lstatSync(descriptorFile);
-    return { descriptorFile, close, submitAuthenticated, submitControlAuthenticated };
+    // How many requests are under way: background windows are not closed while any is.
+    return { descriptorFile, close, submitAuthenticated, submitControlAuthenticated, active: () => operations.size };
   } catch (error) { await close(); throw error; }
 }
 module.exports = { createOutboxBroker, operateOutbox };
