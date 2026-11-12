@@ -12493,3 +12493,13 @@ operations record at start is its own reminder, with a sentence for its cause
 (its history folder, or anything else such as an unfinished taking-in). Full
 suite 6336, the 3 faults for this caught (35 in all), the bell window check
 passes.
+The same session read that change: `PASS_WITH_NOTES`. Nothing polls (the event
+goes out only when the number of operations blocks changes) and nothing reaches
+an agent's background view. Its notes: the read log's own sealing and a failure
+while NAW runs do not ring the bell (both in the list above as not done); the
+sentence for a record not loaded for another reason said "could not be read" and
+"NAW has not touched it", which is not true of a write that failed or a taking-in
+that stopped part way (reworded: "没能打开", "NAW 不会去修它"); and one "知道了"
+covers both causes of a record not loaded, so a change of cause between two
+starts stays quiet until a start loads it (narrow, recorded). The review of this
+batch ends here.
