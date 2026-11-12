@@ -31,7 +31,10 @@ const STATES = [...OPEN_STATES, 'merged', 'returned', 'superseded'];
 // Reasons that exist once for the whole backlog, and those that exist once per subject.
 const GLOBAL_REASONS = ['review-off', 'review-cap', 'checkpoint-invalid', 'merge-unverified', 'send-unconfirmed',
   'record-missing', 'send-refused', 'no-result', 'no-reply', 'person-intervened', 'held-other', 'backlog-full', 'integrator-unset', 'integrator-in-space', 'main-unreadable',
-  'repository-unset'];
+  'repository-unset', 'merged-earlier'];
+// The holds that keep the merge that was reported, for the person's second step on it: one git could not be
+// asked about (checked again), and one that was made during an earlier handoff (the person's to confirm).
+const CLAIMED = ['main-unreadable', 'merged-earlier'];
 const SUBJECT_REASONS = ['lock-held', 'integrator-missing', 'conflict', 'returned-limit', 'installable'];
 const RETURN_LIMIT = 2;       // a branch returned more often than this is the person's to decide, not suggested again
 // The reasons an integrator may write on a HELD line; anything else is kept as "held for another reason".
@@ -102,12 +105,13 @@ function checkEntry(entry) {
       !(entry.resends === undefined || entry.resends === 1) || optional(entry.note, 200) === null || optional(entry.shown, SHOWN_LIMIT) === null ||
       (entry.state === 'merged') !== sha(entry.mergedAs) || (entry.state !== 'merged' && entry.mergedAs !== undefined) ||
       !(entry.tests === undefined || Number.isSafeInteger(entry.tests?.passed) && Number.isSafeInteger(entry.tests?.total)) || optional(entry.review, 100) === null ||
-      !(entry.redone === undefined || entry.redone === true && entry.state === 'returned') ||
-      !(entry.claim === undefined || entry.state === 'held' && entry.reason === 'main-unreadable' && validClaim(entry.claim))) throw fail('Invalid delivery record');
+      !(entry.redone === undefined || entry.redone === true && entry.state === 'returned') || !(entry.firstHead === undefined || sha(entry.firstHead)) ||
+      !(entry.claim === undefined || entry.state === 'held' && CLAIMED.includes(entry.reason) && validClaim(entry.claim))) throw fail('Invalid delivery record');
 }
-// The merge an integrator reported for a delivery that was then held because git could not be read:
-// the commit it named, its test count, and the main commit the handoff began on. Kept so that the
-// same claim can be checked again; it belongs to that hold and to nothing else.
+// The merge an integrator reported for a delivery that was then held because git could not be read,
+// or because the merge was made during an earlier handoff: the commit it named, its test count, and
+// the main commit it is to be judged against. Kept so that the same claim can be checked again or
+// confirmed; it belongs to that hold and to nothing else.
 function validClaim(claim) {
   return Boolean(claim) && typeof claim === 'object' && !Array.isArray(claim) && typeof claim.as === 'string' && /^[0-9a-f]{7,40}$/u.test(claim.as) && sha(claim.startHead) &&
     Number.isSafeInteger(claim.tests?.passed) && Number.isSafeInteger(claim.tests?.total) && optional(claim.review, 100) !== null &&
@@ -266,6 +270,25 @@ async function verifyMerged(read, claim) {
 }
 // The verdict for every MERGED line of a planned settlement, keyed by delivery, together with the
 // handoff and the main head they were checked for: settle() takes exactly this.
+// A reported merge as a settlement judges it: new for the handoff at hand (startHead). One that is
+// not new for this handoff, but is for the main the delivery first reached an integrator on
+// (firstHead), was made before this handoff began: typically while an earlier handoff of the same
+// delivery was open. That is told apart as 'merged-earlier' and never counts by itself: git's
+// history cannot say whether the merge was undone since, so it is the person's to confirm. A first
+// commit that is gone or gives no answer changes nothing: the strict verdict stands.
+async function verifyDelivery(read, claim) {
+  const strict = await verifyMerged(read, { ready: claim?.ready, as: claim?.as, startHead: claim?.startHead, mainHead: claim?.mainHead });
+  // (Asked only when the strict answer was "it was already on main when this handoff began", and only if the first handoff began elsewhere.)
+  if (strict.verified || !['not-new', 'no-changes'].includes(strict.why) || claim.firstHead === claim.startHead) return strict;
+  const earlier = await verifyMerged(read, { ready: claim.ready, as: claim.as, startHead: claim.firstHead, mainHead: claim.mainHead });
+  return earlier.verified ? { verified: false, why: 'merged-earlier', as: earlier.as } : strict;
+}
+// Where main was when a delivery first reached an integrator is kept with it, through every later handoff.
+// "Reached" is a send that was confirmed, and one that never was (it may have arrived all the same); a send
+// that was refused went nowhere and keeps nothing.
+function reached(state, handoff) {
+  for (const entry of state.ready) if (handoff.keys.includes(entry.key) && !sha(entry.firstHead)) entry.firstHead = handoff.mainHead;
+}
 async function verifyResults(read, state, action, mainHead) {
   const checked = { handoffId: action?.handoffId, mainHead, verified: {} };
   if (!state.handoff || state.handoff.id !== action?.handoffId) return checked;
@@ -278,7 +301,7 @@ async function verifyResults(read, state, action, mainHead) {
     if (!entry || !validResult(result) || result.kind !== 'merged') continue;
     checked.verified[key] = result.malformed ? { verified: false, why: 'unreadable-line' }
       : result.tests.total < 1 || result.tests.passed !== result.tests.total ? { verified: false, why: 'tests-not-all-passed' }
-      : await verifyMerged(cached, { ready: entry.commit, as: result.as, startHead: state.handoff.mainHead, mainHead });
+      : await verifyDelivery(cached, { ready: entry.commit, as: result.as, startHead: state.handoff.mainHead, firstHead: entry.firstHead, mainHead });
   }
   return checked;
 }
@@ -625,6 +648,7 @@ class IntegrationHandoffs {
     next.handoff.tag = delivery.tag;
     if (Number.isSafeInteger(delivery.control)) next.handoff.control = delivery.control;
     next.handoff.confirmedAt = now;
+    reached(next, next.handoff);
     next.refusals = 0;
     this.commit(next);
     return { confirmed: true };
@@ -682,6 +706,8 @@ class IntegrationHandoffs {
     const unread = Boolean(checked) && checked.handoffId === handoff.id && checked.mainUnreadable === true && !bound;
     if (action.status === 'failed') {
       if (!['send-unconfirmed', 'record-missing', `integrator-missing:${handoff.integrator.sessionId}`].includes(action.reason)) throw fail('Unknown failure');
+      // A handoff that fails without its send ever having been confirmed may have arrived all the same.
+      reached(next, handoff);
       next.handoff = null;
       for (const entry of entries) held(entry, action.reason);
     } else if (action.status === 'waiting' && action.decision !== true) {
@@ -717,10 +743,14 @@ class IntegrationHandoffs {
             merged += 1; fact(entry, 'merged', { as: verdict.as, tests: result.tests, ...(entry.review ? { review: entry.review } : {}) });
           // Git's own trouble (main's head could not be read, or a question about this merge went unanswered) is said as that.
           } else {
-            held(entry, (unread || verdict?.why === 'git-unanswered') && result.malformed !== true ? 'main-unreadable' : 'merge-unverified');
-            // What was reported is kept with that hold, so that it can be checked again once git can be read.
-            if (entry.state === 'held' && entry.reason === 'main-unreadable') {
-              entry.claim = { as: result.as, tests: { passed: result.tests.passed, total: result.tests.total }, startHead: handoff.mainHead, ...(result.review ? { review: label(result.review, 100) } : {}) };
+            // A merge that was made during an earlier handoff of this delivery is not recorded by NAW: it is the person's to confirm.
+            const earlier = verdict?.why === 'merged-earlier' && sha(verdict.as) && verdict.as.startsWith(result.as) && sha(entry.firstHead);
+            held(entry, earlier ? 'merged-earlier' : (unread || verdict?.why === 'git-unanswered') && result.malformed !== true ? 'main-unreadable' : 'merge-unverified');
+            // What was reported is kept with such a hold: to be checked again as this settlement would have judged it once git
+            // can be read, or to be confirmed against the main commit of the delivery's first handoff.
+            if (entry.state === 'held' && CLAIMED.includes(entry.reason)) {
+              entry.claim = { as: result.as, tests: { passed: result.tests.passed, total: result.tests.total }, startHead: entry.reason === 'merged-earlier' ? entry.firstHead : handoff.mainHead,
+                ...(result.review ? { review: label(result.review, 100) } : {}) };
             }
           }
         } else if (result.kind === 'returned') {
@@ -914,28 +944,38 @@ class IntegrationHandoffs {
     this.commit(next);
     return { redone: true };
   }
-  // The claim kept with a delivery that is held because git could not be read: what a second check needs.
-  // Refused for any other delivery.
-  claimOf(key) {
+  // The claim kept with a held delivery, for the person's second step on it. The caller names the step by
+  // the hold it is for: 'main-unreadable' ("check again": git could not be read) unless it says
+  // 'merged-earlier' ("confirm merged": made before the handoff began). A delivery held under the other
+  // reason is refused, so that a press on a button drawn for one step never acts as the other. Refused
+  // for any other delivery.
+  claimOf(key, reason = 'main-unreadable') {
     this.usable();
     const entry = this.state.ready.find(candidate => candidate.key === key);
-    if (!entry || entry.state !== 'held' || entry.reason !== 'main-unreadable' || !entry.claim) throw stale('This delivery has no claim to check again');
-    return { key: entry.key, commit: entry.commit, as: entry.claim.as, startHead: entry.claim.startHead, tests: { ...entry.claim.tests }, ...(entry.claim.review ? { review: entry.claim.review } : {}) };
+    if (!entry || entry.state !== 'held' || entry.reason !== reason || !entry.claim) throw stale('This delivery has no such claim');
+    return { key: entry.key, commit: entry.commit, reason, as: entry.claim.as, startHead: entry.claim.startHead, tests: { ...entry.claim.tests }, ...(entry.claim.review ? { review: entry.claim.review } : {}),
+      ...(sha(entry.firstHead) ? { firstHead: entry.firstHead } : {}) };
   }
   // That claim asked of git through the given reader, for the main head given. Reads only.
-  async verifyClaim(read, claim, mainHead) { this.usable(); return verifyMerged(read, { ready: claim?.commit, as: claim?.as, startHead: claim?.startHead, mainHead }); }
+  async verifyClaim(read, claim, mainHead) { this.usable(); return verifyDelivery(read, { ready: claim?.commit, as: claim?.as, startHead: claim?.startHead, firstHead: claim?.firstHead, mainHead }); }
   // The second check's verdict on that claim (what verifyClaim said, for the main head it was asked about).
   // - Verified, for the commit the claim names: the delivery is merged, and that main commit may be installed.
+  //   For a hold that waits for the person's confirmation this is that confirmation: the claim is judged
+  //   against the main commit of the delivery's first handoff, and the person's step stands for the rest.
   // - Git still did not answer: nothing changes.
+  // - Made during an earlier handoff (only a claim that git could not be asked about can come to this):
+  //   the hold becomes one that waits for the person's confirmation.
   // - Anything else: the delivery stays on hold as an unverified claim.
-  // The claim must still be the one the check was made for; a delivery that moved on meanwhile is refused.
+  // The claim must still be the one the check was made for, held under the reason it was read under; a
+  // delivery that moved on meanwhile is refused.
   // `began` is when the check began to ask git: an install question opened since then is about a newer
   // main, which holds this merge too. It stands, and so does the person's answer to it if they gave one
   // meanwhile: the older main the check read is not offered after it.
   recheck(claim, verdict, mainHead, now = Date.now(), began = now) {
     const next = this.draft();
     const entry = next.ready.find(candidate => candidate.key === claim?.key);
-    if (!entry || entry.state !== 'held' || entry.reason !== 'main-unreadable' || !entry.claim || entry.commit !== claim.commit || entry.claim.as !== claim.as || entry.claim.startHead !== claim.startHead) {
+    if (!entry || entry.state !== 'held' || !CLAIMED.includes(entry.reason) || entry.reason !== claim.reason || !entry.claim || entry.commit !== claim.commit || entry.claim.as !== claim.as ||
+        entry.claim.startHead !== claim.startHead) {
       throw stale('This delivery has no such claim to check again');
     }
     if (verdict?.verified !== true && verdict?.why === 'git-unanswered') return { outcome: 'unanswered', notify: [], install: null };
@@ -957,9 +997,11 @@ class IntegrationHandoffs {
       this.commit(next);
       return { outcome: 'merged', notify, install };
     }
-    tell(this.leave(next, entry, 'held', 'merge-unverified', now));
+    const earlier = verdict?.why === 'merged-earlier' && sha(verdict.as) && verdict.as.startsWith(kept.as) && sha(entry.firstHead);
+    tell(this.leave(next, entry, 'held', earlier ? 'merged-earlier' : 'merge-unverified', now));
+    if (earlier && entry.state === 'held') entry.claim = { ...kept, startHead: entry.firstHead };
     this.commit(next);
-    return { outcome: entry.state === 'held' ? 'unverified' : entry.state, notify, install };
+    return { outcome: entry.state !== 'held' ? entry.state : earlier ? 'earlier' : 'unverified', notify, install };
   }
   // The person's "retry" on one held delivery. A standing condition stays open: the condition
   // has not changed. An event reason is over once nothing is held under it.

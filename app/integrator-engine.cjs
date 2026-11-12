@@ -321,14 +321,21 @@ class IntegratorEngine {
     return { kind: 'settled', handoffId: action.handoffId, ...result };
   }
 
-  // The person's "check again" on a delivery held because git could not be read: the claim kept with it
-  // is asked of git once more, against the main commit of the handoff it was merged in (so that a merge
-  // made then is still "new"), in one checked look at the repository. Returns { outcome: 'merged' |
-  // 'unverified' | 'unanswered', notify, install }; with no answer, `head` says whether main's head at
-  // least was read. The spaces and the person are told by the next pass.
-  async recheck(key) {
+  // The person's second step on a delivery held with the merge that was reported for it, in one checked
+  // look at the repository.
+  // - "Check again", held because git could not be read: the claim is asked of git once more, against the
+  //   main commit of the handoff it was reported in (so that a merge made then is still "new").
+  // - "Confirm merged", held because the merge was made during an earlier handoff: the claim is asked of
+  //   git against the main commit of the delivery's first handoff, and recorded if that holds.
+  // Returns { outcome: 'merged' | 'unverified' | 'earlier' | 'unanswered', notify, install }. 'earlier': a
+  // check that could not be made before found an earlier merge, which now waits for the person's
+  // confirmation. With no answer, `head` says whether main's head at least was read. The spaces and the
+  // person are told by the next pass.
+  // The two are separate steps: each acts only on a delivery held under its own reason.
+  confirm(key) { return this.recheck(key, 'merged-earlier'); }
+  async recheck(key, reason = 'main-unreadable') {
     const handoffs = this.handoffs, began = this.now();
-    const claim = handoffs.claimOf(key);
+    const claim = handoffs.claimOf(key, reason);
     // A claim whose tests did not all pass can never count: git is not asked.
     if (claim.tests.total < 1 || claim.tests.passed !== claim.tests.total) return handoffs.recheck(claim, { verified: false, why: 'tests-not-all-passed' }, null, this.now());
     let mainHead = null, reader = this.reader;

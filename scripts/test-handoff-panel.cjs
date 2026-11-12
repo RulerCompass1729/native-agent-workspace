@@ -380,8 +380,11 @@ async function run() {
   await until(async () => (await overview()).waiting?.reason === 'integrator-in-space', 'The handoff waits because its integrator sits in a space', 90000);
   // The space's shared record says that its queue leaves that member alone while the handoff waits.
   await until(async () => (await spaceEvents()).includes(say('notice.handoff.holder.waiting', { name: NAMES[3] })), 'The space is told that the queue leaves the integrator alone');
-  // It answers all the same, with words that would be a question to the person. They are not taken for one.
-  await release(integrator.id, '需要你决定：这句是写给空间里别人的');
+  // It works on all the same: it merges the delivery for real and reports it, and adds words that would be a question
+  // to the person. None of it is read: the delivery is not recorded as merged, and nothing is asked.
+  git('cherry-pick', deliveries[4]);
+  const fifth = git('rev-parse', 'HEAD');
+  await release(integrator.id, `MERGED ${deliveries[4].slice(0, 9)} as ${fifth.slice(0, 9)} tests 12/12\n需要你决定：这句是写给空间里别人的`);
   await delay(4000);
   await openPanel();
   const inSpace = await seen(view => view.block.includes(say('queue.handoff.ask.inSpace', { name: NAMES[3] })) && rowOf(view, TASKS[4]).where === 'stalled', 'The panel says that the integrator is in a space');
@@ -401,17 +404,28 @@ async function run() {
   await seen(view => view.block.includes(say('queue.handoff.ask.inSpace', { name: NAMES[3] })), 'The handoff still waits for the person\'s word');
   await page.locator('#queue-handoff button[data-handoff-action="again"]').click();
   await until(async () => (await handoffs()).length === 7, 'The seventh handoff is sent', 90000);
+  assert.ok((await handoffs())[6].text.includes(deliveries[4]), 'The same delivery goes out again');
   // The space is told once that the handoff it was told about is over.
   await until(async () => (await spaceEvents()).includes(say('notice.handoff.holder.closed', { name: NAMES[3] })), 'The space is told that the handoff is over');
   assert.equal((await spaceEvents()).filter(text => text === say('notice.handoff.holder.waiting', { name: NAMES[3] }) || text === say('notice.handoff.holder.closed', { name: NAMES[3] })).length, 2);
-  git('cherry-pick', deliveries[4]);
-  const fifth = git('rev-parse', 'HEAD');
+  // It reports the merge it made while it sat in the space. Main already held that commit when this handoff began, so
+  // NAW does not record it by itself (git's history cannot say whether it was undone since): the row waits for the
+  // person's confirmation, says what NAW could and could not establish, and offers both steps.
   await release(integrator.id, `MERGED ${deliveries[4].slice(0, 9)} as ${fifth.slice(0, 9)} tests 12/12`);
-  const out = await seen(view => rowOf(view, TASKS[4]).where === 'merged', 'Moved out and sent again, the delivery is merged', 90000);
-  assert.ok(!out.block.includes(say('queue.handoff.ask.inSpace', { name: NAMES[3] })), out.block);
-  await shot('moved-out-and-sent-again');
+  const earlier = await seen(view => rowOf(view, TASKS[4]).where === 'held' && rowOf(view, TASKS[4]).buttons.length === 2, 'The merge made meanwhile waits for the person\'s confirmation', 90000);
+  assert.deepEqual([rowOf(earlier, TASKS[4]).why, rowOf(earlier, TASKS[4]).buttons], [say('queue.handoff.why.mergedEarlier', { who: NAMES[3] }), [say('queue.handoff.confirm'), say('queue.handoff.send', { who: NAMES[3] })]]);
+  assert.ok(!earlier.block.includes(say('queue.handoff.ask.inSpace', { name: NAMES[3] })), earlier.block);
+  assert.ok(!(await spaceEvents()).some(text => text.includes('lane/e') && text.includes('已合入 main')), 'Nothing says it is merged yet');
+  await shot('merged-earlier-waits-for-confirmation');
+  // The person confirms: now it is recorded as merged, with the commit and the tests that were reported.
+  await page.locator(`#queue-list .queue-row[data-handoff="held"] button[data-handoff-action="confirm"]`).click();
+  const out = await seen(view => rowOf(view, TASKS[4]).where === 'merged', 'Confirmed by the person, the delivery is merged', 90000);
+  assert.equal(await page.locator('#queue-handoff-error').isHidden(), true);
+  await until(async () => (await spaceEvents()).some(text => text.includes('lane/e') && text.includes('已合入 main') && text.includes(fifth.slice(0, 12)) && text.includes('12/12')), 'The space says the delivery was merged');
+  assert.deepEqual(rowOf(out, TASKS[4]).buttons, []);
+  await shot('confirmed-merged');
   await closePanel();
-  passed.push('With the integrator inside the space its words are not read as an answer: the panel says why, and after it is moved out "Moved out, send again" hands the delivery over again and the merge counts');
+  passed.push('With the integrator inside the space its words are not read as an answer, not even a real merge: the panel says why; moved out and handed the delivery again it reports that merge, which waits for the person\'s "Confirm merged" and is recorded only then');
 
   assert.equal(fs.existsSync(path.join(folder, '.git')), false, 'The integrator\'s own session folder never held a repository');
   assert.deepEqual(errors, []);
