@@ -5359,6 +5359,7 @@ function queueRow(item, memberIds) {
     statusKey = 'queue.status.orphan';
   }
   if (item.finishedBy === 'steward' && item.status === 'cancelled') statusKey = 'queue.status.cancelledBySteward';
+  if (item.finishedBy === 'steward' && item.status === 'done') statusKey = 'queue.status.doneBySteward';
   let statusParams;
   if (statusKey !== 'queue.status.orphan' && statusKey !== 'queue.status.queued' && statusKey !== 'queue.status.cancelled' && statusKey !== 'queue.status.cancelledBySteward') {
     statusParams = () => ({ name });
