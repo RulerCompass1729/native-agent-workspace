@@ -31,7 +31,7 @@
       const total = record.blocks, oldest = record.oldestDay || '—', bytes = size(record.bytes);
       if (entry.kind === 'age') return ['records.item.age', { blocks: entry.blocks, oldest: entry.oldestDay || oldest, total, size: bytes }];
       if (entry.kind === 'size') return ['records.item.size', { size: size(entry.bytes), oldest, total }];
-      if (entry.kind === 'unavailable') return ['records.item.unavailable', {}];
+      if (entry.kind === 'unavailable') return [entry.cause === 'history' ? 'records.item.unavailable' : 'records.item.unavailableOther', {}];
       if (entry.manifest) return ['records.item.unreadableManifest', {}];
       return ['records.item.unreadable', { blocks: entry.blocks, from: entry.fromSequence, through: entry.throughSequence }];
     }
@@ -113,6 +113,8 @@
     }
     async function open() { await refresh(); draw(); if (!dialog.open) dialog.showModal(); }
     button.addEventListener('click', () => { open(); });
+    // Worked out again when the main process says a record changed (a block sealed or added, a record not loaded).
+    if (typeof api.onRecordsChanged === 'function') api.onRecordsChanged(() => { refresh(); });
     dialog.addEventListener('close', () => { dialog.replaceChildren(); dialog.dataset.view = ''; });
     return { refresh, open, size };
   }

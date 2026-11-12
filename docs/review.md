@@ -12421,8 +12421,12 @@ native dialogs (language, the folder shown as it is, Cancel the default). No
 native program, no model.
 
 Not verified, or known:
-- Reminders are worked out when a window starts and after the person's own
-  actions; nothing polls, so a line crossed while NAW runs shows at the next start.
+- Reminders are worked out when a window starts, after the person's own actions,
+  and when the main process says a record changed: a block of the operations
+  record sealed or added, or the record not loaded at start (design section 6).
+  Not done: the read log's own sealing and "today's count cannot be told" do not
+  ring the bell (the butler is still switched off; to do when its entry opens),
+  and a failure of background control while NAW runs shows at the next start.
 - A manifest lost after blocks were deleted cannot be rebuilt (the numbers no
   longer follow on): the record stops, as for any missing block.
 - After deleting, an earlier cancellation in a deleted block is gone: the person
@@ -12482,3 +12486,10 @@ A last read of that change: `PASS_WITH_NOTES`. The blocking finding is gone, onl
 refusals made before any write are marked as such, and every error after the
 first write still stops background control. Its two notes are in the list above.
 The review of this batch ends here.
+After that, checked against the design's section 6 ("只在启动时、封存一块时、出错时
+计算"): a sealed or added operations block now sends a records-changed event that
+the bell answers by working its reminders out again, and any failure to load the
+operations record at start is its own reminder, with a sentence for its cause
+(its history folder, or anything else such as an unfinished taking-in). Full
+suite 6336, the 3 faults for this caught (35 in all), the bell window check
+passes.

@@ -54,12 +54,13 @@ test('a whole past 0.5 GiB, a block that cannot be read, a manifest that cannot 
   fs.writeFileSync(manifestFile(dir, 'operations'), '{broken', { mode: 0o600 });
   assert.deepEqual(of(reminders.status(dir, NOW), 'operations').items.map(item => [item.kind, item.manifest]), [['unreadable', true]]);
   fs.rmSync(manifestFile(dir, 'operations'));
-  assert.deepEqual(of(reminders.status(dir, NOW, { unavailable: ['operations'] }), 'operations').items.map(item => [item.kind, item.level, item.shown]), [['unavailable', 1, true]]);
+  assert.deepEqual(of(reminders.status(dir, NOW, { unavailable: { operations: 'history' } }), 'operations').items.map(item => [item.kind, item.level, item.cause, item.shown]), [['unavailable', 1, 'history', true]]);
+  assert.equal(of(reminders.status(dir, NOW, { unavailable: { operations: 'migration' } }), 'operations').items[0].cause, 'other');
   // "知道了" holds while the condition does; once it is no longer due, the next time it rings again.
   reminders.acknowledge(dir, 'operations', 'unavailable', 1);
-  assert.equal(of(reminders.status(dir, NOW, { unavailable: ['operations'] }), 'operations').items[0].shown, false);
+  assert.equal(of(reminders.status(dir, NOW, { unavailable: { operations: 'history' } }), 'operations').items[0].shown, false);
   assert.deepEqual(of(reminders.status(dir, NOW), 'operations').items, [], 'Background control loaded again');
-  assert.equal(of(reminders.status(dir, NOW, { unavailable: ['operations'] }), 'operations').items[0].shown, true, 'A new stop rings the bell');
+  assert.equal(of(reminders.status(dir, NOW, { unavailable: { operations: 'other' } }), 'operations').items[0].shown, true, 'A new stop rings the bell');
 });
 
 test('export copies the chosen sealed blocks as they are and checks them, never over a different file and never into NAW\'s own folder', t => {
@@ -107,9 +108,10 @@ class Element {
 function page(t, dir, now = NOW) {
   const document = { createElement: tag => new Element(tag) }, button = new Element('button'), badge = new Element('span'), dialog = new Element('dialog'), calls = [];
   const out = folder(t); let chosen = null, deleteAnswer = () => ({ deleted: [] });
-  const api = { records: async (action, ...args) => {
+  let onChanged = null, unavailable = {};
+  const api = { onRecordsChanged: callback => { onChanged = callback; }, records: async (action, ...args) => {
     calls.push([action, ...args]);
-    if (action === 'status') return reminders.status(dir, now);
+    if (action === 'status') return reminders.status(dir, now, { unavailable });
     if (action === 'acknowledge') { reminders.acknowledge(dir, ...args); return reminders.status(dir, now); }
     if (action === 'blocks') return reminders.blocks(dir, args[0], now);
     if (action === 'chooseFolder') { chosen = out; return { folder: out }; }
@@ -120,7 +122,7 @@ function page(t, dir, now = NOW) {
   } };
   const view = bind({ button, badge, dialog, document, api, text: zh });
   const find = action => dialog.all().find(node => node.tag === 'button' && node.dataset.action === action);
-  return { view, button, badge, dialog, calls, out, find, answer: hook => { deleteAnswer = hook; }, text: () => dialog.all().filter(node => !node.hidden).map(node => node.textContent).filter(Boolean).join('\n') };
+  return { view, button, badge, dialog, calls, out, find, answer: hook => { deleteAnswer = hook; }, changed: () => onChanged?.(), unavailable: value => { unavailable = value; }, text: () => dialog.all().filter(node => !node.hidden).map(node => node.textContent).filter(Boolean).join('\n') };
 }
 
 test('the bell is there only while something is due; its dialog says what, and "知道了" puts it away', async t => {
@@ -195,4 +197,19 @@ test('after a checked export the dialog offers to delete exactly those blocks; t
   answer = { deleted: asked[0][2] }; await remove.fire('click');
   assert.ok(p.text().includes(zh('records.delete.done', { count: 2 }))); assert.equal(remove.hidden, true);
   assert.equal(p.dialog.all().filter(node => node.tag === 'label' && !node.hidden).length, 30, 'The deleted blocks leave the list');
+});
+
+test('the bell is worked out again when the main process says a record changed, and each reason for a stop has its own sentence', async t => {
+  const p = page(t, folder(t)); await p.view.refresh(); assert.equal(p.button.hidden, true);
+  p.unavailable({ operations: 'other' }); p.changed(); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual([p.button.hidden, p.badge.textContent], [false, '1']);
+  await p.view.open(); assert.ok(p.text().includes(zh('records.item.unavailableOther'))); assert.equal(p.text().includes(zh('records.item.unavailable')), false);
+  p.dialog.close(); p.unavailable({ operations: 'history' }); await p.view.open();
+  assert.ok(p.text().includes(zh('records.item.unavailable')));
+  // The main process: a sealed or added block, or a record not loaded at start, sends the event; nothing polls.
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.cjs'), 'utf8');
+  assert.ok(main.includes("changed: () => { broadcastRoom().catch(() => {}); recordsChanged(); },"));
+  assert.ok(main.includes("operationsUnavailable = /history cannot be read/.test(String(error?.message)) ? 'history' : 'other'; recordsChanged(); }"));
+  assert.ok(main.includes("for (const c of windows.values()) sendToPage(c, 'workspace:records-changed');"));
+  assert.ok(fs.readFileSync(path.join(__dirname, '..', 'preload.cjs'), 'utf8').includes("['onRecordsChanged', 'workspace:records-changed']"));
 });

@@ -45,7 +45,8 @@ const backgroundOperation = require('./background-operation.cjs');
 const queueRules = require('./queue-dispatch.cjs');
 const { QueueDispatcher } = queueRules;
 const applicationHandlers = new Map();
-let backgroundControl, backgroundUnavailable = false, operationsHistoryUnreadable = false;
+// Why background control did not load at start ('history': its blocks; 'other': anything else), for the bell.
+let backgroundControl, backgroundUnavailable = false, operationsUnavailable = null, operationsBlocks = -1;
 let butlerClosing = false, butlerQuitAttempted = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
@@ -600,6 +601,13 @@ async function assertSpaceFileReader(context, roomId) {
 // lives. With one such window per agent that had used workspace control, and every state change, terminal
 // chunk and progress line sent to each, that memory, which no process accounts for, grew until the machine
 // ran out (2026-11-10). Everything sent to a window's page goes through here or through pushState.
+// The bell works its reminders out again when a block of the operations record is sealed or added, not by polling.
+function recordsChanged() {
+  let count = -1; try { count = backgroundControl?.archive?.manifest.blocks.length ?? -1; } catch { /* Read again next time. */ }
+  if (count === operationsBlocks && backgroundControl) return;
+  operationsBlocks = count;
+  for (const c of windows.values()) sendToPage(c, 'workspace:records-changed');
+}
 function sendToPage(context, channel, ...data) {
   if (context.background || context.win.isDestroyed()) {
     return;
@@ -1290,7 +1298,7 @@ async function boot() {
   viewStore = new ViewStore(dataDir);
   const loaded = dropRetiredViewFields(viewStore.load());
   views = loaded.views;
-  try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: () => { broadcastRoom().catch(() => {}); },
+  try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: () => { broadcastRoom().catch(() => {}); recordsChanged(); },
     confirmationPending: notifyBackgroundConfirmation,
     project: projectBackgroundRecord,
     confirmation: (actor, command, action, context) => {
@@ -1384,8 +1392,8 @@ async function boot() {
       windows.set(id, context); bindClient(context);
       win.on('closed', () => { windows.delete(id); client.close(); });
       return context;
-    } }); backgroundUnavailable = false; operationsHistoryUnreadable = false;
-  } catch (error) { backgroundUnavailable = true; operationsHistoryUnreadable = /history cannot be read/.test(String(error?.message)); }
+    } }); backgroundUnavailable = false; operationsUnavailable = null;
+  } catch (error) { backgroundUnavailable = true; operationsUnavailable = /history cannot be read/.test(String(error?.message)) ? 'history' : 'other'; recordsChanged(); }
   if (loaded.changed) saveViews();
   process.env.NAW_RUNTIME_CONFIG = path.join(dataDir, 'runtime-locations.json');
   await ensureService(dataDir, process.execPath);
@@ -1659,7 +1667,7 @@ async function boot() {
   // no agent command (removed from the agent catalog below), and nothing here deletes a block.
   register('records', async (c, action, ...args) => {
     if (!isCurrentHumanContext(c)) throw uiError('error.records.personOnly');
-    const name = args[0], unavailable = operationsHistoryUnreadable ? ['operations'] : [];
+    const name = args[0], unavailable = operationsUnavailable ? { operations: operationsUnavailable } : {};
     if (action !== 'status' && action !== 'chooseFolder' && !recordReminders.RECORDS.includes(name)) throw uiError('error.records.unknown');
     try {
       if (action === 'status' && args.length === 0) return recordReminders.status(dataDir, Date.now(), { unavailable });

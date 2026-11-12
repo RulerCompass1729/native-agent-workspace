@@ -40,8 +40,8 @@ function acknowledged(dataDir) {
 
 // For each record: its blocks, size, oldest day and the reminders due. A reminder is shown when its level (how many
 // blocks are past 30 days; how many 0.5 GiB the whole has passed; how many blocks cannot be read) is above the level
-// the person last acknowledged. `unavailable` names records the app could not load at start.
-function status(dataDir, now, { unavailable = [] } = {}) {
+// the person last acknowledged. `unavailable` maps a record the app could not load at start to why ('history' or 'other').
+function status(dataDir, now, { unavailable = {} } = {}) {
   const seen = acknowledged(dataDir), records = []; let cleared = false;
   for (const name of RECORDS) {
     const manifest = manifestOf(dataDir, name), items = [], bytes = history.totalBytes({ blocks: manifest ? manifest.blocks : [] }) + keptBytes(dataDir, name);
@@ -54,7 +54,7 @@ function status(dataDir, now, { unavailable = [] } = {}) {
         const level = item.kind === 'size' ? Math.floor(item.bytes / history.REMIND_TOTAL_BYTES) : item.kind === 'age' ? Math.ceil(item.blocks / 30) : item.blocks;
         items.push({ ...item, level });
       }
-      if (unavailable.includes(name)) items.push({ kind: 'unavailable', level: 1 });
+      if (Object.hasOwn(unavailable, name)) items.push({ kind: 'unavailable', level: 1, cause: unavailable[name] === 'history' ? 'history' : 'other' });
     }
     const blocks = manifest ? manifest.blocks : [];
     const days = blocks.flatMap(block => Object.keys(block.days)).sort();
