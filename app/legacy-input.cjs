@@ -176,7 +176,8 @@ class LegacyInput extends EventEmitter {
   async prepareOnce(entry, record) {
     const generation = this.readerGenerations.get(record.id) || 0;
     const checkOpen = () => {
-      if (this.closed) throw uiError("error.legacy.windowClosed");
+      // The view this prepare reads through was closed or retired meanwhile: nothing may be bound to its connection.
+      if (this.closed || entry.closing) throw uiError("error.legacy.windowClosed");
       if ((this.readerGenerations.get(record.id) || 0) !== generation) throw uiError("error.legacy.sessionRemovedConnectionCancelled");
     };
     checkOpen();
@@ -261,6 +262,8 @@ class LegacyInput extends EventEmitter {
       if (this.readerUnavailable(record) && !target.initialized) { target.close(); throw uiError("error.legacy.readerUnavailable"); }
     } catch (error) { this.readerFailures.set(record.id, record.nativeId); this.emit('change'); throw error; }
     target.markReader = () => this.saveLink(entry, record, true);
+    // The reader above reads through this view's connection; that view is not retired while it does.
+    target.readsThrough = entry;
     const { token, submission } = target;
     Object.assign(target, { server, descriptor: path.join(directory, `gui-${record.nativeId}.json`) });
     target.beforeAuthorize = async () => { if (!target.refresh) throw Error('No active send'); await target.refresh(); };

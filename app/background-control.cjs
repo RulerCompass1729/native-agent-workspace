@@ -16,6 +16,8 @@ const MAX_RECORD_BYTES = 32 * 1024 * 1024;
 // file is version 2: an older version refuses it (its background control is then unavailable) rather than starting
 // empty and running an operation id again.
 const STATE_VERSION = 2, SETTLE_MS = 24 * 3600 * 1000;
+// An agent's background window unused this long is closed, looked for this often; its next call opens another.
+const RETIRE_AFTER = 5 * 60 * 1000, RETIRE_EVERY = 60 * 1000;
 const settledStates = new Set(['complete', 'received', 'awaiting-native', 'cancelled', 'not-executed', 'unconfirmed']);
 const recordTime = r => Number.isSafeInteger(r.finishedAt) ? r.finishedAt : r.at;
 const checkArchived = r => { if (!r || !token(r.id) || !r.actor || !token(r.actor.id) || !r.command || !token(r.state)) throw Error('Invalid archived operation'); };
@@ -124,10 +126,13 @@ function refusalDetails(reason) {
 }
 const compactRefusal = row => { row.guard = { auditRooms: row.guard?.auditRooms || ['shared'] }; };
 class BackgroundControl {
-  constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now, readCopyBytes = MAX_RECORD_BYTES }) {
+  constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now, readCopyBytes = MAX_RECORD_BYTES,
+    retireAfter = RETIRE_AFTER, retireHold = () => false }) {
     if (!Number.isSafeInteger(readCopyBytes) || readCopyBytes < 1 || readCopyBytes > MAX_RECORD_BYTES) throw Error('Invalid read copy budget');
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
     this.data = { version: STATE_VERSION, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
+    // Opened windows by view key with their agent, when each was last used, what a retired one hands to the next, calls under way.
+    this.opened = new Map(); this.used = new Map(); this.kept = new Map(); this.busy = 0; this.retireAfter = retireAfter; this.retireHold = retireHold;
     // Settled records, loaded whole: by session, and by the key a receipt or a repeated operation id is looked up with.
     this.archive = new history.BlockLog(dataDir, 'operations', checkArchived);
     try { this.loadHistory(); }
@@ -297,8 +302,53 @@ class BackgroundControl {
     if (this.closed) throw Error('Background control is closing');
     const key = this.key(sender) + ':' + viewId;
     if (viewId !== 'default' && !this.data.views[key]) throw Error('Independent view does not exist');
-    if (!this.contexts.has(key)) this.contexts.set(key, Promise.resolve(this.context(sender, this.data.views[key] && clone(this.data.views[key]))));
+    if (!this.contexts.has(key)) {
+      const kept = this.kept.get(key); this.kept.delete(key);
+      const opening = Promise.resolve(this.context(sender, this.data.views[key] && clone(this.data.views[key]), kept));
+      this.contexts.set(key, opening);
+      // A window that failed to open is not kept as failed: the agent's next call tries again.
+      opening.then(context => { if (this.contexts.get(key) === opening) this.opened.set(key, { context, actor: sender }); },
+        () => { if (this.contexts.get(key) === opening) this.contexts.delete(key); if (kept && !this.kept.has(key)) this.kept.set(key, kept); });
+      // An error here must not reach the main process's event loop: the window simply stays.
+      if (!this.sweeper) { this.sweeper = setInterval(() => { try { this.retireIdle(); } catch {} }, RETIRE_EVERY); this.sweeper.unref?.(); }
+    }
+    this.used.set(key, this.now());
     return this.contexts.get(key);
+  }
+  touch(sender) {
+    if (!sender) return;
+    const prefix = this.key(sender) + ':';
+    for (const key of this.opened.keys()) if (key.startsWith(prefix)) this.used.set(key, this.now());
+  }
+  // Closes the background windows agents have not used for retireAfter, and soon after it ends or is replaced, the
+  // windows of a native session. Only while nothing is in flight: no call here (counted from its first line), no
+  // operation reserved, nothing in the outbox (retireHold), and no record of that agent running or waiting for the
+  // person. Records and receipts live in this file, not in a window: the next call opens a window under the same
+  // saved view and owner, and gets back what main.cjs kept of the old one (its private clipboard, an open preview).
+  retireIdle() {
+    if (this.closed || this.busy || this.inflight.size || this.retireHold()) return 0;
+    const waiting = new Set(this.data.records.filter(r => ['running', 'confirmation-required'].includes(r.state)).map(r => this.key(r.actor)));
+    let retired = 0;
+    for (const [key, { context, actor }] of [...this.opened]) try {
+      if (waiting.has(this.key(actor))) continue;
+      let stale = false;
+      try { const record = context.confirmationActors?.().find(s => s.id === actor.id); stale = !!context.confirmationActors && (!record || record.nativeId !== actor.nativeId || record.archived); } catch {}
+      if (!stale && this.now() - (this.used.get(key) ?? 0) < this.retireAfter) continue;
+      const kept = context.retain ? context.retain() : {};
+      if (kept === null || typeof context.client?.retire !== 'function') continue;
+      // The view is saved first: an agent that only ever looked keeps its owner when the window comes back.
+      if (!stale && context.view && !isDeepStrictEqual(this.data.views[key], context.view)) {
+        try { this.commit(d => { d.views[key] = clone(context.view); }); } catch { return retired; }
+      }
+      if (!context.client.retire()) continue;
+      this.contexts.delete(key); this.opened.delete(key); this.used.delete(key);
+      if (!stale) this.kept.set(key, kept);
+      retired++;
+      if (!context.win?.isDestroyed?.()) context.win?.destroy?.();
+    } catch {
+      // This window stays, or its hidden window is left to app quit; the others are still looked at.
+    }
+    return retired;
   }
   async newView(sender, selected, mode) {
     if (this.closed) throw Error('Background control is closing');
@@ -427,6 +477,12 @@ class BackgroundControl {
     return pending.length >= MAX_PENDING || pending.filter(r => this.key(r.actor) === key).length >= MAX_PENDING_PER_ACTOR ? 'confirmation-limit' : null;
   }
   async call(binding, input) {
+    // Counted from the first line: no window is closed under a call, wherever the call is waiting.
+    this.busy++;
+    try { return await this.callHeld(binding, input); }
+    finally { this.busy--; this.touch(binding?.sender); }
+  }
+  async callHeld(binding, input) {
     if (this.closed) throw Error('Background control is closing');
     let args = validate(input); const { sender, identity } = binding;
     const valid = async () => { await binding.refresh?.(); if (!binding.valid()) throw Error('The originating native call is no longer valid'); };
@@ -650,6 +706,7 @@ class BackgroundControl {
     const row = this.data.records.find(r => r.actor.id === sessionId && r.actor.nativeId === nativeId && r.id === id);
     if (!row || row.state !== 'confirmation-required' || row.confirmation?.kind !== 'message' || !Array.isArray(row.confirmation.options.buttons) ||
         !Number.isSafeInteger(response) || response < 0 || response >= row.confirmation.options.buttons.length || this.inflight.has(this.key(row.actor))) throw Error('This confirmation is no longer current');
+    // Reserved synchronously, so no window is closed while the person's answer is carried out.
     return this.exclusive(row.actor, async () => {
     const context = await this.view(row.actor, row.command.view_id);
     try { await context.checkActor(); }
@@ -667,7 +724,7 @@ class BackgroundControl {
     }
     this.commit(d => { const r = d.records.find(r => r.id === id && r.actor.id === sessionId && r.actor.nativeId === nativeId); Object.assign(r, { state: 'running', humanDecision: response, humanDecisionAt: this.now() }); });
     return this.perform(row.actor, row.command, context, () => context.checkActor(), { operationId: id, confirmation: row.confirmation, response });
-    });
+    }).finally(() => this.touch(row.actor));
   }
   rows(sessionId) {
     return [...(this.archivedBySession.get(sessionId) || []), ...this.data.records.filter(r => r.actor.id === sessionId)].map(r => ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
@@ -678,7 +735,7 @@ class BackgroundControl {
         resultNotice: r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null } }));
   }
   async close() {
-    this.closed = true;
+    this.closed = true; clearInterval(this.sweeper);
     this.readCopies.clear(); this.readBytes = 0;
     // Close our connections first so a queued native wait cannot hold GUI quit.
     // The native session and any input already accepted by it remain untouched.

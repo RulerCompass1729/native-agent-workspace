@@ -561,6 +561,9 @@ function conversationAccess(actor, snapshot) {
   }
   return access;
 }
+// A background window's own state that is not in its saved view (see context.retain).
+const RETAINED_CONTEXT = ['clipboardText', 'clipboardImage', 'clipboardRevision', 'filePreview', 'worktreeSource', 'worktreePlan',
+  'worktreePreviewRevision', 'recordsFolder', 'recordsExported'];
 function controlRequestActors(client) {
   return roomState.apply(client.snapshot()).sessions.map(s => ({ id: s.id, nativeId: s.nativeId,
     archived: s.archived, nativeContextPending: s.nativeContextPending }));
@@ -1334,12 +1337,18 @@ async function boot() {
       detail: backgroundOperation.confirmationDetail(command, state, context),
       buttons: [displayText('common.cancel'), displayText('background.confirm')], defaultId: 0, cancelId: 0 }; },
     audit: auditBackgroundOperation,
-    context: async (actor, saved) => {
+    retireHold: () => (outboxBroker?.active?.() || 0) > 0,
+    context: async (actor, saved, kept) => {
       const view = saved || { owner: randomUUID(), selected: actor.id, mode: 'chat', preference: 'chat', active: false };
       backups(view);
       const client = await connect(dataDir, view.owner);
       const win = new BrowserWindow({ ...windowOptions(), show: false, focusable: false, skipTaskbar: true });
       const context = { background: true, actor, win, client, view, failed: false };
+      // What this agent's next background window takes over when this one is closed for lack of use. Not while a
+      // file is being chosen or saved. Image previews are not carried: their tokens are refused once the window closes.
+      Object.assign(context, kept);
+      context.retain = () => context.fileChoosing || context.fileSaving ? null :
+        Object.fromEntries(RETAINED_CONTEXT.filter(name => context[name] !== undefined).map(name => [name, context[name]]));
       context.metadataOnly = () => !conversationReaderAllowed(actor);
       context.refresh = () => client.refresh();
       context.confirmationActors = () => controlRequestActors(client);
@@ -1401,7 +1410,7 @@ async function boot() {
       };
       const id = win.webContents.id;
       windows.set(id, context); bindClient(context);
-      win.on('closed', () => { windows.delete(id); client.close(); });
+      win.on('closed', () => { windows.delete(id); context.imagePreviews?.close(); client.close(); });
       return context;
     } }); backgroundUnavailable = false; operationsUnavailable = null;
   } catch (error) { backgroundUnavailable = true; operationsUnavailable = /history cannot be read/.test(String(error?.message)) ? 'history' : 'other'; recordsChanged(); }

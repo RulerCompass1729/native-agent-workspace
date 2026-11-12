@@ -12598,3 +12598,74 @@ Independent review 1 (fresh read-only session, 24 tool calls, reported USD 1.48)
 
 The same session read that change (10 tool calls, reported USD 2.15 cumulative): `CHANGES`. The reused-id half was closed, but `view()` did not carry the duplicate mark to the dialog, so a repeat still read 「完成」 twice (the tests checked `entries()` and a hand-made view); and a snapshot of another session, which NAW runs as `initial` and which asks the person, kept 「等你确认」 after the answer, since the method check compared it with no method (an implicit one had no operation id to look up at all). Fixed: the view carries the mark; a snapshot is compared as `initial`, and the id NAW gave it is kept on its outcome line. A test builds the view from recorded calls; it fails on the previous commit and passes now. Known and kept: a rotation log that cannot be read refuses every butler the person designates until the file is fixed (the entry already warns that the designation cannot be read); role lines deleted before this commit carry no session (never installed). Full suite 6369 pass, 0 fail; the window check passes.
 The same session read that change (8 turns, reported USD 2.51 cumulative): `PASS_WITH_NOTES`. Both are closed; the outcome's id is used only for a snapshot that had none, never looks up another session's or another command's record, and no returned value is written. Its notes: outcome lines written by the two earlier commits of this batch lack fields the line check now requires, which would stop the record from loading; those commits ran only against isolated test profiles and were never installed, so nothing reads such lines. Still open from earlier rounds, as recorded above: the broker's `unconfirmed` for a refused call, a broken rotation log refusing whoever is designated, a successor's messages counted from its start. The review of this batch ends here.
+
+## Agents' background windows closed when idle; spacing state pushes held back — 2026-11-12
+
+The person's lag report and the measurements behind it are in the section "The page while agents work" above. The steward decided for the person (「这些事难道你不能做吗」, and earlier 「按你推荐的来」), in `.local/handoff-20261112/claude3-ui-lag.md`:
+1. close an agent's background window after some idle minutes, and the old one when its native session changes, reopening on demand without losing or resending an operation or receipt;
+2. space state pushes by about 250 ms so frames close together are one redraw;
+3. a design only for sending a page just the sessions it shows.
+
+### 1. Agents' background windows (c383434, dea2079, 83178fd)
+
+**When one closes.** Once a minute `BackgroundControl.retireIdle` looks at each opened window. It closes one only if all of these hold:
+- nothing is in flight anywhere: no call (counted from its first line), no reservation, no outbox request (the broker now reports how many it has), and no record of that agent running or waiting for the person;
+- the window has been unused for 5 minutes, or its session's native id changed, or the session is gone or archived.
+
+Before closing, the view is saved, so the next call opens a window under the same owner. Records and receipts are in the operations file, not in the window.
+
+**What is handed on.** What the old window held outside its view goes to the next one: the private clipboard, an open file preview, the chosen worktree folder, and the records folder. Nothing is handed on while a file is being chosen or saved. Image previews are released (their tokens are then refused, not executed), as for visible windows.
+
+**How it closes.** `WorkspaceClient.retire`, not `close`.
+- `close()` bumps the shared `manualEpoch` and `revision`, and each backend socket closing after it bumps them again. Those counters are what `manualGuard`, shared-reply authority, `run` and the outbox binding compare. Closing an agent's window that way would void a person's input in progress in any other window.
+- `retire()` closes without counting it as a change of control. It refuses, closing nothing, while:
+  - the view is the last one (the native input bridge closes with the last view);
+  - a run or directed discussion is running (the connection that prepared a peer lease holds it);
+  - the shared pause list points at the view;
+  - a backend is being updated (`replaceBackendSockets` hands new sockets to every view and stops at a closing one);
+  - a retained Claude reader reads through the view's connection.
+- A prepare that finishes after its view closed is refused.
+- A window that failed to open is not cached as failed: the next call tries again.
+
+**Measured** at a94f3e4, the same change before it was rebased onto main `6cbb440` (isolated hidden app from this checkout: 8 synthetic backends × 3 sessions, 4 working, no model; retire time set to 20 s for the run, the real once-a-minute sweep):
+- Two agents opened windows by real calls; the sweep closed both. Windows 3 → 1; backend sockets 24 → 8; main-process heap 122 → 74–85 MB; state frames read by the main process in 15 s 366 → 122.
+- The person's window's `manualEpoch` and `revision` stayed 0 throughout.
+- Reopen: the same owner; `pasteText` returned the text copied before; the old receipt was complete; repeating the old operation id gave `duplicate` without running again.
+- CPU (main / page): no agent window 9.3% / 10.8%; two windows 14.9% / 16.6%; after they closed 11.2% / 16.5%. After the windows closed the page received about 8 snapshots a second and none was superseded, against 5.1 sent and 2.9 superseded before any window opened. That is the push rate (step 2), not the windows. A first run before the review fixes gave the same picture.
+
+### 2. Spacing state pushes: built, held back
+
+Step 2 is on the lane branch `lane/claude3-bg-retire-20261112` (40bb038, 3706fbc, 65974ff). It was independently reviewed to APPROVE but is not delivered.
+
+**The rule built.** A snapshot goes to a ready page at once if the previous one left at least 250 ms ago; otherwise the newest goes when the time is up. Before the reply to a page's own action, what is waiting goes at once. A snapshot that waited is made again when it is sent, so it cannot undo a rename sent on its own channel meanwhile.
+
+**Why it is held.** `test-terminal-ime.cjs` checks that text typed right after switching a session to its terminal reaches the native program ("Immediate native text"). In interleaved runs that step failed:
+- 6 of 9 times on the step-2 head;
+- 3 of 15 on main `37c87d3`;
+- 2 of 6 on this batch alone (a94f3e4, before the rebase), alternated with main's last 6: main also 2 of 6.
+
+In the failures both recovery panels are empty, focus is on the terminal, and the text never reaches the program: it is dropped without being kept. It looks like the terminal's own channel arriving before the state that gates input (the terminal's epoch, view, owner). The spacing widens a race that main already has, and the race is the same family as the "input not confirmed" popup (463cce73), which is next. Step 2 will be measured again on top of that fix and needs at least nine terminal-ime runs at or below main's rate.
+
+### 3. Sending a page only the sessions it shows
+
+A design only, not built: `.local/work/bg-retire-20261112/design-shown-sessions.md` in the lane. It lists where the page reads messages of sessions it does not show and what each would need: local search, the sidebar's estimated time, the space's columns, the panorama, succession links and terminal decisions.
+
+### Checks (this batch)
+
+- Unit: `background-retire.test.cjs` 9, each fix mutation-checked (removing it fails its test). Full suite 6344/6344 before the rebase, 6387/6387 after it.
+- GUI on the rebased head: background-control, butler-dsh-failures, and steward-record (main's new butler record, which wraps the butler's background-control calls) pass.
+- Not run: native-claude-workspace (needs a real Claude program).
+
+### Independent review
+
+A fresh read-only session (`claude-opus-5-5`).
+- Round 1: CHANGES_REQUIRED.
+  - A failed reopen stayed cached until quit.
+  - A sweep during a backend update could abort other windows' reconnection.
+  - A note: a Claude reader bound to a retiring view.
+  - All three fixed with tests (dea2079).
+- Round 2: APPROVE_WITH_NOTES. Its race note (a prepare finishing after retirement) is fixed in 83178fd.
+- Its other notes are recorded, not changed:
+  - a client could leak if the window factory fails after connecting;
+  - what a retired window hands on is not pruned; it is bounded by the agents that ever used a window.
+- CLI cost 2.56 + 3.06 USD. The same session's four reviews of step 2 cost 4.53 + 5.46 + 5.49 + 6.04 USD.

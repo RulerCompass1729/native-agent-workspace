@@ -65,7 +65,9 @@ class WorkspaceClient extends EventEmitter {
       client.on('progress', data => { if (entry.client === client) this.emit('progress', data); });
       client.on('closed', () => {
         if (entry.client !== client) return;
-        entry.closed = true; entry.confirmClosed(); this.control.revision++; this.control.manualEpoch++;
+        entry.closed = true; entry.confirmClosed();
+        // A retired view's own sockets closing is not a change of control anywhere else.
+        if (!this.retired) { this.control.revision++; this.control.manualEpoch++; }
         for (const s of entry.state.sessions) { this.legacyObservers.get(s.id)?.dispose(); this.legacyObservers.delete(s.id); }
         if (this.control.maintenance.has(entry.key)) return;
         this.socket.destroyed = true; if (!this.closing) this.emit('closed');
@@ -941,6 +943,25 @@ class WorkspaceClient extends EventEmitter {
     for (const e of this.entries) { e.closing = true; e.client.close(); }
     this.control.views.delete(this);
     if (--this.control.clients === 0) { this.control.legacyInput?.close(); controls.delete(this.scope); }
+  }
+  // Closes a view nothing uses any more (an agent's background window) without voiding the
+  // manual input, shared-reply authority or bindings that other views hold: close() above
+  // counts as a change of control for every view. Refused, and nothing closed, while this
+  // view is the last one (the native input bridge would close with it), while a run or a
+  // directed discussion is running (the connection that started it holds it), while the
+  // shared pause list points at this view's connections, while a backend is being updated
+  // (its new sockets are being handed to every view), or while a retained Claude session's
+  // reader reads through this view's connection.
+  retire() {
+    if (this.closing) return true;
+    if (this.control.clients <= 1 || this.control.maintenance.size || [...this.control.armed.values()].some(arm => this.entries.includes(arm.entry)) ||
+        [...(this.control.legacyInput?.targets?.values() || [])].some(target => this.entries.includes(target.readsThrough)) ||
+        this.entries.some(e => backendRooms(e.state).some(r => r?.run?.status === 'running') || e.state.peerLeases?.some(p => p.status === 'running'))) return false;
+    this.retired = true; this.closing = true; this.socket.destroyed = true;
+    for (const observer of this.legacyObservers.values()) observer.dispose(); this.legacyObservers.clear();
+    for (const e of this.entries) { e.closing = true; e.client.close(); }
+    this.control.views.delete(this); this.control.clients--;
+    return true;
   }
 }
 module.exports = { WorkspaceClient };
