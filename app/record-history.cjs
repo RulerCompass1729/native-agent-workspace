@@ -222,8 +222,9 @@ class BlockLog {
     manifest = { blocks: manifest.blocks.map(item => ({ ...item })) };
     for (const [index, block] of manifest.blocks.entries()) {
       if (block.status === 'unreadable') throw Error('Unreadable history block');
-      // Deleted at the person's word; a stop before its file went leaves the file, which goes now.
-      if (block.status === 'deleted') { if (presentFile(path.join(this.#store, block.name))) removeFile(this.#store, block.name); continue; }
+      // Deleted at the person's word. A file found under its name (a stop before it went, or one put back by hand) is
+      // left alone: never read, never removed by NAW.
+      if (block.status === 'deleted') continue;
       if (block.status === 'sealed') {
         const scan = this.#scan(block.name, block.firstSequence, true);
         if (scan.bytes !== block.bytes || scan.sha256 !== block.sha256 || scan.count !== block.count) throw Error('Unreadable history block');
@@ -262,13 +263,15 @@ class BlockLog {
   delete(names, keep, now) {
     if (this.#failed) throw Error('History record is unavailable');
     const manifest = { blocks: this.#manifest.blocks.map(item => ({ ...item, days: { ...item.days } })) };
+    // Everything checked before anything is written; a refusal here changes nothing (code REFUSED).
+    const refuse = message => { throw Object.assign(Error(message), { code: 'REFUSED' }); };
     const chosen = names.map(name => manifest.blocks.find(block => block.name === name && block.status === 'sealed'));
-    if (!names.length || chosen.some(block => !block)) throw Error('Only sealed blocks can be deleted');
+    if (!names.length || chosen.some(block => !block)) refuse('Only sealed blocks can be deleted');
     const lists = chosen.map(block => {
-      const scan = this.#scan(block.name, block.firstSequence, true);
-      if (scan.bytes !== block.bytes || scan.sha256 !== block.sha256) throw Error('A block does not match its record');
+      let scan; try { scan = this.#scan(block.name, block.firstSequence, true); } catch { refuse('A block does not match its record'); }
+      if (scan.bytes !== block.bytes || scan.sha256 !== block.sha256) refuse('A block does not match its record');
       const kept = scan.values.map(keep);
-      if (Buffer.byteLength(JSON.stringify({ version: 1, name: block.name, kept })) > KEPT_MAX_BYTES) throw Error('This block holds too many records to delete at once');
+      if (Buffer.byteLength(JSON.stringify({ version: 1, name: block.name, kept })) > KEPT_MAX_BYTES) refuse('This block holds too many records to delete at once');
       return { block, kept };
     });
     for (const { block, kept } of lists) writePrivateJson(this.#store, `${block.name}.kept.json`, { version: 1, name: block.name, kept });

@@ -192,7 +192,13 @@ class BackgroundControl {
   deleteBlocks(names) {
     if (this.failed || this.closed) throw Error('Background operation storage is unavailable');
     const keep = r => ({ id: r.id, actor: { id: r.actor.id, nativeId: r.actor.nativeId, provider: r.actor.provider }, at: r.at, state: r.state });
-    try { this.archive.delete(names, keep, this.now()); this.loadHistory(); }
+    try { this.archive.delete(names, keep, this.now()); }
+    catch (error) {
+      // Refused before anything was written: nothing changed, and background control goes on.
+      if (error.code === 'REFUSED') throw error;
+      this.failed = true; throw Error('The background operation history could not be changed; no operation is run', { cause: error });
+    }
+    try { this.loadHistory(); }
     catch (error) { this.failed = true; throw Error('The background operation history could not be changed; no operation is run', { cause: error }); }
     this.changed();
   }

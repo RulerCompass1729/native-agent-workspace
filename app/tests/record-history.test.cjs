@@ -132,9 +132,11 @@ test('a block log deletes only sealed blocks that match, keeps a list without co
   assert.deepEqual(again.kept(), [{ id: 'a', deletedAt: day1 + 2 * DAY }, { id: 'b', deletedAt: day1 + 2 * DAY }]);
   assert.deepEqual(again.manifest.blocks.map(block => [block.status, block.count, history.totalBytes({ blocks: [block] })]), [['deleted', 2, 0], ['open', 1, again.manifest.blocks[1].bytes]]);
   assert.deepEqual(history.reminders(again.manifest, day1 + 40 * DAY).map(item => [item.kind, item.blocks]), [['age', 1]], 'A deleted block is not reminded of');
-  // A stop after the manifest marked it deleted but before its file went: the file goes at the next load.
-  fs.writeFileSync(path.join(store, first), 'left by a stop', { mode: 0o600 });
-  new history.BlockLog(dir, 'operations', check).load(); assert.equal(fs.existsSync(path.join(store, first)), false);
+  // A file found under a deleted block's name (a stop before it went, or the person putting a copy back) is left
+  // alone at every load: never read, never removed.
+  fs.writeFileSync(path.join(store, first), 'put back by hand', { mode: 0o600 });
+  for (let n = 0; n < 2; n++) assert.deepEqual(new history.BlockLog(dir, 'operations', check).load().map(value => value.id), ['c']);
+  assert.equal(fs.readFileSync(path.join(store, first), 'utf8'), 'put back by hand');
   // The list gone too: what those ids were cannot be known, and the load stops.
   fs.rmSync(path.join(store, first + '.kept.json'));
   const lost = new history.BlockLog(dir, 'operations', check); lost.load(); assert.throws(() => lost.kept(), /Unreadable/);

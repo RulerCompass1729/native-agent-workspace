@@ -185,13 +185,16 @@ test('deleting a settled block the person exported keeps its operation ids: neve
     assert.equal((await controller.call(binding, { action: 'receipt', operation_id: 'send-1' })).receipt.state, 'received');
     assert.deepEqual(controller.rows('agent').map(row => row.backgroundOperation.id).sort(), ['op-2', 'op-3', 'send-1']);
   }
+  // A delete refused before anything is written (here, the block still being written) changes nothing and stops nothing.
+  assert.throws(() => f.controller.deleteBlocks([f.blocks()[0]]), error => error.code === 'REFUSED');
+  assert.equal((await f.controller.call(binding, invoke('op-4', 'forward', ['four']))).state, 'complete');
   // Asked while the same agent is busy with another operation, the answer is still that the record was deleted.
   let release; const held = new Promise(resolve => { release = resolve; }); f.config.handlers.set('hold', async () => { await held; return 'held'; });
   const busy = f.controller.call(binding, invoke('hold-1', 'hold'));
   await new Promise(resolve => setImmediate(resolve));
   assert.equal((await f.controller.call(binding, invoke('op-1', 'forward', ['one']))).reason, 'record-deleted');
   release(); await busy;
-  assert.deepEqual(f.runs, ['one', 'hello', 'two', 'three'], 'Nothing ran again');
+  assert.deepEqual(f.runs, ['one', 'hello', 'two', 'three', 'four'], 'Nothing ran again');
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.store, 'manifest.json'))).blocks.at(-1).lastSequence, 4, 'The numbering does not go back');
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.store, 'manifest.json'))).blocks[0].status, 'deleted');
 });
