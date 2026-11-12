@@ -627,7 +627,9 @@ function sendToPage(context, channel, ...data) {
 // Every 'workspace:state' send goes through here. Once a window's page has reported that it is ready, one
 // full snapshot is in transit at a time and the newest wins (state-push.cjs); until then, and for a window
 // whose page never reports ready (a background window loads no document), the snapshot is sent as before
-// with sequence 0, which needs no reply.
+// with sequence 0, which needs no reply. Snapshots to a ready page are also spaced by STATE_PUSH_WAIT, so
+// changes in quick succession are one redraw; a single change still goes at once (UI lag, 2026-11-12).
+const STATE_PUSH_WAIT = 250;
 function pushState(context, display) {
   if (context.background || context.win.isDestroyed()) {
     return;
@@ -650,12 +652,14 @@ function bindStatePush(context) {
       if (!context.win.isDestroyed()) {
         context.win.webContents.send('workspace:state', value, sequence);
       }
-    });
+    }, { wait: STATE_PUSH_WAIT });
   };
   context.win.webContents.on('did-start-loading', () => {
+    context.statePush?.close();
     context.statePush = null;
   });
   context.win.webContents.on('render-process-gone', () => {
+    context.statePush?.close();
     context.statePush = null;
   });
 }
@@ -875,7 +879,7 @@ async function openWindow(saved) {
       view.active = false;
       try { saveViews(); } catch { view.active = true; }
     }
-    windows.delete(id); context.imagePreviews?.close(); context.client.close();
+    windows.delete(id); context.statePush?.close(); context.imagePreviews?.close(); context.client.close();
   });
   try { await win.loadURL(entry); await ready; }
   catch (error) { discardReveal(context); if (quitting || win.isDestroyed()) return; throw new Error(startupMessage(error, displayLanguage())); }
@@ -1077,11 +1081,15 @@ function register(name, handler) {
     }
     return handler(c, ...args);
   });
+  // Sent many times a second while the person types, scrolls or resizes: these do not hurry the next state.
+  const hurries = !['input', 'resize', 'readingState', 'draft'].includes(name);
   ipcMain.handle(`workspace:${name}`, async (event, ...args) => {
     const context = windows.get(event.sender.id);
     if (!context || event.senderFrame !== event.sender.mainFrame || !trusted(event.senderFrame.url)) throw new Error('Unexpected IPC source');
     try { return { ok: true, value: await handler(context, ...args) }; }
     catch (error) { return { ok: false, error: error.message || '操作未完成。', uiMessage: error.message ? uiLocale.displayMessage(error.uiMessage) : uiError('error.main.operationIncomplete').uiMessage }; }
+    // The page reads what its action changed once this reply arrives: the state waiting for its time goes first.
+    finally { if (hurries) try { context.statePush?.flushNow(); } catch { /* lost, as any failed send */ } }
   });
 }
 async function replaceBackendSockets(key) {

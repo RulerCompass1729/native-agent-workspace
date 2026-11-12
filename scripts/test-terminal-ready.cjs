@@ -80,7 +80,8 @@ async function run() {
   await until(async () => (await snapshot()).sessions.find(s => s.id === a.id).recovering, 'Native recovery is pending');
   await native('state', a.id); await delay(150);
   assert.equal(await host(a.id).getByText('终端未连接，重新选择此会话或视图可重试。', { exact: true }).count(), 0);
-  assert.equal(await page.locator('#terminal-paste').isDisabled(), true, 'Pending recovery cannot accept native input');
+  // A change from the native side reaches the page within the 250 ms state push spacing.
+  await until(async () => await page.locator('#terminal-paste').isDisabled(), 'Pending recovery cannot accept native input');
   assert.equal((await native('stats')).pending.includes(a.id), false);
   await native('recovering-terminal', a.id, false);
   await until(async () => (await native('stats')).pending.includes(a.id), 'Confirmed recovery attaches without another tab click');
