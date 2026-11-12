@@ -1018,13 +1018,21 @@ function followQueuedRoomInput(id, mark) {
   queuedRoomInputs.delete(id);
 }
 // Recorded times only; message-derived activity is labelled as an estimate.
+// The sidebar shows several times for every session on every draw. toLocaleTimeString with options builds a new
+// formatter on each call, which was the page's largest single cost while agents worked; one formatter per language
+// and time zone offset (sessionTimeFormats, below) gives the same text.
 function sessionTime(value) {
   if (!Number.isFinite(value)) return '';
   const date = new Date(value), now = new Date();
   if (!Number.isFinite(date.getTime())) return '';
-  const time = date.toLocaleTimeString(ui.language.getSnapshot().active, { hour: '2-digit', minute: '2-digit' });
+  // A formatter keeps the time zone it was made in; the offset in the key gives a new one after the zone changes.
+  const language = ui.language.getSnapshot().active, key = language + ' ' + now.getTimezoneOffset();
+  let format = sessionTimeFormats.get(key);
+  if (!format) { format = new Intl.DateTimeFormat(language, { hour: '2-digit', minute: '2-digit' }); sessionTimeFormats.set(key, format); }
+  const time = format.format(date);
   return date.toDateString() === now.toDateString() ? time : `${date.getMonth() + 1}/${date.getDate()}${date.getFullYear() === now.getFullYear() ? '' : `/${date.getFullYear()}`} ${time}`;
 }
+const sessionTimeFormats = new Map();
 function sessionActivityTime(s) {
   const reported = sessionTime(s.lastActivityAt);
   if (reported) return reported;
