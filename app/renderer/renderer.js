@@ -508,6 +508,19 @@ function columnTerminalLimits(binding) {
   return { min: COLUMN_TERMINAL.min, max: Math.min(COLUMN_TERMINAL.most, Math.max(COLUMN_TERMINAL.min, Math.floor(room))) };
 }
 function columnTerminalHeight(id) { return Number.isSafeInteger(columnTerminalHeights[id]) ? columnTerminalHeights[id] : COLUMN_TERMINAL.initial; }
+// T-163: the hint under a column's input shows up to four of its lines, and never fewer than two.
+const COLUMN_HINT = { line: 16, least: 2, most: 4 };
+// How many lines of its hint a column shows: as many as fit beside an 80px conversation and a 64px terminal, up to
+// four, and at least the two it always showed. A longer hint scrolls. Only the column's height and its fixed parts
+// count, not the hint's own length, so the number does not move with what the hint says.
+function fitColumnHint(binding) {
+  const input = binding.columnHost, reader = input?.closest('.collaboration-member-reader'), hint = input?.querySelector('.session-compose-hint');
+  if (!reader || !hint) return;
+  const rest = input.offsetHeight - binding.nativeHost.offsetHeight - hint.offsetHeight + (reader.querySelector('.column-native-footer:not([hidden])')?.offsetHeight || 0);
+  const fit = Math.floor((reader.clientHeight - COLUMN_TERMINAL.conversation - COLUMN_TERMINAL.min - rest) / COLUMN_HINT.line);
+  const lines = String(Math.max(COLUMN_HINT.least, Math.min(COLUMN_HINT.most, fit)));
+  if (input.style.getPropertyValue('--column-hint-lines') !== lines) input.style.setProperty('--column-hint-lines', lines);
+}
 // The most recently changed heights are kept, at most 200 (the saved view refuses more).
 function rememberColumnTerminalHeight(id, value) {
   delete columnTerminalHeights[id]; columnTerminalHeights[id] = value;
@@ -520,6 +533,7 @@ function fitColumnTerminal(binding) { binding.resizeAllowed = true; fitTerminal(
 // choice and native grid stay unchanged, with scrolling and the cursor kept in view.
 function columnTerminalTallest(binding) { return columnTerminalLimits(binding).max; }
 function applyColumnTerminalHeight(binding, height, mode = 'redraw') {
+  fitColumnHint(binding);
   const { min } = columnTerminalLimits(binding), top = columnTerminalTallest(binding);
   const value = Math.max(min, Math.min(top, Math.round(height))), before = binding.terminalHeight;
   binding.terminalHeight = value; binding.nativeHost.style.height = `${value}px`;

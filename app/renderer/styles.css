@@ -563,7 +563,10 @@ header h1, header p { overflow-wrap: anywhere; }
 .collaboration-member-input .session-composer{width:100%;max-width:none;margin:0;padding:4px;border:0;border-radius:0;box-shadow:none}
 .collaboration-member-input .session-message-input{min-height:48px;height:48px;max-height:90px;font-size:14px;line-height:20px;padding:3px;width:100%;resize:vertical}
 .collaboration-member-input .composer-footer{flex-wrap:wrap;gap:3px;justify-content:flex-end}
-.collaboration-member-input .session-compose-hint{flex:1 0 100%;font-size:12px;line-height:16px;max-height:32px;overflow:auto}
+/* The hint says who has the input, or what went wrong and what to do. Up to four lines are shown where the
+   column has the height (fitColumnHint in renderer.js says how many, never fewer than two); a longer hint
+   scrolls inside them (T-163). */
+.collaboration-member-input .session-compose-hint{flex:1 0 100%;font-size:12px;line-height:16px;max-height:calc(var(--column-hint-lines,4)*16px);overflow:auto}
 .collaboration-member-input .composer-footer button{padding:3px 5px;font-size:12px;line-height:18px;min-width:0;white-space:normal}
 .column-native-host{height:112px;min-height:64px;min-width:0;background:#15191f;overflow:hidden}
 /* T-135: the line above a column's terminal changes its height by dragging or with the arrow keys. */
