@@ -121,6 +121,11 @@ test('a session NAW opened to replace another, before it has moved in, cannot be
   const f = fixture(t);
   f.context.queueDispatcher = { rotations: { old: { phase: 'joining', newId: 'outside' } } };
   await assert.rejects(f.call('outside'), key('error.steward.invalid')); assert.equal(fs.existsSync(f.file), false);
+  // A failed rotation still to stop its unused successor: not yet; one it had handed work to: yes.
+  f.context.queueDispatcher = { rotations: { old: { phase: 'failed', newId: 'outside' } } };
+  await assert.rejects(f.call('outside'), key('error.steward.invalid'));
+  f.context.queueDispatcher = { rotations: { old: { phase: 'failed', newId: 'outside', handoffConfirmed: true } } };
+  await f.call('outside'); await f.call(null);
   // Once the rotation is over (kept), it can.
   f.context.queueDispatcher = { rotations: { old: { phase: 'kept' }, outside: { phase: 'kept', successorOf: 'old' } } };
   await f.call('outside'); assert.deepEqual(f.role.selected, { sessionId: 'outside', nativeId: 'native-outside' });

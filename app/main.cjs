@@ -549,9 +549,10 @@ function keepStewardOutside(id, join) {
   if (steward && steward.sessionId === id) throw uiError('error.steward.joinSpace');
 }
 // A session NAW opened to replace another and has not finished moving in (steward step 2, batch 2): its join is still
-// to come, and refusing that join would make the rotation stop it.
+// to come, and refusing that join would make the rotation stop it. Nor one a failed rotation is still to stop (never
+// handed work); a kept one, or one the failed rotation had already handed work to, is the person's to choose.
 function midRotation(id) {
-  return Object.values(queueDispatcher?.rotations || {}).some(record => record?.newId === id && !['kept', 'failed'].includes(record.phase));
+  return Object.values(queueDispatcher?.rotations || {}).some(record => record?.newId === id && record.phase !== 'kept' && !(record.phase === 'failed' && record.handoffConfirmed));
 }
 function conversationReaderAllowed(actor) {
   const secretary = queueSecretary?.current();
