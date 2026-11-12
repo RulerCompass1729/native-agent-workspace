@@ -97,7 +97,9 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
     // Exact managed copy before quota failure input recovery (main 464ae17).
     '77ed9f675a75aa22126a135a4256ad875c42a1e568a17bb557049f0e44008ef5',
     // Exact managed copy before a gap declared the sequence it covers (main 37c87d3, steward step 2 batch 0).
-    '383b09447e9844d93e4cf9fd6d5dfa244c511dd54ea6b10e0784d0bfcd739b0e']);
+    '383b09447e9844d93e4cf9fd6d5dfa244c511dd54ea6b10e0784d0bfcd739b0e',
+    // Exact main daf7cd7 compatibility copy before 2.1.322 mid-turn delivery.
+    'f965e0d610350647f7842c9aa7f911bd3b0bec6c09c0daa7a525fa91d55d43d4']);
   const upgrades = new Set();
   for (const [name, content] of files) {
     const filename = path.join(directory, name);

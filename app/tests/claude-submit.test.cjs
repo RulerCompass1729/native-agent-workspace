@@ -208,3 +208,72 @@ test('a rewritten native append cannot authorize reply sharing',async()=>{
   await invoke('classic.UserPromptSubmit',classic);await invoke('session.append',{...append,message:{...append.message,content:[{type:'text',text:'changed task'}]}});
  }});assert.equal(f.results[0].promptId,undefined);
 });
+
+// 2.1.322 mid-turn delivery: the mod holds a queued message for the running turn's next tool boundary.
+const ROW = '33333333-3333-4333-8333-333333333333';
+test('a held mid-turn message outlives the first-answer limit unauthorized; its append receipt names the row and the turn', async t => {
+  const channel = new SubmissionChannel(20); t.after(() => channel.close());
+  const response = poll(channel), pending = channel.request('steer text', 'held', () => true, true, true);
+  assert.deepEqual(response.value, { id: 'held', text: 'steer text', midturn: true });
+  assert.equal(channel.hold({ id: 'held' }), true);
+  assert.equal(channel.hold({ id: 'held' }), false, 'held once');
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(channel.pending?.tag, 'held'); assert.equal(channel.pending.authorized, false);
+  // Authorization stays at the dispatch moment, past the first-answer deadline.
+  assert.equal(channel.authorize(response.value), true);
+  channel.result({ id: 'held', status: 'accepted', mode: 'append', uuid: ROW, turnId: 'running-turn' });
+  assert.deepEqual(await pending, { mode: 'append', uuid: ROW, turnId: 'running-turn', promptId: null });
+});
+test('an ordinary request cannot be held, and a late hold after the limit is refused', async t => {
+  const channel = new SubmissionChannel(20); t.after(() => channel.close());
+  const first = poll(channel), ordinary = channel.request('plain', 'plain', () => true, true);
+  assert.equal(first.value.midturn, undefined);
+  assert.equal(channel.hold({ id: 'plain' }), false);
+  await assert.rejects(ordinary, error => error.notSent === true);
+  poll(channel); const late = channel.request('late', 'late', () => true, true, true);
+  await assert.rejects(late, error => error.notSent === true);
+  assert.equal(channel.hold({ id: 'late' }), false);
+});
+test('a revoked guard at hold time or at dispatch proves not sent', async t => {
+  const channel = new SubmissionChannel(20); t.after(() => channel.close());
+  let allowed = true;
+  const first = poll(channel), atHold = channel.request('x', 'one', () => allowed, true, true);
+  assert.equal(first.value.id, 'one', 'delivered to the mod'); allowed = false;
+  assert.equal(channel.hold({ id: 'one' }), false);
+  await assert.rejects(atHold, error => error.notSent === true);
+  allowed = true;
+  const second = poll(channel), atDispatch = channel.request('y', 'two', () => allowed, true, true);
+  assert.equal(channel.hold({ id: 'two' }), true); allowed = false;
+  assert.equal(channel.authorize(second.value), false);
+  channel.result({ id: 'two', status: 'blocked' });
+  await assert.rejects(atDispatch, error => error.notSent === true);
+});
+test('a listener that comes back without settling its held message proves it was never sent; an authorized one stays uncertain', async t => {
+  const channel = new SubmissionChannel(20); t.after(() => channel.close());
+  poll(channel); const held = channel.request('held', 'gone', () => true, true, true);
+  channel.hold({ id: 'gone' });
+  const rejected = assert.rejects(held, error => /没有发出|not sent/.test(error.message) && error.notSent === true);
+  poll(channel); await rejected;
+  const again = poll(channel); void again;
+  const second = channel.request('held', 'authorized', () => true, true, true);
+  channel.hold({ id: 'authorized' }); channel.authorize({ id: 'authorized', text: 'held' });
+  const uncertain = assert.rejects(second, error => error.notSent === false);
+  poll(channel); await uncertain;
+});
+test('an append receipt needs its row id and turn; a malformed one stays uncertain', async t => {
+  const channel = new SubmissionChannel(20); t.after(() => channel.close());
+  for (const bad of [{ uuid: 'not-a-row', turnId: 'running-turn' }, { uuid: ROW }]) {
+    const response = poll(channel), pending = channel.request('x', 'bad', () => true, true, true);
+    channel.hold({ id: 'bad' }); channel.authorize(response.value);
+    channel.result({ id: 'bad', status: 'accepted', mode: 'append', ...bad });
+    await assert.rejects(pending, error => error.notSent === false);
+  }
+});
+test('read receipts are emitted only in their exact shape', () => {
+  const channel = new SubmissionChannel(20), reads = [];
+  channel.on('read', read => reads.push(read));
+  assert.equal(channel.read({ id: 'held', uuid: ROW, turnId: 'running-turn' }), true);
+  for (const bad of [{ id: 'held', uuid: 'x', turnId: 'running-turn' }, { id: 'held', uuid: ROW }, { uuid: ROW, turnId: 't' }]) assert.equal(channel.read(bad), false);
+  assert.deepEqual(reads, [{ tag: 'held', uuid: ROW, turnId: 'running-turn' }]);
+  channel.close();
+});

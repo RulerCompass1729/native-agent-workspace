@@ -4,6 +4,10 @@ let stopped = false;
 let generation = 0;
 const legacyOnly = false;
 let collecting = null;
+// A queued app message held for the running root turn's next tool boundary (2.1.322,
+// measured): appended there, the turn's next request reads it. Elsewhere a mod's row
+// would land before the reply being written, so it waits, or runs as its own turn.
+let heldMidturn = null, midturnRead = null, personRevision = 0;
 let foreignSubmissions = 0;
 let foreignRevision = 0;
 let rootBinding = null;
@@ -629,7 +633,26 @@ async function listen($, ownGeneration) {
       return;
     }
     if (message.id && typeof message.text === 'string') {
-      const intentRevision = foreignRevision;
+      let intentRevision = foreignRevision;
+      if (message.midturn === true) {
+        // A draft in the native prompt refuses it before any hold, as before (and again at dispatch).
+        if ((await $.prompt.read()).text) {
+          await request($, '/result', { id: message.id, status: 'draft' }, binding);
+          if (!stopped && generation === ownGeneration) $.clock.after(0, () => listen($, ownGeneration));
+          return;
+        }
+        const held = await holdMidturn($, message, binding, ownGeneration);
+        if (stopped || generation !== ownGeneration) return;
+        if (held.outcome !== 'ended') { $.clock.after(0, () => listen($, ownGeneration)); return; }
+        // The root turn ended before a tool boundary: the ordinary path below runs it as its
+        // own turn. The person's own input during the hold makes this message stale.
+        if (personRevision !== held.personRevision) {
+          await request($, '/result', { id: message.id, status: 'blocked', reason: 'input-changed' }, binding);
+          if (!stopped && generation === ownGeneration) $.clock.after(0, () => listen($, ownGeneration));
+          return;
+        }
+        intentRevision = foreignRevision;
+      }
       const draft = await $.prompt.read();
       if (draft.text) await request($, '/result', { id: message.id, status: 'draft' }, binding);
       else {
@@ -679,6 +702,55 @@ async function listen($, ownGeneration) {
   }
 }
 
+// Holds one app message for the running root turn. Resolves the hold with its outcome:
+// 'taken' (dispatched or refused at a tool boundary), 'ended' (the root turn ended first,
+// or none was running), 'dropped' (the app did not keep it), 'stopped'.
+async function holdMidturn($, message, binding, ownGeneration) {
+  const held = { id: message.id, text: message.text, binding: rootBinding, connection: binding, generation: ownGeneration, personRevision, outcome: null };
+  held.done = new Promise(resolve => { held.resolve = outcome => { if (!held.outcome) { held.outcome = outcome; resolve(held); } }; });
+  if (!rootBinding?.nativeMidturnAppend || rootBinding.lease !== binding.lease || rootIdle) { held.resolve('ended'); return held.done; }
+  heldMidturn = held;
+  try {
+    // The app keeps waiting past its usual first-answer limit only after this.
+    // A boundary may have taken it while /hold was in flight: then that take settles it.
+    if ((await request($, '/hold', { id: message.id }, binding)).held !== true && heldMidturn === held) releaseHeld(held, 'dropped');
+  } catch { if (heldMidturn === held) releaseHeld(held, 'dropped'); }
+  if (heldMidturn === held && (rootIdle || rootBinding !== held.binding)) releaseHeld(held, 'ended');
+  return held.done;
+}
+function releaseHeld(held, outcome) {
+  if (held && heldMidturn === held) heldMidturn = null;
+  held?.resolve(outcome);
+}
+// At a root tool boundary: after the tool's result exists, before the hook returns it.
+// One fresh authorization per dispatch; an uncertain outcome is reported, never retried.
+async function takeMidturn($, binding) {
+  const held = heldMidturn;
+  if (!held || held.binding !== binding || binding !== rootBinding || stopped || generation !== held.generation || rootIdle) return;
+  heldMidturn = null;
+  const { id, text, connection } = held;
+  try {
+    if (personRevision !== held.personRevision) return await request($, '/result', { id, status: 'blocked', reason: 'input-changed' }, connection);
+    if ((await $.prompt.read()).text) return await request($, '/result', { id, status: 'draft' }, connection);
+    const verdict = await request($, '/authorize', { id, text }, connection);
+    if (!verdict.allowed) return await request($, '/result', { id, status: 'blocked' }, connection);
+    // As on the ordinary path, a draft or the person's own input during that round trip refuses it.
+    if ((await $.prompt.read()).text) return await request($, '/result', { id, status: 'draft' }, connection);
+    if (personRevision !== held.personRevision) return await request($, '/result', { id, status: 'blocked', reason: 'input-changed' }, connection);
+    // Nothing is stored yet: a session or context that changed during that round trip still means not sent.
+    if (binding !== rootBinding || stopped || generation !== held.generation) return await request($, '/result', { id, status: 'blocked', reason: 'context-changed' }, connection);
+    let stored;
+    try { stored = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } }); }
+    catch { return await request($, '/result', { id, status: 'unconfirmed', reason: 'native-append' }, connection); }
+    const uuid = typeof stored?.uuid === 'string' && /^[a-f0-9-]{36}$/i.test(stored.uuid) ? stored.uuid : null;
+    // A refusal stores nothing; a row without its id is not proof either way.
+    if (stored?.deny !== undefined || !uuid) return await request($, '/result', { id, status: stored?.deny !== undefined ? 'blocked' : 'unconfirmed', reason: 'native-rejection' }, connection);
+    if (binding === rootBinding) midturnRead = { id, uuid, binding, connection };
+    await request($, '/result', { id, status: 'accepted', mode: 'append', uuid, turnId: activeTurn }, connection);
+  } catch { /* The app ends an uncertain wait at the next poll; nothing is resent. */ }
+  finally { held.resolve('taken'); }
+}
+
 async function bindRoot($, ownGeneration) {
   const binding = await connection($);
   const version = (await $.session.version()).version;
@@ -699,6 +771,9 @@ async function bindRoot($, ownGeneration) {
     nativeCapacity: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version),
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302',
     nativeQueuedPromptLinks: !legacyOnly && ['2.1.321', '2.1.322'].includes(version),
+    // 2.1.322 (measured, loopback model, -p and TUI): a $.session.append made while a root tool
+    // call runs is stored after that tool's result and read by the same turn's next request.
+    nativeMidturnAppend: !legacyOnly && version === '2.1.322',
     nativeTurnRecords: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version),
     nativeNarration: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version) }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
@@ -707,6 +782,7 @@ async function bindRoot($, ownGeneration) {
     nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
     nativeMedia: nativeBlocks && nativeMediaVersion(version) && result.nativeMedia === true,
     nativeQueuedPromptLinks: nativeBlocks && !legacyOnly && result.nativeQueuedPromptLinks === true,
+    nativeMidturnAppend: nativeBlocks && !legacyOnly && version === '2.1.322' && result.nativeMidturnAppend === true,
     nativeTurnRecords: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version) && result.nativeTurnRecords === true,
     nativeNarration: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version) && result.nativeNarration === true };
   nativeReadImages.clear();
@@ -863,7 +939,11 @@ export function register(on) {
     if (!nativeBlocks || e.agentId || !e.tool_use_id || next.origin?.plugin !== 'engine' || next.origin?.tier !== 'core') return next(e);
     const call = { binding, turnId: activeTurn, id: `permission:${e.tool_use_id}`, tool: e.tool, progress: false };
     rootToolCalls.set(e.tool_use_id, call);
-    try { return await next(e); }
+    try {
+      const result = await next(e);
+      if (heldMidturn && binding === rootBinding) await takeMidturn($, binding);
+      return result;
+    }
     finally {
       if (rootToolCalls.get(e.tool_use_id) === call) rootToolCalls.delete(e.tool_use_id);
       if (binding === rootBinding) enqueueBlock($, { id: 'control:permission-end', kind: 'control', status: 'complete', permissionId: call.id }, binding);
@@ -1073,6 +1153,11 @@ export function register(on) {
   }).catch(($, e, next) => next(e));
   on('turn.step', async function* ($, e, next) {
     const binding = rootBinding;
+    // The first root request after the append carries the row (measured): it reached the model.
+    if (!e.agentId && midturnRead) {
+      const read = midturnRead; midturnRead = null;
+      if (read.binding === binding) request($, '/midturn-read', { id: read.id, uuid: read.uuid, turnId: e.turnId }, read.connection).catch(() => {});
+    }
     if (e.agentId || e.turnId !== activeTurn || next.origin?.plugin !== 'engine' || next.origin?.tier !== 'core') return yield* next(e);
     observePhase($, 'requesting', binding, e.turnId);
     const iterator = next(e)[Symbol.asyncIterator](); let finished = false, sent;
@@ -1095,6 +1180,8 @@ export function register(on) {
     try {
       // Flush first: an unpaired `!` from inside this turn is shown, never claimed later.
       if (!e.agentId) { flushShell($); rootIdle = true; turnTriggers = []; shellTurn = null; expectPrompt = null; pendingDrawings.clear(); }
+      // No tool boundary came: the held message runs as its own turn.
+      if (!e.agentId && heldMidturn) releaseHeld(heldMidturn, 'ended');
       if (!e.agentId && binding === rootBinding) {
         observeUsage($);
         const turn = displayTurn(e.turnId, binding), final = turn.blocks.get(turn.last);
@@ -1159,6 +1246,7 @@ export function register(on) {
     // identical human text, invalidates correlation without changing its input.
     foreignSubmissions++;
     foreignRevision++;
+    if (['composer', 'bridge'].includes(e.origin?.kind)) personRevision++;
     if (collecting) collecting.invalid = true;
     enqueueBlock($, { id: 'control:input', kind: 'control', status: 'complete' });
     const inFlight = { origin: e.origin?.kind || null }; foreignInFlight.add(inFlight);
@@ -1261,7 +1349,7 @@ export function register(on) {
   });
   on('session.end', async ($, e, next) => {
     if (collecting) collecting.invalid = true;
-    stopped = true; generation++;
+    stopped = true; generation++; releaseHeld(heldMidturn, 'stopped'); midturnRead = null;
     const known = rootBinding && (e.sessionId === rootBinding.sessionId || rootTransitions.some(t => t.nextSessionId === e.sessionId));
     if (known) {
       if (rootEnds.size >= 64 && !rootEnds.has(e.sessionId)) rootSyncBlocked = true;
@@ -1280,7 +1368,7 @@ export function register(on) {
     if (contextTransitions && expectedStart && expectedStart === e.source && !e.agent_id &&
       e.session_id !== previousId && (e.session_id === currentId || (e.source === 'fork' && currentId === previousId))) {
       if (collecting) collecting.invalid = true;
-      stopped = true; generation++;
+      stopped = true; generation++; releaseHeld(heldMidturn, 'stopped'); midturnRead = null;
       if (rootTransitions.length >= 64) rootSyncBlocked = true;
       else rootTransitions.push({ sessionId: previousId, nextSessionId: e.session_id, source: e.source, model: e.model });
       $.clock.after(0, () => syncRoot($));

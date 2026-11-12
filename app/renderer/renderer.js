@@ -1163,8 +1163,8 @@ function soloAction(s, context = {}) {
   if ((context.column || focusedRoomMember()) && (context.mode || mode) === 'chat' && s.view !== 'chat') return choice({ kind: 'chat', labelKey: 'composer.enableChat', hintKey: 'composer.enableChatHint' });
   if (s.legacyReaderPending && s.state === 'idle') return choice({ kind: 'send', labelKey: 'composer.send', hintKey: 'composer.readerPendingHint' });
   // Native runs a plugin's queued prompt only once idle; text typed in the TUI reaches the running turn.
-  if (s.pendingQueue) return choice({ kind: 'send', labelKey: 'composer.waitNative', hintKey: 'composer.queuePendingHint' });
-  if (s.state === 'working' && s.queueAvailable && !s.approval) return choice({ kind: 'send', labelKey: 'composer.queue', hintKey: 'composer.queueHint' });
+  if (s.pendingQueue) return choice({ kind: 'send', labelKey: 'composer.waitNative', hintKey: s.midturnAvailable ? 'composer.queueMidturnPendingHint' : 'composer.queuePendingHint' });
+  if (s.state === 'working' && s.queueAvailable && !s.approval) return choice({ kind: 'send', labelKey: s.midturnAvailable ? 'composer.queueMidturn' : 'composer.queue', hintKey: s.midturnAvailable ? 'composer.queueMidturnHint' : 'composer.queueHint' });
   if (s.state === 'working' && s.steerAvailable && s.activeTurnId && !s.approval) return choice({ kind: 'send', labelKey: 'composer.steer', hintKey: s.pendingSteer ? 'composer.inputPendingHint' : 'composer.steerHint' });
   return choice({ kind: 'send', labelKey: 'composer.send', hintKey: s.state === 'approval'
     ? s.approvalResolved ? 'composer.approvedHint'
@@ -4272,7 +4272,7 @@ function render() {
         if (run?.status === 'running' && next) text += uiText('room.awaiting', { name: next.name });
         if (pendingRun && roomSubmitting.cancelling) text = uiText('room.cancelling');
         else if (pendingRun && run?.status !== 'running') text = uiText('room.preparing');
-        if (waiting && !pendingRun) text = uiText(waiting.queued ? 'room.queued' : 'room.sending', { name: waiting.recipientName });
+        if (waiting && !pendingRun) text = uiText(waiting.queued ? waiting.midturn ? 'room.queuedMidturn' : 'room.queued' : 'room.sending', { name: waiting.recipientName });
         // The native side reports a state name (inProgress, commandExecution); show its text in the person's language,
         // as the session header does. A label with no entry is native text, such as a permission title, and stays as it is.
         if (active.length) text = [text, ...active.map(member => `${member.name} · ${Object.hasOwn(nativeActivityLabels, member.label) ? uiText(nativeActivityLabels[member.label]) : member.label}`)].filter(Boolean).join(' · ');
@@ -4293,7 +4293,7 @@ function render() {
       const nativeRoute = recipient && (recipient.nativeInputRequired || recipient.shareAvailable === false || recipient.chatAvailable === false || !nativeUsable(recipient));
       $('shared-input').readOnly = false;
       $('forward-button').type = nativeRoute ? 'button' : 'submit';
-      ui.display.text($('forward-button'), nativeRoute ? (nativeUsable(recipient) ? 'composer.terminal' : 'reading.viewSession') : interruptPending(recipient) ? 'composer.waitInterrupt' : recipient?.pendingQueue ? 'composer.waitNative' : roomQueueAvailable(recipient) ? 'composer.queue' : roomSteerAvailable(recipient) ? 'composer.steer' : 'composer.send');
+      ui.display.text($('forward-button'), nativeRoute ? (nativeUsable(recipient) ? 'composer.terminal' : 'reading.viewSession') : interruptPending(recipient) ? 'composer.waitInterrupt' : recipient?.pendingQueue ? 'composer.waitNative' : roomQueueAvailable(recipient) ? recipient.midturnAvailable ? 'composer.queueMidturn' : 'composer.queue' : roomSteerAvailable(recipient) ? 'composer.steer' : 'composer.send');
       const recipientPending = roomPendingRecipients.has(recipient?.id);
       const mergeBlocked = state.room.merge && (!state.room.merge.imported || ['preparing', 'joining', 'failed', 'undoing'].includes(state.room.merge.stage));
       const hasDraftImages = roomImageRefs().length > 0;
@@ -5681,7 +5681,7 @@ async function submitRoom(automatic) {
   // Return focus before the clicked control becomes disabled. Never steal it
   // back asynchronously after the person has opened another view or dialog.
   $('shared-input').focus();
-  const submission = { spaceId: sendingSpace, automatic: Boolean(automatic), recipientName: participantLabel(recipient), queued: !automatic && roomQueueAvailable(recipient), cancelling: false, cancelRequested: false };
+  const submission = { spaceId: sendingSpace, automatic: Boolean(automatic), recipientName: participantLabel(recipient), queued: !automatic && roomQueueAvailable(recipient), midturn: !automatic && roomQueueAvailable(recipient) && recipient.midturnAvailable === true, cancelling: false, cancelRequested: false };
   if (automatic) { roomSubmitting = submission; view.submitting = submission; }
   else roomPendingRecipients.set(first, submission);
   const queuedMark = submission.queued && { spaceId: sendingSpace, raw, address, revision, before: new Set(state.room.messages.map(m => m.id)) };

@@ -13,18 +13,22 @@ class SubmissionChannel extends EventEmitter {
     // submit/result attempt has settled. If its result was lost, end this
     // uncertain wait; never redeliver the already-authorized native input.
     if (this.pending?.waitForNativeTurn && this.pending.delivered && this.pending.authorized) this.finish(uiError("error.nativeWaitingInputUnconfirmed"));
+    // A held message is gone with the listener that held it (a reload): never authorized, so never sent.
+    else if (this.pending?.held && !this.pending.authorized) this.finish(uiError("error.submission.holdEnded"));
     if (this.poll) this.poll.end(JSON.stringify({ idle: true }));
     this.poll = response; this.status(true);
     const timer = setTimeout(() => { if (this.poll === response) { this.poll = null; response.end(JSON.stringify({ idle: true })); } }, 20000);
     response.once('close', () => { clearTimeout(timer); if (this.poll === response) { this.poll = null; this.status(false); } });
     this.flush();
   }
-  request(text, tag, guard, waitForNativeTurn = false) {
+  // midturn: the mod may hold the message for the running turn's next tool boundary
+  // (it answers /hold), so the first-answer limit ends there; authorization stays at dispatch.
+  request(text, tag, guard, waitForNativeTurn = false, midturn = false) {
     if (!this.connected) return Promise.reject(Object.assign(uiError("error.safeSubmissionNotReady"), { notSent: true }));
     if (this.pending) return Promise.reject(Object.assign(uiError("error.previousSubmissionPending"), { notSent: true }));
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.finish(uiError("error.nativeSubmissionUnconfirmed")), this.timeout);
-      this.pending = { text, tag, guard, resolve, reject, timer, delivered: false, authorized: false, waitForNativeTurn, deadline: Date.now() + this.timeout };
+      this.pending = { text, tag, guard, resolve, reject, timer, delivered: false, authorized: false, waitForNativeTurn, midturn: midturn === true, held: false, deadline: Date.now() + this.timeout };
       this.flush();
     });
   }
@@ -33,11 +37,25 @@ class SubmissionChannel extends EventEmitter {
     if (!p || !response || p.delivered) return;
     if (!p.guard()) return this.finish(uiError("error.submissionRevokedByHuman"));
     p.delivered = true; this.poll = null;
-    response.end(JSON.stringify({ id: p.tag, text: p.text }));
+    response.end(JSON.stringify({ id: p.tag, text: p.text, ...(p.midturn ? { midturn: true } : {}) }));
+  }
+  hold(message) {
+    const p = this.pending;
+    if (!p || !p.midturn || p.tag !== message.id || !p.delivered || p.authorized || p.held || Date.now() >= p.deadline) return false;
+    if (!p.guard()) { this.finish(uiError("error.submissionRevokedByHuman")); return false; }
+    // Unauthorized while held: any later failure still proves it was not sent.
+    p.held = true; clearTimeout(p.timer);
+    return true;
+  }
+  read(message) {
+    // After the receipt the request is settled; the adapter matches tag and row id.
+    if (typeof message.id !== 'string' || !/^[a-f0-9-]{36}$/i.test(message.uuid || '') || !/^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId || '')) return false;
+    this.emit('read', { tag: message.id, uuid: message.uuid, turnId: message.turnId });
+    return true;
   }
   authorize(message) {
     const p = this.pending;
-    if (!p || p.tag !== message.id || p.text !== message.text || !p.delivered || p.authorized || Date.now() >= p.deadline || !p.guard()) return false;
+    if (!p || p.tag !== message.id || p.text !== message.text || !p.delivered || p.authorized || (!p.held && Date.now() >= p.deadline) || !p.guard()) return false;
     p.authorized = true;
     // Claude's own submit promise may wait until its queued turn starts. Once
     // authorized, a wall-clock timeout would invite a duplicate of native work
@@ -48,8 +66,14 @@ class SubmissionChannel extends EventEmitter {
   result(message) {
     const p = this.pending;
     if (!p || p.tag !== message.id) return false;
-    if (message.status === 'accepted' && p.authorized) this.finish(null, {
-      turnId: typeof message.turnId === 'string' && /^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId) ? message.turnId : null,
+    const turnId = typeof message.turnId === 'string' && /^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId) ? message.turnId : null;
+    // Stored in the running turn: its own row id and that turn, no prompt of its own.
+    if (message.status === 'accepted' && p.authorized && p.midturn && message.mode === 'append') {
+      const uuid = typeof message.uuid === 'string' && /^[a-f0-9-]{36}$/i.test(message.uuid) ? message.uuid : null;
+      if (uuid && turnId) this.finish(null, { mode: 'append', uuid, turnId, promptId: null });
+      else this.finish(Object.assign(uiError('error.submission.nativeResultUnconfirmed'), { notSent: false }));
+    } else if (message.status === 'accepted' && p.authorized) this.finish(null, {
+      turnId,
       promptId: typeof message.promptId === 'string' && /^[a-f0-9-]{36}$/i.test(message.promptId) ? message.promptId : null,
     });
     else {
@@ -201,6 +225,8 @@ function createSubmissionServer(filename, targets, { restrictedOutboxCall, backg
         }
         return target.submission.receive(res);
       }
+      if (req.url === '/hold') return res.end(JSON.stringify({ held: target.submission.hold(message) }));
+      if (req.url === '/midturn-read') return res.end(JSON.stringify({ received: target.submission.read(message) }));
       if (req.url === '/authorize') {
         try { if (target.beforeAuthorize) await target.beforeAuthorize(); }
         catch { return res.end(JSON.stringify({ allowed: false })); }
