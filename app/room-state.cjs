@@ -1049,8 +1049,10 @@ class RoomState {
   membership(client, id, join, label, room = DEFAULT_ROOM_ID, expected) {
     if (typeof id !== 'string' || typeof join !== 'boolean') return Promise.reject(uiError("error.invalidMemberAction"));
     try { this.metadata(room); } catch (error) { return Promise.reject(error); }
+    // Every join meets here, whoever asks (the person, an agent, a session NAW opened for a space, a rotation's
+    // successor): `joinGuard(id)`, when set, is asked at the moment the join runs, in this one queue.
     const action = () => {
-      if (join) this.assertAvailable(id, true, room);
+      if (join) { this.assertAvailable(id, true, room); this.joinGuard?.(id); }
       return this.changeMember(client, id, join, label, room, expected);
     };
     // Cleanup is conditional on the owning backend's final run check. An eager
@@ -1284,6 +1286,8 @@ class RoomState {
         const current = (await client.call('initial')).sessions.find(s => s.id === id), proof = this.metadata(room).restorePlacements?.[id];
         if (current && roomIds(current).length === 1 && isMember(current, room)) continue;
         if (!current || !proof || roomIds(current).length || JSON.stringify(restorePlacement(current)) !== JSON.stringify(proof)) { skipped.push(id); continue; }
+        // A former member that may not join now (the butler) is left out, as one placed elsewhere is; the space restores.
+        try { this.joinGuard?.(id); } catch { skipped.push(id); continue; }
         await this.changeMember(client, id, true, labels?.get(id), room, { nativeId: current.nativeId, placementRevision: placementRevision(current), connectionRevision: current.connectionRevision || 0 });
         const remaining = { ...this.metadata(room).restorePlacements }; delete remaining[id];
         this.update({ restoreMembers: this.metadata(room).restoreMembers.filter(value => value !== id), restorePlacements: remaining }, undefined, room);

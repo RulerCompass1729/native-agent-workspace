@@ -26,9 +26,9 @@ function fixture(t, { landingOwner = null } = {}) {
   const role = new StewardRole(directory), room = new RoomState(directory);
   const handlers = new Map(), broadcasts = [], memberships = [];
   // The real membership function is not under test here: only whether it is reached.
-  const roomState = { apply: snapshot => room.apply(snapshot), metadata() {}, membership: async (_client, id, join, _label, space) => { memberships.push([id, join, space ?? null]); } };
+  const roomState = { apply: snapshot => room.apply(snapshot), metadata() {}, serial: action => action(), membership: async (_client, id, join, _label, space) => { memberships.push([id, join, space ?? null]); } };
   const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, roomIds, stewardRole: role, roomState, landingOwner, validRoomId: id => typeof id === 'string' && id.length > 0,
-    sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); } });
+    queueDispatcher: null, sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); } });
   vm.runInContext(cut('function register(name, handler) {', 'async function replaceBackendSockets'), context);
   vm.runInContext(cut('function keepStewardOutside(id, join) {', 'function conversationReaderAllowed(actor) {'), context);
   vm.runInContext(cut("  register('steward', async (c, id) => {", "  // B6: the person's own actions on an integration handoff"), context);
@@ -117,6 +117,19 @@ test('the person designates a session outside every space, replaces it, and revo
   assert.equal(new StewardRole(f.directory).current(), null); assert.equal(f.broadcasts.length, 3);
 });
 
+test('a session NAW opened to replace another, before it has moved in, cannot be designated (steward step 2, batch 2)', async t => {
+  const f = fixture(t);
+  f.context.queueDispatcher = { rotations: { old: { phase: 'joining', newId: 'outside' } } };
+  await assert.rejects(f.call('outside'), key('error.steward.invalid')); assert.equal(fs.existsSync(f.file), false);
+  // A failed rotation still to stop its unused successor: not yet; one it had handed work to: yes.
+  f.context.queueDispatcher = { rotations: { old: { phase: 'failed', newId: 'outside' } } };
+  await assert.rejects(f.call('outside'), key('error.steward.invalid'));
+  f.context.queueDispatcher = { rotations: { old: { phase: 'failed', newId: 'outside', handoffConfirmed: true } } };
+  await f.call('outside'); await f.call(null);
+  // Once the rotation is over (kept), it can.
+  f.context.queueDispatcher = { rotations: { old: { phase: 'kept' }, outside: { phase: 'kept', successorOf: 'old' } } };
+  await f.call('outside'); assert.deepEqual(f.role.selected, { sessionId: 'outside', nativeId: 'native-outside' });
+});
 test('a session that cannot hold the designation is refused, in words, and nothing is written', async t => {
   const f = fixture(t);
   await f.call('outside'); const before = fs.readFileSync(f.file, 'utf8');
@@ -180,6 +193,10 @@ test('the entry is wired: the record is built from the data folder, shown in the
   const preload = fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8');
   assert.match(preload, /'runtimeLocation', 'retrySave', 'steward', 'stewardRecord', 'landing'\]\) \{/);
   assert.equal(source.match(/stewardRole\.set\(/g).length, 2, 'Only the entry writes the designation');
+  // Step 2, batch 2: every join meets one guard (a session NAW opened for a space, a rotation's successor included),
+  // and the designation is made in the same queue the joins run in.
+  assert.match(source, /roomState = new RoomState\(dataDir\);\n[^\n]*\n  roomState\.joinGuard = id => keepStewardOutside\(id, true\);/);
+  assert.match(source, /else await roomState\.serial\(async \(\) => \{\n[^]*?stewardRole\.set\(\{ sessionId: record\.id, nativeId: record\.nativeId \}\);\n    \}\);/);
   for (const file of fs.readdirSync(path.join(__dirname, '..')).filter(name => /\.c?js$/.test(name) && !['main.cjs', 'steward-role.cjs'].includes(name))) {
     assert.ok(!/stewardRole|StewardRole|steward\.json/.test(fs.readFileSync(path.join(__dirname, '..', file), 'utf8')), file);
   }

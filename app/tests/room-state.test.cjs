@@ -256,3 +256,24 @@ test('ordering a shared native session within one group leaves every other group
   assert.equal(room.metadata(a).revision, 0); assert.equal(room.metadata(b).revision, 0);
   assert.ok(records.every(r => roomIds(r).length === 2));
 });
+test('restoring a space leaves out a former member that may not join now, and still restores (steward step 2, batch 2, review 1)', async t => {
+  const { room } = setup(t), { records, client } = archiveFixture();
+  await room.archiveRoom(client); assert.ok(records.every(s => s.roomId === null));
+  room.joinGuard = id => { if (id === 'one') throw Error('The butler stays outside'); };
+  await room.restoreRoom(client);
+  assert.deepEqual(records.map(s => s.roomId), [null, 'shared']); assert.equal(room.value.archived, false);
+  assert.deepEqual(room.value.events.at(-1).skippedSessions, ['one']);
+});
+test('every join meets one guard at the moment it runs; leaving is never asked (steward step 2, batch 2)', async t => {
+  const { room } = setup(t); let roomId = null; const asked = [], calls = [];
+  const client = { call: async (method, id, join) => { calls.push(method); if (method === 'initial') return { sessions: [{ id: 'one', roomId }, { id: 'butler', roomId: null }] }; if (method === 'join') roomId = join ? 'shared' : null; } };
+  room.joinGuard = id => { asked.push(id); if (id === 'butler') throw Error('The butler stays outside'); };
+  await assert.rejects(room.membership(client, 'butler', true), /stays outside/);
+  assert.equal(calls.includes('join'), false, 'Refused before anything is joined');
+  await room.membership(client, 'one', true); await room.membership(client, 'one', false);
+  assert.deepEqual(asked, ['butler', 'one']);
+  // A guard that changes while a join waits in the queue is asked when the join runs, not when it was asked for.
+  let butler = null; room.joinGuard = id => { if (id === butler) throw Error('The butler stays outside'); };
+  const held = room.serial(async () => { butler = 'one'; });
+  await assert.rejects(room.membership(client, 'one', true), /stays outside/); await held;
+});
