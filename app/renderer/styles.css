@@ -556,6 +556,18 @@ header h1, header p { overflow-wrap: anywhere; }
 .compact-room #room-tabs .collaboration-layout-controls [aria-pressed="true"],.compact-room #room-tabs .collaboration-toolbar>[aria-pressed="true"]{background:var(--green);color:white}
 .compact-room .collaboration-toolbar>button:last-child{margin-left:0}
 .compact-room #manage-members{margin-left:auto}
+/* The header's second row holds two kinds of control: what to look at (the two pages, a tab for each member) and
+   how the overview is laid out and what to do (grid and list, simplify, invite, queue). On one row a rule stands
+   between the two (T-163). It is drawn beside the layout controls and adds nothing to their width. */
+.compact-room #room-tabs .collaboration-layout-controls{position:relative;align-self:stretch;align-items:center;margin-left:9px}
+.compact-room #room-tabs .collaboration-layout-controls::before{content:"";position:absolute;left:-7px;top:0;bottom:0;border-left:1px solid var(--border)}
+/* Where a member tab cannot show three characters of its name and the window is high enough to spare a row, the
+   second kind takes a row of its own, in the same order (fitRoomTabs in renderer.js sets the class). */
+.compact-room.room-tabs-two-rows #room-tabs{row-gap:2px}
+.compact-room.room-tabs-two-rows #room-tabs::after{content:"";order:1;flex:0 0 100%;height:0}
+.compact-room.room-tabs-two-rows #room-tabs .collaboration-toolbar>*,.compact-room.room-tabs-two-rows #manage-members,.compact-room.room-tabs-two-rows #room-queue{order:2}
+.compact-room.room-tabs-two-rows #room-tabs .collaboration-layout-controls{align-self:auto;margin-left:0}
+.compact-room.room-tabs-two-rows #room-tabs .collaboration-layout-controls::before{content:none}
 
 /* The same private composer node is also hosted in a member's reading column. */
 .collaboration-member-input{min-width:0;display:flex;flex-direction:column;gap:4px;border-top:1px solid var(--border)}

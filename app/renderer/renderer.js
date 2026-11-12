@@ -660,7 +660,7 @@ function columnTerminalSash(binding) {
 function refreshColumnTerminalHeights() {
   for (const binding of sessionComposers.values()) if (columnTerminalBinding(binding.id) && !binding.terminalDrag) applyColumnTerminalHeight(binding, columnTerminalHeight(binding.id));
 }
-window.addEventListener('resize', () => { hideColumnTerminalHint(); refreshColumnTerminalHeights(); });
+window.addEventListener('resize', () => { hideColumnTerminalHint(); fitRoomTabs(true); refreshColumnTerminalHeights(); });
 function removeColumnInput(id) {
   const binding = sessionComposers.get(id); if (!binding) return;
   hideColumnTerminalHint(binding);
@@ -785,6 +785,7 @@ function refreshRoomMemberTabs(people = orderedMembers()) {
   }
   ui.display.text($('room-member-status'), attention ? 'room.memberStatesAttention' : 'room.memberStatesCount', { count: people.length, attention });
   if ($('room-member-status-dialog').open) refreshRoomMemberStatus(people);
+  fitRoomTabs();
 }
 let roomMemberStatusContext = null;
 function roomMemberStatusKey() {
@@ -950,6 +951,8 @@ function renderRoomOverview() {
   $('room-overview').setAttribute('aria-pressed', String(!records && !focused)); $('room-record').setAttribute('aria-pressed', String(records));
   $('room-member-tabs').hidden = false;
   if (roomOverview) roomOverview.toolbar.hidden = focused || records;
+  // The header's row now holds what this page shows of it.
+  fitRoomTabs();
   $('member-related-records').hidden = !focused;
   $('room-record-view').querySelector('.timeline-tools').hidden = !records;
   $('room-messages').hidden = !records;
@@ -3649,6 +3652,34 @@ function openHeaderMenu(anchor, terminal = false) {
   });
   sessionMenu = { id: current().id, anchor, key, close };
 }
+// T-163: the second row of a space's header. Where a member tab cannot show three characters of its name (48px
+// at its type size), the layout controls and the actions take a row of their own. A window less than 700px high
+// keeps one row: the member columns under it have no height to give there, and what they show comes first.
+const ROOM_TABS = { name: 48, height: 700 };
+let roomTabsFit = '', roomTabsWindow = null;
+// The choice is read from the one-row layout, and read again only when something the row's width or its fixed
+// controls follow has changed: the window's size, the sidebar being open or closed, the controls' labels, which of
+// them are shown, the members' names. Those are compared without laying the page out, so an ordinary render pays
+// nothing. `measure` is for the two callers that know the width may have changed (a window resize, the row's own
+// size observer). The choice never depends on what a member's column shows.
+function fitRoomTabs(measure = false) {
+  const header = $('header'), tabs = $('room-tabs');
+  if (measure || !roomTabsWindow) roomTabsWindow = [innerWidth, innerHeight];
+  if (!header.classList.contains('compact-room') || tabs.parentElement !== header) { header.classList.remove('room-tabs-two-rows'); roomTabsFit = ''; return; }
+  const names = [...$('room-member-tabs').children].map(tab => tab.querySelector('.room-member-name')), tall = roomTabsWindow[1] >= ROOM_TABS.height;
+  const controls = [...tabs.querySelectorAll(':scope > button, .collaboration-toolbar > *')].map(item => item.closest('[hidden]') ? '' : item.textContent);
+  const key = [roomTabsWindow[0], tall, document.querySelector('.naw[data-native-surface="sidebar"]')?.dataset.collapsed, ...controls, '', ...names.map(name => name.textContent)].join('\n');
+  if (key === roomTabsFit && !measure) return;
+  roomTabsFit = key;
+  // Reading the one-row layout lays the page out once without the second row. The columns' reading positions are
+  // put back afterwards. They are not taken here: each column saves its own on every scroll, and on a window resize
+  // this runs before the columns have caught up with the new size, so what it would take is not where they were.
+  const was = header.classList.contains('room-tabs-two-rows');
+  if (was) header.classList.remove('room-tabs-two-rows');
+  const two = tall && names.some(name => name.scrollWidth > name.clientWidth + 1 && name.clientWidth < ROOM_TABS.name);
+  if (two) header.classList.add('room-tabs-two-rows');
+  if (two || was) restoreOverviewReading();
+}
 function renderHeaderLayout(s, inRoom) {
   const compact = Boolean(s && !inRoom), toolbar = $('session-toolbar');
   const focusedMember = Boolean(inRoom && s);
@@ -4739,8 +4770,9 @@ const disposers = [
 ];
 sidebarLayout = window.nativeWorkspaceSidebar.bind({ navigation: document.querySelector('.sidebar-navigation'), groups: ['sessions-group', 'workspace-group', 'archive-group'].map($), sashes: ['sidebar-session-sash', 'sidebar-workspace-sash'].map($), onCommit: weights => api.sidebar({ type: 'resize', weights }), displayTitle: (element, params) => ui.display.attribute(element, 'title', 'sidebar.resizeHelp', params), onError: toastError });
 disposers.push(() => sidebarLayout.dispose());
-// A drag resizes the native terminal once, on release, not on every move.
-const observer = new ResizeObserver(entries => { if (entries.some(e => e.target === $('terminal-area')) && activeSessionId() && !splitDragging) fitTerminal(activeSessionId()); if (entries.some(e => e.target === $('collaboration-overview'))) refreshColumnTerminalHeights(); }); observer.observe($('terminal-area')); observer.observe($('collaboration-overview'));
+// A drag resizes the native terminal once, on release, not on every move. The sidebar opening or closing changes
+// the header row's width with no window resize: the row is fitted again on the next frame, not inside the observer.
+const observer = new ResizeObserver(entries => { if (entries.some(e => e.target === $('terminal-area')) && activeSessionId() && !splitDragging) fitTerminal(activeSessionId()); if (entries.some(e => e.target === $('collaboration-overview'))) refreshColumnTerminalHeights(); if (entries.some(e => e.target === $('room-tabs'))) requestAnimationFrame(() => fitRoomTabs(true)); }); observer.observe($('terminal-area')); observer.observe($('collaboration-overview')); observer.observe($('room-tabs'));
 function applySplit() {
   for (const id of ['session-layout', 'room-layout']) $(id).style.setProperty('--split-left', `${(terminalSplit * 100).toFixed(2)}%`);
   for (const divider of document.querySelectorAll('.split-divider')) { divider.setAttribute('aria-valuenow', String(Math.round(terminalSplit * 100))); divider.setAttribute('aria-valuemin', '20'); divider.setAttribute('aria-valuemax', '80'); }
