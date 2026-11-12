@@ -19,14 +19,16 @@ class Element {
   showModal() { this.open = true; }
 }
 const S = (id, extra = {}) => ({ id, nativeId: 'native-' + id, name: id.toUpperCase(), provider: 'claude', state: 'idle', ...extra });
-function fixture({ sessions, steward = null, order = [], disconnected = false, refuse = null } = {}) {
-  const elements = new Map(), calls = [], selected = [], shown = [];
+function fixture({ sessions, steward = null, order = [], disconnected = false, refuse = null, duty = undefined } = {}) {
+  const elements = new Map(), calls = [], selected = [], shown = [], duties = [], toasts = [];
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element(id === 'steward-dialog' ? 'dialog' : 'div')); return elements.get(id); };
   const state = { sessions, steward, sidebar: { order }, rooms: [{ id: 'shared', name: '网站改版' }] };
   const context = vm.createContext({ state, $, disconnected, document: { activeElement: null }, window: { nativeWorkspaceSpaces: spaces },
-    api: { steward: async id => { calls.push(id); if (refuse) throw refuse; state.steward = id === null ? null : { sessionId: id, nativeId: 'native-' + id }; }, initial: async () => state },
+    api: { steward: async (id, text) => { calls.push(id); duties.push(text); if (refuse) throw refuse; state.steward = id === null ? null : { sessionId: id, nativeId: 'native-' + id }; return duty === undefined ? (id === null ? null : { duty: { state: 'sent' } }) : duty; }, initial: async () => state },
+    toastMessage: (key, params) => toasts.push(locale.format('zh', key, params())),
     uiText: (key, params) => locale.format('zh', key, params), updateState: next => { calls.push('state'); return next; }, render: () => calls.push('render'), select: async id => { selected.push(id); },
-    ui: { display: { text: (el, key) => { el.textContent = locale.format('zh', key); }, computed: (el, _slot, read) => { el.textContent = read(); } }, showError: (el, error) => { shown.push(error); el.textContent = 'shown'; } },
+    ui: { display: { text: (el, key) => { el.textContent = locale.format('zh', key); }, computed: (el, _slot, read) => { el.textContent = read(); } }, showError: (el, error) => { shown.push(error); el.textContent = 'shown'; },
+      errorText: error => error.uiMessage ? locale.format('zh', error.uiMessage.key, error.uiMessage.params) : error.message },
     node: (tag, text, cls) => { const el = new Element(tag, text); if (cls) el.className = cls; return el; }, icon: provider => new Element('span', provider),
     spaceRecord: id => state.rooms.find(room => room.id === id), spaceName: room => room.name, sidebarPresentation: record => ({ compact: record.state === 'working' ? '正在工作' : '会话就绪' }),
     contentMenu: null, sessionMenu: null, roomMenu: null, dialogTickets: new Map() });
@@ -36,7 +38,7 @@ function fixture({ sessions, steward = null, order = [], disconnected = false, r
   // Values made inside the renderer's context are copied out, so they compare as plain values here.
   const run = code => { const value = vm.runInContext(code, context); return value && typeof value === 'object' && typeof value.then !== 'function' ? JSON.parse(JSON.stringify(value)) : value; };
   const rows = () => $('steward-list').children.map(row => { const [radio, , text] = row.children; return [text.children[0].textContent, text.children[1].textContent, radio.disabled, radio.checked]; });
-  return { state, context, calls, selected, shown, $, run, rows, pick: id => $('steward-list').children.map(row => row.children[0]).find(radio => radio.value === id).onchange() };
+  return { state, context, calls, selected, shown, duties, toasts, $, run, rows, pick: id => $('steward-list').children.map(row => row.children[0]).find(radio => radio.value === id).onchange() };
 }
 const zh = (key, params) => locale.format('zh', key, params);
 
@@ -74,25 +76,43 @@ test('the menus offer change and revoke on the butler, "make it the butler" on a
   // A window without the call offers nothing.
   delete f.context.api.steward; assert.deepEqual(ids('free'), []);
 
-  // Designating and revoking go to the main process and the window reads the state back.
-  const g = fixture({ sessions, steward: { sessionId: 'butler', nativeId: 'native-butler' } });
-  await g.run("chooseSteward('free')"); assert.deepEqual(g.calls, ['free', 'state', 'render']);
+  // Revoking goes to the main process and the window reads the state back. (Designating goes through the chooser.)
+  const g = fixture({ sessions, steward: { sessionId: 'free', nativeId: 'native-free' } });
   // A menu opened before the designation moved must not revoke somebody else's.
-  g.calls.length = 0; await g.run("chooseSteward('butler', true)"); assert.deepEqual(g.calls, [], 'butler is no longer the butler: nothing is revoked');
-  await g.run("chooseSteward('free', true)"); assert.deepEqual(g.calls, [null, 'state', 'render']); assert.equal(g.state.steward, null);
+  await g.run("revokeSteward('butler')"); assert.deepEqual(g.calls, [], 'butler is no longer the butler: nothing is revoked');
+  await g.run("revokeSteward('free')"); assert.deepEqual(g.calls, [null, 'state', 'render']); assert.equal(g.state.steward, null);
+  // "Make it the butler" in a session's menu opens the chooser with that session chosen.
+  const h = fixture({ sessions, steward: { sessionId: 'butler', nativeId: 'native-butler' } });
+  h.run("openStewardChooser('free')"); assert.deepEqual([h.$('steward-dialog').open, h.rows().find(row => row[0] === 'FREE')[3], h.$('steward-confirm').textContent], [true, true, zh('steward.choose.confirm')]);
 });
 
-test('the chooser lists the butler first, says why a session cannot be chosen, and designates only a different, usable choice', async () => {
+test('the chooser lists the butler first, says why a session cannot be chosen, designates a usable choice, and shows the duty statement it sends', async () => {
   const sessions = [S('free', { state: 'working' }), S('member', { roomIds: ['shared'] }), S('butler'), S('raw', { nativeId: null }), S('done', { state: 'ended' }), S('old', { archived: true })];
   const f = fixture({ sessions, steward: { sessionId: 'butler', nativeId: 'native-butler' }, order: ['member', 'free'] });
   f.run('openStewardChooser()');
   assert.equal(f.$('steward-dialog').open, true);
   assert.deepEqual(f.rows(), [['BUTLER', zh('steward.choose.current'), false, true], ['MEMBER', zh('steward.choose.inSpace', { space: '网站改版' }), true, false], ['FREE', '正在工作', false, false],
     ['RAW', zh('steward.choose.unusable'), true, false], ['DONE', zh('steward.choose.unusable'), true, false]], 'The archived session is not listed');
-  assert.deepEqual([f.$('steward-none').hidden, f.$('steward-confirm').disabled], [true, true], 'Choosing the session that already is the butler is not a change');
-  f.pick('free'); assert.deepEqual([f.rows()[2][3], f.rows()[0][3], f.$('steward-confirm').disabled], [true, false, false]);
+  // The butler chosen: confirming sends it the duty statement again, and the button says so.
+  assert.deepEqual([f.$('steward-none').hidden, f.$('steward-confirm').disabled, f.$('steward-confirm').textContent], [true, false, zh('steward.choose.resend')]);
+  assert.deepEqual([f.$('steward-duty').hidden, f.$('steward-duty-label').hidden, f.$('steward-duty').value], [false, false, zh('steward.duty.default')], 'The default text of the person\'s language, to edit');
+  f.pick('free'); assert.deepEqual([f.rows()[2][3], f.rows()[0][3], f.$('steward-confirm').disabled, f.$('steward-confirm').textContent], [true, false, false, zh('steward.choose.confirm')]);
   await f.run('confirmSteward()');
-  assert.deepEqual([f.calls, f.selected, f.$('steward-dialog').open], [['free', 'state'], ['free'], false], 'Designated, closed, and the window shows what was chosen');
+  assert.deepEqual([f.calls, f.duties, f.selected, f.$('steward-dialog').open], [['free', 'state'], [null], ['free'], false], 'Designated with the default (sent as null, so it follows the language), closed, and shown');
+
+  // Text the person wrote is sent as written, and is what the chooser shows next time.
+  const own = fixture({ sessions: [S('a')] }); own.run('openStewardChooser()'); own.pick('a'); own.$('steward-duty').value = '只做排期，不做执行。';
+  await own.run('confirmSteward()'); assert.deepEqual(own.duties, ['只做排期，不做执行。']);
+  own.state.stewardDuty = '只做排期，不做执行。'; own.run('openStewardChooser()'); assert.equal(own.$('steward-duty').value, '只做排期，不做执行。');
+
+  // Designated, but the statement did not go in: the dialog stays open and says why; dismissed meanwhile, a toast says it.
+  const busy = { duty: { state: 'not-sent', error: { message: 'x', uiMessage: { key: 'error.steward.dutyBusy' } } } };
+  const late = fixture({ sessions: [S('a')], duty: busy }); late.run('openStewardChooser()'); late.pick('a'); await late.run('confirmSteward()');
+  assert.deepEqual([late.$('steward-dialog').open, late.$('steward-error').hidden, late.$('steward-error').textContent, late.selected, late.$('steward-confirm').textContent],
+    [true, false, zh('steward.duty.notSent', { reason: zh('error.steward.dutyBusy') }), [], zh('steward.choose.resend')]);
+  let letGo; const gone = fixture({ sessions: [S('a')], duty: busy }); const send = gone.context.api.steward; gone.context.api.steward = (...args) => new Promise(resolve => { letGo = () => resolve(send(...args)); });
+  gone.run('openStewardChooser()'); gone.pick('a'); const waiting = gone.run('confirmSteward()'); gone.$('steward-dialog').close(); gone.context.dialogTickets.delete(gone.$('steward-dialog')); letGo(); await waiting;
+  assert.deepEqual([gone.toasts, gone.selected], [[zh('steward.duty.notSent', { reason: zh('error.steward.dutyBusy') })], []]);
 
   // A choice that stops being usable while the dialog is open is dropped, not sent.
   const g = fixture({ sessions: [S('a'), S('b')] }); g.run('openStewardChooser()'); g.pick('a'); assert.equal(g.$('steward-confirm').disabled, false);
@@ -101,7 +121,7 @@ test('the chooser lists the butler first, says why a session cannot be chosen, a
 
   // Nobody to choose: the dialog says what to do, and there is nothing to confirm.
   const none = fixture({ sessions: [S('member', { roomIds: ['shared'] })] }); none.run('openStewardChooser()');
-  assert.deepEqual([none.$('steward-none').hidden, none.$('steward-confirm').disabled, none.rows().length], [false, true, 1]);
+  assert.deepEqual([none.$('steward-none').hidden, none.$('steward-confirm').disabled, none.rows().length, none.$('steward-duty').hidden, none.$('steward-duty-label').hidden], [false, true, 1, true, true]);
 
   // A refusal from the main process is said in the dialog, which stays open with the choice.
   const refusal = Object.assign(Error('refused'), { uiMessage: { key: 'error.steward.inSpace' } }), h = fixture({ sessions: [S('a'), S('b')], refuse: refusal });
@@ -132,7 +152,11 @@ test('the page has the entry above everything else, the mark before the title an
   // Both menus offer the same items and carry them out the same way; the butler's header has no "join".
   assert.ok(renderer.includes("const actions = [...update, ...stewardAction(record), ...secretary, ...integratorAction(record), "));
   assert.ok(renderer.includes("if (!terminal) actions.push(...stewardAction(current()).map(item => ({ ...item, secretary: true })));"));
-  assert.equal(renderer.match(/action === 'steward-set' \|\| action === 'steward-revoke'/g).length, 2); assert.equal(renderer.match(/action === 'steward-change'\) openStewardChooser\(\);/g).length, 2);
+  assert.ok(renderer.includes("else if (action === 'steward-set') openStewardChooser(id);\n      else if (action === 'steward-revoke') attempt(() => revokeSteward(id));"));
+  assert.ok(renderer.includes("else if (action === 'steward-set') openStewardChooser(current().id);\n      else if (action === 'steward-revoke') { if (!disconnected) attempt(() => revokeSteward(current().id)); }"));
+  assert.equal(renderer.match(/action === 'steward-change'\) openStewardChooser\(\);/g).length, 2);
+  // The duty statement sits in the chooser, named for assistive technology by its label.
+  assert.ok(html.includes('<label id="steward-duty-label" class="steward-duty" for="steward-duty" data-naw-text="steward.duty.label"></label><textarea id="steward-duty" class="steward-duty" rows="7" spellcheck="false"></textarea><p id="steward-error"'));
   assert.ok(renderer.includes("if (isButler && !inSpace(s)) h.membership.hidden = true;") && renderer.includes("&& !(item.id === 'membership' && item.control.hidden));"));
   assert.ok(renderer.includes("state.queueSecretary, state.integrator, state.steward, disconnected]);"), 'An open header menu closes when the designation moves');
   // The first window of a start lands on the butler; any other window is where it was.

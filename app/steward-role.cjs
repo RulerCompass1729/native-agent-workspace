@@ -14,6 +14,11 @@ const { uiError } = require('./ui-errors.cjs');
 const { successor } = require('./queue-secretary.cjs');
 
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(value);
+// The duty statement the person last chose to send the butler (steward step 2, batch 4; the activation checklist,
+// item 6): a prompt, not a permission. Absent means the default text of the person's language. Bounded in bytes so the
+// whole file stays under the 4096 bytes every build reads (an older build takes a longer file for a broken record).
+const DUTY_MAX = 3200;
+const validDuty = value => typeof value === 'string' && value.trim().length > 0 && Buffer.byteLength(JSON.stringify(value)) <= DUTY_MAX && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value);
 function identity(value) {
   if (!value || Array.isArray(value) || Object.keys(value).sort().join(',') !== 'nativeId,sessionId' || !validId(value.sessionId) || !validId(value.nativeId)) throw Error('Invalid steward identity');
   return { sessionId: value.sessionId, nativeId: value.nativeId };
@@ -33,11 +38,13 @@ class StewardRole {
     this.file = path.join(directory, 'steward.json');
     this.logFile = path.join(directory, 'rotation-log.jsonl');
     this.selected = null;
+    this.duty = null;
     this.failed = false;
     try {
       const data = JSON.parse(readPrivate(this.file, 4096));
-      if (data.version !== 1 || !Object.hasOwn(data, 'selected')) throw Error('Invalid steward record');
+      if (data.version !== 1 || !Object.hasOwn(data, 'selected') || Object.hasOwn(data, 'duty') && !validDuty(data.duty)) throw Error('Invalid steward record');
       this.selected = data.selected === null ? null : identity(data.selected);
+      this.duty = data.duty ?? null;
     } catch (error) { if (error.code !== 'ENOENT') this.failed = true; }
   }
   // The designated session as it is now: the one selected, or its successor after rotations.
@@ -53,13 +60,14 @@ class StewardRole {
     } catch (error) { if (error.code !== 'ENOENT') throw uiError('error.steward.state'); }
     return successor(this.selected, entries);
   }
-  set(value) {
+  set(value, duty = this.duty) {
     const selected = value === null ? null : identity(value);
+    if (duty !== null && !validDuty(duty)) throw uiError('error.steward.dutyInvalid');
     const temp = `${this.file}.${randomUUID()}.tmp`;
     let fd;
     try {
       fd = fs.openSync(temp, 'wx', 0o600);
-      fs.writeFileSync(fd, JSON.stringify({ version: 1, selected }));
+      fs.writeFileSync(fd, JSON.stringify({ version: 1, selected, ...(duty === null ? {} : { duty }) }));
       fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
       fs.renameSync(temp, this.file);
       const directory = fs.openSync(path.dirname(this.file), 'r');
@@ -67,7 +75,8 @@ class StewardRole {
     } catch { this.failed = true; throw uiError('error.steward.state'); }
     finally { if (fd !== undefined) fs.closeSync(fd); try { fs.unlinkSync(temp); } catch {} }
     this.selected = selected;
+    this.duty = duty;
     this.failed = false;
   }
 }
-module.exports = { StewardRole };
+module.exports = { StewardRole, DUTY_MAX, validDuty };
