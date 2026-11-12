@@ -90,9 +90,12 @@ async function run() {
   await control({ action: 'catalog' });
   const snap = await control({ action: 'snapshot' }); assert.equal(snap.value.state, 'complete');
   const queued = await control(invoke('spaceAction', ['shared', 'queueAdd', ['首页换新标题', null]])); assert.equal(queued.value.state, 'complete', JSON.stringify(queued));
-  // The butler, in no space, reads every space as a member does (batch 4, part 2): the task's text is in its view.
-  const seenByButler = await control({ action: 'snapshot' });
-  assert.equal([seenByButler.value.value?.room, ...(seenByButler.value.value?.rooms || [])].filter(Boolean).flatMap(room => room.queue || []).find(item => item.id === queued.value.value)?.text, '首页换新标题', JSON.stringify(seenByButler.value).slice(0, 400));
+  // The butler, in no space, reads every space as a member does (batch 4, part 2): also a space nobody has joined.
+  const lonely = await page.evaluate(() => workspace.spaceCreate('没人的空间'));
+  const elsewhere = await control(invoke('spaceAction', [lonely, 'queueAdd', ['另一个空间的事', null]])); assert.equal(elsewhere.value.state, 'complete', JSON.stringify(elsewhere));
+  const seenByButler = await control({ action: 'snapshot' }), viewed = [seenByButler.value.value?.room, ...(seenByButler.value.value?.rooms || [])].filter(Boolean).flatMap(room => room.queue || []);
+  assert.equal(viewed.find(item => item.id === queued.value.value)?.text, '首页换新标题', JSON.stringify(seenByButler.value).slice(0, 400));
+  assert.equal(viewed.find(item => item.id === elsewhere.value.value)?.text, '另一个空间的事', 'a space nobody joined');
   const cancel = await control(invoke('spaceAction', ['shared', 'queueCancel', [queued.value.value]]));
   assert.equal(cancel.value.state, 'complete', 'The butler may cancel');
   const item = (await page.evaluate(() => workspace.initial())).room.queue.find(i => i.id === queued.value.value);
@@ -106,11 +109,13 @@ async function run() {
   assert.ok(items.indexOf(say('menu.stewardRecord')) >= 0 && items.indexOf(say('menu.stewardRecord')) < items.indexOf(say('menu.stewardChange')), 'Offered first on the butler\'s menu');
   let seen = await dialogText();
   assert.equal(seen.current, say('stewardRecord.current', { name: 'Codex 管家' }));
-  const space = (await page.evaluate(() => workspace.stewardRecord())).entries.find(e => e.spaceAction === 'queueAdd').space;
+  const entries = (await page.evaluate(() => workspace.stewardRecord())).entries;
+  const space = entries.find(e => e.text === '首页换新标题').space, lonelyName = entries.find(e => e.text === '另一个空间的事').space;
   assert.deepEqual(seen.rows.map(r => r.slice(1, 2)[0]), [
     say('stewardRecord.step.method', { method: 'madeUpCommand' }),
     say('stewardRecord.step.queueCancel', { space }),
     say('stewardRecord.step.snapshot'),
+    say('stewardRecord.step.queueAdd', { text: '另一个空间的事', space: lonelyName }),
     say('stewardRecord.step.queueAdd', { text: '首页换新标题', space }),
     say('stewardRecord.step.snapshot'),
     say('stewardRecord.role.designated', { name: 'Codex 管家' })], JSON.stringify(seen.rows));

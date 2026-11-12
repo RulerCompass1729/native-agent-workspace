@@ -591,7 +591,8 @@ function conversationAccess(actor, snapshot) {
     // NAW is a step in its record.
     let outside = false; try { outside = roomIds(current).length === 0; } catch { outside = false; }
     if (outside && isStewardActor(actor)) {
-      access.roomIds = [...new Set([snapshot?.room?.id, ...(snapshot?.rooms || []).map(room => room?.id)].filter(id => typeof id === 'string' && id))];
+      // The backend's rooms and the desktop's own list of spaces (a space nobody has joined yet has no backend room).
+      access.roomIds = [...new Set([snapshot?.room?.id, ...(snapshot?.rooms || []).map(room => room?.id), 'shared', ...(roomState?.spaces?.rooms || []).map(room => room?.id)].filter(id => typeof id === 'string' && id))];
       access.secretary = false;
     }
   }
