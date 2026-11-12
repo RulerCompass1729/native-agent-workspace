@@ -4,28 +4,88 @@
 // most one snapshot is unacknowledged, and while it is, only the newest later snapshot is kept. The page
 // acknowledges after it has handled a snapshot; the newest waiting one is sent then, so the last state
 // always arrives.
-function createStatePush(send) {
+// With a wait, snapshots are also spaced: one is sent at once when the previous one left at least `wait` ms
+// ago, otherwise the newest is sent when that time is up. Several changes in quick succession are then one
+// redraw of the page, and a single change is not delayed (UI lag, 2026-11-12).
+// A push may bring `current`, which makes its snapshot as it is now. A snapshot that waited is made again
+// when it is sent: what other channels sent the page meanwhile (a session's new name) is then in it, and a
+// snapshot made before that cannot arrive after it and undo it.
+function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   let sequence = 0;
+  let lastSent = -Infinity;
+  let timer = null;
+  let urgent = false;
   let unacknowledged = 0;
   let waiting = false;
   let waitingValue = null;
+  let waitingCurrent = null;
   let superseded = 0;
 
   // A snapshot counts as in transit only once the send returned. If the send throws, that snapshot is
   // lost, as it was before the bound existed, and the window is not left waiting for a reply.
   function deliver(value) {
     sequence += 1;
+    urgent = false;
     send(value, sequence);
     unacknowledged = sequence;
+    lastSent = now();
   }
 
-  function push(value) {
-    if (unacknowledged) {
-      if (waiting) {
-        superseded += 1;
-      }
-      waiting = true;
-      waitingValue = value;
+  function hold(value, current) {
+    if (waiting) {
+      superseded += 1;
+    }
+    waiting = true;
+    waitingValue = value;
+    waitingCurrent = typeof current === 'function' ? current : null;
+  }
+
+  // The waiting snapshot, made again now when it can be; the one held if that fails.
+  function takeWaiting() {
+    const value = waitingValue;
+    const current = waitingCurrent;
+    waiting = false;
+    waitingValue = null;
+    waitingCurrent = null;
+    if (!current) {
+      return value;
+    }
+    try {
+      return current();
+    } catch {
+      return value;
+    }
+  }
+
+  // The time is up: the newest waiting snapshot goes, unless one is still in transit. A send that throws
+  // here loses that snapshot, as above; it must not reach the event loop.
+  function flush() {
+    timer = null;
+    if (!waiting || unacknowledged) {
+      return;
+    }
+    const value = takeWaiting();
+    try {
+      deliver(value);
+    } catch {
+      // Lost, as a send that throws in push loses its snapshot.
+    }
+  }
+
+  // Never more than the wait itself, should the clock be set back.
+  function remaining() {
+    return Math.min(lastSent + wait - now(), wait);
+  }
+
+  function push(value, current) {
+    if (unacknowledged || timer) {
+      hold(value, current);
+      return false;
+    }
+    const left = remaining();
+    if (left > 0) {
+      hold(value, current);
+      timer = setTimer(flush, left);
       return false;
     }
     deliver(value);
@@ -38,12 +98,37 @@ function createStatePush(send) {
       return false;
     }
     unacknowledged = 0;
-    if (waiting) {
-      const value = waitingValue;
-      waiting = false;
-      waitingValue = null;
-      deliver(value);
+    if (waiting && (urgent || !timer)) {
+      const left = urgent ? 0 : remaining();
+      if (timer && left <= 0) {
+        clearTimer(timer);
+        timer = null;
+      }
+      if (left > 0) {
+        timer = setTimer(flush, left);
+      } else {
+        deliver(takeWaiting());
+      }
     }
+    return true;
+  }
+
+  // The page's own action has finished (main.cjs, before its reply). Pages read what their action changed
+  // as soon as the reply arrives, so what is waiting goes now, without the wait; if a snapshot is still in
+  // transit, it goes as soon as that one is acknowledged. A send that throws here is the caller's.
+  function flushNow() {
+    if (!waiting) {
+      return false;
+    }
+    if (unacknowledged) {
+      urgent = true;
+      return false;
+    }
+    if (timer) {
+      clearTimer(timer);
+      timer = null;
+    }
+    deliver(takeWaiting());
     return true;
   }
 
@@ -55,13 +140,30 @@ function createStatePush(send) {
     }
     waiting = false;
     waitingValue = null;
+    waitingCurrent = null;
+    if (timer) {
+      clearTimer(timer);
+      timer = null;
+    }
+  }
+
+  // The page this bound served is gone (a reload, a crashed renderer, a closed window): nothing waiting
+  // may be sent later to whatever document comes next.
+  function close() {
+    waiting = false;
+    waitingValue = null;
+    waitingCurrent = null;
+    if (timer) {
+      clearTimer(timer);
+      timer = null;
+    }
   }
 
   function status() {
     return { sequence, unacknowledged, waiting, superseded };
   }
 
-  return { push, acknowledged, discardWaiting, status };
+  return { push, acknowledged, flushNow, discardWaiting, close, status };
 }
 
 module.exports = { createStatePush };

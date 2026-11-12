@@ -145,6 +145,26 @@ test('everything sent to a window\'s page goes through sendToPage or pushState',
 });
 
 // The actual helpers from main.cjs, run against a synthetic window.
+function fakeClock() {
+  let time = 1000;
+  const timers = new Map();
+  let next = 0;
+  return {
+    timers: {
+      now: () => time,
+      setTimer: (callback, ms) => { next += 1; timers.set(next, { at: time + ms, callback }); return next; },
+      clearTimer: id => { timers.delete(id); },
+    },
+    tick(ms) {
+      time += ms;
+      for (const [id, timer] of [...timers].sort((a, b) => a[1].at - b[1].at)) {
+        if (timer.at <= time && timers.has(id)) { timers.delete(id); timer.callback(); }
+      }
+    },
+    pending: () => timers.size,
+  };
+}
+
 function mainHelpers() {
   const helpers = mainSource.slice(mainSource.indexOf('function sendToPage(context, channel, ...data)'), mainSource.indexOf('function bindClient(context)'));
   const handler = mainSource.slice(mainSource.indexOf("ipcMain.handle('workspace:state-rendered'"), mainSource.indexOf("ipcMain.handle('workspace:retry-startup'"));
@@ -164,8 +184,14 @@ function mainHelpers() {
   };
   const context = { win: { isDestroyed: () => destroyed, webContents } };
   const handlers = new Map();
+  // main.cjs's own wait, on a clock the test moves.
+  const clock = fakeClock();
+  // What main would make now: the test sets it as the backend and other channels change things.
+  const current = { value: null };
+  context.client = { snapshot: () => current.value };
   const sandbox = {
-    createStatePush,
+    displayState: snapshot => snapshot,
+    createStatePush: (send, options) => createStatePush(send, { ...options, ...clock.timers }),
     windows: new Map([[7, context]]),
     trusted: url => url === 'app://trusted/',
     ipcMain: { handle: (name, callback) => handlers.set(name, callback) },
@@ -178,9 +204,12 @@ function mainHelpers() {
     sent,
     context,
     pageEvents,
+    tick: clock.tick,
+    current,
     webContents,
     mainFrame,
     push(value) {
+      current.value = value;
       pushState(context, value);
     },
     sendToPage(channel, ...data) {
@@ -215,6 +244,9 @@ test('a ready page gets one snapshot at a time; a reload or a renderer crash rel
   h.push('c');
   assert.deepEqual(h.sent.map(entry => [entry.value, entry.sequence]), [['a', 1]]);
   h.acknowledge(1);
+  // The newest waits until 250 ms after 'a' left.
+  assert.deepEqual(h.sent.map(entry => [entry.value, entry.sequence]), [['a', 1]]);
+  h.tick(250);
   assert.deepEqual(h.sent.map(entry => [entry.value, entry.sequence]), [['a', 1], ['c', 2]]);
 
   // The page reloads while 'c' is unacknowledged: nothing waits on the old document.
@@ -235,6 +267,7 @@ test('a ready page gets one snapshot at a time; a reload or a renderer crash rel
   h.push('g2');
   assert.deepEqual(h.sent.at(-1), { channel: 'workspace:state', value: 'f', sequence: 1 });
   h.acknowledge(1);
+  h.tick(250);
   assert.deepEqual(h.sent.at(-1), { channel: 'workspace:state', value: 'g2', sequence: 2 });
   h.pageEvents.get('render-process-gone')();
   h.push('h');
@@ -368,4 +401,192 @@ test('the page acknowledges every numbered snapshot exactly once, also when a su
   assert.throws(() => deliver({}, 'third', 3), /render failed/);
   assert.deepEqual(seen, ['unnumbered', 'second']);
   assert.equal(acknowledgements.length, 3);
+});
+
+// UI lag, 2026-11-12: changes in quick succession are one redraw; a single change is not delayed.
+function clocked(wait = 250) {
+  const sent = [], clock = fakeClock();
+  const push = createStatePush((value, sequence) => { sent.push([value, sequence]); }, { wait, ...clock.timers });
+  return { sent, push, clock };
+}
+
+test('a single change goes at once; changes within the wait are one snapshot, the newest, when it is up', () => {
+  const { sent, push, clock } = clocked();
+  assert.equal(push.push('a'), true);
+  push.acknowledged(1);
+  clock.tick(100);
+  assert.equal(push.push('b'), false, 'Within 250 ms of the last one');
+  push.push('c');
+  push.push('d');
+  assert.deepEqual(sent, [['a', 1]]);
+  clock.tick(149);
+  assert.deepEqual(sent, [['a', 1]]);
+  clock.tick(1);
+  assert.deepEqual(sent, [['a', 1], ['d', 2]]);
+  assert.equal(push.status().superseded, 2);
+  push.acknowledged(2);
+  clock.tick(1000);
+  assert.equal(push.push('e'), true, 'A change long after the last one is not delayed');
+  assert.deepEqual(sent.at(-1), ['e', 3]);
+  assert.equal(clock.pending(), 0);
+});
+
+test('a flood is at most one snapshot per wait, the last state always arrives, one in transit at a time', () => {
+  const clock = fakeClock(), sent = [];
+  const push = createStatePush((value, sequence) => { sent.push({ value, sequence, at: clock.timers.now() }); }, { wait: 250, ...clock.timers });
+  let produced = 0;
+  // A change every 50 ms for two seconds; the page acknowledges each snapshot 30 ms after it arrives.
+  const page = () => {
+    const last = sent.at(-1);
+    if (last && !last.acked && clock.timers.now() - last.at >= 30) { last.acked = true; push.acknowledged(last.sequence); }
+  };
+  for (let t = 0; t < 2000; t += 10) {
+    if (t % 50 === 0) push.push('v' + ++produced);
+    page(); clock.tick(10);
+  }
+  for (let t = 0; t < 1000; t += 10) { page(); clock.tick(10); }
+  assert.ok(sent.length <= 2000 / 250 + 1, `${sent.length} snapshots for ${produced} changes`);
+  for (let i = 1; i < sent.length; i++) assert.ok(sent[i].at - sent[i - 1].at >= 250, 'Spaced by the wait');
+  assert.equal(sent.at(-1).value, 'v' + produced);
+  assert.equal(push.status().waiting, false);
+});
+
+test('an acknowledgement after the wait is up sends the newest at once; one before it waits for the rest', () => {
+  const { sent, push, clock } = clocked();
+  push.push('a');
+  push.push('b');
+  clock.tick(300);
+  push.acknowledged(1);
+  assert.deepEqual(sent, [['a', 1], ['b', 2]], 'Slow page: no extra wait on top');
+  push.push('c');
+  clock.tick(50);
+  push.acknowledged(2);
+  assert.deepEqual(sent.at(-1), ['b', 2]);
+  clock.tick(199);
+  assert.deepEqual(sent.at(-1), ['b', 2]);
+  clock.tick(1);
+  assert.deepEqual(sent.at(-1), ['c', 3]);
+});
+
+test('a snapshot waiting for its time is never sent after the bound is closed or a newer state was sent', () => {
+  const { sent, push, clock } = clocked();
+  push.push('a');
+  push.acknowledged(1);
+  push.push('b');
+  push.close();
+  clock.tick(1000);
+  assert.deepEqual(sent, [['a', 1]]);
+  const second = clocked();
+  second.push.push('a');
+  second.push.acknowledged(1);
+  second.push.push('b');
+  second.push.discardWaiting();
+  second.clock.tick(1000);
+  assert.deepEqual(second.sent, [['a', 1]]);
+  assert.equal(second.clock.pending(), 0);
+});
+
+test('a send that throws when the time is up loses that snapshot and does not reach the event loop', () => {
+  const clock = fakeClock();
+  let fail = false;
+  const sent = [];
+  const push = createStatePush((value, sequence) => { if (fail) throw Error('gone'); sent.push([value, sequence]); }, { wait: 250, ...clock.timers });
+  push.push('a');
+  push.acknowledged(1);
+  push.push('b');
+  fail = true;
+  assert.doesNotThrow(() => clock.tick(250));
+  assert.equal(push.status().unacknowledged, 0);
+  fail = false;
+  clock.tick(250);
+  assert.equal(push.push('c'), true);
+  assert.deepEqual(sent.at(-1), ['c', 3]);
+});
+
+test('main spaces a ready page\'s snapshots by 250 ms, and a reload drops the one waiting for its time', () => {
+  const h = mainHelpers();
+  h.context.armStatePush();
+  h.push('a');
+  h.acknowledge(1);
+  h.tick(100);
+  h.push('b');
+  assert.deepEqual(h.sent.map(entry => entry.value), ['a']);
+  h.pageEvents.get('did-start-loading')();
+  h.tick(1000);
+  assert.deepEqual(h.sent.map(entry => entry.value), ['a'], 'Nothing for the old document reaches the new one');
+  h.context.armStatePush();
+  h.push('c');
+  assert.deepEqual(h.sent.at(-1), { channel: 'workspace:state', value: 'c', sequence: 1 });
+  assert.match(mainSource, /const STATE_PUSH_WAIT = 250;/);
+});
+
+test('the page\'s own action sends what waits at once, or as soon as the snapshot in transit is acknowledged', () => {
+  const { sent, push, clock } = clocked();
+  push.push('a');
+  push.acknowledged(1);
+  clock.tick(10);
+  push.push('b');
+  assert.deepEqual(sent, [['a', 1]]);
+  assert.equal(push.flushNow(), true, 'Before the action\'s reply, not 240 ms later');
+  assert.deepEqual(sent, [['a', 1], ['b', 2]]);
+  assert.equal(clock.pending(), 0);
+  push.push('c');
+  assert.equal(push.flushNow(), false, 'One in transit still holds');
+  clock.tick(10);
+  push.acknowledged(2);
+  assert.deepEqual(sent.at(-1), ['c', 3], 'Acknowledged: sent without waiting out the rest');
+  assert.equal(push.flushNow(), false, 'Nothing waiting');
+  push.acknowledged(3);
+  push.push('d');
+  assert.deepEqual(sent.at(-1), ['c', 3], 'The hurry was for that action only');
+  clock.tick(250);
+  assert.deepEqual(sent.at(-1), ['d', 4]);
+});
+
+test('main hurries the waiting state before every page action\'s reply, except while typing, scrolling or resizing', () => {
+  const start = mainSource.indexOf("ipcMain.handle(`workspace:${name}`");
+  const wrapper = mainSource.slice(start, mainSource.indexOf('\n}', start));
+  assert.match(wrapper, /finally \{ if \(hurries\) try \{ context\.statePush\?\.flushNow\(\); \} catch/);
+  assert.match(mainSource, /const hurries = !\['input', 'resize', 'readingState', 'draft', 'viewState'\]\.includes\(name\);\n  ipcMain\.handle\(`workspace:\$\{name\}`/);
+});
+
+test('a clock set back never holds a snapshot longer than the wait', () => {
+  const { sent, push, clock } = clocked();
+  push.push('a');
+  push.acknowledged(1);
+  clock.tick(-10000);
+  push.push('b');
+  clock.tick(250);
+  assert.deepEqual(sent.at(-1), ['b', 2]);
+});
+
+test('a snapshot that waited is made again when it is sent; if that fails, the one held is sent', () => {
+  const { sent, push, clock } = clocked();
+  push.push('a', () => 'unused');
+  push.acknowledged(1);
+  let now = 'b as it is now';
+  push.push('b as it was', () => now);
+  now = 'b with the new name';
+  clock.tick(250);
+  assert.deepEqual(sent.at(-1), ['b with the new name', 2]);
+  push.acknowledged(2);
+  push.push('c as it was', () => { throw Error('client closing'); });
+  clock.tick(250);
+  assert.deepEqual(sent.at(-1), ['c as it was', 3]);
+  push.acknowledged(3);
+  clock.tick(250);
+  push.push('d', () => 'd now');
+  assert.deepEqual(sent.at(-1), ['d', 4], 'Sent at once: made just now, not again');
+});
+
+test('main: a session renamed while a snapshot waits is not renamed back when that snapshot is sent', () => {
+  const h = mainHelpers();
+  h.context.armStatePush();
+  h.push({ name: 'Old' });
+  h.acknowledge(1);
+  h.push({ name: 'Old', history: 2 });
+  // The rename goes to the page at once on its own channel; main's snapshot now has the new name.
+  h.current.value = { name: 'Renamed', history: 2 };
+  h.tick(250);
+  assert.deepEqual(h.sent.at(-1).value, { name: 'Renamed', history: 2 });
 });

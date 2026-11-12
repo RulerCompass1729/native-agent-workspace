@@ -12732,3 +12732,45 @@ The review of this change ends here.
 
 Found while fixing batch 0 (probe on record there): a turn that fails without a capacity report emits no end, so a wake staged in it stayed 已登记 for good, also after the next turn started; the same for a turn whose end row was lost. The rule for a wake is "sent once after its turn ends normally"; once a later turn of the same native session has started, that can no longer happen. `session-wake.nativeStart` now withdraws such wakes when the next turn starts, through the existing completion path, with their own sentence (`notice.wake.turnUnreportedCancelled`: 「发送方上一轮的结束 NAW 没有看到，下一轮已经开始；自动消息未投递。」). A late end of that earlier turn then finds nothing staged. Claude (through the adapter, a failed turn) and Codex (a turn whose end never came) tests; with the withdrawal removed both fail. Full suite 6374 pass, 0 fail.
 Independent review (fresh read-only session, 12 turns, reported USD 0.72): `PASS_WITH_NOTES`. In both adapters, once another turn has started the earlier turn can no longer report a completed end (Claude needs `rootTurn` to be that turn, Codex needs `turnId`), so no wake that would have been sent is withdrawn; replayed, gap and duplicate starts emit no start; a steer stays in its turn. Its notes, kept: a start that carries a gap emits no start, so the stale wake waits for the next clean one (never sent wrongly); Codex `turn/started` does not check the thread id (unverified whether a child thread's start ever reaches the root connection; the wake would not have been sent before either, only the label is new); `nativeStart` is also called for an input in the current turn, which is safe for the same reason. The review ends here.
+
+## State pushes to a page spaced by 250 ms — 2026-11-12
+
+Step 2 of the steward's decision recorded in "Agents' background windows closed when idle" ("space state pushes by about 250 ms so frames close together are one redraw"). Commits 0a1f0b4, e070573, f427329, d39ac7d.
+
+**The rule.** A snapshot goes to a ready page at once if the previous one left at least 250 ms ago. Otherwise the newest goes when the time is up.
+- The decision said "wait about 250 ms, then send the newest". This sends a single change at once, because one change alone should not be late; changes close together are still one snapshot, at most four a second.
+- The one-in-transit bound is unchanged.
+- A snapshot that waited is made again when it is sent. Otherwise a snapshot made before a rename (which goes to the page at once on its own channel) arrived after it and put the old name back (control-focus found it). The same race existed behind the one-in-transit bound, for milliseconds.
+- Before the reply to a page's own action, what is waiting goes at once, or as soon as the snapshot in transit is acknowledged. The page reads what its action changed when the reply arrives: after a member move it announces the rendered position on the next frame (`collaboration-overview.js`), which announced the old position with spacing alone.
+  - This covers state already in the main process when the action finishes. State a backend sends afterwards is spaced like any other.
+  - Typing, resizing, reading positions, drafts and view saves (sent with every keystroke in a space's composer) do not hurry it.
+- A reload, a crashed renderer or a closed window drops what waits. A send that throws when the time is up loses that snapshot only.
+
+**GUI checks changed.**
+- `test-column-input.cjs` now counts only composers.
+  - On main the four column terminals exist but stay parked outside their columns: a terminal created asynchronously is mounted by a later render, and that idle fixture has none.
+  - With spacing a timer-sent snapshot renders after they exist, so they are mounted, and xterm's own textareas were counted. The missing render on main is left as its own item.
+- `test-terminal-ready.cjs` and `test-room-send.cjs` wait for state that comes from the native side or the backend after the action, instead of a fixed 150 ms.
+- `test-terminal-ime.cjs` ("Immediate native text") waited for one input equal to "A".
+  - Keys typed before the view claim finishes are held and sent together after it; after it, they go one by one.
+  - On main the step failed 3 of 15 runs; with the spacing, which makes the claim a few milliseconds slower, 6 of 9.
+  - Traced in the page, every failing run delivered the whole text ("A-NOW", or "A-", "N", "O", "W").
+  - The step now checks that the inputs since the switch join to exactly "A-NOW"; 9 of 9 runs pass.
+
+**Measured** (the same isolated load as step 1, one run each, the batch-1 head (364bfda, as taken into main) against this change on it; page and main-process CPU):
+
+| | no agent window | two agent windows | after they closed |
+|---|---|---|---|
+| batch 1 | 8.5% / 9.0%, 4.2 snapshots/s | 14.7% / 16.5%, 7.8/s | 11.9% / 16.3%, 8.0/s |
+| with spacing | 7.5% / 7.2%, 3.2/s | 12.4% / 7.6%, 3.5/s | 8.3% / 8.0%, 3.7/s |
+
+The cells are main / page CPU, then snapshots sent to the page per second. The page's CPU halves once agents' windows have made it keep up with every frame. A first set of runs showed no spacing at all: the measuring probe wrapped `createStatePush` and dropped its options. Fixed and rerun; the figures above are from the fixed probe.
+
+**Checks.** `state-push.test.cjs` 23. Each fix is mutation-checked: removing it fails its test. Full suite 6408/6408 on main 6bc79a1. Before the rebases it was 6397/6398: the one failure (`service-reuse.test.cjs`, a backend not confirmed closed within its wait while other lanes ran tests) passed 3 of 3 runs alone. GUI on main a2fb806: state-push, room-send, column-input, compact-room, control-focus, member-order, terminal-ready, terminal-ime (3 runs), background-control, steward-record and drafts pass. On main 6bc79a1, state-push, room-send, member-order, terminal-ime (2 runs) and control-focus pass again. The full 51 before the rebases: 48 pass. dialog-lifecycle (`records-dialog` missing from its list), session-split-density (the new 「工具结束时送进本轮」 label) and steward-entry ("No space to join") fail the same way on main 6cbb440.
+
+**Independent review.** The same read-only session as for the background windows.
+- Round 1: CHANGES_REQUIRED. View saves, sent with every keystroke in a space's composer, hurried the state, so the spacing did not hold while typing there. Fixed, with its clock note and a check moved in terminal-ready.
+- Round 2: APPROVE. It needed one extra turn to give its verdict after its turn limit.
+- Round 3, on remaking a waiting snapshot: APPROVE.
+- The terminal-ime change and this record came after the reviews and were not reviewed. The change is test-only, and the trace and nine runs above check it.
+- CLI cost 4.53 + 5.46 + 5.49 + 6.04 USD.

@@ -88,7 +88,8 @@ async function run(){
  }
  await page.locator('#room-nav').click();await (await app.browserWindow(page)).evaluate(win=>win.setContentSize(850,600));
  await delay(200);
- const columns=await page.locator('.collaboration-member-reader').evaluateAll(xs=>xs.map(el=>({id:el.dataset.memberId,textboxes:el.querySelectorAll('textarea,input:not([type=hidden])').length,box:el.getBoundingClientRect().toJSON()})));
+ // A mounted native terminal brings xterm's own textareas; only composers are counted.
+ const columns=await page.locator('.collaboration-member-reader').evaluateAll(xs=>xs.map(el=>({id:el.dataset.memberId,textboxes:[...el.querySelectorAll('textarea,input:not([type=hidden])')].filter(x=>!x.closest('.terminal-host')).length,box:el.getBoundingClientRect().toJSON()})));
  const state=await snapshot(),packet=await fixture('stats');assert.equal(packet.stats.inputs,0);assert.equal(packet.stats.sends,0);assert.equal(packet.overviewCalls.claim,0);
  assert.ok(state.sessions.every(s=>fs.realpathSync(s.cwd).startsWith(ownedRoot+path.sep)));
  measurements.push({label:'baseline-four-column-input',columns,identities:state.sessions.map(s=>[s.id,s.nativeId,s.owner,s.roomId,s.liveDraft]),stats:packet});

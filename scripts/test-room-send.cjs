@@ -112,7 +112,8 @@ async function run() {
   assert.equal(await page.locator('#forward-button').isDisabled(), true); assert.equal(await page.locator('#run-button').isDisabled(), true);
   await fillRoomMessage(page, '发送期间的新草稿'); await native('release', '', true);
   await page.locator('#toast').filter({ hasText: 'Synthetic acceptance failure' }).waitFor(); await delay(150);
-  assert.ok((await messageRow('等待确认的发送').locator('summary').innerText()).includes('接收结果未确认'));
+  // The backend reports the row's state after the failed reply; that state waits out the 250 ms push spacing.
+  await until(async () => (await messageRow('等待确认的发送').locator('summary').innerText()).includes('接收结果未确认'), 'Unconfirmed receipt shown on its row');
   assert.equal((await native('stats')).sends.length, 8); assert.equal(await roomBody(page), '发送期间的新草稿');
   await app.close(); app = null; await launch(); await page.locator('#shared-input').waitFor();
   assert.equal(await roomBody(page), '发送期间的新草稿'); assert.equal((await native('stats')).sends.length, 8);
