@@ -7,6 +7,9 @@
 // With a wait, snapshots are also spaced: one is sent at once when the previous one left at least `wait` ms
 // ago, otherwise the newest is sent when that time is up. Several changes in quick succession are then one
 // redraw of the page, and a single change is not delayed (UI lag, 2026-11-12).
+// A push may bring `current`, which makes its snapshot as it is now. A snapshot that waited is made again
+// when it is sent: what other channels sent the page meanwhile (a session's new name) is then in it, and a
+// snapshot made before that cannot arrive after it and undo it.
 function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   let sequence = 0;
   let lastSent = -Infinity;
@@ -15,6 +18,7 @@ function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout
   let unacknowledged = 0;
   let waiting = false;
   let waitingValue = null;
+  let waitingCurrent = null;
   let superseded = 0;
 
   // A snapshot counts as in transit only once the send returned. If the send throws, that snapshot is
@@ -27,12 +31,30 @@ function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout
     lastSent = now();
   }
 
-  function hold(value) {
+  function hold(value, current) {
     if (waiting) {
       superseded += 1;
     }
     waiting = true;
     waitingValue = value;
+    waitingCurrent = typeof current === 'function' ? current : null;
+  }
+
+  // The waiting snapshot, made again now when it can be; the one held if that fails.
+  function takeWaiting() {
+    const value = waitingValue;
+    const current = waitingCurrent;
+    waiting = false;
+    waitingValue = null;
+    waitingCurrent = null;
+    if (!current) {
+      return value;
+    }
+    try {
+      return current();
+    } catch {
+      return value;
+    }
   }
 
   // The time is up: the newest waiting snapshot goes, unless one is still in transit. A send that throws
@@ -42,9 +64,7 @@ function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout
     if (!waiting || unacknowledged) {
       return;
     }
-    const value = waitingValue;
-    waiting = false;
-    waitingValue = null;
+    const value = takeWaiting();
     try {
       deliver(value);
     } catch {
@@ -57,14 +77,14 @@ function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout
     return Math.min(lastSent + wait - now(), wait);
   }
 
-  function push(value) {
+  function push(value, current) {
     if (unacknowledged || timer) {
-      hold(value);
+      hold(value, current);
       return false;
     }
     const left = remaining();
     if (left > 0) {
-      hold(value);
+      hold(value, current);
       timer = setTimer(flush, left);
       return false;
     }
@@ -87,10 +107,7 @@ function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout
       if (left > 0) {
         timer = setTimer(flush, left);
       } else {
-        const value = waitingValue;
-        waiting = false;
-        waitingValue = null;
-        deliver(value);
+        deliver(takeWaiting());
       }
     }
     return true;
@@ -111,10 +128,7 @@ function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout
       clearTimer(timer);
       timer = null;
     }
-    const value = waitingValue;
-    waiting = false;
-    waitingValue = null;
-    deliver(value);
+    deliver(takeWaiting());
     return true;
   }
 
@@ -126,6 +140,7 @@ function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout
     }
     waiting = false;
     waitingValue = null;
+    waitingCurrent = null;
     if (timer) {
       clearTimer(timer);
       timer = null;
@@ -137,6 +152,7 @@ function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout
   function close() {
     waiting = false;
     waitingValue = null;
+    waitingCurrent = null;
     if (timer) {
       clearTimer(timer);
       timer = null;

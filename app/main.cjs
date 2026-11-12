@@ -635,7 +635,8 @@ function pushState(context, display) {
     return;
   }
   if (context.statePush) {
-    context.statePush.push(display);
+    // Made again if it has to wait: it then includes what was sent to the page meanwhile (a new session name).
+    context.statePush.push(display, () => displayState(context.client.snapshot(), context));
     return;
   }
   context.win.webContents.send('workspace:state', display, 0);

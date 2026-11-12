@@ -186,7 +186,11 @@ function mainHelpers() {
   const handlers = new Map();
   // main.cjs's own wait, on a clock the test moves.
   const clock = fakeClock();
+  // What main would make now: the test sets it as the backend and other channels change things.
+  const current = { value: null };
+  context.client = { snapshot: () => current.value };
   const sandbox = {
+    displayState: snapshot => snapshot,
     createStatePush: (send, options) => createStatePush(send, { ...options, ...clock.timers }),
     windows: new Map([[7, context]]),
     trusted: url => url === 'app://trusted/',
@@ -201,9 +205,11 @@ function mainHelpers() {
     context,
     pageEvents,
     tick: clock.tick,
+    current,
     webContents,
     mainFrame,
     push(value) {
+      current.value = value;
       pushState(context, value);
     },
     sendToPage(channel, ...data) {
@@ -552,4 +558,35 @@ test('a clock set back never holds a snapshot longer than the wait', () => {
   push.push('b');
   clock.tick(250);
   assert.deepEqual(sent.at(-1), ['b', 2]);
+});
+
+test('a snapshot that waited is made again when it is sent; if that fails, the one held is sent', () => {
+  const { sent, push, clock } = clocked();
+  push.push('a', () => 'unused');
+  push.acknowledged(1);
+  let now = 'b as it is now';
+  push.push('b as it was', () => now);
+  now = 'b with the new name';
+  clock.tick(250);
+  assert.deepEqual(sent.at(-1), ['b with the new name', 2]);
+  push.acknowledged(2);
+  push.push('c as it was', () => { throw Error('client closing'); });
+  clock.tick(250);
+  assert.deepEqual(sent.at(-1), ['c as it was', 3]);
+  push.acknowledged(3);
+  clock.tick(250);
+  push.push('d', () => 'd now');
+  assert.deepEqual(sent.at(-1), ['d', 4], 'Sent at once: made just now, not again');
+});
+
+test('main: a session renamed while a snapshot waits is not renamed back when that snapshot is sent', () => {
+  const h = mainHelpers();
+  h.context.armStatePush();
+  h.push({ name: 'Old' });
+  h.acknowledge(1);
+  h.push({ name: 'Old', history: 2 });
+  // The rename goes to the page at once on its own channel; main's snapshot now has the new name.
+  h.current.value = { name: 'Renamed', history: 2 };
+  h.tick(250);
+  assert.deepEqual(h.sent.at(-1).value, { name: 'Renamed', history: 2 });
 });
