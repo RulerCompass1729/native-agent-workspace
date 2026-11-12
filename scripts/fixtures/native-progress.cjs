@@ -79,6 +79,8 @@ process.on('message', async q => {
     if (q.method === 'progress') r.emit('progress', q.value);
     if (q.method === 'nativeObservation') Claude.prototype.observeRoot.call(r, { ...q.value, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: (r.rootObservation?.sequence || 0) + 1 });
     if (q.method === 'fleet') r.emit('fleet', q.value);
+    // A Claude turn-end report of background work (count 0: nothing left running), as the native hook sends.
+    if (q.method === 'background') r.emit('background', q.value);
     if (q.method === 'history') r.emit('history', q.value);
     if (q.method === 'approval') { r.emit('approval', q.value, r.approvalRpc); r.emit('state', 'approval'); }
     if (q.method === 'gap') r.emit('terminal', { epoch: r.journal.epoch, index: r.journal.index + 2, data: 'must-not-paint', cols: 80, rows: 24 });

@@ -2453,10 +2453,11 @@ function stewardAction(record) {
   if (!record.nativeId || record.archived || window.nativeWorkspaceSpaces.roomIds(record).length) return [];
   return [{ id: 'steward-set', label: uiText('menu.stewardSet'), labelKey: 'menu.stewardSet' }];
 }
-async function chooseSteward(id, revoke = false) {
+// Designating goes through the chooser, which shows the duty statement it sends; revoking is one step.
+async function revokeSteward(id) {
   // A menu opened before the designation moved must not revoke somebody else's.
-  if (revoke && state.steward?.sessionId !== id) return;
-  await api.steward(revoke ? null : id);
+  if (state.steward?.sessionId !== id) return;
+  await api.steward(null);
   updateState(await api.initial());
   render();
 }
@@ -2486,13 +2487,19 @@ function renderStewardChooser() {
   }));
   if (held) [...list.querySelectorAll('input')].find(input => input.value === held && !input.disabled)?.focus({ preventScroll: true });
   $('steward-none').hidden = candidates.some(item => !item.reason);
-  // Choosing the session that already is the butler changes nothing.
-  $('steward-confirm').disabled = disconnected || !stewardChoice || stewardChoice === state.steward?.sessionId;
+  // Nobody to choose, nothing to send.
+  $('steward-duty').hidden = $('steward-duty-label').hidden = !$('steward-none').hidden;
+  // Confirming the session that already is the butler sends it the duty statement again, and says so.
+  $('steward-confirm').disabled = disconnected || !stewardChoice;
+  ui.display.text($('steward-confirm'), stewardChoice && stewardChoice === state.steward?.sessionId ? 'steward.choose.resend' : 'steward.choose.confirm');
 }
-function openStewardChooser() {
+// From the entry or the butler's menu with the butler chosen; from a session's menu with that session chosen.
+function openStewardChooser(chosen = null) {
   if (disconnected || typeof api.steward !== 'function' || $('steward-dialog').open) return;
   contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
-  stewardChoice = stewardRecord()?.id || ''; $('steward-error').hidden = true;
+  stewardChoice = chosen || stewardRecord()?.id || ''; $('steward-error').hidden = true;
+  // The text the person last chose, or the default of their language; their edits stay while the dialog is open.
+  $('steward-duty').value = state.stewardDuty ?? uiText('steward.duty.default');
   renderStewardChooser(); openTransientDialog('steward-dialog');
   ([...$('steward-list').querySelectorAll('input')].find(input => input.checked && !input.disabled) || $('steward-cancel')).focus({ preventScroll: true });
 }
@@ -2500,9 +2507,19 @@ async function confirmSteward() {
   const id = stewardChoice, ticket = dialogTickets.get($('steward-dialog'));
   if (!id || disconnected) return;
   $('steward-confirm').disabled = true;
+  // The default text unchanged is kept as "the default", so it follows the person's language.
+  const text = $('steward-duty').value, duty = text === uiText('steward.duty.default') ? null : text;
   try {
-    await api.steward(id);
+    const result = await api.steward(id, duty);
     updateState(await api.initial());
+    // Designated, but the duty statement did not go in: the dialog stays open and says why.
+    // Dismissed meanwhile: said once in the toast instead.
+    if (result?.duty?.state === 'not-sent') {
+      const reason = result.duty.error || {}, params = () => ({ reason: ui.errorText(reason) });
+      if (!currentDialogTicket(ticket)) { toastMessage('steward.duty.notSent', params); return; }
+      ui.display.computed($('steward-error'), 'text', () => uiText('steward.duty.notSent', params()));
+      $('steward-error').hidden = false; renderStewardChooser(); return;
+    }
     // The person chose it from a list: show what they chose. Not if they have dismissed the chooser and moved on.
     if (currentDialogTicket(ticket)) { $('steward-dialog').close(); await select(id); }
   } catch (error) {
@@ -2547,7 +2564,8 @@ function openSessionMenu(id, point, rowKey = id) {
         attempt(() => inSpace(person, destination) ? detach(id, destination) : addToSpace(id, destination));
       } else if (action === 'queue-secretary-set' || action === 'queue-secretary-revoke') attempt(() => chooseQueueSecretary(action === 'queue-secretary-revoke' ? null : id));
       else if (action === 'integrator-set' || action === 'integrator-revoke') attempt(() => chooseIntegrator(id, action === 'integrator-revoke'));
-      else if (action === 'steward-set' || action === 'steward-revoke') attempt(() => chooseSteward(id, action === 'steward-revoke'));
+      else if (action === 'steward-set') openStewardChooser(id);
+      else if (action === 'steward-revoke') attempt(() => revokeSteward(id));
       else if (action === 'steward-change') openStewardChooser();
       else if (action === 'steward-record') stewardSteps?.open();
       else if (action === 'wake-session') attempt(() => api.wakePolicy(id, Boolean(state.sessions.find(s => s.id === id)?.wakeDisabled)));
@@ -3664,7 +3682,8 @@ function openHeaderMenu(anchor, terminal = false) {
       if (key !== headerMenuKey()) return;
       if (action === 'queue-secretary-set' || action === 'queue-secretary-revoke') { if (!disconnected) attempt(() => chooseQueueSecretary(action === 'queue-secretary-revoke' ? null : current().id)); }
       else if (action === 'integrator-set' || action === 'integrator-revoke') { if (!disconnected) attempt(() => chooseIntegrator(current().id, action === 'integrator-revoke')); }
-      else if (action === 'steward-set' || action === 'steward-revoke') { if (!disconnected) attempt(() => chooseSteward(current().id, action === 'steward-revoke')); }
+      else if (action === 'steward-set') openStewardChooser(current().id);
+      else if (action === 'steward-revoke') { if (!disconnected) attempt(() => revokeSteward(current().id)); }
       else if (action === 'steward-change') openStewardChooser();
       else if (action === 'steward-record') stewardSteps?.open();
       else items.find(item => item.id === action)?.control.click();

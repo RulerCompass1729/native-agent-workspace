@@ -12809,3 +12809,24 @@ Not changed: a phrase that xterm never hands over is still reported, unless othe
 
 Independent review (fresh read-only session, 21 turns, reported USD 2.47): `CHANGES_REQUIRED`. Blocking: on the ordinary path the first version took the newest phrase for any data while the next composition was open, so a paste or mouse report in that moment could mark it delivered, and a phrase xterm then dropped was lost with no panel; the old code showed the panel there. Fixed as it proposed, with the paste case above. Also taken from its notes: while the newest phrase is still waiting, an older one is taken only when the data also holds the newest one's text (older 「好」 and newer 「好的」), and this record no longer says the newest phrase is reported when the data does not hold it. Kept: the capture and expired paths take the newest phrase without a text check, as before; a cancelled older phrase can cause a false panel, never a loss. The reviewer could not read xterm's source (the dependency folder is outside what it could open); the author copied `CompositionHelper.ts` lines 55-180 for the second reading.
 The same session read that change (11 turns, cumulative reported USD 5.75): `APPROVE_WITH_NOTES`. The ordinary-path loss is closed and every case the first version fixed still holds; the copied source confirms one drop path, a non-composition key that cancels the previous phrase's pending send, which the new rule reports. The paste step fails on the first version and passes on this one, and genuinely models a phrase that is never handed over. From its notes: the six related window checks were rerun on this version, the repro's renderer was confirmed identical to the commit, and the two remaining cases above were added. Still from memory, not read: that xterm clears the textarea on blur and on paste. The review of this change ends here.
+## Designating the butler sends its duty statement (steward step 2, batch 4, 2026-11-12)
+
+The activation checklist, item 6, taken as recommended on 2026-11-12 09:32 (「都按推荐的来」): the duty statement goes to the butler when it is designated (after each rotation is a later batch). Prototype §9: NAW sends it at designation, and the person can edit it in step 2 of the chooser.
+
+What changed: the chooser shows the statement, which the person can edit. Its label says that NAW sends it into that session as the person's message and that this uses one of that session's turns. `register('steward')` in `app/main.cjs` designates first, then sends header and text the way the composer does. An idle session gets `send`. A Claude session in a turn gets `queue`. Anything else is refused as not sent, and the designation stands. The person's own text is kept in `steward.json`, bounded so the whole file stays within the 4096 bytes every build reads. The two session menus open the chooser instead of designating directly. A not-sent statement keeps the dialog open with the reason and a 「重发职责说明」 button, or shows a toast if the dialog was closed. Commits 2d4a8ed, dae9672 and 5a840c3; 2e435b1 before them only keeps two window checks in step with the record dialog.
+
+Review findings fixed (dae9672, 5a840c3):
+- A queued Claude message is answered only when the running turn takes it (`claude-submit.cjs` `authorize`), so the chooser stayed disabled until then. It now answers "queued" once the statement's own row stands waiting in the butler's conversation, matched by its text, as the composer follows its queued row. The legacy private path records the same row with trimmed text (`legacy-input.cjs:373`, then `legacy-claude.cjs:81`).
+- Lone-surrogate ids could push the file past 4096 bytes. `set()` now measures the whole file.
+- The busy wording covered only "turn not ended". It now covers turn, approval and not connected.
+- The not-sent reason now goes through `displayMessage`, like a thrown error.
+- Kept: a `contextChanged` reply still counts as sent. Nothing shows "sent", and the row keeps its own delivery state.
+
+Evidence:
+- `steward-entry.test.cjs` 13 and `steward-ui.test.cjs` 5.
+- The queue answer comes while the submit is still pending. Against the old handler, two tests time out. Without the text match, one test fails.
+- Full suite 6414/6414 at 5a840c3.
+- Window check `test-steward-entry.cjs` at 5a840c3: 9 checks, 4 fixture sends, 0 model prompts. The not-sent screenshot was viewed.
+- No real Claude queue was run. The queue path is covered by unit tests against the source shape only.
+
+Independent review (one read-only session, 3 rounds, no blocking finding): the first round hit its turn limit; the second gave `PASS_WITH_NOTES` at 2d4a8ed; the third gave `PASS_WITH_NOTES` at 5a840c3, with every earlier note handled or kept as above. The worktree fingerprints were unchanged before and after. Cumulative reported cost: USD 1.60. The CLI was given `--model fable` and reported `claude-opus-5-5`.

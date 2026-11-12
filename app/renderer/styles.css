@@ -998,6 +998,9 @@ dialog.steward-dialog .steward-pick .agent-icon{position:static;display:inline-f
 .steward-pick small{display:block;color:var(--muted);line-height:1.45}
 .steward-pick.unavailable{color:var(--muted)}
 .steward-pick.unavailable strong{font-weight:500}
+dialog.steward-dialog label.steward-duty{display:block;margin:12px 0 4px;font-size:13px;font-weight:400;color:var(--muted);line-height:1.45}
+dialog.steward-dialog textarea.steward-duty{display:block;box-sizing:border-box;width:100%;min-height:96px;max-height:40vh;resize:vertical;font:inherit;font-size:13px;line-height:1.5}
+dialog.steward-dialog .steward-duty[hidden]{display:none}
 /* End butler the person talks to. */
 /* Butler read log: one dialog, opened from the butler entry. */
 .butler-reads { width: min(820px, calc(100vw - 48px)); max-height: calc(100vh - 48px); display: flex; flex-direction: column; }

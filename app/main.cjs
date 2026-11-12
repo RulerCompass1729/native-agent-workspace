@@ -19,7 +19,7 @@ const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary, follow: followRotation } = require('./queue-secretary.cjs');
 const { IntegratorRole } = require('./integrator-role.cjs');
-const { StewardRole } = require('./steward-role.cjs');
+const { StewardRole, validDuty } = require('./steward-role.cjs');
 const stewardRecords = require('./steward-record.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
@@ -750,12 +750,12 @@ function displayState(snapshot, context, read = null) {
   let integrator = null, integratorWarning = '';
   try { integrator = integratorRole?.current() || null; } catch { integratorWarning = displayText('error.integrator.state'); }
   // The session the person talks to as the butler. A record that cannot be read is a warning, never "nobody".
-  let steward = null, stewardWarning = '';
-  try { steward = stewardRole?.current() || null; } catch { stewardWarning = displayText('error.steward.state'); }
+  let steward = null, stewardDuty = null, stewardWarning = '';
+  try { stewardDuty = stewardRole?.duty ?? null; steward = stewardRole?.current() || null; } catch { stewardWarning = displayText('error.steward.state'); }
   const warning = [outboxWarning, secretaryWarning, integratorWarning, stewardWarning].filter(Boolean).join('\n');
   // The page asks about handoffs only where they are enabled (or could not start): elsewhere the state is as it always was.
   const handoffEnabled = queueDispatcher?.integration || queueDispatcher?.integrationError ? { handoffEnabled: true } : {};
-  const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
+  const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
   return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected, conversationAccess(context.actor, snapshot)) : result;
@@ -1824,24 +1824,56 @@ async function boot() {
     await broadcastRoom();
   });
   // Designating, changing or revoking the butler the person talks to is the person's alone. It changes where
-  // that session is listed and where the window lands at start; it gives the session no permission.
-  register('steward', async (c, id) => {
+  // that session is listed and where the window lands at start, and which calls main.cjs takes as the butler's
+  // (stewardCaller). Designating also sends the duty statement (`duty`: the person's own text, or null for the
+  // default of their language) into the session as the person's message (the activation checklist, item 6).
+  register('steward', async (c, id, duty = null) => {
     if (c.background) throw uiError('error.steward.personOnly');
+    if (id !== null && duty !== null && !validDuty(duty)) throw uiError('error.steward.dutyInvalid');
+    let record = null;
     if (id === null) stewardRole.set(null);
     // In the queue every join runs in: no join can be half done while the session becomes the butler.
     else await roomState.serial(async () => {
       // The backend's own list does not say which sessions the person archived; the desktop's record does.
-      const record = roomState.apply(await c.client.call('initial')).sessions.find(record => record.id === id);
+      record = roomState.apply(await c.client.call('initial')).sessions.find(record => record.id === id);
       if (!record || !record.nativeId || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state) || midRotation(record.id)) throw uiError('error.steward.invalid');
       // The butler stays outside every space: a member is sent queue work and can be replaced by the queue.
       let spaces;
       try { spaces = roomIds(record); } catch { throw uiError('error.steward.invalid'); }
       if (spaces.length) throw uiError('error.steward.inSpace');
-      stewardRole.set({ sessionId: record.id, nativeId: record.nativeId });
+      stewardRole.set({ sessionId: record.id, nativeId: record.nativeId }, duty);
     });
     // The designation stands even if its line cannot be written; the butler's next call is then refused.
     try { stewardRecord?.designated(id === null ? null : stewardRole.selected); } catch { /* The bell and the refused call say so. */ }
     await broadcastRoom();
+    if (id === null) return null;
+    // The same input the person's composer gives: to an idle session, or queued after a Claude session's running
+    // turn. It is a prompt, not a permission, and handed over is not received: the message keeps its own state in the
+    // butler's conversation. A refusal leaves the designation as it is and says why.
+    const text = displayText('steward.duty.header') + '\n' + (stewardRole.duty ?? displayText('steward.duty.default'));
+    try {
+      const method = record.state === 'working' && record.provider === 'claude' ? 'queue' : record.state === 'idle' ? 'send' : null;
+      if (!method) throw uiError('error.steward.dutyBusy');
+      const rows = () => c.client.snapshot().sessions.find(s => s.id === record.id)?.messages || [], before = new Set(rows().map(m => m.id));
+      const sending = submit(c, method, record.id, text, record.nativeId);
+      // Claude answers a queued message only when its running turn has ended and taken it. The person is not kept
+      // waiting that long: once the message stands in the butler's conversation, waiting there, it is queued, and
+      // that row keeps its own state (as the composer's queued message does). A refusal before then is said here.
+      if (method === 'queue') await new Promise((resolve, reject) => {
+        const settle = (done, value) => { c.client.off('state', look); done(value); };
+        // This message, not one the person queued at the same moment: its own text (the workspace trims what it records).
+        const look = () => { if (rows().some(m => !before.has(m.id) && m.inputMode === 'queue' && m.status === 'awaiting-native' && [text, text.trim()].includes(m.text))) settle(resolve); };
+        c.client.on('state', look);
+        sending.then(() => settle(resolve), error => settle(reject, error));
+        look();
+      });
+      else await sending;
+      return { duty: { state: method === 'queue' ? 'queued' : 'sent' } };
+    } catch (error) {
+      // Shown as a thrown error would be (the IPC reply's own step): the person's language, the same fallback.
+      const message = String(error?.message ?? ''), uiMessage = message ? uiLocale.displayMessage(error?.uiMessage) : uiError('error.main.operationIncomplete').uiMessage;
+      return { duty: { state: 'not-sent', error: { message: message || uiError('error.main.operationIncomplete').message, ...(uiMessage ? { uiMessage } : {}) } } };
+    }
   });
   // B6: the person's own actions on an integration handoff: retry one delivery or everything
   // under one reason, say that a waiting handoff is dealt with (with or without a retry), answer

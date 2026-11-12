@@ -2,9 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
 const { uiError } = require('../ui-errors.cjs');
 const { roomIds } = require('../collaboration-spaces.cjs');
-const { StewardRole } = require('../steward-role.cjs');
+const { StewardRole, DUTY_MAX, validDuty } = require('../steward-role.cjs');
 const { IntegratorRole } = require('../integrator-role.cjs');
 const { QueueSecretary } = require('../queue-secretary.cjs');
 const { RoomState } = require('../room-state.cjs');
@@ -24,21 +25,36 @@ function fixture(t, { landingOwner = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-steward-entry-'));
   t.after(() => { try { fs.chmodSync(directory, 0o700); } catch {} fs.rmSync(directory, { recursive: true, force: true }); });
   const role = new StewardRole(directory), room = new RoomState(directory);
-  const handlers = new Map(), broadcasts = [], memberships = [];
+  const handlers = new Map(), broadcasts = [], memberships = [], submitted = [], queued = [];
   // The real membership function is not under test here: only whether it is reached.
   const roomState = { apply: snapshot => room.apply(snapshot), metadata() {}, serial: action => action(), membership: async (_client, id, join, _label, space) => { memberships.push([id, join, space ?? null]); } };
   const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, roomIds, stewardRole: role, roomState, landingOwner, validRoomId: id => typeof id === 'string' && id.length > 0,
-    queueDispatcher: null, sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); } });
+    queueDispatcher: null, sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); },
+    // What designating sends: the person's own input, as the composer gives it, in the person's language.
+    validDuty, displayText: key => locale.format('zh', key), uiLocale: locale, refuseSubmit: null,
+    submit: async (c, method, ...args) => {
+      if (context.refuseSubmit) throw context.refuseSubmit;
+      submitted.push([c === person, method, ...args]);
+      if (method !== 'queue') return;
+      // As the workspace does: the message is recorded, waiting, and Claude answers only once its running turn has taken it.
+      return new Promise((resolve, reject) => { queued.push({ resolve, reject }); setImmediate(() => {
+        const session = sessions.find(session => session.id === args[0]);
+        // Another message queued at the same moment comes first: it is not taken for this one.
+        (session.messages ||= []).push({ id: `other-${queued.length}`, role: 'user', inputMode: 'queue', status: 'awaiting-native', text: 'the person\'s own' }); client.emit('state');
+        setImmediate(() => { session.messages.push({ id: `row-${queued.length}`, role: 'user', inputMode: 'queue', status: 'awaiting-native', text: args[1].trim() }); client.emit('state'); });
+      }); });
+    } });
   vm.runInContext(cut('function register(name, handler) {', 'async function replaceBackendSockets'), context);
   vm.runInContext(cut('function keepStewardOutside(id, join) {', 'function conversationReaderAllowed(actor) {'), context);
-  vm.runInContext(cut("  register('steward', async (c, id) => {", "  // B6: the person's own actions on an integration handoff"), context);
+  vm.runInContext(cut("  register('steward', async (c, id, duty = null) => {", "  // B6: the person's own actions on an integration handoff"), context);
   vm.runInContext(cut("  register('join', async (c, id, join) => {", "  register('roomRename',"), context);
   // The space action's own join branch, as written, in a handler of its own.
   vm.runInContext("register('spaceJoin', async (c, roomId, action, args = []) => {\n" + cut("    if (action === 'join') {\n      keepStewardOutside(", "    if (['stageImages', 'removeImage'].includes(action)) {") + '});', context);
   vm.runInContext(cut("  register('landing', c => {", '\n'), context);
   const sessions = [
     { id: 'outside', nativeId: 'native-outside', name: 'Outside', state: 'idle', roomIds: [] },
-    { id: 'other', nativeId: 'native-other', name: 'Other', state: 'working', roomIds: [] },
+    { id: 'other', nativeId: 'native-other', name: 'Other', state: 'working', provider: 'claude', roomIds: [] },
+    { id: 'busy-codex', nativeId: 'native-busy-codex', name: 'Busy Codex', state: 'working', provider: 'codex', roomIds: [] },
     { id: 'member', nativeId: 'native-member', name: 'Member', state: 'idle', roomIds: ['shared'] },
     { id: 'legacy-member', nativeId: 'native-legacy', name: 'Legacy member', state: 'idle', roomId: 'shared' },
     { id: 'no-native', nativeId: null, name: 'No native id', state: 'idle', roomIds: [] },
@@ -47,7 +63,7 @@ function fixture(t, { landingOwner = null } = {}) {
     { id: 'background', nativeId: 'native-background', name: 'Background', state: 'background', roomIds: [] },
     { id: 'broken', nativeId: 'native-broken', name: 'Broken membership', state: 'idle', roomIds: 'shared' },
   ];
-  const client = { call: async () => ({ sessions }), entries: [{ state: { sessions: [{ id: 'old' }], capabilities: [] } }], refresh: async () => {}, snapshot: () => ({ wakePolicy: { enabled: true }, sessions }) };
+  const client = Object.assign(new EventEmitter(), { call: async () => ({ sessions }), entries: [{ state: { sessions: [{ id: 'old' }], capabilities: [] } }], refresh: async () => {}, snapshot: () => ({ wakePolicy: { enabled: true }, sessions }) });
   const person = { client, view: { owner: 'first-window' } };
   const agent = id => {
     const record = sessions.find(session => session.id === id);
@@ -55,7 +71,7 @@ function fixture(t, { landingOwner = null } = {}) {
     const c = { background: true, actor, client, view: { selected: id, owner: 'first-window' }, win: { destroy() {} }, checkActor: async () => {} };
     return (name, args) => backgroundOperation.run(actor, () => handlers.get(name)(c, ...args), { context: c, valid: async () => {} });
   };
-  return { directory, role, handlers, broadcasts, memberships, sessions, person, agent, context, file: path.join(directory, 'steward.json'), call: (...args) => handlers.get('steward')(person, ...args) };
+  return { directory, role, handlers, broadcasts, memberships, submitted, queued, client, sessions, person, agent, context, file: path.join(directory, 'steward.json'), call: (...args) => handlers.get('steward')(person, ...args) };
 }
 
 test('nobody is the butler until the person designates one session; the record survives a restart, follows a finished replacement, and can be cleared', t => {
@@ -117,6 +133,67 @@ test('the person designates a session outside every space, replaces it, and revo
   assert.equal(new StewardRole(f.directory).current(), null); assert.equal(f.broadcasts.length, 3);
 });
 
+test('designating sends the duty statement into the session as the person\'s message; it stays the butler when that cannot be done (batch 4)', async t => {
+  const f = fixture(t), header = locale.format('zh', 'steward.duty.header'), standard = locale.format('zh', 'steward.duty.default');
+  f.call = async (...args) => JSON.parse(JSON.stringify(await f.handlers.get('steward')(f.person, ...args)) ?? 'null');
+  // An idle session is sent the default text of the person's language, which is not written into the record.
+  assert.deepEqual(await f.call('outside'), { duty: { state: 'sent' } });
+  assert.deepEqual(f.submitted, [[true, 'send', 'outside', header + '\n' + standard, 'native-outside']]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.file, 'utf8')), { version: 1, selected: { sessionId: 'outside', nativeId: 'native-outside' } });
+  // A Claude session in a turn is queued after it; the person's own text is sent and kept for the next time. The answer
+  // comes once the message stands waiting in its conversation, not when the running turn ends and takes it.
+  assert.deepEqual(await f.call('other', '只做排期，不做执行。'), { duty: { state: 'queued' } });
+  assert.deepEqual([f.queued.length, f.sessions.find(s => s.id === 'other').messages.map(m => m.id), f.client.listenerCount('state')], [1, ['other-1', 'row-1'], 0]);
+  assert.deepEqual(f.submitted[1], [true, 'queue', 'other', header + '\n只做排期，不做执行。', 'native-other']);
+  assert.equal(new StewardRole(f.directory).duty, '只做排期，不做执行。');
+  // Confirming the same butler again sends it again; null goes back to the default.
+  assert.deepEqual(await f.call('other'), { duty: { state: 'queued' } }); assert.equal(f.submitted[2][3], header + '\n' + standard); assert.equal(f.role.duty, null);
+  // A session that can take neither is still the butler, and the person is told why the statement did not go in.
+  const busy = await f.call('busy-codex');
+  assert.deepEqual([busy.duty.state, busy.duty.error.uiMessage.key, f.role.current().sessionId, f.submitted.length], ['not-sent', 'error.steward.dutyBusy', 'busy-codex', 3]);
+  f.context.refuseSubmit = Error('The session closed');
+  const refused = await f.call('outside');
+  assert.deepEqual([refused.duty, f.role.current().sessionId], [{ state: 'not-sent', error: { message: 'The session closed' } }, 'outside']);
+  // A queue refused before the message is recorded is said, in the form a thrown error is shown in.
+  f.context.refuseSubmit = uiError('error.workspace.nativeWaitingInputUnavailable');
+  const unqueued = await f.call('other');
+  assert.deepEqual([unqueued.duty.state, unqueued.duty.error.message, unqueued.duty.error.uiMessage, f.client.listenerCount('state')],
+    ['not-sent', f.context.refuseSubmit.message, locale.displayMessage(f.context.refuseSubmit.uiMessage), 0]);
+  // A refusal after the row stands is that row's own state; it is not an unhandled failure here.
+  f.queued[0].reject(Object.assign(Error('Closed'), { notSent: true }));
+  f.context.refuseSubmit = Object.assign(Error(''), { uiMessage: { version: 1, key: 'error.steward.dutyBusy' } });
+  const incomplete = uiError('error.main.operationIncomplete');
+  assert.deepEqual((await f.call('outside')).duty, { state: 'not-sent', error: { message: incomplete.message, uiMessage: incomplete.uiMessage } }, 'No message: the same fallback as a thrown error');
+  // Revoking sends nothing. Text that is empty or too long is refused before anything changes.
+  f.context.refuseSubmit = null; assert.equal(await f.call(null), null); assert.equal(f.submitted.length, 3);
+  const before = fs.readFileSync(f.file, 'utf8');
+  for (const bad of ['', '   ', 'x'.repeat(DUTY_MAX), 'a\u0000b', 7, {}]) await assert.rejects(f.call('outside', bad), key('error.steward.dutyInvalid'), JSON.stringify(bad));
+  assert.deepEqual([fs.readFileSync(f.file, 'utf8'), f.submitted.length], [before, 3]);
+  // An agent cannot have anything sent this way either.
+  await assert.rejects(f.agent('outside')('steward', ['outside', 'text']), key('error.steward.personOnly')); assert.equal(f.submitted.length, 3);
+});
+
+test('the duty statement is bounded so that the record stays readable by every build, and a damaged one is an error', t => {
+  // The longest ids with the longest statement still fit the 4096 bytes every build reads.
+  const f = fixture(t), long = { sessionId: '会'.repeat(100), nativeId: '話'.repeat(100) };
+  let most = ''; while (validDuty(most + '说')) most += '说';
+  f.role.set(long, most);
+  assert.ok(fs.statSync(f.file).size <= 4096, String(fs.statSync(f.file).size));
+  assert.deepEqual([new StewardRole(f.directory).current(), new StewardRole(f.directory).duty], [long, most]);
+  assert.throws(() => f.role.set(long, most + '说'), key('error.steward.dutyInvalid'));
+  // JSON writes a lone surrogate as six bytes: such ids with the longest statement would pass the old limit, so the
+  // whole file is measured, and the record on disk stays as it was.
+  const before = fs.readFileSync(f.file, 'utf8'), odd = { sessionId: '\ud800'.repeat(100), nativeId: '\udfff'.repeat(100) };
+  assert.throws(() => f.role.set(odd, most), key('error.steward.dutyInvalid'));
+  assert.deepEqual([fs.readFileSync(f.file, 'utf8'), f.role.duty], [before, most]);
+  f.role.set(odd, '短'); assert.ok(fs.statSync(f.file).size <= 4096); assert.deepEqual(new StewardRole(f.directory).current(), odd);
+  // Tabs and new lines are text; other control characters are not.
+  assert.equal(validDuty('一\n二\t三\r\n'), true); assert.equal(validDuty('a\u001bb'), false);
+  for (const duty of ['', 5, null, 'a\u0007']) {
+    const g = fixture(t); fs.writeFileSync(g.file, JSON.stringify({ version: 1, selected: ONE, duty }), { mode: 0o600 });
+    assert.throws(() => new StewardRole(g.directory).current(), key('error.steward.state'), JSON.stringify(duty));
+  }
+});
 test('a session NAW opened to replace another, before it has moved in, cannot be designated (steward step 2, batch 2)', async t => {
   const f = fixture(t);
   f.context.queueDispatcher = { rotations: { old: { phase: 'joining', newId: 'outside' } } };
@@ -177,11 +254,13 @@ test('only the first window of a start of the app is told to land, once; a secon
 });
 
 test('the entry is wired: the record is built from the data folder, shown in the state, reachable from the window, and nothing else writes it', () => {
-  assert.ok(source.includes("const { StewardRole } = require('./steward-role.cjs');"));
+  assert.ok(source.includes("const { StewardRole, validDuty } = require('./steward-role.cjs');"));
   assert.match(source, /integratorRole = new IntegratorRole\(dataDir\);\n[^\n]*\n  stewardRole = new StewardRole\(dataDir\);/);
-  assert.match(source, /try \{ steward = stewardRole\?\.current\(\) \|\| null; \} catch \{ stewardWarning = displayText\('error\.steward\.state'\); \}/);
+  assert.match(source, /try \{ stewardDuty = stewardRole\?\.duty \?\? null; steward = stewardRole\?\.current\(\) \|\| null; \} catch \{ stewardWarning = displayText\('error\.steward\.state'\); \}/);
   assert.match(source, /const warning = \[outboxWarning, secretaryWarning, integratorWarning, stewardWarning\]/);
   assert.match(source, /queueSecretary: secretary, integrator, \.\.\.handoffEnabled, steward, /);
+  // The duty statement the person chose is shown to the person's windows only, never in an agent's view.
+  assert.ok(source.includes("steward, ...(context?.background ? {} : { stewardDuty }), "));
   // The start of the app names the window that lands: the first one restored, or the one opened when none is.
   assert.match(source, /const restore = views\.filter\(v => v\.active\);\n[^\n]*\n[^\n]*\n  landingOwner = restore\.length > 1 \? null : \(restore\[0\] \|\| views\.at\(-1\)\)\?\.owner \|\| null;\n/);
   // The rule itself, as written: one restored window lands, the last view when none was open, and none of several.
@@ -196,7 +275,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   // Step 2, batch 2: every join meets one guard (a session NAW opened for a space, a rotation's successor included),
   // and the designation is made in the same queue the joins run in.
   assert.match(source, /roomState = new RoomState\(dataDir\);\n[^\n]*\n  roomState\.joinGuard = id => keepStewardOutside\(id, true\);/);
-  assert.match(source, /else await roomState\.serial\(async \(\) => \{\n[^]*?stewardRole\.set\(\{ sessionId: record\.id, nativeId: record\.nativeId \}\);\n    \}\);/);
+  assert.match(source, /else await roomState\.serial\(async \(\) => \{\n[^]*?stewardRole\.set\(\{ sessionId: record\.id, nativeId: record\.nativeId \}, duty\);\n    \}\);/);
   for (const file of fs.readdirSync(path.join(__dirname, '..')).filter(name => /\.c?js$/.test(name) && !['main.cjs', 'steward-role.cjs'].includes(name))) {
     assert.ok(!/stewardRole|StewardRole|steward\.json/.test(fs.readFileSync(path.join(__dirname, '..', file), 'utf8')), file);
   }
@@ -204,13 +283,15 @@ test('the entry is wired: the record is built from the data folder, shown in the
   const own = fs.readFileSync(path.join(__dirname, '../steward-role.cjs'), 'utf8');
   assert.equal(/integrator\.json|queue-secretary\.json|butler\.json/.test(own), false); assert.ok(own.includes("path.join(directory, 'steward.json')"));
   // The designation gives nothing: the entry's handler touches the record and tells the windows, and no more.
-  const handler = cut("  register('steward', async (c, id) => {", "  // B6: the person's own actions on an integration handoff");
+  const handler = cut("  register('steward', async (c, id, duty = null) => {", "  // B6: the person's own actions on an integration handoff");
   assert.deepEqual([...new Set(handler.match(/\b(queueSecretary|integratorRole|operator[A-Z]\w*|butler[A-Z]\w*|backgroundControl|queueDispatcher)\b/g) || [])], []);
 });
 
 test('every sentence exists in both languages, and the words say what the designation does and does not do', () => {
   const keys = ['menu.stewardSet', 'menu.stewardChange', 'menu.stewardRevoke', 'error.steward.invalid', 'error.steward.inSpace', 'error.steward.joinSpace', 'error.steward.state', 'error.steward.personOnly', 'steward.emptyLabel',
     'steward.rowLabel', 'steward.rowStatus', 'steward.choose.title', 'steward.choose.intro', 'steward.choose.current', 'steward.choose.inSpace', 'steward.choose.unusable', 'steward.choose.none', 'steward.choose.confirm',
+    // Batch 4: the duty statement designating sends (the activation checklist, item 6).
+    'steward.choose.resend', 'steward.duty.label', 'steward.duty.default', 'steward.duty.header', 'steward.duty.notSent', 'error.steward.dutyInvalid', 'error.steward.dutyBusy',
     // The butler's record (step 2, batch 1); its own sentences are checked in steward-record.test.cjs.
     // Batch 4: what the butler does to a queue says so.
     'notice.queue.addedBySteward', 'notice.queue.cancelledBySteward', 'notice.queue.resolvedBySteward', 'queue.creator.steward', 'queue.status.cancelledBySteward', 'queue.status.doneBySteward',

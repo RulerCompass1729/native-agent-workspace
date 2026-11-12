@@ -1,7 +1,8 @@
 // The butler the person talks to (大管家), step 1: its entry at the top of the sidebar, designating, changing and
 // revoking it, and where the window lands when the app starts. Actual isolated source GUI and NAW's own backend
 // service; only native output is synthetic (the transport fixture). No native program is started and no model is
-// called. The designation gives the session nothing: this script checks places, lists and words, not powers.
+// called. The designation gives the session nothing: this script checks places, lists and words, not powers. Designating
+// sends the duty statement into the session as the person's message (batch 4); here it reaches the synthetic session.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
 const scratch = require('./fixtures/test-scratch.cjs'), { createIn } = require('./fixtures/create-view.cjs'), { joinSpace } = require('./fixtures/space-membership.cjs');
@@ -18,7 +19,7 @@ const child = scratch.childProcess.fork(path.join(root, 'app/daemon.cjs'), [prof
   env: { ...env, NAW_TEST_APP_ROOT: root, NAW_WORKSPACE: workspacePath, NAW_APP_VERSION: require(path.join(root, 'package.json')).version },
   stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
 });
-let app, page, sequence = 0;
+let app, page, sequence = 0, sends = 0;
 const errors = [], checks = [], shots = [], delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, tries = 240) { for (let i = 0; i < tries; i++) { if (await fn()) return; await delay(50); } throw Error(label); }
 function fixture(method, target, value) {
@@ -64,6 +65,8 @@ const sidebar = () => page.evaluate(() => {
 const call = (method, ...args) => page.evaluate(([name, values]) => window.workspace[name](...values).then(value => ({ value }), error => ({ refused: error.message })), [method, args]);
 const menuItems = () => page.getByRole('menuitem').allTextContents();
 const closeMenu = async () => { await page.keyboard.press('Escape'); await delay(120); };
+// A synthetic turn ends as a Claude turn does: its reply is complete and its turn-end report lists no background work.
+const finish = async id => { await fixture('complete', id); await fixture('background', id, { count: 0, scheduled: 0, kinds: [], ids: [] }); };
 const select = async id => { await page.locator(`.session-row .session-link[data-session-id="${id}"]`).first().click(); await delay(250); };
 
 (async () => {
@@ -79,7 +82,7 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   assert.deepEqual(seen.order, ['brand', 'steward-entry', 'butler-row', 'new-session'], 'The entry sits right under the brand, above everything else');
   assert.equal(record(), undefined, 'Nothing is written before the person designates');
   await page.locator('#steward-empty').click(); await dialog.waitFor({ state: 'visible' });
-  assert.deepEqual([await picks(), await page.locator('#steward-none').innerText(), await page.locator('#steward-confirm').isDisabled()], [[], say('steward.choose.none'), true]);
+  assert.deepEqual([await picks(), await page.locator('#steward-none').innerText(), await page.locator('#steward-confirm').isDisabled(), await page.locator('#steward-duty').isVisible()], [[], say('steward.choose.none'), true, false]);
   await page.locator('#steward-cancel').click(); await dialog.waitFor({ state: 'hidden' });
   checks.push('With nobody designated the entry is at the top of the sidebar and says so; the built-in butler row stays hidden; the chooser says there is no session to choose');
 
@@ -101,17 +104,25 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   assert.deepEqual(await picks(), [['Claude 前端', say('steward.choose.inSpace', { space: '网站改版' }), true, false], ['Claude 主会话', ready, false, false], ['Codex 文档', ready, false, false]]);
   assert.equal((await dialog.locator('.butler-note').innerText()).trim(), say('steward.choose.intro')); assert.equal(await page.locator('#steward-confirm').isDisabled(), true);
   await shot('zh-1280-chooser');
+  // The duty statement it will send, in the person's language, named by its label, to edit.
+  assert.deepEqual([await page.locator('#steward-duty').inputValue(), await page.getByLabel(say('steward.duty.label')).count()], [say('steward.duty.default'), 1]);
   await dialog.locator(`input[value="${main}"]`).check(); assert.equal(await page.locator('#steward-confirm').isDisabled(), false); assert.equal(record(), undefined, 'Choosing is not designating');
+  await fixture('bindSends', main); await fixture('bindSends', docs);
   await page.locator('#steward-confirm').click(); await dialog.waitFor({ state: 'hidden' });
   await until(async () => (await sidebar()).butler?.id === main, 'The butler\'s row is in the entry\'s place');
+  const sent = await fixture('stats', main); sends++;
+  assert.deepEqual([sent.stats.sends, sent.lastSend.text], [sends, say('steward.duty.header') + '\n' + say('steward.duty.default')], 'The statement went into the session as the person\'s message');
+  await until(async () => (await page.locator('#messages').innerText()).includes(say('steward.duty.header')), 'The statement is in the butler\'s conversation');
+  await finish(main); await until(async () => (await sidebar()).butler?.status === say('steward.rowStatus', { name: 'Claude 主会话', status: ready }), 'Its turn ended');
   seen = await sidebar();
   assert.deepEqual(seen.butler, { id: main, title: say('butler.name'), status: say('steward.rowStatus', { name: 'Claude 主会话', status: ready }), icon: '◆', active: true, label: seen.butler.label, draggable: null });
   assert.ok(seen.butler.label.startsWith(say('steward.rowLabel', { details: 'Claude 主会话 · Claude · ' })), seen.butler.label);
   assert.deepEqual([seen.empty, seen.listed, seen.count, seen.title, seen.badge], [null, [member, docs], '2', 'Claude 主会话', '◆ ' + say('butler.name')], 'It left the list, the count follows, and the window shows its conversation with the mark');
   assert.deepEqual(record(), { sessionId: main, nativeId: nativeOf(main) }); assert.deepEqual((await snapshot()).steward, { sessionId: main, nativeId: nativeOf(main) });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'steward.json'), 'utf8')).duty, undefined, 'The default text is not written into the record');
   assert.equal((await page.locator('#messages').innerText()).includes('两件都已合入，全量测试通过。'), true, 'The conversation is the session\'s own');
   await shot('zh-1280-butler');
-  checks.push('Designating from the entry: the chooser lists the sessions and why a space member cannot be chosen; after confirming, the session is the row at the top named for the butler, it is no longer among Sessions, the window shows its own conversation with the mark, and the record holds only its two ids');
+  checks.push('Designating from the entry: the chooser lists the sessions and why a space member cannot be chosen, and shows the duty statement it will send; after confirming, the session is the row at the top named for the butler, it is no longer among Sessions, the window shows its own conversation with the mark and the statement as the person\'s message, and the record holds only its two ids');
 
   // 3. The entry is the conversation: from another session, one click on the row comes back to it.
   await select(docs); seen = await sidebar(); assert.deepEqual([seen.title, seen.badge, seen.butler.active], ['Codex 文档', null, false]);
@@ -122,7 +133,7 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   // 4. Its menus: change and revoke are offered on it; reordering and spaces are not. On another session,
   //    "make it the butler" stands above the secretary's item; a space member is not offered it.
   await page.locator('#session-header-more').click(); let items = await menuItems(); await shot('zh-1280-butler-menu'); await closeMenu();
-  assert.deepEqual(items.slice(0, 4), [say('header.share'), say('header.usage'), say('menu.stewardChange'), say('menu.stewardRevoke')], 'No space to join; change and revoke');
+  assert.deepEqual(items, [say('header.share'), say('header.usage'), say('menu.stewardRecord'), say('menu.stewardChange'), say('menu.stewardRevoke'), say('menu.queueSecretarySet'), say('menu.integratorSet')], 'No space to join; its record, change and revoke');
   await page.locator('#steward-slot .session-row').click({ button: 'right' }); items = await menuItems(); await closeMenu();
   for (const key of ['menu.stewardChange', 'menu.stewardRevoke', 'menu.rename', 'menu.archiveSession']) assert.ok(items.includes(say(key)), key);
   for (const text of [say('menu.moveUp'), say('menu.moveDown'), say('menu.stewardSet'), say('menu.joinSpace', { name: '网站改版' })]) assert.equal(items.includes(text), false, text);
@@ -152,19 +163,46 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   assert.deepEqual(await joinControl(), [true]); await select(docs); assert.deepEqual(await joinControl(), [false]); await select(main);
   checks.push('The main process refuses to designate a space member or an unknown session, and to join the butler to a space; nothing changes');
 
-  // 6. Changing: the chooser marks who is the butler now; choosing it again is not a change; choosing another
-  //    session moves the designation, and the earlier one is back among Sessions.
+  // 6. Changing: the chooser marks who is the butler now; confirming it again sends the statement again, here in the
+  //    person's own words, which the chooser then shows. Choosing another session moves the designation, and the
+  //    earlier one is back among Sessions. A session in a Codex turn is designated, and the dialog says the statement
+  //    did not go in; sent again once the turn has ended.
+  const own = '你只做排期和汇报，不写代码。\n要我定的事攒成一张清单。';
   await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: say('menu.stewardChange'), exact: true }).click(); await dialog.waitFor({ state: 'visible' });
-  assert.deepEqual((await picks())[0], ['Claude 主会话', say('steward.choose.current'), false, true]); assert.equal(await page.locator('#steward-confirm').isDisabled(), true);
-  await dialog.locator(`input[value="${docs}"]`).check(); await page.locator('#steward-confirm').click(); await dialog.waitFor({ state: 'hidden' });
+  assert.deepEqual((await picks())[0], ['Claude 主会话', say('steward.choose.current'), false, true]);
+  assert.deepEqual([await page.locator('#steward-confirm').isDisabled(), await page.locator('#steward-confirm').innerText()], [false, say('steward.choose.resend')]);
+  await page.locator('#steward-duty').fill(own); await page.locator('#steward-confirm').click(); await dialog.waitFor({ state: 'hidden' });
+  let got = await fixture('stats', main); sends++;
+  assert.deepEqual([got.stats.sends, got.lastSend.text, JSON.parse(fs.readFileSync(path.join(profile, 'steward.json'), 'utf8')).duty], [sends, say('steward.duty.header') + '\n' + own, own]);
+  await finish(main);
+  const stateOf = async id => (await snapshot()).sessions.find(s => s.id === id).state;
+  await fixture('state', docs, 'working'); await until(async () => await stateOf(docs) === 'working', 'Codex 文档 is in a turn');
+  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: say('menu.stewardChange'), exact: true }).click(); await dialog.waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#steward-duty').inputValue(), own, 'The chooser shows the words the person last sent');
+  await dialog.locator(`input[value="${docs}"]`).check(); assert.equal(await page.locator('#steward-confirm').innerText(), say('steward.choose.confirm')); await page.locator('#steward-confirm').click();
   await until(async () => (await sidebar()).butler?.id === docs, 'The designation moved');
+  await until(async () => await page.locator('#steward-error').isVisible(), 'The dialog says the statement did not go in');
+  assert.deepEqual([await page.locator('#steward-error').innerText(), await dialog.isVisible(), await page.locator('#steward-confirm').innerText(), (await fixture('stats', docs)).stats.sends],
+    [say('steward.duty.notSent', { reason: say('error.steward.dutyBusy') }), true, say('steward.choose.resend'), sends]);
+  await shot('zh-1280-not-sent');
+  await fixture('state', docs, 'idle'); await until(async () => await stateOf(docs) === 'idle' && !(await page.locator('#steward-confirm').isDisabled()), 'Its turn ended; ready to send again');
+  await page.locator('#steward-confirm').click(); await dialog.waitFor({ state: 'hidden' });
+  got = await fixture('stats', docs); sends++; assert.deepEqual([got.stats.sends, got.lastSend.text], [sends, say('steward.duty.header') + '\n' + own]);
+  await finish(docs);
+  await until(async () => (await sidebar()).butler?.status === say('steward.rowStatus', { name: 'Codex 文档', status: ready }), 'Its turn ended');
   seen = await sidebar(); assert.deepEqual([seen.listed, seen.count, seen.title, seen.butler.status], [[member, main], '2', 'Codex 文档', say('steward.rowStatus', { name: 'Codex 文档', status: ready })]);
   assert.deepEqual(record(), { sessionId: docs, nativeId: nativeOf(docs) });
-  // And from a session's own menu, without the chooser.
+  // And from a session's own menu: the chooser opens with that session chosen.
   await page.locator(`#session-list .session-row[data-session-row="${main}"]`).click({ button: 'right' }); await page.getByRole('menuitem', { name: say('menu.stewardSet'), exact: true }).click();
+  await dialog.waitFor({ state: 'visible' }); assert.equal(await dialog.locator(`input[value="${main}"]`).isChecked(), true, 'The session the menu was opened on is chosen');
+  await page.locator('#steward-duty').fill(say('steward.duty.default')); await page.locator('#steward-confirm').click(); await dialog.waitFor({ state: 'hidden' });
   await until(async () => (await sidebar()).butler?.id === main, 'Designated from the session\'s menu');
+  got = await fixture('stats', main); sends++; assert.deepEqual([got.stats.sends, got.lastSend.text], [sends, say('steward.duty.header') + '\n' + say('steward.duty.default')]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'steward.json'), 'utf8')).duty, undefined, 'Back to the default text, which follows the language');
+  await finish(main);
+  await until(async () => (await sidebar()).butler?.status === say('steward.rowStatus', { name: 'Claude 主会话', status: ready }), 'Its turn ended');
   assert.deepEqual((await sidebar()).listed, [member, docs]);
-  checks.push('Changing from the butler\'s menu and designating from a session\'s menu both move the designation; the earlier butler is back among Sessions');
+  checks.push('Confirming the current butler sends the statement again, in the person\'s own words, which the chooser shows next time; changing moves the designation and the earlier butler is back among Sessions; a session in a Codex turn is designated and the dialog says the statement did not go in, and it is sent once the turn has ended; "make it the butler" in a session\'s menu opens the chooser with that session chosen, and the default text is sent and not written into the record');
 
   // 7. Small window and English: the row is the first thing in the narrow rail, and the words follow the language.
   await select(main); await size(850, 600);
@@ -200,7 +238,8 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   checks.push('Revoking puts the session back among Sessions, running, and the entry says nobody is designated; with nobody designated a new start of the app is where the window was');
 
   assert.deepEqual(errors, []);
-  const result = { checks, screenshots: shots.length, nativeProgramsStarted: 0, promptsSent: 0, paidModelCalls: 0, evidence };
+  // Every send went to a synthetic session of the transport fixture; none reached a model.
+  const result = { checks, screenshots: shots.length, nativeProgramsStarted: 0, fixtureSends: sends, modelPromptsSent: 0, paidModelCalls: 0, evidence };
   fs.writeFileSync(path.join(evidence, 'steward-entry-result.json'), JSON.stringify(result, null, 1)); console.log(JSON.stringify(result));
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(evidence, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(evidence, 'failure.png') }).catch(() => {}); }

@@ -120,7 +120,9 @@ async function run() {
  // dialogs added on 10-30 (c9800cc, 3305174): space-create and space-files are checked below, space-merge is not yet.
  // room-member-status (04f70f9, the focused member's peer status list) is opened and dismissed in test-compact-room.cjs, not here.
  // The butler's three dialogs are opened and dismissed in test-butler-entry*.cjs and test-butler-reads.cjs; steward-dialog in test-steward-entry.cjs.
- assert.deepEqual(await page.locator('dialog[closedby="any"]').evaluateAll(dialogs => dialogs.map(d => d.id).sort()), ['butler-dialog', 'butler-reads-dialog', 'butler-review-dialog', 'context-dialog', 'create-dialog', 'file-dialog', 'invite-dialog', 'native-history-dialog', 'notes-dialog', 'privacy-dialog', 'queue-dialog', 'room-member-status-dialog', 'run-dialog', 'search-dialog', 'session-chain-dialog', 'setup-dialog', 'share-dialog', 'space-create-dialog', 'space-files-dialog', 'space-merge-dialog', 'steward-dialog', 'terminal-display-dialog']);
+ // records-dialog (the bell's records) is opened and closed with Escape in test-record-reminders.cjs, steward-record-dialog
+ // (「大管家的记录」) in test-steward-record.cjs; neither checks an outside click or its Done button.
+ assert.deepEqual(await page.locator('dialog[closedby="any"]').evaluateAll(dialogs => dialogs.map(d => d.id).sort()), ['butler-dialog', 'butler-reads-dialog', 'butler-review-dialog', 'context-dialog', 'create-dialog', 'file-dialog', 'invite-dialog', 'native-history-dialog', 'notes-dialog', 'privacy-dialog', 'queue-dialog', 'records-dialog', 'room-member-status-dialog', 'run-dialog', 'search-dialog', 'session-chain-dialog', 'setup-dialog', 'share-dialog', 'space-create-dialog', 'space-files-dialog', 'space-merge-dialog', 'steward-dialog', 'steward-record-dialog', 'terminal-display-dialog']);
  // All three ordinary cancellation paths discard inputs; no create or permissions.
  const count = initial.sessions.length;
  for (const kind of ['outside', 'escape', 'button']) {
