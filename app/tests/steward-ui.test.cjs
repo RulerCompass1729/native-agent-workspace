@@ -108,6 +108,11 @@ test('the chooser lists the butler first, says why a session cannot be chosen, a
   h.run('openStewardChooser()'); h.pick('b'); await h.run('confirmSteward()');
   assert.deepEqual([h.shown, h.$('steward-error').hidden, h.$('steward-dialog').open, h.selected, h.rows()[1][3]], [[refusal], false, true, [], true]);
 
+  // The person dismissed the chooser and moved on while the call was on its way: the designation stands, and the
+  // window is not pulled to the butler.
+  let release; const slow = fixture({ sessions: [S('a'), S('b')] }); slow.context.api.steward = id => new Promise(resolve => { release = () => { slow.state.steward = { sessionId: id, nativeId: 'native-' + id }; resolve(); }; });
+  slow.run('openStewardChooser()'); slow.pick('a'); const pending = slow.run('confirmSteward()'); slow.$('steward-dialog').close(); slow.context.dialogTickets.delete(slow.$('steward-dialog')); release(); await pending;
+  assert.deepEqual([slow.state.steward.sessionId, slow.selected], ['a', []]);
   // While disconnected the chooser does not open.
   const off = fixture({ sessions: [S('a')], disconnected: true }); off.run('openStewardChooser()'); assert.equal(off.$('steward-dialog').open, false);
 });

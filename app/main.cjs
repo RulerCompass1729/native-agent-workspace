@@ -2157,7 +2157,9 @@ async function boot() {
   updateApplicationMenu();
   }
   const restore = views.filter(v => v.active);
-  landingOwner = (restore[0] || views.at(-1))?.owner || null;
+  // The one window of this start lands on the butler. When several windows are restored each was left on
+  // purpose, perhaps on one session, so none of them lands and each is where it was.
+  landingOwner = restore.length > 1 ? null : (restore[0] || views.at(-1))?.owner || null;
   if (restore.length) for (const view of restore) await openWindow(view);
   else await openWindow(views.at(-1));
   if (quitting) return;

@@ -89,7 +89,7 @@ test('the three designations keep three records: setting the butler never touche
   assert.equal(fs.readFileSync(f.file, 'utf8'), mine);
 });
 
-test('a record or log that cannot be trusted is an error, never "nobody designated"', t => {
+test('a record or log that cannot be trusted is an error, never "nobody designated"; designating again restores it', t => {
   const state = key('error.steward.state');
   for (const damage of [file => fs.writeFileSync(file, '{broken', { mode: 0o600 }), file => fs.writeFileSync(file, JSON.stringify({ version: 2, selected: ONE }), { mode: 0o600 }), file => fs.chmodSync(file, 0o644),
     file => { fs.rmSync(file); fs.symlinkSync(path.join(path.dirname(file), 'elsewhere.json'), file); }]) {
@@ -98,6 +98,10 @@ test('a record or log that cannot be trusted is an error, never "nobody designat
   }
   const f = fixture(t); f.role.set(ONE); fs.writeFileSync(path.join(f.directory, 'rotation-log.jsonl'), 'not json\n', { mode: 0o600 });
   assert.throws(() => new StewardRole(f.directory).current(), state);
+  // What the warning tells the person to do works: designating again writes a new record over the damaged one.
+  const again = fixture(t); again.role.set(ONE); fs.writeFileSync(again.file, '{broken', { mode: 0o600 });
+  const damaged = new StewardRole(again.directory); assert.throws(() => damaged.current(), state);
+  damaged.set({ sessionId: 'session-9', nativeId: 'native-9' }); assert.deepEqual(new StewardRole(again.directory).current(), { sessionId: 'session-9', nativeId: 'native-9' });
   // A designation that cannot be saved is refused, and the record is not trusted until it is read again.
   const g = fixture(t); fs.chmodSync(g.directory, 0o500);
   assert.throws(() => g.role.set(ONE), state); assert.throws(() => g.role.current(), state);
@@ -122,8 +126,8 @@ test('a session that cannot hold the designation is refused, in words, and nothi
   }
   assert.equal(fs.readFileSync(f.file, 'utf8'), before); assert.equal(f.broadcasts.length, 1);
   // A session the person archived is known from the desktop's own record, not from the backend's list.
-  const room = new RoomState(f.directory); f.context.roomState.apply = snapshot => ({ ...snapshot, sessions: snapshot.sessions.map(s => s.id === 'other' ? { ...s, archived: true } : s) });
-  await assert.rejects(f.call('other'), key('error.steward.invalid')); assert.ok(room);
+  f.context.roomState.apply = snapshot => ({ ...snapshot, sessions: snapshot.sessions.map(s => s.id === 'other' ? { ...s, archived: true } : s) });
+  await assert.rejects(f.call('other'), key('error.steward.invalid'));
 });
 
 test('an agent can neither designate nor revoke, whoever it is and whatever it names', async t => {
@@ -152,7 +156,8 @@ test('only the first window of a start of the app is told to land, once; a secon
   const f = fixture(t, { landingOwner: 'first-window' }), landing = f.handlers.get('landing');
   assert.equal(await landing({ view: { owner: 'second-window' } }), false);
   // An agent's view of the same window is never told to land, and its asking does not use the mark up.
-  assert.notEqual(await f.agent('outside')('landing', []).catch(() => 'refused'), true);
+  const asked = await f.agent('outside')('landing', []).then(value => value, error => error);
+  assert.ok(asked === false || asked instanceof Error, String(asked));
   assert.equal(await landing(f.person), true); assert.equal(await landing(f.person), false, 'A reload of the same window asks again and is told no');
   // No start to land for.
   assert.equal(await fixture(t).handlers.get('landing')(f.person), false);
@@ -165,7 +170,11 @@ test('the entry is wired: the record is built from the data folder, shown in the
   assert.match(source, /const warning = \[outboxWarning, secretaryWarning, integratorWarning, stewardWarning\]/);
   assert.match(source, /queueSecretary: secretary, integrator, \.\.\.handoffEnabled, steward, /);
   // The start of the app names the window that lands: the first one restored, or the one opened when none is.
-  assert.match(source, /const restore = views\.filter\(v => v\.active\);\n  landingOwner = \(restore\[0\] \|\| views\.at\(-1\)\)\?\.owner \|\| null;\n/);
+  assert.match(source, /const restore = views\.filter\(v => v\.active\);\n[^\n]*\n[^\n]*\n  landingOwner = restore\.length > 1 \? null : \(restore\[0\] \|\| views\.at\(-1\)\)\?\.owner \|\| null;\n/);
+  // The rule itself, as written: one restored window lands, the last view when none was open, and none of several.
+  const rule = (views, restore) => vm.runInNewContext(source.match(/landingOwner = (restore\.length > 1 [^;]*);/)[1], { views, restore });
+  const A = { owner: 'a' }, B = { owner: 'b' };
+  assert.deepEqual([rule([A, B], [A]), rule([A, B], []), rule([], []), rule([A, B], [A, B])], ['a', 'b', null, null]);
   // Both calls are answered by this desktop, with or without a backend that supports background control.
   assert.match(source, /name === 'handoff' \|\| name === 'steward' \|\| /); assert.match(source, /'chooseFolder', 'copy', 'landing', /);
   const preload = fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8');
@@ -187,8 +196,11 @@ test('every sentence exists in both languages, and the words say what the design
     'steward.rowLabel', 'steward.rowStatus', 'steward.choose.title', 'steward.choose.intro', 'steward.choose.current', 'steward.choose.inSpace', 'steward.choose.unusable', 'steward.choose.none', 'steward.choose.confirm'];
   for (const language of ['zh', 'en']) assert.deepEqual(Object.keys(messages[language]).filter(name => /steward/i.test(name)).sort(), [...keys].sort(), language);
   for (const name of keys) assert.equal(/[一-鿿]/.test(messages.en[name]), false, name);
-  assert.equal(locale.format('zh', 'steward.choose.intro'), '你主要和它说话。它固定在侧栏最上面，不再列在「会话」里。指定不改变它的任何权限。只有你能指定、更换或撤销。');
-  assert.equal(locale.format('en', 'steward.choose.intro'), 'You mainly talk to it. It stays at the top of the sidebar and is no longer listed under Sessions. Designating it changes none of its permissions. Only you can designate, change or revoke it.');
+  // It gives nothing and takes one thing away, and the person is told both before they confirm.
+  assert.equal(locale.format('zh', 'steward.choose.intro'), '你主要和它说话。它固定在侧栏最上面，不再列在「会话」里。指定不给它任何新权限；当大管家期间它不能加入协作空间。只有你能指定、更换或撤销。');
+  assert.equal(locale.format('en', 'steward.choose.intro'), 'You mainly talk to it. It stays at the top of the sidebar and is no longer listed under Sessions. Designating it gives it no new permission; while it is the butler it cannot join a collaboration space. Only you can designate, change or revoke it.');
+  assert.equal(/不改变它的任何权限|changes none of its permissions/.test(JSON.stringify(messages)), false);
+  assert.equal(locale.format('zh', 'error.steward.state'), '大管家的指定记录读不到；侧栏最上面显示成「未指定」。重新指定一次就能恢复。');
   assert.equal(locale.format('zh', 'menu.stewardSet'), '设为大管家（我主要和它说话）'); assert.equal(locale.format('zh', 'error.steward.joinSpace'), '大管家不能加入协作空间。先撤销大管家，再把这个会话加入空间。');
   assert.equal(locale.format('zh', 'steward.choose.inSpace', { space: '网站改版' }), '在协作空间「网站改版」里，先移出才能当大管家');
   assert.equal(locale.format('zh', 'steward.rowStatus', { name: 'A', status: '会话就绪' }), 'A · 会话就绪');

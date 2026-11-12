@@ -147,7 +147,9 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   assert.deepEqual(await call('spaceAction', spaceId, 'join', [main, true]), { refused: say('error.steward.joinSpace') });
   assert.deepEqual(await call('join', main, true), { refused: say('error.steward.joinSpace') });
   assert.deepEqual(record(), { sessionId: main, nativeId: nativeOf(main) }); assert.deepEqual((await snapshot()).sessions.find(s => s.id === main).roomIds || [], [], 'The butler is still outside every space');
-  assert.equal(await page.locator('#header-actions .header-secondary', { hasText: say('header.join') }).count() ? await page.locator('#header-actions .header-secondary', { hasText: say('header.join') }).isVisible() : false, false, 'No "join" on the butler\'s header');
+  // The header's own join control is switched off for the butler (its hidden property, whatever the layout shows), and on for another session.
+  const joinControl = () => page.evaluate(() => [...document.querySelectorAll('#header-actions > .header-secondary')].filter(control => control.dataset.action).map(control => control.hidden));
+  assert.deepEqual(await joinControl(), [true]); await select(docs); assert.deepEqual(await joinControl(), [false]); await select(main);
   checks.push('The main process refuses to designate a space member or an unknown session, and to join the butler to a space; nothing changes');
 
   // 6. Changing: the chooser marks who is the butler now; choosing it again is not a change; choosing another

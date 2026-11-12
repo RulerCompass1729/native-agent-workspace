@@ -2468,9 +2468,8 @@ async function confirmSteward() {
   try {
     await api.steward(id);
     updateState(await api.initial());
-    if (currentDialogTicket(ticket)) $('steward-dialog').close();
-    // The person chose it from a list: show what they chose.
-    await select(id);
+    // The person chose it from a list: show what they chose. Not if they have dismissed the chooser and moved on.
+    if (currentDialogTicket(ticket)) { $('steward-dialog').close(); await select(id); }
   } catch (error) {
     if (!currentDialogTicket(ticket)) throw error;
     ui.showError($('steward-error'), error); $('steward-error').hidden = false; renderStewardChooser();
