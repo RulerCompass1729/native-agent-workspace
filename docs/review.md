@@ -11909,3 +11909,115 @@ What a person configures stays: `CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_EFFOR
 - The list follows Claude Code 2.1.322 and Codex 0.167.1. A later version may set more; nothing here notices that.
 
 **Independent review.** A fresh read-only session (`bd2888f2`, claude-opus-5-5; Read, Grep and Glob only) read the diffs, the function's callers, the PTY host, every process start in `app/` outside the bundled DSH client (whose processes start from an allow-list) and the evidence: APPROVE_WITH_NOTES, nothing blocking. It confirmed the table of launches, that each new name is supported by the evidence, that removing `CLAUDE_EFFORT` is right although the integrator's message had named it as a setting (the integrator should say so when taking the delivery), that nothing sets or relies on an inherited hook token or socket, and that the result for every name is what a start from the Finder gives. It could not compare the quoted documentation and program text with their sources. Taken from its notes: `CLAUDE_CODE_INVOKED_SKILLS` joined the list (same evidence as `CLAUDE_CODE_EXECPATH`; the tests failed on it first); an assertion that the outbox descriptor stays inherited; the wording about git; the names now listed under "Left open"; and two of the made-up settings in the test were swapped for other documented ones. Its advice on the second case: merge it with the first. The same session then read that delta: APPROVE_WITH_NOTES again, nothing blocking; its two notes (how far its own search of process starts went, and one more Codex name to list) are in this record as it stands.
+
+## The butler the person talks to: its entry, designating it, and where the window lands (step 1, 2026-11-11)
+
+Which part of the vision this serves: 「一个入口」 and its first marker, that the
+person almost never has to go and find the right agent by hand. The person on
+2026-11-11: the butler should be an entry of its own, so that they can talk to
+it alone and step into any session or space when they need to look closer. The
+integrator put four recommendations to the person (the entry at the top of the
+sidebar opens the conversation; one entry; a new start lands on the butler when
+one is designated; the butler stays outside every space), and the person
+answered 「暂时按你推荐的来」 without having looked at the pictures. So this is
+built to those recommendations, and a commit of it can be taken back.
+
+Step 1 gives the designated session nothing: no permission, no tool, no
+message. It takes one thing away, by the person's own rule that the butler
+stays outside every space: while it is the butler it cannot be joined to a
+space, by the person or by an agent. The chooser says both. What the butler
+may see and do, its own identity in the records, and the duty statement are
+step 2: designed, not built, and they wait for the person.
+
+Built:
+- The top of the sidebar, under the brand, is the butler's place in every
+  launch. With nobody designated it says so and opens a chooser. With a butler
+  it is that session's own row, the same row every session has, named for the
+  butler with the session's name and state on the line below. The session is
+  then not listed among Sessions, and the count beside Sessions follows.
+- Choosing the row opens that session's own conversation and terminal. A mark
+  before the title says it is the butler.
+- Designating: from the chooser, or from a session's menu, above the
+  secretary's item. Changing and revoking: from the butler's menus. Revoking
+  puts the session back among Sessions; it keeps running.
+- Only the person designates, changes or revokes. The record is one more file
+  beside the secretary's and the integrator's, written by the same rules, and
+  it follows a finished session replacement as theirs do.
+- The butler stays outside every space: a member cannot be designated, and
+  the main process refuses to join the butler to a space by either way of
+  joining. Leaving is never refused.
+- The one window of a start of the app lands on the butler's conversation.
+  When several windows are restored none of them lands: each was left where
+  it is on purpose. A reload, a second window, and an agent's view are where
+  they were.
+- The built-in butler behind its closed switch is untouched; its row stays
+  hidden under this one.
+
+Three older window checks said "the sidebar says nothing about a butler". They
+now say it of everything in the sidebar but this entry. The census of
+light-dismiss dialogs gains this chooser and the built-in butler's three
+dialogs, which it had been missing.
+
+Checks (author-run, no model): unit tests of the record, the main-process
+entry and the window's functions, 55 deliberate faults, all caught. A new
+window check on the synthetic transport walks the whole journey in the
+product's own window, in both languages and at both sizes, with ten deliberate
+faults, all caught. The older window checks of the built-in butler, the dialog
+census, the sidebar, its layout, status and density, and the compact space
+view pass. Counts are in the commit message.
+
+Not verified, or known:
+- Three sidebar window checks were not run (grouped compact rows, the
+  membership rail, space discovery): each needs its own launch arrangement.
+- Not designed here: how the row tells the person that the butler wants them
+  while they look at another session, beyond the state mark every row has;
+  the butler in a second window or on a phone.
+- NAW replaces sessions by itself only for space members today, so a butler
+  is not replaced by NAW; the record would follow a logged replacement.
+- A butler whose session is archived or gone reads as nobody designated; the
+  record is left as it is until the person designates again.
+- The pictures the person was given showed two further things that are not
+  built: opening a new session from the chooser, and the built-in butler as a
+  greyed line in it.
+- The butler can still end in a space by two of NAW's own joins that do not
+  pass the check: placing a session NAW has just opened for a space, and
+  moving a replaced member's successor in. Either needs the person to
+  designate that session between its creation and a successful join, which
+  can be as long as a retry; so does a join already on its way when the
+  person designates. The row then
+  stays at the top and "leave" stays offered. Before the butler is given any
+  permission (step 2) there has to be one check where all joins meet.
+- With the built-in butler's switch opened in a test, or its row replaced by
+  its failure row, two rows carry the butler's name. No daily launch has both.
+- A designation that cannot be read shows as "not designated" beside a
+  warning that says so and that this does not mean nobody is designated.
+  Designating again cures a damaged record; it does not cure a rotation log
+  that cannot be read, so the warning promises nothing.
+- One restored window that the person had opened for one session still
+  lands on the butler, and its place is saved over: nothing tells such a
+  window from the main one. A person who always keeps two windows open never
+  lands on the butler. Both are put to the person on the page they are given.
+
+Independent read-only review (one fresh session on the rebased commit; the CLI
+reported the model as claude-opus-5-5): `CHANGES`, one blocking finding. The
+chooser said that designating changes none of the session's permissions,
+which is not true: it takes away joining a space, also for the session's own
+agent. The sentence, its test and this record now say what is given and what
+is taken. Its notes, and what was done: the first restored window was taken
+for the landing though it may be a window the person opened for one session
+(changed: with several windows none lands); after confirming, the window
+followed the choice even when the person had dismissed the chooser (changed);
+an unreadable record read as "not designated" with a warning that said less
+(the warning now says what the row shows); three weak
+assertions (two rewritten, one removed); the two internal joins and the two
+rows with one name are in the list above; an archived butler was already
+there. It found no path by which the designation gives a session anything, no
+way for an agent to designate or to use the landing, the older window checks
+not weakened, and the code reshaped after the first full run sound.
+The same session then read the changes: `PASS_WITH_NOTES`, nothing blocking.
+Its three notes are taken as words only, after its look: the warning had
+promised that designating again restores an unreadable designation, which
+is false when it is the rotation log that cannot be read (the promise is
+removed); the landing rule is narrower than "a new start lands on the
+butler" for a person with two windows (put to the person); and the record
+said "in the moment" where a retry can make it longer (corrected above).
