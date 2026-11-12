@@ -26,7 +26,7 @@ function fixture(t, { landingOwner = null } = {}) {
   const role = new StewardRole(directory), room = new RoomState(directory);
   const handlers = new Map(), broadcasts = [], memberships = [];
   // The real membership function is not under test here: only whether it is reached.
-  const roomState = { apply: snapshot => room.apply(snapshot), metadata() {}, membership: async (_client, id, join, _label, space) => { memberships.push([id, join, space ?? null]); } };
+  const roomState = { apply: snapshot => room.apply(snapshot), metadata() {}, serial: action => action(), membership: async (_client, id, join, _label, space) => { memberships.push([id, join, space ?? null]); } };
   const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, roomIds, stewardRole: role, roomState, landingOwner, validRoomId: id => typeof id === 'string' && id.length > 0,
     sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); } });
   vm.runInContext(cut('function register(name, handler) {', 'async function replaceBackendSockets'), context);
@@ -180,6 +180,10 @@ test('the entry is wired: the record is built from the data folder, shown in the
   const preload = fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8');
   assert.match(preload, /'runtimeLocation', 'retrySave', 'steward', 'stewardRecord', 'landing'\]\) \{/);
   assert.equal(source.match(/stewardRole\.set\(/g).length, 2, 'Only the entry writes the designation');
+  // Step 2, batch 2: every join meets one guard (a session NAW opened for a space, a rotation's successor included),
+  // and the designation is made in the same queue the joins run in.
+  assert.match(source, /roomState = new RoomState\(dataDir\);\n[^\n]*\n  roomState\.joinGuard = id => keepStewardOutside\(id, true\);/);
+  assert.match(source, /else await roomState\.serial\(async \(\) => \{\n[^]*?stewardRole\.set\(\{ sessionId: record\.id, nativeId: record\.nativeId \}\);\n    \}\);/);
   for (const file of fs.readdirSync(path.join(__dirname, '..')).filter(name => /\.c?js$/.test(name) && !['main.cjs', 'steward-role.cjs'].includes(name))) {
     assert.ok(!/stewardRole|StewardRole|steward\.json/.test(fs.readFileSync(path.join(__dirname, '..', file), 'utf8')), file);
   }

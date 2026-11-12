@@ -1267,6 +1267,8 @@ async function boot() {
   }
   sessionLabels = new SessionLabels(dataDir);
   roomState = new RoomState(dataDir);
+  // The butler stays outside every space, by any way of joining (steward step 2, batch 2).
+  roomState.joinGuard = id => keepStewardOutside(id, true);
   try {
     // One writer owns the display-measurement epoch. It neither starts a model
     // nor opens the separate working-day recording period.
@@ -1767,7 +1769,8 @@ async function boot() {
   register('steward', async (c, id) => {
     if (c.background) throw uiError('error.steward.personOnly');
     if (id === null) stewardRole.set(null);
-    else {
+    // In the queue every join runs in: no join can be half done while the session becomes the butler.
+    else await roomState.serial(async () => {
       // The backend's own list does not say which sessions the person archived; the desktop's record does.
       const record = roomState.apply(await c.client.call('initial')).sessions.find(record => record.id === id);
       if (!record || !record.nativeId || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) throw uiError('error.steward.invalid');
@@ -1776,7 +1779,7 @@ async function boot() {
       try { spaces = roomIds(record); } catch { throw uiError('error.steward.invalid'); }
       if (spaces.length) throw uiError('error.steward.inSpace');
       stewardRole.set({ sessionId: record.id, nativeId: record.nativeId });
-    }
+    });
     // The designation stands even if its line cannot be written; the butler's next call is then refused.
     try { stewardRecord?.designated(id === null ? null : stewardRole.selected); } catch { /* The bell and the refused call say so. */ }
     await broadcastRoom();

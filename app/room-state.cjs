@@ -1049,8 +1049,10 @@ class RoomState {
   membership(client, id, join, label, room = DEFAULT_ROOM_ID, expected) {
     if (typeof id !== 'string' || typeof join !== 'boolean') return Promise.reject(uiError("error.invalidMemberAction"));
     try { this.metadata(room); } catch (error) { return Promise.reject(error); }
+    // Every join meets here, whoever asks (the person, an agent, a session NAW opened for a space, a rotation's
+    // successor): `joinGuard(id)`, when set, is asked at the moment the join runs, in this one queue.
     const action = () => {
-      if (join) this.assertAvailable(id, true, room);
+      if (join) { this.assertAvailable(id, true, room); this.joinGuard?.(id); }
       return this.changeMember(client, id, join, label, room, expected);
     };
     // Cleanup is conditional on the owning backend's final run check. An eager
