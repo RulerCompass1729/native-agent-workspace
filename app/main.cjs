@@ -19,6 +19,7 @@ const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary, follow: followRotation } = require('./queue-secretary.cjs');
 const { IntegratorRole } = require('./integrator-role.cjs');
+const { StewardRole } = require('./steward-role.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
 const { ButlerReadAudit } = require('./butler-read-audit.cjs');
@@ -125,7 +126,7 @@ const queueOutcomeSeen = new Set(), queueOutcomeNotifications = new Map();
 let pendingReveal = null;
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
-let dataDir, sessionLabels, roomState, queueSecretary, integratorRole, butlerIngress, butlerReadAudit = null, butlerBackend = null, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
+let dataDir, sessionLabels, roomState, queueSecretary, integratorRole, stewardRole, landingOwner = null, butlerIngress, butlerReadAudit = null, butlerBackend = null, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
 let butlerRole = null, butlerPerson = null;
 let startupWindow, starting = false, wired = false;
 let applicationBuild, applicationMenu;
@@ -536,6 +537,14 @@ function flushReveal() {
 function discardReveal(context) {
   if (!context.uiReady) pendingReveal = null;
 }
+// The designated butler is not joined to a space while it holds the designation (the person revokes it first).
+// Leaving is never refused, and a record that cannot be read refuses nothing here: the state warning says so.
+function keepStewardOutside(id, join) {
+  if (join !== true) return;
+  let steward = null;
+  try { steward = stewardRole?.current() || null; } catch { return; }
+  if (steward && steward.sessionId === id) throw uiError('error.steward.joinSpace');
+}
 function conversationReaderAllowed(actor) {
   const secretary = queueSecretary?.current();
   return !secretary || secretary.sessionId !== actor.id || secretary.nativeId !== actor.nativeId;
@@ -685,10 +694,13 @@ function displayState(snapshot, context, read = null) {
   try { secretary = queueSecretary?.current() || null; } catch { secretaryWarning = displayText('error.queue.secretaryState'); }
   let integrator = null, integratorWarning = '';
   try { integrator = integratorRole?.current() || null; } catch { integratorWarning = displayText('error.integrator.state'); }
-  const warning = [outboxWarning, secretaryWarning, integratorWarning].filter(Boolean).join('\n');
+  // The session the person talks to as the butler. A record that cannot be read is a warning, never "nobody".
+  let steward = null, stewardWarning = '';
+  try { steward = stewardRole?.current() || null; } catch { stewardWarning = displayText('error.steward.state'); }
+  const warning = [outboxWarning, secretaryWarning, integratorWarning, stewardWarning].filter(Boolean).join('\n');
   // The page asks about handoffs only where they are enabled (or could not start): elsewhere the state is as it always was.
   const handoffEnabled = queueDispatcher?.integration || queueDispatcher?.integrationError ? { handoffEnabled: true } : {};
-  const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
+  const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
   return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected, conversationAccess(context.actor, snapshot)) : result;
@@ -1033,11 +1045,11 @@ function register(name, handler) {
       }
       // Never silently fall back to an old backend that cannot retain actor
       // attribution or preserve the person's draft for these input paths.
-      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom']);
+      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom']);
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
       // handler below still authenticates the secretary and person-only actions.
-      const localQueue = name === 'queueSecretary' || name === 'integrator' || name === 'handoff' || name === 'spaceAction' && ['queueAdd', 'queueCancel', 'queueResolve'].includes(args[1]);
+      const localQueue = name === 'queueSecretary' || name === 'integrator' || name === 'handoff' || name === 'steward' || name === 'spaceAction' && ['queueAdd', 'queueCancel', 'queueResolve'].includes(args[1]);
       if (!local.has(name) && !localQueue) {
         const targetIds = (name === 'spaceAction' ? [args[2]?.[0]].flat() : [args[0]].flat()).filter(id => typeof id === 'string');
         const targets = c.client.entries.filter(e => !targetIds.length || e.state.sessions.some(s => targetIds.includes(s.id)));
@@ -1270,6 +1282,8 @@ async function boot() {
   queueSecretary = new QueueSecretary(dataDir);
   // Who the person designated as integrator. A record only: nothing is sent to it from here.
   integratorRole = new IntegratorRole(dataDir);
+  // Who the person designated as the butler they talk to. A record only: it gives that session nothing.
+  stewardRole = new StewardRole(dataDir);
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
   creationDefaults = new CreationDefaults(dataDir, { defaultWorkspace, newWorkspaceRoot: `${path.resolve(defaultWorkspace)}-sessions` });
   viewStore = new ViewStore(dataDir);
@@ -1403,6 +1417,7 @@ async function boot() {
     return true;
   });
   register('join', async (c, id, join) => {
+    keepStewardOutside(id, join);
     try { await roomState.membership(c.client, id, join, sessionLabels.labels.get(id)); }
     finally { await broadcastRoom(); }
   });
@@ -1438,6 +1453,7 @@ async function boot() {
     if (!validRoomId(roomId) || !Array.isArray(args) || args.length > 8) throw uiError("error.invalidSpaceAction");
     roomState.metadata(roomId); // Never reinterpret a missing space as shared.
     if (action === 'join') {
+      keepStewardOutside(args[0], args[1]);
       try { return await roomState.membership(c.client, args[0], args[1], sessionLabels.labels.get(args[0]), roomId, args[2]); }
       finally { await broadcastRoom(); }
     }
@@ -1666,6 +1682,23 @@ async function boot() {
     }
     await broadcastRoom();
   });
+  // Designating, changing or revoking the butler the person talks to is the person's alone. It changes where
+  // that session is listed and where the window lands at start; it gives the session no permission.
+  register('steward', async (c, id) => {
+    if (c.background) throw uiError('error.steward.personOnly');
+    if (id === null) stewardRole.set(null);
+    else {
+      // The backend's own list does not say which sessions the person archived; the desktop's record does.
+      const record = roomState.apply(await c.client.call('initial')).sessions.find(record => record.id === id);
+      if (!record || !record.nativeId || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) throw uiError('error.steward.invalid');
+      // The butler stays outside every space: a member is sent queue work and can be replaced by the queue.
+      let spaces;
+      try { spaces = roomIds(record); } catch { throw uiError('error.steward.invalid'); }
+      if (spaces.length) throw uiError('error.steward.inSpace');
+      stewardRole.set({ sessionId: record.id, nativeId: record.nativeId });
+    }
+    await broadcastRoom();
+  });
   // B6: the person's own actions on an integration handoff: retry one delivery or everything
   // under one reason, say that a waiting handoff is dealt with (with or without a retry), answer
   // a question, and look at where things stand. Each is the person's alone. The background gate
@@ -1791,6 +1824,9 @@ async function boot() {
     return submit(c, method, ...args);
   });
   register('uiReady', c => { c.ready?.(); c.uiReady = true; c.armStatePush?.(); flushReveal(); });
+  // Asked once by a window as it starts: is this the first window of this start of the app? Only that window
+  // lands on the butler's conversation; a reload, a second window or an agent's view is answered no.
+  register('landing', c => { if (c.background || landingOwner === null || c.view?.owner !== landingOwner) return false; landingOwner = null; return true; });
   for (const method of ['send', 'queue', 'steer']) register(method, async (c, id, text, nativeId, turnId) => {
     const draft = backups(c.view)[id];
     const result = await submit(c, method, id, text, nativeId, ...(method === 'steer' ? [turnId] : []));
@@ -2121,6 +2157,7 @@ async function boot() {
   updateApplicationMenu();
   }
   const restore = views.filter(v => v.active);
+  landingOwner = (restore[0] || views.at(-1))?.owner || null;
   if (restore.length) for (const view of restore) await openWindow(view);
   else await openWindow(views.at(-1));
   if (quitting) return;

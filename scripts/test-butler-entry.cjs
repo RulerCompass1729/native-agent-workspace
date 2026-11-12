@@ -62,11 +62,13 @@ const gallery = [
   const size = async (width, height) => { await application.evaluate(({ BrowserWindow }, [w, h]) => { for (const win of BrowserWindow.getAllWindows()) win.setContentSize(w, h); }, [width, height]); await until(async () => await page.evaluate(w => innerWidth === w, width), `Window ${width} wide`, 10000); };
 
   // 1. The product as it is: the switch is closed.
+  //    The sidebar's own entry for the butler the person talks to (scripts/test-steward-entry.cjs) is a different thing
+  //    and is always there; "nothing about a butler" below means the built-in butler: everything in the sidebar but that entry.
   await size(1280, 800);
   const closed = () => page.evaluate(() => {
     const row = document.getElementById('butler-row'), dialog = document.getElementById('butler-dialog'), next = document.getElementById('new-session');
     return { row: !!row && row.hidden && row.getClientRects().length === 0, rowBeforeNew: row.nextElementSibling === next, dialog: !!dialog && !dialog.open, entry: typeof window.workspace.butler,
-      text: /大管家|Butler/.test(document.querySelector('.sidebar').innerText), module: typeof window.nativeWorkspaceButlerEntry?.bind, view: JSON.stringify(window.nativeWorkspaceButlerEntryView?.entryView(undefined)) };
+      text: /大管家|Butler/.test([...document.querySelector('.sidebar').children].filter(part => part.id !== 'steward-entry' && part.getClientRects().length).map(part => part.innerText).join('\n')), module: typeof window.nativeWorkspaceButlerEntry?.bind, view: JSON.stringify(window.nativeWorkspaceButlerEntryView?.entryView(undefined)) };
   });
   assert.deepEqual(await closed(), { row: true, rowBeforeNew: true, dialog: true, entry: 'function', text: false, module: 'function', view: '{"visible":false}' });
   // The call exists, and the main process refuses it: the entry is closed in an ordinary launch.
@@ -98,10 +100,10 @@ const gallery = [
     // Looked at three times over a second and a half: the refusal has no sign of its own to wait for.
     for (const wait of [400, 500, 600]) { await sleep(wait);
     const quiet = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#butler-row')].map(row => row.hidden && row.getClientRects().length === 0), dialogs: [...document.querySelectorAll('#butler-dialog')].map(dialog => dialog.open),
-      text: /大管家|Butler/.test(document.querySelector('.sidebar').innerText), toast: document.getElementById('toast').hidden === false && document.getElementById('toast').getClientRects().length > 0, open: document.querySelectorAll('dialog[open]').length }));
+      text: /大管家|Butler/.test([...document.querySelector('.sidebar').children].filter(part => part.id !== 'steward-entry' && part.getClientRects().length).map(part => part.innerText).join('\n')), toast: document.getElementById('toast').hidden === false && document.getElementById('toast').getClientRects().length > 0, open: document.querySelectorAll('dialog[open]').length }));
     assert.deepEqual(quiet, { rows: mode === 'row' ? [] : [true], dialogs: mode === 'dialog' ? [] : [false], text: false, toast: false, open: 0 }, `Closed switch, ${mode} kept out: the window is as it was`); }
     await page.evaluate(() => { window.dispatchEvent(new Event('focus')); }); await sleep(200);
-    assert.equal(await page.evaluate(() => /大管家|Butler/.test(document.querySelector('.sidebar').innerText) || document.querySelectorAll('#butler-row:not([hidden])').length > 0), false, mode);
+    assert.equal(await page.evaluate(() => /大管家|Butler/.test([...document.querySelector('.sidebar').children].filter(part => part.id !== 'steward-entry' && part.getClientRects().length).map(part => part.innerText).join('\n')) || document.querySelectorAll('#butler-row:not([hidden])').length > 0), false, mode);
   }
   for (const name of ['butler.json', 'butler-native']) assert.equal(fs.existsSync(path.join(profile, name)), false, 'Still nothing about a butler is written: ' + name);
   await load('none');

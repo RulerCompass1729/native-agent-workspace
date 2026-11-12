@@ -2392,7 +2392,8 @@ async function archiveChainSession(id) {
 function sessionMenuModel(id, row) {
   const record = state.sessions.find(s => s.id === id), group = row.spaceId;
   const visible = group ? orderedMembers(group) : sidebarSessions(), index = visible.findIndex(s => s.id === id);
-  const roomItems = allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: uiText(inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', { name: spaceName(r) }), labelKey: inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', labelParams: { name: spaceName(r) } }));
+  const isSteward = state.steward?.sessionId === id;
+  const roomItems = isSteward && !window.nativeWorkspaceSpaces.roomIds(record).length ? [] : allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: uiText(inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', { name: spaceName(r) }), labelKey: inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', labelParams: { name: spaceName(r) } }));
   // Right under the version fact that says this backend is older (T-131).
   const update = backendVersionNotice(record, state.appVersion)?.kind === 'old' && !record.archived ? [{ id: 'update-backend', label: uiText('menu.updateThisBackend'), labelKey: 'menu.updateThisBackend' }] : [];
   const chain = sessionChainModel(id);
@@ -2400,7 +2401,7 @@ function sessionMenuModel(id, row) {
   const secretaryKey = state.queueSecretary?.sessionId === id ? 'menu.queueSecretaryRevoke' : 'menu.queueSecretarySet';
   const secretary = typeof api.queueSecretary === 'function' && (state.queueSecretary?.sessionId === id || record.nativeId && !record.archived)
     ? [{ id: state.queueSecretary?.sessionId === id ? 'queue-secretary-revoke' : 'queue-secretary-set', label: uiText(secretaryKey), labelKey: secretaryKey }] : [];
-  const actions = [...update, ...secretary, ...integratorAction(record), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }, { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
+  const actions = [...update, ...stewardAction(record), ...secretary, ...integratorAction(record), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index >= 0 && index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }, { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
   return { record, group, visible, index, actionsKey: JSON.stringify([actions.map(({ label, ...action }) => action.labelKey ? action : { ...action, label }), visible.map(s => s.id)]),
     items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text, labelRead: () => sidebarDetails(record)[index] })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
 }
@@ -2408,6 +2409,72 @@ async function chooseQueueSecretary(id) {
   await api.queueSecretary(id);
   updateState(await api.initial());
   render();
+}
+// The butler the person talks to is one session outside every space. Designating is offered where it can be done;
+// changing and revoking are offered on the session that holds the designation, wherever it is now.
+function stewardAction(record) {
+  if (typeof api.steward !== 'function' || !record) return [];
+  if (state.steward?.sessionId === record.id) return [{ id: 'steward-change', label: uiText('menu.stewardChange'), labelKey: 'menu.stewardChange' }, { id: 'steward-revoke', label: uiText('menu.stewardRevoke'), labelKey: 'menu.stewardRevoke' }];
+  if (!record.nativeId || record.archived || window.nativeWorkspaceSpaces.roomIds(record).length) return [];
+  return [{ id: 'steward-set', label: uiText('menu.stewardSet'), labelKey: 'menu.stewardSet' }];
+}
+async function chooseSteward(id, revoke = false) {
+  // A menu opened before the designation moved must not revoke somebody else's.
+  if (revoke && state.steward?.sessionId !== id) return;
+  await api.steward(revoke ? null : id);
+  updateState(await api.initial());
+  render();
+}
+// Every unarchived session, the butler first, each with why it cannot be chosen when it cannot.
+function stewardCandidates() {
+  const butler = stewardRecord();
+  return [...(butler ? [butler] : []), ...sidebarSessions()].map(record => {
+    const space = window.nativeWorkspaceSpaces.roomIds(record).map(id => spaceRecord(id)).find(Boolean) || null;
+    const reason = window.nativeWorkspaceSpaces.roomIds(record).length ? 'inSpace' : !record.nativeId || record.nativeContextPending || ['ended', 'background'].includes(record.state) ? 'unusable' : '';
+    return { record, space, reason, current: record === butler };
+  });
+}
+let stewardChoice = '';
+function renderStewardChooser() {
+  const list = $('steward-list'), candidates = stewardCandidates();
+  if (!candidates.some(item => item.record.id === stewardChoice && !item.reason)) stewardChoice = '';
+  const held = document.activeElement?.name === 'steward-choice' ? document.activeElement.value : '';
+  list.replaceChildren(...candidates.map(({ record, space, reason, current }) => {
+    const row = node('label', undefined, 'steward-pick' + (reason ? ' unavailable' : '')), radio = node('input'), text = node('span'), name = node('strong', record.name), note = node('small');
+    radio.type = 'radio'; radio.name = 'steward-choice'; radio.value = record.id; radio.disabled = Boolean(reason) || disconnected; radio.checked = record.id === stewardChoice;
+    radio.onchange = () => { stewardChoice = record.id; renderStewardChooser(); };
+    if (reason === 'inSpace') ui.display.computed(note, 'text', () => uiText('steward.choose.inSpace', { space: space ? spaceName(space) : '' }));
+    else if (reason) ui.display.text(note, 'steward.choose.unusable');
+    else if (current) ui.display.text(note, 'steward.choose.current');
+    else ui.display.computed(note, 'text', () => sidebarPresentation(record).compact);
+    text.append(name, note); row.append(radio, icon(record.provider), text); return row;
+  }));
+  if (held) [...list.querySelectorAll('input')].find(input => input.value === held && !input.disabled)?.focus({ preventScroll: true });
+  $('steward-none').hidden = candidates.some(item => !item.reason);
+  // Choosing the session that already is the butler changes nothing.
+  $('steward-confirm').disabled = disconnected || !stewardChoice || stewardChoice === state.steward?.sessionId;
+}
+function openStewardChooser() {
+  if (disconnected || typeof api.steward !== 'function' || $('steward-dialog').open) return;
+  contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
+  stewardChoice = stewardRecord()?.id || ''; $('steward-error').hidden = true;
+  renderStewardChooser(); openTransientDialog('steward-dialog');
+  ([...$('steward-list').querySelectorAll('input')].find(input => input.checked && !input.disabled) || $('steward-cancel')).focus({ preventScroll: true });
+}
+async function confirmSteward() {
+  const id = stewardChoice, ticket = dialogTickets.get($('steward-dialog'));
+  if (!id || disconnected) return;
+  $('steward-confirm').disabled = true;
+  try {
+    await api.steward(id);
+    updateState(await api.initial());
+    if (currentDialogTicket(ticket)) $('steward-dialog').close();
+    // The person chose it from a list: show what they chose.
+    await select(id);
+  } catch (error) {
+    if (!currentDialogTicket(ticket)) throw error;
+    ui.showError($('steward-error'), error); $('steward-error').hidden = false; renderStewardChooser();
+  }
 }
 // The integrator is one session outside every space (B6). Designating is offered only where it can
 // be done; revoking is offered on the session that holds the designation, wherever it is now.
@@ -2446,6 +2513,8 @@ function openSessionMenu(id, point, rowKey = id) {
         attempt(() => inSpace(person, destination) ? detach(id, destination) : addToSpace(id, destination));
       } else if (action === 'queue-secretary-set' || action === 'queue-secretary-revoke') attempt(() => chooseQueueSecretary(action === 'queue-secretary-revoke' ? null : id));
       else if (action === 'integrator-set' || action === 'integrator-revoke') attempt(() => chooseIntegrator(id, action === 'integrator-revoke'));
+      else if (action === 'steward-set' || action === 'steward-revoke') attempt(() => chooseSteward(id, action === 'steward-revoke'));
+      else if (action === 'steward-change') openStewardChooser();
       else if (action === 'wake-session') attempt(() => api.wakePolicy(id, Boolean(state.sessions.find(s => s.id === id)?.wakeDisabled)));
       else if (action === 'operator-session') attempt(() => setOperatorEnabled(id, !state.sessions.find(s => s.id === id)?.operatorEnabled));
       else if (action === 'operator-revoke') attempt(async () => { for (const domain of state.operatorPolicy?.domains || []) if (!domain.revokedAt && (domain.initiators.some(i => i.id === id) || domain.carried?.some(c => c.from.id === id))) await api.operatorAction(id, 'revoke', domain.id); toastMessage('operator.disabledNote'); });
@@ -2520,9 +2589,22 @@ function openMemberMenu(id, anchor) {
   });
   sessionMenu = { id, anchor, key, kind: 'member', close };
 }
+// Every unarchived session but the butler the person talks to, which has its own place above the lists.
 function sidebarSessions() {
-  const ranks = new Map((state.sidebar?.order || []).map((id, index) => [id, index]));
-  return state.sessions.filter(s => !s.archived).sort((a, b) => (ranks.get(a.id) ?? Infinity) - (ranks.get(b.id) ?? Infinity));
+  const ranks = new Map((state.sidebar?.order || []).map((id, index) => [id, index])), butler = state.steward?.sessionId;
+  return state.sessions.filter(s => !s.archived && s.id !== butler).sort((a, b) => (ranks.get(a.id) ?? Infinity) - (ranks.get(b.id) ?? Infinity));
+}
+// The session the person designated as the butler they talk to, when it is one of the unarchived sessions.
+function stewardRecord() {
+  const id = state?.steward?.sessionId;
+  return id ? state.sessions.find(s => s.id === id && !s.archived) || null : null;
+}
+// The entry's place when nobody is designated: it says so there, and opens the chooser. With a butler, its own row
+// stands in the slot. Drawing it asks the main process nothing.
+function renderStewardEntry(butler) {
+  const empty = $('steward-empty');
+  empty.hidden = Boolean(butler); empty.disabled = disconnected;
+  if ($('steward-dialog').open) renderStewardChooser();
 }
 // U22: the listed sessions whose name another listed session also has. Their rows show the
 // short id beside the name; a unique name stays without it. One session shown under two spaces
@@ -2721,7 +2803,7 @@ function renderSidebarGroups() {
   if ($('space-discovery').parentElement !== discoveryGroup) discoveryGroup.insertBefore($('space-discovery'), discoveryGroup.querySelector('.sidebar-group-body'));
   $('space-discovery').hidden = Boolean(count) || Boolean(state.sidebar?.[grouped ? 'sessionsCollapsed' : 'workspaceCollapsed']);
   ui.display.text($('session-group-label'), grouped ? 'sidebar.spaces' : 'sidebar.sessions');
-  const visible = state.sessions.filter(s => !s.archived);
+  const visible = state.sessions.filter(s => !s.archived && s.id !== state.steward?.sessionId);
   const working = visible.filter(s => s.state === 'working').length;
   ui.display.computed($('session-group-summary'), 'text', () => grouped ? String(count) : working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length));
   ui.display.computed($('workspace-group-summary'), 'text', () => state.room.archived ? '0' : uiText('sidebar.memberCount', { count: members().length }));
@@ -2830,21 +2912,25 @@ function renderSessions() {
     for (const record of visible) occurrences.push({ record, key: record.id, group: null, container: list });
   }
   const keys = new Set(occurrences.map(row => row.key));
+  // The butler's own row: the same row any session has, in the entry's place above the lists.
+  const butler = stewardRecord(); renderStewardEntry(butler);
+  if (butler) { const key = `steward:${butler.id}`; occurrences.unshift({ record: butler, key, group: null, container: $('steward-slot'), steward: true }); keys.add(key); }
   if (sessionMenu && !sessionMenu.anchor && sessionMenu.rowKey && !keys.has(sessionMenu.rowKey)) sessionMenu.close();
   for (const [key, row] of sessionRows) if (!keys.has(key) && renameTarget?.row !== row.element) { row.element.remove(); sessionRows.delete(key); }
   const positions = new Map(), repeated = sameNameSessions(visible);
-  for (const { record, key, group, container } of occurrences) {
+  for (const { record, key, group, container, steward = false } of occurrences) {
     let row = sessionRows.get(key);
     if (!row) {
       const element = node('div', undefined, 'session-row'); element.dataset.sessionRow = record.id; element.dataset.occurrence = key;
       const link = button('', () => select(record.id), 'session-link'); link.dataset.sessionId = record.id;
-      draggableSession(link, record.id, true, group || ''); sidebarDropRow(element, record.id, group);
+      // The butler's row is not reordered and not dragged into a space.
+      if (steward) element.classList.add('steward-row'); else { draggableSession(link, record.id, true, group || ''); sidebarDropRow(element, record.id, group); }
       const label = node('span', undefined, 'label'), name = node('span', undefined, 'session-title'), shortId = node('span', undefined, 'session-short-id'), status = node('small'), badges = node('span', undefined, 'session-space-badges'), dot = node('span'), version = node('span', undefined, 'session-backend-version');
       const metadata = node('span', undefined, 'session-metadata'), time = node('time', undefined, 'session-time'), marker = node('span', undefined, 'sidebar-state-marker');
       version.setAttribute('aria-hidden', 'true'); dot.setAttribute('aria-hidden', 'true'); marker.setAttribute('aria-hidden', 'true');
       metadata.append(badges, status, time); label.append(name, version, shortId, metadata);
       // T-142: the status mark sits on the avatar's top-right corner, where a glance finds it.
-      const avatar = icon(record.provider); avatar.append(dot); link.append(avatar, label, marker);
+      const avatar = icon(record.provider); if (steward) avatar.textContent = '◆'; avatar.append(dot); link.append(avatar, label, marker);
       const more = button('⋯', () => openSessionMenu(record.id, undefined, key), 'session-more'); more.dataset.sessionMenu = record.id;
       more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
       more.addEventListener('pointerdown', event => { if (sessionMenu?.rowKey === key) event.stopPropagation(); });
@@ -2854,7 +2940,8 @@ function renderSessions() {
     }
     const memberships = allSpaces().filter(r => !r.archived && inSpace(record, r.id)), membershipNames = () => memberships.map(r => spaceName(r)).join('、');
     const presentation = sidebarPresentation(record);
-    const label = () => `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${sidebarPresentation(record).full}`;
+    const plainLabel = () => `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${sidebarPresentation(record).full}`;
+    const label = () => steward ? uiText('steward.rowLabel', { details: plainLabel() }) : plainLabel();
     const association = () => memberships.length ? uiText('sidebar.memberships', { names: membershipNames() }) : uiText('sidebar.independent');
     const occurrence = () => grouped && memberships.length > 1 ? uiText('sidebar.sameIdentity') : '';
     const version = () => backendVersionNotice(record, state.appVersion);
@@ -2876,7 +2963,9 @@ function renderSessions() {
     if (record.id === selected) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
     const moreParams = () => ({ name: record.name, id: sessionShortId(record.id), space: group ? ` · ${spaceName(spaceRecord(group))}` : '' }); ui.display.attribute(row.more, 'aria-label', 'sidebar.sessionActions', moreParams); ui.display.attribute(row.more, 'title', 'sidebar.sessionActions', moreParams); row.more.disabled = renameTarget?.id === record.id;
     ui.display.computed(row.more, 'aria-description', () => sidebarDetails(record).join(' · '));
-    row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); ui.display.computed(row.status, 'text', () => sidebarPresentation(record).compact);
+    // The butler's row is named for what it is; which session it is stands on the line below, before its state.
+    if (steward) { ui.display.text(row.name, 'butler.name'); row.shortId.textContent = ''; ui.display.computed(row.status, 'text', () => uiText('steward.rowStatus', { name: record.name, status: sidebarPresentation(record).compact })); }
+    else { row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); ui.display.computed(row.status, 'text', () => sidebarPresentation(record).compact); }
     row.element.classList.toggle('same-name', repeated.has(record.id));
     row.time.textContent = sessionActivityTime(record); row.time.title = sessionTimes(record);
     row.dot.className = `state-dot ${presentation.tone}${presentation.workTone ? ' ' + presentation.workTone : ''}`; ui.display.computed(row.dot, 'title', () => sidebarPresentation(record).full); row.dot.dataset.nativeState = record.state;
@@ -3509,7 +3598,7 @@ function documentSelectionChanged() {
 }
 document.addEventListener('selectionchange', documentSelectionChanged);
 document.addEventListener('toggle', updateSelectedSharing, true);
-const headerMenuKey = () => JSON.stringify([selectionRevision, selected, current()?.id, current()?.nativeId, spaceId, current() ? pairRevision(current()) : null, current()?.archived, current()?.owner, state.queueSecretary, state.integrator, disconnected]);
+const headerMenuKey = () => JSON.stringify([selectionRevision, selected, current()?.id, current()?.nativeId, spaceId, current() ? pairRevision(current()) : null, current()?.archived, current()?.owner, state.queueSecretary, state.integrator, state.steward, disconnected]);
 function openHeaderMenu(anchor, terminal = false) {
   if (!current()) return;
   if (sessionMenu?.anchor === anchor) return sessionMenu.close();
@@ -3517,13 +3606,16 @@ function openHeaderMenu(anchor, terminal = false) {
   const key = headerMenuKey(), h = headerControls;
   const actions = terminal ? [{ id: 'display', label: uiText('header.display'), labelKey: 'header.display', control: $('terminal-display') }]
     : [{ id: 'membership', label: h.membership.textContent, labelRead: () => h.membership.textContent, control: h.membership }, { id: 'share', label: uiText('header.share'), labelKey: 'header.share', control: h.selectedText }, { id: 'usage', label: uiText('header.usage'), labelKey: 'header.usage', control: h.usage }];
+  // The same flag as the secretary item: kept on an archived session, and disabled while disconnected.
+  if (!terminal) actions.push(...stewardAction(current()).map(item => ({ ...item, secretary: true })));
   const secretaryKey = state.queueSecretary?.sessionId === current().id ? 'menu.queueSecretaryRevoke' : 'menu.queueSecretarySet';
   if (typeof api.queueSecretary === 'function' && (state.queueSecretary?.sessionId === current().id || current().nativeId && !current().archived)) actions.push({
     id: state.queueSecretary?.sessionId === current().id ? 'queue-secretary-revoke' : 'queue-secretary-set', label: uiText(secretaryKey), labelKey: secretaryKey, secretary: true,
   });
   // The same flag as the secretary item: kept on an archived session, and disabled while disconnected.
   if (!terminal) actions.push(...integratorAction(current()).map(item => ({ ...item, secretary: true })));
-  const items = actions.filter(item => terminal || !current().archived || item.id === 'usage' || item.secretary);
+  // The butler is not offered a space to join.
+  const items = actions.filter(item => (terminal || !current().archived || item.id === 'usage' || item.secretary) && !(item.id === 'membership' && item.control.hidden));
   anchor.focus(); anchor.setAttribute('aria-expanded', 'true');
   const close = ui.menu({
     items: items.map(({ control, secretary, ...item }) => ({ ...item, disabled: Boolean(control?.disabled) || Boolean(secretary && disconnected) })),
@@ -3537,6 +3629,8 @@ function openHeaderMenu(anchor, terminal = false) {
       if (key !== headerMenuKey()) return;
       if (action === 'queue-secretary-set' || action === 'queue-secretary-revoke') { if (!disconnected) attempt(() => chooseQueueSecretary(action === 'queue-secretary-revoke' ? null : current().id)); }
       else if (action === 'integrator-set' || action === 'integrator-revoke') { if (!disconnected) attempt(() => chooseIntegrator(current().id, action === 'integrator-revoke')); }
+      else if (action === 'steward-set' || action === 'steward-revoke') { if (!disconnected) attempt(() => chooseSteward(current().id, action === 'steward-revoke')); }
+      else if (action === 'steward-change') openStewardChooser();
       else items.find(item => item.id === action)?.control.click();
     },
   });
@@ -3719,6 +3813,10 @@ function renderHeader(s, inRoom) {
   h.usage.hidden = !s && !inRoom;
   h.resume.hidden = !s || !canResume(s) || mode !== 'terminal';
   h.membership.hidden = h.selectedText.hidden = !s || !!s.archived;
+  // The butler stays outside every space: no "join" on it. If it is somehow in one, leaving stays offered.
+  const isButler = Boolean(s && !s.archived && state.steward?.sessionId === s.id);
+  if (isButler && !inSpace(s)) h.membership.hidden = true;
+  const badge = $('steward-badge'); if (badge) { badge.hidden = !isButler; if (isButler) ui.display.computed(badge, 'text', () => '◆ ' + uiText('butler.name')); }
   ui.display.text(h.membership, s && inSpace(s) ? 'header.leave' : 'header.join');
   h.restore.hidden = !s?.archived;
   h.more.hidden = !inRoom || !!s;
@@ -5817,6 +5915,10 @@ $('retry-save').onclick = () => attempt(async () => {
   finally { $('retry-save').disabled = false; }
 });
 $('search-button').onclick = () => openSearch();
+$('steward-empty').onclick = () => openStewardChooser();
+$('steward-cancel').onclick = () => $('steward-dialog').close();
+$('steward-confirm').onclick = () => attempt(confirmSteward);
+$('steward-dialog').addEventListener('close', () => { if ($('steward-dialog').open) return; stewardChoice = ''; $('steward-list').replaceChildren(); $('steward-error').hidden = true; });
 $('close-session-chain').onclick = () => $('session-chain-dialog').close();
 $('session-chain-dialog').addEventListener('close', () => {
   if ($('session-chain-dialog').open) return;
@@ -5935,7 +6037,10 @@ attempt(async () => {
       draftRecoveries.set(id, await api.retainDraftRecovery(id, backup.text));
     }
   }
-  await select(state.viewState.selected || '', mode); await api.uiReady(); reportLanguageWarning();
+  // The first window of this start of the app lands on the butler's conversation when one is designated;
+  // otherwise, and in every other window, where the window was.
+  const landing = typeof api.landing === 'function' && await api.landing() ? stewardRecord() : null;
+  await select(landing ? landing.id : state.viewState.selected || '', mode); await api.uiReady(); reportLanguageWarning();
 });
 const disposeContentMenus = bindContentMenus();
 return () => { clearInterval(nativeActivityClock); roomOverview?.dispose(); document.removeEventListener('toggle', updateSelectedSharing, true); document.removeEventListener('selectionchange', documentSelectionChanged); document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); disposeReadingViews(); disposeContentMenus(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };

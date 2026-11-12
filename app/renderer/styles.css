@@ -961,6 +961,23 @@ header h1, header p { overflow-wrap: anywhere; }
 .butler-dialog .dialog-actions button{white-space:nowrap}
 .butler-dialog .butler-apart{margin-right:auto}
 /* End butler entry. */
+/* The butler the person talks to: its place at the top of the sidebar, its mark in the header, and the chooser. */
+.steward-slot:empty{display:none}
+.steward-row{margin:2px 0 6px}
+.steward-row .agent-icon{background:var(--ink);color:var(--surface,#fff)}
+.steward-badge{flex:none;display:inline-flex;align-items:center;font-size:12px;font-weight:600;padding:2px 9px;margin-right:8px;border:1px solid var(--border);border-radius:999px;white-space:nowrap}
+dialog.steward-dialog{max-height:calc(100vh - 32px);overflow:auto}
+.steward-list{border-top:1px solid var(--border);margin:0 0 4px}
+.steward-list:empty{display:none}
+dialog.steward-dialog label.steward-pick{display:grid;grid-template-columns:18px 32px minmax(0,1fr);align-items:center;gap:10px;padding:7px 2px;margin:0;border-bottom:1px solid var(--border);font-size:13px;font-weight:400}
+dialog.steward-dialog label.steward-pick>*{margin:0}
+dialog.steward-dialog .steward-pick input{all:revert;margin:0;width:15px;height:15px}
+dialog.steward-dialog .steward-pick .agent-icon{position:static;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px}
+.steward-pick strong{display:block;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.steward-pick small{display:block;color:var(--muted);line-height:1.45}
+.steward-pick.unavailable{color:var(--muted)}
+.steward-pick.unavailable strong{font-weight:500}
+/* End butler the person talks to. */
 /* Butler read log: one dialog, opened from the butler entry. */
 .butler-reads { width: min(820px, calc(100vw - 48px)); max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
 .butler-reads:not([open]) { display: none; }

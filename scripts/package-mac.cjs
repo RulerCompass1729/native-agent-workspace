@@ -199,6 +199,7 @@ async function build() {
       'startup.html',
       'startup.js',
       'state-push.cjs',
+      'steward-role.cjs',
       'submission-policy.cjs',
       'terminal-continuation.js',
       'terminal-keyboard.cjs',

@@ -55,7 +55,7 @@ const all = () => { const records = []; let after = 0, through = 0;
   await size(1280, 800);
   const closed = () => page.evaluate(() => { const dialog = document.getElementById('butler-reads-dialog'), row = document.getElementById('butler-row');
     return { dialog: Boolean(dialog) && !dialog.open && dialog.getClientRects().length === 0, bound: Boolean(dialog?.querySelector('h2')), row: row.hidden, module: typeof window.nativeWorkspaceButlerReads?.bind,
-      text: /大管家|Butler|读过什么|has read/.test(document.querySelector('.sidebar').innerText + document.querySelector('main').innerText) }; });
+      text: /大管家|Butler|读过什么|has read/.test([...document.querySelector('.sidebar').children].filter(part => part.id !== 'steward-entry' && part.getClientRects().length).map(part => part.innerText).join('\n') + document.querySelector('main').innerText) }; });
   assert.deepEqual(await closed(), { dialog: true, bound: true, row: true, module: 'function', text: false });
   assert.equal(fs.existsSync(logFile), false, 'Starting the app writes no read log');
   checks.push('With the entry closed (every ordinary launch) the read log dialog is in the page, shut and invisible, and nothing offers it');
