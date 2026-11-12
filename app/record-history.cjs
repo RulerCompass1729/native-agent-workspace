@@ -146,6 +146,150 @@ function reminders(manifest, now) {
   return due;
 }
 
+const dayOf = time => new Date(time).toISOString().slice(0, 10);
+const openDayOf = block => parseBlockName(block.name).day;
+const presentFile = file => { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
+
+// A record kept whole in blocks and read back whole at start (the executed-operations record). Each line is
+// {"sequence":n,"time":t,"day":"YYYY-MM-DD","value":...}: its number in the whole record, its own time and UTC day,
+// and the value, which `check` must accept. Lines are only ever added; a value that changes later is added again,
+// and the later line is the one that holds. The open block is sealed with its size and checksum when a line arrives
+// on a later UTC day than it was opened, or would take it past its size. Loading reads every block: a sealed block
+// that is missing or no longer matches, or a line that does not read, stops the load and the caller fails closed;
+// a last line cut short by a stop during an append is left as it is and its block sealed.
+class BlockLog {
+  #parent; #record; #check; #manifest = { version: 1, record: '', blocks: [] }; #store = null; #failed = false;
+  constructor(parent, record, check) {
+    if (typeof parent !== 'string' || !path.isAbsolute(parent) || typeof record !== 'string' || !/^[a-z][a-z-]{0,40}$/.test(record) || typeof check !== 'function') throw Error('Invalid block log');
+    this.#parent = parent; this.#record = record; this.#check = check; this.#manifest = { version: 1, record, blocks: [] };
+  }
+  get manifest() { return { version: 1, record: this.#record, blocks: this.#manifest.blocks.map(item => ({ ...item, days: { ...item.days } })) }; }
+  get directory() { return this.#store; }
+  #existing() { const top = existingDirectory(this.#parent, HISTORY_DIR); return top && existingDirectory(top, this.#record); }
+  #write(manifest) { writePrivateJson(this.#store, MANIFEST, { version: 1, record: this.#record, blocks: manifest.blocks }); this.#manifest = manifestValue({ version: 1, record: this.#record, blocks: manifest.blocks }, this.#record); }
+  // One block read whole: its values in order and what the manifest says of it.
+  #scan(name, first, tail) {
+    const file = path.join(this.#store, name), named = fs.lstatSync(file);
+    if (!privateFile(named) || named.size > BLOCK_MAX_BYTES) throw Error('Unreadable history block');
+    const bytes = fs.readFileSync(file), hash = sha256().update(bytes).digest('hex'), decoder = new TextDecoder('utf-8', { fatal: true });
+    const values = [], days = {}; let start = 0, next = first, oldestTime = null, newestTime = null;
+    for (;;) {
+      const end = bytes.indexOf(10, start);
+      if (end === -1) break;
+      let line; try { line = JSON.parse(decoder.decode(bytes.subarray(start, end))); } catch { throw Error('Unreadable history block'); }
+      if (!exact(line, ['sequence', 'time', 'day', 'value']) || line.sequence !== next || !integer(line.time) || line.day !== dayOf(line.time)) throw Error('Unreadable history block');
+      try { this.#check(line.value); } catch { throw Error('Unreadable history block'); }
+      values.push(line.value); days[line.day] = (days[line.day] || 0) + 1; next++; start = end + 1;
+      oldestTime = oldestTime === null ? line.time : Math.min(oldestTime, line.time); newestTime = newestTime === null ? line.time : Math.max(newestTime, line.time);
+    }
+    if (start < bytes.length && (!tail || bytes.length - start > BLOCK_MAX_BYTES)) throw Error('Unreadable history block');
+    return { values, count: values.length, days, bytes: bytes.length, sha256: hash, oldestTime, newestTime, tail: bytes.length - start };
+  }
+  #entry(name, first, scan, status) {
+    return { name, firstSequence: first, lastSequence: first + scan.count - 1, offset: 0, count: scan.count, bytes: scan.bytes, oldestTime: scan.oldestTime,
+      newestTime: scan.newestTime, days: scan.days, sha256: status === 'sealed' ? scan.sha256 : null, status, origin: 'native' };
+  }
+  // Every value in the record, in order. Called once, at start.
+  load() {
+    this.#store = this.#existing();
+    if (!this.#store) return [];
+    let manifest;
+    try { const value = readPrivateJson(path.join(this.#store, MANIFEST), MANIFEST_MAX_BYTES); manifest = value === null ? null : manifestValue(value, this.#record); }
+    catch (error) { if (!(error instanceof SyntaxError) && !/^Invalid (manifest|block entry)$/.test(error.message)) throw error; manifest = undefined; }
+    const names = fs.readdirSync(this.#store).filter(name => parseBlockName(name)).sort((a, b) => parseBlockName(a).firstSequence - parseBlockName(b).firstSequence);
+    if (manifest === null && !names.length) return [];
+    let changed = false;
+    if (!manifest) {
+      // Built again from the blocks, every one of which must read; the newest is the one still open.
+      manifest = { blocks: [] };
+      for (const name of names) {
+        const first = lastSequence(manifest) + 1;
+        if (parseBlockName(name).firstSequence !== first) throw Error('Unreadable history block');
+        const scan = this.#scan(name, first, true);
+        if (!scan.count) throw Error('Unreadable history block');
+        manifest.blocks.push(this.#entry(name, first, scan, 'sealed'));
+      }
+      if (manifest.blocks.length) Object.assign(manifest.blocks.at(-1), { status: 'open', sha256: null });
+      changed = true;
+    }
+    const values = [];
+    manifest = { blocks: manifest.blocks.map(item => ({ ...item })) };
+    for (const [index, block] of manifest.blocks.entries()) {
+      if (block.status === 'unreadable') throw Error('Unreadable history block');
+      if (block.status === 'sealed') {
+        const scan = this.#scan(block.name, block.firstSequence, true);
+        if (scan.bytes !== block.bytes || scan.sha256 !== block.sha256 || scan.count !== block.count) throw Error('Unreadable history block');
+        values.push(...scan.values); continue;
+      }
+      // The open block: lines past the manifest's count (a stop before it caught up) are taken in; a last line cut
+      // short seals it as it is; fewer lines than counted stop the load.
+      if (!presentFile(path.join(this.#store, block.name))) { if (block.count) throw Error('Unreadable history block'); manifest.blocks.splice(index, 1); changed = true; break; }
+      const scan = this.#scan(block.name, block.firstSequence, true);
+      if (scan.count < block.count) throw Error('Unreadable history block');
+      if (!scan.count) {
+        fs.renameSync(path.join(this.#store, block.name), path.join(this.#store, `${block.name}.${randomUUID()}.torn`)); syncDirectory(this.#store);
+        manifest.blocks.splice(index, 1); changed = true; break;
+      }
+      const entry = this.#entry(block.name, block.firstSequence, scan, scan.tail ? 'sealed' : 'open');
+      if (scan.tail || scan.count !== block.count || scan.bytes !== block.bytes) { manifest.blocks[index] = entry; changed = true; }
+      values.push(...scan.values);
+    }
+    if (changed) this.#write(manifest); else this.#manifest = manifestValue({ version: 1, record: this.#record, blocks: manifest.blocks }, this.#record);
+    return values;
+  }
+  // Values added at the end, each with its own time; written and synced before this returns. A failure leaves the
+  // record unusable for this run (the caller fails closed); what reached the disk is taken in at the next start.
+  append(items, now) {
+    if (this.#failed) throw Error('History record is unavailable');
+    if (!Array.isArray(items) || !items.length) return;
+    try { this.#append(items, now); } catch (error) { this.#failed = true; throw error; }
+  }
+  #append(items, now) {
+    this.#store ||= ensureDirectory(ensureDirectory(this.#parent, HISTORY_DIR), this.#record);
+    let manifest = { blocks: this.#manifest.blocks.map(item => ({ ...item, days: { ...item.days } })) }, sequence = lastSequence(manifest);
+    const writeDay = dayOf(now), lines = items.map(item => {
+      if (!integer(item.time)) throw Error('Invalid history line');
+      this.#check(item.value); sequence++;
+      const text = Buffer.from(JSON.stringify({ sequence, time: item.time, day: dayOf(item.time), value: item.value }) + '\n');
+      if (text.length > BLOCK_MAX_BYTES) throw Error('History line is too large');
+      return { text, time: item.time, day: dayOf(item.time) };
+    });
+    for (let index = 0; index < lines.length;) {
+      let open = manifest.blocks.at(-1)?.status === 'open' ? manifest.blocks.at(-1) : null;
+      if (open && (writeDay > openDayOf(open) || open.bytes + lines[index].text.length > BLOCK_MAX_BYTES)) {
+        const scan = this.#scan(open.name, open.firstSequence, false);
+        if (scan.count !== open.count || scan.bytes !== open.bytes) throw Error('History block changed');
+        manifest.blocks[manifest.blocks.length - 1] = this.#entry(open.name, open.firstSequence, scan, 'sealed'); this.#write(manifest); open = null;
+      }
+      if (!open) {
+        const first = lastSequence(manifest) + 1, name = blockName(first, writeDay);
+        if (presentFile(path.join(this.#store, name))) throw Error('History block place is taken');
+        open = { name, firstSequence: first, lastSequence: first - 1, offset: 0, count: 0, bytes: 0, oldestTime: null, newestTime: null, days: {}, sha256: null, status: 'open', origin: 'native' };
+        manifest.blocks.push(open); this.#write(manifest);
+      }
+      const batch = []; let size = open.bytes;
+      while (index < lines.length && size + lines[index].text.length <= BLOCK_MAX_BYTES) { batch.push(lines[index]); size += lines[index].text.length; index++; }
+      const bytes = Buffer.concat(batch.map(line => line.text)), file = path.join(this.#store, open.name);
+      let fd;
+      try {
+        fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_NOFOLLOW | (open.bytes ? 0 : fs.constants.O_CREAT | fs.constants.O_EXCL), 0o600);
+        const before = fs.fstatSync(fd);
+        if (!privateFile(before) || before.size !== open.bytes) throw Error('History block changed');
+        let offset = 0;
+        while (offset < bytes.length) { const count = fs.writeSync(fd, bytes, offset, bytes.length - offset); if (!Number.isSafeInteger(count) || count <= 0) throw Error('No progress'); offset += count; }
+        fs.fsyncSync(fd);
+        if (fs.fstatSync(fd).size !== open.bytes + bytes.length) throw Error('History block changed');
+      } finally { if (fd !== undefined) fs.closeSync(fd); }
+      if (!open.bytes) syncDirectory(this.#store);
+      const days = { ...open.days }; for (const line of batch) days[line.day] = (days[line.day] || 0) + 1;
+      const times = batch.map(line => line.time);
+      Object.assign(open, { lastSequence: open.lastSequence + batch.length, count: open.count + batch.length, bytes: open.bytes + bytes.length, days,
+        oldestTime: Math.min(...(open.oldestTime === null ? [] : [open.oldestTime]), ...times), newestTime: Math.max(...(open.newestTime === null ? [] : [open.newestTime]), ...times) });
+      this.#write(manifest);
+    }
+  }
+}
+
 module.exports = Object.freeze({ BLOCK_MAX_BYTES, REMIND_AGE_DAYS, REMIND_TOTAL_BYTES, HISTORY_DIR, MANIFEST, INTENT, MANIFEST_MAX_BYTES, INTENT_MAX_BYTES,
   privateFile, privateDirectory, blockName, parseBlockName, blockEntry, manifestValue, lastSequence, totalBytes, isDay, isHash,
-  ensureDirectory, existingDirectory, syncDirectory, readPrivateJson, writePrivateJson, removeFile, sha256, reminders });
+  ensureDirectory, existingDirectory, syncDirectory, readPrivateJson, writePrivateJson, removeFile, sha256, reminders, BlockLog });

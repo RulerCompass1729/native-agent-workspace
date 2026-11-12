@@ -27,6 +27,23 @@ uncertain send. `awaiting-native` is not a native delivery receipt. Only a real
 receipt from the bound recipient makes the operation `received`; this does not
 claim that the recipient has started or completed its task.
 
+Every operation record is kept (the person, 2026-11-11: keep everything, split
+into small blocks, for example by day). `background-operations.json` holds what
+is still current: operations that ended within the last day or are still
+pending, views, refusal summaries. Once an operation has ended more than a day
+ago with nothing pending (no unread copy), it moves to the day's block under
+`history/operations/` (the shared layout in `app/record-history.cjs`), which is
+only added to; a later change, such as a send confirmed on a later receipt, adds
+the record again and the later line holds. All records stay loaded, so receipts,
+a repeated operation ID and the conversation rows behave as before. A block that
+cannot be read stops background control rather than risk running an operation ID
+again. The state file is version 2. An older version refuses it, and its
+background control is then unavailable while the app runs, instead of starting
+empty. An older version's file is kept as `legacy-NNNN.json` beside the blocks
+when it is taken in; an operation ID it shares with the blocks keeps the record
+written first. Memory and start time grow with the whole record; the person is
+reminded at 0.5 GiB.
+
 File commands accept explicit absolute `paths` on the invocation instead of
 opening a desktop picker. File and web links return validated material or a URL
 without opening another application. `newWindow` returns an independent hidden

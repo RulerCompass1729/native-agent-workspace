@@ -79,3 +79,40 @@ test('the reminders are worked out from the manifest alone: blocks past 30 days,
   const damaged = manifest([at(1, NOW - DAY, { status: 'unreadable' }), at(2, NOW - DAY), at(3, NOW, { status: 'unreadable', sha256: null })]);
   assert.deepEqual(history.reminders(damaged, NOW), [{ kind: 'unreadable', blocks: 2, fromSequence: 1, throughSequence: 3 }]);
 });
+
+test('a block log adds lines to the open block, seals it on a later UTC day, and reads every line back in order', t => {
+  const dir = folder(t), check = value => { if (!value || typeof value.id !== 'string') throw Error('bad'); };
+  const log = new history.BlockLog(dir, 'operations', check), day1 = Date.UTC(2026, 10, 1, 12), day2 = day1 + DAY;
+  assert.deepEqual(log.load(), []); assert.equal(fs.existsSync(path.join(dir, 'history')), false, 'Loading makes nothing');
+  log.append([{ time: day1 - DAY, value: { id: 'a' } }, { time: day1, value: { id: 'b' } }], day1);
+  log.append([{ time: day2, value: { id: 'c' } }], day2);
+  const again = new history.BlockLog(dir, 'operations', check);
+  assert.deepEqual(again.load().map(value => value.id), ['a', 'b', 'c']);
+  assert.deepEqual(again.manifest.blocks.map(block => [block.name, block.status, block.count, block.days]), [
+    ['000000001-2026-11-01.jsonl', 'sealed', 2, { '2026-10-31': 1, '2026-11-01': 1 }], ['000000003-2026-11-02.jsonl', 'open', 1, { '2026-11-02': 1 }]]);
+  assert.throws(() => again.append([{ time: day2, value: { id: 7 } }], day2), /bad/, 'A value the record does not accept is not written');
+  assert.throws(() => again.append([{ time: day2, value: { id: 'd' } }], day2), /unavailable/, 'After a failure the log stays closed for this run');
+  assert.deepEqual(new history.BlockLog(dir, 'operations', check).load().map(value => value.id), ['a', 'b', 'c']);
+});
+
+test('a block log keeps a cut-short last line and seals its block, builds a lost manifest again, and stops on anything else', t => {
+  const dir = folder(t), check = () => {}, day1 = Date.UTC(2026, 10, 1, 12);
+  const log = new history.BlockLog(dir, 'operations', check); log.append([{ time: day1, value: { id: 'a' } }], day1);
+  const store = path.join(dir, 'history', 'operations'), open = path.join(store, '000000001-2026-11-01.jsonl');
+  fs.appendFileSync(open, '{"sequence":2,"ti'); const cut = fs.readFileSync(open);
+  const reopened = new history.BlockLog(dir, 'operations', check);
+  assert.deepEqual(reopened.load().map(value => value.id), ['a']); assert.deepEqual(fs.readFileSync(open), cut, 'Left as it is');
+  assert.equal(reopened.manifest.blocks[0].status, 'sealed');
+  reopened.append([{ time: day1, value: { id: 'b' } }], day1);
+  assert.deepEqual(reopened.manifest.blocks.map(block => block.name), ['000000001-2026-11-01.jsonl', '000000002-2026-11-01.jsonl'], 'Nothing follows the cut-short line');
+  // A manifest that does not parse is built again from the blocks.
+  fs.writeFileSync(path.join(store, 'manifest.json'), '{broken', { mode: 0o600 });
+  assert.deepEqual(new history.BlockLog(dir, 'operations', check).load().map(value => value.id), ['a', 'b']);
+  // A sealed block changed, a block missing, or a manifest that cannot be opened safely stops the load.
+  fs.writeFileSync(open, Buffer.concat([cut, Buffer.from('x')]), { mode: 0o600 });
+  assert.throws(() => new history.BlockLog(dir, 'operations', check).load(), /Unreadable/);
+  fs.writeFileSync(open, cut, { mode: 0o600 }); fs.chmodSync(path.join(store, 'manifest.json'), 0o644);
+  assert.throws(() => new history.BlockLog(dir, 'operations', check).load(), /Unsafe/);
+  fs.chmodSync(path.join(store, 'manifest.json'), 0o600); fs.rmSync(path.join(store, '000000002-2026-11-01.jsonl'));
+  assert.throws(() => new history.BlockLog(dir, 'operations', check).load(), /Unreadable/);
+});

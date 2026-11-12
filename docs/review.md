@@ -12273,3 +12273,61 @@ newest block that is gone; and on a day past 64 pages, today's line says the 64
 are used up without saying how many more were read (the day's header shows it).
 The review of this batch ends here. After rebasing onto main ace4975 the full
 suite passed again (6307 tests), and so did the DSH read budget check.
+
+## Records kept whole, in blocks: the executed-operations record (batch 2 of 3, 2026-11-12)
+
+The person's words are in the batch 1 section. This batch keeps every executed
+operation an agent asked NAW to run (`background-operations.json`), which until now
+was one document rewritten whole on each change and refused new operations at
+32 MiB.
+
+What changed:
+- `app/record-history.cjs`: `BlockLog`, an append-only record in the shared block
+  layout, read back whole at start. A value that changes later is added again and
+  the later line holds. A sealed block that no longer matches or is missing, or a
+  line that does not read, stops the load; a last line cut short by a stop is kept
+  and its block sealed.
+- `app/background-control.cjs`: a record that ended more than a day ago with
+  nothing pending (not running, not awaiting a decision, no unread copy) moves
+  from the state file into the day's block under `history/operations/`. Every
+  record stays loaded: receipts, a repeated operation id, the conversation rows
+  and an earlier cancellation look in both. A send confirmed on a later receipt
+  is added again. The state file is version 2; an older version's version 1 file
+  is kept byte for byte as `legacy-NNNN.json` and taken in (an id already recorded
+  keeps its first record).
+- `app/service-client.cjs` copies the new module into the service runtime; a new
+  test checks that every module the daemon loads is copied. The real-window
+  background control check now also treats the person-only `butler` channel as
+  outside the agent catalog (it is removed there since 7347c1c; the check had
+  not been updated and failed on main too).
+
+Design choice, against the design page's section 2: no `.keys` index. All
+records are loaded instead, so nothing an agent or the person sees changes. The
+failure measured was the 32 MiB stop and the whole-file rewrite; the memory and
+start time this costs grow with the record and were not measured at size. The
+person is reminded at 0.5 GiB.
+
+Rollback, run with real code: main ace4975's own module (a separate worktree)
+recorded an operation, this version took the file in two days later, and the
+older module then refused the version 2 file ("Invalid background operation
+record", not "missing"), so it cannot start empty and run the id again. In the
+older `main.cjs` that refusal sets background control unavailable and the app
+runs. Evidence: `rollback-run.log`.
+
+Evidence: the full suite, 6318 tests, all pass. The five operations and records
+test files: 210 pass. 16 deliberate faults in the operations module and the block
+log are all caught (a seventeenth showed a check that could never act; the check
+was removed). The real-window background control check passes (10 checks,
+including a real restart where an old operation is not sent again). No native
+program, no model.
+
+Not verified, or known:
+- Going back to an older version: its background control is unavailable until
+  the person comes back to this version. Nothing else in the app is affected.
+- A block that cannot be read stops background control for the whole app run
+  (as a damaged file did before); the bell (batch 3) tells the person.
+- Memory and start time grow with the whole record (all of it is loaded).
+- An open block's contents changed in place by another program are not detected
+  until it is sealed; this record is not tamper-proof.
+- The real-window check runs within one day, so nothing settles there; settling,
+  taking in, a later receipt and a stop between the two writes are unit-tested.
