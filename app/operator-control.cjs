@@ -436,7 +436,9 @@ class OperatorControl {
     this.commit(data => { for (const request of Object.values(data.requests)) if (!request.closed && data.dispatches[request.currentDispatchId]?.executorId === id) { request.humanAt = Date.now(); request.humanOrder = data.sequence; } });
   }
   turnEnd(id, info) {
-    if (info.status === 'completed' || !Object.values(this.data.reports).some(r => r.executorId === id && r.executorNativeId === info.nativeId && r.callerTurnId === info.turnId)) return;
+    // `incomplete`: native ended the turn normally, only NAW could not confirm it saw all of it, so the report's turn
+    // is not "未正常结束" (steward step 2, batch 0).
+    if (info.status === 'completed' || info.status === 'incomplete' || !Object.values(this.data.reports).some(r => r.executorId === id && r.executorNativeId === info.nativeId && r.callerTurnId === info.turnId)) return;
     this.commit(data => { for (const report of Object.values(data.reports)) if (report.executorId === id && report.executorNativeId === info.nativeId && report.callerTurnId === info.turnId) report.turnAbnormal = true; });
   }
   close(requestId, reason) {

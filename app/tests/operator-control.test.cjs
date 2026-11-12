@@ -198,6 +198,15 @@ test('same-space report mirrors are fixed on save; new membership does not back-
   assert.equal(snapshot.sessions.find(s => s.id === f.id).messages.filter(m => m.operator?.reportId === saved.reportId).length, 1);
   f.w.get(f.id).roomId = null; snapshot = f.w.snapshot(); assert.equal(snapshot.room.messages.filter(m => m.operator?.reportId === saved.reportId).length, 1);
 });
+test('a report\'s turn that native ended normally but NAW could not confirm whole is not called abnormal (steward step 2, batch 0)', async t => {
+  const f = await fixture(t); f.enable(); f.grant(); const opened = await f.open();
+  const saved = await f.report(opened, { state: 'ready' }); const s = f.w.get(opened.sessionId), r = f.w.runtimes.get(s.id);
+  const abnormal = () => f.w.operator.data.reports[saved.reportId].turnAbnormal === true;
+  r.emit('nativeTurnEnd', { nativeId: s.nativeId, turnId: r.liveTurn.id, status: 'incomplete' });
+  assert.equal(abnormal(), false, '「所在原生回合未正常结束」 would be untrue');
+  r.emit('nativeTurnEnd', { nativeId: s.nativeId, turnId: r.liveTurn.id, status: 'failed' });
+  assert.equal(abnormal(), true);
+});
 
 test('uncertain creation is durably reserved before runtime allocation and is never repeated after restoration', async t => {
   const f = await fixture(t, { start: s => { if (s.name === 'Uncertain executor') throw Error('Synthetic native boot lost'); } });
