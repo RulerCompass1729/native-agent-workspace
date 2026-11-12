@@ -292,7 +292,17 @@ class IntegratorEngine {
         const now = this.now();
         if (now - handoffs.headUnreadSince(open.id, now) < this.headWaitMs) return none('main-unknown');
         checked = { handoffId: open.id, mainUnreadable: true };
-      } else checked = reader ? await handoffs.verify(reader, action, mainHead) : {};
+      } else {
+        checked = reader ? await handoffs.verify(reader, action, mainHead) : {};
+        // Git read the head but did not answer a question about a merge (it failed, timed out, or the
+        // repository went away meanwhile): the same trouble as a head that cannot be read. The answer waits
+        // the same bounded while and is checked again; after that it is settled with those merges held as
+        // "could not be checked", never as merges that were not found.
+        if (Object.values(checked.verified || {}).some(verdict => verdict?.why === 'git-unanswered')) {
+          const now = this.now();
+          if (now - handoffs.headUnreadSince(open.id, now) < this.headWaitMs) return none('git-unanswered');
+        }
+      }
       let fresh = null;
       try { fresh = await look(); } catch { /* No fresh view: nothing is settled from the older one. */ }
       if (!fresh) return none('not-ready-now');

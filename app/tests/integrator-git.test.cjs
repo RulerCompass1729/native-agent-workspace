@@ -34,7 +34,15 @@ test('a commit is named by hex digits only, and an unknown or unsafe name is not
   const tree = git('rev-parse', 'HEAD^{tree}');
   assert.equal(await read.commit(tree), null);
   assert.throws(() => reader('relative/path'));
-  assert.equal(await reader(path.join(repo, 'missing')).commit(base), null, 'A folder git cannot read answers null');
+  // "There is no such commit" is an answer (null). A folder that is gone, or that is no repository, is no answer at all (undefined).
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-integrator-git-plain-'));
+  t.after(() => fs.rmSync(plain, { recursive: true, force: true }));
+  for (const [where, folder] of [['a folder that is gone', path.join(repo, 'missing')], ['a folder that is no repository', fs.realpathSync(plain)]]) {
+    const silent = reader(folder);
+    assert.deepEqual([await silent.commit(base), await silent.isAncestor(base, base), await silent.changes(base, base)], [undefined, undefined, undefined], where);
+    // A name that could never be a commit is refused before git is asked, wherever the reader points.
+    assert.deepEqual([await silent.commit('main'), await silent.isAncestor('main', base), await silent.changes(base, 'main')], [null, null, null], where);
+  }
   // A branch or tag named like a short id is found by git before the commit. Such a name is not
   // taken for the commit it imitates; the full id still names the commit.
   const next = fixtureCommit(repo, git);
@@ -74,7 +82,9 @@ test('ancestry is answered yes, no, or not at all', async t => {
   assert.equal(await read.isAncestor(next, next), true);
   assert.equal(await read.isAncestor(next, base), false);
   assert.equal(await read.isAncestor(side, next), false);
-  for (const [a, b] of [[base.slice(0, 7), next], [base, 'main'], ['f'.repeat(40), next], [base, 'e'.repeat(40)], [undefined, next]]) assert.equal(await read.isAncestor(a, b), null, `${a} ${b}`);
+  // Names that are no full ids are refused (null). A full id of a commit the repository does not have is a question git does not answer (undefined).
+  for (const [a, b] of [[base.slice(0, 7), next], [base, 'main'], [undefined, next]]) assert.equal(await read.isAncestor(a, b), null, `${a} ${b}`);
+  for (const [a, b] of [['f'.repeat(40), next], [base, 'e'.repeat(40)]]) assert.equal(await read.isAncestor(a, b), undefined, `${a} ${b}`);
 });
 
 test('the changes of a range keep their ids across a fast-forward and a cherry-pick, and differ when the change differs', async t => {
@@ -102,7 +112,7 @@ test('the changes of a range keep their ids across a fast-forward and a cherry-p
   assert.deepEqual(await read.changes(base, git('rev-parse', 'HEAD')), delivered);
   // Nothing between a commit and itself; an unknown end is not answered.
   assert.deepEqual(await read.changes(second, second), []);
-  assert.equal(await read.changes(base, 'f'.repeat(40)), null);
+  assert.equal(await read.changes(base, 'f'.repeat(40)), undefined, 'A commit the repository does not have: git does not answer');
   assert.equal(await read.changes(base.slice(0, 7), second), null);
   assert.equal(RANGE_LIMIT, 500);
 });

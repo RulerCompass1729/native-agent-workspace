@@ -232,16 +232,25 @@ function validResult(result) {
 // 3. every commit the delivery holds relative to that earlier main is among what was merged up to
 //    the named commit: as the very same commit (a fast-forward) or as a commit with the same
 //    change (a cherry-pick). So the named commit is one that holds the whole delivery.
-// Anything git cannot answer counts as not verified.
+// Anything git answers with "no" counts as not verified. A question git did not answer at all (the
+// reader gives undefined) is told apart as 'git-unanswered': NAW's own trouble with git, not a claim
+// that failed. A "no" that was answered stands, whatever went unanswered after it.
 async function verifyMerged(read, claim) {
   const no = why => ({ verified: false, why });
   if (!sha(claim?.startHead) || !sha(claim?.mainHead)) return no('main-unknown');
   const [as, ready] = [await read.commit(claim.as), await read.commit(claim.ready)];
-  if (!as || !ready) return no('unknown-commit');
-  if (await read.isAncestor(as, claim.mainHead) !== true) return no('not-on-main');
-  if (await read.isAncestor(as, claim.startHead) !== false) return no('not-new');
+  if (as !== undefined && !as || ready !== undefined && !ready) return no('unknown-commit');
+  if (as === undefined || ready === undefined) return no('git-unanswered');
+  const onMain = await read.isAncestor(as, claim.mainHead);
+  if (onMain === undefined) return no('git-unanswered');
+  if (onMain !== true) return no('not-on-main');
+  const before = await read.isAncestor(as, claim.startHead);
+  if (before === undefined) return no('git-unanswered');
+  if (before !== false) return no('not-new');
   const delivered = await read.changes(claim.startHead, ready), merged = await read.changes(claim.startHead, as);
-  if (!delivered || !merged || !delivered.length) return no('no-changes');
+  // Here too an answered "no" (nothing delivered, or a range too large to read) comes before what went unanswered.
+  if (delivered !== undefined && (!delivered || !delivered.length) || merged !== undefined && !merged) return no('no-changes');
+  if (delivered === undefined || merged === undefined) return no('git-unanswered');
   const commits = new Set(merged.map(entry => entry.commit)), landed = new Set(merged.map(entry => entry.change).filter(Boolean));
   if (!delivered.every(entry => commits.has(entry.commit) || Boolean(entry.change) && landed.has(entry.change))) return no('changes-differ');
   return { verified: true, as };
@@ -690,7 +699,8 @@ class IntegrationHandoffs {
             entry.state = 'merged'; entry.closedAt = now; entry.mergedAs = verdict.as; entry.tests = result.tests; delete entry.resends;
             if (result.review) entry.review = label(result.review, 100);
             merged += 1; fact(entry, 'merged', { as: verdict.as, tests: result.tests, ...(entry.review ? { review: entry.review } : {}) });
-          } else held(entry, unread && result.malformed !== true ? 'main-unreadable' : 'merge-unverified');
+          // Git's own trouble (main's head could not be read, or a question about this merge went unanswered) is said as that.
+          } else held(entry, (unread || verdict?.why === 'git-unanswered') && result.malformed !== true ? 'main-unreadable' : 'merge-unverified');
         } else if (result.kind === 'returned') {
           entry.state = 'returned'; entry.closedAt = now; entry.note = result.reason; delete entry.resends;
           // The redo is a new task only the person or their secretary may add: it is suggested, and after

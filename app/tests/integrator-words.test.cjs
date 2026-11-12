@@ -83,7 +83,7 @@ test('the person\'s notice says how many deliveries and why, in both languages, 
   const cases = [
     [{ reason: 'review-off', count: 3, roomId: 'shared', itemId: 'item-1' }, '3 件交付要独立审查，而审查关着', 'Reviews are off, and deliveries need an independent review. Waiting: 3'],
     [{ reason: 'lock-held:Claude 终端', count: 1 }, '合并锁被 Claude 终端 占着，1 件交付在等', 'The merge lock is held by Claude 终端. Deliveries waiting: 1'],
-    [{ reason: 'main-unreadable', count: 2 }, 'NAW 读不到 main 的位置，2 件合入没法核对', 'NAW could not read where main is. Merges that could not be checked: 2'],
+    [{ reason: 'main-unreadable', count: 2 }, 'NAW 没能读项目文件夹，2 件合入没法核对', 'NAW could not read the project folder. Merges that could not be checked: 2'],
     [{ reason: `installable:${HEAD}`, count: 0 }, 'main 已合入新的交付（bbbbbbbbbbbb），可以安装', 'New deliveries were merged into main (bbbbbbbbbbbb); it can be installed'],
     [{ reason: `returned-limit:${SPACE}:lane/a`, count: 0 }, '分支 lane/a 被退回超过 2 次，请你决定怎么办', 'Branch lane/a was returned more than twice; please decide what to do'],
     [{ reason: 'returned-limit:lane/b', count: 0 }, '分支 lane/b 被退回超过 2 次，请你决定怎么办', 'Branch lane/b was returned more than twice; please decide what to do'],

@@ -207,6 +207,54 @@ test('an answer with merges waits a bounded while for main\'s head, then is sett
   assert.deepEqual(await f.engine.settle(view, f.look(view)), { kind: 'none', why: 'main-unknown' }, 'The second handoff\'s wait starts when its own answer is first seen');
 });
 
+test('a question about a merge that git does not answer waits the same bounded while and is asked again; then the merge is held as "could not be checked"', async t => {
+  // Main's head is read, but git answers nothing about the merge itself: each question in turn, and all of them.
+  const silent = { commit: async () => undefined }, cases = [silent, { isAncestor: async () => undefined }, { changes: async () => undefined }];
+  for (const [index, overrides] of cases.entries()) {
+    const f = fixture(t, { reader: reader(overrides) });
+    await f.handed(['a']);
+    f.clock = LATER;
+    const session = answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9`);
+    assert.deepEqual(await f.settle(session), { kind: 'none', why: 'git-unanswered' }, String(index));
+    // The first time is kept with the handoff, as for a head that cannot be read; nothing else is written and nothing is settled while it waits.
+    assert.equal(f.handoffs.snapshot().handoff.headUnreadAt, LATER);
+    const before = f.bytes();
+    f.clock = LATER + HEAD_WAIT_MS - 1;
+    assert.deepEqual(await f.settle(session), { kind: 'none', why: 'git-unanswered' });
+    assert.deepEqual([f.bytes(), f.looks, f.states()], [before, 0, { a: 'handed' }], 'The handoff keeps its place and the answer is not read afresh');
+    // The wait is over: the merge is held as one NAW could not check, which is said as that and not as a claim that failed.
+    f.clock = LATER + HEAD_WAIT_MS;
+    const result = await f.settle(session);
+    assert.deepEqual([outcomes(result), result.notify, result.install, f.looks], [{ a: 'held:main-unreadable' }, ['main-unreadable'], null, 1], String(index));
+  }
+  // Git answers again within the wait: the merge is checked and recorded as usual.
+  const g = fixture(t);
+  await g.handed(['a', 'b']);
+  let answers = false;
+  g.engine.reader = reader({ commit: async value => (answers ? reader().commit(value) : undefined) });
+  g.clock = LATER;
+  const both = answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9\nRETURNED ${commitOf('b')} needs a rebase`);
+  assert.deepEqual(await g.settle(both), { kind: 'none', why: 'git-unanswered' });
+  assert.deepEqual(g.states(), { a: 'handed', b: 'handed' }, 'The returned delivery waits with it: one answer is settled as a whole');
+  answers = true; g.clock = LATER + 60000;
+  assert.deepEqual(outcomes(await g.settle(both)), { a: 'merged', b: 'returned:needs a rebase' });
+  // One merge git did not answer for and one it confirmed, after the wait: each as it is.
+  const h = fixture(t, { reader: reader({ changes: async (base, tip) => (tip === commitOf('a') ? undefined : reader().changes(base, tip)) }) });
+  await h.handed(['a', 'b']);
+  h.clock = LATER;
+  const two = answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9\nMERGED ${commitOf('b')} as ${HEAD2} tests 9/9`);
+  assert.deepEqual(await h.settle(two), { kind: 'none', why: 'git-unanswered' });
+  h.clock = LATER + HEAD_WAIT_MS;
+  const mixed = await h.settle(two);
+  assert.deepEqual([outcomes(mixed), mixed.install], [{ a: 'held:main-unreadable', b: 'merged' }, { commit: HEAD2 }]);
+  // An answered "no" never waits: it is an unverified claim at once.
+  const n = fixture(t, { reader: reader({ isAncestor: async () => false }) });
+  await n.handed(['a']);
+  n.clock = LATER;
+  assert.deepEqual(outcomes(await n.settle(answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 9/9`))), { a: 'held:merge-unverified' });
+  assert.equal(n.handoffs.snapshot().ready[0].state, 'held');
+});
+
 test('with one checked look at the repository per settlement, every git question goes to that look; a repository that cannot be read is an unreadable head, never an unknown commit', async t => {
   const session = answered('tag-1', `MERGED ${commitOf('a')} as ${HEAD2} tests 3/3`);
   // The look is taken once, and its reader and head are the only ones asked: the engine's general reader and head are not.
