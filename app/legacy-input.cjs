@@ -176,7 +176,8 @@ class LegacyInput extends EventEmitter {
   async prepareOnce(entry, record) {
     const generation = this.readerGenerations.get(record.id) || 0;
     const checkOpen = () => {
-      if (this.closed) throw uiError("error.legacy.windowClosed");
+      // The view this prepare reads through was closed or retired meanwhile: nothing may be bound to its connection.
+      if (this.closed || entry.closing) throw uiError("error.legacy.windowClosed");
       if ((this.readerGenerations.get(record.id) || 0) !== generation) throw uiError("error.legacy.sessionRemovedConnectionCancelled");
     };
     checkOpen();
