@@ -569,8 +569,16 @@ async function stewardCaller(c) {
   return { id: record.id, name: sessionLabels.labels.get(record.id) || record.name };
 }
 function conversationReaderAllowed(actor) {
+  // The butler reads as any session may, also when it is the secretary too (checklist item 9 merges the two).
+  if (isStewardActor(actor)) return true;
   const secretary = queueSecretary?.current();
   return !secretary || secretary.sessionId !== actor.id || secretary.nativeId !== actor.nativeId;
+}
+// The designated butler, as the designation names it now (steward step 2, batch 4), for gates that judge a call with
+// the state already in hand. A designation that cannot be read is nobody.
+function isStewardActor(actor) {
+  let steward = null; try { steward = stewardOf?.() || null; } catch { return false; }
+  return Boolean(steward && actor && steward.sessionId === actor.id && steward.nativeId === actor.nativeId);
 }
 function conversationAccess(actor, snapshot) {
   const access = { roomIds: [], secretary: true };
@@ -578,6 +586,14 @@ function conversationAccess(actor, snapshot) {
   const current = snapshot?.sessions?.find(s => s.id === actor.id && s.nativeId === actor.nativeId);
   if (current && !current.archived && !current.nativeContextPending && !roomState.value.archivedSessions?.includes(actor.id)) {
     try { access.roomIds = roomIds(current); } catch { /* Invalid membership grants nothing. */ }
+    // The butler sees every space as a member does (the person, 2026-11-11: 「大管家权限最高,应该啥都可以看到和操作」,
+    // 「都能看,」; checklist 2026-11-12). Only while it is in no space, as its designation requires; what it reads through
+    // NAW is a step in its record.
+    let outside = false; try { outside = roomIds(current).length === 0; } catch { outside = false; }
+    if (outside && isStewardActor(actor)) {
+      access.roomIds = [...new Set([snapshot?.room?.id, ...(snapshot?.rooms || []).map(room => room?.id)].filter(id => typeof id === 'string' && id))];
+      access.secretary = false;
+    }
   }
   return access;
 }

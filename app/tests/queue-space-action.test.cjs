@@ -222,3 +222,29 @@ test('stewardCaller: only the designated session, as it is now, outside every sp
     sessions = [{ ...record, ...change }]; assert.equal(await call(), null, JSON.stringify(change));
   }
 });
+// Batch 4, part 2: the butler sees every space as a member does, only while it is in no space.
+test('the butler, in no space, reads every space as a member; others keep their own spaces; an unreadable designation is nobody', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
+  const start = source.indexOf('function conversationReaderAllowed(actor) {'), end = source.indexOf('function controlRequestActors(client) {', start);
+  let steward = { sessionId: 'butler', nativeId: 'native-butler' }, secretary = null;
+  const context = vm.createContext({ stewardOf: () => { if (steward instanceof Error) throw steward; return steward; }, queueSecretary: { current: () => secretary },
+    roomState: { value: { archivedSessions: [] } }, roomIds: s => s.roomIds });
+  vm.runInContext(source.slice(start, end), context);
+  const snapshot = { room: { id: 'shared' }, rooms: [{ id: 'shared' }, { id: 'web' }, { id: 'docs' }], sessions: [
+    { id: 'butler', nativeId: 'native-butler', roomIds: [] }, { id: 'member', nativeId: 'native-member', roomIds: ['web'] }] };
+  const access = actor => JSON.parse(JSON.stringify(context.conversationAccess(actor, snapshot)));
+  const butler = { id: 'butler', nativeId: 'native-butler' }, member = { id: 'member', nativeId: 'native-member' };
+  assert.deepEqual(access(butler), { roomIds: ['shared', 'web', 'docs'], secretary: false });
+  assert.deepEqual(access(member), { roomIds: ['web'], secretary: false });
+  secretary = { sessionId: 'butler', nativeId: 'native-butler' };
+  assert.deepEqual(access(butler), { roomIds: ['shared', 'web', 'docs'], secretary: false }, 'also the secretary: the butler reads');
+  assert.equal(context.conversationReaderAllowed(butler), true);
+  steward = { sessionId: 'butler', nativeId: 'older-native' };
+  assert.deepEqual(access(butler), { roomIds: [], secretary: true }, 'another native session of it is the secretary only');
+  steward = Error('unreadable'); assert.deepEqual(access(butler), { roomIds: [], secretary: true });
+  // What the agent's view then holds: queue text and space content for every space.
+  steward = { sessionId: 'butler', nativeId: 'native-butler' }; secretary = null;
+  const value = { sessions: snapshot.sessions, room: { id: 'shared' }, rooms: [{ id: 'web', name: 'Web', notes: 'N', queue: [{ id: 'q', status: 'queued', text: 'Fix it', assignee: null, createdAt: 1 }] }] };
+  const view = backgroundOperation.conversationSnapshot(value, { ...butler, name: 'B', provider: 'claude' }, null, undefined, context.conversationAccess(butler, snapshot));
+  assert.deepEqual([view.rooms[0].notes, view.rooms[0].queue[0].text], ['N', 'Fix it']);
+});

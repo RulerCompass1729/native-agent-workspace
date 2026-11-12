@@ -90,6 +90,9 @@ async function run() {
   await control({ action: 'catalog' });
   const snap = await control({ action: 'snapshot' }); assert.equal(snap.value.state, 'complete');
   const queued = await control(invoke('spaceAction', ['shared', 'queueAdd', ['首页换新标题', null]])); assert.equal(queued.value.state, 'complete', JSON.stringify(queued));
+  // The butler, in no space, reads every space as a member does (batch 4, part 2): the task's text is in its view.
+  const seenByButler = await control({ action: 'snapshot' });
+  assert.equal([seenByButler.value.value?.room, ...(seenByButler.value.value?.rooms || [])].filter(Boolean).flatMap(room => room.queue || []).find(item => item.id === queued.value.value)?.text, '首页换新标题', JSON.stringify(seenByButler.value).slice(0, 400));
   const cancel = await control(invoke('spaceAction', ['shared', 'queueCancel', [queued.value.value]]));
   assert.equal(cancel.value.state, 'complete', 'The butler may cancel');
   const item = (await page.evaluate(() => workspace.initial())).room.queue.find(i => i.id === queued.value.value);
@@ -107,12 +110,13 @@ async function run() {
   assert.deepEqual(seen.rows.map(r => r.slice(1, 2)[0]), [
     say('stewardRecord.step.method', { method: 'madeUpCommand' }),
     say('stewardRecord.step.queueCancel', { space }),
+    say('stewardRecord.step.snapshot'),
     say('stewardRecord.step.queueAdd', { text: '首页换新标题', space }),
     say('stewardRecord.step.snapshot'),
     say('stewardRecord.role.designated', { name: 'Codex 管家' })], JSON.stringify(seen.rows));
   assert.equal(seen.rows[0][2], say('stewardRecord.reason.unknown-command'), 'A refusal NAW did not save as an operation is in the record');
   assert.equal(seen.rows[1][2], say('stewardRecord.result.complete'));
-  assert.equal(seen.rows[2][2], say('stewardRecord.result.complete')); assert.equal(seen.rows[3][2], say('stewardRecord.result.complete'));
+  assert.equal(seen.rows[2][2], say('stewardRecord.result.complete')); assert.equal(seen.rows[3][2], say('stewardRecord.result.complete')); assert.equal(seen.rows[4][2], say('stewardRecord.result.complete'));
   assert.ok(seen.attention >= 1, 'The refused row stands out');
   assert.ok(seen.note.includes(say('stewardRecord.note')));
   await shot('zh-1280-steward-record');

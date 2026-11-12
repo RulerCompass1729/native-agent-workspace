@@ -321,6 +321,9 @@ local branch or main; not installed, pushed or published):
 - Preserve Claude Agent Teams and Codex native fleet behavior; ordinary SDK
   subagents are not an equivalent substitute.
 - Human control, private sharing scopes, and no hidden model calls are requirements.
+  The one exception to private sharing scopes is the butler (大管家) the person
+  designated: it sees what every collaboration space holds; each read through
+  NAW is a step in its record.
 - Provider-specific capabilities may extend the interface. Do not force every
   provider into a lowest-common-denominator runtime or silently drop events.
 - Do not infer delivery, completion, cancellation, or fleet termination from a
