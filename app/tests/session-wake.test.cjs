@@ -565,3 +565,11 @@ for(const status of ['active','complete'])test('same-thread confirmed native goa
  f.rb.host.rpc.call=async(method,params)=>{methods.push(method);assert.equal(method,'thread/goal/get');assert.equal(params.threadId,goal.threadId);return {goal};};
  await f.call();await f.finish();assert.equal(f.writes.length,1);assert.deepEqual(methods,['thread/goal/get','thread/goal/get']);assert.deepEqual(goal,before);
 });
+test('Codex: a wake staged in a turn whose end never came is withdrawn when the next turn starts; a late end changes nothing', async t => {
+  const f = await fixture(t); assert.equal((await f.call()).status, 'staged');
+  f.start('turn-two'); await tick();
+  const row = f.source.get(f.a).messages.find(m => m.wake);
+  assert.equal(row.wake.status, 'cancelled'); assert.equal(row.wake.cancellation.nativeStatus, 'unreported');
+  f.ra.emit('nativeTurnEnd', { nativeId: f.source.get(f.a).nativeId, turnId: 'turn-one', status: 'completed' }); for (let i = 0; i < 8; i++) await tick();
+  assert.equal(row.wake.status, 'cancelled'); assert.equal(f.writes.length, 0);
+});

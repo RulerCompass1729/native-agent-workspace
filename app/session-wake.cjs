@@ -77,6 +77,13 @@ function snapshot(w) { try { return { enabled: enabled(w), ...(w.wakeGuardFailur
 // typing, queueing or steering later in that turn withdraws the turn's wake authority.
 const humanProof = s => s ? JSON.stringify([s.owner ?? null, s.controlRevision || 0, s.connectionRevision || 0]) : null;
 function nativeStart(w, r, info, s) {
+  // A wake still staged from an earlier turn of this native session: that turn's end never reached NAW (a failed turn
+  // with no capacity report, a lost end row), so "after its turn ends normally" can no longer happen. Withdrawn now,
+  // with that reason, instead of staying 已登记 for good (steward step 2).
+  try {
+    const earlier = new Set((s?.messages || []).filter(m => m.wake?.status === 'staged' && m.wake.nativeId === info.nativeId && m.wake.turnId !== info.turnId).map(m => m.wake.turnId));
+    for (const turnId of earlier) complete(w, s, r, { nativeId: info.nativeId, turnId, status: 'unreported' });
+  } catch { /* Withdrawn at the next start, or at reopen. */ }
   try { r.wakeTurn = { nativeId: info.nativeId, turnId: info.turnId, boundary: boundary(w), human: humanProof(s) }; }
   catch { r.wakeTurn = null; }
 }
@@ -162,6 +169,7 @@ async function stageOnce(w, s, r, native, args) {
 const TURN_END_CANCELLED = Object.freeze({
   boundary: ['发送方这一轮中途有新的输入或权限确认', 'notice.wake.turnBoundaryCancelled'],
   incomplete: ['发送方这一轮的原生内容没能确认完整', 'notice.wake.turnIncompleteCancelled'],
+  unreported: ['发送方上一轮的结束 NAW 没有看到，下一轮已经开始', 'notice.wake.turnUnreportedCancelled'],
   completed: ['原生回合已正常结束，但授权校验未通过', 'notice.wake.completedTurnRevoked'],
   other: ['原生回合未正常结束或授权已变化', 'notice.wake.turnCancelled'],
 });

@@ -263,3 +263,20 @@ test('a gap after a wake was staged withdraws it at once with the gap as the rea
   assert.match(row.text, /原生观察连接出现缺口/);
   assert.equal(f.writes.length, 0);
 });
+
+// A turn that failed without a capacity report emits no end; its wake is withdrawn when the next turn starts.
+test('a wake staged in a turn whose end NAW never saw is withdrawn when the next turn starts, and a late end changes nothing', async t => {
+  const f = await wakeFixture(t);
+  f.start('failed-turn');
+  assert.equal((await f.call()).status, 'staged');
+  f.r.observeRoot({ block: true, sessionId: f.s.nativeId, lease: f.r.rootLease, epoch: f.r.observationEpoch, sequence: (f.r.rootObservation?.sequence || 0) + 1, id: 'turn:failed-turn', kind: 'turn', turnId: 'failed-turn', status: 'failed', text: '' });
+  await f.settle();
+  assert.equal(f.wakes()[0].wake.status, 'staged', 'No end was reported for that turn');
+  f.start('next-turn'); await f.settle();
+  const [row] = f.wakes();
+  assert.equal(row.wake.status, 'cancelled'); assert.equal(row.wake.cancellation.nativeStatus, 'unreported');
+  assert.match(row.text, /^发送方上一轮的结束 NAW 没有看到，下一轮已经开始；自动消息未投递。\n/);
+  assert.ok(require('../ui-locale.js').displayText('en', row.text, row.uiMessage).startsWith("NAW did not see the end of the sender's earlier turn"));
+  f.r.emit('nativeTurnEnd', { nativeId: f.s.nativeId, turnId: 'failed-turn', status: 'failed' }); await f.settle();
+  assert.equal(f.wakes()[0].wake.status, 'cancelled'); assert.equal(f.writes.length, 0);
+});
