@@ -100,3 +100,35 @@ test('the check that asks Claude for its live sessions runs it without the launc
   for (const key of Object.keys(launcherSession)) assert.equal(names.includes(key), false, key + ' reached the started program');
   for (const key of Object.keys(personSettings)) assert.equal(names.includes(key), true, key);
 });
+// NAW's own per-session values: the token and sockets through which a native Claude's hooks and bridge speak to
+// the backend as that session. A NAW started from a NAW session's command tool finds that session's in its own
+// environment.
+const launcherNaw = { NAW_HOOK_TOKEN: 'launcher-hook-token', NAW_HOOK_SOCKET: '/tmp/launcher-hook.sock', NAW_SUBMIT_SOCKET: '/tmp/launcher-submit.sock' };
+test('a hook token inherited from the NAW session that started this NAW is not passed on', { timeout: 15000 }, async t => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const { Terminal } = require('../adapters.cjs'), { pythonExecutable } = require('../platform.cjs');
+  const python = pythonExecutable(); assert.ok(python, 'A real Python runtime is required');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-env-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const report = path.join(dir, 'names.json');
+  await withProcessEnv({ ...launcherNaw, NAW_TEST_ORDINARY: 'inherited' }, async () => {
+    // A launch that is given nothing of its own (a native Codex terminal, the Codex app server) gets none.
+    const bare = nativeEnvironment();
+    for (const key of Object.keys(launcherNaw)) assert.equal(bare[key], undefined, key + ' is the launching session\'s');
+    // A native Claude is given its own three, and gets exactly those.
+    const own = nativeEnvironment({ NAW_HOOK_TOKEN: 'own-token', NAW_HOOK_SOCKET: '/own/hook.sock', NAW_SUBMIT_SOCKET: '/own/submit.sock' });
+    assert.deepEqual([own.NAW_HOOK_TOKEN, own.NAW_HOOK_SOCKET, own.NAW_SUBMIT_SOCKET], ['own-token', '/own/hook.sock', '/own/submit.sock']);
+    // A launch given only one of them does not fall back to the launching session's for the others.
+    const partial = nativeEnvironment({ NAW_HOOK_TOKEN: 'own-token' });
+    assert.deepEqual([partial.NAW_HOOK_TOKEN, partial.NAW_HOOK_SOCKET, partial.NAW_SUBMIT_SOCKET], ['own-token', undefined, undefined]);
+    // Every other name is as before: inherited when nothing is given, replaced by what is given.
+    assert.equal(nativeEnvironment().NAW_TEST_ORDINARY, 'inherited'); assert.equal(nativeEnvironment({ NAW_TEST_ORDINARY: 'given' }).NAW_TEST_ORDINARY, 'given');
+    // The real path, started the way a Codex terminal is: nothing passed with the launch.
+    const terminal = new Terminal([python, '-c', 'import os,sys,json\nopen(sys.argv[1],"w").write(json.dumps(sorted(os.environ)))', report], dir);
+    try {
+      await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(Error('The started program did not finish')), 10000); terminal.on('closed', () => { clearTimeout(timer); resolve(); }); });
+    } finally { if (terminal.alive && terminal.pid) { try { process.kill(terminal.pid, 'SIGKILL'); } catch { /* already gone */ } } terminal.screen.dispose(); }
+  });
+  const names = JSON.parse(fs.readFileSync(report, 'utf8'));
+  for (const key of Object.keys(launcherNaw)) assert.equal(names.includes(key), false, key + ' reached the started program');
+  assert.equal(names.includes('NAW_TEST_ORDINARY'), true);
+});

@@ -48,7 +48,12 @@ const LAUNCHER_SESSION = [
   'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_TOOL_CALL_ID', 'CODEX_CI',
 ];
 function nativeEnvironment(extra = {}) {
-  const env = { ...process.env, ...extra };
+  const env = { ...process.env };
+  // NAW gives a native Claude its own hook token and sockets with the launch (in `extra`), and never puts them
+  // into a process's own environment. Found there, they are those of a NAW session whose command tool started
+  // this NAW; a launch that is given none of its own (Codex) must not get that session's.
+  for (const key of ['NAW_HOOK_TOKEN', 'NAW_HOOK_SOCKET', 'NAW_SUBMIT_SOCKET']) delete env[key];
+  Object.assign(env, extra);
   // Finder launches with a small PATH; preserve the user's order and append
   // the same conventional locations used by executable discovery.
   env.PATH = [...new Set([...(env.PATH || '').split(path.delimiter).filter(Boolean), path.join(require('node:os').homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'])].join(path.delimiter);
