@@ -98,7 +98,23 @@ async function run() {
   await until(async () => (await fixture()).inputs.slice(refusedBase).map(x => x.data).join('') === '后', 'Typing after a refused phrase still reaches the terminal');
   await page.locator(`[data-terminal-id="${id}"] .terminal-input-recovery button`).last().click();
   await until(() => input.evaluate(el => document.activeElement === el), 'Terminal focused after closing the notice');
-  passed.push('A phrase committed just before the next composition is sent once without an unsent notice; a refused one is kept');
+  // A paste that arrives while the next composition is open does not stand for the phrase before it: when xterm then
+  // never hands that phrase over (here its text is taken out of the textarea first), it is still kept in the notice.
+  const otherBase = (await fixture()).inputs.length;
+  await input.evaluate(el => {
+    const fire = (type, data) => el.dispatchEvent(new CompositionEvent(type, { data, bubbles: true, cancelable: true }));
+    fire('compositionstart', ''); el.value += '甲'; fire('compositionupdate', '甲'); fire('compositionend', '甲'); fire('compositionstart', '');
+    const clip = new DataTransfer(); clip.setData('text/plain', 'x');
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: clip, bubbles: true, cancelable: true }));
+    el.value = el.value.slice(0, -1);
+  });
+  await until(async () => await recoveryText() === '甲', 'A phrase other input arrived before is kept when it is never sent');
+  const pasted = (await fixture()).inputs.slice(otherBase).map(x => x.data).join('');
+  assert.ok(pasted.includes('x') && !pasted.includes('甲'), 'The paste is sent and the phrase is not');
+  await endComposition('');
+  await page.locator(`[data-terminal-id="${id}"] .terminal-input-recovery button`).last().click();
+  await until(() => input.evaluate(el => document.activeElement === el), 'Terminal focused after closing the second notice');
+  passed.push('A phrase committed just before the next composition is sent once without an unsent notice; other input meanwhile does not stand for it; a refused or unsent one is kept');
   // No wait-for-focus after these clicks: reproduce the person's actual sequence.
   await page.locator('#chat-tab').click(); await page.keyboard.type('-GUI-NOW');
   assert.equal(await page.locator('#message-input').inputValue(), 'FIRST-A-GUI-NOW');

@@ -4507,7 +4507,7 @@ async function ensureTerminal(id, explicit = false) {
     if (entry.viewInput && !canCaptureTerminal(id)) {
       const error = uiError("error.inputSwitchExpired");
       cancelViewInput(entry, error); preserveUnconfirmed(data, error);
-      const commits = takeCommits(data), refused = Promise.reject(error); refused.catch(() => {});
+      const commits = takeCommits(data, true), refused = Promise.reject(error); refused.catch(() => {});
       if (token && !commits.includes(token)) commits.push(token);
       for (const commit of commits) { commit.consumed = true; commit.input = refused; }
       return;
@@ -4516,13 +4516,13 @@ async function ensureTerminal(id, explicit = false) {
       const pending = entry.viewInput;
       if (pending.text.length + data.length > 65536) { cancelViewInput(entry, uiError("error.bufferTooLong")); preserveUnconfirmed(data, uiError("error.inputNotSent")); render(); return; }
       pending.text += data;
-      for (const commit of takeCommits(data)) { commit.consumed = true; commit.input = pending.done; }
+      for (const commit of takeCommits(data, true)) { commit.consumed = true; commit.input = pending.done; }
       return;
     }
     const finishing = canFlushComposition(id, token);
     if (terminals.get(id) !== entry || (!terminalCanInput(id) && !finishing)) return;
     // Also on this ordinary path: the next composition may have begun before xterm handed over these commits.
-    const commits = takeCommits(data);
+    const commits = takeCommits(data, finishing);
     for (const commit of commits) commit.consumed = true;
     const input = api.input(id, data);
     for (const commit of commits) commit.input = input;
@@ -4530,11 +4530,13 @@ async function ensureTerminal(id, explicit = false) {
   });
   // Commits whose check after compositionend is still waiting, oldest first. A busy page handles the next keys before
   // its 0 ms timers, so xterm can hand over a commit after the next composition began, or several commits in one piece.
-  // The newest commit is the data's, as it always was; an older one is too when the data begins with the older ones'
-  // text, in order. A commit the data does not cover stays waiting, and its check says it was not sent.
+  // Data takes the commits whose text it holds, in order, through the newest. When no composition is open
+  // (`finishing`), data that does not hold that text still takes the newest commit, as it always did. Any other
+  // commit stays waiting, and its check says it was not sent: a paste or mouse report that arrives while the next
+  // composition is open does not stand for the phrase before it.
   // Defined after the callback above, which only runs once input arrives.
   entry.commits = [];
-  const takeCommits = data => {
+  const takeCommits = (data, finishing) => {
     const newest = entry.composition, taken = [];
     let rest = data;
     for (const commit of entry.commits) {
@@ -4542,8 +4544,9 @@ async function ensureTerminal(id, explicit = false) {
       if (!commit.text || !rest.startsWith(commit.text)) break;
       taken.push(commit); rest = rest.slice(commit.text.length);
     }
-    if (newest && !newest.consumed) taken.push(newest);
-    return taken;
+    if (!newest || newest.consumed) return taken;
+    if (newest.text && rest.startsWith(newest.text)) return [...taken, newest];
+    return finishing ? [newest] : [];
   };
   let confirmingEnter = false, blurValue, compositionSequence = 0;
   element.addEventListener('compositionstart', () => { entry.columnReading = false; entry.composing = true; compositionSequence++; entry.compositionIntent = entry.viewInput; entry.compositionOrigin = { cancelled: false }; }, true);
