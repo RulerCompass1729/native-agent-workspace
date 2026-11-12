@@ -554,9 +554,31 @@ function keepStewardOutside(id, join) {
 function midRotation(id) {
   return Object.values(queueDispatcher?.rotations || {}).some(record => record?.newId === id && record.phase !== 'kept' && !(record.phase === 'failed' && record.handoffConfirmed));
 }
+// The designated butler calling through NAW now (steward step 2, batch 4): the very session and native session the
+// designation names, the designation readable, the session usable and in no space. Anything else is not the butler,
+// so a refused or unreadable designation falls back to the rules for everyone else. The person's words, 2026-11-12:
+// 「这些事难道你不能做吗」; checklist items 4, 5 and 9, taken as recommended.
+async function stewardCaller(c) {
+  if (!c?.background) return null;
+  const actor = backgroundOperation.current();
+  let steward = null; try { steward = stewardOf?.() || null; } catch { return null; }
+  if (!steward || !actor || steward.sessionId !== actor.id || steward.nativeId !== actor.nativeId) return null;
+  const record = roomState.apply(await c.client.call('initial')).sessions.find(s => s.id === actor.id);
+  if (!record || record.nativeId !== actor.nativeId || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) return null;
+  try { if (roomIds(record).length) return null; } catch { return null; }
+  return { id: record.id, name: sessionLabels.labels.get(record.id) || record.name };
+}
 function conversationReaderAllowed(actor) {
+  // The butler reads as any session may, also when it is the secretary too (checklist item 9 merges the two).
+  if (isStewardActor(actor)) return true;
   const secretary = queueSecretary?.current();
   return !secretary || secretary.sessionId !== actor.id || secretary.nativeId !== actor.nativeId;
+}
+// The designated butler, as the designation names it now (steward step 2, batch 4), for gates that judge a call with
+// the state already in hand. A designation that cannot be read is nobody.
+function isStewardActor(actor) {
+  let steward = null; try { steward = stewardOf?.() || null; } catch { return false; }
+  return Boolean(steward && actor && steward.sessionId === actor.id && steward.nativeId === actor.nativeId);
 }
 function conversationAccess(actor, snapshot) {
   const access = { roomIds: [], secretary: true };
@@ -564,6 +586,15 @@ function conversationAccess(actor, snapshot) {
   const current = snapshot?.sessions?.find(s => s.id === actor.id && s.nativeId === actor.nativeId);
   if (current && !current.archived && !current.nativeContextPending && !roomState.value.archivedSessions?.includes(actor.id)) {
     try { access.roomIds = roomIds(current); } catch { /* Invalid membership grants nothing. */ }
+    // The butler sees every space as a member does (the person, 2026-11-11: 「大管家权限最高,应该啥都可以看到和操作」,
+    // 「都能看,」; checklist 2026-11-12). Only while it is in no space, as its designation requires; what it reads through
+    // NAW is a step in its record.
+    let outside = false; try { outside = roomIds(current).length === 0; } catch { outside = false; }
+    if (outside && isStewardActor(actor)) {
+      // The backend's rooms and the desktop's own list of spaces (a space nobody has joined yet has no backend room).
+      access.roomIds = [...new Set([snapshot?.room?.id, ...(snapshot?.rooms || []).map(room => room?.id), 'shared', ...(roomState?.spaces?.rooms || []).map(room => room?.id)].filter(id => typeof id === 'string' && id))];
+      access.secretary = false;
+    }
   }
   return access;
 }
@@ -1518,21 +1549,24 @@ async function boot() {
       try { return await roomState[action === 'archive' ? 'archiveRoom' : 'restoreRoom'](c.client, sessionLabels.labels, roomId); }
       finally { await broadcastRoom(); }
     } else if (action === 'removeFile') roomState.removeFile(args[0], args[1], roomId);
-    else if (['queueCancel', 'queueResolve'].includes(action) && c.background) {
-      throw uiError("error.queue.personOnly");
-    } else if (action === 'queueAdd') {
-      const creator = c.background
-        // The backend's own list does not say which sessions the person archived; the desktop's record does.
-        ? queueSecretary.creator(backgroundOperation.current(), roomState.apply(await c.client.call('initial')).sessions, sessionLabels.labels)
-        : { kind: 'person', name: 'You', sessionId: null };
-      const itemId = roomState.queueAdd(args[0], args[1] ?? null, roomId, creator);
-      await broadcastRoom();
-      queueDispatcher?.schedule();
-      return itemId;
-    } else if (action === 'queueCancel') roomState.queueCancel(args[0], roomId);
-    else if (action === 'queueResolve') {
-      roomState.queueResolve(args[0], roomId);
-      queueDispatcher?.schedule();
+    else if (['queueAdd', 'queueCancel', 'queueResolve'].includes(action)) {
+      // Besides the person: the secretary adds; the butler adds, cancels and marks handled, each under its own name.
+      const steward = c.background ? await stewardCaller(c) : null;
+      if (c.background && !steward && action !== 'queueAdd') throw uiError("error.queue.personOnly");
+      const by = steward ? 'steward' : null;
+      if (action === 'queueAdd') {
+        // The butler's items keep the creator form older builds read (a session that added it); `addedBy` says who.
+        const creator = steward ? { kind: 'secretary', name: steward.name, sessionId: steward.id } : c.background
+          // The backend's own list does not say which sessions the person archived; the desktop's record does.
+          ? queueSecretary.creator(backgroundOperation.current(), roomState.apply(await c.client.call('initial')).sessions, sessionLabels.labels)
+          : { kind: 'person', name: 'You', sessionId: null };
+        const itemId = roomState.queueAdd(args[0], args[1] ?? null, roomId, creator, by);
+        await broadcastRoom();
+        queueDispatcher?.schedule();
+        return itemId;
+      }
+      if (action === 'queueCancel') roomState.queueCancel(args[0], roomId, by);
+      else { roomState.queueResolve(args[0], roomId, by); queueDispatcher?.schedule(); }
     }
     else if (['forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory'].includes(action)) {
       if (action === 'clearSharedHistory') {

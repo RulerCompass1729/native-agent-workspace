@@ -28,9 +28,11 @@ or start paid model runs as a side effect of editing documents.
   member) and on what the person asks it directly; another agent may ask it only
   about its current item (questions, reviews, handoffs), and the asking agent
   leaves new tasks for the person. New tasks enter the queue only through the
-  person or the one person-designated secretary. That secretary may queue only
-  the person's own requests; other agents cannot add items. Cancelling and marking items complete remain
-  person-only. It does not claim board tasks itself (the person, 2026-11-08:
+  person, the one person-designated secretary, or the person-designated butler
+  (大管家). The secretary and the butler may queue only the person's own
+  requests; other agents cannot add items. Cancelling and marking items complete
+  are for the person and the butler; NAW records which of them did it. Neither
+  claims board tasks itself (the person, 2026-11-08:
   agents claiming the same task by themselves). A session is such a member once
   a 【NAW 派活】 has reached it, or once the person or the secretary says so
   through NAW. The secretary and the designated integrator stay outside queue
@@ -319,6 +321,9 @@ local branch or main; not installed, pushed or published):
 - Preserve Claude Agent Teams and Codex native fleet behavior; ordinary SDK
   subagents are not an equivalent substitute.
 - Human control, private sharing scopes, and no hidden model calls are requirements.
+  The one exception to private sharing scopes is the butler (大管家) the person
+  designated: it sees what every collaboration space holds; each read through
+  NAW is a step in its record.
 - Provider-specific capabilities may extend the interface. Do not force every
   provider into a lowest-common-denominator runtime or silently drop events.
 - Do not infer delivery, completion, cancellation, or fleet termination from a

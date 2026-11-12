@@ -261,6 +261,12 @@ function validateItem(item) {
   if (item.ready !== undefined && !validReady(item.ready)) {
     throw Error('Invalid queue delivery line');
   }
+  // Who acted when it was not the person or the item's creator: only the butler, for now.
+  for (const key of ['addedBy', 'finishedBy']) {
+    if (item[key] !== undefined && item[key] !== 'steward') {
+      throw Error('Invalid queue actor');
+    }
+  }
   return { ...item, ...(Object.hasOwn(item, 'creator') ? { creator: validateCreator(item.creator) } : {}) };
 }
 
