@@ -195,7 +195,7 @@ test('every sentence exists in both languages, and the words say what the design
   const keys = ['menu.stewardSet', 'menu.stewardChange', 'menu.stewardRevoke', 'error.steward.invalid', 'error.steward.inSpace', 'error.steward.joinSpace', 'error.steward.state', 'error.steward.personOnly', 'steward.emptyLabel',
     'steward.rowLabel', 'steward.rowStatus', 'steward.choose.title', 'steward.choose.intro', 'steward.choose.current', 'steward.choose.inSpace', 'steward.choose.unusable', 'steward.choose.none', 'steward.choose.confirm',
     // The butler's record (step 2, batch 1); its own sentences are checked in steward-record.test.cjs.
-    'menu.stewardRecord', 'error.steward.recordUnavailable', 'error.stewardRecord.personOnly', 'error.stewardRecord.unavailable', 'records.name.steward', 'records.item.stewardUnavailable', 'records.item.stewardUnavailableOther'];
+    'menu.stewardRecord', 'error.steward.recordUnavailable', 'error.steward.designationUnreadable', 'error.stewardRecord.personOnly', 'error.stewardRecord.unavailable', 'records.name.steward', 'records.item.stewardUnavailable', 'records.item.stewardUnavailableOther'];
   for (const language of ['zh', 'en']) assert.deepEqual(Object.keys(messages[language]).filter(name => /steward/i.test(name) && !name.startsWith('stewardRecord.')).sort(), [...keys].sort(), language);
   for (const name of keys) assert.equal(/[一-鿿]/.test(messages.en[name]), false, name);
   // It gives nothing and takes one thing away, and the person is told both before they confirm.

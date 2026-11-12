@@ -161,12 +161,79 @@ test('every sentence the dialog can show exists in Chinese and English', () => {
     { kind: 'invoke', method: 'spaceAction', spaceAction: 'queueResolve', space: 'S', state: 'complete' },
     { kind: 'invoke', method: 'spaceAction', spaceAction: 'notes', space: 'S', state: 'complete' },
     { kind: 'invoke', method: 'openSession', target: 'B', state: null },
+    { kind: 'invoke', method: 'send', state: 'complete', duplicate: true },
     ...['running', 'complete', 'received', 'awaiting-native', 'confirmation-required', 'cancelled', 'unconfirmed', 'odd'].map(state => ({ kind: 'invoke', method: 'send', state })),
     ...['another-operation-running', 'unknown-command', 'confirmation-limit', 'originating-session-unavailable', 'conversation-access-denied', 'conversation-target-unavailable', 'space-file-membership-required', 'explicit-paths-required', 'odd'].map(reason => ({ kind: 'invoke', method: 'send', state: 'not-executed', reason })),
   ];
   const keys = new Set(['stewardRecord.title', 'stewardRecord.current', 'stewardRecord.none', 'stewardRecord.heading', 'stewardRecord.col.time', 'stewardRecord.col.what', 'stewardRecord.col.result',
-    'stewardRecord.empty', 'stewardRecord.more', 'stewardRecord.note', 'stewardRecord.usage', 'stewardRecord.usageNone', 'stewardRecord.usageLimit', 'stewardRecord.failed', 'menu.stewardRecord',
+    'stewardRecord.empty', 'stewardRecord.more', 'stewardRecord.note', 'stewardRecord.writeFailed', 'error.steward.designationUnreadable', 'stewardRecord.usage', 'stewardRecord.usageNone', 'stewardRecord.usageLimit', 'stewardRecord.failed', 'menu.stewardRecord',
     'error.steward.recordUnavailable', 'error.stewardRecord.personOnly', 'error.stewardRecord.unavailable', 'records.name.steward', 'records.item.stewardUnavailable', 'records.item.stewardUnavailableOther']);
   for (const entry of entries) { keys.add(shown.what(entry)[0]); const end = shown.result(entry); if (end) keys.add(end[0]); }
   for (const key of keys) for (const language of ['zh', 'en']) assert.equal(typeof messages[language][key], 'string', `${language} ${key}`);
+});
+
+// Review 1 of this batch.
+test('a later state is taken only for an open outcome of the same command; an id reused for another command keeps its own', async t => {
+  const f = fixture(t);
+  await assert.rejects(f.record.around(sender(), invoke('spaceAction', ['room-a', 'queueAdd', ['Reused id', null]], 'op-x'), async () => { throw Error('operation_id already belongs to a different command'); }), /different command/);
+  await f.record.around(sender(), invoke('rename', ['worker', 'New name'], 'op-c'), async () => ({ state: 'confirmation-required' }));
+  await f.record.around(sender(), invoke('send', ['worker', 'hi'], 'op-d'), async () => ({ state: 'complete', duplicate: true }));
+  await f.record.around(sender(), invoke('rename', ['worker', 'Other'], 'op-m'), async () => ({ state: 'confirmation-required' }));
+  const later = { 'op-x': { state: 'complete', reason: null, method: 'send' }, 'op-c': { state: 'complete', reason: null, method: 'rename' },
+    'op-d': { state: 'received', reason: null, method: 'send' }, 'op-m': { state: 'complete', reason: null, method: 'send' } };
+  const steps = Object.fromEntries(f.record.entries({ stateOf: step => later[step.operationId] }).filter(e => e.kind === 'step').map(e => [e.operationId, [e.state, e.duplicate]]));
+  assert.deepEqual(steps, { 'op-x': ['unconfirmed', false], 'op-c': ['complete', false], 'op-d': ['complete', true], 'op-m': ['confirmation-required', false] });
+});
+
+test('while the designation cannot be read, the butler the record last named is refused; others run', async t => {
+  let broken = false;
+  const f = fixture(t, { current: () => { if (broken) throw Error('Unreadable'); return steward; } });
+  f.record.designated(steward); broken = true;
+  let ran = 0;
+  await assert.rejects(f.record.around(sender(), invoke('send', ['x', 'hi']), async () => { ran++; }), error => error.uiMessage?.key === 'error.steward.designationUnreadable');
+  await f.record.around(sender('claude', { id: 'other', nativeId: 'native-other' }), invoke('send', ['x', 'hi']), async () => { ran++; });
+  assert.equal(ran, 1);
+});
+
+test('deleting exported blocks keeps who held the role: no new "started" line, and periods hold', async t => {
+  const day = 24 * 3600 * 1000; let clock = Date.parse('2026-11-01T10:00:00Z');
+  const f = fixture(t, { now: () => clock });
+  f.record.designated(steward); clock += 1000;
+  await f.record.around(sender(), invoke('send', ['x', 'hi']), async () => ({ state: 'complete' }));
+  clock += 2 * day; // the next line seals the first block
+  await f.record.around(sender(), invoke('send', ['x', 'again'], 'op-2'), async () => ({ state: 'complete' }));
+  const sealed = f.record.log.manifest.blocks.filter(b => b.status === 'sealed').map(b => b.name);
+  assert.equal(sealed.length, 1);
+  f.record.deleteBlocks(sealed);
+  const before = f.record.lines.length;
+  f.record.sync(steward);
+  assert.equal(f.record.lines.length, before, 'still the butler the record named');
+  assert.deepEqual(f.record.periods().map(p => [p.session.id, p.from]), [['butler', Date.parse('2026-11-01T10:00:00Z')]]);
+  const reopened = f.open(); assert.equal(reopened.recorded.id, 'butler');
+});
+
+test('a successor a rotation handed the role to counts its messages from its start', async t => {
+  let current = steward;
+  const f = fixture(t, { current: () => current, selected: () => steward });
+  f.record.designated(steward);
+  current = { sessionId: 'butler-2', nativeId: 'native-2' };
+  const early = Date.parse('2026-11-12T09:00:00Z'); // before the line that noticed the rotation
+  f.record.sync(current);
+  const snapshot = { sessions: [{ id: 'butler-2', name: 'Next', messages: [{ id: 'w', wake: { senderId: 'butler-2', nativeId: 'native-2', recipientId: 'x', body: 'From the successor', time: early, status: 'submitted' } }] }] };
+  assert.ok(view(f.record, snapshot, { current }).entries.some(e => e.kind === 'message' && e.text === 'From the successor'));
+});
+
+test('long arguments are shortened further, not dropped', () => {
+  const args = invoke('spaceAction', ['room', 'notes', Array.from({ length: 12 }, () => 'y'.repeat(500))]);
+  const copy = argumentsOf(args); assert.ok(copy); assert.ok(copy.length <= 2000);
+  assert.equal(JSON.parse(copy)[2][0].length, 81);
+});
+
+test('a record that stopped taking lines while NAW runs still shows what it holds, and says so', async t => {
+  const f = fixture(t);
+  await f.record.around(sender(), invoke('send', ['x', 'hi']), async () => ({ state: 'complete' }));
+  f.record.log.append = () => { throw Error('Disk full'); };
+  await assert.rejects(f.record.around(sender(), invoke('send', ['x', 'hi'], 'op-2'), async () => {}));
+  const shown = view(f.record, { sessions: [] }, { current: steward });
+  assert.equal(shown.writeFailed, true); assert.ok(shown.entries.some(e => e.method === 'send'));
 });

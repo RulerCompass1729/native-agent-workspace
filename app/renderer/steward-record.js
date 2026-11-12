@@ -32,6 +32,7 @@
       if (entry.kind === 'role') return null;
       if (entry.kind === 'message') return MESSAGES.includes(entry.state) ? [`stewardRecord.message.${entry.state}`, {}] : ['stewardRecord.result.other', { state: dash(entry.state) }];
       if (!entry.state) return ['stewardRecord.result.unrecorded', {}];
+      if (entry.duplicate) return ['stewardRecord.result.duplicate', {}];
       if (entry.state === 'not-executed') return REASONS.includes(entry.reason) ? [`stewardRecord.reason.${entry.reason}`, {}] : ['stewardRecord.result.refused', { reason: dash(entry.reason) }];
       return STATES.includes(entry.state) ? [`stewardRecord.result.${entry.state}`, {}] : ['stewardRecord.result.other', { state: entry.state }];
     }
@@ -42,6 +43,7 @@
       dialog.append(title);
       const current = view?.current;
       dialog.append(make('p', 'quiet', current ? 'stewardRecord.current' : 'stewardRecord.none', { name: dash(current?.name) }));
+      if (view?.writeFailed) dialog.append(make('p', 'records-note', 'stewardRecord.writeFailed'));
       dialog.append(make('h3', '', 'stewardRecord.heading'));
       const entries = view?.entries || [];
       if (!entries.length) dialog.append(make('p', 'quiet', 'stewardRecord.empty'));

@@ -1301,7 +1301,8 @@ async function boot() {
   // What the butler does through NAW, under its own name (steward step 2, batch 1). One that cannot be read stops
   // only the butler's calls, and the bell says so.
   stewardOf = stewardRecords.cachedSteward(stewardRole);
-  stewardRecord = new stewardRecords.StewardRecord(dataDir, { steward: stewardOf, selected: () => stewardRole.selected, failed: () => recordsChanged() });
+  // One writer for the run: a retried start keeps it, unless it could not be opened.
+  if (!stewardRecord || stewardRecord.loadError) stewardRecord = new stewardRecords.StewardRecord(dataDir, { steward: () => stewardOf(), selected: () => stewardRole.selected, failed: () => recordsChanged() });
   if (!stewardRecord.failed) try { stewardRecord.sync(stewardOf()); } catch { /* Said again when the record is opened or the butler acts. */ }
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
   creationDefaults = new CreationDefaults(dataDir, { defaultWorkspace, newWorkspaceRoot: `${path.resolve(defaultWorkspace)}-sessions` });
@@ -1719,14 +1720,16 @@ async function boot() {
   // butler cannot read or shape its own record through NAW.
   register('stewardRecord', async c => {
     if (!isCurrentHumanContext(c)) throw uiError('error.stewardRecord.personOnly');
-    if (!stewardRecord || stewardRecord.failed) throw uiError('error.stewardRecord.unavailable');
+    // One that could not be opened is the bell's to explain; one that stopped taking lines still shows what it holds.
+    if (!stewardRecord || stewardRecord.loadError) throw uiError('error.stewardRecord.unavailable');
     let current = null, known = true;
     try { current = stewardOf(); } catch { known = false; }
     if (known) try { stewardRecord.sync(current); } catch { /* Shown from what is recorded. */ }
     const snapshot = sessionLabels.apply(roomState.apply(await c.client.call('initial')));
     const stateOf = step => {
-      let r = null; try { r = backgroundControl?.receipt({ provider: step.session.provider, id: step.session.id, nativeId: step.session.nativeId }, step.operationId) || null; } catch { r = null; }
-      return r && typeof r.state === 'string' ? { state: r.state, reason: typeof r.reason === 'string' ? r.reason : r.refusalSummary?.reason ?? null } : null;
+      const actor = { provider: step.session.provider, id: step.session.id, nativeId: step.session.nativeId };
+      let r = null; try { r = backgroundControl?.receipt(actor, step.operationId) || backgroundControl?.deletedReply(actor, step.operationId) || null; } catch { r = null; }
+      return r && typeof r.state === 'string' ? { state: r.state, reason: typeof r.reason === 'string' ? r.reason : r.refusalSummary?.reason ?? null, method: r.command?.method ?? null } : null;
     };
     return stewardRecords.view(stewardRecord, snapshot, { current: known ? current : null, stateOf });
   });
