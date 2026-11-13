@@ -228,12 +228,30 @@ async function nativeGoalStatus(s, r, valid, rpc = r.host?.rpc) {
     throw uiError('error.wake.nativeGoalDisallows');
   return result.goal?.status ?? null;
 }
-function eligible(w, s, r, intent, tag) {
-  return !w.closed && !w.storageWarning && enabled(w) && !s.wakeDisabled && boundary(w) === intent.boundary && same(s, intent.targetProof) &&
-    w.runtimes.get(s.id) === r && !r.stopped && !r.transportDisconnected && r.chatAvailable !== false && s.state === 'idle' &&
-    (!s.pendingTag || s.pendingTag === tag) && !s.approval && !s.nativeContextPending && !r.nativeInputRequired && !r.pendingQueue && !r.nativeAbortRequest &&
-    budgetAllows(s, intent.id);
+// The first reason the recipient cannot take this message now, as its own key, or null. One key per cause (the wake
+// proposal, item 4, 2026-11-12), so the sender and the person read 「正在干活」 rather than one sentence covering a
+// changed identity, the switch, approval and the limit alike. Checked in the order the single condition had.
+function recipientIssue(w, s, r, intent, tag) {
+  if (w.closed || w.storageWarning) return ['error.wake.recipientUnreachable'];
+  if (!enabled(w) || s.wakeDisabled) return ['error.wake.recipientDisabled'];
+  if (boundary(w) !== intent.boundary) return ['error.wake.recipientBoundaryChanged'];
+  if (!same(s, intent.targetProof)) return ['error.wake.recipientIdentityChanged'];
+  if (w.runtimes.get(s.id) !== r || r.stopped || r.transportDisconnected || r.chatAvailable === false) return ['error.wake.recipientUnreachable'];
+  if (s.state !== 'idle') {
+    if (s.approval || r.nativeInputRequired || s.state === 'approval') return ['error.wake.recipientAwaiting'];
+    return s.state === 'working' ? ['error.wake.recipientBusy', { name: s.name }] : ['error.wake.recipientUnreachable'];
+  }
+  if (s.pendingTag && s.pendingTag !== tag) return ['error.wake.recipientInputPending'];
+  if (s.approval) return ['error.wake.recipientAwaiting'];
+  if (s.nativeContextPending) return ['error.wake.recipientInputPending'];
+  if (r.nativeInputRequired) return ['error.wake.recipientAwaiting'];
+  if (r.pendingQueue) return ['error.wake.recipientInputPending'];
+  if (r.nativeAbortRequest) return ['error.wake.recipientBusy', { name: s.name }];
+  if (!budgetAllows(s, intent.id)) return ['error.wake.recipientCooldown'];
+  return null;
 }
+function eligible(w, s, r, intent, tag) { return !recipientIssue(w, s, r, intent, tag); }
+function refuseRecipient(w, s, r, intent) { const issue = recipientIssue(w, s, r, intent); if (issue) throw uiError(...issue); }
 // This read-only check reserves nothing and is not delivery authority. The
 // receiver checks the consumed, exact sender intent again at actual dispatch.
 async function check(w, spec) {
@@ -243,7 +261,7 @@ async function check(w, spec) {
     const s = w.get(spec.recipientId), r = w.runtime(s.id);
     const budget = s.wakeBudget || {};
     if (budget.humanRevision === (s.wakeHumanRevision || 0) && budget.streak >= MAX_STREAK) throw uiError('error.wake.consecutiveLimit');
-    if (!eligible(w, s, r, spec)) throw uiError('error.wake.recipientChangedOrLimited');
+    refuseRecipient(w, s, r, spec);
     if (s.provider === 'codex') {
       const status = await nativeGoalStatus(s, r, () => eligible(w, s, r, spec));
       if (!goalAllows(status)) throw uiError('error.wake.nativeGoalStateDisallows', { status });
@@ -259,7 +277,10 @@ async function receive(w, spec) {
   try {
     const budget = s.wakeBudget || {};
     if (budget.humanRevision === (s.wakeHumanRevision || 0) && budget.streak >= MAX_STREAK) throw uiError("error.wake.consecutiveLimit");
-    if (intent.id !== spec.id || intent.senderId !== spec.senderId || intent.recipientId !== s.id || intent.boundary !== generation || !same(s, proof) || !eligible(w, s, r, intent)) throw uiError("error.wake.recipientChangedOrLimited");
+    if (intent.id !== spec.id || intent.senderId !== spec.senderId || intent.recipientId !== s.id) throw uiError('error.wake.credentialInvalid');
+    if (intent.boundary !== generation) throw uiError('error.wake.recipientBoundaryChanged');
+    if (!same(s, proof)) throw uiError('error.wake.recipientIdentityChanged');
+    refuseRecipient(w, s, r, intent);
     if (s.provider === 'codex') {
       const status = await nativeGoalStatus(s, r, () => eligible(w, s, r, intent));
       if (!goalAllows(status)) throw uiError('error.wake.nativeGoalStateDisallows', { status });

@@ -187,6 +187,31 @@ test('target busy, permission wait, or immediate global/session off prevents any
     await f.finish(); assert.equal(f.writes.length, 0, boundary);
   }
 });
+test('a refused wake says why: working, waiting, turned off, or just sent one (wake proposal, item 4)', async t => {
+  // 2026-11-12 16:25: a message to a session mid-turn was refused under one sentence that also covered a changed
+  // identity, the switch and the limit; nobody could tell it was only busy.
+  const locale = require('../ui-locale.js');
+  const cases = [
+    ['working', f => { f.target.get(f.b).state = 'working'; }, 'Receiver 正在干活。', 'Receiver is working.'],
+    ['waiting', f => { f.rb.nativeInputRequired = true; }, '收件方在等批准或等原生输入。', 'The recipient is waiting for an approval or native input.'],
+    ['off', f => { f.target.get(f.b).wakeDisabled = true; }, '收件方或全部会话关了自动消息。', 'Automatic messages are turned off for the recipient or for all sessions.'],
+    ['queued', f => { f.rb.pendingQueue = 'tag'; }, '收件方已有一条输入在投递或排队。', 'The recipient already has input being delivered or queued.'],
+    ['cooldown', f => { const s = f.target.get(f.b); s.wakeBudget = { id: 'earlier', lastAt: Date.now(), streak: 1, humanRevision: s.wakeHumanRevision || 0 }; }, '收件方刚收过自动消息：两条至少隔 60 秒，连续最多 3 条。', 'The recipient just received an automatic message: at least 60 seconds apart, at most 3 in a row.'],
+  ];
+  for (const [label, set, zh, en] of cases) {
+    for (const when of ['registering', 'delivering']) {
+      const f = await fixture(t);
+      if (when === 'registering') set(f);
+      const result = await f.call('Exact body.');
+      if (when === 'delivering') { assert.equal(result.status, 'staged', label); set(f); await f.finish(); }
+      const row = f.source.get(f.a).messages.find(m => m.wake);
+      assert.equal(row.wake.status, 'not-sent', `${label} ${when}`);
+      assert.equal(row.text, `自动消息没有发出；不会自动重发。\n${zh}\nExact body.`, `${label} ${when}`);
+      assert.equal(locale.displayText('en', row.text, row.uiMessage), `Automatic message was not sent; it will not be retried automatically.\n${en}\nExact body.`, `${label} ${when}`);
+      assert.equal(f.writes.length, 0);
+    }
+  }
+});
 test('failed original turn never dispatches or replays a staged intent', async t => {
   const { source, a, call, finish, writes } = await fixture(t);
   await call(); await finish('failed'); assert.equal(writes.length, 0);
