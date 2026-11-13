@@ -125,7 +125,7 @@ test('a position this record did not give is refused, so the reader starts again
 function handler({ butler, ledger }) {
   const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
   const start = source.indexOf("  register('stewardEvents', async (c, position = null) => {");
-  const end = source.indexOf('  // B6: the person\'s own actions on an integration handoff', start);
+  const end = source.indexOf('  // The switch for waking the butler when NAW has recorded something new', start);
   assert.ok(start > 0 && end > start);
   let registered;
   const reads = [];

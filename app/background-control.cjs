@@ -77,6 +77,7 @@ const parameters = {
   spaceAction: ['roomId', 'action: join|rename|notes|memberOrder|archive|restore|stageImages|removeImage|acceptImages|removeFile|queueAdd|queueCancel|queueResolve|forward|queueShared|steerShared|run|pause|clearSharedHistory', 'queueAdd: [text, assignee or null]; only the person-designated secretary or the butler may add; queueCancel: the person or the butler, and a session for an item it added itself that is still queued (not yet sent); queueResolve: only the person or the butler; other arguments in the corresponding command order'],
   queueSecretary: ['sessionId or null to revoke; person-only, agents cannot designate themselves'],
   stewardEvents: ['position from the last read (through), or null to read from the start; the designated butler only. Returns {events, through, more}: what NAW recorded since, oldest first, a few at a time; while more is true, read again from through'],
+  stewardWake: ['on: true or false to turn waking on events on or off; omit it to see how it stands. The designated butler or the person only; off by default. While on, NAW sends the butler, once it is idle and at most once a minute, one 【NAW 事件】 message naming a position: read stewardEvents from that position'],
   spaceFiles: ['roomId', 'fileId?; omit to import the explicit paths'], gitWorktreePreview: ['selected repository path', 'nonce', 'relative path'],
   create: ['options: {provider,cwd,name,view?,gitWorktree?}'], nativeHistory: ['options?'], importHistory: ['nativeId', 'options'],
   rename: ['sessionId', 'name'], sidebar: ['change'],

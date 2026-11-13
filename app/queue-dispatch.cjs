@@ -1706,6 +1706,9 @@ class QueueDispatcher {
     // The butler the person designated, as it is now: { sessionId, nativeId, duty } or null (steward step 2, batch 3).
     // A record that cannot be read names nobody here: the butler is then not rotated and gets no statement.
     this.steward = options.steward || (() => null);
+    // Waking that butler when NAW has recorded something new (steward-wake.cjs), or null: it keeps the switch, the position
+    // and the minute between wakes; a pass here finds the butler ready and sends (wakeSteward).
+    this.stewardWake = options.stewardWake || null;
     this.logFile = path.join(options.dataDir, 'rotation-log.jsonl');
     this.log = this.loadLog();
     this.chainsCache = null;
@@ -2177,6 +2180,10 @@ class QueueDispatcher {
     if (this.integration && this.integration.hasWork(this.integrationRooms())) {
       return true;
     }
+    // Something new for the butler, with waking it on: passes go on until it can be woken.
+    if (this.stewardWake && this.stewardWake.due()) {
+      return true;
+    }
     const rooms = [this.roomState.value];
     for (const room of this.roomState.spaces.rooms) {
       rooms.push(room);
@@ -2377,6 +2384,30 @@ class QueueDispatcher {
       rotations: Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id))),
       actions, engaged, ...this.trustAdmission() }));
     if (this.integration && !this.closed) await this.integrate();
+    if (this.stewardWake && !this.closed) await this.wakeSteward(current, engaged);
+  }
+
+  // The designated butler, woken when NAW has recorded something new (steward-wake.cjs keeps the switch, the position,
+  // the minute between wakes and the line in its record). Here, condition 2: only the butler outside every space, in no
+  // rotation and holding no handoff, ready and settled as a member is before its next item and not just used by the
+  // person; then the same send as a queue item, a NAW message under the person's automatic-message switch. `holding` is
+  // what the pass asked the integration engine before anything was sent (asked once a pass); a handoff given since then
+  // left the butler at work, which the fresh read below sees.
+  async wakeSteward(current, holding) {
+    try {
+      if (!this.stewardWake.due()) return;
+      const steward = this.stewardOutside(current.snapshot.sessions);
+      if (!steward || !settled(steward.sessionId, this.idleSince, current.now, this.settleMs)) return;
+      const rotations = Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id)));
+      if (engagedSessions(rotations, current.snapshot.rooms).has(steward.sessionId) || Array.isArray(holding) && holding.includes(steward.sessionId)) return;
+      const fresh = await this.freshReady(steward.sessionId);
+      if (!fresh || this.stewardOutside(fresh.snapshot.sessions)?.sessionId !== steward.sessionId || fresh.session.nativeId !== steward.nativeId) return;
+      // Condition 4 needs the model: as the session reports it, or for Claude as its own transcript last recorded it.
+      const model = reportedModel(fresh.session) || transcriptModel(fresh.session, this.transcriptRoot);
+      await this.stewardWake.wake(fresh.session, model, (text, itemId) => this.send(fresh.session, text, itemId));
+    } catch {
+      // Nothing was sent, or the wake kept its own outcome: the next pass looks again.
+    }
   }
 
   // What the integration engine is shown: the sessions as the dispatcher sees them, with its own

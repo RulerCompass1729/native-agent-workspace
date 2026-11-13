@@ -208,6 +208,7 @@ async function build() {
       'state-push.cjs',
       'steward-record.cjs',
       'steward-role.cjs',
+      'steward-wake.cjs',
       'submission-policy.cjs',
       'terminal-continuation.js',
       'terminal-keyboard.cjs',

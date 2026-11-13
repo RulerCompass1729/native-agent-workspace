@@ -812,6 +812,9 @@ class ButlerLedger {
     }
     return { events, through: origin === null ? null : `${origin}:${events.at(-1)?.sequence ?? after}`, more: later.length > events.length };
   }
+  // The position of the newest event (null while the record is empty): what waking the butler compares with the
+  // position it last named (steward-wake.cjs). It reads nothing from the file.
+  latest() { this.healthy(); return this.state.origin === null ? null : `${this.state.origin}:${this.state.eventSequence}`; }
   // Decisions/failures already handled by the rule/B1 path need no model turn.
   // Keep the original event and its independent reporting state for audit.
   consumeRecorded(eventIds) {
