@@ -13247,7 +13247,7 @@ Tests and checks:
 
 Left open:
 - When an item is marked handled before its member's turn ends, a READY in that reply is not recorded from the queue, since the settle is skipped. The member's board line still records it.
-- `error.queue.notWaiting` 「这一件不在等你决定。」 is still the refusal for a done, cancelled or failed item. Better words would be new words, so they wait for the person.
+- `error.queue.notWaiting` 「这一件不在等你决定。」 is still the refusal for a queued, done, cancelled or failed item. For a queued item it does not tell the butler to cancel instead. Better words would be new words, so they wait for the person (review 2 note 2).
 - The person's panel still offers 已处理 only on waiting rows; the person can cancel a queued row, and a sent row has no button.
 - If the queue trims an item (over 300 kept) while its send is in flight, `stillSent` throws, as `queueSetDelivery` did before. That pass faults once and the next one recovers (review 1 note 2).
 

@@ -3189,8 +3189,8 @@ test('assigneeRefusal: members in the person\'s order with name and id, kept sho
   assert.equal(rules.assigneeRefusal('m-1', { id: '7b1d2c3e-4f50-4a61-8b72-000000000000' }, sessions).uiMessage.key, 'error.queue.assigneeNoMembers');
 });
 
-// 11-12 (items 0bcc3c9c, 2829a073): the butler could mark handled only an item waiting for the person. An item still
-// queued, or already sent, whose work was done some other way stayed open; the person or the butler may now close it.
+// 11-12 (items 0bcc3c9c, 2829a073): the butler could mark handled only an item waiting for the person. An item already
+// sent, whose work was done some other way, stayed open; the person or the butler may now mark it handled.
 test('the person or the butler marks handled an item already sent; one still queued, or closed, is still refused', t => {
   const { room } = roomSetup(t);
   const queued = room.queueAdd('still queued', null), sent = room.queueAdd('sent but done elsewhere', null), other = room.queueAdd('sent, the butler closes it', null);
@@ -3198,14 +3198,14 @@ test('the person or the butler marks handled an item already sent; one still que
   room.queueMarkSent('shared', other, 'agent-b', 'Codex 1', NOW);
   room.queueResolve(sent);
   room.queueResolve(other, 'shared', 'steward');
-  const [first, second, third] = room.value.queue;
+  const [, second, third] = room.value.queue;
   assert.deepEqual([second.status, second.finishedBy, second.sentTo], ['done', undefined, 'agent-a']);
   assert.deepEqual([third.status, third.finishedBy, third.sentTo], ['done', 'steward', 'agent-b']);
   const lines = room.value.events.filter(event => /^notice\.queue\.resolved/.test(event.uiMessage?.key || '')).map(event => event.text);
   assert.deepEqual(lines, ['已处理：sent but done elsewhere', '已处理：sent, the butler closes it · 大管家标的']);
   // A queued item is cancelled instead; marked done, one nobody was given would name nobody in its row.
   for (const by of ['steward', null]) assert.throws(() => room.queueResolve(queued, 'shared', by), /不在等你决定/);
-  assert.equal(first.status, 'queued');
+  assert.equal(room.queueFind('shared', queued).status, 'queued');
   const cancelled = room.queueAdd('cancelled one', null);
   room.queueCancel(cancelled);
   for (const id of [sent, other, cancelled]) assert.throws(() => room.queueResolve(id, 'shared', 'steward'), /不在等你决定/);
