@@ -15,7 +15,8 @@ const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), confi
 for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = process.env.NAW_CLAUDE_BIN || executable('claude'); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.(307|308|309|310|311|312|316|317)\b/, 'Verify the updated native contract before sending a test task');
+// The versions this checkout's managed mod is qualified for (claude-pin.cjs, equal to register.js nativeBlocks).
+assert.ok(require('../app/claude-pin.cjs').QUALIFIED.includes(nativeVersion.split(' ')[0]), `Claude ${nativeVersion} is not qualified in app/claude-pin.cjs; verify the native contract before sending a test task`);
 let application, page, client, calls = 0, held, releaseFinal, releaseStart, unexpectedRequest;
 const errors = [], checks = [];
 const compatibilityTrial = process.env.NAW_TEST_NATIVE_COMPAT === '1';

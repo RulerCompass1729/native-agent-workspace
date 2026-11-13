@@ -44,7 +44,13 @@ if (!binary) {
   throw Error('Real native CLI required');
 }
 const nativeVersion = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.(316|317|318|319)\b/, 'A native version with verified chat sending');
+// Both builds must be qualified for this version (each bundle's own claude-pin.cjs); otherwise the
+// older build never binds the session and the run would only time out waiting for chat.
+for (const app of [OLD_APP, NEW_APP]) {
+  const bundle = path.resolve(path.dirname(app), '../..');
+  const { QUALIFIED } = require(path.join(bundle, 'Contents/Resources/app/app/claude-pin.cjs'));
+  assert.ok(QUALIFIED.includes(nativeVersion.split(' ')[0]), `Claude ${nativeVersion} is not qualified in ${path.basename(bundle)} at ${bundle}`);
+}
 
 // One GUI test at a time on this machine (the daily installer checks the same slot).
 const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
