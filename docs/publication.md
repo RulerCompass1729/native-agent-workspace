@@ -21,9 +21,13 @@ in local Git configuration. It does not modify global Git or agent settings and
 refuses to overwrite an existing, different hook setup. The private rules must be
 nonempty, valid, and outside the repository. They are not copied into Git.
 
-Configure your public Git author identity, preferably a GitHub noreply address.
-Personal email addresses are blocked; public contact exceptions need a specific
-review before any rule change. Contributors retain their names/copyright choices.
+Configure your public Git author identity with a GitHub noreply address.
+Author and committer emails other than noreply or example addresses are blocked,
+including a handle or URL written in the email's place; public contact exceptions
+need a specific review before any rule change. Contributors retain their
+names/copyright choices. A `git clone` does not copy this clone's local identity:
+set it in each new clone before committing, or use `git worktree add`, which
+shares it.
 
 ## Before each publication
 

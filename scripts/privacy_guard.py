@@ -110,6 +110,17 @@ class Scanner:
         self.parts.append(data)
         self.size += len(data)
 
+    def identity(self, data, label):
+        """Each `name <email>` line must carry a noreply/example email: a handle or URL in
+        place of an email would otherwise pass every pattern and publish an account."""
+        self.add(data, label)
+        for line in data.decode("utf-8").splitlines():
+            found = re.search(r"<([^<>]*)>", line)
+            email = EMAIL.fullmatch(found.group(1)) if found else None
+            if not email or email.group(1).lower() not in SAFE_EMAIL_DOMAINS:
+                raise Blocked(f"{label}: author/committer email must be a noreply "
+                              "or example address (value withheld)")
+
     def path(self, raw):
         self.add(raw, "path/ref")
         path = PurePosixPath(raw.decode("utf-8"))
@@ -169,7 +180,7 @@ class Scanner:
         for oid in commits:
             self.commits += 1
             self.add(git("show", "-s", "--format=%B", oid), "commit message")
-            self.add(git("show", "-s", "--format=%an <%ae>%n%cn <%ce>", oid), "commit identity")
+            self.identity(git("show", "-s", "--format=%an <%ae>%n%cn <%ce>", oid), "commit identity")
             self.entries(git("ls-tree", "-r", "-z", oid))
             self.add(git("show", "--format=", "--root", "-m", "-p", "--text",
                          "--no-ext-diff", "--no-textconv", oid), "historical patch")
@@ -241,7 +252,7 @@ def main():
                 raise Blocked("commit-message file required")
             scan.add(Path(args.argument).read_bytes(), "commit message")
             for var in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
-                scan.add(git("var", var), "commit identity")
+                scan.identity(git("var", var), "commit identity")
         elif args.mode == "history":
             refs = git("for-each-ref", "--format=%(refname) %(objectname)")
             scan.add(refs, "ref names")

@@ -88,6 +88,51 @@ class PublicationGuardTests(unittest.TestCase):
                                CANARY + " <fixture@users.noreply.github.com>",
                                "-qm", "Safe message", ok=False))
 
+    def test_identity_without_a_noreply_email_is_blocked(self):
+        # A handle or URL where the email belongs matches no pattern, so it needs its own check.
+        handle = "fixture-handle"
+        for email in ("https://github.com/" + handle, handle, "fixture@" + "personal.invalid"):
+            with self.subTest(email=email):
+                self.call("git", "config", "user.email", email)
+                result = self.call("git", "commit", "--allow-empty", "-qm", "Safe message", ok=False)
+                self.blocked(result)
+                self.assertNotIn(handle, result.stdout + result.stderr)
+        self.call("git", "config", "user.email", "fixture@example.com")
+        self.call("git", "commit", "--allow-empty", "-qm", "Example identity")
+
+    def test_identity_values_accept_only_noreply_or_example_emails(self):
+        code = """
+import sys
+from scripts.privacy_guard import Scanner, Blocked
+scan = Scanner()
+ok = [b'Fixture <fixture@users.noreply.github.com>', b'Fixture <fixture@example.com> 1 +0000',
+      b'A <a@example.invalid>\\nB <b@users.noreply.github.com>']
+bad = [b'Fixture <https://github.com/fixture-handle>', b'Fixture <>', b'Fixture fixture-handle',
+       b'Fixture <fixture handle@users.noreply.github.com>', b'Fixture <fixture-handle>',
+       b'A <a@example.com>\\nB <https://github.com/fixture-handle>']
+for value in ok:
+    scan.identity(value, 'commit identity')
+for value in bad:
+    try:
+        scan.identity(value, 'commit identity')
+    except Blocked as error:
+        assert 'fixture-handle' not in str(error)
+        continue
+    raise SystemExit('passed: case %d' % bad.index(value))
+print('identity cases ok')
+"""
+        result = self.call(sys.executable, '-c', code)
+        self.assertIn('identity cases ok', result.stdout)
+
+    def test_identity_without_a_noreply_email_blocks_push(self):
+        self.call("git", "-c", "user.email=https://github.com/fixture-handle",
+                  "-c", "core.hooksPath=" + str(self.base / "no-hooks"),
+                  "commit", "--allow-empty", "-qm", "Legacy identity")
+        result = self.call("git", "push", "origin", "main", ok=False)
+        self.blocked(result)
+        self.assertNotIn("fixture-handle", result.stdout + result.stderr)
+        self.assert_remote_empty()
+
     def test_fake_key_detected_without_printing_it(self):
         fake = "gh" + "p_" + "A7b9C2d5E8f1G4h6J3k0L9m2N5p8Q1r4S7t0"
         self.file("example.txt", fake)
