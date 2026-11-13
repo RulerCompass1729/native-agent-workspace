@@ -10,6 +10,7 @@ const path = require('node:path');
 const cp = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { roomIds, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
+const { uiError } = require('./ui-errors.cjs');
 const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 
@@ -492,6 +493,32 @@ function memberIds(room, sessions) {
     }
   }
   return ordered;
+}
+
+// A queue item's assignee must be a member of its space when the item is added. An id no session
+// has (in the person's data on 11-12, one sharing only its first eight characters with a member) or
+// a session outside the space would leave the item queued for nobody. The refusal names the members
+// (name and id, in the person's order), so whoever added it can choose one or leave it unassigned.
+// Kept within the 2048 characters a background caller's receipt keeps of an error.
+const MEMBER_LIST_LIMIT = 1600;
+function assigneeRefusal(assignee, room, sessions, name = session => session.name || session.id) {
+  if (assignee === null || assignee === undefined) return null;
+  const ids = memberIds(room, sessions);
+  if (typeof assignee === 'string' && ids.includes(assignee)) return null;
+  const listed = [];
+  let length = 0;
+  for (const id of ids) {
+    const session = sessions.find(candidate => candidate.id === id);
+    const entry = `${shortText(String(name(session) || id), 60)} · ${id}`;
+    if (length + entry.length > MEMBER_LIST_LIMIT) {
+      listed.push(`… +${ids.length - listed.length}`);
+      break;
+    }
+    listed.push(entry);
+    length += entry.length + 2;
+  }
+  if (!listed.length) return uiError('error.queue.assigneeNoMembers');
+  return uiError('error.queue.assigneeNotMember', { members: listed.join('; ') });
 }
 
 // When a session began: its creation time or, for sessions recorded before NAW kept one, its
@@ -3216,6 +3243,7 @@ module.exports = {
   startsWithDecision,
   AUTOMATIC_ORIGINS,
   automaticInput,
+  assigneeRefusal,
   UNCONFIRMED_SEND_MS,
   dispatchText,
   handoffRequestText,

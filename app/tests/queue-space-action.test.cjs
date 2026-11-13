@@ -248,3 +248,69 @@ test('the butler, in no space, reads every space as a member; others keep their 
   const view = backgroundOperation.conversationSnapshot(value, { ...butler, name: 'B', provider: 'claude' }, null, undefined, context.conversationAccess(butler, snapshot));
   assert.deepEqual([view.rooms[0].notes, view.rooms[0].queue[0].text], ['N', 'Fix it']);
 });
+
+// Follow-up 2 (11-12): in the person's data, item 87a3b4c0 named an assignee no session had (it shared only its
+// first eight characters with a member) and stayed queued for nobody. An assignee that is not a current member
+// of the space is refused before anything is added, and the refusal names the members (name · id) to choose from.
+const SPACE = '7b1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8', OTHER_SPACE = '7b1d2c3e-4f50-4a61-8b72-000000000000';
+const MEMBER = '0e36ef36-5bff-4c1a-9d2e-3f4a5b6c7d8e', LOOKALIKE = '0e36ef36-c702-4e3b-8a1c-2d3e4f5a6b7c';
+function assigneeCase(sessions, extra = {}) {
+  const harness = spaceAction({ queueRules: require('../queue-dispatch.cjs'),
+    sessionLabels: { labels: new Map([[MEMBER, 'Builder']]) }, stewardCaller: async c => c.background ? { id: 'butler', name: 'Claude manager' } : null, ...extra });
+  harness.handlerFor = background => args => harness.handler({ background, client: { call: async () => ({ sessions }) } }, SPACE, 'queueAdd', args);
+  return harness;
+}
+const members = () => [
+  { id: MEMBER, name: 'stored name', roomIds: [SPACE] },
+  { id: 'a1b2c3d4-0000-4000-8000-000000000002', name: 'Reviewer', roomIds: [SPACE, OTHER_SPACE] },
+  { id: 'a1b2c3d4-0000-4000-8000-000000000003', name: 'Gone', roomIds: [SPACE], archived: true },
+  { id: 'a1b2c3d4-0000-4000-8000-000000000004', name: 'Elsewhere', roomIds: [OTHER_SPACE] },
+  { id: 'butler', name: 'Claude manager', roomIds: [] },
+];
+const notMember = list => error => {
+  assert.equal(error.uiMessage?.key, 'error.queue.assigneeNotMember');
+  assert.equal(error.uiMessage.params.members, list);
+  assert.match(error.message, /没有加进队列/);
+  return true;
+};
+test('queueAdd refuses an assignee that is not a current member of the space, naming the members to choose from', async () => {
+  const { handlerFor, calls } = assigneeCase(members(), { roomState: { apply: s => s, metadata: () => ({ memberOrder: ['a1b2c3d4-0000-4000-8000-000000000002'] }), queueAdd: (...args) => { calls.push(['queueAdd', ...args]); return 'item-1'; } } });
+  const listed = `Reviewer · a1b2c3d4-0000-4000-8000-000000000002; Builder · ${MEMBER}`;
+  for (const background of [true, false]) {
+    const add = handlerFor(background);
+    // An id no session has, sharing its first eight characters with a member; an archived member; a session in
+    // another space only; the butler itself (in no space); something that is not an id at all.
+    for (const assignee of [LOOKALIKE, 'a1b2c3d4-0000-4000-8000-000000000003', 'a1b2c3d4-0000-4000-8000-000000000004', 'butler', MEMBER.slice(0, 8), 7, '']) {
+      await assert.rejects(add(['task', assignee]), notMember(listed), `${background} ${assignee}`);
+    }
+    assert.deepEqual(calls, [], 'nothing was added');
+  }
+  // A member is taken as the assignee; no assignee is any free member's.
+  assert.equal(await handlerFor(true)(['task', MEMBER]), 'item-1');
+  assert.equal(await handlerFor(true)(['task', null]), 'item-1');
+  assert.equal(await handlerFor(false)(['task', 'a1b2c3d4-0000-4000-8000-000000000002']), 'item-1');
+  assert.deepEqual(calls.map(call => call[2]), [MEMBER, null, 'a1b2c3d4-0000-4000-8000-000000000002']);
+});
+test('queueAdd with an assignee in a space with no members says so, and adds nothing', async () => {
+  const { handlerFor, calls } = assigneeCase(members().filter(s => !s.roomIds.includes(SPACE) || s.archived), { roomState: { apply: s => s, metadata: () => ({ memberOrder: [] }), queueAdd: () => { calls.push('added'); } } });
+  await assert.rejects(handlerFor(true)(['task', MEMBER]), error => error.uiMessage?.key === 'error.queue.assigneeNoMembers' && /没有加进队列/.test(error.message));
+  assert.deepEqual(calls, []);
+});
+test('a background caller\'s refused assignee comes back in its receipt with the members, and nothing is queued', async t => {
+  const f = fixture(t);
+  const member = { id: MEMBER, nativeId: 'native-member', name: 'Builder', state: 'idle', roomIds: ['shared'] };
+  f.c.client.call = async () => ({ sessions: [f.record, member] });
+  const { handlers } = registered({ roomState: f.room, queueSecretary: f.role, sessionLabels: { labels: new Map() }, queueRules: require('../queue-dispatch.cjs') });
+  f.role.set({ sessionId: f.sender.id, nativeId: f.sender.nativeId });
+  const controller = new BackgroundControl({ dataDir: f.dir, handlers, context: () => f.c });
+  const binding = { sender: { id: f.sender.id, nativeId: f.sender.nativeId, provider: 'codex', name: 'Secretary' }, identity: { callId: 'native-call', turnId: 'native-turn' }, valid: () => true };
+  const receipt = await controller.call(binding, { action: 'invoke', method: 'spaceAction', arguments: ['shared', 'queueAdd', ['Work for a lookalike', LOOKALIKE]], operation_id: 'lookalike' });
+  assert.equal(receipt.state, 'unconfirmed');
+  assert.match(receipt.error, /没有加进队列/);
+  assert.ok(receipt.error.includes(`Builder · ${MEMBER}`), receipt.error);
+  assert.equal(f.room.queueItems().length, 0);
+  const accepted = await controller.call(binding, { action: 'invoke', method: 'spaceAction', arguments: ['shared', 'queueAdd', ['Work for the member', MEMBER]], operation_id: 'member' });
+  assert.equal(accepted.state, 'complete');
+  assert.deepEqual(f.room.queueItems().map(item => item.assignee), [MEMBER]);
+  await controller.close();
+});

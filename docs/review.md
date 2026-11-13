@@ -13092,3 +13092,25 @@ From a second, increment review (PASS_WITH_NOTES): a test now checks the handoff
 - No real-window journey with a real Claude member and the queue was run end to end: the dispatcher lives in the app's main process and the real-native queue script pins Claude ≤2.1.319. The evidence is the probe and the unit tests.
 - Agent-tool background tasks were not seen in the data or the probe and are not recognised.
 - A Claude process started before this code is installed keeps the forwarder path its settings were written with (`adapters.cjs`, at start), so its in-turn notifications are recognised only after it is started again.
+
+## A queue item's assignee must be a member of its space — 2026-11-12
+
+From the steward's follow-up 2 (11-12): queueAdd refuses an assignee that does not exist or is not a member, with a refusal the steward can act on (the members' names and ids), and a unit test for an id like 87a3b4c0's, which shared its first eight characters with a member.
+
+**Why 87a3b4c0 never went out.** It was assigned to an id no session had. The dispatcher sends an assigned item only to that member, so it stayed queued for nobody. Nothing checked the assignee when it was added.
+
+**What changed.**
+- `assigneeRefusal(assignee, room, sessions, name)` in `app/queue-dispatch.cjs`: no assignee, or an id that is a current member of the space (in it and not archived, by the same `memberIds` the dispatcher uses), is accepted. Anything else is refused with `error.queue.assigneeNotMember`, which says the item was not added and lists the members as 「名字 · id」 in the person's member order, or with `error.queue.assigneeNoMembers` when the space has none. Names are cut at 60 characters and the list stops at 1600 characters with 「… +N」, within the 2048 characters a background caller's receipt keeps of an error.
+- `register('spaceAction')` in `app/main.cjs`: queueAdd with an assignee reads the sessions with the desktop's archive record (`roomState.apply`), names them with the person's labels, and throws the refusal before anything is added. This holds for the person's window, the secretary and the steward alike. The redo path already checked membership and is unchanged.
+- The steward and the secretary get the refusal as a receipt in state `unconfirmed` with the text above. A `not-executed` receipt would need a precondition path in the background controller, which only maintenance actions have; the text says plainly that nothing was added, and the member list lets the caller try again with a member or with no assignee.
+
+**Tests and checks.**
+- `app/tests/queue-space-action.test.cjs`, on the actual handler: an id sharing its first eight characters with a member, an archived member, a session in another space only, the steward itself, an eight-character prefix, a number and an empty string are each refused for a background caller and for the person's window, with the members listed by label in member order, and nothing is added; a member and no assignee are added. A space with no members gets its own refusal. Through the actual background controller, a secretary's refused add comes back in its receipt with the member list and nothing is queued; adding the member then completes.
+- `app/tests/queue-dispatch.test.cjs`: the pure rule, including names cut short, an unreadable session record skipped, another space's room, and an 80-member list kept within the receipt's 2048 characters with the count of those left out.
+- Red on the old `main.cjs`: the three handler tests fail. Breakages: 10, each caught (never refusing, a prefix match, any session id, refusing no assignee, no length cap, ignoring member order, skipping the check in `main.cjs`, checking only background callers, stored names instead of labels, archive record ignored). The one about no assignee is caught by the unit test, since `main.cjs` asks only when there is an assignee.
+- 19 related test files (catalog, locale, queue, background control, secretary): 462 passed, 0 failed.
+
+**Left open.**
+- The steward's own instructions do not say what to do with the refusal; the text itself names the members and the no-assignee choice.
+- A member removed after the check and before the item is saved is not caught; that item then waits for its member, as every assigned item did before (the planner sends an assigned item only to that member, `planDispatch`).
+- Items already queued for a non-member, such as 87a3b4c0, are not changed by this; they are on the cancel list relayed to the person on 11-12.

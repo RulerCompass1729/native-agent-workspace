@@ -3156,3 +3156,35 @@ test('an earlier rotation\'s old session someone else archived is settled quietl
   const second = make(); await second.start(); await second.schedule();
   assert.deepEqual(room.value.archivedSessions, [], 'the restore stays');
 });
+
+// Follow-up 2 (11-12): the refusal for an assignee that is not a current member of the space.
+test('assigneeRefusal: members in the person\'s order with name and id, kept short; nothing for no assignee or a member', () => {
+  const R = '7b1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8';
+  const sessions = [
+    { id: 'm-1', name: 'First', roomIds: [R] },
+    { id: 'm-2', name: 'x'.repeat(80), roomIds: [R] },
+    { id: 'm-3', name: 'Archived', roomIds: [R], archived: true },
+    { id: 'm-4', roomIds: 'unreadable' },
+    { id: 'm-5', roomIds: [R] },
+  ];
+  const room = { id: R, memberOrder: ['m-5', 'missing'] };
+  assert.equal(rules.assigneeRefusal(null, room, sessions), null);
+  assert.equal(rules.assigneeRefusal(undefined, room, sessions), null);
+  assert.equal(rules.assigneeRefusal('m-1', room, sessions), null);
+  for (const assignee of ['m-3', 'm-4', 'missing', 'M-1', 'm-1 ', 1]) {
+    const error = rules.assigneeRefusal(assignee, room, sessions);
+    assert.equal(error.uiMessage.key, 'error.queue.assigneeNotMember', String(assignee));
+    assert.equal(error.uiMessage.params.members, `m-5 · m-5; First · m-1; ${'x'.repeat(59)}… · m-2`);
+  }
+  // Named the way the caller names sessions (the person's labels in the app).
+  assert.match(rules.assigneeRefusal('missing', room, sessions, s => `Label ${s.id}`).uiMessage.params.members, /^Label m-5 · m-5; Label m-1 · m-1/);
+  // A long list stops within what a background receipt keeps of an error, and says how many are left out.
+  const many = Array.from({ length: 80 }, (_, i) => ({ id: `member-${String(i).padStart(2, '0')}-${'0'.repeat(24)}`, name: 'N'.repeat(60), roomIds: [R] }));
+  const long = rules.assigneeRefusal('missing', { id: R }, many);
+  assert.ok(long.message.length <= 2048, String(long.message.length));
+  const listed = long.uiMessage.params.members.split('; ');
+  assert.match(listed.at(-1), /^… \+\d+$/);
+  assert.equal(listed.length - 1 + Number(listed.at(-1).slice(3)), 80);
+  assert.equal(rules.assigneeRefusal('missing', { id: R }, []).uiMessage.key, 'error.queue.assigneeNoMembers');
+  assert.equal(rules.assigneeRefusal('m-1', { id: '7b1d2c3e-4f50-4a61-8b72-000000000000' }, sessions).uiMessage.key, 'error.queue.assigneeNoMembers');
+});
