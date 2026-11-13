@@ -488,6 +488,25 @@ async function cleanup() {
   assert.equal(request.text.includes(UNSENT), false, 'NAW\'s handoff request does not carry the unsent text');
   const finished = log.find(entry => entry.event === 'done' && entry.old.id === first.id);
   assert.ok(finished, 'The rotation finished');
+  // The person, 11-12: the replaced session leaves the list of sessions for 归档, where it can be restored.
+  // The archive follows the done line: read the log again until it is there.
+  const rotationLog = () => fs.readFileSync(path.join(profile, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  await until(() => rotationLog().some(entry => entry.event === 'archived' && entry.old.id === first.id), 'The rotation log records the archive', 30000);
+  const archivedLog = rotationLog();
+  assert.ok(archivedLog.findIndex(entry => entry.event === 'archived' && entry.old.id === first.id) > archivedLog.findIndex(entry => entry.event === 'done' && entry.old.id === first.id), 'after the done rotation');
+  await until(async () => (await page.evaluate(() => workspace.initial())).sessions.find(s => s.id === first.id)?.archived === true, 'The old session is archived in the window', 30000);
+  // 归档 is collapsed by default: open it the way the person does, then read it.
+  if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click();
+  await page.locator('#archive-group-body').waitFor();
+  await until(async () => (await page.locator('#archive-list').innerText()).includes('实测甲'), 'The old session is listed under 归档', 30000);
+  assert.equal(await page.locator(`#session-list [data-session-id="${first.id}"]`).count(), 0, 'It is no longer among the sessions');
+  if (process.env.NAW_EVIDENCE_DIR) {
+    fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
+    await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'rotation-archived.png') });
+  }
+  const spaceEvents = (await page.evaluate(() => workspace.initial())).rooms.flatMap(room => room.events || []);
+  assert.ok(spaceEvents.some(event => event.uiMessage?.key === 'notice.rotation.archived'), 'The space says the replaced session was archived');
+  checks.push('The replaced session was archived: off the list of sessions, under 归档, said in the space');
   if (finished.terminal) {
     // A live terminal was typed into: its last screen is kept before the session ends.
     const savedScreen = fs.readFileSync(path.join(profile, finished.terminal), 'utf8');
