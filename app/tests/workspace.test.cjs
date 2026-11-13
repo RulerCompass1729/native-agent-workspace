@@ -404,10 +404,13 @@ test('continuous output checkpoints before it becomes quiet and reload never sen
   let saves = 0;
   const rename = fs.renameSync;
   t.mock.method(fs, 'renameSync', (...args) => { saves++; return rename(...args); });
+  // A timed checkpoint writes off the event loop; wait for that write (setImmediate and Date are not mocked here).
+  const written = async () => { const start = Date.now(); while (w.saveWriting && Date.now() - start < 5000) await new Promise(resolve => setImmediate(resolve)); assert.ok(!w.saveWriting); };
   for (let i = 0; i < 20; i++) {
     r.emit('delta', { id: 'continuous-reply', text: `第${i}段。` });
     t.mock.timers.tick(50);
   }
+  await written();
   const stored = JSON.parse(fs.readFileSync(path.join(directory, 'workspace.json')));
   assert.equal(stored.sessions[0].messages[0]?.text, w.get(id).messages[0].text);
   assert.equal(saves, 1, 'One bounded checkpoint, not one disk write per output chunk');
@@ -420,10 +423,10 @@ test('continuous output checkpoints before it becomes quiet and reload never sen
   assert.equal(recovered.get(id).state, 'recoverable');
   assert.equal(starts, 0); assert.equal(sends, 0);
   r.emit('delta', { id: 'continuous-reply', text: '最后一段。' });
-  t.mock.timers.tick(150);
+  t.mock.timers.tick(150); await written();
   assert.equal(saves, 2, 'Quiet output still saves promptly');
   assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'workspace.json'))).sessions[0].messages[0].text, w.get(id).messages[0].text);
-  t.mock.timers.tick(2000);
+  t.mock.timers.tick(2000); await written();
   assert.equal(saves, 2, 'Completed checkpoints leave no redundant timer');
 });
 

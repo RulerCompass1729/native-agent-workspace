@@ -142,7 +142,7 @@ class Workspace extends EventEmitter {
     // this existing Workspace writer owns the additional-room history file.
     this.rooms = new Map([['shared', this.room]]);
     this.versions = { shellModelCalls: 0, dispatches: 0 };
-    this.saveTimer = null;
+    this.saveTimer = null; this.saveSeq = 0; this.renamedSeq = 0; this.saveWriting = false; this.saveAgain = false;
     this.deadlineTimer = setInterval(() => { for (const room of this.rooms.values()) this.expireRun(room.run); this.tickCapacity(); this.tickToolWait(); }, 1000);
     this.deadlineTimer.unref();
     this.forwards = new Map(); this.pendingDrafts = new Map();
@@ -306,10 +306,26 @@ class Workspace extends EventEmitter {
     if (this.storageWarning) return;
     // Keep burst coalescing, but a continuously streaming reply must not
     // postpone every checkpoint until the provider becomes quiet.
-    if (!this.saveDeadline) this.saveDeadline = setTimeout(() => this.persist(), 1000);
+    if (!this.saveDeadline) this.saveDeadline = setTimeout(() => this.persistLater(), 1000);
     clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => this.persist(), 150);
+    this.saveTimer = setTimeout(() => this.persistLater(), 150);
   }
+  // Both writers save one numbered snapshot of the same two files. persist() has renamed it before it returns, for
+  // a caller that must know a record is on disk. A timed checkpoint (persistLater) writes off the event loop: at the
+  // daily shape a 15 MB synchronous write held every terminal key and reply for tens of milliseconds each second.
+  // A write renames only a snapshot newer than the one on disk, so an older one finishing late never replaces it.
+  storeSnapshot(replacement) {
+    // No terminal bytes, credentials, environment, hook secrets or raw protocol.
+    const sessions = [...this.sessions.values()].map(record => {
+      const { owner, approval, approvals, approvalOverflow, approvalResolved, pid, ...s } = replacement?.id === record.id ? replacement.next : record;
+      return { ...s, messages: persistedMessages(s.messages), pendingTag: null };
+    });
+    const mobile = Array.isArray(this.mobileRequests) && !this.mobileRequests.length ? {} : { mobileRequests: this.mobileRequests };
+    const workspace = JSON.stringify({ sessions, room: { messages: persistedMessages(this.room.messages, 'shared-native-cache-gap'), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts), ...(this.goalContinuation ? { goalContinuation: this.goalContinuation.journal() } : {}), ...mobile });
+    const rooms = this.rooms.size > 1 ? JSON.stringify({ version: 1, rooms: [...this.rooms.values()].filter(r => r.id !== 'shared').map(r => ({ ...r, messages: persistedMessages(r.messages, 'shared-native-cache-gap') })) }) : null;
+    return { seq: ++this.saveSeq, workspace, rooms };
+  }
+  saveFailed() { this.storageFailure = 'write'; setWarning(this, 'storageWarning', 'error.warning.workspaceWrite'); this.emit('change'); }
   persist(replacement) {
     clearTimeout(this.saveTimer); clearTimeout(this.saveDeadline);
     this.saveTimer = this.saveDeadline = null;
@@ -317,21 +333,42 @@ class Workspace extends EventEmitter {
     let workspaceSaved = false;
     const target = path.join(this.dataDir, 'workspace.json'); const temp = `${target}.tmp`;
     try {
-      // No terminal bytes, credentials, environment, hook secrets or raw protocol.
-      const sessions = [...this.sessions.values()].map(record => {
-        const { owner, approval, approvals, approvalOverflow, approvalResolved, pid, ...s } = replacement?.id === record.id ? replacement.next : record;
-        return { ...s, messages: persistedMessages(s.messages), pendingTag: null };
-      });
-      const mobile = Array.isArray(this.mobileRequests) && !this.mobileRequests.length ? {} : { mobileRequests: this.mobileRequests };
-      fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: persistedMessages(this.room.messages, 'shared-native-cache-gap'), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts), ...(this.goalContinuation ? { goalContinuation: this.goalContinuation.journal() } : {}), ...mobile }), { mode: 0o600 });
-      fs.renameSync(temp, target); workspaceSaved = true; fs.chmodSync(target, 0o600);
-      if (this.rooms.size > 1) {
+      const snapshot = this.storeSnapshot(replacement);
+      fs.writeFileSync(temp, snapshot.workspace, { mode: 0o600 });
+      // Numbered before the rename: a rename that fails after it took place still keeps an older checkpoint out.
+      this.renamedSeq = snapshot.seq; fs.renameSync(temp, target); workspaceSaved = true; fs.chmodSync(target, 0o600);
+      if (snapshot.rooms !== null) {
         const file = path.join(this.dataDir, 'room-records.json'), pending = `${file}.tmp`;
-        fs.writeFileSync(pending, JSON.stringify({ version: 1, rooms: [...this.rooms.values()].filter(r => r.id !== 'shared').map(r => ({ ...r, messages: persistedMessages(r.messages, 'shared-native-cache-gap') })) }), { mode: 0o600 });
+        fs.writeFileSync(pending, snapshot.rooms, { mode: 0o600 });
         fs.renameSync(pending, file); fs.chmodSync(file, 0o600);
       }
-    } catch { this.storageFailure = 'write'; setWarning(this, 'storageWarning', 'error.warning.workspaceWrite'); this.emit('change'); }
+    } catch { this.saveFailed(); }
     return workspaceSaved;
+  }
+  persistLater() {
+    clearTimeout(this.saveTimer); clearTimeout(this.saveDeadline);
+    this.saveTimer = this.saveDeadline = null;
+    if (this.storageWarning || this.closed) return;
+    // One write at a time: a checkpoint due meanwhile is taken when it ends, from the state then.
+    if (this.saveWriting) { this.saveAgain = true; return; }
+    let snapshot;
+    try { snapshot = this.storeSnapshot(); } catch { this.saveFailed(); return; }
+    this.saveWriting = true;
+    const target = path.join(this.dataDir, 'workspace.json'), file = path.join(this.dataDir, 'room-records.json');
+    const temp = `${target}.later.tmp`, pending = `${file}.later.tmp`;
+    (async () => {
+      await fs.promises.writeFile(temp, snapshot.workspace, { mode: 0o600 });
+      // Check and rename in one turn of the event loop, so a persist() cannot land between them. After close
+      // nothing is renamed: close() saved last, and another daemon may already own the directory.
+      if (snapshot.seq < this.renamedSeq || this.closed) return fs.promises.rm(temp, { force: true });
+      this.renamedSeq = snapshot.seq; fs.renameSync(temp, target); fs.chmodSync(target, 0o600);
+      if (snapshot.rooms === null) return;
+      await fs.promises.writeFile(pending, snapshot.rooms, { mode: 0o600 });
+      // Room records pair with the workspace file of the same snapshot.
+      if (this.renamedSeq !== snapshot.seq || this.closed) return fs.promises.rm(pending, { force: true });
+      fs.renameSync(pending, file); fs.chmodSync(file, 0o600);
+    })().catch(() => { if (this.renamedSeq <= snapshot.seq && !this.storageWarning && !this.closed) this.saveFailed(); })
+      .finally(() => { this.saveWriting = false; if (this.saveAgain) { this.saveAgain = false; this.persistLater(); } });
   }
   retrySave() {
     // A failed read may hide existing records. Never overwrite it with the
