@@ -13405,3 +13405,25 @@ The person's answer on the board (11-12 21:2x, 「按你推荐的来」): 「被
 - If saving fails while a message is on its way in, it stays `sending` and the others to that recipient wait until a restart.
 - A retry repeats the sender's checks but not the turn-end check that a butler sending several messages in one turn is still the butler (its second and later messages); this matters only if the role moves from that butler to the recipient between the turn's end and the attempt.
 - An older build reading these records shows a held row as 接收结果未记录.
+
+## The butler's default duty statement — 2026-11-12
+
+From the manager's 11-12 request: the default text in the 「设为大管家」 dialog (`steward.duty.default`, zh and en) should say that the butler looks after all of NAW, is not a space's secretary, hands work to members, and hands work off when it is sinking into execution. The manager approved the draft with three additions: recommend a secretary or integrator to the person, who alone designates them; leave each working member one or two next items; the person may still ask the butler to do something itself.
+
+**What changed.**
+- `app/ui-messages.js`: both default statements. Items 2, 3, 5 and 6 are unchanged.
+- `app/background-control.cjs`: the `spaceAction` catalog line now says who may add (the secretary or the butler) and who may cancel or resolve (the person or the butler), as `app/main.cjs` and `app/queue-secretary.cjs` enforce.
+- `app/renderer/renderer.js` (`openStewardChooser`): the statement box opens at its start. Before, it kept the scroll position from the last time, and the English chooser opened partway down.
+
+**Checks.**
+- `app/tests/steward-entry.test.cjs`: each locale's default passes `validDuty` and stays within three quarters of `DUTY_MAX`. Related tests (steward, background control, locale): 242 passed, 0 failed.
+- `scripts/test-steward-entry.cjs` (isolated window, no model): it also opens the English chooser from the session menu, checks the English default and that the box is at its start, and takes shots of the start and end of both languages. With the `scrollTop` line removed it fails on that check.
+
+**Independent review.** First round BLOCK, then PASS on the delta.
+- Blocking: 「给每个在干活的成员在队列里留一两件下一步」 alone invited the butler to make up work, while the butler may queue only the person's own requests. It now starts 「从用户要做的事里」 / "From what the person has asked for".
+- Note: the secretary and the integrator are single roles for all of NAW (one record in `app/main.cjs`), not one per space. The opening now reads 「你不是秘书…；NAW 需要秘书或集成者时…」.
+- Note: the window check was not shown to fail on the old code; the run with the line removed shows it does.
+
+**Left open.**
+- A butler already designated keeps the statement it was sent; the new default reaches it when the statement is sent again or at a handoff. A statement the person edited is not touched.
+- Whether the butler may designate a secretary or an integrator itself is for the person to decide; the text says only the person can, which is what the code does.

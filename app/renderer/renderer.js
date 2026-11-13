@@ -2613,6 +2613,8 @@ function openStewardChooser(chosen = null) {
   // The text the person last chose, or the default of their language; their edits stay while the dialog is open.
   $('steward-duty').value = state.stewardDuty ?? uiText('steward.duty.default');
   renderStewardChooser(); openTransientDialog('steward-dialog');
+  // From its first line, wherever the box was scrolled the last time the dialog was open.
+  $('steward-duty').scrollTop = 0;
   ([...$('steward-list').querySelectorAll('input')].find(input => input.checked && !input.disabled) || $('steward-cancel')).focus({ preventScroll: true });
 }
 async function confirmSteward() {

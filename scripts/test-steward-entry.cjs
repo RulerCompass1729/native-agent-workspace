@@ -51,6 +51,11 @@ async function language(value) {
   await page.locator('#close-setup').click(); await page.locator('#setup-dialog').waitFor({ state: 'hidden' });
 }
 const shot = async name => { await delay(150); await page.screenshot({ path: path.join(evidence, name + '.png') }); shots.push(name); };
+// The rest of the duty statement, as the person sees it after scrolling the box to its end; then back to the top.
+const dutyEnd = async name => {
+  await page.locator('#steward-duty').evaluate(box => { box.scrollTop = box.scrollHeight; }); await shot(name);
+  await page.locator('#steward-duty').evaluate(box => { box.scrollTop = 0; });
+};
 const record = () => { try { return JSON.parse(fs.readFileSync(path.join(profile, 'steward.json'), 'utf8')).selected; } catch (error) { if (error.code === 'ENOENT') return undefined; throw error; } };
 // What the sidebar shows about the butler and the lists, read from the page as a person would see it.
 const sidebar = () => page.evaluate(() => {
@@ -106,6 +111,7 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   await shot('zh-1280-chooser');
   // The duty statement it will send, in the person's language, named by its label, to edit.
   assert.deepEqual([await page.locator('#steward-duty').inputValue(), await page.getByLabel(say('steward.duty.label')).count()], [say('steward.duty.default'), 1]);
+  await dutyEnd('zh-1280-chooser-end');
   await dialog.locator(`input[value="${main}"]`).check(); assert.equal(await page.locator('#steward-confirm').isDisabled(), false); assert.equal(record(), undefined, 'Choosing is not designating');
   await fixture('bindSends', main); await fixture('bindSends', docs);
   await page.locator('#steward-confirm').click(); await dialog.waitFor({ state: 'hidden' });
@@ -212,8 +218,16 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   await language('en'); await size(1280, 800);
   seen = await sidebar(); assert.deepEqual([seen.butler.title, seen.badge], [locale.format('en', 'butler.name'), '◆ ' + locale.format('en', 'butler.name')]);
   assert.ok(seen.butler.label.startsWith(locale.format('en', 'steward.rowLabel', { details: 'Claude 主会话 · Claude · ' })));
-  await shot('en-1280-butler'); await language('zh');
-  checks.push('In the 850 by 600 window the row is the first icon of the narrow rail; in English the row, the mark and the labels are English');
+  await shot('en-1280-butler');
+  // The chooser in English offers the English default, since the person kept the default.
+  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: locale.format('en', 'menu.stewardChange'), exact: true }).click(); await dialog.waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#steward-duty').inputValue(), locale.format('en', 'steward.duty.default'));
+  // Shown from its first line, though the box was left scrolled down when the dialog last closed: confirming from the
+  // session's menu above, after the whole default was filled in. Without the fix this fails (checked 11-12).
+  assert.equal(await page.locator('#steward-duty').evaluate(box => box.scrollTop), 0, 'The statement is shown from its start');
+  await shot('en-1280-chooser'); await dutyEnd('en-1280-chooser-end');
+  await page.locator('#steward-cancel').click(); await dialog.waitFor({ state: 'hidden' }); await language('zh');
+  checks.push('In the 850 by 600 window the row is the first icon of the narrow rail; in English the row, the mark and the labels are English, and the chooser offers the English default statement');
 
   // 8. Where the window lands when the app starts: on the butler's conversation, whatever was open before; a
   //    reload of the page stays where it was.
