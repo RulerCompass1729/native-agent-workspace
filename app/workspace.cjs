@@ -54,6 +54,16 @@ function interruptActivity(s) {
 // that moment, and only if the wait is still on. Nothing polls, and nothing is stopped, approved
 // or sent because of it; the space record is written by the desktop (room-state.cjs recordStuck).
 const STUCK_AFTER_MS = 5 * 60 * 1000;
+// A timed checkpoint writes again the saved messages of a session only after a change that may have touched them
+// (Workspace.savedMessages); the rest of each record is serialised every time. A placeholder, random for each process,
+// marks where kept JSON goes; if a record happens to hold it too, that snapshot is serialised whole.
+const SAVED_MARK = `\u0000naw-saved-${randomUUID()}`, SAVED_MARK_JSON = JSON.stringify(SAVED_MARK);
+const spliceSaved = (json, text) => {
+  const at = json.indexOf(SAVED_MARK_JSON);
+  return at < 0 || json.includes(SAVED_MARK_JSON, at + 1) ? null : json.slice(0, at) + text + json.slice(at + SAVED_MARK_JSON.length);
+};
+// Every persist(), and a timed checkpoint at least this often, serialises all messages again.
+const SAVE_ALL_MS = 30 * 1000;
 // Why a failed native turn is continued automatically: the suffix of its notice keys and the opening of its
 // collaboration pause. All three share one timer, one limit and the same cancellations.
 const RECOVERY_REASONS = Object.freeze({
@@ -143,6 +153,8 @@ class Workspace extends EventEmitter {
     this.rooms = new Map([['shared', this.room]]);
     this.versions = { shellModelCalls: 0, dispatches: 0 };
     this.saveTimer = null; this.saveSeq = 0; this.renamedSeq = 0; this.saveWriting = false; this.saveAgain = false;
+    // Change counters: each session record's own (changed(id)) and the workspace's (changed() naming none).
+    this.revisionAll = 0; this.revisions = new WeakMap(); this.savedJson = new WeakMap(); this.savedAllAt = -Infinity;
     this.deadlineTimer = setInterval(() => { for (const room of this.rooms.values()) this.expireRun(room.run); this.tickCapacity(); this.tickToolWait(); }, 1000);
     this.deadlineTimer.unref();
     this.forwards = new Map(); this.pendingDrafts = new Map();
@@ -281,7 +293,10 @@ class Workspace extends EventEmitter {
   // session: the one session whose messages this change touched, as a streamed reply does; with none, any
   // session's may have changed. The daemon then digests only that session's messages again (state-delta.cjs),
   // with the spaces': every space is digested again on each change, since sharedReplies may rewrite its rows.
+  // A timed checkpoint likewise serialises again only that session's saved messages (savedMessages).
   changed(session) {
+    const named = typeof session === 'string' ? this.sessions.get(session) : undefined;
+    if (named) this.revisions.set(named, (this.revisions.get(named) || 0) + 1); else this.revisionAll++;
     // A wait that has ended is forgotten at the first change after it, with its timer. An open
     // permission prompt starts its wait at the first change that shows it, whatever reported it.
     for (const [key, wait] of this.stuckWaits) {
@@ -314,17 +329,36 @@ class Workspace extends EventEmitter {
   // a caller that must know a record is on disk. A timed checkpoint (persistLater) writes off the event loop: at the
   // daily shape a 15 MB synchronous write held every terminal key and reply for tens of milliseconds each second.
   // A write renames only a snapshot newer than the one on disk, so an older one finishing late never replaces it.
-  storeSnapshot(replacement) {
+  // The same JSON with reuse (a timed checkpoint) or without: kept JSON of a session's saved messages is spliced in.
+  storeSnapshot(replacement, reuse = false) {
+    const now = Date.now();
+    if (!reuse || !(now - this.savedAllAt < SAVE_ALL_MS)) { reuse = false; this.savedAllAt = now; }
     // No terminal bytes, credentials, environment, hook secrets or raw protocol.
-    const sessions = [...this.sessions.values()].map(record => {
+    const records = [...this.sessions.values()].map(record => {
       const { owner, approval, approvals, approvalOverflow, approvalResolved, pid, ...s } = replacement?.id === record.id ? replacement.next : record;
-      return { ...s, messages: persistedMessages(s.messages), pendingTag: null };
+      return [record, s];
     });
     const mobile = Array.isArray(this.mobileRequests) && !this.mobileRequests.length ? {} : { mobileRequests: this.mobileRequests };
-    const workspace = JSON.stringify({ sessions, room: { messages: persistedMessages(this.room.messages, 'shared-native-cache-gap'), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts), ...(this.goalContinuation ? { goalContinuation: this.goalContinuation.journal() } : {}), ...mobile });
+    const rest = { sessions: SAVED_MARK, room: { messages: persistedMessages(this.room.messages, 'shared-native-cache-gap'), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts), ...(this.goalContinuation ? { goalContinuation: this.goalContinuation.journal() } : {}), ...mobile };
+    const sessions = records.map(([record, s]) => spliceSaved(JSON.stringify({ ...s, messages: SAVED_MARK, pendingTag: null }),
+      s.messages === record.messages ? this.savedMessages(record, reuse) : JSON.stringify(persistedMessages(s.messages))));
+    const workspace = (!sessions.includes(null) && spliceSaved(JSON.stringify(rest), `[${sessions.join(',')}]`)) ||
+      JSON.stringify({ ...rest, sessions: records.map(([, s]) => ({ ...s, messages: persistedMessages(s.messages), pendingTag: null })) });
     const rooms = this.rooms.size > 1 ? JSON.stringify({ version: 1, rooms: [...this.rooms.values()].filter(r => r.id !== 'shared').map(r => ({ ...r, messages: persistedMessages(r.messages, 'shared-native-cache-gap') })) }) : null;
     return { seq: ++this.saveSeq, workspace, rooms };
   }
+  // The JSON of a session's saved messages, kept with the change counters it was taken at. It is used again only
+  // while neither counter has moved and the record still holds the same messages array.
+  savedMessages(record, reuse) {
+    const own = this.revisions.get(record) || 0, kept = this.savedJson.get(record);
+    if (reuse && kept && kept.all === this.revisionAll && kept.own === own && kept.messages === record.messages) return kept.json;
+    const json = JSON.stringify(persistedMessages(record.messages));
+    this.savedJson.set(record, { all: this.revisionAll, own, messages: record.messages, json });
+    return json;
+  }
+  // A change to a session's rows that its caller reports later, or not at all, without naming the session (as
+  // session-wake's revoke): its kept JSON is not used again.
+  edited(record) { if (record) this.revisions.set(record, (this.revisions.get(record) || 0) + 1); }
   saveFailed() { this.storageFailure = 'write'; setWarning(this, 'storageWarning', 'error.warning.workspaceWrite'); this.emit('change'); }
   persist(replacement) {
     clearTimeout(this.saveTimer); clearTimeout(this.saveDeadline);
@@ -352,7 +386,7 @@ class Workspace extends EventEmitter {
     // One write at a time: a checkpoint due meanwhile is taken when it ends, from the state then.
     if (this.saveWriting) { this.saveAgain = true; return; }
     let snapshot;
-    try { snapshot = this.storeSnapshot(); } catch { this.saveFailed(); return; }
+    try { snapshot = this.storeSnapshot(undefined, true); } catch { this.saveFailed(); return; }
     this.saveWriting = true;
     const target = path.join(this.dataDir, 'workspace.json'), file = path.join(this.dataDir, 'room-records.json');
     const temp = `${target}.later.tmp`, pending = `${file}.later.tmp`;
@@ -756,7 +790,8 @@ class Workspace extends EventEmitter {
       (m.id === `claude-prompt-${promptId}` || m.id === `claude-prompt-${promptId}-q${tag}`) && textTag(m.text) === tag);
     const applyPromptImage = (row, event) => {
       if (!row || event.nativeId !== s.nativeId || row.nativeId && row.nativeId !== event.nativeId) return false;
-      row.nativeId = event.nativeId; // the image viewer checks the row's native session
+      // The image viewer checks the row's native session; set before the payload is checked, so counted here.
+      row.nativeId = event.nativeId; this.edited(s);
       return require('./native-images.cjs').applyImagePayload(row, event.imagePayload, this.dataDir, s.id);
     };
     on('nativePromptImage', event => {
@@ -823,7 +858,9 @@ class Workspace extends EventEmitter {
       if (state === 'working') this.peerLeases?.working(s.id);
       if (state === 'approval') { s.peerRevision = (s.peerRevision || 0) + 1; this.pauseParticipant(s.id, '等待原生权限确认', false, uiActivity('notice.run.approval')[1]); }
       if (state === 'working' && this.activeRun(s.id) && this.activeRun(s.id).awaiting?.sessionId !== s.id) this.pause('成员开始了本轮之外的原生工作，请核对后再交接。', undefined, false, uiActivity('notice.run.outsideWork')[1]);
-      if (['ended', 'background', 'recoverable', 'error'].includes(state)) this.pauseParticipant(s.id, '原生会话不可用', false, uiActivity('notice.run.nativeUnavailable')[1]); this.changed();
+      if (['ended', 'background', 'recoverable', 'error'].includes(state)) this.pauseParticipant(s.id, '原生会话不可用', false, uiActivity('notice.run.nativeUnavailable')[1]);
+      // 'working' changes no rows here; what it sets off elsewhere (a pause, a cancelled retry) reports its own change.
+      this.changed(state === 'working' ? s.id : undefined);
     });
     on('terminal', event => {
       const prompt = directoryTrustPrompt(s, runtime);
@@ -831,7 +868,8 @@ class Workspace extends EventEmitter {
       if (runtime.terminal) this.observedTerminals.set(s.id, runtime.terminal);
       this.emit('terminal', { id: s.id, ...event });
     });
-    on('activity', (text, uiMessage) => { setActivity(s, text, uiMessage); this.changed(); });
+    // A tool call's activity and its state 'working', and usage, touch no messages: they name their own session.
+    on('activity', (text, uiMessage) => { setActivity(s, text, uiMessage); this.changed(s.id); });
     // Background task IDs this session started or last reported in flight. Kept across turn ends: a task listed once
     // may finish during a later turn, whose report no longer lists it. Used up when the task's notification says it
     // ended; a new native process starts with none.
@@ -847,7 +885,7 @@ class Workspace extends EventEmitter {
       if ([info.count, info.scheduled].some(n => Number.isSafeInteger(n) && n > 0)) this.nativeWorkObserved(s.id, '原生报告仍有后台或定时工作，请核对后再交接。', uiActivity('notice.run.backgroundObserved')[1]);
       this.changed();
     });
-    on('usage', usage => { s.usage = usage; this.changed(); });
+    on('usage', usage => { s.usage = usage; this.changed(s.id); });
     on('accountUsage', () => this.changed());
     on('fleet', item => {
       s.fleet.push({ ...item, time: Date.now(), stale: false }); s.fleet = s.fleet.slice(-80);

@@ -376,9 +376,11 @@ test('observed native children survive window reads; transport/service gaps inva
   assert.equal(observedFleet(cold.snapshot().sessions[0]).unknown, 1);
   assert.equal(cold.versions.dispatches, 0);
 });
-// The daemon digests again only the session a change names (state-delta.cjs): a streamed reply must name
-// its own session and change no other session's messages; a gap and every other change name none.
-test('a streamed reply names its session when it reports a change; a gap and any other change name none', async t => {
+// The daemon digests again only the session a change names (state-delta.cjs), and a timed checkpoint serialises
+// again only its saved messages: a streamed reply must name its own session and change no other session's
+// messages; a tool call's activity and state 'working', and usage, name theirs and change no messages; a gap
+// and every other change name none.
+test('a streamed reply or a tool call names its session when it reports a change; a gap and any other change name none', async t => {
   const { workspace: w, runtimes: [claude, codex], ids: [a, b] } = await fixture(t, 2);
   const seen = []; w.on('change', session => seen.push(session));
   const messagesOf = id => JSON.stringify(w.snapshot().sessions.find(s => s.id === id).messages);
@@ -392,7 +394,15 @@ test('a streamed reply names its session when it reports a change; a gap and any
   streamed(b, a, () => codex.emit('delta', { id: 'answer', text: 'stre' }));
   streamed(b, a, () => codex.emit('messageItem', { id: 'answer', text: 'streamed' }));
   streamed(b, a, () => codex.emit('progress', { id: 'command', kind: 'commandExecution', status: 'inProgress', source: 'codex-native', turnId: 'turn-1', input: 'ls' }));
-  for (const action of [() => claude.emit('nativeBlock', { nativeId: w.get(a).nativeId, id: 'gap-1', kind: 'gap' }), () => w.setDraft(a, 'typed'), () => codex.emit('usage', { total: 1 })]) {
+  const quiet = (id, action) => {
+    const before = [a, b].map(messagesOf); seen.length = 0; action();
+    assert.deepEqual(seen, [id], String(action)); assert.deepEqual([a, b].map(messagesOf), before, 'no session\'s messages changed');
+  };
+  quiet(a, () => claude.emit('activity', 'Read'));
+  quiet(a, () => claude.emit('state', 'working'));
+  quiet(a, () => claude.emit('usage', { total: 2 }));
+  quiet(b, () => codex.emit('usage', { total: 1 }));
+  for (const action of [() => claude.emit('nativeBlock', { nativeId: w.get(a).nativeId, id: 'gap-1', kind: 'gap' }), () => w.setDraft(a, 'typed'), () => claude.emit('state', 'idle')]) {
     seen.length = 0; action();
     assert.ok(seen.length && seen.every(session => session === undefined), String(action));
   }
