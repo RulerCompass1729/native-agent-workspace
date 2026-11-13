@@ -29,6 +29,9 @@ Workspace.prototype.bind = function (record, runtime) {
 process.on('message', request => {
   if (request.method === 'holdQueue') { holdNext = true; process.send({ requestId: request.id }); return; }
   if (request.method === 'releaseQueue') { const release = releaseHeld; releaseHeld = null; release?.(); process.send({ requestId: request.id, released: Boolean(release) }); return; }
+  // A Claude session's hook reports its background work when a turn ends; until then NAW treats it as unknown
+  // and sends it nothing (queue-dispatch.cjs readiness). This reports none, as queue-native.cjs release does.
+  if (request.method === 'backgroundReport') { sessions.get(request.target).runtime.emit('background', { count: 0, scheduled: 0, kinds: [], ids: [] }); return; }
   if (request.method === 'backgroundComplete') {
     const { runtime, record } = sessions.get(request.target);
     runtime.event({ method: 'item/completed', params: { threadId: record.nativeId, turnId: runtime.turnId,

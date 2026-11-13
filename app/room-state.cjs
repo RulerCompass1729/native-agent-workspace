@@ -668,9 +668,13 @@ class RoomState {
     const event = { kind: 'queue', ...uiNotice(by === 'steward' ? 'notice.queue.cancelledBySteward' : 'notice.queue.cancelled', { text: queueRules.shortText(item.text) }) };
     this.queueReplace(id, itemId, next, event);
   }
+  // Besides an item waiting for them, the person or the butler may mark handled one already sent whose work was done
+  // another way (11-12: the butler could not close it, item 0bcc3c9c). NAW then does not settle it; the dispatcher
+  // leaves an item it finds closed as it is (queue-dispatch.cjs, stillSent). A queued item is cancelled instead:
+  // marked done, an item nobody was given would name nobody in its row (queue.status.doneBySteward).
   queueResolve(itemId, id = DEFAULT_ROOM_ID, by = null) {
     const item = this.queueFind(id, itemId);
-    if (item.status !== 'waiting') {
+    if (!['waiting', 'sent'].includes(item.status)) {
       throw uiError("error.queue.notWaiting");
     }
     const event = { kind: 'queue', ...uiNotice(by === 'steward' ? 'notice.queue.resolvedBySteward' : 'notice.queue.resolved', { text: queueRules.shortText(item.text) }) };
