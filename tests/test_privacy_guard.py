@@ -173,9 +173,23 @@ print('identity cases ok')
                     self.identities.unlink()
                 else:
                     self.identities.write_text(content)
-                self.blocked(self.call("git", "commit", "--allow-empty", "-qm", "Safe message", ok=False))
+                result = self.call("git", "commit", "--allow-empty", "-qm", "Safe message", ok=False)
+                self.blocked(result)
+                self.assertIn("identity rules", result.stderr)
         self.identities.write_text("SYNTHETIC_PERSONAL_HANDLE_\n")
-        self.blocked(self.call(sys.executable, "scripts/privacy_guard.py", "install", str(self.patterns), ok=False))
+        guard = (sys.executable, "scripts/privacy_guard.py")
+        self.blocked(self.call(*guard, "install", str(self.patterns), ok=False))
+        # One file named twice is not two files.
+        self.call("git", "config", "--local", "privacyGuard.identityPatternsFile", str(self.patterns))
+        result = self.call("git", "commit", "--allow-empty", "-qm", "Safe message", ok=False)
+        self.blocked(result)
+        self.assertIn("separate file", result.stderr)
+        self.blocked(self.call(*guard, "install", str(self.patterns), str(self.patterns), ok=False))
+        # A wrong argument count does not print the paths back.
+        result = self.call(*guard, "install", str(self.patterns), str(self.identities), str(self.identities), ok=False)
+        self.blocked(result)
+        self.assertNotIn(self.identities.name, result.stdout + result.stderr)
+        self.call(*guard, "install", str(self.patterns), str(self.identities))
         self.call("git", "commit", "--allow-empty", "-qm", "Both rule files back")
 
     def test_fake_key_detected_without_printing_it(self):
@@ -210,7 +224,9 @@ print('identity cases ok')
                     self.patterns.unlink()
                 else:
                     self.patterns.write_text(content)
-                self.blocked(self.call("git", "commit", "--allow-empty", "-qm", "No rules", ok=False))
+                result = self.call("git", "commit", "--allow-empty", "-qm", "No rules", ok=False)
+                self.blocked(result)
+                self.assertIn("private rules", result.stderr)
 
     def test_scanner_error_is_not_pass_and_does_not_echo_output(self):
         bins = self.base / "bin"

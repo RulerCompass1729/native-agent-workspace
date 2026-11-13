@@ -65,19 +65,26 @@ def root_dir():
     return Path(os.fsdecode(git("rev-parse", "--show-toplevel")).strip()).resolve()
 
 
-def load_patterns(path, root):
+def load_patterns(path, root, what="private rules"):
     path = Path(path).expanduser().resolve()
     if path == root or root in path.parents:
-        raise Blocked("private patterns must live outside the repository")
+        raise Blocked(f"{what} must live outside the repository")
     try:
         rules = [s.strip() for s in path.read_text(encoding="utf-8").splitlines()
                  if s.strip() and not s.lstrip().startswith("#")]
         patterns = [re.compile(s, re.I) for s in rules]
     except (OSError, UnicodeError, re.error):
-        raise Blocked("private rules missing, unreadable, or invalid") from None
+        raise Blocked(f"{what} missing, unreadable, or invalid") from None
     if not patterns or any(p.search("") for p in patterns):
-        raise Blocked("private rules empty or match empty input")
+        raise Blocked(f"{what} empty or match empty input")
     return patterns
+
+
+def load_both(path, identities, root):
+    """The private rules and the identity rules: two separate files, both required."""
+    if Path(path).expanduser().resolve() == Path(identities).expanduser().resolve():
+        raise Blocked("identity rules must be a separate file from the private rules")
+    return load_patterns(path, root) + load_patterns(identities, root, "identity rules")
 
 
 class Scanner:
@@ -88,7 +95,7 @@ class Scanner:
             identities = git("config", "--local", "--get", IDENTITY_KEY).decode().strip()
         except Blocked:
             raise Blocked("identity rules not configured; install both private rule files") from None
-        self.patterns = load_patterns(value, self.root) + load_patterns(identities, self.root)
+        self.patterns = load_both(value, identities, self.root)
         self.gitleaks = shutil.which("gitleaks")
         if not self.gitleaks:
             raise Blocked("gitleaks is required; install it before publishing")
@@ -218,8 +225,7 @@ class Scanner:
 
 def install(path, identities):
     root = root_dir()
-    load_patterns(path, root)
-    load_patterns(identities, root)
+    load_both(path, identities, root)
     if not shutil.which("gitleaks"):
         raise Blocked("gitleaks is required")
     configured = subprocess.run(["git", "config", "--get", "core.hooksPath"],
@@ -242,8 +248,15 @@ def install(path, identities):
     print("Installed local pre-commit, commit-msg, pre-push guards; private path not printed")
 
 
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        # argparse would print the arguments back, and they may be private paths.
+        print("BLOCKED privacy guard: invalid arguments; details withheld", file=sys.stderr)
+        raise SystemExit(2)
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = Parser(description=__doc__)
     parser.add_argument("mode", choices=["install", "staged", "message", "push", "history"])
     parser.add_argument("argument", nargs="?")
     parser.add_argument("identities", nargs="?")
