@@ -287,7 +287,8 @@ for(const [label,code,message,status] of [
  ['suffix','other',routingError+'.','failed'],['wrong case','other','Workspace routing discovery timed out','failed'],
  ['missing message','other',null,'failed'],['wrong enum','Other',routingError,'failed'],
  ['code absent',null,routingError,'failed'],['text-only error','badRequest',routingError,'failed'],
- ['interrupted','other',routingError,'interrupted'],['completed','other',routingError,'completed']
+ ['interrupted','other',routingError,'interrupted'],['completed','other',routingError,'completed'],
+ ['a Claude-only refused request','requestForbidden','NATIVE ORIGINAL','failed'],['unauthorized','unauthorized','NATIVE ORIGINAL','failed']
 ])test('routing recovery rejects '+label,t=>{
  const f=capacityFixture(t);f.host.rpc.nativeVersion='0.165.0';f.start('live');f.end('live',code,status,message);
  assert.equal(f.w.capacityStatus(f.s.id),null);assert.equal(f.calls.length,0);

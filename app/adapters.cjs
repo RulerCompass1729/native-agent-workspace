@@ -439,7 +439,14 @@ function claudeGeneratedTitle(file, nativeId) {
 }
 // Correlate the ordered failure UUID with native's typed HTTP status, never
 // the error prose. Reuse the bounded journal read used for native titles.
-function claudeOverloaded(file, nativeId, messageId) {
+// 529 is a model at capacity. 403 is a request the server or the network edge in front of it refused: measured
+// 2026-11-13 on 2.1.322 and 2.1.323 as an intermittent block that later requests of the same session passed. The
+// status alone decides. Native's own `error` label says "authentication_failed" for that block and for a real
+// sign-out alike, so it separates nothing. The 2.1.323 bundle also has a second label for an edge block, made only
+// for HTTP 403 ("invalid_request" with apiError "network_edge_blocked"; read in the bundle, not seen in a saved
+// row), which requiring the first label would drop. A 403 that does not pass is retried within the shared limit of
+// three and then left to the person.
+function claudeFailureCause(file, nativeId, messageId) {
   if (!/^[a-f0-9-]{36}$/i.test(messageId || '') || typeof file !== 'string' || !path.isAbsolute(file) || path.basename(file) !== `${nativeId}.jsonl`) return false;
   let fd;
   try {
@@ -453,8 +460,9 @@ function claudeOverloaded(file, nativeId, messageId) {
       try {
         const row = JSON.parse(line);
         if (row.uuid !== messageId) continue;
-        return row.type === 'assistant' && row.sessionId === nativeId && row.isSidechain === false &&
-          row.isApiErrorMessage === true && row.message?.model === '<synthetic>' && row.apiErrorStatus === 529;
+        if (row.type !== 'assistant' || row.sessionId !== nativeId || row.isSidechain !== false ||
+          row.isApiErrorMessage !== true || row.message?.model !== '<synthetic>') return false;
+        return row.apiErrorStatus === 529 ? 'serverOverloaded' : row.apiErrorStatus === 403 ? 'requestForbidden' : false;
       } catch { /* torn line: no authority to retry */ }
     }
   } catch (error) { return error.code === 'ENOENT' ? null : false; }
@@ -919,7 +927,18 @@ class Claude extends EventEmitter {
         this.startedRootTurn.endReported = true;
         this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId, status: 'incomplete' });
       }
-      if (status === 'failed' && message.failedRequest === true && !incomplete && !turn.incomplete && /^[a-f0-9-]{36}$/i.test(message.errorMessageId || '')) this.rootTurn.errorMessageId = message.errorMessageId;
+      if (status === 'failed' && message.failedRequest === true && !incomplete && !turn.incomplete && /^[a-f0-9-]{36}$/i.test(message.errorMessageId || '')) {
+        // A row that replaces an unclassified one is read as if that one had never been named: its reads, its wait
+        // for the saved row, a cancellation of that wait and the control posture of its first read decide nothing.
+        if (this.rootTurn.errorRowUnclassified && this.rootTurn.errorMessageId !== message.errorMessageId && !this.rootTurn.endReported) Object.assign(this.rootTurn, { failureReads: 0, pendingFailure: false, failureCancelled: false, failurePosture: null });
+        this.rootTurn.errorMessageId = message.errorMessageId;
+        this.rootTurn.errorRowUnclassified = message.errorRowUnclassified === true;
+      } else if (status === 'failed' && message.failedRequest === true && this.rootTurn.errorRowUnclassified) {
+        // The bridge names an unclassified row only while it is the turn's single one. Once it stops (a second such
+        // row followed, even after the end was reported), no row stands for this turn and a continuation scheduled
+        // from the first one ends at the next tick, as it does for two rows in a known format.
+        this.rootTurn.errorMessageId = null; this.rootTurn.pendingFailure = false;
+      }
       if (status === 'failed' && message.failedRequest === true && !incomplete && !turn.incomplete && message.failureCause === 'usageCredits') this.rootTurn.failureCause = 'usageCredits';
       if (incomplete || turn.incomplete) this.rootTurn.errorMessageId = null;
       this.reportCapacityFailure();
@@ -958,13 +977,17 @@ class Claude extends EventEmitter {
       !turn.failedTranscript || !turn.errorMessageId || !this.failedTurnInputMatches(turn.id) || turn.failureReads && !retry) return;
     turn.failurePosture ||= { owner: this.record.owner, control: this.record.controlRevision, member: this.record.memberRevision };
     const same = turn.failurePosture.owner === this.record.owner && turn.failurePosture.control === this.record.controlRevision && turn.failurePosture.member === this.record.memberRevision;
-    const overloaded = same ? claudeOverloaded(turn.failedTranscript, this.record.nativeId, turn.errorMessageId) : false;
+    const cause = same ? claudeFailureCause(turn.failedTranscript, this.record.nativeId, turn.errorMessageId) : false;
     turn.failureReads = (turn.failureReads || 0) + 1;
-    turn.pendingFailure = overloaded === null && turn.failureReads < 5;
+    turn.pendingFailure = cause === null && turn.failureReads < 5;
     if (turn.pendingFailure) return;
+    // The bridge passes on a failure row whose prose it does not know only so that this read can find a typed 403
+    // (native words it "Please run /login · API Error: 403 …"). Any other such row leaves the turn as it was before
+    // these rows were passed on: no failed end is reported from it, and an overload is not taken from it either.
+    if (turn.errorRowUnclassified && cause !== 'requestForbidden') return;
     turn.endReported = true;
     if (this.startedRootTurn?.id === turn.id) this.startedRootTurn.endReported = true; // never a second, boundary end (T-141)
-    this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId: turn.id, status: 'failed', errorInfo: overloaded === true ? 'serverOverloaded' : null });
+    this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId: turn.id, status: 'failed', errorInfo: cause || null });
   }
   reportCreditFailure() {
     const turn = this.failedInputTurn;

@@ -13329,3 +13329,38 @@ Left open:
 - If the queue trims an item (over 300 kept) while its send is in flight, `stillSent` throws, as `queueSetDelivery` did before. That pass faults once and the next one recovers (review 1 note 2).
 
 Merge order: this branch adds no words, does not touch `background-control.cjs:75` and can merge alone. Part 1, a member claiming an item it takes from the board, follows on its own branch based on the withdraw branch (25fd89d3). It changes `background-control.cjs:75`, which 078a42e and 25fd89d3 also change.
+
+## A Claude request refused with a typed 403 is continued like an overload (2026-11-13, background session mgr403)
+
+Why: on 2026-11-13, 01:47 to 02:17, four Claude sessions failed with an API 403. The saved native row was an assistant row with `isApiErrorMessage: true`, `message.model: "<synthetic>"`, `apiErrorStatus: 403` and `error: "authentication_failed"`, worded 「Please run /login · API Error: 403 …」: an intermittent block in front of the API, which later requests of the same sessions passed. NAW showed 「原生请求未完成」, the sessions stayed in `error`, and nothing continued them overnight. An overload (529) already has a bounded continuation: 2, 5 and 10 minutes, at most three 「继续」, cancelled by a draft, a takeover or a membership change, and a notice at the limit.
+
+Two gaps, both closed:
+- `adapters.cjs` `claudeFailureCause` (was `claudeOverloaded`): the typed check admitted only 529. It now answers `serverOverloaded` for a typed 529 and `requestForbidden` for a typed 403, from the same row fields as before. No error text is read.
+- `claude-bridge/hooks/register.js` `failureRow`: the bridge named a failure row only when its text began with 「API Error: 」, so the 403 row never reached the typed check. It now also names the turn's single stand-in row in a wording it does not know, by uuid and marked `errorRowUnclassified`; the text is neither kept nor sent. The adapter reports a failed end from such a row only for a typed 403. Any other such row (401, 400, 500, a 529 in an unknown wording, a row that is not saved) leaves the turn as it was.
+
+The status alone decides; `error === "authentication_failed"` is not required. Native gives that label to this block and to a real sign-out alike, so it separates nothing. A static read of the 2.1.323 CLI also found a second label for an edge block, made only for HTTP 403 (`invalid_request` with `apiError: "network_edge_blocked"`). No real row with that label was seen, so its saved `apiErrorStatus` is not measured; if it were not 403, such a row would not be continued. A 403 that keeps failing costs at most three 「继续」 in 17 minutes, each refused before any model work, and then the limit notice says that signing in again may be needed.
+
+Reused, not added: `workspace.cjs` maps `requestForbidden` of a Claude session to a third reason, `forbidden`, beside `capacity` and `routing`. `scheduleCapacity`, `tickCapacity`, `capacityValid` and the continuation send are the same code for all three; there is no new timer or loop. `RECOVERY_REASONS` only picks the words. New words, zh and en: the continuation notice, the limit notice, the phase line, the sidebar badge and the collaboration-pause note. `claude-compat-plugin.cjs` recognises the previous compatibility copy of the hook (main 6ebb88c, the hook of c458e7e), and `legacy-input.test.cjs` pins that copy.
+
+Checks (no model, no provider process):
+- `claude-observation.test.cjs`, through the real bridge and adapter: a typed 403 is reported for the continuation on 2.1.322 and 2.1.323 in three hook orders and with both labels; 401, 400, 500, a 529 in an unknown wording, Cloudflare wording with 502 or with no status, `"403"` as a string, a 403 row that is not an API error, of a side chain, of another session, or not saved all stay as they were. The cancellations (draft, input, rebind, gap, ambiguous, changed transcript, takeover, membership change) apply to 403; 529 and 403 in one run of failures share one budget of three; a Codex session never takes this cause.
+- On the base code the tests of the first review round fail 37 times (638 run, 601 pass). The unknown-wording cases that must stay unchanged pass on both. The five tests added after that round were run on the reviewed adapter, not on the base code (see the notes below).
+- Full suite 6686/0.
+- Window `scripts/test-forbidden-recovery.cjs`, zh and en (hidden Electron, real daemon, workspace and Claude adapter decision; synthetic transport, 0 provider processes, 0 model calls): a typed 403 shows its reason and the two-minute schedule; three 「继续」 at 2/5/10 minutes on the same native identity; the limit notice, phase line and sidebar badge; one recorded OS notification request; a 401 is not continued. The fixture feeds the adapter the bridge's frames directly, so the hook is covered by the unit tests above, not by this window.
+
+Independent review (fresh read-only session, Glob/Grep/Read only, no MCP, 34 turns, 32 reads, reported USD 1.91): pass, no blocking finding, five notes.
+- Note 1, reproduced and fixed: a second unclassified row saved after the first was admitted left the first one named, so 「two such rows name no row」 did not hold in that order. The adapter now clears the row when the bridge stops naming it, and the scheduled continuation ends at the next tick.
+- Note 2, reproduced and fixed: when a known-format overload row followed an unclassified one whose read was still waiting, a cancelled wait (and, found while fixing, the control posture taken at that first read) kept the overload from being continued, which the base code would have continued. The replaced row's reads, wait, cancellation and posture are now all dropped. Four new tests fail on the reviewed adapter and pass now; a fifth shows the overload path keeps its row.
+- Note 3, done: the previous compatibility copy (c458e7e) is in the fixed upgrade list.
+- Note 5: where the second label was read is kept with the private evidence.
+
+Delta review (same session, 12 turns, 11 reads, reported USD 2.60): pass, no blocking finding. Its three notes are the scope of the 37 above, the unmeasured status of the second label, and the last-but-one line of 「Left open」 below. After it only this section and one code comment were reworded.
+
+To verify (note 4): a real native 403 passing through the hook has not been seen since this change. The next real one should show `capacityRecovery.reason === 'forbidden'` for a row whose transcript has `apiErrorStatus: 403`.
+
+Left open:
+- The observed block lasted about 30 minutes; three attempts span 17. A longer block still ends at the limit notice and waits for the person.
+- A hook from before this change with the new adapter behaves as before (the 「Please run /login」 403 is not continued until that native process restarts with the new hook).
+- A 529 row in a wording the bridge does not know is still not continued, as before.
+- If a turn's unclassified 403 row was already reported and a known-format 529 row of the same turn is saved only afterwards, the scheduled continuation is dropped and none is scheduled for the 529; the base code would have continued it. That needs native to write a known-format error row after the turn's end. It ends on the side of not continuing (delta review note 3).
+- The words are new and user-visible; the person reviews the zh and en screenshots before this merges.

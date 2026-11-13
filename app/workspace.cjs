@@ -54,6 +54,13 @@ function interruptActivity(s) {
 // that moment, and only if the wait is still on. Nothing polls, and nothing is stopped, approved
 // or sent because of it; the space record is written by the desktop (room-state.cjs recordStuck).
 const STUCK_AFTER_MS = 5 * 60 * 1000;
+// Why a failed native turn is continued automatically: the suffix of its notice keys and the opening of its
+// collaboration pause. All three share one timer, one limit and the same cancellations.
+const RECOVERY_REASONS = Object.freeze({
+  capacity: { key: 'Capacity', pause: '模型满载' },
+  routing: { key: 'Routing', pause: '路由发现超时' },
+  forbidden: { key: 'Forbidden', pause: '请求被拒绝（403）后' },
+});
 const { OperatorControl } = require('./operator-control.cjs');
 const { GoalContinuation } = require('./goal-continuation-runner.cjs');
 // Pointer motion with no button held (SGR any-event mouse tracking, e.g. fullscreen Claude)
@@ -566,7 +573,7 @@ class Workspace extends EventEmitter {
     const delays = [120000, 300000, 600000];
     if (r.attempt >= delays.length) {
       r.status = 'exhausted';
-      s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', ...uiNotice(reason === 'routing' ? 'notice.capacityLimitRouting' : 'notice.capacityLimitCapacity'), status: 'complete', time: Date.now() });
+      s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', ...uiNotice(`notice.capacityLimit${RECOVERY_REASONS[reason].key}`), status: 'complete', time: Date.now() });
     } else r.due = Date.now() + delays[r.attempt];
     this.changed();
   }
@@ -615,7 +622,7 @@ class Workspace extends EventEmitter {
     }
     r.attempt++; r.status = 'sending';
     const time = new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', ...uiNotice(r.reason === 'routing' ? 'notice.capacityAutoContinueRouting' : 'notice.capacityAutoContinueCapacity', { time, attempt: r.attempt }), status: 'complete', time: now });
+    s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', ...uiNotice(`notice.capacityAutoContinue${RECOVERY_REASONS[r.reason].key}`, { time, attempt: r.attempt }), status: 'complete', time: now });
     // send() and the adapter recheck the same identity/control before writing.
     try { await this.send(s.id, '继续', r.owner, null, null, null, r); }
     catch { stop(...uiActivity('notice.capacityReceiptUnconfirmed')); }
@@ -742,7 +749,9 @@ class Workspace extends EventEmitter {
       const codexVersion = runtime.host?.rpc?.nativeVersion;
       const qualified = s.provider === 'codex' ? require('./codex-qualification.cjs').allows('capacity', codexVersion) : s.provider === 'claude' && runtime.nativeCapacityAvailable && !runtime.retainedReader;
       // Other is broad: admit only the observed native routing timeout verbatim.
-      const reason = info.errorInfo === 'serverOverloaded' ? 'capacity' : s.provider === 'codex' && info.errorInfo === 'other' && info.errorMessage === 'workspace routing discovery timed out' ? 'routing' : null;
+      // A refused request (typed HTTP 403) is Claude's own cause; a Codex error kind never arms it.
+      const reason = info.errorInfo === 'serverOverloaded' ? 'capacity' : s.provider === 'codex' && info.errorInfo === 'other' && info.errorMessage === 'workspace routing discovery timed out' ? 'routing'
+        : s.provider === 'claude' && info.errorInfo === 'requestForbidden' ? 'forbidden' : null;
       if (qualified && info.nativeId === s.nativeId && info.status === 'failed' && reason) this.scheduleCapacity(s, runtime, info.turnId, reason);
       else this.cancelCapacity(s.id);
     });
@@ -1257,7 +1266,7 @@ class Workspace extends EventEmitter {
     } else if (!route) {
       if (s.owner !== owner) throw uiError("error.workspace.takeControlFirst");
       s.peerRevision = (s.peerRevision || 0) + 1;
-      if (recovery) this.pauseParticipant(id, `${recovery.reason === 'routing' ? '路由发现超时' : '模型满载'}自动继续；原协作交接保持暂停`, true, uiActivity(recovery.reason === 'routing' ? 'notice.run.automaticRouting' : 'notice.run.automaticCapacity')[1]);
+      if (recovery) this.pauseParticipant(id, `${RECOVERY_REASONS[recovery.reason].pause}自动继续；原协作交接保持暂停`, true, uiActivity(`notice.run.automatic${RECOVERY_REASONS[recovery.reason].key}`)[1]);
       else { if (!backgroundOperation.current()) wake.human(this, id); if (forward) { this.pauseParticipant(id, '真人输入优先', false, uiActivity('notice.run.humanPriority')[1]); this.pauseRoom(forward.roomId || 'shared', '真人输入优先', uiActivity('notice.run.humanPriority')[1]); } else this.pause('真人输入优先', undefined, false, uiActivity('notice.run.humanPriority')[1]); }
     }
     const failedTurn = !route && !dispatch && s.state === 'error' ? runtime.failedTurnInputId : null;

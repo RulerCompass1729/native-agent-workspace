@@ -17,11 +17,11 @@ function exhaustedRecovery(record) {
       record.nativeContextPending || record.approval || record.approvalOverflow || record.claudeQuestion || record.nativeApproval || record.nativeInputRequired ||
       !['idle', 'error'].includes(record.state) || typeof record.nativeId !== 'string' || !record.nativeId ||
       recovery?.nativeId !== record.nativeId || typeof recovery.turnId !== 'string' || !recovery.turnId ||
-      recovery.status !== 'exhausted' || recovery.attempt !== 3 || !['capacity', 'routing'].includes(recovery.reason)) return null;
+      recovery.status !== 'exhausted' || recovery.attempt !== 3 || !['capacity', 'routing', 'forbidden'].includes(recovery.reason)) return null;
   return recovery;
 }
 function recoveryStatusSuffix(recovery, prefix = true) {
-  return recovery ? (prefix ? ' · ' : '') + uiText(recovery.reason === 'routing' ? 'capacityBadge.routingStopped' : 'capacityBadge.capacityStopped') + uiText('capacityBadge.retried', { count: recovery.attempt }) : '';
+  return recovery ? (prefix ? ' · ' : '') + uiText(recovery.reason === 'routing' ? 'capacityBadge.routingStopped' : recovery.reason === 'forbidden' ? 'capacityBadge.forbiddenStopped' : 'capacityBadge.capacityStopped') + uiText('capacityBadge.retried', { count: recovery.attempt }) : '';
 }
 const sessionStatus = (record, recoveryBadge = false) => {
   if (record.state === 'stopping' && record.nativeContextPending && !switchedAway(record)) return uiText('collab.contextUnknown');
@@ -4253,7 +4253,7 @@ function renderNativeActivity(s) {
   const recovery = !disconnected && !s?.transportDisconnected && s?.capacityRecovery;
   if (recovery && ['scheduled', 'exhausted'].includes(recovery.status)) {
     el.hidden = false;
-    ui.display.computed($('native-phase'), 'text', () => `${s.name} · ${uiText(recovery.reason === 'routing' ? 'native.routingTimeout' : 'native.capacity')}${recovery.status === 'exhausted' ? uiText('native.capacityLimit') : ''}`);
+    ui.display.computed($('native-phase'), 'text', () => `${s.name} · ${uiText(recovery.reason === 'routing' ? 'native.routingTimeout' : recovery.reason === 'forbidden' ? 'native.forbidden' : 'native.capacity')}${recovery.status === 'exhausted' ? uiText('native.capacityLimit') : ''}`);
     ui.display.computed($('native-elapsed'), 'text', () => recovery.status === 'scheduled' ? uiText('native.recovery', { time: new Date(recovery.due).toLocaleTimeString(ui.language.getSnapshot().active, { hour: '2-digit', minute: '2-digit' }), attempt: recovery.attempt + 1 }) : '');
     return;
   }
