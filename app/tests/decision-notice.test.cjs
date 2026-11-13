@@ -39,6 +39,21 @@ test('ordinary outcomes are silent; callback failure cannot undo the durable out
   assert.equal(persisted.queueFind('shared', id).status, 'waiting');
   assert.equal(persisted.metadata().events.at(-1).uiMessage.key, 'notice.queue.waiting');
 });
+test('in the space record, only a decision asks the person to decide; the other waiting items are left to look at (11-12)', t => {
+  const { state, sent } = room(t);
+  for (const reason of ['person-intervened', 'no-reply']) {
+    state.queueSettle('shared', sent(), 'waiting', reason, 'Member');
+    const event = state.metadata().events.at(-1);
+    assert.equal(event.uiMessage.key, 'notice.queue.lookAt', reason);
+    assert.equal(event.text, 'Member 做的「Synthetic task」留给你看一眼；它已经可以接下一项');
+    assert.equal(locale.format('en', event.uiMessage.key, event.uiMessage.params), '“Synthetic task” (Member) is left for you to look at; Member can already take its next item');
+    assert.equal(event.butlerSource, undefined, 'nothing for the steward to bring to the person');
+  }
+  state.queueSettle('shared', sent(), 'waiting', '', 'Member', '需要你决定：Proceed?');
+  const decision = state.metadata().events.at(-1);
+  assert.equal(decision.uiMessage.key, 'notice.queue.waiting');
+  assert.equal(decision.text, 'Member 需要你决定：Synthetic task');
+});
 test('decision line strips three markers and ANSI, bounds only the first line, and falls back to task', () => {
   for (const marker of ['需要你决定：', '需要你决定:', 'Needs your decision:']) {
     assert.equal(rules.decisionLine(marker + ' Proceed?\nPrivate remainder', 'Task'), 'Proceed?');

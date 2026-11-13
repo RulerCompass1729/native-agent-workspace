@@ -13193,3 +13193,23 @@ From the steward's follow-up 2 (11-12): queueAdd refuses an assignee that does n
 - The steward's own instructions do not say what to do with the refusal; the text itself names the members and the no-assignee choice.
 - A member removed after the check and before the item is saved is not caught; that item then waits for its member, as every assigned item did before (the planner sends an assigned item only to that member, `planDispatch`).
 - Items already queued for a non-member, such as 87a3b4c0, are not changed by this; they are on the cancel list relayed to the person on 11-12.
+
+## An item left for the person to look at no longer says it needs a decision — 2026-11-12
+
+From the steward's follow-up 4 (11-12): the record and the row of an item the person stepped into, or whose turn came back empty, must stop saying 「需要你决定 / 等你决定」; something like 「留给你看一眼，成员已经接下一项」. Since 90ec4ab such an item no longer holds its member, but both lines still read as a decision.
+
+**What changed.** The same rule that decides who is notified now decides the words: a waiting item without a reason is a decision; one with a reason (`person-intervened`, `no-reply`) is left to look at.
+- Space record (`app/room-state.cjs`, `queueSettle`): `notice.queue.lookAt`, 「{name} 做的「{text}」留给你看一眼；它已经可以接下一项」 / "“{text}” ({name}) is left for you to look at; {name} can already take its next item". A decision keeps `notice.queue.waiting`, 「{name} 需要你决定：{text}」.
+- Queue row (`app/renderer/renderer.js`, `queueRow`): `queue.status.lookAt`, 「留给你看一眼 · {name}」 / "For you to look at · {name}". A decision keeps 「等你决定 · {name}」. Both keep the 已处理 button and the reason line under the task (「你在这个会话里说过话」 / 「它没有回话」).
+- The row reads the stored item, and a decision can still carry the reason of a refusal before it was sent (`queueRequeue` stores it; `queueSettle` writes only a non-empty reason). So the row names the two kinds, as `UNHELD_WAITING` does, instead of asking whether there is a reason. The record is safe as it is: it reads the reason passed at settle time, which for a waiting item is only `person-intervened`, `no-reply` or empty (`planDispatch`).
+- 「它已经可以接下一项」 says the member may take the next item, not that one was sent: there may be none queued.
+
+**Tests and checks.**
+- `app/tests/decision-notice.test.cjs`: for both reasons the stored record is the look-at line in Chinese and in English, with nothing for the steward to bring to the person; a decision is still 「需要你决定」.
+- `app/tests/secretary-queue-ui.test.cjs`, on the actual `queueRow`: both reasons show the look-at status in both languages and keep 已处理; a decision row still reads 「等你决定」 / "Needs your decision". A decision made in a real `RoomState` after a refusal (requeue, send again, settle) keeps the refusal's reason and still reads 「等你决定」; with the first version's condition (any reason) this test fails.
+- Eight breakages of the record, the row and the four strings each fail these tests; the unchanged code passes.
+- `scripts/test-queue-dispatch.cjs`, real window, synthetic native: step 4b asserts the look-at record and row and that no decision record was written for that item; the monitor scenario has a new step 4, an empty turn whose record and row are read on screen in the interface language, with screenshots `look-at-record-{zh,en}` and `look-at-row-{zh,en}`, and no notification.
+- Real-window runs on 11-12 (loopback fixture, no model calls): main, DECISION_NOTICE in Chinese and English, and DECISION_NOTICE with the monitor in Chinese and English each passed (exit 0). The screenshots were read: the record and row say the look-at words, and the earlier decision item in the same space still says 「需要你决定」 / "Needs your decision".
+
+**Left open.**
+- 「这一件不在等你决定。」 (`error.queue.notWaiting`), shown only when 已处理 is pressed on an item that has already moved on, still says 决定 for both kinds.

@@ -5448,6 +5448,11 @@ function queueRow(item, memberIds) {
     name = queueMemberName(item.assignee);
   }
   let statusKey = 'queue.status.' + item.status;
+  // These two waiting kinds ask the person nothing: the item is left for them to look at (11-12). They are named
+  // as in UNHELD_WAITING (queue-dispatch.cjs): a decision can still carry an earlier refusal's reason.
+  if (item.status === 'waiting' && ['person-intervened', 'no-reply'].includes(item.reason)) {
+    statusKey = 'queue.status.lookAt';
+  }
   if (item.status === 'queued' && item.assignee && !memberIds.has(item.assignee)) {
     statusKey = 'queue.status.orphan';
   }
