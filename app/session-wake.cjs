@@ -228,12 +228,55 @@ async function nativeGoalStatus(s, r, valid, rpc = r.host?.rpc) {
     throw uiError('error.wake.nativeGoalDisallows');
   return result.goal?.status ?? null;
 }
-function eligible(w, s, r, intent, tag) {
-  return !w.closed && !w.storageWarning && enabled(w) && !s.wakeDisabled && boundary(w) === intent.boundary && same(s, intent.targetProof) &&
-    w.runtimes.get(s.id) === r && !r.stopped && !r.transportDisconnected && r.chatAvailable !== false && s.state === 'idle' &&
-    (!s.pendingTag || s.pendingTag === tag) && !s.approval && !s.nativeContextPending && !r.nativeInputRequired && !r.pendingQueue && !r.nativeAbortRequest &&
-    budgetAllows(s, intent.id);
+// How a message reaches the recipient now (the wake proposal, item 1, 2026-11-12): a turn of its own when it is idle;
+// in the middle of a turn, the native way the person's own input takes there: Claude's queue (read at the running
+// turn's next tool boundary, or as its next turn) and Codex's steer into the running turn. null: neither is open.
+function routeFor(s, r) {
+  if (s.state === 'idle') return { mode: 'send' };
+  if (s.state !== 'working' || s.approval || r.nativeInputRequired) return null;
+  if (s.provider === 'claude' && r.queueAvailable === true && !r.pendingQueue) return { mode: 'queue' };
+  if (s.provider === 'codex' && r.steerAvailable === true && !r.pendingSteer && typeof r.turnId === 'string' && r.turnId) return { mode: 'steer', turnId: r.turnId };
+  return null;
 }
+// The first reason the recipient cannot take this message now, as its own key, or null. One key per cause (the wake
+// proposal, item 4, 2026-11-12), so the sender and the person read 「正在干活」 rather than one sentence covering a
+// changed identity, the switch, approval and the limit alike. Checked in the order the single condition had.
+// `mode` is the way in (by default the one open now); with `tag`, an input of that mode already under way, which
+// keeps its own native slot and, for steer, the turn it named (`turnId`).
+function recipientIssue(w, s, r, intent, tag, mode = routeFor(s, r)?.mode, turnId) {
+  if (w.closed || w.storageWarning) return ['error.wake.recipientUnreachable'];
+  if (!enabled(w) || s.wakeDisabled) return ['error.wake.recipientDisabled'];
+  if (boundary(w) !== intent.boundary) return ['error.wake.recipientBoundaryChanged'];
+  if (!same(s, intent.targetProof)) return ['error.wake.recipientIdentityChanged'];
+  if (w.runtimes.get(s.id) !== r || r.stopped || r.transportDisconnected || r.chatAvailable === false) return ['error.wake.recipientUnreachable'];
+  if (mode === 'queue' || mode === 'steer') {
+    if (s.approval || r.nativeInputRequired || s.state === 'approval') return ['error.wake.recipientAwaiting'];
+    const slot = mode === 'queue' ? r.pendingQueue : r.pendingSteer;
+    if (slot && slot !== tag) return ['error.wake.recipientInputPending'];
+    // A queued message the running turn did not take at a tool boundary runs as its next turn: the turn may end first.
+    const open = mode === 'queue' ? s.state === 'working' || (Boolean(tag) && s.state === 'idle') : s.state === 'working' && r.turnId === (turnId ?? r.turnId);
+    if (!open) return ['error.wake.recipientUnreachable'];
+    if (s.nativeContextPending) return ['error.wake.recipientInputPending'];
+    if (r.nativeAbortRequest) return ['error.wake.recipientBusy', { name: s.name }];
+    if (!budgetAllows(s, intent.id)) return ['error.wake.recipientCooldown'];
+    return null;
+  }
+  if (s.state !== 'idle') {
+    if (s.approval || r.nativeInputRequired || s.state === 'approval') return ['error.wake.recipientAwaiting'];
+    if (s.state !== 'working') return ['error.wake.recipientUnreachable'];
+    return r.pendingQueue || r.pendingSteer ? ['error.wake.recipientInputPending'] : ['error.wake.recipientBusy', { name: s.name }];
+  }
+  if (s.pendingTag && s.pendingTag !== tag) return ['error.wake.recipientInputPending'];
+  if (s.approval) return ['error.wake.recipientAwaiting'];
+  if (s.nativeContextPending) return ['error.wake.recipientInputPending'];
+  if (r.nativeInputRequired) return ['error.wake.recipientAwaiting'];
+  if (r.pendingQueue) return ['error.wake.recipientInputPending'];
+  if (r.nativeAbortRequest) return ['error.wake.recipientBusy', { name: s.name }];
+  if (!budgetAllows(s, intent.id)) return ['error.wake.recipientCooldown'];
+  return null;
+}
+function eligible(w, s, r, intent, tag, mode, turnId) { return !recipientIssue(w, s, r, intent, tag, mode, turnId); }
+function refuseRecipient(w, s, r, intent) { const issue = recipientIssue(w, s, r, intent); if (issue) throw uiError(...issue); }
 // This read-only check reserves nothing and is not delivery authority. The
 // receiver checks the consumed, exact sender intent again at actual dispatch.
 async function check(w, spec) {
@@ -243,7 +286,7 @@ async function check(w, spec) {
     const s = w.get(spec.recipientId), r = w.runtime(s.id);
     const budget = s.wakeBudget || {};
     if (budget.humanRevision === (s.wakeHumanRevision || 0) && budget.streak >= MAX_STREAK) throw uiError('error.wake.consecutiveLimit');
-    if (!eligible(w, s, r, spec)) throw uiError('error.wake.recipientChangedOrLimited');
+    refuseRecipient(w, s, r, spec);
     if (s.provider === 'codex') {
       const status = await nativeGoalStatus(s, r, () => eligible(w, s, r, spec));
       if (!goalAllows(status)) throw uiError('error.wake.nativeGoalStateDisallows', { status });
@@ -256,21 +299,35 @@ async function receive(w, spec) {
   const s = w.get(spec.recipientId), r = w.runtime(s.id);
   const proof = identity(s), generation = boundary(w);
   const intent = await w.peerRunner.takeWake(spec);
+  let route;
   try {
     const budget = s.wakeBudget || {};
     if (budget.humanRevision === (s.wakeHumanRevision || 0) && budget.streak >= MAX_STREAK) throw uiError("error.wake.consecutiveLimit");
-    if (intent.id !== spec.id || intent.senderId !== spec.senderId || intent.recipientId !== s.id || intent.boundary !== generation || !same(s, proof) || !eligible(w, s, r, intent)) throw uiError("error.wake.recipientChangedOrLimited");
+    if (intent.id !== spec.id || intent.senderId !== spec.senderId || intent.recipientId !== s.id) throw uiError('error.wake.credentialInvalid');
+    if (intent.boundary !== generation) throw uiError('error.wake.recipientBoundaryChanged');
+    if (!same(s, proof)) throw uiError('error.wake.recipientIdentityChanged');
+    refuseRecipient(w, s, r, intent);
     if (s.provider === 'codex') {
       const status = await nativeGoalStatus(s, r, () => eligible(w, s, r, intent));
       if (!goalAllows(status)) throw uiError('error.wake.nativeGoalStateDisallows', { status });
     }
+    refuseRecipient(w, s, r, intent);
+    route = routeFor(s, r);
   } catch (error) { return notSent(error); }
   reserveBudget(s, intent.id);
-  const ticket = { intent, valid: tag => eligible(w, s, r, intent, tag) };
+  // The ticket holds the way chosen here: a message sent as a turn of its own stays one, and a midturn one keeps
+  // its slot and turn. Every native step checks it again.
+  const ticket = { intent, mode: route.mode, valid: tag => eligible(w, s, r, intent, tag, route.mode, route.turnId) };
   const text = `[Workspace message from ${intent.senderName} · ${intent.senderId} at ${new Date(intent.time).toISOString()}]\n${intent.body}`;
   durable(w);
+  if (route.mode !== 'send') {
+    let tag;
+    // A refusal before native held it is not-sent, with its reason; an uncertain outcome stays an error (unconfirmed).
+    try { tag = await w.wakeMidturn(s.id, text, ticket, route); } catch (error) { if (error?.notSent === true) return notSent(error); throw error; }
+    return { status: s.messages.find(m => m.id === tag)?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
+  }
   const tag = await w.send(s.id, text, null, null, null, null, null, ticket);
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, stage, complete, take, receive, check, validateArgs, root };
+module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, stage, complete, take, receive, check, validateArgs, root };
