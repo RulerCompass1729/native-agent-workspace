@@ -50,6 +50,9 @@
       dialog.append(title);
       const current = view?.current;
       dialog.append(make('p', 'quiet', current ? 'stewardRecord.current' : 'stewardRecord.none', { name: dash(current?.name) }));
+      // Messages held for it under its 60-second limit: how many, and how long the oldest has waited.
+      if (current && view.waiting?.count > 0) { const minutes = Math.floor(Math.max(0, view.at - view.waiting.since) / 60000);
+        dialog.append(make('p', 'steward-record-waiting', minutes ? 'stewardRecord.waiting' : 'stewardRecord.waitingNew', { count: view.waiting.count, minutes })); }
       if (view?.writeFailed) dialog.append(make('p', 'records-note', 'stewardRecord.writeFailed'));
       dialog.append(make('h3', '', 'stewardRecord.heading'));
       const entries = view?.entries || [];

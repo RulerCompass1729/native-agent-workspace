@@ -220,7 +220,12 @@ async function stageOnce(w, s, r, native, args) {
   w.mirrorWake?.(s, intent, target.session, row);
   try { durable(w); } catch (e) { intent.status = 'unconfirmed'; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
   if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text };
-  if (waits) return { status: 'staged', id: intent.id, readiness: 'held', message: '已保存，尚未投递。收件方 60 秒内刚收过一条自动消息：当前原生回合正常结束时限制还没过，就先存着，限制过了由 NAW 再试一次；你不要等待或重试。真人可随时撤销。' };
+  if (waits) {
+    // About when: when the limit opens, or a minute after the last one held here for the same recipient.
+    const at = Math.max(target.readiness.retryAt, ...heldRows(w).filter(({ row: other }) => other.wake.recipientId === intent.recipientId).map(({ row: other }) => other.wake.retryAt + COOLDOWN));
+    const minutes = Math.max(1, Math.ceil((at - Date.now()) / 60000));
+    return { status: 'staged', id: intent.id, readiness: 'held', message: `已保存，尚未投递。收件方 60 秒内刚收过一条自动消息：已排着，约 ${minutes} 分钟后由 NAW 再送一次（当前原生回合结束时限制已过就直接送）；你不要等待或重试。真人可随时撤销。` };
+  }
   const readiness = target.readiness?.status === 'ready' ? 'checked' : 'deferred';
   return { status: 'staged', id: intent.id, readiness, message: '已保存，尚未投递。当前原生回合正常结束后只尝试一次；不要等待或重试。真人可随时撤销。' + (readiness === 'deferred' ? ' 收件后台不支持即时就绪检查，尚未确认它能接收。' : '') };
 }

@@ -6,7 +6,7 @@ const { createIn } = require('./fixtures/create-view.cjs');
 // kept by its sender's backend and delivered once the butler's limit allows, exactly once, as the butler's own turn,
 // instead of being refused and lost? The unit tests cover the rest (three in a row, other recipients, the person acting
 // on either session, pausing all handoffs, a reopened backend); this run shows the real app's timer and the real
-// sender agent's tool result.
+// sender agent's tool result, with about when it goes, and 「大管家的记录」 counting it, in Chinese and English.
 // Bounded: 3 native sessions, at most 10 local responses, about 70 seconds of waiting for the limit. Takes the shared
 // GUI slot itself (exit 75 when it is busy). No paid inference or daily app.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -16,6 +16,7 @@ const loopback = require('./fixtures/loopback-model.cjs');
 const root = path.resolve(__dirname, '..');
 const { connectService } = require(path.join(root, 'app/service-client.cjs'));
 const { executable } = require(path.join(root, 'app/platform.cjs'));
+const locale = require(path.join(root, 'app/ui-locale.js')), say = (language, key, params) => locale.format(language, key, params);
 const evidence = process.env.NAW_EVIDENCE_DIR;
 const located = executable('claude'); if (!located) throw Error('Real Claude CLI required');
 const version = file => testScratch.childProcess.execFileSync(file, ['--version'], { encoding: 'utf8' }).trim();
@@ -165,7 +166,7 @@ async function cleanup() {
   await select(ids.docs); await page.locator('#message-input').fill(DOCS_TASK); await page.locator('#send-button').click();
   await until(() => seen('docs2'), 'Docs reports and ends its turn');
   facts.docsResult = toolResult('docs2', 'toolu_docs');
-  assert.match(facts.docsResult, /staged/); assert.match(facts.docsResult, /held/); assert.match(facts.docsResult, /60 秒/);
+  assert.match(facts.docsResult, /staged/); assert.match(facts.docsResult, /held/); assert.match(facts.docsResult, /60 秒/); assert.match(facts.docsResult, /已排着，约 1 分钟后/);
   const heldRow = async () => session(await snapshot(), ids.docs).messages.find(m => m.origin === 'agent-wake-intent');
   await until(async () => (await heldRow())?.wake?.status === 'held', 'Docs\'s report is held by its backend');
   const held = (await heldRow()).wake;
@@ -175,7 +176,33 @@ async function cleanup() {
   await until(async () => (await page.locator('#messages').innerText()).includes('已存着，60 秒限制过了再试一次'), 'Docs chat shows it held');
   assert.ok(!(await page.locator('#messages').innerText()).includes('接收结果未记录'), 'Held is named, not shown as unknown');
   await shot('wake-held-docs-held.png');
-  checks.push('Docs\'s report within the minute: its agent read 「held」 at once; at the turn\'s end its backend kept it, to be offered when the butler\'s limit opens; nothing reached the butler meanwhile');
+  // 「大管家的记录」 says how many are held for it and how long the oldest has waited (the integrator, 11-12 21:2x:
+  // 「大管家记录里看得到存量和最老等待」; 「中英截图先给我」): in both languages while Docs's report is held.
+  const openRecord = async language => {
+    await page.locator('#steward-slot .session-row').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: say(language, 'menu.stewardRecord'), exact: true }).click();
+    await page.locator('#steward-record-dialog').waitFor({ state: 'visible' });
+    return (await page.locator('#steward-record-dialog .steward-record-waiting').innerText()).trim();
+  };
+  const closeRecord = async () => { await page.keyboard.press('Escape'); await page.locator('#steward-record-dialog').waitFor({ state: 'hidden' }); };
+  const language = async value => {
+    await page.locator('#setup-button').click(); await page.locator('#setup-dialog').waitFor({ state: 'visible' });
+    await page.locator('#ui-language').selectOption(value);
+    await until(async () => await page.locator('#new-session').getAttribute('aria-label') === say(value, 'sidebar.newSession'), `The interface reads ${value}`);
+    await page.keyboard.press('Escape'); await page.locator('#setup-dialog').waitFor({ state: 'hidden' });
+  };
+  facts.record = { zh: await openRecord('zh') };
+  assert.equal(facts.record.zh, say('zh', 'stewardRecord.waitingNew', { count: 1 }), 'The record counts the held report');
+  await shot('wake-held-record-zh.png'); await closeRecord();
+  await language('en'); await select(ids.docs);
+  await until(async () => (await page.locator('#messages').innerText()).includes(say('en', 'reading.wakeHeld')), 'Docs chat shows it held, in English');
+  await shot('wake-held-docs-held-en.png');
+  facts.record.en = await openRecord('en');
+  assert.equal(facts.record.en, say('en', 'stewardRecord.waitingNew', { count: 1 }));
+  await shot('wake-held-record-en.png'); await closeRecord();
+  await language('zh');
+  assert.ok(!seen('butler-docs'), 'Still held after both looks');
+  checks.push('Docs\'s report within the minute: its agent read 「held」 and about when it goes at once; 「大管家的记录」 counted it in both languages; at the turn\'s end its backend kept it, to be offered when the butler\'s limit opens; nothing reached the butler meanwhile');
 
   // Once the limit allows, it is delivered, once, as the butler's own turn; nobody pressed anything.
   await until(() => seen('butler-docs'), 'The butler reads the held report after its limit', 90000);
