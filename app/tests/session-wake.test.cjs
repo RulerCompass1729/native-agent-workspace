@@ -4,7 +4,7 @@ const { EventEmitter } = require('node:events');
 const { Workspace } = require('../workspace.cjs');
 const { PeerRunner } = require('../peer-handoffs.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-async function fixture(t, sourceProvider = 'codex', preflight = true, nativeSource = false) {
+async function fixture(t, sourceProvider = 'codex', preflight = true, nativeSource = false, targetProvider = 'codex') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-test-'));
   const key = 'backends/aaaaaaaaaaaaaaaaaaaa', dirs = [root, path.join(root, key)];
   fs.mkdirSync(dirs[1], { recursive: true, mode: 0o700 }); fs.chmodSync(path.dirname(dirs[1]), 0o700);
@@ -12,7 +12,7 @@ async function fixture(t, sourceProvider = 'codex', preflight = true, nativeSour
   const workspaces = [], runtimes = [], writes = [];
   for (let i = 0; i < 2; i++) {
     const w = new Workspace({ binaries: {}, close() {}, create(s) {
-      const r = s.provider === 'claude' ? new (require('../adapters.cjs').Claude)(s, this, { attachOnly: true }) : nativeSource && i === 0 ? new (require('../adapters.cjs').Codex)(s, this) : new EventEmitter(); r.record = s; s.nativeId = 'native-' + s.id;
+      const r = s.provider === 'claude' && i === 0 ? new (require('../adapters.cjs').Claude)(s, this, { attachOnly: true }) : nativeSource && i === 0 ? new (require('../adapters.cjs').Codex)(s, this) : new EventEmitter(); r.record = s; s.nativeId = 'native-' + s.id;
       r.host = { rpc: { call: async method => { assert.equal(method, 'thread/goal/get'); return { goal: null }; } } };
       r.chatAvailable = r.addressedSendAvailable = true;
       r.start = async () => r.emit('state', 'idle');
@@ -34,7 +34,7 @@ async function fixture(t, sourceProvider = 'codex', preflight = true, nativeSour
   workspaces.forEach((w, i) => { w.peerRunner = new PeerRunner(w, dirs[i], connect); });
   t.after(() => { workspaces.forEach(w => w.close()); fs.rmSync(root, { recursive: true, force: true }); });
   const a = await workspaces[0].create(sourceProvider, root, 'source-owner', 'Sender');
-  const b = await workspaces[1].create('codex', root, 'target-owner', 'Receiver');
+  const b = await workspaces[1].create(targetProvider, root, 'target-owner', 'Receiver');
   const [source, target] = workspaces, [ra, rb] = runtimes;
   const start = id => { if (nativeSource) return ra.event({ method: 'turn/started', params: { threadId: source.get(a).nativeId, turn: { id } } }); if (sourceProvider === 'claude') ra.liveTurn = { id, promptId: 'native-prompt-' + id }; else ra.turnId = id; ra.emit('nativeTurnStart', { nativeId: source.get(a).nativeId, turnId: id }); ra.emit('state', 'working'); };
   start('turn-one');
@@ -192,6 +192,7 @@ test('a refused wake says why: working, waiting, turned off, or just sent one (w
   // identity, the switch and the limit; nobody could tell it was only busy.
   const locale = require('../ui-locale.js');
   const cases = [
+    // Working, with no native way into its turn (this Codex fixture cannot steer): item 1 opens the others.
     ['working', f => { f.target.get(f.b).state = 'working'; }, 'Receiver 正在干活。', 'Receiver is working.'],
     ['waiting', f => { f.rb.nativeInputRequired = true; }, '收件方在等批准或等原生输入。', 'The recipient is waiting for an approval or native input.'],
     ['off', f => { f.target.get(f.b).wakeDisabled = true; }, '收件方或全部会话关了自动消息。', 'Automatic messages are turned off for the recipient or for all sessions.'],
@@ -210,6 +211,94 @@ test('a refused wake says why: working, waiting, turned off, or just sent one (w
       assert.equal(locale.displayText('en', row.text, row.uiMessage), `Automatic message was not sent; it will not be retried automatically.\n${en}\nExact body.`, `${label} ${when}`);
       assert.equal(f.writes.length, 0);
     }
+  }
+});
+// 2026-11-12 16:25, and the person: 「别忘了 agent 在干活的时候是可以发送消息的,所以你没法发其实有问题」. A session
+// mid-turn takes an automatic message the way it takes the person's own input there.
+function midturnTarget(f, provider) {
+  const s = f.target.get(f.b), calls = [];
+  s.state = 'working';
+  let settle;
+  const answer = () => new Promise((resolve, reject) => { settle = { resolve, reject }; });
+  if (provider === 'claude') {
+    Object.assign(f.rb, { queueAvailable: true, midturnAvailable: true });
+    f.rb.queue = (text, tag, guard) => { calls.push({ text, tag, guard, slot: f.rb.pendingQueue }); return answer(); };
+  } else {
+    Object.assign(f.rb, { steerAvailable: true, turnId: 'recipient-turn', finished: [] });
+    f.rb.finishTurn = id => f.rb.finished.push(id);
+    f.rb.steer = (text, tag, turnId, guard) => { calls.push({ text, tag, turnId, guard, slot: f.rb.pendingSteer }); return answer(); };
+  }
+  return { s, calls, settle: () => settle };
+}
+test('an automatic message to a Claude session mid-turn goes into its native queue and is read in that turn (wake proposal, item 1)', async t => {
+  const f = await fixture(t, 'codex', true, false, 'claude'), m = midturnTarget(f, 'claude');
+  f.target.setDraft(f.b, 'The person is typing here', 'target-owner');
+  const before = { owner: m.s.owner, control: m.s.controlRevision, peer: m.s.peerRevision || 0, human: m.s.wakeHumanRevision || 0 };
+  const staged = await f.call('Merged; please rebase.');
+  assert.equal(staged.status, 'staged'); assert.equal(staged.readiness, 'checked');
+  await f.finish();
+  assert.equal(m.calls.length, 1, 'one queued input, no send');
+  assert.match(m.calls[0].text, /^\[Workspace message from Sender · .+\]\nMerged; please rebase\.$/);
+  assert.equal(m.calls[0].slot, m.calls[0].tag, 'it holds the native queue slot');
+  assert.equal(m.calls[0].guard(), true);
+  const sender = f.source.get(f.a).messages.find(x => x.wake);
+  assert.equal(sender.wake.status, 'consumed', 'waiting for the turn to take it is neither sent nor failed');
+  const row = m.s.messages.find(x => x.id === m.calls[0].tag);
+  assert.equal(row.origin, 'agent-wake'); assert.equal(row.name, '来自 Sender'); assert.equal(row.inputMode, 'queue'); assert.equal(row.midturn, true); assert.equal(row.status, 'awaiting-native');
+  m.settle().resolve({ mode: 'append', uuid: '00000000-0000-4000-8000-000000000001', turnId: 'recipient-turn' });
+  for (let i = 0; i < 8; i++) await tick();
+  assert.equal(sender.wake.status, 'submitted'); assert.equal(sender.text, '发给原会话的自动消息：原生已接收。\nMerged; please rebase.');
+  assert.equal(row.status, 'submitted'); assert.equal(row.deliveredInto, 'recipient-turn');
+  assert.equal(f.rb.pendingQueue, null);
+  // Not the person: the receiver keeps its owner, draft and control, and its loop guard counts this one.
+  assert.deepEqual({ owner: m.s.owner, control: m.s.controlRevision, peer: m.s.peerRevision || 0, human: m.s.wakeHumanRevision || 0 }, before);
+  assert.equal(f.target.drafts.get(f.b), 'The person is typing here');
+  assert.equal(m.s.wakeBudget.streak, 1); assert.equal(f.writes.length, 0);
+});
+test('a queued automatic message the person overtakes before native holds it is not sent, and says so (wake proposal, item 1)', async t => {
+  const f = await fixture(t, 'codex', true, false, 'claude'), m = midturnTarget(f, 'claude');
+  await f.call('Please look at the failing test.'); await f.finish();
+  assert.equal(m.calls.length, 1);
+  f.target.claim(f.b, 'new-human-owner');
+  assert.equal(m.calls[0].guard(), false, 'the takeover withdraws it at the next native step');
+  m.settle().reject(Object.assign(Error('held message withdrawn'), { notSent: true }));
+  for (let i = 0; i < 8; i++) await tick();
+  const sender = f.source.get(f.a).messages.find(x => x.wake);
+  assert.equal(sender.wake.status, 'not-sent'); assert.match(sender.text, /^自动消息没有发出；不会自动重发。\nheld message withdrawn\n/);
+  assert.equal(m.s.messages.find(x => x.id === m.calls[0].tag).status, 'not-sent');
+  assert.equal(f.rb.pendingQueue, null);
+});
+test('an automatic message to a Codex session mid-turn steers its running turn (wake proposal, item 1)', async t => {
+  const f = await fixture(t), m = midturnTarget(f, 'codex');
+  await f.call('Your branch is merged.'); await f.finish();
+  assert.equal(m.calls.length, 1); assert.equal(m.calls[0].turnId, 'recipient-turn'); assert.equal(m.calls[0].slot, m.calls[0].tag);
+  assert.equal(m.calls[0].guard(), true);
+  f.rb.turnId = 'a-later-turn';
+  assert.equal(m.calls[0].guard(), false, 'a steer is for the turn it named');
+  f.rb.turnId = 'recipient-turn';
+  m.settle().resolve('recipient-turn');
+  for (let i = 0; i < 8; i++) await tick();
+  const sender = f.source.get(f.a).messages.find(x => x.wake), row = m.s.messages.find(x => x.id === m.calls[0].tag);
+  assert.equal(sender.wake.status, 'submitted');
+  assert.equal(row.inputMode, 'steer'); assert.equal(row.turnId, 'recipient-turn'); assert.equal(row.status, 'submitted'); assert.equal(row.origin, 'agent-wake');
+  assert.equal(f.rb.pendingSteer, null); assert.deepEqual(f.rb.finished, ['recipient-turn'], 'a completion held behind the steer drains');
+  assert.equal(f.writes.length, 0);
+});
+test('mid-turn, a recipient waiting for approval or already holding a queued input still refuses, with its reason (wake proposal, item 1)', async t => {
+  const cases = [
+    ['claude', f => { f.rb.pendingQueue = 'the person queued one'; }, '收件方已有一条输入在投递或排队。'],
+    ['claude', f => { f.rb.nativeInputRequired = true; }, '收件方在等批准或等原生输入。'],
+    ['claude', f => { f.rb.queueAvailable = false; }, 'Receiver 正在干活。'],
+    ['codex', f => { f.rb.pendingSteer = 'the person steered'; }, '收件方已有一条输入在投递或排队。'],
+  ];
+  for (const [provider, set, zh] of cases) for (const when of ['registering', 'delivering']) {
+    const f = await fixture(t, 'codex', true, false, provider), m = midturnTarget(f, provider);
+    if (when === 'registering') set(f);
+    const result = await f.call('Exact body.');
+    if (when === 'delivering') { assert.equal(result.status, 'staged'); set(f); await f.finish(); }
+    const row = f.source.get(f.a).messages.find(x => x.wake);
+    assert.equal(row.text, `自动消息没有发出；不会自动重发。\n${zh}\nExact body.`, `${provider} ${when} ${zh}`);
+    assert.equal(m.calls.length, 0); assert.equal(f.writes.length, 0);
   }
 });
 test('failed original turn never dispatches or replays a staged intent', async t => {

@@ -16,6 +16,8 @@ const { uiError, uiNotice, uiActivity, setActivity, setWarning } = require('./ui
 const { displayMessage } = require('./ui-locale.js');
 // A person's row to one session keeps 「你 → 名字」 and carries its catalog name (T-60). Null when the name
 // is not a plain string, so the raw text shows as before.
+// The row fields of an automatic message from another agent (session-wake.cjs), whichever native way it went in.
+const wakeOrigin = intent => ({ name: `来自 ${intent.senderName}`, uiNameMessage: displayMessage({ version: 1, key: 'notice.wake.from', params: { name: intent.senderName } }, 'notice.') || undefined, origin: 'agent-wake', wakeSource: { id: intent.id, senderId: intent.senderId, nativeId: intent.nativeId, turnId: intent.turnId, time: intent.time } });
 const youToName = name => displayMessage({ version: 1, key: 'notice.name.youToNamed', params: { name } }, 'notice.', `你 → ${name}`) || undefined;
 const gitWorktree = require('./git-worktree.cjs');
 const { directoryTrustPrompt } = require('./native-directory-trust.cjs');
@@ -1263,7 +1265,7 @@ class Workspace extends EventEmitter {
     if (wakeTicket) wakeTicket.tag = tag;
     const draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
     const clearedDraft = !backgroundOperation.current() && !mobile && !wakeTicket && !dispatch && !route && !forward && typeof draft === 'string' && draft.trim() === text;
-    s.messages.push({ id: tag, role: 'user', text, time: Date.now(), ...(mobile ? { origin: 'human-mobile' } : wakeTicket ? { name: `来自 ${wakeTicket.intent.senderName}`, uiNameMessage: displayMessage({ version: 1, key: 'notice.wake.from', params: { name: wakeTicket.intent.senderName } }, 'notice.') || undefined, origin: 'agent-wake', wakeSource: { id: wakeTicket.intent.id, senderId: wakeTicket.intent.senderId, nativeId: wakeTicket.intent.nativeId, turnId: wakeTicket.intent.turnId, time: wakeTicket.intent.time } } : recovery ? { name: 'NAW', origin: 'capacity-recovery' } : dispatch ? { name: 'NAW 派活', uiNameMessage: displayMessage({ version: 1, key: 'notice.queue.senderName', params: {} }, 'notice.') || undefined, origin: 'naw-dispatch', dispatchItem: dispatch.itemId } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native', ...backgroundOperation.message() });
+    s.messages.push({ id: tag, role: 'user', text, time: Date.now(), ...(mobile ? { origin: 'human-mobile' } : wakeTicket ? wakeOrigin(wakeTicket.intent) : recovery ? { name: 'NAW', origin: 'capacity-recovery' } : dispatch ? { name: 'NAW 派活', uiNameMessage: displayMessage({ version: 1, key: 'notice.queue.senderName', params: {} }, 'notice.') || undefined, origin: 'naw-dispatch', dispatchItem: dispatch.itemId } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native', ...backgroundOperation.message() });
     if (images) s.messages.at(-1).spaceUploads = images.refs.map(ref => ({ ...ref }));
     if (forward) {
       this.forwards.set(tag, { ...forward, roomId, control });
@@ -1447,6 +1449,53 @@ class Workspace extends EventEmitter {
         runtime.finishTurn(expectedTurnId);
         if (!unchanged) this.cancelCapacity(id);
       }
+      this.changed();
+    }
+  }
+  // An automatic message (session-wake.cjs) to a session in the middle of a turn, the native way the person's own
+  // input takes there (the wake proposal, item 1, 2026-11-12): Claude's queue, read at the running turn's next tool
+  // boundary or as its next turn, and Codex's steer into the running turn. Not the person: no takeover, no human
+  // pause, no control or peer revision, so the ticket (identity, switches, slot, turn, limit) stands in for the
+  // owner's check at every native step. A refusal before native holds it carries notSent.
+  async wakeMidturn(id, text, ticket, route) {
+    const backgroundValid = backgroundOperation.inputGuard(this, [id]);
+    const s = this.get(id), runtime = this.runtime(id), steer = route?.mode === 'steer';
+    if (!['queue', 'steer'].includes(route?.mode) || !ticket?.valid()) throw Object.assign(uiError("error.workspace.automaticAuthorizationExpired"), { notSent: true });
+    this.pauseParticipant(id, '原会话收到自动消息；旧协作交接已撤销', true, uiActivity('notice.run.automaticInputBoundary')[1]);
+    const tag = randomUUID(), nativeId = s.nativeId, connection = s.connectionRevision;
+    const valid = () => backgroundValid() && this.runtimes.get(id) === runtime && s.nativeId === nativeId && s.connectionRevision === connection && ticket.valid(tag);
+    ticket.tag = tag;
+    const message = { id: tag, role: 'user', text, time: Date.now(), ...wakeOrigin(ticket.intent), status: 'awaiting-native', inputMode: route.mode,
+      ...(steer ? { turnId: route.turnId } : runtime.midturnAvailable === true ? { midturn: true } : {}), ...backgroundOperation.message() };
+    if (steer) runtime.pendingSteer = tag; else runtime.pendingQueue = tag;
+    s.messages.push(message); this.versions.dispatches++; this.changed();
+    let accepted = false;
+    try {
+      this.persist(); if (this.storageWarning) throw Object.assign(uiError("error.workspace.automaticRecordUnsaved"), { notSent: true });
+      if (steer) await runtime.steer(text, tag, route.turnId, valid);
+      else {
+        const receipt = await runtime.queue(text, tag, valid);
+        if (receipt?.mode === 'append') message.deliveredInto = receipt.turnId;
+        else {
+          // Its own turn, after the one it waited behind: shown there, as the person's queued message is.
+          const at = s.messages.indexOf(message);
+          if (at >= 0 && at < s.messages.length - 1) { s.messages.splice(at, 1); s.messages.push(message); }
+        }
+      }
+      accepted = true; message.status = 'submitted'; this.deliveryStatus(tag, 'submitted');
+      return tag;
+    } catch (error) {
+      if (message.status !== 'submitted') message.status = error?.notSent === true ? 'not-sent' : 'unconfirmed';
+      throw error;
+    } finally {
+      if (steer) {
+        if (runtime.pendingSteer === tag) {
+          // As steer(): a completion received before the ACK drains only now; uncertain input cancels recovery.
+          const unchanged = accepted && ticket.valid(tag);
+          runtime.pendingSteer = null; runtime.finishTurn(route.turnId);
+          if (!unchanged) this.cancelCapacity(id);
+        }
+      } else if (runtime.pendingQueue === tag) runtime.pendingQueue = null;
       this.changed();
     }
   }
