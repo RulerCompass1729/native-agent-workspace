@@ -12,14 +12,21 @@ identifiers that a generic scanner cannot infer: your private account identifier
 personal addresses, financial context, internal projects, and customer identifiers.
 Do not put the actual examples, rule values, or local path in a public issue.
 
+Create a second rules file, in the same format and also outside the repository,
+read only by this repository's guard: identities that must never appear beside
+the public one, such as personal account names. It is separate so that other
+repositories sharing the first file are not blocked by it.
+
 ```sh
-python3 scripts/privacy_guard.py install /path/outside-repo/private-patterns.txt
+python3 scripts/privacy_guard.py install /path/outside-repo/private-patterns.txt /path/outside-repo/identity-patterns.txt
 ```
 
-The installer sets this clone's `core.hooksPath` and `privacyGuard.privatePatternsFile`
-in local Git configuration. It does not modify global Git or agent settings and
-refuses to overwrite an existing, different hook setup. The private rules must be
-nonempty, valid, and outside the repository. They are not copied into Git.
+The installer sets this clone's `core.hooksPath`, `privacyGuard.privatePatternsFile`
+and `privacyGuard.identityPatternsFile` in local Git configuration. It does not
+modify global Git or agent settings and refuses to overwrite an existing, different
+hook setup. Both rule files are required and must be nonempty, valid, and outside
+the repository; a missing one blocks rather than falling back to the other. They
+are not copied into Git.
 
 Configure your public Git author identity with a GitHub noreply address.
 Author and committer emails other than noreply or example addresses are blocked,

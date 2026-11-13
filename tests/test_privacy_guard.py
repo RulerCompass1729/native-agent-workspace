@@ -14,6 +14,8 @@ import unittest
 
 SOURCE = Path(__file__).resolve().parents[1]
 CANARY = "SYNTHETIC_PRIVATE_RECORD_" + "7319"
+# A personal account name kept apart from the public identity; only the second rules file names it.
+HANDLE = "SYNTHETIC_PERSONAL_HANDLE_" + "4821"
 
 
 class PublicationGuardTests(unittest.TestCase):
@@ -26,6 +28,8 @@ class PublicationGuardTests(unittest.TestCase):
         self.remote = self.base / "remote.git"
         self.patterns = self.base / "private-patterns.txt"
         self.patterns.write_text("# synthetic only\n\nSYNTHETIC_PRIVATE_RECORD_\n")
+        self.identities = self.base / "identity-patterns.txt"
+        self.identities.write_text("# synthetic only\nSYNTHETIC_PERSONAL_HANDLE_\n")
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
                         GIT_TERMINAL_PROMPT="0")
@@ -35,7 +39,7 @@ class PublicationGuardTests(unittest.TestCase):
         shutil.copytree(SOURCE / ".githooks", self.repo / ".githooks")
         (self.repo / "scripts").mkdir()
         shutil.copy2(SOURCE / "scripts/privacy_guard.py", self.repo / "scripts/privacy_guard.py")
-        self.call(sys.executable, "scripts/privacy_guard.py", "install", str(self.patterns))
+        self.call(sys.executable, "scripts/privacy_guard.py", "install", str(self.patterns), str(self.identities))
         self.call("git", "add", ".")
         self.call("git", "commit", "-qm", "Safe initial fixture")
         self.call("git", "init", "--bare", "-q", str(self.remote))
@@ -52,6 +56,7 @@ class PublicationGuardTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("BLOCKED privacy guard", result.stderr)
         self.assertNotIn(CANARY, result.stdout + result.stderr)
+        self.assertNotIn(HANDLE.lower(), (result.stdout + result.stderr).lower())
 
     def file(self, name, value="safe fixture\n"):
         file = self.repo / name
@@ -133,6 +138,45 @@ print('identity cases ok')
         self.blocked(result)
         self.assertNotIn("fixture-handle", result.stdout + result.stderr)
         self.assert_remote_empty()
+
+    def test_personal_handle_beside_a_noreply_identity_is_blocked(self):
+        # The email rule passes any noreply address; the second rules file catches the personal name.
+        for name, email in ((HANDLE, "fixture@users.noreply.github.com"),
+                            ("Fixture Contributor", HANDLE.lower() + "@users.noreply.github.com")):
+            with self.subTest(name=name, email=email):
+                self.call("git", "config", "user.name", name)
+                self.call("git", "config", "user.email", email)
+                self.blocked(self.call("git", "commit", "--allow-empty", "-qm", "Safe message", ok=False))
+        self.call("git", "-c", "core.hooksPath=" + str(self.base / "no-hooks"),
+                  "commit", "--allow-empty", "-qm", "Legacy identity")
+        self.call("git", "config", "user.name", "Fixture Contributor")
+        self.call("git", "config", "user.email", "fixture@users.noreply.github.com")
+        self.blocked(self.call("git", "push", "origin", "main", ok=False))
+        self.assert_remote_empty()
+
+    def test_personal_handle_in_content_or_message_is_blocked(self):
+        self.file("notes.txt", "maintained by " + HANDLE.lower() + "\n")
+        self.blocked(self.call("git", "commit", "-qm", "Safe message", ok=False))
+        self.call("git", "reset", "--hard", "-q", "HEAD")
+        self.blocked(self.call("git", "commit", "--allow-empty", "-qm", "Thanks " + HANDLE, ok=False))
+
+    def test_identity_rules_are_required_beside_the_private_rules(self):
+        # Only the shared private rules configured: blocked, not a quiet fallback to them alone.
+        self.call("git", "config", "--local", "--unset", "privacyGuard.identityPatternsFile")
+        result = self.call("git", "commit", "--allow-empty", "-qm", "Safe message", ok=False)
+        self.blocked(result)
+        self.assertIn("identity rules not configured", result.stderr)
+        self.call("git", "config", "--local", "privacyGuard.identityPatternsFile", str(self.identities))
+        for content in (None, "# comments only\n\n", "[invalid"):
+            with self.subTest(content=content):
+                if content is None:
+                    self.identities.unlink()
+                else:
+                    self.identities.write_text(content)
+                self.blocked(self.call("git", "commit", "--allow-empty", "-qm", "Safe message", ok=False))
+        self.identities.write_text("SYNTHETIC_PERSONAL_HANDLE_\n")
+        self.blocked(self.call(sys.executable, "scripts/privacy_guard.py", "install", str(self.patterns), ok=False))
+        self.call("git", "commit", "--allow-empty", "-qm", "Both rule files back")
 
     def test_fake_key_detected_without_printing_it(self):
         fake = "gh" + "p_" + "A7b9C2d5E8f1G4h6J3k0L9m2N5p8Q1r4S7t0"
@@ -274,7 +318,9 @@ assert options['input'] == b'safe fixture\\n'
     def test_in_repo_private_rules_are_rejected(self):
         local = self.repo / "local-rules.txt"
         local.write_text("SYNTHETIC_PRIVATE_RECORD_\n")
-        self.blocked(self.call(sys.executable, "scripts/privacy_guard.py", "install", str(local), ok=False))
+        for rules in ((local, self.identities), (self.patterns, local)):
+            with self.subTest(rules=[p.name for p in rules]):
+                self.blocked(self.call(sys.executable, "scripts/privacy_guard.py", "install", *map(str, rules), ok=False))
 
     def test_gitleaks_inline_allow_cannot_suppress_a_key(self):
         fake = "gh" + "p_" + "A7b9C2d5E8f1G4h6J3k0L9m2N5p8Q1r4S7t0"

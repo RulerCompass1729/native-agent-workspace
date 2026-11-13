@@ -18,6 +18,9 @@ import tempfile
 MAX_BLOB = 2 * 1024 * 1024
 MAX_SCAN = 512 * 1024 * 1024
 CONFIG_KEY = "privacyGuard.privatePatternsFile"
+# A second rules file read only by this repository: identities, such as personal account
+# names, that must never appear beside the public one. Both files are required.
+IDENTITY_KEY = "privacyGuard.identityPatternsFile"
 HOOKS = ("pre-commit", "commit-msg", "pre-push")
 BLOCKED_DIRS = {".git", ".local", ".scratch", ".runtime", ".claude", ".codex",
                 "local-only", "private", "transcripts", "screenshots"}
@@ -81,7 +84,11 @@ class Scanner:
     def __init__(self):
         self.root = root_dir()
         value = git("config", "--local", "--get", CONFIG_KEY).decode().strip()
-        self.patterns = load_patterns(value, self.root)
+        try:
+            identities = git("config", "--local", "--get", IDENTITY_KEY).decode().strip()
+        except Blocked:
+            raise Blocked("identity rules not configured; install both private rule files") from None
+        self.patterns = load_patterns(value, self.root) + load_patterns(identities, self.root)
         self.gitleaks = shutil.which("gitleaks")
         if not self.gitleaks:
             raise Blocked("gitleaks is required; install it before publishing")
@@ -209,9 +216,10 @@ class Scanner:
               f"gitleaks; {len(self.blobs)} blobs, {self.commits} commits; no matches")
 
 
-def install(path):
+def install(path, identities):
     root = root_dir()
     load_patterns(path, root)
+    load_patterns(identities, root)
     if not shutil.which("gitleaks"):
         raise Blocked("gitleaks is required")
     configured = subprocess.run(["git", "config", "--get", "core.hooksPath"],
@@ -229,6 +237,7 @@ def install(path):
             raise Blocked("hook source missing")
         file.chmod(file.stat().st_mode | 0o111)
     git("config", "--local", CONFIG_KEY, str(Path(path).expanduser().resolve()))
+    git("config", "--local", IDENTITY_KEY, str(Path(identities).expanduser().resolve()))
     git("config", "--local", "core.hooksPath", ".githooks")
     print("Installed local pre-commit, commit-msg, pre-push guards; private path not printed")
 
@@ -237,13 +246,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["install", "staged", "message", "push", "history"])
     parser.add_argument("argument", nargs="?")
+    parser.add_argument("identities", nargs="?")
     args = parser.parse_args()
     try:
         if args.mode == "install":
-            if not args.argument:
-                raise Blocked("supply an external private-pattern file")
-            install(args.argument)
+            if not args.argument or not args.identities:
+                raise Blocked("supply both external private-pattern files: private rules, then identity rules")
+            install(args.argument, args.identities)
             return 0
+        if args.identities:
+            raise Blocked("unexpected argument")
         scan = Scanner()
         if args.mode == "staged":
             scan.staged()
