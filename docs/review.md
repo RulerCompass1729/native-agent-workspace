@@ -13631,3 +13631,26 @@ Checks:
 - GUI script checks (`gui-script-waits`, `gui-script-language`, `gui-names`, `gui-text-pattern`): 21/21.
 
 Not covered: eight passing runs alone do not prove the flake is gone (at one in six, eight clean runs happen about one time in four by chance); the evidence that it was timing is the failed run's file and screenshot.
+
+## The person sees and turns off NAW's wake of the butler; the wake says what it is (UI, 2026-11-13, Claude · NAW 开发 · 续)
+
+Why: the backend on main (ee6f8796) left the switch reachable only by the butler and the wake labelled 「NAW 派活」 in the butler's conversation, pending the person's words (decided on the board 2026-11-13 01:20:41: 「有新的界面文字就等用户看图」; approved product sentence: the butler is 「看得见、能关」). The dispatch from the butler: the person can see and turn off the switch in their own window, and the wake's sender label shows it is an event wake. A visual change: it waits for the person to see the screenshots before merging.
+
+What changed:
+- `steward-record.cjs` `view()`: wake lines are rows (target, outcome; not the position); a `wake` option `{ on, at, failed }` passed through only when `on` is boolean. `main.cjs` `stewardRecord` (person only) passes `stewardWake.view()`; a missing or throwing switch leaves the record without it.
+- `renderer/steward-record.js`: wake rows 「NAW 唤醒 {target} 来读新事件 · 已发出」; `wakeSwitch()` under the butler's name: a checkbox with its status (off / on, not yet / on, last wake attempt {time} / setting not saved, treated as off), a cost line, and an alert when NAW refuses, after which it shows the state NAW gives. Changed in place; disabled while NAW answers.
+- `renderer/reading-list.js` `messageName()`: a non-room NAW message whose `dispatchItem` starts `steward-wake:` reads 「NAW 事件唤醒」 / "NAW event wake"; queue items keep 「NAW 派活」 and the person's messages 「你」. Rendered, so earlier wakes read the same.
+- zh/en words in `ui-messages.js`; styles for the switch line.
+
+Checks: affected files 89/89; 26 mutations, 26 caught (U24–U26 added after review); full suite 6748/0 before and after the review fixes. Window (`scripts/test-steward-wake.cjs`, step 7 added: hidden Electron, synthetic fixture, real stdio `workspace_control`, 0 native programs, 0 model calls): PASS, seven checks, in zh and en: the conversation label, the record row and switch, and the person turning it off and on in place while the butler's `stewardWake` sees each change. Screenshots for the person: six, zh and en, with an index of old → new words (private evidence).
+
+Independent review (fresh read-only session, Glob/Grep/Read only, no MCP, 15 turns, reported USD 0.77): PASS_WITH_NOTES.
+- Note 1, fixed: 「上次唤醒」 stood for every attempt, including one not sent (`steward-wake.cjs:156` sets the time on each). The status says 「上次尝试唤醒」 / "last wake attempt"; the row below says whether it went out.
+- Note 2, fixed: 「设置读不出来」 was wrong after a failed save; now 「它的设置没存好」, which fits both causes.
+- Note 3, test added: the change and the re-read both failing: the box goes back, the alert shows, the status keeps the last state NAW gave (U25, U26).
+- Note 4, withdrawn by the reviewer on the delta: designating or revoking turns the switch off (`main.cjs` `steward` → `set(false)`), covered by `steward-wake.test.cjs` 'turned off, it clears a switch kept for an earlier designation'.
+- Note 5, fixed: the status is the checkbox's `aria-describedby` (U24).
+- Notes kept: the refusal reason is shown as NAW sends it, not re-translated on a language switch, like the record's own failure line; a queue item id cannot start with `steward-wake:` (`queue-dispatch.cjs` makes it with `randomUUID`), and if a stored one did, it would only change the label.
+Delta review (same session, 6 turns, reported USD 0.94): PASS. HEAD, index and worktree unchanged across both runs.
+
+Not covered: the wake message body stays Chinese in an English window (it is for the butler; unchanged); the record names the butler's own commands as `stewardWake` / `stewardEvents`, as for other commands without a sentence. The person has not yet seen the screenshots.

@@ -819,6 +819,8 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (m.nativeBlock && m.kind === 'input' && m.inputMode === 'native-inline') return uiText('reading.nativeSession');
       if (!room && m.commandSource === 'userShell') return uiText('reading.you'); // the person's own `!` command
       if (!room && m.role === 'system' && !m.sessionId) return ui.displayText(m.name, m.uiNameMessage) || uiText('reading.nativeSession');
+      // NAW waking the butler (steward-wake.cjs) goes out as a NAW message like a queue item; said as what it is.
+      if (!room && m.origin === 'naw-dispatch' && typeof m.dispatchItem === 'string' && m.dispatchItem.startsWith('steward-wake:')) return uiText('reading.stewardWake');
       return (room ? roomMessageLabel(m) : ui.displayText(m.name, m.uiNameMessage)) || (m.role === 'user' ? uiText('reading.you') : sessionProvider === 'claude' ? 'Claude' : 'Codex');
     };
     const name = messageName();

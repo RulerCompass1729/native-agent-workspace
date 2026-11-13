@@ -1874,7 +1874,9 @@ async function boot() {
       if (typeof sessionId !== 'string' || sessionId === actor.id) return null;
       return { sessionId, name: r.readTarget?.name ?? null, messages: r.readTarget?.messages ?? null, through: r.readTarget?.through ?? null, unasked: r.unasked === true };
     };
-    return stewardRecords.view(stewardRecord, snapshot, { current: known ? current : null, stateOf, readOf });
+    // NAW's switch for waking the butler, shown with the record so the person sees it and can turn it off.
+    let wake = null; try { wake = stewardWake ? stewardWake.view() : null; } catch { wake = null; }
+    return stewardRecords.view(stewardRecord, snapshot, { current: known ? current : null, stateOf, readOf, wake });
   });
   applicationHandlers.delete('stewardRecord');
   register('queueSecretary', async (c, id) => {

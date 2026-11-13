@@ -185,8 +185,9 @@ test('every sentence the dialog can show exists in Chinese and English', () => {
     { kind: 'invoke', method: 'send', state: 'complete', duplicate: true },
     ...['running', 'complete', 'received', 'awaiting-native', 'confirmation-required', 'cancelled', 'unconfirmed', 'odd'].map(state => ({ kind: 'invoke', method: 'send', state })),
     ...['another-operation-running', 'unknown-command', 'confirmation-limit', 'originating-session-unavailable', 'conversation-access-denied', 'conversation-target-unavailable', 'space-file-membership-required', 'explicit-paths-required', 'odd'].map(reason => ({ kind: 'invoke', method: 'send', state: 'not-executed', reason })),
+    ...['sent', 'not-sent', 'unconfirmed', null].map(state => ({ kind: 'wake', target: 'B', state })),
   ];
-  const keys = new Set(['stewardRecord.title', 'stewardRecord.current', 'stewardRecord.none', 'stewardRecord.waiting', 'stewardRecord.waitingNew', 'stewardRecord.heading', 'stewardRecord.col.time', 'stewardRecord.col.what', 'stewardRecord.col.result',
+  const keys = new Set(['stewardRecord.wake.switch', 'stewardRecord.wake.off', 'stewardRecord.wake.never', 'stewardRecord.wake.last', 'stewardRecord.wake.failed', 'stewardRecord.wake.cost', 'stewardRecord.wake.error', 'stewardRecord.title', 'stewardRecord.current', 'stewardRecord.none', 'stewardRecord.waiting', 'stewardRecord.waitingNew', 'stewardRecord.heading', 'stewardRecord.col.time', 'stewardRecord.col.what', 'stewardRecord.col.result',
     'stewardRecord.empty', 'stewardRecord.more', 'stewardRecord.note', 'stewardRecord.writeFailed', 'error.steward.designationUnreadable', 'stewardRecord.usage', 'stewardRecord.usageNone', 'stewardRecord.usageLimit', 'stewardRecord.failed', 'menu.stewardRecord',
     'error.steward.recordUnavailable', 'error.stewardRecord.personOnly', 'error.stewardRecord.unavailable', 'records.name.steward', 'records.item.stewardUnavailable', 'records.item.stewardUnavailableOther']);
   for (const entry of entries) { keys.add(shown.what(entry)[0]); const end = shown.result(entry); if (end) keys.add(end[0]); }
@@ -320,4 +321,94 @@ test('the record knows which running call it wrote as a step, and of whom', asyn
   let later;
   await f.record.around(sender(), { action: 'snapshot' }, async () => { later = new Promise(resolve => setTimeout(() => resolve(f.record.recording(sender())), 5)); return { state: 'complete' }; });
   assert.equal(await later, false, 'a timer the call left behind is not the call');
+});
+
+// NAW's switch for waking the butler, in the person's own window (the approved words for the butler: 「看得见、能关」;
+// independent review note 5 of stewardWake: only the butler could turn it on or off).
+function wakeDialog(shown, wakeCalls) {
+  const { bind } = require('../renderer/steward-record.js');
+  const el = tag => ({ tag, children: [], className: '', textContent: '', dataset: {}, attrs: {}, listeners: {}, hidden: false, checked: false, disabled: false,
+    append(...c) { this.children.push(...c); }, replaceChildren(...c) { this.children = c; }, setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(type, f) { this.listeners[type] = f; } });
+  const dialog = { ...el('dialog'), id: 'd', open: false, showModal() { this.open = true; }, close() {} };
+  const api = { stewardRecord: async () => shown, stewardWake: async (...args) => { wakeCalls.push(args); return wakeCalls.answer(...args); } };
+  return { dialog, open: () => bind({ dialog, document: { createElement: el }, api }).open() };
+}
+const all = node => [node, ...(node.children || []).flatMap(all)];
+const find = (dialog, test) => all(dialog).filter(test);
+
+test('the person sees whether NAW wakes the butler and when it last tried, and can turn it on and off in place', async () => {
+  const at = new Date(2026, 10, 13, 15, 0).getTime(), base = { current: { id: 'butler', name: 'Butler', provider: 'claude', usage: null }, entries: [], total: 0, at };
+  const states = async (wake, current = base.current) => {
+    const calls = []; calls.answer = () => { throw Error('not called'); };
+    const d = wakeDialog({ ...base, current, wake }, calls); await d.open();
+    const [box] = find(d.dialog, n => n.className === 'steward-record-wake'); if (!box) return null;
+    const [input] = find(box, n => n.type === 'checkbox'), [status] = find(box, n => n.className === 'steward-record-wake-status');
+    return [input.checked, status.textContent, find(box, n => n.tag === 'span' && n.textContent === 'NAW 记下新事件时唤醒它').length, find(box, n => n.textContent === '每次唤醒它会跑一轮，算进下面的用量；最多每分钟一次，它在忙时不叫。').length];
+  };
+  assert.deepEqual(await states({ on: false, at: null, failed: false }), [false, '关着', 1, 1]);
+  assert.deepEqual(await states({ on: true, at: null, failed: false }), [true, '开着 · 还没唤醒过', 1, 1]);
+  assert.deepEqual(await states({ on: true, at: at - 3_600_000, failed: false }), [true, '开着 · 上次尝试唤醒 14:00', 1, 1]);
+  assert.deepEqual(await states({ on: true, at: at - 86_400_000, failed: false }), [true, '开着 · 上次尝试唤醒 11-12 15:00', 1, 1], 'an earlier day says the day');
+  assert.deepEqual(await states({ on: false, at: null, failed: true }), [false, '它的设置没存好，现在按关处理；重新勾上就能用', 1, 1]);
+  assert.equal(await states(null), null, 'not known: no switch');
+  assert.equal(await states({ on: false, at: null, failed: false }, null), null, 'no butler: no switch');
+
+  // Ticking it asks NAW to turn it on, and shows what NAW answers; unticking turns it off.
+  const calls = []; let pending;
+  calls.answer = on => new Promise(resolve => { pending = () => resolve(on === undefined ? { on: false, at: null, failed: false } : { on, at: null, failed: false }); });
+  const d = wakeDialog({ ...base, wake: { on: false, at: null, failed: false } }, calls); await d.open();
+  const [input] = find(d.dialog, n => n.type === 'checkbox'), [status] = find(d.dialog, n => n.className === 'steward-record-wake-status');
+  input.checked = true; const turning = input.listeners.change();
+  assert.equal(input.disabled, true, 'not clicked twice while NAW answers');
+  pending(); await turning;
+  assert.deepEqual(calls.slice(), [[true]]);
+  assert.deepEqual([input.checked, input.disabled, status.textContent], [true, false, '开着 · 还没唤醒过']);
+  input.checked = false; const off = input.listeners.change(); pending(); await off;
+  assert.deepEqual(calls.slice(), [[true], [false]]);
+  assert.deepEqual([input.checked, status.textContent], [false, '关着']);
+
+  // Refused: says why, and shows how it stands from NAW, not as ticked.
+  const refused = []; refused.answer = on => { if (on !== undefined) throw Error('还没有指定大管家，事件唤醒开不了。'); return { on: false, at: null, failed: false }; };
+  const r = wakeDialog({ ...base, wake: { on: false, at: null, failed: false } }, refused); await r.open();
+  const [box] = find(r.dialog, n => n.className === 'steward-record-wake'), [tick] = find(box, n => n.type === 'checkbox'), [alert] = find(box, n => n.attrs.role === 'alert');
+  assert.equal(alert.hidden, true);
+  tick.checked = true; await tick.listeners.change();
+  assert.deepEqual(refused.slice(), [[true], []]);
+  assert.deepEqual([tick.checked, tick.disabled, alert.hidden, alert.textContent], [false, false, false, '开关没改成：还没有指定大管家，事件唤醒开不了。']);
+
+  // Neither the change nor the read answers: the box goes back, the alert says it was not changed, and the status keeps
+  // the last state NAW gave rather than the one asked for.
+  const silent = []; silent.answer = () => { throw Error('NAW 后台没有回应。'); };
+  const q = wakeDialog({ ...base, wake: { on: true, at: null, failed: false } }, silent); await q.open();
+  const [qbox] = find(q.dialog, n => n.className === 'steward-record-wake'), [qtick] = find(qbox, n => n.type === 'checkbox'),
+    [qalert] = find(qbox, n => n.attrs.role === 'alert'), [qstatus] = find(qbox, n => n.className === 'steward-record-wake-status');
+  // The status is read out with the switch.
+  assert.deepEqual([qtick.attrs['aria-describedby'], qstatus.id], ['d-wake-status', 'd-wake-status']);
+  qtick.checked = false; await qtick.listeners.change();
+  assert.deepEqual(silent.slice(), [[false], []]);
+  assert.deepEqual([qtick.checked, qtick.disabled, qalert.hidden, qalert.textContent, qstatus.textContent], [true, false, false, '开关没改成：NAW 后台没有回应。', '开着 · 还没唤醒过']);
+});
+
+test('NAW\'s wakes of the butler are rows of the record, under NAW\'s name, with whether they went out', async t => {
+  const f = fixture(t);
+  f.record.append({ kind: 'wake', id: 'w1', session: { id: 'butler', nativeId: 'native-butler' }, position: null });
+  f.record.append({ kind: 'outcome', step: 'w1', state: 'sent', reason: null, error: null, duplicate: false, operationId: 'tag-1' });
+  f.record.append({ kind: 'wake', id: 'w2', session: { id: 'gone-session-id', nativeId: 'native-gone' }, position: '0123456789abcdef:4' });
+  f.record.append({ kind: 'outcome', step: 'w2', state: 'not-sent', reason: null, error: 'x'.repeat(300), duplicate: false, operationId: null });
+  f.record.append({ kind: 'wake', id: 'w3', session: { id: 'butler', nativeId: 'native-butler' }, position: '0123456789abcdef:4' });
+  const snapshot = { sessions: [{ id: 'butler', name: 'Butler', messages: [] }] };
+  const shown = view(f.record, snapshot, { current: steward, wake: { on: true, at: 5, failed: false, extra: 'x' } });
+  assert.deepEqual(shown.entries.filter(e => e.kind === 'wake').map(e => [e.target, e.state, e.recorded, e.error && e.error.length]),
+    [['Butler', null, false, null], ['gone-ses', 'not-sent', true, 300], ['Butler', 'sent', true, null]], 'newest first; a name from now, or the id');
+  assert.equal(JSON.stringify(shown.entries).includes('0123456789abcdef'), false, 'not the position it named');
+  assert.deepEqual(shown.wake, { on: true, at: 5, failed: false });
+  assert.equal(view(f.record, snapshot, { current: steward }).wake, null);
+  assert.equal(view(f.record, snapshot, { current: steward, wake: { on: 'yes' } }).wake, null);
+
+  // In the dialog: what NAW did and whether it went out; one that did not, or whose outcome is missing, stands out.
+  const calls = []; calls.answer = () => { throw Error('not called'); };
+  const d = wakeDialog(shown, calls); await d.open();
+  const rows = find(d.dialog, n => n.tag === 'tr' && n.dataset.kind === 'wake');
+  assert.deepEqual(rows.map(row => [row.children[1].textContent, row.children[2].textContent, row.className]),
+    [['NAW 唤醒 Butler 来读新事件', '结果没有记下', 'attention'], ['NAW 唤醒 gone-ses 来读新事件', '没有发出', 'attention'], ['NAW 唤醒 Butler 来读新事件', '已发出', '']]);
 });
