@@ -23,6 +23,7 @@ const { QueueSecretary, follow: followRotation } = require('./queue-secretary.cj
 const { IntegratorRole } = require('./integrator-role.cjs');
 const { StewardRole, validDuty } = require('./steward-role.cjs');
 const stewardRecords = require('./steward-record.cjs');
+const { StewardWake } = require('./steward-wake.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
 const { ButlerReadAudit } = require('./butler-read-audit.cjs');
@@ -50,6 +51,8 @@ const { QueueDispatcher } = queueRules;
 const applicationHandlers = new Map();
 // Why background control did not load at start ('history': its blocks; 'other': anything else), for the bell.
 let backgroundControl, backgroundUnavailable = false, operationsUnavailable = null, operationsBlocks = -1, stewardRecord = null, stewardOf = null;
+// Waking the butler when NAW has recorded something new (steward-wake.cjs): off until the person or the butler turns it on.
+let stewardWake = null;
 let butlerClosing = false, butlerQuitAttempted = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
@@ -849,6 +852,8 @@ async function startQueueDispatcher() {
       directoryTrustTimeoutMs: process.env.NAW_QUEUE_DIRECTORY_TRUST_TIMEOUT_MS,
       // Passive local facts only; no controller or native/model runner is bound.
       observeQueueState: states => butlerIngress?.observeQueues(states),
+      // The butler, woken on what NAW records when the person or the butler turned that on (steward-wake.cjs).
+      stewardWake: stewardWake || undefined,
     };
     if (backgroundTest && process.env.NAW_TEST_QUEUE_DIRECTORY_MIGRATION === '1') options.migrateDirectories = true;
     // B6 integration handoffs are closed in the daily app: only a verified isolated test run can
@@ -1145,7 +1150,7 @@ function register(name, handler) {
       }
       // Never silently fall back to an old backend that cannot retain actor
       // attribution or preserve the person's draft for these input paths.
-      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents']);
+      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardWake']);
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
       // handler below still authenticates the secretary and person-only actions.
@@ -1404,6 +1409,12 @@ async function boot() {
   // One writer for the run: a retried start keeps it, unless it could not be opened.
   if (!stewardRecord || stewardRecord.loadError) stewardRecord = new stewardRecords.StewardRecord(dataDir, { steward: () => stewardOf(), selected: () => stewardRole.selected, failed: () => recordsChanged() });
   if (!stewardRecord.failed) try { stewardRecord.sync(stewardOf()); } catch { /* Said again when the record is opened or the butler acts. */ }
+  // Its lines go to that record under NAW's name; one that cannot be written sends nothing. The switch holds for the
+  // person's designation, which a rotation keeps.
+  try {
+    stewardWake ||= new StewardWake(dataDir, { ledger: () => butlerIngress?.ledger || null, selected: () => stewardRole.selected,
+      record: line => { if (!stewardRecord) throw Error('The butler record is unavailable'); stewardRecord.append(line); } });
+  } catch { stewardWake = null; }
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
   creationDefaults = new CreationDefaults(dataDir, { defaultWorkspace, newWorkspaceRoot: `${path.resolve(defaultWorkspace)}-sessions` });
   viewStore = new ViewStore(dataDir);
@@ -1916,6 +1927,9 @@ async function boot() {
     });
     // The designation stands even if its line cannot be written; the butler's next call is then refused.
     try { stewardRecord?.designated(id === null ? null : stewardRole.selected); } catch { /* The bell and the refused call say so. */ }
+    // Waking the butler on events (steward-wake.cjs) holds for the designation it was turned on for: designating or
+    // revoking, the same session again included, turns it off, until the person or that butler turns it on.
+    try { stewardWake?.set(false); } catch { /* A state that cannot be saved wakes nobody until it is set again. */ }
     await broadcastRoom();
     if (id === null) return null;
     // The same input the person's composer gives: to an idle session, or queued after a Claude session's running
@@ -1955,6 +1969,17 @@ async function boot() {
     if (!(await stewardCaller(c))) throw uiError('error.steward.eventsButlerOnly');
     try { return butlerIngress.ledger.eventsAfter(position); }
     catch (error) { throw uiError(error?.code === 'BUTLER_POSITION_STALE' ? 'error.steward.eventsPosition' : 'error.steward.eventsUnavailable'); }
+  });
+  // The switch for waking the butler when NAW has recorded something new (steward-wake.cjs; decided on the task board by
+  // the butler then designated, 2026-11-13 01:20:41: 「事件来时唤醒大管家，我定了：做，默认关」, 「开关只给用户和大管家」):
+  // the person in their window, or the designated butler through NAW (stewardCaller), whose step is in its record.
+  // true or false turns it on or off; no argument only says how it stands.
+  register('stewardWake', async (c, on) => {
+    if (c.background ? !(await stewardCaller(c)) : !isCurrentHumanContext(c)) throw uiError('error.steward.wakeOnly');
+    if (on !== undefined && typeof on !== 'boolean') throw uiError('error.steward.wakeInvalid');
+    if (!stewardWake) throw uiError('error.steward.wakeUnavailable');
+    try { return on === undefined ? stewardWake.view() : stewardWake.set(on); }
+    catch (error) { throw uiError(error?.code === 'STEWARD_WAKE_NO_BUTLER' ? 'error.steward.wakeNoButler' : 'error.steward.wakeUnavailable'); }
   });
   // B6: the person's own actions on an integration handoff: retry one delivery or everything
   // under one reason, say that a waiting handoff is dealt with (with or without a retry), answer

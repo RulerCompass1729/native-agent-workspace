@@ -6,7 +6,8 @@
 //
 // Every workspace_control call the designated butler makes that reads or changes NAW (invoke, snapshot) gets a line
 // before it runs and a line with its outcome after; a call whose first line cannot be written is refused, nothing run.
-// Designating, revoking, and a rotation that hands the role on each get a line. Lines are kept whole in daily blocks
+// Designating, revoking, and a rotation that hands the role on each get a line; so does each time NAW wakes the butler
+// because something new was recorded (steward-wake.cjs), under NAW's name. Lines are kept whole in daily blocks
 // like the other records (history/steward). A result is never kept here: what a read returned stays where the read
 // rules keep it, or nowhere.
 const fs = require('node:fs');
@@ -23,6 +24,8 @@ const text = (value, max) => typeof value === 'string' && value.length <= max;
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 const session = value => exact(value, ['id', 'nativeId', 'provider', 'name']) && token(value.id) && token(value.nativeId) && ['claude', 'codex'].includes(value.provider) && text(value.name, NAME_MAX);
 const EVENTS = Object.freeze(['designated', 'revoked', 'followed', 'started']);
+// A position of the event record the butler reads (butler-ledger.cjs eventsAfter).
+const POSITION = /^[0-9a-f]{16}:(0|[1-9][0-9]{0,15})$/u;
 // Outcomes NAW may still settle later; any other outcome is final as recorded.
 const OPEN = Object.freeze(['confirmation-required', 'awaiting-native', 'running']);
 
@@ -37,6 +40,9 @@ function check(value) {
     : value?.kind === 'outcome' ? exact(value, ['kind', 'at', 'step', 'state', 'reason', 'error', 'duplicate', 'operationId']) && token(value.step) && token(value.state) && (value.reason === null || token(value.reason)) &&
       (value.error === null || text(value.error, ERROR_MAX)) && typeof value.duplicate === 'boolean' && (value.operationId === null || token(value.operationId))
     : value?.kind === 'role' ? exact(value, ['kind', 'at', 'event', 'session']) && EVENTS.includes(value.event) && (value.session === null || exact(value.session, ['id', 'nativeId']) && token(value.session.id) && token(value.session.nativeId))
+    // NAW woke the butler because something new was recorded (steward-wake.cjs): whom, and the position the message named.
+    : value?.kind === 'wake' ? exact(value, ['kind', 'at', 'id', 'session', 'position']) && token(value.id) && exact(value.session, ['id', 'nativeId']) &&
+      token(value.session.id) && token(value.session.nativeId) && (value.position === null || typeof value.position === 'string' && POSITION.test(value.position))
     : false;
   if (!ok) throw Error('Invalid steward record line');
 }
@@ -146,6 +152,11 @@ class StewardRecord {
     for (const value of this.lines) if (value.kind === 'outcome') outcomes.set(value.step, value);
     return this.lines.filter(value => value.kind !== 'outcome').map(value => {
       if (value.kind === 'role') return { at: value.at, kind: 'role', event: value.event, session: value.session };
+      if (value.kind === 'wake') {
+        const outcome = outcomes.get(value.id) || null;
+        return { at: value.at, kind: 'wake', id: value.id, session: value.session, position: value.position, state: outcome?.state ?? null, error: outcome?.error ?? null,
+          operationId: outcome?.operationId ?? null, recorded: Boolean(outcome) };
+      }
       const outcome = outcomes.get(value.id) || null, operationId = value.operationId ?? outcome?.operationId ?? null;
       const open = outcome && !outcome.error && !outcome.duplicate && OPEN.includes(outcome.state) && operationId;
       let later = open ? stateOf({ ...value, operationId }) : null;
@@ -199,7 +210,9 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
   const nameOf = id => typeof id === 'string' && sessions.has(id) ? sessions.get(id).name : null;
   const spaceOf = id => typeof id === 'string' && rooms.has(id) ? rooms.get(id).name || id : null;
   const cut = value => typeof value === 'string' ? (value.length > 300 ? value.slice(0, 300) + '…' : value) : null;
-  const entries = record.entries({ stateOf }).map(entry => {
+  // NAW's wakes of the butler are in the record from the first one; the dialog shows them once the person has seen their
+  // words (a separate change), and until then shows the record as before.
+  const entries = record.entries({ stateOf }).filter(entry => entry.kind !== 'wake').map(entry => {
     if (entry.kind === 'role') return { at: entry.at, kind: 'role', event: entry.event, name: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null };
     let args = null; try { args = entry.arguments === null ? null : JSON.parse(entry.arguments); } catch { args = null; }
     const out = { at: entry.at, kind: entry.action === 'snapshot' ? 'snapshot' : 'invoke', method: entry.method, state: entry.state, reason: entry.reason, error: cut(entry.error), duplicate: entry.duplicate, recorded: entry.recorded };

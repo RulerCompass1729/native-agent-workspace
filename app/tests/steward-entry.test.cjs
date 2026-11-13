@@ -25,11 +25,13 @@ function fixture(t, { landingOwner = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-steward-entry-'));
   t.after(() => { try { fs.chmodSync(directory, 0o700); } catch {} fs.rmSync(directory, { recursive: true, force: true }); });
   const role = new StewardRole(directory), room = new RoomState(directory);
-  const handlers = new Map(), broadcasts = [], memberships = [], submitted = [], queued = [];
+  const handlers = new Map(), broadcasts = [], memberships = [], submitted = [], queued = [], wakeOff = [];
   // The real membership function is not under test here: only whether it is reached.
   const roomState = { apply: snapshot => room.apply(snapshot), metadata() {}, serial: action => action(), membership: async (_client, id, join, _label, space) => { memberships.push([id, join, space ?? null]); } };
   const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, roomIds, stewardRole: role, stewardOf: require('../steward-record.cjs').cachedSteward(role), roomState, landingOwner, validRoomId: id => typeof id === 'string' && id.length > 0,
     queueDispatcher: null, sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); },
+    // Waking the butler on events (steward-wake.cjs): only whether the designation turns it off, and when.
+    stewardWake: { set: on => { wakeOff.push([on, role.selected]); } },
     // What designating sends: the person's own input, as the composer gives it, in the person's language.
     validDuty, displayText: key => locale.format('zh', key), uiLocale: locale, refuseSubmit: null,
     submit: async (c, method, ...args) => {
@@ -71,7 +73,7 @@ function fixture(t, { landingOwner = null } = {}) {
     const c = { background: true, actor, client, view: { selected: id, owner: 'first-window' }, win: { destroy() {} }, checkActor: async () => {} };
     return (name, args) => backgroundOperation.run(actor, () => handlers.get(name)(c, ...args), { context: c, valid: async () => {} });
   };
-  return { directory, role, handlers, broadcasts, memberships, submitted, queued, client, sessions, person, agent, context, file: path.join(directory, 'steward.json'), call: (...args) => handlers.get('steward')(person, ...args) };
+  return { directory, role, handlers, broadcasts, memberships, submitted, queued, wakeOff, client, sessions, person, agent, context, file: path.join(directory, 'steward.json'), call: (...args) => handlers.get('steward')(person, ...args) };
 }
 
 test('nobody is the butler until the person designates one session; the record survives a restart, follows a finished replacement, and can be cleared', t => {
@@ -131,6 +133,20 @@ test('the person designates a session outside every space, replaces it, and revo
   assert.deepEqual(f.role.current(), { sessionId: 'other', nativeId: 'native-other' }, 'There is one butler: the newer replaces the older');
   await f.call(null);
   assert.equal(new StewardRole(f.directory).current(), null); assert.equal(f.broadcasts.length, 3);
+});
+
+test('designating or revoking the butler, the same session again included, turns waking on events off once it is written', async t => {
+  const f = fixture(t), OUTSIDE = { sessionId: 'outside', nativeId: 'native-outside' };
+  await f.call('outside'); await f.call(null); await f.call('outside');
+  // Each after the designation it follows is saved: a switch kept for an earlier designation does not come back on.
+  assert.deepEqual(f.wakeOff, [[false, OUTSIDE], [false, null], [false, OUTSIDE]]);
+  // A refused designation changes nothing, the switch included.
+  await assert.rejects(f.call('member'), key('error.steward.inSpace'));
+  assert.equal(f.wakeOff.length, 3);
+  // A switch that cannot be saved does not undo the designation.
+  f.context.stewardWake = { set() { throw Error('The steward wake state cannot be saved'); } };
+  await f.call('other');
+  assert.deepEqual(f.role.selected, { sessionId: 'other', nativeId: 'native-other' });
 });
 
 test('the queue dispatcher is told who the butler is now and the duty statement it is handed on with (batch 3)', async t => {
@@ -294,7 +310,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   // Both calls are answered by this desktop, with or without a backend that supports background control.
   assert.match(source, /name === 'handoff' \|\| name === 'steward' \|\| /); assert.match(source, /'chooseFolder', 'copy', 'landing', /);
   const preload = fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8');
-  assert.match(preload, /'runtimeLocation', 'retrySave', 'steward', 'stewardRecord', 'landing'\]\) \{/);
+  assert.match(preload, /'runtimeLocation', 'retrySave', 'steward', 'stewardRecord', 'stewardWake', 'landing'\]\) \{/);
   assert.equal(source.match(/stewardRole\.set\(/g).length, 2, 'Only the entry writes the designation');
   // Step 2, batch 2: every join meets one guard (a session NAW opened for a space, a rotation's successor included),
   // and the designation is made in the same queue the joins run in.
@@ -328,7 +344,9 @@ test('every sentence exists in both languages, and the words say what the design
     // The wake proposal, item 2: the butler's extra messages of a turn are withdrawn when the role ends first.
     'notice.wake.stewardEnded',
     // The events the butler reads; their refusals are checked in steward-events.test.cjs.
-    'error.steward.eventsButlerOnly', 'error.steward.eventsPosition', 'error.steward.eventsUnavailable'];
+    'error.steward.eventsButlerOnly', 'error.steward.eventsPosition', 'error.steward.eventsUnavailable',
+    // Waking the butler on events; its refusals are checked in steward-wake.test.cjs.
+    'error.steward.wakeOnly', 'error.steward.wakeInvalid', 'error.steward.wakeNoButler', 'error.steward.wakeUnavailable'];
   for (const language of ['zh', 'en']) assert.deepEqual(Object.keys(messages[language]).filter(name => /steward/i.test(name) && !name.startsWith('stewardRecord.')).sort(), [...keys].sort(), language);
   for (const name of keys) assert.equal(/[一-鿿]/.test(messages.en[name]), false, name);
   // What it gives and the one thing it takes away: the person is told both before they confirm.
