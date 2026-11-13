@@ -99,9 +99,14 @@ test('a turn that already reported its end never gets a second, boundary end (T-
 });
 
 // T-138 display (measured on 2.1.317: the typed prompt had no row at all, round3/green-317/completed.json).
-for (const own of [false, true]) test(`a prompt typed during a ${own ? 'desktop-sent' : 'typed'} turn gets its own row, joins no running turn, and heads its own turn (T-138)`, t => {
-  const f = fixture(t), first = randomUUID(), typed = '再看一下 T-141。';
-  if (own) f.r.pending = { text: 'Look at the board.', promptId: first }; // NAW's own send: no nativeInput, but its text is recorded
+for (const own of [false, true]) test(`a prompt typed during a ${own ? 'desktop-sent' : 'typed'} turn gets its own row, joins no running turn, and heads its own turn (T-138)`, async t => {
+  const f = fixture(t), first = randomUUID(), typed = '再看一下 T-141。', completes = [];
+  f.r.on('complete', info => completes.push(info.tag));
+  if (own) { // NAW's own send, accepted as prompt `first`: no nativeInput, but its text is recorded
+    const control = f.w.get('session').controlRevision;
+    f.r.submission.request = async () => ({ promptId: first });
+    await f.r.send('Look at the board.', 'own-send', () => f.w.get('session').controlRevision === control);
+  }
   f.typed(first, 'Look at the board.'); f.start('first-turn', first);
   f.typed(first, typed); f.typed(first, typed); // the same submit seen twice keeps one row
   const id = `claude-prompt-${first}-q${promptTextTag(typed)}`, queued = () => f.rows().find(m => m.id === id);
@@ -109,6 +114,7 @@ for (const own of [false, true]) test(`a prompt typed during a ${own ? 'desktop-
   assert.equal(queued().text, typed); assert.equal(queued().turnId, undefined, 'not linked to the running turn');
   assert.deepEqual(f.rows().map(m => m.id), [...(own ? [] : [`claude-prompt-${first}`]), id]);
   f.stop(first); f.end('first-turn');
+  assert.deepEqual(completes, [undefined], 'the person typed in that turn, so its reply is not the desktop send\'s');
   const firstEnd = () => f.w.sessions.get('session').messages.findIndex(m => m.kind === 'turn' && m.turnId === 'first-turn');
   assert.ok(firstEnd() > f.w.sessions.get('session').messages.indexOf(queued()), 'typed before the first turn ended');
   f.start('queued-turn', first, { prompts: [`${first}-q${promptTextTag(typed)}`], rows: [] });
