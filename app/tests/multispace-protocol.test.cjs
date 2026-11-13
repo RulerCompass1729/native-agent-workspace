@@ -41,7 +41,9 @@ test('actual bounded space envelopes preserve membership and original output acr
     if (failure) throw Error(`${failure.message}; it was killed and its profile retained: ${dir}\n${stderr}`);
     fs.rmSync(dir, { recursive: true, force: true });
   });
-  for (let i = 0; i < 100 && !fs.existsSync(path.join(dir, 'connection.json')) && child.exitCode === null; i++) await delay(10);
+  // The daemon writes connection.json once it listens. In a full-suite run on a busy machine that took over the
+  // 1 s this used to allow, so wait up to 5 s, within the 10 s test timeout; stop once the daemon exits or is killed.
+  for (const end = Date.now() + 5000; Date.now() < end && !fs.existsSync(path.join(dir, 'connection.json')) && child.exitCode === null && child.signalCode === null;) await delay(10);
   assert.ok(fs.existsSync(path.join(dir, 'connection.json')), stderr);
   client = await connectService(dir, 'space-test-owner');
   assert.ok((await client.call('initial')).capabilities.includes('collaborationSpacesV1'));
