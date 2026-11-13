@@ -12858,3 +12858,33 @@ Independent review (one read-only session, 4 rounds):
 - The fourth gave `PASS` at a58b23c.
 
 The worktree fingerprints were unchanged before and after each round. The CLI reported USD 0.93, 1.22, 1.74 and 1.91 for the four invocations. It was given `--model fable` and reported `claude-opus-5-5`.
+
+## An automatic message reaches a session mid-turn the way the person's input does (wake proposal, item 1, 2026-11-12)
+
+The person, relayed by the integrator: 「别忘了 agent 在干活的时候是可以发送消息的,所以你没法发其实有问题」. An automatic message to a session that was mid-turn was refused when it was registered, and never tried again. The decision on the board took item 1 as proposed.
+
+What changed: when the sender's turn ends normally, an idle recipient still gets the message as a turn of its own. A Claude recipient mid-turn now gets it through its native queue, read at the running turn's next tool boundary or as its next turn. A Codex recipient mid-turn gets it as a steer into the running turn. These are the paths the person's own input takes there. The message does not count as the person's control: owner, control, peer and human revisions stay as they were, and the loop guard counts it. The ticket that carries the message's authority is checked at every native step. Still refused, each with its reason: approval or native input pending, a queue or steer slot already taken, stopped or disconnected, automatic messages off, and the loop limit. A refusal that happens before native holds the message is reported as not sent. Commits c58ec29 and c023a56.
+
+Review findings fixed:
+- Blocking (c023a56): an automatic message that entered a turn answering a collaboration space did not end that sharing. The person's private queue or steer ends it (their `controlRevision++` invalidates the turn's shared-reply grant). So the rest of the turn, which could quote a message meant for the recipient alone, kept showing in the space. `wakeMidturn` now closes the recipient's open grants before the native step, without taking the person's control revision. A message refused before `wakeMidturn` leaves the sharing open.
+- Kept as notes:
+  - A queued or held automatic message occupies the native slot until the turn reads it. Meanwhile the person's own NAW queue or send is refused; native typing and interrupting still work.
+  - A draft in the recipient's NAW composer does not block the message. The idle path already behaved this way. The mod still refuses when the native prompt holds a draft.
+  - A refused Codex steer precheck is reported as unconfirmed, not as not sent. The person's `steer()` does the same.
+  - A storage failure before a steer still cancels recovery capacity. The person's `steer()` does the same.
+  - Because the sharing closes before the native step, a later refusal still ends that turn's sharing. This errs on the private side, as the person's queue does.
+  - The `wakeReceive` call has no local deadline, like the native queue it waits for. A receiving service that hangs without closing its socket leaves the sender's row saying the message is registered and not yet delivered, with no result.
+
+Evidence:
+- `session-wake.test.cjs` and `service-queue-deadline.test.cjs`: 76/76 at c023a56.
+- On the parent f406e3d, the four first-round item 1 tests and the deadline test fail. On c58ec29, the new sharing test fails ("the rest of the turn stays in the session").
+- Full suite: 6435/6435 at c58ec29, and 6437/6437 at c023a56.
+- `scripts/test-session-wake.cjs` (two owned services, synthetic adapters) passed at c58ec29. It runs the idle path only.
+- Not run: the real adapters' queue and steer steps together with the ticket guard. The unit tests stub `queue()` and `steer()`, and the reviewer read the mod's hold and authorize path instead. No model was called.
+
+Independent review (one read-only session, 3 rounds):
+- The first round hit its turn limit.
+- The second round gave `BLOCK` at c58ec29 (the sharing above) with six notes.
+- The third gave `PASS_WITH_NOTES` at c023a56.
+
+The worktree fingerprints were unchanged before and after each round. The CLI reported USD 1.19, 1.59 and 1.99 for the three invocations. It was given `--model fable` and reported `claude-opus-5-5`.
