@@ -167,7 +167,8 @@ const commandStarted = d => startTask(d, 'Bash', { stdout: '', stderr: '', inter
 test('inside the dispatched turn, a Monitor\'s events and expiry and a background command\'s completion are not the person; typing still is', async t => {
   const machine = [
     ['Monitor events', monitorStarted, [monitorEvent('bmonsyn01', 'BUILD_STEP 1'), monitorEvent('bmonsyn01', 'BUILD_STEP 2')]],
-    ['Monitor expiry', monitorStarted, [monitorEvent('bmonsyn01', 'BUILD_STEP 1'), monitorEvent('bmonsyn01', '[Monitor expired after 3s with 1 events delivered. Re-arm it if you still need the watch.]')]],
+    // The expiry has no status, so it does not use the ID up: a late event of the same Monitor is still automatic.
+    ['Monitor expiry', monitorStarted, [monitorEvent('bmonsyn01', 'BUILD_STEP 1'), monitorEvent('bmonsyn01', '[Monitor expired after 3s with 1 events delivered. Re-arm it if you still need the watch.]'), monitorEvent('bmonsyn01', 'BUILD_STEP 2')]],
     ['background command completion', commandStarted, [commandDone('bcmdsyn01')]],
   ];
   for (const [label, start, notices] of machine) {

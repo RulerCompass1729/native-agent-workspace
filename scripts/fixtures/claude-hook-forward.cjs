@@ -16,7 +16,7 @@ async function runForwarder(message, { appRoot = path.resolve(__dirname, '../..'
     let stdout = '';
     child.stdout.on('data', d => { stdout += d; });
     child.stdin.end(JSON.stringify(message));
-    await new Promise(resolve => child.on('exit', resolve));
+    await new Promise((resolve, reject) => { child.on('exit', resolve); child.on('error', reject); });
     for (let i = 0; i < 50 && !received.length; i += 1) await new Promise(resolve => setTimeout(resolve, 20));
     return { stdout, received };
   } finally {
