@@ -61,6 +61,25 @@ test('a long backlog comes in pieces with nothing lost or repeated', t => {
   assert.deepEqual(seen, [1, 2, 3, 4, 5, 6, 7]);
 });
 
+// A provider limits how much one tool answer may carry; an answer over it fails (the reader stays at the same position
+// for good) or loses events from its middle. Long events come a few at a time, and one always comes.
+test('long events come a few at a time under a size bound, and one that is longer than the bound still comes', t => {
+  const f = fixture(t), ledger = f.open(), size = read => Buffer.byteLength(JSON.stringify(read.events));
+  const long = (n, length) => ({ ...failure(n), payload: { ...failure(n).payload, text: '合'.repeat(length) } });
+  for (let n = 1; n <= 6; n++) ledger.ingest(long(n, 1000));
+  ledger.ingest(long(7, 6000));
+  ledger.ingest(failure(8));
+  const reads = [];
+  let position = null;
+  do { reads.push(ledger.eventsAfter(position)); position = reads.at(-1).through; } while (reads.at(-1).more && reads.length < 20);
+  assert.deepEqual(reads.flatMap(sequences), [1, 2, 3, 4, 5, 6, 7, 8], 'nothing lost or repeated');
+  assert.ok(reads.length >= 3 && reads.length < 20, `${reads.length} reads`);
+  assert.ok(reads[0].events.length > 1, 'several fit in one answer');
+  for (const read of reads) assert.ok(read.events.length === 1 || size(read) <= 8 * 1024, `${size(read)} bytes`);
+  const alone = reads.find(read => sequences(read).includes(7));
+  assert.ok(size(alone) > 8 * 1024 && sequences(alone)[0] === 7, 'the longest one comes first in its own answer');
+});
+
 test('after NAW restarts, the old position reads on; reading takes nothing from the separate butler', t => {
   const f = fixture(t), ledger = f.open();
   for (const n of [1, 2]) ledger.ingest(failure(n));

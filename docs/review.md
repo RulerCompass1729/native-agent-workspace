@@ -13226,7 +13226,7 @@ What changed:
 - `background-control.cjs`: catalog entry; `stewardEvents` is a private read, so what was read comes back in the same answer and is never kept in the operation log.
 - `ui-messages.js`: three agent-facing refusals (butler only, position not from this record, record unreadable), zh and en.
 
-Payload fields are those `butler-ingress.cjs` already records from queue outcomes (task text, the decision question, the failure reason, space and member names): queue text and delivery records, which the butler may see.
+Payload fields are those `butler-ingress.cjs` and `butler-ready.cjs` already record from queue outcomes (task text, the decision question, the failure reason, a delivery's READY title, space and member names): queue text and delivery records, which the butler may see.
 
 Checks:
 - `steward-events.test.cjs` 9/9: the manager's three conditions (an old position reads on after a restart and from another session; a session that is not the butler is refused; a position at the newest event returns nothing with the same `through`), a backlog read in pieces with nothing lost or repeated, a replaced record refused, the real handler from `main.cjs`, and nothing read kept in any file of the operation log's folder. `steward-entry.test.cjs` now ends its cut of the designation handler where this one starts.
@@ -13234,4 +13234,10 @@ Checks:
 - Full suite 6563/0.
 - Window (hidden Electron, real service with the synthetic native fixture, the actual stdio `workspace_control` tool, 0 native programs, 0 model calls): `scripts/test-steward-events.cjs` PASS, six checks, including the restart and 88 other profile files that keep nothing read.
 
-Not covered: waking the butler when an event arrives (it reads when it is already in a turn); that would start model turns and needs a decision first.
+Independent review (fresh read-only session, Glob/Grep/Read only, no MCP, 13 turns, reported USD 0.76): PASS_WITH_NOTES on c6fa0de5.
+- Note 1, fixed: an answer was bounded only by count (50). Events carry up to 12,000 characters of text, so a backlog could make one answer about 1 MB. NAW's own transport carries that (64 MB, read copies 32 MB), but a provider's tool-output limit would fail it, leaving the butler at the same position for good, or cut events from its middle while `through` moves past them. An answer now also stays under about 8 KB; one event always comes, however long. New test with long CJK events (several fit in one answer, a 6000-character one comes alone, nothing lost or repeated); M13 (no size bound) and M14 (a long event never comes) caught, 14 of 14 in all. The catalog now says to read again while `more` is true. Full suite 6564/0; window check PASS again.
+- Note 2, not covered: a ledger file restored from an older copy outside NAW keeps its first record, so an old position past the restored point would skip events recorded again under the same numbers. No NAW path does this; a replaced file is refused.
+- Note 3: delivery events carry the item's text and its READY title, queue records like the rest.
+- Note 4: the real `stewardCaller` is exercised by the window check (a session in a space refused); its other refusals (an archived butler, another native session) are shared with the other butler routes and tested there.
+
+Not covered: waking the butler when an event arrives (it reads when it is already in a turn); that would start model turns and needs a decision first. The providers' exact tool-output limits were not measured (that needs a model run); the 8 KB bound is kept well under them.

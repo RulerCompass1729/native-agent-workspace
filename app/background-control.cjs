@@ -76,7 +76,7 @@ const parameters = {
   spaceCreate: ['name'], spaceMerge: ['action: preview|status|commit|recover|discard|undo', 'value'],
   spaceAction: ['roomId', 'action: join|rename|notes|memberOrder|archive|restore|stageImages|removeImage|acceptImages|removeFile|queueAdd|queueCancel|queueResolve|forward|queueShared|steerShared|run|pause|clearSharedHistory', 'queueAdd: [text, assignee or null]; only the person-designated secretary may add; queueCancel/queueResolve are person-only; other arguments in the corresponding command order'],
   queueSecretary: ['sessionId or null to revoke; person-only, agents cannot designate themselves'],
-  stewardEvents: ['position from the last read (through), or null to read from the start; the designated butler only. Returns {events, through, more}: what NAW recorded since, oldest first, at most 50'],
+  stewardEvents: ['position from the last read (through), or null to read from the start; the designated butler only. Returns {events, through, more}: what NAW recorded since, oldest first, a few at a time; while more is true, read again from through'],
   spaceFiles: ['roomId', 'fileId?; omit to import the explicit paths'], gitWorktreePreview: ['selected repository path', 'nonce', 'relative path'],
   create: ['options: {provider,cwd,name,view?,gitWorktree?}'], nativeHistory: ['options?'], importHistory: ['nativeId', 'options'],
   rename: ['sessionId', 'name'], sidebar: ['change'],

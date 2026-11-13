@@ -13,7 +13,7 @@ const EVENT_KINDS = ['request', 'queue-empty', 'ready', 'decision', 'failure', '
 const ACTION_KINDS = ['queue', 'open', 'archive', 'question', 'report'];
 const PAYLOAD_LIMITS = { text: 12000, title: 400, spaceId: 200, spaceName: 200, memberName: 200,
   memberId: 200, itemId: 200, outcome: 200, reason: 2000, decisionKind: 200, questionKey: 600, supersedes: 200 };
-const MAX_FILE_BYTES = 32 * 1024 * 1024, MAX_RECORD_BYTES = 2 * 1024 * 1024, MAX_BATCH = 100;
+const MAX_FILE_BYTES = 32 * 1024 * 1024, MAX_RECORD_BYTES = 2 * 1024 * 1024, MAX_BATCH = 100, READ_BYTES = 8 * 1024;
 const FILE_NAME = 'butler-ledger.jsonl';
 const QUESTION_SEND_CHANNELS = ['notification', 'butler-ask'];
 const QUESTION_METRIC_GAPS = ['source-unavailable', 'write-failed', 'delivery-unconfirmed', 'unattributed',
@@ -801,8 +801,15 @@ class ButlerLedger {
       requireValue(match && match[1] === origin && Number.isSafeInteger(after) && after <= this.state.eventSequence,
         'This position is not one of the current butler ledger', 'BUTLER_POSITION_STALE');
     }
-    const later = this.state.events.filter(event => event.sequence > after);
-    const events = later.slice(0, limit).map(({ sequence, time, kind, payload }) => clone({ sequence, time, kind, payload }));
+    // An answer also stays under about READ_BYTES, so a provider's tool-output limit never fails it (leaving the reader
+    // at the same position for good) or cuts events from its middle; one event always comes, however long.
+    const later = this.state.events.filter(event => event.sequence > after), events = [];
+    let bytes = 0;
+    for (const { sequence, time, kind, payload } of later.slice(0, limit)) {
+      const event = clone({ sequence, time, kind, payload }), size = Buffer.byteLength(JSON.stringify(event));
+      if (events.length && bytes + size > READ_BYTES) break;
+      events.push(event); bytes += size;
+    }
     return { events, through: origin === null ? null : `${origin}:${events.at(-1)?.sequence ?? after}`, more: later.length > events.length };
   }
   // Decisions/failures already handled by the rule/B1 path need no model turn.
