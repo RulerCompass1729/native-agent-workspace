@@ -817,7 +817,8 @@ async function toButler(t, { designate = true } = {}) {
 test('a message the butler refuses only for its 60-second limit is held and sent once the limit allows (option A)', async t => {
   const wake = require('../session-wake.cjs'), locale = require('../ui-locale.js');
   const f = await toButler(t);
-  f.ra.emit('state', 'idle'); await f.turn('first', 'First.'); assert.equal(f.writes.length, 1); f.reply();
+  f.ra.emit('state', 'idle'); const first = await f.turn('first', 'First.'); assert.equal(f.writes.length, 1); f.reply();
+  assert.match(first.message, /当前原生回合正常结束后尝试投递；那时收件方若 60 秒内刚收过一条自动消息，NAW 先存着，限制过了再送一次；/, 'to the butler, not 「只尝试一次」');
   const firstAt = f.target.get(f.b).wakeBudget.lastAt;
   f.advance(10000);
   const second = await f.turn('second', 'Second.');
@@ -849,7 +850,8 @@ test('the limit itself stays: three in a row still ends it, and other recipients
   assert.equal(f.source.wakeHoldTimer, null);
   // Not the butler: refused for the limit and not retried, as before.
   const g = await toButler(t, { designate: false });
-  await g.turn('first', 'First.'); g.reply(); g.advance(10000);
+  const plainFirst = await g.turn('first', 'First.'); g.reply(); g.advance(10000);
+  assert.match(plainFirst.message, /当前原生回合正常结束后只尝试一次；/, 'to anyone else, tried once as before');
   const refused = await g.turn('second', 'Second.');
   assert.equal(refused.status, 'not-sent');
   // Each side checks on its own. The recipient's: only the designated butler, refusing for its limit, asks to hold.
@@ -979,6 +981,42 @@ test('three agents report to the butler at once: one goes now, the other two are
   assert.equal(f.writes.length, 3); assert.equal(f.writes[2].text.split('\n')[1], 'From three.');
   assert.deepEqual(rows.map(row => row.wake.status), ['submitted', 'submitted', 'submitted']);
   assert.equal(view(record, f.source.snapshot(), { current }).waiting, null, 'nothing held now');
+});
+// The second review's notes: turns that overlap read that a message to the butler may be held, and a queue reads a
+// minute more for each one ahead of it.
+test('overlapping turns to the butler read that a message may be held; a queue reads about when; the fourth in a row is still refused (option A, review)', async t => {
+  const wake = require('../session-wake.cjs');
+  const f = await toButler(t);
+  const sender = async name => { const id = await f.source.create('codex', f.root, 'source-owner', name); return { s: f.source.get(id), r: f.source.runtimes.get(id) }; };
+  const open = ({ s, r }, id, text) => { r.turnId = id; r.emit('nativeTurnStart', { nativeId: s.nativeId, turnId: id }); r.emit('state', 'working'); return r.addressedCall({ nativeId: s.nativeId, turnId: id, callId: 'call-' + id }, { recipient_id: f.b, message: text }); };
+  const close = async ({ s, r }, id) => { r.turnId = null; r.emit('state', 'idle'); r.emit('nativeTurnEnd', { nativeId: s.nativeId, turnId: id, status: 'completed' }); await f.settle(); };
+  const two = await sender('Sender two'), three = await sender('Sender three'), four = await sender('Sender four');
+  // Nothing has gone when both call, so neither knows yet; neither reads 「只尝试一次」.
+  f.start('one'); const first = await f.call('From one.', 'call-one');
+  const second = await open(two, 'two', 'From two.');
+  for (const result of [first, second]) {
+    assert.equal(result.readiness, 'checked');
+    assert.match(result.message, /当前原生回合正常结束后尝试投递；那时收件方若 60 秒内刚收过一条自动消息，NAW 先存着，限制过了再送一次；/);
+  }
+  await f.finish(); await f.settle();
+  const firstAt = f.target.get(f.b).wakeBudget.lastAt;
+  f.advance(300); await close(two, 'two');
+  const rows = [f.rows().at(-1), two.s.messages.find(m => m.wake)];
+  assert.deepEqual(rows.map(row => row.wake.status), ['submitted', 'held'], 'held at its turn end');
+  // Two more while it waits: each reads a minute more than the one before it.
+  f.advance(300); const third = await open(three, 'three', 'From three.'); await close(three, 'three');
+  f.advance(300); const fourth = await open(four, 'four', 'From four.'); await close(four, 'four');
+  assert.match(third.message, /已排着，约 2 分钟后/); assert.match(fourth.message, /已排着，约 3 分钟后/);
+  rows.push(three.s.messages.find(m => m.wake), four.s.messages.find(m => m.wake));
+  assert.deepEqual(rows.map(row => row.wake.status), ['submitted', 'held', 'held', 'held']);
+  f.reply(); f.advance(firstAt + 60000 - f.now()); wake.retryHeld(f.source); await f.settle();
+  f.reply(); f.advance(60000); wake.retryHeld(f.source); await f.settle();
+  assert.deepEqual(f.writes.map(write => write.text.split('\n')[1]), ['From one.', 'From two.', 'From three.']);
+  // The limit itself is unchanged: the fourth in a row is refused at its attempt, with the reason.
+  f.reply(); f.advance(60000); wake.retryHeld(f.source); await f.settle();
+  assert.equal(f.writes.length, 3);
+  assert.equal(rows[3].wake.status, 'not-sent'); assert.match(rows[3].text, /连续 3 次/);
+  assert.equal(f.source.wakeHoldTimer, null);
 });
 test('a held message is not sent once the person ends or moves the butler role, or its sender becomes unavailable (option A, review)', async t => {
   const wake = require('../session-wake.cjs');
