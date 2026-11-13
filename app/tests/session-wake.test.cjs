@@ -811,18 +811,21 @@ async function personSpeaks(t, { steward = false } = {}) {
   if (steward) fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: f.a, nativeId: s.nativeId } }), { mode: 0o600 });
   Object.defineProperty(f.ra, 'queueAvailable', { value: true, configurable: true });
   f.ra.nativeMidturnAppend = true;
-  let mode = 'append';
+  let mode = 'append', release;
   f.ra.submission.request = async (text, tag, guard, queued, midturn) => {
     requests.push({ text, tag, queued, midturn });
     const uuid = `00000000-0000-4000-8000-${String(requests.length).padStart(12, '0')}`;
     if (mode === 'not-sent') throw Object.assign(new Error('native refused the words'), { notSent: true });
+    if (mode === 'unconfirmed') throw new Error('no answer from native');
+    // Native answers words queued as their own turn only when that turn starts, after the running one ends.
+    if (mode === 'held') return new Promise(resolve => { release = () => resolve({ turnId: null, promptId: null }); });
     return mode === 'append' ? { mode: 'append', uuid, turnId: f.ra.turnId } : { turnId: null, promptId: null };
   };
   const say = async text => { const tag = await f.source.queue(f.a, text, 'source-owner'); return { tag, uuid: `00000000-0000-4000-8000-${String(requests.length).padStart(12, '0')}` }; };
   const read = ({ tag, uuid }, turnId = f.ra.turnId) => f.ra.submission.emit('read', { tag, uuid, turnId });
   const send = (to, text, callId) => Promise.resolve().then(() => f.ra.addressedCall({ nativeId: s.nativeId, turnId: f.ra.turnId, promptId: f.ra.liveTurn.promptId, callId }, { recipient_id: to, message: text }));
   const sent = () => s.messages.filter(m => m.wake);
-  return { ...f, s, requests, say, read, send, sent, ownTurn: () => { mode = 'own-turn'; }, notSent: () => { mode = 'not-sent'; } };
+  return { ...f, s, requests, say, read, send, sent, ownTurn: () => { mode = 'own-turn'; }, fail: kind => { mode = kind; }, release: () => release?.() };
 }
 const refusedAs = key => error => error.uiMessage?.key === key;
 test('the person speaking into a sender\'s turn: before the turn reads it, it cannot send; once read, it sends again, once (wake proposal, item 3)', async t => {
@@ -848,13 +851,26 @@ test('the person speaking into a sender\'s turn: before the turn reads it, it ca
   assert.equal(before.wake.cancellation.code, 'source-identity-changed');
   assert.equal(after.wake.status, 'submitted'); assert.equal(after.wake.epoch, 1);
 });
-test('words native provably did not take are never read: the turn is refused as revoked, not told to wait (wake proposal, item 3)', async t => {
-  const f = await personSpeaks(t);
-  f.notSent();
-  await assert.rejects(f.source.queue(f.a, 'Use the other plan.', 'source-owner'), error => error.notSent === true);
-  assert.equal(f.s.messages.find(m => m.origin === 'human' && m.text === 'Use the other plan.').status, 'not-sent');
-  await assert.rejects(f.send(f.b, 'After the words failed.', 'failed'), refusedAs('error.wake.turnRevokedByHuman'));
-  assert.equal(f.sent().length, 0);
+test('words this turn will not read leave it revoked, not told to wait: not sent, unconfirmed, or no mid-turn delivery (wake proposal, item 3)', async t => {
+  for (const [name, kind, status] of [['not sent', 'not-sent', 'not-sent'], ['unconfirmed', 'unconfirmed', 'unconfirmed']]) {
+    const f = await personSpeaks(t);
+    f.fail(kind);
+    await assert.rejects(f.source.queue(f.a, 'Use the other plan.', 'source-owner'));
+    assert.equal(f.s.messages.find(m => m.origin === 'human' && m.text === 'Use the other plan.').status, status, name);
+    await assert.rejects(f.send(f.b, 'After the words.', 'failed'), refusedAs('error.wake.turnRevokedByHuman'), name);
+    assert.equal(f.sent().length, 0, name);
+  }
+  // A Claude version without mid-turn delivery: the words wait for the turn to end and run as their own turn.
+  const f = await personSpeaks(t); f.ra.nativeMidturnAppend = false; f.fail('held');
+  const queued = f.source.queue(f.a, 'Next, please.', 'source-owner');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.requests.length, 1); assert.equal(f.requests[0].midturn, false, 'not offered into the running turn');
+  await assert.rejects(f.send(f.b, 'Still this turn.', 'same'), refusedAs('error.wake.turnRevokedByHuman'));
+  f.read({ tag: f.requests[0].tag, uuid: '00000000-0000-4000-8000-000000000001' });
+  await assert.rejects(f.send(f.b, 'Still this turn, again.', 'again'), refusedAs('error.wake.turnRevokedByHuman'));
+  f.release(); await queued;
+  await f.finish();
+  assert.equal(f.writes.length, 0);
 });
 test('the read authorizes nothing when the person acted again, everything was paused, or it is not the turn\'s read of those words (wake proposal, item 3)', async t => {
   const cases = {
@@ -874,7 +890,9 @@ test('the read authorizes nothing when the person acted again, everything was pa
     const f = await personSpeaks(t), words = await f.say('Hold on.');
     const other = await act(f, words);
     if (other) f.read(other); else if (!name.startsWith('a read')) f.read(words);
-    await assert.rejects(f.send(f.b, 'Must not go.', 'after'), /真人|授权|回合|读到/, name);
+    // The other words are still unread, so that turn is told to wait; every other case is over for the turn.
+    const expected = name === 'a read of other words' ? 'error.wake.turnAwaitingHumanRead' : 'error.wake.turnRevokedByHuman';
+    await assert.rejects(f.send(f.b, 'Must not go.', 'after'), refusedAs(expected), name);
     await f.finish();
     assert.equal(f.writes.length, 0, name);
   }
@@ -893,8 +911,9 @@ test('words that run as their own later turn do not reopen the turn they waited 
   const f = await personSpeaks(t); f.ownTurn();
   const words = await f.say('Next, please.');
   assert.equal(f.s.messages.find(m => m.id === words.tag).deliveredInto, undefined);
+  await assert.rejects(f.send(f.b, 'Before the turn ends.', 'before-end'), refusedAs('error.wake.turnRevokedByHuman'), 'native will not read them in this turn');
   f.read(words);
-  await assert.rejects(f.send(f.b, 'Still this turn.', 'same'), /真人|读到/);
+  await assert.rejects(f.send(f.b, 'Still this turn.', 'same'), refusedAs('error.wake.turnRevokedByHuman'));
   await f.finish();
   assert.equal(f.writes.length, 0);
 });
