@@ -205,15 +205,17 @@ function cachedSteward(role) {
 // the role), and the role lines. Names come from the current state; nothing here is a value an operation returned.
 // `readOf(step)` names the conversation a read step read and how far ({ sessionId, name, messages, through, unasked }),
 // from NAW's record of that operation; a step without one is said as it was asked.
-function view(record, snapshot, { current = null, stateOf = () => null, readOf = () => null, limit = 300, now = Date.now() } = {}) {
+// `wake` is how NAW's switch for waking the butler stands (steward-wake.cjs view: { on, at, failed }), or null when it
+// cannot be read; the dialog shows it to the person with the switch.
+function view(record, snapshot, { current = null, stateOf = () => null, readOf = () => null, wake = null, limit = 300, now = Date.now() } = {}) {
   const sessions = new Map((snapshot?.sessions || []).map(s => [s.id, s])), rooms = new Map([snapshot?.room, ...(snapshot?.rooms || [])].filter(Boolean).map(r => [r.id || 'shared', r]));
   const nameOf = id => typeof id === 'string' && sessions.has(id) ? sessions.get(id).name : null;
   const spaceOf = id => typeof id === 'string' && rooms.has(id) ? rooms.get(id).name || id : null;
   const cut = value => typeof value === 'string' ? (value.length > 300 ? value.slice(0, 300) + '…' : value) : null;
-  // NAW's wakes of the butler are in the record from the first one; the dialog shows them once the person has seen their
-  // words (a separate change), and until then shows the record as before.
-  const entries = record.entries({ stateOf }).filter(entry => entry.kind !== 'wake').map(entry => {
+  const entries = record.entries({ stateOf }).map(entry => {
     if (entry.kind === 'role') return { at: entry.at, kind: 'role', event: entry.event, name: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null };
+    // NAW woke the butler of that time: whom, and whether the message went out. Not the position it named.
+    if (entry.kind === 'wake') return { at: entry.at, kind: 'wake', target: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null, state: entry.state, error: cut(entry.error), recorded: entry.recorded };
     let args = null; try { args = entry.arguments === null ? null : JSON.parse(entry.arguments); } catch { args = null; }
     const out = { at: entry.at, kind: entry.action === 'snapshot' ? 'snapshot' : 'invoke', method: entry.method, state: entry.state, reason: entry.reason, error: cut(entry.error), duplicate: entry.duplicate, recorded: entry.recorded };
     if (entry.method === 'spaceAction' && Array.isArray(args)) {
@@ -250,6 +252,7 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
   if (current) for (const x of sessions.values()) for (const row of x.messages || []) if (row.wake?.status === 'held' && row.wake.recipientId === current.sessionId && Number.isSafeInteger(row.wake.heldAt)) held.push(row.wake.heldAt);
   return { current: s ? { id: s.id, name: s.name, provider: s.provider, usage: s.usage || null } : current ? { id: current.sessionId, name: null, provider: null, usage: null } : null,
     waiting: held.length ? { count: held.length, since: Math.min(...held) } : null,
+    wake: wake && typeof wake.on === 'boolean' ? { on: wake.on, at: Number.isSafeInteger(wake.at) ? wake.at : null, failed: wake.failed === true } : null,
     total: entries.length, entries: entries.slice(0, limit), at: now, writeFailed: record.failed && !record.loadError };
 }
 

@@ -1071,3 +1071,11 @@ dialog p.records-note { color: var(--ink); }
 .steward-record-usage { display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 10px; font-size: 13px; margin: 8px 0; }
 .steward-record-usage p { margin: 0 0 4px; }
 .steward-record-error { color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }
+/* NAW's switch for waking the butler: on one line with how it stands. */
+.steward-record-wake { margin: 4px 0 14px; }
+.steward-record-wake-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 13px; }
+dialog .steward-record-wake label { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 500; }
+dialog .steward-record-wake input[type=checkbox] { width: auto; margin: 0; }
+.steward-record-wake-status { color: var(--muted); font-variant-numeric: tabular-nums; }
+.steward-record-wake p { margin: 4px 0 0; }
+.steward-record-wake p[hidden] { display: none; }

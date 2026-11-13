@@ -302,11 +302,11 @@ test('the dispatcher wakes the butler only once it is idle and settled, through 
   assert.equal(text, wakeText(null), 'the record was empty when it was turned on: from the start');
   assert.match(itemId, /^steward-wake:[0-9a-f-]{36}$/u);
   assert.equal(env.client.calls.some(call => ['send', 'queue', 'claim', 'input'].includes(call[0])), false, 'no human send, no takeover');
-  // In 「大管家的记录」 under NAW's name, with its outcome; the person's dialog leaves it out until its words are seen.
+  // In 「大管家的记录」 under NAW's name, with its outcome, and in the person's dialog.
   const entries = env.record.entries().filter(entry => entry.kind === 'wake');
   assert.deepEqual(entries.map(entry => [entry.position, entry.state]), [[null, 'sent']]);
   assert.match(entries[0].operationId, /^tag-\d+$/u);
-  assert.deepEqual(stewardRecords.view(env.record, { sessions: [] }).entries, [], 'the wake is the only line, and the dialog shows none');
+  assert.deepEqual(stewardRecords.view(env.record, { sessions: [] }).entries, [{ at: entries[0].at, kind: 'wake', target: 'butler', state: 'sent', error: null, recorded: true }], 'the wake is the only line, and the dialog shows it');
   assert.equal(env.dispatcher.hasOpenWork(), false);
 });
 
@@ -378,6 +378,28 @@ test('only the person in their window and the designated butler turn it on or of
   const failing = code => ({ view: () => ({}), set: () => { throw Object.assign(Error('x'), { code }); } });
   await assert.rejects(handler({ wake: failing('STEWARD_WAKE_NO_BUTLER') }).person(true), refusal('error.steward.wakeNoButler'));
   await assert.rejects(handler({ wake: failing('STEWARD_WAKE_UNAVAILABLE') }).person(true), refusal('error.steward.wakeUnavailable'));
+});
+
+// The person's 「大管家的记录」 carries how the switch stands, so their window shows it beside the record (main.cjs
+// stewardRecord, the real handler): a switch that cannot be read leaves the record as it is, without the switch.
+test('the person\'s record shows how the switch stands; a switch that is missing or cannot be read leaves the record without it', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
+  const start = source.indexOf("  register('stewardRecord', async c => {"), end = source.indexOf("  applicationHandlers.delete('stewardRecord');", start);
+  assert.ok(start > 0 && end > start);
+  const run = async (wake, c = { background: false, client: { call: async () => ({ sessions: [] }) } }) => {
+    let registered;
+    const context = vm.createContext({ register: (name, fn) => { assert.equal(name, 'stewardRecord'); registered = fn; }, uiError, isCurrentHumanContext: x => !x.background,
+      stewardRecord: { loadError: null, failed: false, sync() {}, entries: () => [], periods: () => [] }, stewardOf: () => BUTLER, stewardRecords,
+      sessionLabels: { apply: x => x }, roomState: { apply: x => x }, backgroundControl: null, backgroundOperation: null, stewardWake: wake });
+    vm.runInContext(source.slice(start, end), context);
+    return registered(c);
+  };
+  assert.deepEqual((await run({ view: () => ({ on: true, at: NOW, failed: false }) })).wake, { on: true, at: NOW, failed: false });
+  assert.deepEqual((await run({ view: () => ({ on: false, at: null, failed: true }) })).wake, { on: false, at: null, failed: true });
+  assert.equal((await run(null)).wake, null);
+  const broken = await run({ view: () => { throw Error('unreadable'); } });
+  assert.deepEqual([broken.wake, broken.entries], [null, []], 'the record is still shown');
+  await assert.rejects(run({ view: () => ({ on: true }) }, { background: true }), error => error?.uiMessage?.key === 'error.stewardRecord.personOnly');
 });
 
 test('the switch is a local call the butler finds in the catalog, the page can reach, and the dispatcher is given', () => {

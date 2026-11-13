@@ -537,3 +537,20 @@ for (const action of ['summary', 'more', 'group']) {
     assert.deepEqual(f.calls, []);
   });
 }
+
+// NAW waking the butler (steward-wake.cjs) goes out as a NAW message like a queue item; its sender says it is an event
+// wake, in either language, and a queue item keeps its own sender.
+test('a wake of the butler is labelled as an event wake; a queue item and anything else keep their sender', () => {
+  const queueName = locale.displayMessage({ version: 1, key: 'notice.queue.senderName', params: {} }, 'notice.');
+  const rows = [
+    { id: 'wake', role: 'user', text: '【NAW 事件】有新事件。', time: 1, name: 'NAW 派活', uiNameMessage: queueName, origin: 'naw-dispatch', dispatchItem: 'steward-wake:4d1c2a7e-0000-4000-8000-000000000000', status: 'complete' },
+    { id: 'item', role: 'user', text: '【NAW 派活】做一件事', time: 2, name: 'NAW 派活', uiNameMessage: queueName, origin: 'naw-dispatch', dispatchItem: 'item-1', status: 'complete' },
+    { id: 'typed', role: 'user', text: 'steward-wake: typed by the person', time: 3, origin: 'human', dispatchItem: 'steward-wake:x', status: 'complete' },
+  ];
+  const f = fixture(rows), label = id => f.view.entries.get(id).heading.firstChild.textContent;
+  assert.deepEqual(['wake', 'item', 'typed'].map(label), ['NAW 事件唤醒', 'NAW 派活', '你']);
+  f.switch('en');
+  assert.deepEqual(['wake', 'item', 'typed'].map(label), ['NAW event wake', 'NAW queue', 'You']);
+  assert.equal(f.view.entries.get('wake').body.textContent, rows[0].text, 'the message itself is unchanged');
+  assert.deepEqual(f.calls, []);
+});

@@ -20,6 +20,8 @@
     // What it did, in a sentence: the few things a butler does most by name, anything else as its command.
     function what(entry, now = Date.now()) {
       if (entry.kind === 'role') return [`stewardRecord.role.${ROLES.includes(entry.event) ? entry.event : 'started'}`, { name: dash(entry.name) }];
+      // NAW's own step: it woke the butler of that time to read what it recorded.
+      if (entry.kind === 'wake') return ['stewardRecord.step.wake', { target: dash(entry.target) }];
       // A read of another session's conversation: whom, and how far when NAW knows it.
       if (entry.read) {
         if (entry.read.gone) return [entry.read.image ? 'stewardRecord.step.readImageGone' : 'stewardRecord.step.readGone', {}];
@@ -38,12 +40,43 @@
     function result(entry) {
       if (entry.kind === 'role') return null;
       if (entry.kind === 'message') return MESSAGES.includes(entry.state) ? [`stewardRecord.message.${entry.state}`, {}] : ['stewardRecord.result.other', { state: dash(entry.state) }];
+      if (entry.kind === 'wake') return entry.state === 'sent' ? ['stewardRecord.wake.sent', {}] : ['not-sent', 'unconfirmed'].includes(entry.state) ? [`stewardRecord.message.${entry.state}`, {}]
+        : entry.state ? ['stewardRecord.result.other', { state: entry.state }] : ['stewardRecord.result.unrecorded', {}];
       if (!entry.state) return ['stewardRecord.result.unrecorded', {}];
       if (entry.duplicate) return ['stewardRecord.result.duplicate', {}];
       if (entry.state === 'not-executed') return REASONS.includes(entry.reason) ? [`stewardRecord.reason.${entry.reason}`, {}] : ['stewardRecord.result.refused', { reason: dash(entry.reason) }];
       return STATES.includes(entry.state) ? [`stewardRecord.result.${entry.state}`, {}] : ['stewardRecord.result.other', { state: entry.state }];
     }
     const attention = entry => ['confirmation-required', 'not-executed', 'unconfirmed', 'not-sent'].includes(entry.state) || entry.kind !== 'role' && entry.kind !== 'message' && !entry.state;
+    // NAW's switch for waking the butler when it records something new: the person's to see and turn off here (the
+    // approved words for the butler: 「看得见、能关」), off by default. Changed in place, so focus stays on it.
+    function wakeSwitch(state, now) {
+      const box = make('div', 'steward-record-wake'), label = make('label'), input = document.createElement('input'), words = make('span', '', 'stewardRecord.wake.switch');
+      input.type = 'checkbox'; input.dataset.action = 'steward-wake'; label.append(input, words);
+      const status = make('span', 'steward-record-wake-status'), failure = make('p', 'records-note'); failure.setAttribute('role', 'alert'); failure.hidden = true;
+      // Read out with the switch: whether it is on, and when NAW last tried to wake the butler (steward-wake.cjs view).
+      status.id = `${dialog.id || 'steward-record-dialog'}-wake-status`; input.setAttribute('aria-describedby', status.id);
+      const show = (value, at) => {
+        input.checked = value.on === true;
+        if (value.failed) say(status, 'stewardRecord.wake.failed');
+        else if (!value.on) say(status, 'stewardRecord.wake.off');
+        else if (value.at) say(status, 'stewardRecord.wake.last', { time: when(value.at, at) });
+        else say(status, 'stewardRecord.wake.never');
+      };
+      show(state, now);
+      input.addEventListener('change', async () => {
+        const want = input.checked; input.disabled = true; failure.hidden = true;
+        try { show(await api.stewardWake(want), Date.now()); }
+        catch (error) {
+          // Not changed as asked: say why, and show how it stands now.
+          say(failure, 'stewardRecord.wake.error', { reason: error?.message || '—' }); failure.hidden = false;
+          try { show(await api.stewardWake(), Date.now()); } catch { input.checked = !want; }
+        } finally { input.disabled = false; }
+      });
+      const line = make('div', 'steward-record-wake-switch'); line.append(label, status);
+      box.append(line, make('p', 'quiet', 'stewardRecord.wake.cost'), failure);
+      return box;
+    }
     function draw(view) {
       dialog.replaceChildren();
       const title = make('h2', '', 'stewardRecord.title'); title.id = (dialog.id || 'steward-record-dialog') + '-title'; dialog.setAttribute('aria-labelledby', title.id);
@@ -53,6 +86,7 @@
       // Messages held for it under its 60-second limit: how many, and how long the oldest has waited.
       if (current && view.waiting?.count > 0) { const minutes = Math.floor(Math.max(0, view.at - view.waiting.since) / 60000);
         dialog.append(make('p', 'steward-record-waiting', minutes ? 'stewardRecord.waiting' : 'stewardRecord.waitingNew', { count: view.waiting.count, minutes })); }
+      if (current && view.wake) dialog.append(wakeSwitch(view.wake, view.at));
       if (view?.writeFailed) dialog.append(make('p', 'records-note', 'stewardRecord.writeFailed'));
       dialog.append(make('h3', '', 'stewardRecord.heading'));
       const entries = view?.entries || [];

@@ -4,6 +4,9 @@
 // of a space asks the person a decision on its queue item, which NAW records; once the butler is idle and settled, NAW
 // sends it one message naming only a position, through the same send as a queue item, and writes that wake in
 // 「大管家的记录」 under NAW's name. From that position the butler reads exactly the new event.
+// The person's own window (the dispatch of the UI branch: 「用户自己看得见、关得掉」): the wake's sender in the butler's
+// conversation says it is an event wake, and 「大管家的记录」 shows the wake, the switch and when it last woke the
+// butler; the person turns it off and on there, and the butler sees what they set. Screenshots in Chinese and English.
 // Real hidden Electron UI and service; the native producer is synthetic (the background-control fixture). No native
 // program is started and no model is called. Takes the GUI test slot itself.
 const scratch = require('./fixtures/test-scratch.cjs');
@@ -27,6 +30,11 @@ let profile, child, client, app, page, helper, rpc, sequence = 0, butler, worker
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, limit = 8000) { const end = Date.now() + limit; while (Date.now() < end) { if (await fn()) return; await wait(100); } throw Error(label); }
 const save = (name, value) => fs.writeFileSync(path.join(evidence, name + '.json'), JSON.stringify(value, null, 2), { mode: 0o600 });
+const shot = async name => { await wait(250); await page.screenshot({ path: path.join(evidence, name + '.png') }); };
+const say = (language, key, params) => locale.format(language, key, params);
+// The record's clock, as the dialog writes it: the time today, the day too before today.
+const clock = at => { const d = new Date(at), pad = n => String(n).padStart(2, '0'), time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return d.toDateString() === new Date().toDateString() ? time : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`; };
 function fixture(method, target, value) {
   const id = ++sequence;
   return new Promise((resolve, reject) => {
@@ -62,6 +70,10 @@ async function control(session, args) {
 const refused = (value, key) => value.state === 'unconfirmed' && ['zh', 'en'].some(language => value.error === locale.format(language, key));
 const sessionOf = async id => (await client.call('initial')).sessions.find(s => s.id === id);
 const sendsTo = async id => (await fixture('stats')).sends.filter(s => s.id === id);
+async function size(width, height) {
+  await (await app.browserWindow(page)).evaluate((win, [w, h]) => win.setContentSize(w, h), [width, height]);
+  await until(() => page.evaluate(w => innerWidth === w, width), `Window ${width} wide`); await wait(300);
+}
 // The lines of 「大管家的记录」 as NAW wrote them (history/steward, one { sequence, time, day, value } per line), read from
 // the profile without opening the record.
 function recordLines() {
@@ -148,15 +160,79 @@ async function run() {
   assert.equal(wake.length, 1, JSON.stringify(lines));
   assert.deepEqual([wake[0].session.id, wake[0].position], [butler, JSON.parse(position)]);
   assert.equal(lines.find(line => line.kind === 'outcome' && line.step === wake[0].id)?.state, 'sent');
-  const shown = (await page.evaluate(() => workspace.stewardRecord())).entries;
-  assert.equal(shown.some(entry => entry.kind === 'wake' || entry.method === undefined && entry.kind !== 'role'), false, JSON.stringify(shown));
-  checks.push('The wake is a line in 「大管家的记录」 under NAW\'s name with the outcome sent; the dialog shows it only once its words are seen');
+  const shown = await page.evaluate(() => workspace.stewardRecord());
+  assert.deepEqual(shown.entries.filter(entry => entry.kind === 'wake').map(entry => [entry.target, entry.state, entry.recorded]), [['Codex 管家', 'sent', true]], JSON.stringify(shown.entries));
+  assert.equal(JSON.stringify(shown).includes(JSON.parse(position)), false, 'the person\'s record does not carry the position');
+  assert.deepEqual([shown.wake.on, shown.wake.failed, Number.isSafeInteger(shown.wake.at)], [true, false, true], JSON.stringify(shown.wake));
+  checks.push('The wake is a line in 「大管家的记录」 under NAW\'s name with the outcome sent; the person\'s record lists it and says the switch is on');
   // 6. From that position the butler reads exactly the new event: the decision, not the old failure.
   const read = await control(butler, invoke('stewardEvents', [JSON.parse(position)]));
   assert.equal(read.state, 'complete', JSON.stringify(read));
   assert.deepEqual(read.value.events.map(e => [e.sequence, e.kind, e.payload.spaceId]), [[2, 'decision', 'shared']], JSON.stringify(read.value));
   checks.push('From the position in the message the butler reads the decision and nothing older');
   save('wake', { wakeText: wakes[0].text, wokenAfterMs, sinceDesignationMs, record: lines.filter(line => line.kind !== 'invoke' && line.kind !== 'snapshot'), read: read.value });
+
+  // 7. The person's window, in each language: the wake's sender in the butler's conversation, and 「大管家的记录」 with
+  // the switch, which the person turns off (and on again) there; the butler sees what they set.
+  await size(1280, 800);
+  const lastAt = shown.wake.at, ui = {};
+  const sender = () => page.evaluate(() => [...document.querySelectorAll('#messages .message')].map(m => [m.querySelector('.message-heading strong')?.innerText.trim(), m.querySelector('.message-body')?.innerText.trim() || '']));
+  const record = () => page.evaluate(() => {
+    const d = document.getElementById('steward-record-dialog'), box = d.querySelector('.steward-record-wake'), input = box?.querySelector('input[type=checkbox]');
+    return { open: d.open, switch: box ? { label: box.querySelector('label').innerText.trim(), checked: input.checked, disabled: input.disabled, status: box.querySelector('.steward-record-wake-status').innerText.trim(),
+      notes: [...box.querySelectorAll('p')].filter(p => !p.hidden).map(p => p.innerText.trim()), probe: input.dataset.probe || null } : null,
+      wakes: [...d.querySelectorAll('tbody tr[data-kind=wake]')].map(tr => [...tr.cells].map(td => td.innerText.trim().replace(/\s+/g, ' '))) };
+  });
+  const openRecord = async language => {
+    await page.locator('#steward-slot .session-row').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: say(language, 'menu.stewardRecord'), exact: true }).click();
+    await page.locator('#steward-record-dialog .steward-record-wake').waitFor({ state: 'visible' }); await wait(200);
+  };
+  const closeRecord = async () => { await page.keyboard.press('Escape'); await page.locator('#steward-record-dialog').waitFor({ state: 'hidden' }); };
+  const language = async value => {
+    await page.locator('#setup-button').click(); await page.locator('#setup-dialog').waitFor({ state: 'visible' });
+    await page.locator('#ui-language').selectOption(value);
+    await until(async () => await page.locator('#new-session').getAttribute('aria-label') === say(value, 'sidebar.newSession'), `The interface reads ${value}`);
+    await page.keyboard.press('Escape'); await page.locator('#setup-dialog').waitFor({ state: 'hidden' });
+  };
+  const tick = page.locator('#steward-record-dialog input[data-action="steward-wake"]');
+  // The person clicks the switch; it changes in place (the same element, marked first) and settles on what NAW answers.
+  const flip = async (want, language) => {
+    await tick.evaluate(el => { el.dataset.probe = 'kept'; });
+    await page.locator('#steward-record-dialog .steward-record-wake label').click();
+    await until(async () => { const r = await record(); return r.switch.checked === want && !r.switch.disabled && r.switch.status === (want ? say(language, 'stewardRecord.wake.last', { time: clock(lastAt) }) : say(language, 'stewardRecord.wake.off')); }, `The switch settles ${want ? 'on' : 'off'}`);
+    const r = await record(); assert.equal(r.switch.probe, 'kept', 'changed in place, not redrawn');
+    assert.equal((await page.evaluate(() => workspace.stewardWake())).on, want);
+    const seen = await control(butler, invoke('stewardWake', []));
+    assert.deepEqual([seen.state, seen.value.on], ['complete', want], JSON.stringify(seen));
+    return r;
+  };
+  for (const lang of ['zh', 'en']) {
+    if (lang === 'en') await language('en');
+    await page.locator('#messages').getByText('【NAW 事件】', { exact: false }).first().waitFor();
+    await until(async () => (await sender()).some(([name, body]) => name === say(lang, 'reading.stewardWake') && body.startsWith('【NAW 事件】')), `The wake's sender reads ${lang}`);
+    const rows = await sender();
+    assert.deepEqual(rows.filter(([, body]) => body.startsWith('【NAW 事件】')).map(([name]) => name), [say(lang, 'reading.stewardWake')], JSON.stringify(rows));
+    assert.equal(rows.some(([name, body]) => body.startsWith('【NAW 事件】') && name === say(lang, 'notice.queue.senderName')), false);
+    await page.locator('#messages .message').filter({ hasText: '【NAW 事件】' }).first().scrollIntoViewIfNeeded();
+    await shot(`wake-ui-conversation-${lang}`);
+    await openRecord(lang);
+    const before = await record();
+    assert.deepEqual(before.switch && [before.switch.label, before.switch.checked, before.switch.status, before.switch.notes],
+      [say(lang, 'stewardRecord.wake.switch'), true, say(lang, 'stewardRecord.wake.last', { time: clock(lastAt) }), [say(lang, 'stewardRecord.wake.cost')]], JSON.stringify(before));
+    assert.deepEqual(before.wakes.map(row => row.slice(1)), [[say(lang, 'stewardRecord.step.wake', { target: 'Codex 管家' }), say(lang, 'stewardRecord.wake.sent')]], JSON.stringify(before.wakes));
+    await shot(`wake-ui-record-${lang}`);
+    const off = await flip(false, lang);
+    await shot(`wake-ui-record-off-${lang}`);
+    const on = await flip(true, lang);
+    ui[lang] = { sender: say(lang, 'reading.stewardWake'), before, off: off.switch, on: on.switch };
+    await closeRecord();
+  }
+  // Left off, as the person found it before the butler turned it on.
+  await openRecord('en'); await flip(false, 'en'); await closeRecord();
+  await language('zh');
+  checks.push('In the person\'s window, in Chinese and English: the wake\'s sender in the butler\'s conversation reads as an event wake (a queue item keeps 「NAW 派活」); 「大管家的记录」 lists the wake as sent and shows the switch on with the time of the last wake; the person turns it off and on there, in place, and the butler sees each change');
+  save('ui', ui);
 
   assert.deepEqual(errors, []);
   const stats = await fixture('stats'); assert.equal(stats.nativeProcesses, 0); assert.equal(stats.modelCalls, 0);
