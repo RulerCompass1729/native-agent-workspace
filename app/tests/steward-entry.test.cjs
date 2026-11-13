@@ -208,6 +208,11 @@ test('the duty statement is bounded so that the record stays readable by every b
   f.role.set(odd, '短'); assert.ok(fs.statSync(f.file).size <= 4096); assert.deepEqual(new StewardRole(f.directory).current(), odd);
   // Tabs and new lines are text; other control characters are not.
   assert.equal(validDuty('一\n二\t三\r\n'), true); assert.equal(validDuty('a\u001bb'), false);
+  // Each language's default leaves room for the person to add to it in the dialog: a quarter of the limit at least.
+  for (const language of ['zh', 'en']) {
+    const standard = locale.format(language, 'steward.duty.default'), bytes = Buffer.byteLength(JSON.stringify(standard));
+    assert.ok(validDuty(standard) && bytes <= DUTY_MAX * 0.75, `${language}: ${bytes} of ${DUTY_MAX} bytes`);
+  }
   for (const duty of ['', 5, null, 'a\u0007']) {
     const g = fixture(t); fs.writeFileSync(g.file, JSON.stringify({ version: 1, selected: ONE, duty }), { mode: 0o600 });
     assert.throws(() => new StewardRole(g.directory).current(), key('error.steward.state'), JSON.stringify(duty));
