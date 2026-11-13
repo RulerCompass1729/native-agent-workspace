@@ -12887,3 +12887,61 @@ Notes kept:
 - A butler designated before batch 2 that is still in a space is rotated as a member, and the designation follows into the spaces. `stewardCaller` already refuses it there.
 - If the fixed parts of a handoff alone exceed 16000 characters, it still fails, as before.
 - `cachedSteward` ignores `role.failed`. After a failed write that left the file unchanged, the dispatcher can still rotate the session the file names and hand it the statement. The other `stewardOf` users already behave this way, and the person sees the failed write.
+## A replaced session goes to 归档 after its rotation — 2026-11-12
+
+The person (11-12 09:5x, a screenshot of 「独立会话 · 3」 with two replaced agents in it): 「如果独立会话里还有不需要的会话就自动归档吧?…我猜是被替换掉的agent」. Task: `.local/handoff-20261112/rotation-auto-archive.md`.
+
+**What was happening.** When NAW rotates a space member to a fresh session, the old session leaves its spaces and, if nobody is using it, is stopped (`queue-dispatch.cjs`). It then stayed in the sidebar's list of sessions as ended, one more row per rotation.
+
+**Now.**
+- **Archived at the rotation.** When NAW itself stopped the old session while finishing a rotation (no one was using it), it archives that session with the sidebar's own archive, after the rotation is saved as settled (so a quit while it waits leaves it to the next start's check, and the rotation's notification does not wait on it). Every record is kept, and the session is restored from 归档. A session someone else archived meanwhile (the person, during the handoff) gets no line in the spaces, which would claim NAW did it, but is settled quietly in the log (`archived` with `by: 'other'`), so a later restore stays.
+  - The rotation log gets an `archived` entry after the `done` one.
+  - Each space in the rotation shows a second line after the rotation's own: 「NAW 换会话：被换下来的「…」已归档（工作已交给「…」），可在侧栏「归档」里恢复」 (with an English line).
+  - If archiving fails, the session stays where it was and the rotation is still done.
+  - An archive that finishes after the 60-second wait gave up is logged and announced when it finishes.
+- **Not archived at the rotation.** A kept rotation (the old session in use) leaves it in place, as before. An old session that was not running when the rotation finished (ended, or in Claude's native background) is not archived then; the next start's check below decides.
+- **The automatic form.** `roomState.archiveSession` has an `automatic` option. It never leaves or pauses a space on its own: a session still in a space is refused, and it waits on no pause. Leaving a space during a rotation is best-effort, so an old session can still be in one. The person's archive would then leave that space and pause it, as for any human archive. In the daily app (`WorkspaceClient`, which has `callSpace`), the person's archive of a session in no space pauses nothing either. Only a client without per-space calls (the test fake) would fall back to the global pause.
+- **A pre-existing fault, fixed because it is in this function.** `archiveSession` read the snapshot after setting the session's gate, so a session the snapshot did not hold left the gate set until restart: "updating" every time after. It now reads before the gate and says the session is missing. `restoreSession` has the same shape and is untouched, noted on the board.
+- **Rotations from before this change.** On each start, the first full pass archives, once each, an old session from a `done` entry that is still `ended`, in no space, the same native session as logged, with its successor in the list, and with no row from the person after the rotation. A row of the person's that has no time counts as use. Each such archive adds an `archived` entry, and a session with one is never archived by this pass again, so one the person restores stays restored. An old session already archived by someone else is settled the same way, quietly. On the daily data that is 6 quiet entries at the first start. The pass reads the view again only when it archived something. A full pass with no queued work is the once-a-minute check through an open window.
+- **A read-only dry run on the daily data** (`archive-dryrun.py`, reading ids, states and message times only, rerun under the final rule where an untimed row of the person's counts as use) finds 8 `done` entries. 6 old sessions are already archived. The first start would archive exactly two, 「Claude 3」 (93479857) and 「Claude 2」 (1a5651d6), the two in the person's screenshot. 「Claude 秘书 · 新」 has no rotation entry and is not touched; it is the steward's to archive, as the task says.
+
+**Checks.**
+- Node tests (`queue-dispatch.test.cjs`, 19 new, 8 of them from one table; 1 changed):
+  - a done rotation archives the old session, logs it after `done` and says so in the space, with no pause; a kept one is not even tried;
+  - one in the native background when the rotation finishes is left alone;
+  - a failed archive leaves the rotation done;
+  - a late archive is logged when it finishes, and its restore stays;
+  - the automatic archive refuses a session in a space without starting to leave it;
+  - a missing session leaves no gate;
+  - an earlier rotation is archived once and never after a restore;
+  - a session someone else archived (during the handoff, or before the startup check) is settled quietly, with no line in the spaces, and a later restore stays;
+  - eight cases are not archived, each proving the pass ran and nothing was tried: used after, running again, back in a space, successor gone, another native session, `kept`, an untimed row of the person's, and archived once then restored.
+  - The existing "a rotation is announced and logged" test now expects `requested, done, archived`.
+- Breakages: 21 (Q1–Q21), each caught by the test meant for it (`mutate-15.log`, `mutate-16.log`; raw output in `mutate-out/`). Three of them (Q2, Q13, Q16) first passed on a second layer of protection, so those tests now also assert that nothing was tried.
+- Real window, real Claude 2.1.319 (the script's qualified range, `NAW_CLAUDE_BIN`), loopback model. `scripts/test-queue-native.cjs`, after its real rotation, checks:
+  - the log's `archived` entry after `done`;
+  - the window's archived flag;
+  - the old session under 归档 (opened as the person opens it) and not among the sessions;
+  - the space's archived line.
+
+**Independent review.** A fresh read-only session (`review-archive-1-result.md`): PASS_WITH_NOTES, no blocking finding. It confirmed that the other readers of `rotation-log.jsonl` (succession of grants, the integrator, steward and butler following a rotation) take only `done` and `kept`, and that the notice is true in both languages. Its notes:
+1. An archive that outlived the 60-second wait was not logged, so a restore could be undone at a restart. It is now logged when it finishes.
+2. The rotation-time archive had no state condition. It now only follows NAW's own stop.
+3. A row of the person's with no time counted as "before". It now counts as use.
+4. The stated reason for the automatic form (avoiding the global pause) held only for the test fake. Reworded above; the form stays for the in-space refusal.
+5. Concurrency: each archive can hold the dispatcher up to 60 s; N = 2 on the daily data.
+6. The pre-existing gate fault: fixed in `archiveSession`, noted for `restoreSession`.
+
+**Left open.**
+- An old session archived this way shows its own last state in 归档 (已结束); nothing there says NAW archived it.
+- A crash between NAW's own archive being saved and its log line: the next start settles it quietly as `by: 'other'`, so that log line names the wrong actor. The restore still stays.
+- `restoreSession` keeps the gate fault described above.
+- Any fault while reading the snapshot before the gate is said as "session missing", including a malformed space membership that used to say the membership could not be checked.
+
+The same session read the increment (`review-archive-2-result.md`): PASS_WITH_NOTES. It confirmed that a late archive is logged exactly once and never after a close, that `stoppedHere` implies a done outcome, and that the gate change holds. Its notes:
+1. A quit during the archive wait logged `done` twice at the next start. The archive now runs after the rotation is saved; a test checks the saved state when the archive starts.
+2. An error inside the late callback was unhandled. It is now caught; the archive stands.
+3. The dry run still used the old untimed-row rule. Rerun under the new one: still exactly the two (`archive-dryrun-2.log`).
+4. A session the person archived meanwhile was logged and announced as NAW's archive. It no longer is (Q18).
+
+Its third read of the increment (`review-archive-3-result.md`) was PASS_WITH_NOTES: the move after `save()` leaves the kept path, the refresh and the late callback's `doneEntry` as they were. Its new note: a session someone else archived (at the rotation, or already archived when the startup check meets it) left no settling line, so a later restore could be undone once, with a notice claiming NAW archived it. Both places now settle it quietly (Q19–Q21, and two tests: archived by the person during the handoff, and an earlier rotation's old session archived by someone else then restored). Its fourth read (`review-archive-4-result.md`, PASS_WITH_NOTES) confirmed that fix on both paths, and that the quiet entries persist and add nothing to the rotation chains; its notes on the docs and one test title are applied above. The review of this change ends here.

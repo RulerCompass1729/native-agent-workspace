@@ -771,7 +771,7 @@ class RoomState {
   }
   rotationEvent(ids, phase, oldName, detail, receiptId) {
     if (receiptId !== undefined && (typeof receiptId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(receiptId))) throw Error('Invalid rotation receipt');
-    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', needsTrust: 'notice.rotation.needsTrust', trustTimedOut: 'notice.rotation.trustTimedOut', trustTimeoutUnconfirmed: 'notice.rotation.trustTimeoutUnconfirmed', trustCleanupUnconfirmed: 'notice.rotation.trustCleanupUnconfirmed', trustStateInvalid: 'notice.rotation.trustStateInvalid', trustStateUnknown: 'notice.rotation.trustStateUnknown' };
+    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', archived: 'notice.rotation.archived', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', needsTrust: 'notice.rotation.needsTrust', trustTimedOut: 'notice.rotation.trustTimedOut', trustTimeoutUnconfirmed: 'notice.rotation.trustTimeoutUnconfirmed', trustCleanupUnconfirmed: 'notice.rotation.trustCleanupUnconfirmed', trustStateInvalid: 'notice.rotation.trustStateInvalid', trustStateUnknown: 'notice.rotation.trustStateUnknown' };
     for (const id of ids) {
       try {
         this.metadata(id);
@@ -1138,14 +1138,21 @@ class RoomState {
     const merge = shared && this.metadata(room).merge;
     if (merge && (!merge.imported || merge.joins.length !== merge.batch.memberIds.length || ['preparing', 'joining', 'failed', 'undoing'].includes(merge.stage))) throw uiError("error.room.mergeStepsUnconfirmed");
   }
-  archiveSession(client, id, label) {
+  // automatic: NAW's own archive of a session in no space (an old session a rotation replaced). It never leaves
+  // or pauses a space on its own: a session still in one is refused, and nothing waits on a pause.
+  archiveSession(client, id, label, { automatic = false } = {}) {
     if (typeof id !== 'string' || !id || id.length > 100) return Promise.reject(uiError("error.main.invalidSession"));
     if (this.gates.has(id)) return Promise.reject(uiError("error.room.sessionUpdating"));
+    // Read before the gate: a session the snapshot does not hold must not leave its gate set.
+    let spaces;
+    try { spaces = typeof client.snapshot === 'function' ? roomIds(client.snapshot().sessions.find(s => s.id === id)) : DEFAULT_ROOM_ID; }
+    catch { return Promise.reject(uiError("error.sessionMissing")); }
     this.gates.add(id);
-    return this.enqueue(client, async () => {
+    const action = async () => {
       if (this.value.archivedSessions.includes(id)) return;
       const snapshot = await client.call('initial'), session = snapshot.sessions.find(s => s.id === id);
       if (!session) throw uiError("error.sessionMissing");
+      if (automatic && roomIds(session).length) throw uiError('error.room.sessionRestoreChanged');
       let plan = Object.hasOwn(this.value.sessionArchives, id) ? this.value.sessionArchives[id] : null;
       const pending = plan?.rooms.find(r => !r.done);
       if (plan && ((session.nativeId ?? null) !== plan.nativeId || plan.detached ||
@@ -1192,7 +1199,8 @@ class RoomState {
           JSON.stringify(restorePlacement(current)) !== JSON.stringify(plan.checkpoint)) throw uiError('error.room.sessionRestoreChanged');
       plan = { ...plan, detached: restorePlacement(current) };
       this.update({ archivedSessions: [...this.value.archivedSessions, id], sessionArchives: { ...this.value.sessionArchives, [id]: plan } });
-    }, id, typeof client.snapshot === 'function' ? roomIds(client.snapshot().sessions.find(s => s.id === id)) : DEFAULT_ROOM_ID).finally(() => this.gates.delete(id));
+    };
+    return (automatic ? this.serial(action) : this.enqueue(client, action, id, spaces)).finally(() => this.gates.delete(id));
   }
   restoreSession(client, id, label) {
     if (!orderId(id)) return Promise.reject(uiError('error.main.invalidSession'));

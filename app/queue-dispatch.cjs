@@ -1184,7 +1184,8 @@ function validLogEntry(entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
     return false;
   }
-  if (!['requested', 'done', 'kept', 'failed', 'waiting'].includes(entry.event) || !Number.isFinite(entry.time)) {
+  // archived: an old session NAW archived after its done rotation (only done and kept link sessions).
+  if (!['requested', 'done', 'kept', 'failed', 'waiting', 'archived'].includes(entry.event) || !Number.isFinite(entry.time)) {
     return false;
   }
   if (entry.noticeId !== undefined && !validTrustReceipt(entry.noticeId)) return false;
@@ -1898,6 +1899,88 @@ class QueueDispatcher {
     return `${name}（${shortId(id)}）`;
   }
 
+  // The archive the person uses from the sidebar (keeps every record, undone from 归档), in its automatic form,
+  // which refuses a session still in a space. Tidiness only: a failure leaves it where it was. An archive that
+  // finishes after the wait gave up is recorded then (`late`), so a restore is never undone at a later start.
+  // Resolves true (archived here), 'already' (archived by someone else: settle it quietly) or false.
+  async archiveOld(id, label, late) {
+    // Archived already (by the person, meanwhile): not NAW's to announce, but settled so a restore stays.
+    if ((this.roomState.value.archivedSessions || []).includes(id)) {
+      return 'already';
+    }
+    let waited = false;
+    const archived = this.roomState.archiveSession(this.client, id, label, { automatic: true })
+      .then(() => (this.roomState.value.archivedSessions || []).includes(id), () => false);
+    archived.then(done => {
+      if (done && waited && !this.closed) {
+        try {
+          late();
+        } catch {
+          // The archive stands; only its late line was not written.
+        }
+      }
+    });
+    try {
+      return await withTimeout(archived, CALL_TIMEOUT_MS, 'archive-timeout');
+    } catch {
+      waited = true;
+      return false;
+    }
+  }
+
+  // The log line that settles an archive for good, and the line in its spaces. One someone else made is
+  // settled quietly (`by: 'other'`): no line in the spaces, which would claim NAW archived it.
+  recordArchive(entry, oldLabel, newLabel, other = false) {
+    this.appendLog('archived', { roomIds: entry.spaces, oldId: entry.old.id, oldNativeId: entry.old.nativeId, name: entry.old.name,
+      newId: entry.new.id, newNativeId: entry.new.nativeId, newName: entry.new.name }, other ? { by: 'other' } : {});
+    if (!other) {
+      this.roomState.rotationEvent(entry.spaces, 'archived', oldLabel, newLabel);
+    }
+  }
+
+  // Old sessions rotated before NAW archived them (or whose archive did not happen then), once each:
+  // only one that is still ended, in no space, unchanged by the person since its rotation, with its
+  // successor still there. Its archive is logged, so one the person restores is never archived again.
+  async archiveHandedOff(snapshot) {
+    const sessions = new Map(snapshot.sessions.map(session => [session.id, session]));
+    const settled = new Set();
+    let archived = 0;
+    for (const entry of this.log) {
+      if (entry.event === 'archived') {
+        settled.add(entry.old.id);
+      }
+    }
+    // A person's row with no time cannot be placed before the rotation: it counts as use.
+    const usedSince = (session, time) => (session.messages || []).some(m =>
+      (m.role === 'user' || m.role === 'human' || m.origin === 'human') && !(Number(m.time) <= time));
+    for (const entry of this.log) {
+      if (this.closed || entry.event !== 'done' || !entry.new || settled.has(entry.old.id)) {
+        continue;
+      }
+      const old = sessions.get(entry.old.id);
+      if (old && old.archived) {
+        // Archived by someone else since: settled quietly, so a later restore stays.
+        settled.add(old.id);
+        this.recordArchive(entry, '', '', true);
+        continue;
+      }
+      if (!old || old.state !== 'ended' || roomIds(old).length || !sessions.has(entry.new.id) ||
+          (entry.old.nativeId && old.nativeId !== entry.old.nativeId) || usedSince(old, entry.time)) {
+        continue;
+      }
+      settled.add(old.id);
+      const oldLabel = this.label(old.id, entry.old.name), newLabel = this.label(entry.new.id, entry.new.name || entry.old.name);
+      const result = await this.archiveOld(old.id, oldLabel, () => this.recordArchive(entry, oldLabel, newLabel));
+      if (result === true) {
+        archived += 1;
+      }
+      if (result) {
+        this.recordArchive(entry, oldLabel, newLabel, result === 'already');
+      }
+    }
+    return archived;
+  }
+
   save() {
     for (const [oldId, record] of Object.entries(this.rotations)) {
       if (!this.faultedRotations.has(oldId)) this.holdTrustSuccessor(oldId, record);
@@ -2190,6 +2273,13 @@ class QueueDispatcher {
     this.dirty = false;
     this.lastFullPass = now;
     let current = this.view();
+    if (!this.handedOffArchived) {
+      this.handedOffArchived = true;
+      // Read again only when something changed: an ordinary pass adds no snapshot read.
+      if (await this.archiveHandedOff(current.snapshot)) {
+        current = this.view();
+      }
+    }
     if (rotating || recoveringTrust) {
       await this.advanceRotations(current.snapshot, current.now);
       current = this.view();
@@ -3008,7 +3098,7 @@ class QueueDispatcher {
       }
       // NAW cannot see a prompt typed but not sent in the native terminal: keep the screen first,
       // and keep the old session if its screen cannot be saved.
-      let unsaved = false;
+      let unsaved = false, stoppedHere = false;
       if (live && !inUse && old.terminalInputPending === true) {
         try {
           record.terminalFile = await this.saveTerminal(oldId);
@@ -3033,6 +3123,7 @@ class QueueDispatcher {
           inUse = true;
         } else {
           await withTimeout(this.client.call('stop', oldId), CALL_TIMEOUT_MS, 'stop-timeout');
+          stoppedHere = true;
         }
       }
       if (!record.oldId) {
@@ -3048,7 +3139,7 @@ class QueueDispatcher {
       if (unsaved) {
         extra.reason = 'terminal-unsaved';
       }
-      this.appendLog(outcome, record, extra);
+      const doneEntry = this.appendLog(outcome, record, extra);
       this.roomState.rotationEvent(record.roomIds, inUse ? 'oldKept' : 'done', oldLabel, newLabel);
       let notice = outcome;
       if (outcome === 'done' && record.terminalFile) {
@@ -3068,6 +3159,13 @@ class QueueDispatcher {
         this.rotations[record.newId] = { phase: 'kept', keptAt: now, oldNativeId: record.newNativeId, name: record.newName || record.name, roomIds: record.roomIds, successorOf: oldId };
       }
       this.save();
+      // Handed over and stopped here: out of the person's list of sessions too (11-12, 「独立会话里还有不需要的会话就自动归档吧」).
+      // After the rotation is saved, so a quit while it waits leaves it to the next start's check. One that was not
+      // running (ended, or in the native background) is left to that check too.
+      const result = stoppedHere && await this.archiveOld(oldId, oldLabel, () => this.recordArchive(doneEntry, oldLabel, newLabel));
+      if (result) {
+        this.recordArchive(doneEntry, oldLabel, newLabel, result === 'already');
+      }
       await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
       await this.broadcast();
     }

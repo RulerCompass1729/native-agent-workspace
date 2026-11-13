@@ -417,6 +417,8 @@ class FakeClient extends EventEmitter {
   }
   async call(method, ...args) {
     this.calls.push([method, ...args]);
+    // The room's own archive reads the backend's sessions this way.
+    if (method === 'initial') return this.snapshot();
     const session = this.state.sessions.find(s => s.id === args[0]);
     if (method === 'dispatch') {
       this.sequence += 1;
@@ -1079,7 +1081,8 @@ test('a rotation is announced and logged with every session id and native id, an
   for (const line of lines) {
     events.push(line.event);
   }
-  assert.deepEqual(events, ['requested', 'done']);
+  // The person, 11-12: the replaced session is archived after a done rotation, and that is logged too.
+  assert.deepEqual(events, ['requested', 'done', 'archived']);
   assert.deepEqual(lines[1].old, { id: 'a', nativeId: 'native-a', name: 'Agent a' });
   assert.equal(lines[1].new.id, newId);
   assert.equal(lines[1].new.nativeId, `native-${newId}`);
@@ -2829,4 +2832,222 @@ test('B2 shared warning: an unreadable primary plus shared metadata damage still
   assert.equal(other.queue.find(item => item.id === f.queued).status, 'queued');
   assert.deepEqual(other.events.map(event => event.id), f.priorEvents);
   assert.equal(fs.readFileSync(f.room.file, 'utf8'), f.damagedBytes);
+});
+
+// The person, 11-12: 「如果独立会话里还有不需要的会话就自动归档吧」 (rotation-auto-archive.md).
+async function rotateOnce(t, extra = {}) {
+  const setup = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })], extra);
+  fakeMembership(setup.room, setup.client);
+  // The rotation is saved as settled before the archive starts: a quit while it waits leaves nothing to redo.
+  const archive = setup.room.archiveSession.bind(setup.room);
+  setup.savedAtArchive = [];
+  setup.room.archiveSession = (...args) => {
+    setup.savedAtArchive.push(Object.keys(JSON.parse(fs.readFileSync(path.join(setup.dir, 'queue-dispatch.json'), 'utf8')).rotations));
+    return archive(...args);
+  };
+  setup.room.queueAdd('next task', 'a');
+  await setup.dispatcher.start();
+  await setup.dispatcher.schedule();
+  setup.client.reply('a', '交接：分支 abc。');
+  await setup.dispatcher.schedule(); // the successor starts
+  await setup.dispatcher.schedule(); // it gets the handoff
+  await setup.dispatcher.schedule(); // the old one leaves, stops and is archived
+  return { ...setup, newId: setup.client.state.sessions[1].id };
+}
+const rotationLog = dir => fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+const eventKeys = room => room.value.events.map(event => event.uiMessage?.key);
+
+test('a done rotation archives the old session it stopped, logs it and says so in the space', async t => {
+  const { room, client, dir, newId, savedAtArchive } = await rotateOnce(t);
+  assert.deepEqual(savedAtArchive, [[newId]], 'only the successor rests in the saved rotations when the archive starts');
+  assert.deepEqual(client.calls.find(call => call[0] === 'stop'), ['stop', 'a']);
+  assert.deepEqual(room.value.archivedSessions, ['a'], 'the old session, not its successor');
+  assert.equal(client.calls.filter(call => call[0] === 'pause').length, 0, 'the automatic archive pauses nothing');
+  const log = rotationLog(dir), doneAt = log.findIndex(entry => entry.event === 'done'), archivedAt = log.findIndex(entry => entry.event === 'archived');
+  assert.ok(doneAt >= 0 && archivedAt > doneAt, 'the archive is logged after the done rotation');
+  assert.equal(log[archivedAt].old.id, 'a'); assert.equal(log[archivedAt].new.id, newId);
+  const keys = eventKeys(room);
+  assert.ok(keys.indexOf('notice.rotation.archived') > keys.indexOf('notice.rotation.done'));
+  // Archiving is undone from the sidebar, as for any session.
+  await room.restoreSession(client, 'a', 'Agent a');
+  assert.deepEqual(room.value.archivedSessions, []);
+});
+
+test('an old session kept because it is in use is not archived', async t => {
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
+  fakeMembership(room, client);
+  const tried = []; const archive = room.archiveSession.bind(room);
+  room.archiveSession = (...args) => { tried.push(args[1]); return archive(...args); };
+  room.queueAdd('next task', 'a');
+  await dispatcher.start(); await dispatcher.schedule();
+  client.reply('a', '交接：分支 abc。');
+  await dispatcher.schedule(); await dispatcher.schedule();
+  advance(1000); dispatcher.noteHuman('a'); await dispatcher.schedule();
+  assert.deepEqual(tried, [], 'not even tried');
+  assert.deepEqual(room.value.archivedSessions, []);
+  assert.ok(!eventKeys(room).includes('notice.rotation.archived'));
+});
+
+test('an archive that fails leaves the old session where it was and the rotation done', async t => {
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
+  fakeMembership(room, client);
+  room.archiveSession = async () => { throw Error('archive refused'); };
+  room.queueAdd('next task', 'a');
+  await dispatcher.start(); await dispatcher.schedule();
+  client.reply('a', '交接：分支 abc。');
+  await dispatcher.schedule(); await dispatcher.schedule(); await dispatcher.schedule();
+  assert.deepEqual(client.calls.find(call => call[0] === 'stop'), ['stop', 'a']);
+  assert.deepEqual(room.value.archivedSessions, []);
+  const keys = eventKeys(room);
+  assert.ok(keys.includes('notice.rotation.done')); assert.ok(!keys.includes('notice.rotation.archived'));
+});
+
+// Already in the list from rotations before this: the daily log's own shape (done, old ended, successor running).
+function handedOffSetup(t, sessions, entries) {
+  const { dir, room } = roomSetup(t);
+  fs.writeFileSync(path.join(dir, 'rotation-log.jsonl'), entries.map(entry => JSON.stringify(entry)).join('\n') + '\n', { mode: 0o600 });
+  const client = new FakeClient(sessions);
+  const make = () => {
+    // No queued work: a full pass is the once-a-minute check through an open window, as in the daily app.
+    const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, clients: () => client, now: () => NOW, settleMs: 0, tickMs: 3600000 });
+    t.after(() => dispatcher.close());
+    return dispatcher;
+  };
+  return { dir, room, client, make };
+}
+const doneEntry = (old, next, time = NOW - 10 * HOUR, extra = {}) => ({ time, event: 'done', spaces: ['shared'],
+  old: { id: old, nativeId: `native-${old}`, name: `Agent ${old}` }, new: { id: next, nativeId: `native-${next}`, name: `Agent ${next}` }, ...extra });
+const ended = (id, extra = {}) => member(id, { state: 'ended', roomIds: [], roomId: null, messages: [{ id: `${id}-1`, role: 'user', text: 'before', time: NOW - 20 * HOUR }], ...extra });
+
+test('rotations from before are archived once: an ended old session in no space, untouched since, its successor still there', async t => {
+  const { dir, room, client, make } = handedOffSetup(t, [ended('old1'), member('new1')], [doneEntry('old1', 'new1')]);
+  const first = make();
+  await first.start(); await first.schedule();
+  assert.deepEqual(room.value.archivedSessions, ['old1']);
+  const logged = rotationLog(dir).filter(entry => entry.event === 'archived');
+  assert.equal(logged.length, 1); assert.equal(logged[0].old.id, 'old1'); assert.equal(logged[0].new.id, 'new1');
+  assert.ok(eventKeys(room).includes('notice.rotation.archived'));
+  // The person restores it: a later start never archives it again.
+  await room.restoreSession(client, 'old1', 'Agent old1');
+  first.close();
+  const second = make();
+  await second.start(); await second.schedule();
+  assert.deepEqual(room.value.archivedSessions, []);
+  assert.equal(rotationLog(dir).filter(entry => entry.event === 'archived').length, 1);
+});
+
+for (const [name, sessions, entries] of [
+  ['used by the person after its rotation', [ended('old1', { messages: [{ id: 'm', role: 'user', text: 'later', time: NOW - 5 * HOUR }] }), member('new1')], [doneEntry('old1', 'new1')]],
+  ['running again', [ended('old1', { state: 'idle' }), member('new1')], [doneEntry('old1', 'new1')]],
+  ['back in a space', [ended('old1', { roomIds: ['shared'], roomId: 'shared' }), member('new1')], [doneEntry('old1', 'new1')]],
+  ['its successor gone', [ended('old1')], [doneEntry('old1', 'new1')]],
+  ['continued as another native session', [ended('old1', { nativeId: 'native-other' }), member('new1')], [doneEntry('old1', 'new1')]],
+  ['kept, not done', [ended('old1'), member('new1')], [{ ...doneEntry('old1', 'new1'), event: 'kept' }]],
+  ['the person\'s row has no time', [ended('old1', { messages: [{ id: 'm', role: 'user', text: 'when?' }] }), member('new1')], [doneEntry('old1', 'new1')]],
+  ['already archived once and restored', [ended('old1'), member('new1')], [doneEntry('old1', 'new1'), { ...doneEntry('old1', 'new1', NOW - 9 * HOUR), event: 'archived' }]],
+]) test(`a rotation from before is not archived: ${name}`, async t => {
+  const { room, make } = handedOffSetup(t, sessions, entries);
+  const dispatcher = make();
+  let passes = 0; const original = dispatcher.archiveHandedOff.bind(dispatcher);
+  dispatcher.archiveHandedOff = snapshot => { passes++; return original(snapshot); };
+  const tried = []; const archive = room.archiveSession.bind(room);
+  room.archiveSession = (...args) => { tried.push(args[1]); return archive(...args); };
+  await dispatcher.start(); await dispatcher.schedule();
+  assert.equal(passes, 1, 'the pass ran, once');
+  assert.deepEqual(tried, [], 'not even tried');
+  assert.deepEqual(room.value.archivedSessions, []);
+  assert.ok(!eventKeys(room).includes('notice.rotation.archived'));
+});
+test('NAW\'s automatic archive pauses nothing and refuses a session still in a space; through a client without per-space calls the person\'s archive pauses first', async t => {
+  const { room } = roomSetup(t);
+  const client = new FakeClient([ended('gone'), member('inspace')]);
+  const paused = [];
+  const original = client.call.bind(client);
+  client.call = async (method, ...args) => { if (method === 'pause') { paused.push(args); return; } return original(method, ...args); };
+  await room.archiveSession(client, 'gone', 'Agent gone', { automatic: true });
+  assert.deepEqual(room.value.archivedSessions, ['gone']); assert.deepEqual(paused, [], 'nobody intervened, so nothing is paused');
+  await assert.rejects(room.archiveSession(client, 'inspace', 'Agent inspace', { automatic: true }), error => error.uiMessage?.key === 'error.room.sessionRestoreChanged');
+  assert.equal(client.calls.filter(call => call[0] === 'moveMembership').length, 0, 'it never starts leaving the space');
+  assert.deepEqual(room.value.archivedSessions, ['gone']); assert.deepEqual(paused, []);
+  await room.restoreSession(client, 'gone', 'Agent gone');
+  await room.archiveSession(client, 'gone', 'Agent gone');
+  assert.deepEqual(paused, [['gone']], 'the person\'s own archive is unchanged');
+});
+test('an old session that was not running when its rotation finished is left to the next start\'s check', async t => {
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
+  fakeMembership(room, client);
+  const tried = []; const archive = room.archiveSession.bind(room);
+  room.archiveSession = (...args) => { tried.push(args[1]); return archive(...args); };
+  room.queueAdd('next task', 'a');
+  await dispatcher.start(); await dispatcher.schedule();
+  client.reply('a', '交接：分支 abc。');
+  await dispatcher.schedule(); await dispatcher.schedule();
+  // Sent to the native background before NAW finishes: NAW does not stop it, so it does not archive it either.
+  client.state.sessions[0].state = 'background';
+  await dispatcher.schedule();
+  assert.equal(client.calls.filter(call => call[0] === 'stop').length, 0);
+  assert.deepEqual(tried, [], 'not even tried');
+  assert.deepEqual(room.value.archivedSessions, []);
+});
+
+test('an archive that finishes after the wait gave up is still logged, so a restore stays restored', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { dir, room, client, make } = handedOffSetup(t, [ended('old1'), member('new1')], [doneEntry('old1', 'new1')]);
+  let release; const gate = new Promise(resolve => { release = resolve; });
+  const archive = room.archiveSession.bind(room);
+  room.archiveSession = async (...args) => { await gate; return archive(...args); };
+  const dispatcher = make();
+  const started = dispatcher.start();
+  for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(60000);
+  await started;
+  assert.equal(rotationLog(dir).filter(entry => entry.event === 'archived').length, 0, 'not yet');
+  release();
+  for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(room.value.archivedSessions, ['old1']);
+  assert.equal(rotationLog(dir).filter(entry => entry.event === 'archived').length, 1, 'logged when it finished');
+  room.archiveSession = archive;
+  await room.restoreSession(client, 'old1', 'Agent old1');
+  dispatcher.close();
+  const again = make(); await again.start(); await again.schedule();
+  assert.deepEqual(room.value.archivedSessions, [], 'a restored session stays restored');
+});
+
+test('archiving a session the snapshot does not hold leaves no gate behind', async t => {
+  const { room } = roomSetup(t);
+  const client = new FakeClient([member('present')]);
+  await assert.rejects(room.archiveSession(client, 'missing', 'Missing'), error => error.uiMessage?.key === 'error.sessionMissing');
+  await assert.rejects(room.archiveSession(client, 'missing', 'Missing'), error => error.uiMessage?.key === 'error.sessionMissing', 'not "updating" the second time');
+});
+test('archiveOld reports a session the person archived meanwhile as \'already\', without trying to archive it', async t => {
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [ended('gone')]);
+  room.update({ archivedSessions: ['gone'] });
+  let tried = 0; const archive = room.archiveSession.bind(room); room.archiveSession = async (...args) => { tried++; return archive(...args); };
+  assert.equal(await dispatcher.archiveOld('gone', 'Agent gone', () => {}), 'already');
+  assert.equal(tried, 0);
+});
+test('a rotation whose old session the person archived during the handoff settles quietly', async t => {
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start(); await dispatcher.schedule();
+  client.reply('a', '交接：分支 abc。');
+  await dispatcher.schedule(); await dispatcher.schedule();
+  room.update({ archivedSessions: ['a'] });
+  await dispatcher.schedule();
+  const archived = rotationLog(dir).filter(entry => entry.event === 'archived');
+  assert.equal(archived.length, 1); assert.equal(archived[0].by, 'other');
+  assert.ok(!eventKeys(room).includes('notice.rotation.archived'), 'no line claims NAW archived it');
+});
+test('an earlier rotation\'s old session someone else archived is settled quietly; restoring it later sticks', async t => {
+  const { dir, room, client, make } = handedOffSetup(t, [ended('old1'), member('new1')], [doneEntry('old1', 'new1')]);
+  room.update({ archivedSessions: ['old1'] });
+  const first = make(); await first.start(); await first.schedule();
+  const archived = rotationLog(dir).filter(entry => entry.event === 'archived');
+  assert.equal(archived.length, 1); assert.equal(archived[0].by, 'other');
+  assert.ok(!eventKeys(room).includes('notice.rotation.archived'));
+  await room.restoreSession(client, 'old1', 'Agent old1');
+  first.close();
+  const second = make(); await second.start(); await second.schedule();
+  assert.deepEqual(room.value.archivedSessions, [], 'the restore stays');
 });
