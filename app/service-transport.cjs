@@ -60,6 +60,8 @@ function createWriter(socket, { maxBytes = 2 * RESPONSE_BYTES, maxFrames = 1024 
   }
   return {
     sendFrame,
+    // Whether a frame of this kind waits unsent, so that the next one would replace it.
+    queued: key => queue.some(entry => entry.key === key),
     send(value, key = null) {
       let frame;
       try { frame = encodeFrame(value); } catch { socket.destroy(); return false; }

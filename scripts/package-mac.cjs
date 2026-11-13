@@ -202,6 +202,7 @@ async function build() {
       'space-merge.cjs',
       'startup.html',
       'startup.js',
+      'state-delta.cjs',
       'state-push.cjs',
       'steward-record.cjs',
       'steward-role.cjs',

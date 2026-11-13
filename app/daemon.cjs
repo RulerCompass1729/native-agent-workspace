@@ -9,6 +9,7 @@ const { NativeHost } = require('./adapters.cjs');
 const { Workspace } = require('./workspace.cjs');
 const { PeerLeases, PeerRunner, CAPABILITY, DIRECTED, identity: peerIdentity } = require('./peer-handoffs.cjs');
 const { readFrames, REQUEST_BYTES, encodeFrame, createWriter } = require('./service-transport.cjs');
+const { createStateEncoder, sendState } = require('./state-delta.cjs');
 const { roomId: validRoomId, isMember, membershipRevision } = require('./collaboration-spaces.cjs');
 const { displayMessage } = require('./ui-locale.js');
 const gitWorktree = require('./git-worktree.cjs');
@@ -37,6 +38,8 @@ async function main() {
   const host = new NativeHost(privateDir, dataDir, binding); await host.start();
   // A sibling, never inside the legacy shared cwd (including NAW_WORKSPACE).
   const workspace = new Workspace(host, dataDir, `${path.resolve(defaultWorkspace)}-sessions`); const clients = new Set(), writers = new Map();
+  // Clients that take state deltas (state-delta.cjs), each with the states its next frame may build on.
+  const deltas = new Map(), stateEncoder = createStateEncoder();
   workspace.peerLeases = new PeerLeases(workspace);
   const peerRunner = workspace.peerRunner = new PeerRunner(workspace, dataDir);
   const send = (client, value) => writers.get(client)?.send(value);
@@ -44,6 +47,11 @@ async function main() {
   const mobileCapabilities = ['mobile-access.cjs', 'mobile-session.cjs'].every(name => fs.existsSync(path.join(__dirname, name))) ? ['humanMobileV1', 'humanMobilePreparedV1'] : [];
   const broadcast = (event, data) => {
     if (!clients.size) return;
+    if (event === 'state') {
+      try { sendState(stateEncoder, [...clients].map(client => ({ writer: writers.get(client), delta: deltas.get(client) || null })).filter(target => target.writer), data); }
+      catch { for (const client of clients) client.destroy(); }
+      return;
+    }
     let frame;
     try { frame = encodeFrame({ event, data }); }
     catch { for (const client of clients) client.destroy(); return; }
@@ -219,14 +227,14 @@ async function main() {
     readFrames(client, REQUEST_BYTES, request => {
       if (!authenticated) {
         if (request.token !== token || request.protocol !== 1 || typeof request.owner !== 'string' || request.owner.length > 100) { client.destroy(); return; }
-        authenticated = true; owner = request.owner; clients.add(client); clearTimeout(authTimer); send(client, { ready: true }); return;
+        authenticated = true; owner = request.owner; clients.add(client); if (request.stateDelta === 1) deltas.set(client, { sent: null, waiting: null }); clearTimeout(authTimer); send(client, { ready: true }); return;
       }
       if (!Array.isArray(request.args) || request.args.length > (request.method === 'run' ? 7 : 5) || !Number.isInteger(request.id)) { client.destroy(); return; }
       Promise.resolve().then(() => request.backgroundActor
         ? background.run(request.backgroundActor, () => dispatch(owner, request.method, request.args, client))
         : dispatch(owner, request.method, request.args, client)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。', uiMessage: error.message ? displayMessage(error.uiMessage) : uiError('error.main.operationIncomplete').uiMessage }));
     });
-    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); workspace.scopedOutboxDisconnected(client); workspace.peerLeases.disconnected(client); if (mobileCapabilities.length) workspace.mobileDisconnected(client); if (!shuttingDown) workspace.release(owner); });
+    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); deltas.delete(client); workspace.scopedOutboxDisconnected(client); workspace.peerLeases.disconnected(client); if (mobileCapabilities.length) workspace.mobileDisconnected(client); if (!shuttingDown) workspace.release(owner); });
   });
   await new Promise(resolve => server.listen(endpoint, resolve)); fs.chmodSync(endpoint, 0o600);
   const connection = path.join(dataDir, 'connection.json'); const tmp = `${connection}.tmp`;

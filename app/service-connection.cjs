@@ -1,6 +1,7 @@
 const fs = require('node:fs'), net = require('node:net'), path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { readFrames, RESPONSE_BYTES } = require('./service-transport.cjs');
+const { rebuildState } = require('./state-delta.cjs');
 const { uiError } = require('./ui-errors.cjs');
 const { displayMessage } = require('./ui-locale.js');
 const background = require('./background-operation.cjs');
@@ -8,7 +9,15 @@ const background = require('./background-operation.cjs');
 class ServiceClient extends EventEmitter {
   constructor(socket) {
     super(); this.socket = socket; this.sequence = 0; this.pending = new Map(); this.receipts = new WeakMap(); let received = 0;
+    // The last whole state, which a delta frame builds on (state-delta.cjs).
+    let state = null;
     readFrames(socket, RESPONSE_BYTES, m => {
+      if (m.event === 'state') {
+        if (m.delta === 1) {
+          try { m = { ...m, data: rebuildState(state, m.data) }; } catch { socket.destroy(); return; }
+        }
+        state = m.data;
+      }
       const value = m.event ? m.data : m.value;
       if (value && typeof value === 'object') this.receipts.set(value, ++received);
       if (m.ready) this.emit('ready');
@@ -57,7 +66,8 @@ async function connectService(dataDir, owner) {
     const timer = setTimeout(() => { socket.destroy(); reject(uiError('error.serviceUnresponsive')); }, 2500);
     client.once('ready', () => { clearTimeout(timer); resolve(); });
     socket.once('error', () => { clearTimeout(timer); reject(uiError('error.serviceConnect')); });
-    socket.once('connect', () => socket.write(JSON.stringify({ protocol: 1, owner, token: info.token }) + '\n'));
+    // stateDelta: this client rebuilds delta state frames. An older service ignores it and sends whole ones.
+    socket.once('connect', () => socket.write(JSON.stringify({ protocol: 1, owner, token: info.token, stateDelta: 1 }) + '\n'));
   });
   return client;
 }
