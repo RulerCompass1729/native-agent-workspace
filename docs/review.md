@@ -13017,3 +13017,20 @@ From the mid-turn task (`.local/handoff-20261112/claude2-midturn.md`): 「一条
 - A handler that never finishes keeps idle windows open until the app closes.
 
 **Independent review.** A fresh read-only session (`review-release-1-result.md`): PASS_WITH_NOTES, no blocking finding. It confirmed that nothing is sent twice, by any path (same operation id, deferred settle, receipt refresh, restart, a second queue to the same busy member), and that the actor match is the one the final receipt uses. One note was a code inconsistency, now fixed and tested: a delivery that could not be read at the end settled `complete`, where the ordinary path says `unconfirmed` (R8). The others are worded above: what close does, a later refusal answered `awaiting-native` first, `run`, self-revocation, the 24-hour archive and a handler that never ends. Its second read (`review-release-2-result.md`, PASS_WITH_NOTES) confirmed that fix and the wording; the test count is corrected. The review of this change ends here.
+
+## Claude Code 2.1.323 qualification (2026-11-12)
+
+**Why.** The vendor's launcher now points at 2.1.323. NAW starts new sessions on the qualified 2.1.322 beside it for at most seven days (`claude-pin.cjs`); from 11-19 those sessions would run an unqualified 2.1.323 and lose the queue, mid-turn delivery, capacity recovery and the display extensions.
+
+**Change.** Exact `2.1.323` joins every list that ends in `2.1.322` in `claude-bridge/hooks/register.js` (blocks, root bootstrap, model, usage, narration, turn records, context transitions, queue, queued-prompt links, capacity, queued display link) and both mid-turn checks; `claude-pin.cjs` QUALIFIED matches. Media, abort and direct inline/prompt input stay closed, as on 2.1.322. The compat refresh recognises the exact transformed main 64876c8 hook. Window scripts that assert a version (`test-native-midturn`, `test-native-wake-midturn`, `test-native-queue`) admit 2.1.323, and each of their journeys below passed on it; `test-native-addressed` and `test-native-claude-pin` are unchanged and were not run.
+
+**Evidence (author-run, private evidence folder `claude-2.1.323-20261112`; real binaries, sandboxed loopback fixture, zero paid).**
+- Declarations embedded in both binaries: 658 → 673 blocks, 15 added, none removed. The APIs and events this mod uses differ only in comments plus an optional `ToolInfo.inputSchema`; the engine now raises `tool.list` and `mcp.connect` itself, which the bridge does not hook. AssistantMessage and ToolProgress render props are unchanged.
+- The mod's own tests under `claude plugin test`: 61/0 on 2.1.322 and on 2.1.323.
+- Mid-turn append probes (`-p`: after, during, parallel tools; TUI: after, parallel): the appended row is carried by the same turn's next request right after the tool result(s), as on 2.1.322; TUI keeps it in place, no extra turn.
+- 529 with retries off: identical journal error row and StopFailure keys on both; `turn.complete` reason `error`.
+- Child-command environment names (`env | cut -d= -f1`): the same 34 names on both, so `platform.cjs`'s strip list still covers them.
+- Real window (real Electron, real 2.1.323, real bridge), one run each, all pass: mid-turn solo and shared, automatic message mid-turn, queue solo, queue shared, shared model switch.
+- Tests: 15 related files 606/0; full `node --test app/tests/*.test.cjs` 6501/0. An unknown later version (2.1.324) and suffixed strings stay closed in every gate test.
+
+**Not covered.** No paid or real-provider turn; installed daily-app acceptance belongs to the integrator.

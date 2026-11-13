@@ -80,7 +80,7 @@ test('319 uses the native post-switch model without changing unrelated control c
   assert.ok(rows.every(row => row.kind === 'control' && row.id === 'control:model'));
 });
 
-for (const version of ['2.1.321', '2.1.322']) test(`${version} cold start combines qualified display metadata with blocks, model, root, queue and capacity`, async () => {
+for (const version of ['2.1.321', '2.1.322', '2.1.323']) test(`${version} cold start combines qualified display metadata with blocks, model, root, queue and capacity`, async () => {
   const f = await startup(version);
   assert.equal(f.calls[0]?.route, '/root-bind');
   assert.equal(f.modelReads.length, 1);
@@ -92,7 +92,7 @@ for (const version of ['2.1.321', '2.1.322']) test(`${version} cold start combin
   assert.ok(f.calls.some(c => c.route === '/next'));
 });
 
-for (const version of ['2.1.319-beta', '2.1.320', '2.1.321-beta', '2.1.322+unqualified', '2.1.323']) test(`unqualified model metadata ${version} remains off`, async () => {
+for (const version of ['2.1.319-beta', '2.1.320', '2.1.321-beta', '2.1.322+unqualified', '2.1.324']) test(`unqualified model metadata ${version} remains off`, async () => {
   const f = await startup(version);
   assert.equal(f.calls.some(c => c.route === '/root-bind'), false);
   assert.equal(f.modelReads.length, 0);
@@ -107,16 +107,17 @@ test('the native runner admits exact319 only in its solo model-only path', () =>
   for (const inlineTrial of [false, true]) assert.throws(() => vm.runInNewContext(guard, { assert, nativeVersion: '2.1.319 (Claude Code)', inlineTrial, noModelServer: false }));
 });
 
-// B11 rollout, 2026-11-10: the queue journey passed on real 2.1.322 through the loopback fixture (solo and shared).
-test('the native runner admits exact322 in its queue journey, and no neighbouring or unverified version', () => {
+// B11 rollout, 2026-11-10: the queue journey passed on real 2.1.322 through the loopback fixture (solo and shared);
+// 2026-11-12: the same three journeys passed on real 2.1.323.
+test('the native runner admits exact322 and exact323 in its queue journey, and no neighbouring or unverified version', () => {
   const runner = fs.readFileSync(path.join(__dirname, '../../scripts/test-native-queue.cjs'), 'utf8');
   const guard = runner.split('\n').find(line => line.startsWith('assert.match(nativeVersion,'));
   assert.ok(guard);
   // inlineTrial false with noModelServer false is the queue journey (solo or shared) and the shared model-only
-  // journey; each of the three passed on real 2.1.322 (rollout-status.md, 2026-11-10).
+  // journey; each of the three passed on real 2.1.322 (rollout-status.md, 2026-11-10) and on real 2.1.323 (2026-11-12).
   const queue = version => vm.runInNewContext(guard, { assert, nativeVersion: version, inlineTrial: false, noModelServer: false });
-  for (const version of ['2.1.322 (Claude Code)', '2.1.322', '2.1.311 (Claude Code)']) queue(version);
-  for (const version of ['2.1.322-beta (Claude Code)', '2.1.3220 (Claude Code)', '2.1.321 (Claude Code)', '2.1.323 (Claude Code)', '2.1.318 (Claude Code)', '2.2.322 (Claude Code)']) assert.throws(() => queue(version), version);
+  for (const version of ['2.1.322 (Claude Code)', '2.1.322', '2.1.323 (Claude Code)', '2.1.323', '2.1.311 (Claude Code)']) queue(version);
+  for (const version of ['2.1.322-beta (Claude Code)', '2.1.3220 (Claude Code)', '2.1.323-beta (Claude Code)', '2.1.3230 (Claude Code)', '2.1.321 (Claude Code)', '2.1.324 (Claude Code)', '2.1.318 (Claude Code)', '2.2.322 (Claude Code)']) assert.throws(() => queue(version), version);
   assert.throws(() => vm.runInNewContext(guard, { assert, nativeVersion: '2.1.322 (Claude Code)', inlineTrial: true, noModelServer: false }), 'the inline journey stays on 312');
   assert.throws(() => vm.runInNewContext(guard, { assert, nativeVersion: '2.1.322 (Claude Code)', inlineTrial: false, noModelServer: true }), 'the model-only journey keeps its own list');
 });

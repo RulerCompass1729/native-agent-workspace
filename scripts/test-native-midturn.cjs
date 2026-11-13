@@ -3,7 +3,7 @@ const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage } = require('./room-input.cjs');
-// Real Electron + real Claude CLI 2.1.322 + the real bridge; canned responses on loopback (B11 fixture).
+// Real Electron + real Claude CLI 2.1.322 or 2.1.323 + the real bridge; canned responses on loopback (B11 fixture).
 // Question: does a message queued while Claude works reach the running turn at its next tool boundary,
 // once, after that tool's result, with the GUI saying so (stored, then read), and no extra turn?
 // NAW_MIDTURN_SHARED=1 sends it from the collaboration space (the steward's route): the delivery is
@@ -20,8 +20,8 @@ const shared = process.env.NAW_MIDTURN_SHARED === '1';
 const evidence = process.env.NAW_EVIDENCE_DIR;
 const located = executable('claude'), binary = located && fs.realpathSync(located); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-// Mid-turn delivery is measured on exact 2.1.322 only (.local/work/midturn-20261112/work.md in the author's lane).
-assert.match(nativeVersion, /^2\.1\.322(?=\s|$)/, 'Mid-turn delivery is qualified on exact 2.1.322 only');
+// Mid-turn delivery is measured on exact 2.1.322 (.local/work/midturn-20261112/work.md in the author's lane) and 2.1.323.
+assert.match(nativeVersion, /^2\.1\.32[23](?=\s|$)/, 'Mid-turn delivery is qualified on exact 2.1.322 and 2.1.323 only');
 const common = testScratch.childProcess.execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('GUI slot occupied; no GUI launched.'); process.exit(75); }
@@ -110,7 +110,7 @@ async function cleanup() {
     await inlineRecipient(page, before.id);
   }
   await until(async () => (await page.locator(send).innerText()) === '工具结束时送进本轮 ↑', 'The waiting action says it delivers at the next tool step');
-  checks.push('A working 2.1.322 session offers 工具结束时送进本轮');
+  checks.push(`A working ${nativeVersion.split(' ')[0]} session offers 工具结束时送进本轮`);
   const sentAt = Date.now();
   if (shared) await fillRoomMessage(page, STEER); else await page.locator(input).fill(STEER);
   await page.locator(send).click();
