@@ -1164,3 +1164,62 @@ test('a held message is not sent once the person ends or moves the butler role, 
     assert.equal(f.source.wakeHoldTimer, null, act);
   }
 });
+
+// Item 3 (12ced1d6) and option A (42e60ba3) together, as the integration review of the two asked (2026-11-13): a
+// message keeps its sender's identity from when it was registered. One held from before the person spoke is not sent,
+// even once a later turn has read the person's words; one the turn registered after reading them is held and sent like
+// any other.
+async function personToButler(t) {
+  const oldNow = Date.now; let now = oldNow(); Date.now = () => now; t.after(() => { Date.now = oldNow; });
+  const f = await fixture(t, 'claude'), s = f.source.get(f.a), b = f.target.get(f.b), requests = [];
+  b.roomIds = []; b.roomId = null;
+  fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: f.b, nativeId: b.nativeId } }), { mode: 0o600 });
+  Object.defineProperty(f.ra, 'queueAvailable', { value: true, configurable: true });
+  f.ra.nativeMidturnAppend = true;
+  const uuid = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  f.ra.submission.request = async text => { requests.push(text); return { mode: 'append', uuid: uuid(requests.length), turnId: f.ra.turnId }; };
+  const say = async text => { const tag = await f.source.queue(f.a, text, 'source-owner'); return { tag, uuid: uuid(requests.length) }; };
+  const read = ({ tag, uuid: id }) => f.ra.submission.emit('read', { tag, uuid: id, turnId: f.ra.turnId });
+  const begin = id => { f.start(id); s.state = 'working'; };
+  const send = (text, callId) => Promise.resolve().then(() => f.ra.addressedCall({ nativeId: s.nativeId, turnId: f.ra.turnId, promptId: f.ra.liveTurn.promptId, callId }, { recipient_id: f.b, message: text }));
+  const reply = () => { const tag = f.writes.at(-1).tag; f.rb.emit('state', 'idle'); f.rb.emit('complete', { tag, text: 'An ordinary reply.', background: 0, scheduled: 0, fleetPending: 0, stopHookActive: false }); };
+  const settle = async () => { for (let i = 0; i < 12; i++) await tick(); };
+  const rows = () => s.messages.filter(m => m.wake);
+  // The butler has just taken one message: the next within a minute is held for its limit.
+  f.ra.emit('state', 'idle'); begin('first'); await send('First.', 'call-first'); await f.finish(); reply();
+  assert.equal(f.writes.length, 1);
+  now += 10000;
+  return { ...f, s, say, read, begin, send, settle, rows, advance: ms => { now += ms; } };
+}
+test('a message held from an earlier turn is not sent once the person speaks into a later turn, even after that turn reads the words (items 3 and option A)', async t => {
+  const wake = require('../session-wake.cjs');
+  const f = await personToButler(t);
+  f.begin('second'); assert.equal((await f.send('Second.', 'call-second')).status, 'staged'); await f.finish();
+  const held = f.rows().at(-1);
+  assert.equal(held.wake.status, 'held');
+  f.begin('third');
+  f.read(await f.say('Do not send that one.'));
+  f.advance(60000); wake.retryHeld(f.source); await f.settle();
+  assert.equal(f.writes.length, 1, 'the held message is not sent');
+  assert.deepEqual([held.wake.status, held.wake.cancellation?.code], ['cancelled', 'source-identity-changed']);
+  assert.equal(held.text, '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nSecond.');
+  await f.finish();
+  assert.equal(f.writes.length, 1);
+});
+test('a message the turn registers after reading the person is held for the butler\'s limit and sent once it allows; one registered before is not (items 3 and option A)', async t => {
+  const wake = require('../session-wake.cjs');
+  const f = await personToButler(t);
+  f.begin('second');
+  assert.equal((await f.send('Before the person spoke.', 'before')).status, 'staged');
+  f.read(await f.say('Send the butler the new plan.'));
+  assert.equal((await f.send('The new plan.', 'after')).status, 'staged');
+  await f.finish();
+  const [, before, after] = f.rows();
+  assert.deepEqual([before.wake.status, before.wake.cancellation?.code], ['cancelled', 'source-identity-changed']);
+  assert.deepEqual([after.wake.status, after.wake.epoch], ['held', 1]);
+  assert.equal(f.writes.length, 1, 'nothing more before the limit');
+  f.advance(50000); wake.retryHeld(f.source); await f.settle();
+  assert.equal(f.writes.length, 2);
+  assert.match(f.writes[1].text, /\nThe new plan\.$/);
+  assert.equal(after.wake.status, 'submitted');
+});

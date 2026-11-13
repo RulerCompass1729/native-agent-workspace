@@ -13488,3 +13488,11 @@ Left open:
 - A 529 row in a wording the bridge does not know is still not continued, as before.
 - If a turn's unclassified 403 row was already reported and a known-format 529 row of the same turn is saved only afterwards, the scheduled continuation is dropped and none is scheduled for the 529; the base code would have continued it. That needs native to write a known-format error row after the turn's end. It ends on the side of not continuing (delta review note 3).
 - The words are new and user-visible; the person reviews the zh and en screenshots before this merges.
+
+## Held butler messages and the person's read words, tested together — 2026-11-13
+
+The integration review of 42e60ba3 (option A, held messages) with 12ced1d6 (item 3, a turn may send again once it has read the person's words) passed with a note: no unit test runs the two together. Both are on main since 07f8b3a9. Two tests in `app/tests/session-wake.test.cjs` now do, with a Claude sender, the real adapter's read event and the designated butler as recipient. No code change.
+- A message held from an earlier turn is not sent once the person speaks into a later turn, even after that turn reads the words: cancelled at the retry as `source-identity-changed`.
+- In one turn, a message registered before the person spoke is cancelled at the turn's end; one registered after the turn read the words is held for the butler's limit and sent once the limit allows.
+
+Checks: both pass; the session-wake file passes 96/0. Each test catches its own break and not the other's: with `retryHeld` no longer checking the sender's identity the first fails; with `retryHeld` dropping messages registered after a read the second fails.
