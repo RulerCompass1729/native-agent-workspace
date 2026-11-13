@@ -13017,3 +13017,24 @@ From the mid-turn task (`.local/handoff-20261112/claude2-midturn.md`): 「一条
 - A handler that never finishes keeps idle windows open until the app closes.
 
 **Independent review.** A fresh read-only session (`review-release-1-result.md`): PASS_WITH_NOTES, no blocking finding. It confirmed that nothing is sent twice, by any path (same operation id, deferred settle, receipt refresh, restart, a second queue to the same busy member), and that the actor match is the one the final receipt uses. One note was a code inconsistency, now fixed and tested: a delivery that could not be read at the end settled `complete`, where the ordinary path says `unconfirmed` (R8). The others are worded above: what close does, a later refusal answered `awaiting-native` first, `run`, self-revocation, the 24-hour archive and a handler that never ends. Its second read (`review-release-2-result.md`, PASS_WITH_NOTES) confirmed that fix and the wording; the test count is corrected. The review of this change ends here.
+
+## The butler may message up to four sessions in one turn (wake proposal, item 2, 2026-11-12)
+
+The board decision of 11-12 16:44: 「②只给指定大管家（每收件方 1 条、最多 4 个），其他 agent 不变」. Before, any session could register one automatic message per native turn, so the butler could not hand work to several agents that delivered at the same time.
+
+What changed: the session the person designated as the butler (大管家), usable and in no space, may register one automatic message to each of up to four different recipients in one turn. A second to the same recipient, or a fifth recipient, is refused with its reason (「要说的合成一条」). Every other session still registers one a turn. Calls under way count, a call that registered nothing does not, and a refused row counts (each message is tried once). The designation is read from the same record main.cjs keeps, only when a second message comes up. If NAW cannot confirm at the turn's end that the sender still is the butler (revoked, changed, unreadable, archived, in a space, native context pending), only the turn's first registered message goes; the others are cancelled with that reason. The recipient's own limits (3 in a row, 60 s) are unchanged. The chooser intro the person reads before designating and the tool description say so. Commits 05c6840 and 9f31bcb.
+
+Review findings fixed (9f31bcb): the butler check also requires the native context not to be pending, as `stewardCaller` does; the cancel text says NAW could not confirm the role instead of claiming it ended; the tool description says "tried once"; the intro says 自动消息; two stale comments.
+
+Kept as notes:
+- The role is checked when the turn ends, not again when each recipient takes its message; a revocation in that short window can still let messages 2–4 through.
+- If a save fails partway through the turn's end, later rows read 已登记 until the next turn withdraws them; they cannot be sent.
+- A non-butler's refused second attempt now reads the rotation log once.
+- A recipient, the butler included, still takes one automatic message per 60 s. Three agents reporting to the butler at once would see two refused. The proposal kept this limit; it goes to the person as a separate question.
+
+Evidence:
+- `session-wake.test.cjs`, `steward-entry.test.cjs`, `legacy-input.test.cjs`: 151/151 at 9f31bcb. Five of the new tests fail on 64876c8; the native-context case fails without its check.
+- Full suite on the tree of 05c6840: 6483/6484; the one failure, `background-conversation.test.cjs:537` (a repeated refused background-control call summarised under another id), is in code this change does not touch and passes alone and on 64876c8.
+- `scripts/test-native-wake-steward.cjs` (real Electron, Claude 2.1.322, loopback responses, no paid model call) passed at 05c6840 and at 9f31bcb: the butler, designated through NAW, messaged two sessions in one turn and both received theirs once as their own turn; its repeat to the first was refused and reached nobody.
+
+Independent review (one read-only session, 2 rounds): `PASS_WITH_NOTES` at 05c6840, `PASS` on the delta at 9f31bcb. The worktree fingerprints were unchanged before and after each round. The CLI reported USD 1.65 and 1.89. It was given `--model fable` and reported `claude-opus-5-5`.
