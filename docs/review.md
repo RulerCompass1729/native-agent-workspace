@@ -13215,3 +13215,23 @@ Acceptance (echo p90 at most 20 ms and at most 1% of keys over 50 ms, three runs
 Independent review (fresh read-only session, Glob/Grep/Read only, no MCP, 23 turns, reported USD 1.43): PASS. Notes: (1) rows computed from the clock at snapshot time (an operator grant's expiry) are carried like messages, so in a delta client such a flag can lag until the next full digest; (2) an unnamed edit that is later reverted to its earlier value could leave a delta client wrong for good, which needs an unnamed edit in the first place; (3) the protocol test's timing could be flaky on a loaded machine (3 of 3 passed here).
 
 Not covered: a session that streams while it is itself very large (a 31k-message Codex starting again) still has its own messages digested in full on every broadcast. Paths other than streaming digest everything as before.
+
+## The butler reads only what is new: stewardEvents (2026-11-13, Claude · NAW 开发 · 续)
+
+Why: the person, 2026-11-09: 「我希望 NAW 自己可以监控自己的 agent，并通过自带的 agent（aka 大管家）来进行汇报」; 11-11: 「super-agent 的架构应该是优先级最高的」. NAW already records business events with no model (`butler-ingress.cjs` into `butler-ledger.jsonl`: a failed or blocked queue item, a decision asked, a delivery, a space whose queue ran empty), but the designated butler had no way to read them; it compared the board and queues with scripts of its own.
+
+What changed:
+- `butler-ledger.cjs` `eventsAfter(position, limit = 50)`: the events after a position, oldest first, with `through` (the position to read on from) and `more`. A position is `<origin>:<sequence>`; origin is a hash of the ledger's first record, so it survives a restart and names no session. A position from another ledger (a new profile, a replaced file), past the newest event or malformed is refused with `BUTLER_POSITION_STALE`, and the reader starts again from the beginning. Reading writes nothing and leaves the separate butler's pending events as they are.
+- `main.cjs` `register('stewardEvents')`: only the designated butler (`stewardCaller`) reads; anyone else is refused before the ledger is read. Each read is a step in 「大管家的记录」 (`stewardRecord.around`). Answered by this desktop (`local`).
+- `background-control.cjs`: catalog entry; `stewardEvents` is a private read, so what was read comes back in the same answer and is never kept in the operation log.
+- `ui-messages.js`: three agent-facing refusals (butler only, position not from this record, record unreadable), zh and en.
+
+Payload fields are those `butler-ingress.cjs` already records from queue outcomes (task text, the decision question, the failure reason, space and member names): queue text and delivery records, which the butler may see.
+
+Checks:
+- `steward-events.test.cjs` 9/9: the manager's three conditions (an old position reads on after a restart and from another session; a session that is not the butler is refused; a position at the newest event returns nothing with the same `through`), a backlog read in pieces with nothing lost or repeated, a replaced record refused, the real handler from `main.cjs`, and nothing read kept in any file of the operation log's folder. `steward-entry.test.cjs` now ends its cut of the designation handler where this one starts.
+- Twelve mutations (no butler gate, gate after the read, no origin check, no newest check, `through` falling back to 0, a repeated event, origin following the newest record, `more` never set, the limit ignored, a stale position reported as unreadable, the read kept in the operation log, a read taking events from the separate butler): 12 caught out of 12.
+- Full suite 6563/0.
+- Window (hidden Electron, real service with the synthetic native fixture, the actual stdio `workspace_control` tool, 0 native programs, 0 model calls): `scripts/test-steward-events.cjs` PASS, six checks, including the restart and 88 other profile files that keep nothing read.
+
+Not covered: waking the butler when an event arrives (it reads when it is already in a turn); that would start model turns and needs a decision first.

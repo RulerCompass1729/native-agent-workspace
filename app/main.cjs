@@ -1138,7 +1138,7 @@ function register(name, handler) {
       }
       // Never silently fall back to an old backend that cannot retain actor
       // attribution or preserve the person's draft for these input paths.
-      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom']);
+      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents']);
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
       // handler below still authenticates the secretary and person-only actions.
@@ -1935,6 +1935,16 @@ async function boot() {
       const message = String(error?.message ?? ''), uiMessage = message ? uiLocale.displayMessage(error?.uiMessage) : uiError('error.main.operationIncomplete').uiMessage;
       return { duty: { state: 'not-sent', error: { message: message || uiError('error.main.operationIncomplete').message, ...(uiMessage ? { uiMessage } : {}) } } };
     }
+  });
+  // What the butler reads to report to the person only what is new (the person, 2026-11-09: 「我希望 NAW 自己可以监控
+  // 自己的 agent，并通过自带的 agent（aka 大管家）来进行汇报」): the business events NAW already records without a
+  // model (deliveries, decisions, failures, blocked steps, a space whose queue ran empty), after the position its last
+  // read returned (butler-ledger.cjs eventsAfter). Only the designated butler, usable and in no space (stewardCaller);
+  // the step is in its record like its other calls. It only reads.
+  register('stewardEvents', async (c, position = null) => {
+    if (!(await stewardCaller(c))) throw uiError('error.steward.eventsButlerOnly');
+    try { return butlerIngress.ledger.eventsAfter(position); }
+    catch (error) { throw uiError(error?.code === 'BUTLER_POSITION_STALE' ? 'error.steward.eventsPosition' : 'error.steward.eventsUnavailable'); }
   });
   // B6: the person's own actions on an integration handoff: retry one delivery or everything
   // under one reason, say that a waiting handoff is dealt with (with or without a retry), answer
