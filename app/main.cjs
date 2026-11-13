@@ -678,6 +678,10 @@ function sendToPage(context, channel, ...data) {
 // with sequence 0, which needs no reply. Snapshots to a ready page are also spaced by STATE_PUSH_WAIT, so
 // changes in quick succession are one redraw; a single change still goes at once (UI lag, 2026-11-12).
 const STATE_PUSH_WAIT = 250;
+// While the person types in a window, its snapshot waits for a pause this long, and goes at most this long
+// after the previous one (state-push.cjs).
+const STATE_PUSH_TYPING_QUIET = 400;
+const STATE_PUSH_TYPING_HOLD = 1500;
 function pushState(context, display) {
   if (context.background || context.win.isDestroyed()) {
     return;
@@ -701,7 +705,7 @@ function bindStatePush(context) {
       if (!context.win.isDestroyed()) {
         context.win.webContents.send('workspace:state', value, sequence);
       }
-    }, { wait: STATE_PUSH_WAIT });
+    }, { wait: STATE_PUSH_WAIT, quiet: STATE_PUSH_TYPING_QUIET, maxHold: STATE_PUSH_TYPING_HOLD });
   };
   context.win.webContents.on('did-start-loading', () => {
     context.statePush?.close();
@@ -794,6 +798,16 @@ const HUMAN_SESSION_METHODS = new Set(['prepareInput', 'input', 'draft', 'send',
 // A terminal's own replies (focus, cursor reports) are not the person typing.
 function terminalReplyOnly(method, args) {
   return method === 'input' && queueRules.terminalReplyOnly(args[1]);
+}
+// A key the person typed in a window's page: the composer's draft, the terminal (not its own replies), or a
+// space composer's text, which comes with every viewState. State for that page then waits for a pause.
+function typingKey(name, view, args) {
+  if (name === 'draft') return true;
+  if (name === 'input') return !terminalReplyOnly(name, args);
+  const next = args[0];
+  if (name !== 'viewState' || !next || typeof next !== 'object') return false;
+  if (!next.roomViews || typeof next.roomViews !== 'object') return typeof next.sharedDraft === 'string' && next.sharedDraft !== (view?.sharedDraft ?? '');
+  return Object.entries(next.roomViews).some(([id, room]) => typeof room?.sharedDraft === 'string' && room.sharedDraft !== (view?.roomViews?.[id]?.sharedDraft ?? ''));
 }
 async function startQueueDispatcher() {
   if (queueDispatcher || process.env.NAW_QUEUE_DISPATCH === 'off') {
@@ -1143,6 +1157,8 @@ function register(name, handler) {
   ipcMain.handle(`workspace:${name}`, async (event, ...args) => {
     const context = windows.get(event.sender.id);
     if (!context || event.senderFrame !== event.sender.mainFrame || !trusted(event.senderFrame.url)) throw new Error('Unexpected IPC source');
+    // Read before the handler records the new view. A window without a bound has nothing to hold.
+    if (context.statePush && typingKey(name, context.view, args)) context.statePush.typed();
     try { return { ok: true, value: await handler(context, ...args) }; }
     catch (error) { return { ok: false, error: error.message || '操作未完成。', uiMessage: error.message ? uiLocale.displayMessage(error.uiMessage) : uiError('error.main.operationIncomplete').uiMessage }; }
     // The page reads what its action changed once this reply arrives: the state waiting for its time goes first.

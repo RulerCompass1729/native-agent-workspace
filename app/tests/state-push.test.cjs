@@ -590,3 +590,160 @@ test('main: a session renamed while a snapshot waits is not renamed back when th
   h.tick(250);
   assert.deepEqual(h.sent.at(-1).value, { name: 'Renamed', history: 2 });
 });
+
+// Typing (UI lag, 2026-11-12): every key made a new full state, and each snapshot that reached the page
+// made the next key wait for it. While the person types, a snapshot waits for a pause, within a bound.
+function typingClock() {
+  const sent = [], clock = fakeClock();
+  const push = createStatePush((value, sequence) => { sent.push({ value, sequence, at: clock.timers.now() }); }, { wait: 250, quiet: 400, maxHold: 1500, ...clock.timers });
+  return { sent, push, clock };
+}
+
+test('while the person types, snapshots go at most once per 1.5 s, and the newest arrives after the typing stops', () => {
+  const { sent, push, clock } = typingClock();
+  push.push('start');
+  push.acknowledged(1);
+  let produced = 0;
+  // Nine keys a second for three seconds; each key and a streaming reply both make a new state.
+  for (let t = 0; t < 3000; t += 110) {
+    push.typed();
+    push.push('v' + ++produced);
+    clock.tick(55);
+    push.push('v' + ++produced);
+    clock.tick(55);
+    const last = sent.at(-1);
+    if (push.status().unacknowledged === last.sequence) push.acknowledged(last.sequence);
+  }
+  const during = sent.slice(1);
+  assert.ok(during.length >= 1 && during.length <= 3, `${during.length} snapshots while typing`);
+  // Each goes when its hold is up (the clock moves in 55 ms steps here), not later.
+  for (let i = 1; i < sent.length; i++) assert.ok(sent[i].at - sent[i - 1].at >= 1500 && sent[i].at - sent[i - 1].at <= 1500 + 110, `One per hold while typing: ${sent.map(s => s.at)}`);
+  clock.tick(1500);
+  const last = sent.at(-1);
+  if (push.status().unacknowledged === last.sequence) push.acknowledged(last.sequence);
+  clock.tick(1500);
+  assert.equal(sent.at(-1).value, 'v' + produced, 'The last state arrives');
+  assert.equal(push.status().waiting, false);
+  assert.equal(clock.pending(), 0);
+});
+
+test('a pause in typing lets the waiting snapshot go 400 ms after the last key', () => {
+  const { sent, push, clock } = typingClock();
+  push.push('a');
+  push.acknowledged(1);
+  clock.tick(1000);
+  push.typed();
+  push.push('b');
+  assert.deepEqual(sent.map(s => s.value), ['a'], 'A key just now: the snapshot waits');
+  clock.tick(399);
+  assert.deepEqual(sent.map(s => s.value), ['a']);
+  clock.tick(1);
+  assert.deepEqual(sent.map(s => s.value), ['a', 'b']);
+});
+
+test('a key typed while a snapshot waits for its 250 ms extends the wait to the pause', () => {
+  const { sent, push, clock } = typingClock();
+  push.push('a');
+  push.acknowledged(1);
+  clock.tick(100);
+  push.push('b');
+  clock.tick(100);
+  push.typed();
+  clock.tick(50);
+  assert.deepEqual(sent.map(s => s.value), ['a'], 'The 250 ms are up, but a key came 50 ms ago');
+  clock.tick(349);
+  assert.deepEqual(sent.map(s => s.value), ['a']);
+  clock.tick(1);
+  assert.deepEqual(sent.map(s => s.value), ['a', 'b']);
+});
+
+test('typing never holds the page\'s own action: what waits goes before its reply', () => {
+  const { sent, push, clock } = typingClock();
+  push.push('a');
+  push.acknowledged(1);
+  push.typed();
+  push.push('b');
+  assert.equal(push.flushNow(), true);
+  assert.deepEqual(sent.map(s => s.value), ['a', 'b']);
+  push.typed();
+  push.push('c');
+  assert.equal(push.flushNow(), false, 'One in transit');
+  push.acknowledged(2);
+  assert.deepEqual(sent.map(s => s.value), ['a', 'b', 'c'], 'Acknowledged: the hurried one goes without the typing wait');
+  assert.equal(clock.pending(), 0);
+});
+
+test('without keys the bound behaves as before: a single change goes at once', () => {
+  const { sent, push, clock } = typingClock();
+  assert.equal(push.push('a'), true);
+  push.acknowledged(1);
+  clock.tick(250);
+  assert.equal(push.push('b'), true);
+  assert.deepEqual(sent.map(s => s.value), ['a', 'b']);
+});
+
+test('a clock set back while typing holds a snapshot no longer than the hold', () => {
+  const { sent, push, clock } = typingClock();
+  push.push('a');
+  push.acknowledged(1);
+  push.typed();
+  clock.tick(-10000);
+  push.typed();
+  push.push('b');
+  clock.tick(1500);
+  assert.deepEqual(sent.map(s => s.value), ['a', 'b']);
+  assert.equal(clock.pending(), 0);
+});
+
+test('a clock set back with no keys holds a snapshot no longer than the 250 ms wait', () => {
+  const { sent, push, clock } = typingClock();
+  push.push('a');
+  push.acknowledged(1);
+  clock.tick(-10000);
+  push.push('b');
+  clock.tick(249);
+  assert.deepEqual(sent.map(s => s.value), ['a']);
+  clock.tick(1);
+  assert.deepEqual(sent.map(s => s.value), ['a', 'b'], 'Without keys, the typing hold plays no part');
+  assert.equal(clock.pending(), 0);
+});
+
+test('main reports keys to the bound: the draft, the person\'s terminal input, a space composer\'s text', () => {
+  const start = mainSource.indexOf('function terminalReplyOnly(method, args)');
+  const source = mainSource.slice(start, mainSource.indexOf('async function startQueueDispatcher()', start));
+  const sandbox = { queueRules: require('../queue-dispatch.cjs') };
+  vm.createContext(sandbox);
+  vm.runInContext(source, sandbox);
+  const typingKey = vm.runInContext('typingKey', sandbox);
+  const view = { sharedDraft: 'shared text', roomViews: { shared: { sharedDraft: 'shared text' }, s2: { sharedDraft: 'hello' } } };
+  assert.equal(typingKey('draft', view, ['id', 'abc']), true);
+  assert.equal(typingKey('input', view, ['id', 'a']), true);
+  assert.equal(typingKey('input', view, ['id', '\x1b[I']), false, 'A terminal\'s focus report is not a key');
+  assert.equal(typingKey('input', view, ['id', '\x1b[12;40R']), false, 'Nor its cursor report');
+  assert.equal(typingKey('viewState', view, [{ selected: 'x', mode: 'chat', sharedDraft: 'shared text', roomViews: { shared: { sharedDraft: 'shared text' }, s2: { sharedDraft: 'hello!' } } }]), true, 'Typed in a space');
+  assert.equal(typingKey('viewState', view, [{ selected: 'x', mode: 'chat', sharedDraft: 'hello', roomViews: { shared: { sharedDraft: 'shared text' }, s2: { sharedDraft: 'hello' } } }]), false,
+    'A scroll or selection in another space carries its unchanged text');
+  assert.equal(typingKey('viewState', {}, [{ selected: 'x', mode: 'chat', roomViews: { s3: { sharedDraft: 'new' } } }]), true, 'A first key in a space never seen');
+  assert.equal(typingKey('viewState', view, [{ selected: 'x', mode: 'chat', sharedDraft: 'shared text!' }]), true, 'A page without roomViews');
+  assert.equal(typingKey('viewState', view, [null]), false);
+  assert.equal(typingKey('readingState', view, [{}]), false);
+  assert.equal(typingKey('send', view, ['id', 'text']), false);
+});
+
+test('main tells a window\'s bound about each key before the handler runs, and arms it with the typing wait', () => {
+  const start = mainSource.indexOf("ipcMain.handle(`workspace:${name}`");
+  const wrapper = mainSource.slice(start, mainSource.indexOf('\n}', start));
+  assert.match(wrapper, /\n    if \(context\.statePush && typingKey\(name, context\.view, args\)\) context\.statePush\.typed\(\);\n    try \{ return \{ ok: true, value: await handler\(context, \.\.\.args\) \}; \}/);
+  assert.match(mainSource, /const STATE_PUSH_TYPING_QUIET = 400;\nconst STATE_PUSH_TYPING_HOLD = 1500;/);
+  const h = mainHelpers();
+  h.context.armStatePush();
+  h.push('a');
+  h.acknowledge(1);
+  h.tick(1000);
+  h.context.statePush.typed();
+  h.push('b');
+  h.tick(399);
+  assert.deepEqual(h.sent.map(entry => entry.value), ['a']);
+  h.tick(1);
+  assert.deepEqual(h.sent.map(entry => entry.value), ['a', 'b']);
+});
