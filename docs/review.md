@@ -13240,4 +13240,6 @@ Independent review (fresh read-only session, Glob/Grep/Read only, no MCP, 13 tur
 - Note 3: delivery events carry the item's text and its READY title, queue records like the rest.
 - Note 4: the real `stewardCaller` is exercised by the window check (a session in a space refused); its other refusals (an archived butler, another native session) are shared with the other butler routes and tested there.
 
-Not covered: waking the butler when an event arrives (it reads when it is already in a turn); that would start model turns and needs a decision first. The providers' exact tool-output limits were not measured (that needs a model run); the 8 KB bound is kept well under them.
+Not covered: waking the butler when an event arrives (it reads when it is already in a turn); that would start model turns and needs a decision first. The providers' exact tool-output limits were not measured (that needs a model run). An answer of several events stays under about 8 KB, but one long event comes alone and can reach tens of KB (Chinese text near the ledger's limits). If a provider cut the middle of such an answer, the butler would lose part of that event's text, not the event: `through` comes after `events`.
+
+Delta review (same session, 7 turns, reported USD 1.08): PASS_WITH_NOTES on 98e49dca; its one note was this sentence, which had said the bound stays well under the limits.
