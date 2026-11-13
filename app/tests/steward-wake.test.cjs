@@ -346,7 +346,7 @@ test('after the person used the butler, the wake comes once their quiet time has
 });
 
 // The switch in main.cjs: the person's and the designated butler's alone.
-function handler({ butler: isButler = true, person = true, wake = { view: () => ({ on: false }), set: on => ({ on }) } } = {}) {
+function handler({ butler: isButler = true, person = true, wake = { view: () => ({ on: false }), set: on => ({ on }) }, record = null } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
   const start = source.indexOf("  register('stewardWake', async (c, on) => {");
   const end = source.indexOf("  // B6: the person's own actions on an integration handoff", start);
@@ -356,7 +356,7 @@ function handler({ butler: isButler = true, person = true, wake = { view: () => 
     register: (name, fn) => { assert.equal(name, 'stewardWake'); registered = fn; },
     stewardCaller: async c => (c.background && isButler ? { id: 'butler', name: 'Synthetic butler' } : null),
     isCurrentHumanContext: c => !c.background && person,
-    stewardWake: wake, uiError,
+    stewardWake: wake, stewardRecord: record, uiError,
   });
   vm.runInContext(source.slice(start, end), context);
   return { agent: (...args) => registered({ background: true }, ...args), person: (...args) => registered({ background: false }, ...args) };
@@ -378,6 +378,29 @@ test('only the person in their window and the designated butler turn it on or of
   const failing = code => ({ view: () => ({}), set: () => { throw Object.assign(Error('x'), { code }); } });
   await assert.rejects(handler({ wake: failing('STEWARD_WAKE_NO_BUTLER') }).person(true), refusal('error.steward.wakeNoButler'));
   await assert.rejects(handler({ wake: failing('STEWARD_WAKE_UNAVAILABLE') }).person(true), refusal('error.steward.wakeUnavailable'));
+});
+
+// The board, 11:18:30: the person's own turn-off is a line of 「大管家的记录」, so they see it beside what the butler
+// did with the switch. Only a real change by the person writes it; the butler's calls are already its steps.
+test('the person turning the switch off is one line of the record; nothing else the switch does writes one', async () => {
+  const lines = [];
+  const record = { wakeOff: () => lines.push('off') };
+  const switchOf = on => { let state = on; return { view: () => ({ on: state }), set: next => { state = next; return { on: state }; } }; };
+  assert.deepEqual(await handler({ wake: switchOf(true), record }).person(false), { on: false });
+  assert.deepEqual(lines, ['off'], 'the person turned it off');
+  await handler({ wake: switchOf(false), record }).person(false);
+  await handler({ wake: switchOf(true), record }).agent(false);
+  await handler({ wake: switchOf(false), record }).person(true);
+  await handler({ wake: switchOf(true), record }).person();
+  assert.deepEqual(lines, ['off'], 'already off, the butler\'s own call, turning it on or looking write nothing here');
+  const kept = { view: () => ({ on: true }), set: () => ({ on: true }) };
+  await handler({ wake: kept, record }).person(false);
+  assert.deepEqual(lines, ['off'], 'a switch still on after the call was not turned off');
+  const broken = { wakeOff: () => { throw Error('record full'); } };
+  assert.deepEqual(await handler({ wake: switchOf(true), record: broken }).person(false), { on: false }, 'a line that cannot be written leaves it off');
+  const unreadable = { view: () => { throw Error('x'); }, set: on => ({ on }) };
+  assert.deepEqual(await handler({ wake: unreadable, record }).person(false), { on: false });
+  assert.deepEqual(lines, ['off'], 'a switch that could not be read before is not said to have been on');
 });
 
 // The person's 「大管家的记录」 carries how the switch stands, so their window shows it beside the record (main.cjs

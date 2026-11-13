@@ -6,7 +6,9 @@
 // 「大管家的记录」 under NAW's name. From that position the butler reads exactly the new event.
 // The person's own window (the dispatch of the UI branch: 「用户自己看得见、关得掉」): the wake's sender in the butler's
 // conversation says it is an event wake, and 「大管家的记录」 shows the wake, the switch and when it last woke the
-// butler; the person turns it off and on there, and the butler sees what they set. Screenshots in Chinese and English.
+// butler; the person turns it off and on there, and the butler sees what they set. The record says in words what the
+// butler did with the switch, and has a line each time the person turned it off (the board, 2026-11-13 11:18:30).
+// Screenshots in Chinese and English.
 // Real hidden Electron UI and service; the native producer is synthetic (the background-control fixture). No native
 // program is started and no model is called. Takes the GUI test slot itself.
 const scratch = require('./fixtures/test-scratch.cjs');
@@ -181,7 +183,8 @@ async function run() {
     const d = document.getElementById('steward-record-dialog'), box = d.querySelector('.steward-record-wake'), input = box?.querySelector('input[type=checkbox]');
     return { open: d.open, switch: box ? { label: box.querySelector('label').innerText.trim(), checked: input.checked, disabled: input.disabled, status: box.querySelector('.steward-record-wake-status').innerText.trim(),
       notes: [...box.querySelectorAll('p')].filter(p => !p.hidden).map(p => p.innerText.trim()), probe: input.dataset.probe || null } : null,
-      wakes: [...d.querySelectorAll('tbody tr[data-kind=wake]')].map(tr => [...tr.cells].map(td => td.innerText.trim().replace(/\s+/g, ' '))) };
+      wakes: [...d.querySelectorAll('tbody tr[data-kind=wake]')].map(tr => [...tr.cells].map(td => td.innerText.trim().replace(/\s+/g, ' '))),
+      steps: [...d.querySelectorAll('tbody tr')].map(tr => tr.cells[1]?.innerText.trim().replace(/\s+/g, ' ')) };
   });
   const openRecord = async language => {
     await page.locator('#steward-slot .session-row').click({ button: 'right' });
@@ -224,14 +227,37 @@ async function run() {
     await shot(`wake-ui-record-${lang}`);
     const off = await flip(false, lang);
     await shot(`wake-ui-record-off-${lang}`);
+    // Opened again, the record says in words that the person turned it off, then that the butler looked; what the
+    // butler did with the switch and the events reads as words too, not as command names.
+    await closeRecord(); await openRecord(lang);
+    const steps = (await record()).steps, word = key => say(lang, `stewardRecord.step.${key}`);
+    assert.deepEqual(steps.slice(0, 2), [word('wakeCheck'), word('youWakeOff')], JSON.stringify(steps));
+    for (const key of ['wakeOn', 'events', 'wakeCheck']) assert.ok(steps.includes(word(key)), `${key}: ${JSON.stringify(steps)}`);
+    assert.equal(steps.filter(step => step === word('youWakeOff')).length, lang === 'zh' ? 1 : 2, JSON.stringify(steps));
+    assert.equal(steps.some(step => /^steward(Wake|Events)$/u.test(step)), false, JSON.stringify(steps));
+    await shot(`wake-words-record-${lang}`);
     const on = await flip(true, lang);
-    ui[lang] = { sender: say(lang, 'reading.stewardWake'), before, off: off.switch, on: on.switch };
+    ui[lang] = { sender: say(lang, 'reading.stewardWake'), before, off: off.switch, on: on.switch, steps };
     await closeRecord();
   }
-  // Left off, as the person found it before the butler turned it on.
-  await openRecord('en'); await flip(false, 'en'); await closeRecord();
-  await language('zh');
+  // Left off, as the person found it before the butler turned it on: this time the butler turns it off. That is its
+  // own step in words; the person's line is only for what they did.
+  const butlerOff = await control(butler, invoke('stewardWake', [false]));
+  assert.deepEqual([butlerOff.state, butlerOff.value.on], ['complete', false], JSON.stringify(butlerOff));
+  const personOff = () => recordLines().filter(line => line.kind === 'wakeSwitch');
+  assert.deepEqual(personOff().map(line => line.on), [false, false], 'one line for each time the person turned it off, none for the butler');
+  for (const lang of ['en', 'zh']) {
+    if (lang === 'zh') await language('zh');
+    await openRecord(lang);
+    const r = await record(), word = key => say(lang, `stewardRecord.step.${key}`);
+    assert.deepEqual([r.switch.checked, r.switch.status, r.steps[0]], [false, say(lang, 'stewardRecord.wake.off'), word('wakeOff')], JSON.stringify(r));
+    assert.equal(r.steps.filter(step => step === word('youWakeOff')).length, 2, JSON.stringify(r.steps));
+    await shot(`wake-words-butler-off-${lang}`);
+    ui[`${lang}-butler-off`] = r.steps;
+    await closeRecord();
+  }
   checks.push('In the person\'s window, in Chinese and English: the wake\'s sender in the butler\'s conversation reads as an event wake (a queue item keeps 「NAW 派活」); 「大管家的记录」 lists the wake as sent and shows the switch on with the time of the last wake; the person turns it off and on there, in place, and the butler sees each change');
+  checks.push('「大管家的记录」 says in words what the butler did with the switch and the events (turned it on, looked at it, read the events, turned it off), and has a line 「你关掉了事件唤醒」 for each time the person turned it off and none for the butler\'s own turn-off');
   save('ui', ui);
 
   assert.deepEqual(errors, []);

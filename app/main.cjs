@@ -1992,8 +1992,14 @@ async function boot() {
     if (c.background ? !(await stewardCaller(c)) : !isCurrentHumanContext(c)) throw uiError('error.steward.wakeOnly');
     if (on !== undefined && typeof on !== 'boolean') throw uiError('error.steward.wakeInvalid');
     if (!stewardWake) throw uiError('error.steward.wakeUnavailable');
-    try { return on === undefined ? stewardWake.view() : stewardWake.set(on); }
+    // The person turning it off in their window is a line of 「大管家的记录」 (the butler's own calls are steps there).
+    // Written after the switch is off: a line that cannot be written does not keep wakes on.
+    let wasOn = false; try { wasOn = !c.background && on === false && stewardWake.view().on; } catch { wasOn = false; }
+    let state;
+    try { state = on === undefined ? stewardWake.view() : stewardWake.set(on); }
     catch (error) { throw uiError(error?.code === 'STEWARD_WAKE_NO_BUTLER' ? 'error.steward.wakeNoButler' : 'error.steward.wakeUnavailable'); }
+    if (wasOn && !state.on) try { stewardRecord?.wakeOff(); } catch { /* The record shows that a line could not be written. */ }
+    return state;
   });
   // B6: the person's own actions on an integration handoff: retry one delivery or everything
   // under one reason, say that a waiting handoff is dealt with (with or without a retry), answer
