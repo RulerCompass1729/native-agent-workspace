@@ -13193,3 +13193,25 @@ From the steward's follow-up 2 (11-12): queueAdd refuses an assignee that does n
 - The steward's own instructions do not say what to do with the refusal; the text itself names the members and the no-assignee choice.
 - A member removed after the check and before the item is saved is not caught; that item then waits for its member, as every assigned item did before (the planner sends an assigned item only to that member, `planDispatch`).
 - Items already queued for a non-member, such as 87a3b4c0, are not changed by this; they are on the cancel list relayed to the person on 11-12.
+
+## The butler's default duty statement — 2026-11-12
+
+From the manager's 11-12 request: the default text in the 「设为大管家」 dialog (`steward.duty.default`, zh and en) should say that the butler looks after all of NAW, is not a space's secretary, hands work to members, and hands work off when it is sinking into execution. The manager approved the draft with three additions: recommend a secretary or integrator to the person, who alone designates them; leave each working member one or two next items; the person may still ask the butler to do something itself.
+
+**What changed.**
+- `app/ui-messages.js`: both default statements. Items 2, 3, 5 and 6 are unchanged.
+- `app/background-control.cjs`: the `spaceAction` catalog line now says who may add (the secretary or the butler) and who may cancel or resolve (the person or the butler), as `app/main.cjs` and `app/queue-secretary.cjs` enforce.
+- `app/renderer/renderer.js` (`openStewardChooser`): the statement box opens at its start. Before, it kept the scroll position from the last time, and the English chooser opened partway down.
+
+**Checks.**
+- `app/tests/steward-entry.test.cjs`: each locale's default passes `validDuty` and stays within three quarters of `DUTY_MAX`. Related tests (steward, background control, locale): 242 passed, 0 failed.
+- `scripts/test-steward-entry.cjs` (isolated window, no model): it also opens the English chooser from the session menu, checks the English default and that the box is at its start, and takes shots of the start and end of both languages. With the `scrollTop` line removed it fails on that check.
+
+**Independent review.** First round BLOCK, then PASS on the delta.
+- Blocking: 「给每个在干活的成员在队列里留一两件下一步」 alone invited the butler to make up work, while the butler may queue only the person's own requests. It now starts 「从用户要做的事里」 / "From what the person has asked for".
+- Note: the secretary and the integrator are single roles for all of NAW (one record in `app/main.cjs`), not one per space. The opening now reads 「你不是秘书…；NAW 需要秘书或集成者时…」.
+- Note: the window check was not shown to fail on the old code; the run with the line removed shows it does.
+
+**Left open.**
+- A butler already designated keeps the statement it was sent; the new default reaches it when the statement is sent again or at a handoff. A statement the person edited is not touched.
+- Whether the butler may designate a secretary or an integrator itself is for the person to decide; the text says only the person can, which is what the code does.
