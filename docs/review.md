@@ -13337,8 +13337,8 @@ Reported on the board 11-12 23:57 (Claude 2), approved by the manager 23:58: aft
 - Change: `app/room-state.cjs` `queueMarkSent` deletes `reason` and keeps `attempts`. No interface text changes.
 - Unit test `app/tests/queue-dispatch.test.cjs` ("a send after a refusal drops the refusal reason…"): fails on the old code at the first `reason` check after the send; passes on the fix. Broken variants (also dropping `attempts`; not clearing at send) fail it.
 - The first full suite on the fix failed one test: "a decision on an item that was refused once before it went out still holds its member" asserted that the refusal stays on the item through the send (independent review, 11-12). That test now checks both cases: an item sent after this change carries no reason, and an item as an older build saved it still carries one. Both hold the member. Making `holdsMember` tell the kinds apart by having a reason fails it.
-- Full suite, page bundle and queue-dispatch window on the final commit: recorded with the READY.
-- Independent review (read-only, 10 turns): PASS, no blocking findings. Notes taken: the comment above `holdsMember` (`app/queue-dispatch.cjs:29-32`) now says the stale reason is on items saved before this change; the queue still names the two unheld kinds instead of testing for any reason.
+- On a1a3cf08: full suite 6598 pass, 0 fail; page bundle rebuilt; queue-dispatch window exit 0, 13 passed, 0 native model calls, one window. The last commit changes only that comment and this section.
+- Independent review, one read-only session: PASS for 89eae8e5 (10 turns), then PASS for the test delta a1a3cf08 (5 turns), no blocking findings. Notes taken: the comment above `holdsMember` (`app/queue-dispatch.cjs:29-31`) says the stale reason is on items saved by an older build; the queue still names the two unheld kinds instead of testing for any reason.
 
 Left open:
 - Rows finished or waiting before this change keep the old reason they stored; nothing migrates them.
