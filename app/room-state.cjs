@@ -685,7 +685,9 @@ class RoomState {
     if (item.status !== 'queued') {
       throw uiError("error.queue.notQueued");
     }
+    // The refusal that put it back is over once it is sent; attempts keeps the count (queueRequeue).
     const next = { ...item, status: 'sent', sentTo: sessionId, sentAt: now, tag: null };
+    delete next.reason;
     const params = { text: queueRules.shortText(item.text), name };
     const event = { kind: 'queue', sessionId, ...uiNotice('notice.queue.dispatched', params) };
     this.queueReplace(id, itemId, next, event);

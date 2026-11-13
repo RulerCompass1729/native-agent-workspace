@@ -27,9 +27,9 @@ const OPEN_STATUSES = ['queued', 'sent', 'waiting'];
 // they held their members until the person pressed a button).
 const UNHELD_WAITING = ['person-intervened', 'no-reply'];
 // Whether an item keeps its member from more queue work: one still running, or a waiting one that
-// asks the person to decide, until the person handles it. A decision is settled without a reason but
-// can still carry an earlier refusal's (queueRequeue keeps it on the item), so the two kinds above are
-// named rather than told apart by having a reason.
+// asks the person to decide, until the person handles it. A decision is settled without a reason, but
+// one saved by an older build can still carry an earlier refusal's (queueRequeue kept it through the send;
+// queueMarkSent now drops it), so the two kinds above are named rather than told apart by having a reason.
 function holdsMember(item) {
   return Boolean(item) && (item.status === 'sent' || item.status === 'waiting' && !UNHELD_WAITING.includes(item.reason));
 }
