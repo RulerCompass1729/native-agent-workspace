@@ -425,6 +425,20 @@ test('a refusal before sending returns the item to the queue, and fails it after
   assert.equal(room.value.queue[0].status, 'failed');
 });
 
+test('a send after a refusal drops the refusal reason and keeps the count, so the finished row shows no old error', t => {
+  const { room } = roomSetup(t);
+  const id = room.queueAdd('试一下', null);
+  room.queueMarkSent('shared', id, 'agent-a', 'A', NOW);
+  room.queueRequeue('shared', id, 'Synthetic refusal', 5, 'A');
+  assert.equal(room.value.queue[0].reason, 'Synthetic refusal', 'a queued item still says why it came back');
+  room.queueMarkSent('shared', id, 'agent-a', 'A', NOW + 1);
+  assert.equal(Object.hasOwn(room.value.queue[0], 'reason'), false);
+  assert.equal(room.value.queue[0].attempts, 1);
+  room.queueSettle('shared', id, 'done', '', 'A');
+  assert.equal(room.value.queue[0].status, 'done');
+  assert.equal(Object.hasOwn(room.value.queue[0], 'reason'), false);
+});
+
 class FakeClient extends EventEmitter {
   constructor(sessions) {
     super();
