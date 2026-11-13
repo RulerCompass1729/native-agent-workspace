@@ -210,7 +210,8 @@ test('a reply that asks for a decision stops dispatch to that member until the p
 });
 
 test('a decision on an item that was refused once before it went out still holds its member', t => {
-  // The refusal stays on the item through sending and a decision's settle (independent review, 11-12).
+  // Since 11-13 the send drops the refusal (queueMarkSent); an item saved by an older build still carries it through
+  // the decision's settle (independent review, 11-12). Both hold the member.
   const { room } = roomSetup(t);
   const asked = room.queueAdd('任务一', 'a');
   room.queueMarkSent('shared', asked, 'a', 'Agent a', NOW - 60000);
@@ -221,12 +222,15 @@ test('a decision on an item that was refused once before it went out still holds
   room.queueSettle('shared', asked, 'waiting', '', 'Agent a', '需要你决定：合吗？', '合吗？');
   room.queueAdd('任务二', 'a');
   const queue = room.queueItems('shared');
-  assert.deepEqual([queue[0].status, queue[0].reason], ['waiting', 'Synthetic draft refusal']);
-  const rooms = [{ id: 'shared', name: 'Team', queue }];
-  assert.deepEqual(plan(rooms, [member('a')]), []);
-  const vacancy = rules.queueVacancies({ rooms, sessions: [member('a')], wakePolicy: AWAKE, idleSince: settledSince(['a']), now: NOW });
-  assert.equal(vacancy[0].active, false);
-  assert.deepEqual(vacancy[0].candidateIds, []);
+  assert.deepEqual([queue[0].status, queue[0].reason], ['waiting', undefined]);
+  const saved = [{ ...queue[0], reason: 'Synthetic draft refusal' }, queue[1]];
+  for (const items of [queue, saved]) {
+    const rooms = [{ id: 'shared', name: 'Team', queue: items }];
+    assert.deepEqual(plan(rooms, [member('a')]), []);
+    const vacancy = rules.queueVacancies({ rooms, sessions: [member('a')], wakePolicy: AWAKE, idleSince: settledSince(['a']), now: NOW });
+    assert.equal(vacancy[0].active, false);
+    assert.deepEqual(vacancy[0].candidateIds, []);
+  }
 });
 
 test('a reply is found by send time when a native record replaced the NAW message id', () => {

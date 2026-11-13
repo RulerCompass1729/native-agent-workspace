@@ -13329,3 +13329,16 @@ Left open:
 - If the queue trims an item (over 300 kept) while its send is in flight, `stillSent` throws, as `queueSetDelivery` did before. That pass faults once and the next one recovers (review 1 note 2).
 
 Merge order: this branch adds no words, does not touch `background-control.cjs:75` and can merge alone. Part 1, a member claiming an item it takes from the board, follows on its own branch based on the withdraw branch (25fd89d3). It changes `background-control.cjs:75`, which 078a42e and 25fd89d3 also change.
+
+## A sent queue item drops the reason of the refusal that put it back (queue item 61f9c09b, 2026-11-13, Claude 4)
+
+Reported on the board 11-12 23:57 (Claude 2), approved by the manager 23:58: after a refusal put an item back in the queue, a later successful send kept the refusal's `reason`, so the finished row's hover still showed that old error.
+
+- Change: `app/room-state.cjs` `queueMarkSent` deletes `reason` and keeps `attempts`. No interface text changes.
+- Unit test `app/tests/queue-dispatch.test.cjs` ("a send after a refusal drops the refusal reason…"): fails on the old code at the first `reason` check after the send; passes on the fix. Broken variants (also dropping `attempts`; not clearing at send) fail it.
+- The first full suite on the fix failed one test: "a decision on an item that was refused once before it went out still holds its member" asserted that the refusal stays on the item through the send (independent review, 11-12). That test now checks both cases: an item sent after this change carries no reason, and an item as an older build saved it still carries one. Both hold the member. Making `holdsMember` tell the kinds apart by having a reason fails it.
+- Full suite, page bundle and queue-dispatch window on the final commit: recorded with the READY.
+- Independent review (read-only, 10 turns): PASS, no blocking findings. Notes taken: the comment above `holdsMember` (`app/queue-dispatch.cjs:29-32`) now says the stale reason is on items saved before this change; the queue still names the two unheld kinds instead of testing for any reason.
+
+Left open:
+- Rows finished or waiting before this change keep the old reason they stored; nothing migrates them.
