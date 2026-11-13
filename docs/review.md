@@ -13546,3 +13546,75 @@ Independent review (fresh read-only session, Glob/Grep/Read only, no MCP, 20 tur
 Delta review (same session, 9 turns, reported USD 1.41): PASS_WITH_NOTES. Note 1 closed: `stewardRole.set` is called only by the person's revoke and designate in `main.cjs`, and both now turn it off; a wake already sending writes its state from the switch as it is when the send ends. Its notes were corrections to notes 2–4 above, now made, and one behaviour: designating the butler that is already designated (for example to send a new duty statement) turns wakes off, and until the person's switch exists only the butler sees that, through `stewardWake` with no argument.
 
 Not covered: the integration engine's `holding` exclusion for the butler has no test of its own; the wake shows in the butler's conversation with the existing 「NAW 派活」 sender label until the UI branch. A rotation keeps the switch: it moves the designation through the rotation log (`steward-role.cjs` `current()`), not `selected`, which the switch compares with; read in the source, no test of its own.
+
+## A timed checkpoint reuses the saved JSON of sessions no change touched (snapshot reuse, 2026-11-13, Claude 3)
+
+Why: the person's 「现在打字输入变得超级慢」 and 「可以优先终端这边的输入」. After the asynchronous write, the keys still over 50 ms were held 41-50 ms in the daemon, in line with the store snapshot each checkpoint still takes on the event loop (about 35 ms a second in the running daemon while a reply streams). Daily backends hold old idle Codex sessions (31875, 17717, 17152 messages) next to the Claude sessions in use (board 2026-11-12 21:42:01), and every checkpoint serialised them again. Authorised on the board 2026-11-13 09:13:37 (Claude manager), with four conditions: unchanged only by a revision counter on the session, every path that changes a session counts; a test per path and a random test where reuse equals a full serialisation byte for byte; crash read-back equals memory; full suite, real window and independent review.
+
+What changed:
+- `app/workspace.cjs`:
+  - `changed(session)` counts: a session id adds one to that record's revision; no id (or an unknown one) adds one to a workspace-wide revision.
+  - `storeSnapshot(replacement, reuse)` builds the same JSON as before, but splices in the messages JSON of each session. `savedMessages` reuses a record's kept JSON only if three things all hold: neither revision moved since it was taken, the record still holds the same `messages` array, and the caller asked for reuse.
+  - Only the timed checkpoint (`persistLater`) asks for reuse, and even then every session is serialised again at least every 30 s. `persist()` always serialises everything and refreshes what is kept.
+  - The splice uses a random placeholder. If a record or draft holds that placeholder, or a splice fails for any reason, the whole snapshot is taken the old way.
+- Three runtime events now name their session:
+  - `activity` and `usage` call `changed(s.id)`.
+  - `state` names its session for 'working' only.
+  - They write no message rows. Before this change, every tool call (Claude's PreToolUse sends `activity`, then `state 'working'`) counted as a change to every session, so nothing could be reused while an agent worked.
+  - Their receivers are listed below.
+- `Workspace.edited(record)` adds one to a record's revision without reporting a change. Three places call it, each changing rows and reporting no session:
+  - session-wake `revoke` (pause all) and `cancelParticipant` (the person's own action in a session) cancel waiting wake rows.
+  - A prompt image event sets the prompt row's `nativeId` before its payload is checked, and a refused payload reports nothing.
+
+Receivers of the three named events (board 09:30:22): none of them reads anything new except two in the daemon:
+- `Workspace.changed()` itself counts only that session.
+- The state broadcast (`daemon.cjs:67`) digests only that session's messages again. Other sessions keep the digests of the broadcast before, any change naming none in the same 35 ms window still digests all, and CARRY_MS 2000 is unchanged. The three events write no message rows, so the frames are the same bytes, given no row edit elsewhere that reports nothing in that window.
+`peer-handoffs.cjs:125` and `scoped-outbox-runtime.cjs:17` take no argument. The main process (`service-connection.cjs` rebuilds the whole state; `main.cjs:747/752` to the page, `main.cjs:1937` the butler's queued-message watcher) and the page receive whole states as before. The butler's event stream (`stewardEvents`, `butler-ledger.cjs`) is not fed by these events. The legacy in-process modules have their own `change` events. The butler wake on main (`steward-wake.cjs`, `queue-dispatch.cjs` `wakeSteward`) reads the butler ledger and whole snapshots in the main process, so it is unchanged too. Every other `changed()` stays unnamed and counts as all sessions.
+
+Checks:
+- `workspace-snapshot-reuse.test.cjs` 11/11:
+  - each named path (native block, tool row, Claude and Codex progress, Codex delta and message, a named edit) serialises only its session again, and the other session's kept JSON stays in use.
+  - each unnamed path (gap, unnamed edit, draft, turn end) serialises every session again.
+  - tool-call activity, 'working' and usage leave the other session's kept JSON in use.
+  - the two wake cancels and the refused prompt image are saved by the next timed checkpoint (each red without its call).
+  - a random sequence over every path, 600 steps (one seed a run; 25 fixed seeds recorded once): each timed checkpoint equals a full one byte for byte.
+  - real timed checkpoints through `persistLater` reuse kept JSON.
+  - a replacement record is saved with its own rows.
+  - `persist()` and the 30 s refresh serialise every session again.
+  - a replaced messages array is caught before it is reported.
+  - a record or draft holding the placeholder is saved whole.
+  - crash read-back: the last checkpoint reuses one session's kept JSON; the file equals a full save, and a fresh Workspace on a copy reads the same rows.
+  - `workspace.test.cjs`: the naming test now covers the three events.
+- Differential over the whole suite: a preload made every snapshot also take the reused one and a full one and compared them (6720 tests, 547 processes). It found 6 differences:
+  - 3 in session-wake: the wake cancels, fixed above.
+  - 2 in state-delta-protocol's `quietEdit` fixture, which edits a row and reports nothing on purpose.
+  - 1 in operator-control, where the test pushes a row directly.
+- Static sweep of every site that writes session rows (`app/*.cjs`, read-only audit, then each flagged site read again):
+  - The prompt image site was the only new one, fixed above.
+  - A failed wake save's notice (`session-wake.cjs` stage catch) is safe: while the save warning is up, `changed()` arms no timer and `persistLater()` returns, and only `retrySave()` (a full `persist()`) clears it.
+  - A Codex progress row trimmed away is safe: a trim that removes rows replaces the array (`native-blocks.cjs:95/116`).
+- 23 mutations: 23 caught.
+- Full suite 6724/6724 before the rebase onto main ee6f8796; 6744/6744 on the rebased commit; the 12 affected files 589/589.
+- GUI (hidden, synthetic profiles, 0 models, 0 native processes), counted as the checks each run lists in its JSON output, all exit 0 with no errors: test-storage (crash and reconnect) 3/3, test-long-continuity 7/7 (5 of them also printed as PASS lines), test-command-actions 3/3.
+- Independent review (Opus 5.5, read-only): PASS_WITH_NOTES, and PASS_WITH_NOTES on the delta (the stronger crash read-back test, new evidence, the rebase, this entry). Acted on: the crash read-back test now reuses kept JSON; the 25 seeds recorded; the memory figure; one line number; the counters named here. The modules it named as read by grep only (operator-control, adapters, workspace create/import) were then read by the author, not confirmed independently: no silent row edit (operator rows go only into the view copy; adapters only read rows, including what `firstPromptRow` returns, except line 1799, which reports).
+
+Measured:
+- Snapshot alone, same shape (1904, 31875 and 945 rows of 356 characters, 15.4 MB; 3 interleaved runs, load 7-10):
+  - after a streamed reply: 22.1-22.6 -> 6.5-7.2 ms.
+  - after a tool call: 21.7-23.2 -> 6.2-6.9 ms.
+  - after a change naming none (still a full serialisation): ~22 -> ~20 ms.
+- Typing harness (the same harness as the async write, with a tool call of the working session every 2 s; 3 runs before on aa369370 and 3 after, interleaved):
+  - Store snapshot per checkpoint in the running daemon: 34.2/34.8/35.6 -> 11.1/12.7/9.0 ms.
+  - Timed save on the event loop: 37-38 -> 17-23 ms per second.
+  - Echo p90: 17.0/17.8/18.2 -> 18.2/17.5/16.6 ms.
+  - Keys over 50 ms: 0/0/1.5% -> 1.5/0/0%. Both sides have one run with a key held 52-53 ms in the daemon (toBackend).
+  - Acceptance (2026-11-12 22:20: p90 at most 20 ms, at most 1% of keys over 50 ms, three runs) holds at 2 of 3 on both sides. Echo does not show the saving at this run length.
+  - The largest daemon cost left is the state broadcast's frames, 46-91 ms per second on both sides. Next candidate.
+
+Not covered:
+- The contract: a change to a session's rows that reports nothing, or reports only another session, is saved by the next `persist()`, by the next change naming none, or at most 30 s later. Before this change, any later change saved it. The daemon's digest already relied on the same contract, with 2 s as its net.
+- What is kept costs memory about the size of the saved messages, up to twice that for text outside Latin-1 (about 15-30 MB at the daily shape, not measured), freed with the record (WeakMap). A replaced array is held until the next snapshot.
+- Naming the three events also narrows the daemon's digest after each tool call to that session (same contract; CARRY_MS 2000 unchanged).
+- `persistedMessages` trims the copy it saves. When the copy needs trimming and holds no gap row yet, `trimVolatileRows` adds one stamped `Date.now()`. Reused JSON keeps the stamp from when it was taken, and a full save stamps it again. This only happens if a session's volatile rows grew past the bound after the live array was last trimmed. No test or differential run hit it.
+- The 30 s full save follows the wall clock; a clock stepped back by D delays it by D.
+- An existing gap, not changed here: "pause all" with no hand-off running (`pauseAll`, `workspace.cjs:1663`) cancels waiting wake rows and reports nothing, so the page shows them at the next change. They are now counted for the save. Because a tool call no longer re-digests every session, the page may see them up to CARRY_MS (2 s) later while another session streams.
