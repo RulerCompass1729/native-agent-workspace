@@ -427,17 +427,63 @@ function saveSessionDraft(binding) {
   });
   updateSessionComposer(binding, s, binding.column);
 }
+// Refused before anything reached native because the method was picked on
+// older state than the service's: a typing hold delays state pushes up to 1.5 s.
+const staleMethodRefusals = new Set(['error.workspace.sessionNotReady', 'error.workspace.nativeWaitingInputUnavailable', 'error.workspace.nativeTurnOrControlChanged', 'error.client.currentNativeSessionOrControlChanged', 'error.client.currentTurnOrControlChanged']);
+const STALE_METHOD_WAIT_MS = 1000;
+let stateArrivals = 0;
+const stateArrivalWaiters = new Set();
+function stateArrived() { stateArrivals++; for (const wake of [...stateArrivalWaiters]) wake(); }
+function nextStateArrival(seen, until) {
+  if (stateArrivals !== seen) return Promise.resolve();
+  return new Promise(resolve => {
+    const wake = () => { clearTimeout(timer); stateArrivalWaiters.delete(wake); resolve(); };
+    const timer = setTimeout(wake, Math.max(0, until - Date.now())); stateArrivalWaiters.add(wake);
+  });
+}
+function sessionInputMethod(s) {
+  if (s.state === 'working' && s.queueAvailable) return { method: 'queue' };
+  if (s.state === 'working' && s.steerAvailable && s.activeTurnId) return { method: 'steer', turnId: s.activeTurnId };
+  return { method: 'send' };
+}
+async function deliverSessionInput(s, pick, text, revision) {
+  const { id, nativeId } = s;
+  const mark = pick.method === 'queue' && { text, revision, before: new Set(s.messages.map(m => m.id)) };
+  if (mark) queuedInputs.set(id, mark);
+  try { return mark ? await api.queue(id, text, nativeId) : pick.method === 'steer' ? await api.steer(id, text, nativeId, pick.turnId) : await api.send(id, text, nativeId); }
+  finally { if (mark && !mark.tag && queuedInputs.get(id) === mark) queuedInputs.delete(id); }
+}
 async function submitSession(binding) {
   const s = state.sessions.find(s => s.id === binding.id), action = soloAction(s, { column: binding.column, mode: binding.column ? 'chat' : mode });
   if (!composerCurrent(binding) || binding.ui.send.disabled || binding.ui.composing || action.kind !== 'send') return;
   if (inputFocusAllowed()) binding.ui.input.focus();
   const { id, nativeId } = s, text = binding.ui.input.value, revision = draftRevisions.get(id);
-  const mark = s.state === 'working' && s.queueAvailable && { text, revision, before: new Set(s.messages.map(m => m.id)) };
-  if (mark) queuedInputs.set(id, mark);
-  let receipt;
-  try { receipt = mark ? await api.queue(id, text, nativeId) : s.state === 'working' && s.steerAvailable && s.activeTurnId
-    ? await api.steer(id, text, nativeId, s.activeTurnId) : await api.send(id, text, nativeId); }
-  finally { if (mark && !mark.tag && queuedInputs.get(id) === mark) queuedInputs.delete(id); }
+  // Counted, not locked: a queued Claude message keeps its call open until its turn starts.
+  const submit = binding.submits = (binding.submits || 0) + 1, pick = sessionInputMethod(s);
+  const deliver = async (target, choice) => { binding.delivering = (binding.delivering || 0) + 1; try { return await deliverSessionInput(target, choice, text, revision); } finally { binding.delivering--; } };
+  let seen = stateArrivals, receipt;
+  try { receipt = await deliver(s, pick); }
+  catch (error) {
+    if (!staleMethodRefusals.has(error?.uiMessage?.key)) throw error;
+    // A later Enter in this composer carries the same box; it reports its own outcome.
+    if (binding.submits !== submit) return;
+    // An earlier call from this composer still open may yet leave this same text in the box.
+    if (binding.delivering) throw error;
+    // Enter then means what it means on the newer state: pick again, send at most once more.
+    const until = Date.now() + STALE_METHOD_WAIT_MS;
+    let now, next;
+    for (;;) {
+      await nextStateArrival(seen, until); seen = stateArrivals;
+      if (binding.submits !== submit) return;
+      now = state.sessions.find(x => x.id === id);
+      const again = now && soloAction(now, { column: binding.column, mode: binding.column ? 'chat' : mode });
+      if (!again || again.kind !== 'send' || now.nativeId !== nativeId || now.nativeContextPending || !composerCurrent(binding) || binding.ui.send.disabled || binding.ui.composing || draftRevisions.get(id) !== revision || binding.ui.input.value !== text) throw error;
+      next = sessionInputMethod(now);
+      if (next.method !== pick.method || next.turnId !== pick.turnId) break;
+      if (Date.now() >= until) throw error;
+    }
+    receipt = await deliver(now, next);
+  }
   const fresh = state.sessions.find(s => s.id === id);
   if (!receipt?.contextChanged && fresh?.owner === owner && fresh?.nativeId === nativeId && !fresh.nativeContextPending && draftRevisions.get(id) === revision && binding.ui.input.value === text) binding.ui.setValue('');
 }
@@ -4321,12 +4367,12 @@ function render() {
       $('forward-button').type = nativeRoute ? 'button' : 'submit';
       ui.display.text($('forward-button'), nativeRoute ? (nativeUsable(recipient) ? 'composer.terminal' : 'reading.viewSession') : interruptPending(recipient) ? 'composer.waitInterrupt' : recipient?.pendingQueue ? 'composer.waitNative' : roomQueueAvailable(recipient) ? recipient.midturnAvailable ? 'composer.queueMidturn' : 'composer.queue' : roomSteerAvailable(recipient) ? 'composer.steer' : 'composer.send');
       const recipientPending = roomPendingRecipients.has(recipient?.id);
-      const mergeBlocked = state.room.merge && (!state.room.merge.imported || ['preparing', 'joining', 'failed', 'undoing'].includes(state.room.merge.stage));
+      const mergeBlocked = roomMergeBlocked();
       const hasDraftImages = roomImageRefs().length > 0;
       const unavailable = mergeBlocked || roomSubmitting || recipientPending || disconnected || (!hasDraftImages && !nativeWorkspaceMentions.body(roomMention, $('shared-input').value).trim());
       const threadUnsupported = roomReplyTo && (!roomThreads.rows.has(roomReplyTo) || (recipient && !recipient.legacyShare && !recipient.serviceCapabilities?.includes('replyThreads')));
-      const ready = s => s && !interruptPending(s) && s.state === 'idle' && !s.nativeInputRequired && !s.pendingTag && !s.pendingQueue && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
-      const manualErrorReady = !interruptPending(recipient) && recipient?.state === 'error' && recipient.failedTurnInputAvailable && !recipient.pendingTag && !recipient.pendingQueue && !recipient.approval;
+      const ready = roomRecipientReady;
+      const manualErrorReady = roomManualErrorReady(recipient);
       $('forward-button').disabled = nativeRoute ? mergeBlocked || roomSubmitting || recipientPending || disconnected : unavailable || (!ready(recipient) && !manualErrorReady && !roomQueueAvailable(recipient) && !roomSteerAvailable(recipient)) || Boolean(threadUnsupported);
       const otherRun = allSpaces().find(r => r.id !== spaceId && r.run?.status === 'running');
       $('run-button').disabled = unavailable || roomPendingRecipients.size > 0 || !recipient || !ready(recipient) || run?.status === 'running' || run?.pausePending || run?.pauseUnconfirmed || !safeHandoffs || Boolean(threadUnsupported) || Boolean(otherRun);
@@ -4821,7 +4867,8 @@ const disposers = [
   disposeToastKeyboard,
   api.onProgress(updateLegacyProgress),
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
-  api.onState(next => { updateState(next); render(); }),
+  // Waiters resume in a microtask, after this render has updated the buttons.
+  api.onState(next => { updateState(next); stateArrived(); render(); }),
   api.onSessionName(({ id, name }) => {
     const record = state?.sessions.find(s => s.id === id);
     if (record) { record.name = name; render(); }
@@ -5740,8 +5787,36 @@ async function submitRoom(automatic) {
   const submission = { spaceId: sendingSpace, automatic: Boolean(automatic), recipientName: participantLabel(recipient), queued: !automatic && roomQueueAvailable(recipient), midturn: !automatic && roomQueueAvailable(recipient) && recipient.midturnAvailable === true, cancelling: false, cancelRequested: false };
   if (automatic) { roomSubmitting = submission; view.submitting = submission; }
   else roomPendingRecipients.set(first, submission);
-  const queuedMark = submission.queued && { spaceId: sendingSpace, raw, address, revision, before: new Set(state.room.messages.map(m => m.id)) };
+  let queuedMark = submission.queued && { spaceId: sendingSpace, raw, address, revision, before: new Set(state.room.messages.map(m => m.id)) };
   if (queuedMark) queuedRoomInputs.set(first, queuedMark);
+  // Text to one recipient picks again after a stale-state refusal, as a session composer does.
+  const roomTextInput = async () => {
+    const replyTo = roomReplyTo || undefined, pick = roomInputMethod(recipient);
+    const roomText = choice => api.spaceAction(sendingSpace, choice.method, choice.method === 'steerShared' ? [first, text, recipient.nativeId, choice.turnId, replyTo] : [first, text, recipient.nativeId, replyTo]);
+    let seen = stateArrivals;
+    try { return await roomText(pick); }
+    catch (error) {
+      if (!staleMethodRefusals.has(error?.uiMessage?.key)) throw error;
+      const until = Date.now() + STALE_METHOD_WAIT_MS;
+      let now, next;
+      for (;;) {
+        await nextStateArrival(seen, until); seen = stateArrivals;
+        now = members().find(s => s.id === first);
+        const unchanged = now && roomPendingRecipients.get(first) === submission && !submission.cancelRequested && !roomSubmitting && !disconnected && !roomMergeBlocked() && spaceId === sendingSpace && roomRecipient() === first && !$('shared-input').readOnly && roomDraftRevision === revision && $('shared-input').value === raw && roomMention?.text === address?.text && roomMention?.memberRevision === address?.memberRevision && (roomReplyTo || undefined) === replyTo && !roomImageRefs().length;
+        if (!unchanged || now.nativeId !== recipient.nativeId || now.nativeInputRequired || now.shareAvailable === false || now.chatAvailable === false || !nativeUsable(now) || interruptPending(now)) throw error;
+        next = roomInputMethod(now);
+        if (next.method !== pick.method || next.turnId !== pick.turnId) break;
+        if (Date.now() >= until) throw error;
+      }
+      if (next.method === 'forward' && !roomRecipientReady(now) && !roomManualErrorReady(now)) throw error;
+      if (queuedMark && !queuedMark.tag && queuedRoomInputs.get(first) === queuedMark) queuedRoomInputs.delete(first);
+      submission.queued = next.method === 'queueShared'; submission.midturn = submission.queued && now.midturnAvailable === true;
+      queuedMark = submission.queued && { spaceId: sendingSpace, raw, address, revision, before: new Set(state.room.messages.map(m => m.id)) };
+      if (queuedMark) queuedRoomInputs.set(first, queuedMark);
+      render();
+      return await roomText(next);
+    }
+  };
   if (imageRefs.length) view.roomImageDispatching = true;
   render();
   try {
@@ -5749,7 +5824,7 @@ async function submitRoom(automatic) {
       await persistView();
       view.roomImageSend = { version: imageVersion, recipientId: first, nativeId: recipient.nativeId };
     }
-    const receipt = await (imageRefs.length ? api.spaceAction(sendingSpace, 'forward', [first, text, recipient.nativeId, roomReplyTo || undefined, { version: imageVersion }]) : automatic ? api.spaceAction(sendingSpace, 'run', [ids, text, automatic.limit, automatic.mode || 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined, automatic.identities]) : roomQueueAvailable(recipient) ? api.spaceAction(sendingSpace, 'queueShared', [first, text, recipient.nativeId, roomReplyTo || undefined]) : roomSteerAvailable(recipient) ? api.spaceAction(sendingSpace, 'steerShared', [first, text, recipient.nativeId, recipient.activeTurnId, roomReplyTo || undefined]) : api.spaceAction(sendingSpace, 'forward', [first, text, recipient.nativeId, roomReplyTo || undefined]));
+    const receipt = await (imageRefs.length ? api.spaceAction(sendingSpace, 'forward', [first, text, recipient.nativeId, roomReplyTo || undefined, { version: imageVersion }]) : automatic ? api.spaceAction(sendingSpace, 'run', [ids, text, automatic.limit, automatic.mode || 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined, automatic.identities]) : roomTextInput());
     if (submission.cancelRequested || receipt?.contextChanged) return;
     if (imageRefs.length) {
       if (!receipt?.imageDraft?.accepted) return;
@@ -5791,6 +5866,20 @@ $('forward-button').onclick = () => {
 };
 function roomSteerAvailable(s) {
   return Boolean(!interruptPending(s) && s?.state === 'working' && s.steerAvailable && s.activeTurnId && !s.pendingSteer && !s.approval && (s.legacySharedSteer || s.serviceCapabilities?.includes('nativeSharedSteer')));
+}
+function roomRecipientReady(s) {
+  return Boolean(s && !interruptPending(s) && s.state === 'idle' && !s.nativeInputRequired && !s.pendingTag && !s.pendingQueue && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false);
+}
+function roomManualErrorReady(s) {
+  return Boolean(!interruptPending(s) && s?.state === 'error' && s.failedTurnInputAvailable && !s.pendingTag && !s.pendingQueue && !s.approval);
+}
+function roomMergeBlocked() {
+  return Boolean(state.room.merge && (!state.room.merge.imported || ['preparing', 'joining', 'failed', 'undoing'].includes(state.room.merge.stage)));
+}
+function roomInputMethod(s) {
+  if (roomQueueAvailable(s)) return { method: 'queueShared' };
+  if (roomSteerAvailable(s)) return { method: 'steerShared', turnId: s.activeTurnId };
+  return { method: 'forward' };
 }
 function roomQueueAvailable(s) {
   return Boolean(!interruptPending(s) && !s?.nativeInputRequired && s?.state === 'working' && s.queueAvailable && !s.pendingQueue && !s.approval && (s.legacySharedQueue || s.serviceCapabilities?.includes('nativeSharedQueue')));
