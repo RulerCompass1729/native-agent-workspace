@@ -12816,3 +12816,31 @@ Evidence:
 - No real Claude queue was run. The queue path is covered by unit tests against the source shape only.
 
 Independent review (one read-only session, 3 rounds, no blocking finding): the first round hit its turn limit; the second gave `PASS_WITH_NOTES` at 2d4a8ed; the third gave `PASS_WITH_NOTES` at 5a840c3, with every earlier note handled or kept as above. The worktree fingerprints were unchanged before and after. Cumulative reported cost: USD 1.60. The CLI was given `--model fable` and reported `claude-opus-5-5`.
+
+## The butler reads another session's conversation without asking each time (steward step 2, batch 4, 2026-11-12)
+
+The person, 2026-11-12 14:24, to the proposal 「大管家每读一次别的会话的对话都要你点确认，建议改成不用每次确认，但每读一次都记进『大管家的记录』」: 「按你推荐的来」. Relayed with: 「每次读在记录里写明读了谁、读到哪」.
+
+What changed: the designated butler, usable and in no space, reads another session's conversation (`initial`, `previewImage` of a session) without the confirmation dialog, and gets it in the same answer. Its running audit line says the butler reads without confirmation. Terminal reads and every other maintenance action still ask. The butler's record says whom NAW read and how far, for example 「读 X 的对话：40 条，到 09:58」, taken from what NAW ran rather than from what was asked. The record's line format is unchanged, because older builds reject unknown fields. Commits 88cd3f2, 6d767c5 and a58b23c.
+
+Review findings fixed:
+- Blocking (6d767c5): a read waiting for the person, approved after its session was designated butler, was taken as unasked. The person's answer consumed it, the butler got metadata only, and the audit said it was not confirmed. An approved call is now never unasked.
+- A designation made while a call was under way could let a read through without a step in the record (6d767c5). A read now skips asking only when the record wrote the running call as a step of that session (`StewardRecord.recording`, an AsyncLocalStorage store set by `around()`). Since a58b23c, the store is open only while the call runs, so a timer left behind does not pass.
+- After the person deletes an operation's record, a read step named what was asked, which may not be the session read (6d767c5). It now says a conversation, and that whose is no longer known. Since a58b23c this line has no tense, as it may stand beside a declined read.
+- Kept as notes: if writing a snapshot's outcome fails, that step says 「读了 NAW 的状态」 (the record then refuses further steps and the dialog shows the write failure). The dialog does not mark which reads skipped asking.
+
+Evidence:
+- `background-conversation.test.cjs` and `steward-record.test.cjs`: 173/173 at a58b23c.
+- The old code (f857648) fails all nine first-round background tests.
+- Seven author-run mutations are each caught by a test: dropping the no-space check, dropping the butler check at release, letting every maintenance action skip, dropping `!approved`, dropping the recording gate, dropping the deleted-record wording, and dropping the open check.
+- Full suite: 6430/6430 at 6d767c5, and 6429/6430 at a58b23c. The one failure was `native-control-midturn-view.test.cjs:119` (a synthetic native turn not started yet under full-suite load). That file loads none of the changed modules and passed 4/4 twice when run alone.
+- At 88cd3f2, one refusal-summary id compare failed across a 60-second window boundary and passed on two reruns.
+- Not checked in a real window: the record dialog's read lines, which are checked only through `what()`. No model was called.
+
+Independent review (one read-only session, 4 rounds):
+- The first round hit its turn limit.
+- The second round gave `BLOCK` at 88cd3f2 (the approved read above) with three notes.
+- The third gave `PASS_WITH_NOTES` at 6d767c5.
+- The fourth gave `PASS` at a58b23c.
+
+The worktree fingerprints were unchanged before and after each round. The CLI reported USD 0.93, 1.22, 1.74 and 1.91 for the four invocations. It was given `--model fable` and reported `claude-opus-5-5`.
