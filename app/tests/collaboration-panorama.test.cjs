@@ -217,3 +217,24 @@ test('the untouched default space shows its interface-language name; a renamed s
   assert.equal(shared.textContent, 'Shared work', 'the same option repaints in English'); assert.equal(team.textContent, 'Team 中文', 'a name the person gave is not translated');
   assert.equal(filter.children[1], shared); assert.equal(filter.value, 'shared');
 });
+
+test('a quote the person holds stays while the page no longer gets that session\'s messages (shown-sessions.cjs)', () => {
+  const binding = require('./fixtures/locale-ui.cjs')('zh');
+  const { doc } = fakeDom(); const Element = doc.Element;
+  const host = new Element('div'), api = create({ host, display: binding.ui.display, language: binding.ui.language, view: { spaceId: 'shared' } });
+  const rooms = [{ id: 'shared', name: 'A' }], record = session('S', ['shared'], { messages: [{ id: 'source', role: 'assistant', text: 'first reply' }] });
+  api.update({ rooms, sessions: [record] });
+  const row = api.reader.children[0], quote = row.children.find(child => child.tagName === 'BLOCKQUOTE');
+  assert.equal(quote.textContent, 'first reply');
+  // A selection in that quote; meanwhile a newer reply arrives and S's messages are left out of the page.
+  const text = { parentElement: { closest: () => quote } };
+  Object.assign(quote, { closest: selector => selector === '[data-panorama-session]' ? row : null, contains: () => true });
+  api.reader.contains = node => node === quote;
+  doc.getSelection = () => ({ isCollapsed: false, anchorNode: text, focusNode: text });
+  const left = { ...record, messages: [], messagesOmitted: true, messageSummary: { lastAssistant: { id: 'newer', role: 'assistant', text: 'newer reply' } } };
+  api.update({ rooms, sessions: [left] });
+  assert.equal(quote.textContent, 'first reply'); assert.equal(quote.dataset.messageId, 'source');
+  doc.getSelection = () => null;
+  api.update({ rooms, sessions: [left] });
+  assert.equal(quote.textContent, 'newer reply', 'let go: the newest reply, from the summary');
+});

@@ -96,11 +96,17 @@ test('Escape blur cannot persist a terminal display edit after the dialog has cl
   f.$('terminal-display-dialog').showModal(); await f.context.saveDisplay();
   assert.deepEqual(writes, [{ fontSize: 18, palette: 'green' }]);
 });
-test('a queued search render after close does not rebuild private results', () => {
+test('a queued search render after close does not rebuild private results', async () => {
   const search = fs.readFileSync(require.resolve('../renderer/search-view.js'), 'utf8'), f = fixture();
-  Object.assign(f.context, { clearTimeout() {}, searchTimer: 1, searchOrigin: { selected: 'fixture' }, ui: { clearMarkdown() { throw Error('Closed results touched'); } } });
-  vm.runInContext(search.slice(search.indexOf('function renderSearch()'), search.indexOf('function searchInputKey(')), f.context);
-  f.context.renderSearch(); assert.equal(f.$('search-results').children.length, 0);
+  Object.assign(f.context, { clearTimeout() {}, searchTimer: 1, searchRevision: 0, searchOrigin: { selected: 'fixture' }, ui: { clearMarkdown() { throw Error('Closed results touched'); } } });
+  vm.runInContext(search.slice(search.indexOf('async function renderSearch()'), search.indexOf('function searchInputKey(')), f.context);
+  await f.context.renderSearch(); assert.equal(f.$('search-results').children.length, 0);
+  // Main answers the search (main.cjs 'search'): an answer that comes after the dialog closed draws nothing either.
+  let answer; f.context.api = { search: () => new Promise(resolve => { answer = resolve; }) };
+  Object.assign(f.context, { ui: { clearMarkdown() {} }, searchOptions: () => ({}) }); f.$('search-dialog').open = true;
+  const pending = f.context.renderSearch(); f.$('search-dialog').open = false;
+  answer({ results: [{ key: 'session:private', kind: 'session', name: 'PRIVATE', sessionId: 'private' }], total: 1 }); await pending;
+  assert.equal(f.$('search-results').children.length, 0);
 });
 
 test('a pending create keeps Cancel available while duplicate folder changes stay disabled', () => {

@@ -25,7 +25,7 @@ async function hydrate(change, snapshotEpoch = 'A') {
   const entry = { term, nativeId: record.nativeId, generation: 0, ready: false, queued: [{ id: 's', epoch: 'A', sequence: 11, index: 11, kind: 'output', data: 'QUEUED' }] };
   const surface = { hidden: true, inert: true }, loading = { removed: false, remove() { this.removed = true; } };
   const c = vm.createContext({ Promise, Map, Number, Boolean, id: 's', owner: 'view', entry, term, surface, loading, state: { sessions: [record] }, terminals: new Map([['s', entry]]), intent: 1, selectionRevision: 1,
-    projectSpace: s => s, legacyProgressOffline: () => false, latestViewStorage: undefined, sessionComposers: new Map(), queuedInputs: new Map(), queuedRoomInputs: new Map(),
+    projectSpace: s => s, legacyProgressOffline: () => false, latestViewStorage: undefined, sessionComposers: new Map(), queuedInputs: new Map(), queuedRoomInputs: new Map(), shownKnown: new Set(),
     columnTerminalBinding: () => false, terminalContextVisible: () => true, nativeUsable: s => s?.state === 'idle', inputFocusAllowed: () => true, canCaptureTerminal: () => false, disconnected: false,
     activeSessionId: () => 's', syncTerminalMount() { calls.mounts++; }, fitTerminal() { calls.fits++; }, render() { calls.renders++; }, revealTerminalCursor() {}, document: { activeElement: null },
     uiError: key => new Error(key), ui: { display: { text(node, key) { node.key = key; } } },

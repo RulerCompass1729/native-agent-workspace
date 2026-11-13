@@ -13,6 +13,8 @@ const { preflight, appBuildInfo } = require('./preflight.cjs');
 const { setLocation } = require('./runtime-locations.cjs');
 const { pathToFileURL } = require('node:url');
 const { submissionState, assertNativeCreation, capabilitiesFor } = require('./submission-policy.cjs');
+const { omitHidden, reportShown, validShown } = require('./shown-sessions.cjs');
+const { searchRecords } = require('./renderer/local-search.js');
 const { readPreview, saveCopy, extensions: textExtensions, openMessageFile } = require('./local-files.cjs');
 const { ImagePreviews, imageSource } = require('./native-images.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
@@ -691,7 +693,7 @@ function pushState(context, display) {
     context.statePush.push(display, () => displayState(context.client.snapshot(), context));
     return;
   }
-  context.win.webContents.send('workspace:state', display, 0);
+  context.win.webContents.send('workspace:state', omitHidden(display, context.shown), 0);
 }
 // The page's ready report arms the bound; a reload or the end of its process removes it, because the
 // acknowledgement for a snapshot sent to the old document can no longer arrive.
@@ -703,17 +705,22 @@ function bindStatePush(context) {
     }
     context.statePush = createStatePush((value, sequence) => {
       if (!context.win.isDestroyed()) {
-        context.win.webContents.send('workspace:state', value, sequence);
+        // Left out at sending, not when made: a snapshot that waited still gets the messages of a session
+        // the page started showing meanwhile (shown-sessions.cjs).
+        context.win.webContents.send('workspace:state', omitHidden(value, context.shown), sequence);
       }
     }, { wait: STATE_PUSH_WAIT, quiet: STATE_PUSH_TYPING_QUIET, maxHold: STATE_PUSH_TYPING_HOLD });
   };
+  // A new document has none of the messages: it gets every one until it reports what it shows.
   context.win.webContents.on('did-start-loading', () => {
     context.statePush?.close();
     context.statePush = null;
+    context.shown = null;
   });
   context.win.webContents.on('render-process-gone', () => {
     context.statePush?.close();
     context.statePush = null;
+    context.shown = null;
   });
 }
 function bindClient(context) {
@@ -1153,7 +1160,8 @@ function register(name, handler) {
   });
   // Sent many times a second while the person types, scrolls or resizes: these do not hurry the next state.
   // viewState goes with every keystroke in a space's composer; it changes the window's view, never the state.
-  const hurries = !['input', 'resize', 'readingState', 'draft', 'viewState'].includes(name);
+  // shownSessions and search change no state either: what the page needs is in their reply.
+  const hurries = !['input', 'resize', 'readingState', 'draft', 'viewState', 'shownSessions', 'search'].includes(name);
   ipcMain.handle(`workspace:${name}`, async (event, ...args) => {
     const context = windows.get(event.sender.id);
     if (!context || event.senderFrame !== event.sender.mainFrame || !trusted(event.senderFrame.url)) throw new Error('Unexpected IPC source');
@@ -1182,7 +1190,7 @@ async function replaceBackendSockets(key) {
       const refreshed = displayState(await context.client.refresh(), context);
       // This complete state is newer than any snapshot still waiting behind the bound.
       context.statePush?.discardWaiting();
-      sendToPage(context, 'workspace:reconnected', refreshed);
+      sendToPage(context, 'workspace:reconnected', omitHidden(refreshed, context.shown));
     }
   }
 }
@@ -2241,7 +2249,24 @@ async function boot() {
     const display = displayState(snapshot, c, read);
     if (!c.background) notifyCapacity(display, c.win);
     const result = { ...display, viewState: c.view, appVersion: app.getVersion(), appBuild, localeWarning, preflight: preflight() };
-    return c.background ? backgroundOperation.conversationSnapshot(result, c.actor, read, c.view.selected, conversationAccess(c.actor, snapshot)) : result;
+    return c.background ? backgroundOperation.conversationSnapshot(result, c.actor, read, c.view.selected, conversationAccess(c.actor, snapshot)) : omitHidden(result, c.shown);
+  });
+  // The sessions whose messages the page shows. The reply holds the messages of the ones it did not have.
+  register('shownSessions', (c, ids) => {
+    if (c.background || !validShown(ids)) throw uiError("error.main.invalidViewState");
+    const report = reportShown(c.shown, ids, () => displayState(c.client.snapshot(), c));
+    c.shown = report.shown;
+    return { messages: report.messages };
+  });
+  // Search reads every session's messages, which the page no longer holds (local-search.js, same rules).
+  register('search', (c, query, options = {}) => {
+    // An agent's background view reads only the conversations it was given (initial, conversationAccess).
+    if (c.background) throw uiError('error.operator.desktopOnly');
+    if (typeof query !== 'string' || query.length > 1000 || !options || typeof options !== 'object') throw uiError("error.main.searchTooLong");
+    const display = displayState(c.client.snapshot(), c), spaceId = typeof options.spaceId === 'string' ? options.spaceId : 'shared';
+    // As the page's projectSpace: the space it shows; a space gone meanwhile has no records to find.
+    const room = (display.rooms || [display.room]).find(r => (r?.id || 'shared') === spaceId) || null;
+    return searchRecords({ ...display, room }, query, { scope: options.scope, sessionId: options.sessionId, archived: Boolean(options.archived), limit: options.limit });
   });
   register('mobilePairing', (_c, selection) => beginAppMobile(selection));
   register('mobileRevoke', () => revokeAppMobile());

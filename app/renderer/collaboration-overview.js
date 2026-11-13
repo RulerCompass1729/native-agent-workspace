@@ -37,7 +37,8 @@
     return { rootState, state: rootState + (goal.text ? ' · ' + goal.text : ''), child, freshness: stale ? text('collab.lastObserved', { time }) : time, stale,
       compactChild, freshnessReported: age !== null || stale };
   }
-  function excerpt(record, messages = record.messages || [], limit = 220) {
+  // A session the page does not show carries only its newest reply (shown-sessions.cjs lastAssistant).
+  function excerpt(record, messages = record.messagesOmitted ? [record.messageSummary?.lastAssistant].filter(Boolean) : record.messages || [], limit = 220) {
     const source = messages.findLast(message => message.role === 'assistant' && typeof message.id === 'string' && message.id &&
       typeof message.text === 'string' && message.text.trim());
     if (!source) return null;

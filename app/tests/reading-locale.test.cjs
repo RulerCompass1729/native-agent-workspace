@@ -223,7 +223,9 @@ function searchFixture(messages, notes = '') {
   dialog.showModal = () => { dialog.open = true; }; dialog.close = () => { dialog.open = false; };
   f.document.querySelector = selector => { assert.equal(selector, 'dialog[open]'); return dialog.open ? dialog : null; };
   f.document.activeElement.focus = () => {};
-  c.window.nativeWorkspaceSearch = require('../renderer/local-search.js');
+  // Main runs the same search over the full state (main.cjs 'search'); the stub answers from this state.
+  const product = c.api, { searchRecords } = require('../renderer/local-search.js');
+  c.api = new Proxy({}, { get: (_target, key) => key === 'search' ? async (query, options) => searchRecords(f.state, query, options) : product[key] });
   const room = { id: 'archived-space', name: 'RAW 中文 room', archived: true, messages, notes };
   f.state.room = room; f.state.rooms = [room];
   Object.assign(c, { clearTimeout, structuredClone, spaceId: 'shared', selected: 'session-A', roomSession: '', roomSurface: 'overview', roomRecordScope: '', roomRecordReturn: null, roomFilterHistory: null, mode: 'chat', pendingRoomFilter: '', roomThread: '',
@@ -238,7 +240,7 @@ test('actual local search keeps query, original result nodes and an archived raw
   const f = searchFixture([{ id: 'message', role: 'assistant', text: raw }]);
   f.get('search-input').value = 'needle'; f.get('search-input').selectionStart = 2;
   f.get('search-archived').checked = true; f.get('search-options').open = true;
-  f.context.renderSearch();
+  await f.context.renderSearch();
   const first = f.get('search-results').firstChild, snippet = first.childNodes.at(-1), writes = snippet.textWrites;
   await f.context.openSearchResult({ kind: 'shared', roomId: f.room.id, messageId: 'message' });
   const body = f.get('search-preview-body'), bodyWrites = body.textWrites;

@@ -1,6 +1,8 @@
 // Search is a local reading action. Opening a result never restores, sends,
 // changes membership or takes control of another window's native session.
-let searchLimit = 60, searchTimer, searchOrigin, searchReturn;
+// searchRevision: main runs the search (local-search.js), since the page holds the messages only of the
+// sessions it shows; the newest call draws and an older reply is dropped.
+let searchLimit = 60, searchTimer, searchOrigin, searchReturn, searchRevision = 0;
 let searchOpener, searchNavigating = false;
 const searchOptions = () => ({
   scope: $('search-scope').value, sessionId: searchOrigin?.sessionId || '',
@@ -21,11 +23,16 @@ function openSearch(scope = 'all') {
   $('search-options').open = false;
   searchLimit = 60; $('search-dialog').showModal(); renderSearch(); $('search-input').focus();
 }
-function renderSearch() {
+async function renderSearch() {
   clearTimeout(searchTimer);
   if (!searchOrigin || !$('search-dialog').open) return;
   ui.clearMarkdown($('search-preview-body')); $('search-preview').hidden = true; $('search-results').hidden = false;
-  const { results, total } = window.nativeWorkspaceSearch.searchRecords(state, $('search-input').value, searchOptions());
+  const revision = ++searchRevision;
+  let found;
+  try { found = await api.search($('search-input').value, { ...searchOptions(), spaceId }); }
+  catch (error) { if (revision === searchRevision) toastError(error); return; }
+  if (revision !== searchRevision || !searchOrigin || !$('search-dialog').open) return;
+  const { results, total } = found;
   const list = $('search-results');
   list.replaceChildren();
   for (const result of results) {
@@ -48,15 +55,21 @@ function renderSearch() {
   $('search-more').disabled = searchLimit >= 600;
   ui.display.text($('search-more'), searchLimit >= 600 ? 'search.narrow' : 'common.more');
   if (!total) { const label = node('p', undefined, 'quiet'); ui.display.text(label, 'search.emptyHelp'); list.append(label); }
+  return true;
 }
 function searchInputKey(event) {
   if (event.isComposing || event.keyCode === 229) return;
   if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); $('search-dialog').close(); return; }
   if (!['ArrowDown', 'ArrowUp', 'Enter'].includes(event.key)) return;
-  event.preventDefault(); renderSearch();
-  const rows = $('search-results').querySelectorAll('button');
-  if (event.key === 'Enter') rows[0]?.click();
-  else (event.key === 'ArrowUp' ? rows[rows.length - 1] : rows[0])?.focus();
+  event.preventDefault();
+  const key = event.key;
+  // Only on the list this key asked for: not an older one left after a failed or overtaken search.
+  renderSearch().then(drawn => {
+    if (!drawn) return;
+    const rows = $('search-results').querySelectorAll('button');
+    if (key === 'Enter') rows[0]?.click();
+    else (key === 'ArrowUp' ? rows[rows.length - 1] : rows[0])?.focus();
+  });
 }
 function searchResultKey(event) {
   if (event.isComposing || event.keyCode === 229 || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
@@ -89,7 +102,7 @@ function pointToMessage(element, key, id, query = '') {
   return true;
 }
 async function openSearchResult(result) {
-  clearTimeout(searchTimer);
+  clearTimeout(searchTimer); searchRevision++; // a list still on its way does not draw over what opens now
   if (result.kind === 'shared' || result.kind === 'room') {
     const room = spaceRecord(result.roomId || 'shared'), records = room ? [...room.messages, ...(room.events || [])] : [];
     if (!room || result.messageId && !records.some(m => m.id === result.messageId)) { renderSearch(); toast(uiText('search.sharedRemoved')); return; }
@@ -108,8 +121,10 @@ async function openSearchResult(result) {
       return;
     }
   } else {
+    const loading = result.messageId && ensureMessages([result.sessionId]);
+    if (loading) await loading;
     const s = state.sessions.find(s => s.id === result.sessionId);
-    if (!s || (result.messageId && !s.messages.some(m => m.id === result.messageId))) { renderSearch(); toast(uiText('search.changed')); return; }
+    if (!s || (result.messageId && (s.messagesOmitted || !s.messages.some(m => m.id === result.messageId)))) { renderSearch(); toast(uiText('search.changed')); return; }
   }
   const origin = searchOrigin, query = $('search-input').value;
   searchNavigating = true;
@@ -129,8 +144,10 @@ async function openSearchResult(result) {
   await persistView();
 }
 async function showBackgroundConfirmation(target) {
+  const loading = ensureMessages([target.sessionId]);
+  if (loading) await loading;
   const record = state.sessions.find(s => s.id === target.sessionId && s.nativeId === target.nativeId);
-  const row = record?.messages.find(m => m.id === target.messageId);
+  const row = record?.messagesOmitted ? null : record?.messages.find(m => m.id === target.messageId);
   if (!row || row.backgroundOperation?.state !== 'confirmation-required') { toast(uiText('search.changed')); return false; }
   await select(record.id, 'chat');
   return pointToMessage($('messages'), record.id, row.id);

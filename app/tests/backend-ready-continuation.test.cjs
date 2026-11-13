@@ -152,7 +152,7 @@ test('automatic continuation runs the actual socket replacement in every window 
   const other = { view: { owner: 'other-window' }, win: { isDestroyed: () => false, webContents: { send() {} } },
     client: { socket: { destroyed: false }, replaceService(key, connection) { assert.equal(f.control.maintenance.has(key), true); replaced.push(['other-window', key, connection]); }, async refresh() { return {}; } } };
   f.scope.windows.set(2, other);
-  f.scope.path = require('node:path'); f.scope.displayState = state => state;
+  f.scope.path = require('node:path'); f.scope.displayState = state => state; f.scope.omitHidden = require('../shown-sessions.cjs').omitHidden;
   f.scope.connectService = async (directory, owner) => {
     assert.equal(directory, require('node:path').join('synthetic-profile', 'old'));
     const connection = { async call(method) { assert.equal(method, 'initial'); return { sessions: [] }; }, close() { throw Error('successful replacement must keep the new connection'); } };

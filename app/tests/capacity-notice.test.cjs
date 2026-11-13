@@ -27,7 +27,7 @@ function harness(language = 'zh') {
   const context = { client, win };
   const sandbox = { Notification, capacityNotifications: new Map(), context, quitting: false, focusOrOpen: () => activations++,
     backgroundOperation: require('../background-operation.cjs'),
-    roomState: { assertAvailable() {} }, displayState: value => value,
+    roomState: { assertAvailable() {} }, displayState: value => value, omitHidden: require('../shown-sessions.cjs').omitHidden,
     notifyToolWait() {}, register: (name, callback) => callbacks.set(name, callback),
     applicationBuild: null, appBuildInfo: async () => ({}), app: { getVersion: () => 'synthetic' },
     displayText: (key, params) => locale.format(language, key, params), localeWarning: null,
