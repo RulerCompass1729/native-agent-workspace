@@ -1,30 +1,42 @@
 // Real framed Unix RPC and daemon, with the existing synthetic NativeHost only.
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const { fork } = require('node:child_process'), { once } = require('node:events');
+const { fork, spawn } = require('node:child_process'), { once } = require('node:events');
 const { randomUUID } = require('node:crypto');
 const { connectService } = require('../service-connection.cjs');
 const { membershipRevision } = require('../collaboration-spaces.cjs');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { RoomState } = require('../room-state.cjs');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-test('actual bounded space envelopes preserve membership and original output across Unix RPC, including stale undo refusal', { timeout: 10000 }, async t => {
+// NAW_TEST_MULTISPACE_TIMEOUT_MS and NAW_TEST_MULTISPACE_PID_FILE are set only by the cleanup check at the end of this file.
+test('actual bounded space envelopes preserve membership and original output across Unix RPC, including stale undo refusal', { timeout: Number(process.env.NAW_TEST_MULTISPACE_TIMEOUT_MS) || 10000 }, async t => {
   const root = path.resolve(__dirname, '../..'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-spaces-protocol-')); fs.chmodSync(dir, 0o700);
   let client, sequence = 0, stderr = '';
   const child = fork(path.join(root, 'app/daemon.cjs'), [dir], { execArgv: ['--require', path.join(root, 'scripts/fixtures/collaboration-overview.cjs')], env: { ...process.env, NAW_TEST_APP_ROOT: root, NAW_WORKSPACE: path.join(dir, 'workspace') }, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+  if (process.env.NAW_TEST_MULTISPACE_PID_FILE) fs.writeFileSync(process.env.NAW_TEST_MULTISPACE_PID_FILE, String(child.pid));
   child.stderr.on('data', chunk => { stderr += chunk; });
   const fixture = (method, target, value) => new Promise((resolve, reject) => {
     const id = ++sequence, timer = setTimeout(() => { child.off('message', listener); reject(Error('Owned fixture request timed out')); }, 1000);
     const listener = reply => { if (reply.requestId !== id) return; clearTimeout(timer); child.off('message', listener); reply.error ? reject(Error(reply.error)) : resolve(reply); };
     child.on('message', listener); child.send({ id, method, target, value });
   });
+  // However the test ends, including its own timeout before the daemon is ready, the forked daemon
+  // ends: an orderly stop first, then SIGKILL. A live daemon keeps this file's process from exiting.
   t.after(async () => {
-    if (child.exitCode === null && child.signalCode === null) {
-      if (!client && fs.existsSync(path.join(dir, 'connection.json'))) client = await connectService(dir, 'space-test-cleanup');
-      if (client) { await fixture('stop'); await client.call('shutdown'); await Promise.race([once(child, 'exit'), delay(3000).then(() => { throw Error('Owned synthetic daemon did not exit; profile retained'); })]); }
-    }
-    client?.close();
-    assert.notEqual(child.exitCode, null, 'Only an exited owned fixture may be removed');
+    const alive = () => child.exitCode === null && child.signalCode === null;
+    let failure = null;
+    if (alive()) {
+      const exited = once(child, 'exit');
+      try {
+        await Promise.race([(async () => {
+          if (!client && fs.existsSync(path.join(dir, 'connection.json'))) client = await connectService(dir, 'space-test-cleanup');
+          if (client) { await fixture('stop'); await client.call('shutdown'); await exited; }
+        })(), delay(3000).then(() => { throw Error('Owned synthetic daemon did not exit'); })]);
+      } catch (error) { failure = error; }
+      client?.close();
+      if (alive()) { child.kill('SIGKILL'); await exited; }
+    } else client?.close();
+    if (failure) throw Error(`${failure.message}; it was killed and its profile retained: ${dir}\n${stderr}`);
     fs.rmSync(dir, { recursive: true, force: true });
   });
   for (let i = 0; i < 100 && !fs.existsSync(path.join(dir, 'connection.json')) && child.exitCode === null; i++) await delay(10);
@@ -92,4 +104,29 @@ test('actual bounded space envelopes preserve membership and original output acr
   assert.equal((await fixture('stats',cross)).stats.sends,beforeCount,'Every stale proof is refused before transport');
   await client.call('spaceAction','shared','forward',[cross,'EXPLICIT OTHER VIEW BODY',record.nativeId],{[cross]:proofNow});
   const after=(await client.call('initial')).sessions.find(s=>s.id===cross);assert.equal(after.owner,'independent-view');assert.equal(after.nativeId,record.nativeId);assert.equal(after.liveDraft,'POSITIVE PRIVATE DRAFT');assert.equal((await fixture('stats',cross)).stats.sends,beforeCount+1);
+});
+
+// 11-12: under load this test's own 10 s limit cancelled it before the daemon was ready; the cleanup
+// skipped the forked daemon, whose IPC channel then kept the file's process, and the whole suite, alive.
+test('the space protocol test above ends its forked daemon and exits after its own timeout', { skip: Boolean(process.env.NAW_TEST_MULTISPACE_TIMEOUT_MS), timeout: 60000 }, async t => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-spaces-protocol-cleanup-')), pidFile = path.join(scratch, 'daemon.pid');
+  // A fresh runner, as npm test starts it: without the parent's NODE_TEST_CONTEXT, which turns a nested run into a reporter child.
+  const env = { ...process.env, NAW_TEST_MULTISPACE_TIMEOUT_MS: '1', NAW_TEST_MULTISPACE_PID_FILE: pidFile }; delete env.NODE_TEST_CONTEXT;
+  const run = spawn(process.execPath, ['--test', '--test-timeout=0', __filename], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let output = ''; run.stdout.on('data', chunk => { output += chunk; }); run.stderr.on('data', chunk => { output += chunk; });
+  const living = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } };
+  const daemon = () => { try { return Number(fs.readFileSync(pidFile, 'utf8')) || null; } catch { return null; } };
+  t.after(() => {
+    // Only what this check started: the run, and the daemon whose pid that run wrote.
+    if (run.exitCode === null && run.signalCode === null) run.kill('SIGKILL');
+    const pid = daemon(); if (pid && living(pid)) process.kill(pid, 'SIGKILL');
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+  const ended = await Promise.race([once(run, 'exit').then(() => true), delay(20000).then(() => false)]);
+  const pid = daemon();
+  assert.ok(pid, `The run forked its daemon\n${output.slice(-2000)}`);
+  assert.ok(ended, `The run must exit after its own timeout; still alive after 20 s, daemon ${living(pid) ? 'alive' : 'gone'}\n${output.slice(-2000)}`);
+  assert.match(output, /timed out after 1ms/);
+  assert.equal(run.exitCode, 1);
+  assert.equal(living(pid), false, 'The forked daemon is gone once the run exits');
 });
