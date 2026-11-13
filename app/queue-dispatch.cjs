@@ -90,11 +90,14 @@ const DECISION_MARKERS = ['需要你决定：', '需要你决定:', 'Needs your 
 const AUTOMATIC_ORIGINS = Object.freeze(['naw-dispatch', 'agent-wake', 'capacity-recovery', 'agent-control', 'room']);
 // Whether a user-role row was written by NAW, another agent or the session's own machinery rather than the person:
 // by its origin; a native row NAW recognised as machine input (a background task's notification, a scheduled wake)
-// carries the source it was recognised by; a native row without an origin falls back to NAW's marker.
+// carries the source it was recognised by (workspace.cjs, on('nativeInput')); a native row without an origin falls
+// back to NAW's marker.
+// The sources workspace.cjs records on such a row; any other value is not trusted to be machine input.
+const NATIVE_MACHINE_SOURCES = Object.freeze(['task-notification', 'system', 'loop_wakeup', 'schedule_wakeup', 'poll_event', 'naw-peer']);
 function automaticInput(message) {
   if (!message) return false;
   if (AUTOMATIC_ORIGINS.includes(message.origin)) return true;
-  if (message.origin === 'native') return typeof message.inputSource === 'string' && message.inputSource !== '';
+  if (message.origin === 'native') return NATIVE_MACHINE_SOURCES.includes(message.inputSource);
   if (message.origin === undefined && typeof message.text === 'string') {
     return message.text.includes('【NAW 派活】') || message.text.includes('【NAW 换会话】');
   }

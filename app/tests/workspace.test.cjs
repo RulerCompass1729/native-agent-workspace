@@ -886,6 +886,8 @@ test('a background task that starts and finishes within one native turn is known
   // notification arrives during the same turn, with that turn's prompt id and no source. No turn end lists it.
   const done = (id, n) => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_${n}</tool-use-id>\n<output-file>/tmp/synthetic/${id}.output</output-file>\n<status>completed</status>\n<summary>Synthetic task ${n} completed</summary>\n</task-notification>`;
   const event = (id, n) => `<task-notification>\n<task-id>${id}</task-id>\n<summary>Monitor event: "synthetic"</summary>\n<event>SYNTHETIC_EVENT_${n}</event>\n</task-notification>`;
+  // A watched command may print anything into an event, a status line too; that is not the block's own status.
+  const printed = id => `<task-notification>\n<task-id>${id}</task-id>\n<summary>Monitor event: "<status>failed</status>"</summary>\n<event>\n<status>completed</status>\n</event>\n</task-notification>`;
   const notify = (text, promptId = 'turn') => { hook({ hook_event_name: 'UserPromptSubmit', prompt_id: promptId, prompt: text }); return s.messages.filter(m => m.role === 'user' && m.text === text).at(-1); };
   hook({ hook_event_name: 'UserPromptSubmit', prompt: 'Synthetic task' });
   hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'toolu_1', background_task_id: 'bsame0001' });
@@ -894,7 +896,8 @@ test('a background task that starts and finishes within one native turn is known
   let before = effects();
   // A monitor sends one notification per event and one when it ends, all with its ID; an event has no <status>.
   for (const [text, why] of [[event('bmoni0001', 1), 'A monitor event'], [done('bsame0001', 1), 'The Bash task finishing in the same turn'],
-    [event('bmoni0001', 2), 'A later event of the same monitor'], [done('bmoni0001', 2), 'The monitor ending']]) {
+    [event('bmoni0001', 2), 'A later event of the same monitor'], [printed('bmoni0001'), 'An event whose output prints a status'],
+    [done('bmoni0001', 2), 'The monitor ending']]) {
     const shown = notify(text);
     assert.deepEqual([shown?.name, shown?.inputSource], ['后台任务通知', 'task-notification'], why);
   }

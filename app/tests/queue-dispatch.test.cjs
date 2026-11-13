@@ -1071,7 +1071,8 @@ test('a native row NAW recognised as machine input is not the person stepping in
   // The same row without a source is the person, as before: NAW could not tell it from typing.
   const typed = [{ id: 't1', role: 'user', text: 'NAW task', origin: 'naw-dispatch' }, { id: 'n1', role: 'user', text: notice, origin: 'native' }, { id: 'r1', role: 'assistant', text: 'Done.' }];
   assert.equal(plan(rooms, [member('a', { messages: typed })])[0].reason, 'person-intervened');
-  for (const inputSource of ['', null, 7]) {
+  // Only the sources workspace.cjs records count; any other value may not be machine input.
+  for (const inputSource of ['', null, 7, 'user', 'made-up']) {
     const odd = typed.map(m => m.id === 'n1' ? { ...m, inputSource } : m);
     assert.equal(plan(rooms, [member('a', { messages: odd })])[0].reason, 'person-intervened', String(inputSource));
   }
@@ -2031,6 +2032,22 @@ test('B2: a trust wait observed after joining returns only queued assignments to
   await dispatcher.advanceRotations(client.snapshot(), NOW + 4 * 60000);
   assert.equal(room.queueItems('shared').find(item => item.id === id).status, 'cancelled');
   assert.equal(client.sends(record.newId).length, 0);
+});
+
+test('B2: the old member\'s own background task ending during the trust wait is not the person (11-12)', async t => {
+  // NAW recognised the row as machine input, so it moved no control revision; only its source tells it from typing.
+  const notice = '<task-notification>\n<task-id>bsynth002</task-id>\n<status>completed</status>\n<summary>Synthetic task completed</summary>\n</task-notification>';
+  for (const inputSource of ['task-notification', undefined]) {
+    const { client, dispatcher, record } = await projectRotation(t, { record: { oldControl: 0 }, afterCreate(fresh) { fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('claude'); } });
+    await dispatcher.advanceRotations(client.snapshot(), NOW + 1000);
+    assert.equal(record.phase, 'waiting-trust');
+    client.state.sessions.find(s => s.id === 'a').messages.push({ id: 'n1', role: 'user', text: notice, origin: 'native', ...(inputSource ? { inputSource } : {}), time: NOW - 1000 },
+      { id: 'r1', role: 'assistant', text: 'The synthetic task finished.', time: NOW - 500 });
+    await dispatcher.advanceRotations(client.snapshot(), NOW + 2000);
+    if (inputSource) assert.notEqual(record.reason, 'person-active', 'a recognised notification lets the rotation go on');
+    else assert.deepEqual([record.phase, record.reason], ['failed', 'person-active'], 'the same row without a source is the person, as before');
+    assert.equal(client.calls.some(c => c[0] === 'stop' && c[1] === 'a'), false);
+  }
 });
 
 test('B2: person activity during the trust wait cancels the handoff without ending the old member', async t => {

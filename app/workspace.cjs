@@ -838,8 +838,10 @@ class Workspace extends EventEmitter {
       // control:input boundary (nativeControlBoundary below), which voids wakes staged by or for this session.
       const sourced = ['system', 'loop_wakeup', 'schedule_wakeup', 'poll_event', 'naw-peer'].includes(item?.source);
       const reported = !sourced && !['user', 'sdk'].includes(item?.source) && onlyBlocks && taskIds.every(id => id && runtime.backgroundTaskIds?.has(id));
-      // A monitor notifies once per event and once when it ends, with the same ID; only a block with a status ends the task.
-      if (reported) blocks.forEach((block, i) => { if (/<status>/.test(block)) runtime.backgroundTaskIds.delete(taskIds[i]); });
+      // A monitor notifies once per event and once when it ends, with the same ID; only a block with a status ends the task
+      // (real 2.1.322: an event carries task-id, summary and event; an end, like a finished Bash, a status). What a watched
+      // command printed into an event or a summary is not the block's own status.
+      if (reported) blocks.forEach((block, i) => { if (/<status>/.test(block.replace(/<(event|summary)>[\s\S]*?<\/\1>/g, ''))) runtime.backgroundTaskIds.delete(taskIds[i]); });
       const machine = sourced || reported, inputSource = sourced ? item.source : reported ? 'task-notification' : null;
       // Missing source is not proof of human authorship for report questions.
       if (!machine && item?.source === 'user') this.operatorHuman(s.id);

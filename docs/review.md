@@ -13061,11 +13061,11 @@ Only a decision asks the person something. Only a decision reaches the person as
 
 ## A background task's own notification is not the person stepping in — 2026-11-12
 
-From the steward's follow-up 1 (11-13): 「replyAfter 认 inputSource；查清 task-notification 为什么不在 backgroundTaskIds。先用旧代码复现出「你插手过」再改」.
+From the steward's follow-up 1 (11-12): 「replyAfter 认 inputSource；查清 task-notification 为什么不在 backgroundTaskIds。先用旧代码复现出「你插手过」再改」.
 
 **Why NAW missed them.** NAW learned a background task's ID only from a turn-end report (Stop's `background_tasks`), which lists the tasks still running when the turn ends. Read in the person's own Claude transcripts (entry types, times and IDs only) and confirmed in a loopback run of real Claude 2.1.322 (0 paid):
 - Most notifications are for a task started and finished within the same turn. They arrive during that turn as a UserPromptSubmit with that turn's prompt id and no `source`. No turn-end report ever lists that task.
-- A monitor sends one notification per event (`<event>`, no `<status>`) and one when it ends (`<status>`), all with the same ID. Before, the first one used up the ID.
+- A monitor sends one notification per event and one when it ends, all with the same ID. The probe recorded each block's tag names: an event has task-id, summary and event; the end, like a finished Bash, has task-id, tool-use-id, output-file, status and summary. Before, the first event used up the ID.
 - `PostToolUse` names the task when it starts: `tool_response.backgroundTaskId` for Bash, `tool_response.taskId` for Monitor. NAW's hook forwarder kept no field of `tool_response`.
 
 So these notifications were judged as the person: NAW woke the "human" path, moved the control revision and, separately, the queue's reply reader counted every native user row as the person, without looking at `inputSource`. The two `person-intervened` items found in the person's data on 11-12 had only such rows after the dispatch.
@@ -13073,15 +13073,18 @@ So these notifications were judged as the person: NAW woke the "human" path, mov
 **Now.**
 - `app/claude_hook.py` forwards `background_task_id` for a `PostToolUse` of Bash (`backgroundTaskId`) or Monitor (`taskId`): a string of at most 64 characters, never cut. Nothing else of the tool's input or output.
 - `app/adapters.cjs` emits `backgroundStarted` for a root session only (after the child check); a child agent's task ID is not remembered.
-- `app/workspace.cjs` keeps those IDs with the turn-end ones (same set, same cap of 200). A notification uses up its ID only in a block with `<status>`; a monitor's events keep it. A replay after the task ended, or an event after the monitor ended, is still the person.
-- `automaticInput(message)` in `app/queue-dispatch.cjs` is the one rule for "not the person": an automatic origin; a native row with a non-empty string `inputSource` (what NAW recognised it by); a native row without an origin carrying NAW's marker. `replyAfter` and the integration handoff's `rowsAfter` both use it. In the handoff, such a row counts like any automatic message from someone else: a later answer must read like one.
+- `app/workspace.cjs` keeps those IDs with the turn-end ones (same set, same cap of 200). A notification uses up its ID only in a block with its own `<status>`, outside what the watched command printed into the event or summary; a monitor's events keep it. A replay after the task ended, or an event after the monitor ended, is still the person.
+- `automaticInput(message)` in `app/queue-dispatch.cjs` is the one rule for "not the person": an automatic origin; a native row whose `inputSource` is one of the six that `workspace.cjs` records (task-notification, system, loop_wakeup, schedule_wakeup, poll_event, naw-peer); a native row without an origin carrying NAW's marker. Session rotation reads replies the same way, so a recognised notification after a rotation request no longer stops the rotation as "person active"; its reply joins the handoff text. `replyAfter` and the integration handoff's `rowsAfter` both use it. In the handoff, such a row counts like any automatic message from someone else: a later answer must read like one.
 
 **Checks.**
 - `app/tests/claude-hook.test.cjs` (new): the real forwarder against a unix socket, with the response shapes the probe recorded; no other tool text leaves; foreground Bash, other tools, other keys, non-strings and a 65-character ID are not forwarded.
 - `app/tests/workspace.test.cjs`: through the real Claude adapter, a Bash task and a monitor started in one turn notify during it (events, done, monitor end): machine, no wake or control change. Replays after the end and a child agent's ID are the person.
-- `app/tests/queue-dispatch.test.cjs` and `app/tests/integrator-settle.test.cjs`: each recognised `inputSource` settles the item or handoff from the agent's answer; no source, `''`, `null` or a number is still the person.
-- All four were red on the old code. Breakages: 12, each caught (forwarder field, Monitor key, truncation, adapter emit, child emit, listener, consuming on events, never consuming, three changes to the helper, `rowsAfter` on the old rule).
-- Loopback probe, real Claude 2.1.322 with the new forwarder: both background tasks' IDs are forwarded at start and match the four notifications of the same turn; the foreground Bash forwards none; the turn-end report lists only the task that outlived the turn.
+- `app/tests/queue-dispatch.test.cjs` and `app/tests/integrator-settle.test.cjs`: each recognised `inputSource` settles the item or handoff from the agent's answer; no source, `''`, `null`, a number, `user` or an unknown name is still the person. A rotation waiting for the trust prompt goes on after a recognised notification and its reply, and stops as before without the source.
+- A monitor event whose output prints a `<status>` line keeps the monitor's ID.
+- All four were red on the old code. Breakages: 15, each caught (forwarder field, Monitor key, truncation, adapter emit, child emit, listener, consuming on events, never consuming, a status matched anywhere in the block, four changes to the helper, rotation without the helper, `rowsAfter` on the old rule).
+- Loopback probe, real Claude 2.1.322 with the new forwarder (twice): both background tasks' IDs are forwarded at start and match the four notifications of the same turn; the foreground Bash forwards none; the turn-end report lists only the task that outlived the turn. NAW's hooks are installed without a tool matcher, so a Monitor's PostToolUse reaches the forwarder in the app as in the probe.
+
+**Independent review.** PASS_WITH_NOTES, no blocking finding. Taken from its notes: the block tags are now recorded by the probe; a status printed inside an event no longer ends a monitor; the helper accepts only the six recorded sources; the rotation case has a test; a date. Kept as it is: a person typing, with no hook source, text that is exactly the notification block of a task NAW knows is read as machine input. That was so before for reported tasks; more IDs are known now.
 
 **Left open.**
 - No real-window journey with a real Claude member and the queue was run end to end: the dispatcher lives in the app's main process and the real-native queue script pins Claude ≤2.1.319. The evidence is the probe and the unit tests.
