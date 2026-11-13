@@ -7,6 +7,8 @@
   const MESSAGES = ['staged', 'sending', 'consumed', 'submitted', 'unconfirmed', 'not-sent', 'cancelled'];
   const REASONS = ['another-operation-running', 'unknown-command', 'confirmation-limit', 'originating-session-unavailable', 'conversation-access-denied', 'conversation-target-unavailable', 'space-file-membership-required', 'explicit-paths-required'];
   const ROLES = ['designated', 'revoked', 'followed', 'started'];
+  // The butler's call on NAW's switch for waking it (steward-record.cjs view `wake`): turned on, off, or looked at.
+  const WAKE_CALLS = Object.freeze({ __proto__: null, on: 'stewardRecord.step.wakeOn', off: 'stewardRecord.step.wakeOff', check: 'stewardRecord.step.wakeCheck' });
   function bind({ dialog, document, api, text, display, usageLines = null, language = () => 'zh' }) {
     const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
     const format = text || ((key, params) => locale.format('zh', key, params));
@@ -22,6 +24,11 @@
       if (entry.kind === 'role') return [`stewardRecord.role.${ROLES.includes(entry.event) ? entry.event : 'started'}`, { name: dash(entry.name) }];
       // NAW's own step: it woke the butler of that time to read what it recorded.
       if (entry.kind === 'wake') return ['stewardRecord.step.wake', { target: dash(entry.target) }];
+      // The person turned that off in their window.
+      if (entry.kind === 'wakeSwitch') return ['stewardRecord.step.youWakeOff', {}];
+      // The butler's own calls on that switch and on what NAW recorded for it, in words rather than as commands.
+      if (entry.method === 'stewardWake' && WAKE_CALLS[entry.wake]) return [WAKE_CALLS[entry.wake], {}];
+      if (entry.method === 'stewardEvents') return ['stewardRecord.step.events', {}];
       // A read of another session's conversation: whom, and how far when NAW knows it.
       if (entry.read) {
         if (entry.read.gone) return [entry.read.image ? 'stewardRecord.step.readImageGone' : 'stewardRecord.step.readGone', {}];
@@ -38,7 +45,7 @@
     }
     // How it ended, as far as NAW knows now.
     function result(entry) {
-      if (entry.kind === 'role') return null;
+      if (entry.kind === 'role' || entry.kind === 'wakeSwitch') return null;
       if (entry.kind === 'message') return MESSAGES.includes(entry.state) ? [`stewardRecord.message.${entry.state}`, {}] : ['stewardRecord.result.other', { state: dash(entry.state) }];
       if (entry.kind === 'wake') return entry.state === 'sent' ? ['stewardRecord.wake.sent', {}] : ['not-sent', 'unconfirmed'].includes(entry.state) ? [`stewardRecord.message.${entry.state}`, {}]
         : entry.state ? ['stewardRecord.result.other', { state: entry.state }] : ['stewardRecord.result.unrecorded', {}];
@@ -47,7 +54,7 @@
       if (entry.state === 'not-executed') return REASONS.includes(entry.reason) ? [`stewardRecord.reason.${entry.reason}`, {}] : ['stewardRecord.result.refused', { reason: dash(entry.reason) }];
       return STATES.includes(entry.state) ? [`stewardRecord.result.${entry.state}`, {}] : ['stewardRecord.result.other', { state: entry.state }];
     }
-    const attention = entry => ['confirmation-required', 'not-executed', 'unconfirmed', 'not-sent'].includes(entry.state) || entry.kind !== 'role' && entry.kind !== 'message' && !entry.state;
+    const attention = entry => ['confirmation-required', 'not-executed', 'unconfirmed', 'not-sent'].includes(entry.state) || !['role', 'message', 'wakeSwitch'].includes(entry.kind) && !entry.state;
     // NAW's switch for waking the butler when it records something new: the person's to see and turn off here (the
     // approved words for the butler: 「看得见、能关」), off by default. Changed in place, so focus stays on it.
     function wakeSwitch(state, now) {

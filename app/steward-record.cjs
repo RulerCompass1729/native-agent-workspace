@@ -7,7 +7,8 @@
 // Every workspace_control call the designated butler makes that reads or changes NAW (invoke, snapshot) gets a line
 // before it runs and a line with its outcome after; a call whose first line cannot be written is refused, nothing run.
 // Designating, revoking, and a rotation that hands the role on each get a line; so does each time NAW wakes the butler
-// because something new was recorded (steward-wake.cjs), under NAW's name. Lines are kept whole in daily blocks
+// because something new was recorded (steward-wake.cjs), under NAW's name, and each time the person turns that off in
+// their window. Lines are kept whole in daily blocks
 // like the other records (history/steward). A result is never kept here: what a read returned stays where the read
 // rules keep it, or nowhere.
 const fs = require('node:fs');
@@ -43,6 +44,8 @@ function check(value) {
     // NAW woke the butler because something new was recorded (steward-wake.cjs): whom, and the position the message named.
     : value?.kind === 'wake' ? exact(value, ['kind', 'at', 'id', 'session', 'position']) && token(value.id) && exact(value.session, ['id', 'nativeId']) &&
       token(value.session.id) && token(value.session.nativeId) && (value.position === null || typeof value.position === 'string' && POSITION.test(value.position))
+    // The person turned NAW's wake of the butler off in their window (main.cjs stewardWake); the butler's own calls are steps.
+    : value?.kind === 'wakeSwitch' ? exact(value, ['kind', 'at', 'on']) && value.on === false
     : false;
   if (!ok) throw Error('Invalid steward record line');
 }
@@ -97,6 +100,9 @@ class StewardRecord {
   designated(value) {
     this.append({ kind: 'role', event: value ? 'designated' : 'revoked', session: value ? { id: value.sessionId, nativeId: value.nativeId } : null });
   }
+  // The person turned NAW's wake of the butler off in their window (main.cjs stewardWake), as the board asked on
+  // 2026-11-13 11:18:30: 「用户在窗里点掉开关也记一行「你关掉了事件唤醒」」.
+  wakeOff() { this.append({ kind: 'wakeSwitch', on: false }); }
   // When the butler is not the one the record last named: a rotation handed the role on, or the record started with
   // a butler already designated (or the record could not be told at the time).
   sync(current) {
@@ -152,6 +158,7 @@ class StewardRecord {
     for (const value of this.lines) if (value.kind === 'outcome') outcomes.set(value.step, value);
     return this.lines.filter(value => value.kind !== 'outcome').map(value => {
       if (value.kind === 'role') return { at: value.at, kind: 'role', event: value.event, session: value.session };
+      if (value.kind === 'wakeSwitch') return { at: value.at, kind: 'wakeSwitch', on: value.on };
       if (value.kind === 'wake') {
         const outcome = outcomes.get(value.id) || null;
         return { at: value.at, kind: 'wake', id: value.id, session: value.session, position: value.position, state: outcome?.state ?? null, error: outcome?.error ?? null,
@@ -216,12 +223,16 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
     if (entry.kind === 'role') return { at: entry.at, kind: 'role', event: entry.event, name: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null };
     // NAW woke the butler of that time: whom, and whether the message went out. Not the position it named.
     if (entry.kind === 'wake') return { at: entry.at, kind: 'wake', target: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null, state: entry.state, error: cut(entry.error), recorded: entry.recorded };
+    if (entry.kind === 'wakeSwitch') return { at: entry.at, kind: 'wakeSwitch', on: entry.on };
     let args = null; try { args = entry.arguments === null ? null : JSON.parse(entry.arguments); } catch { args = null; }
     const out = { at: entry.at, kind: entry.action === 'snapshot' ? 'snapshot' : 'invoke', method: entry.method, state: entry.state, reason: entry.reason, error: cut(entry.error), duplicate: entry.duplicate, recorded: entry.recorded };
     if (entry.method === 'spaceAction' && Array.isArray(args)) {
       Object.assign(out, { space: spaceOf(args[0]) || (typeof args[0] === 'string' ? args[0] : null), spaceAction: typeof args[1] === 'string' ? args[1].slice(0, 40) : null });
       if (args[1] === 'queueAdd' && Array.isArray(args[2])) Object.assign(out, { text: cut(args[2][0]), target: nameOf(args[2][1]) });
-    } else if (Array.isArray(args)) out.target = nameOf(args[0]);
+    } else if (entry.method === 'stewardWake' && Array.isArray(args)) {
+      // The butler's own call on NAW's switch for waking it: turned on, turned off, or only looked at how it stands.
+      out.wake = args.length === 0 ? 'check' : args.length === 1 && typeof args[0] === 'boolean' ? (args[0] ? 'on' : 'off') : null;
+    } else if (Array.isArray(args) && entry.method !== 'stewardEvents') out.target = nameOf(args[0]);
     // A read of another session's conversation (a snapshot NAW ran as `initial`, or one of its images): whom it read,
     // from what NAW actually ran rather than what was asked, and how far.
     if (entry.action === 'snapshot' || ['initial', 'previewImage'].includes(entry.method)) {

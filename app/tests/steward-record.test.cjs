@@ -186,6 +186,9 @@ test('every sentence the dialog can show exists in Chinese and English', () => {
     ...['running', 'complete', 'received', 'awaiting-native', 'confirmation-required', 'cancelled', 'unconfirmed', 'odd'].map(state => ({ kind: 'invoke', method: 'send', state })),
     ...['another-operation-running', 'unknown-command', 'confirmation-limit', 'originating-session-unavailable', 'conversation-access-denied', 'conversation-target-unavailable', 'space-file-membership-required', 'explicit-paths-required', 'odd'].map(reason => ({ kind: 'invoke', method: 'send', state: 'not-executed', reason })),
     ...['sent', 'not-sent', 'unconfirmed', null].map(state => ({ kind: 'wake', target: 'B', state })),
+    ...['on', 'off', 'check'].map(wake => ({ kind: 'invoke', method: 'stewardWake', wake, state: 'complete' })),
+    { kind: 'invoke', method: 'stewardEvents', state: 'complete' },
+    { kind: 'wakeSwitch', on: false },
   ];
   const keys = new Set(['stewardRecord.wake.switch', 'stewardRecord.wake.off', 'stewardRecord.wake.never', 'stewardRecord.wake.last', 'stewardRecord.wake.failed', 'stewardRecord.wake.cost', 'stewardRecord.wake.error', 'stewardRecord.title', 'stewardRecord.current', 'stewardRecord.none', 'stewardRecord.waiting', 'stewardRecord.waitingNew', 'stewardRecord.heading', 'stewardRecord.col.time', 'stewardRecord.col.what', 'stewardRecord.col.result',
     'stewardRecord.empty', 'stewardRecord.more', 'stewardRecord.note', 'stewardRecord.writeFailed', 'error.steward.designationUnreadable', 'stewardRecord.usage', 'stewardRecord.usageNone', 'stewardRecord.usageLimit', 'stewardRecord.failed', 'menu.stewardRecord',
@@ -343,7 +346,7 @@ test('the person sees whether NAW wakes the butler and when it last tried, and c
     const d = wakeDialog({ ...base, current, wake }, calls); await d.open();
     const [box] = find(d.dialog, n => n.className === 'steward-record-wake'); if (!box) return null;
     const [input] = find(box, n => n.type === 'checkbox'), [status] = find(box, n => n.className === 'steward-record-wake-status');
-    return [input.checked, status.textContent, find(box, n => n.tag === 'span' && n.textContent === 'NAW 记下新事件时唤醒它').length, find(box, n => n.textContent === '每次唤醒它会跑一轮，算进下面的用量；最多每分钟一次，它在忙时不叫。').length];
+    return [input.checked, status.textContent, find(box, n => n.tag === 'span' && n.textContent === 'NAW 记下新事件时唤醒它').length, find(box, n => n.textContent === '每次唤醒它会跑一轮，算进下面的用量；最多每分钟一次，它在忙时不唤醒。').length];
   };
   assert.deepEqual(await states({ on: false, at: null, failed: false }), [false, '关着', 1, 1]);
   assert.deepEqual(await states({ on: true, at: null, failed: false }), [true, '开着 · 还没唤醒过', 1, 1]);
@@ -411,4 +414,34 @@ test('NAW\'s wakes of the butler are rows of the record, under NAW\'s name, with
   const rows = find(d.dialog, n => n.tag === 'tr' && n.dataset.kind === 'wake');
   assert.deepEqual(rows.map(row => [row.children[1].textContent, row.children[2].textContent, row.className]),
     [['NAW 唤醒 Butler 来读新事件', '结果没有记下', 'attention'], ['NAW 唤醒 gone-ses 来读新事件', '没有发出', 'attention'], ['NAW 唤醒 Butler 来读新事件', '已发出', '']]);
+});
+
+// The board, 11:18:30: the butler's calls on the wake switch read as words, and the person turning it off is a line.
+test('what the butler did with the wake switch reads as words, and the person turning it off is a line of the record', async t => {
+  const f = fixture(t);
+  const done = id => async () => ({ id, state: 'complete', value: { on: true } });
+  await f.record.around(sender(), invoke('stewardWake', [true], 'op-on'), done('op-on'));
+  await f.record.around(sender(), invoke('stewardWake', [], 'op-check'), done('op-check'));
+  await f.record.around(sender(), invoke('stewardEvents', ['0123456789abcdef:1'], 'op-events'), done('op-events'));
+  await f.record.around(sender(), invoke('stewardWake', [false], 'op-off'), done('op-off'));
+  await f.record.around(sender(), invoke('stewardWake', ['yes'], 'op-odd'), async () => ({ id: 'op-odd', state: 'not-executed', reason: 'odd' }));
+  f.record.wakeOff();
+  const shown = view(f.record, { sessions: [{ id: 'butler', name: 'Butler', messages: [] }] }, { current: steward });
+  assert.deepEqual(shown.entries.filter(e => e.kind !== 'role').map(e => [e.kind, e.method, e.wake, e.target, e.on]), [
+    ['wakeSwitch', undefined, undefined, undefined, false], ['invoke', 'stewardWake', null, undefined, undefined], ['invoke', 'stewardWake', 'off', undefined, undefined],
+    ['invoke', 'stewardEvents', undefined, undefined, undefined], ['invoke', 'stewardWake', 'check', undefined, undefined], ['invoke', 'stewardWake', 'on', undefined, undefined]]);
+  assert.equal(JSON.stringify(shown.entries).includes('0123456789abcdef'), false, 'not the position it read from');
+  // Survives a restart as written.
+  assert.deepEqual(f.open().entries().filter(e => e.kind === 'wakeSwitch').map(e => [e.on, typeof e.at]), [[false, 'number']]);
+  // Only as NAW writes it: off, and nothing else.
+  const { check } = require('../steward-record.cjs'), at = Date.parse('2026-11-13T10:00:00Z');
+  check({ kind: 'wakeSwitch', at, on: false });
+  for (const line of [{ kind: 'wakeSwitch', at, on: true }, { kind: 'wakeSwitch', at, on: false, by: 'agent' }, { kind: 'wakeSwitch', at }, { kind: 'wakeSwitch', on: false }])
+    assert.throws(() => check(line), /Invalid steward record line/);
+
+  const calls = []; calls.answer = () => { throw Error('not called'); };
+  const d = wakeDialog(shown, calls); await d.open();
+  const rows = find(d.dialog, n => n.tag === 'tr' && n.dataset.kind && n.dataset.kind !== 'role').map(row => [row.children[1].textContent, row.children[2].textContent, row.className]);
+  assert.deepEqual(rows, [['你关掉了事件唤醒', '', ''], ['stewardWake', rows[1][1], 'attention'], ['它关掉了事件唤醒', '完成', ''], ['它读了 NAW 记下的事件', '完成', ''],
+    ['它查看了唤醒设置', '完成', ''], ['它打开了事件唤醒', '完成', '']], 'an argument NAW does not know keeps the command name');
 });
