@@ -2050,6 +2050,31 @@ test('B2: the old member\'s own background task ending during the trust wait is 
   }
 });
 
+test('a background task\'s notification after the rotation request: its reply joins the handoff summary; without a source it is the person (11-12)', async t => {
+  const notice = '<task-notification>\n<task-id>bsynth003</task-id>\n<status>completed</status>\n<summary>Synthetic task completed</summary>\n</task-notification>';
+  for (const inputSource of ['task-notification', undefined]) {
+    const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
+    fakeMembership(room, client);
+    room.queueAdd('next task', 'a');
+    await dispatcher.start();
+    assert.equal(dispatcher.rotations.a.phase, 'requested');
+    const old = client.state.sessions.find(s => s.id === 'a');
+    old.messages.push({ id: 'summary', role: 'assistant', text: '交接：分支 abc。' },
+      { id: 'n1', role: 'user', text: notice, origin: 'native', ...(inputSource ? { inputSource } : {}) },
+      { id: 'r1', role: 'assistant', text: 'The synthetic task finished.' });
+    old.state = 'idle';
+    await dispatcher.schedule(); await dispatcher.schedule(); await dispatcher.schedule();
+    const successor = client.state.sessions.find(s => s.id !== 'a');
+    if (inputSource) {
+      const sent = client.sends(successor.id).map(call => JSON.stringify(call)).join('\n');
+      assert.ok(sent.includes('交接：分支 abc。') && sent.includes('The synthetic task finished.'), 'the summary is kept and the later reply joins it');
+    } else {
+      assert.equal(successor, undefined, 'no successor was made');
+      assert.equal(client.calls.some(c => c[0] === 'stop' && c[1] === 'a'), false);
+    }
+  }
+});
+
 test('B2: person activity during the trust wait cancels the handoff without ending the old member', async t => {
   const { client, dispatcher, record } = await projectRotation(t, { record: { oldControl: 0 }, afterCreate(fresh) { fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('claude'); } });
   client.state.sessions.find(s => s.id === 'a').controlRevision++;
