@@ -148,6 +148,57 @@ test('what still counts inside or around the dispatched turn: a person typing th
   assert.equal(other.runtime.pending, null);
 });
 
+// 11-13 (Monitor): agents start Monitors and background commands inside a dispatched turn. Each notification arrives under
+// the turn's prompt id with exactly the hook fields of the person's typing (real Claude 2.1.323, loopback probe 11-13), so
+// NAW tells them apart only by the task ID: the typed field PostToolUse reports when the task starts (Monitor `taskId`,
+// Bash `backgroundTaskId`), which the real forwarder passes on here. A Monitor's expiry is one more event, with no status.
+const { runForwarder } = require('../../scripts/fixtures/claude-hook-forward.cjs');
+const monitorEvent = (id, line) => `<task-notification>\n<task-id>${id}</task-id>\n<summary>Monitor event: "watch the build"</summary>\n<event>${line}</event>\n</task-notification>`;
+const commandDone = id => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_b</tool-use-id>\n<output-file>/tmp/synthetic.output</output-file>\n<status>completed</status>\n<summary>Background command "run the tests" completed (exit code 0)</summary>\n</task-notification>`;
+async function startTask(d, tool, response) {
+  const { received } = await runForwarder({ hook_event_name: 'PostToolUse', session_id: d.s.nativeId, prompt_id: 'turn', tool_name: tool, tool_use_id: tool === 'Monitor' ? 'toolu_m' : 'toolu_b',
+    tool_input: { command: 'synthetic', description: 'synthetic', ...(tool === 'Bash' ? { run_in_background: true } : { timeout_ms: 3500 }) }, tool_response: response });
+  assert.equal(received.length, 1);
+  d.hook(JSON.parse(received[0]));
+}
+const monitorStarted = d => startTask(d, 'Monitor', { persistent: false, taskId: 'bmonsyn01', timeoutMs: 3500 });
+const commandStarted = d => startTask(d, 'Bash', { stdout: '', stderr: '', interrupted: false, isImage: false, noOutputExpected: false, backgroundTaskId: 'bcmdsyn01' });
+
+test('inside the dispatched turn, a Monitor\'s events and expiry and a background command\'s completion are not the person; typing still is', async t => {
+  const machine = [
+    ['Monitor events', monitorStarted, [monitorEvent('bmonsyn01', 'BUILD_STEP 1'), monitorEvent('bmonsyn01', 'BUILD_STEP 2')]],
+    ['Monitor expiry', monitorStarted, [monitorEvent('bmonsyn01', 'BUILD_STEP 1'), monitorEvent('bmonsyn01', '[Monitor expired after 3s with 1 events delivered. Re-arm it if you still need the watch.]')]],
+    ['background command completion', commandStarted, [commandDone('bcmdsyn01')]],
+  ];
+  for (const [label, start, notices] of machine) {
+    const d = await dispatchedClaude(t);
+    await start(d);
+    for (const prompt of notices) {
+      d.hook({ hook_event_name: 'UserPromptSubmit', prompt });
+      assert.equal(d.s.messages.at(-1).inputSource, 'task-notification', label);
+    }
+    assert.equal(d.s.controlRevision, d.control, label);
+    assert.deepEqual(d.pauses, [], label);
+    d.stop();
+    assert.deepEqual(d.completed, [d.tag], label);
+    assert.deepEqual(d.verdict(), [['done', undefined, 'Done: the build passed.']], label);
+  }
+  // The person typing while a Monitor runs in that turn: the same hook fields and prompt id, and no task ID this session
+  // started (plain words, or a pasted block naming a task it never started): still the person.
+  for (const words of ['please also check the docs', monitorEvent('bpastedx1', 'BUILD_STEP 1')]) {
+    const typed = await dispatchedClaude(t);
+    await monitorStarted(typed);
+    typed.hook({ hook_event_name: 'UserPromptSubmit', prompt: monitorEvent('bmonsyn01', 'BUILD_STEP 1') });
+    assert.deepEqual(typed.pauses, []);
+    typed.hook({ hook_event_name: 'UserPromptSubmit', prompt: words });
+    assert.equal(typed.s.messages.at(-1).inputSource, undefined, words);
+    assert.equal(typed.s.controlRevision, typed.control + 1, words);
+    assert.deepEqual(typed.pauses, ['真人在原生终端输入'], words);
+    typed.stop();
+    assert.deepEqual(typed.verdict(), [['waiting', 'person-intervened', 'Done: the build passed.']], words);
+  }
+});
+
 test('a dispatch cannot be combined with another delivery kind', async t => {
   const { w, ids, sent } = await fixture(t);
   const forward = { roomId: 'shared' };

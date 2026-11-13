@@ -824,43 +824,77 @@ async function openScenario(a, b) {
     nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
 }
 
-// 11-13 (eddb1c16): the member's turn starts a background task that finishes and notifies during the same turn,
-// as real Claude 2.1.322 does, and the desktop restarts while that turn runs (the 10:41 install). The member's
-// answer settles the item: neither the notification nor the restart is the person stepping in.
+// 11-13 (eddb1c16, then Monitor): the member's turn starts a Monitor and a background command, and their notifications
+// arrive during that turn as real Claude sends them (loopback probes: 2.1.322 on 11-12, 2.1.323 on 11-13, where a
+// Monitor's expiry is one more event with no status). Each start goes in as Claude writes it, through NAW's real hook
+// forwarder. The desktop restarts while that turn runs (the 10:41 install). The member's answer settles the item: no
+// notification and no restart is the person stepping in. A second item, where the person types during the turn while a
+// Monitor runs, still settles as the person's.
 async function backgroundScenario(a) {
   assert.equal(process.env.NAW_TEST_DECISION_NOTICE, '1', 'Runs with the notification fixture, so nothing reaches the OS');
   assert.equal(process.env.NAW_TEST_QUEUE_CLAUDE_ADAPTER, '1', 'The member runs on the real Claude adapter');
   const english = process.env.NAW_TEST_UI_LANGUAGE === 'en';
-  const text = 'Background task item';
+  const text = 'Background task item', typedText = 'Typed during the turn item';
   const hook = async event => assert.equal((await fixture('hook', a, JSON.stringify(event))).done, true, event.hook_event_name);
   const member = async () => (await snapshot()).sessions.find(s => s.id === a);
+  const started = (tool, id) => hook({ $forward: true, hook_event_name: 'PostToolUse', tool_name: tool, tool_use_id: 'toolu_' + id,
+    tool_input: { command: 'synthetic', description: 'synthetic', ...(tool === 'Bash' ? { run_in_background: true } : { timeout_ms: 3500 }) },
+    tool_response: tool === 'Bash' ? { stdout: '', stderr: '', interrupted: false, isImage: false, noOutputExpected: false, backgroundTaskId: id } : { persistent: false, taskId: id, timeoutMs: 3500 } });
+  const monitorEvent = (id, line) => `<task-notification>\n<task-id>${id}</task-id>\n<summary>Monitor event: "watch the build"</summary>\n<event>${line}</event>\n</task-notification>`;
+  const commandDone = id => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_${id}</tool-use-id>\n<output-file>/tmp/synthetic.output</output-file>\n<status>completed</status>\n<summary>Background command "run the tests" completed (exit code 0)</summary>\n</task-notification>`;
+  const stop = () => hook({ hook_event_name: 'Stop', last_assistant_message: 'Done: the build passed.', background_tasks: [], session_crons: [], stop_hook_active: false });
+  const settle = async (itemText, label) => {
+    const elapsed = await until(async () => (await itemByText(itemText)).status !== 'sent', label, DISPATCH_LIMIT_MS);
+    timings.push({ label, ms: elapsed });
+    return itemByText(itemText);
+  };
   await addItem(text, a);
   await expectSend(1, a, /Background task item/, 'item dispatched to the member');
   const sent = await itemByText(text);
   assert.ok(Number.isSafeInteger(sent.control), 'The item keeps the control revision it was sent under');
   assert.equal((await member()).controlRevision, sent.control);
+  const before = (await member()).messages.length;
   await hook({ hook_event_name: 'UserPromptSubmit', prompt: '$sent' });
-  await hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'toolu_1', background_task_id: 'bsynth001' });
+  await started('Monitor', 'bmonsyn01');
+  await started('Bash', 'bcmdsyn01');
+  await hook({ hook_event_name: 'UserPromptSubmit', prompt: monitorEvent('bmonsyn01', 'BUILD_STEP 1') });
   await relaunch();
   await openSpace();
   assert.equal((await itemByText(text)).status, 'sent', 'Still with the member after the restart');
-  const notice = '<task-notification>\n<task-id>bsynth001</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>Synthetic task completed</summary>\n</task-notification>';
-  await hook({ hook_event_name: 'UserPromptSubmit', prompt: notice });
-  const row = (await member()).messages.findLast(m => m.role === 'user');
-  assert.equal(row.inputSource, 'task-notification', 'NAW recognised the notification');
+  await hook({ hook_event_name: 'UserPromptSubmit', prompt: commandDone('bcmdsyn01') });
+  await hook({ hook_event_name: 'UserPromptSubmit', prompt: monitorEvent('bmonsyn01', 'BUILD_STEP 2') });
+  await hook({ hook_event_name: 'UserPromptSubmit', prompt: monitorEvent('bmonsyn01', '[Monitor expired after 3s with 2 events delivered. Re-arm it if you still need the watch.]') });
+  const rows = (await member()).messages.slice(before).filter(m => m.role === 'user' && m.origin === 'native');
+  assert.deepEqual(rows.map(m => m.inputSource || null), ['task-notification', 'task-notification', 'task-notification', 'task-notification'],
+    'The only native input in the turn: the Monitor\'s two events and expiry and the command\'s completion, each recognised');
   const control = (await member()).controlRevision;
-  await hook({ hook_event_name: 'Stop', last_assistant_message: 'Done: the build passed.', background_tasks: [], session_crons: [], stop_hook_active: false });
-  const elapsed = await until(async () => (await itemByText(text)).status !== 'sent', 'Settled', DISPATCH_LIMIT_MS);
-  timings.push({ label: 'settled after the turn ended', ms: elapsed });
-  const settled = await itemByText(text);
+  await stop();
+  const settled = await settle(text, 'settled after the turn ended');
   assert.deepEqual([settled.status, settled.reason], ['done', undefined], `Settled as ${settled.status}/${settled.reason}`);
-  assert.equal(control, sent.control, 'The notification did not move the control revision');
-  await page.locator('#room-queue').click();
+  assert.equal(control, sent.control, 'No notification moved the control revision');
+  passed.push('A Monitor (two events, expiry) and a background command that notified during the dispatched turn, with a desktop restart in that turn, settled the item done');
+  // The person types while a Monitor runs in the next dispatched turn.
+  await addItem(typedText, a);
+  await expectSend(2, a, /Typed during the turn item/, 'second item dispatched to the member');
+  const typedSent = await itemByText(typedText);
+  await hook({ hook_event_name: 'UserPromptSubmit', prompt: '$sent' });
+  await started('Monitor', 'bmonsyn02');
+  await hook({ hook_event_name: 'UserPromptSubmit', prompt: monitorEvent('bmonsyn02', 'BUILD_STEP 1') });
+  assert.equal((await member()).controlRevision, typedSent.control, 'The Monitor\'s event did not move the control revision');
+  await hook({ hook_event_name: 'UserPromptSubmit', prompt: 'please also check the docs' });
+  assert.equal((await member()).messages.findLast(m => m.role === 'user').inputSource, undefined, 'The typing is the person\'s');
+  await stop();
+  const typed = await settle(typedText, 'typed item settled after the turn ended');
+  assert.deepEqual([typed.status, typed.reason], ['waiting', 'person-intervened'], `Settled as ${typed.status}/${typed.reason}`);
+  passed.push('The person typing during a dispatched turn, while a Monitor ran, still settled the item as the person\'s');
+  if (!(await page.locator('#queue-dialog').isVisible())) {
+    await page.locator('#room-queue').click();
+  }
   await page.locator('#queue-dialog').waitFor();
   await capture('background-task-settled-' + (english ? 'en' : 'zh'));
-  passed.push('A background task that notified during the dispatched turn, with a desktop restart in that turn, settled the item done');
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ passed, item: [settled.status, settled.reason || null], control: [sent.control, (await member()).controlRevision],
+  console.log(JSON.stringify({ passed, items: [[settled.status, settled.reason || null], [typed.status, typed.reason || null]],
+    control: [sent.control, typedSent.control, (await member()).controlRevision],
     syntheticDispatches: (await sends()).length, nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
 }
 
