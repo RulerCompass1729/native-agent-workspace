@@ -13215,3 +13215,28 @@ Acceptance (echo p90 at most 20 ms and at most 1% of keys over 50 ms, three runs
 Independent review (fresh read-only session, Glob/Grep/Read only, no MCP, 23 turns, reported USD 1.43): PASS. Notes: (1) rows computed from the clock at snapshot time (an operator grant's expiry) are carried like messages, so in a delta client such a flag can lag until the next full digest; (2) an unnamed edit that is later reverted to its earlier value could leave a delta client wrong for good, which needs an unnamed edit in the first place; (3) the protocol test's timing could be flaky on a loaded machine (3 of 3 passed here).
 
 Not covered: a session that streams while it is itself very large (a 31k-message Codex starting again) still has its own messages digested in full on every broadcast. Paths other than streaming digest everything as before.
+
+## A turn the person spoke into may send again once it has read them (wake proposal, item 3) — 2026-11-13
+
+The person, 11-12: 「agent 在干活的时候是可以发送消息的,所以你没法发其实有问题」. Board decision 11-12 16:44: 「③只做读到真人的话后重新授权、不在真人的话后附行」; at 23:44 the manager added that after the person speaks and before their words are read, the turn still cannot send, and a test must catch a change that breaks that. Before, words the person queued into a sender's running turn withdrew its automatic messages for the rest of the turn.
+
+**Now (Claude, the person's private queue with mid-turn delivery).**
+- What the turn registered before the person's words is still withdrawn at the turn's end (`source-identity-changed`).
+- Until native's read receipt shows that the turn's next root request carried the words, a new message is refused with 「真人刚在这一回合插了话，这一回合还没读到；读到之后可以再发。」 (en: "The person just spoke into this turn, and the turn has not read it yet; once it has, it can send again."). The old text 「真人操作已撤销本回合的自动消息授权。」 stays wherever the turn really is over.
+- After the read, the turn gets a fresh per-turn allowance (`epoch`): one message for an ordinary session, up to four recipients for the butler. Calls made before the read and replayed after it are refused.
+- The read authorizes nothing after a later person action, a takeover, terminal typing, pausing everything, a new turn, newer words still unread, or another agent's words.
+- Words that this turn will not read leave it revoked: not offered into the running turn (no mid-turn delivery, or answered as their own turn), not sent, or unconfirmed.
+- Sub-agents and teammates neither send nor produce the read: the hook denies `workspace_message` with an agent id (`app/claude-bridge/hooks/register.js:906`) and reads only root steps (`:1159`).
+- Code: `humanQueued`, `humanRead`, `humanNotRead` and the epoch in `app/session-wake.cjs`; the calls in `app/workspace.cjs` `queue()` and its `midturnRead` listener. Commits 53ff3708, 9dd6af94, a3593826.
+
+**Checks.**
+- `app/tests/session-wake.test.cjs`: 86/86; six new tests through the real Claude adapter. Full suite at a3593826: 6556/6556.
+- Breakages: 13, each caught, including re-authorizing at queue time (the manager's condition), ignoring which turn or which words were read, counting rows from before the read, waiting for a read without mid-turn delivery, and each missing clear.
+- `scripts/test-native-wake-reauth.cjs` (new): real Electron, real Claude 2.1.323, loopback responses, two sessions. The person types into the sender's long step through the composer; the call made in the same response before the read is refused with the new text; the next request carries the words once; the message after the read reaches the receiver once; the one from before is withdrawn. 5 local responses, no paid call; passed at 53ff3708 and a3593826.
+
+**Independent review** (one read-only session, 2 rounds): `PASS_WITH_NOTES` at 9dd6af94, `PASS` on the delta at a3593826. Fixed from the first round: words without mid-turn delivery or with an unconfirmed outcome had left the turn told to wait for a read that never comes; the refusal tests now check the exact reason per case; the mutation record says why three drafts were dropped; the sub-agent question was answered from the hook source. The worktree fingerprints were unchanged around each round. The CLI reported USD 1.24 and 1.57.
+
+**Left open, with what would reopen each.**
+- Codex steer: when its user-message item is emitted relative to the next model request is unverified. Reopen on a real Codex trace that shows it.
+- Words typed in the native terminal, and the space queue: unchanged (the terminal input withdraws for the turn; the space queue does not change the sender's control state).
+- The window check pins Claude 2.1.322/2.1.323, the versions mid-turn delivery is qualified on.

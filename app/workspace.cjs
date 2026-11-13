@@ -878,11 +878,12 @@ class Workspace extends EventEmitter {
     });
     on('history', (items, turns, recovery) => { applyCodexHistory(s, items, runtime, id => this.deliveryStatus(id, 'submitted'), turns, recovery); this.changed(); });
     on('turnHistory', turns => { applyCodexTurnHistory(s, turns, runtime); this.sharedReplies.restoreTurnMetadata(s); this.changed(); });
-    on('midturnRead', ({ tag }) => {
+    on('midturnRead', ({ tag, turnId }) => {
       // The running turn's next model request carried it (bridge-observed, 2.1.322 and 2.1.323).
       let found = false;
       for (const list of this.messageLists(s)) for (const m of list) if (m.id === tag && m.deliveredInto) { m.nativeRead = true; found = true; }
-      if (found) this.changed();
+      // The person's words read in the turn they were queued into: it may send again (the wake proposal, item 3).
+      if (found) { wake.humanRead(runtime, s, tag, turnId); this.changed(); }
     });
     on('submitted', tag => {
       const input = s.messages.find(m => m.id === tag);
@@ -1354,6 +1355,10 @@ class Workspace extends EventEmitter {
     runtime.pendingQueue = tag;
     // midturn: read at the running turn's next tool boundary, or as its own turn if the turn ends first.
     const midturn = runtime.midturnAvailable === true ? { midturn: true } : {};
+    // The wake proposal, item 3: once the running turn reads the person's words, it may send automatic messages again.
+    // Only words offered into the running turn can be read there; any other outcome leaves the turn revoked.
+    const readable = !shared && !backgroundOperation.current() && midturn.midturn === true;
+    if (readable) wake.humanQueued(runtime, s, tag);
     const message = { id: tag, role: 'user', text, origin: 'human', ...backgroundOperation.message(), status: 'awaiting-native', inputMode: 'queue', ...midturn, time: Date.now() };
     if (shared) {
       const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, uiNameMessage: backgroundOperation.current() ? undefined : youToName(s.name), ...backgroundOperation.message(s.name), text, status: 'awaiting-native', inputMode: 'queue', ...midturn, time: Date.now(), deliveryTracked: true,
@@ -1370,6 +1375,7 @@ class Workspace extends EventEmitter {
       const midturnText = shared && midturn.midturn ? spaceMidturnText(room.name || roomId, actor && { id: actor.id, name: actor.name }, text) : undefined;
       const receipt = await runtime.queue(text, tag, valid, midturnText);
       message.status = 'submitted';
+      if (readable && receipt?.mode !== 'append') wake.humanNotRead(runtime, tag);
       if (receipt?.mode === 'append') {
         // Read inside the running turn at a tool boundary: it keeps its place in time. No prompt of its own
         // can carry a shared reply, so this message's grant closes (a grant an earlier message holds stays).
@@ -1396,6 +1402,7 @@ class Workspace extends EventEmitter {
       // uncertain outcome stays in the record so it is not sent twice.
       const status = error.notSent === true ? 'not-sent' : 'unconfirmed';
       if (message.status !== 'submitted') message.status = status;
+      if (readable) wake.humanNotRead(runtime, tag);
       if (status === 'not-sent' && clearedDraft && this.draftRevisions.get(id) === draftRevision && !this.drafts.get(id)) this.drafts.set(id, draft);
       if (shared) {
         this.forwards.delete(tag); this.sharedReplies.close(tag, status === 'not-sent' ? '没有发出' : '接收结果未确认', uiActivity(status === 'not-sent' ? 'notice.sharing.notSent' : 'notice.sharing.receiptUnconfirmed')[1]); this.deliveryStatus(tag, status);
