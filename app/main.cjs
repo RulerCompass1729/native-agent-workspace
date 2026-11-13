@@ -580,6 +580,17 @@ function isStewardActor(actor) {
   let steward = null; try { steward = stewardOf?.() || null; } catch { return false; }
   return Boolean(steward && actor && steward.sessionId === actor.id && steward.nativeId === actor.nativeId);
 }
+// Whether the butler reads another session's conversation without the person confirming each read (the person,
+// 2026-11-12 14:24, to 「大管家每读一次别的会话的对话都要你点确认，建议改成不用每次确认，但每读一次都记进『大管家的
+// 记录』」: 「按你推荐的来」). Only the designated butler, usable and in no space, and only while its record takes lines:
+// each read is first a step there, with whom it read and how far (stewardRecord view). It covers the conversation and
+// its images (`initial`, `previewImage` of a session); terminal reads and every other maintenance action still ask.
+function stewardReadsUnasked(actor, snapshot) {
+  if (!isStewardActor(actor) || !stewardRecord || stewardRecord.failed || !stewardRecord.recording(actor)) return false;
+  let record = null; try { record = roomState.apply(snapshot).sessions.find(s => s.id === actor.id && s.nativeId === actor.nativeId); } catch { return false; }
+  if (!record || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) return false;
+  try { return roomIds(record).length === 0; } catch { return false; }
+}
 function conversationAccess(actor, snapshot) {
   const access = { roomIds: [], secretary: true };
   try { access.secretary = !conversationReaderAllowed(actor); } catch { /* Unknown roles get metadata only. */ }
@@ -612,7 +623,9 @@ function projectBackgroundRecord(record, context = null) {
   }
   if (!['initial', 'previewImage', 'spaceFiles'].includes(record.command.method) || record.value === undefined) return record;
   const target = backgroundOperation.conversationTarget(record.command.method, record.command.arguments, record.actor);
-  const candidate = record.humanDecision === 1 && record.readAuthorization?.sessionId === target ? record.readAuthorization : null;
+  // Approved by the person, or read without asking by the butler (stewardReadsUnasked) while it still is the butler.
+  const allowed = record.humanDecision === 1 || record.unasked === true && isStewardActor(record.actor);
+  const candidate = allowed && record.readAuthorization?.sessionId === target ? record.readAuthorization : null;
   let read = null;
   if (candidate) try { if (conversationReaderAllowed(record.actor)) read = candidate; } catch { /* Fail closed on an unknown role. */ }
   if (record.command.method === 'previewImage' && target && (!read || read.sessionId !== target)) {
@@ -1386,6 +1399,7 @@ async function boot() {
       detail: backgroundOperation.confirmationDetail(command, state, context),
       buttons: [displayText('common.cancel'), displayText('background.confirm')], defaultId: 0, cancelId: 0 }; },
     audit: auditBackgroundOperation,
+    unasked: (actor, _command, action, context) => action === 'readConversation' && stewardReadsUnasked(actor, context.client.snapshot()),
     retireHold: () => (outboxBroker?.active?.() || 0) > 0,
     context: async (actor, saved, kept) => {
       const view = saved || { owner: randomUUID(), selected: actor.id, mode: 'chat', preference: 'chat', active: false };
@@ -1792,7 +1806,18 @@ async function boot() {
       let r = null; try { r = backgroundControl?.receipt(actor, step.operationId) || backgroundControl?.deletedReply(actor, step.operationId) || null; } catch { r = null; }
       return r && typeof r.state === 'string' ? { state: r.state, reason: typeof r.reason === 'string' ? r.reason : r.refusalSummary?.reason ?? null, method: r.command?.method ?? null } : null;
     };
-    return stewardRecords.view(stewardRecord, snapshot, { current: known ? current : null, stateOf });
+    // Whom a read step read and how far, from NAW's record of that operation (what it ran, not what was asked).
+    const readOf = step => {
+      const actor = { provider: step.session.provider, id: step.session.id, nativeId: step.session.nativeId };
+      let r = null; try { r = backgroundControl?.receipt(actor, step.operationId) || null; } catch { r = null; }
+      // The person deleted that record: what it ran is no longer known, and the step must not name a session it may not have read.
+      if (!r) { try { return backgroundControl?.deletedReply(actor, step.operationId) ? { gone: true } : null; } catch { return null; } }
+      if (!['initial', 'previewImage'].includes(r.command?.method)) return null;
+      const sessionId = r.readTarget?.sessionId || backgroundOperation.conversationTarget(r.command.method, r.command.arguments, actor);
+      if (typeof sessionId !== 'string' || sessionId === actor.id) return null;
+      return { sessionId, name: r.readTarget?.name ?? null, messages: r.readTarget?.messages ?? null, through: r.readTarget?.through ?? null, unasked: r.unasked === true };
+    };
+    return stewardRecords.view(stewardRecord, snapshot, { current: known ? current : null, stateOf, readOf });
   });
   applicationHandlers.delete('stewardRecord');
   register('queueSecretary', async (c, id) => {

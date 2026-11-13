@@ -18,8 +18,15 @@
       return d.toDateString() === t.toDateString() ? time : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`; };
     const dash = value => value || '—';
     // What it did, in a sentence: the few things a butler does most by name, anything else as its command.
-    function what(entry) {
+    function what(entry, now = Date.now()) {
       if (entry.kind === 'role') return [`stewardRecord.role.${ROLES.includes(entry.event) ? entry.event : 'started'}`, { name: dash(entry.name) }];
+      // A read of another session's conversation: whom, and how far when NAW knows it.
+      if (entry.read) {
+        if (entry.read.gone) return [entry.read.image ? 'stewardRecord.step.readImageGone' : 'stewardRecord.step.readGone', {}];
+        if (entry.read.image) return ['stewardRecord.step.readImage', { target: dash(entry.read.target) }];
+        if (entry.read.messages !== null && entry.read.messages !== undefined && entry.read.through) return ['stewardRecord.step.readThrough', { target: dash(entry.read.target), count: entry.read.messages, through: when(entry.read.through, now) }];
+        return ['stewardRecord.step.read', { target: dash(entry.read.target) }];
+      }
       if (entry.kind === 'snapshot') return ['stewardRecord.step.snapshot', {}];
       if (entry.kind === 'message') return ['stewardRecord.step.message', { target: dash(entry.target), text: entry.text || '' }];
       if (entry.method === 'spaceAction' && entry.spaceAction === 'queueAdd') return [entry.target ? 'stewardRecord.step.queueAddTo' : 'stewardRecord.step.queueAdd', { text: entry.text || '', space: dash(entry.space), target: dash(entry.target) }];
@@ -54,7 +61,7 @@
         for (const entry of entries) {
           const tr = make('tr', attention(entry) ? 'attention' : ''), time = make('td', 'steward-record-time'), step = make('td'), end = make('td', 'steward-record-result');
           tr.dataset.kind = entry.kind; time.textContent = when(entry.at, view.at);
-          const [key, params] = what(entry); say(step, key, params);
+          const [key, params] = what(entry, view.at); say(step, key, params);
           const outcome = result(entry); if (outcome) say(end, ...outcome);
           // NAW's own words for a step that failed or was refused by a rule, as the agent was told them.
           if (entry.error) { const why = make('small', 'steward-record-error'); why.textContent = entry.error; end.append(document.createElement('br'), why); }

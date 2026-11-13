@@ -154,6 +154,11 @@ test('every sentence the dialog can show exists in Chinese and English', () => {
   const entries = [
     ...['designated', 'revoked', 'followed', 'started'].map(event => ({ kind: 'role', event, name: 'A' })),
     { kind: 'snapshot', state: 'complete' },
+    { kind: 'snapshot', state: 'complete', read: { target: 'B', messages: 3, through: 1, image: false } },
+    { kind: 'snapshot', state: 'not-executed', read: { target: 'B', messages: null, through: null, image: false } },
+    { kind: 'invoke', method: 'previewImage', state: 'complete', read: { target: 'B', messages: null, through: null, image: true } },
+    { kind: 'invoke', method: 'initial', state: 'complete', read: { gone: true, image: false } },
+    { kind: 'invoke', method: 'previewImage', state: 'complete', read: { gone: true, image: true } },
     ...['staged', 'sending', 'consumed', 'submitted', 'unconfirmed', 'not-sent', 'cancelled', 'odd'].map(state => ({ kind: 'message', target: 'B', text: 't', state })),
     { kind: 'invoke', method: 'spaceAction', spaceAction: 'queueAdd', text: 't', space: 'S', target: null, state: 'complete' },
     { kind: 'invoke', method: 'spaceAction', spaceAction: 'queueAdd', text: 't', space: 'S', target: 'B', state: 'complete' },
@@ -252,4 +257,51 @@ test('the view says a repeat was not done again, and a snapshot that asked the p
   const { bind } = require('../renderer/steward-record.js'), dialog = bind({ dialog: { addEventListener() {} }, document: {}, api: {} });
   assert.equal(dialog.result(repeat)[0], 'stewardRecord.result.duplicate');
   assert.deepEqual(asked, ['op-given'], 'a final outcome is never looked up again');
+});
+
+// Reads without the person's confirmation (the person, 2026-11-12 14:24): each read step says whom it read and how far,
+// from what NAW ran (a snapshot is pinned to the selected session, whatever was asked), never what it read.
+test('a read step says whom it read and how far, from what NAW ran', async t => {
+  const f = fixture(t);
+  await f.record.around(sender(), { action: 'snapshot' }, async () => ({ id: 'op-read', state: 'complete', value: 'PRIVATE BODY' }));
+  await f.record.around(sender(), invoke('initial', ['asked-for'], 'op-pinned'), async () => ({ id: 'op-pinned', state: 'complete' }));
+  await f.record.around(sender(), invoke('previewImage', [{ kind: 'session', sessionId: 'worker' }], 'op-image'), async () => ({ id: 'op-image', state: 'complete' }));
+  await f.record.around(sender(), { action: 'snapshot' }, async () => ({ state: 'complete' }));
+  await f.record.around(sender(), invoke('send', ['worker', 'hi'], 'op-send'), async () => ({ id: 'op-send', state: 'complete' }));
+  const through = Date.parse('2026-11-12T09:58:00Z'), asked = [];
+  const reads = { 'op-read': { sessionId: 'worker', name: 'Old name', messages: 40, through, unasked: true }, 'op-pinned': { sessionId: 'gone', name: 'Gone one', messages: 2, through: null },
+    'op-image': { sessionId: 'worker' }, 'op-send': { sessionId: 'worker' } };
+  const shown = view(f.record, { sessions: [{ id: 'worker', name: 'Worker' }, { id: 'asked-for', name: 'Asked for' }] }, { current: steward, readOf: step => { asked.push(step.operationId); return reads[step.operationId]; } });
+  const [send, own, image, pinned, read] = shown.entries;
+  assert.deepEqual(read.read, { target: 'Worker', image: false, messages: 40, through, unasked: true });
+  assert.deepEqual(pinned.read, { target: 'Gone one', image: false, messages: 2, through: null, unasked: false }, 'the session NAW read, not the one asked for');
+  assert.equal(pinned.target, undefined);
+  assert.equal(image.read.image, true); assert.equal(own.read, undefined, 'a snapshot of NAW itself has no read');
+  assert.equal(send.read, undefined); assert.equal(send.target, 'Worker');
+  assert.deepEqual(asked.sort(), ['op-image', 'op-pinned', 'op-read'], 'only read steps are looked up');
+  assert.doesNotMatch(JSON.stringify(shown), /PRIVATE BODY/);
+  const { bind } = require('../renderer/steward-record.js'), dialog = bind({ dialog: { addEventListener() {} }, document: {}, api: {} });
+  const now = Date.parse('2026-11-12T10:30:00Z'), local = new Date(through), hm = `${String(local.getHours()).padStart(2, '0')}:${String(local.getMinutes()).padStart(2, '0')}`;
+  assert.deepEqual(dialog.what(read, now), ['stewardRecord.step.readThrough', { target: 'Worker', count: 40, through: hm }]);
+  assert.deepEqual(dialog.what(pinned, now), ['stewardRecord.step.read', { target: 'Gone one' }]);
+  assert.deepEqual(dialog.what(image, now), ['stewardRecord.step.readImage', { target: 'Worker' }]);
+  assert.deepEqual(dialog.what(own, now), ['stewardRecord.step.snapshot', {}]);
+  // The person deleted that operation's record: the step says a conversation was read, never a name it may not have read.
+  const gone = view(f.record, { sessions: [{ id: 'asked-for', name: 'Asked for' }] }, { current: steward, readOf: step => step.operationId === 'op-pinned' || step.operationId === 'op-image' ? { gone: true } : null });
+  const goneImage = gone.entries.find(entry => entry.method === 'previewImage'), gonePinned = gone.entries.find(entry => entry.method === 'initial');
+  assert.deepEqual(gonePinned.read, { gone: true, image: false }); assert.equal(gonePinned.target, undefined);
+  assert.deepEqual(dialog.what(gonePinned, now), ['stewardRecord.step.readGone', {}]);
+  assert.deepEqual(dialog.what(goneImage, now), ['stewardRecord.step.readImageGone', {}]);
+});
+test('the record knows which running call it wrote as a step, and of whom', async t => {
+  const f = fixture(t), other = { id: 'other', nativeId: 'native-other' };
+  const seen = [];
+  await f.record.around(sender(), { action: 'snapshot' }, async () => { await new Promise(resolve => setImmediate(resolve)); seen.push(f.record.recording(sender()), f.record.recording(other)); return { state: 'complete' }; });
+  await f.record.around(sender('claude', other), { action: 'snapshot' }, async () => { seen.push(f.record.recording(other)); return { state: 'complete' }; });
+  assert.deepEqual(seen, [true, false, false], 'only the butler\'s own recorded call; a call that was not written is not one');
+  assert.equal(f.record.recording(sender()), false, 'nothing once the call is over');
+  // A timer made during the butler's recorded call keeps its store, but is not that call once it has ended.
+  let later;
+  await f.record.around(sender(), { action: 'snapshot' }, async () => { later = new Promise(resolve => setTimeout(() => resolve(f.record.recording(sender())), 5)); return { state: 'complete' }; });
+  assert.equal(await later, false, 'a timer the call left behind is not the call');
 });

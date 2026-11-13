@@ -735,3 +735,115 @@ for (const method of Object.keys(terminalReadBodies)) test(`${method} refuses a 
   assert.equal((await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt.value, undefined);
   assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('_PRIVATE_'), false);
 });
+
+// The butler reads another session's conversation without the person confirming each read (the person, 2026-11-12
+// 14:24, 「按你推荐的来」), only while it is the designated butler in no space and its record takes lines.
+function butlerFixture(t, provider = 'claude') {
+  const a = main.indexOf('    unasked: (actor'), b = main.indexOf('\n    retireHold:', a);
+  assert.ok(a > 0 && b > a, 'main.cjs passes the unasked gate to background control');
+  let sandbox = null;
+  const f = fixture(t, provider, { unasked: (...args) => vm.runInContext('(' + main.slice(a + '    unasked: '.length, b).trim().replace(/,$/, '') + ')', sandbox)(...args) });
+  sandbox = f.sandbox;
+  sandbox.stewardOf = () => ({ sessionId: f.actor.id, nativeId: f.actor.nativeId });
+  // The butler's record as main.cjs keeps it: a call goes through it the way boot() sends every workspace_control call.
+  const { StewardRecord } = require('../steward-record.cjs');
+  const recordDir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-record-')); t.after(() => fs.rmSync(recordDir, { recursive: true, force: true }));
+  sandbox.stewardRecord = new StewardRecord(recordDir, { steward: () => sandbox.stewardOf() });
+  f.call = (input, binding = f.binding) => sandbox.stewardRecord.around(binding.sender, input, () => f.controller.call(binding, input));
+  f.steps = () => sandbox.stewardRecord.lines.filter(line => line.kind === 'step').length;
+  f.state.sessions[0].roomIds = [];
+  f.state.sessions[1].messages.push({ id: 'other-later', role: 'user', text: 'LATER', time: 1234 });
+  return f;
+}
+for (const provider of ['claude', 'codex']) test(`${provider}: the butler in no space reads another conversation in one call, unasked, and the record says so`, async t => {
+  const f = butlerFixture(t, provider); await f.select('other');
+  const result = await f.call({ action: 'snapshot' });
+  assert.equal(result.state, 'complete', JSON.stringify(result).slice(0, 400));
+  assert.ok(JSON.stringify(result.value).includes(f.secret), 'what was read comes back in the same answer');
+  assert.equal(result.readState, 'consumed'); assert.equal(result.unasked, true);
+  assert.deepEqual(result.readTarget, { sessionId: 'other', nativeId: 'native-other', name: 'Other 中文', messages: 2, through: 1234 });
+  assert.equal(f.notices.length, 0, 'no confirmation is asked for');
+  assert.deepEqual(f.audits.map(r => [r.state, r.unasked === true]), [['running', true], ['complete', true]]);
+  assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes(f.secret), false, 'no durable conversation body');
+  assert.equal(f.steps(), 1, 'written in the butler\'s record first');
+  assert.equal((await f.call({ action: 'receipt', operation_id: result.id })).receipt.value, undefined, 'taken once');
+  // An image of that conversation is read the same way.
+  let entered = 0; f.config.handlers.set('previewImage', () => { entered++; return { dataUrl: 'data:image/png;base64,AA==' }; });
+  const image = await f.call(command('previewImage', [{ kind: 'session', sessionId: 'other', messageId: 'other-message', index: 0 }]));
+  assert.equal(image.state, 'complete', JSON.stringify(image).slice(0, 400)); assert.equal(entered, 1); assert.equal(image.value.dataUrl, 'data:image/png;base64,AA==');
+  assert.equal(f.notices.length, 0);
+});
+for (const [label, change] of [
+  ['a session that is not the butler', f => { f.sandbox.stewardOf = () => ({ sessionId: 'third', nativeId: 'native-third' }); }],
+  ['the butler inside a space', f => { f.state.sessions[0].roomIds = ['shared']; }],
+  ['the butler when the designation cannot be read', f => { f.sandbox.stewardOf = () => { throw Error('Unreadable'); }; }],
+  // Each read is a step of the record first: a call the record did not write (here, sent to background control
+  // directly) is not let through unasked, nor one designated only while it was already under way (the review's race).
+  ['the butler in a call its record did not write', f => { f.call = input => f.controller.call(f.binding, input); }],
+  ['a session designated while its call was under way', f => {
+    const designation = f.sandbox.stewardOf; f.sandbox.stewardOf = () => null;
+    f.call = input => f.sandbox.stewardRecord.around(f.binding.sender, input, () => { f.sandbox.stewardOf = designation; return f.controller.call(f.binding, input); });
+  }],
+]) test(`${label} still asks before reading another conversation`, async t => {
+  const f = butlerFixture(t); change(f); await f.select('other');
+  const pending = await f.call({ action: 'snapshot' });
+  assert.equal(pending.state, 'confirmation-required'); assert.equal(JSON.stringify(pending).includes(f.secret), false);
+  assert.equal(f.notices.length, 1); assert.equal(pending.unasked, undefined);
+});
+test('the butler still asks before reading another session\'s terminal', async t => {
+  const f = butlerFixture(t); let entered = 0;
+  f.config.handlers.set('terminalSnapshot', () => { entered++; return { text: f.secret }; });
+  const pending = await f.call(command('terminalSnapshot', ['other']));
+  assert.equal(pending.state, 'confirmation-required'); assert.equal(entered, 0); assert.equal(f.notices.length, 1);
+});
+test('an unasked read is released only while its reader is still the butler; nothing else unlocks a read', async t => {
+  const f = butlerFixture(t); await f.select('other');
+  const done = await f.call({ action: 'snapshot' });
+  const value = { ...structuredClone(f.state), viewState: { selected: 'other' } };
+  const record = { ...f.controller.receipt(f.actor, done.id), value };
+  assert.ok(JSON.stringify(f.sandbox.projectBackgroundRecord(structuredClone(record), f.contexts[0])).includes(f.secret));
+  f.sandbox.stewardOf = () => null;
+  assert.equal(JSON.stringify(f.sandbox.projectBackgroundRecord(structuredClone(record), f.contexts[0])).includes(f.secret), false, 'revoked: metadata only');
+  f.sandbox.stewardOf = () => ({ sessionId: f.actor.id, nativeId: f.actor.nativeId });
+  const { unasked: _unasked, ...plain } = record;
+  assert.equal(JSON.stringify(f.sandbox.projectBackgroundRecord(structuredClone(plain), f.contexts[0])).includes(f.secret), false, 'neither approved nor unasked: metadata only');
+});
+test('the space audit does not call an unasked read confirmed', t => {
+  const { RoomState } = require('../room-state.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-audit-unasked-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const state = new RoomState(dir), row = { id: 'read-1', actor: { id: 'agent', nativeId: 'native', name: 'Butler', provider: 'claude' },
+    command: { method: 'initial', arguments: ['other'] }, state: 'running', at: 1 };
+  state.recordControlOperation({ ...row, unasked: true });
+  assert.equal(state.value.events[0].uiMessage.key, 'notice.background.runningUnasked');
+  assert.match(state.value.events[0].text, /不用确认/);
+  state.recordControlOperation({ ...row, id: 'read-2' });
+  assert.equal(state.value.events[1].uiMessage.key, 'notice.background.running');
+});
+test('the butler whose record takes no lines is refused before anything is read', async t => {
+  const f = butlerFixture(t); await f.select('other'); f.sandbox.stewardRecord.failed = true;
+  await assert.rejects(f.call({ action: 'snapshot' }), error => error.uiMessage?.key === 'error.steward.recordUnavailable');
+  assert.equal(f.audits.length, 0); assert.equal(f.notices.length, 0);
+});
+// The review's blocking finding: a read the person answered must stay theirs, even when its reader may by then read
+// without asking (designated meanwhile). It goes to the reader as an approved read, and is not said to be unasked.
+for (const provider of ['claude', 'codex']) test(`${provider}: a read the person approved is never taken as unasked, also when its reader may now skip asking`, async t => {
+  let skip = false;
+  const f = fixture(t, provider, { unasked: () => skip }); await f.select('other');
+  const pending = await f.controller.call(f.binding, { action: 'snapshot' });
+  assert.equal(pending.state, 'confirmation-required');
+  skip = true;
+  const decided = await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
+  assert.equal(JSON.stringify(decided).includes(f.secret), false, 'the person\'s answer does not take the read');
+  const receipt = (await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt;
+  assert.ok(JSON.stringify(receipt.value).includes(f.secret), 'its reader gets what was read');
+  assert.equal(receipt.unasked, undefined); assert.ok(f.audits.every(r => r.unasked === undefined), 'no audit line says it was not confirmed');
+});
+test('a session designated butler while its read waits gets that read once the person approves it', async t => {
+  const f = butlerFixture(t); const designation = f.sandbox.stewardOf; f.sandbox.stewardOf = () => null; await f.select('other');
+  const pending = await f.call({ action: 'snapshot' });
+  assert.equal(pending.state, 'confirmation-required');
+  f.sandbox.stewardOf = designation;
+  await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
+  const receipt = (await f.call({ action: 'receipt', operation_id: pending.id })).receipt;
+  assert.ok(JSON.stringify(receipt.value).includes(f.secret)); assert.equal(receipt.unasked, undefined);
+});

@@ -511,7 +511,8 @@ class RoomState {
     const command = record.command.method + (['spaceAction', 'spaceMerge'].includes(record.command.method) ? '.' + record.command.arguments[record.command.method === 'spaceAction' ? 1 : 0] : '');
     const name = require('./background-operation.cjs').visibleText(record.actor.name);
     const event = { id, role: 'system', kind: 'control-audit', sessionId: record.actor.id, name,
-      time: record.at || Date.now(), ...uiNotice('notice.background.' + state, { name, command }),
+      // A read the butler makes without the person's confirmation is not said to be confirmed.
+      time: record.at || Date.now(), ...uiNotice('notice.background.' + (state === 'running' && record.unasked === true ? 'runningUnasked' : state), { name, command }),
       controlAudit: { operationId: record.id, actor: { id: record.actor.id, nativeId: record.actor.nativeId, name, provider: record.actor.provider },
         method: record.command.method, action, state: record.state, ...(record.resultState ? { resultState: record.resultState } : {}) } };
     const available = rooms.filter(id => id === DEFAULT_ROOM_ID || this.spaces.rooms.some(r => r.id === id));
