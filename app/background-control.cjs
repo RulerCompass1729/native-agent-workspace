@@ -31,7 +31,9 @@ const summarizedReasons = new Set([...admissionReasons, 'another-operation-runni
 const positiveCount = n => Number.isSafeInteger(n) && n > 0;
 const nextCount = n => { if (!Number.isSafeInteger(n) || n < 0 || n >= Number.MAX_SAFE_INTEGER) throw Error('Refusal counter is exhausted'); return n + 1; };
 const terminalReads = new Set(['terminalSnapshot', 'observe', 'terminal']);
-const privateReads = new Set(['initial', 'previewImage', 'expandImage', ...terminalReads]);
+// What these return goes back in the same answer and is never kept in the durable operation log. stewardEvents is the
+// butler's read of queue text, deliveries and failure reasons (main.cjs).
+const privateReads = new Set(['initial', 'previewImage', 'expandImage', 'stewardEvents', ...terminalReads]);
 const spaceFileRead = command => command.method === 'spaceFiles' && command.arguments?.[1] !== undefined;
 const privateRead = command => privateReads.has(command.method) || spaceFileRead(command);
 const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value) ? value : 'sha256:' + createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -74,6 +76,7 @@ const parameters = {
   spaceCreate: ['name'], spaceMerge: ['action: preview|status|commit|recover|discard|undo', 'value'],
   spaceAction: ['roomId', 'action: join|rename|notes|memberOrder|archive|restore|stageImages|removeImage|acceptImages|removeFile|queueAdd|queueCancel|queueResolve|forward|queueShared|steerShared|run|pause|clearSharedHistory', 'queueAdd: [text, assignee or null]; only the person-designated secretary may add; queueCancel/queueResolve are person-only; other arguments in the corresponding command order'],
   queueSecretary: ['sessionId or null to revoke; person-only, agents cannot designate themselves'],
+  stewardEvents: ['position from the last read (through), or null to read from the start; the designated butler only. Returns {events, through, more}: what NAW recorded since, oldest first, a few at a time; while more is true, read again from through'],
   spaceFiles: ['roomId', 'fileId?; omit to import the explicit paths'], gitWorktreePreview: ['selected repository path', 'nonce', 'relative path'],
   create: ['options: {provider,cwd,name,view?,gitWorktree?}'], nativeHistory: ['options?'], importHistory: ['nativeId', 'options'],
   rename: ['sessionId', 'name'], sidebar: ['change'],

@@ -13,7 +13,7 @@ const EVENT_KINDS = ['request', 'queue-empty', 'ready', 'decision', 'failure', '
 const ACTION_KINDS = ['queue', 'open', 'archive', 'question', 'report'];
 const PAYLOAD_LIMITS = { text: 12000, title: 400, spaceId: 200, spaceName: 200, memberName: 200,
   memberId: 200, itemId: 200, outcome: 200, reason: 2000, decisionKind: 200, questionKey: 600, supersedes: 200 };
-const MAX_FILE_BYTES = 32 * 1024 * 1024, MAX_RECORD_BYTES = 2 * 1024 * 1024, MAX_BATCH = 100;
+const MAX_FILE_BYTES = 32 * 1024 * 1024, MAX_RECORD_BYTES = 2 * 1024 * 1024, MAX_BATCH = 100, READ_BYTES = 8 * 1024;
 const FILE_NAME = 'butler-ledger.jsonl';
 const QUESTION_SEND_CHANNELS = ['notification', 'butler-ask'];
 const QUESTION_METRIC_GAPS = ['source-unavailable', 'write-failed', 'delivery-unconfirmed', 'unattributed',
@@ -133,7 +133,7 @@ function normalizeResult(value) {
     ...(value.usage === undefined ? {} : { usage: normalizeUsage(value.usage) }) };
 }
 function initialState() {
-  return { sequence: 0, eventSequence: 0, events: [], eventIndex: new Map(), processed: new Set(),
+  return { sequence: 0, eventSequence: 0, origin: null, events: [], eventIndex: new Map(), processed: new Set(),
     batches: new Map(), activeBatchId: null, actions: new Map(), questions: new Map(), questionHead: new Map(),
     deliveries: new Map(), reports: new Map(), reported: new Set(), attempts: new Map(), suspended: new Map(), quarantined: new Map(), quarantinedEvents: new Set(), sourceStates: new Map(),
     questionMetricEpochs: new Map(), questionMetricGaps: [], questionSends: new Map(), reviews: new Map(), hasStoredReviewData: false };
@@ -676,6 +676,8 @@ function reduce(state, record) {
     }
     default: throw invalid('Unknown ledger record type');
   }
+  // This ledger's name in a read position (eventsAfter): its first record, which never changes once written.
+  if (record.sequence === 1) state.origin = createHash('sha256').update(JSON.stringify(record)).digest('hex').slice(0, 16);
   state.sequence = record.sequence;
 }
 function fileIdentity(stat) { return { dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs }; }
@@ -783,6 +785,33 @@ class ButlerLedger {
     return { changed: true, event: active ? clone(this.state.eventIndex.get(event.eventId)) : null };
   }
   pendingEvents() { this.healthy(); return clone(pending(this.state)); }
+  // What the person's designated butler reads to report only what is new: the business events after a position
+  // this ledger gave, oldest first, at most `limit`. A position is `<origin>:<sequence>`, origin naming this ledger
+  // by its first record, so a restart keeps every position good. One from another ledger (a new profile, a replaced
+  // file), past the newest event or malformed is refused, and the reader starts again from the beginning (null).
+  // Reading changes nothing: what the separate butler's batches take stays as it is.
+  eventsAfter(position = null, limit = 50) {
+    this.healthy();
+    requireValue(Number.isSafeInteger(limit) && limit > 0 && limit <= MAX_BATCH, 'Invalid event read limit');
+    const origin = this.state.origin;
+    let after = 0;
+    if (position !== null) {
+      const match = typeof position === 'string' ? /^([0-9a-f]{16}):(0|[1-9][0-9]{0,15})$/u.exec(position) : null;
+      after = match ? Number(match[2]) : NaN;
+      requireValue(match && match[1] === origin && Number.isSafeInteger(after) && after <= this.state.eventSequence,
+        'This position is not one of the current butler ledger', 'BUTLER_POSITION_STALE');
+    }
+    // An answer also stays under about READ_BYTES, so a provider's tool-output limit never fails it (leaving the reader
+    // at the same position for good) or cuts events from its middle; one event always comes, however long.
+    const later = this.state.events.filter(event => event.sequence > after), events = [];
+    let bytes = 0;
+    for (const { sequence, time, kind, payload } of later.slice(0, limit)) {
+      const event = clone({ sequence, time, kind, payload }), size = Buffer.byteLength(JSON.stringify(event));
+      if (events.length && bytes + size > READ_BYTES) break;
+      events.push(event); bytes += size;
+    }
+    return { events, through: origin === null ? null : `${origin}:${events.at(-1)?.sequence ?? after}`, more: later.length > events.length };
+  }
   // Decisions/failures already handled by the rule/B1 path need no model turn.
   // Keep the original event and its independent reporting state for audit.
   consumeRecorded(eventIds) {

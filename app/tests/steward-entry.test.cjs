@@ -46,7 +46,7 @@ function fixture(t, { landingOwner = null } = {}) {
     } });
   vm.runInContext(cut('function register(name, handler) {', 'async function replaceBackendSockets'), context);
   vm.runInContext(cut('function keepStewardOutside(id, join) {', 'function conversationReaderAllowed(actor) {'), context);
-  vm.runInContext(cut("  register('steward', async (c, id, duty = null) => {", "  // B6: the person's own actions on an integration handoff"), context);
+  vm.runInContext(cut("  register('steward', async (c, id, duty = null) => {", "  register('stewardEvents', async (c, position = null) => {"), context);
   vm.runInContext(cut("  register('join', async (c, id, join) => {", "  register('roomRename',"), context);
   // The space action's own join branch, as written, in a handler of its own.
   vm.runInContext("register('spaceJoin', async (c, roomId, action, args = []) => {\n" + cut("    if (action === 'join') {\n      keepStewardOutside(", "    if (['stageImages', 'removeImage'].includes(action)) {") + '});', context);
@@ -307,7 +307,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   const own = fs.readFileSync(path.join(__dirname, '../steward-role.cjs'), 'utf8');
   assert.equal(/integrator\.json|queue-secretary\.json|butler\.json/.test(own), false); assert.ok(own.includes("path.join(directory, 'steward.json')"));
   // Designating only writes the record: the entry's handler touches the record and tells the windows, and no more.
-  const handler = cut("  register('steward', async (c, id, duty = null) => {", "  // B6: the person's own actions on an integration handoff");
+  const handler = cut("  register('steward', async (c, id, duty = null) => {", "  register('stewardEvents', async (c, position = null) => {");
   assert.deepEqual([...new Set(handler.match(/\b(queueSecretary|integratorRole|operator[A-Z]\w*|butler[A-Z]\w*|backgroundControl|queueDispatcher)\b/g) || [])], []);
 });
 
@@ -321,7 +321,9 @@ test('every sentence exists in both languages, and the words say what the design
     'notice.queue.addedBySteward', 'notice.queue.cancelledBySteward', 'notice.queue.resolvedBySteward', 'queue.creator.steward', 'queue.status.cancelledBySteward', 'queue.status.doneBySteward',
     'menu.stewardRecord', 'error.steward.recordUnavailable', 'error.steward.designationUnreadable', 'error.stewardRecord.personOnly', 'error.stewardRecord.unavailable', 'records.name.steward', 'records.item.stewardUnavailable', 'records.item.stewardUnavailableOther',
     // The wake proposal, item 2: the butler's extra messages of a turn are withdrawn when the role ends first.
-    'notice.wake.stewardEnded'];
+    'notice.wake.stewardEnded',
+    // The events the butler reads; their refusals are checked in steward-events.test.cjs.
+    'error.steward.eventsButlerOnly', 'error.steward.eventsPosition', 'error.steward.eventsUnavailable'];
   for (const language of ['zh', 'en']) assert.deepEqual(Object.keys(messages[language]).filter(name => /steward/i.test(name) && !name.startsWith('stewardRecord.')).sort(), [...keys].sort(), language);
   for (const name of keys) assert.equal(/[一-鿿]/.test(messages.en[name]), false, name);
   // What it gives and the one thing it takes away: the person is told both before they confirm.
