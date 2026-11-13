@@ -6,7 +6,7 @@ const root = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..');
 const { NativeHost } = require(path.join(root, 'app/adapters.cjs'));
 const { Workspace } = require(path.join(root, 'app/workspace.cjs'));
 const pending = [], inputs = [], runtimes = new Map();
-const sends = [], interruptions = [];
+const sends = [], interruptions = [], queued = [];
 const heldClaims = new Set(), claims = [];
 const claim = Workspace.prototype.claim;
 Workspace.prototype.claim = function (id, ...args) {
@@ -74,6 +74,13 @@ process.on('message', q => {
     const r = runtimes.get(q.target); r.chatAvailable = q.method === 'available'; r.emit('capability');
   }
   if (q.method === 'set-state') runtimes.get(q.target).emit('state', q.value);
+  // A Claude session that can take a queued message while working. A queued message is only recorded: it is never
+  // delivered, so a test that expects none can tell.
+  if (q.method === 'queue-capable') {
+    const r = runtimes.get(q.target); r.queueAvailable = Boolean(q.value);
+    r.queue = async text => { queued.push({ id: q.target, text }); throw Error('Synthetic queue does not deliver'); };
+    r.emit('capability');
+  }
   if (q.method === 'recovering-terminal') {
     const r = runtimes.get(q.target); r.record.recovering = Boolean(q.value);
     if (q.value) { r.savedTerminal = r.terminal; r.terminal = null; r.hasHistory = false; r.record.connectionRevision = (r.record.connectionRevision || 0) + 1; }
@@ -96,5 +103,5 @@ process.on('message', q => {
   }
   if (q.method === 'fail') { const at = pending.findIndex(p => p.id === q.target); if (at >= 0) pending.splice(at, 1)[0].reject(Error('Synthetic snapshot failure')); }
   if (q.method === 'first-message-required') { const at = pending.findIndex(p => p.id === q.target); if (at >= 0) pending.splice(at, 1)[0].reject(Error('请先在对话中发送第一条消息，再打开同一会话的原生终端。')); }
-  process.send({ requestId: q.id, waitingInputs: waitingInputs.map(c => c.id), pending: pending.map(p => p.id), claims: claims.map(c => c.id), inputs, sends, interruptions });
+  process.send({ requestId: q.id, waitingInputs: waitingInputs.map(c => c.id), pending: pending.map(p => p.id), claims: claims.map(c => c.id), inputs, sends, interruptions, queued });
 });
