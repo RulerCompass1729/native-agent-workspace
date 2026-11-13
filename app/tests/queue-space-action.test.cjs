@@ -415,6 +415,10 @@ test('a session claims an item queued for it that it is already doing, and nothi
   await assert.rejects(claim(sent), refused('error.queue.notQueued'));
   await assert.rejects(claim(cancelled), refused('error.queue.notQueued'));
   assert.deepEqual([own, others, anyone, sent, cancelled, later].map(status), ['queued', 'queued', 'queued', 'sent', 'cancelled', 'queued']);
+  // Its own and queued, but the item NAW sent it has not settled: both would settle on the same reply.
+  await assert.rejects(claim(own), refused('error.queue.claimBusy'));
+  assert.equal(status(own), 'queued');
+  f.room.queueSettle('shared', sent, 'done', '', 'Secretary', 'finished');
   const events = f.room.value.events.length;
   // Its own, queued: sent to it now, under the input its turn began with and its control revision now.
   const before = Date.now();
@@ -428,11 +432,13 @@ test('a session claims an item queued for it that it is already doing, and nothi
   assert.deepEqual([event.sessionId, event.uiMessage.key, event.uiMessage.params], ['secretary', 'notice.queue.claimed', { text: 'board task', name: 'Secretary', sessionId: 'secretary' }]);
   assert.doesNotThrow(() => require('../queue-dispatch.cjs').validateQueue(f.room.queueItems()));
   await assert.rejects(claim(own), refused('error.queue.notQueued'));
+  await assert.rejects(claim(later), refused('error.queue.claimBusy'));
+  f.room.queueSettle('shared', own, 'done', '', 'Secretary', 'board task done');
   // With no input on its record, the reply is what follows the time of the claim.
   f.record.messages = [];
   await claim(later);
   assert.equal(f.room.queueFind('shared', later).tag, `claimed:${later}`);
-  assert.deepEqual([own, others, anyone, sent, cancelled, later].map(status), ['sent', 'queued', 'queued', 'sent', 'cancelled', 'sent']);
+  assert.deepEqual([own, others, anyone, sent, cancelled, later].map(status), ['done', 'queued', 'queued', 'done', 'cancelled', 'sent']);
 });
 test('through the real background controller, a claim needs no confirmation and a refused one changes nothing', async t => {
   const f = fixture(t);

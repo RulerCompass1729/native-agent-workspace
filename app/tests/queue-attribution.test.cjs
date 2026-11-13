@@ -132,10 +132,41 @@ test('room state lets only the item\'s assignee claim it, while it is queued, an
   assert.equal(locale.format('en', 'error.queue.claimOwnOnly'), 'A session can claim only an item queued for it that has not been sent yet.');
   assert.throws(() => room.queueClaim(mine, 'shared', member, NOW), refused('error.queue.notQueued'));
   // An input id the queue could not store is not used: the reply is then what follows the claim's time.
-  for (const input of ['x'.repeat(101), 'line\nbreak', 7]) {
-    const id = room.queueAdd(`Odd ${String(input).length}`, 'session-one');
-    room.queueClaim(id, 'shared', { ...member, input }, NOW);
-    assert.equal(room.queueFind('shared', id).tag, `claimed:${id}`, String(input));
+  for (const [index, input] of ['x'.repeat(101), 'line\nbreak', 7, ''].entries()) {
+    const sessionId = `session-odd-${index}`;
+    const id = room.queueAdd(`Odd ${String(input).length}`, sessionId);
+    room.queueClaim(id, 'shared', { ...member, sessionId, input }, NOW);
+    assert.equal(room.queueFind('shared', id).tag, `claimed:${id}`, JSON.stringify(input));
   }
   assert.doesNotThrow(() => rules.validateQueue(new RoomState(dir).queueItems('shared')));
+});
+
+// Review note: the planner settles every sent item on the member's reply after its anchor, so a
+// member already holding a sent item, in any space, cannot claim another until that one settles.
+test('a member with a sent item that has not settled, in any space, cannot claim another; once it settles it can', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-queue-claim-busy-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const room = new RoomState(dir);
+  const other = room.create('Other');
+  const member = { name: 'Builder <one>', sessionId: 'session-one', control: 0, input: 'turn-input' };
+  const refused = key => error => error.uiMessage?.key === key;
+  const first = room.queueAdd('Sent by NAW', 'session-one', 'shared', person());
+  room.queueClaim(first, 'shared', member, NOW);
+  const here = room.queueAdd('Same space', 'session-one', 'shared', person());
+  const there = room.queueAdd('Other space', 'session-one', other, person());
+  for (const [id, itemId] of [['shared', here], [other, there]]) {
+    assert.throws(() => room.queueClaim(itemId, id, member, NOW), refused('error.queue.claimBusy'), id);
+  }
+  assert.deepEqual([room.queueFind('shared', here).status, new RoomState(dir).queueFind(other, there).status], ['queued', 'queued']);
+  // Another member is not held by this one's item.
+  const theirs = room.queueAdd('Theirs', 'session-two', other, person());
+  room.queueClaim(theirs, other, { ...member, sessionId: 'session-two' }, NOW);
+  assert.equal(room.queueFind(other, theirs).status, 'sent');
+  assert.equal(locale.format('zh', 'error.queue.claimBusy'), '这个会话还有一件已派出、没结算的任务，等它结算后再认领。');
+  assert.equal(locale.format('en', 'error.queue.claimBusy'), 'This session still has a sent item that has not settled; claim after it settles.');
+  // Settled for the person to decide: it no longer settles on a reply, so it does not hold a claim back.
+  room.queueSettle('shared', first, 'waiting', '', 'Builder <one>', 'Pick one');
+  room.queueClaim(there, other, member, NOW + 1);
+  assert.deepEqual([new RoomState(dir).queueFind(other, there).status, room.queueFind('shared', here).status], ['sent', 'queued']);
+  assert.throws(() => room.queueClaim(here, 'shared', member, NOW + 2), refused('error.queue.claimBusy'));
 });

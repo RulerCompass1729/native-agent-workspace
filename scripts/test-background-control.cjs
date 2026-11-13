@@ -296,11 +296,19 @@ async function run() {
   await recordLine(`Claimed from queue: ${claimText} → Synthetic operator (${source}) is already doing it; NAW will not send it`, 'en', claimEvent.id, 'claim');
   await page.screenshot({ path: path.join(pictures, 'queue-claimed-en.png') });
   assert.equal((await control(invoke('interfaceSettings', ['update', 'locale', { preference: 'zh' }, claimEnglish.value.find(s => s.ns === 'locale').revision]))).state, 'complete');
-  // The claimed item was never sent; the person cancels the other member's.
+  // While its claimed item has not settled, the operator cannot claim a second one: both would settle on the same reply.
+  const secondText = 'Claim check: a second item for the operator';
+  await page.evaluate(([text, id]) => workspace.spaceAction('shared', 'queueAdd', [text, id]), [secondText, source]);
+  const second = await queueItem(secondText);
+  const busyClaim = await control(invoke('spaceAction', ['shared', 'queueClaim', [second.id]]));
+  assert.equal(busyClaim.state, 'unconfirmed', JSON.stringify(busyClaim)); assert.match(busyClaim.error, /还有一件已派出、没结算的任务/);
+  save('claim-busy', { state: busyClaim.state, error: busyClaim.error, second: (await queueItem(secondText)).status });
+  // The claimed item was never sent; the person cancels the other member's and the second one.
   await page.evaluate(id => workspace.spaceAction('shared', 'queueCancel', [id]), others.id);
-  assert.deepEqual([(await queueItem(claimText)).status, (await queueItem(othersText)).status], ['sent', 'cancelled']);
+  await page.evaluate(id => workspace.spaceAction('shared', 'queueCancel', [id]), second.id);
+  assert.deepEqual([(await queueItem(claimText)).status, (await queueItem(othersText)).status, (await queueItem(secondText)).status], ['sent', 'cancelled', 'cancelled']);
   assert.equal((await fixture('stats')).sends.length, 1, 'No queue item was sent');
-  checks.push('Through the real MCP path, a member claims an item queued for it without confirmation; another member\'s is refused; nothing is sent; the record names who claimed it in Chinese and English');
+  checks.push('Through the real MCP path, a member claims an item queued for it without confirmation; another member\'s is refused, and so is a second one while the first has not settled; nothing is sent; the record names who claimed it in Chinese and English');
   await checkDesktopState('desktop-final');
   save('operations', JSON.parse(fs.readFileSync(path.join(profile, 'background-operations.json')))); save('final-state', await state());
   const finalStats = await fixture('stats'); save('fixture-stats', finalStats);

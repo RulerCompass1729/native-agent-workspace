@@ -645,6 +645,27 @@ test('a claimed item is left for the person when the person stepped in or took c
   }
 });
 
+// Review note 4: without a stored turn input the claim's anchor is its time. Native-block sessions,
+// the only ones background control serves, stamp each message with one.
+test('a claim with no stored turn input settles on what the member says from the claim\'s time on', async t => {
+  const earlier = [{ id: 'old-ask', role: 'user', text: 'an older request', origin: 'human', time: NOW - 2000 },
+    { id: 'old-answer', role: 'assistant', text: 'earlier work', time: NOW - 1000 }];
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { state: 'working', messages: earlier })]);
+  const claimed = room.queueAdd('board task', 'a');
+  await dispatcher.start();
+  room.queueClaim(claimed, 'shared', { name: 'Agent a', sessionId: 'a', control: 0 }, NOW);
+  assert.equal(room.queueFind('shared', claimed).tag, `claimed:${claimed}`);
+  const session = client.state.sessions[0];
+  session.messages.push({ id: 'late', role: 'assistant', text: 'Done: the board task.', time: NOW + 5 });
+  session.state = 'idle';
+  client.emit('state');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  const item = room.queueFind('shared', claimed);
+  assert.deepEqual([item.status, item.reason, item.reply], ['done', undefined, 'Done: the board task.'], 'the person\'s older request is not read as stepping in');
+  assert.equal(client.sends().length, 0);
+});
+
 test('a refused send goes back to the queue; an uncertain failure is recorded and never retried', async t => {
   const { room, client, dispatcher } = dispatcherSetup(t, [member('a')]);
   const original = client.call.bind(client);

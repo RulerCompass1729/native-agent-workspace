@@ -694,7 +694,14 @@ class RoomState {
     if (item.status !== 'queued') {
       throw uiError("error.queue.notQueued");
     }
-    const tag = typeof member.input === 'string' && member.input.length <= 100 && !/[\u0000-\u001f]/u.test(member.input) ? member.input : `claimed:${item.id}`;
+    // One sent item per member: the planner settles each sent item on the member's reply after its
+    // anchor, so two at once would both settle on the same reply.
+    for (const room of [{ ...this.value, id: DEFAULT_ROOM_ID }, ...this.spaces.rooms]) {
+      if ((room.queue || []).some(other => other.status === 'sent' && other.sentTo === member.sessionId)) {
+        throw uiError("error.queue.claimBusy");
+      }
+    }
+    const tag = typeof member.input === 'string' && member.input.length > 0 && member.input.length <= 100 && !/[\u0000-\u001f]/u.test(member.input) ? member.input : `claimed:${item.id}`;
     const next = { ...item, status: 'sent', sentTo: member.sessionId, sentAt: now, tag, control: member.control };
     const params = { text: queueRules.shortText(item.text), name: member.name, sessionId: member.sessionId };
     const event = { kind: 'queue', sessionId: member.sessionId, ...uiNotice('notice.queue.claimed', params) };
