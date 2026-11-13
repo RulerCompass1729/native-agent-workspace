@@ -320,7 +320,11 @@ async function run() {
   for (const call of navigation.filter(c => ['claim', 'draft'].includes(c.method))) assert.equal(call.id, ids[2]);
   const ipc = [...ipcBatches.flat(), ...await app.evaluate(() => globalThis.panoramaIPC)];
   const navIPC = ipc.slice(ipcNavigationStart);
-  assert.deepEqual(navIPC.filter(c => !allowed.has(c.method)), [], 'All main IPC routes, including local/shared handlers, are accounted separately from WCP');
+  // Page-local IPC that calls nothing native or shared: the page reports which sessions it shows (shown-sessions.cjs) and
+  // acknowledges each rendered state (state-push.cjs); at start it asks once whether to land on the butler record and
+  // reads the butler and records status (main.cjs: register 'landing', 'butler' 'status', 'records' 'status').
+  const pageLocal = c => ['shownSessions', 'state-rendered', 'landing'].includes(c.method) || (['butler', 'records'].includes(c.method) && c.id === 'status');
+  assert.deepEqual(navIPC.filter(c => !allowed.has(c.method) && !pageLocal(c)), [], 'All main IPC routes, including local/shared handlers, are accounted separately from WCP');
   assert.equal(navIPC.filter(c => c.method === 'claim').length, 1);
   fs.writeFileSync(path.join(evidence, 'call-accounting.json'), JSON.stringify({ navigationStart, setup: calls.slice(0, navigationStart), navigation,
     ipcNavigationStart, setupIPC: ipc.slice(0, ipcNavigationStart), navigationIPC: navIPC }, null, 2));

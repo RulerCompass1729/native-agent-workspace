@@ -170,7 +170,11 @@ async function run() {
   fs.writeFileSync(path.join(evidence, 'call-accounting.json'), JSON.stringify({ navigationStart, setup: calls.slice(0, navigationStart), navigation: calls.slice(navigationStart), ipcNavigationStart, setupIPC: ipc.slice(0, ipcNavigationStart), navigationIPC: ipc.slice(ipcNavigationStart) }, null, 2)); // written before the checks, so a failure keeps it
   const allowed = new Set(['initial', 'uiReady', 'viewState', 'readingState', 'terminalSnapshot', 'resize', 'observe', 'unobserve', 'copy']);
   assert.deepEqual(calls.slice(navigationStart).filter(call => !allowed.has(call.method)), []);
-  assert.deepEqual(ipc.slice(ipcNavigationStart).filter(call => !allowed.has(call.method)), []);
+  // Page-local IPC that calls nothing native or shared: the page reports which sessions it shows (shown-sessions.cjs) and
+  // acknowledges each rendered state (state-push.cjs); at start it asks once whether to land on the butler record and
+  // reads the butler and records status (main.cjs: register 'landing', 'butler' 'status', 'records' 'status').
+  const pageLocal = c => ['shownSessions', 'state-rendered', 'landing'].includes(c.method) || (['butler', 'records'].includes(c.method) && c.id === 'status');
+  assert.deepEqual(ipc.slice(ipcNavigationStart).filter(call => !allowed.has(call.method) && !pageLocal(call)), []);
   assert.equal(ipc.slice(ipcNavigationStart).filter(call => call.method === 'copy').length, 2);
   // Since 3f4590d a new page reads each member terminal it shows once, read-only (census③, 384fddc): the reload above
   // shows the default space's two members. Every other terminal read, and all sizing and watching, still targets only U.
