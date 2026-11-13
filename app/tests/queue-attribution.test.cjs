@@ -170,3 +170,27 @@ test('a member with a sent item that has not settled, in any space, cannot claim
   assert.deepEqual([new RoomState(dir).queueFind(other, there).status, room.queueFind('shared', here).status], ['sent', 'queued']);
   assert.throws(() => room.queueClaim(here, 'shared', member, NOW + 2), refused('error.queue.claimBusy'));
 });
+
+// Review round 2, note 1: with either room file unread, a sent item in the unread file cannot be seen.
+test('nothing is claimed while a room file could not be read', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-queue-claim-unread-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const room = new RoomState(dir);
+  const other = room.create('Other');
+  const member = { name: 'Builder <one>', sessionId: 'session-one', control: 0, input: 'turn-input' };
+  const refused = key => error => error.uiMessage?.key === key;
+  const here = room.queueAdd('Default space', 'session-one', 'shared', person());
+  const there = room.queueAdd('Other space', 'session-one', other, person());
+  const spacesFile = path.join(dir, 'collaboration-spaces.json'), roomFile = path.join(dir, 'room-state.json');
+  const spaces = fs.readFileSync(spacesFile, 'utf8'), rooms = fs.readFileSync(roomFile, 'utf8');
+  fs.writeFileSync(spacesFile, '{');
+  assert.throws(() => new RoomState(dir).queueClaim(here, 'shared', member, NOW), refused('error.warning.otherRoomDataRead'));
+  fs.writeFileSync(spacesFile, spaces);
+  fs.writeFileSync(roomFile, '{');
+  assert.throws(() => new RoomState(dir).queueClaim(there, other, member, NOW), refused('error.warning.roomRead'));
+  fs.writeFileSync(roomFile, rooms);
+  const restored = new RoomState(dir);
+  assert.deepEqual([restored.queueFind('shared', here).status, restored.queueFind(other, there).status], ['queued', 'queued']);
+  restored.queueClaim(there, other, member, NOW);
+  assert.equal(new RoomState(dir).queueFind(other, there).status, 'sent');
+});

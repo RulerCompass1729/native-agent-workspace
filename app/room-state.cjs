@@ -695,7 +695,10 @@ class RoomState {
       throw uiError("error.queue.notQueued");
     }
     // One sent item per member: the planner settles each sent item on the member's reply after its
-    // anchor, so two at once would both settle on the same reply.
+    // anchor, so two at once would both settle on the same reply. With a room file unread, the
+    // member's other items cannot all be seen, so nothing is claimed.
+    if (this.warning || this.spacesWarning) throw Object.assign(Error(this.warning || this.spacesWarning), {
+      uiMessage: this.warning ? this.warningUiMessage : this.spacesWarningUiMessage });
     for (const room of [{ ...this.value, id: DEFAULT_ROOM_ID }, ...this.spaces.rooms]) {
       if ((room.queue || []).some(other => other.status === 'sent' && other.sentTo === member.sessionId)) {
         throw uiError("error.queue.claimBusy");
