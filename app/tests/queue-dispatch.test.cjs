@@ -599,6 +599,73 @@ test('the dispatcher sends through the backend dispatch input, waits for the rep
   assert.match(client.sends()[1][2], /second task/);
 });
 
+// Queue item 6897c6e3, part 1: a member took the work from the board while the same item was queued for it (four
+// sends of one item in the person's data). It claims the item mid-turn; NAW never sends it and settles it by the
+// member's reply when the turn ends, as it would an item it sent; the member's next item then goes out as usual.
+function claimSetup(t, extra = {}) {
+  const input = { id: 'board-turn', role: 'user', text: 'take the board task', origin: 'human', status: 'submitted' };
+  const setup = dispatcherSetup(t, [member('a', { state: 'working', messages: [{ id: 'earlier', role: 'assistant', text: 'earlier work' }, input], ...extra })]);
+  const claimed = setup.room.queueAdd('board task', 'a');
+  const next = setup.room.queueAdd('next task', 'a');
+  setup.claim = (control = 0) => setup.room.queueClaim(claimed, 'shared', { name: 'Agent a', sessionId: 'a', control, input: 'board-turn' }, NOW);
+  return { ...setup, claimed, next };
+}
+test('a claimed item is never sent; the member\'s reply at the end of its turn settles it, then its next item goes out', async t => {
+  const { room, client, dispatcher, claimed, next, claim } = claimSetup(t);
+  await dispatcher.start();
+  assert.equal(client.sends().length, 0, 'the member is working');
+  claim();
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  assert.equal(client.sends().length, 0, 'nothing is sent while the claimed item is in flight');
+  client.reply('a', 'Done: the board task.\nREADY lane/board-task 0123abcd');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  const item = room.queueFind('shared', claimed);
+  assert.deepEqual([item.status, item.reply, item.ready], ['done', 'Done: the board task. READY lane/board-task 0123abcd', { branch: 'lane/board-task', commit: '0123abcd' }]);
+  assert.deepEqual(client.sends().map(call => call[4]), [next], 'only the next item was sent, once');
+  assert.equal(room.queueFind('shared', next).status, 'sent');
+});
+test('a claimed item is left for the person when the person stepped in or took control during the turn', async t => {
+  for (const change of ['typed', 'control']) {
+    const { room, client, dispatcher, claimed, claim } = claimSetup(t, { controlRevision: 2 });
+    await dispatcher.start();
+    claim(2);
+    const session = client.state.sessions[0];
+    if (change === 'typed') session.messages.push({ id: 'person', role: 'user', text: 'wait, do it differently', origin: 'human' });
+    else session.controlRevision = 3;
+    client.reply('a', 'Done.');
+    await dispatcher.schedule();
+    await dispatcher.schedule();
+    const item = room.queueFind('shared', claimed);
+    assert.deepEqual([item.status, item.reason], ['waiting', 'person-intervened'], change);
+    // As for an item NAW sent, the member is held for that pass only; the claimed item itself is never sent.
+    assert.equal(client.sends().some(call => call[4] === claimed), false, change);
+    await dispatcher.close();
+  }
+});
+
+// Review note 4: without a stored turn input the claim's anchor is its time. Native-block sessions,
+// the only ones background control serves, stamp each message with one.
+test('a claim with no stored turn input settles on what the member says from the claim\'s time on', async t => {
+  const earlier = [{ id: 'old-ask', role: 'user', text: 'an older request', origin: 'human', time: NOW - 2000 },
+    { id: 'old-answer', role: 'assistant', text: 'earlier work', time: NOW - 1000 }];
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { state: 'working', messages: earlier })]);
+  const claimed = room.queueAdd('board task', 'a');
+  await dispatcher.start();
+  room.queueClaim(claimed, 'shared', { name: 'Agent a', sessionId: 'a', control: 0 }, NOW);
+  assert.equal(room.queueFind('shared', claimed).tag, `claimed:${claimed}`);
+  const session = client.state.sessions[0];
+  session.messages.push({ id: 'late', role: 'assistant', text: 'Done: the board task.', time: NOW + 5 });
+  session.state = 'idle';
+  client.emit('state');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  const item = room.queueFind('shared', claimed);
+  assert.deepEqual([item.status, item.reason, item.reply], ['done', undefined, 'Done: the board task.'], 'the person\'s older request is not read as stepping in');
+  assert.equal(client.sends().length, 0);
+});
+
 test('a refused send goes back to the queue; an uncertain failure is recorded and never retried', async t => {
   const { room, client, dispatcher } = dispatcherSetup(t, [member('a')]);
   const original = client.call.bind(client);

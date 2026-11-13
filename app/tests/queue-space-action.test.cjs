@@ -35,6 +35,9 @@ function spaceAction(extra = {}) {
     queueResolve(...args) {
       calls.push(['queueResolve', ...args]);
     },
+    queueClaim(...args) {
+      calls.push(['queueClaim', ...args]);
+    },
   };
   const context = vm.createContext({
     register(name, fn) {
@@ -46,7 +49,7 @@ function spaceAction(extra = {}) {
     broadcastRoom: async () => {},
     queueDispatcher: { schedule() {} },
     backgroundOperation,
-    queueSecretary: { creator() { throw uiError('error.queue.secretaryOnly'); }, author() { throw uiError('error.queue.withdrawOwnOnly'); } },
+    queueSecretary: { creator() { throw uiError('error.queue.secretaryOnly'); }, author(actor, records, labels, refusal = 'error.queue.withdrawOwnOnly') { throw uiError(refusal); } },
     sessionLabels: { labels: new Map() },
     stewardCaller: async () => null,
     ...extra,
@@ -57,8 +60,8 @@ function spaceAction(extra = {}) {
 
 test('an ordinary agent cannot add or resolve, and its cancel is only ever a withdrawal of its own item', async () => {
   const { handler, calls } = spaceAction();
-  const refusal = { queueAdd: 'error.queue.secretaryOnly', queueCancel: 'error.queue.withdrawOwnOnly', queueResolve: 'error.queue.personOnly' };
-  for (const action of ['queueAdd', 'queueCancel', 'queueResolve']) {
+  const refusal = { queueAdd: 'error.queue.secretaryOnly', queueCancel: 'error.queue.withdrawOwnOnly', queueResolve: 'error.queue.personOnly', queueClaim: 'error.queue.claimOwnOnly' };
+  for (const action of ['queueAdd', 'queueCancel', 'queueResolve', 'queueClaim']) {
     await assert.rejects(handler({ background: true, client: { call: async () => ({ sessions: [] }) } }, 'shared', action, ['x', null]), error => error.uiMessage?.key === refusal[action], action);
   }
   assert.deepEqual(calls, []);
@@ -69,6 +72,8 @@ test('the person\'s window adds, resolves and cancels queue items', async () => 
   assert.equal(await handler({}, 'shared', 'queueAdd', ['task', null]), 'item-1');
   await handler({}, 'shared', 'queueResolve', ['item-1']);
   await handler({}, 'shared', 'queueCancel', ['item-1']);
+  // Claiming is a session's own, for itself: the person's window has no session of its own to claim for.
+  await assert.rejects(handler({ client: { call: async () => { throw Error('no session list is read'); } } }, 'shared', 'queueClaim', ['item-1']), error => error.uiMessage?.key === 'error.queue.claimOwnOnly');
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['queueAdd', 'task', null, 'shared', { kind: 'person', name: 'You', sessionId: null }, null], ['queueResolve', 'item-1', 'shared', null], ['queueCancel', 'item-1', 'shared', null]]);
 });
 
@@ -379,5 +384,75 @@ test('through the real background controller, a withdrawal needs no confirmation
   assert.equal(taken.state, 'complete');
   assert.equal(taken.confirmation, undefined);
   assert.deepEqual(f.room.queueItems().map(item => item.status), ['cancelled', 'queued']);
+  await controller.close();
+});
+
+// Queue item 6897c6e3, part 1 (board 11-13 00:02:25/00:02:46): a member that took work from the board while the same
+// item was queued for it claims the item, so that NAW does not send it the same work again. Nothing is sent; the item
+// counts as sent to that member and settles by its reply. Not a cancel or a resolve: those stay as they are.
+test('a session claims an item queued for it that it is already doing, and nothing else', async t => {
+  const f = fixture(t);
+  const other = { ...f.sender, id: 'other', nativeId: 'native-other', name: 'Other' };
+  f.record.controlRevision = 3;
+  f.record.messages = [{ id: 'earlier-input', role: 'user', text: 'an earlier turn', origin: 'human' }, { id: 'earlier', role: 'assistant', text: 'earlier work' },
+    { id: 'turn-input', role: 'user', text: 'take the board task', origin: 'human' }, { id: 'working', role: 'assistant', text: 'on it' }];
+  const sessions = [f.record, { id: 'other', nativeId: 'native-other', name: 'Other', state: 'idle' }];
+  f.c.client.call = async () => ({ sessions });
+  const add = (text, assignee) => f.room.queueAdd(text, assignee, 'shared');
+  const own = add('board task', 'secretary'), others = add('someone else\'s', 'other'), anyone = add('for any member', null);
+  const sent = add('already sent', 'secretary'), cancelled = add('cancelled', 'secretary'), later = add('later', 'secretary');
+  f.room.queueMarkSent('shared', sent, 'secretary', 'Secretary', Date.now());
+  f.room.queueCancel(cancelled, 'shared');
+  const claim = (id, actor = f.sender) => f.invoke('spaceAction', ['shared', 'queueClaim', [id]], actor);
+  const refused = key => error => error.uiMessage?.key === key;
+  const status = id => f.room.queueFind('shared', id).status;
+  // Queued for another member, for any member, or called by another session: not its own.
+  await assert.rejects(claim(others), refused('error.queue.claimOwnOnly'));
+  await assert.rejects(claim(anyone), refused('error.queue.claimOwnOnly'));
+  await assert.rejects(claim(own, other), refused('error.queue.claimOwnOnly'));
+  await assert.rejects(claim(own, { ...f.sender, nativeId: 'native-replacement' }), refused('error.queue.claimOwnOnly'));
+  // Its own, but no longer queued.
+  await assert.rejects(claim(sent), refused('error.queue.notQueued'));
+  await assert.rejects(claim(cancelled), refused('error.queue.notQueued'));
+  assert.deepEqual([own, others, anyone, sent, cancelled, later].map(status), ['queued', 'queued', 'queued', 'sent', 'cancelled', 'queued']);
+  // Its own and queued, but the item NAW sent it has not settled: both would settle on the same reply.
+  await assert.rejects(claim(own), refused('error.queue.claimBusy'));
+  assert.equal(status(own), 'queued');
+  f.room.queueSettle('shared', sent, 'done', '', 'Secretary', 'finished');
+  const events = f.room.value.events.length;
+  // Its own, queued: sent to it now, under the input its turn began with and its control revision now.
+  const before = Date.now();
+  await claim(own);
+  const item = f.room.queueFind('shared', own);
+  assert.deepEqual([item.status, item.sentTo, item.tag, item.control], ['sent', 'secretary', 'turn-input', 3]);
+  assert.ok(item.sentAt >= before && item.sentAt <= Date.now());
+  assert.equal(Object.hasOwn(item, 'finishedBy') || Object.hasOwn(item, 'finishedAt'), false);
+  assert.equal(f.room.value.events.length, events + 1);
+  const event = f.room.value.events.at(-1);
+  assert.deepEqual([event.sessionId, event.uiMessage.key, event.uiMessage.params], ['secretary', 'notice.queue.claimed', { text: 'board task', name: 'Secretary', sessionId: 'secretary' }]);
+  assert.doesNotThrow(() => require('../queue-dispatch.cjs').validateQueue(f.room.queueItems()));
+  await assert.rejects(claim(own), refused('error.queue.notQueued'));
+  await assert.rejects(claim(later), refused('error.queue.claimBusy'));
+  f.room.queueSettle('shared', own, 'done', '', 'Secretary', 'board task done');
+  // With no input on its record, the reply is what follows the time of the claim.
+  f.record.messages = [];
+  await claim(later);
+  assert.equal(f.room.queueFind('shared', later).tag, `claimed:${later}`);
+  assert.deepEqual([own, others, anyone, sent, cancelled, later].map(status), ['done', 'queued', 'queued', 'done', 'cancelled', 'sent']);
+});
+test('through the real background controller, a claim needs no confirmation and a refused one changes nothing', async t => {
+  const f = fixture(t);
+  f.record.messages = [{ id: 'turn-input', role: 'user', text: 'take the board task', origin: 'human' }];
+  const own = f.room.queueAdd('own', 'secretary', 'shared'), persons = f.room.queueAdd('the person\'s, for any member', null, 'shared');
+  const controller = new BackgroundControl({ dataDir: f.dir, handlers: f.handlers, context: () => f.c });
+  const binding = { sender: { id: f.sender.id, nativeId: f.sender.nativeId, provider: 'codex', name: 'Secretary' }, identity: { callId: 'native-call', turnId: 'native-turn' }, valid: () => true };
+  const call = (id, operation) => controller.call(binding, { action: 'invoke', method: 'spaceAction', arguments: ['shared', 'queueClaim', [id]], operation_id: operation });
+  const refused = await call(persons, 'claim-unassigned');
+  assert.equal(refused.state, 'unconfirmed');
+  assert.match(refused.error, /只能认领指给自己/);
+  const taken = await call(own, 'claim-own');
+  assert.equal(taken.state, 'complete');
+  assert.equal(taken.confirmation, undefined);
+  assert.deepEqual(f.room.queueItems().map(item => [item.status, item.tag ?? null]), [['sent', 'turn-input'], ['queued', null]]);
   await controller.close();
 });

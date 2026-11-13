@@ -681,6 +681,35 @@ class RoomState {
     const event = { kind: 'queue', ...uiNotice('notice.queue.withdrawn', { text: queueRules.shortText(item.text), name: author.name, sessionId: author.sessionId }) };
     this.queueReplace(id, itemId, { ...item, status: 'cancelled', finishedAt: Date.now() }, event);
   }
+  // A member already doing an item queued for it (taken from the board, say) claims it, so that NAW does not send it
+  // the same work again (queue item 6897c6e3, part 1). From now it counts as sent to that member: NAW settles it by
+  // the member's reply when its turn ends, as for an item NAW sent. Nothing is sent. The tag is the input the member's
+  // turn began with (`member.input`), so the reply is what follows it, as after NAW's own input; without one, a tag that
+  // matches no message makes it what follows the claim's time. `control` is the member's control revision now.
+  queueClaim(itemId, id = DEFAULT_ROOM_ID, member, now = Date.now()) {
+    const item = this.queueFind(id, itemId);
+    if (typeof member?.sessionId !== 'string' || !member.sessionId || item.assignee !== member.sessionId) {
+      throw uiError("error.queue.claimOwnOnly");
+    }
+    if (item.status !== 'queued') {
+      throw uiError("error.queue.notQueued");
+    }
+    // One sent item per member: the planner settles each sent item on the member's reply after its
+    // anchor, so two at once would both settle on the same reply. With a room file unread, the
+    // member's other items cannot all be seen, so nothing is claimed.
+    if (this.warning || this.spacesWarning) throw Object.assign(Error(this.warning || this.spacesWarning), {
+      uiMessage: this.warning ? this.warningUiMessage : this.spacesWarningUiMessage });
+    for (const room of [{ ...this.value, id: DEFAULT_ROOM_ID }, ...this.spaces.rooms]) {
+      if ((room.queue || []).some(other => other.status === 'sent' && other.sentTo === member.sessionId)) {
+        throw uiError("error.queue.claimBusy");
+      }
+    }
+    const tag = typeof member.input === 'string' && member.input.length > 0 && member.input.length <= 100 && !/[\u0000-\u001f]/u.test(member.input) ? member.input : `claimed:${item.id}`;
+    const next = { ...item, status: 'sent', sentTo: member.sessionId, sentAt: now, tag, control: member.control };
+    const params = { text: queueRules.shortText(item.text), name: member.name, sessionId: member.sessionId };
+    const event = { kind: 'queue', sessionId: member.sessionId, ...uiNotice('notice.queue.claimed', params) };
+    this.queueReplace(id, itemId, next, event);
+  }
   // Besides an item waiting for them, the person or the butler may mark handled one already sent whose work was done
   // another way (11-12: the butler could not close it, item 0bcc3c9c). NAW then does not settle it; the dispatcher
   // leaves an item it finds closed as it is (queue-dispatch.cjs, stillSent). A queued item is cancelled instead:
