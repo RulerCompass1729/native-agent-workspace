@@ -231,7 +231,12 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
   }
   entries.sort((a, b) => b.at - a.at);
   const s = current && sessions.get(current.sessionId);
+  // Automatic messages held for the butler under its 60-second limit (option A; the integrator, 11-12 21:2x: 「大管家记录里
+  // 看得到存量和最老等待」): how many this backend holds, and since when the oldest waits.
+  const held = [];
+  if (current) for (const x of sessions.values()) for (const row of x.messages || []) if (row.wake?.status === 'held' && row.wake.recipientId === current.sessionId && Number.isSafeInteger(row.wake.heldAt)) held.push(row.wake.heldAt);
   return { current: s ? { id: s.id, name: s.name, provider: s.provider, usage: s.usage || null } : current ? { id: current.sessionId, name: null, provider: null, usage: null } : null,
+    waiting: held.length ? { count: held.length, since: Math.min(...held) } : null,
     total: entries.length, entries: entries.slice(0, limit), at: now, writeFailed: record.failed && !record.loadError };
 }
 

@@ -14,7 +14,7 @@ function readingWakeIntent(message, room, session) {
     typeof wake.body === 'string' && wake.body.length <= 6000 && typeof wake.recipientId === 'string' && wake.recipientId ? wake : null;
 }
 function readingWakeStatus(wake) {
-  const labels = { staged: 'reading.wakeRegistered', sending: 'delivery.awaiting', consumed: 'delivery.awaiting',
+  const labels = { staged: 'reading.wakeRegistered', held: 'reading.wakeHeld', sending: 'delivery.awaiting', consumed: 'delivery.awaiting',
     submitted: 'delivery.submitted', unconfirmed: 'delivery.unconfirmed', cancelled: 'delivery.notSent', 'not-sent': 'delivery.notSent' };
   return typeof wake.status === 'string' && Object.hasOwn(labels, wake.status) ? labels[wake.status] : 'delivery.unknown';
 }
@@ -955,7 +955,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (!entry.inputBody) { entry.inputBody = node('pre', undefined, 'native-tool-input'); entry.body.before(entry.inputBody); }
       entry.inputBody.textContent = m.input || ''; entry.inputBody.hidden = !m.input;
     }
-    const wakeBody = wake && ['staged', 'sending', 'consumed', 'submitted'].includes(wake.status);
+    const wakeBody = wake && ['staged', 'held', 'sending', 'consumed', 'submitted'].includes(wake.status);
     const spaceBody = readingSpaceMessageBody(m, room);
     const displayText = spaceBody ? spaceBody.body : wakeBody ? wake.body : nativeCompletionText(m);
     if (spaceBody) {

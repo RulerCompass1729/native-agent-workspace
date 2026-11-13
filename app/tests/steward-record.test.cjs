@@ -148,6 +148,22 @@ test('the bell keeps this record like the others', t => {
   assert.equal(reminders.status(dir, Date.now(), { unavailable: { steward: 'history' } }).records.find(r => r.record === 'steward').items[0].shown, false);
 });
 
+// Option A (the integrator, 11-12 21:2x: 「大管家记录里看得到存量和最老等待」).
+test('the dialog says how many messages are held for the butler and how long the oldest has waited', async () => {
+  const { bind } = require('../renderer/steward-record.js');
+  const el = tag => ({ tag, children: [], className: '', textContent: '', dataset: {}, append(...c) { this.children.push(...c); }, replaceChildren(...c) { this.children = c; }, setAttribute() {}, addEventListener() {} });
+  const lines = async shown => {
+    const dialog = { ...el('dialog'), id: 'd', open: false, showModal() { this.open = true; }, close() {} };
+    await bind({ dialog, document: { createElement: el }, api: { stewardRecord: async () => shown } }).open();
+    return dialog.children.filter(c => c.className === 'steward-record-waiting').map(c => c.textContent);
+  };
+  const at = 1_800_000_000_000, base = { current: { id: 'butler', name: 'Butler', provider: 'claude', usage: null }, entries: [], total: 0, at };
+  assert.deepEqual(await lines({ ...base, waiting: { count: 2, since: at - 125_000 } }), ['排着等送给大管家的自动消息：2 条，最早一条已等 2 分钟。']);
+  assert.deepEqual(await lines({ ...base, waiting: { count: 1, since: at - 5_000 } }), ['排着等送给大管家的自动消息：1 条，最早一条刚排上（不到 1 分钟）。']);
+  assert.deepEqual(await lines({ ...base, waiting: null }), []);
+  assert.deepEqual(await lines({ ...base, current: null, waiting: { count: 1, since: at } }), [], 'no butler, no line');
+});
+
 test('every sentence the dialog can show exists in Chinese and English', () => {
   const messages = require('../ui-messages.js'), { bind } = require('../renderer/steward-record.js');
   const shown = bind({ dialog: { addEventListener() {} }, document: {}, api: {} });
@@ -170,7 +186,7 @@ test('every sentence the dialog can show exists in Chinese and English', () => {
     ...['running', 'complete', 'received', 'awaiting-native', 'confirmation-required', 'cancelled', 'unconfirmed', 'odd'].map(state => ({ kind: 'invoke', method: 'send', state })),
     ...['another-operation-running', 'unknown-command', 'confirmation-limit', 'originating-session-unavailable', 'conversation-access-denied', 'conversation-target-unavailable', 'space-file-membership-required', 'explicit-paths-required', 'odd'].map(reason => ({ kind: 'invoke', method: 'send', state: 'not-executed', reason })),
   ];
-  const keys = new Set(['stewardRecord.title', 'stewardRecord.current', 'stewardRecord.none', 'stewardRecord.heading', 'stewardRecord.col.time', 'stewardRecord.col.what', 'stewardRecord.col.result',
+  const keys = new Set(['stewardRecord.title', 'stewardRecord.current', 'stewardRecord.none', 'stewardRecord.waiting', 'stewardRecord.waitingNew', 'stewardRecord.heading', 'stewardRecord.col.time', 'stewardRecord.col.what', 'stewardRecord.col.result',
     'stewardRecord.empty', 'stewardRecord.more', 'stewardRecord.note', 'stewardRecord.writeFailed', 'error.steward.designationUnreadable', 'stewardRecord.usage', 'stewardRecord.usageNone', 'stewardRecord.usageLimit', 'stewardRecord.failed', 'menu.stewardRecord',
     'error.steward.recordUnavailable', 'error.stewardRecord.personOnly', 'error.stewardRecord.unavailable', 'records.name.steward', 'records.item.stewardUnavailable', 'records.item.stewardUnavailableOther']);
   for (const entry of entries) { keys.add(shown.what(entry)[0]); const end = shown.result(entry); if (end) keys.add(end[0]); }

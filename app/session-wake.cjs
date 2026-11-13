@@ -1,7 +1,8 @@
 const { uiError, uiActivity, setWarning } = require('./ui-errors.cjs');
 const { displayMessage } = require('./ui-locale.js');
 // One explicit native intent, transferred once through the existing local services.
-// No timer, replay, model router, permission decision or native goal write lives here.
+// No replay, model router, permission decision or native goal write lives here. The one timer offers again a message
+// the designated butler refused only for its 60-second limit (option A, below).
 const fs = require('node:fs'), path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { readLayout } = require('./service-layout.cjs');
@@ -53,7 +54,7 @@ function revoke(w) {
       try { const stat = fs.lstatSync(file); if (stat.isFile() && stat.uid === process.getuid()) fs.unlinkSync(file); } catch { /* The local automatic path stays disabled. */ }
     }
   } finally { try { fs.unlinkSync(temp); } catch { /* Never block human controls on cleanup. */ } }
-  for (const s of w.sessions.values()) for (const m of s.messages || []) if (m.wake?.status === 'staged') { m.wake.status = 'cancelled'; m.text = `真人操作或交接边界已变化；自动消息未投递。\n${m.wake.body}`; m.uiMessage = displayMessage({ version: 1, key: 'notice.wake.humanBoundary', params: { body: m.wake.body } }, 'notice.', m.text) || undefined; }
+  for (const s of w.sessions.values()) for (const m of s.messages || []) if (['staged', 'held'].includes(m.wake?.status)) { m.wake.status = 'cancelled'; m.text = `真人操作或交接边界已变化；自动消息未投递。\n${m.wake.body}`; m.uiMessage = displayMessage({ version: 1, key: 'notice.wake.humanBoundary', params: { body: m.wake.body } }, 'notice.', m.text) || undefined; }
   return saved;
 }
 function initialize(w) {
@@ -136,8 +137,29 @@ function sourceIssue(w, s, r, intent) {
 }
 function sourceValid(w, s, r, intent) { return !sourceIssue(w, s, r, intent); }
 function durable(w) { w.changed(); w.persist(); if (w.storageWarning) throw uiError("error.wake.recordSaveFailed"); }
-function notSent(error) {
-  return { status: 'not-sent', reason: error.message, reasonUiMessage: displayMessage(error.uiMessage) || null };
+function notSent(error, hold) {
+  return { status: 'not-sent', reason: error.message, reasonUiMessage: displayMessage(error.uiMessage) || null, ...hold };
+}
+// Option A (board 11-12 21:2x, the person 「按你推荐的来」): 「被拒的自动消息先存着、每分钟补送一条，限制本身不变（不放宽）」.
+// A message the designated butler refuses only for its 60-second limit is kept by its sender's backend and offered
+// again when the limit allows: one a minute to the butler, as the limit already has it. Every other refusal (three in
+// a row, busy, waiting, switched off, a changed identity) and every other recipient stay as before: not sent, not
+// retried. Each offer is a full delivery attempt again, so the person acting on either session or pausing all
+// handoffs still ends it. The recipient's backend says so, with the time its limit opens.
+function holdFor(w, s, error) {
+  if (error?.cooldown !== true || !isSteward(w, s)) return undefined;
+  const at = s.wakeBudget?.lastAt;
+  return Number.isSafeInteger(at) ? { hold: true, retryAt: at + COOLDOWN } : undefined;
+}
+// The sender's side checks the answer too: only a refusal for the limit, of a message to the person's designated
+// butler, is ever held.
+function holdable(w, intent, result) {
+  if (result?.status !== 'not-sent' || result.hold !== true || !Number.isSafeInteger(result.retryAt) || result.reasonUiMessage?.key !== 'error.wake.recipientCooldown') return false;
+  return stillButler(w, intent);
+}
+// The designation as it is now still names the recipient's native session: the person can end or move the role.
+function stillButler(w, intent) {
+  try { const steward = stewardNow(w); return Boolean(steward) && steward.sessionId === intent.recipientId && steward.nativeId === intent.targetProof?.nativeId; } catch { return false; }
 }
 function refusedNotice(row, result) {
   row.wake.status = 'not-sent';
@@ -155,9 +177,10 @@ function validateArgs(args) {
 // space. Anything else, a designation that cannot be read included, is not, and keeps one message a turn. Read from
 // the same file main.cjs keeps, only when it matters.
 const STEWARD_RECIPIENTS = 4;
+function stewardNow(w) { return new (require('./steward-role.cjs').StewardRole)(root(w)).current(); }
 function isSteward(w, s) {
   try {
-    const steward = new (require('./steward-role.cjs').StewardRole)(root(w)).current();
+    const steward = stewardNow(w);
     return Boolean(steward && s && steward.sessionId === s.id && steward.nativeId === s.nativeId && !s.archived && !s.nativeContextPending && spaces.roomIds(s).length === 0);
   } catch { return false; }
 }
@@ -222,15 +245,27 @@ async function stageOnce(w, s, r, native, args) {
   const row = { id: intent.id, role: 'system', kind: 'notice', name: '自动消息', origin: 'agent-wake-intent', text: `发给 ${target.session.name} 的消息已登记，尚未投递。\n${args.message}`, status: 'complete', time: intent.time, wake: intent };
   row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.registered', params: { name: target.session.name, body: args.message } }, 'notice.', row.text) || undefined;
   row.uiNameMessage = uiActivity('notice.wake.name')[1];
-  if (target.readiness?.status === 'not-sent') refusedNotice(row, target.readiness);
+  // The butler's limit can open before this turn ends: the message stays staged, and is held then if it has not.
+  const waits = target.readiness?.status === 'not-sent' && holdable(w, intent, target.readiness);
+  if (target.readiness?.status === 'not-sent' && !waits) refusedNotice(row, target.readiness);
   s.messages.push(row);
   // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
   // push and the save, and an unsaved staged wake would still be sent when the turn ends.
   w.mirrorWake?.(s, intent, target.session, row);
   try { durable(w); } catch (e) { intent.status = 'unconfirmed'; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
   if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text };
+  if (waits) {
+    // About when: the ones held here for the same recipient go first, a minute apart from the earliest, and none
+    // before its limit opens.
+    const queued = heldRows(w).filter(({ row: other }) => other.wake.recipientId === intent.recipientId).map(({ row: other }) => other.wake.retryAt);
+    const at = Math.max(target.readiness.retryAt, queued.length ? Math.min(...queued) + COOLDOWN * queued.length : 0);
+    const minutes = Math.max(1, Math.ceil((at - Date.now()) / 60000));
+    return { status: 'staged', id: intent.id, readiness: 'held', message: `已保存，尚未投递。收件方 60 秒内刚收过一条自动消息：已排着，约 ${minutes} 分钟后由 NAW 再送一次（当前原生回合结束时限制已过就直接送）；你不要等待或重试。真人可随时撤销。` };
+  }
   const readiness = target.readiness?.status === 'ready' ? 'checked' : 'deferred';
-  return { status: 'staged', id: intent.id, readiness, message: '已保存，尚未投递。当前原生回合正常结束后只尝试一次；不要等待或重试。真人可随时撤销。' + (readiness === 'deferred' ? ' 收件后台不支持即时就绪检查，尚未确认它能接收。' : '') };
+  // To the butler, the turn's end can still meet its limit; then the message is held instead of tried only once.
+  const once = stillButler(w, intent) ? '当前原生回合正常结束后尝试投递；那时收件方若 60 秒内刚收过一条自动消息，NAW 先存着，限制过了再送一次；' : '当前原生回合正常结束后只尝试一次；';
+  return { status: 'staged', id: intent.id, readiness, message: `已保存，尚未投递。${once}不要等待或重试。真人可随时撤销。` + (readiness === 'deferred' ? ' 收件后台不支持即时就绪检查，尚未确认它能接收。' : '') };
 }
 // Why a wake staged in a turn was withdrawn when that turn's end was reported. T-141: `boundary` is a turn whose
 // authority an input or permission boundary took mid-turn; steward step 2, batch 0: `incomplete`, one that ended
@@ -260,19 +295,87 @@ function complete(w, s, r, info) {
       const [why, key] = TURN_END_CANCELLED[Object.hasOwn(TURN_END_CANCELLED, reason) ? reason : 'other'];
       intent.status = 'cancelled'; row.text = `${why}；自动消息未投递。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key, params: { body: intent.body } }, 'notice.', row.text) || undefined; durable(w); continue;
     }
-    intent.status = 'sending'; durable(w);
-    // Persist before the one transfer. Reopening never replays sending/staged rows.
-    w.peerRunner.transferWake(intent).then(result => {
-      if (result.status === 'not-sent') refusedNotice(row, result);
-      else { intent.status = result.status; row.text = `发给原会话的自动消息：${result.status === 'submitted' ? '原生已接收' : '接收结果未确认'}。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: result.status === 'submitted' ? 'notice.wake.submitted' : 'notice.wake.unconfirmed', params: { body: intent.body } }, 'notice.', row.text) || undefined; }
-      durable(w);
-    }).catch(error => { intent.status = 'unconfirmed'; row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; row.uiMessage = displayMessage(uiError('error.wake.deliveryUnconfirmed', { reason: error.message, body: intent.body }, { cause: error, param: 'reason' }).uiMessage, 'error.', row.text) || undefined; w.changed(); w.persist(); });
+    transfer(w, row);
   }
+}
+// One delivery attempt. Persist before it: reopening never replays sending/staged/held rows. Only an explicit refusal
+// before anything was reserved or written (not-sent) can be held and offered again; an uncertain outcome never is.
+function transfer(w, row) {
+  const intent = row.wake;
+  intent.status = 'sending'; durable(w);
+  return w.peerRunner.transferWake(intent).then(result => {
+    if (holdable(w, intent, result)) hold(w, row, result.retryAt);
+    else if (result.status === 'not-sent') refusedNotice(row, result);
+    else {
+      intent.status = result.status; row.text = `发给原会话的自动消息：${result.status === 'submitted' ? '原生已接收' : '接收结果未确认'}。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: result.status === 'submitted' ? 'notice.wake.submitted' : 'notice.wake.unconfirmed', params: { body: intent.body } }, 'notice.', row.text) || undefined;
+      // It took one: the others held here for it wait out its new minute instead of being refused for it first.
+      if (result.status === 'submitted') for (const other of heldRows(w)) if (other.row.wake.recipientId === intent.recipientId) other.row.wake.retryAt = Math.max(other.row.wake.retryAt, Date.now() + COOLDOWN);
+    }
+    durable(w);
+  }).catch(error => { intent.status = 'unconfirmed'; row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; row.uiMessage = displayMessage(uiError('error.wake.deliveryUnconfirmed', { reason: error.message, body: intent.body }, { cause: error, param: 'reason' }).uiMessage, 'error.', row.text) || undefined; w.changed(); w.persist(); })
+    .finally(() => arm(w));
+}
+function heldRows(w) {
+  const rows = [];
+  for (const s of w.sessions.values()) for (const row of s.messages || []) if (row.wake?.status === 'held') rows.push({ s, row });
+  return rows;
+}
+function hold(w, row, retryAt) {
+  const intent = row.wake, now = Date.now();
+  intent.status = 'held'; intent.heldAt ??= now;
+  // Never sooner than a second from now, never later than the limit itself allows.
+  intent.retryAt = Math.min(Math.max(retryAt, now + 1000), now + COOLDOWN + 1000);
+  row.text = `收件方 60 秒内刚收过一条自动消息；这条先存着，限制过了再试一次。\n${intent.body}`;
+  row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.held', params: { body: intent.body } }, 'notice.', row.text) || undefined;
+}
+// The one timer: at the earliest time a held message may go. One recipient takes one attempt at a time, oldest first.
+function arm(w) {
+  clearTimeout(w.wakeHoldTimer); w.wakeHoldTimer = null; w.wakeHoldAt = null;
+  if (w.closed) return;
+  const rows = heldRows(w), sending = new Set();
+  for (const s of w.sessions.values()) for (const m of s.messages || []) if (['sending', 'consumed'].includes(m.wake?.status)) sending.add(m.wake.recipientId);
+  const next = Math.min(...rows.filter(({ row }) => !sending.has(row.wake.recipientId)).map(({ row }) => row.wake.retryAt));
+  if (!Number.isFinite(next)) return;
+  w.wakeHoldAt = next;
+  // A timer callback that threw would end the whole service: it never does.
+  w.wakeHoldTimer = setTimeout(() => { try { retryHeld(w); } catch { /* The rows stay held and shown. */ } }, Math.max(0, next - Date.now()));
+  w.wakeHoldTimer.unref?.();
+}
+function dropHeld(w, row, issue) {
+  const intent = row.wake;
+  intent.status = 'cancelled'; intent.cancellation = { ...issue, at: Date.now() };
+  row.text = `存着的自动消息没有补送：补送前核对发送方和授权没通过。\n${intent.body}`;
+  row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.heldCancelled', params: { body: intent.body } }, 'notice.', row.text) || undefined;
+  try { durable(w); } catch { /* Shown now; the next save keeps it. */ }
+}
+function retryHeld(w) {
+  clearTimeout(w.wakeHoldTimer); w.wakeHoldTimer = null; w.wakeHoldAt = null;
+  if (w.closed) return;
+  const sending = new Set(), due = Object.create(null);
+  for (const s of w.sessions.values()) for (const m of s.messages || []) if (['sending', 'consumed'].includes(m.wake?.status)) sending.add(m.wake.recipientId);
+  for (const { s, row } of heldRows(w)) {
+    const intent = row.wake, first = due[intent.recipientId];
+    if (intent.retryAt > Date.now() || sending.has(intent.recipientId) || first && first.row.wake.time <= intent.time) continue;
+    due[intent.recipientId] = { s, row };
+  }
+  let pending = false;
+  try {
+    for (const { s, row } of Object.values(due)) {
+      const r = w.runtimes.get(s.id);
+      let issue;
+      // The sender as complete() checks it at the turn's end, and the butler role; the recipient's side checks everything again.
+      try { issue = !r ? { code: 'source-runtime-changed' } : !w.peerRunner ? { code: 'backend-unsupported' } : sourceIssue(w, s, r, row.wake) || (stillButler(w, row.wake) ? null : { code: 'steward-role-ended' }); }
+      catch (error) { issue = { code: 'authorization-unreadable', reason: error.message }; }
+      if (issue) { dropHeld(w, row, issue); continue; }
+      // A save that fails before the attempt sends nothing.
+      try { transfer(w, row); pending = true; } catch (error) { dropHeld(w, row, { code: 'storage-unavailable', reason: error.message }); }
+    }
+  } finally { if (!pending) arm(w); }
 }
 function cancelParticipant(w, id, reason, reasonUiMessage) {
   // Name the boundary, so a cancelled wake can be traced (T-100: the 11-02 secretary wake).
   const why = typeof reason === 'string' && reason ? `（${reason.slice(0, 120)}）` : '';
-  for (const row of w.sessions.get(id)?.messages || []) if (row.wake?.status === 'staged') {
+  for (const row of w.sessions.get(id)?.messages || []) if (['staged', 'held'].includes(row.wake?.status)) {
     row.wake.status = 'cancelled'; row.text = `原生观察或控制边界已变化${why}；自动消息未投递。\n${row.wake.body}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryReason', params: { why, body: row.wake.body } }, 'notice.', row.text) || undefined;
     const rawReason = typeof reason === 'string' ? reason.slice(0, 120) : '';
     const cause = displayMessage(reasonUiMessage, 'notice.', rawReason);
@@ -326,6 +429,9 @@ function recipientIssue(w, s, r, intent, tag, mode = routeFor(s, r)?.mode, turnI
   if (boundary(w) !== intent.boundary) return ['error.wake.recipientBoundaryChanged'];
   if (!same(s, intent.targetProof)) return ['error.wake.recipientIdentityChanged'];
   if (w.runtimes.get(s.id) !== r || r.stopped || r.transportDisconnected || r.chatAvailable === false) return ['error.wake.recipientUnreachable'];
+  // The 60-second limit first among the recipient's current states: a message it refuses is named for it even while
+  // the one it just took is still on its way in, so the butler's can be held (option A).
+  if (!budgetAllows(s, intent.id)) return ['error.wake.recipientCooldown'];
   if (mode === 'queue' || mode === 'steer') {
     if (s.approval || r.nativeInputRequired || s.state === 'approval') return ['error.wake.recipientAwaiting'];
     const slot = mode === 'queue' ? r.pendingQueue : r.pendingSteer;
@@ -335,7 +441,6 @@ function recipientIssue(w, s, r, intent, tag, mode = routeFor(s, r)?.mode, turnI
     if (!open) return ['error.wake.recipientUnreachable'];
     if (s.nativeContextPending) return ['error.wake.recipientInputPending'];
     if (r.nativeAbortRequest) return ['error.wake.recipientBusy', { name: s.name }];
-    if (!budgetAllows(s, intent.id)) return ['error.wake.recipientCooldown'];
     return null;
   }
   if (s.state !== 'idle') {
@@ -349,18 +454,21 @@ function recipientIssue(w, s, r, intent, tag, mode = routeFor(s, r)?.mode, turnI
   if (r.nativeInputRequired) return ['error.wake.recipientAwaiting'];
   if (r.pendingQueue) return ['error.wake.recipientInputPending'];
   if (r.nativeAbortRequest) return ['error.wake.recipientBusy', { name: s.name }];
-  if (!budgetAllows(s, intent.id)) return ['error.wake.recipientCooldown'];
   return null;
 }
 function eligible(w, s, r, intent, tag, mode, turnId) { return !recipientIssue(w, s, r, intent, tag, mode, turnId); }
-function refuseRecipient(w, s, r, intent) { const issue = recipientIssue(w, s, r, intent); if (issue) throw uiError(...issue); }
+function refuseRecipient(w, s, r, intent) {
+  const issue = recipientIssue(w, s, r, intent);
+  if (issue) throw Object.assign(uiError(...issue), issue[0] === 'error.wake.recipientCooldown' ? { cooldown: true } : {});
+}
 // This read-only check reserves nothing and is not delivery authority. The
 // receiver checks the consumed, exact sender intent again at actual dispatch.
 async function check(w, spec) {
   if (!spec || typeof spec.id !== 'string' || !spec.id || typeof spec.recipientId !== 'string' || !spec.recipientId ||
       typeof spec.boundary !== 'string' || !spec.targetProof || typeof spec.targetProof !== 'object') throw uiError('error.wake.sourceInvalid');
+  let s;
   try {
-    const s = w.get(spec.recipientId), r = w.runtime(s.id);
+    s = w.get(spec.recipientId); const r = w.runtime(s.id);
     const budget = s.wakeBudget || {};
     if (budget.humanRevision === (s.wakeHumanRevision || 0) && budget.streak >= MAX_STREAK) throw uiError('error.wake.consecutiveLimit');
     refuseRecipient(w, s, r, spec);
@@ -369,7 +477,7 @@ async function check(w, spec) {
       if (!goalAllows(status)) throw uiError('error.wake.nativeGoalStateDisallows', { status });
     }
     return { status: 'ready' };
-  } catch (error) { return notSent(error); }
+  } catch (error) { return notSent(error, holdFor(w, s, error)); }
 }
 async function receive(w, spec) {
   if (!spec || typeof spec.sourceKey !== 'string' || !readLayout(root(w)).entries.includes(spec.sourceKey) || typeof spec.id !== 'string' || typeof spec.senderId !== 'string') throw uiError("error.wake.sourceInvalid");
@@ -390,7 +498,7 @@ async function receive(w, spec) {
     }
     refuseRecipient(w, s, r, intent);
     route = routeFor(s, r);
-  } catch (error) { return notSent(error); }
+  } catch (error) { return notSent(error, holdFor(w, s, error)); }
   reserveBudget(s, intent.id);
   // The ticket holds the way chosen here: a message sent as a turn of its own stays one, and a midturn one keeps
   // its slot and turn. Every native step checks it again.
@@ -407,4 +515,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, humanQueued, humanRead, humanNotRead, stage, complete, take, receive, check, validateArgs, root };
+module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, humanQueued, humanRead, humanNotRead, stage, complete, take, receive, check, validateArgs, root, retryHeld };

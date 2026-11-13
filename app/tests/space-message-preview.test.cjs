@@ -79,7 +79,7 @@ test('a native control outbox record retains its real sender and recipient, with
 });
 for (const language of ['en', 'zh']) test(language + ': delivery uses only authoritative status; complete is not delivered/read/resumed', () => {
   const f = fixture([], language);
-  for (const [status, key] of Object.entries({ staged: 'reading.wakeRegistered', sending: 'delivery.awaiting', submitted: 'delivery.submitted', cancelled: 'delivery.notSent', unconfirmed: 'delivery.unconfirmed', unknown: 'delivery.unknown' }))
+  for (const [status, key] of Object.entries({ staged: 'reading.wakeRegistered', held: 'reading.wakeHeld', sending: 'delivery.awaiting', submitted: 'delivery.submitted', cancelled: 'delivery.notSent', unconfirmed: 'delivery.unconfirmed', unknown: 'delivery.unknown' }))
     assert.equal(f.context.spaceMessagePreviewStatus(wake('x', 1, status)), locale.format(language, key));
   const missing = wake('missing', 1); delete missing.wakeStatus; missing.status = 'complete';
   assert.equal(f.context.spaceMessagePreviewStatus(missing), locale.format(language, 'delivery.unknown'));
