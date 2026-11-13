@@ -526,6 +526,26 @@ async function monitorScenario(a) {
   assert.equal((await facts('ready')).length, 2); assert.equal((await facts('queue-dry')).length, 2);
   assert.equal((await notices()).length, 1, 'Deliveries and an empty queue never notify');
   assert.equal((await sends()).length, 2, 'Nothing was sent to a member because of these records');
+
+  // 4) A turn that comes back empty is left for the person to look at: the record and the row say so in the
+  // interface language, and nothing asks for a decision (follow-up 4, 11-12).
+  await addItem('Empty turn', a);
+  await expectSend(3, a, /Empty turn/, 'empty-turn item dispatched');
+  await release(a, '');
+  await until(async () => (await itemByText('Empty turn')).status === 'waiting', 'Empty turn left for the person', DISPATCH_LIMIT_MS);
+  assert.equal((await itemByText('Empty turn')).reason, 'no-reply');
+  const lookAt = (await shared()).events.findLast(event => event.uiMessage?.key === 'notice.queue.lookAt');
+  assert.ok(lookAt?.id, 'one look-at record');
+  await shown(lookAt, english ? '“Empty turn” from 队员甲 is left for you to look at; the member can already take its next item' : '队员甲 做的「Empty turn」留给你看一眼；它已经可以接下一项', 'look-at record');
+  await capture('look-at-record-' + (english ? 'en' : 'zh'));
+  const leftId = (await itemByText('Empty turn')).id;
+  await page.locator('#room-queue').click();
+  await page.locator('#queue-dialog').waitFor();
+  await page.locator(`#queue-list [data-queue-item="${leftId}"]`).getByRole('button', { name: english ? 'Handled' : '已处理', exact: true }).waitFor();
+  assert.equal(await page.locator(`#queue-list [data-queue-item="${leftId}"] .queue-status`).innerText(), english ? 'For you to look at · 队员甲' : '留给你看一眼 · 队员甲');
+  await capture('look-at-row-' + (english ? 'en' : 'zh'));
+  assert.equal((await notices()).length, 1, 'An empty turn does not notify');
+  passed.push('A turn that came back empty is left for the person to look at, in the record and in its row');
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ passed, facts: (await shared()).events.filter(event => event.monitor).map(event => event.monitor.key), notifications: (await notices()).length,
     syntheticDispatches: (await sends()).length, nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
@@ -865,11 +885,15 @@ async function run() {
   await release(a, '');
   await until(async () => (await itemByText('任务五')).status === 'waiting', '任务五 is left for the person', DISPATCH_LIMIT_MS);
   assert.equal((await itemByText('任务五')).reason, 'no-reply');
+  // It is left for the person to look at, not a decision (follow-up 4, 11-12).
+  assert.ok((await events()).includes('队员甲 做的「任务五」留给你看一眼；它已经可以接下一项'), 'the space record leaves it to look at');
+  assert.ok(!(await events()).includes('队员甲 需要你决定：任务五'), 'the space record does not ask for a decision');
   await addItem('任务五乙', a);
   await expectSend(6, a, /【NAW 派活】[\s\S]*任务五乙/, 'next item to a member whose last turn came back empty');
   const leftId = (await itemByText('任务五')).id;
   assert.equal((await itemByText('任务五')).status, 'waiting', 'the empty turn stays open for the person');
   await page.locator(`#queue-list [data-queue-item="${leftId}"]`).getByRole('button', { name: '已处理', exact: true }).waitFor();
+  assert.equal(await page.locator(`#queue-list [data-queue-item="${leftId}"] .queue-status`).innerText(), '留给你看一眼 · 队员甲');
   await capture('left-for-person');
   passed.push('A turn that came back empty stayed open for the person, and its member still got the next item');
 

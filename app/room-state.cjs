@@ -735,7 +735,9 @@ class RoomState {
     let event;
     const text = queueRules.shortText(item.text);
     if (status === 'waiting') {
-      event = { kind: 'queue', sessionId: item.sentTo, ...uiNotice('notice.queue.waiting', { text, name }) };
+      // Only a decision asks the person something. An item the person stepped into, or whose turn came back
+      // empty, is left for them to look at while its member goes on (follow-up 4, 11-12).
+      event = { kind: 'queue', sessionId: item.sentTo, ...uiNotice(reason ? 'notice.queue.lookAt' : 'notice.queue.waiting', { text, name }) };
     } else if (status === 'failed') {
       const params = { text, name, reason: reason || '' };
       event = { kind: 'queue', sessionId: item.sentTo, ...uiNotice('notice.queue.failed', params) };

@@ -1,7 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const vm = require('node:vm');
+const { RoomState } = require('../room-state.cjs');
 const locale = require('../ui-locale.js');
 const localeUI = require('./fixtures/locale-ui.cjs');
 const source = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
@@ -90,6 +93,46 @@ test('only a still-queued row offers cancellation; a waiting row retains the per
   assert.deepEqual(actions('waiting'), ['已处理']);
   for (const status of ['sent', 'done', 'cancelled', 'failed']) assert.deepEqual(actions(status), []);
   for (const lang of ['zh', 'en']) assert.match(locale.format(lang, 'queue.dispatchHelp'), /10/);
+});
+
+// Follow-up 4 (11-12): only a decision asks the person to decide; an item the person stepped into, or whose turn
+// came back empty, is left for them to look at while its member goes on. The 已处理 button stays on both.
+test('a waiting row says 「等你决定」 only for a decision; with a reason it is left for the person to look at', () => {
+  const f = fixture();
+  const queueRow = item => f.c.queueRow({ id: item.reason || 'decision', text: 'Task', status: 'waiting', sentTo: 'member', ...item }, new Set());
+  const status = row => descendants(row, 'queue-status')[0].textContent;
+  const decision = queueRow({});
+  assert.equal(status(decision), '等你决定 · Recipient member');
+  // A decision on an item refused once before it was sent still asks for a decision. The item is made that way in a
+  // real RoomState: queueRequeue stores the refusal's reason, queueMarkSent drops it once the item is sent, and
+  // queueSettle writes only a non-empty reason. One saved by an older build, which kept the reason through the
+  // send, still carries it; it asks for a decision too.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-queue-row-'));
+  try {
+    const rooms = new RoomState(dir), id = rooms.queueAdd('Task', null);
+    rooms.queueMarkSent('shared', id, 'member', 'Member', Date.now());
+    rooms.queueRequeue('shared', id, 'Native send refused: session busy', 5, 'Member');
+    rooms.queueMarkSent('shared', id, 'member', 'Member', Date.now());
+    rooms.queueSettle('shared', id, 'waiting', '', 'Member', '需要你决定：Proceed?');
+    const stored = rooms.queueFind('shared', id);
+    assert.equal(stored.reason, undefined);
+    assert.equal(rooms.metadata().events.at(-1).uiMessage.key, 'notice.queue.waiting');
+    for (const item of [stored, { ...stored, reason: 'Native send refused: session busy' }]) {
+      assert.equal(status(f.c.queueRow(item, new Set())), '等你决定 · Recipient member', item.reason);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  for (const reason of ['person-intervened', 'no-reply']) {
+    const row = queueRow({ reason });
+    assert.equal(status(row), '留给你看一眼 · Recipient member', reason);
+    assert.deepEqual(descendants(row, 'queue-actions')[0].children.map(x => x.textContent), ['已处理']);
+    f.l.setLanguage('en'); f.l.ui.display.refresh(row);
+    assert.equal(status(row), 'For you to look at · Recipient member', reason);
+    f.l.setLanguage('zh'); f.l.ui.display.refresh(row);
+  }
+  f.l.setLanguage('en'); f.l.ui.display.refresh(decision);
+  assert.equal(status(decision), 'Needs your decision · Recipient member');
 });
 
 test('the compact session menu and member menu expose the same secretary choice and reject a changed role', async () => {
