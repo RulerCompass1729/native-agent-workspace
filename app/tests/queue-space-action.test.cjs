@@ -352,7 +352,8 @@ test('a session takes back an item it queued itself while it is still queued, an
   assert.equal(status(sent), 'sent');
   // Marking handled stays the person's, also for its own item.
   await assert.rejects(f.invoke('spaceAction', ['shared', 'queueResolve', [later]]), refused('error.queue.personOnly'));
-  // Another native session under the same id is not the one that added it; nor is it once ended.
+  // A call from a native session other than the one the person's record names now is refused, and so is the session once
+  // ended. (The item keeps only the session id: if the record itself moves to a new native session, that one may withdraw.)
   await assert.rejects(withdraw(mismatch, { ...f.sender, nativeId: 'native-replacement' }), refused('error.queue.withdrawOwnOnly'));
   f.record.state = 'ended';
   await assert.rejects(withdraw(mismatch), refused('error.queue.withdrawOwnOnly'));
