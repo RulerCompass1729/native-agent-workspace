@@ -22,17 +22,19 @@ test('actual bounded space envelopes preserve membership and original output acr
   });
   // However the test ends, including its own timeout before the daemon is ready, the forked daemon
   // ends: an orderly stop first, then SIGKILL. A live daemon keeps this file's process from exiting.
+  // The orderly stop took 5.4 s under load once (2.1.323 qualification run), hence 10 s before the kill.
   t.after(async () => {
     const alive = () => child.exitCode === null && child.signalCode === null;
     let failure = null;
     if (alive()) {
       const exited = once(child, 'exit');
+      let timer;
       try {
         await Promise.race([(async () => {
           if (!client && fs.existsSync(path.join(dir, 'connection.json'))) client = await connectService(dir, 'space-test-cleanup');
           if (client) { await fixture('stop'); await client.call('shutdown'); await exited; }
-        })(), delay(3000).then(() => { throw Error('Owned synthetic daemon did not exit'); })]);
-      } catch (error) { failure = error; }
+        })(), new Promise((_resolve, reject) => { timer = setTimeout(() => reject(Error('Owned synthetic daemon did not exit within 10 s')), 10000); })]);
+      } catch (error) { failure = error; } finally { clearTimeout(timer); }
       client?.close();
       if (alive()) { child.kill('SIGKILL'); await exited; }
     } else client?.close();
