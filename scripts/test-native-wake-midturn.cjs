@@ -3,7 +3,7 @@ const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage } = require('./room-input.cjs');
-// Real Electron + real Claude CLI 2.1.322 + the real bridge, two sessions; canned responses on loopback (B11 fixture).
+// Real Electron + real Claude CLI 2.1.322 or 2.1.323 + the real bridge, two sessions; canned responses on loopback (B11 fixture).
 // Question (wake proposal, item 1, 2026-11-12): an automatic message (one session's workspace_message tool) to a
 // session in the middle of a turn of several tool calls: does it enter that turn through the native queue, read once
 // at the next tool boundary, shown on the recipient as 来自 <sender> and submitted, without counting as the person's
@@ -21,13 +21,16 @@ const { executable } = require(path.join(root, 'app/platform.cjs'));
 const evidence = process.env.NAW_EVIDENCE_DIR;
 const located = executable('claude'); if (!located) throw Error('Real Claude CLI required');
 const version = file => testScratch.childProcess.execFileSync(file, ['--version'], { encoding: 'utf8' }).trim();
-// Mid-turn delivery is qualified on exact 2.1.322 only (claude-bridge/hooks/register.js). When the vendor's launcher
-// points at a newer version, use the 2.1.322 installed beside it, the version NAW itself starts then (claude-pin.cjs).
+// Mid-turn delivery is qualified on exact 2.1.322 and 2.1.323 (claude-bridge/hooks/register.js). When the vendor's
+// launcher points at another version, use the newest of these installed beside it, as NAW itself does (claude-pin.cjs).
+const MIDTURN = ['2.1.323', '2.1.322'];
 let binary = fs.realpathSync(located);
 const launcherVersion = version(binary);
-if (path.basename(path.dirname(binary)) === 'versions' && path.basename(binary) !== '2.1.322' && fs.existsSync(path.join(path.dirname(binary), '2.1.322'))) binary = path.join(path.dirname(binary), '2.1.322');
+if (path.basename(path.dirname(binary)) === 'versions' && !MIDTURN.includes(path.basename(binary))) {
+  const beside = MIDTURN.find(v => fs.existsSync(path.join(path.dirname(binary), v))); if (beside) binary = path.join(path.dirname(binary), beside);
+}
 const nativeVersion = version(binary);
-assert.match(nativeVersion, /^2\.1\.322(?=\s|$)/, 'Mid-turn delivery is qualified on exact 2.1.322 only');
+assert.match(nativeVersion, /^2\.1\.32[23](?=\s|$)/, 'Mid-turn delivery is qualified on exact 2.1.322 and 2.1.323 only');
 const common = testScratch.childProcess.execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('GUI slot occupied; no GUI launched.'); process.exit(75); }
@@ -158,7 +161,7 @@ async function cleanup() {
   await revealDefaultSpace(page);
   await create(RECEIVER); await create(SENDER);
   assert.equal((await snapshot()).wakePolicy?.enabled, true, 'Automatic messages are on by default');
-  checks.push('Two 2.1.322 sessions in the space, each with the workspace tool; automatic messages on');
+  checks.push(`Two ${nativeVersion.split(' ')[0]} sessions in the space, each with the workspace tool; automatic messages on`);
 
   // Case 1. The person gives Receiver a task from the space, so its turn answers there: two tools, the second long.
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();

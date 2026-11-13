@@ -17,7 +17,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 // Versions the managed mod is qualified for: root binding and native blocks, the base
 // of every other capability. Equal to the managed nativeBlocks list in
 // claude-bridge/hooks/register.js; a test compares the two.
-const QUALIFIED = Object.freeze(['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322']);
+const QUALIFIED = Object.freeze(['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323']);
 const LIMIT_MS = 7 * 24 * 60 * 60 * 1000;
 const exact = v => typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v);
 const compare = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };

@@ -499,7 +499,7 @@ test('a launch leaves an unsafe or edited compat copy untouched and never writes
   assert.throws(() => installPlugin(cwd, { existingOnly: true }), /不可安全写入/);
   assert.equal(fs.readFileSync(path.join(elsewhere, 'skills/native-workspace-compat/hooks/register.js'), 'utf8'), '// old');
 });
-for (const commit of ['e5eafe74d62dade8310f0bb52d68be7a1b9b0421', '6345e63181f69e941e4e3c3d77a0004d84cf4879', '3d5adca1c8478827b6897cc78e7d18ace9e446ea', 'ccea1a6669b1c40ebbf5648998bfdec6c24affbf', 'dea4132', '9401ba0', '8f8b331', '2695aa8', '88e8678'])
+for (const commit of ['e5eafe74d62dade8310f0bb52d68be7a1b9b0421', '6345e63181f69e941e4e3c3d77a0004d84cf4879', '3d5adca1c8478827b6897cc78e7d18ace9e446ea', 'ccea1a6669b1c40ebbf5648998bfdec6c24affbf', 'dea4132', '9401ba0', '8f8b331', '2695aa8', '88e8678', '64876c8', '532d984'])
   test(`committed compat copy ${commit.slice(0, 7)} upgrades when NAW starts Claude in its folder; edited copies stay`, t => {
     const { cwd } = fixture(t), file = path.join(cwd, '.claude/skills/native-workspace-compat/hooks/register.js');
     const prior = require('node:child_process').execFileSync('git', ['show', `${commit}:app/claude-bridge/hooks/register.js`],

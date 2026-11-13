@@ -3,8 +3,8 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const assert = require('node:assert/strict'), { randomUUID, createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const args = process.argv.slice(2), option = key => args.includes(key) ? args[args.indexOf(key) + 1] : undefined;
-const plan = { profiles: 1, fakeBackends: 1, windows: 1, guiStarts: 1, syntheticSessions: 1,
-  activeMs: 120000, cleanupMs: 90000, syntheticSends: 1, realProviders: 0, productModels: 0, nativeInput: 0, OSClipboard: 0 };
+const plan = { profiles: 1, fakeBackends: 1, windows: 1, guiStarts: 1, syntheticSessions: 2,
+  activeMs: 150000, cleanupMs: 90000, syntheticSends: 3, realProviders: 0, productModels: 0, nativeInput: 0, OSClipboard: 0 };
 if (args.includes('--plan')) { console.log(JSON.stringify(plan)); process.exit(0); }
 assert.ok(args.includes('--run'), 'Explicit --run required');
 const ownerRoot = path.resolve(__dirname, '..'), root = fs.realpathSync(option('--source-root') || ownerRoot), evidence = option('--evidence');
@@ -78,7 +78,74 @@ const clean = scratch.cleanup(async () => {
     await fixture('complete', id, { text: 'Synthetic local reply' }); await settle(); await until(async () => (await snapshot()).sessions[0].state === 'idle', 'Synthetic completion settles'); assert.equal(await page.locator('#shared-input').inputValue(), shared); result.after = await snapshot();
     const identity = s => s.sessions.map(r => [r.id, r.nativeId, r.owner, r.cwd, r.view, r.roomIds, r.model, r.permissions]); assert.deepEqual(identity(result.after), identity(result.before));
     const final = await fixture(); result.finalFixture = final; assert.equal(final.sends.length, 1); assert.equal(final.sends[0].id, id); assert.equal(final.sends[0].text, edited); assert.deepEqual(final.inputs, []); assert.deepEqual(final.interruptions, []); assert.deepEqual(final.pending, []); assert.deepEqual(final.waitingInputs, []); result.guards = await app.evaluate(() => globalThis.hintGuards); assert.deepEqual(result.guards, { clipboard: 0, external: 0, dialogs: 0 }); assert.deepEqual(result.errors, []);
-    await capture('04-idle-after-explicit-send', form()); for (const file of files) assert.equal(hash(fs.readFileSync(path.join(root, file))), pins[file]); assert.equal(hash(fs.readFileSync(__filename)), pins.driver);
+    await capture('04-idle-after-explicit-send', form());
+    // Enter right after a turn ended, while typing still holds this page's state: the page picks a queue from that
+    // older state and the backend refuses it before writing anything. The page then picks again from the state after it.
+    const queueId = await client.call('create', { provider: 'claude', cwd: profile, name: 'Synthetic queue member', view: 'chat' }); await client.call('join', queueId, true); result.queueSession = queueId;
+    const daemonSession = async () => (await client.call('initial')).sessions.find(s => s.id === queueId);
+    await fixture('queue-capable', queueId, true); await until(async () => (await daemonSession())?.queueAvailable === true, 'Synthetic queue capability');
+    await page.locator('#panorama-nav').click(); await page.locator('[data-panorama-session="' + queueId + '"] .panorama-member-heading>button').click(); await settle(); await page.locator('#take-control').click();
+    await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('zh'); await page.locator('#close-setup').click(); await page.locator('#setup-dialog').waitFor({ state: 'hidden' });
+    const queueInput = page.locator('#message-input'), queueSend = page.locator('#send-button'), queueLabel = locale.format('zh', 'composer.queue'), staleText = 'STALE ENTER 回车';
+    await page.evaluate(() => { window.statePushes = 0; workspace.onState(() => { window.statePushes++; }); });
+    const pushes = () => page.evaluate(() => window.statePushes);
+    let stale = null; result.staleAttempts = [];
+    for (let attempt = 0; attempt < 6 && !stale; attempt++) {
+      await fixture('set-state', queueId, 'working'); await until(async () => (await queueSend.textContent()) === queueLabel, 'Queue offered while working');
+      await queueInput.fill('S'); await until(async () => (await daemonSession())?.liveDraft === 'S', 'Typing reached the backend');
+      let typed = 'S', seen = await pushes(), ended = false;
+      for (let n = 0; n < 60 && !ended; n++) {
+        typed += String(n % 10); await queueInput.press(String(n % 10)); await delay(70);
+        const now = await pushes();
+        if (now !== seen && n >= 2) { await fixture('set-state', queueId, 'idle'); ended = true; }
+        seen = now;
+      }
+      for (const key of ['x', 'y']) { typed += key; await queueInput.press(key); await delay(70); }
+      const label = await queueSend.textContent(), backend = (await daemonSession())?.state;
+      result.staleAttempts.push({ attempt, ended, label, backend });
+      if (!ended || label !== queueLabel || backend !== 'idle') { await delay(1600); continue; }
+      await queueInput.fill(staleText);
+      result.staleAttempts.at(-1).labelBeforeEnter = await queueSend.textContent();
+      if (result.staleAttempts.at(-1).labelBeforeEnter !== queueLabel) { await delay(1600); continue; }
+      await page.evaluate(() => { document.getElementById('toast').hidden = true; document.getElementById('toast-text').textContent = ''; });
+      await queueInput.press('Enter'); stale = { attempt };
+    }
+    assert.ok(stale, 'Page state was never held across the turn end: ' + JSON.stringify(result.staleAttempts));
+    for (let n = 0; n < 80; n++) { const f = await fixture(); const toastText = await page.evaluate(() => document.getElementById('toast').hidden ? '' : document.getElementById('toast-text').textContent); if (toastText || f.sends.some(x => x.id === queueId)) { stale.toast = toastText; stale.sends = f.sends.filter(x => x.id === queueId); stale.queued = f.queued; break; } await delay(50); }
+    await delay(500); stale.toast ||= await page.evaluate(() => document.getElementById('toast').hidden ? '' : document.getElementById('toast-text').textContent); stale.input = await queueInput.inputValue(); const after = await fixture(); stale.sends = after.sends.filter(x => x.id === queueId); stale.queued = after.queued; result.staleEnter = stale;
+    await page.screenshot({ path: path.join(evidence, '05-stale-enter.png') });
+    assert.equal(stale.toast, '', 'Stale Enter showed an error: ' + stale.toast);
+    assert.deepEqual(stale.sends.map(x => x.text), [staleText]); assert.deepEqual(stale.queued, []); assert.equal(stale.input, '');
+    await fixture('complete', queueId, { text: 'Synthetic local reply' }); await settle(); await until(async () => (await daemonSession())?.state === 'idle', 'Stale Enter reply settles'); assert.deepEqual(result.errors, []);
+    // The same in the space input: the page picks a shared queue from held state, and after the refusal forwards once.
+    await page.locator('#panorama-nav').click(); await page.locator('[data-panorama-session="' + queueId + '"] [data-panorama-space="shared"]').click(); await settle();
+    await chooseRecipient(page, queueId);
+    const sharedInput = page.locator('#shared-input'), forward = page.locator('#forward-button');
+    const toastNow = () => page.evaluate(() => document.getElementById('toast').hidden ? '' : document.getElementById('toast-text').textContent);
+    let roomStale = null, roomTyped = ''; result.roomStaleAttempts = [];
+    for (let attempt = 0; attempt < 6 && !roomStale; attempt++) {
+      await fixture('set-state', queueId, 'working'); await until(async () => (await forward.textContent()) === queueLabel, 'Space queue offered while working');
+      // Typing here changes no backend state, so the hold is bounded by the push that showed working
+      // (state-push remaining(): lastSent + maxHold). An agent that is writing output pushes all the time.
+      await sharedInput.evaluate(el => el.setSelectionRange(el.value.length, el.value.length));
+      for (let n = 0; n < 3; n++) { const key = String(n); roomTyped += key; await sharedInput.press(key); await delay(70); }
+      await fixture('set-state', queueId, 'idle'); const ended = true;
+      for (const key of ['x', 'y']) { roomTyped += key; await sharedInput.press(key); await delay(70); }
+      const label = await forward.textContent(), backend = (await daemonSession())?.state;
+      result.roomStaleAttempts.push({ attempt, ended, label, backend });
+      if (!ended || label !== queueLabel || backend !== 'idle') { await delay(1600); continue; }
+      await page.evaluate(() => { document.getElementById('toast').hidden = true; document.getElementById('toast-text').textContent = ''; });
+      await sharedInput.press('Enter'); roomStale = { attempt };
+    }
+    assert.ok(roomStale, 'Space input state was never held across the turn end: ' + JSON.stringify(result.roomStaleAttempts));
+    for (let n = 0; n < 80; n++) { if (await toastNow() || (await fixture()).sends.filter(x => x.id === queueId).length > 1) break; await delay(50); }
+    await delay(500); roomStale.toast = await toastNow(); roomStale.input = await sharedInput.inputValue();
+    const roomAfter = await fixture(); roomStale.sends = roomAfter.sends.filter(x => x.id === queueId).slice(1); roomStale.queued = roomAfter.queued; roomStale.typed = roomTyped; result.roomStaleEnter = roomStale;
+    await page.screenshot({ path: path.join(evidence, '06-stale-enter-space.png') });
+    assert.equal(roomStale.toast, '', 'Stale Enter in the space input showed an error: ' + roomStale.toast);
+    assert.equal(roomStale.sends.length, 1); assert.ok(roomStale.sends[0].text.includes(roomTyped), 'Forwarded text: ' + roomStale.sends[0].text); assert.deepEqual(roomStale.queued, []); assert.equal(roomStale.input, '');
+    await fixture('complete', queueId, { text: 'Synthetic local reply' }); await settle(); await until(async () => (await daemonSession())?.state === 'idle', 'Space stale Enter reply settles'); assert.deepEqual(result.errors, []);
+    for (const file of files) assert.equal(hash(fs.readFileSync(path.join(root, file))), pins[file]); assert.equal(hash(fs.readFileSync(__filename)), pins.driver);
     result.outcome = 'SOURCE_GUI_COMPOSER_HINTS_PASS_NOT_INSTALLED'; result.provenance = 'Actual source Solo/member-column input, language Host setting, saved drafts and one explicit synthetic send only after idle. No real provider/native input or original user session.';
   } catch (error) { failure = error.stack; process.exitCode = 1; result.outcome = 'INCOMPLETE_NOT_PASS'; if (child?.connected) result.stopFixture = await fixture().catch(() => null); if (page && !page.isClosed()) await page.screenshot({ path: path.join(evidence, 'failure.png') }).catch(() => {}); }
   finally { clearTimeout(timer); result.failure = failure; result.activeSeconds = (Date.now() - began) / 1000; fs.mkdirSync(evidence, { recursive: true }); fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify(result, null, 2) + '\n'); const at = Date.now(); try { await clean(); assert.ok(!profile || !fs.existsSync(profile)); const current = fs.lstatSync(slot); assert.equal(current.ino, lease.ino); assert.equal(current.dev, lease.dev); assert.equal(JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))).token, token); fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot); const released = { at: new Date().toISOString(), token, profileGone: true, cleanupSeconds: (Date.now() - at) / 1000 }; fs.writeFileSync(path.join(evidence, 'released.json'), JSON.stringify(released)); console.log(JSON.stringify({ outcome: result.outcome, failure, released })); } catch (error) { process.exitCode = 1; fs.writeFileSync(path.join(evidence, 'cleanup-failure.txt'), error.stack); console.error(error.stack); } }

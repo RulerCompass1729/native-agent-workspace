@@ -13078,6 +13078,46 @@ Only a decision asks the person something. Only a decision reaches the person as
 - No real working Claude with a real person stepping in was run. The real-window step uses an empty reply; `person-intervened` takes the same rule and is covered by the unit tests.
 - For the two other kinds, the space line still reads 「{name} 需要你决定：{task}」 and the queue row 「等你决定 · {name}」, although they ask nothing and the member is already working on its next item (`left-for-person.png`).
 - Items that were waiting before this change free their members as soon as it is installed. Older items queued behind them then go out in order, even if their work was since done another way. The person can cancel those first.
+
+## Enter right after a turn ends picks the send method again (page, 2026-11-12)
+
+The manager's words of 11-13 02:42Z: 「打完字马上回车时，页面按最多旧 1.5 秒的状态选发送方式，会被拒一次。想一个不增加按键延迟的办法」. While a person types, state pushes to the page are held (quiet 400 ms, at most 1.5 s, `state-push.cjs`). If the agent's turn ends inside that window and the person presses Enter, the page picks queue or steer from the old state. The service refuses before writing anything to native, and the popup 「当前原生会话或控制权已变化，草稿保留。」 asks for a second Enter.
+
+What changed, in the page only (`renderer.js`). The session composer, and the space input's text to one member, are covered. Each can be refused with one of five keys, all thrown before anything reaches native: `workspace.cjs` `sessionNotReady`, `nativeWaitingInputUnavailable` and `nativeTurnOrControlChanged`, and `workspace-client.cjs` `currentNativeSessionOrControlChanged` and `currentTurnOrControlChanged`. After such a refusal the page waits for the next state, at most 1 s (at once if a state arrived during the call). It then runs the entry checks and the same method rule again. If that picks a different method or steer turn, the page sends once more. In every other case the page shows the original refusal as before: the same pick, a changed draft, a changed native session, pending native context, or no new state. The typing path, the state push, the main process and the service are untouched, so keystrokes get no extra delay. The adapter-level `error.nativeWaitingInputUnavailable` is left out on purpose: it is thrown after the service has recorded the message.
+
+Where this differs from the approved plan: its point 3, one lock for the whole submission, was replaced. A Claude queue call stays open until its queued turn starts (`claude-submit.cjs`), so a lock would silence Enter in that composer for the whole turn. Instead, a newer Enter in the same composer takes over and the older press returns quietly. A refusal that arrives while an older call from the same composer is still open is not retried.
+
+Left open:
+- Image forwards and automatic runs in the space input do not pick again.
+- The space retry does not recheck `threadUnsupported` or `roomImagesImporting`; the worst case is the original popup.
+- Two quick Enters whose refusals come back out of order (the second first) still give one popup and send nothing, as before this change.
+- A retry from one composer runs NAW's usual takeover step for that session again (the intervene that bumps its revision). A call another composer starts to the same member within that second could be invalidated by it. The reviewer judged the worst case an unconfirmed call, not a double delivery, without reading `manualGuard`; not tested.
+- A send button disabled by the old state still ignores Enter. This is a later item. Trigger: the user says Enter does nothing, or Claude 2.1.323 is still uncertified after 11-19.
+
+Evidence:
+- `composer-stale-method.test.cjs`: 18 tests. Ten mutations of the checks (key filters, draft and text checks, newer Enter at the refusal and in the wait, an older call still open, pending context, same pick, forward readiness) each turn a test red. Full suite on 5e5cdea: 6513/6513.
+- GUI `scripts/test-composer-send-hints.cjs` (real Electron, IPC and daemon, synthetic native), new steps for both inputs. Before: the popup, nothing sent, the draft kept. After: one send each, no popup, both inputs cleared. `room-send` and `drafts` pass. `native-queue` was skipped: the installed Claude 2.1.323 is not certified by that test.
+
+Independent review (one read-only session, Glob/Grep/Read only, no MCP, 3 rounds): on the first version, no blocking finding. It confirmed that each of the five keys is thrown before any native write and nowhere else, and that a second Enter cannot deliver twice. One note was fixed: an older call from the same composer that closed during the wait, leaving the same text on purpose, could let a refused later Enter resend it. Now the decision is made when the refusal arrives, and pending native context is checked as well. The second round found that this fix brought back a popup for two quick Enters (the first press now checks for a newer Enter before the older-call check), and that is fixed too. The third round, on that delta, found no blocking issue. Its other notes are listed under "Left open". The CLI reported USD 1.89, 2.15 and 2.38. Commit 5e5cdea.
+## Claude Code 2.1.323 qualification (2026-11-12)
+
+**Why.** The vendor's launcher now points at 2.1.323. NAW starts new sessions on the qualified 2.1.322 beside it for at most seven days (`claude-pin.cjs`); from 11-19 those sessions would run an unqualified 2.1.323 and lose the queue, mid-turn delivery, capacity recovery and the display extensions.
+
+**Change.** Exact `2.1.323` joins every list that ends in `2.1.322` in `claude-bridge/hooks/register.js` (blocks, root bootstrap, model, usage, narration, turn records, context transitions, queue, queued-prompt links, capacity, queued display link) and both mid-turn checks; `claude-pin.cjs` QUALIFIED matches. Media, abort and direct inline/prompt input stay closed, as on 2.1.322. The compat refresh recognises the exact transformed main 64876c8 hook. Window scripts that assert a version (`test-native-midturn`, `test-native-wake-midturn`, `test-native-queue`) admit 2.1.323, and each of their journeys below passed on it; `test-native-addressed` and `test-native-claude-pin` are unchanged and were not run.
+
+**Evidence (author-run, private evidence folder `claude-2.1.323-20261112`; real binaries, sandboxed loopback fixture, zero paid).**
+- Declarations embedded in both binaries: 658 → 673 blocks, 15 added, none removed. The APIs and events this mod uses differ in comments, an optional `ToolInfo.inputSchema`, and one change of meaning: `$.tool.list()`, which the bridge reads to learn whether the workspace tools exist, now goes through other plugins' `tool.list` hooks, and an `mcp.connect` hook can hold the workspace server back. Either way the tool reads as absent, as the model sees it, so the workspace tools stay off (fails closed). The bridge hooks neither event. AssistantMessage and ToolProgress render props are byte-identical; AskUserQuestion's differ only in a comment.
+- The mod's own tests under `claude plugin test`: 61/0 on 2.1.322 and on 2.1.323.
+- Mid-turn append probes (`-p`: after, during, parallel tools; TUI: after, parallel): the appended row is carried by the same turn's next request right after the tool result(s), as on 2.1.322; TUI keeps it in place, no extra turn.
+- 529 with retries off: identical journal error row and StopFailure keys on both; `turn.complete` reason `error`.
+- Child-command environment names (`env | cut -d= -f1`): the same 34 names on both, so `platform.cjs`'s strip list still covers them.
+- Real window (real Electron, real 2.1.323, real bridge), one run each, all pass: mid-turn solo and shared, automatic message mid-turn, queue solo, queue shared, shared model switch.
+- Tests: 15 related files 606/0; full `node --test app/tests/*.test.cjs` 6501/0. An unknown later version (2.1.324) and suffixed strings stay closed in every gate test.
+
+**Independent review.** A fresh read-only session (Read, Grep and Glob only; no MCP): PASS_WITH_NOTES, no blocking finding (the first run reached its turn limit and was asked for a bounded verdict in the same session). Notes, fixed in c458e7e: the declarations wording above understated the `tool.list` change; the main 64876c8 copy now has a fixed upgrade test; a test shows a qualified 2.1.323 launcher starting new sessions and resuming ones 2.1.322 last ran, with no fallback record. Delta review: PASS_WITH_NOTES. Its last note adds 532d984's copy to the fixed upgrade list (test only).
+
+**Not covered.** No paid or real-provider turn; installed daily-app acceptance belongs to the integrator. The full suite on c458e7e had one failure outside this change: `multispace-protocol.test.cjs`, "Owned synthetic daemon did not exit; profile retained", a teardown that took 5.4 s under load. That file passed three times alone. It is a flaky-teardown follow-up, not a pass.
+
 ## The butler's 60-second limit holds a message instead of refusing it (option A, 2026-11-12)
 
 The person's answer on the board (11-12 21:2x, 「按你推荐的来」): 「被拒的自动消息先存着、每分钟补送一条，限制本身不变（不放宽）」. Before, every recipient took one automatic message per 60 seconds and refused the rest, so when three agents reported to the butler at once, two reports were lost.
