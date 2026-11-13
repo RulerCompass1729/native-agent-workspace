@@ -277,3 +277,21 @@ test('every join meets one guard at the moment it runs; leaving is never asked (
   const held = room.serial(async () => { butler = 'one'; });
   await assert.rejects(room.membership(client, 'one', true), /stays outside/); await held;
 });
+// 11-12: archiveSession read the snapshot after setting its gate, so a session the snapshot did not hold kept the
+// gate ("updating") until restart. restoreSession reads only inside its queued step and settles every read failure
+// as an unconfirmed placement; this keeps it that way.
+test('restoring a session the snapshot does not hold leaves no gate behind', async t => {
+  const { room } = setup(t), id = 'gone';
+  const clients = {
+    absent: { snapshot: () => ({ sessions: [] }), call: async method => method === 'initial' ? { sessions: [] } : undefined },
+    unreadable: { snapshot: () => { throw Error('Synthetic unreadable snapshot'); }, call: async () => { throw Error('Synthetic backend gone'); } },
+  };
+  for (const [name, client] of Object.entries(clients)) {
+    room.update({ archivedSessions: [id], sessionArchives: { [id]: { nativeId: 'native', rooms: [], checkpoint: null, detached: { roomIds: [] } } } });
+    const restored = await room.restoreSession(client, id, 'Gone');
+    assert.equal(restored.restored, true, name); assert.equal(restored.placement, 'unavailable', name);
+    assert.equal(room.gates.has(id), false, `${name}: no gate left`);
+    assert.doesNotThrow(() => room.assertAvailable(id), name);
+    await assert.rejects(room.archiveSession(client, id, 'Gone'), error => error.uiMessage?.key === 'error.sessionMissing', `${name}: a later archive is not refused as updating`);
+  }
+});
