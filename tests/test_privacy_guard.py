@@ -117,6 +117,7 @@ for value in bad:
         scan.identity(value, 'commit identity')
     except Blocked as error:
         assert 'fixture-handle' not in str(error)
+        assert 'author/committer email' in str(error), str(error)
         continue
     raise SystemExit('passed: case %d' % bad.index(value))
 print('identity cases ok')

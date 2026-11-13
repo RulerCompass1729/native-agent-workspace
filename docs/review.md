@@ -13673,3 +13673,13 @@ From the butler's queue item: write rules 1-7 of the reviewed design (v3, privat
 Round 2 (the same session, the delta only, 3 turns): pass with notes. The generic wording still covers every example v3 named there, and gates slightly more, toward caution; N2 and N3 resolve the notes. R1: the first draft's commit still carried the old examples, so the fix was folded into that commit before delivery and the branch never carries them. R2 (a short wrapped line) left as is: it renders the same and keeps the reviewed text unchanged.
 
 **Checks.** Documentation only; no tests apply. Privacy guard, gitleaks and the PII count were clean before each commit.
+
+## Commit identity must be a noreply or example email (privacy guard, 2026-11-13, Claude 4)
+
+A commit made in a `git clone` (which does not copy this repository's local identity) used the machine's global identity: an account handle with a URL in place of the email. The commit-msg hook and the push scan both passed it, because only email-shaped values were checked. Found before any push by reading the identities of every outgoing commit.
+
+**What changed.** `Scanner.identity` requires each `name <email>` line to carry a noreply or example-domain email; the message mode (author and committer of a new commit) and every commit in a push or history scan use it. `docs/publication.md` says clones need the identity set, or `git worktree add`.
+
+**Tests and checks.** Three new tests: at commit time (URL, bare handle, personal domain), at push time (a URL identity made with hooks bypassed), and on values (empty, spaced, no angle brackets, a bad second line; noreply and example pass). On main's guard they fail 4 ways; with the change the whole guard suite passes, 29 tests.
+
+**Review.** Round 1 (a fresh read-only session, 9 turns): pass with notes, none blocking. Note 1: the value test accepted any refusal, so it could pass without reaching the identity check if other checks grew; it now asserts the identity refusal. Note 2 (left open, outside this change): a noreply address whose local part names a personal account still passes, and names are checked only by patterns; the maintainer's private rules should list such handles. Annotated-tag tagger lines remain pattern-checked only.
