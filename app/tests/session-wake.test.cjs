@@ -716,3 +716,88 @@ test('Codex: a wake staged in a turn whose end never came is withdrawn when the 
   f.ra.emit('nativeTurnEnd', { nativeId: f.source.get(f.a).nativeId, turnId: 'turn-one', status: 'completed' }); for (let i = 0; i < 8; i++) await tick();
   assert.equal(row.wake.status, 'cancelled'); assert.equal(f.writes.length, 0);
 });
+
+// The wake proposal, item 2 (board 11-12 16:44): 「②只给指定大管家（每收件方 1 条、最多 4 个），其他 agent 不变」.
+async function butler(t, recipients, { designate = true, spaces = [] } = {}) {
+  const f = await fixture(t), s = f.source.get(f.a);
+  s.roomIds = spaces; s.roomId = spaces.includes('shared') ? 'shared' : null;
+  const ids = [f.b];
+  for (let i = 2; i <= recipients; i++) ids.push(await f.target.create('codex', f.root, 'target-owner', 'Receiver ' + i));
+  const designation = selected => fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected }), { mode: 0o600 });
+  if (designate) designation({ sessionId: f.a, nativeId: s.nativeId });
+  // Called inside a promise, as native calls arrive: a refusal before anything is staged is a rejection here.
+  const send = (to, text, callId) => Promise.resolve().then(() => f.ra.addressedCall({ nativeId: s.nativeId, turnId: f.ra.turnId, callId }, { recipient_id: to, message: text }));
+  const received = id => f.target.get(id).messages.filter(m => m.origin === 'agent-wake');
+  const sent = () => s.messages.filter(m => m.wake);
+  return { ...f, s, ids, send, received, sent, designation };
+}
+test('the butler sends one message each to three recipients in one turn, each once after the turn ends (wake proposal, item 2)', async t => {
+  const f = await butler(t, 3);
+  for (const [i, id] of f.ids.entries()) assert.equal((await f.send(id, `Task ${i + 1}.`, `call-${i}`)).status, 'staged');
+  assert.equal(f.writes.length, 0, 'nothing goes before the turn ends');
+  await f.finish();
+  assert.equal(f.writes.length, 3);
+  for (const [i, id] of f.ids.entries()) {
+    assert.deepEqual(f.received(id).map(m => [m.status, m.text.split('\n')[1]]), [['submitted', `Task ${i + 1}.`]]);
+    assert.equal(f.target.get(id).wakeBudget.streak, 1, 'each recipient keeps its own limit');
+  }
+  assert.deepEqual(f.sent().map(m => m.wake.status), ['submitted', 'submitted', 'submitted']);
+});
+test('the butler cannot send a second message to one recipient, nor reach a fifth, in one turn (wake proposal, item 2)', async t => {
+  const f = await butler(t, 5);
+  assert.equal((await f.send(f.ids[0], 'First.', 'one')).status, 'staged');
+  await assert.rejects(f.send(f.ids[0], 'Second to the same.', 'two'), /这一轮已经给这个收件方登记过一条；要说的合成一条。/);
+  for (const [i, id] of f.ids.slice(1, 4).entries()) assert.equal((await f.send(id, `Next ${i}.`, `next-${i}`)).status, 'staged');
+  await assert.rejects(f.send(f.ids[4], 'Fifth.', 'five'), /这一轮最多给 4 个不同的收件方各发一条。/);
+  assert.equal(f.sent().length, 4);
+  await f.finish();
+  assert.equal(f.writes.length, 4); assert.equal(f.received(f.ids[0]).length, 1); assert.equal(f.received(f.ids[4]).length, 0);
+});
+test('concurrent butler calls to one recipient stage one; a call that registered nothing does not count (wake proposal, item 2)', async t => {
+  const f = await butler(t, 2);
+  const both = await Promise.allSettled([f.send(f.ids[0], 'A.', 'c1'), f.send(f.ids[0], 'B.', 'c2')]);
+  assert.equal(both.filter(r => r.status === 'fulfilled').length, 1);
+  await assert.rejects(f.send('no-such-session', 'Lost.', 'c3'));
+  assert.equal(f.sent().length, 1);
+  assert.equal((await f.send(f.ids[1], 'C.', 'c4')).status, 'staged');
+  await f.finish();
+  assert.equal(f.writes.length, 2); assert.equal(f.received(f.ids[0]).length, 1); assert.equal(f.received(f.ids[1]).length, 1);
+});
+test('every other sender still sends one message a turn: not designated, in a space, another native session, native context pending, or an unreadable designation (wake proposal, item 2)', async t => {
+  const cases = {
+    'not designated': { designate: false },
+    'in a space': { spaces: ['shared'] },
+    'another native session': { after: f => f.designation({ sessionId: f.a, nativeId: 'native-other' }) },
+    // As main.cjs stewardCaller: a session whose native context is still to come is not the butler's yet.
+    'native context pending': { after: f => { f.s.nativeContextPending = true; } },
+    'unreadable designation': { after: f => fs.chmodSync(path.join(f.root, 'steward.json'), 0o644) },
+  };
+  for (const [name, options] of Object.entries(cases)) {
+    const f = await butler(t, 2, options); options.after?.(f);
+    assert.equal((await f.send(f.ids[0], 'Only one.', 'one')).status, 'staged', name);
+    await assert.rejects(f.send(f.ids[1], 'A second.', 'two'), /这个原生回合已经请求过自动消息；未追加。/, name);
+    await f.finish();
+    assert.equal(f.writes.length, 1, name); assert.equal(f.sent().length, 1, name);
+  }
+});
+test('a turn the butler started after a refused first message still counts that one (wake proposal, item 2)', async t => {
+  const f = await butler(t, 2);
+  f.target.get(f.ids[0]).wakeDisabled = true;
+  assert.equal((await f.send(f.ids[0], 'Refused.', 'one')).status, 'not-sent');
+  await assert.rejects(f.send(f.ids[0], 'Again.', 'two'), /合成一条/, 'each message is tried once, also by the butler');
+  assert.equal((await f.send(f.ids[1], 'Other.', 'three')).status, 'staged');
+  await f.finish();
+  assert.equal(f.writes.length, 1); assert.equal(f.received(f.ids[1]).length, 1);
+});
+test('when the person ends the butler role before the turn ends, only the turn\'s first message goes (wake proposal, item 2)', async t => {
+  const f = await butler(t, 2);
+  assert.equal((await f.send(f.ids[0], 'First.', 'one')).status, 'staged');
+  assert.equal((await f.send(f.ids[1], 'Second.', 'two')).status, 'staged');
+  f.designation(null);
+  await f.finish();
+  assert.equal(f.writes.length, 1); assert.equal(f.received(f.ids[0]).length, 1); assert.equal(f.received(f.ids[1]).length, 0);
+  const [first, second] = f.sent();
+  assert.equal(first.wake.status, 'submitted');
+  assert.equal(second.wake.status, 'cancelled'); assert.equal(second.wake.cancellation.code, 'steward-role-ended');
+  assert.equal(second.text, '这一轮结束时没能确认发送方还是大管家，只发第一条；自动消息未投递。\nSecond.');
+});

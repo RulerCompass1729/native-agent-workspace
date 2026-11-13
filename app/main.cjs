@@ -1388,7 +1388,7 @@ async function boot() {
   queueSecretary = new QueueSecretary(dataDir);
   // Who the person designated as integrator. A record only: nothing is sent to it from here.
   integratorRole = new IntegratorRole(dataDir);
-  // Who the person designated as the butler they talk to. A record only: it gives that session nothing.
+  // Who the person designated as the butler they talk to; what it lets that session do is listed in steward-role.cjs.
   stewardRole = new StewardRole(dataDir);
   // What the butler does through NAW, under its own name (steward step 2, batch 1). One that cannot be read stops
   // only the butler's calls, and the bell says so.

@@ -5,6 +5,7 @@ const { displayMessage } = require('./ui-locale.js');
 const fs = require('node:fs'), path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { readLayout } = require('./service-layout.cjs');
+const spaces = require('./collaboration-spaces.cjs');
 const CAPABILITY = 'agentWakeV1', PREFLIGHT = 'agentWakePreflightV1', COOLDOWN = 60000, MAX_STREAK = 3;
 function root(w) { return w.peerRunner?.root() || (/^[a-f0-9]{20}$/.test(path.basename(w.dataDir)) && path.basename(path.dirname(w.dataDir)) === 'backends' ? path.dirname(path.dirname(w.dataDir)) : w.dataDir); }
 function marker(w, name) { return path.join(root(w), name); }
@@ -118,15 +119,43 @@ function validateArgs(args) {
     typeof args.recipient_id !== 'string' || !args.recipient_id || args.recipient_id.length > 100 ||
     typeof args.message !== 'string' || !args.message.trim() || args.message.length > 6000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(args.message)) throw uiError("error.handoffRecipientAndBodyRequired");
 }
+// The designated butler (大管家) as main.cjs stewardCaller names it: the very session and native session the person's
+// designation names now (after logged rotations), usable (not archived, its native context not pending) and in no
+// space. Anything else, a designation that cannot be read included, is not, and keeps one message a turn. Read from
+// the same file main.cjs keeps, only when it matters.
+const STEWARD_RECIPIENTS = 4;
+function isSteward(w, s) {
+  try {
+    const steward = new (require('./steward-role.cjs').StewardRole)(root(w)).current();
+    return Boolean(steward && s && steward.sessionId === s.id && steward.nativeId === s.nativeId && !s.archived && !s.nativeContextPending && spaces.roomIds(s).length === 0);
+  } catch { return false; }
+}
+// One automatic message a turn; the butler, one to each of up to four different recipients (the wake proposal, item 2,
+// 2026-11-12: 「②只给指定大管家（每收件方 1 条、最多 4 个），其他 agent 不变」). `taken`: the recipients the turn already
+// holds a message, or a call under way, for. Called only once the sender is known to be the butler.
+function stewardLimit(taken, recipient) {
+  if (taken.includes(recipient)) throw uiError("error.wake.turnRecipientRepeated");
+  if (new Set(taken).size >= STEWARD_RECIPIENTS) throw uiError("error.wake.turnRecipientLimit", { limit: STEWARD_RECIPIENTS });
+}
 function stage(w, s, r, native, args) {
   if (r.wakeTurn?.boundary !== boundary(w) || native?.valid?.() === false || r.wakeTurn.human !== humanProof(s)) throw uiError("error.wake.turnRevokedByHuman");
-  const pending = r.wakeStagePending;
-  if (pending?.turnId === native?.turnId && pending.nativeId === native?.nativeId) {
-    if (pending.callId === native.callId && pending.recipient === args?.recipient_id && pending.body === args?.message) return pending.promise.then(result => { const row = s.messages.find(m => m.id === result.id); return ['staged', 'not-sent'].includes(row?.wake?.status) ? result : { status: 'unconfirmed', id: result.id, message: '原登记已经撤销或结果未确认；不会重发。' }; });
+  const turn = r.wakeStagePending?.turnId === native?.turnId && r.wakeStagePending.nativeId === native?.nativeId ? r.wakeStagePending : null;
+  const pending = turn?.calls.find(call => call.callId === native?.callId);
+  if (pending) {
+    if (pending.recipient === args?.recipient_id && pending.body === args?.message) return pending.promise.then(result => { const row = s.messages.find(m => m.id === result.id); return ['staged', 'not-sent'].includes(row?.wake?.status) ? result : { status: 'unconfirmed', id: result.id, message: '原登记已经撤销或结果未确认；不会重发。' }; });
     throw uiError("error.wake.turnAlreadyRequested");
   }
+  // Any earlier call of the turn refuses everyone else's next, as before. For the butler, one that failed before
+  // anything was registered does not count (a registered one is counted from its row in stageOnce).
+  if (turn) {
+    if (!isSteward(w, s)) throw uiError("error.wake.turnAlreadyRequested");
+    stewardLimit(turn.calls.filter(call => !call.failed).map(call => call.recipient), args?.recipient_id);
+  }
   const promise = stageOnce(w, s, r, native, args);
-  r.wakeStagePending = { nativeId: native?.nativeId, turnId: native?.turnId, callId: native?.callId, recipient: args?.recipient_id, body: args?.message, promise };
+  const call = { callId: native?.callId, recipient: args?.recipient_id, body: args?.message, promise, failed: false };
+  promise.catch(() => { call.failed = true; });
+  if (turn) turn.calls.push(call);
+  else r.wakeStagePending = { nativeId: native?.nativeId, turnId: native?.turnId, calls: [call] };
   return promise;
 }
 async function stageOnce(w, s, r, native, args) {
@@ -138,10 +167,16 @@ async function stageOnce(w, s, r, native, args) {
   if (args.recipient_id === s.id) throw uiError("error.wake.cannotWakeSelf");
   const replay = (s.messages || []).find(m => m.wake?.nativeId === native.nativeId && m.wake.callId === native.callId && m.wake.turnId !== native.turnId);
   if (replay) throw uiError("error.wake.nativeCallAlreadyRegistered");
-  const previous = (s.messages || []).find(m => m.wake?.nativeId === native.nativeId && m.wake.turnId === native.turnId);
+  const earlier = (s.messages || []).filter(m => m.wake?.nativeId === native.nativeId && m.wake.turnId === native.turnId);
+  const previous = earlier.find(m => m.wake.callId === native.callId);
   if (previous) {
-    if (previous.wake.callId === native.callId && previous.wake.recipientId === args.recipient_id && previous.wake.body === args.message && previous.wake.status === 'staged') return { status: 'staged', id: previous.id, message: '同一调用已登记，尚未投递；不会重复登记。' };
+    if (previous.wake.recipientId === args.recipient_id && previous.wake.body === args.message && previous.wake.status === 'staged') return { status: 'staged', id: previous.id, message: '同一调用已登记，尚未投递；不会重复登记。' };
     throw uiError("error.wake.turnAlreadyRegistered");
+  }
+  // Every row of the turn counts, a refused one too: each message is tried once.
+  if (earlier.length) {
+    if (!isSteward(w, s)) throw uiError("error.wake.turnAlreadyRegistered");
+    stewardLimit(earlier.map(m => m.wake.recipientId), args.recipient_id);
   }
   const intent = { id: randomUUID(), nativeId: native.nativeId, turnId: native.turnId, callId: native.callId, senderId: s.id, senderName: s.name,
     sourceProof: identity(s), recipientId: args.recipient_id, body: args.message, boundary: turn.boundary, time: Date.now(), status: 'staged' };
@@ -172,15 +207,22 @@ const TURN_END_CANCELLED = Object.freeze({
   unreported: ['发送方上一轮的结束 NAW 没有看到，下一轮已经开始', 'notice.wake.turnUnreportedCancelled'],
   completed: ['原生回合已正常结束，但授权校验未通过', 'notice.wake.completedTurnRevoked'],
   other: ['原生回合未正常结束或授权已变化', 'notice.wake.turnCancelled'],
+  // Item 2: a turn's messages after its first went out only as the butler's; at the turn's end NAW could not confirm the
+  // sender still is (revoked, changed, or the designation unreadable).
+  steward: ['这一轮结束时没能确认发送方还是大管家，只发第一条', 'notice.wake.stewardEnded'],
 });
 function complete(w, s, r, info) {
+  // The turn's first registered message, whatever became of it; only the butler's turn has others.
+  const first = (s.messages || []).find(m => m.wake?.nativeId === info.nativeId && m.wake.turnId === info.turnId);
+  let steward = null;
   for (const row of s.messages || []) {
     const intent = row.wake;
     if (intent?.status !== 'staged' || intent.nativeId !== info.nativeId || intent.turnId !== info.turnId) continue;
-    const issue = info.status !== 'completed' ? { code: 'turn-not-completed' } : sourceIssue(w, s, r, intent);
+    let issue = info.status !== 'completed' ? { code: 'turn-not-completed' } : sourceIssue(w, s, r, intent), reason = info.status;
+    if (!issue && row !== first && !(steward ??= isSteward(w, s))) { issue = { code: 'steward-role-ended' }; reason = 'steward'; }
     if (issue) {
       intent.cancellation = { ...issue, nativeStatus: info.status ?? null, at: Date.now() };
-      const [why, key] = TURN_END_CANCELLED[Object.hasOwn(TURN_END_CANCELLED, info.status) ? info.status : 'other'];
+      const [why, key] = TURN_END_CANCELLED[Object.hasOwn(TURN_END_CANCELLED, reason) ? reason : 'other'];
       intent.status = 'cancelled'; row.text = `${why}；自动消息未投递。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key, params: { body: intent.body } }, 'notice.', row.text) || undefined; durable(w); continue;
     }
     intent.status = 'sending'; durable(w);
