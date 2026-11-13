@@ -114,7 +114,8 @@ async function run() {
   // A dead connection preserves text, not an obsolete live-stream claim.
   const expected=checkpoint.sessions[0].messages.map(m=>['streaming','running','awaiting-native'].includes(m.status)?{...m,status:'unconfirmed'}:m);
   assert.deepEqual(session.messages,expected);
-  assert.equal(await page.locator('#message-input').inputValue(), '还没发出的中文草稿。');
+  // The draft reaches the composer a moment after the recovered rows (a failed run saved it and showed it just after the read), so wait for it.
+  await until(async () => await page.locator('#message-input').inputValue() === '还没发出的中文草稿。', 'Reconnect restores the unsent draft');
   assert.equal(recovered.diagnostics.dispatches, 0);
   await page.getByRole('button', { name: '继续原生会话', exact: true }).waitFor();
   await page.locator('#messages [data-message-id="streaming-reply"] .message-heading').getByText('结果未确认',{exact:true}).waitFor();
