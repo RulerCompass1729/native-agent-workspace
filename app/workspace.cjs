@@ -1462,6 +1462,9 @@ class Workspace extends EventEmitter {
     const s = this.get(id), runtime = this.runtime(id), steer = route?.mode === 'steer';
     if (!['queue', 'steer'].includes(route?.mode) || !ticket?.valid()) throw Object.assign(uiError("error.workspace.automaticAuthorizationExpired"), { notSent: true });
     this.pauseParticipant(id, '原会话收到自动消息；旧协作交接已撤销', true, uiActivity('notice.run.automaticInputBoundary')[1]);
+    // The message is for this session only. As the person's private queue or steer ends what the turn still shows in a
+    // space (their controlRevision++), so does this, without taking the person's control revision (review of item 1, B1).
+    for (const grant of this.sharedReplies.grants.values()) if (grant.sessionId === id && !grant.closed) this.sharedReplies.close(grant.tag);
     const tag = randomUUID(), nativeId = s.nativeId, connection = s.connectionRevision;
     const valid = () => backgroundValid() && this.runtimes.get(id) === runtime && s.nativeId === nativeId && s.connectionRevision === connection && ticket.valid(tag);
     ticket.tag = tag;

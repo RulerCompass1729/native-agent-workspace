@@ -284,6 +284,35 @@ test('an automatic message to a Codex session mid-turn steers its running turn (
   assert.equal(f.rb.pendingSteer, null); assert.deepEqual(f.rb.finished, ['recipient-turn'], 'a completion held behind the steer drains');
   assert.equal(f.writes.length, 0);
 });
+// Review of item 1, B1: a turn answering a space keeps showing there until private input arrives. The automatic
+// message is for the recipient only, so what follows it stays in the recipient's own conversation.
+test('an automatic message entering a turn that answers a space ends that sharing, as private input does (wake proposal, item 1)', async t => {
+  for (const provider of ['claude', 'codex']) {
+    const f = await fixture(t, 'codex', true, false, provider), m = midturnTarget(f, provider), replies = f.target.sharedReplies;
+    const c = await f.target.create('codex', f.root, 'target-owner', 'Bystander'), other = f.target.get(c);
+    f.target.join(f.b, true); f.target.join(c, true);
+    replies.authorize(m.s, f.rb, 'space-reply', { id: 'space-row', inputMode: 'send' }, null, 'shared');
+    replies.authorize(other, f.target.runtimes.get(c), 'elsewhere', { id: 'other-row', inputMode: 'send' }, null, 'shared');
+    assert.equal(replies.valid(replies.grants.get('space-reply')), true, `${provider}: the turn answers the space`);
+    assert.equal(replies.valid(replies.grants.get('elsewhere')), true);
+    const control = m.s.controlRevision;
+    await f.call('Private note.'); await f.finish();
+    assert.equal(m.calls.length, 1, provider);
+    assert.equal(replies.grants.get('space-reply').closed, true, `${provider}: the rest of the turn stays in the session`);
+    assert.equal(replies.grants.get('elsewhere').closed, false, `${provider}: another session's sharing is untouched`);
+    assert.equal(m.s.controlRevision, control, `${provider}: not the person's control`);
+    assert.equal(m.calls[0].guard(), true, `${provider}: its own authority still holds`);
+  }
+});
+test('an automatic message refused before it reaches native leaves the space sharing open (wake proposal, item 1)', async t => {
+  const f = await fixture(t, 'codex', true, false, 'claude'), m = midturnTarget(f, 'claude'), replies = f.target.sharedReplies;
+  f.target.join(f.b, true);
+  replies.authorize(m.s, f.rb, 'space-reply', { id: 'space-row', inputMode: 'send' }, null, 'shared');
+  await f.call('Exact body.');
+  f.rb.pendingQueue = 'the person queued one'; await f.finish();
+  assert.equal(m.calls.length, 0);
+  assert.equal(replies.valid(replies.grants.get('space-reply')), true);
+});
 test('mid-turn, a recipient waiting for approval or already holding a queued input still refuses, with its reason (wake proposal, item 1)', async t => {
   const cases = [
     ['claude', f => { f.rb.pendingQueue = 'the person queued one'; }, '收件方已有一条输入在投递或排队。'],
