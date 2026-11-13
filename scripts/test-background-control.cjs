@@ -225,6 +225,50 @@ async function run() {
   assert.equal(visibleLabel, 'Synthetic operator → Background renamed recipient');
   save('shared-message-label', { messageId: sharedRow.id, label: visibleLabel });
   await page.screenshot({ path: path.join(pictures, 'shared-agent-attribution.png') });
+  // A session takes back an item it queued itself while it is still queued (the person, 11-12 21:1x: 「可以」);
+  // anyone else's item stays the person's to cancel. The record line says who took it back, in both languages.
+  // Both items are for the busy recipient, so the queue does not send them while this runs.
+  const sharedRoom = async () => { const value = await page.evaluate(() => workspace.initial()); return (value.rooms || [value.room]).find(r => r.id === 'shared'); };
+  const queueItem = async text => (await sharedRoom()).queue.find(item => item.text === text);
+  const ownText = 'Withdrawal check: the secretary\'s item', personsText = 'Withdrawal check: the person\'s item';
+  await page.evaluate(id => workspace.queueSecretary(id), source);
+  const added = await control(invoke('spaceAction', ['shared', 'queueAdd', [ownText, recipient]])); assert.equal(added.state, 'complete', JSON.stringify(added));
+  await page.evaluate(([text, id]) => workspace.spaceAction('shared', 'queueAdd', [text, id]), [personsText, recipient]);
+  const own = await queueItem(ownText), persons = await queueItem(personsText);
+  assert.deepEqual([own.status, persons.status, own.creator.sessionId, persons.creator.kind], ['queued', 'queued', source, 'person']);
+  const refusedWithdrawal = await control(invoke('spaceAction', ['shared', 'queueCancel', [persons.id]]));
+  assert.equal(refusedWithdrawal.state, 'unconfirmed', JSON.stringify(refusedWithdrawal)); assert.match(refusedWithdrawal.error, /只能撤回自己放进队列/);
+  const withdrawn = await control(invoke('spaceAction', ['shared', 'queueCancel', [own.id]]));
+  assert.equal(withdrawn.state, 'complete', JSON.stringify(withdrawn)); assert.equal(withdrawn.confirmation, undefined, 'No confirmation for taking back its own item');
+  assert.deepEqual([(await queueItem(ownText)).status, (await queueItem(personsText)).status], ['cancelled', 'queued']);
+  const withdrawal = (await sharedRoom()).events.findLast(event => event.uiMessage?.key === 'notice.queue.withdrawn');
+  assert.deepEqual(withdrawal.uiMessage.params, { text: ownText, name: 'Synthetic operator', sessionId: source });
+  const recordLine = async (expected, label) => {
+    let row = null;
+    await until(async () => {
+      row = await page.evaluate(id => {
+        const element = document.querySelector('#room-messages [data-message-id="' + id + '"]'); if (!element) return null;
+        element.scrollIntoView({ block: 'center' });
+        const box = element.getBoundingClientRect(), list = document.querySelector('#room-messages').getBoundingClientRect();
+        return { text: element.innerText, inside: box.width > 0 && box.height > 0 && box.top >= list.top - 1 && box.bottom <= list.bottom + 1 };
+      }, withdrawal.id);
+      return row?.inside && row.text.includes(expected);
+    }, `${label}: ${JSON.stringify(row)}`);
+    save('withdrawal-record-' + label, row);
+  };
+  await recordLine(`队列撤回：${ownText} · Synthetic operator（${source}）撤回了自己放进来的这一件`, 'zh');
+  await page.screenshot({ path: path.join(pictures, 'queue-withdrawn-zh.png') });
+  const described = (await control(invoke('interfaceSettings', ['describe']))).value.find(s => s.ns === 'locale');
+  const inEnglish = await control(invoke('interfaceSettings', ['update', 'locale', { preference: 'en' }, described.revision])); assert.equal(inEnglish.state, 'complete', JSON.stringify(inEnglish));
+  await recordLine(`Withdrawn from queue: ${ownText} · taken back by Synthetic operator (${source}), who added it`, 'en');
+  await page.screenshot({ path: path.join(pictures, 'queue-withdrawn-en.png') });
+  assert.equal((await control(invoke('interfaceSettings', ['update', 'locale', { preference: 'zh' }, inEnglish.value.find(s => s.ns === 'locale').revision]))).state, 'complete');
+  // The person cancels their own item and revokes the secretary; nothing was sent.
+  await page.evaluate(id => workspace.spaceAction('shared', 'queueCancel', [id]), persons.id);
+  await page.evaluate(() => workspace.queueSecretary(null));
+  assert.deepEqual([(await queueItem(ownText)).status, (await queueItem(personsText)).status], ['cancelled', 'cancelled']);
+  assert.equal((await fixture('stats')).sends.length, 1, 'No queue item was sent');
+  checks.push('Through the real MCP path, the secretary takes back its own queued item without confirmation; another\'s is refused; the record names who took it back in Chinese and English');
   await checkDesktopState('desktop-final');
   save('operations', JSON.parse(fs.readFileSync(path.join(profile, 'background-operations.json')))); save('final-state', await state());
   const finalStats = await fixture('stats'); save('fixture-stats', finalStats);

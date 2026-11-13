@@ -87,3 +87,24 @@ test('only an undispatched queued item can be cancelled; waiting items remain fo
   room.queueCancel(queued);
   assert.equal(room.queueFind('shared', queued).status, 'cancelled');
 });
+
+test('room state lets only the item\'s own adding session withdraw it, while it is queued', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-queue-withdraw-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const room = new RoomState(dir);
+  const mine = room.queueAdd('Mine', null, 'shared', secretary());
+  const persons = room.queueAdd('The person\'s', null, 'shared', person());
+  const legacyItem = room.queueAdd('No creator', null);
+  const author = { name: 'Secretary <one>', sessionId: 'session-one' };
+  const refused = key => error => error.uiMessage?.key === key;
+  for (const who of [undefined, null, {}, { name: 'x', sessionId: '' }, { name: 'x', sessionId: 'session-two' }]) {
+    assert.throws(() => room.queueWithdraw(mine, 'shared', who), refused('error.queue.withdrawOwnOnly'), JSON.stringify(who));
+  }
+  for (const id of [persons, legacyItem]) assert.throws(() => room.queueWithdraw(id, 'shared', author), refused('error.queue.withdrawOwnOnly'));
+  room.queueWithdraw(mine, 'shared', author);
+  assert.deepEqual(new RoomState(dir).queueItems('shared').map(item => item.status), ['cancelled', 'queued', 'queued']);
+  const notice = room.value.events.at(-1).uiMessage;
+  assert.equal(locale.format('zh', notice.key, notice.params), '队列撤回：Mine · Secretary <one>（session-one）撤回了自己放进来的这一件');
+  assert.equal(locale.format('en', notice.key, notice.params), 'Withdrawn from queue: Mine · taken back by Secretary <one> (session-one), who added it');
+  assert.throws(() => room.queueWithdraw(mine, 'shared', author), refused('error.queue.notCancellable'));
+});

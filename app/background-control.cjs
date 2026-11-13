@@ -72,7 +72,7 @@ const parameters = {
   join: ['sessionId', 'join: boolean'], roomRename: ['name'], roomNotes: ['text', 'expectedRevision'], roomMemberOrder: ['change'],
   archiveSession: ['sessionId'], restoreSession: ['sessionId'], archiveRoom: [], restoreRoom: [],
   spaceCreate: ['name'], spaceMerge: ['action: preview|status|commit|recover|discard|undo', 'value'],
-  spaceAction: ['roomId', 'action: join|rename|notes|memberOrder|archive|restore|stageImages|removeImage|acceptImages|removeFile|queueAdd|queueCancel|queueResolve|forward|queueShared|steerShared|run|pause|clearSharedHistory', 'queueAdd: [text, assignee or null]; only the person-designated secretary may add; queueCancel/queueResolve are person-only; other arguments in the corresponding command order'],
+  spaceAction: ['roomId', 'action: join|rename|notes|memberOrder|archive|restore|stageImages|removeImage|acceptImages|removeFile|queueAdd|queueCancel|queueResolve|forward|queueShared|steerShared|run|pause|clearSharedHistory', 'queueAdd: [text, assignee or null]; only the person-designated secretary may add; queueCancel by a session takes back only an item it added itself that is still queued (not yet sent), anything else only the person cancels; queueResolve is person-only; other arguments in the corresponding command order'],
   queueSecretary: ['sessionId or null to revoke; person-only, agents cannot designate themselves'],
   spaceFiles: ['roomId', 'fileId?; omit to import the explicit paths'], gitWorktreePreview: ['selected repository path', 'nonce', 'relative path'],
   create: ['options: {provider,cwd,name,view?,gitWorktree?}'], nativeHistory: ['options?'], importHistory: ['nativeId', 'options'],

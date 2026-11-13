@@ -668,6 +668,19 @@ class RoomState {
     const event = { kind: 'queue', ...uiNotice(by === 'steward' ? 'notice.queue.cancelledBySteward' : 'notice.queue.cancelled', { text: queueRules.shortText(item.text) }) };
     this.queueReplace(id, itemId, next, event);
   }
+  // The session that queued an item takes it back before it is sent; anyone else's, or one already sent, stays the
+  // person's to cancel. The item keeps the form older builds read: the record line says who took it back.
+  queueWithdraw(itemId, id = DEFAULT_ROOM_ID, author) {
+    const item = this.queueFind(id, itemId);
+    if (typeof author?.sessionId !== 'string' || !author.sessionId || item.creator?.kind !== 'secretary' || item.creator.sessionId !== author.sessionId) {
+      throw uiError("error.queue.withdrawOwnOnly");
+    }
+    if (item.status !== 'queued') {
+      throw uiError("error.queue.notCancellable");
+    }
+    const event = { kind: 'queue', ...uiNotice('notice.queue.withdrawn', { text: queueRules.shortText(item.text), name: author.name, sessionId: author.sessionId }) };
+    this.queueReplace(id, itemId, { ...item, status: 'cancelled', finishedAt: Date.now() }, event);
+  }
   queueResolve(itemId, id = DEFAULT_ROOM_ID, by = null) {
     const item = this.queueFind(id, itemId);
     if (item.status !== 'waiting') {

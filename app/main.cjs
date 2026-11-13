@@ -1591,15 +1591,16 @@ async function boot() {
       finally { await broadcastRoom(); }
     } else if (action === 'removeFile') roomState.removeFile(args[0], args[1], roomId);
     else if (['queueAdd', 'queueCancel', 'queueResolve'].includes(action)) {
-      // Besides the person: the secretary adds; the butler adds, cancels and marks handled, each under its own name.
+      // Besides the person: the secretary adds; the butler adds, cancels and marks handled, each under its own name;
+      // a session takes back what it queued itself while it is still queued (the person, 11-12 21:1x: 「可以」).
       const steward = c.background ? await stewardCaller(c) : null;
-      if (c.background && !steward && action !== 'queueAdd') throw uiError("error.queue.personOnly");
+      if (c.background && !steward && action === 'queueResolve') throw uiError("error.queue.personOnly");
       const by = steward ? 'steward' : null;
+      // The backend's own list does not say which sessions the person archived; the desktop's record does.
+      const sessions = async () => roomState.apply(await c.client.call('initial')).sessions;
       if (action === 'queueAdd') {
         // An assignee that is not a current member of this space is refused before anything is added, with the
         // members' names and ids, so that the item is never left queued for nobody (11-12, item 87a3b4c0).
-        // The backend's own list does not say which sessions the person archived; the desktop's record does.
-        const sessions = async () => roomState.apply(await c.client.call('initial')).sessions;
         const assignee = args[1] ?? null;
         if (assignee !== null) {
           const refusal = queueRules.assigneeRefusal(assignee, { id: roomId, memberOrder: roomState.metadata(roomId).memberOrder },
@@ -1615,7 +1616,8 @@ async function boot() {
         queueDispatcher?.schedule();
         return itemId;
       }
-      if (action === 'queueCancel') roomState.queueCancel(args[0], roomId, by);
+      if (action === 'queueCancel' && c.background && !steward) roomState.queueWithdraw(args[0], roomId, queueSecretary.author(backgroundOperation.current(), await sessions(), sessionLabels.labels));
+      else if (action === 'queueCancel') roomState.queueCancel(args[0], roomId, by);
       else { roomState.queueResolve(args[0], roomId, by); queueDispatcher?.schedule(); }
     }
     else if (['forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory'].includes(action)) {
