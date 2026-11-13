@@ -10,8 +10,13 @@
 // A push may bring `current`, which makes its snapshot as it is now. A snapshot that waited is made again
 // when it is sent: what other channels sent the page meanwhile (a session's new name) is then in it, and a
 // snapshot made before that cannot arrive after it and undo it.
-function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+// While the person types (`typed`, called by main for each key), a snapshot also waits until `quiet` ms
+// after the last key, but never longer than `maxHold` ms after the previous one left. Each snapshot costs
+// the page tens of milliseconds, and a key that arrives meanwhile waits for it; typing itself makes a new
+// state with every key (UI lag, 2026-11-12).
+function createStatePush(send, { wait = 0, quiet = 0, maxHold = 0, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   let sequence = 0;
+  let lastTyped = -Infinity;
   let lastSent = -Infinity;
   let timer = null;
   let urgent = false;
@@ -64,6 +69,12 @@ function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout
     if (!waiting || unacknowledged) {
       return;
     }
+    // Keys typed since this time was set extend it; a clock set back before the last send does not.
+    const left = remaining();
+    if (left > 0 && now() >= lastSent) {
+      timer = setTimer(flush, left);
+      return;
+    }
     const value = takeWaiting();
     try {
       deliver(value);
@@ -72,9 +83,17 @@ function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout
     }
   }
 
-  // Never more than the wait itself, should the clock be set back.
+  // Never more than the wait itself, or the hold while typing, should the clock be set back: without keys
+  // the hold plays no part.
   function remaining() {
-    return Math.min(lastSent + wait - now(), wait);
+    const spaced = lastSent + wait - now();
+    const typing = Math.min(lastTyped + quiet, lastSent + maxHold) - now();
+    return Math.max(Math.min(spaced, wait), Math.min(typing, maxHold));
+  }
+
+  // The person typed a key in this window's page. The page's own actions (flushNow) are not held by it.
+  function typed() {
+    lastTyped = now();
   }
 
   function push(value, current) {
@@ -163,7 +182,7 @@ function createStatePush(send, { wait = 0, now = Date.now, setTimer = setTimeout
     return { sequence, unacknowledged, waiting, superseded };
   }
 
-  return { push, acknowledged, flushNow, discardWaiting, close, status };
+  return { push, acknowledged, flushNow, discardWaiting, close, status, typed };
 }
 
 module.exports = { createStatePush };
