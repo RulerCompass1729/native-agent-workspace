@@ -28,7 +28,7 @@ function fixture(t, { landingOwner = null } = {}) {
   const handlers = new Map(), broadcasts = [], memberships = [], submitted = [], queued = [];
   // The real membership function is not under test here: only whether it is reached.
   const roomState = { apply: snapshot => room.apply(snapshot), metadata() {}, serial: action => action(), membership: async (_client, id, join, _label, space) => { memberships.push([id, join, space ?? null]); } };
-  const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, roomIds, stewardRole: role, roomState, landingOwner, validRoomId: id => typeof id === 'string' && id.length > 0,
+  const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, roomIds, stewardRole: role, stewardOf: require('../steward-record.cjs').cachedSteward(role), roomState, landingOwner, validRoomId: id => typeof id === 'string' && id.length > 0,
     queueDispatcher: null, sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); },
     // What designating sends: the person's own input, as the composer gives it, in the person's language.
     validDuty, displayText: key => locale.format('zh', key), uiLocale: locale, refuseSubmit: null,
@@ -131,6 +131,25 @@ test('the person designates a session outside every space, replaces it, and revo
   assert.deepEqual(f.role.current(), { sessionId: 'other', nativeId: 'native-other' }, 'There is one butler: the newer replaces the older');
   await f.call(null);
   assert.equal(new StewardRole(f.directory).current(), null); assert.equal(f.broadcasts.length, 3);
+});
+
+test('the queue dispatcher is told who the butler is now and the duty statement it is handed on with (batch 3)', async t => {
+  // main.cjs's own option, as written: a mistake there would only be swallowed by the dispatcher, which then never
+  // replaces the butler.
+  const f = fixture(t), option = vm.runInContext('(' + cut('      steward: () => {', '      creationDefaults:').trim().replace(/^steward: /u, '').replace(/,$/u, '') + ')', f.context);
+  const header = locale.format('zh', 'steward.duty.header'), standard = locale.format('zh', 'steward.duty.default');
+  // Made in the sandbox's realm: compared as the plain values they are.
+  const told = () => JSON.parse(JSON.stringify(option()));
+  assert.equal(option(), null);
+  f.role.set(ONE);
+  assert.deepEqual(told(), { ...ONE, duty: header + '\n' + standard });
+  f.role.set(ONE, '只管派活。');
+  assert.deepEqual(told(), { ...ONE, duty: header + '\n只管派活。' }, 'the person\'s own statement');
+  const TWO = { sessionId: 'session-2', nativeId: 'native-2' };
+  fs.writeFileSync(path.join(f.directory, 'rotation-log.jsonl'), edge('done', ONE, TWO) + '\n', { mode: 0o600 });
+  assert.deepEqual(told(), { ...TWO, duty: header + '\n只管派活。' }, 'after a finished replacement, its successor');
+  fs.writeFileSync(path.join(f.directory, 'rotation-log.jsonl'), 'not json\n', { mode: 0o600 });
+  assert.throws(option, key('error.steward.state'), 'a record that cannot be read is not taken for nobody');
 });
 
 test('designating sends the duty statement into the session as the person\'s message; it stays the butler when that cannot be done (batch 4)', async t => {

@@ -12858,3 +12858,32 @@ Independent review (one read-only session, 4 rounds):
 - The fourth gave `PASS` at a58b23c.
 
 The worktree fingerprints were unchanged before and after each round. The CLI reported USD 0.93, 1.22, 1.74 and 1.91 for the four invocations. It was given `--model fable` and reported `claude-opus-5-5`.
+
+## The butler is replaced like a member, and its duty statement goes with the handoff (steward step 2, batch 3, 2026-11-12)
+
+The task handoff for step 2, batch 3: 「换会话时身份、权限、职责说明跟到接班会话，并让空间外的大管家也能被 NAW 换会话。」 The activation checklist, item 6, taken as recommended on 2026-11-12 09:32 (「都按推荐的来」): the duty statement is sent when designated, and again after a rotation.
+
+What changed: the queue dispatcher rotated only space members, and the butler stays in no space. `planDispatch` now also takes `outside`: the designated butler, named only by `QueueDispatcher.stewardOutside` (designation readable, the very session and native session, in no space). The same quiet, size, readiness and recent-use rules apply. The handoff to its successor carries the duty statement, but only while the old session still holds the designation when the handoff is sent (`stewardDuty`). The designation then follows the logged rotation as before (`event=done` only). `handoffText` shortens a handoff that would not fit the backend's 16000-character input; the directory note and the statement are never cut. This applies to members too, where such a text used to fail to send.
+
+Kept, as known:
+- A `kept` rotation leaves a successor that has the statement but not the designation.
+- A revocation after the handoff was asked for still completes the rotation, without the statement.
+- The record's "followed" line is written at the butler's next call.
+- The last handoff line mentions a space's queue, which does not apply to the butler.
+
+Evidence:
+- The 6 new tests in `queue-dispatch.test.cjs` and `steward-entry.test.cjs` fail on main's sources. Two terminal-save tests also failed there, and at the commit, in a worktree without `node_modules`; they are environment-only and pass in the lane.
+- Full suite 6436/6436 at 0c1a472.
+- `test-steward-entry.cjs` passes in an isolated window, with 0 model calls.
+
+Independent review (one fresh read-only session, 2 rounds, cumulative reported USD 1.21): `PASS_WITH_NOTES` at 8f8024f and again at 0c1a472. The worktree fingerprints were unchanged after each round.
+
+Fixed from round 1 (0c1a472):
+- The dispatcher option re-read the rotation log on every planning pass. It now uses the existing cached `stewardOf`.
+- A shortened handoff could end in half a surrogate pair. The cut now steps back one unit.
+
+Notes kept:
+- A `done` rotation without a new native id leaves the designation on the stopped session. The secretary and integrator share this; it is rare.
+- A butler designated before batch 2 that is still in a space is rotated as a member, and the designation follows into the spaces. `stewardCaller` already refuses it there.
+- If the fixed parts of a handoff alone exceed 16000 characters, it still fails, as before.
+- `cachedSteward` ignores `role.failed`. After a failed write that left the file unchanged, the dispatcher can still rotate the session the file names and hand it the statement. The other `stewardOf` users already behave this way, and the person sees the failed write.

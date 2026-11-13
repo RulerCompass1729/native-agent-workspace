@@ -548,6 +548,10 @@ function keepStewardOutside(id, join) {
   try { steward = stewardRole?.current() || null; } catch { return; }
   if (steward && steward.sessionId === id) throw uiError('error.steward.joinSpace');
 }
+// The duty statement as the butler is given it: when designated, and with the handoff to a session that replaces it.
+function stewardDutyText() {
+  return displayText('steward.duty.header') + '\n' + (stewardRole.duty ?? displayText('steward.duty.default'));
+}
 // A session NAW opened to replace another and has not finished moving in (steward step 2, batch 2): its join is still
 // to come, and refusing that join would make the rotation stop it. Nor one a failed rotation is still to stop (never
 // handed work); a kept one, or one the failed rotation had already handed work to, is the person's to choose.
@@ -813,6 +817,13 @@ async function startQueueDispatcher() {
       labels: sessionLabels.labels,
       broadcast: broadcastRoom,
       notify: notifyRotation,
+      // The butler stays in no space: the dispatcher rotates it by this name and hands its duty statement on
+      // (steward step 2, batch 3). The record then follows the logged rotation (steward-role.cjs current()).
+      steward: () => {
+        // Read again only when the designation or rotation log files change: this runs on every planning pass.
+        const current = stewardOf?.() || null;
+        return current && { ...current, duty: stewardDutyText() };
+      },
       creationDefaults: snapshot => creationDefaults.get(snapshot?.sessions || []),
       directoryTrustTimeoutMs: process.env.NAW_QUEUE_DIRECTORY_TRUST_TIMEOUT_MS,
       // Passive local facts only; no controller or native/model runner is bound.
@@ -1875,7 +1886,7 @@ async function boot() {
     // The same input the person's composer gives: to an idle session, or queued after a Claude session's running
     // turn. It is a prompt, not a permission, and handed over is not received: the message keeps its own state in the
     // butler's conversation. A refusal leaves the designation as it is and says why.
-    const text = displayText('steward.duty.header') + '\n' + (stewardRole.duty ?? displayText('steward.duty.default'));
+    const text = stewardDutyText();
     try {
       const method = record.state === 'working' && record.provider === 'claude' ? 'queue' : record.state === 'idle' ? 'send' : null;
       if (!method) throw uiError('error.steward.dutyBusy');

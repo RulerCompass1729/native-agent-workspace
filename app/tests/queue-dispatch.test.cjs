@@ -6,6 +6,7 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const rules = require('../queue-dispatch.cjs');
 const { RoomState } = require('../room-state.cjs');
+const { StewardRole } = require('../steward-role.cjs');
 
 const HOUR = 60 * 60 * 1000;
 const NOW = 1_800_000_000_000;
@@ -1176,6 +1177,121 @@ test('members of every space with a long conversation are rotated once quiet; a 
   const unknown = member('a', { createdAt: undefined, lastActivityAt: NOW - 40 * 60000, messages: [{ role: 'user', text: 'y' }, { role: 'user', text: 'w', time: 1234 }] });
   assert.equal(rules.sessionStart(unknown, NOW), null);
   assert.deepEqual(plan(plain, [unknown], { memory: new Map([['a', 4 * 1024 ** 3]]) }), []);
+});
+
+test('the butler named as outside is rotated once quiet like a member; no other session in no space is, nor one twice', () => {
+  const plain = [{ id: 'shared', name: 'Team' }];
+  const outsider = extra => member('b', { roomIds: [], roomId: null, createdAt: NOW - 25 * HOUR, messages: heavyMessages(), lastActivityAt: NOW - 40 * 60000, ...extra });
+  assert.deepEqual(plan(plain, [outsider()], { outside: ['b'] }), [{ kind: 'rotate', sessionId: 'b', reason: 'content' }]);
+  assert.deepEqual(plan(plain, [outsider()]), [], 'a session in no space is rotated only as the butler');
+  assert.deepEqual(plan(plain, [outsider({ lastActivityAt: NOW - 10 * 60000 })], { outside: ['b'] }), [], 'the same quiet time as a member');
+  assert.deepEqual(plan(plain, [outsider({ state: 'working' })], { outside: ['b'] }), []);
+  assert.deepEqual(plan(plain, [outsider({ archived: true })], { outside: ['b'] }), []);
+  assert.deepEqual(plan(plain, [outsider({ messages: [] })], { outside: ['b'] }), [], 'a short conversation is kept');
+  assert.deepEqual(plan(plain, [outsider()], { outside: ['missing'] }), []);
+  assert.deepEqual(plan(plain, [outsider()], { outside: ['b'], humanAt: new Map([['b', NOW - 60000]]) }), [], 'the person just used it');
+  // One in a space is a member there; naming it as outside too does not rotate it twice.
+  const inside = member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages(), lastActivityAt: NOW - 40 * 60000 });
+  assert.deepEqual(plan(plain, [inside], { outside: ['a'] }), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+});
+
+test('the dispatcher names the butler only as the very native session designated, in no space', t => {
+  let steward = { sessionId: 'b', nativeId: 'native-b', duty: 'D' };
+  const { dispatcher } = dispatcherSetup(t, [], { steward: () => steward });
+  const outside = member('b', { roomIds: [], roomId: null });
+  assert.equal(dispatcher.stewardOutside([outside]), steward);
+  assert.equal(dispatcher.stewardOutside([{ ...outside, nativeId: 'native-other' }]), null, 'another native session under that id');
+  assert.equal(dispatcher.stewardOutside([member('b')]), null, 'in a space');
+  assert.equal(dispatcher.stewardOutside([]), null);
+  steward = null;
+  assert.equal(dispatcher.stewardOutside([outside]), null);
+  steward = () => { throw Error('unreadable'); };
+  const broken = dispatcherSetup(t, [], { steward }).dispatcher;
+  assert.equal(broken.stewardOutside([outside]), null, 'a designation that cannot be read names nobody');
+  assert.equal(broken.stewardDuty('b', { oldNativeId: 'native-b' }), '');
+});
+
+test('the butler is replaced like a member: its duty statement goes with the handoff, and the designation follows once done', async t => {
+  const butler = member('b', { roomIds: [], roomId: null, createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp', lastActivityAt: NOW - 40 * 60000 });
+  const other = member('o', { roomIds: [], roomId: null, createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp', lastActivityAt: NOW - 40 * 60000 });
+  const duty = '【NAW 职责说明】\n不要陷进执行。';
+  let role = null;
+  // With no queued work, rotation is checked through an open window (tick), as in the daily app.
+  let window = null;
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [butler, other], {
+    clients: () => window,
+    steward: () => {
+      const current = role.current();
+      return current && { ...current, duty };
+    },
+  });
+  window = client;
+  role = new StewardRole(dir);
+  role.set({ sessionId: 'b', nativeId: 'native-b' });
+  const joins = fakeMembership(room, client);
+  await dispatcher.start();
+  await dispatcher.schedule();
+  const request = client.sends('b');
+  assert.equal(request.length, 1);
+  assert.match(request[0][2], /【NAW 换会话】[\s\S]*只写交接/);
+  assert.equal(client.sends('o').length, 0, 'another session in no space is not rotated');
+  client.reply('b', '交接：在看三个 agent 的交付。');
+  await dispatcher.schedule();
+  const newId = client.state.sessions[2].id;
+  await dispatcher.schedule();
+  const handoff = client.sends(newId);
+  assert.equal(handoff.length, 1);
+  assert.match(handoff[0][2], /交接：在看三个 agent 的交付。[\s\S]*【NAW 职责说明】\n不要陷进执行。/);
+  assert.deepEqual(role.current(), { sessionId: 'b', nativeId: 'native-b' }, 'the old session is the butler until the rotation is done');
+  await dispatcher.schedule();
+  assert.deepEqual(client.calls.find(call => call[0] === 'stop'), ['stop', 'b']);
+  assert.deepEqual(joins, [], 'neither session joins or leaves a space');
+  assert.deepEqual(role.current(), { sessionId: newId, nativeId: `native-${newId}` });
+  const done = fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).find(line => line.event === 'done');
+  assert.deepEqual(done.spaces, []);
+  // The successor rests for a day like a member's: it is not replaced again at once.
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'queue-dispatch.json'), 'utf8')).rotations[newId].phase, 'kept');
+});
+
+test('a butler revoked after its handoff was asked for is still replaced, without the duty statement', async t => {
+  const butler = member('b', { roomIds: [], roomId: null, createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp', lastActivityAt: NOW - 40 * 60000 });
+  let role = null, window = null;
+  const { client, dispatcher, dir } = dispatcherSetup(t, [butler], {
+    clients: () => window,
+    steward: () => {
+      const current = role.current();
+      return current && { ...current, duty: '【NAW 职责说明】\nD' };
+    },
+  });
+  window = client;
+  role = new StewardRole(dir);
+  role.set({ sessionId: 'b', nativeId: 'native-b' });
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.equal(client.sends('b').length, 1);
+  role.set(null);
+  client.reply('b', '交接：x。');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  const newId = client.state.sessions[1].id;
+  const handoff = client.sends(newId);
+  assert.equal(handoff.length, 1);
+  assert.doesNotMatch(handoff[0][2], /职责说明/);
+});
+
+test('a handoff that would not fit the backend input is shortened, never the duty statement', () => {
+  const duty = '【NAW 职责说明】\n' + 'd'.repeat(3000);
+  const text = rules.handoffText('Claude manager', 'h'.repeat(rules.ITEM_TEXT_LIMIT * 2 + 4000), '旧目录说明', duty);
+  assert.ok(text.length <= 16000, `${text.length}`);
+  assert.ok(text.includes(duty) && text.includes('旧目录说明'));
+  assert.match(text, /h…\n\n旧目录说明\n\n【NAW 职责说明】/);
+  for (const pad of [0, 1]) {
+    const cut = rules.handoffText('A', 'x'.repeat(pad) + '😀'.repeat(9000), '', duty);
+    assert.ok(cut.length <= 16000 && cut.includes(duty));
+    assert.doesNotMatch(cut, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u, 'never half a character before the cut');
+  }
+  const short = rules.handoffText('A', '交接', '', '');
+  assert.equal(short, rules.handoffText('A', '交接'), 'no statement, no change');
 });
 
 test('a session\'s memory footprint includes its child processes; pressure is macOS\'s own level', () => {
