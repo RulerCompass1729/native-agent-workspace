@@ -183,7 +183,8 @@ local branch or main; not installed, pushed or published):
 - The independent reviewer, when the shared risk gates require one, is a separate headless Claude Code session,
   not a subagent of the main agent. Start each new checkpoint in a fresh session,
   saving its UUID with that checkpoint's private evidence. Point the brief only to
-  relevant rows/sections of `docs/review.md`, not its whole history. Apply the
+  relevant rows/sections of the review record (`docs/review/`, see "Evidence and
+  public boundaries"), not its whole history. Apply the
   shared review budget: a reproduced local repair defaults to three minutes and
   eight read/search calls. Name the exact diff, direct callers, raw failure/fix
   evidence and remaining risk; expand only for a concrete missing check. These
@@ -223,7 +224,7 @@ local branch or main; not installed, pushed or published):
   of unrelated temporary files. Never identify ownership by a filename or sweep
   a temporary-directory wildcard. Confirm that HEAD, the index and the worktree
   remain unchanged after each review. Reproduce and record its findings in
-  `docs/review.md`, fix them, then send only the delta to the same session. If
+  the review record, fix them, then send only the delta to the same session. If
   Claude is unavailable, keep the checkpoint open rather than self-approving.
   Reuse relevant evidence and avoid frequent handoffs.
 - A member of a space whose NAW queue the person uses ends each turn idle once
@@ -392,11 +393,24 @@ local branch or main; not installed, pushed or published):
 
 - Apply the shared risk gates before starting an independent review; this
   project does not require a review for every task. When required, review the
-  affected product path. Maintain
-  `docs/review.md` with user feedback, reproduced findings, fixes and evidence;
-  review actual source and raw local evidence, not just the author's summary.
-  Reuse the reviewer after fixes. Keep private evidence outside this public repo,
-  and do not add model tests simply to make a review appear more thorough.
+  affected product path. Keep user feedback, reproduced findings, fixes and
+  evidence in the review record; review actual source and raw local evidence,
+  not just the author's summary. Reuse the reviewer after fixes. Keep private
+  evidence outside this public repo, and do not add model tests simply to make
+  a review appear more thorough.
+- The review record is one file per day: append a new record at the end of
+  `docs/review/YYYY-MM-DD.md` for the day you write it (`date +%F` on this
+  machine), creating the file if needed. `docs/review.md` holds the records
+  written before it was frozen on 2026-11-13 (that day continues in
+  `docs/review/2026-11-13.md`): the push guard refuses any file over 2 MiB, and
+  every edit put another whole copy of it into history. Do not add to it or
+  edit it; a correction or status change to an entry there is a new record in
+  today's file, naming the entry. When merging, keep every record both sides
+  add to a day file. When a branch changed `docs/review.md`, restore main's
+  frozen copy and put each added record, and each change restated as a record
+  naming its entry, at the end of the day file of the day you move it.
+  `app/tests/docs-size.test.cjs` fails when `docs/review.md` differs from its
+  frozen copy or another file under `docs/` passes 1.5 MiB.
 
 - Read actual implementation files before making source-level claims.
 - Label requirements, design proposals, source findings, and runtime proof separately.

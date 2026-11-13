@@ -1,5 +1,10 @@
 # Review and issue record
 
+**Frozen on 2026-11-13.** New records go in one file per day,
+[`docs/review/YYYY-MM-DD.md`](review/). This file is kept as it is: a
+correction or status change to an entry below is a new record in that day's
+file, naming the entry.
+
 **N-E refusal growth and pre-consent outcomes, 2026-11-11 (review pending):**
 Missing folder paths, a busy maintenance request and known file/read-policy
 preconditions now share the existing counted, bounded refusal summaries and
