@@ -13033,4 +13033,6 @@ From the mid-turn task (`.local/handoff-20261112/claude2-midturn.md`): 「一条
 - Real window (real Electron, real 2.1.323, real bridge), one run each, all pass: mid-turn solo and shared, automatic message mid-turn, queue solo, queue shared, shared model switch.
 - Tests: 15 related files 606/0; full `node --test app/tests/*.test.cjs` 6501/0. An unknown later version (2.1.324) and suffixed strings stay closed in every gate test.
 
-**Not covered.** No paid or real-provider turn; installed daily-app acceptance belongs to the integrator.
+**Independent review.** A fresh read-only session (Read, Grep and Glob only; no MCP): PASS_WITH_NOTES, no blocking finding (the first run reached its turn limit and was asked for a bounded verdict in the same session). Notes, fixed in c458e7e: the declarations wording above understated the `tool.list` change; the main 64876c8 copy now has a fixed upgrade test; a test shows a qualified 2.1.323 launcher starting new sessions and resuming ones 2.1.322 last ran, with no fallback record. Delta review: PASS_WITH_NOTES. Its last note adds 532d984's copy to the fixed upgrade list (test only).
+
+**Not covered.** No paid or real-provider turn; installed daily-app acceptance belongs to the integrator. The full suite on c458e7e had one failure outside this change: `multispace-protocol.test.cjs`, "Owned synthetic daemon did not exit; profile retained", a teardown that took 5.4 s under load. That file passed three times alone. It is a flaky-teardown follow-up, not a pass.
