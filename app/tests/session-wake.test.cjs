@@ -801,3 +801,101 @@ test('when the person ends the butler role before the turn ends, only the turn\'
   assert.equal(second.wake.status, 'cancelled'); assert.equal(second.wake.cancellation.code, 'steward-role-ended');
   assert.equal(second.text, '这一轮结束时没能确认发送方还是大管家，只发第一条；自动消息未投递。\nSecond.');
 });
+
+// The wake proposal, item 3 (board 11-12 16:44: 「③只做读到真人的话后重新授权、不在真人的话后附行」; 23:44:19: 「真人插话之后、
+// 他的话还没读到之前，这一回合仍然发不出」). A Claude sender in a turn; the person queues words into it through NAW, the real
+// adapter takes native's append receipt, and native's read of them comes as the submission channel's read event.
+async function personSpeaks(t, { steward = false } = {}) {
+  const f = await fixture(t, 'claude'), s = f.source.get(f.a), requests = [];
+  s.state = 'working';
+  if (steward) fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: f.a, nativeId: s.nativeId } }), { mode: 0o600 });
+  Object.defineProperty(f.ra, 'queueAvailable', { value: true, configurable: true });
+  f.ra.nativeMidturnAppend = true;
+  let mode = 'append';
+  f.ra.submission.request = async (text, tag, guard, queued, midturn) => {
+    requests.push({ text, tag, queued, midturn });
+    const uuid = `00000000-0000-4000-8000-${String(requests.length).padStart(12, '0')}`;
+    return mode === 'append' ? { mode: 'append', uuid, turnId: f.ra.turnId } : { turnId: null, promptId: null };
+  };
+  const say = async text => { const tag = await f.source.queue(f.a, text, 'source-owner'); return { tag, uuid: `00000000-0000-4000-8000-${String(requests.length).padStart(12, '0')}` }; };
+  const read = ({ tag, uuid }, turnId = f.ra.turnId) => f.ra.submission.emit('read', { tag, uuid, turnId });
+  const send = (to, text, callId) => Promise.resolve().then(() => f.ra.addressedCall({ nativeId: s.nativeId, turnId: f.ra.turnId, promptId: f.ra.liveTurn.promptId, callId }, { recipient_id: to, message: text }));
+  const sent = () => s.messages.filter(m => m.wake);
+  return { ...f, s, requests, say, read, send, sent, ownTurn: () => { mode = 'own-turn'; } };
+}
+const refusedAs = key => error => error.uiMessage?.key === key;
+test('the person speaking into a sender\'s turn: before the turn reads it, it cannot send; once read, it sends again, once (wake proposal, item 3)', async t => {
+  const f = await personSpeaks(t);
+  assert.equal((await f.send(f.b, 'Before the person spoke.', 'before')).status, 'staged');
+  const words = await f.say('Send Receiver the new plan instead.');
+  assert.equal(f.requests.length, 1); assert.equal(f.requests[0].midturn, true);
+  const row = f.s.messages.find(m => m.id === words.tag);
+  assert.equal(row.deliveredInto, f.ra.turnId, 'native stored the words in the running turn');
+  let refusal; await assert.rejects(f.send(f.b, 'Decided before reading the person.', 'unread'), error => { refusal = error; return refusedAs('error.wake.turnAwaitingHumanRead')(error); });
+  assert.equal(refusal.message, '真人刚在这一回合插了话，这一回合还没读到；读到之后可以再发。');
+  assert.equal(require('../ui-locale.js').displayText('en', refusal.message, refusal.uiMessage), 'The person just spoke into this turn, and the turn has not read it yet; once it has, it can send again.');
+  assert.equal(f.sent().length, 1, 'a refusal before the read registers nothing');
+  f.read(words);
+  assert.equal(row.nativeRead, true);
+  assert.equal((await f.send(f.b, 'The new plan.', 'after')).status, 'staged');
+  await assert.rejects(f.send(f.b, 'And one more.', 'more'), /这一轮已经登记过|已经请求过/, 'still one message a turn for a session that is not the butler');
+  await f.finish();
+  assert.equal(f.writes.length, 1);
+  assert.match(f.writes[0].text, /\nThe new plan\.$/);
+  const [before, after] = f.sent();
+  assert.equal(before.wake.status, 'cancelled', 'what the turn registered before the person spoke stays withdrawn');
+  assert.equal(before.wake.cancellation.code, 'source-identity-changed');
+  assert.equal(after.wake.status, 'submitted'); assert.equal(after.wake.epoch, 1);
+});
+test('the read authorizes nothing when the person acted again, everything was paused, or it is not the turn\'s read of those words (wake proposal, item 3)', async t => {
+  const cases = {
+    'a takeover before the read': async f => { f.source.claim(f.a, 'another-window'); },
+    'the person typing in the terminal before the read': async f => { f.s.view = 'terminal'; f.ra.terminal = { alive: true, input() {} }; f.source.input(f.a, 'x', 'source-owner'); },
+    'pausing all handoffs before the read': async f => { f.source.pauseAll('stop'); },
+    // Only the person's words reopen the turn: here another agent's, queued through NAW's background control.
+    'another agent\'s words': async (f, words) => {
+      f.read(words); await f.send(f.b, 'After the person.', 'first');
+      const actor = { id: 'other-session', name: 'Other agent', nativeId: 'other-native', provider: 'claude', callId: 'call-1', turnId: 'turn-1', operationId: 'operation-1' };
+      return require('../background-operation.cjs').run(actor, () => f.say('From another agent.'));
+    },
+    'a read reported for another turn': async (f, words) => { f.read(words, 'another-turn'); },
+    'a read of other words': async f => { f.read({ tag: '11111111-1111-4111-8111-111111111111', uuid: '00000000-0000-4000-8000-000000000009' }); },
+  };
+  for (const [name, act] of Object.entries(cases)) {
+    const f = await personSpeaks(t), words = await f.say('Hold on.');
+    const other = await act(f, words);
+    if (other) f.read(other); else if (!name.startsWith('a read')) f.read(words);
+    await assert.rejects(f.send(f.b, 'Must not go.', 'after'), /真人|授权|回合|读到/, name);
+    await f.finish();
+    assert.equal(f.writes.length, 0, name);
+  }
+});
+test('the person\'s second words before the first are read: only reading the latest lets the turn send (wake proposal, item 3)', async t => {
+  const f = await personSpeaks(t);
+  const first = await f.say('One thing.'), second = await f.say('And another.');
+  f.read(first);
+  await assert.rejects(f.send(f.b, 'Too early.', 'early'), refusedAs('error.wake.turnAwaitingHumanRead'));
+  f.read(second);
+  assert.equal((await f.send(f.b, 'After both.', 'late')).status, 'staged');
+  await f.finish();
+  assert.equal(f.writes.length, 1);
+});
+test('words that run as their own later turn do not reopen the turn they waited behind (wake proposal, item 3)', async t => {
+  const f = await personSpeaks(t); f.ownTurn();
+  const words = await f.say('Next, please.');
+  assert.equal(f.s.messages.find(m => m.id === words.tag).deliveredInto, undefined);
+  f.read(words);
+  await assert.rejects(f.send(f.b, 'Still this turn.', 'same'), /真人|读到/);
+  await f.finish();
+  assert.equal(f.writes.length, 0);
+});
+test('the butler, after reading the person, may message a recipient it already registered one for in that turn (wake proposal, items 2 and 3)', async t => {
+  const f = await personSpeaks(t, { steward: true });
+  assert.equal((await f.send(f.b, 'First version.', 'one')).status, 'staged');
+  f.read(await f.say('Change it.'));
+  assert.equal((await f.send(f.b, 'Changed version.', 'two')).status, 'staged');
+  await assert.rejects(f.send(f.b, 'Third.', 'three'), /这一轮已经给这个收件方登记过一条/);
+  await f.finish();
+  assert.equal(f.writes.length, 1); assert.match(f.writes[0].text, /\nChanged version\.$/);
+  assert.deepEqual(f.sent().map(m => m.wake.status), ['cancelled', 'submitted']);
+});

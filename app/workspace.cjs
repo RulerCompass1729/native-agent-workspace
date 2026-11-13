@@ -875,11 +875,12 @@ class Workspace extends EventEmitter {
     });
     on('history', (items, turns, recovery) => { applyCodexHistory(s, items, runtime, id => this.deliveryStatus(id, 'submitted'), turns, recovery); this.changed(); });
     on('turnHistory', turns => { applyCodexTurnHistory(s, turns, runtime); this.sharedReplies.restoreTurnMetadata(s); this.changed(); });
-    on('midturnRead', ({ tag }) => {
+    on('midturnRead', ({ tag, turnId }) => {
       // The running turn's next model request carried it (bridge-observed, 2.1.322 and 2.1.323).
       let found = false;
       for (const list of this.messageLists(s)) for (const m of list) if (m.id === tag && m.deliveredInto) { m.nativeRead = true; found = true; }
-      if (found) this.changed();
+      // The person's words read in the turn they were queued into: it may send again (the wake proposal, item 3).
+      if (found) { wake.humanRead(runtime, s, tag, turnId); this.changed(); }
     });
     on('submitted', tag => {
       const input = s.messages.find(m => m.id === tag);
@@ -1346,6 +1347,8 @@ class Workspace extends EventEmitter {
       s.controlRevision === control && s.connectionRevision === connection && !s.approval && !['ended', 'recoverable', 'error', 'disconnected'].includes(s.state) &&
       (!shared || (spaces.isMember(s, roomId) && spaces.membershipRevision(s, roomId) === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed)) && (roomId === 'shared' || !this.storageWarning);
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
+    // The wake proposal, item 3: once the running turn reads the person's words, it may send automatic messages again.
+    if (!shared && !backgroundOperation.current()) wake.humanQueued(runtime, s, tag);
     // Like a native TUI queue, the recorded message leaves the composer at once.
     const clearedDraft = !backgroundOperation.current() && !shared && typeof draft === 'string' && draft.trim() === text;
     runtime.pendingQueue = tag;
