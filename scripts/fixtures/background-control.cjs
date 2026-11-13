@@ -6,13 +6,16 @@ const root = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..');
 const { Workspace } = require(path.join(root, 'app/workspace.cjs'));
 const { NativeHost } = require(path.join(root, 'app/adapters.cjs'));
 const create = NativeHost.prototype.create;
+// holdQueue: the next queued input waits for releaseQueue before native takes it (a turn still running).
+let holdNext = false, releaseHeld = null;
 NativeHost.prototype.create = function (record) {
   const runtime = create.call(this, record);
   if (record.provider === 'claude') {
     runtime.queueAvailable = true;
     runtime.queue = async (text, tag, valid) => {
       if (!valid()) throw Error('Synthetic queue is stale');
-      await new Promise(resolve => setTimeout(resolve, 25));
+      if (holdNext) { holdNext = false; await new Promise(resolve => { releaseHeld = resolve; }); }
+      else await new Promise(resolve => setTimeout(resolve, 25));
       if (!valid()) throw Error('Synthetic queue changed before native pickup');
       runtime.emit('submitted', tag);
     };
@@ -24,6 +27,8 @@ Workspace.prototype.bind = function (record, runtime) {
   bind.call(this, record, runtime); sessions.set(record.id, { runtime, record });
 };
 process.on('message', request => {
+  if (request.method === 'holdQueue') { holdNext = true; process.send({ requestId: request.id }); return; }
+  if (request.method === 'releaseQueue') { const release = releaseHeld; releaseHeld = null; release?.(); process.send({ requestId: request.id, released: Boolean(release) }); return; }
   if (request.method === 'backgroundComplete') {
     const { runtime, record } = sessions.get(request.target);
     runtime.event({ method: 'item/completed', params: { threadId: record.nativeId, turnId: runtime.turnId,

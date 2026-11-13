@@ -170,3 +170,101 @@ test('Claude root proof requires the actual bound prompt and cannot be consumed 
   r.liveTurn = { id: 'new', promptId: 'new' }; assert.equal(proof.valid(), false);
   assert.throws(() => native.rootCall(r, { ...message, callId: 'new-call' }, new AbortController().signal, () => true));
 });
+
+// Claude 2 batch 2 of 87a3b4c0: a message an agent queues for a working session must not hold its slot until
+// native takes it (a whole turn, or longer). The real queue path records the message with the actor first.
+function queued(t, outcome = {}) {
+  const f = setup(t);
+  // retireAfter 0: any opened window may be closed at once, unless something keeps it.
+  const controller = new BackgroundControl({ ...f.config, stagedPollMs: 5, retireAfter: 0 });
+  const state = { row: null, sent: 0 };
+  let settle; const native = new Promise((resolve, reject) => { settle = { take: resolve, fail: reject }; });
+  f.handlers.set('queueShared', async (_c, recipient, text) => {
+    state.sent++;
+    if (outcome.record !== false) state.row = { id: 'msg-1', text, status: outcome.status || 'awaiting-native', agentControl: { ...operation.current() } };
+    if (outcome.refuse) { await new Promise(resolve => setTimeout(resolve, 40)); throw Object.assign(Error('Native refused it'), { notSent: true }); }
+    await native; state.row.status = 'submitted'; return 'msg-1';
+  });
+  f.handlers.set('fast', () => 'ran');
+  const ready = controller.view(sender).then(c => {
+    c.client.snapshot = () => ({ sessions: [{ id: 'recipient', nativeId: 'recipient-native', messages: state.row ? [state.row] : [] }] });
+    c.client.retire = () => true;
+    c.delivery = async () => {
+      if (outcome.unreadable && state.row?.status === 'submitted') throw Error('Delivery could not be read');
+      return state.row ? { recipientId: 'recipient', messageId: state.row.id, nativeReceived: state.row.status === 'submitted', status: state.row.status } : null;
+    };
+    return c;
+  });
+  const settled = async () => { while (controller.pendingDeliveries.size) await new Promise(resolve => setTimeout(resolve, 5)); };
+  return { controller, state, settle, ready, settled };
+}
+const queue = invoke('queued-1', 'queueShared', ['recipient', 'hello', 'recipient-native']);
+
+test('a queued message answers awaiting-native once NAW recorded it and frees its agent at once; native taking it settles the receipt', async t => {
+  const q = queued(t); await q.ready;
+  const answer = await q.controller.call(binding(), queue);
+  assert.equal(answer.state, 'awaiting-native'); assert.equal(answer.delivery.messageId, 'msg-1');
+  // The same agent's next operation runs; nothing else is waited for.
+  assert.equal((await q.controller.call(binding(), invoke('next', 'fast'))).value, 'ran');
+  // Pending: no window of it is closed, and asking again never sends again.
+  assert.equal(q.controller.pendingDeliveries.size, 1); assert.equal(q.controller.retireIdle(), 0);
+  assert.equal((await q.controller.call(binding(), queue)).duplicate, true); assert.equal(q.state.sent, 1);
+  q.settle.take(); await q.settled();
+  const receipt = await q.controller.call(binding(), { action: 'receipt', operation_id: 'queued-1' });
+  assert.equal(receipt.receipt.state, 'received'); assert.equal(receipt.receipt.delivery.nativeReceived, true); assert.equal(q.state.sent, 1);
+  // Nothing pending any more: the same window can now be closed.
+  assert.equal(q.controller.retireIdle(), 1);
+});
+
+test('a recorded message whose delivery then fails settles unconfirmed and is not sent again', async t => {
+  const q = queued(t); await q.ready;
+  assert.equal((await q.controller.call(binding(), queue)).state, 'awaiting-native');
+  q.settle.fail(Object.assign(Error('Native receipt unconfirmed'), { notSent: false })); await q.settled();
+  const receipt = await q.controller.call(binding(), { action: 'receipt', operation_id: 'queued-1' });
+  assert.equal(receipt.receipt.state, 'unconfirmed'); assert.match(receipt.receipt.error, /unconfirmed/);
+  assert.equal((await q.controller.call(binding(), queue)).duplicate, true); assert.equal(q.state.sent, 1);
+});
+
+test('until NAW has recorded the message the slot is held as before', async t => {
+  const q = queued(t, { record: false }); await q.ready;
+  const pending = q.controller.call(binding(), queue);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal((await q.controller.call(binding(), invoke('next', 'fast'))).reason, 'another-operation-running');
+  q.state.row = { id: 'msg-1', text: 'hello', status: 'awaiting-native', agentControl: null };
+  q.settle.take();
+  assert.equal((await pending).state, 'received');
+});
+
+test('another agent\'s recorded message does not free this agent', async t => {
+  const q = queued(t, { record: false }); await q.ready;
+  q.state.row = { id: 'other', text: 'hello', status: 'awaiting-native', agentControl: { id: 'someone-else', nativeId: 'native', operationId: 'queued-1' } };
+  const pending = q.controller.call(binding(), queue);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal((await q.controller.call(binding(), invoke('next', 'fast'))).reason, 'another-operation-running');
+  q.settle.take(); await pending;
+});
+
+test('closing while a recorded message waits leaves its receipt awaiting-native, read again after reopening', async t => {
+  const q = queued(t); await q.ready;
+  assert.equal((await q.controller.call(binding(), queue)).state, 'awaiting-native');
+  await q.controller.close();
+  // Saved as awaiting-native (the existing receipt refresh reads its delivery again), never as running or sent twice.
+  const disk = JSON.parse(fs.readFileSync(q.controller.file, 'utf8')).records.find(r => r.id === 'queued-1');
+  assert.equal(disk.state, 'awaiting-native'); assert.equal(disk.delivery.messageId, 'msg-1'); assert.equal(q.state.sent, 1);
+});
+
+test('a message recorded but already refused does not answer awaiting-native; the refusal is the answer', async t => {
+  const q = queued(t, { status: 'not-sent', refuse: true }); await q.ready;
+  const answer = await q.controller.call(binding(), queue);
+  assert.equal(answer.state, 'unconfirmed'); assert.match(answer.error, /refused/);
+  assert.equal(q.controller.pendingDeliveries.size, 0); assert.equal(q.state.sent, 1);
+});
+
+test('a delivery that cannot be read after native took the message settles unconfirmed, as the ordinary path does', async t => {
+  const q = queued(t, { unreadable: true }); await q.ready;
+  assert.equal((await q.controller.call(binding(), queue)).state, 'awaiting-native');
+  q.settle.take(); await q.settled();
+  // Read from disk: asking for the receipt would read the (still unreadable) delivery again.
+  const saved = JSON.parse(fs.readFileSync(q.controller.file, 'utf8')).records.find(r => r.id === 'queued-1');
+  assert.equal(saved.state, 'unconfirmed'); assert.match(saved.error, /could not be read/); assert.equal(q.state.sent, 1);
+});

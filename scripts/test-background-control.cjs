@@ -162,7 +162,19 @@ async function run() {
   const sharedRow = raw.room.messages.find(m => m.agentControl?.operationId === args.operation_id && m.text === text);
   checks.push('Exact input submitted once; actual synthetic native event confirms receipt; agent attribution in both histories');
   const queued = await control(invoke('queueShared', [recipient, '  Busy original thread continuation\n', target.nativeId]));
-  assert.equal(queued.state, 'received', JSON.stringify(queued)); assert.equal(queued.delivery.body, '  Busy original thread continuation\n');
+  // Taken within 25 ms: usually received at once; under load it may answer awaiting-native first and settle soon after.
+  assert.ok(['received', 'awaiting-native'].includes(queued.state), JSON.stringify(queued)); assert.equal(queued.delivery.body, '  Busy original thread continuation\n');
+  if (queued.state !== 'received') await until(async () => (await control({ action: 'receipt', operation_id: queued.id })).receipt?.state === 'received', 'Quick queued input settles received');
+  // Claude 2, 87a3b4c0 batch 2: a message native has not taken yet answers awaiting-native and frees the agent at once.
+  await fixture('holdQueue');
+  const held = await control(invoke('queueShared', [recipient, 'Held until the next tool step\n', target.nativeId]));
+  assert.equal(held.state, 'awaiting-native', JSON.stringify(held)); assert.equal(held.delivery.status, 'awaiting-native');
+  const meanwhile = await control(invoke('interfaceSettings', ['describe']));
+  assert.equal(meanwhile.state, 'complete', 'The same agent\'s next operation runs while the message waits: ' + JSON.stringify(meanwhile));
+  assert.equal((await control(invoke('queueShared', [recipient, 'Held until the next tool step\n', target.nativeId], held.id))).duplicate, true, 'Asking again never sends again');
+  await fixture('releaseQueue'); // Another fixture may answer first; the receipt below is the proof it was released.
+  await until(async () => (await control({ action: 'receipt', operation_id: held.id })).receipt?.state === 'received', 'The held message settles received once native takes it');
+  checks.push('A queued message native has not taken answers awaiting-native, frees the agent for its next operation, and settles received later, sent once');
   assert.equal((await state()).sessions.find(s => s.id === recipient).state, 'working');
   checks.push('Busy original recipient receives queue input without pretending idle or starting another session');
   const card = page.locator(`[data-message-id="background:${(await state()).sessions.find(s => s.id === source).nativeId}:${args.operation_id}"]`);

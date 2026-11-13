@@ -12974,3 +12974,46 @@ Independent review (one read-only session, 3 rounds):
 - The third gave `PASS_WITH_NOTES` at c023a56.
 
 The worktree fingerprints were unchanged before and after each round. The CLI reported USD 1.19, 1.59 and 1.99 for the three invocations. It was given `--model fable` and reported `claude-opus-5-5`.
+
+## A message an agent queues no longer holds that agent until native takes it (mid-turn delivery, batch 2) — 2026-11-12
+
+From the mid-turn task (`.local/handoff-20261112/claude2-midturn.md`): 「一条没结的投递，不该挡住同一发起者的其他操作；结果不明的不重发」. Measured 11-11: while the steward's queued space message waited for a working member, every other `workspace_control` call of the steward was refused `another-operation-running`, until the person reopened the interface.
+
+**What held it.** Background control keeps one slot per agent (`exclusive`). A queue operation's handler returns only when native takes the message, because queued input has no local deadline. With batch 1 that is the recipient's next tool end or the end of its turn on 2.1.322. On other versions, or while the recipient waits on an approval, it can be hours, and the slot was held all that time.
+
+**Now (`background-control.cjs` only).**
+- For `queue` and `queueShared` (also through `spaceAction`), the operation answers `awaiting-native` with its delivery once NAW has recorded the message. Recorded means the recipient's own record holds this operation's message, matched on its operation, agent and native ids, in status `awaiting-native`. The operation then frees its agent's slot.
+  - The window's current state is read every 200 ms; it is not refreshed.
+  - Until the message is recorded, nothing changes: the slot is held and the handler's own outcome is the answer. The same holds for a refusal recorded before the first look. A refusal that comes after the message was seen waiting is answered `awaiting-native` first and settles `unconfirmed`.
+  - The early answer reads the window's own state. The late settle uses the full check (`main.cjs` `context.delivery`).
+- The handler finishes in the background and settles the record:
+  - native took it: `received`;
+  - any failure, including a delivery that cannot be read at the end: `unconfirmed`, as the ordinary path does.
+
+  Nothing is sent again. Asking with the same operation id returns the receipt, as before.
+- While such a delivery is pending, no background window is closed. `retireIdle` from 1f5c196 also waits for it, because closing a window could revoke the held message.
+- On close, the window's connections close and the pending call is usually rejected (service closed), so it settles `unconfirmed`. It stays `awaiting-native` on disk only if the process exits first. Either way nothing is resent, and the receipt refresh reads the delivery again when asked.
+- What the freed agent can now do while its message waits: any operation except `run`, which still waits for pending interventions in its scope, as before. Some of its own later operations can revoke its held message, for example a private input to the same session, a membership change or clearing shared history. The message then settles `unconfirmed`, and only the receipt shows that.
+- Unchanged: the recipient still holds one queued message at a time, so a second one to the same busy member is refused by that session as before. `workspace.queue`, the daemon and `workspace-client` are not touched.
+
+**Checks.**
+- `background-control.test.cjs` (7 new; the first covers the first three lines):
+  - a recorded message answers `awaiting-native` and frees the agent; its next operation runs;
+  - no window closes while it waits, and asking again never resends;
+  - native taking it settles `received`, and the window can then be closed;
+  - a late failure settles `unconfirmed`;
+  - before it is recorded, the slot is held as before;
+  - another agent's recorded message does not free this one;
+  - a message recorded as already refused answers with the refusal;
+  - closing leaves `awaiting-native` on disk when the handler has not settled;
+  - a delivery that cannot be read at the end settles `unconfirmed`.
+- Breakages: R1–R8 and R4b, each caught by its test (`mutate-17.log` to `mutate-19.log`).
+- Real window, real app, synthetic native: `scripts/test-background-control.cjs`, with a fixture switch that holds the next queued message. Through the steward's own route, `workspace_control` `queueShared` answers `awaiting-native`, and the same agent's next operation (`interfaceSettings describe`) runs meanwhile. The same operation id returns a duplicate. Released, the receipt becomes `received`. The existing quick queue check now accepts `awaiting-native` before `received`, because the synthetic native takes it within 25 ms and under load the recorded state can be seen first.
+
+**Left open.**
+- A real Claude steward journey (a real `workspace_control` call to a real working Claude) was not run. The route is the real app and broker with a synthetic native.
+- The 200 ms look is a poll of the window's own state; it does not ask the service.
+- A delivery waiting more than 24 hours can be archived by the records sweeper before it settles; its late outcome is then not saved. A receipt refresh can still read the delivery from the archived copy.
+- A handler that never finishes keeps idle windows open until the app closes.
+
+**Independent review.** A fresh read-only session (`review-release-1-result.md`): PASS_WITH_NOTES, no blocking finding. It confirmed that nothing is sent twice, by any path (same operation id, deferred settle, receipt refresh, restart, a second queue to the same busy member), and that the actor match is the one the final receipt uses. One note was a code inconsistency, now fixed and tested: a delivery that could not be read at the end settled `complete`, where the ordinary path says `unconfirmed` (R8). The others are worded above: what close does, a later refusal answered `awaiting-native` first, `run`, self-revocation, the 24-hour archive and a handler that never ends. Its second read (`review-release-2-result.md`, PASS_WITH_NOTES) confirmed that fix and the wording; the test count is corrected. The review of this change ends here.
