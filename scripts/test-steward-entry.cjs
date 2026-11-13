@@ -222,8 +222,8 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   // The chooser in English offers the English default, since the person kept the default.
   await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: locale.format('en', 'menu.stewardChange'), exact: true }).click(); await dialog.waitFor({ state: 'visible' });
   assert.equal(await page.locator('#steward-duty').inputValue(), locale.format('en', 'steward.duty.default'));
-  // Shown from its first line, though the box was left scrolled down when the dialog was last open (before the fix the
-  // English box opened partway down).
+  // Shown from its first line, though the box was left scrolled down when the dialog last closed: confirming from the
+  // session's menu above, after the whole default was filled in. Without the fix this fails (checked 11-12).
   assert.equal(await page.locator('#steward-duty').evaluate(box => box.scrollTop), 0, 'The statement is shown from its start');
   await shot('en-1280-chooser'); await dutyEnd('en-1280-chooser-end');
   await page.locator('#steward-cancel').click(); await dialog.waitFor({ state: 'hidden' }); await language('zh');
