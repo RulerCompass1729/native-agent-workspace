@@ -13078,3 +13078,27 @@ Only a decision asks the person something. Only a decision reaches the person as
 - No real working Claude with a real person stepping in was run. The real-window step uses an empty reply; `person-intervened` takes the same rule and is covered by the unit tests.
 - For the two other kinds, the space line still reads 「{name} 需要你决定：{task}」 and the queue row 「等你决定 · {name}」, although they ask nothing and the member is already working on its next item (`left-for-person.png`).
 - Items that were waiting before this change free their members as soon as it is installed. Older items queued behind them then go out in order, even if their work was since done another way. The person can cancel those first.
+## The butler's 60-second limit holds a message instead of refusing it (option A, 2026-11-12)
+
+The person's answer on the board (11-12 21:2x, 「按你推荐的来」): 「被拒的自动消息先存着、每分钟补送一条，限制本身不变（不放宽）」. Before, every recipient took one automatic message per 60 seconds and refused the rest, so when three agents reported to the butler at once, two reports were lost.
+
+**What changed (`app/session-wake.cjs`).**
+- When the person's designated butler refuses a message only because it took one less than 60 seconds ago, the recipient's backend says so and names the time its limit opens. The sender's backend checks that the recipient is the designated butler, keeps the message as `held` and offers it again at that time.
+- One timer per backend, at the earliest held message. Per recipient, one attempt at a time, oldest first; when one is taken, the others wait out the new minute. Each attempt is a full delivery again: the sender's turn and authorization are checked first, then the recipient checks everything.
+- The limit is now checked right after reachability, before the busy/waiting checks, so a message refused while the previous one is still on its way in is named as a limit refusal and can be held.
+- If the limit opens before the sender's turn ends, the message simply goes then. The sender agent's tool result reads `readiness: "held"` with a sentence saying it is kept and sent later, not to wait or retry.
+- Held messages are cancelled, never sent, when: the person acts on the butler or the sender (as for any automatic message), handoffs are paused for all (`revoke`), the check before an attempt fails, or the backend restarts (reopening never replays them).
+- The sender's card reads 「已存着，60 秒限制过了自动补送」 while held (`reading.wakeHeld`), then 原生已接收.
+
+**Unchanged.** The 60-second limit and the three-in-a-row limit themselves; every other refusal (busy, waiting, switched off, a changed identity); every recipient other than the butler; an uncertain delivery is never offered again. The tool description gains one clause.
+
+**Checks.**
+- `app/tests/session-wake.test.cjs`, 5 new tests: held then sent once the limit allows (also with the real timer); three in a row, other recipients and a non-butler hold are not held; held while the previous message is still on its way in; cancelled by the person's input to either session and by pausing all, here or in another backend; oldest first, the others wait a minute, a reopened backend cancels held messages. `space-message-preview.test.cjs`: the held label. On e0f068d, 7 of these fail.
+- 10 breakages of the change, each caught.
+- Related tests 284/284 and 247/247; full suite 6500/0.
+- Real window (`scripts/test-native-wake-held.cjs`, new): real Electron, real bridge, Claude 2.1.322, loopback responses, no paid call. Front reports to the butler; Docs reports 0.7 s later. Docs's agent reads `held`. Docs's card reads 已存着; the butler reads Docs's report 106 ms after its limit opens, once, as its own turn, with no control change and no other request. The first run showed the held card as 接收结果未记录; the label above fixes it.
+
+**Left open.**
+- The person typing to the butler, or an approval prompt on it, cancels held messages to it. This keeps the rule that the person's own input comes first; the senders' cards say it was not sent.
+- Other recipients still refuse a second message within 60 seconds.
+- Not run: several backends holding messages for the same butler at once (each backend keeps its own timer; the butler still takes one a minute and refuses the rest, which are then held again).
