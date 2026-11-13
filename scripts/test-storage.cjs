@@ -61,8 +61,10 @@ async function run() {
         saved.sessions[0].roomId === 'shared' && saved.drafts[id] === '还没发出的中文草稿。';
     } catch { return false; }
   }, 'Initial history saved');
-  const beforeFailure = stored(), obstruction = path.join(profile, 'workspace.json.tmp');
-  fs.mkdirSync(obstruction);
+  // A directory in place of each temporary file makes the next save fail: the timed checkpoint writes
+  // workspace.json.later.tmp, the retry (a synchronous save) workspace.json.tmp.
+  const beforeFailure = stored(), obstructions = ['workspace.json.tmp', 'workspace.json.later.tmp'].map(name => path.join(profile, name));
+  for (const obstruction of obstructions) fs.mkdirSync(obstruction);
   await fixture('messageItem', id, { id: 'storage-retry-note', text: '保存暂时失败期间收到的记录。' });
   await page.locator('#retry-save').waitFor({ state: 'visible' });
   assert.deepEqual(stored(), beforeFailure, 'A failed write preserves the previous checkpoint');
@@ -70,7 +72,7 @@ async function run() {
   await until(async () => !(await page.locator('#retry-save').isDisabled()), 'Failed retry settles');
   assert.equal(await page.locator('#retry-save').isVisible(), true);
   assert.deepEqual(stored(), beforeFailure);
-  fs.rmdirSync(obstruction);
+  for (const obstruction of obstructions) fs.rmdirSync(obstruction);
   await page.locator('#retry-save').click();
   await page.locator('#retry-save').waitFor({ state: 'hidden' });
   const savedAfterRetry = stored();
