@@ -140,7 +140,7 @@ test('everything sent to a window\'s page goes through sendToPage or pushState',
   assert.match(outside, /register\('uiReady', c => \{[^\n]*c\.armStatePush\?\.\(\)/);
   assert.equal((outside.match(/bindStatePush\(context\);/g) || []).length, 1, 'ordinary windows; a background window loads no document and never reports ready');
   // The reconnect refresh is the one other complete state sent to the page; nothing older may follow it.
-  const reconnect = outside.slice(outside.indexOf("context.statePush?.discardWaiting();"), outside.indexOf("sendToPage(context, 'workspace:reconnected', refreshed);"));
+  const reconnect = outside.slice(outside.indexOf("context.statePush?.discardWaiting();"), outside.indexOf("sendToPage(context, 'workspace:reconnected', omitHidden(refreshed, context.shown));"));
   assert.ok(reconnect.length > 0 && reconnect.length < 80, 'the waiting snapshot is discarded right before the reconnect refresh is sent');
 });
 
@@ -191,6 +191,7 @@ function mainHelpers() {
   context.client = { snapshot: () => current.value };
   const sandbox = {
     displayState: snapshot => snapshot,
+    omitHidden: require('../shown-sessions.cjs').omitHidden,
     createStatePush: (send, options) => createStatePush(send, { ...options, ...clock.timers }),
     windows: new Map([[7, context]]),
     trusted: url => url === 'app://trusted/',
@@ -274,6 +275,25 @@ test('a ready page gets one snapshot at a time; a reload or a renderer crash rel
   assert.deepEqual(h.sent.at(-1), { channel: 'workspace:state', value: 'h', sequence: 0 });
 });
 
+test('a page gets the messages of the sessions it shows only, decided when a snapshot leaves', () => {
+  const h = mainHelpers(), made = n => ({ sessions: [{ id: 'a', messages: ['a' + n] }, { id: 'b', messages: ['b' + n] }] });
+  const shape = () => h.sent.at(-1).value.sessions.map(s => s.messagesOmitted ? 'omitted' : s.messages[0]);
+  h.context.shown = new Set(['a']);
+  h.push(made(0)); assert.deepEqual(shape(), ['a0', 'omitted'], 'before the page is ready, too');
+  h.context.armStatePush();
+  h.push(made(1)); assert.deepEqual(shape(), ['a1', 'omitted']);
+  h.push(made(2));
+  // The page starts showing b while that snapshot waits: it leaves with b's messages.
+  h.context.shown = new Set(['a', 'b']);
+  h.acknowledge(1); h.tick(250);
+  assert.deepEqual(shape(), ['a2', 'b2']);
+  // A new document has none of the messages: everything until it reports.
+  h.pageEvents.get('did-start-loading')();
+  assert.equal(h.context.shown, null);
+  h.context.shown = new Set(['b']); h.pageEvents.get('render-process-gone')(); assert.equal(h.context.shown, null);
+  h.push(made(3)); assert.deepEqual(shape(), ['a3', 'b3']);
+});
+
 test('only the window\'s own trusted main frame can acknowledge, and a destroyed window is not sent to', () => {
   const h = mainHelpers();
   h.context.armStatePush();
@@ -327,6 +347,7 @@ test('the actual client wiring forwards state, terminal and progress to a page a
     const sandbox = {
       createStatePush,
       context,
+      omitHidden: require('../shown-sessions.cjs').omitHidden,
       displayState: value => {
         displays += 1;
         return value;
@@ -547,7 +568,8 @@ test('main hurries the waiting state before every page action\'s reply, except w
   const start = mainSource.indexOf("ipcMain.handle(`workspace:${name}`");
   const wrapper = mainSource.slice(start, mainSource.indexOf('\n}', start));
   assert.match(wrapper, /finally \{ if \(hurries\) try \{ context\.statePush\?\.flushNow\(\); \} catch/);
-  assert.match(mainSource, /const hurries = !\['input', 'resize', 'readingState', 'draft', 'viewState'\]\.includes\(name\);\n  ipcMain\.handle\(`workspace:\$\{name\}`/);
+  // The page's report of what it shows and its search are read-only and arrive while the person types.
+  assert.match(mainSource, /const hurries = !\['input', 'resize', 'readingState', 'draft', 'viewState', 'shownSessions', 'search'\]\.includes\(name\);\n  ipcMain\.handle\(`workspace:\$\{name\}`/);
 });
 
 test('a clock set back never holds a snapshot longer than the wait', () => {

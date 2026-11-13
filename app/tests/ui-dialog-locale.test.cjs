@@ -152,13 +152,16 @@ test('an old-backend join explanation retains valid metadata with and without a 
 
 // The default space shows its interface-language name while its stored name is absent or the untouched system default
 // (T-60, coordinator 2026-11-08); the same words on another space are that person's name and stay raw.
-test('search repaints the default space name and an absent fallback while preserving identical words on another space', () => {
+test('search repaints the default space name and an absent fallback while preserving identical words on another space', async () => {
   for (const [rawName, id, english] of [['', 'shared', 'Shared work'], ['共同工作', 'shared', 'Shared work'], ['共同工作', '33333333-3333-4333-8333-333333333333', '共同工作']]) {
     const f = fixture(); f.rooms[0].name = rawName; f.rooms[0].id = id; f.$('search-dialog').open = true;
     Object.assign(f.context, { searchOrigin: {}, searchLimit: 60, searchTimer: null, clearTimeout() {}, searchOptions: () => ({ scope: 'room' }) });
-    f.context.ui.clearMarkdown = () => {}; f.context.window.nativeWorkspaceSearch = require('../renderer/local-search.js');
-    const source = fs.readFileSync(path.join(__dirname, '../renderer/search-view.js'), 'utf8'), a = source.indexOf('function renderSearch('), z = source.indexOf('function searchInputKey(', a);
-    assert.ok(a > 0 && z > a); vm.runInContext(source.slice(a, z), f.context); f.context.renderSearch();
+    f.context.ui.clearMarkdown = () => {};
+    // Main runs the same search over the full state (main.cjs 'search'); the stub answers from this state.
+    const product = f.context.api, { searchRecords } = require('../renderer/local-search.js');
+    Object.assign(f.context, { searchRevision: 0, api: new Proxy({}, { get: (_target, key) => key === 'search' ? async (query, options) => searchRecords(f.state, query, options) : product[key] }) });
+    const source = fs.readFileSync(path.join(__dirname, '../renderer/search-view.js'), 'utf8'), a = source.indexOf('async function renderSearch('), z = source.indexOf('function searchInputKey(', a);
+    assert.ok(a > 0 && z > a); vm.runInContext(source.slice(a, z), f.context); await f.context.renderSearch();
     const row = f.$('search-results').children[0], name = row.children[0], before = JSON.stringify(f.state); assert.equal(name.textContent, '共同工作');
     f.document.activeElement = row; f.switch('en'); assert.equal(name.textContent, english);
     assert.equal(f.$('search-results').children[0], row); assert.equal(row.children[0], name); assert.equal(f.document.activeElement, row);

@@ -86,7 +86,7 @@ for (const scenario of ['missing saved member', 'archived selected member']) tes
 test('opening an explicit search result from recent-all retains the canonical historical filter on save',async()=>{
  const{ctx,$,calls}=harness();ctx.roomSession='';ctx.roomSurface='records';ctx.roomFilterHistory={roomFilter:'a',roomSearch:'original history',roomThread:''};
  ctx.state.room.messages=[{id:'result-b',recipientId:'b',text:'Exact B result'}];
- Object.assign(ctx,{clearTimeout(){},searchTimer:null,searchOrigin:{spaceId:'shared',selected:'room'},searchReturn:null,searchNavigating:false,spaceRecord:()=>ctx.state.room,selectSpace:async()=>{},selectRoom:async()=>{},pointToMessage(){}});
+ Object.assign(ctx,{clearTimeout(){},searchTimer:null,searchRevision:0,searchOrigin:{spaceId:'shared',selected:'room'},searchReturn:null,searchNavigating:false,spaceRecord:()=>ctx.state.room,selectSpace:async()=>{},selectRoom:async()=>{},pointToMessage(){}});
  $('search-dialog').close=()=>{};const text=fs.readFileSync(require.resolve('../renderer/search-view.js'),'utf8'),from=text.indexOf('async function openSearchResult('),to=text.indexOf('async function returnToReading(',from);assert.ok(from>=0&&to>from);vm.runInContext(text.slice(from,to),ctx);
  await ctx.openSearchResult({kind:'shared',roomId:'shared',messageId:'result-b'});
  assert.equal(ctx.roomViews.shared.roomFilter,'a');assert.equal(ctx.roomViews.shared.roomSearch,'original history');assert.equal(ctx.roomRecordScope,'');assert.equal(ctx.roomRecordReturn,null);assert.deepEqual(calls.native,[]);

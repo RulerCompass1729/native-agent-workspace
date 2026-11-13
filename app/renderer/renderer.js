@@ -336,6 +336,9 @@ function readLegacyProgress(s) {
     cache.pending = []; cache.pendingBytes = 0; cache.loading = false; cache.refreshing = false; render();
   }).catch(() => { if (legacyProgress.get(s.id) !== cache || cache.suspended) return; cache.pending = []; cache.pendingBytes = 0; cache.loading = false; cache.unavailable = true; render(); });
 }
+// A session this page does not show comes without its messages (shown-sessions.cjs). What other places read
+// from them, main has worked out into messageSummary; each reader checks messagesOmitted itself.
+function hasAssistantMessage(s) { return s?.messagesOmitted ? Boolean(s.messageSummary?.hasAssistant) : Boolean(s?.messages.some(m => m.role === 'assistant')); }
 function sessionMessages(s) {
   const cache = legacyProgress.get(s.id);
   if (s.nativeBlockMapping || !cache) return s.messages;
@@ -455,7 +458,9 @@ async function deliverSessionInput(s, pick, text, revision) {
 }
 async function submitSession(binding) {
   const s = state.sessions.find(s => s.id === binding.id), action = soloAction(s, { column: binding.column, mode: binding.column ? 'chat' : mode });
-  if (!composerCurrent(binding) || binding.ui.send.disabled || binding.ui.composing || action.kind !== 'send') return;
+  // Until its messages are here (a member that just joined, a session opened before its state; reportShown) nothing
+  // is sent and the text stays: a queue mark needs them.
+  if (!composerCurrent(binding) || binding.ui.send.disabled || binding.ui.composing || action.kind !== 'send' || s.messagesOmitted) return;
   if (inputFocusAllowed()) binding.ui.input.focus();
   const { id, nativeId } = s, text = binding.ui.input.value, revision = draftRevisions.get(id);
   // Counted, not locked: a queued Claude message keeps its call open until its turn starts.
@@ -768,6 +773,47 @@ const viewClaims = new Map();
 const activeSessionId = () => selected === 'room' ? roomSession : selected;
 const current = () => state?.sessions.find(s => s.id === activeSessionId());
 const members = (id = spaceId) => spaceRecord(id)?.archived ? [] : state?.sessions.filter(s => inSpace(s, id) && !s.archived) || [];
+// The sessions whose messages this page needs: main leaves out the rest (shown-sessions.cjs). One being
+// opened counts from the moment it is asked for (shownPending) until the view that shows it is drawn.
+// shownKnown: the ids of the newest report main has answered.
+const shownPending = new Map();
+let shownReported = null, shownReply = null, shownKnown = new Set();
+function shownSessionIds(pending = true) {
+  const ids = new Set(pending ? shownPending.keys() : []), active = activeSessionId();
+  if (active) ids.add(active);
+  if (selected === 'room') for (const s of members()) ids.add(s.id);
+  for (const id of queuedInputs.keys()) ids.add(id);
+  return [...ids].filter(id => state?.sessions.some(s => s.id === id)).sort();
+}
+function reportShown() {
+  if (!state) return null;
+  const ids = shownSessionIds(), key = ids.join('\n');
+  if (key === shownReported) return shownReply;
+  shownReported = key;
+  return shownReply = api.shownSessions(ids).then(value => {
+    shownKnown = new Set(ids);
+    const patched = applyShownMessages(value), onScreen = new Set(shownSessionIds(false));
+    if (patched.some(id => onScreen.has(id))) render();
+  }, () => { if (shownReported === key) shownReported = null; });
+}
+function applyShownMessages(value) {
+  const patched = [];
+  for (const [id, messages] of Object.entries(value?.messages || {})) {
+    const index = state?.sessions.findIndex(s => s.id === id) ?? -1, record = state?.sessions[index];
+    if (!record?.messagesOmitted || !Array.isArray(messages)) continue;
+    const { messagesOmitted: _omitted, messageSummary: _summary, ...rest } = record;
+    state.sessions[index] = { ...rest, messages }; patched.push(id);
+  }
+  return patched;
+}
+// Before a view shows these sessions. Null when the page has their messages already, so that a switch
+// between shown sessions stays as immediate as before.
+function ensureMessages(ids) {
+  const wanted = [...new Set(ids)].filter(id => state?.sessions.find(s => s.id === id)?.messagesOmitted);
+  if (!wanted.length) return null;
+  for (const id of wanted) shownPending.set(id, (shownPending.get(id) || 0) + 1);
+  return Promise.resolve(reportShown()).finally(() => { for (const id of wanted) { const n = shownPending.get(id) - 1; if (n > 0) shownPending.set(id, n); else shownPending.delete(id); } });
+}
 function orderedMembers(id = spaceId) {
   const people = members(id), ranks = new Map((spaceRecord(id)?.memberOrder || []).map((id, index) => [id, index]));
   const fallback = ranks.size;
@@ -986,8 +1032,9 @@ function renderRoomOverview() {
     display: ui.display, language: ui.language, showError: ui.showError,
     onMove: moveRoomMember,
     onOrderError: error => error.message ? toastError(error) : toastMessage('collab.orderUnchanged'),
-    label: s => participantLabel(s, state.sessions), messages: s => sessionMessages(s),
-    renderMessages: (el, s, rows, key) => messageList(el, rows, false, key, { session: s, passive: true }),
+    // A member whose messages have not arrived yet keeps its column as it was; its excerpt comes from the summary.
+    label: s => participantLabel(s, state.sessions), messages: s => s.messagesOmitted ? undefined : sessionMessages(s),
+    renderMessages: (el, s, rows, key) => { if (rows) messageList(el, rows, false, key, { session: s, passive: true }); },
     disposeMessages: el => { messageViews.get(el)?.dispose(); messageViews.delete(el); },
     renderInput: renderColumnInput, disposeInput: removeColumnInput,
     beforeInputLayout: suspendColumnInputs,
@@ -1028,6 +1075,14 @@ const inputFocusAllowed = () => !sessionMenu && !roomMenu && !contentMenu && !re
 function updateState(next) {
   const before = new Map((state?.sessions || []).map(s => [s.id, s]));
   state = projectSpace({ ...state, ...next });
+  // A state main made before it learned that this page shows a session can arrive after the reply that
+  // brought that session's messages (reportShown): the messages the page holds stay until newer ones come.
+  if (shownKnown.size) state.sessions = state.sessions.map(s => {
+    const held = s.messagesOmitted && shownKnown.has(s.id) ? before.get(s.id) : null;
+    if (!held || held.messagesOmitted) return s;
+    const { messagesOmitted: _omitted, messageSummary: _summary, ...rest } = s;
+    return { ...rest, messages: held.messages };
+  });
   for (const s of state.sessions || []) if (legacyProgressOffline(s)) freezeLegacyProgress(s);
   if (latestViewStorage !== undefined) { state.viewStorageWarning = latestViewStorage; state.viewStorageWarningUiMessage = latestViewStorageUiMessage; }
   for (const [id, binding] of sessionComposers) {
@@ -1092,8 +1147,9 @@ const sessionTimeFormats = new Map();
 function sessionActivityTime(s) {
   const reported = sessionTime(s.lastActivityAt);
   if (reported) return reported;
-  let latest = null;
-  for (const m of Array.isArray(s.messages) ? s.messages : []) {
+  const summary = s.messagesOmitted ? s.messageSummary || {} : null;
+  let latest = summary && Number.isFinite(summary.latestAt) ? summary.latestAt : null;
+  if (!summary) for (const m of Array.isArray(s.messages) ? s.messages : []) {
     if (!m?.volatile && m?.kind !== 'gap' && Number.isFinite(m?.time) && Number.isFinite(new Date(m.time).getTime())) latest = latest === null ? m.time : Math.max(latest, m.time);
   }
   return latest === null ? uiText('time.unknown') : uiText('time.estimated', { time: sessionTime(latest) });
@@ -1123,8 +1179,10 @@ function sessionChainModel(id) {
     }
   }
   const sessions = [...links.values()].map(link => {
-    const record = state.sessions.find(s => s.id === link.id);
-    const messages = (record?.messages || []).filter(m => !m.volatile && m.kind !== 'gap' && ['user', 'assistant'].includes(m.role) && Number.isFinite(m.time));
+    const record = state.sessions.find(s => s.id === link.id), summary = record?.messagesOmitted ? record.messageSummary || {} : null;
+    // Only the earliest and latest turn times are read below: a session left out gives just those.
+    const messages = summary ? [summary.turnFirstAt, summary.turnLastAt].filter(Number.isFinite).map(time => ({ time }))
+      : (record?.messages || []).filter(m => !m.volatile && m.kind !== 'gap' && ['user', 'assistant'].includes(m.role) && Number.isFinite(m.time));
     const handedAt = link.successors.length ? Math.min(...link.successors.map(edge => edge.time)) : null;
     const after = handedAt === null ? [] : messages.filter(m => m.time > handedAt);
     const starts = [...link.incoming, ...messages.map(m => m.time)];
@@ -1369,6 +1427,9 @@ function persistView() { normalizeRoomMention(); captureReadingViews(); const vi
 // Opening a space never changes which sessions the sidebar lists (T-132).
 async function selectSpace(id) {
   if (!spaceRecord(id)) throw uiError("error.spaceUnavailable");
+  // Its columns show every member: the current space stays on screen until they have their messages.
+  const loading = spaceId !== id && ensureMessages(members(id).map(s => s.id));
+  if (loading) { await loading; if (!spaceRecord(id)) throw uiError("error.spaceUnavailable"); }
   if (spaceId !== id) {
     captureReadingViews(); captureRoomView(); closeMentions(); suspendColumnInputs();
     roomOverview?.dispose(); roomOverview = null; spaceId = id; state = projectSpace(state); restoreRoomView();
@@ -1545,9 +1606,14 @@ function openSpaceRegionMenu(point, anchor = $('new-space')) {
 }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
 async function select(id, requestedMode, member = roomSession, passive = false) {
+  // The old view stays until the new one has its messages; another selection meanwhile wins. Counted once,
+  // before the wait: a caller reads selectionRevision right after calling (operateNative).
+  const loading = ensureMessages(id === 'room' ? [member, ...members().map(s => s.id)] : [id]);
+  let revision = loading ? ++selectionRevision : 0;
+  if (loading) { await loading; if (revision !== selectionRevision) return; }
   rememberRoomMemberView();
   captureReadingViews(); suspendColumnInputs();
-  const revision = ++selectionRevision;
+  if (!loading) revision = ++selectionRevision;
   const leaving = terminals.get(activeSessionId());
   cancelViewInput(leaving);
   if (leaving?.composing) leaving.term.blur();
@@ -4308,14 +4374,16 @@ function render() {
       const visibleMessages = sessionMessages(s);
       const signature = JSON.stringify([s.name, visibleMessages, !visibleMessages.length && [s.state, Boolean(s.nativeApproval)]]);
       const readingKey = focusedReadingKey(s.id);
-      if (signature !== lastMessages || messageViews.get($('messages'))?.key !== readingKey) { messageList($('messages'), visibleMessages, false, readingKey); lastMessages = signature; }
+      // select() waits for the messages; should they still be missing, the list is hidden, never "no messages".
+      if (s.messagesOmitted) { $('messages').hidden = true; lastMessages = ''; }
+      else if (signature !== lastMessages || messageViews.get($('messages'))?.key !== readingKey) { messageList($('messages'), visibleMessages, false, readingKey); lastMessages = signature; }
       renderAdvanced(s);
       for (const id of terminals.keys()) syncTerminalMount(id);
       $('terminal-empty').hidden = terminals.has(s.id);
       // Without a terminal in this window: not started yet, ended, or (status line says
       // which: archived, background, disconnected…) simply none here.
       ui.display.text($('terminal-empty'), alive ? 'terminal.notStarted' : s.state === 'ended' ? 'terminal.endedEmpty' : 'terminal.noScreen');
-      if (terminalVisible && alive && (mode === 'terminal' || s.terminalState?.alive || s.activeTurnId || s.messages.some(m => m.role === 'assistant'))) {
+      if (terminalVisible && alive && (mode === 'terminal' || s.terminalState?.alive || s.activeTurnId || hasAssistantMessage(s))) {
         // Mounting the same native display is passive; input still requires its
         // own focus/control claim. Never steal focus when the snapshot arrives.
         renderTerminal(s.id);
@@ -4404,7 +4472,7 @@ function render() {
     renderApproval(approvalTarget, approvalTarget?.owner === owner);
     renderRename(); updateSelectedSharing();
     if (removedRoomFocus) focusRemainingMember(removedRoomFocus.origin, removedRoomFocus.index);
-  } finally { restoreVisibleReading(); rendering = false; }
+  } finally { restoreVisibleReading(); rendering = false; reportShown(); }
 }
 async function switchMode(next, takeControl = false) {
   captureReadingViews();
@@ -4485,7 +4553,7 @@ async function ensureTerminal(id, explicit = false) {
   const old = terminals.get(id);
   if (old && (old.generation !== generation || old.nativeId !== record?.nativeId)) { old.term.dispose(); old.element.remove(); terminals.delete(id); cancelViewInput(old, uiError("error.nativeConnectionChanged")); }
   if (old?.waitingForFirstTurn && terminals.get(id) === old &&
-      (record?.activeTurnId && record.activeTurnId !== old.firstTurnAttemptId || record?.messages.some(message => message.role === 'assistant') && !old.firstTurnHadOutput)) {
+      (record?.activeTurnId && record.activeTurnId !== old.firstTurnAttemptId || hasAssistantMessage(record) && !old.firstTurnHadOutput)) {
     // A first-message instruction never launched a display. Once that same
     // native thread has real output, the visible pane can attach without a seed.
     old.term.dispose(); old.element.remove(); terminals.delete(id);
@@ -4522,7 +4590,7 @@ async function ensureTerminal(id, explicit = false) {
     selection.shouldForceSelection = event => (!terminalCanInput(id) && !canCaptureTerminal(id)) || mouse?.activeEncoding === 'DEFAULT' || nativeForce(event);
   }
   const intent = selectionRevision;
-  const entry = { element, term, fit, generation, nativeId: record?.nativeId, ready: false, sequence: 0, queued: [], firstTurnAttemptId: record?.activeTurnId, firstTurnHadOutput: record?.messages.some(message => message.role === 'assistant') }; terminals.set(id, entry); syncTerminalMount(id);
+  const entry = { element, term, fit, generation, nativeId: record?.nativeId, ready: false, sequence: 0, queued: [], firstTurnAttemptId: record?.activeTurnId, firstTurnHadOutput: hasAssistantMessage(record) }; terminals.set(id, entry); syncTerminalMount(id);
   term.onSelectionChange(() => nativeSelectionChanged(id, term));
   let recovery = inputRecoveries.get(id);
   if (!recovery) {

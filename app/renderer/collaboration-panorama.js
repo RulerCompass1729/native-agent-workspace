@@ -191,7 +191,9 @@
         // Keep the originally selected source while visiting a member. A newer
         // reply must not silently replace the text to which a return refers.
         const held = heldSource?.sessionId === record.id ? record.messages?.find(message => message.id === heldSource.messageId) : null;
-        const snippet = held ? collaboration.excerpt(record, [held]) : person.excerpt;
+        // Without the session's messages the held reply cannot be read again: the quote already shown stays.
+        const kept = !held && record.messagesOmitted && heldSource?.sessionId === record.id && row.snippet?.messageId === heldSource.messageId ? row.snippet : null;
+        const snippet = held ? collaboration.excerpt(record, [held]) : kept || person.excerpt;
         row.snippet = snippet;
         if (snippet) { display.unbind(row.quote); write(row.quote, snippet.text); }
         else display.text(row.quote, 'collab.noExcerpt');

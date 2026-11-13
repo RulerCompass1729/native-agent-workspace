@@ -127,13 +127,20 @@ test('background notification renders format characters visibly in the actor nam
 test('session confirmation navigation rejects stale identities or handled requests before changing views', async () => {
   const source = fs.readFileSync(require.resolve('../renderer/search-view.js'), 'utf8'), calls = [];
   const row = { id: 'message', backgroundOperation: { state: 'confirmation-required' } }, record = { id: 'agent', nativeId: 'native-agent', messages: [row] };
-  const c = { state: { sessions: [record] }, toast: m => calls.push(m), uiText: k => k, $: () => ({}),
+  const c = { state: { sessions: [record] }, toast: m => calls.push(m), uiText: k => k, $: () => ({}), ensureMessages: () => null,
     select: async (...args) => calls.push(args), pointToMessage: (_el, key, id) => { calls.push([key, id]); return true; } };
   vm.createContext(c); vm.runInContext(section(source, 'async function showBackgroundConfirmation(', '\nasync function showRoomRecord('), c);
   const target = { sessionId: 'agent', nativeId: 'native-agent', messageId: 'message' };
   assert.equal(await c.showBackgroundConfirmation({ ...target, nativeId: 'new-native' }), false); assert.deepEqual(calls, ['search.changed']);
   calls.length = 0; assert.equal(await c.showBackgroundConfirmation(target), true); assert.deepEqual(calls, [['agent', 'chat'], ['agent', 'message']]);
   calls.length = 0; row.backgroundOperation.state = 'complete'; assert.equal(await c.showBackgroundConfirmation(target), false); assert.deepEqual(calls, ['search.changed']);
+  // A session this page does not show comes without messages: they are fetched first (shown-sessions.cjs).
+  row.backgroundOperation.state = 'confirmation-required';
+  const omitted = { id: 'agent', nativeId: 'native-agent', messages: [], messagesOmitted: true, messageSummary: {} };
+  c.state.sessions = [omitted]; c.ensureMessages = ids => { calls.push(['ensure', ...ids]); return Promise.resolve().then(() => { c.state.sessions = [record]; }); };
+  calls.length = 0; assert.equal(await c.showBackgroundConfirmation(target), true); assert.deepEqual(calls, [['ensure', 'agent'], ['agent', 'chat'], ['agent', 'message']]);
+  c.state.sessions = [omitted]; c.ensureMessages = () => Promise.resolve();
+  calls.length = 0; assert.equal(await c.showBackgroundConfirmation(target), false); assert.deepEqual(calls, ['search.changed']);
 });
 test('a durable control audit never waits for a window broadcast to finish', t => {
   const { state } = room(t), record = { id: 'restore', actor: { id: 'agent', nativeId: 'native', name: 'Agent', provider: 'codex' },
