@@ -21,12 +21,12 @@ let profile, child, client, app, page, helper, sequence = 0, butler, worker;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label) { for (let n = 0; n < 200; n++) { if (await fn()) return; await wait(40); } throw Error(label); }
 const save = (name, value) => fs.writeFileSync(path.join(evidence, name + '.json'), JSON.stringify(value, null, 2), { mode: 0o600 });
-function fixture(method, target, value) {
+function fixture(method, target, value, text) {
   const id = ++sequence;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { child.off('message', receive); reject(Error('Fixture response timeout')); }, 8000);
     const receive = r => { if ((method === 'backgroundProof' ? r.proofRequestId : r.requestId) !== id) return; clearTimeout(timer); child.off('message', receive); r.error ? reject(Error(r.error)) : resolve(r); };
-    child.on('message', receive); child.send({ id, method, target, value });
+    child.on('message', receive); child.send({ id, method, target, value, text });
   });
 }
 function mcp() {
@@ -150,6 +150,33 @@ async function run() {
   assert.equal(seen.rows.find(r => r[1] === locale.format('en', 'stewardRecord.step.snapshot'))?.[2], locale.format('en', 'stewardRecord.result.complete'));
   await shot('en-1280-steward-record');
   checks.push('In the 850 by 600 window the dialog fits; in English its words are English');
+
+  // 4b. The butler marks handled an item NAW already sent, whose work was done another way (11-12: it was refused on
+  //     item 0bcc3c9c). When the member's turn then ends, even asking for a decision, the item stays handled, is not
+  //     sent again, and does not keep the member from its next item (11-12: item 2829a073 flipped back).
+  await page.keyboard.press('Escape'); await page.locator('#steward-record-dialog').waitFor({ state: 'hidden' });
+  const queueItem = async id => (await page.evaluate(() => workspace.initial())).room.queue.find(i => i.id === id);
+  async function untilSent(id, label) { const end = Date.now() + 150000; while (Date.now() < end) { if ((await queueItem(id))?.status === 'sent') return; await wait(250); } throw Error(label); }
+  const sentBefore = (await fixture('stats')).sends.length;
+  const first = await control(invoke('spaceAction', ['shared', 'queueAdd', ['换掉旧图标', worker]])); assert.equal(first.value.state, 'complete', JSON.stringify(first));
+  await untilSent(first.value.value, 'NAW sends the first item to the member');
+  const resolved = await control(invoke('spaceAction', ['shared', 'queueResolve', [first.value.value]]));
+  assert.equal(resolved.value.state, 'complete', JSON.stringify(resolved));
+  assert.deepEqual([(await queueItem(first.value.value)).status, (await queueItem(first.value.value)).finishedBy], ['done', 'steward']);
+  await fixture('release', worker, undefined, '需要你决定：要不要也换掉旧按钮？'); await fixture('backgroundReport', worker);
+  const second = await control(invoke('spaceAction', ['shared', 'queueAdd', ['换掉旧按钮', worker]])); assert.equal(second.value.state, 'complete', JSON.stringify(second));
+  await untilSent(second.value.value, 'The member, free again, gets its next item');
+  const closed = await queueItem(first.value.value), sentNow = (await fixture('stats')).sends.slice(sentBefore);
+  assert.deepEqual([closed.status, closed.finishedBy, closed.reason ?? null], ['done', 'steward', null], JSON.stringify(closed));
+  assert.deepEqual(sentNow.map(s => [s.id, /换掉旧图标/.test(s.text), /换掉旧按钮/.test(s.text)]), [[worker, true, false], [worker, false, true]], 'Each item sent once');
+  const notices = (await page.evaluate(() => workspace.initial())).room.events.filter(e => e.uiMessage?.params?.text === '换掉旧图标').map(e => e.uiMessage.key);
+  assert.ok(notices.includes('notice.queue.resolvedBySteward') && !notices.includes('notice.queue.waiting'), JSON.stringify(notices));
+  await openRecord(); seen = await dialogText();
+  const resolveStep = locale.format('en', 'stewardRecord.step.queueResolve', { space: '\u0001' }).split('\u0001')[0];
+  assert.equal(seen.rows.find(r => r[1].startsWith(resolveStep))?.[2], locale.format('en', 'stewardRecord.result.complete'), JSON.stringify(seen.rows));
+  await shot('en-1280-steward-resolved-sent'); save('resolved-sent', { closed, sentNow: sentNow.map(s => s.id === worker), notices });
+  await fixture('release', worker, undefined, '换掉旧按钮完成'); await fixture('backgroundReport', worker);
+  checks.push('The butler marks handled an item NAW already sent; when the member then asks for a decision the item stays handled, is sent once only, and the member gets its next item; the record lists the step as done');
 
   // 5. Revoking keeps the record; the dialog of nobody designated is not offered (no butler row), the record stays on disk.
   await page.keyboard.press('Escape'); await page.evaluate(() => workspace.steward(null));

@@ -2444,7 +2444,16 @@ class QueueDispatcher {
     }
   }
 
+  // Whether the item is still out with its member: the person or the butler may have marked it handled since
+  // (room-state.cjs queueResolve), and then nothing NAW learns later changes it (11-12, item 2829a073).
+  stillSent(roomId, itemId) {
+    return this.roomState.queueFind(roomId, itemId).status === 'sent';
+  }
+
   settle(action, snapshot) {
+    if (!this.stillSent(action.roomId, action.itemId)) {
+      return;
+    }
     const session = snapshot.sessions.find(s => s.id === action.sessionId);
     let name = action.sessionId;
     if (session) {
@@ -2569,13 +2578,15 @@ class QueueDispatcher {
     this.roomState.queueMarkSent(room.id, item.id, session.id, name, this.now());
     try {
       const tag = await this.send(session, dispatchText(room.name || '', item), item.id);
-      this.roomState.queueSetDelivery(room.id, item.id, tag, session.controlRevision || 0);
+      if (this.stillSent(room.id, item.id)) this.roomState.queueSetDelivery(room.id, item.id, tag, session.controlRevision || 0);
     } catch (error) {
       if (errorKey(error) === NATIVE_DRAFT_KEY) {
         // Treated like the person typing: this member is left alone for a while.
         this.humanAt.set(session.id, this.now());
       }
-      if (notSent(error)) {
+      if (!this.stillSent(room.id, item.id)) {
+        // Marked handled while the send was on its way: left as the person or the butler closed it.
+      } else if (notSent(error)) {
         // A prompt the person left unsent there does not use up the item's attempts: it waits.
         let attempts = NOT_SENT_ATTEMPTS;
         if (errorKey(error) === NATIVE_DRAFT_KEY) {
