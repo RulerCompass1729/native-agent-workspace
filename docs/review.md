@@ -13216,27 +13216,27 @@ Independent review (fresh read-only session, Glob/Grep/Read only, no MCP, 23 tur
 
 Not covered: a session that streams while it is itself very large (a 31k-message Codex starting again) still has its own messages digested in full on every broadcast. Paths other than streaming digest everything as before.
 
-## The butler can mark handled an item still queued or already sent (queue item 6897c6e3 part 2, 2026-11-13, Claude 2)
+## The butler can mark handled an item already sent (queue item 6897c6e3 part 2, 2026-11-13, Claude 2)
 
-Why: on 11-12 at 22:56:47 and 22:57:01 the butler's `queueResolve` on item 0bcc3c9c was refused with 「这一件不在等你决定。」. The item was queued at the first try and sent at 22:56:52; its work had been done another way. `queueResolve` took only `waiting` items, so nobody could close an item that was queued or sent. The person's queue panel offers 已处理 only on waiting rows. The butler's acceptance (board 11-13 00:02:46) had three parts. An item the butler marks handled while sent must not turn back to waiting or person-intervened when the member's turn ends; on 11-12, item 2829a073 was settled waiting first and only then resolved. A closed item is never sent again. A test must catch both.
+Why: on 11-12 at 22:56:47 and 22:57:01 the butler's `queueResolve` on item 0bcc3c9c was refused with 「这一件不在等你决定。」. The item was queued at the first try and sent at 22:56:52; its work had been done another way. `queueResolve` took only `waiting` items, so nobody could mark handled an item already sent. The person's queue panel offers 已处理 only on waiting rows. The butler's acceptance (board 11-13 00:02:46) had three parts. An item the butler marks handled while sent must not turn back to waiting or person-intervened when the member's turn ends; on 11-12, item 2829a073 was settled waiting first and only then resolved. A closed item is never sent again. A test must catch both.
 
 What changed:
-- `room-state.cjs` `queueResolve`: accepts `waiting`, `queued` and `sent`. Done, cancelled and failed items are still refused with `error.queue.notWaiting`. The record notices are the existing ones (「已处理：{text}」, and 「… · 大管家标的」 for the butler). Who may call it is unchanged: the person or the butler (`main.cjs` `spaceAction`). No new words.
+- `room-state.cjs` `queueResolve`: accepts `waiting` and `sent`. Queued, done, cancelled and failed items are still refused with `error.queue.notWaiting`. A queued item is cancelled instead, which the butler may do. Marked done, a queued item nobody was given would show 「已完成 ·  · 大管家标的」 with an empty name (`queue.status.doneBySteward`, review 1 note 1), and other words would be new words. The record notices are the existing ones (「已处理：{text}」, and 「… · 大管家标的」 for the butler). Who may call it is unchanged: the person or the butler (`main.cjs` `spaceAction`). No new words.
 - `queue-dispatch.cjs` `stillSent(roomId, itemId)`: whether the item is still out with its member.
   - `settle()` returns early when the item is no longer sent. The planner plans a settle only for items that were sent when the pass read the state. The guard therefore covers a mark that lands between that read and the settle. Before, `queueSettle` threw `error.queue.notSent` there and the rest of that pass was skipped. `queueSettle` itself already refused a closed item, so no item turned back either way.
   - `dispatch()`: after the send returns, the delivery tag is written only if the item is still sent. When the send fails, an item marked handled meanwhile is left as it is: not returned to the queue and not marked failed.
-  - An item marked handled while queued was already never sent: `dispatch()` reads the state again after `freshReady` and `queueMarkSent` refuses anything not queued. A test now pins this.
+  - An item closed while queued was already never sent: `dispatch()` reads the state again after `freshReady` and `queueMarkSent` refuses anything not queued. A test now pins this for a cancel that lands after the pass planned the send.
 
 Tests and checks:
 - `app/tests/queue-dispatch.test.cjs`, 7 new tests; those that run the dispatcher also check that its pass records no fault:
-  - The person or the butler marks queued and sent items handled; closed items are still refused.
+  - The person or the butler marks sent items handled; queued and closed items are still refused.
   - An item marked handled while sent stays done when the member's turn ends with a human message and a 需要你决定 reply, and is sent once only.
-  - An item marked handled while queued is never sent, including when the pass had already planned it.
+  - An item the butler cancels while queued is never sent, including when the pass had already planned it.
   - An item marked handled after the pass read the state stays handled, and the rest of the pass goes on.
   - The send is on its way (delivered, refused, uncertain): the item stays handled, with no tag, attempts or reason, and the other member's item is still sent.
 - `queue-monitor-events.test.cjs`: its stand-in for `settle.call` gains `queueFind` and `stillSent`.
-- Red on the old code: all 7 fail. Breakages M1–M7 each caught: settle, delivery or failure path unguarded; resolve refusing queued, refusing sent, or accepting anything; `stillSent` always true.
-- 11 related files 365/365. Full suite 6561/6561 on the change before the window-script edits; see the commit's own suite run for the final tree.
+- Red on the old code: 6 of the 7 new tests fail; the seventh, a queued item the butler cancels after the pass planned its send, pins what the old code already did. Breakages M1–M8 each caught: settle, delivery or failure path unguarded; resolve accepting queued, refusing sent, or accepting anything; `stillSent` always true; `dispatch()` without its re-check.
+- 11 related files 365/365 on the final tree. Full suite on the first commit: 6560 of 6561; the one failure is a real-clock check in `integrator-dispatch.test.cjs:132` (1000 ms margin, took 2.6 s under load, 5/5 on rerun), not touched here. The final tree's full suite is recorded with the READY.
 - Window (real hidden Electron and service, synthetic native, 0 models), `scripts/test-steward-record.cjs` step 4b:
   - The butler queues an item for the Claude member through the actual `workspace_control` tool, NAW sends it, and the butler marks it handled (`complete`).
   - The member's turn ends asking for a decision. The item stays done by the butler, is sent once, and the member's next item is sent. The butler's record shows the step as done.
@@ -13249,5 +13249,6 @@ Left open:
 - When an item is marked handled before its member's turn ends, a READY in that reply is not recorded from the queue, since the settle is skipped. The member's board line still records it.
 - `error.queue.notWaiting` 「这一件不在等你决定。」 is still the refusal for a done, cancelled or failed item. Better words would be new words, so they wait for the person.
 - The person's panel still offers 已处理 only on waiting rows; the person can cancel a queued row, and a sent row has no button.
+- If the queue trims an item (over 300 kept) while its send is in flight, `stillSent` throws, as `queueSetDelivery` did before. That pass faults once and the next one recovers (review 1 note 2).
 
 Merge order: this branch adds no words, does not touch `background-control.cjs:75` and can merge alone. Part 1, a member claiming an item it takes from the board, follows on its own branch based on the withdraw branch (25fd89d3). It changes `background-control.cjs:75`, which 078a42e and 25fd89d3 also change.
