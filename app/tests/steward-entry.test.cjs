@@ -133,6 +133,25 @@ test('the person designates a session outside every space, replaces it, and revo
   assert.equal(new StewardRole(f.directory).current(), null); assert.equal(f.broadcasts.length, 3);
 });
 
+test('the queue dispatcher is told who the butler is now and the duty statement it is handed on with (batch 3)', async t => {
+  // main.cjs's own option, as written: a mistake there would only be swallowed by the dispatcher, which then never
+  // replaces the butler.
+  const f = fixture(t), option = vm.runInContext('(' + cut('      steward: () => {', '      creationDefaults:').trim().replace(/^steward: /u, '').replace(/,$/u, '') + ')', f.context);
+  const header = locale.format('zh', 'steward.duty.header'), standard = locale.format('zh', 'steward.duty.default');
+  // Made in the sandbox's realm: compared as the plain values they are.
+  const told = () => JSON.parse(JSON.stringify(option()));
+  assert.equal(option(), null);
+  f.role.set(ONE);
+  assert.deepEqual(told(), { ...ONE, duty: header + '\n' + standard });
+  f.role.set(ONE, '只管派活。');
+  assert.deepEqual(told(), { ...ONE, duty: header + '\n只管派活。' }, 'the person\'s own statement');
+  const TWO = { sessionId: 'session-2', nativeId: 'native-2' };
+  fs.writeFileSync(path.join(f.directory, 'rotation-log.jsonl'), edge('done', ONE, TWO) + '\n', { mode: 0o600 });
+  assert.deepEqual(told(), { ...TWO, duty: header + '\n只管派活。' }, 'after a finished replacement, its successor');
+  fs.writeFileSync(path.join(f.directory, 'rotation-log.jsonl'), 'not json\n', { mode: 0o600 });
+  assert.throws(option, key('error.steward.state'), 'a record that cannot be read is not taken for nobody');
+});
+
 test('designating sends the duty statement into the session as the person\'s message; it stays the butler when that cannot be done (batch 4)', async t => {
   const f = fixture(t), header = locale.format('zh', 'steward.duty.header'), standard = locale.format('zh', 'steward.duty.default');
   f.call = async (...args) => JSON.parse(JSON.stringify(await f.handlers.get('steward')(f.person, ...args)) ?? 'null');

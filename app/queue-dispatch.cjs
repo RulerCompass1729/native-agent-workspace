@@ -15,6 +15,7 @@ const fleet = require('./renderer/fleet-observation.js');
 
 const CAPABILITY = 'queueDispatchV1';
 const ITEM_TEXT_LIMIT = 6000;
+const SEND_TEXT_LIMIT = 16000;
 // The member's own reply, kept on the item so a settled queue row can show what came back.
 const ITEM_REPLY_LIMIT = 200;
 const QUEUE_LIMIT = 300;
@@ -937,11 +938,27 @@ function planDispatch(input) {
     }
     return 0;
   }
+  const quietGroups = [];
   for (const room of rooms) {
-    if (room.archived) {
-      continue;
+    if (!room.archived) {
+      quietGroups.push(memberIds(room, sessions));
     }
-    for (const id of memberIds(room, sessions)) {
+  }
+  // The butler the person designated stays in no space, and is rotated under the same rules by its own name
+  // (`outside`; steward step 2, batch 3: 「让空间外的大管家也能被 NAW 换会话」). One in a space is a member above.
+  for (const id of input.outside || []) {
+    let spaces = null;
+    try {
+      spaces = byId.has(id) ? roomIds(byId.get(id)) : null;
+    } catch {
+      spaces = null;
+    }
+    if (spaces && !spaces.length && !byId.get(id).archived) {
+      quietGroups.push([id]);
+    }
+  }
+  for (const ids of quietGroups) {
+    for (const id of ids) {
       if (busy.has(id)) {
         continue;
       }
@@ -1026,15 +1043,21 @@ function directoryHandoff(record, snapshot) {
   return `旧会话的工作目录 ${record.cwd} 是 NAW 自动建的，新会话改在 ${record.newCwd}${copy}，这样能读到项目的 CLAUDE.md。旧目录保留，没有删除，里面现有：${entries}。需要时按绝对路径读写。`;
 }
 
-function handoffText(oldName, handoff, directoryNote = '') {
-  return [
+// `duty`: the butler's duty statement, handed on with the handoff when the butler is replaced (steward step 2,
+// batch 3; the activation checklist, item 6: 「换会话后再发一次」). The backend takes at most SEND_TEXT_LIMIT
+// characters (workspace.cjs cleanText), so a handoff that would not fit is shortened, never the statement.
+function handoffText(oldName, handoff, directoryNote = '', duty = '') {
+  const text = body => [
     `【NAW 换会话】你接手「${oldName}」的工作。旧会话已经结束，它写的交接如下：`,
     '',
-    handoff,
+    body,
     '',
     ...(directoryNote ? [directoryNote, ''] : []),
+    ...(duty ? [duty, ''] : []),
     '先按交接核对现状（只读即可），然后结束本轮，不留后台等待；这个空间有队列时，NAW 会接着派下一件。',
   ].join('\n');
+  const left = SEND_TEXT_LIMIT - text('').length;
+  return text(handoff.length > left ? handoff.slice(0, Math.max(0, left - 1)) + '…' : handoff);
 }
 
 function shortText(text, limit = 60) {
@@ -1622,6 +1645,9 @@ class QueueDispatcher {
     this.faultedRotations = new Set();
     this.faultNoticed = new Set();
     this.notify = options.notify || (() => {});
+    // The butler the person designated, as it is now: { sessionId, nativeId, duty } or null (steward step 2, batch 3).
+    // A record that cannot be read names nobody here: the butler is then not rotated and gets no statement.
+    this.steward = options.steward || (() => null);
     this.logFile = path.join(options.dataDir, 'rotation-log.jsonl');
     this.log = this.loadLog();
     this.chainsCache = null;
@@ -2161,6 +2187,7 @@ class QueueDispatcher {
       current = this.view();
     }
     const sample = await this.memory(current.snapshot.sessions, current.now);
+    const steward = this.stewardOutside(current.snapshot.sessions);
     // B6: the session that holds an open handoff gets no queue work and is not rotated, so what
     // it writes until the handoff is closed is not a member's reply; it is not listed as vacant either.
     const engaged = this.integration ? this.integration.holding() : undefined;
@@ -2183,6 +2210,7 @@ class QueueDispatcher {
       rotations: Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id))),
       ...this.trustAdmission(),
       engaged,
+      outside: steward ? [steward.sessionId] : [],
     });
     for (const action of actions) {
       if (this.closed) {
@@ -2277,6 +2305,40 @@ class QueueDispatcher {
     }
     this.roomState.queueSettle(action.roomId, action.itemId, action.status, action.reason || '', name, action.reply || '', action.question, action.ready);
     this.broadcast().catch(() => {});
+  }
+
+  // The designated butler when it is this very native session and in no space; anything else names nobody.
+  stewardOutside(sessions) {
+    let steward = null;
+    try {
+      steward = this.steward();
+    } catch {
+      return null;
+    }
+    const session = steward && validId(steward.sessionId) && sessions.find(s => s.id === steward.sessionId);
+    if (!session || !validId(steward.nativeId) || session.nativeId !== steward.nativeId) {
+      return null;
+    }
+    try {
+      return roomIds(session).length ? null : steward;
+    } catch {
+      return null;
+    }
+  }
+
+  // The duty statement handed on to the session replacing the butler: only while the old session still holds the
+  // designation (the person may have revoked or moved it since the handoff was asked for).
+  stewardDuty(oldId, record) {
+    let steward = null;
+    try {
+      steward = this.steward();
+    } catch {
+      return '';
+    }
+    if (!steward || steward.sessionId !== oldId || steward.nativeId !== record.oldNativeId || typeof steward.duty !== 'string') {
+      return '';
+    }
+    return steward.duty;
   }
 
   // Read fresh state once, right before sending; skip quietly if the member moved on.
@@ -2889,7 +2951,7 @@ class QueueDispatcher {
       if (mismatch) {
         throw Error(`settings-differ:${mismatch}`);
       }
-      record.handoffTag = await this.send(fresh, handoffText(record.name, record.handoff, directoryHandoff(record, snapshot)), `rotation-handoff:${oldId}`);
+      record.handoffTag = await this.send(fresh, handoffText(record.name, record.handoff, directoryHandoff(record, snapshot), this.stewardDuty(oldId, record)), `rotation-handoff:${oldId}`);
       record.handedAt = now;
       record.phase = 'handed';
       this.save();
