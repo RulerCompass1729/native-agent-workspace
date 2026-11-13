@@ -242,20 +242,79 @@ local branch or main; not installed, pushed or published):
   line. The line only reports a delivery: it does not merge, install or ask
   for anything. When the person
   starts using a queue in a space, they or the secretary tell its members once,
-  through NAW, to end any background wait.
+  through NAW, to end any background wait. An idle member does not see the
+  board, so a board entry does not reach it: work meant for an idle member goes
+  to it through the queue (see Task-led collaboration for who may add items).
 - Otherwise, a Claude agent working from the private task board does not end a turn idle;
   nothing reliably wakes an idle session. Before ending a turn, either be
   working on the next item it can take, or leave exactly one background command
   that exits on a specific event: a newer READY entry in a lane log (for the
   main session, also a new secretary note that names it), a reviewer or test
-  finishing, or a fixed wait while a choice is pending with the person.
-  Do not use `/loop` or timed polling prompts for this. Record choices for the
-  person on the board as its rules describe and keep working meanwhile; choices
-  that expose the machine, end sessions or backends, spend money or publish
-  still wait for an explicit answer. If nothing on the board is doable, say why
+  finishing, or a fixed wait while a hard-gate question is pending with the
+  person. Do not use `/loop` or timed polling prompts for this. Ask the person
+  as the next item describes and keep working meanwhile. If nothing on the
+  board is doable, say why
   before ending the turn. A background wait counts as background work and blocks
   moving the agent's backend: when the person asks to update it, end the wait
   first.
+- Questions for the person (the person, 2026-11-13: a question they have not
+  answered within 20 minutes goes ahead as recommended, since they can easily
+  miss one, but no agent may stall on it). For every agent in NAW, the butler
+  included:
+  1. A question may default only when the choice is reversible, affects only
+     the local repository, the current task or this machine's NAW, and stays
+     within authorization the person has already given. Every other choice is
+     a hard gate (item 5); when unsure, treat it as one.
+  2. Do not ask a question that may default through a prompt that blocks the
+     turn (AskUserQuestion). Write one line in the reply and one on the board:
+     「请你定：<问题>；推荐 <X>，因为 <一句理由>；<HH:MM> PT 前没回就按推荐做」,
+     with the deadline 20 minutes after sending. Do not start it with
+     「需要你决定：」, which makes NAW hold a queue member.
+  3. While waiting, do not end the turn. First do the parts of the current item
+     that do not depend on the answer (a queue member works only on items NAW
+     sent it and on what the person asked it directly, and takes no other board
+     work; an agent outside a queue works only within existing authorization).
+     When nothing is left, wait in the foreground inside the turn, at most 10
+     minutes per wait, with no background command or `/loop`, and check the
+     board for an answer after each wait. When the person answers in another
+     session, the butler writes the answer on the board at once.
+  4. At the deadline, check the board and the agent's own conversation once
+     more. If there is still no answer, do only the one thing the question
+     named, not related switches or operations, and write on the board:
+     「<HH:MM> PT 20 分钟未答，按推荐做了 <具体哪件>；原问题 <…>；撤回办法 <…>」.
+     If the person later decides otherwise, change it back their way; for
+     something already installed in the daily app, changing back means the
+     next version.
+  5. A hard gate never defaults; it waits for the person's explicit answer.
+     Examples, not a complete list: pushing, uploading, publishing, or messages
+     to other people; spending money; connecting to the real DeepSeek service;
+     deleting data or anything else irreversible; switches only the person may
+     use (the automatic-messages switch, automatic migration, authorizations,
+     designating the secretary, integrator or butler); loosening permissions
+     or confirmation gates; ending sessions or backends, exposing this machine,
+     or quitting or restarting the daily NAW other than for an installation;
+     the person's own financial or career decisions, including proposals made
+     for them; a conflict with the vision or a requirement (see Vision first).
+     Write a hard-gate question as 「需要你决定：…（硬门，不按默认）」; the
+     butler collects it into the person's list. First do any part of the
+     current item that does not depend on it. Then a queue member ends its turn
+     with a final message whose first line is that question (NAW's existing
+     hold). An agent outside a queue (the integrator, the secretary, an agent
+     on the private task board), Claude or Codex, keeps working within
+     existing authorization or leaves one background command that waits for
+     this answer, and does not end the turn idle.
+  6. When the person is asked to look at the wording of interface text, items
+     2–4 apply; at the deadline the wording first passes one independent
+     review and merges only after it passes. Installing it into the daily app
+     then follows the person's standing install permission (2026-11-12, for
+     the agent that installs daily builds), provided every pre-install check
+     passes. Changes to how the
+     interface looks (lines, color blocks, spacing, layout) are a hard gate:
+     the person looks at the pictures and agrees themselves (the person,
+     2026-11-11; a review does not stand in for them).
+  7. A question without a recommendation cannot default. First decide a
+     recommendation with a reason, then ask; if you cannot, treat it as a hard
+     gate.
 - Verification principles (approved by the person on 2026-11-02 for every Claude
   and Codex agent here). A check exists only when it can catch a failure the
   earlier checks cannot, and missing that failure costs more than the check; say
