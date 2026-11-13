@@ -1596,10 +1596,19 @@ async function boot() {
       if (c.background && !steward && action !== 'queueAdd') throw uiError("error.queue.personOnly");
       const by = steward ? 'steward' : null;
       if (action === 'queueAdd') {
+        // An assignee that is not a current member of this space is refused before anything is added, with the
+        // members' names and ids, so that the item is never left queued for nobody (11-12, item 87a3b4c0).
+        // The backend's own list does not say which sessions the person archived; the desktop's record does.
+        const sessions = async () => roomState.apply(await c.client.call('initial')).sessions;
+        const assignee = args[1] ?? null;
+        if (assignee !== null) {
+          const refusal = queueRules.assigneeRefusal(assignee, { id: roomId, memberOrder: roomState.metadata(roomId).memberOrder },
+            await sessions(), session => sessionLabels.labels.get(session.id) || session.name || session.id);
+          if (refusal) throw refusal;
+        }
         // The butler's items keep the creator form older builds read (a session that added it); `addedBy` says who.
         const creator = steward ? { kind: 'secretary', name: steward.name, sessionId: steward.id } : c.background
-          // The backend's own list does not say which sessions the person archived; the desktop's record does.
-          ? queueSecretary.creator(backgroundOperation.current(), roomState.apply(await c.client.call('initial')).sessions, sessionLabels.labels)
+          ? queueSecretary.creator(backgroundOperation.current(), await sessions(), sessionLabels.labels)
           : { kind: 'person', name: 'You', sessionId: null };
         const itemId = roomState.queueAdd(args[0], args[1] ?? null, roomId, creator, by);
         await broadcastRoom();

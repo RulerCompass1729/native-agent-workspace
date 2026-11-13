@@ -10,6 +10,7 @@ const path = require('node:path');
 const cp = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { roomIds, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
+const { uiError } = require('./ui-errors.cjs');
 const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 
@@ -88,6 +89,21 @@ const DECISION_MARKERS = ['需要你决定：', '需要你决定:', 'Needs your 
 // Input written by NAW or another agent, not by the person.
 // Read by the integration handoff as well; frozen, so that no module that reads it can change it for the queue.
 const AUTOMATIC_ORIGINS = Object.freeze(['naw-dispatch', 'agent-wake', 'capacity-recovery', 'agent-control', 'room']);
+// Whether a user-role row was written by NAW, another agent or the session's own machinery rather than the person:
+// by its origin; a native row NAW recognised as machine input (a background task's notification, a scheduled wake)
+// carries the source it was recognised by (workspace.cjs, on('nativeInput')); a native row without an origin falls
+// back to NAW's marker.
+// The sources workspace.cjs records on such a row; any other value is not trusted to be machine input.
+const NATIVE_MACHINE_SOURCES = Object.freeze(['task-notification', 'system', 'loop_wakeup', 'schedule_wakeup', 'poll_event', 'naw-peer']);
+function automaticInput(message) {
+  if (!message) return false;
+  if (AUTOMATIC_ORIGINS.includes(message.origin)) return true;
+  if (message.origin === 'native') return NATIVE_MACHINE_SOURCES.includes(message.inputSource);
+  if (message.origin === undefined && typeof message.text === 'string') {
+    return message.text.includes('【NAW 派活】') || message.text.includes('【NAW 换会话】');
+  }
+  return false;
+}
 // Refusals raised before the backend wrote anything: the item is still unsent.
 const NATIVE_DRAFT_KEY = 'error.submission.nativeDraft';
 // A terminal that is no longer open: only its owner may reopen it, and nothing unsent remains.
@@ -430,12 +446,7 @@ function replyAfter(session, tag, sentAt) {
     if (!after) {
       continue;
     }
-    // A row with an origin is judged by it; only native rows without one fall back to NAW's marker.
-    let automatic = AUTOMATIC_ORIGINS.includes(message.origin);
-    if (message.origin === undefined && typeof message.text === 'string') {
-      automatic = message.text.includes('【NAW 派活】') || message.text.includes('【NAW 换会话】');
-    }
-    if (message.role === 'user' && !automatic) {
+    if (message.role === 'user' && !automaticInput(message)) {
       humanAfter = true;
     }
     if (message.role === 'assistant' && typeof message.text === 'string' && message.text.trim()) {
@@ -482,6 +493,32 @@ function memberIds(room, sessions) {
     }
   }
   return ordered;
+}
+
+// A queue item's assignee must be a member of its space when the item is added. An id no session
+// has (in the person's data on 11-12, one sharing only its first eight characters with a member) or
+// a session outside the space would leave the item queued for nobody. The refusal names the members
+// (name and id, in the person's order), so whoever added it can choose one or leave it unassigned.
+// Kept within the 2048 characters a background caller's receipt keeps of an error.
+const MEMBER_LIST_LIMIT = 1600;
+function assigneeRefusal(assignee, room, sessions, name = session => session.name || session.id) {
+  if (assignee === null || assignee === undefined) return null;
+  const ids = memberIds(room, sessions);
+  if (typeof assignee === 'string' && ids.includes(assignee)) return null;
+  const listed = [];
+  let length = 0;
+  for (const id of ids) {
+    const session = sessions.find(candidate => candidate.id === id);
+    const entry = `${shortText(String(name(session) || id), 60)} · ${id}`;
+    if (length + entry.length > MEMBER_LIST_LIMIT) {
+      listed.push(`… +${ids.length - listed.length}`);
+      break;
+    }
+    listed.push(entry);
+    length += entry.length + 2;
+  }
+  if (!listed.length) return uiError('error.queue.assigneeNoMembers');
+  return uiError('error.queue.assigneeNotMember', { members: listed.join('; ') });
 }
 
 // When a session began: its creation time or, for sessions recorded before NAW kept one, its
@@ -3205,6 +3242,8 @@ module.exports = {
   replyAfter,
   startsWithDecision,
   AUTOMATIC_ORIGINS,
+  automaticInput,
+  assigneeRefusal,
   UNCONFIRMED_SEND_MS,
   dispatchText,
   handoffRequestText,

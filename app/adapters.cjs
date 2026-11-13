@@ -1174,6 +1174,11 @@ class Claude extends EventEmitter {
           (this.rootTurn?.inputUsed && current === prompt) ||
           (this.pending.promptId && this.pending.promptId !== prompt)))) return;
     }
+    // A background task is named when it starts. One that ends within the same turn is in no turn-end report,
+    // and its notification arrives during that turn without a source (real 2.1.322, 11-12).
+    if (event.hook_event_name === 'PostToolUse' && typeof event.background_task_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(event.background_task_id)) {
+      this.emit('backgroundStarted', event.background_task_id);
+    }
     if (['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name)) this.emit('progress', {
       id: event.tool_use_id, source: 'claude-hook', kind: 'tool', title: event.tool_name || '',
       status: event.hook_event_name === 'PreToolUse' ? 'running' : event.hook_event_name === 'PostToolUse' ? 'completed' : 'failed',

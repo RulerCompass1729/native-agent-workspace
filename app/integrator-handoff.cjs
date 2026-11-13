@@ -13,7 +13,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
-const { validReady, sessionReady, shortText, replyAfter, startsWithDecision, decisionLine, AUTOMATIC_ORIGINS,
+const { validReady, sessionReady, shortText, replyAfter, startsWithDecision, decisionLine, automaticInput,
   IDLE_SETTLE_MS, HUMAN_QUIET_MS, NOT_SENT_ATTEMPTS, UNCONFIRMED_SEND_MS } = require('./queue-dispatch.cjs');
 
 const FILE = 'integration-handoffs.json';
@@ -319,8 +319,10 @@ async function verifyResults(read, state, action, mainHead) {
 //   wrote it there, or it is a turn of an exchange they started.
 // - own: how many of the integrator's messages came before the first automatic message from
 //   someone else (a queue item, another agent's wake or control message, a rotation request,
-//   another member's message through a space, which carries that member's name).
-//   A continuation after a limit is not from someone else: it resumes the same work.
+//   another member's message through a space, which carries that member's name, and a native
+//   row NAW recognised as machine input, such as the integrator's own background task ending:
+//   what follows it may be about that task). A continuation after a limit is not from someone
+//   else: it resumes the same work.
 function rowsAfter(session, handoff) {
   const messages = Array.isArray(session?.messages) ? session.messages : [];
   let index = -1;
@@ -336,8 +338,7 @@ function rowsAfter(session, handoff) {
     if (message.role !== 'user') continue;
     // This handoff's own message begins with the marker and its id; a row that only quotes them does not.
     if (text.trimStart().startsWith(MARKER + handoff.id)) continue;
-    let automatic = AUTOMATIC_ORIGINS.includes(message.origin);
-    if (message.origin === undefined) automatic = text.includes('【NAW 派活】') || text.includes('【NAW 换会话】');
+    const automatic = automaticInput(message);
     // Through a space: with a sender's name it is another member's message, without one the person's own step.
     const named = typeof message.name === 'string' && message.name.trim() !== '';
     if (!automatic || (message.origin === 'room' && !named)) typed = true;

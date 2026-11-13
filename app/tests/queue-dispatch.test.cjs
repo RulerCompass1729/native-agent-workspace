@@ -1052,6 +1052,32 @@ test('while the old session waits for a collaboration, the new member already ta
   assert.equal(dispatcher.rotations.a.phase, 'kept');
 });
 
+test('a native row NAW recognised as machine input is not the person stepping in (11-12)', () => {
+  const rooms = [{ id: 'shared', name: 'Team', queue: [sentItem(), item('2')] }];
+  const notice = '<task-notification>\n<task-id>bsynth001</task-id>\n<status>completed</status>\n<summary>Synthetic task completed</summary>\n</task-notification>';
+  // Every source workspace.cjs records on a machine row: the member's own background task, a scheduled wake, another agent's message.
+  for (const inputSource of ['task-notification', 'system', 'loop_wakeup', 'schedule_wakeup', 'poll_event', 'naw-peer']) {
+    const messages = [
+      { id: 't1', role: 'user', text: 'NAW task', origin: 'naw-dispatch' },
+      { id: 'r0', role: 'assistant', text: 'Started the build in the background.' },
+      { id: 'n1', role: 'user', text: notice, origin: 'native', inputSource },
+      { id: 'r1', role: 'assistant', text: 'Done: the build passed.' },
+    ];
+    assert.deepEqual(plan(rooms, [member('a', { messages })]), [
+      { kind: 'settle', roomId: 'shared', itemId: '1', status: 'done', sessionId: 'a', reply: 'Done: the build passed.' },
+      { kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a' },
+    ], inputSource);
+  }
+  // The same row without a source is the person, as before: NAW could not tell it from typing.
+  const typed = [{ id: 't1', role: 'user', text: 'NAW task', origin: 'naw-dispatch' }, { id: 'n1', role: 'user', text: notice, origin: 'native' }, { id: 'r1', role: 'assistant', text: 'Done.' }];
+  assert.equal(plan(rooms, [member('a', { messages: typed })])[0].reason, 'person-intervened');
+  // Only the sources workspace.cjs records count; any other value may not be machine input.
+  for (const inputSource of ['', null, 7, 'user', 'made-up']) {
+    const odd = typed.map(m => m.id === 'n1' ? { ...m, inputSource } : m);
+    assert.equal(plan(rooms, [member('a', { messages: odd })])[0].reason, 'person-intervened', String(inputSource));
+  }
+});
+
 test('the person quoting NAW text is still the person; an ended old session needs no wait', () => {
   const rooms = [{ id: 'shared', name: 'Team', queue: [sentItem()] }];
   const quoted = [
@@ -2006,6 +2032,47 @@ test('B2: a trust wait observed after joining returns only queued assignments to
   await dispatcher.advanceRotations(client.snapshot(), NOW + 4 * 60000);
   assert.equal(room.queueItems('shared').find(item => item.id === id).status, 'cancelled');
   assert.equal(client.sends(record.newId).length, 0);
+});
+
+test('B2: the old member\'s own background task ending during the trust wait is not the person (11-12)', async t => {
+  // NAW recognised the row as machine input, so it moved no control revision; only its source tells it from typing.
+  const notice = '<task-notification>\n<task-id>bsynth002</task-id>\n<status>completed</status>\n<summary>Synthetic task completed</summary>\n</task-notification>';
+  for (const inputSource of ['task-notification', undefined]) {
+    const { client, dispatcher, record } = await projectRotation(t, { record: { oldControl: 0 }, afterCreate(fresh) { fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('claude'); } });
+    await dispatcher.advanceRotations(client.snapshot(), NOW + 1000);
+    assert.equal(record.phase, 'waiting-trust');
+    client.state.sessions.find(s => s.id === 'a').messages.push({ id: 'n1', role: 'user', text: notice, origin: 'native', ...(inputSource ? { inputSource } : {}), time: NOW - 1000 },
+      { id: 'r1', role: 'assistant', text: 'The synthetic task finished.', time: NOW - 500 });
+    await dispatcher.advanceRotations(client.snapshot(), NOW + 2000);
+    if (inputSource) assert.notEqual(record.reason, 'person-active', 'a recognised notification lets the rotation go on');
+    else assert.deepEqual([record.phase, record.reason], ['failed', 'person-active'], 'the same row without a source is the person, as before');
+    assert.equal(client.calls.some(c => c[0] === 'stop' && c[1] === 'a'), false);
+  }
+});
+
+test('a background task\'s notification after the rotation request: its reply joins the handoff summary; without a source it is the person (11-12)', async t => {
+  const notice = '<task-notification>\n<task-id>bsynth003</task-id>\n<status>completed</status>\n<summary>Synthetic task completed</summary>\n</task-notification>';
+  for (const inputSource of ['task-notification', undefined]) {
+    const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
+    fakeMembership(room, client);
+    room.queueAdd('next task', 'a');
+    await dispatcher.start();
+    assert.equal(dispatcher.rotations.a.phase, 'requested');
+    const old = client.state.sessions.find(s => s.id === 'a');
+    old.messages.push({ id: 'summary', role: 'assistant', text: '交接：分支 abc。' },
+      { id: 'n1', role: 'user', text: notice, origin: 'native', ...(inputSource ? { inputSource } : {}) },
+      { id: 'r1', role: 'assistant', text: 'The synthetic task finished.' });
+    old.state = 'idle';
+    await dispatcher.schedule(); await dispatcher.schedule(); await dispatcher.schedule();
+    const successor = client.state.sessions.find(s => s.id !== 'a');
+    if (inputSource) {
+      const sent = client.sends(successor.id).map(call => JSON.stringify(call)).join('\n');
+      assert.ok(sent.includes('交接：分支 abc。') && sent.includes('The synthetic task finished.'), 'the summary is kept and the later reply joins it');
+    } else {
+      assert.equal(successor, undefined, 'no successor was made');
+      assert.equal(client.calls.some(c => c[0] === 'stop' && c[1] === 'a'), false);
+    }
+  }
 });
 
 test('B2: person activity during the trust wait cancels the handoff without ending the old member', async t => {
@@ -3088,4 +3155,36 @@ test('an earlier rotation\'s old session someone else archived is settled quietl
   first.close();
   const second = make(); await second.start(); await second.schedule();
   assert.deepEqual(room.value.archivedSessions, [], 'the restore stays');
+});
+
+// Follow-up 2 (11-12): the refusal for an assignee that is not a current member of the space.
+test('assigneeRefusal: members in the person\'s order with name and id, kept short; nothing for no assignee or a member', () => {
+  const R = '7b1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8';
+  const sessions = [
+    { id: 'm-1', name: 'First', roomIds: [R] },
+    { id: 'm-2', name: 'x'.repeat(80), roomIds: [R] },
+    { id: 'm-3', name: 'Archived', roomIds: [R], archived: true },
+    { id: 'm-4', roomIds: 'unreadable' },
+    { id: 'm-5', roomIds: [R] },
+  ];
+  const room = { id: R, memberOrder: ['m-5', 'missing'] };
+  assert.equal(rules.assigneeRefusal(null, room, sessions), null);
+  assert.equal(rules.assigneeRefusal(undefined, room, sessions), null);
+  assert.equal(rules.assigneeRefusal('m-1', room, sessions), null);
+  for (const assignee of ['m-3', 'm-4', 'missing', 'M-1', 'm-1 ', 1]) {
+    const error = rules.assigneeRefusal(assignee, room, sessions);
+    assert.equal(error.uiMessage.key, 'error.queue.assigneeNotMember', String(assignee));
+    assert.equal(error.uiMessage.params.members, `m-5 · m-5; First · m-1; ${'x'.repeat(59)}… · m-2`);
+  }
+  // Named the way the caller names sessions (the person's labels in the app).
+  assert.match(rules.assigneeRefusal('missing', room, sessions, s => `Label ${s.id}`).uiMessage.params.members, /^Label m-5 · m-5; Label m-1 · m-1/);
+  // A long list stops within what a background receipt keeps of an error, and says how many are left out.
+  const many = Array.from({ length: 80 }, (_, i) => ({ id: `member-${String(i).padStart(2, '0')}-${'0'.repeat(24)}`, name: 'N'.repeat(60), roomIds: [R] }));
+  const long = rules.assigneeRefusal('missing', { id: R }, many);
+  assert.ok(long.message.length <= 2048, String(long.message.length));
+  const listed = long.uiMessage.params.members.split('; ');
+  assert.match(listed.at(-1), /^… \+\d+$/);
+  assert.equal(listed.length - 1 + Number(listed.at(-1).slice(3)), 80);
+  assert.equal(rules.assigneeRefusal('missing', { id: R }, []).uiMessage.key, 'error.queue.assigneeNoMembers');
+  assert.equal(rules.assigneeRefusal('m-1', { id: '7b1d2c3e-4f50-4a61-8b72-000000000000' }, sessions).uiMessage.key, 'error.queue.assigneeNoMembers');
 });

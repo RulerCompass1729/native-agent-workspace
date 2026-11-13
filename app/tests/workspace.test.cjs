@@ -872,6 +872,46 @@ test('machine-injected native turns keep their place, are not shown as the perso
   assert.equal(s.messages.filter(m => m.role === 'user').length, 19, 'Every input keeps its own record');
   assert.ok(!JSON.stringify(s).includes('PRIVATE'), 'Task descriptions and commands are not stored');
 });
+test('a background task that starts and finishes within one native turn is known from its start (Claude 2.1.322, 11-12)', async t => {
+  const { workspace: w, ids } = await fixture(t, 1);
+  const { Claude } = require('../adapters.cjs');
+  const runtime = Object.create(Claude.prototype); EventEmitter.call(runtime);
+  runtime.record = w.get(ids[0]); runtime.ready = true; runtime.chatAvailable = true;
+  runtime.submission = { request: async () => ({ promptId: 'unused' }) }; runtime.terminal = { input() {} };
+  w.runtimes.set(ids[0], runtime); w.bind(runtime.record, runtime);
+  const s = w.get(ids[0]), nativeId = s.nativeId;
+  const hook = event => runtime.hook({ session_id: nativeId, prompt_id: 'turn', ...event });
+  const effects = () => [s.controlRevision, s.wakeHumanRevision || 0];
+  // Shapes and order as the loopback probe recorded them: PostToolUse names the task when it starts, and its
+  // notification arrives during the same turn, with that turn's prompt id and no source. No turn end lists it.
+  const done = (id, n) => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_${n}</tool-use-id>\n<output-file>/tmp/synthetic/${id}.output</output-file>\n<status>completed</status>\n<summary>Synthetic task ${n} completed</summary>\n</task-notification>`;
+  const event = (id, n) => `<task-notification>\n<task-id>${id}</task-id>\n<summary>Monitor event: "synthetic"</summary>\n<event>SYNTHETIC_EVENT_${n}</event>\n</task-notification>`;
+  // A watched command may print anything into an event, a status line too; that is not the block's own status.
+  const printed = id => `<task-notification>\n<task-id>${id}</task-id>\n<summary>Monitor event: "<status>failed</status>"</summary>\n<event>\n<status>completed</status>\n</event>\n</task-notification>`;
+  const notify = (text, promptId = 'turn') => { hook({ hook_event_name: 'UserPromptSubmit', prompt_id: promptId, prompt: text }); return s.messages.filter(m => m.role === 'user' && m.text === text).at(-1); };
+  hook({ hook_event_name: 'UserPromptSubmit', prompt: 'Synthetic task' });
+  hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'toolu_1', background_task_id: 'bsame0001' });
+  hook({ hook_event_name: 'PostToolUse', tool_name: 'Monitor', tool_use_id: 'toolu_2', background_task_id: 'bmoni0001' });
+  hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'toolu_3' });
+  let before = effects();
+  // A monitor sends one notification per event and one when it ends, all with its ID; an event has no <status>.
+  for (const [text, why] of [[event('bmoni0001', 1), 'A monitor event'], [done('bsame0001', 1), 'The Bash task finishing in the same turn'],
+    [event('bmoni0001', 2), 'A later event of the same monitor'], [printed('bmoni0001'), 'An event whose output prints a status'],
+    [done('bmoni0001', 2), 'The monitor ending']]) {
+    const shown = notify(text);
+    assert.deepEqual([shown?.name, shown?.inputSource], ['后台任务通知', 'task-notification'], why);
+  }
+  assert.deepEqual(effects(), before, 'None of them is the person: no handoff invalidation, no human wake');
+  // A task that ended is used up: its notification again, or an event after the monitor ended, is the person.
+  for (const [text, promptId] of [[done('bsame0001', 1), 'again-1'], [event('bmoni0001', 3), 'again-2']]) {
+    before = effects(); const again = notify(text, promptId);
+    assert.equal(again.inputSource, undefined, promptId); assert.deepEqual(effects(), [before[0] + 1, before[1] + 1], promptId);
+  }
+  // A child agent's tools do not name the root session's tasks.
+  hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'toolu_4', agent_id: 'child-1', background_task_id: 'bchild001' });
+  before = effects(); const child = notify(done('bchild001', 4), 'child');
+  assert.equal(child.inputSource, undefined); assert.deepEqual(effects(), [before[0] + 1, before[1] + 1]);
+});
 test('typed terminal input marks a possible native draft until a new native process starts', async t => {
   const { workspace: w, ids } = await fixture(t, 1);
   const { Claude } = require('../adapters.cjs');
