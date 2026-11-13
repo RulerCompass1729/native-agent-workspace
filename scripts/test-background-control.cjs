@@ -243,7 +243,7 @@ async function run() {
   assert.deepEqual([(await queueItem(ownText)).status, (await queueItem(personsText)).status], ['cancelled', 'queued']);
   const withdrawal = (await sharedRoom()).events.findLast(event => event.uiMessage?.key === 'notice.queue.withdrawn');
   assert.deepEqual(withdrawal.uiMessage.params, { text: ownText, name: 'Synthetic operator', sessionId: source });
-  const recordLine = async (expected, label) => {
+  const recordLine = async (expected, label, id = withdrawal.id, kind = 'withdrawal') => {
     let row = null;
     await until(async () => {
       row = await page.evaluate(id => {
@@ -251,10 +251,10 @@ async function run() {
         element.scrollIntoView({ block: 'center' });
         const box = element.getBoundingClientRect(), list = document.querySelector('#room-messages').getBoundingClientRect();
         return { text: element.innerText, inside: box.width > 0 && box.height > 0 && box.top >= list.top - 1 && box.bottom <= list.bottom + 1 };
-      }, withdrawal.id);
+      }, id);
       return row?.inside && row.text.includes(expected);
     }, `${label}: ${JSON.stringify(row)}`);
-    save('withdrawal-record-' + label, row);
+    save(`${kind}-record-${label}`, row);
   };
   await recordLine(`队列撤回：${ownText} · Synthetic operator（${source}）撤回了自己放进来的这一件`, 'zh');
   await page.screenshot({ path: path.join(pictures, 'queue-withdrawn-zh.png') });
@@ -269,6 +269,38 @@ async function run() {
   assert.deepEqual([(await queueItem(ownText)).status, (await queueItem(personsText)).status], ['cancelled', 'cancelled']);
   assert.equal((await fixture('stats')).sends.length, 1, 'No queue item was sent');
   checks.push('Through the real MCP path, the secretary takes back its own queued item without confirmation; another\'s is refused; the record names who took it back in Chinese and English');
+  // Queue item 6897c6e3, part 1: a member already doing an item queued for it (taken from the board, say) claims it, so
+  // that NAW does not send it the same work again; another member's item is refused. The record line says who claimed it.
+  // The operator keeps a draft and its turn open, so the queue does not send it anything while this runs.
+  const claimText = 'Claim check: work the operator took from the board', othersText = 'Claim check: the recipient\'s item';
+  await page.evaluate(([text, id]) => workspace.spaceAction('shared', 'queueAdd', [text, id]), [claimText, source]);
+  await page.evaluate(([text, id]) => workspace.spaceAction('shared', 'queueAdd', [text, id]), [othersText, recipient]);
+  const toClaim = await queueItem(claimText), others = await queueItem(othersText);
+  assert.deepEqual([toClaim.status, toClaim.assignee, others.status], ['queued', source, 'queued']);
+  const refusedClaim = await control(invoke('spaceAction', ['shared', 'queueClaim', [others.id]]));
+  assert.equal(refusedClaim.state, 'unconfirmed', JSON.stringify(refusedClaim)); assert.match(refusedClaim.error, /只能认领指给自己/);
+  const operator = (await state()).sessions.find(s => s.id === source), input = (operator.messages || []).findLast(m => m.role === 'user');
+  save('claim-operator', { state: operator.state, controlRevision: operator.controlRevision || 0, input: input?.id || null, queued: (await queueItem(claimText)).status });
+  const claimed = await control(invoke('spaceAction', ['shared', 'queueClaim', [toClaim.id]]));
+  assert.equal(claimed.state, 'complete', JSON.stringify(claimed)); assert.equal(claimed.confirmation, undefined, 'No confirmation for claiming an item queued for it');
+  const afterClaim = await queueItem(claimText);
+  assert.deepEqual([afterClaim.status, afterClaim.sentTo, afterClaim.tag, afterClaim.control, (await queueItem(othersText)).status],
+    ['sent', source, input?.id || `claimed:${toClaim.id}`, operator.controlRevision || 0, 'queued']);
+  save('claim-item', afterClaim);
+  const claimEvent = (await sharedRoom()).events.findLast(event => event.uiMessage?.key === 'notice.queue.claimed');
+  assert.deepEqual(claimEvent.uiMessage.params, { text: claimText, name: 'Synthetic operator', sessionId: source });
+  await recordLine(`队列认领：${claimText} → Synthetic operator（${source}）已经在做这一件，NAW 不再派`, 'zh', claimEvent.id, 'claim');
+  await page.screenshot({ path: path.join(pictures, 'queue-claimed-zh.png') });
+  const claimLocale = (await control(invoke('interfaceSettings', ['describe']))).value.find(s => s.ns === 'locale');
+  const claimEnglish = await control(invoke('interfaceSettings', ['update', 'locale', { preference: 'en' }, claimLocale.revision])); assert.equal(claimEnglish.state, 'complete', JSON.stringify(claimEnglish));
+  await recordLine(`Claimed from queue: ${claimText} → Synthetic operator (${source}) is already doing it; NAW will not send it`, 'en', claimEvent.id, 'claim');
+  await page.screenshot({ path: path.join(pictures, 'queue-claimed-en.png') });
+  assert.equal((await control(invoke('interfaceSettings', ['update', 'locale', { preference: 'zh' }, claimEnglish.value.find(s => s.ns === 'locale').revision]))).state, 'complete');
+  // The claimed item was never sent; the person cancels the other member's.
+  await page.evaluate(id => workspace.spaceAction('shared', 'queueCancel', [id]), others.id);
+  assert.deepEqual([(await queueItem(claimText)).status, (await queueItem(othersText)).status], ['sent', 'cancelled']);
+  assert.equal((await fixture('stats')).sends.length, 1, 'No queue item was sent');
+  checks.push('Through the real MCP path, a member claims an item queued for it without confirmation; another member\'s is refused; nothing is sent; the record names who claimed it in Chinese and English');
   await checkDesktopState('desktop-final');
   save('operations', JSON.parse(fs.readFileSync(path.join(profile, 'background-operations.json')))); save('final-state', await state());
   const finalStats = await fixture('stats'); save('fixture-stats', finalStats);

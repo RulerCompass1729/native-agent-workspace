@@ -108,3 +108,34 @@ test('room state lets only the item\'s own adding session withdraw it, while it 
   assert.equal(locale.format('en', notice.key, notice.params), 'Withdrawn from queue: Mine · taken back by Secretary <one> (session-one), who added it');
   assert.throws(() => room.queueWithdraw(mine, 'shared', author), refused('error.queue.notCancellable'));
 });
+
+// Queue item 6897c6e3, part 1: a member claims an item queued for it that it is already doing.
+test('room state lets only the item\'s assignee claim it, while it is queued, and keeps it as sent to that member', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-queue-claim-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const room = new RoomState(dir);
+  const mine = room.queueAdd('Board task', 'session-one', 'shared', person());
+  const anyone = room.queueAdd('For any member', null, 'shared', secretary());
+  const member = { name: 'Builder <one>', sessionId: 'session-one', control: 4, input: 'turn-input' };
+  const refused = key => error => error.uiMessage?.key === key;
+  for (const who of [undefined, null, {}, { ...member, sessionId: '' }, { ...member, sessionId: 'session-two' }]) {
+    assert.throws(() => room.queueClaim(mine, 'shared', who, NOW), refused('error.queue.claimOwnOnly'), JSON.stringify(who));
+  }
+  assert.throws(() => room.queueClaim(anyone, 'shared', member, NOW), refused('error.queue.claimOwnOnly'), 'an item for any member is not its own');
+  room.queueClaim(mine, 'shared', member, NOW);
+  const saved = new RoomState(dir).queueFind('shared', mine);
+  assert.deepEqual([saved.status, saved.sentTo, saved.sentAt, saved.tag, saved.control, saved.creator.kind], ['sent', 'session-one', NOW, 'turn-input', 4, 'person']);
+  const notice = room.value.events.at(-1).uiMessage;
+  assert.equal(locale.format('zh', notice.key, notice.params), '队列认领：Board task → Builder <one>（session-one）已经在做这一件，NAW 不再派');
+  assert.equal(locale.format('en', notice.key, notice.params), 'Claimed from queue: Board task → Builder <one> (session-one) is already doing it; NAW will not send it');
+  assert.equal(locale.format('zh', 'error.queue.claimOwnOnly'), '会话只能认领指给自己、还在排队的任务。');
+  assert.equal(locale.format('en', 'error.queue.claimOwnOnly'), 'A session can claim only an item queued for it that has not been sent yet.');
+  assert.throws(() => room.queueClaim(mine, 'shared', member, NOW), refused('error.queue.notQueued'));
+  // An input id the queue could not store is not used: the reply is then what follows the claim's time.
+  for (const input of ['x'.repeat(101), 'line\nbreak', 7]) {
+    const id = room.queueAdd(`Odd ${String(input).length}`, 'session-one');
+    room.queueClaim(id, 'shared', { ...member, input }, NOW);
+    assert.equal(room.queueFind('shared', id).tag, `claimed:${id}`, String(input));
+  }
+  assert.doesNotThrow(() => rules.validateQueue(new RoomState(dir).queueItems('shared')));
+});

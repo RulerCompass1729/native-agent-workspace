@@ -13522,3 +13522,29 @@ The integration review of 42e60ba3 (option A, held messages) with 12ced1d6 (item
 - In one turn, a message registered before the person spoke is cancelled at the turn's end; one registered after the turn read the words is held for the butler's limit and sent once the limit allows.
 
 Checks: both pass; the session-wake file passes 96/0. Each test catches its own break and not the other's: with `retryHeld` no longer checking the sender's identity the first fails; with `retryHeld` dropping messages registered after a read the second fails.
+
+## A member claims an item queued for it that it is already doing — 2026-11-13
+
+From queue item 6897c6e3, part 1 (the butler's split, board 11-13 00:02:25 and 00:02:46): a member took work from the board while the same item was queued for it, and the queue still sent it the same item (four times in the person's data). Agreed scope: a new queueClaim. A member marks an item queued for it as sent to itself, nothing is sent, and the item settles by the member's reply when its turn ends, as an item NAW sent does. It is not a cancel or a resolve, and nothing only the person may do is opened.
+
+**What changed.**
+- `app/room-state.cjs` `queueClaim(itemId, roomId, member, now)`, in the same step as the change: the item must be queued for that session (`assignee` equals the caller's session id), else `error.queue.claimOwnOnly`; it must still be queued, else `error.queue.notQueued`. The item becomes `sent` to the member with `sentAt`, the member's control revision now (`control`), and as `tag` the id of the input the member's turn began with. If there is none, or the queue could not store it, the tag is `claimed:<item id>`, which matches no message, so the reply is what follows the time of the claim. A record line names the member (`notice.queue.claimed`).
+- `register('spaceAction')` in `app/main.cjs`: queueClaim is a local queue action. The person's window is refused before anything is read (it has no session of its own). For a session it takes the caller as the person's record has it now (`queueSecretary.author`, the same check as a withdrawal, with the claim's refusal), the last user message on that record, and its control revision; then it schedules the dispatcher.
+- `app/queue-secretary.cjs` `author()` takes the refusal key, defaulting to the withdrawal's.
+- The agent catalog (`app/background-control.cjs`) lists queueClaim and says what it does.
+- Dispatch: a claimed item is `sent` with a tag, so the planner keeps the member busy and settles the item when the member is idle, by `replyAfter` from that input: done, waiting for a decision, or left for the person if the person typed after that input or took control. A READY line in the reply is recorded as for a sent item. `queueMarkSent` requires a queued item and so does the claim, so a claim and a send of the same item cannot both happen.
+
+**User-visible words (new).** zh 「队列认领：{text} → {name}（{sessionId}）已经在做这一件，NAW 不再派」 / en "Claimed from queue: {text} → {name} ({sessionId}) is already doing it; NAW will not send it"; refusal zh 「会话只能认领指给自己、还在排队的任务。」 / en "A session can claim only an item queued for it that has not been sent yet." These wait for the person's look at the screenshots before merge (the butler, board 11-12 23:16:03).
+
+**Tests and checks.**
+- `app/tests/queue-space-action.test.cjs`, on the actual handler with the real record, room state and background controller: its own queued item is claimed with the turn's input as tag and the control revision now, and one record line; another member's item, an item for any member, a call from another native session, and items already sent or cancelled are refused and change nothing; with no input on record the tag is `claimed:<id>`; through the real controller a claim needs no confirmation. The person's window is refused without reading the session list.
+- `app/tests/queue-attribution.test.cjs`: the room-state rule, reload, both languages of the record line and the refusal, and inputs the queue could not store.
+- `app/tests/queue-dispatch.test.cjs`, with the real dispatcher: a claimed item is never sent; the member's reply at the end of its turn settles it as done with the READY line, and then the member's next item goes out; the person typing or taking control during the turn leaves it for the person.
+- Red on 25fd89d3: the 4 new tests and 2 updated ones fail. Breakages: 14, all caught.
+- Real windows: hidden, loopback, synthetic native, no model. `scripts/test-background-control.cjs` gains the journey through the real MCP path: the person queues one item for the operator and one for the recipient; the operator's claim of the recipient's item is refused; its own is claimed without confirmation, is `sent` with the operator's last input as tag, and is never sent (one native send in the whole run, as before); the record line is checked visible in Chinese and in English.
+
+**Left open.**
+- An item queued for any member (no assignee) cannot be claimed. A member that took such an item from the board still gets it again if it is the next one free; the person or the butler cancels it.
+- The queue row of a claimed item reads as an ordinary sent item; the record line says it was claimed.
+- If a person's message is waiting behind the member's running turn when it claims, that message is the input the reply is counted from, so it is not seen as the person stepping in.
+- If the member's record of that input is replaced by a native copy with another id, the reply is counted by time, as for an item NAW sent.

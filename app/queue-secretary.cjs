@@ -111,12 +111,12 @@ class QueueSecretary {
     if (!current || current.sessionId !== actor?.id || current.nativeId !== actor?.nativeId || !record) throw uiError('error.queue.secretaryOnly');
     return { kind: 'secretary', name: labels.get(record.id) || record.name, sessionId: record.id };
   }
-  // A session taking back an item it queued itself (the person, 2026-11-12 21:1x, 「可以」): the caller as the
-  // person's record has it now, whether or not it is still the secretary. Room state compares it with the item's
-  // creator and status in the same step as the change.
-  author(actor, records, labels) {
+  // A session taking back an item it queued itself (the person, 2026-11-12 21:1x, 「可以」), or claiming one queued
+  // for it: the caller as the person's record has it now, whether or not it is still the secretary. Room state
+  // compares it with the item's creator or assignee, and status, in the same step as the change.
+  author(actor, records, labels, refusal = 'error.queue.withdrawOwnOnly') {
     const record = usableRecord(actor, records);
-    if (!record) throw uiError('error.queue.withdrawOwnOnly');
+    if (!record) throw uiError(refusal);
     return { name: labels.get(record.id) || record.name, sessionId: record.id };
   }
 }

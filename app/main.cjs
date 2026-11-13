@@ -1149,7 +1149,7 @@ function register(name, handler) {
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
       // handler below still authenticates the secretary and person-only actions.
-      const localQueue = name === 'queueSecretary' || name === 'integrator' || name === 'handoff' || name === 'steward' || name === 'spaceAction' && ['queueAdd', 'queueCancel', 'queueResolve'].includes(args[1]);
+      const localQueue = name === 'queueSecretary' || name === 'integrator' || name === 'handoff' || name === 'steward' || name === 'spaceAction' && ['queueAdd', 'queueCancel', 'queueResolve', 'queueClaim'].includes(args[1]);
       if (!local.has(name) && !localQueue) {
         const targetIds = (name === 'spaceAction' ? [args[2]?.[0]].flat() : [args[0]].flat()).filter(id => typeof id === 'string');
         const targets = c.client.entries.filter(e => !targetIds.length || e.state.sessions.some(s => targetIds.includes(s.id)));
@@ -1598,9 +1598,10 @@ async function boot() {
       try { return await roomState[action === 'archive' ? 'archiveRoom' : 'restoreRoom'](c.client, sessionLabels.labels, roomId); }
       finally { await broadcastRoom(); }
     } else if (action === 'removeFile') roomState.removeFile(args[0], args[1], roomId);
-    else if (['queueAdd', 'queueCancel', 'queueResolve'].includes(action)) {
+    else if (['queueAdd', 'queueCancel', 'queueResolve', 'queueClaim'].includes(action)) {
       // Besides the person: the secretary adds; the butler adds, cancels and marks handled, each under its own name;
-      // a session takes back what it queued itself while it is still queued (the person, 11-12 21:1x: 「可以」).
+      // a session takes back what it queued itself while it is still queued (the person, 11-12 21:1x: 「可以」);
+      // a session claims an item queued for it that it is already doing, so that NAW does not send it again (6897c6e3).
       const steward = c.background ? await stewardCaller(c) : null;
       if (c.background && !steward && action === 'queueResolve') throw uiError("error.queue.personOnly");
       const by = steward ? 'steward' : null;
@@ -1624,7 +1625,18 @@ async function boot() {
         queueDispatcher?.schedule();
         return itemId;
       }
-      if (action === 'queueCancel' && c.background && !steward) roomState.queueWithdraw(args[0], roomId, queueSecretary.author(backgroundOperation.current(), await sessions(), sessionLabels.labels));
+      if (action === 'queueClaim') {
+        // Only a session claims, and only for itself: the person's window has no session of its own here.
+        if (!c.background) throw uiError("error.queue.claimOwnOnly");
+        const list = await sessions();
+        const member = queueSecretary.author(backgroundOperation.current(), list, sessionLabels.labels, 'error.queue.claimOwnOnly');
+        const record = list.find(session => session.id === member.sessionId);
+        // As for an item NAW sends: its reply is what follows the input this turn began with, and a change of control since counts.
+        const input = (record.messages || []).findLast(message => message?.role === 'user');
+        roomState.queueClaim(args[0], roomId, { ...member, control: record.controlRevision || 0, input: input?.id });
+        queueDispatcher?.schedule();
+      }
+      else if (action === 'queueCancel' && c.background && !steward) roomState.queueWithdraw(args[0], roomId, queueSecretary.author(backgroundOperation.current(), await sessions(), sessionLabels.labels));
       else if (action === 'queueCancel') roomState.queueCancel(args[0], roomId, by);
       else { roomState.queueResolve(args[0], roomId, by); queueDispatcher?.schedule(); }
     }
