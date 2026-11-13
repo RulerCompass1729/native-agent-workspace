@@ -121,9 +121,11 @@ class StewardRecord {
       this.append({ kind: 'step', id, session: { id: sender.id, nativeId: sender.nativeId, provider: sender.provider, name: String(sender.name ?? '').slice(0, NAME_MAX) },
         action: args.action, method: args.action === 'invoke' ? args.method : null, arguments: argumentsOf(args), operationId: args.operation_id ?? null });
     } catch { throw uiError('error.steward.recordUnavailable'); }
-    let result;
-    try { result = await this.calls.run({ id: sender.id, nativeId: sender.nativeId }, run); }
+    // Open only while this call runs: a timer or connection made during it keeps the store, never the step.
+    let result; const call = { id: sender.id, nativeId: sender.nativeId, open: true };
+    try { result = await this.calls.run(call, run); }
     catch (error) { this.finish(id, { state: 'unconfirmed', reason: null, error: String(error?.message ?? '').slice(0, ERROR_MAX) || null, duplicate: false, operationId: null }); throw error; }
+    finally { call.open = false; }
     this.finish(id, outcomeOf(result));
     return result;
   }
@@ -131,7 +133,7 @@ class StewardRecord {
   // a conversation without the person confirming it: a designation made while a call is under way does not count).
   recording(actor) {
     const call = this.calls.getStore();
-    return Boolean(call && actor && call.id === actor.id && call.nativeId === actor.nativeId);
+    return Boolean(call?.open === true && actor && call.id === actor.id && call.nativeId === actor.nativeId);
   }
   // An outcome that cannot be written leaves its step without one; the view says so, and the record stops taking new
   // steps (the next call is refused).

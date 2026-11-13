@@ -300,4 +300,8 @@ test('the record knows which running call it wrote as a step, and of whom', asyn
   await f.record.around(sender('claude', other), { action: 'snapshot' }, async () => { seen.push(f.record.recording(other)); return { state: 'complete' }; });
   assert.deepEqual(seen, [true, false, false], 'only the butler\'s own recorded call; a call that was not written is not one');
   assert.equal(f.record.recording(sender()), false, 'nothing once the call is over');
+  // A timer made during the butler's recorded call keeps its store, but is not that call once it has ended.
+  let later;
+  await f.record.around(sender(), { action: 'snapshot' }, async () => { later = new Promise(resolve => setTimeout(() => resolve(f.record.recording(sender())), 5)); return { state: 'complete' }; });
+  assert.equal(await later, false, 'a timer the call left behind is not the call');
 });
