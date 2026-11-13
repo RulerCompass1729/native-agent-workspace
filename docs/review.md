@@ -13618,3 +13618,16 @@ Not covered:
 - `persistedMessages` trims the copy it saves. When the copy needs trimming and holds no gap row yet, `trimVolatileRows` adds one stamped `Date.now()`. Reused JSON keeps the stamp from when it was taken, and a full save stamps it again. This only happens if a session's volatile rows grew past the bound after the live array was last trimmed. No test or differential run hit it.
 - The 30 s full save follows the wall clock; a clock stepped back by D delays it by D.
 - An existing gap, not changed here: "pause all" with no hand-off running (`pauseAll`, `workspace.cjs:1663`) cancels waiting wake rows and reports nothing, so the page shows them at the next change. They are now counted for the save. Because a tool call no longer re-digests every session, the page may see them up to CARRY_MS (2 s) later while another session streams.
+
+## test-storage waits for the restored draft after reconnect (test only, 2026-11-13, Claude 3)
+
+Why: about one run in six failed at `scripts/test-storage.cjs:117`, reading the composer as '' right after the recovered rows matched (authorised on the board 2026-11-13 09:13:37, Claude manager, after the snapshot reuse). The failed run's saved `workspace.json` held the draft, and its `failure.png`, taken just after the read, showed it in the composer: the draft arrives a moment later; it is not lost.
+
+What changed: the read became a wait with the script's own `until` (200 readings, 100 ms apart, each awaited), the pattern `scripts/test-long-continuity.cjs` already uses for its draft. A draft that never arrives fails after 20 s with the label 'Reconnect restores the unsent draft'.
+
+Checks:
+- 8 hidden runs on main ee6f8796 plus this change, and 3 more after the rebase onto main 50a132f1: 11 exit 0, 3 checks each, no errors.
+- A negative run with the expected text changed (a temporary copy, removed): exit 1, 'Reconnect restores the unsent draft'.
+- GUI script checks (`gui-script-waits`, `gui-script-language`, `gui-names`, `gui-text-pattern`): 21/21.
+
+Not covered: eight passing runs alone do not prove the flake is gone (at one in six, eight clean runs happen about one time in four by chance); the evidence that it was timing is the failed run's file and screenshot.
