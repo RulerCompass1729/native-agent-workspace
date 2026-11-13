@@ -428,9 +428,10 @@ test('an explicitly owned system error body switches its bound causes while reta
 });
 
 
-test('an own automatic-continuation clock formats from the original recorded instant and copies only the visible language', async () => {
+for (const [key, label] of [['notice.capacityAutoContinueRouting', ''], ['notice.capacityAutoContinueForbidden', ': refused request (403)']])
+test('an own automatic-continuation clock formats from the original recorded instant and copies only the visible language' + label, async () => {
   const time = new Date(2026, 8, 6, 19, 5).getTime(), rawClock = new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const own = locale.createNotice('notice.capacityAutoContinueRouting', { time: rawClock, attempt: 2 });
+  const own = locale.createNotice(key, { time: rawClock, attempt: 2 });
   const rows = [{ id: 'clock', role: 'system', name: 'NAW', kind: 'notice', ...own, time }, { id: 'raw-clock', role: 'system', kind: 'notice', text: own.text, time }], before = JSON.stringify(rows), f = fixture(rows);
   f.switch('en');
   const expected = locale.format('en', own.uiMessage.key, { ...own.uiMessage.params, time: new Date(time).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' }) });

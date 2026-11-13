@@ -1422,19 +1422,21 @@ test(`quota notice respects native origin and processed text: ${kind}`, async ()
 // T-32: capacity recovery per Claude version, through the real bridge and adapter. 2.1.316 and 2.1.317 build the same
 // API-error row and StopFailure input as the qualified 2.1.312 (read-only comparison of the installed bundles; no real
 // 529 was reproduced there). Later versions qualify capacity separately from abort (T-32).
-async function capacityThroughBridge(t, version, row = {}, order = 'relay-last') {
-  const f = await mod({ version }), prompt = randomUUID(), turn = randomUUID(), errorId = randomUUID(), text = 'API Error: Repeated 529 Overloaded errors';
+async function capacityThroughBridge(t, version, row = {}, order = 'relay-last', text = 'API Error: Repeated 529 Overloaded errors', also = []) {
+  const f = await mod({ version }), prompt = randomUUID(), turn = randomUUID(), errorId = randomUUID();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-claude-capacity-version-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, f.r.record.nativeId + '.jsonl');
-  fs.writeFileSync(file, JSON.stringify({ uuid: errorId, sessionId: f.r.record.nativeId, type: 'assistant', isSidechain: false,
-    isApiErrorMessage: true, message: { model: '<synthetic>' }, apiErrorStatus: 529, ...row }) + '\n');
-  const ends = []; f.r.on('nativeTurnEnd', e => ends.push(e));
+  // `also`: further engine-written rows of the same turn, each saved with its own typed fields.
+  const saved = [{ uuid: errorId, text, row }, ...also.map(other => ({ uuid: randomUUID(), ...other }))];
+  fs.writeFileSync(file, saved.map(one => JSON.stringify({ uuid: one.uuid, sessionId: f.r.record.nativeId, type: 'assistant', isSidechain: false,
+    isApiErrorMessage: true, message: { model: '<synthetic>' }, apiErrorStatus: 529, ...one.row }) + '\n').join(''));
+  const ends = [], blocks = []; f.r.on('nativeTurnEnd', e => ends.push(e)); f.r.on('nativeBlock', block => blocks.push(block));
   f.r.lastPromptId = prompt; f.r.submission.status(true);
   await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: prompt });
   await f.invoke('turn.start', { turnId: turn });
-  await f.append(response(text, { uuid: errorId, origin: { kind: 'model', model: '<synthetic>' } }),
-    async e => ({ uuid: e.uuid, message: { type: 'assistant', content: [{ type: 'text', text }] } }));
+  for (const one of saved) await f.append(response(one.text, { uuid: one.uuid, origin: { kind: 'model', model: '<synthetic>' } }),
+    async e => ({ uuid: e.uuid, message: { type: 'assistant', content: [{ type: 'text', text: one.text }] } }));
   // A real turn's start reaches the adapter long before it ends.
   while (f.clock.length) await f.clock.shift()();
   // The adapter hears StopFailure from the classic hook relay, with the saved transcript: after the bridge's
@@ -1450,7 +1452,7 @@ async function capacityThroughBridge(t, version, row = {}, order = 'relay-last')
   if (order === 'relay-before-delivery') relay();
   while (f.clock.length) await f.clock.shift()();
   if (order === 'relay-last') relay();
-  return { f, ends, turn };
+  return { f, ends, turn, blocks };
 }
 for (const order of ['relay-last', 'relay-before-delivery', 'hook-before-end'])
 for (const version of ['2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323']) test(`Claude capacity recovery is armed only on qualified versions, through the real bridge: ${version} ${order}`, async t => {
@@ -1652,9 +1654,9 @@ for (const change of [{ apiErrorStatus: 500 }, { apiErrorStatus: 429 }, { apiErr
 test('Claude capacity rejects non-overload or unrelated native metadata: ' + JSON.stringify(change), t => {
   const f = capacityFailure(t, change); f.fail(); f.stop(); assert.deepEqual(f.events.filter(e => e.errorInfo === 'serverOverloaded'), []);
 });
-for (const boundary of ['replayed', 'gap', 'incomplete', 'child-hook', 'old-hook', 'retained', 'unqualified', 'new-prompt', 'rebind', 'used-input', 'dead', 'torn', 'missing', 'symlink', 'outside-tail', 'already-complete', 'fifo'])
-test('Claude capacity cannot infer a fresh failure through ' + boundary, t => {
-  const f = capacityFailure(t);
+const freshFailureBoundaries = ['replayed', 'gap', 'incomplete', 'child-hook', 'old-hook', 'retained', 'unqualified', 'new-prompt', 'rebind', 'used-input', 'dead', 'torn', 'missing', 'symlink', 'outside-tail', 'already-complete', 'fifo'];
+function freshFailureBoundary(t, boundary, rowChange, cause) {
+  const f = capacityFailure(t, rowChange);
   if (boundary === 'retained') f.r.retainedReader = true;
   if (boundary === 'unqualified') f.r.nativeCapacityAvailable = false;
   if (boundary === 'torn') fs.writeFileSync(f.file, JSON.stringify(f.row).slice(0, -2));
@@ -1669,11 +1671,13 @@ test('Claude capacity cannot infer a fresh failure through ' + boundary, t => {
   if (boundary === 'used-input') f.r.claimFailedTurnInput();
   if (boundary === 'dead') f.r.terminal.alive = false;
   f.stop(boundary === 'child-hook' ? { agent_id: 'child' } : boundary === 'old-hook' ? { prompt_id: randomUUID() } : {});
-  assert.deepEqual(f.events.filter(e => e.errorInfo === 'serverOverloaded'), []);
-});
+  assert.deepEqual(f.events.filter(e => e.errorInfo === cause), []);
+}
+for (const boundary of freshFailureBoundaries)
+test('Claude capacity cannot infer a fresh failure through ' + boundary, t => freshFailureBoundary(t, boundary, {}, 'serverOverloaded'));
 
-function capacityWorkspace(t, runtime) {
-  const f = capacityFailure(t, {}, runtime), host = { binaries: {}, close() {} }, w = new Workspace(host, f.dir);
+function capacityWorkspace(t, runtime, rowChange = {}) {
+  const f = capacityFailure(t, rowChange, runtime), host = { binaries: {}, close() {} }, w = new Workspace(host, f.dir);
   const s = Object.assign(f.r.record, { id: 'capacity-root', provider: 'claude', cwd: f.dir, messages: [], state: 'idle', owner: 'window', controlRevision: 0, memberRevision: 0 });
   f.r.host = host; f.r.ready = f.r.chatAvailable = true;
   w.sessions.set(s.id, s); w.runtimes.set(s.id, f.r); w.bind(s, f.r);
@@ -1689,18 +1693,22 @@ test('Claude overload uses the shared two-minute timer and a new continuation wi
   assert.ok(f.s.messages.some(m => m.name === 'NAW' && m.text.includes('第 1 次')));
   f.r.emit('interrupted', {}); assert.equal(f.w.capacityStatus(f.s.id), null);
 });
-for (const boundary of ['human-draft', 'input', 'rebind', 'gap', 'ambiguous', 'changed-transcript'])
-test('Claude scheduled continuation yields to ' + boundary, async t => {
-  const f = capacityWorkspace(t); f.fail(); f.stop(); const due = f.w.capacityStatus(f.s.id).due;
+async function scheduledYields(t, boundary, rowChange) {
+  const f = capacityWorkspace(t, undefined, rowChange); f.fail(); f.stop(); const due = f.w.capacityStatus(f.s.id).due;
   if (boundary === 'human-draft') f.w.setDraft(f.s.id, 'My unsent task', 'window');
   if (boundary === 'input') f.r.hook({ hook_event_name: 'UserPromptSubmit', session_id: f.s.nativeId, prompt_id: randomUUID(), prompt: 'Different task' });
   if (boundary === 'rebind') f.r.bindRoot({ sessionId: f.s.nativeId, nativeBlocks: true, nativeAbort: true });
   if (boundary === 'gap') f.r.observeRootGap({ sessionId: f.s.nativeId, lease: f.r.rootLease, epoch: f.r.observationEpoch });
   if (boundary === 'ambiguous') f.fail({ incomplete: true, errorMessageId: undefined });
   if (boundary === 'changed-transcript') f.r.rootTurn.failedTranscript = f.file + '.different';
+  if (boundary === 'takeover') f.w.claim(f.s.id, 'other-window');
+  if (boundary === 'member-change') f.w.join(f.s.id, true);
   f.w.tickCapacity(due); await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(f.sent, []); assert.equal(f.w.capacityStatus(f.s.id), null);
-});
+}
+const scheduledBoundaries = ['human-draft', 'input', 'rebind', 'gap', 'ambiguous', 'changed-transcript'];
+for (const boundary of scheduledBoundaries)
+test('Claude scheduled continuation yields to ' + boundary, t => scheduledYields(t, boundary, {}));
 
 test('repeated Claude overloads retain the shared 2/5/10-minute budget; another error cancels it', async t => {
   const f = capacityWorkspace(t); assert.equal(f.r.nativeAbortAvailable, false); f.fail(); f.stop();
@@ -1748,6 +1756,200 @@ test('missing native row gets at most five bounded reads, no delayed surprise re
   assert.equal(f.r.rootTurn.failureReads, 5); assert.equal(f.r.rootTurn.pendingFailure, false);
   fs.writeFileSync(f.file, JSON.stringify(f.row) + '\n'); f.w.tickCapacity(); f.stop(); f.fail();
   assert.equal(f.w.capacityStatus(f.s.id), null); assert.equal(f.sent.length, 0);
+});
+
+// A request the server refused (typed HTTP 403) goes through the same bounded continuation as an overload. Native
+// words that row "Please run /login · API Error: 403 …", a format the bridge does not know: the bridge names the row
+// without its text, and only the typed status of the saved row decides. Measured 2026-11-13 on 2.1.322 and 2.1.323.
+const refusedText = 'Please run /login · API Error: 403 Attention Required! | Cloudflare';
+const refusedRow = { apiErrorStatus: 403, error: 'authentication_failed' };
+const displayText = (language, message) => require('../ui-locale.js').displayText(language, message.text, message.uiMessage);
+for (const order of ['relay-last', 'relay-before-delivery', 'hook-before-end']) for (const version of ['2.1.322', '2.1.323'])
+for (const [label, row] of [['authentication_failed', refusedRow], ['network_edge_blocked', { apiErrorStatus: 403, error: 'invalid_request', apiError: 'network_edge_blocked' }]])
+test(`a Claude request refused with a typed 403 is reported for the bounded continuation, through the real bridge: ${version} ${order} ${label}`, async t => {
+  const { f, ends, turn, blocks } = await capacityThroughBridge(t, version, row, order, refusedText);
+  assert.deepEqual(ends, [{ nativeId: f.r.record.nativeId, turnId: turn, status: 'failed', errorInfo: 'requestForbidden' }]);
+  assert.ok(!/login|Cloudflare|Attention/.test(JSON.stringify(blocks)), 'The wording of a row the bridge does not know is not shown or passed on');
+});
+for (const [label, row, text] of [
+  ['401', { apiErrorStatus: 401, error: 'authentication_failed' }, 'Invalid API key · Please run /login'],
+  ['400', { apiErrorStatus: 400, error: 'invalid_request' }, refusedText],
+  ['500', { apiErrorStatus: 500 }, refusedText],
+  ['529 in an unknown wording', { apiErrorStatus: 529 }, 'Please retry · API Error: 529 Overloaded'],
+  ['Cloudflare wording with 502', { apiErrorStatus: 502, error: 'authentication_failed' }, 'Please run /login · API Error: 502 Attention Required! | Cloudflare'],
+  ['Cloudflare wording without a status', { apiErrorStatus: null }, refusedText],
+  ['403 as a string', { apiErrorStatus: '403' }, refusedText],
+  ['a 403 row that is not an API error', { apiErrorStatus: 403, isApiErrorMessage: false }, refusedText],
+  ['a 403 row of a side chain', { apiErrorStatus: 403, isSidechain: true }, refusedText],
+  ['a 403 row of another session', { apiErrorStatus: 403, sessionId: randomUUID() }, refusedText],
+  ['the row is not saved', { apiErrorStatus: 403, uuid: randomUUID() }, refusedText]])
+test(`a Claude failure in a wording the bridge does not know stays as it was unless its saved row is a typed 403: ${label}`, async t => {
+  const { f, ends, blocks } = await capacityThroughBridge(t, '2.1.323', row, 'relay-last', text);
+  for (let read = 0; read < 6; read++) f.r.reportCapacityFailure(true);
+  assert.deepEqual(ends, [], 'No failed end is reported from that row, so nothing can be scheduled');
+  assert.ok(!/login|Cloudflare|Attention|Overloaded|Invalid/.test(JSON.stringify(blocks)));
+});
+test('the wording decides nothing: Cloudflare text in a known format with another status is an ordinary failure, and a known-format 403 is a refused request', async t => {
+  const other = await capacityThroughBridge(t, '2.1.323', { apiErrorStatus: 503 }, 'relay-last', 'API Error: 503 Attention Required! | Cloudflare');
+  assert.deepEqual(other.ends, [{ nativeId: other.f.r.record.nativeId, turnId: other.turn, status: 'failed', errorInfo: null }]);
+  const refused = await capacityThroughBridge(t, '2.1.323', { apiErrorStatus: 403 }, 'relay-last', 'API Error: 403 synthetic gateway refusal');
+  assert.deepEqual(refused.ends, [{ nativeId: refused.f.r.record.nativeId, turnId: refused.turn, status: 'failed', errorInfo: 'requestForbidden' }]);
+});
+test('two rows in unknown wordings name no row, and a known-format row of the same turn still decides as before', async t => {
+  const two = await capacityThroughBridge(t, '2.1.323', refusedRow, 'relay-last', refusedText, [{ text: 'Another engine-written line', row: refusedRow }]);
+  for (let read = 0; read < 6; read++) two.f.r.reportCapacityFailure(true);
+  assert.deepEqual(two.ends, []);
+  for (const first of ['unknown', 'known']) {
+    const unknown = { text: refusedText, row: refusedRow }, known = { text: 'API Error: Repeated 529 Overloaded errors', row: {} };
+    const [a, b] = first === 'unknown' ? [unknown, known] : [known, unknown];
+    const mixed = await capacityThroughBridge(t, '2.1.323', a.row, 'relay-last', a.text, [b]);
+    assert.deepEqual(mixed.ends, [{ nativeId: mixed.f.r.record.nativeId, turnId: mixed.turn, status: 'failed', errorInfo: 'serverOverloaded' }], first);
+  }
+});
+for (const order of ['frame-first', 'hook-first']) test('a refused Claude request needs the native UUID, a typed 403 and both live boundaries: ' + order, t => {
+  const f = capacityFailure(t, refusedRow);
+  if (order === 'frame-first') { f.fail(); assert.equal(f.events.length, 0); f.stop(); }
+  else { f.stop(); assert.equal(f.events.length, 0); f.fail(); }
+  assert.deepEqual(f.events, [{ nativeId: f.r.record.nativeId, turnId: f.turnId, status: 'failed', errorInfo: 'requestForbidden' }]);
+  f.stop(); f.fail(); assert.equal(f.events.length, 1, 'Duplicate hooks or updates cannot schedule another attempt');
+});
+for (const error of ['authentication_failed', 'invalid_request', undefined]) test('the status alone decides a refused Claude request, not native\'s own label: ' + error, t => {
+  const f = capacityFailure(t, { apiErrorStatus: 403, ...(error ? { error } : {}) }); f.fail(); f.stop();
+  assert.deepEqual(f.events.map(e => e.errorInfo), ['requestForbidden']);
+});
+for (const change of [{ apiErrorStatus: 401 }, { apiErrorStatus: 400 }, { apiErrorStatus: 500 }, { apiErrorStatus: 429 }, { apiErrorStatus: 404 }, { apiErrorStatus: '403' }, { apiErrorStatus: null },
+  { apiErrorStatus: 403, isApiErrorMessage: false }, { apiErrorStatus: 403, isSidechain: true }, { apiErrorStatus: 403, sessionId: randomUUID() },
+  { apiErrorStatus: 403, uuid: randomUUID() }, { apiErrorStatus: 403, message: { model: 'ordinary-model' } }, { apiErrorStatus: 403, type: 'user' },
+  { apiErrorStatus: 502, error: 'authentication_failed', message: { model: '<synthetic>', content: [{ type: 'text', text: refusedText }] } }])
+test('a refused Claude request is taken only from the typed 403 of the native API-error row: ' + JSON.stringify(change), t => {
+  const f = capacityFailure(t, change); f.fail(); f.stop();
+  for (let read = 0; read < 5; read++) f.r.reportCapacityFailure(true);
+  assert.deepEqual(f.events.map(e => e.errorInfo), [null], 'The turn ends as an ordinary failure, with neither cause');
+});
+for (const [status, cause] of [[403, 'requestForbidden'], [529, null], [500, null], [401, null], [400, null]])
+test('a row the bridge could not classify is admitted only for a typed 403: ' + status, t => {
+  const f = capacityFailure(t, { apiErrorStatus: status }); f.fail({ errorRowUnclassified: true }); f.stop(); f.fail({ errorRowUnclassified: true });
+  assert.deepEqual(f.events, cause ? [{ nativeId: f.r.record.nativeId, turnId: f.turnId, status: 'failed', errorInfo: cause }] : []);
+});
+test('a known-format row that follows an unclassified one in the same turn is read on its own', t => {
+  const f = capacityFailure(t), other = randomUUID();
+  fs.appendFileSync(f.file, JSON.stringify({ ...f.row, uuid: other, apiErrorStatus: 500 }) + '\n');
+  f.stop(); f.fail({ errorMessageId: other, errorRowUnclassified: true }); assert.deepEqual(f.events, []);
+  f.fail(); assert.deepEqual(f.events, [{ nativeId: f.r.record.nativeId, turnId: f.turnId, status: 'failed', errorInfo: 'serverOverloaded' }]);
+});
+// Before unclassified rows were named, nothing of this turn had been read or cancelled when its overload row came.
+for (const between of ['the wait for the unclassified row is cancelled', 'another window takes over'])
+test('an overload row that follows an unclassified one is continued as before when ' + between, t => {
+  const f = capacityWorkspace(t), unsaved = randomUUID();
+  f.stop(); f.fail({ errorMessageId: unsaved, errorRowUnclassified: true });
+  assert.equal(f.r.rootTurn.pendingFailure, true); assert.deepEqual(f.events, []);
+  if (between === 'another window takes over') { f.w.claim(f.s.id, 'other-window'); assert.equal(f.s.owner, 'other-window'); }
+  else { f.w.cancelCapacity(f.s.id); assert.equal(f.r.rootTurn.failureCancelled, true); }
+  f.fail();
+  assert.deepEqual(f.events, [{ nativeId: f.r.record.nativeId, turnId: f.turnId, status: 'failed', errorInfo: 'serverOverloaded' }]);
+  assert.equal(f.w.capacityStatus(f.s.id)?.reason, 'capacity');
+});
+test('a second unclassified row saved after the first was admitted names no row, through the real bridge', async t => {
+  const f = await mod({ version: '2.1.323' }), prompt = randomUUID(), turn = randomUUID(), first = randomUUID(), second = randomUUID();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-claude-capacity-version-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, f.r.record.nativeId + '.jsonl');
+  fs.writeFileSync(file, [first, second].map(uuid => JSON.stringify({ uuid, sessionId: f.r.record.nativeId, type: 'assistant', isSidechain: false,
+    isApiErrorMessage: true, message: { model: '<synthetic>' }, ...refusedRow }) + '\n').join(''));
+  const ends = [], blocks = []; f.r.on('nativeTurnEnd', e => ends.push(e)); f.r.on('nativeBlock', block => blocks.push(block));
+  f.r.lastPromptId = prompt; f.r.submission.status(true);
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: prompt });
+  await f.invoke('turn.start', { turnId: turn });
+  const row = (uuid, text, saved) => f.append(response(text, { uuid, origin: { kind: 'model', model: '<synthetic>' } }),
+    async e => { await saved; return { uuid: e.uuid, message: { type: 'assistant', content: [{ type: 'text', text }] } }; });
+  await row(first, refusedText);
+  // The second row's save starts inside the turn and finishes after the turn's failed end was reported.
+  let save; const late = row(second, 'Another engine-written line', new Promise(resolve => { save = resolve; }));
+  while (f.clock.length) await f.clock.shift()();
+  await f.invoke('turn.complete', { turnId: turn, reason: 'error', answer: '', durationMs: 100 });
+  await f.invoke('classic.StopFailure', { session_id: f.r.record.nativeId, prompt_id: prompt });
+  while (f.clock.length) await f.clock.shift()();
+  f.r.hook({ hook_event_name: 'StopFailure', session_id: f.r.record.nativeId, prompt_id: prompt, transcript_path: file });
+  assert.deepEqual(ends, [{ nativeId: f.r.record.nativeId, turnId: turn, status: 'failed', errorInfo: 'requestForbidden' }]);
+  assert.equal(f.r.rootTurn.errorMessageId, first);
+  save(); await late; while (f.clock.length) await f.clock.shift()();
+  assert.equal(f.r.rootTurn.errorMessageId, null, 'The row a continuation was taken from no longer stands for the turn');
+  assert.equal(ends.length, 1); assert.ok(!JSON.stringify(blocks).includes('engine-written') && !JSON.stringify(blocks).includes('Cloudflare'));
+});
+test('a continuation scheduled from an unclassified row ends when the bridge stops naming that row', async t => {
+  const f = capacityWorkspace(t, undefined, refusedRow); f.fail({ errorRowUnclassified: true }); f.stop();
+  const due = f.w.capacityStatus(f.s.id).due; assert.equal(f.w.capacityStatus(f.s.id).reason, 'forbidden');
+  f.fail({ errorMessageId: undefined });
+  f.w.tickCapacity(due); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.sent, []); assert.equal(f.w.capacityStatus(f.s.id), null); assert.equal(f.events.length, 1);
+});
+test('a known-format failure that names no row keeps the row a continuation was taken from', async t => {
+  // Only an unclassified row is withdrawn by a later frame without a row; the overload path is as it was.
+  const f = capacityWorkspace(t); f.fail(); f.stop(); const due = f.w.capacityStatus(f.s.id).due;
+  f.fail({ errorMessageId: undefined });
+  f.w.tickCapacity(due); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.sent, ['继续']);
+});
+for (const boundary of freshFailureBoundaries)
+test('a refused Claude request cannot infer a fresh failure through ' + boundary, t => freshFailureBoundary(t, boundary, refusedRow, 'requestForbidden'));
+
+test('a refused Claude request uses the shared two-minute timer, its own words and the same continuation', async t => {
+  const f = capacityWorkspace(t, undefined, refusedRow), pauses = [], pause = f.w.pauseParticipant;
+  f.w.pauseParticipant = function (...args) { pauses.push(args); return pause.apply(this, args); };
+  f.fail(); f.stop();
+  const scheduled = f.w.capacityStatus(f.s.id); assert.equal(scheduled.reason, 'forbidden'); assert.equal(scheduled.attempt, 0); assert.ok(scheduled.due - Date.now() > 119000);
+  f.w.tickCapacity(scheduled.due - 1); assert.deepEqual(f.sent, []);
+  f.w.tickCapacity(scheduled.due); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.sent, ['继续']); assert.equal(f.s.messages.filter(m => m.origin === 'capacity-recovery').length, 1);
+  const notices = f.s.messages.filter(m => m.name === 'NAW' && m.kind === 'notice');
+  assert.deepEqual(notices.map(m => m.uiMessage?.key), ['notice.capacityAutoContinueForbidden']);
+  assert.match(notices[0].text, /^服务端拒绝了请求（403），.+ 自动继续（第 1 次）$/);
+  assert.match(displayText('en', notices[0]), /^The server refused the request \(403\)\. Continued automatically at .+ \(attempt 1\)$/);
+  const own = require('../ui-locale.js').createNotice('notice.run.automaticForbidden');
+  assert.deepEqual(pauses.filter(args => args[2]).map(args => [args[1], args[3]?.key]), [[own.text, 'notice.run.automaticForbidden']], 'The automatic pause names the refused request, in the catalog\'s own words');
+  f.r.emit('interrupted', {}); assert.equal(f.w.capacityStatus(f.s.id), null);
+});
+for (const boundary of [...scheduledBoundaries, 'takeover', 'member-change'])
+test('a scheduled continuation after a refused Claude request yields to ' + boundary, t => scheduledYields(t, boundary, refusedRow));
+
+function nextFailure(f, status) {
+  const promptId = f.r.lastPromptId = randomUUID(), turnId = randomUUID(), errorMessageId = randomUUID();
+  fs.writeFileSync(f.file, JSON.stringify({ ...f.row, uuid: errorMessageId, apiErrorStatus: status }) + '\n');
+  f.block({ id: 'control:turn-start', kind: 'control', status: 'running', promptId, turnId });
+  f.block({ id: 'turn:' + turnId, kind: 'turn', status: 'failed', turnId, failedRequest: true, errorMessageId });
+  f.stop({ prompt_id: promptId });
+}
+test('repeated refused Claude requests keep the shared 2/5/10-minute budget and end with the sign-in notice; another error cancels it', async t => {
+  const f = capacityWorkspace(t, undefined, refusedRow); f.fail(); f.stop();
+  for (let n = 0; n < 3; n++) {
+    const r = f.w.capacityStatus(f.s.id); assert.equal(r.attempt, n); assert.equal(r.reason, 'forbidden');
+    assert.ok(r.due - Date.now() > [120000, 300000, 600000][n] - 1000);
+    f.w.tickCapacity(r.due); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.sent.length, n + 1); nextFailure(f, 403);
+  }
+  assert.equal(f.w.capacityStatus(f.s.id).status, 'exhausted'); f.w.tickCapacity(Date.now() + 86400000); assert.equal(f.sent.length, 3);
+  const limits = f.s.messages.filter(m => m.uiMessage?.key === 'notice.capacityLimitForbidden');
+  assert.equal(limits.length, 1, 'The retry limit is visible in NAW');
+  assert.equal(limits[0].text, '服务端拒绝了请求（403），自动继续已达 3 次上限。可能需要重新登录，需要你处理。');
+  assert.equal(displayText('en', limits[0]), 'The server refused the request (403), and automatic continuation reached its limit of 3 attempts. You may need to sign in again. Your action is needed.');
+  assert.deepEqual(f.s.messages.filter(m => /^notice\.capacity(Limit|AutoContinue)(Capacity|Routing)$/.test(m.uiMessage?.key || '')), [], 'A refused request is never worded as an overload or a routing timeout');
+  nextFailure(f, 401); assert.equal(f.w.capacityStatus(f.s.id), null, 'A sign-in error (401) is not continued');
+});
+test('an overload and a refused request in one run of failures share one budget of three', async t => {
+  const f = capacityWorkspace(t); f.fail(); f.stop();
+  for (const [n, status, reason] of [[0, 403, 'capacity'], [1, 529, 'forbidden'], [2, 403, 'capacity']]) {
+    const r = f.w.capacityStatus(f.s.id); assert.equal(r.attempt, n); assert.equal(r.reason, reason);
+    assert.ok(r.due - Date.now() > [120000, 300000, 600000][n] - 1000);
+    f.w.tickCapacity(r.due); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.sent.length, n + 1); nextFailure(f, status);
+  }
+  assert.deepEqual({ ...f.w.capacityStatus(f.s.id), due: 0, nativeId: 0, turnId: 0 }, { nativeId: 0, turnId: 0, status: 'exhausted', attempt: 3, due: 0, reason: 'forbidden' });
+  assert.deepEqual(f.s.messages.filter(m => m.name === 'NAW' && m.kind === 'notice').map(m => m.uiMessage?.key),
+    ['notice.capacityAutoContinueCapacity', 'notice.capacityAutoContinueForbidden', 'notice.capacityAutoContinueCapacity', 'notice.capacityLimitForbidden']);
+});
+test('only a Claude session takes a refused request as a cause; any other session cancels', t => {
+  const f = capacityWorkspace(t, undefined, refusedRow);
+  f.s.provider = 'codex'; f.fail(); f.stop(); assert.equal(f.w.capacityStatus(f.s.id), null);
 });
 
 
