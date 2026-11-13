@@ -1396,6 +1396,7 @@ class Workspace extends EventEmitter {
       // uncertain outcome stays in the record so it is not sent twice.
       const status = error.notSent === true ? 'not-sent' : 'unconfirmed';
       if (message.status !== 'submitted') message.status = status;
+      if (status === 'not-sent' && !shared) wake.humanUnsent(runtime, tag);
       if (status === 'not-sent' && clearedDraft && this.draftRevisions.get(id) === draftRevision && !this.drafts.get(id)) this.drafts.set(id, draft);
       if (shared) {
         this.forwards.delete(tag); this.sharedReplies.close(tag, status === 'not-sent' ? '没有发出' : '接收结果未确认', uiActivity(status === 'not-sent' ? 'notice.sharing.notSent' : 'notice.sharing.receiptUnconfirmed')[1]); this.deliveryStatus(tag, status);

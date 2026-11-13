@@ -109,6 +109,10 @@ function humanRead(r, s, tag, turnId) {
   turn.human = awaiting.human; turn.epoch = (turn.epoch || 0) + 1;
   return true;
 }
+// Words native provably did not take are never read: the turn is refused as revoked, not told to wait for a read.
+function humanUnsent(r, tag) {
+  if (r.wakeTurn?.awaiting?.tag === tag) delete r.wakeTurn.awaiting;
+}
 // Still to be read: the refusal says the turn can send again once it has, rather than that it is over for the turn.
 function awaitingRead(w, r, s, native) {
   const awaiting = r.wakeTurn?.awaiting;
@@ -402,4 +406,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, humanQueued, humanRead, stage, complete, take, receive, check, validateArgs, root };
+module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, humanQueued, humanRead, humanUnsent, stage, complete, take, receive, check, validateArgs, root };

@@ -815,13 +815,14 @@ async function personSpeaks(t, { steward = false } = {}) {
   f.ra.submission.request = async (text, tag, guard, queued, midturn) => {
     requests.push({ text, tag, queued, midturn });
     const uuid = `00000000-0000-4000-8000-${String(requests.length).padStart(12, '0')}`;
+    if (mode === 'not-sent') throw Object.assign(new Error('native refused the words'), { notSent: true });
     return mode === 'append' ? { mode: 'append', uuid, turnId: f.ra.turnId } : { turnId: null, promptId: null };
   };
   const say = async text => { const tag = await f.source.queue(f.a, text, 'source-owner'); return { tag, uuid: `00000000-0000-4000-8000-${String(requests.length).padStart(12, '0')}` }; };
   const read = ({ tag, uuid }, turnId = f.ra.turnId) => f.ra.submission.emit('read', { tag, uuid, turnId });
   const send = (to, text, callId) => Promise.resolve().then(() => f.ra.addressedCall({ nativeId: s.nativeId, turnId: f.ra.turnId, promptId: f.ra.liveTurn.promptId, callId }, { recipient_id: to, message: text }));
   const sent = () => s.messages.filter(m => m.wake);
-  return { ...f, s, requests, say, read, send, sent, ownTurn: () => { mode = 'own-turn'; } };
+  return { ...f, s, requests, say, read, send, sent, ownTurn: () => { mode = 'own-turn'; }, notSent: () => { mode = 'not-sent'; } };
 }
 const refusedAs = key => error => error.uiMessage?.key === key;
 test('the person speaking into a sender\'s turn: before the turn reads it, it cannot send; once read, it sends again, once (wake proposal, item 3)', async t => {
@@ -846,6 +847,14 @@ test('the person speaking into a sender\'s turn: before the turn reads it, it ca
   assert.equal(before.wake.status, 'cancelled', 'what the turn registered before the person spoke stays withdrawn');
   assert.equal(before.wake.cancellation.code, 'source-identity-changed');
   assert.equal(after.wake.status, 'submitted'); assert.equal(after.wake.epoch, 1);
+});
+test('words native provably did not take are never read: the turn is refused as revoked, not told to wait (wake proposal, item 3)', async t => {
+  const f = await personSpeaks(t);
+  f.notSent();
+  await assert.rejects(f.source.queue(f.a, 'Use the other plan.', 'source-owner'), error => error.notSent === true);
+  assert.equal(f.s.messages.find(m => m.origin === 'human' && m.text === 'Use the other plan.').status, 'not-sent');
+  await assert.rejects(f.send(f.b, 'After the words failed.', 'failed'), refusedAs('error.wake.turnRevokedByHuman'));
+  assert.equal(f.sent().length, 0);
 });
 test('the read authorizes nothing when the person acted again, everything was paused, or it is not the turn\'s read of those words (wake proposal, item 3)', async t => {
   const cases = {
