@@ -376,6 +376,27 @@ test('observed native children survive window reads; transport/service gaps inva
   assert.equal(observedFleet(cold.snapshot().sessions[0]).unknown, 1);
   assert.equal(cold.versions.dispatches, 0);
 });
+// The daemon digests again only the session a change names (state-delta.cjs): a streamed reply must name
+// its own session and change no other session's messages; a gap and every other change name none.
+test('a streamed reply names its session when it reports a change; a gap and any other change name none', async t => {
+  const { workspace: w, runtimes: [claude, codex], ids: [a, b] } = await fixture(t, 2);
+  const seen = []; w.on('change', session => seen.push(session));
+  const messagesOf = id => JSON.stringify(w.snapshot().sessions.find(s => s.id === id).messages);
+  const streamed = (id, other, action) => {
+    const before = messagesOf(id), untouched = messagesOf(other); seen.length = 0; action();
+    assert.deepEqual(seen, [id]); assert.notEqual(messagesOf(id), before, 'the named session changed');
+    assert.equal(messagesOf(other), untouched, 'no other session changed');
+  };
+  streamed(a, b, () => claude.emit('nativeBlock', { nativeId: w.get(a).nativeId, id: 'display:reply', kind: 'response', turnId: 'turn', text: 'part', status: 'streaming' }));
+  streamed(a, b, () => claude.emit('progress', { id: 'read', source: 'claude-native-message', kind: 'tool', status: 'running', title: 'Read' }));
+  streamed(b, a, () => codex.emit('delta', { id: 'answer', text: 'stre' }));
+  streamed(b, a, () => codex.emit('messageItem', { id: 'answer', text: 'streamed' }));
+  streamed(b, a, () => codex.emit('progress', { id: 'command', kind: 'commandExecution', status: 'inProgress', source: 'codex-native', turnId: 'turn-1', input: 'ls' }));
+  for (const action of [() => claude.emit('nativeBlock', { nativeId: w.get(a).nativeId, id: 'gap-1', kind: 'gap' }), () => w.setDraft(a, 'typed'), () => codex.emit('usage', { total: 1 })]) {
+    seen.length = 0; action();
+    assert.ok(seen.length && seen.every(session => session === undefined), String(action));
+  }
+});
 test('continuous output checkpoints before it becomes quiet and reload never sends a task', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);

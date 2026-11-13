@@ -77,6 +77,8 @@ process.on('message', async q => {
     if (q.method === 'state') r.emit('state', q.value);
     if (q.method === 'nativeBlock') r.emit('nativeBlock', { ...q.value, nativeId: r.record.nativeId });
     if (q.method === 'progress') r.emit('progress', q.value);
+    // A change to the last message in place that reports nothing: the daemon learns of it only from a later change.
+    if (q.method === 'quietEdit') r.record.messages.at(-1).text = q.value;
     if (q.method === 'nativeObservation') Claude.prototype.observeRoot.call(r, { ...q.value, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: (r.rootObservation?.sequence || 0) + 1 });
     if (q.method === 'fleet') r.emit('fleet', q.value);
     // A Claude turn-end report of background work (count 0: nothing left running), as the native hook sends.
