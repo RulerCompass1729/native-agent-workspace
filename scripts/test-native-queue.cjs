@@ -28,13 +28,13 @@ const located = executable('claude'), binary = located && fs.realpathSync(locate
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
 // Each journey runs only on the exact versions it was verified on (app/tests/claude-319-contract.test.cjs pins this
 // line). The third list covers the queue journey, solo and shared, and the shared model-only journey; all three
-// passed on exact 2.1.322 on 2026-11-10 inside the loopback fixture's sandbox. The product also qualifies queueing
-// on 318, 319 and 321, which are not installed and have not been run.
-assert.match(nativeVersion, inlineTrial ? /^2\.1\.312\b/ : noModelServer ? /^2\.1\.(308|309|310|311|316|317|318|319(?=\s|$))\b/ : /^2\.1\.(308|309|310|311|322(?=\s|$))\b/, 'Verify the updated native contract before sending a test task');
-// 2.1.322 offers mid-turn delivery: a queued message is held for the running turn's next tool boundary. This
+// passed on exact 2.1.322 on 2026-11-10 and on exact 2.1.323 on 2026-11-12 inside the loopback fixture's sandbox.
+// The product also qualifies queueing on 318, 319 and 321, which are not installed and have not been run.
+assert.match(nativeVersion, inlineTrial ? /^2\.1\.312\b/ : noModelServer ? /^2\.1\.(308|309|310|311|316|317|318|319(?=\s|$))\b/ : /^2\.1\.(308|309|310|311|322(?=\s|$)|323(?=\s|$))\b/, 'Verify the updated native contract before sending a test task');
+// 2.1.322 and 2.1.323 offer mid-turn delivery: a queued message is held for the running turn's next tool boundary. This
 // journey's first turn has no tool, so it runs as its own turn when that turn ends (the fallback); the words say so.
 // The mid-turn journey itself is scripts/test-native-midturn.cjs.
-const midturn = /^2\.1\.322(?=\s|$)/.test(nativeVersion);
+const midturn = /^2\.1\.32[23](?=\s|$)/.test(nativeVersion);
 const queueLabel = midturn ? '工具结束时送进本轮 ↑' : '等本轮结束后发送 ↑';
 let application, page, client, calls = 0, held, releaseFinal, pausedNative;
 let budgetError, toolMarker;

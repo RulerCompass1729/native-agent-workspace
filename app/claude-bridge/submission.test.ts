@@ -29,7 +29,7 @@ for (const allowed of [false, true]) {
   });
 }
 
-// 2.1.322: a queued app message held for the running root turn's next tool boundary
+// 2.1.322 and 2.1.323: a queued app message held for the running root turn's next tool boundary
 // (measured on the real CLI: appended there, the same turn's next request reads it).
 const midturnSession = '22222222-2222-4222-8222-222222222222';
 async function midturn($, on, options: { version?: string; granted?: boolean; hold?: boolean; allowed?: boolean; deny?: boolean; draft?: string; holdGate?: Promise<unknown>; authorizeGate?: Promise<unknown>; endOnAuthorize?: boolean; midturnText?: string } = {}) {
@@ -84,8 +84,8 @@ async function drain(stream) { for await (const _ of stream) { /* chunks */ } }
 const tool = $ => $.tool.call({ tool: 'Bash', command: 'sleep 1', description: 'wait' });
 const ended = { answer: 'done', durationMs: 5, isAborted: false, reason: 'answer' as const };
 
-test('2.1.322: a queued app message enters the running root turn at its next tool boundary', async ($, on) => {
-  const f = await midturn($, on);
+for (const version of ['2.1.322', '2.1.323']) test(`${version}: a queued app message enters the running root turn at its next tool boundary`, async ($, on) => {
+  const f = await midturn($, on, { version });
   expect(f.bind().nativeMidturnAppend).toBe(true);
   await $.turn.start({ turnId: 'running-turn' });
   f.release(); await f.clock.settle();
@@ -174,9 +174,9 @@ test('2.1.322 idle root: no hold, the ordinary submission', async ($, on) => {
   expect(f.submitted.map(e => e.text)).toEqual(['HELD_TEXT']);
 });
 
-for (const [version, granted] of [['2.1.321', true], ['2.1.322', false]] as const) test(`${version}${granted ? '' : ' without the app grant'}: a running turn keeps the ordinary path`, async ($, on) => {
+for (const [version, granted] of [['2.1.321', true], ['2.1.322', false], ['2.1.323', false]] as const) test(`${version}${granted ? '' : ' without the app grant'}: a running turn keeps the ordinary path`, async ($, on) => {
   const f = await midturn($, on, { version, granted });
-  if (version !== '2.1.322') expect(f.bind().nativeMidturnAppend).toBe(false);
+  if (granted) expect(f.bind().nativeMidturnAppend).toBe(false);
   await $.turn.start({ turnId: 'running-turn' });
   f.release(); await f.clock.settle();
   expect(f.routes()).toEqual(['/authorize', '/result']); expect(f.held()).toEqual([]);

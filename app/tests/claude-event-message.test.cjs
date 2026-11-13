@@ -172,7 +172,7 @@ test('an unconfirmed local stage is not replayed by scheduled metadata/reconnect
   assert.equal(f.state.nativeCalls, 1);
 });
 
-for (const version of ['2.1.321', '2.1.322']) test(`${version} actual hooks require the current root prompt and native approval before staging`, async t => {
+for (const version of ['2.1.321', '2.1.322', '2.1.323']) test(`${version} actual hooks require the current root prompt and native approval before staging`, async t => {
   const f = await fixture(t, version), promptId = randomUUID();
   await f.prompt({ prompt_id: promptId }); await f.start('current-turn');
   assert.equal(JSON.parse((await f.call()).result).status, 'staged');

@@ -667,7 +667,7 @@ class Claude extends EventEmitter {
     // Native `!` commands, turn-start inputs and the turn's own clock (T-99).
     this.nativeTurnRecords = this.nativeBlocks && message.nativeTurnRecords === true && !this.retainedReader;
     this.nativeQueuedPromptLinks = this.nativeBlocks && message.nativeQueuedPromptLinks === true && !this.retainedReader;
-    // 2.1.322 (measured): a queued message can enter the running turn at its next tool boundary.
+    // 2.1.322 and 2.1.323 (measured): a queued message can enter the running turn at its next tool boundary.
     this.nativeMidturnAppend = this.nativeBlocks && message.nativeMidturnAppend === true && !this.retainedReader;
     // The model's running explanation, as the native terminal drew it (T-130).
     this.nativeNarration = this.nativeBlocks && message.nativeNarration === true && !this.retainedReader;

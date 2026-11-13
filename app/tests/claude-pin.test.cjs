@@ -36,6 +36,11 @@ test('a qualified version, another layout or an exact file the person chose is n
   const ok = install(t, ['2.1.321', '2.1.322'], '2.1.322');
   assert.deepEqual(pin.choose({ launcher: ok.launcher, fresh: true, stateFile: ok.stateFile, now: T0 }), { binary: ok.launcher, version: '2.1.322', pin: null });
   assert.equal(fs.existsSync(ok.stateFile), false);
+  // A launcher on qualified 2.1.323 is used as it is: a new session, and a session 2.1.322 last ran and wrote
+  // (it moves forward, never back), with no fallback recorded.
+  const forward = install(t, ['2.1.322', '2.1.323'], '2.1.323');
+  for (const fresh of [true, false]) assert.deepEqual(pin.choose({ launcher: forward.launcher, fresh, lastVersion: '2.1.322', lastWritten: '2.1.322', stateFile: forward.stateFile, now: T0 }), { binary: forward.launcher, version: '2.1.323', pin: null }, String(fresh));
+  assert.equal(fs.existsSync(forward.stateFile), false);
   const exact = install(t, ['2.1.322', '2.1.999']);
   assert.deepEqual(pin.choose({ launcher: exact.file('2.1.999'), fresh: true, stateFile: exact.stateFile, now: T0 }), { binary: exact.file('2.1.999'), version: null, pin: null });
   const other = install(t, ['2.1.322']); fs.mkdirSync(path.join(other.dir, 'Cellar'));

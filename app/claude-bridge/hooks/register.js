@@ -4,8 +4,8 @@ let stopped = false;
 let generation = 0;
 const legacyOnly = false;
 let collecting = null;
-// A queued app message held for the running root turn's next tool boundary (2.1.322,
-// measured): appended there, the turn's next request reads it. Elsewhere a mod's row
+// A queued app message held for the running root turn's next tool boundary (2.1.322 and
+// 2.1.323, measured): appended there, the turn's next request reads it. Elsewhere a mod's row
 // would land before the reply being written, so it waits, or runs as its own turn.
 let heldMidturn = null, midturnRead = null, personRevision = 0;
 let foreignSubmissions = 0;
@@ -174,7 +174,7 @@ async function queuedDisplayLink($, e, binding) {
   let result;
   try {
     const version = (await $.session.version()).version;
-    if (!['2.1.321', '2.1.322'].includes(version)) return null;
+    if (!['2.1.321', '2.1.322', '2.1.323'].includes(version)) return null;
     result = await request($, '/prompt-identity', { promptId: e.prompt_id, epoch: binding.observationEpoch }, binding);
   }
   catch { return null; }
@@ -759,7 +759,7 @@ async function bindRoot($, ownGeneration) {
   // 2.1.316 and 2.1.317 (T-133, measured): our submission made mid-turn waits for the running turn to end, then runs
   // as its own turn under a new prompt id, and the submit resolves at that turn's start; it is never taken into the
   // running turn. So its receipt names its own prompt and turn.
-  const result = await request($, '/root-bind', { nativeBlocks, addressedTool, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version)),
+  const result = await request($, '/root-bind', { nativeBlocks, addressedTool, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(version)),
     nativeInlineInput: ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativePromptInput: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     // On 2.1.316 and 2.1.317 only tool results carry images; prompt images need the input gates, which stay off.
@@ -767,26 +767,26 @@ async function bindRoot($, ownGeneration) {
     // 2.1.316 and 2.1.317: turn.abort is qualified (T-133), and so is capacity recovery, which reads the native
     // transcript and continues the session (T-32): their bundles build the same API-error row (isApiErrorMessage,
     // apiErrorStatus) and StopFailure input (prompt, session, agent, transcript) as 2.1.312, by read-only comparison;
-    // no real 529 was reproduced on those versions. Capacity recovery is independent of abort: 2.1.318/319/321/322
+    // no real 529 was reproduced on those versions. Capacity recovery is independent of abort: 2.1.318/319/321/322/323
     // retain these failure contracts and produce typed 529 rows against a local error fixture (no paid inference).
     nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(version),
-    nativeCapacity: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version),
+    nativeCapacity: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(version),
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302',
-    nativeQueuedPromptLinks: !legacyOnly && ['2.1.321', '2.1.322'].includes(version),
-    // 2.1.322 (measured, loopback model, -p and TUI): a $.session.append made while a root tool
-    // call runs is stored after that tool's result and read by the same turn's next request.
-    nativeMidturnAppend: !legacyOnly && version === '2.1.322',
-    nativeTurnRecords: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version),
-    nativeNarration: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version) }, binding);
+    nativeQueuedPromptLinks: !legacyOnly && ['2.1.321', '2.1.322', '2.1.323'].includes(version),
+    // 2.1.322 and 2.1.323 (measured, loopback model, -p and TUI): a $.session.append made while a root
+    // tool call runs is stored after that tool's result and read by the same turn's next request.
+    nativeMidturnAppend: !legacyOnly && ['2.1.322', '2.1.323'].includes(version),
+    nativeTurnRecords: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(version),
+    nativeNarration: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(version) }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0, gapThrough: 0,
     nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
     nativeMedia: nativeBlocks && nativeMediaVersion(version) && result.nativeMedia === true,
     nativeQueuedPromptLinks: nativeBlocks && !legacyOnly && result.nativeQueuedPromptLinks === true,
-    nativeMidturnAppend: nativeBlocks && !legacyOnly && version === '2.1.322' && result.nativeMidturnAppend === true,
-    nativeTurnRecords: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version) && result.nativeTurnRecords === true,
-    nativeNarration: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(version) && result.nativeNarration === true };
+    nativeMidturnAppend: nativeBlocks && !legacyOnly && ['2.1.322', '2.1.323'].includes(version) && result.nativeMidturnAppend === true,
+    nativeTurnRecords: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(version) && result.nativeTurnRecords === true,
+    nativeNarration: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(version) && result.nativeNarration === true };
   nativeReadImages.clear();
   heartbeat($, rootBinding, ownGeneration);
   // Native MCP connection may finish just after session.start. One early
@@ -1325,20 +1325,24 @@ export function register(on) {
     const nativeVersion = (await $.session.version()).version;
     // 2.1.316 and 2.1.317: the free status-line usage read, session.model() and the
     // PostModelSwitch event are declared as on 2.1.312 (T-133).
-    nativeUsageSupported = ['2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(nativeVersion);
-    nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(nativeVersion);
+    nativeUsageSupported = ['2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(nativeVersion);
+    nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(nativeVersion);
     nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308', '2.1.309', '2.1.310'].includes(nativeVersion)
-      : ['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(nativeVersion);
+      : ['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(nativeVersion);
     // 2.1.321/322: narration, terminal turn records, free usage and context transitions
-    // match 2.1.319 declarations and pass the same guarded fixtures. Media stays off
-    // pending its producer contract; queue, capacity and direct input have separate gates.
+    // match 2.1.319 declarations and pass the same guarded fixtures. 2.1.323: the declarations
+    // this mod uses differ from 2.1.322's in comments and an optional ToolInfo field, and $.tool.list()
+    // (observeAddressedTool) now reads through other plugins' tool.list hooks, while an mcp.connect hook
+    // can hold the workspace server back: either way the tool reads as absent, as the model sees it, so
+    // the workspace tools stay off. It adds Progress, theme grounds and AbovePromptList, none hooked here.
+    // Media stays off pending its producer contract; queue, capacity and direct input have separate gates.
     // 2.1.318 and 2.1.319 (T-171): native blocks too, so workspace messages have their turn identity. Their
     // declarations differ from 2.1.317's only in declarations this mod does not use (model.fork effort, the
     // backdrop/theme API, command results, turn attribution). Their display/usage/transition contracts also
     // match 2.1.317; input, queue, abort and capacity keep their separate qualification gates.
     // 2.1.316 and 2.1.317 (2.1.317's engine API only adds to 2.1.316's, T-133): root binding, native
     // blocks (turn identity for workspace messages), abort, usage, model, media and queue; inline input stays off.
-    contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(nativeVersion);
+    contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(nativeVersion);
     const version = nativeVersion.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));
     stopped = !supported;
@@ -1346,7 +1350,7 @@ export function register(on) {
     operatorTools = [];
     // The explicit versions also allow transitions, but this deferred callback reads
     // mutable transition state; keep bootstrap qualification separate.
-    if (supported && await $.env.get('NAW_HOOK_TOKEN') && !(legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET'))) $.clock.after(0, () => (contextTransitions || (!legacyOnly && ['2.1.318', '2.1.319', '2.1.321', '2.1.322'].includes(nativeVersion))) ? bindRoot($, ownGeneration).catch(() => {}) : listen($, ownGeneration));
+    if (supported && await $.env.get('NAW_HOOK_TOKEN') && !(legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET'))) $.clock.after(0, () => (contextTransitions || (!legacyOnly && ['2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(nativeVersion))) ? bindRoot($, ownGeneration).catch(() => {}) : listen($, ownGeneration));
     return next(e);
   });
   on('session.end', async ($, e, next) => {

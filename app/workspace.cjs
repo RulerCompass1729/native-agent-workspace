@@ -109,7 +109,7 @@ function createSettings(provider, settings) {
   return result;
 }
 
-// A space message read inside a running Claude turn (2.1.322) gets no reply of its own, so the agent is told
+// A space message read inside a running Claude turn (2.1.322, 2.1.323) gets no reply of its own, so the agent is told
 // who sent it from which space and, when an agent sent it, how to answer that agent. The person's choice (b),
 // 11-12. Nothing is claimed about where this turn's output goes: a turn an earlier space message started keeps
 // sharing it. A message that runs as its own turn keeps its plain text.
@@ -867,7 +867,7 @@ class Workspace extends EventEmitter {
     on('history', (items, turns, recovery) => { applyCodexHistory(s, items, runtime, id => this.deliveryStatus(id, 'submitted'), turns, recovery); this.changed(); });
     on('turnHistory', turns => { applyCodexTurnHistory(s, turns, runtime); this.sharedReplies.restoreTurnMetadata(s); this.changed(); });
     on('midturnRead', ({ tag }) => {
-      // The running turn's next model request carried it (bridge-observed, 2.1.322).
+      // The running turn's next model request carried it (bridge-observed, 2.1.322 and 2.1.323).
       let found = false;
       for (const list of this.messageLists(s)) for (const m of list) if (m.id === tag && m.deliveredInto) { m.nativeRead = true; found = true; }
       if (found) this.changed();

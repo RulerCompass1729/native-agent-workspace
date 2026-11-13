@@ -37,7 +37,7 @@ function backendPrograms(dataDir, key = '.') {
 // What an agent program sets for the commands it runs, to describe its own session: who it is, how to reach it,
 // where it keeps its files. None of these is a setting a person makes; those (CLAUDE_CODE_SUBAGENT_MODEL,
 // CLAUDE_CODE_EFFORT_LEVEL, CODEX_HOME and the like) are kept. Sources: Claude Code's documented list and the
-// child-environment list of 2.1.322; the per-thread and per-call names of Codex 0.167.1.
+// child-environment list of 2.1.322 (the same names on 2.1.323); the per-thread and per-call names of Codex 0.167.1.
 const LAUNCHER_SESSION = [
   // Which session it is and how it was entered.
   'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_BRIDGE_SESSION_ID',
