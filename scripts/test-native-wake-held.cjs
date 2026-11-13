@@ -172,7 +172,7 @@ async function cleanup() {
   facts.held = { heldAt: held.heldAt, retryAt: held.retryAt, firstAt, text: (await heldRow()).text };
   assert.ok(Number.isSafeInteger(firstAt) && held.retryAt === firstAt + 60000, 'Offered again when the butler\'s limit opens');
   assert.ok(!seen('butler-docs'), 'Not delivered while held');
-  await until(async () => (await page.locator('#messages').innerText()).includes('已存着，60 秒限制过了自动补送'), 'Docs chat shows it held');
+  await until(async () => (await page.locator('#messages').innerText()).includes('已存着，60 秒限制过了再试一次'), 'Docs chat shows it held');
   assert.ok(!(await page.locator('#messages').innerText()).includes('接收结果未记录'), 'Held is named, not shown as unknown');
   await shot('wake-held-docs-held.png');
   checks.push('Docs\'s report within the minute: its agent read 「held」 at once; at the turn\'s end its backend kept it, to be offered when the butler\'s limit opens; nothing reached the butler meanwhile');

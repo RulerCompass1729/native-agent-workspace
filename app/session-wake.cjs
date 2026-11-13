@@ -120,10 +120,15 @@ function holdFor(w, s, error) {
   const at = s.wakeBudget?.lastAt;
   return Number.isSafeInteger(at) ? { hold: true, retryAt: at + COOLDOWN } : undefined;
 }
-// The sender's side checks the answer too: only a message to the person's designated butler is ever held.
+// The sender's side checks the answer too: only a refusal for the limit, of a message to the person's designated
+// butler, is ever held.
 function holdable(w, intent, result) {
-  if (result?.status !== 'not-sent' || result.hold !== true || !Number.isSafeInteger(result.retryAt)) return false;
-  try { return stewardNow(w)?.sessionId === intent.recipientId; } catch { return false; }
+  if (result?.status !== 'not-sent' || result.hold !== true || !Number.isSafeInteger(result.retryAt) || result.reasonUiMessage?.key !== 'error.wake.recipientCooldown') return false;
+  return stillButler(w, intent);
+}
+// The designation as it is now still names the recipient's native session: the person can end or move the role.
+function stillButler(w, intent) {
+  try { const steward = stewardNow(w); return Boolean(steward) && steward.sessionId === intent.recipientId && steward.nativeId === intent.targetProof?.nativeId; } catch { return false; }
 }
 function refusedNotice(row, result) {
   row.wake.status = 'not-sent';
@@ -215,7 +220,7 @@ async function stageOnce(w, s, r, native, args) {
   w.mirrorWake?.(s, intent, target.session, row);
   try { durable(w); } catch (e) { intent.status = 'unconfirmed'; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
   if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text };
-  if (waits) return { status: 'staged', id: intent.id, readiness: 'held', message: '已保存，尚未投递。收件方 60 秒内刚收过一条自动消息：当前原生回合正常结束时限制还没过，就先存着，限制过了自动补送；不要等待或重试。真人可随时撤销。' };
+  if (waits) return { status: 'staged', id: intent.id, readiness: 'held', message: '已保存，尚未投递。收件方 60 秒内刚收过一条自动消息：当前原生回合正常结束时限制还没过，就先存着，限制过了由 NAW 再试一次；你不要等待或重试。真人可随时撤销。' };
   const readiness = target.readiness?.status === 'ready' ? 'checked' : 'deferred';
   return { status: 'staged', id: intent.id, readiness, message: '已保存，尚未投递。当前原生回合正常结束后只尝试一次；不要等待或重试。真人可随时撤销。' + (readiness === 'deferred' ? ' 收件后台不支持即时就绪检查，尚未确认它能接收。' : '') };
 }
@@ -276,7 +281,7 @@ function hold(w, row, retryAt) {
   intent.status = 'held'; intent.heldAt ??= now;
   // Never sooner than a second from now, never later than the limit itself allows.
   intent.retryAt = Math.min(Math.max(retryAt, now + 1000), now + COOLDOWN + 1000);
-  row.text = `收件方 60 秒内刚收过一条自动消息；这条先存着，限制过了自动补送。\n${intent.body}`;
+  row.text = `收件方 60 秒内刚收过一条自动消息；这条先存着，限制过了再试一次。\n${intent.body}`;
   row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.held', params: { body: intent.body } }, 'notice.', row.text) || undefined;
 }
 // The one timer: at the earliest time a held message may go. One recipient takes one attempt at a time, oldest first.
@@ -284,7 +289,7 @@ function arm(w) {
   clearTimeout(w.wakeHoldTimer); w.wakeHoldTimer = null; w.wakeHoldAt = null;
   if (w.closed) return;
   const rows = heldRows(w), sending = new Set();
-  for (const s of w.sessions.values()) for (const m of s.messages || []) if (m.wake?.status === 'sending') sending.add(m.wake.recipientId);
+  for (const s of w.sessions.values()) for (const m of s.messages || []) if (['sending', 'consumed'].includes(m.wake?.status)) sending.add(m.wake.recipientId);
   const next = Math.min(...rows.filter(({ row }) => !sending.has(row.wake.recipientId)).map(({ row }) => row.wake.retryAt));
   if (!Number.isFinite(next)) return;
   w.wakeHoldAt = next;
@@ -303,7 +308,7 @@ function retryHeld(w) {
   clearTimeout(w.wakeHoldTimer); w.wakeHoldTimer = null; w.wakeHoldAt = null;
   if (w.closed) return;
   const sending = new Set(), due = Object.create(null);
-  for (const s of w.sessions.values()) for (const m of s.messages || []) if (m.wake?.status === 'sending') sending.add(m.wake.recipientId);
+  for (const s of w.sessions.values()) for (const m of s.messages || []) if (['sending', 'consumed'].includes(m.wake?.status)) sending.add(m.wake.recipientId);
   for (const { s, row } of heldRows(w)) {
     const intent = row.wake, first = due[intent.recipientId];
     if (intent.retryAt > Date.now() || sending.has(intent.recipientId) || first && first.row.wake.time <= intent.time) continue;
@@ -314,8 +319,8 @@ function retryHeld(w) {
     for (const { s, row } of Object.values(due)) {
       const r = w.runtimes.get(s.id);
       let issue;
-      // The sender as complete() checks it at the turn's end; the recipient's side checks everything again.
-      try { issue = !r ? { code: 'source-runtime-changed' } : !w.peerRunner ? { code: 'backend-unsupported' } : sourceIssue(w, s, r, row.wake); }
+      // The sender as complete() checks it at the turn's end, and the butler role; the recipient's side checks everything again.
+      try { issue = !r ? { code: 'source-runtime-changed' } : !w.peerRunner ? { code: 'backend-unsupported' } : sourceIssue(w, s, r, row.wake) || (stillButler(w, row.wake) ? null : { code: 'steward-role-ended' }); }
       catch (error) { issue = { code: 'authorization-unreadable', reason: error.message }; }
       if (issue) { dropHeld(w, row, issue); continue; }
       // A save that fails before the attempt sends nothing.
@@ -326,7 +331,7 @@ function retryHeld(w) {
 function cancelParticipant(w, id, reason, reasonUiMessage) {
   // Name the boundary, so a cancelled wake can be traced (T-100: the 11-02 secretary wake).
   const why = typeof reason === 'string' && reason ? `（${reason.slice(0, 120)}）` : '';
-  for (const row of w.sessions.get(id)?.messages || []) if (row.wake?.status === 'staged') {
+  for (const row of w.sessions.get(id)?.messages || []) if (['staged', 'held'].includes(row.wake?.status)) {
     row.wake.status = 'cancelled'; row.text = `原生观察或控制边界已变化${why}；自动消息未投递。\n${row.wake.body}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryReason', params: { why, body: row.wake.body } }, 'notice.', row.text) || undefined;
     const rawReason = typeof reason === 'string' ? reason.slice(0, 120) : '';
     const cause = displayMessage(reasonUiMessage, 'notice.', rawReason);

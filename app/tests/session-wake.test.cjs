@@ -824,8 +824,8 @@ test('a message the butler refuses only for its 60-second limit is held and sent
   assert.equal(second.status, 'staged'); assert.equal(second.readiness, 'held'); assert.match(second.message, /先存着/);
   const row = f.rows().at(-1);
   assert.equal(row.wake.status, 'held');
-  assert.equal(row.text, '收件方 60 秒内刚收过一条自动消息；这条先存着，限制过了自动补送。\nSecond.');
-  assert.equal(locale.displayText('en', row.text, row.uiMessage), 'The recipient received an automatic message less than 60 seconds ago; this one is held and will be sent once the limit allows.\nSecond.');
+  assert.equal(row.text, '收件方 60 秒内刚收过一条自动消息；这条先存着，限制过了再试一次。\nSecond.');
+  assert.equal(locale.displayText('en', row.text, row.uiMessage), 'The recipient received an automatic message less than 60 seconds ago; this one is held and tried once more when the limit allows.\nSecond.');
   assert.equal(row.wake.retryAt, firstAt + 60000); assert.equal(f.source.wakeHoldAt, firstAt + 60000, 'the one timer is set for when the limit opens');
   assert.equal(f.writes.length, 1, 'nothing more before the limit');
   wake.retryHeld(f.source); await f.settle();
@@ -861,10 +861,16 @@ test('the limit itself stays: three in a row still ends it, and other recipients
   assert.equal(g.rows().at(-1).text, '自动消息没有发出；不会自动重发。\n收件方刚收过自动消息：两条至少隔 60 秒，连续最多 3 条。\nSecond.');
   g.advance(60000); wake.retryHeld(g.source); await g.settle();
   assert.equal(g.writes.length, 1); assert.equal(g.source.wakeHoldTimer, null);
-  // The sender's: a recipient backend that asks to hold a message to anyone but the designated butler is not followed.
-  g.source.peerRunner.transferWake = async () => ({ status: 'not-sent', reason: 'Synthetic refusal.', reasonUiMessage: null, hold: true, retryAt: Date.now() + 1000 });
+  // The sender's: a recipient backend that asks to hold a message to anyone but the designated butler is not followed,
+  // even for the limit.
+  g.source.peerRunner.transferWake = async () => ({ status: 'not-sent', reason: 'Synthetic refusal.', reasonUiMessage: { version: 1, key: 'error.wake.recipientCooldown', params: {} }, hold: true, retryAt: Date.now() + 1000 });
   g.advance(60001); await g.turn('third', 'Third.');
   assert.equal(g.rows().at(-1).wake.status, 'not-sent'); assert.equal(g.source.wakeHoldTimer, null);
+  // Nor one to the butler that asks to hold for any reason but its 60-second limit.
+  const h = await toButler(t);
+  h.source.peerRunner.transferWake = async () => ({ status: 'not-sent', reason: 'Synthetic refusal.', reasonUiMessage: null, hold: true, retryAt: Date.now() + 1000 });
+  await h.turn('first', 'First.');
+  assert.equal(h.rows().at(-1).wake.status, 'not-sent'); assert.equal(h.source.wakeHoldTimer, null);
 });
 test('the butler still holds a message its limit refuses while the one it just took is on its way in (option A)', async t => {
   const f = await toButler(t);
@@ -914,7 +920,13 @@ test('held messages to the butler go one at a time, oldest first, and a reopened
   await turnOf(f.source.get(c), rc, 'other', 'From sender two.');
   const one = f.rows().at(-1), two = f.source.get(c).messages.find(m => m.wake);
   assert.deepEqual([one.wake.status, two.wake.status], ['held', 'held']);
-  f.advance(58001); wake.retryHeld(f.source); await f.settle();
+  f.advance(58001);
+  // An earlier attempt the butler took but has not answered yet is still one under way: nothing else goes to it.
+  const taken = { id: 'taken', role: 'system', kind: 'notice', text: '', wake: { id: 'taken', status: 'consumed', recipientId: f.b, body: '' } };
+  f.source.get(c).messages.push(taken); wake.retryHeld(f.source); await f.settle();
+  assert.equal(f.writes.length, 1); assert.equal(f.source.wakeHoldTimer, null, 'no timer while it is under way');
+  f.source.get(c).messages.splice(f.source.get(c).messages.indexOf(taken), 1);
+  wake.retryHeld(f.source); await f.settle();
   assert.equal(f.writes.length, 2); assert.equal(f.writes[1].text.split('\n')[1], 'From sender one.', 'oldest first');
   assert.equal(two.wake.status, 'held', 'the other waits for the next minute');
   assert.ok(two.wake.retryAt >= f.now() + 60000);
@@ -926,4 +938,23 @@ test('held messages to the butler go one at a time, oldest first, and a reopened
   assert.equal(reopened.wakeHoldTimer ?? null, null);
   f.advance(60000); wake.retryHeld(f.source); await f.settle();
   assert.equal(f.writes.length, 3, 'the live backend still sends its own'); assert.equal(two.wake.status, 'submitted');
+});
+test('a held message is not sent once the person ends or moves the butler role, or its sender becomes unavailable (option A, review)', async t => {
+  const wake = require('../session-wake.cjs');
+  const designate = (f, selected) => fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected }), { mode: 0o600 });
+  const outcomes = {
+    'role ended': [f => designate(f, null), '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nSecond.', 'steward-role-ended'],
+    'role moved': [f => designate(f, { sessionId: f.b, nativeId: 'native-other' }), '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nSecond.', 'steward-role-ended'],
+    'sender unavailable': [f => f.ra.emit('state', 'error'), '原生观察或控制边界已变化（原生会话不可用）；自动消息未投递。\nSecond.', undefined],
+  };
+  for (const [act, [change, text, code]] of Object.entries(outcomes)) {
+    const f = await toButler(t);
+    await f.turn('first', 'First.'); f.reply(); f.advance(10000); await f.turn('second', 'Second.');
+    const row = f.rows().at(-1); assert.equal(row.wake.status, 'held', act);
+    change(f);
+    f.advance(60000); wake.retryHeld(f.source); await f.settle();
+    assert.equal(f.writes.length, 1, act);
+    assert.deepEqual([row.wake.status, row.text, row.wake.cancellation?.code], ['cancelled', text, code], act);
+    assert.equal(f.source.wakeHoldTimer, null, act);
+  }
 });
