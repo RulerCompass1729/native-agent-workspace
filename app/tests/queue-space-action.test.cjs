@@ -29,6 +29,9 @@ function spaceAction(extra = {}) {
     queueCancel(...args) {
       calls.push(['queueCancel', ...args]);
     },
+    queueWithdraw(...args) {
+      calls.push(['queueWithdraw', ...args]);
+    },
     queueResolve(...args) {
       calls.push(['queueResolve', ...args]);
     },
@@ -43,7 +46,7 @@ function spaceAction(extra = {}) {
     broadcastRoom: async () => {},
     queueDispatcher: { schedule() {} },
     backgroundOperation,
-    queueSecretary: { creator() { throw uiError('error.queue.secretaryOnly'); } },
+    queueSecretary: { creator() { throw uiError('error.queue.secretaryOnly'); }, author() { throw uiError('error.queue.withdrawOwnOnly'); } },
     sessionLabels: { labels: new Map() },
     stewardCaller: async () => null,
     ...extra,
@@ -52,10 +55,11 @@ function spaceAction(extra = {}) {
   return { handler, calls };
 }
 
-test('an ordinary agent cannot add; even the secretary cannot cancel or resolve queue items', async () => {
+test('an ordinary agent cannot add or resolve, and its cancel is only ever a withdrawal of its own item', async () => {
   const { handler, calls } = spaceAction();
+  const refusal = { queueAdd: 'error.queue.secretaryOnly', queueCancel: 'error.queue.withdrawOwnOnly', queueResolve: 'error.queue.personOnly' };
   for (const action of ['queueAdd', 'queueCancel', 'queueResolve']) {
-    await assert.rejects(handler({ background: true, client: { call: async () => ({ sessions: [] }) } }, 'shared', action, ['x', null]), error => error.uiMessage?.key === (action === 'queueAdd' ? 'error.queue.secretaryOnly' : 'error.queue.personOnly'));
+    await assert.rejects(handler({ background: true, client: { call: async () => ({ sessions: [] }) } }, 'shared', action, ['x', null]), error => error.uiMessage?.key === refusal[action], action);
   }
   assert.deepEqual(calls, []);
 });
@@ -109,7 +113,7 @@ test('actual background entry accepts only the selected native secretary, stores
   const event = f.room.value.events.at(-1);
   assert.equal(event.uiMessage.key, 'notice.queue.addedBySecretary');
   assert.equal(event.uiMessage.params.sessionId, f.sender.id);
-  for (const action of ['queueCancel', 'queueResolve']) await assert.rejects(f.invoke('spaceAction', ['shared', action, [id]]), error => error.uiMessage?.key === 'error.queue.personOnly');
+  await assert.rejects(f.invoke('spaceAction', ['shared', 'queueResolve', [id]]), error => error.uiMessage?.key === 'error.queue.personOnly');
   await f.handlers.get('spaceAction')({}, 'shared', 'queueCancel', [id]);
   assert.equal(f.room.queueItems()[0].status, 'cancelled');
   await assert.rejects(f.invoke('spaceAction', ['shared', 'queueAdd', ['other', null]], { ...f.sender, id: 'other' }), error => error.uiMessage?.key === 'error.queue.secretaryOnly');
@@ -312,5 +316,68 @@ test('a background caller\'s refused assignee comes back in its receipt with the
   const accepted = await controller.call(binding, { action: 'invoke', method: 'spaceAction', arguments: ['shared', 'queueAdd', ['Work for the member', MEMBER]], operation_id: 'member' });
   assert.equal(accepted.state, 'complete');
   assert.deepEqual(f.room.queueItems().map(item => item.assignee), [MEMBER]);
+  await controller.close();
+});
+
+// The person, 11-12 21:1x, 「可以」 to: 秘书/放入者可撤回自己放进队列、尚未派出的条目；别人放的、已派出的、「已处理」照旧只有人能点。
+test('a session takes back an item it queued itself while it is still queued, and nothing else', async t => {
+  const f = fixture(t);
+  const other = { id: 'other', nativeId: 'native-other', name: 'Other', provider: 'claude', turnId: 'turn', callId: 'call', operationId: 'op' };
+  const sessions = [f.record, { id: 'other', nativeId: 'native-other', name: 'Other', state: 'idle' }];
+  f.c.client.call = async () => ({ sessions });
+  f.role.set({ sessionId: f.sender.id, nativeId: f.sender.nativeId });
+  const add = text => f.invoke('spaceAction', ['shared', 'queueAdd', [text, null]]);
+  const withdraw = (id, actor = f.sender) => f.invoke('spaceAction', ['shared', 'queueCancel', [id]], actor);
+  const own = await add('own, still queued'), sent = await add('own, already sent'), later = await add('own, after the role ended');
+  const mismatch = await add('own, called from another native session');
+  const persons = await f.handlers.get('spaceAction')({}, 'shared', 'queueAdd', ['the person\'s', null]);
+  const status = id => f.room.queueFind('shared', id).status;
+  const refused = key => error => error.uiMessage?.key === key;
+  // Someone else's: another session's, and the person's.
+  await assert.rejects(withdraw(own, other), refused('error.queue.withdrawOwnOnly'));
+  await assert.rejects(withdraw(persons), refused('error.queue.withdrawOwnOnly'));
+  // Its own, still queued: taken back, said to be its own doing, in the form older builds read.
+  await withdraw(own);
+  assert.equal(status(own), 'cancelled');
+  const event = f.room.value.events.at(-1).uiMessage;
+  assert.deepEqual([event.key, event.params], ['notice.queue.withdrawn', { text: 'own, still queued', name: 'Secretary', sessionId: 'secretary' }]);
+  const item = f.room.queueFind('shared', own);
+  assert.equal(Object.hasOwn(item, 'finishedBy'), false);
+  assert.deepEqual(item.creator, { kind: 'secretary', name: 'Secretary', sessionId: 'secretary' });
+  assert.doesNotThrow(() => require('../queue-dispatch.cjs').validateQueue(f.room.queueItems()));
+  await assert.rejects(withdraw(own), refused('error.queue.notCancellable'));
+  // Its own, already sent: the person's to handle.
+  f.room.queueMarkSent('shared', sent, 'other', 'Other', Date.now());
+  await assert.rejects(withdraw(sent), refused('error.queue.notCancellable'));
+  assert.equal(status(sent), 'sent');
+  // Marking handled stays the person's, also for its own item.
+  await assert.rejects(f.invoke('spaceAction', ['shared', 'queueResolve', [later]]), refused('error.queue.personOnly'));
+  // A call from a native session other than the one the person's record names now is refused, and so is the session once
+  // ended. (The item keeps only the session id: if the record itself moves to a new native session, that one may withdraw.)
+  await assert.rejects(withdraw(mismatch, { ...f.sender, nativeId: 'native-replacement' }), refused('error.queue.withdrawOwnOnly'));
+  f.record.state = 'ended';
+  await assert.rejects(withdraw(mismatch), refused('error.queue.withdrawOwnOnly'));
+  f.record.state = 'idle';
+  // No longer the secretary, it still takes back what it added.
+  f.role.set(null);
+  await withdraw(later);
+  assert.equal(status(later), 'cancelled');
+  assert.deepEqual([own, sent, later, mismatch, persons].map(status), ['cancelled', 'sent', 'cancelled', 'queued', 'queued']);
+});
+test('through the real background controller, a withdrawal needs no confirmation and a refused one changes nothing', async t => {
+  const f = fixture(t);
+  f.role.set({ sessionId: f.sender.id, nativeId: f.sender.nativeId });
+  const own = await f.invoke('spaceAction', ['shared', 'queueAdd', ['own', null]]);
+  const persons = await f.handlers.get('spaceAction')({}, 'shared', 'queueAdd', ['the person\'s', null]);
+  const controller = new BackgroundControl({ dataDir: f.dir, handlers: f.handlers, context: () => f.c });
+  const binding = { sender: { id: f.sender.id, nativeId: f.sender.nativeId, provider: 'codex', name: 'Secretary' }, identity: { callId: 'native-call', turnId: 'native-turn' }, valid: () => true };
+  const call = (id, operation) => controller.call(binding, { action: 'invoke', method: 'spaceAction', arguments: ['shared', 'queueCancel', [id]], operation_id: operation });
+  const refused = await call(persons, 'withdraw-persons');
+  assert.equal(refused.state, 'unconfirmed');
+  assert.match(refused.error, /只能撤回自己放进队列/);
+  const taken = await call(own, 'withdraw-own');
+  assert.equal(taken.state, 'complete');
+  assert.equal(taken.confirmation, undefined);
+  assert.deepEqual(f.room.queueItems().map(item => item.status), ['cancelled', 'queued']);
   await controller.close();
 });

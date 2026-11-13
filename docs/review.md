@@ -13427,3 +13427,29 @@ From the manager's 11-12 request: the default text in the 「设为大管家」 
 **Left open.**
 - A butler already designated keeps the statement it was sent; the new default reaches it when the statement is sent again or at a handoff. A statement the person edited is not touched.
 - Whether the butler may designate a secretary or an integrator itself is for the person to decide; the text says only the person can, which is what the code does.
+
+## A session takes back what it queued itself — 2026-11-12
+
+From the person's approval on 11-12 (board, Claude terminal 21:1x), to a proposal that said it relaxes a gate only the person may open: 「秘书/放入者可撤回自己放进队列、尚未派出的条目；别人放的、已派出的、「已处理」照旧只有人能点。」 The person answered 「可以」.
+
+**What changed.**
+- `register('spaceAction')` in `app/main.cjs`: an agent's queueCancel, when the agent is not the butler, goes to `roomState.queueWithdraw` with the caller's own session. It never reaches the person's `queueCancel`. queueResolve from an agent other than the butler is still refused with `error.queue.personOnly`.
+- `app/queue-secretary.cjs`: `author(actor, records, labels)` is the caller as the person's record has it now (the same native session; not archived, ended, in the background or still moving in), whether or not it is still the secretary. `creator()` uses the same check (`usableRecord`).
+- `app/room-state.cjs` `queueWithdraw`, in the same step as the change: the item must have been added by that session (`creator.kind` 'secretary' and the same `sessionId`), else `error.queue.withdrawOwnOnly`; and it must still be queued, else `error.queue.notCancellable`. The item becomes `cancelled` with no new field, so older builds still read it (their `validateItem` accepts `finishedBy` only as the butler's). The record line `notice.queue.withdrawn` names who took it back: 「队列撤回：{text} · {name}（{sessionId}）撤回了自己放进来的这一件」 / "Withdrawn from queue: {text} · taken back by {name} ({sessionId}), who added it".
+- `error.queue.personOnly` no longer says only the person cancels: 「只有你能把任务标为已处理或指定秘书。」 It is thrown only for queueResolve and for designating the secretary. The agent catalog (`app/background-control.cjs`) says what queueCancel does for a session, and that the butler may add, cancel and resolve, which the code already allowed. The steward-duty branch (078a42e) corrects the same line for the butler; the two conflict there, and this line contains both.
+- Dispatch is unchanged: the dispatcher records an item as sent before sending it, and `queueMarkSent` requires it to be still queued, so a withdrawal and a dispatch cannot both happen.
+
+**Tests and checks.**
+- `app/tests/queue-space-action.test.cjs`, on the actual handler with the real secretary record, room state and background controller. Its own queued item is withdrawn, with the record line and no new field. Another session's item and the person's item are refused, and so is its own item once sent. Resolve is refused. A call from another native session than the record names, and from the session once ended, is refused. A former secretary withdraws its own item. Through the controller: no confirmation; a refusal is `unconfirmed` and changes nothing.
+- `app/tests/queue-attribution.test.cjs`: the room-state rule (missing, empty or other author; the person's and a legacy item) and both languages of the record line.
+- Red on main a3107237: 4 of 21 fail. Breakages: 12, of which 11 are caught. The one left, dropping the `creator.kind` check, is equivalent today: `validateCreator` forces a person creator's session id to null.
+- Full unit suite: 6553 passed, 0 failed.
+- Real windows: hidden, loopback, synthetic native, no model. `scripts/test-background-control.cjs` gains the journey through the real MCP path. The secretary adds an item and the person adds one. The secretary's cancel of the person's item is refused, and its own is taken back without confirmation. The record line is checked on screen in Chinese and English, with screenshots. `test-steward-record` (the butler's cancel) and the `test-queue-dispatch` main scenario pass.
+
+**Independent review.** PASS_WITH_NOTES (fresh read-only session, 18 turns, USD 1.00). No blocking finding. Taken from its notes: a test comment now says what the native-session check covers. Kept, as noted below: a former butler's items, the session-id-only creator, and one refusal text.
+
+**Left open.**
+- The queue row of a withdrawn item reads plain 已取消 / Cancelled; the record line says who did it. A row label would need an item field: `finishedBy` is refused by older builds, so it would have to be a new field they ignore.
+- The item keeps only the session id. If the person's record of that session moves to a new native session, the new one may withdraw the items.
+- A former butler withdraws items it added as the butler, as the one who added them. This is not tested.
+- A session that is archived, ended or in the background gets the same refusal text as for someone else's item.
