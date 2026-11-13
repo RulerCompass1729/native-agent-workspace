@@ -139,18 +139,27 @@ function operator(request) {
     .then(result => ({ done: true, result }), error => ({ done: false, error: String(error?.message || error).slice(0, 300) }));
 }
 
-// One hook event for the member's current prompt; '$sent' stands for the text NAW sent.
-function hook(request) {
+// One hook event for the member's current prompt; '$sent' stands for the text NAW sent. With '$forward' the event is
+// the payload as Claude writes it, and only what NAW's real hook forwarder passes on reaches the adapter.
+async function hook(request) {
   const runtime = runtimes.get(request.session);
   const prompt = prompts.get(request.session);
   if (!claudeAdapter || !runtime || !prompt) {
     return false;
   }
-  const event = JSON.parse(request.reply);
-  if (event.prompt === '$sent') {
-    event.prompt = prompt.text;
+  const { $forward, ...written } = JSON.parse(request.reply);
+  if (written.prompt === '$sent') {
+    written.prompt = prompt.text;
   }
-  runtime.hook({ session_id: runtime.record.nativeId, prompt_id: prompt.promptId, ...event });
+  let event = { session_id: runtime.record.nativeId, prompt_id: prompt.promptId, ...written };
+  if ($forward) {
+    const { received } = await require('./claude-hook-forward.cjs').runForwarder(event, { appRoot });
+    if (received.length !== 1) {
+      return false;
+    }
+    event = JSON.parse(received[0]);
+  }
+  runtime.hook(event);
   if (event.hook_event_name === 'Stop') {
     turns.delete(request.session);
   }
@@ -160,7 +169,9 @@ function hook(request) {
 process.on('message', request => {
   if (request.method === 'fail-next-send') failNext.add(request.session);
   if (request.method === 'hook') {
-    process.send({ requestId: request.id, done: hook(request), sends: sends.map(({ id, text }) => ({ id, text })) });
+    hook(request)
+      .then(done => process.send({ requestId: request.id, done, sends: sends.map(({ id, text }) => ({ id, text })) }))
+      .catch(error => process.send({ requestId: request.id, done: false, error: error.message, sends: sends.map(({ id, text }) => ({ id, text })) }));
     return;
   }
   if (['operator-ready', 'open'].includes(request.method)) {
