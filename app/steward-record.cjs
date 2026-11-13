@@ -11,6 +11,7 @@
 // rules keep it, or nowhere.
 const fs = require('node:fs');
 const { randomUUID } = require('node:crypto');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const history = require('./record-history.cjs');
 const { validate } = require('./background-control.cjs');
 const { uiError } = require('./ui-errors.cjs');
@@ -71,7 +72,7 @@ class StewardRecord {
   constructor(dataDir, { steward, selected = () => null, now = Date.now, failed = () => {} }) {
     this.now = now; this.steward = steward; this.selected = selected; this.onFailed = failed;
     this.log = new history.BlockLog(dataDir, RECORD, check);
-    this.lines = []; this.keptRoles = []; this.failed = false;
+    this.lines = []; this.keptRoles = []; this.failed = false; this.calls = new AsyncLocalStorage();
     try { this.lines = this.log.load(); this.keptRoles = this.log.kept().filter(item => item.kind === 'role'); }
     catch (error) { this.failed = true; this.loadError = error; }
   }
@@ -121,10 +122,16 @@ class StewardRecord {
         action: args.action, method: args.action === 'invoke' ? args.method : null, arguments: argumentsOf(args), operationId: args.operation_id ?? null });
     } catch { throw uiError('error.steward.recordUnavailable'); }
     let result;
-    try { result = await run(); }
+    try { result = await this.calls.run({ id: sender.id, nativeId: sender.nativeId }, run); }
     catch (error) { this.finish(id, { state: 'unconfirmed', reason: null, error: String(error?.message ?? '').slice(0, ERROR_MAX) || null, duplicate: false, operationId: null }); throw error; }
     this.finish(id, outcomeOf(result));
     return result;
+  }
+  // Whether the call now running is one this record wrote as a step of `actor` (main.cjs lets only such a call read
+  // a conversation without the person confirming it: a designation made while a call is under way does not count).
+  recording(actor) {
+    const call = this.calls.getStore();
+    return Boolean(call && actor && call.id === actor.id && call.nativeId === actor.nativeId);
   }
   // An outcome that cannot be written leaves its step without one; the view says so, and the record stops taking new
   // steps (the next call is refused).
@@ -202,7 +209,8 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
     // from what NAW actually ran rather than what was asked, and how far.
     if (entry.action === 'snapshot' || ['initial', 'previewImage'].includes(entry.method)) {
       let read = null; try { read = entry.operationId ? readOf(entry) : null; } catch { read = null; }
-      if (read && typeof read.sessionId === 'string' && read.sessionId) {
+      if (read?.gone === true) { out.read = { gone: true, image: entry.method === 'previewImage' }; delete out.target; }
+      else if (read && typeof read.sessionId === 'string' && read.sessionId) {
         out.read = { target: nameOf(read.sessionId) || (typeof read.name === 'string' ? read.name : null) || read.sessionId.slice(0, 8), image: entry.method === 'previewImage',
           messages: Number.isSafeInteger(read.messages) ? read.messages : null, through: Number.isSafeInteger(read.through) ? read.through : null, unasked: read.unasked === true };
         delete out.target;

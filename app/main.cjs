@@ -586,7 +586,7 @@ function isStewardActor(actor) {
 // each read is first a step there, with whom it read and how far (stewardRecord view). It covers the conversation and
 // its images (`initial`, `previewImage` of a session); terminal reads and every other maintenance action still ask.
 function stewardReadsUnasked(actor, snapshot) {
-  if (!isStewardActor(actor) || !stewardRecord || stewardRecord.failed) return false;
+  if (!isStewardActor(actor) || !stewardRecord || stewardRecord.failed || !stewardRecord.recording(actor)) return false;
   let record = null; try { record = roomState.apply(snapshot).sessions.find(s => s.id === actor.id && s.nativeId === actor.nativeId); } catch { return false; }
   if (!record || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) return false;
   try { return roomIds(record).length === 0; } catch { return false; }
@@ -1810,7 +1810,9 @@ async function boot() {
     const readOf = step => {
       const actor = { provider: step.session.provider, id: step.session.id, nativeId: step.session.nativeId };
       let r = null; try { r = backgroundControl?.receipt(actor, step.operationId) || null; } catch { r = null; }
-      if (!r || !['initial', 'previewImage'].includes(r.command?.method)) return null;
+      // The person deleted that record: what it ran is no longer known, and the step must not name a session it may not have read.
+      if (!r) { try { return backgroundControl?.deletedReply(actor, step.operationId) ? { gone: true } : null; } catch { return null; } }
+      if (!['initial', 'previewImage'].includes(r.command?.method)) return null;
       const sessionId = r.readTarget?.sessionId || backgroundOperation.conversationTarget(r.command.method, r.command.arguments, actor);
       if (typeof sessionId !== 'string' || sessionId === actor.id) return null;
       return { sessionId, name: r.readTarget?.name ?? null, messages: r.readTarget?.messages ?? null, through: r.readTarget?.through ?? null, unasked: r.unasked === true };

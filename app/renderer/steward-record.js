@@ -22,6 +22,7 @@
       if (entry.kind === 'role') return [`stewardRecord.role.${ROLES.includes(entry.event) ? entry.event : 'started'}`, { name: dash(entry.name) }];
       // A read of another session's conversation: whom, and how far when NAW knows it.
       if (entry.read) {
+        if (entry.read.gone) return [entry.read.image ? 'stewardRecord.step.readImageGone' : 'stewardRecord.step.readGone', {}];
         if (entry.read.image) return ['stewardRecord.step.readImage', { target: dash(entry.read.target) }];
         if (entry.read.messages !== null && entry.read.messages !== undefined && entry.read.through) return ['stewardRecord.step.readThrough', { target: dash(entry.read.target), count: entry.read.messages, through: when(entry.read.through, now) }];
         return ['stewardRecord.step.read', { target: dash(entry.read.target) }];

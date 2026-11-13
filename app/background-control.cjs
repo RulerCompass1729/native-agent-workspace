@@ -619,7 +619,8 @@ class BackgroundControl {
               if (error instanceof PreconditionRefused && !row.handlerStarted) preconditionError = error;
               throw error;
             }
-            const unasked = action === 'readConversation' && this.unasked(actor, args, action, context) === true;
+            // A read the person already answered keeps that answer: it is theirs, released as an approved read.
+            const unasked = !approved && action === 'readConversation' && this.unasked(actor, args, action, context) === true;
             if (!unasked) {
               const answer = await dialog(context, 'message', options);
               if (answer.response !== 1) return { cancelled: true };

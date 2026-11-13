@@ -157,6 +157,8 @@ test('every sentence the dialog can show exists in Chinese and English', () => {
     { kind: 'snapshot', state: 'complete', read: { target: 'B', messages: 3, through: 1, image: false } },
     { kind: 'snapshot', state: 'not-executed', read: { target: 'B', messages: null, through: null, image: false } },
     { kind: 'invoke', method: 'previewImage', state: 'complete', read: { target: 'B', messages: null, through: null, image: true } },
+    { kind: 'invoke', method: 'initial', state: 'complete', read: { gone: true, image: false } },
+    { kind: 'invoke', method: 'previewImage', state: 'complete', read: { gone: true, image: true } },
     ...['staged', 'sending', 'consumed', 'submitted', 'unconfirmed', 'not-sent', 'cancelled', 'odd'].map(state => ({ kind: 'message', target: 'B', text: 't', state })),
     { kind: 'invoke', method: 'spaceAction', spaceAction: 'queueAdd', text: 't', space: 'S', target: null, state: 'complete' },
     { kind: 'invoke', method: 'spaceAction', spaceAction: 'queueAdd', text: 't', space: 'S', target: 'B', state: 'complete' },
@@ -284,4 +286,18 @@ test('a read step says whom it read and how far, from what NAW ran', async t => 
   assert.deepEqual(dialog.what(pinned, now), ['stewardRecord.step.read', { target: 'Gone one' }]);
   assert.deepEqual(dialog.what(image, now), ['stewardRecord.step.readImage', { target: 'Worker' }]);
   assert.deepEqual(dialog.what(own, now), ['stewardRecord.step.snapshot', {}]);
+  // The person deleted that operation's record: the step says a conversation was read, never a name it may not have read.
+  const gone = view(f.record, { sessions: [{ id: 'asked-for', name: 'Asked for' }] }, { current: steward, readOf: step => step.operationId === 'op-pinned' || step.operationId === 'op-image' ? { gone: true } : null });
+  const goneImage = gone.entries.find(entry => entry.method === 'previewImage'), gonePinned = gone.entries.find(entry => entry.method === 'initial');
+  assert.deepEqual(gonePinned.read, { gone: true, image: false }); assert.equal(gonePinned.target, undefined);
+  assert.deepEqual(dialog.what(gonePinned, now), ['stewardRecord.step.readGone', {}]);
+  assert.deepEqual(dialog.what(goneImage, now), ['stewardRecord.step.readImageGone', {}]);
+});
+test('the record knows which running call it wrote as a step, and of whom', async t => {
+  const f = fixture(t), other = { id: 'other', nativeId: 'native-other' };
+  const seen = [];
+  await f.record.around(sender(), { action: 'snapshot' }, async () => { await new Promise(resolve => setImmediate(resolve)); seen.push(f.record.recording(sender()), f.record.recording(other)); return { state: 'complete' }; });
+  await f.record.around(sender('claude', other), { action: 'snapshot' }, async () => { seen.push(f.record.recording(other)); return { state: 'complete' }; });
+  assert.deepEqual(seen, [true, false, false], 'only the butler\'s own recorded call; a call that was not written is not one');
+  assert.equal(f.record.recording(sender()), false, 'nothing once the call is over');
 });
