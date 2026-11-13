@@ -13017,3 +13017,44 @@ From the mid-turn task (`.local/handoff-20261112/claude2-midturn.md`): 「一条
 - A handler that never finishes keeps idle windows open until the app closes.
 
 **Independent review.** A fresh read-only session (`review-release-1-result.md`): PASS_WITH_NOTES, no blocking finding. It confirmed that nothing is sent twice, by any path (same operation id, deferred settle, receipt refresh, restart, a second queue to the same busy member), and that the actor match is the one the final receipt uses. One note was a code inconsistency, now fixed and tested: a delivery that could not be read at the end settled `complete`, where the ordinary path says `unconfirmed` (R8). The others are worded above: what close does, a later refusal answered `awaiting-native` first, `run`, self-revocation, the 24-hour archive and a handler that never ends. Its second read (`review-release-2-result.md`, PASS_WITH_NOTES) confirmed that fix and the wording; the test count is corrected. The review of this change ends here.
+
+## A waiting queue item holds its member only while it asks the person to decide — 2026-11-12
+
+From the steward's task (11-12): 「waiting 项不再无限期挡住收件方，同时不把等人回答的问题埋掉」, and find out first why one queued item never went out. Measured in the person's own data (ids, states and times only): in one space, two members each had an item waiting since 11-11 with "the person stepped in", and the four items queued for them behind those never went out, because nobody pressed 已处理.
+
+**What held them.** Three places counted every waiting item as keeping its member busy until the person handled it: the planner, the integration handoff's view of busy sessions, and the steward's vacancy projection. A waiting item is one of three kinds:
+- a decision: the reply begins 「需要你决定：」;
+- a turn the person stepped into (`person-intervened`);
+- a turn that ended with nothing to say (`no-reply`).
+
+Only a decision asks the person something. Only a decision reaches the person as a notification and in the question bell; the other two only write a line in the space record.
+
+**Now (`app/queue-dispatch.cjs` only).** `holdsMember(item)` is true for an item still sent, or for a waiting item that is a decision. A decision is any waiting item whose reason is neither `person-intervened` nor `no-reply`. Those two are named, not told apart by having a reason: a decision is settled without one but can keep an earlier refusal's, which `queueRequeue` stores on the item and nothing clears. The planner's first step, `engagedSessions` and `queueVacancies` all use it.
+- A `person-intervened` or `no-reply` item stays open in the queue list, with its 已处理 button, for the person to look at. Its member takes the next item from the next pass. In the pass where the item settles, the member still gets nothing, as before.
+- If the person used that session through NAW in the last two minutes, the member still waits for that quiet period. Being judged `person-intervened` does not start it. After it, the member is treated like one that finished an item: it is sent the next one 8 seconds after it goes idle.
+- A decision still holds its member, in every space, until the person handles it. Its notification, bell entry and steward record are unchanged. So the member's last turn is still the question when the person comes to it.
+- Session rotation uses the same set of busy members. So the two other kinds no longer keep their member from being rotated either. After a rotation, the item still names the old session and can still be marked handled.
+- In the vacancy projection, a space whose only open items are of those two kinds has nothing left to send. The steward is told its idle members are free.
+- Unchanged: what room-state notifies, the UI wording, how `person-intervened` is detected, and `queueAdd`.
+
+**Why the other item never went out.** Its assignee is an id that no session has. Its first eight characters match a real member and the rest do not. `queueAdd` checks only an id's format, so the item was accepted and stays queued for nobody. The list shows it as 「交给的人不在空间」. The planner was re-run on the stored state, with every runtime condition set to pass. As stored, the item is not sent. With the real member's id, it is. This change does not touch that.
+
+**Also found, not changed.** Both `person-intervened` items in that data were misjudged. Every row counted as the person after the dispatch was a Claude Code background-task notification: origin `native`, no `inputSource`. The planner counts any native user row as the person. Those notifications were also not recognised as machine input, so NAW moved the session's control revision as if the person had typed. This is follow-up 1.
+
+**Checks.**
+- `app/tests/queue-dispatch.test.cjs`:
+  - on the next pass, a `person-intervened` or `no-reply` item lets its member take its own next item, and another member takes unassigned work;
+  - a decision holds only its member, and holds it in another space too;
+  - a decision on an item that was refused once before it went out still holds its member. The item is built through RoomState's own methods: added, sent, refused, sent again, settled as a decision;
+  - a `person-intervened` item does not stop a rotation; a decision does (existing check).
+- `app/tests/butler-ingress.test.cjs`: a space whose only open item is of those two kinds, here or in another space, is vacant. A waiting item without a reason still is not (existing case), nor one that kept an earlier refusal.
+- `app/tests/integrator-dispatch.test.cjs`: the integration view counts a decision as busy, with or without an earlier refusal, and the other two kinds as free.
+- Breakages M1–M11, each caught by its test files (`mutate-2.log`), on scratch copies with an unmutated baseline that passes. M9 is the first version of this change (any reason frees the member); M10 and M11 drop one named kind each.
+- Real window, real app, synthetic native (`scripts/test-queue-dispatch.cjs`, new step 4b): a member's turn comes back empty. The item waits as `no-reply`, still listed with its 已处理 button, and the same member is sent its next item. The decision step before it still holds its member until 已处理. The decision-notice and monitor scenarios also run (decision notification and bell, the 「还有 1 项等你处理」 record).
+
+**Independent review.** The first review blocked the first version on the stale refusal reason above. The named kinds and the test for it are the fix.
+
+**Left open.**
+- No real working Claude with a real person stepping in was run. The real-window step uses an empty reply; `person-intervened` takes the same rule and is covered by the unit tests.
+- For the two other kinds, the space line still reads 「{name} 需要你决定：{task}」 and the queue row 「等你决定 · {name}」, although they ask nothing and the member is already working on its next item (`left-for-person.png`).
+- Items that were waiting before this change free their members as soon as it is installed. Older items queued behind them then go out in order, even if their work was since done another way. The person can cancel those first.

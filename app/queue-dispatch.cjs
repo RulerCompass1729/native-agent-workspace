@@ -21,6 +21,17 @@ const ITEM_REPLY_LIMIT = 200;
 const QUEUE_LIMIT = 300;
 const ITEM_STATUSES = ['queued', 'sent', 'done', 'waiting', 'cancelled', 'failed'];
 const OPEN_STATUSES = ['queued', 'sent', 'waiting'];
+// The waiting items that ask the person nothing: the person stepped in, or no reply came back. Such an
+// item stays open in the list for the person to look at, and its member takes the next item (11-12:
+// they held their members until the person pressed a button).
+const UNHELD_WAITING = ['person-intervened', 'no-reply'];
+// Whether an item keeps its member from more queue work: one still running, or a waiting one that
+// asks the person to decide, until the person handles it. A decision is settled without a reason but
+// can still carry an earlier refusal's (queueRequeue keeps it on the item), so the two kinds above are
+// named rather than told apart by having a reason.
+function holdsMember(item) {
+  return Boolean(item) && (item.status === 'sent' || item.status === 'waiting' && !UNHELD_WAITING.includes(item.reason));
+}
 // A member must stay idle this long before NAW sends, so a turn-end report can settle.
 const IDLE_SETTLE_MS = 8000;
 // The person's own activity in a session keeps NAW out of it for this long.
@@ -709,8 +720,8 @@ function integrationChanged(result) {
 
 // The sessions NAW itself is doing something with, for the integration handoff: one in a session
 // rotation that is not at rest (and a successor it has not confirmed), one in a running space
-// exchange, and one a queue item was sent to whose answer is still awaited. The same rule as the
-// planner's and the vacancy projection's own, which are left as they are.
+// exchange, and one a queue item holds (holdsMember). The same rule as the planner's and the vacancy
+// projection's own.
 function engagedSessions(rotations, rooms) {
   const busy = new Set();
   for (const [id, rotation] of Object.entries(rotations || {})) {
@@ -722,7 +733,7 @@ function engagedSessions(rotations, rooms) {
   }
   for (const room of Array.isArray(rooms) ? rooms : []) {
     if (room?.run?.status === 'running' && Array.isArray(room.run.ids)) for (const id of room.run.ids) busy.add(id);
-    for (const item of room?.queue || []) if (['sent', 'waiting'].includes(item.status) && item.sentTo) busy.add(item.sentTo);
+    for (const item of room?.queue || []) if (item.sentTo && holdsMember(item)) busy.add(item.sentTo);
   }
   return busy;
 }
@@ -744,10 +755,11 @@ function queueVacancies(input) {
   }
   for (const room of input.rooms || []) {
     if (room.run?.status === 'running' && Array.isArray(room.run.ids)) for (const id of room.run.ids) busy.add(id);
-    for (const item of room.queue || []) if (['sent', 'waiting'].includes(item.status) && item.sentTo) busy.add(item.sentTo);
+    for (const item of room.queue || []) if (item.sentTo && holdsMember(item)) busy.add(item.sentTo);
   }
   return (input.rooms || []).map(room => {
-    const candidates = !room.archived && !(room.queue || []).some(item => OPEN_STATUSES.includes(item.status))
+    // A space with only items left for the person to look at has nothing to send or wait for.
+    const candidates = !room.archived && !(room.queue || []).some(item => item.status === 'queued' || holdsMember(item))
       ? (input.sessions || []).filter(session => !busy.has(session.id) && roomIds(session).includes(room.id) &&
         sessionReady(session, input.wakePolicy).ready &&
         !humanRecent(session.id, input.humanAt || new Map(), input.now, input.humanQuietMs ?? HUMAN_QUIET_MS))
@@ -823,7 +835,7 @@ function planDispatch(input) {
   // 1) Settle items already sent.
   for (const room of rooms) {
     for (const item of room.queue || []) {
-      if (item.status === 'waiting' && item.sentTo) {
+      if (item.status === 'waiting' && item.sentTo && holdsMember(item)) {
         busy.add(item.sentTo);
       }
       if (item.status !== 'sent') {

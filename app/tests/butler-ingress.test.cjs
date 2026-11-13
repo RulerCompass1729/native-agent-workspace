@@ -129,6 +129,8 @@ test('queue vacancies require an actually ready unoccupied member and an empty l
     { rooms: [{ id: 'shared', name: 'Synthetic team', queue: [{ status: 'queued' }] }] },
     { rooms: [{ id: 'shared', name: 'Synthetic team', queue: [{ status: 'sent' }] }] },
     { rooms: [{ id: 'shared', name: 'Synthetic team', queue: [{ status: 'waiting' }] }] },
+    // A decision whose item kept an earlier refusal (queueRequeue) is still a decision.
+    { rooms: [{ id: 'shared', name: 'Synthetic team', queue: [] }, { id: 'other', queue: [{ status: 'waiting', reason: 'Synthetic refusal', sentTo: 'agent-a' }] }] },
     { rooms: [{ id: 'shared', name: 'Synthetic team', queue: [], run: { status: 'running', ids: ['agent-a'] } }] },
     { rooms: [{ id: 'shared', name: 'Synthetic team', queue: [] }, { id: 'other', queue: [], run: { status: 'running', ids: ['agent-a'] } }] },
     { rooms: [{ id: 'shared', name: 'Synthetic team', queue: [] }, { id: 'other', queue: [{ status: 'sent', sentTo: 'agent-a' }] }] },
@@ -140,6 +142,14 @@ test('queue vacancies require an actually ready unoccupied member and an empty l
   ];
   for (const changes of cases) assert.equal(queueVacancies(vacancyInput(changes))[0].active, false);
   assert.equal(queueVacancies(vacancyInput({ rooms: [{ id: 'shared', name: 'Synthetic team', queue: [{ status: 'done' }] }] }))[0].active, true);
+  // An item left for the person to look at, the person having stepped in or no reply having come back,
+  // asks nothing of its member, here or in another space: the space is empty (11-12).
+  for (const reason of ['person-intervened', 'no-reply']) {
+    for (const rooms of [[{ id: 'shared', name: 'Synthetic team', queue: [{ status: 'waiting', reason, sentTo: 'agent-a' }] }],
+      [{ id: 'shared', name: 'Synthetic team', queue: [] }, { id: 'other', queue: [{ status: 'waiting', reason, sentTo: 'agent-a' }] }]]) {
+      assert.equal(queueVacancies(vacancyInput({ rooms }))[0].active, true, reason);
+    }
+  }
 });
 
 test('vacancy capacity identifies an additional eligible member while an empty room is already active', () => {

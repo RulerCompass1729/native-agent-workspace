@@ -347,6 +347,11 @@ test('an integrator NAW itself is busy with is handed nothing until that is over
   g.reply('integrator', 'Done.');
   await g.pass();
   assert.deepEqual([g.room.queueItems()[0].status, busy()], ['done', []]);
+  // A waiting item engages its member only while it asks the person to decide (11-12).
+  const queued = queue => { const current = g.dispatcher.view(); return g.dispatcher.integrationView({ ...current, snapshot: { ...current.snapshot, rooms: [{ id: 'shared', queue }] } }); };
+  assert.equal(queued([{ id: 'w', status: 'waiting', sentTo: 'integrator' }]).busy('integrator'), true, 'A decision waits for the person');
+  assert.equal(queued([{ id: 'w', status: 'waiting', reason: 'Synthetic refusal', sentTo: 'integrator' }]).busy('integrator'), true, 'A decision that kept an earlier refusal');
+  for (const reason of ['person-intervened', 'no-reply']) assert.equal(queued([{ id: 'w', status: 'waiting', reason, sentTo: 'integrator' }]).busy('integrator'), false, reason);
   g.dispatcher.rotations = { 'member-a': { phase: 'requested', newId: 'next' } };
   assert.deepEqual(busy(), ['member-a', 'next']);
   g.dispatcher.rotations = { 'member-a': { phase: 'kept', newId: 'next', handoffConfirmed: true } };
