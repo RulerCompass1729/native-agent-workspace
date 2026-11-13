@@ -523,6 +523,8 @@ for (const provider of ['claude', 'codex']) for (const [method, args] of [
   ['openLocalFile', ['agent']], ['saveLocalFile', ['preview-token']], ['runtimeLocation', ['codex']], ['spaceFiles', ['shared']],
 ]) for (const count of method === 'spaceFiles' ? [0] : [0, 2]) test(`${provider} ${method}: invalid path count ${count} refuses before human confirmation`, async t => {
   const f = spaceExportFixture(t, provider), c = await f.controller.view(f.actor);
+  // Both refusals must share one 60-second summary window; the wall clock can cross a minute between them.
+  f.controller.now = () => 60000;
   if (method === 'runtimeLocation') f.config.handlers.set(method, () => { throw Error('Handler must not run before consent'); });
   c.filePreview = { token: 'preview-token', name: 'Local.txt', bytes: Buffer.from('LOCAL'), text: 'LOCAL' };
   const paths = count ? [path.join(f.dir, 'one.txt'), path.join(f.dir, 'two.txt')] : [];
