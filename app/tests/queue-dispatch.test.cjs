@@ -157,7 +157,7 @@ test('a finished item settles as done and the same member gets the next item in 
   ]);
 });
 
-test('an interrupted or silent turn, or the person stepping in, holds the member for the person', () => {
+test('an interrupted or silent turn, or the person stepping in, is left for the person and holds the member for that pass only', () => {
   const rooms = [{ id: 'shared', name: 'Team', queue: [sentItem(), item('2')] }];
   const silent = [{ id: 't1', role: 'user', text: 'NAW task', origin: 'naw-dispatch' }];
   assert.deepEqual(plan(rooms, [member('a', { messages: silent })]), [
@@ -179,6 +179,16 @@ test('an interrupted or silent turn, or the person stepping in, holds the member
   assert.deepEqual(plan(rooms, [member('a', { messages: answered, controlRevision: 3 })]), [
     { kind: 'settle', roomId: 'shared', itemId: '1', status: 'waiting', reason: 'person-intervened', sessionId: 'a', reply: 'partial work' },
   ]);
+  // On the next pass such an item asks nothing of the member: it stays open for the person to look at,
+  // and the member takes the next item, its own or anyone's (11-12: these held members until the person
+  // pressed a button, and the items behind them never went out).
+  for (const reason of ['person-intervened', 'no-reply']) {
+    const later = [{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'waiting', reason }), item('2', { assignee: 'a' }), item('3')] }];
+    assert.deepEqual(plan(later, [member('a', { messages: answered, controlRevision: 3 }), member('b')]), [
+      { kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a' },
+      { kind: 'dispatch', roomId: 'shared', itemId: '3', sessionId: 'b' },
+    ], reason);
+  }
 });
 
 test('a reply that asks for a decision stops dispatch to that member until the person resolves it', () => {
@@ -192,6 +202,31 @@ test('a reply that asks for a decision stops dispatch to that member until the p
   ]);
   const later = [{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'waiting' }), item('2', { assignee: 'a' })] }];
   assert.deepEqual(plan(later, [member('a', { messages })]), []);
+  // Only that member: another member still takes unassigned work, and a decision held in another space holds it there too.
+  const other = [{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'waiting' }), item('2')] }];
+  assert.deepEqual(plan(other, [member('a', { messages }), member('b')]), [{ kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'b' }]);
+  const elsewhere = [{ id: 'one', name: 'One', queue: [sentItem({ status: 'waiting' })] }, { id: 'two', name: 'Two', queue: [item('2')] }];
+  assert.deepEqual(plan(elsewhere, [member('a', { messages, roomIds: ['one', 'two'] })]), []);
+});
+
+test('a decision on an item that was refused once before it went out still holds its member', t => {
+  // The refusal stays on the item through sending and a decision's settle (independent review, 11-12).
+  const { room } = roomSetup(t);
+  const asked = room.queueAdd('任务一', 'a');
+  room.queueMarkSent('shared', asked, 'a', 'Agent a', NOW - 60000);
+  room.queueRequeue('shared', asked, 'Synthetic draft refusal', 5, 'Agent a');
+  room.queueMarkSent('shared', asked, 'a', 'Agent a', NOW - 30000);
+  room.queueSetDelivery('shared', asked, 't1', 0);
+  // The planner passes '' as a decision's reason (QueueDispatcher, action.reason || '').
+  room.queueSettle('shared', asked, 'waiting', '', 'Agent a', '需要你决定：合吗？', '合吗？');
+  room.queueAdd('任务二', 'a');
+  const queue = room.queueItems('shared');
+  assert.deepEqual([queue[0].status, queue[0].reason], ['waiting', 'Synthetic draft refusal']);
+  const rooms = [{ id: 'shared', name: 'Team', queue }];
+  assert.deepEqual(plan(rooms, [member('a')]), []);
+  const vacancy = rules.queueVacancies({ rooms, sessions: [member('a')], wakePolicy: AWAKE, idleSince: settledSince(['a']), now: NOW });
+  assert.equal(vacancy[0].active, false);
+  assert.deepEqual(vacancy[0].candidateIds, []);
 });
 
 test('a reply is found by send time when a native record replaced the NAW message id', () => {
@@ -288,6 +323,9 @@ test('an old, quiet space member is rotated even with no work queued; a recent c
   assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [] }], [quiet]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
   const waiting = item('2', { status: 'waiting', sentTo: 'a', sentAt: NOW - 2 * HOUR, tag: 't2' });
   assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [waiting] }], [quiet]), []);
+  // An item that asks the person nothing does not keep the member from its rotation either.
+  const intervened = { ...waiting, reason: 'person-intervened' };
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [intervened] }], [quiet]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
 });
 
 test('only refusals raised before anything was written count as not sent', () => {
