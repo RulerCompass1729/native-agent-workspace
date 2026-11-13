@@ -536,7 +536,7 @@ async function monitorScenario(a) {
   assert.equal((await itemByText('Empty turn')).reason, 'no-reply');
   const lookAt = (await shared()).events.findLast(event => event.uiMessage?.key === 'notice.queue.lookAt');
   assert.ok(lookAt?.id, 'one look-at record');
-  await shown(lookAt, english ? '“Empty turn” (队员甲) is left for you to look at; 队员甲 can already take its next item' : '队员甲 做的「Empty turn」留给你看一眼；它已经可以接下一项', 'look-at record');
+  await shown(lookAt, english ? '“Empty turn” from 队员甲 is left for you to look at; the member can already take its next item' : '队员甲 做的「Empty turn」留给你看一眼；它已经可以接下一项', 'look-at record');
   await capture('look-at-record-' + (english ? 'en' : 'zh'));
   const leftId = (await itemByText('Empty turn')).id;
   await page.locator('#room-queue').click();

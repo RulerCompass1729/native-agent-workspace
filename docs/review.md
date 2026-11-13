@@ -13193,13 +13193,15 @@ From the steward's follow-up 2 (11-12): queueAdd refuses an assignee that does n
 - The steward's own instructions do not say what to do with the refusal; the text itself names the members and the no-assignee choice.
 - A member removed after the check and before the item is saved is not caught; that item then waits for its member, as every assigned item did before (the planner sends an assigned item only to that member, `planDispatch`).
 - Items already queued for a non-member, such as 87a3b4c0, are not changed by this; they are on the cancel list relayed to the person on 11-12.
+- The `unconfirmed` receipt elsewhere means an outcome to inspect and not repeat (third review, note A). Here the text says nothing was added. A `not-executed` receipt would need the background controller to accept a precondition refusal from an ordinary handler before it has any effect; today only the confirmation step of maintenance actions can give one (`app/background-control.cjs`, `perform`). Do it when a steward is seen not retrying after this refusal, or another ordinary action needs the same.
+- Every add with an assignee now reads the sessions once more, twice for a background secretary; and a bad assignee is reported before an empty text or an archived space (third review, note B).
 
 ## An item left for the person to look at no longer says it needs a decision — 2026-11-12
 
 From the steward's follow-up 4 (11-12): the record and the row of an item the person stepped into, or whose turn came back empty, must stop saying 「需要你决定 / 等你决定」; something like 「留给你看一眼，成员已经接下一项」. Since 90ec4ab such an item no longer holds its member, but both lines still read as a decision.
 
 **What changed.** The same rule that decides who is notified now decides the words: a waiting item without a reason is a decision; one with a reason (`person-intervened`, `no-reply`) is left to look at.
-- Space record (`app/room-state.cjs`, `queueSettle`): `notice.queue.lookAt`, 「{name} 做的「{text}」留给你看一眼；它已经可以接下一项」 / "“{text}” ({name}) is left for you to look at; {name} can already take its next item". A decision keeps `notice.queue.waiting`, 「{name} 需要你决定：{text}」.
+- Space record (`app/room-state.cjs`, `queueSettle`): `notice.queue.lookAt`, 「{name} 做的「{text}」留给你看一眼；它已经可以接下一项」 / "“{text}” from {name} is left for you to look at; the member can already take its next item" (each catalog uses each parameter once, `app/tests/ui-locale.test.cjs`). A decision keeps `notice.queue.waiting`, 「{name} 需要你决定：{text}」.
 - Queue row (`app/renderer/renderer.js`, `queueRow`): `queue.status.lookAt`, 「留给你看一眼 · {name}」 / "For you to look at · {name}". A decision keeps 「等你决定 · {name}」. Both keep the 已处理 button and the reason line under the task (「你在这个会话里说过话」 / 「它没有回话」).
 - The row reads the stored item, and a decision can still carry the reason of a refusal before it was sent (`queueRequeue` stores it; `queueSettle` writes only a non-empty reason). So the row names the two kinds, as `UNHELD_WAITING` does, instead of asking whether there is a reason. The record is safe as it is: it reads the reason passed at settle time, which for a waiting item is only `person-intervened`, `no-reply` or empty (`planDispatch`).
 - 「它已经可以接下一项」 says the member may take the next item, not that one was sent: there may be none queued.
@@ -13213,3 +13215,6 @@ From the steward's follow-up 4 (11-12): the record and the row of an item the pe
 
 **Left open.**
 - 「这一件不在等你决定。」 (`error.queue.notWaiting`), shown only when 已处理 is pressed on an item that has already moved on, still says 决定 for both kinds.
+- The record tells the kinds apart by having a settle-time reason, the row by naming the two reasons. They agree because a waiting item settles only with `person-intervened`, `no-reply` or no reason (`planDispatch`). A new waiting reason would be a look-at in the record but a decision in the row; name it in both places (third review).
+
+**Full suite and review.** The full suite first failed one test: `app/tests/ui-locale.test.cjs` requires the two catalogs to use the same parameters, and the English line used {name} twice. It now says "the member" the second time. Third independent review, the same reviewer, of 8f80605, e2d7669 and 6ca7991: PASS_WITH_NOTES; notes A, B and the record/row point are recorded above.

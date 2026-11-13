@@ -5695,7 +5695,7 @@
     "notice.queue.cancelled": "Removed from queue: {text}",
     "notice.queue.dispatched": "NAW sent: {text} → {name}",
     "notice.queue.waiting": "{name} needs your decision: {text}",
-    "notice.queue.lookAt": "“{text}” ({name}) is left for you to look at; {name} can already take its next item",
+    "notice.queue.lookAt": "“{text}” from {name} is left for you to look at; the member can already take its next item",
     "notice.queue.failed": "Not sent: {text} → {name} ({reason}); it will not be resent automatically.",
     "notice.rotation.needsTrust": "Needs your decision: “{detail}” is waiting for native directory trust. Handoff from “{name}” is paused; the original session is kept.",
     "notice.rotation.trustTimedOut": "Directory trust confirmation timed out. “{detail}” was disconnected; the original session “{name}” can continue working.",

@@ -46,7 +46,7 @@ test('in the space record, only a decision asks the person to decide; the other 
     const event = state.metadata().events.at(-1);
     assert.equal(event.uiMessage.key, 'notice.queue.lookAt', reason);
     assert.equal(event.text, 'Member 做的「Synthetic task」留给你看一眼；它已经可以接下一项');
-    assert.equal(locale.format('en', event.uiMessage.key, event.uiMessage.params), '“Synthetic task” (Member) is left for you to look at; Member can already take its next item');
+    assert.equal(locale.format('en', event.uiMessage.key, event.uiMessage.params), '“Synthetic task” from Member is left for you to look at; the member can already take its next item');
     assert.equal(event.butlerSource, undefined, 'nothing for the steward to bring to the person');
   }
   state.queueSettle('shared', sent(), 'waiting', '', 'Member', '需要你决定：Proceed?');
