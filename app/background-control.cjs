@@ -128,14 +128,18 @@ function refusalDetails(reason) {
   } : {}) };
 }
 const compactRefusal = row => { row.guard = { auditRooms: row.guard?.auditRooms || ['shared'] }; };
+// Input queued for a native session: answered once NAW recorded it, not when native took it.
+const queuedDelivery = args => ['queue', 'queueShared'].includes(args.method === 'spaceAction' ? args.arguments?.[1] : args.method);
 class BackgroundControl {
   constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now, readCopyBytes = MAX_RECORD_BYTES,
-    retireAfter = RETIRE_AFTER, retireHold = () => false, unasked = () => false }) {
+    retireAfter = RETIRE_AFTER, retireHold = () => false, unasked = () => false, stagedPollMs = 200 }) {
     if (!Number.isSafeInteger(readCopyBytes) || readCopyBytes < 1 || readCopyBytes > MAX_RECORD_BYTES) throw Error('Invalid read copy budget');
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
     this.data = { version: STATE_VERSION, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
     // Opened windows by view key with their agent, when each was last used, what a retired one hands to the next, calls under way.
     this.opened = new Map(); this.used = new Map(); this.kept = new Map(); this.busy = 0; this.retireAfter = retireAfter; this.retireHold = retireHold;
+    // Queued deliveries whose operation has answered but whose native receipt is still awaited (they hold no slot).
+    this.pendingDeliveries = new Set(); this.stagedPollMs = stagedPollMs;
     // Settled records, loaded whole: by session, and by the key a receipt or a repeated operation id is looked up with.
     this.archive = new history.BlockLog(dataDir, 'operations', checkArchived);
     try { this.loadHistory(); }
@@ -331,8 +335,65 @@ class BackgroundControl {
   // operation reserved, nothing in the outbox (retireHold), and no record of that agent running or waiting for the
   // person. Records and receipts live in this file, not in a window: the next call opens a window under the same
   // saved view and owner, and gets back what main.cjs kept of the old one (its private clipboard, an open preview).
+  // Resolves { staged } once the recipient's record holds this operation's message waiting for native; stays
+  // pending otherwise (the handler's own outcome then wins the race). Reads the window's current state only.
+  watchStaged(actor, args, context, running) {
+    const target = operation.deliveryTargets(args.method, args.arguments)?.[0];
+    let settled = false;
+    running.then(() => { settled = true; }, () => { settled = true; });
+    return new Promise(resolve => {
+      const look = () => {
+        if (settled || this.closed) return;
+        try {
+          const session = context.client?.snapshot?.().sessions?.find(s => s.id === target);
+          const message = session?.messages?.find(m => m.agentControl?.operationId === actor.operationId && m.agentControl?.id === actor.id && m.agentControl?.nativeId === actor.nativeId);
+          if (message?.status === 'awaiting-native') {
+            return resolve({ staged: { recipientId: session.id, nativeId: session.nativeId, messageId: message.id, nativeReceived: false, status: message.status, body: message.text } });
+          }
+        } catch { /* Looked at again shortly; the handler's own outcome still settles the operation. */ }
+        const timer = setTimeout(look, this.stagedPollMs); timer.unref?.();
+      };
+      look();
+    });
+  }
+  // Answers now with awaiting-native and settles the record when the handler ends: received, or as the ordinary
+  // path would (unconfirmed on any failure). Nothing is sent again.
+  async deferDelivery(actor, args, context, running, delivery) {
+    const key = this.key(actor), id = args.operation_id, find = d => d.records.find(r => r.id === id && this.key(r.actor) === key);
+    this.commit(d => {
+      const row = find(d);
+      d.views[key + ':' + (args.view_id || 'default')] = clone(context.view);
+      delete row.confirmation;
+      Object.assign(row, { state: 'awaiting-native', delivery, deferredAt: this.now() });
+    });
+    const guard = this.receipt(actor, id)?.guard;
+    const unconfirmed = failure => ({ state: 'unconfirmed', error: typeof failure?.message === 'string' ? failure.message.slice(0, 2048) : 'Operation outcome is unconfirmed' });
+    const pending = running.then(async value => {
+      // As the ordinary path: a delivery that cannot be read leaves the outcome unconfirmed.
+      try {
+        const settled = await context.delivery?.(args, value, actor, guard);
+        return { value, delivery: settled, state: settled ? settled.nativeReceived ? 'received' : 'awaiting-native' : 'complete' };
+      } catch (failure) { return { value, ...unconfirmed(failure) }; }
+    }, unconfirmed)
+      .then(outcome => {
+        try {
+          this.commit(d => {
+            const row = find(d); if (!row) return;
+            Object.assign(row, { state: outcome.state, finishedAt: this.now(), ...(outcome.value === undefined ? {} : { value: clone(outcome.value) }),
+              ...(outcome.delivery ? { delivery: outcome.delivery } : {}), ...(outcome.error ? { error: outcome.error } : {}) });
+          });
+          return this.finishAudit(actor, id, context);
+        } catch { /* Closing, or the record could not be saved: the receipt keeps awaiting-native and is read again later. */ }
+      })
+      .catch(() => {})
+      .finally(() => this.pendingDeliveries.delete(pending));
+    this.pendingDeliveries.add(pending);
+    await this.finishAudit(actor, id, context);
+    return { ...this.receipt(actor, id, context), retry: false };
+  }
   retireIdle() {
-    if (this.closed || this.busy || this.inflight.size || this.retireHold()) return 0;
+    // A queued delivery still waiting for its receipt keeps every window: closing one could revoke it.
+    if (this.closed || this.busy || this.inflight.size || this.pendingDeliveries.size || this.retireHold()) return 0;
     const waiting = new Set(this.data.records.filter(r => ['running', 'confirmation-required'].includes(r.state)).map(r => this.key(r.actor)));
     let retired = 0;
     for (const [key, { context, actor }] of [...this.opened]) try {
@@ -608,7 +669,7 @@ class BackgroundControl {
         const row = this.receipt(actor, args.operation_id);
         if (row.guard && !isDeepStrictEqual(row.guard, controlGuard(context, args))) throw Error('The operation target changed before execution');
         const request = { context, args, actor, guard: row.guard, valid, approved, dialogIndex: 0 };
-        value = await operation.run(actor, async () => {
+        const running = operation.run(actor, async () => {
           const action = operation.maintenanceAction(args.method, args.arguments, actor);
           let terminalTarget = null;
           if (action) {
@@ -648,6 +709,13 @@ class BackgroundControl {
           if (!current || current.nativeId !== terminalTarget.nativeId) throw Error('The approved terminal target changed before the read completed');
           return frozen;
         }, request);
+        // A queued message waits for its native receipt, possibly for a whole turn. Once NAW has recorded it,
+        // the operation answers awaiting-native and frees its agent's slot; the receipt is settled later.
+        const staged = queuedDelivery(args) ? this.watchStaged(actor, args, context, running) : null;
+        const first = staged ? await Promise.race([running.then(result => ({ result }), failure => ({ failure })), staged]) : null;
+        if (first?.staged) return this.deferDelivery(actor, args, context, running, first.staged);
+        if (first && 'failure' in first) throw first.failure;
+        value = first ? first.result : await running;
         delivery = await context.delivery?.(args, value, actor, row.guard);
         state = delivery ? delivery.nativeReceived ? 'received' : 'awaiting-native' : 'complete';
       } catch (e) {
