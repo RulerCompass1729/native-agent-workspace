@@ -1057,7 +1057,15 @@ function handoffText(oldName, handoff, directoryNote = '', duty = '') {
     '先按交接核对现状（只读即可），然后结束本轮，不留后台等待；这个空间有队列时，NAW 会接着派下一件。',
   ].join('\n');
   const left = SEND_TEXT_LIMIT - text('').length;
-  return text(handoff.length > left ? handoff.slice(0, Math.max(0, left - 1)) + '…' : handoff);
+  if (handoff.length <= left) {
+    return text(handoff);
+  }
+  // Cut before a character, never between the two halves of one.
+  let end = Math.max(0, left - 1);
+  if (end > 0 && /[\uD800-\uDBFF]/u.test(handoff[end - 1])) {
+    end -= 1;
+  }
+  return text(handoff.slice(0, end) + '…');
 }
 
 function shortText(text, limit = 60) {

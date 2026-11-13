@@ -820,7 +820,8 @@ async function startQueueDispatcher() {
       // The butler stays in no space: the dispatcher rotates it by this name and hands its duty statement on
       // (steward step 2, batch 3). The record then follows the logged rotation (steward-role.cjs current()).
       steward: () => {
-        const current = stewardRole?.current() || null;
+        // Read again only when the designation or rotation log files change: this runs on every planning pass.
+        const current = stewardOf?.() || null;
         return current && { ...current, duty: stewardDutyText() };
       },
       creationDefaults: snapshot => creationDefaults.get(snapshot?.sessions || []),

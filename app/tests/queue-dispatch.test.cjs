@@ -1285,6 +1285,11 @@ test('a handoff that would not fit the backend input is shortened, never the dut
   assert.ok(text.length <= 16000, `${text.length}`);
   assert.ok(text.includes(duty) && text.includes('旧目录说明'));
   assert.match(text, /h…\n\n旧目录说明\n\n【NAW 职责说明】/);
+  for (const pad of [0, 1]) {
+    const cut = rules.handoffText('A', 'x'.repeat(pad) + '😀'.repeat(9000), '', duty);
+    assert.ok(cut.length <= 16000 && cut.includes(duty));
+    assert.doesNotMatch(cut, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u, 'never half a character before the cut');
+  }
   const short = rules.handoffText('A', '交接', '', '');
   assert.equal(short, rules.handoffText('A', '交接'), 'no statement, no change');
 });
