@@ -87,6 +87,67 @@ test('the automatic-message switches and the person\'s draft stop a dispatch bef
   assert.equal(sent.length, 1);
 });
 
+// eddb1c16 (11-13): on Claude 2.1.322 a background task the dispatched turn starts and finishes notifies during that
+// turn, under its prompt id. NAW's own send is accepted and running then; nothing displaced it, so the item settles done.
+// A member on the real Claude adapter, sent one queue item that native accepts as prompt 'turn'.
+async function dispatchedClaude(t) {
+  const { w, ids } = await fixture(t);
+  const { Claude } = require('../adapters.cjs');
+  const id = ids[0], s = w.get(id), runtime = Object.create(Claude.prototype); EventEmitter.call(runtime);
+  runtime.record = s; runtime.ready = true; runtime.chatAvailable = true; runtime.terminal = { input() {} };
+  runtime.submission = { request: async () => ({ promptId: 'turn' }) };
+  w.runtimes.set(id, runtime); w.bind(s, runtime);
+  const pauses = [], pause = w.pause.bind(w); w.pause = (...args) => { pauses.push(args[0]); return pause(...args); };
+  const completed = []; runtime.on('complete', info => completed.push(info.tag));
+  const hook = event => runtime.hook({ session_id: s.nativeId, prompt_id: 'turn', ...event });
+  const control = s.controlRevision, sentAt = Date.now(), text = '【NAW 派活】task';
+  const tag = await dispatch(w, id, text);
+  // Shapes and order as the 11-12 loopback probe recorded them (real Claude 2.1.322 and 2.1.323).
+  hook({ hook_event_name: 'UserPromptSubmit', prompt: text });
+  hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'toolu_1', background_task_id: 'bsynth001' });
+  const stop = () => hook({ hook_event_name: 'Stop', last_assistant_message: 'Done: the build passed.', background_tasks: [], session_crons: [], stop_hook_active: false });
+  // The queue's own rule, on this member's record, once it is idle.
+  const verdict = () => {
+    const rules = require('../queue-dispatch.cjs');
+    const item = { id: 'item-1', text, status: 'sent', sentTo: id, sentAt, tag, control, createdAt: sentAt - 1000 };
+    const member = { ...s, roomIds: ['shared'], roomId: 'shared', serviceCapabilities: [rules.CAPABILITY, 'guardedSessionStopV1'], fleet: [] };
+    return rules.planDispatch({ rooms: [{ id: 'shared', name: 'Team', queue: [item] }], sessions: [member], wakePolicy: { enabled: true },
+      idleSince: new Map([[id, Date.now() - 60000]]), now: Date.now() }).filter(action => action.kind === 'settle').map(action => [action.status, action.reason, action.reply]);
+  };
+  return { w, s, runtime, hook, stop, verdict, pauses, completed, control, tag };
+}
+const taskDone = '<task-notification>\n<task-id>bsynth001</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>Synthetic task completed</summary>\n</task-notification>';
+
+test('a background task the dispatched turn starts and finishes does not count as the person stepping in', async t => {
+  const { s, hook, stop, verdict, pauses, completed, control, tag } = await dispatchedClaude(t);
+  hook({ hook_event_name: 'UserPromptSubmit', prompt: taskDone });
+  assert.equal(s.messages.at(-1).inputSource, 'task-notification', 'NAW recognises the notification as machine input');
+  assert.equal(s.controlRevision, control, 'The control revision stays where the dispatch left it');
+  assert.deepEqual(pauses, [], 'Nothing is paused');
+  stop();
+  assert.deepEqual(completed, [tag], 'The turn end is still the reply to the dispatch');
+  assert.equal(s.pendingTag, null);
+  assert.deepEqual(verdict(), [['done', undefined, 'Done: the build passed.']]);
+});
+
+test('what still counts inside or around the dispatched turn: a person typing there, and input that starts another turn', async t => {
+  // A person typing during the dispatched turn: same prompt id on 2.1.316+, and still the person.
+  const typed = await dispatchedClaude(t);
+  typed.hook({ hook_event_name: 'UserPromptSubmit', prompt: 'please also check the docs' });
+  assert.equal(typed.s.controlRevision, typed.control + 1);
+  assert.deepEqual(typed.pauses, ['真人在原生终端输入']);
+  typed.stop();
+  assert.deepEqual(typed.completed, [undefined], 'The reply is no longer bound to the dispatch');
+  assert.deepEqual(typed.verdict(), [['waiting', 'person-intervened', 'Done: the build passed.']]);
+  // Machine input under another prompt id is not inside the dispatched turn: it displaced the send, as before (528c0271).
+  const other = await dispatchedClaude(t);
+  other.hook({ hook_event_name: 'UserPromptSubmit', prompt_id: 'other', prompt: taskDone });
+  assert.equal(other.s.messages.at(-1).inputSource, 'task-notification');
+  assert.equal(other.s.controlRevision, other.control + 1);
+  assert.deepEqual(other.pauses, ['原生自动输入抢在交接发送之前开始；请核对后再继续。']);
+  assert.equal(other.runtime.pending, null);
+});
+
 test('a dispatch cannot be combined with another delivery kind', async t => {
   const { w, ids, sent } = await fixture(t);
   const forward = { roomId: 'shared' };

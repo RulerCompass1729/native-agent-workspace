@@ -1236,9 +1236,14 @@ class Claude extends EventEmitter {
           entering.prompts.add(event.prompt_id || null);
           if (entering === this.queued) this.emit('state', 'working');
         } else if (!this.pending || event.prompt !== this.pending.text || event.prompt_id !== this.pending.promptId) {
-          const superseded = Boolean(this.queued || this.pending);
+          // Input under the native prompt id our accepted send was given arrives inside that turn (2.1.316+;
+          // on 2.1.322 a background task's own notification, 11-13). It displaced nothing and the turn is still ours;
+          // a person's input there still pauses and moves the control revision, so the reply stays private.
+          const inside = Boolean(this.pending?.promptId && event.prompt_id === this.pending.promptId);
+          const superseded = Boolean(this.queued || (this.pending && !inside));
           if (this.queued) this.queued.superseded = true;
-          this.pending = null; this.emit('state', 'working');
+          if (!inside) this.pending = null;
+          this.emit('state', 'working');
           // The first hook may follow turn-start. A repeated id is still input,
           // but must not recapture that turn's wake proof, even for identical text.
           if (!this.nativePromptInput) this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: rowId, ...(!laterText && !promptAlreadyAnnounced && this.liveTurn?.promptId === event.prompt_id ? { turnId: this.liveTurn.id } : {}), ...(typeof event.source === 'string' ? { source: event.source } : {}), ...(superseded ? { superseded } : {}) } : undefined);

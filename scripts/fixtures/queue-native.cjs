@@ -9,6 +9,11 @@ const { Workspace } = require(path.join(appRoot, 'app/workspace.cjs'));
 
 const sends = [];
 const turns = new Map();
+// 11-13 (eddb1c16): with NAW_TEST_QUEUE_CLAUDE_ADAPTER=1 a Claude member runs on the real Claude adapter and only its
+// transport is synthetic. NAW's send is accepted as one native prompt; the runner then plays the hook events that
+// real Claude 2.1.322 sent in the 11-12 loopback probe, under that prompt's id.
+const claudeAdapter = process.env.NAW_TEST_QUEUE_CLAUDE_ADAPTER === '1';
+const prompts = new Map();
 const failNext = new Set();
 const runtimes = new Map();
 
@@ -17,6 +22,32 @@ NativeHost.prototype.start = async function () {
 };
 NativeHost.prototype.close = function () {};
 NativeHost.prototype.create = function (record) {
+  if (claudeAdapter && record.provider === 'claude') {
+    const { Claude } = require(path.join(appRoot, 'app/adapters.cjs'));
+    const runtime = Object.create(Claude.prototype);
+    EventEmitter.call(runtime);
+    Object.assign(runtime, { record, ready: true, chatAvailable: true, terminal: { input() {} } });
+    runtime.submission = {
+      request: async (text, tag, guard) => {
+        if (!guard()) throw Error('Synthetic acceptance refused');
+        const promptId = require('node:crypto').randomUUID();
+        sends.push({ id: record.id, text });
+        turns.set(record.id, tag);
+        prompts.set(record.id, { promptId, text });
+        return { promptId };
+      },
+    };
+    runtime.start = async () => {
+      runtime.emit('model', 'fixture-model');
+      runtime.emit('state', 'idle');
+    };
+    runtime.stop = async () => {
+      turns.delete(record.id);
+      return { state: 'ended' };
+    };
+    runtimes.set(record.id, runtime);
+    return runtime;
+  }
   const runtime = new EventEmitter();
   runtime.chatAvailable = true;
   runtime.start = async () => {
@@ -108,8 +139,30 @@ function operator(request) {
     .then(result => ({ done: true, result }), error => ({ done: false, error: String(error?.message || error).slice(0, 300) }));
 }
 
+// One hook event for the member's current prompt; '$sent' stands for the text NAW sent.
+function hook(request) {
+  const runtime = runtimes.get(request.session);
+  const prompt = prompts.get(request.session);
+  if (!claudeAdapter || !runtime || !prompt) {
+    return false;
+  }
+  const event = JSON.parse(request.reply);
+  if (event.prompt === '$sent') {
+    event.prompt = prompt.text;
+  }
+  runtime.hook({ session_id: runtime.record.nativeId, prompt_id: prompt.promptId, ...event });
+  if (event.hook_event_name === 'Stop') {
+    turns.delete(request.session);
+  }
+  return true;
+}
+
 process.on('message', request => {
   if (request.method === 'fail-next-send') failNext.add(request.session);
+  if (request.method === 'hook') {
+    process.send({ requestId: request.id, done: hook(request), sends: sends.map(({ id, text }) => ({ id, text })) });
+    return;
+  }
   if (['operator-ready', 'open'].includes(request.method)) {
     operator(request).then(result => process.send({ requestId: request.id, ...result, sends: sends.map(({ id, text }) => ({ id, text })) }));
     return;

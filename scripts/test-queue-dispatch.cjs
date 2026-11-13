@@ -824,6 +824,46 @@ async function openScenario(a, b) {
     nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
 }
 
+// 11-13 (eddb1c16): the member's turn starts a background task that finishes and notifies during the same turn,
+// as real Claude 2.1.322 does, and the desktop restarts while that turn runs (the 10:41 install). The member's
+// answer settles the item: neither the notification nor the restart is the person stepping in.
+async function backgroundScenario(a) {
+  assert.equal(process.env.NAW_TEST_DECISION_NOTICE, '1', 'Runs with the notification fixture, so nothing reaches the OS');
+  assert.equal(process.env.NAW_TEST_QUEUE_CLAUDE_ADAPTER, '1', 'The member runs on the real Claude adapter');
+  const english = process.env.NAW_TEST_UI_LANGUAGE === 'en';
+  const text = 'Background task item';
+  const hook = async event => assert.equal((await fixture('hook', a, JSON.stringify(event))).done, true, event.hook_event_name);
+  const member = async () => (await snapshot()).sessions.find(s => s.id === a);
+  await addItem(text, a);
+  await expectSend(1, a, /Background task item/, 'item dispatched to the member');
+  const sent = await itemByText(text);
+  assert.ok(Number.isSafeInteger(sent.control), 'The item keeps the control revision it was sent under');
+  assert.equal((await member()).controlRevision, sent.control);
+  await hook({ hook_event_name: 'UserPromptSubmit', prompt: '$sent' });
+  await hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'toolu_1', background_task_id: 'bsynth001' });
+  await relaunch();
+  await openSpace();
+  assert.equal((await itemByText(text)).status, 'sent', 'Still with the member after the restart');
+  const notice = '<task-notification>\n<task-id>bsynth001</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>Synthetic task completed</summary>\n</task-notification>';
+  await hook({ hook_event_name: 'UserPromptSubmit', prompt: notice });
+  const row = (await member()).messages.findLast(m => m.role === 'user');
+  assert.equal(row.inputSource, 'task-notification', 'NAW recognised the notification');
+  const control = (await member()).controlRevision;
+  await hook({ hook_event_name: 'Stop', last_assistant_message: 'Done: the build passed.', background_tasks: [], session_crons: [], stop_hook_active: false });
+  const elapsed = await until(async () => (await itemByText(text)).status !== 'sent', 'Settled', DISPATCH_LIMIT_MS);
+  timings.push({ label: 'settled after the turn ended', ms: elapsed });
+  const settled = await itemByText(text);
+  assert.deepEqual([settled.status, settled.reason], ['done', undefined], `Settled as ${settled.status}/${settled.reason}`);
+  assert.equal(control, sent.control, 'The notification did not move the control revision');
+  await page.locator('#room-queue').click();
+  await page.locator('#queue-dialog').waitFor();
+  await capture('background-task-settled-' + (english ? 'en' : 'zh'));
+  passed.push('A background task that notified during the dispatched turn, with a desktop restart in that turn, settled the item done');
+  assert.deepEqual(errors, []);
+  console.log(JSON.stringify({ passed, item: [settled.status, settled.reason || null], control: [sent.control, (await member()).controlRevision],
+    syntheticDispatches: (await sends()).length, nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
+}
+
 async function run() {
   console.log('Fixture profile:', profile);
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon');
@@ -833,6 +873,7 @@ async function run() {
   const a = await createMember('队员甲');
   const b = await createMember('队员乙');
   await openSpace();
+  if (process.env.NAW_TEST_QUEUE_BACKGROUND === '1') return backgroundScenario(a);
   if (process.env.NAW_TEST_QUEUE_MONITOR === '1') return monitorScenario(a);
   if (process.env.NAW_TEST_STUCK_RECORD === '1') return stuckScenario(a);
   if (process.env.NAW_TEST_VERSION_GATE === '1') return versionScenario(a, b);
