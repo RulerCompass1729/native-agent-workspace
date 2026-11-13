@@ -306,7 +306,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   // The record module shares nothing writable with the other two roles.
   const own = fs.readFileSync(path.join(__dirname, '../steward-role.cjs'), 'utf8');
   assert.equal(/integrator\.json|queue-secretary\.json|butler\.json/.test(own), false); assert.ok(own.includes("path.join(directory, 'steward.json')"));
-  // The designation gives nothing: the entry's handler touches the record and tells the windows, and no more.
+  // Designating only writes the record: the entry's handler touches the record and tells the windows, and no more.
   const handler = cut("  register('steward', async (c, id, duty = null) => {", "  // B6: the person's own actions on an integration handoff");
   assert.deepEqual([...new Set(handler.match(/\b(queueSecretary|integratorRole|operator[A-Z]\w*|butler[A-Z]\w*|backgroundControl|queueDispatcher)\b/g) || [])], []);
 });
@@ -324,9 +324,9 @@ test('every sentence exists in both languages, and the words say what the design
     'notice.wake.stewardEnded'];
   for (const language of ['zh', 'en']) assert.deepEqual(Object.keys(messages[language]).filter(name => /steward/i.test(name) && !name.startsWith('stewardRecord.')).sort(), [...keys].sort(), language);
   for (const name of keys) assert.equal(/[一-鿿]/.test(messages.en[name]), false, name);
-  // It gives nothing and takes one thing away, and the person is told both before they confirm.
-  assert.equal(locale.format('zh', 'steward.choose.intro'), '你主要和它说话。它固定在侧栏最上面，不再列在「会话」里。指定之后，它能看所有协作空间里的内容（消息、便签、事件、文件、图片、队列），它看到的内容会交给它所用的模型服务；它能经 NAW 往队列里加事、取消和标为已处理，每一步记在「大管家的记录」里；它一回合能给最多 4 个不同的会话各发一条消息（其他会话一回合一条）。当大管家期间它不能加入协作空间。只有你能指定、更换或撤销。');
-  assert.equal(locale.format('en', 'steward.choose.intro'), 'You mainly talk to it. It stays at the top of the sidebar and is no longer listed under Sessions. Once designated it can see what every collaboration space holds (messages, notes, events, files, images, queues), and what it sees goes to the model service it runs on; it can add, cancel and mark handled queue items through NAW, each step in the butler’s record; in one turn it can send one message each to up to four different sessions (any other session sends one). While it is the butler it cannot join a collaboration space. Only you can designate, change or revoke it.');
+  // What it gives and the one thing it takes away: the person is told both before they confirm.
+  assert.equal(locale.format('zh', 'steward.choose.intro'), '你主要和它说话。它固定在侧栏最上面，不再列在「会话」里。指定之后，它能看所有协作空间里的内容（消息、便签、事件、文件、图片、队列），它看到的内容会交给它所用的模型服务；它能经 NAW 往队列里加事、取消和标为已处理，每一步记在「大管家的记录」里；它一回合能给最多 4 个不同的会话各发一条自动消息（其他会话一回合一条）。当大管家期间它不能加入协作空间。只有你能指定、更换或撤销。');
+  assert.equal(locale.format('en', 'steward.choose.intro'), 'You mainly talk to it. It stays at the top of the sidebar and is no longer listed under Sessions. Once designated it can see what every collaboration space holds (messages, notes, events, files, images, queues), and what it sees goes to the model service it runs on; it can add, cancel and mark handled queue items through NAW, each step in the butler’s record; in one turn it can send one automatic message each to up to four different sessions (any other session sends one). While it is the butler it cannot join a collaboration space. Only you can designate, change or revoke it.');
   assert.equal(/不改变它的任何权限|changes none of its permissions/.test(JSON.stringify(messages)), false);
   // The warning says what the row shows and that it is not "nobody". It promises no cure: a damaged record is cured by
   // designating again, a rotation log that cannot be read is not.

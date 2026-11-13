@@ -120,13 +120,14 @@ function validateArgs(args) {
     typeof args.message !== 'string' || !args.message.trim() || args.message.length > 6000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(args.message)) throw uiError("error.handoffRecipientAndBodyRequired");
 }
 // The designated butler (大管家) as main.cjs stewardCaller names it: the very session and native session the person's
-// designation names now (after logged rotations), in no space. Anything else, a designation that cannot be read
-// included, is not, and keeps one message a turn. Read from the same file main.cjs keeps, only when it matters.
+// designation names now (after logged rotations), usable (not archived, its native context not pending) and in no
+// space. Anything else, a designation that cannot be read included, is not, and keeps one message a turn. Read from
+// the same file main.cjs keeps, only when it matters.
 const STEWARD_RECIPIENTS = 4;
 function isSteward(w, s) {
   try {
     const steward = new (require('./steward-role.cjs').StewardRole)(root(w)).current();
-    return Boolean(steward && s && steward.sessionId === s.id && steward.nativeId === s.nativeId && !s.archived && spaces.roomIds(s).length === 0);
+    return Boolean(steward && s && steward.sessionId === s.id && steward.nativeId === s.nativeId && !s.archived && !s.nativeContextPending && spaces.roomIds(s).length === 0);
   } catch { return false; }
 }
 // One automatic message a turn; the butler, one to each of up to four different recipients (the wake proposal, item 2,
@@ -206,8 +207,9 @@ const TURN_END_CANCELLED = Object.freeze({
   unreported: ['发送方上一轮的结束 NAW 没有看到，下一轮已经开始', 'notice.wake.turnUnreportedCancelled'],
   completed: ['原生回合已正常结束，但授权校验未通过', 'notice.wake.completedTurnRevoked'],
   other: ['原生回合未正常结束或授权已变化', 'notice.wake.turnCancelled'],
-  // Item 2: a turn's messages after its first went out only as the butler's; the role is gone when the turn ends.
-  steward: ['发送方已不是大管家，这一轮只发第一条', 'notice.wake.stewardEnded'],
+  // Item 2: a turn's messages after its first went out only as the butler's; at the turn's end NAW could not confirm the
+  // sender still is (revoked, changed, or the designation unreadable).
+  steward: ['这一轮结束时没能确认发送方还是大管家，只发第一条', 'notice.wake.stewardEnded'],
 });
 function complete(w, s, r, info) {
   // The turn's first registered message, whatever became of it; only the butler's turn has others.

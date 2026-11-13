@@ -763,11 +763,13 @@ test('concurrent butler calls to one recipient stage one; a call that registered
   await f.finish();
   assert.equal(f.writes.length, 2); assert.equal(f.received(f.ids[0]).length, 1); assert.equal(f.received(f.ids[1]).length, 1);
 });
-test('every other sender still sends one message a turn: not designated, in a space, another native session, or an unreadable designation (wake proposal, item 2)', async t => {
+test('every other sender still sends one message a turn: not designated, in a space, another native session, native context pending, or an unreadable designation (wake proposal, item 2)', async t => {
   const cases = {
     'not designated': { designate: false },
     'in a space': { spaces: ['shared'] },
     'another native session': { after: f => f.designation({ sessionId: f.a, nativeId: 'native-other' }) },
+    // As main.cjs stewardCaller: a session whose native context is still to come is not the butler's yet.
+    'native context pending': { after: f => { f.s.nativeContextPending = true; } },
     'unreadable designation': { after: f => fs.chmodSync(path.join(f.root, 'steward.json'), 0o644) },
   };
   for (const [name, options] of Object.entries(cases)) {
@@ -797,5 +799,5 @@ test('when the person ends the butler role before the turn ends, only the turn\'
   const [first, second] = f.sent();
   assert.equal(first.wake.status, 'submitted');
   assert.equal(second.wake.status, 'cancelled'); assert.equal(second.wake.cancellation.code, 'steward-role-ended');
-  assert.equal(second.text, '发送方已不是大管家，这一轮只发第一条；自动消息未投递。\nSecond.');
+  assert.equal(second.text, '这一轮结束时没能确认发送方还是大管家，只发第一条；自动消息未投递。\nSecond.');
 });
