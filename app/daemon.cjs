@@ -45,10 +45,14 @@ async function main() {
   const send = (client, value) => writers.get(client)?.send(value);
   // Retained copied runtimes must not advertise modules they do not contain.
   const mobileCapabilities = ['mobile-access.cjs', 'mobile-session.cjs'].every(name => fs.existsSync(path.join(__dirname, name))) ? ['humanMobileV1', 'humanMobilePreparedV1'] : [];
+  // The sessions whose messages changed since the last state broadcast that reached a client, or null
+  // when any record's may have (workspace.changed names a session only for a streamed reply).
+  let stateChanges = new Set();
   const broadcast = (event, data) => {
     if (!clients.size) return;
     if (event === 'state') {
-      try { sendState(stateEncoder, [...clients].map(client => ({ writer: writers.get(client), delta: deltas.get(client) || null })).filter(target => target.writer), data); }
+      const changed = stateChanges; stateChanges = new Set();
+      try { sendState(stateEncoder, [...clients].map(client => ({ writer: writers.get(client), delta: deltas.get(client) || null })).filter(target => target.writer), data, changed); }
       catch { for (const client of clients) client.destroy(); }
       return;
     }
@@ -60,7 +64,7 @@ async function main() {
     for (const client of clients) writers.get(client)?.sendFrame(frame, event === 'state' ? 'state' : null);
   };
   let scheduled = false;
-  workspace.on('change', () => { if (!scheduled) { scheduled = true; setTimeout(() => { scheduled = false; broadcast('state', workspace.snapshot()); }, 35); } });
+  workspace.on('change', session => { if (stateChanges && typeof session === 'string') stateChanges.add(session); else stateChanges = null; if (!scheduled) { scheduled = true; setTimeout(() => { scheduled = false; broadcast('state', workspace.snapshot()); }, 35); } });
   workspace.on('terminal', data => broadcast('terminal', data));
   workspace.on('progress', data => broadcast('progress', data));
   let shuttingDown = false;

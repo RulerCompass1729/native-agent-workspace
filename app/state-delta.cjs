@@ -35,22 +35,32 @@ function mapRecords(snapshot, change) {
   return out;
 }
 
-function createStateEncoder(hash = digest) {
+// How long a session's digests may be carried from broadcast to broadcast before every record is
+// digested again: a change that touched a session's messages without naming it reaches a delta
+// client within this time.
+const CARRY_MS = 2000;
+
+function createStateEncoder(hash = digest, clock = Date.now) {
   // The digests of the broadcasts some client may still hold, by broadcast number.
-  let generation = 0; const kept = new Map();
-  // The digests of one snapshot's messages, by record key.
-  const digests = snapshot => {
-    const result = new Map();
+  let generation = 0, digestedAll = -Infinity; const kept = new Map();
+  // The digests of one snapshot's messages, by record key. `changed` names the sessions whose messages
+  // may have changed since the broadcast before (a Set of ids; null: any record's). Every other session
+  // keeps the digests of that broadcast; spaces are always digested again (workspace.changed).
+  const digests = (snapshot, changed, before) => {
+    const now = clock(), carry = Boolean(changed && before && now - digestedAll < CARRY_MS), result = new Map();
+    if (!carry) digestedAll = now;
     for (const [key, record] of records(snapshot)) {
-      if (record && Array.isArray(record.messages)) result.set(key, record.messages.map(message => hash(JSON.stringify(message) ?? 'null')));
+      if (!record || !Array.isArray(record.messages)) continue;
+      const same = carry && key === `sessions:${record.id}` && typeof record.id === 'string' && !changed.has(record.id) ? before.get(key) : null;
+      result.set(key, same || record.messages.map(message => hash(JSON.stringify(message) ?? 'null')));
     }
     return result;
   };
   return {
     // One broadcast. Every frame is encoded at most once, and only when asked for, within this
     // same synchronous turn: the snapshot shares message objects with the live workspace.
-    frames(snapshot, withDelta) {
-      const current = ++generation, now = withDelta ? digests(snapshot) : null;
+    frames(snapshot, withDelta, changed = null) {
+      const current = ++generation, now = withDelta ? digests(snapshot, changed, kept.get(current - 1)) : null;
       if (now) kept.set(current, now);
       let full = null; const deltas = new Map();
       const whole = () => full ||= encodeFrame({ event: 'state', data: snapshot });
@@ -83,8 +93,9 @@ function createStateEncoder(hash = digest) {
 // queued for it, and the state that frame was built on. A queued state is dropped when the next
 // one comes (createWriter), so the client then still holds what the dropped frame was built on.
 // A client that holds nothing yet gets a whole snapshot.
-function sendState(encoder, targets, snapshot) {
-  const frames = encoder.frames(snapshot, targets.some(target => target.delta)), held = new Set([frames.generation]);
+// changed: the sessions whose messages changed since the broadcast before, or null (createStateEncoder).
+function sendState(encoder, targets, snapshot, changed = null) {
+  const frames = encoder.frames(snapshot, targets.some(target => target.delta), changed), held = new Set([frames.generation]);
   for (const { writer, delta } of targets) {
     if (!delta) { writer.sendFrame(frames.full(), 'state'); continue; }
     const base = writer.queued('state') ? delta.waiting : delta.sent;

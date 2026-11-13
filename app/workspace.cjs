@@ -269,7 +269,10 @@ class Workspace extends EventEmitter {
     }
     return stuck.length ? { stuck } : {};
   }
-  changed() {
+  // session: the one session whose messages this change touched, as a streamed reply does; with none, any
+  // session's may have changed. The daemon then digests only that session's messages again (state-delta.cjs),
+  // with the spaces': every space is digested again on each change, since sharedReplies may rewrite its rows.
+  changed(session) {
     // A wait that has ended is forgotten at the first change after it, with its timer. An open
     // permission prompt starts its wait at the first change that shows it, whatever reported it.
     for (const [key, wait] of this.stuckWaits) {
@@ -290,7 +293,7 @@ class Workspace extends EventEmitter {
       this.activityMarks.set(s.id, mark);
     }
     this.sharedReplies.refresh();
-    this.emit('change');
+    this.emit('change', session);
     if (this.storageWarning) return;
     // Keep burst coalescing, but a continuously streaming reply must not
     // postpone every checkpoint until the provider becomes quiet.
@@ -643,15 +646,15 @@ class Workspace extends EventEmitter {
         const value = update.item;
         applyNativeBlock(s, { ...value, id: `observation:${value.id}`, nativeId: s.nativeId, kind: 'tool',
           incomplete: value.truncated, title: value.title || '原生过程记录', uiTitleMessage: value.title ? value.uiTitleMessage : uiNotice('notice.nativeProcessTitle').uiMessage, status: value.status === 'completed' ? 'complete' : value.status });
-        this.changed();
+        this.changed(s.id);
       }
       const nativeProgress = applyCodexProgress(s, item);
       if (nativeProgress) {
         this.sharedReplies.record(s, nativeProgress);
-        this.changed();
+        this.changed(s.id);
       }
     });
-    on('nativeBlock', item => { if (item.kind === 'gap') { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生观察连接出现缺口；请核对后重新授权。', s.id, undefined, uiActivity('notice.peer.observationBoundary')[1]); this.pauseParticipant(s.id, '原生观察连接出现缺口，请核对后重新授权。', false, uiActivity('notice.run.observationGap')[1]); } if (applyNativeBlock(s, item, this.dataDir)) { this.sharedReplies.record(s, s.messages.find(m => m.id === `native:${item.nativeId}:${item.id}`)); this.changed(); } });
+    on('nativeBlock', item => { if (item.kind === 'gap') { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生观察连接出现缺口；请核对后重新授权。', s.id, undefined, uiActivity('notice.peer.observationBoundary')[1]); this.pauseParticipant(s.id, '原生观察连接出现缺口，请核对后重新授权。', false, uiActivity('notice.run.observationGap')[1]); } if (applyNativeBlock(s, item, this.dataDir)) { this.sharedReplies.record(s, s.messages.find(m => m.id === `native:${item.nativeId}:${item.id}`)); this.changed(item.kind === 'gap' ? undefined : s.id); } });
     on('replyBound', identity => {
       // An accepted native receipt can annotate its exact existing input for
       // reading. This metadata grants no new sharing or execution authority.
@@ -906,8 +909,8 @@ class Workspace extends EventEmitter {
       setActivity(s, ...uiActivity("notice.activity.inputAcceptedReplyUnconfirmed"));
       this.pauseParticipant(s.id, s.activity, false, s.activityUiMessage); this.changed();
     });
-    on('delta', item => { this.sharedReplies.record(s, applyCodexDelta(s, item)); this.changed(); });
-    on('messageItem', item => { this.sharedReplies.record(s, applyCodexMessage(s, item)); this.changed(); });
+    on('delta', item => { this.sharedReplies.record(s, applyCodexDelta(s, item)); this.changed(s.id); });
+    on('messageItem', item => { this.sharedReplies.record(s, applyCodexMessage(s, item)); this.changed(s.id); });
     on('complete', info => {
       this.cancelCapacity(s.id); this.endUnidentifiedWait(s);
       // Only the adapter's verified native identity can authorize a forward.

@@ -7,7 +7,7 @@ const { connectService } = require('../service-connection.cjs');
 const { readFrames, RESPONSE_BYTES } = require('../service-transport.cjs');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-test('a delta client rebuilds the whole state an older client is sent, while a reply streams', { timeout: 15000 }, async t => {
+test('a delta client rebuilds the whole state an older client is sent, while a reply streams', { timeout: 20000 }, async t => {
   const root = path.resolve(__dirname, '../..'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-state-delta-')); fs.chmodSync(dir, 0o700);
   let client, raw, sequence = 0, stderr = '';
   const child = fork(path.join(root, 'app/daemon.cjs'), [dir], { execArgv: ['--require', path.join(root, 'scripts/fixtures/native-progress.cjs')], env: { ...process.env, NAW_TEST_APP_ROOT: root, NAW_WORKSPACE: path.join(dir, 'workspace') }, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
@@ -38,7 +38,7 @@ test('a delta client rebuilds the whole state an older client is sent, while a r
   const info = JSON.parse(fs.readFileSync(path.join(dir, 'connection.json'), 'utf8')), whole = [];
   raw = net.connect(info.endpoint);
   await once(raw, 'connect');
-  const ready = new Promise(resolve => readFrames(raw, RESPONSE_BYTES, m => { if (m.ready) resolve(); else if (m.event === 'state') whole.push(m); }));
+  const ready = new Promise(resolve => readFrames(raw, RESPONSE_BYTES, m => { if (m.ready) resolve(); else if (m.event === 'state') { m.at = Date.now(); whole.push(m); } }));
   raw.write(JSON.stringify({ protocol: 1, owner: 'older-app', token: info.token }) + '\n');
   await ready;
 
@@ -63,4 +63,28 @@ test('a delta client rebuilds the whole state an older client is sent, while a r
   for (let i = 0; i < whole.length; i++) assert.equal(JSON.stringify(rebuilt[i]), JSON.stringify(whole[i].data), `frame ${i}`);
   const last = rebuilt.at(-1).sessions.find(s => s.id === id);
   assert.equal(last.messages.at(-1).text.trim(), 'part '.repeat(6).trim()); assert.equal(last.liveDraft, 'typed but not sent');
+
+  // A streamed reply names its session, and the daemon digests only that session again. A change to another
+  // session's messages that reports nothing is carried, and reaches the delta client within 2 seconds.
+  const other = await client.call('create', { provider: 'codex', cwd: dir, name: 'Synthetic quiet', view: 'chat' });
+  await fixture('nativeBlock', other, { id: 'display:quiet', turnId: 'quiet-turn', kind: 'response', text: 'before', status: 'complete' });
+  await client.call('draft', other, 'everything digested again'); await delay(150);
+  const from = whole.length, edited = Date.now();
+  await fixture('quietEdit', other, 'changed quietly');
+  for (let i = 1; i <= 5; i++) { await fixture('nativeBlock', id, { id: 'display:more', turnId: sent.lastSend.turnId, kind: 'response', text: 'more '.repeat(i), status: 'streaming' }); await delay(80); }
+  await delay(2100 - (Date.now() - edited));
+  await fixture('nativeBlock', id, { id: 'display:more', turnId: sent.lastSend.turnId, kind: 'response', text: 'more '.repeat(6), status: 'complete' }); await delay(150);
+  assert.equal(rebuilt.length, whole.length);
+  const quiet = i => rebuilt[i].sessions.find(s => s.id === other).messages.at(-1).text, late = [];
+  for (let i = from; i < whole.length; i++) if (JSON.stringify(rebuilt[i]) !== JSON.stringify(whole[i].data)) late.push({ i, after: whole[i].at - edited, text: quiet(i) });
+  assert.ok(late.length >= 1 && late.every(frame => frame.text === 'before'), `carried: the delta client still read the quiet session as before (${JSON.stringify(late)})`);
+  assert.ok(late.every(frame => frame.after < 2250), `never later than 2 seconds (${JSON.stringify(late)})`);
+  assert.equal(JSON.stringify(rebuilt.at(-1)), JSON.stringify(whole.at(-1).data)); assert.equal(quiet(rebuilt.length - 1), 'changed quietly');
+  // A change reported without naming a session (a draft here) digests everything again: an earlier change in place
+  // that reported nothing goes with it at once.
+  const reported = whole.length;
+  await fixture('quietEdit', other, 'changed, then any change reported'); await client.call('draft', id, 'reported'); await delay(150);
+  assert.ok(whole.length > reported); assert.equal(rebuilt.length, whole.length);
+  for (let i = reported; i < whole.length; i++) assert.equal(JSON.stringify(rebuilt[i]), JSON.stringify(whole[i].data), `frame ${i}`);
+  assert.equal(quiet(rebuilt.length - 1), 'changed, then any change reported');
 });

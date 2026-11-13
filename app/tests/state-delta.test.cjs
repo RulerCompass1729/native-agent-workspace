@@ -17,14 +17,15 @@ function liveState() {
 // Encode one broadcast whole and as a delta from the one before; the rebuilt delta must equal the
 // whole frame byte for byte once re-encoded. The first broadcast has nothing to build on.
 const lastOf = new WeakMap();
-function step(encoder, base, live) {
-  const frames = encoder.frames(snapshotOf(live), true), previous = lastOf.get(encoder) ?? null; lastOf.set(encoder, frames.generation);
+// changed: the sessions this broadcast names (createStateEncoder); exact: the rebuilt state must equal the whole one.
+function step(encoder, base, live, changed = null, exact = true) {
+  const frames = encoder.frames(snapshotOf(live), true, changed), previous = lastOf.get(encoder) ?? null; lastOf.set(encoder, frames.generation);
   const deltaBytes = frames.delta(previous).length, full = JSON.parse(frames.full()), delta = JSON.parse(frames.delta(previous));
   encoder.keep(new Set([frames.generation]));
   assert.equal(full.delta, undefined); assert.equal(delta.delta, previous === null ? undefined : 1); assert.equal(delta.event, 'state');
-  const rebuilt = delta.delta === 1 ? rebuildState(base, delta.data) : delta.data;
-  assert.equal(JSON.stringify(rebuilt), JSON.stringify(full.data));
-  return { rebuilt, delta: delta.data, fullBytes: frames.full().length, deltaBytes };
+  const rebuilt = delta.delta === 1 ? rebuildState(base, delta.data) : delta.data, same = JSON.stringify(rebuilt) === JSON.stringify(full.data);
+  if (exact) assert.ok(same, 'the rebuilt state reads as the whole one');
+  return { rebuilt, delta: delta.data, fullBytes: frames.full().length, deltaBytes, same };
 }
 const kept = (data, list, id) => (list === 'room' ? data.room : data[list].find(r => r.id === id))?.messagesKeep;
 
@@ -82,12 +83,15 @@ test('a long history that grows by one message goes as that message, not the his
   rebuilt = r.rebuilt;
 });
 
-test('random changes over many frames always rebuild to the whole state', () => {
+// Each change names the session it touched, as workspace.changed does, or nothing for the room and the list;
+// with the clock standing still every unnamed session is carried, and each frame must still rebuild exactly.
+for (const naming of [false, true]) test(`random changes over many frames always rebuild to the whole state${naming ? ', each naming the session it changed' : ''}`, () => {
   let seed = 7; const random = n => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
-  const encoder = createStateEncoder(), live = liveState();
+  const encoder = createStateEncoder(undefined, () => 0), live = liveState();
   let rebuilt = step(encoder, null, live).rebuilt, deltas = 0;
   for (let i = 0; i < 400; i++) {
     const s = live.sessions[random(live.sessions.length)] || live.room;
+    const named = naming ? new Set(s === live.room ? [] : [s.id]) : null;
     switch (random(9)) {
       case 0: case 1: s.messages.push(message(`m${i}`, `text ${i}`)); break;
       case 2: if (s.messages.length) s.messages[s.messages.length - 1].text += ' more'; break;
@@ -98,7 +102,7 @@ test('random changes over many frames always rebuild to the whole state', () => 
       case 7: if (live.sessions.length > 1) live.sessions.splice(random(live.sessions.length), 1); break;
       default: live.room.messages.push(message(`r${i}`, 'space'));
     }
-    const r = step(encoder, rebuilt, live); rebuilt = r.rebuilt;
+    const r = step(encoder, rebuilt, live, named); rebuilt = r.rebuilt;
     if (JSON.stringify(r.delta).includes('messagesKeep')) deltas++;
   }
   assert.ok(deltas > 300, `most frames carried a delta (${deltas})`);
@@ -175,6 +179,56 @@ test('with no client that takes deltas nothing is digested', () => {
   assert.equal(digests, 0); assert.equal(encoder.held(), 0);
   sendState(encoder, [{ writer: w, delta: { sent: null, waiting: null } }], snapshotOf(live));
   assert.ok(digests > 0);
+});
+
+test('a broadcast digests again only the sessions it names and every space; with none named, nothing digested before, or after 2 seconds, everything', () => {
+  let hashed = [], clock = 1000, rebuilt = null;
+  const encoder = createStateEncoder(text => { hashed.push(JSON.parse(text).id); return text; }, () => clock), live = liveState();
+  const send = (changed, exact = true) => { hashed = []; const r = step(encoder, rebuilt, live, changed, exact); rebuilt = r.rebuilt; return r; };
+  send(new Set());
+  assert.deepEqual(hashed.sort(), ['a1', 'a2', 'b1', 'r1', 'r1'], 'nothing digested before: everything (the shared room is both room and a space)');
+  live.sessions[0].messages.push(message('a3', 'stre'));
+  let r = send(new Set(['a']));
+  assert.deepEqual(hashed.sort(), ['a1', 'a2', 'a3', 'r1', 'r1'], 'b keeps its digests');
+  assert.equal(kept(r.delta, 'sessions', 'a'), 2); assert.equal(kept(r.delta, 'sessions', 'b'), 1);
+  // A streamed reply can rewrite a space's rows (shared replies): spaces are digested again every time.
+  live.room.messages[0].text = 'space reply'; live.sessions[0].messages[2].text = 'streaming';
+  r = send(new Set(['a'])); assert.equal(kept(r.delta, 'room'), undefined); assert.equal(r.rebuilt.room.messages[0].text, 'space reply');
+  live.sessions[1].messages[0].status = 'superseded';
+  send(null); assert.ok(hashed.includes('b1'), 'a change that names no session: everything');
+  // A session changed in place without being named is carried, at most 2 seconds after everything was digested.
+  live.sessions[1].messages[0].text = 'changed quietly'; clock += 1999;
+  r = send(new Set(['a']), false); assert.equal(r.same, false); assert.equal(hashed.includes('b1'), false);
+  clock += 1; r = send(new Set(['a']));
+  assert.ok(hashed.includes('b1')); assert.equal(r.rebuilt.sessions[1].messages[0].text, 'changed quietly');
+  send(new Set(['a'])); assert.equal(hashed.includes('b1'), false, 'the 2 seconds start again');
+  // A broadcast that no delta client took leaves nothing to carry.
+  encoder.frames(snapshotOf(live), false, new Set()); send(new Set(['a'])); assert.ok(hashed.includes('b1'));
+  // A session first seen is digested.
+  live.sessions.push({ id: 'c', name: 'C', messages: [message('c1', 'new')] }); send(new Set()); assert.ok(hashed.includes('c1'));
+});
+
+test('the digest work for a streamed reply does not grow with the other sessions\' history', () => {
+  const crypto = require('node:crypto'), since = start => Number(process.hrtime.bigint() - start);
+  const work = size => {
+    let hashed = 0; const encoder = createStateEncoder(text => { hashed++; return crypto.hash('sha256', text, 'base64'); }), live = liveState();
+    live.sessions[1].messages = Array.from({ length: size }, (_, i) => message(`h${i}`, 'x'.repeat(300)));
+    let carried = Infinity, full = Infinity, named = 0;
+    for (let i = 0; i < 3; i++) {
+      encoder.keep(new Set([encoder.frames(snapshotOf(live), true, null).generation]));
+      live.sessions[0].messages.push(message(`a${i + 3}`, 'stre'));
+      hashed = 0; let start = process.hrtime.bigint();
+      encoder.keep(new Set([encoder.frames(snapshotOf(live), true, new Set(['a'])).generation])); carried = Math.min(carried, since(start));
+      named = hashed; start = process.hrtime.bigint();
+      encoder.keep(new Set([encoder.frames(snapshotOf(live), true, null).generation])); full = Math.min(full, since(start));
+      live.sessions[0].messages.pop();
+    }
+    return { named, carried, full };
+  };
+  const small = work(1000), large = work(20000);
+  assert.equal(large.named, small.named, 'the same messages are digested whatever the size of the history beside them');
+  assert.equal(large.named, 3 + 2, 'the named session and the shared room (room and space)');
+  assert.ok(large.carried * 4 < large.full, `named ${large.carried}ns, everything ${large.full}ns`);
 });
 
 function peer() {
