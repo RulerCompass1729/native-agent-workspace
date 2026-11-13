@@ -781,13 +781,18 @@ class Workspace extends EventEmitter {
       this.emit('terminal', { id: s.id, ...event });
     });
     on('activity', (text, uiMessage) => { setActivity(s, text, uiMessage); this.changed(); });
+    // Background task IDs this session started or last reported in flight. Kept across turn ends: a task listed once
+    // may finish during a later turn, whose report no longer lists it. Used up when the task's notification says it
+    // ended; a new native process starts with none.
+    const rememberTasks = ids => {
+      const known = runtime.backgroundTaskIds ||= new Set();
+      for (const id of ids) { known.delete(id); known.add(id); }
+      while (known.size > 200) known.delete(known.values().next().value);
+    };
+    on('backgroundStarted', id => rememberTasks([id]));
     on('background', info => {
       s.background = info.count; s.scheduled = info.scheduled; s.backgroundKinds = Array.isArray(info.kinds) ? info.kinds : null; s.backgroundAt = Date.now(); s.backgroundStale = false;
-      // Kept across turn ends: a task listed once may finish during a later turn, whose report no longer lists it.
-      // Each ID is used once; a new native process starts with none.
-      const known = runtime.backgroundTaskIds ||= new Set();
-      for (const id of Array.isArray(info.ids) ? info.ids : []) { known.delete(id); known.add(id); }
-      while (known.size > 200) known.delete(known.values().next().value);
+      rememberTasks(Array.isArray(info.ids) ? info.ids : []);
       if ([info.count, info.scheduled].some(n => Number.isSafeInteger(n) && n > 0)) this.nativeWorkObserved(s.id, '原生报告仍有后台或定时工作，请核对后再交接。', uiActivity('notice.run.backgroundObserved')[1]);
       this.changed();
     });
@@ -824,7 +829,8 @@ class Workspace extends EventEmitter {
     });
     on('nativeInput', (text, item) => {
       // Machine-injected turns are not a person at the terminal. Claude 2.1.316 sends no hook source,
-      // so a turn made only of notifications for tasks this session last reported in flight also counts.
+      // so a turn made only of notifications for tasks this session started or last reported in flight also counts.
+      // On 2.1.322 most notifications arrive during the turn that started the task, before any turn-end report.
       const blocks = text.match(/<task-notification>[\s\S]*?<\/task-notification>/g), onlyBlocks = Boolean(blocks) && !text.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
       const taskIds = onlyBlocks ? blocks.map(block => /<task-id>\s*([A-Za-z0-9_-]{1,64})\s*<\/task-id>/.exec(block)?.[1]) : [];
       // `naw-peer`: a Claude Code cross-session message, tagged by NAW's mod from the engine's origin (T-137).
@@ -832,7 +838,8 @@ class Workspace extends EventEmitter {
       // control:input boundary (nativeControlBoundary below), which voids wakes staged by or for this session.
       const sourced = ['system', 'loop_wakeup', 'schedule_wakeup', 'poll_event', 'naw-peer'].includes(item?.source);
       const reported = !sourced && !['user', 'sdk'].includes(item?.source) && onlyBlocks && taskIds.every(id => id && runtime.backgroundTaskIds?.has(id));
-      if (reported) for (const id of taskIds) runtime.backgroundTaskIds.delete(id);
+      // A monitor notifies once per event and once when it ends, with the same ID; only a block with a status ends the task.
+      if (reported) blocks.forEach((block, i) => { if (/<status>/.test(block)) runtime.backgroundTaskIds.delete(taskIds[i]); });
       const machine = sourced || reported, inputSource = sourced ? item.source : reported ? 'task-notification' : null;
       // Missing source is not proof of human authorship for report questions.
       if (!machine && item?.source === 'user') this.operatorHuman(s.id);

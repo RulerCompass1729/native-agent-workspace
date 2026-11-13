@@ -1052,6 +1052,31 @@ test('while the old session waits for a collaboration, the new member already ta
   assert.equal(dispatcher.rotations.a.phase, 'kept');
 });
 
+test('a native row NAW recognised as machine input is not the person stepping in (11-12)', () => {
+  const rooms = [{ id: 'shared', name: 'Team', queue: [sentItem(), item('2')] }];
+  const notice = '<task-notification>\n<task-id>bsynth001</task-id>\n<status>completed</status>\n<summary>Synthetic task completed</summary>\n</task-notification>';
+  // Every source workspace.cjs records on a machine row: the member's own background task, a scheduled wake, another agent's message.
+  for (const inputSource of ['task-notification', 'system', 'loop_wakeup', 'schedule_wakeup', 'poll_event', 'naw-peer']) {
+    const messages = [
+      { id: 't1', role: 'user', text: 'NAW task', origin: 'naw-dispatch' },
+      { id: 'r0', role: 'assistant', text: 'Started the build in the background.' },
+      { id: 'n1', role: 'user', text: notice, origin: 'native', inputSource },
+      { id: 'r1', role: 'assistant', text: 'Done: the build passed.' },
+    ];
+    assert.deepEqual(plan(rooms, [member('a', { messages })]), [
+      { kind: 'settle', roomId: 'shared', itemId: '1', status: 'done', sessionId: 'a', reply: 'Done: the build passed.' },
+      { kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a' },
+    ], inputSource);
+  }
+  // The same row without a source is the person, as before: NAW could not tell it from typing.
+  const typed = [{ id: 't1', role: 'user', text: 'NAW task', origin: 'naw-dispatch' }, { id: 'n1', role: 'user', text: notice, origin: 'native' }, { id: 'r1', role: 'assistant', text: 'Done.' }];
+  assert.equal(plan(rooms, [member('a', { messages: typed })])[0].reason, 'person-intervened');
+  for (const inputSource of ['', null, 7]) {
+    const odd = typed.map(m => m.id === 'n1' ? { ...m, inputSource } : m);
+    assert.equal(plan(rooms, [member('a', { messages: odd })])[0].reason, 'person-intervened', String(inputSource));
+  }
+});
+
 test('the person quoting NAW text is still the person; an ended old session needs no wait', () => {
   const rooms = [{ id: 'shared', name: 'Team', queue: [sentItem()] }];
   const quoted = [

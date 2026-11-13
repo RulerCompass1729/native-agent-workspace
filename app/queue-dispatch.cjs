@@ -88,6 +88,18 @@ const DECISION_MARKERS = ['需要你决定：', '需要你决定:', 'Needs your 
 // Input written by NAW or another agent, not by the person.
 // Read by the integration handoff as well; frozen, so that no module that reads it can change it for the queue.
 const AUTOMATIC_ORIGINS = Object.freeze(['naw-dispatch', 'agent-wake', 'capacity-recovery', 'agent-control', 'room']);
+// Whether a user-role row was written by NAW, another agent or the session's own machinery rather than the person:
+// by its origin; a native row NAW recognised as machine input (a background task's notification, a scheduled wake)
+// carries the source it was recognised by; a native row without an origin falls back to NAW's marker.
+function automaticInput(message) {
+  if (!message) return false;
+  if (AUTOMATIC_ORIGINS.includes(message.origin)) return true;
+  if (message.origin === 'native') return typeof message.inputSource === 'string' && message.inputSource !== '';
+  if (message.origin === undefined && typeof message.text === 'string') {
+    return message.text.includes('【NAW 派活】') || message.text.includes('【NAW 换会话】');
+  }
+  return false;
+}
 // Refusals raised before the backend wrote anything: the item is still unsent.
 const NATIVE_DRAFT_KEY = 'error.submission.nativeDraft';
 // A terminal that is no longer open: only its owner may reopen it, and nothing unsent remains.
@@ -430,12 +442,7 @@ function replyAfter(session, tag, sentAt) {
     if (!after) {
       continue;
     }
-    // A row with an origin is judged by it; only native rows without one fall back to NAW's marker.
-    let automatic = AUTOMATIC_ORIGINS.includes(message.origin);
-    if (message.origin === undefined && typeof message.text === 'string') {
-      automatic = message.text.includes('【NAW 派活】') || message.text.includes('【NAW 换会话】');
-    }
-    if (message.role === 'user' && !automatic) {
+    if (message.role === 'user' && !automaticInput(message)) {
       humanAfter = true;
     }
     if (message.role === 'assistant' && typeof message.text === 'string' && message.text.trim()) {
@@ -3205,6 +3212,7 @@ module.exports = {
   replyAfter,
   startsWithDecision,
   AUTOMATIC_ORIGINS,
+  automaticInput,
   UNCONFIRMED_SEND_MS,
   dispatchText,
   handoffRequestText,

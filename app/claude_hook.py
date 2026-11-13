@@ -19,6 +19,14 @@ def main():
     )
     event = {key: message[key] for key in fields if key in message}
     event["token"] = os.environ["NAW_HOOK_TOKEN"]
+    # A tool that started background work: only that task's ID, so that its notification is known
+    # even when it ends before any turn-end report lists it. Nothing the tool ran or printed.
+    response = message.get("tool_response")
+    if message.get("hook_event_name") == "PostToolUse" and isinstance(response, dict):
+        task = {"Bash": "backgroundTaskId", "Monitor": "taskId"}.get(message.get("tool_name"))
+        task = response.get(task) if task else None
+        if isinstance(task, str) and 0 < len(task) <= 64:
+            event["background_task_id"] = task
     ask = "--ask" in sys.argv and message.get("tool_name") == "AskUserQuestion"
     if ask:
         # The chat view may answer this question; NAW replies with answers or

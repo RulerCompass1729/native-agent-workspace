@@ -269,6 +269,13 @@ test('after an automatic message from someone else: a later answer counts when t
     const quoting = sessionWith(says('r1', merged('a'), NOW + 1), user('typed', `这一句是什么意思：【NAW 集成交接】${opened.handoffId}：…`, origin ? { origin } : {}));
     assert.deepEqual(shape(backlog.plan(later(quoting))).slice(0, 2), ['waiting', 'person-intervened'], String(origin));
   }
+  // A native row NAW recognised as machine input (the integrator's own background task ending, a scheduled wake) is
+  // not the person's step; like any automatic message, what follows it must read like an answer (11-12).
+  for (const inputSource of ['task-notification', 'system', 'loop_wakeup']) {
+    const machine = user('machine', '<task-notification>\n<task-id>bsynth001</task-id>\n<status>completed</status>\n</task-notification>', { origin: 'native', inputSource });
+    assert.deepEqual(shape(planned(['a'], sessionWith(machine, says('r1', merged('a'), NOW + 3))).action), ['done', undefined, undefined, [key('a')], 0], inputSource);
+  }
+  assert.deepEqual(shape(planned(['a'], sessionWith(user('machine', '<task-notification></task-notification>', { origin: 'native' }), says('r1', merged('a'), NOW + 3))).action).slice(0, 2), ['waiting', 'person-intervened'], 'Without a source it is the person');
   // A native row without an origin that is not NAW's own counts as the person's typing, as before; so does another handoff's message.
   assert.deepEqual(shape(planned(['a'], sessionWith(says('r1', merged('a'), NOW + 1), user('other', '【NAW 集成交接】H9-00000000：other deliveries'))).action).slice(0, 2), ['waiting', 'person-intervened']);
   // This handoff's own message as a native row (NAW's copy replaced, with or without its origin) is neither the person's step nor a message from someone else.
