@@ -103,7 +103,9 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
     // Exact main e673782 compatibility copy before a space message's mid-turn frame.
     '280a737a8edaa495ae173b2623edb4302159d8b5fc86ed24cf58aa12e6abcea7',
     // Exact main 64876c8 compatibility copy before 2.1.323 qualification.
-    '9c45c7131ad8db8a26ed4d8048f36fe8dae98e9cd918ea549f62e0f48418861f']);
+    '9c45c7131ad8db8a26ed4d8048f36fe8dae98e9cd918ea549f62e0f48418861f',
+    // Exact 532d984 copy (2.1.323 qualification, before its review rewording).
+    '989382d638deb015a4134b60326f13b3e80124a3808ccf48b8474091f6ba5954']);
   const upgrades = new Set();
   for (const [name, content] of files) {
     const filename = path.join(directory, name);

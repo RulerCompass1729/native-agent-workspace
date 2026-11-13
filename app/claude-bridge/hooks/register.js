@@ -1331,9 +1331,11 @@ export function register(on) {
       : ['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(nativeVersion);
     // 2.1.321/322: narration, terminal turn records, free usage and context transitions
     // match 2.1.319 declarations and pass the same guarded fixtures. 2.1.323: the declarations
-    // this mod uses differ from 2.1.322's only in comments and an optional ToolInfo field; it adds
-    // Progress, theme grounds, AbovePromptList and engine raises of tool.list and mcp.connect, none
-    // hooked here. Media stays off pending its producer contract; queue, capacity and direct input have separate gates.
+    // this mod uses differ from 2.1.322's in comments and an optional ToolInfo field, and $.tool.list()
+    // (observeAddressedTool) now reads through other plugins' tool.list hooks, while an mcp.connect hook
+    // can hold the workspace server back: either way the tool reads as absent, as the model sees it, so
+    // the workspace tools stay off. It adds Progress, theme grounds and AbovePromptList, none hooked here.
+    // Media stays off pending its producer contract; queue, capacity and direct input have separate gates.
     // 2.1.318 and 2.1.319 (T-171): native blocks too, so workspace messages have their turn identity. Their
     // declarations differ from 2.1.317's only in declarations this mod does not use (model.fork effort, the
     // backdrop/theme API, command results, turn attribution). Their display/usage/transition contracts also
