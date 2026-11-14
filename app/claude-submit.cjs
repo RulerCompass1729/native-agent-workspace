@@ -23,12 +23,14 @@ class SubmissionChannel extends EventEmitter {
   }
   // midturn: the mod may hold the message for the running turn's next tool boundary
   // (it answers /hold), so the first-answer limit ends there; authorization stays at dispatch.
+  // A guard marked ownInput is the person's own private message: the mod sends it beside a draft
+  // in the native prompt, which stays as typed (measured); anything else still waits for the draft.
   request(text, tag, guard, waitForNativeTurn = false, midturn = false, midturnText) {
     if (!this.connected) return Promise.reject(Object.assign(uiError("error.safeSubmissionNotReady"), { notSent: true }));
     if (this.pending) return Promise.reject(Object.assign(uiError("error.previousSubmissionPending"), { notSent: true }));
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.finish(uiError("error.nativeSubmissionUnconfirmed")), this.timeout);
-      this.pending = { text, tag, guard, resolve, reject, timer, delivered: false, authorized: false, waitForNativeTurn, midturn: midturn === true, midturnText: midturn === true && typeof midturnText === 'string' && midturnText ? midturnText : undefined, held: false, deadline: Date.now() + this.timeout };
+      this.pending = { text, tag, guard, resolve, reject, timer, delivered: false, authorized: false, waitForNativeTurn, midturn: midturn === true, midturnText: midturn === true && typeof midturnText === 'string' && midturnText ? midturnText : undefined, held: false, own: guard?.ownInput === true, deadline: Date.now() + this.timeout };
       this.flush();
     });
   }
@@ -37,7 +39,7 @@ class SubmissionChannel extends EventEmitter {
     if (!p || !response || p.delivered) return;
     if (!p.guard()) return this.finish(uiError("error.submissionRevokedByHuman"));
     p.delivered = true; this.poll = null;
-    response.end(JSON.stringify({ id: p.tag, text: p.text, ...(p.midturn ? { midturn: true } : {}), ...(p.midturnText ? { midturnText: p.midturnText } : {}) }));
+    response.end(JSON.stringify({ id: p.tag, text: p.text, ...(p.midturn ? { midturn: true } : {}), ...(p.midturnText ? { midturnText: p.midturnText } : {}), ...(p.own ? { own: true } : {}) }));
   }
   hold(message) {
     const p = this.pending;

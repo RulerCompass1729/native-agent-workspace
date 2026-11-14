@@ -18,6 +18,12 @@ Workspace.prototype.claim = function (id, ...args) {
     resolve();
   } }));
 };
+// hold-send: the next send to a session waits for release-send, then checks its guard again, as Claude's mod does when it
+// asks to authorize right before submitting. dispatch-send: a NAW queue item sent to the session.
+const heldSends = new Set(), waitingSends = [], revoked = [], dispatchErrors = [];
+let current = null;
+const send = Workspace.prototype.send;
+Workspace.prototype.send = function (...args) { current = this; return send.apply(this, args); };
 const heldInputs = new Set(), heldInputAcks = new Set(), waitingInputs = [];
 const originalInput = Workspace.prototype.input;
 Workspace.prototype.input = function (id, ...args) {
@@ -40,6 +46,8 @@ NativeHost.prototype.create = function (record) {
   r.stop = async () => ({ state: 'ended' });
   r.send = async (text, tag, guard) => {
     if (!r.chatAvailable || !guard()) throw Error('Synthetic send unavailable');
+    if (heldSends.delete(record.id)) await new Promise(resolve => waitingSends.push({ id: record.id, release: resolve }));
+    if (!guard()) { revoked.push({ id: record.id, text }); throw Object.assign(require(path.join(root, 'app/ui-errors.cjs')).uiError('error.submissionRevokedByHuman'), { notSent: true }); }
     sends.push({ id: record.id, text }); r.pendingTag = tag;
     r.emit('submitted', tag); r.emit('state', 'working');
   };
@@ -64,6 +72,9 @@ process.on('message', q => {
   if (['release-input', 'fail-input'].includes(q.method)) { const at = waitingInputs.findIndex(c => c.id === q.target); if (at >= 0) waitingInputs.splice(at, 1)[0].release(q.method === 'fail-input'); }
 
   if (q.method === 'hold-claim') heldClaims.add(q.target);
+  if (q.method === 'hold-send') heldSends.add(q.target);
+  if (q.method === 'release-send') { const at = waitingSends.findIndex(c => c.id === q.target); if (at >= 0) waitingSends.splice(at, 1)[0].release(); }
+  if (q.method === 'dispatch-send') current.send(q.target, q.value, 'naw-dispatcher', null, null, null, null, null, null, null, { itemId: 'fixture-item' }).catch(error => dispatchErrors.push(error.message));
   if (['release-claim', 'fail-claim', 'release-taken'].includes(q.method)) { const at = claims.findIndex(c => c.id === q.target); if (at >= 0) claims.splice(at, 1)[0].release(q.method); }
   if (q.method === 'release') {
     const at = pending.findIndex(p => p.id === q.target);
@@ -103,5 +114,5 @@ process.on('message', q => {
   }
   if (q.method === 'fail') { const at = pending.findIndex(p => p.id === q.target); if (at >= 0) pending.splice(at, 1)[0].reject(Error('Synthetic snapshot failure')); }
   if (q.method === 'first-message-required') { const at = pending.findIndex(p => p.id === q.target); if (at >= 0) pending.splice(at, 1)[0].reject(Error('请先在对话中发送第一条消息，再打开同一会话的原生终端。')); }
-  process.send({ requestId: q.id, waitingInputs: waitingInputs.map(c => c.id), pending: pending.map(p => p.id), claims: claims.map(c => c.id), inputs, sends, interruptions, queued });
+  process.send({ requestId: q.id, waitingInputs: waitingInputs.map(c => c.id), waitingSends: waitingSends.map(c => c.id), pending: pending.map(p => p.id), claims: claims.map(c => c.id), inputs, sends, revoked, dispatchErrors, interruptions, queued });
 });

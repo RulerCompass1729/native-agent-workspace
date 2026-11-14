@@ -162,6 +162,8 @@ class Workspace extends EventEmitter {
     this.deadlineTimer = setInterval(() => { for (const room of this.rooms.values()) this.expireRun(room.run); this.tickCapacity(); this.tickToolWait(); }, 1000);
     this.deadlineTimer.unref();
     this.forwards = new Map(); this.pendingDrafts = new Map();
+    // Keys the person typed into each session's native terminal (not saved): see ownControl.
+    this.terminalKeys = new Map();
     this.sharedReplies = new SharedReplies(this);
     this.approvalRoutes = new Map();
     // Waits that may become stuck, in memory only: a restart leaves no interrupt or approval pending.
@@ -1345,6 +1347,15 @@ class Workspace extends EventEmitter {
       this.changed(); this.persist(); throw error;
     }
   }
+  // The person's own private message stays valid while they type in that session's native terminal (the person,
+  // 2026-11-13: 两边的输入可以不要锁定): keys there raise controlRevision and terminalKeys together, so only
+  // another control change (a takeover, an interrupt, a turn they submit in the terminal) takes the message back.
+  // Automatic, queued and handoff messages keep the plain controlRevision check: a key still takes them back.
+  // Keys an agent types into the terminal (a background operation) are not counted, so they still take it back.
+  ownControl(s) {
+    const control = s.controlRevision, keys = this.terminalKeys.get(s.id) || 0;
+    return () => s.controlRevision - (this.terminalKeys.get(s.id) || 0) === control - keys;
+  }
   async send(id, text, owner, route = null, forward = null, sourceMessage = null, recovery = null, wakeTicket = null, mobile = null, images = null, dispatch = null) {
     const backgroundValid = backgroundOperation.inputGuard(this, [id], backgroundOperation.current() || route?.agentControl);
     const originalText = text; text = images && typeof text === 'string' && text.length <= 16000 && !text.trim() ? '' : cleanText(text); if (wakeTicket || mobile || backgroundOperation.current()) text = originalText;
@@ -1380,12 +1391,16 @@ class Workspace extends EventEmitter {
     if (runtime.chatAvailable === false) throw uiError(s.provider === 'claude' ? 'error.workspace.claudeSubmitDisconnected' : 'error.workspace.nativeFirstMessageRequired');
     const roomId = route?.roomId || forward?.roomId || 'shared', room = this.roomFor(roomId);
     const control = s.controlRevision; const member = spaces.membershipRevision(s, roomId); const connection = s.connectionRevision;
+    const own = !route && !forward && !dispatch && !wakeTicket && !recovery && !mobile && !backgroundOperation.current();
+    const sameControl = own ? this.ownControl(s) : () => s.controlRevision === control;
     const guard = () => {
       this.expireRun(route);
-      return backgroundValid() && (!dispatch || dispatchAllowed()) && (!mobile || mobileSession.valid(mobile)) && (!wakeTicket || wakeTicket.valid(wakeTicket.tag)) && (!recovery || this.capacityValid(s, recovery)) && !runtime.nativeInputRequired && s.state !== 'ended' && s.controlRevision === control &&
+      return backgroundValid() && (!dispatch || dispatchAllowed()) && (!mobile || mobileSession.valid(mobile)) && (!wakeTicket || wakeTicket.valid(wakeTicket.tag)) && (!recovery || this.capacityValid(s, recovery)) && !runtime.nativeInputRequired && s.state !== 'ended' && sameControl() &&
         (!failedTurn || runtime.submission?.pending?.authorized || runtime.pending?.accepted || runtime.failedTurnInputMatches(failedTurn)) &&
         (!(route || forward) || (spaces.isMember(s, roomId) && spaces.membershipRevision(s, roomId) === member)) && (!route || (this.routeValid(route))) && (roomId === 'shared' || !this.storageWarning);
     };
+    // Claude's mod sends the person's own message beside a draft in the native prompt (claude-submit.cjs).
+    if (own) guard.ownInput = true;
     if (!guard()) throw uiError("error.workspace.handoffExpired");
     if (!recovery) this.cancelCapacity(id);
     const tag = imageTag || mobile?.row?.tag || randomUUID(); s.pendingTag = tag;
@@ -1422,20 +1437,20 @@ class Workspace extends EventEmitter {
     }
     catch (error) {
       const current = this.runtimes.get(id) === runtime && s.connectionRevision === connection && s.pendingTag === tag;
-      const sameControl = s.controlRevision === control;
+      const unchangedControl = sameControl();
       this.forwards.delete(tag); this.sharedReplies.close(tag, '接收结果未确认', uiActivity('notice.sharing.receiptUnconfirmed')[1]);
       this.deliveryStatus(tag, 'unconfirmed');
       for (const list of this.messageLists(s)) { const m = list.find(m => m.id === tag); if (m?.status === 'awaiting-native') m.status = mobile && (!mobile.started || error.notSent === true) ? 'not-sent' : 'unconfirmed'; }
       if (current) {
         s.pendingTag = null;
-        if (sameControl) {
+        if (unchangedControl) {
           if (clearedDraft && this.draftRevisions.get(id) === draftRevision) this.drafts.set(id, draft);
           // A private send already stopped the previous exchange. Its late
           // rejection cannot revoke a later authorization for other sessions.
           if (route) this.pause(error.message, route, false, error.uiMessage);
         }
       } else if (!this.runtimes.has(id) && s.state === 'recoverable' && s.connectionRevision === connection
-        && sameControl && !s.pendingTag && clearedDraft && this.draftRevisions.get(id) === draftRevision) {
+        && unchangedControl && !s.pendingTag && clearedDraft && this.draftRevisions.get(id) === draftRevision) {
         // Confirmed backend exit may retire the runtime before its rejected
         // ACK settles. Retain only this unchanged, still-owned draft.
         this.drafts.set(id, draft);
@@ -1461,9 +1476,11 @@ class Workspace extends EventEmitter {
     // private input still revokes its output scope immediately.
     if (!shared) s.controlRevision++;
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
+    const sameControl = !shared && !backgroundOperation.current() ? this.ownControl(s) : () => s.controlRevision === control;
     const valid = () => backgroundValid() && this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending &&
-      s.controlRevision === control && s.connectionRevision === connection && !s.approval && !['ended', 'recoverable', 'error', 'disconnected'].includes(s.state) &&
+      sameControl() && s.connectionRevision === connection && !s.approval && !['ended', 'recoverable', 'error', 'disconnected'].includes(s.state) &&
       (!shared || (spaces.isMember(s, roomId) && spaces.membershipRevision(s, roomId) === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed)) && (roomId === 'shared' || !this.storageWarning);
+    if (!shared && !backgroundOperation.current()) valid.ownInput = true;
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
     // Like a native TUI queue, the recorded message leaves the composer at once.
     const clearedDraft = !backgroundOperation.current() && !shared && typeof draft === 'string' && draft.trim() === text;
@@ -1541,7 +1558,8 @@ class Workspace extends EventEmitter {
       !runtime.steerAvailable || runtime.pendingSteer || typeof expectedTurnId !== 'string' || !expectedTurnId || runtime.turnId !== expectedTurnId) throw uiError("error.workspace.nativeTurnOrControlChanged");
     if (shared) { this.pauseParticipant(id, '真人追加指令', false, uiActivity('notice.run.humanSteer')[1]); this.pauseRoom(roomId, '真人追加指令', uiActivity('notice.run.humanSteer')[1]); } else this.pause('真人追加指令', undefined, false, uiActivity('notice.run.humanSteer')[1]); s.controlRevision++;
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
-    const valid = () => backgroundValid() && this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending && s.controlRevision === control &&
+    const sameControl = !shared && !backgroundOperation.current() ? this.ownControl(s) : () => s.controlRevision === control;
+    const valid = () => backgroundValid() && this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending && sameControl() &&
       s.connectionRevision === connection && !['ended', 'recoverable', 'error', 'disconnected', 'approval'].includes(s.state) && !s.approval && runtime.turnId === expectedTurnId &&
       (!shared || (spaces.isMember(s, roomId) && spaces.membershipRevision(s, roomId) === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed)) && (roomId === 'shared' || !this.storageWarning);
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
@@ -1560,7 +1578,7 @@ class Workspace extends EventEmitter {
       await runtime.steer(text, tag, expectedTurnId, valid, Boolean(shared));
       accepted = true;
       message.status = 'submitted'; this.deliveryStatus(tag, 'submitted');
-      if (!backgroundOperation.current() && !shared && s.controlRevision === control && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
+      if (!backgroundOperation.current() && !shared && sameControl() && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
       return tag;
     } catch (error) {
       // Do not relabel ongoing output as cancelled or retry this input.
@@ -1578,7 +1596,7 @@ class Workspace extends EventEmitter {
         // and pending marker settle. Uncertain input or a newer human boundary
         // must still cancel recovery, including edits subsequently cleared.
         const unchanged = accepted && this.runtimes.get(id) === runtime && s.owner === controller &&
-          s.nativeId === nativeId && s.controlRevision === control && spaces.membershipRevision(s, roomId) === member &&
+          s.nativeId === nativeId && sameControl() && spaces.membershipRevision(s, roomId) === member &&
           s.connectionRevision === connection && this.draftRevisions.get(id) === draftRevision;
         runtime.finishTurn(expectedTurnId);
         if (!unchanged) this.cancelCapacity(id);
@@ -1662,7 +1680,7 @@ class Workspace extends EventEmitter {
     // The window that controls the session types into its terminal whichever side its view is on (the person,
     // 2026-11-13: 两边的输入可以不要锁定); the view only routes a held question.
     const response = isTerminalResponse(data);
-    if (!response) { if (!backgroundOperation.current()) wake.human(this, id); this.cancelCapacity(id); this.pause('真人在原生终端操作', undefined, false, uiActivity('notice.run.humanTerminalAction')[1]); s.controlRevision++; s.terminalInputPending = true; }
+    if (!response) { if (!backgroundOperation.current()) wake.human(this, id); this.cancelCapacity(id); this.pause('真人在原生终端操作', undefined, false, uiActivity('notice.run.humanTerminalAction')[1]); s.controlRevision++; if (!backgroundOperation.current()) this.terminalKeys.set(id, (this.terminalKeys.get(id) || 0) + 1); s.terminalInputPending = true; }
     const t = runtime.terminal; if (!t?.alive) throw uiError("error.workspace.terminalNotConnected"); t.input(data);
   }
   resize(id, owner, cols, rows) { const s = this.get(id); if (s.owner === owner && Number.isInteger(cols) && Number.isInteger(rows)) this.runtime(id).terminal?.resize(cols, rows); }

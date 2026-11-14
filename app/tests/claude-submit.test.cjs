@@ -286,3 +286,15 @@ test('a mid-turn request carries its mid-turn text to the mod; an ordinary one n
   assert.deepEqual(second.value, { id: 'ordinary', text: 'plain' });
   await assert.rejects(ordinary, error => error.notSent === true);
 });
+test('only a guard marked as the person\'s own message tells the mod so (it may go in beside a native draft)', async t => {
+  const channel = new SubmissionChannel(20); t.after(() => channel.close());
+  const own = Object.assign(() => true, { ownInput: true });
+  const first = poll(channel), mine = channel.request('box text', 'mine', own, true, true);
+  assert.deepEqual(first.value, { id: 'mine', text: 'box text', midturn: true, own: true });
+  await assert.rejects(mine, error => error.notSent === true);
+  for (const guard of [() => true, Object.assign(() => true, { ownInput: 'yes' })]) {
+    const next = poll(channel), other = channel.request('queue item', 'other', guard);
+    assert.deepEqual(next.value, { id: 'other', text: 'queue item' });
+    await assert.rejects(other, error => error.notSent === true);
+  }
+});
