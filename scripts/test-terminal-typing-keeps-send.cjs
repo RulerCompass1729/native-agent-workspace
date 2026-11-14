@@ -8,7 +8,14 @@ const { createIn } = require('./fixtures/create-view.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright')), { connect } = require('../app/service-client.cjs');
-const root = path.resolve(__dirname, '..'), profile = testScratch.directory(path.join(os.tmpdir(), 'naw-typing-keeps-send-'));
+const root = path.resolve(__dirname, '..');
+// One hidden GUI test at a time on this machine: take the shared GUI slot before anything starts (exit 75 = occupied).
+const common = require('node:child_process').execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
+const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = require('node:crypto').randomUUID();
+try { fs.mkdirSync(slot); } catch (e) { if (e.code !== 'EEXIST') throw e; console.error('GUI slot occupied; no launch.'); process.exit(75); }
+fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token, owner: 'test-terminal-typing-keeps-send', pid: process.pid, at: new Date().toISOString() }));
+const releaseSlot = () => { try { if (JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))).token === token) fs.rmSync(slot, { recursive: true }); } catch {} };
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-typing-keeps-send-'));
 const child = fork(path.join(root, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')], env: { ...process.env, NAW_APP_VERSION: require('../package.json').version, NAW_WORKSPACE: profile }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 let app, page, client, sequence = 0; const errors = [], passed = [], measurements = [];
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -74,5 +81,6 @@ async function run() {
   console.log(JSON.stringify({ passed, measurements, errors, nativeProviderProcesses: 0, nativeModelCalls: 0, oneWindow: true }));
 }
 run().catch(async e => { console.error(e.stack); if (page) await capture('failed'); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
-  if (app) await app.close(); if (client) { const s = await client.call('initial'); for (const x of s.sessions) await client.call('stop', x.id); await client.call('shutdown'); client.close(); } if (child.connected) child.disconnect();
+  try { if (app) await app.close(); if (client) { const s = await client.call('initial'); for (const x of s.sessions) await client.call('stop', x.id); await client.call('shutdown'); client.close(); } if (child.connected) child.disconnect(); }
+  finally { releaseSlot(); }
 }));
