@@ -1947,6 +1947,86 @@ test('when the typed-into terminal cannot be saved, the old session is kept and 
   assert.deepEqual(notices, ['keptUnsaved']);
 });
 
+// Rotation drill, finding 2 (2026-11-14, run2: an item added to 空间C without a member went to the kept old 辛):
+// once the old session is kept beside its successor, the member's work goes to the successor only.
+async function keptBesideSuccessor(t) {
+  const notices = [];
+  const old = member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp', terminalInputPending: true });
+  const setup = dispatcherSetup(t, [old], { notify: kind => notices.push(kind) });
+  const { room, client, dispatcher } = setup;
+  fakeMembership(room, client);
+  client.snapshotFails = true;
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  client.reply('a', '交接：在 feature 分支。');
+  await dispatcher.schedule();
+  const newId = client.state.sessions[1].id;
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  assert.deepEqual(notices, ['keptUnsaved']);
+  assert.ok(client.state.sessions[0].roomIds.includes('shared') && client.state.sessions[1].roomIds.includes('shared'), 'both stay in the space');
+  client.reply(newId, '已核对交接。');
+  await dispatcher.schedule();
+  client.reply(newId, 'next task 做完了。');
+  await dispatcher.schedule();
+  return { ...setup, newId };
+}
+
+test('finding 2: after the old session is kept, an item added without a member goes to the successor, not the old one', async t => {
+  const { room, client, dispatcher, newId } = await keptBesideSuccessor(t);
+  const handoff = client.sends(newId)[0][2];
+  assert.doesNotMatch(handoff, /旧会话已经结束/, 'the handoff, sent before the outcome, does not claim the old one ended');
+  assert.match(handoff, /要是人这时还在用它，就留给人用完自己关，这个空间里没指定成员的活 NAW 之后派给你/);
+  const before = client.sends('a').length;
+  room.queueAdd('C 的新一件（没指定成员）', null);
+  await dispatcher.schedule();
+  assert.equal(client.sends('a').length, before, 'the kept old session gets no new work');
+  assert.match(client.sends(newId).at(-1)[2], /C 的新一件/);
+  // While the successor is busy, the item waits for it rather than going to the old session.
+  room.queueAdd('再一件', null);
+  await dispatcher.schedule();
+  assert.equal(client.sends('a').length, before);
+  assert.equal(room.value.queue.at(-1).status, 'queued');
+  const vacancy = rules.queueVacancies({ rooms: client.snapshot().rooms.map(r => ({ ...r, queue: [] })), sessions: client.snapshot().sessions,
+    wakePolicy: AWAKE, idleSince: settledSince(['a', newId]), now: NOW, handedOff: dispatcher.handedOff() })[0];
+  assert.equal(vacancy.candidateIds.includes('a'), false, 'nor is it shown as a free member of the space');
+});
+
+test('finding 2: an item assigned to the kept old session by name still goes to it, and once the successor ends the old one takes the space\'s work again', async t => {
+  const { room, client, dispatcher, newId } = await keptBesideSuccessor(t);
+  room.queueAdd('只给旧的', 'a');
+  await dispatcher.schedule();
+  assert.match(client.sends('a').at(-1)[2], /只给旧的/);
+  client.reply('a', '好了。');
+  await dispatcher.schedule();
+  client.state.sessions.find(s => s.id === newId).state = 'ended';
+  const before = client.sends('a').length;
+  room.queueAdd('没指定成员的', null);
+  await dispatcher.schedule();
+  assert.equal(client.sends('a').length, before + 1);
+  assert.match(client.sends('a').at(-1)[2], /没指定成员的/);
+});
+
+// Review of finding 2: a stopped Codex successor is 'disconnected', a crashed one 'recoverable'; neither carries the work.
+for (const state of ['disconnected', 'recoverable', 'error', 'background', 'stopping']) {
+  test(`finding 2: a successor that is ${state} no longer keeps the kept old session from the space's work`, async t => {
+    const { room, client, dispatcher, newId } = await keptBesideSuccessor(t);
+    client.state.sessions.find(s => s.id === newId).state = state;
+    const before = client.sends('a').length;
+    room.queueAdd('没指定成员的', null);
+    await dispatcher.schedule();
+    assert.equal(client.sends('a').length, before + 1);
+    assert.match(client.sends('a').at(-1)[2], /没指定成员的/);
+  });
+}
+
+test('finding 2: the butler\'s handoff says the designation stays with a kept old session', () => {
+  const text = rules.handoffText('大管家', '交接', '', '【大管家职责】');
+  assert.match(text, /要是人这时还在用旧会话，它就留给人用，大管家仍是它，直到人另行指定/);
+  assert.doesNotMatch(text, /旧会话已经结束/);
+});
+
 test('a typed-into session whose terminal is no longer open is ended without reopening it', async t => {
   const { client, notices, dir } = await rotateTypedSession(t, false, true);
   assert.ok(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), 'nothing unsent remains, so it ends');

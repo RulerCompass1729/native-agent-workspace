@@ -850,10 +850,13 @@ function queueVacancies(input) {
     if (room.run?.status === 'running' && Array.isArray(room.run.ids)) for (const id of room.run.ids) busy.add(id);
     for (const item of room.queue || []) if (item.sentTo && holdsMember(item)) busy.add(item.sentTo);
   }
+  const byId = new Map((input.sessions || []).map(session => [session.id, session]));
   return (input.rooms || []).map(room => {
+    const members = new Set(memberIds(room, input.sessions || []));
     // A space with only items left for the person to look at has nothing to send or wait for.
     const candidates = !room.archived && !(room.queue || []).some(item => item.status === 'queued' || holdsMember(item))
       ? (input.sessions || []).filter(session => !busy.has(session.id) && roomIds(session).includes(room.id) &&
+        !carriedOn(session.id, input.handedOff, members, byId) &&
         sessionReady(session, input.wakePolicy).ready &&
         !humanRecent(session.id, input.humanAt || new Map(), input.now, input.humanQuietMs ?? HUMAN_QUIET_MS))
       : [];
@@ -865,6 +868,36 @@ function queueVacancies(input) {
 }
 
 // One pass over every space. Returns the actions in the order to run them.
+// A kept old session handed its work to a successor and stays only for the person (rotation drill, finding 2,
+// 2026-11-14: an item added without a member went to the old session, so two contexts did one member's work).
+// While a successor of it (or of that successor) is still in the space, that space's unassigned items go there,
+// never to the old one. An item the chooser assigned to the old session by name still goes to it.
+// A successor in one of these states runs no native process that can take the work: stopped (a Codex stop ends
+// 'disconnected', workspace.cjs:2010-2013), crashed ('recoverable'), failed, backgrounded or being stopped. The
+// list is workspace.cjs:849's, plus 'stopping'. Independent review of this change, 2026-11-14: with 'ended' alone, a
+// stopped Codex successor kept its old session from the space's work for good.
+const SUCCESSOR_GONE_STATES = ['ended', 'stopping', 'background', 'recoverable', 'error', 'disconnected'];
+function carriedOn(id, handedOff, members, byId) {
+  if (!handedOff || typeof handedOff.get !== 'function') {
+    return false;
+  }
+  const seen = new Set([id]);
+  const next = [...(handedOff.get(id) || [])];
+  while (next.length) {
+    const to = next.shift();
+    if (seen.has(to)) {
+      continue;
+    }
+    seen.add(to);
+    const session = byId.get(to);
+    if (members.has(to) && session && !SUCCESSOR_GONE_STATES.includes(session.state)) {
+      return true;
+    }
+    next.push(...(handedOff.get(to) || []));
+  }
+  return false;
+}
+
 function planDispatch(input) {
   const rooms = input.rooms || [];
   const sessions = input.sessions || [];
@@ -1001,11 +1034,13 @@ function planDispatch(input) {
       continue;
     }
     const members = memberIds(room, sessions);
+    const memberSet = new Set(members);
+    const unassigned = members.filter(id => !carriedOn(id, input.handedOff, memberSet, byId));
     for (const item of room.queue || []) {
       if (item.status !== 'queued') {
         continue;
       }
-      let candidates = members;
+      let candidates = unassigned;
       if (item.assignee) {
         candidates = [];
         if (members.includes(item.assignee)) {
@@ -1186,14 +1221,21 @@ function directoryHandoff(record, snapshot) {
 // `duty`: the butler's duty statement, handed on with the handoff when the butler is replaced (steward step 2,
 // batch 3; the activation checklist, item 6: 「换会话后再发一次」). The backend takes at most SEND_TEXT_LIMIT
 // characters (workspace.cjs cleanText), so a handoff that would not fit is shortened, never the statement.
+// Sent before NAW knows whether the old session ends: what it says about the old one holds either way. A kept
+// old session stays for the person; the space's work goes on to the successor (carriedOn), while the butler
+// designation, the person's own setting, stays where the person is using it (queue-secretary.cjs successor).
 function handoffText(oldName, handoff, directoryNote = '', duty = '') {
+  const after = duty
+    ? '旧会话交完就结束，大管家由你接着当；要是人这时还在用旧会话，它就留给人用，大管家仍是它，直到人另行指定。'
+    : '旧会话交完就结束；要是人这时还在用它，就留给人用完自己关，这个空间里没指定成员的活 NAW 之后派给你。';
   const text = body => [
-    `【NAW 换会话】你接手「${oldName}」的工作。旧会话已经结束，它写的交接如下：`,
+    `【NAW 换会话】你接手「${oldName}」的工作，它写的交接如下：`,
     '',
     body,
     '',
     ...(directoryNote ? [directoryNote, ''] : []),
     ...(duty ? [duty, ''] : []),
+    after,
     '先按交接核对现状（只读即可），然后结束本轮，不留后台等待；这个空间有队列时，NAW 会接着派下一件。',
   ].join('\n');
   const left = SEND_TEXT_LIMIT - text('').length;
@@ -2010,12 +2052,18 @@ class QueueDispatcher {
   }
 
   // Built once per log change: windows read it on every state event.
-  // Old sessions that already handed their work to a successor (done or kept), from the log.
+  // Old sessions that already handed their work to a successor (done or kept), from the log, each with the
+  // successors it handed to (carriedOn).
   handedOff() {
-    const ids = new Set();
+    const ids = new Map();
     for (const entry of this.log) {
       if (['done', 'kept'].includes(entry.event) && entry.old && entry.old.id) {
-        ids.add(entry.old.id);
+        if (!ids.has(entry.old.id)) {
+          ids.set(entry.old.id, new Set());
+        }
+        if (entry.new && validId(entry.new.id || '')) {
+          ids.get(entry.old.id).add(entry.new.id);
+        }
       }
     }
     return ids;
@@ -2515,7 +2563,7 @@ class QueueDispatcher {
       idleSince: this.vacancySince, humanAt: this.humanAt, now: current.now,
       settleMs: this.settleMs, humanQuietMs: this.humanQuietMs,
       rotations: Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id))),
-      actions, engaged, ...this.trustAdmission() }));
+      actions, engaged, handedOff, ...this.trustAdmission() }));
     if (this.integration && !this.closed) await this.integrate();
     if (this.stewardWake && !this.closed) await this.wakeSteward(current, engaged);
     if (this.answerNotices && !this.closed) await this.notifyAnswers(current, engaged);
