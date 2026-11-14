@@ -712,11 +712,14 @@ class RoomState {
   }
   // Besides an item waiting for them, the person or the butler may mark handled one already sent whose work was done
   // another way (11-12: the butler could not close it, item 0bcc3c9c). NAW then does not settle it; the dispatcher
-  // leaves an item it finds closed as it is (queue-dispatch.cjs, stillSent). A queued item is cancelled instead:
-  // marked done, an item nobody was given would name nobody in its row (queue.status.doneBySteward).
+  // leaves an item it finds closed as it is (queue-dispatch.cjs, stillSent). So too one still queued for a member who
+  // did it from the board: on 11-13 the butler could only cancel items 61f9c09b and 862d6abb, done and merged, and the
+  // record said 「已取消」. NAW never sends an item that is no longer queued (queueMarkSent), as for a cancel. One queued
+  // for nobody is cancelled instead: marked done, it would name nobody in its row (queue.status.doneBySteward).
   queueResolve(itemId, id = DEFAULT_ROOM_ID, by = null) {
     const item = this.queueFind(id, itemId);
-    if (!['waiting', 'sent'].includes(item.status)) {
+    const assigned = item.status === 'queued' && typeof item.assignee === 'string' && item.assignee.length > 0;
+    if (!assigned && !['waiting', 'sent'].includes(item.status)) {
       throw uiError("error.queue.notWaiting");
     }
     const event = { kind: 'queue', ...uiNotice(by === 'steward' ? 'notice.queue.resolvedBySteward' : 'notice.queue.resolved', { text: queueRules.shortText(item.text) }) };

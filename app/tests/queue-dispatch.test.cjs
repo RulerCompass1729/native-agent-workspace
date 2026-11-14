@@ -3288,12 +3288,47 @@ test('the person or the butler marks handled an item already sent; one still que
   assert.deepEqual([third.status, third.finishedBy, third.sentTo], ['done', 'steward', 'agent-b']);
   const lines = room.value.events.filter(event => /^notice\.queue\.resolved/.test(event.uiMessage?.key || '')).map(event => event.text);
   assert.deepEqual(lines, ['已处理：sent but done elsewhere', '已处理：sent, the butler closes it · 大管家标的']);
-  // A queued item is cancelled instead; marked done, one nobody was given would name nobody in its row.
+  // A queued item for nobody is cancelled instead; marked done, it would name nobody in its row.
   for (const by of ['steward', null]) assert.throws(() => room.queueResolve(queued, 'shared', by), /不在等你决定/);
   assert.equal(room.queueFind('shared', queued).status, 'queued');
   const cancelled = room.queueAdd('cancelled one', null);
   room.queueCancel(cancelled);
   for (const id of [sent, other, cancelled]) assert.throws(() => room.queueResolve(id, 'shared', 'steward'), /不在等你决定/);
+});
+
+// 11-13 (items 61f9c09b, 862d6abb): an item still queued for a member who did the work from the board could only be
+// cancelled, and the record said 「已取消」. The person or the butler may mark it handled; its row names that member.
+test('an item still queued for a member who did it another way is marked handled, names that member, and is never sent', async t => {
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a'), member('b')]);
+  const done = room.queueAdd('merged from the board', 'a'), person = room.queueAdd('the person closes this one', 'b');
+  room.queueResolve(done, 'shared', 'steward');
+  room.queueResolve(person);
+  assert.deepEqual(room.value.queue.map(item => [item.status, item.finishedBy, item.assignee, item.sentTo, Number.isFinite(item.finishedAt)]),
+    [['done', 'steward', 'a', undefined, true], ['done', undefined, 'b', undefined, true]]);
+  const lines = room.value.events.filter(event => /^notice\.queue\.(resolved|cancelled)/.test(event.uiMessage?.key || '')).map(event => event.text);
+  assert.deepEqual(lines, ['已处理：merged from the board · 大管家标的', '已处理：the person closes this one'], 'handled, not cancelled');
+  assert.equal(room.value.events.filter(event => event.monitor?.kind === 'queue-dry').length, 1, 'the queue ran dry once, as after a cancel');
+  // Closed, it stays closed: marked again or cancelled, it is refused.
+  assert.throws(() => room.queueResolve(done, 'shared', 'steward'), /不在等你决定/);
+  assert.throws(() => room.queueCancel(done, 'shared', 'steward'));
+  const faults = passFaults(dispatcher);
+  await dispatcher.start();
+  for (let i = 0; i < 3; i += 1) { dispatcher.dirty = true; await dispatcher.schedule(); }
+  assert.equal(client.sends().length, 0, 'never sent');
+  assert.deepEqual(room.value.queue.map(item => item.status), ['done', 'done']);
+  assert.deepEqual(faults, []);
+});
+
+test('an item marked handled while the pass was planning to send it is not sent', async t => {
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a')]);
+  const late = room.queueAdd('done from the board while NAW was planning', 'a'), faults = passFaults(dispatcher);
+  const sample = dispatcher.memory.bind(dispatcher);
+  dispatcher.memory = async (...args) => { if (room.queueFind('shared', late).status === 'queued') room.queueResolve(late, 'shared', 'steward'); return sample(...args); };
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.equal(client.sends().length, 0);
+  assert.deepEqual([room.value.queue[0].status, room.value.queue[0].finishedBy], ['done', 'steward']);
+  assert.deepEqual(faults, []);
 });
 
 test('an item the butler marked handled while sent stays handled when the member\'s turn ends, and is not sent again', async t => {
