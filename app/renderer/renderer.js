@@ -2466,7 +2466,7 @@ function openRoomMenu(point, anchor, id = spaceId) {
       else if (action === 'files') attempt(async () => { await selectSpace(id); openSpaceFiles(); });
       else if (action === 'usage') attempt(() => showTrust({ usageScope: { kind: 'room', roomId: id, name: room.name } }));
       else if (action === 'about') toastMessage("toast.collaborationAbout");
-      else if (action === 'archive') attempt(async () => { await api.spaceAction(id, 'archive', []); toastMessage("toast.workspaceArchived"); });
+      else if (action === 'archive') attempt(async () => { if (await api.spaceAction(id, 'archive', []) !== false) toastMessage("toast.workspaceArchived"); });
     },
   });
   roomMenu.key = key; roomMenu.anchor = anchor; roomMenu.roomId = id;

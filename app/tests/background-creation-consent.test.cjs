@@ -35,21 +35,21 @@ async function fixture(t, provider) {
   const c = { background: true, actor, client, view: {}, refresh: client.refresh, win: { destroy() {}, isDestroyed: () => false } };
   const handlers = new Map();
   const scope = vm.createContext({ context: c, client, actor, roomState: rooms, sessionLabels: labels, backgroundOperation: operation, roomIds: require('../collaboration-spaces.cjs').roomIds,
-    applicationHandlers: handlers, ipcMain: { handle() {} }, showDialog: (context, kind, options) => dialog(context, kind, options), displayText: key => key, uiError: require('../ui-errors.cjs').uiError,
+    applicationHandlers: handlers, ipcMain: { handle() {} }, showDialog: (context, kind, options) => dialog(context, kind, options), displayText: (key, params) => require('../ui-locale.js').format('en', key, params), uiError: require('../ui-errors.cjs').uiError,
     assertNativeCreation: require('../submission-policy.cjs').assertNativeCreation, capabilitiesFor: () => ['resume', 'resubscribe', 'transportReconnect'],
     validRoomId: require('../collaboration-spaces.cjs').roomId,
     creationDefaults: { remember() { throw Error('A background creation must not save desktop defaults'); } }, broadcastRoom: async () => {} });
   vm.runInContext(part('function controlRequestActors(', '\nfunction projectBackgroundRecord('), scope);
   vm.runInContext(part('      context.confirmationActors =', '      context.fingerprint ='), scope);
   vm.runInContext(part('      context.fingerprint = command =>', '\n      context.delivery ='), scope);
+  vm.runInContext(part('function roomArchiveDetail(', '\nfunction register('), scope);
   vm.runInContext(part('function register(', '\nasync function replaceBackendSockets('), scope);
   for (const [start, end] of [["  register('archiveSession',", "  register('spaceMerge',"], ["  register('spaceAction',", "  register('spaceFiles',"],
     ["  register('create',", "  register('nativeHistory',"], ["  register('importHistory',", "  register('butlerReview',"],
     ["  for (const action of ['resume', 'forget'])", "  register('stop',"]])
     vm.runInContext(part(start, end), scope);
   // The card carries what main.cjs shows: its detail names the sessions and spaces the request refers to.
-  const confirmation = (_actor, command) => ({ type: 'warning', message: 'Maintenance', detail: operation.confirmationDetail(command, labels.apply(rooms.apply(client.snapshot()))),
-    buttons: ['Cancel', 'Confirm'], defaultId: 0, cancelId: 0 });
+  const confirmation = vm.runInContext('(' + part('    confirmation: (actor, command, action, context) => {', '\n    audit:').trim().slice('confirmation: '.length).replace(/,$/, '') + ')', scope);
   controller = new BackgroundControl({ dataDir: dir, handlers, context: () => c, confirmation, audit() {} });
   const ask = (method, args, operationId = randomUUID()) => controller.call({ sender: actor, identity: { callId: 'call-' + operationId, turnId: 'turn' }, valid: () => true },
     { action: 'invoke', method, arguments: args, operation_id: operationId });
@@ -205,9 +205,9 @@ for (const method of ['archiveRoom', 'restoreRoom', 'spaceArchive', 'spaceRestor
       await join(f, f.other, room);
       if (restore) await f.rooms.archiveRoom(f.client, f.labels.labels, room);
       const card = await f.ask(scoped ? 'spaceAction' : method, scoped ? [room, restore ? 'restore' : 'archive', []] : []);
-      if (change === 'member-move') await join(f, f.other, f.rooms.create('Destination'));
+      if (change === 'member-move') { if (restore) await f.rooms.restoreSession(f.client, f.other); await join(f, f.other, f.rooms.create('Destination')); }
       if (change === 'member-reconnect') { await f.workspace.stop(f.other); await f.workspace.resume(f.other, 'owner'); }
-      if (change === 'member-archive') await f.rooms.archiveSession(f.client, f.other);
+      if (change === 'member-archive') await f.rooms[restore ? 'restoreSession' : 'archiveSession'](f.client, f.other);
       if (change === 'room-name') f.rooms.rename('Changed target', room);
       if (change === 'room-archive-state') await f.rooms[restore ? 'restoreRoom' : 'archiveRoom'](f.client, f.labels.labels, room);
       await refused(f, card);
@@ -298,3 +298,27 @@ for (const provider of ['claude', 'codex']) {
     assert.equal(f.rooms.apply(f.workspace.snapshot()).sessions.find(s => s.id === f.other).archived, true);
   });
 }
+
+for (const named of [false, true]) for (const change of ['idle-to-working', 'working-to-idle']) {
+  test(`space archive consent binds eligible members: ${named ? 'named' : 'shared'}, ${change}`, async t => {
+    const f = await fixture(t, 'codex'), room = named ? f.rooms.create('Target') : 'shared';
+    await join(f, f.other, room);
+    f.workspace.get(f.other).state = change === 'idle-to-working' ? 'idle' : 'working';
+    const card = await f.ask(named ? 'spaceAction' : 'archiveRoom', named ? [room, 'archive', []] : []);
+    assert.ok(card.confirmation.options.detail.includes(f.other));
+    f.workspace.get(f.other).state = change === 'idle-to-working' ? 'working' : 'idle';
+    await refused(f, card); assert.equal(archived(f, f.other), false);
+  });
+}
+test('a background archive cannot expand consent after its guard check and before the handler runs', async t => {
+  const f = await fixture(t, 'codex'); await join(f, f.other);
+  f.workspace.get(f.other).state = 'working';
+  const card = await f.ask('archiveRoom', []), call = f.client.call;
+  f.client.call = async (method, ...args) => {
+    if (method === 'initial') f.workspace.get(f.other).state = 'idle';
+    return call(method, ...args);
+  };
+  const result = await f.confirm(card);
+  assert.equal(result.state, 'unconfirmed'); assert.equal(archived(f, f.other), false);
+  assert.equal(f.rooms.value.archived, false);
+});

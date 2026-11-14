@@ -225,13 +225,13 @@ test('desktop rejects a stale global placement proof even when the destination p
 test('archive/restore rejoins only its exact saved standalone placement and retains the native session', async t => {
   const f = await backend(t), m = metadataClient(f);await m.state.membership(m.client, f.id, true, 'Original', m.a);
   await m.state.archiveRoom(m.client, null, m.a);assert.deepEqual(spaces.roomIds(f.s), []);
-  const proof = m.state.metadata(m.a).restorePlacements[f.id];assert.equal(proof.nativeId, 'original-native');
+  const proof = m.state.value.sessionArchives[f.id].detached;assert.equal(proof.nativeId, 'original-native');
   await m.state.restoreRoom(m.client, null, m.a);assert.deepEqual(spaces.roomIds(f.s), [m.a]);assert.equal(f.s.nativeId, 'original-native');assert.equal(f.calls.sends, 0);
 });
 test('restoring an old archive cannot steal a session moved elsewhere, including later-returned standalone ABA', async t => {
   for (const standalone of [false, true]) {
     const f = await backend(t), m = metadataClient(f);await m.state.membership(m.client, f.id, true, 'Original', m.a);await m.state.archiveRoom(m.client, null, m.a);
-    await m.state.membership(m.client, f.id, true, 'Original', m.b);if (standalone) await m.state.membership(m.client, f.id, false, 'Original', m.b);
+    f.w.moveMembership(f.id, m.b, proofFor(f.s));if (standalone) f.w.moveMembership(f.id, null, proofFor(f.s));
     const expected = spaces.roomIds(f.s);await m.state.restoreRoom(m.client, null, m.a);assert.deepEqual(spaces.roomIds(f.s), expected);
     assert.equal(m.state.metadata(m.a).events.at(-1).skippedSessions[0], f.id);assert.equal(f.calls.sends, 0);
   }
