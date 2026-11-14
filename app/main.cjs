@@ -867,6 +867,8 @@ async function startQueueDispatcher() {
       stewardWake: stewardWake || undefined,
       // The agent that asked, told what the person answered on its confirmation cards (answer-notices.cjs).
       answerNotices,
+      // A member whose own conversation was compacted COMPACT_LIMIT times continues in a new session.
+      countCompactions: true,
     };
     if (backgroundTest && process.env.NAW_TEST_QUEUE_DIRECTORY_MIGRATION === '1') options.migrateDirectories = true;
     // B6 integration handoffs are closed in the daily app: only a verified isolated test run can
@@ -891,6 +893,10 @@ async function startQueueDispatcher() {
     const testMemoryAge = Number(process.env.NAW_TEST_QUEUE_MEMORY_MIN_AGE_MS);
     if (backgroundTest && Number.isSafeInteger(testMemoryAge) && testMemoryAge >= 0) {
       options.memoryMinAgeMs = testMemoryAge;
+    }
+    const testCompact = Number(process.env.NAW_TEST_QUEUE_COMPACT_LIMIT);
+    if (backgroundTest && Number.isSafeInteger(testCompact) && testCompact > 0) {
+      options.compactLimit = testCompact;
     }
     const testQuiet = Number(process.env.NAW_TEST_QUEUE_HUMAN_QUIET_MS);
     if (backgroundTest && Number.isSafeInteger(testQuiet) && testQuiet >= 0) {

@@ -27,8 +27,11 @@ for (const dir of [profile, cwd, config]) {
 // NAW_TEST_QUEUE_PROVIDER=codex runs the same checks against a real Codex CLI.
 const PROVIDER = process.env.NAW_TEST_QUEUE_PROVIDER || 'claude';
 // NAW_TEST_QUEUE_TRIGGER=memory rotates because the real process tree is above a lowered
-// 100 MB memory limit, instead of because the conversation is above a lowered record limit.
+// 100 MB memory limit, instead of because the conversation is above a lowered record limit;
+// =compact because the real CLI compacted the conversation once (/compact) against a limit of 1
+// (queue 794d3cd7), counted by NAW from the CLI's own record.
 const TRIGGER = process.env.NAW_TEST_QUEUE_TRIGGER || 'content';
+assert.ok(['content', 'memory', 'compact'].includes(TRIGGER), 'content, memory or compact');
 const UNSENT = 'UNSENT_DRAFT_NAW';
 assert.ok(['claude', 'codex'].includes(PROVIDER), 'claude or codex');
 const codexHome = path.join(base, 'codex');
@@ -401,6 +404,31 @@ async function cleanup() {
   await page.evaluate(text => workspace.spaceAction('shared', 'queueAdd', [text, null]), 'QUEUE_TASK_2 请只回复完成标记');
   timings.terminalOpenDoneMs = await until(async () => (await itemByText('QUEUE_TASK_2 请只回复完成标记')).status === 'done', 'Second item done with the terminal open');
   checks.push(`The next item followed with the member's native terminal open and idle (${timings.terminalOpenDoneMs} ms)`);
+  if (TRIGGER === 'compact') {
+    assert.equal(PROVIDER, 'claude', 'The compaction run drives the Claude terminal');
+    // The person compacts the conversation in the native terminal; the CLI writes it to its own record.
+    const record = () => {
+      const dirs = fs.existsSync(path.join(config, 'projects')) ? fs.readdirSync(path.join(config, 'projects')) : [];
+      for (const dir of dirs) {
+        const file = path.join(config, 'projects', dir, `${first.nativeId}.jsonl`);
+        if (fs.existsSync(file)) return file;
+      }
+      return null;
+    };
+    const compactions = () => {
+      const file = record();
+      if (!file) return 0;
+      return fs.readFileSync(file, 'utf8').split('\n').filter(line => line.includes('"subtype":"compact_boundary"')).length;
+    };
+    assert.equal(compactions(), 0, 'Not compacted before');
+    await page.locator('#terminal-area .xterm-screen').click();
+    await page.keyboard.type('/compact', { delay: 30 });
+    await sleep(500);
+    await page.keyboard.press('Enter');
+    timings.compactMs = await until(() => compactions() === 1, 'The native CLI recorded one compaction', 120000);
+    await until(async () => (await snapshot()).sessions.find(s => s.id === first.id).state === 'idle', 'Idle after compacting', 60000);
+    checks.push(`The real CLI compacted the conversation once and wrote it to ${path.relative(base, record())} (${timings.compactMs} ms)`);
+  }
   // The person types into the native prompt and leaves it unsent; NAW cannot see that text.
   // A new session folder is not yet trusted by Codex: answer as the person would, like their daily folders.
   await page.locator('#terminal-area .xterm-screen').click();
@@ -437,6 +465,9 @@ async function cleanup() {
   }
   if (TRIGGER === 'memory') {
     await launch({ NAW_TEST_QUEUE_MEMORY_MB: '100', NAW_TEST_QUEUE_MEMORY_MIN_AGE_MS: '180000' });
+  } else if (TRIGGER === 'compact') {
+    // NAW reads the CLI's records where the CLI writes them: the test's own config folder.
+    await launch({ NAW_TEST_QUEUE_COMPACT_LIMIT: '1', CLAUDE_CONFIG_DIR: config });
   } else {
     await launch({ NAW_TEST_QUEUE_CONTENT_LIMIT: '2' });
   }
@@ -520,6 +551,11 @@ async function cleanup() {
   } else {
     assert.equal(PROVIDER, 'codex', 'A live Claude terminal is always saved');
     checks.push('The Codex terminal was no longer open: nothing unsent remained and none was reopened');
+  }
+  if (TRIGGER === 'compact') {
+    assert.match(request.text, /^【NAW 换会话】这个会话的上下文已压缩 1 次。为了不再一次次压缩上下文，/u, 'The request says why');
+    assert.equal(request.text.includes('释放内存'), false);
+    checks.push('Compaction trigger: NAW counted the real compaction and asked for the handoff saying 「上下文已压缩 1 次」');
   }
   if (TRIGGER === 'memory') {
     const measured = /已占用约 ([\d.]+) GB 内存/u.exec(request.text);

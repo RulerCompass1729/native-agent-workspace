@@ -14,6 +14,7 @@ const { uiError } = require('./ui-errors.cjs');
 const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 const { noticeText } = require('./answer-notices.cjs');
+const { CompactionCounter } = require('./compaction-count.cjs');
 
 const CAPABILITY = 'queueDispatchV1';
 const ITEM_TEXT_LIMIT = 6000;
@@ -74,6 +75,14 @@ const MAINTENANCE_MS = 60 * 1000;
 const MEMORY_SAMPLE_MS = 30 * 1000;
 // An idle old member with no work is rotated only after this long without activity.
 const QUIET_BEFORE_ROTATE_MS = 30 * 60 * 1000;
+// A conversation compacted this many times continues in a new session (queue 794d3cd7, the person:
+// 「compact conversation 的次数过多…也需要继承然后新开继承之后的会话了，否则太浪费了」). Measured
+// 2026-11-13 in the person's own records: the third compaction came a median 2.4 hours into a session.
+const COMPACT_LIMIT = 3;
+// The butler is rotated for that at a pause between two turns: its own record had 18 pauses of two
+// minutes or more in 5 hours and none of thirty. A member is rotated before its next item, or after
+// the usual thirty quiet minutes, so a conversation the person is having is not cut into.
+const QUIET_COMPACT_MS = 2 * 60 * 1000;
 // A new member that never becomes ready (for example a startup prompt) ends the rotation.
 const NEW_SESSION_READY_MS = 10 * 60 * 1000;
 const HANDOFF_ACCEPT_MS = 2 * 60 * 1000;
@@ -720,9 +729,16 @@ function recordCount(session) {
   return count;
 }
 
-// Why a member is due for rotation now: 'content', 'memory' or null.
+// A successor's own kept record: it rests a day against the other reasons, while its own
+// compactions are counted from its own start.
+function restingSuccessor(record) {
+  return Boolean(record) && record.phase === 'kept' && validId(record.successorOf || '') && !trustRecord(record);
+}
+
+// Why a member is due for rotation now: 'content', 'compact', 'memory' or null.
 function rotationReason(session, now, options, rotations) {
-  if (!['claude', 'codex'].includes(session.provider) || rotations[session.id] || options.blockedRotations?.has(session.id)) {
+  const record = rotations[session.id];
+  if (!['claude', 'codex'].includes(session.provider) || (record && !restingSuccessor(record)) || options.blockedRotations?.has(session.id)) {
     return null;
   }
   // A kept old session already has a successor carrying its work; the person ends it when done.
@@ -734,8 +750,15 @@ function rotationReason(session, now, options, rotations) {
     return null;
   }
   const limit = options.contentLimits ? options.contentLimits[session.provider] : undefined;
-  if (Number.isFinite(limit) && recordCount(session) >= limit) {
+  if (!record && Number.isFinite(limit) && recordCount(session) >= limit) {
     return 'content';
+  }
+  const compactions = options.compactions ? options.compactions.get(session.id) : undefined;
+  if (Number.isSafeInteger(compactions) && Number.isSafeInteger(options.compactLimit) && options.compactLimit > 0 && compactions >= options.compactLimit) {
+    return 'compact';
+  }
+  if (record) {
+    return null;
   }
   const start = sessionStart(session, now);
   if (start === null) {
@@ -821,9 +844,12 @@ function planDispatch(input) {
   const contentLimits = input.contentLimits ?? CONTENT_LIMITS;
   const quietMs = input.quietMs ?? QUIET_BEFORE_ROTATE_MS;
   const quietMemoryMs = input.quietMemoryMs ?? QUIET_MEMORY_MS;
+  const quietCompactMs = input.quietCompactMs ?? QUIET_COMPACT_MS;
   const rotationOptions = {
     blockedRotations: input.blockedRotations,
     contentLimits,
+    compactions: input.compactions,
+    compactLimit: input.compactLimit ?? COMPACT_LIMIT,
     handedOff: input.handedOff,
     waitingModel: input.waitingModel,
     memory: input.memory,
@@ -974,7 +1000,7 @@ function planDispatch(input) {
       const reason = rotationReason(target, now, rotationOptions, rotations);
       if (reason && rotationSlots > 0) {
         rotationSlots -= 1;
-        actions.push({ kind: 'rotate', sessionId: target.id, reason });
+        actions.push(rotateAction(target.id, reason, rotationOptions));
       } else {
         // Due but another rotation is running: it keeps working and is rotated later.
         actions.push({ kind: 'dispatch', roomId: room.id, itemId: item.id, sessionId: target.id });
@@ -1029,6 +1055,8 @@ function planDispatch(input) {
       let quiet = quietMs;
       if (reason === 'memory') {
         quiet = quietMemoryMs;
+      } else if (reason === 'compact' && id === input.butler) {
+        quiet = quietCompactMs;
       }
       if (now - lastActivity < quiet) {
         continue;
@@ -1040,9 +1068,28 @@ function planDispatch(input) {
   // The largest session goes first, then the oldest.
   quietCandidates.sort((a, b) => b.memory - a.memory || a.start - b.start);
   for (const candidate of quietCandidates.slice(0, Math.max(rotationSlots, 0))) {
-    actions.push({ kind: 'rotate', sessionId: candidate.sessionId, reason: candidate.reason });
+    actions.push(rotateAction(candidate.sessionId, candidate.reason, rotationOptions));
   }
   return actions;
+}
+
+function rotateAction(sessionId, reason, options) {
+  const action = { kind: 'rotate', sessionId, reason };
+  if (reason === 'compact') action.compactions = options.compactions.get(sessionId);
+  return action;
+}
+
+// Sessions a pass may rotate, whose compactions are counted: members of a space in use and the butler
+// outside every space (planDispatch steps 2 and 3), not an old session already handed off.
+function rotationSubjects(rooms, sessions, outside, handedOff) {
+  const byId = new Map((sessions || []).map(session => [session.id, session]));
+  const ids = new Set();
+  for (const room of rooms || []) {
+    if (!room.archived) for (const id of memberIds(room, sessions || [])) ids.add(id);
+  }
+  for (const id of outside || []) if (byId.has(id) && !byId.get(id).archived) ids.add(id);
+  return [...ids].filter(id => !(handedOff && handedOff.has(id))).map(id => byId.get(id))
+    .filter(session => ['claude', 'codex'].includes(session.provider));
 }
 
 function dispatchText(roomName, item) {
@@ -1057,16 +1104,20 @@ function dispatchText(roomName, item) {
   ].join('\n');
 }
 
-function rotationWhy(reason, records, bytes) {
+function rotationWhy(reason, records, bytes, compactions) {
   if (reason === 'memory') {
     return `这个会话（连同它的子进程）已占用约 ${(bytes / 1073741824).toFixed(1)} GB 内存`;
+  }
+  if (reason === 'compact') {
+    return `这个会话的上下文已压缩 ${compactions} 次`;
   }
   return `这个会话已有 ${records} 条记录，内容很多`;
 }
 
-function handoffRequestText(why) {
+function handoffRequestText(why, reason) {
+  const purpose = reason === 'compact' ? '为了不再一次次压缩上下文' : '为了释放内存';
   return [
-    `【NAW 换会话】${why}。为了释放内存，NAW 会开一个新会话接着做，这个会话随后结束（记录保留，可以恢复）。`,
+    `【NAW 换会话】${why}。${purpose}，NAW 会开一个新会话接着做，这个会话随后结束（记录保留，可以恢复）。`,
     '',
     '请现在只写交接，不要开始新工作。交接写给接手的新会话，包括：',
     '1. 正在做的事和目标；',
@@ -1665,6 +1716,10 @@ class QueueDispatcher {
     this.humanQuietMs = options.humanQuietMs ?? HUMAN_QUIET_MS;
     this.contentLimits = options.contentLimits ?? CONTENT_LIMITS;
     this.quietMs = options.quietMs ?? QUIET_BEFORE_ROTATE_MS;
+    this.compactLimit = options.compactLimit ?? COMPACT_LIMIT;
+    this.quietCompactMs = options.quietCompactMs ?? QUIET_COMPACT_MS;
+    // Counts each member's own compactions from the native records (compaction-count.cjs); the app turns it on.
+    this.compactions = options.compactions || (options.countCompactions === true ? new CompactionCounter() : null);
     this.tickMs = options.tickMs ?? TICK_MS;
     this.transcriptRoot = options.transcriptRoot || path.join(os.homedir(), '.claude', 'projects');
     // Sessions whose model is known nowhere yet: asked again after a while, never rested for a week.
@@ -2301,6 +2356,18 @@ class QueueDispatcher {
     return session.name || session.id;
   }
 
+  // Compactions counted so far per member; without a counter or a readable record, none.
+  async compactionCounts(snapshot, steward, handedOff, now) {
+    if (!this.compactions) return new Map();
+    try {
+      const subjects = rotationSubjects(snapshot.rooms, snapshot.sessions, steward ? [steward.sessionId] : [], handedOff);
+      const counts = await this.compactions.sample(subjects, now);
+      return counts instanceof Map ? counts : new Map();
+    } catch {
+      return new Map();
+    }
+  }
+
   // Session memory footprints and macOS memory pressure, sampled at most twice a minute.
   async memory(sessions, now) {
     if (this.memorySample && now - this.memorySample.at < MEMORY_SAMPLE_MS) {
@@ -2366,6 +2433,8 @@ class QueueDispatcher {
     }
     const sample = await this.memory(current.snapshot.sessions, current.now);
     const steward = this.stewardOutside(current.snapshot.sessions);
+    const handedOff = this.handedOff();
+    const compactions = await this.compactionCounts(current.snapshot, steward, handedOff, current.now);
     // B6: the session that holds an open handoff gets no queue work and is not rotated, so what
     // it writes until the handoff is closed is not a member's reply; it is not listed as vacant either.
     const engaged = this.integration ? this.integration.holding() : undefined;
@@ -2379,9 +2448,12 @@ class QueueDispatcher {
       settleMs: this.settleMs,
       humanQuietMs: this.humanQuietMs,
       contentLimits: this.contentLimits,
-      handedOff: this.handedOff(),
+      handedOff,
       waitingModel: this.waitingModel(current.now),
       quietMs: this.quietMs,
+      compactions,
+      compactLimit: this.compactLimit,
+      quietCompactMs: this.quietCompactMs,
       memory: sample.memory,
       memoryLimit: sample.limit,
       memoryMinAgeMs: this.memoryMinAgeMs,
@@ -2389,6 +2461,7 @@ class QueueDispatcher {
       ...this.trustAdmission(),
       engaged,
       outside: steward ? [steward.sessionId] : [],
+      butler: this.stewardSession(current.snapshot.sessions)?.steward.sessionId,
     });
     for (const action of actions) {
       if (this.closed) {
@@ -2558,8 +2631,8 @@ class QueueDispatcher {
     this.broadcast().catch(() => {});
   }
 
-  // The designated butler when it is this very native session and in no space; anything else names nobody.
-  stewardOutside(sessions) {
+  // The designated butler when it is this very native session, in a space or not; anything else names nobody.
+  stewardSession(sessions) {
     let steward = null;
     try {
       steward = this.steward();
@@ -2570,8 +2643,15 @@ class QueueDispatcher {
     if (!session || !validId(steward.nativeId) || session.nativeId !== steward.nativeId) {
       return null;
     }
+    return { steward, session };
+  }
+
+  // The designated butler when it is this very native session and in no space; anything else names nobody.
+  stewardOutside(sessions) {
+    const found = this.stewardSession(sessions);
+    if (!found) return null;
     try {
-      return roomIds(session).length ? null : steward;
+      return roomIds(found.session).length ? null : found.steward;
     } catch {
       return null;
     }
@@ -2767,7 +2847,7 @@ class QueueDispatcher {
     }
     const session = current.session;
     const reason = action.reason || 'content';
-    const why = rotationWhy(reason, recordCount(session), bytes || 0);
+    const why = rotationWhy(reason, recordCount(session), bytes || 0, action.compactions);
     // Decided before the old session is asked anything: a successor must match it.
     let carry = carrySettings(session);
     if (carry.reason === 'model-unknown') {
@@ -2821,7 +2901,7 @@ class QueueDispatcher {
     this.rotations[session.id] = record;
     this.save();
     try {
-      record.tag = await this.send(session, handoffRequestText(why), `rotation:${session.id}`);
+      record.tag = await this.send(session, handoffRequestText(why, reason), `rotation:${session.id}`);
       this.save();
       this.appendLog('requested', record, { reason, why });
       this.roomState.rotationEvent(record.roomIds, 'requested', this.label(session.id, record.name), why);
@@ -3309,7 +3389,7 @@ class QueueDispatcher {
       } else {
         delete this.rotations[oldId];
       }
-      // The successor is not rotated again for a day, whatever its size: no replacement loop.
+      // The successor is not rotated again for a day, whatever its size, except for its own compactions: no replacement loop.
       if (validId(record.newNativeId || '')) {
         this.rotations[record.newId] = { phase: 'kept', keptAt: now, oldNativeId: record.newNativeId, name: record.newName || record.name, roomIds: record.roomIds, successorOf: oldId };
       }
@@ -3337,6 +3417,9 @@ module.exports = {
   ROTATE_AFTER_MS,
   CONTENT_LIMITS,
   QUIET_BEFORE_ROTATE_MS,
+  COMPACT_LIMIT,
+  QUIET_COMPACT_MS,
+  rotationSubjects,
   NOT_SENT_ATTEMPTS,
   NATIVE_DRAFT_KEY,
   INTEGRATOR_ABSENT_MS,
