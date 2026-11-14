@@ -176,14 +176,22 @@ test('a queue member that ended its turn asking the person is told too; one whos
   const f = await fixture(t, 'claude', agent('claude', { roomIds: ['shared'], roomId: 'shared' }));
   const held = f.rooms.queueAdd('Stop the old job', 'agent', 'shared');
   f.rooms.queueMarkSent('shared', held, 'agent', 'Asker', NOW); f.rooms.queueSettle('shared', held, 'waiting', '', 'Asker', '需要你决定：停掉旧任务吗？');
-  // The next item for it: a decision the person has not handled holds the member from queue work.
-  const next = f.rooms.queueAdd('Then the new one', 'agent', 'shared');
   await f.ask('op-a'); await f.answer('op-a', 1);
   await f.elapse(21000);
   assert.equal(f.told().length, 1, 'told while its item waits for the person');
   assert.equal(f.rooms.queueFind('shared', held).status, 'waiting', 'the item is left for the person');
-  assert.equal(f.rooms.queueFind('shared', next).status, 'queued', 'still held from queue work');
   assert.equal(f.client.dispatches().length, 1, 'only the notice was sent');
+  // With a next item for it: an open decision no longer holds the member from queue work (126658e7), so that item
+  // goes to it, and the answer waits for that item as for any running one (below).
+  const h = await fixture(t, 'claude', agent('claude', { roomIds: ['shared'], roomId: 'shared' }));
+  const asks = h.rooms.queueAdd('Stop the old job', 'agent', 'shared');
+  h.rooms.queueMarkSent('shared', asks, 'agent', 'Asker', NOW); h.rooms.queueSettle('shared', asks, 'waiting', '', 'Asker', '需要你决定：停掉旧任务吗？');
+  const next = h.rooms.queueAdd('Then the new one', 'agent', 'shared');
+  await h.ask('op-a'); await h.answer('op-a', 1);
+  await h.elapse(21000);
+  assert.equal(h.rooms.queueFind('shared', asks).status, 'waiting', 'the decision stays open');
+  assert.equal(h.rooms.queueFind('shared', next).status, 'sent', 'its next item went to it');
+  assert.deepEqual(h.told(), [], 'not while that item runs');
   // Its item still running (sent, the send not yet confirmed, so it cannot settle): nothing that could mix into the
   // item's reply; once the item settled, it is told.
   const g = await fixture(t, 'claude', agent('claude', { roomIds: ['shared'], roomId: 'shared' }));
