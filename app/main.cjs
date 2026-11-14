@@ -24,6 +24,7 @@ const { IntegratorRole } = require('./integrator-role.cjs');
 const { StewardRole, validDuty } = require('./steward-role.cjs');
 const stewardRecords = require('./steward-record.cjs');
 const { StewardWake } = require('./steward-wake.cjs');
+const { AnswerNotices } = require('./answer-notices.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
 const { ButlerReadAudit } = require('./butler-read-audit.cjs');
@@ -53,6 +54,8 @@ const applicationHandlers = new Map();
 let backgroundControl, backgroundUnavailable = false, operationsUnavailable = null, operationsBlocks = -1, stewardRecord = null, stewardOf = null;
 // Waking the butler when NAW has recorded something new (steward-wake.cjs): off until the person or the butler turns it on.
 let stewardWake = null;
+// The person's answers on agents' confirmation cards, owed to the agent that asked until the dispatcher tells it.
+const answerNotices = new AnswerNotices();
 let butlerClosing = false, butlerQuitAttempted = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
@@ -854,6 +857,8 @@ async function startQueueDispatcher() {
       observeQueueState: states => butlerIngress?.observeQueues(states),
       // The butler, woken on what NAW records when the person or the butler turned that on (steward-wake.cjs).
       stewardWake: stewardWake || undefined,
+      // The agent that asked, told what the person answered on its confirmation cards (answer-notices.cjs).
+      answerNotices,
     };
     if (backgroundTest && process.env.NAW_TEST_QUEUE_DIRECTORY_MIGRATION === '1') options.migrateDirectories = true;
     // B6 integration handoffs are closed in the daily app: only a verified isolated test run can
@@ -1422,6 +1427,8 @@ async function boot() {
   views = loaded.views;
   try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: () => { broadcastRoom().catch(() => {}); recordsChanged(); },
     confirmationPending: notifyBackgroundConfirmation,
+    decided: (actor, receipt, decision) => answerNotices.add(actor, receipt, decision),
+    receiptRead: (actor, id) => answerNotices.read(actor, id),
     project: projectBackgroundRecord,
     confirmation: (actor, command, action, context) => {
       // Validate only input shape and the owned in-memory token before asking.
@@ -1487,14 +1494,27 @@ async function boot() {
           }
           // Placement and archive state are consent targets. Background native
           // progress and the audit event itself must not invalidate consent.
+          const placement = s => ({ id: s.id, nativeId: s.nativeId, connectionRevision: s.connectionRevision,
+            nativeContextPending: s.nativeContextPending, archived: s.archived, roomIds: roomIds(s), placementRevision: s.placementRevision,
+            memberRevision: s.memberRevision, roomMembershipRevisions: s.roomMembershipRevisions,
+            ...(s.id === controlTarget && s.id !== actor.id ? { owner: s.owner, controlRevision: s.controlRevision, activeTurnId: s.activeTurnId,
+              approvalId: s.approval?.requestId, nativeApprovalIds: s.nativeApproval?.requests?.map(r => r.id), nativeInputRequired: s.nativeInputRequired } : {}) });
+          // A new session or space touches nothing that exists. Its consent is the asking session as it was, and which
+          // sessions or spaces already carry the requested name: one appearing or renamed onto it voids the card, so
+          // two answered cards cannot leave two of one name. Others the person confirms meanwhile do not (2026-11-13:
+          // a space and two sessions confirmed together, and only the space was made).
+          if (['create', 'spaceCreate'].includes(command.method)) {
+            const requested = command.method === 'create' ? command.arguments[0]?.name : command.arguments[0];
+            const name = typeof requested === 'string' ? requested.trim() : '';
+            const holders = command.method === 'create' ? sessionLabels.apply(metadata).sessions : metadata.rooms;
+            return { auditRooms: [...(auditRooms.size ? auditRooms : ['shared'])].sort(),
+              sessions: metadata.sessions.filter(s => s.id === actor.id).map(placement),
+              named: name ? holders.filter(x => x.name === name).map(x => x.id).sort() : [] };
+          }
           return { auditRooms: [...(auditRooms.size ? auditRooms : ['shared'])].sort(),
             ...(command.method === 'initial' ? { selected: context.view.selected } : {}),
             ...(command.method === 'pasteNativeContent' ? { clipboardRevision: context.clipboardRevision || null } : {}),
-            sessions: metadata.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, connectionRevision: s.connectionRevision,
-              nativeContextPending: s.nativeContextPending, archived: s.archived, roomIds: roomIds(s), placementRevision: s.placementRevision,
-              memberRevision: s.memberRevision, roomMembershipRevisions: s.roomMembershipRevisions,
-              ...(s.id === controlTarget && s.id !== actor.id ? { owner: s.owner, controlRevision: s.controlRevision, activeTurnId: s.activeTurnId,
-                approvalId: s.approval?.requestId, nativeApprovalIds: s.nativeApproval?.requests?.map(r => r.id), nativeInputRequired: s.nativeInputRequired } : {}) })),
+            sessions: metadata.sessions.map(placement),
             rooms: metadata.rooms.map(r => ({ id: r.id, name: r.name, archived: r.archived, memberOrder: r.memberOrder,
               restoreMembers: roomState.metadata(r.id).restoreMembers, restorePlacements: roomState.metadata(r.id).restorePlacements })),
             sessionArchives: roomState.value.sessionArchives };

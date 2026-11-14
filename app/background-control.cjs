@@ -22,7 +22,7 @@ const settledStates = new Set(['complete', 'received', 'awaiting-native', 'cance
 const recordTime = r => Number.isSafeInteger(r.finishedAt) ? r.finishedAt : r.at;
 const checkArchived = r => { if (!r || !token(r.id) || !r.actor || !token(r.actor.id) || !r.command || !token(r.state)) throw Error('Invalid archived operation'); };
 const MAX_PENDING_PER_ACTOR = 32, MAX_PENDING = 128;
-const REFUSAL_WINDOW_MS = 60000, MAX_REFUSAL_SUMMARIES = 128;
+const REFUSAL_WINDOW_MS = 60000, MAX_REFUSAL_SUMMARIES = 128, NOTIFY_SHARE_MS = 60000;
 const REFUSAL_RETRY_HINT = 'invoke or snapshot: new operation_id or compacted refused ID is a fresh request.';
 const refusalRetry = () => ({ retryWithNewOperationId: true, retryHint: REFUSAL_RETRY_HINT });
 const admissionReasons = new Set(['confirmation-limit', 'originating-session-unavailable']);
@@ -136,7 +136,7 @@ const compactRefusal = row => { row.guard = { auditRooms: row.guard?.auditRooms 
 const queuedDelivery = args => ['queue', 'queueShared'].includes(args.method === 'spaceAction' ? args.arguments?.[1] : args.method);
 class BackgroundControl {
   constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now, readCopyBytes = MAX_RECORD_BYTES,
-    retireAfter = RETIRE_AFTER, retireHold = () => false, unasked = () => false, stagedPollMs = 200 }) {
+    retireAfter = RETIRE_AFTER, retireHold = () => false, unasked = () => false, stagedPollMs = 200, decided = () => {}, receiptRead = () => {} }) {
     if (!Number.isSafeInteger(readCopyBytes) || readCopyBytes < 1 || readCopyBytes > MAX_RECORD_BYTES) throw Error('Invalid read copy budget');
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
     this.data = { version: STATE_VERSION, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
@@ -153,6 +153,9 @@ class BackgroundControl {
     // only for the designated butler in no space (the person, 2026-11-12 14:24). Its preconditions are still checked.
     this.unasked = unasked;
     this.confirmationPending = confirmationPending;
+    // The person's answer on a card, once its outcome is recorded, and the agent reading a receipt itself: what main.cjs
+    // tells the agent that asked (answer-notices.cjs). Neither can change an outcome.
+    this.decided = decided; this.receiptRead = receiptRead;
     this.project = project;
     this.readCopies = new Map(); this.readBytes = 0; this.readCopyBytes = readCopyBytes;
     let st = null;
@@ -573,7 +576,9 @@ class BackgroundControl {
         if (changedRecord && !isDeepStrictEqual(changedRecord, archived)) this.reappend(changedRecord);
         else if (delivery && !archived) this.commit(d => { const r = d.records.find(r => r.id === saved.id && this.key(r.actor) === this.key(sender)); r.delivery = delivery; if (delivery.nativeReceived) r.state = 'received'; });
       }
-      return { state: 'complete', receipt: this.takeReceipt(sender, args.operation_id, context), retry: false };
+      const receipt = this.takeReceipt(sender, args.operation_id, context);
+      if (receipt) try { this.receiptRead(clone(sender), args.operation_id); } catch { /* Only whether it is told again. */ }
+      return { state: 'complete', receipt, retry: false };
     }
     const context = await this.view(sender, args.view_id); await valid();
     const selected = args.action === 'snapshot' || args.method === 'initial' ? context.view.selected : null;
@@ -770,11 +775,14 @@ class BackgroundControl {
       });
       const result = await this.finishAudit(actor, args.operation_id, context);
       if (result.state === 'confirmation-required' && result.confirmation?.kind === 'message' && !Object.hasOwn(result, 'confirmationNotifiedAt') && this.confirmationPending) {
-        const notified = this.data.records.find(r => r.id !== result.id && this.key(r.actor) === key && r.state === 'confirmation-required' &&
-          Object.hasOwn(r, 'confirmationNotifiedAt') && isDeepStrictEqual({ ...r.command, operation_id: args.operation_id }, args) && isDeepStrictEqual(r.guard, result.guard));
-        // Explicit operation IDs stay independent; a matching pending cohort
-        // shares one system notification until every request has been handled.
-        this.commit(d => { d.records.find(r => r.id === result.id && this.key(r.actor) === key).confirmationNotifiedAt = notified?.confirmationNotifiedAt ?? this.now(); });
+        const now = this.now(), notified = this.data.records.find(r => r.id !== result.id && this.key(r.actor) === key && r.state === 'confirmation-required' &&
+          Object.hasOwn(r, 'confirmationNotifiedAt') && now >= r.confirmationNotifiedAt && now - r.confirmationNotifiedAt < NOTIFY_SHARE_MS &&
+          isDeepStrictEqual({ ...r.command, operation_id: args.operation_id }, args) && isDeepStrictEqual(r.guard, result.guard));
+        // Explicit operation IDs stay independent. A matching request sent within
+        // a minute of a notification shares it; one sent again later, while the
+        // earlier card still waits, means the person missed it and is told again
+        // (as is one after the clock went back: in doubt, tell).
+        this.commit(d => { d.records.find(r => r.id === result.id && this.key(r.actor) === key).confirmationNotifiedAt = notified?.confirmationNotifiedAt ?? now; });
         if (!notified) try { await this.confirmationPending(this.receipt(actor, result.id)); } catch { /* The durable confirmation remains available. */ }
       }
       if (privateValue && result.state === 'complete') {
@@ -794,6 +802,7 @@ class BackgroundControl {
     const row = this.data.records.find(r => r.actor.id === sessionId && r.actor.nativeId === nativeId && r.id === id);
     if (!row || row.state !== 'confirmation-required' || row.confirmation?.kind !== 'message' || !Array.isArray(row.confirmation.options.buttons) ||
         !Number.isSafeInteger(response) || response < 0 || response >= row.confirmation.options.buttons.length || this.inflight.has(this.key(row.actor))) throw Error('This confirmation is no longer current');
+    const decision = response === (row.confirmation.options.cancelId ?? 0) ? 'cancelled' : 'confirmed';
     // Reserved synchronously, so no window is closed while the person's answer is carried out.
     return this.exclusive(row.actor, async () => {
     const context = await this.view(row.actor, row.command.view_id);
@@ -812,6 +821,12 @@ class BackgroundControl {
     }
     this.commit(d => { const r = d.records.find(r => r.id === id && r.actor.id === sessionId && r.actor.nativeId === nativeId); Object.assign(r, { state: 'running', humanDecision: response, humanDecisionAt: this.now() }); });
     return this.perform(row.actor, row.command, context, () => context.checkActor(), { operationId: id, confirmation: row.confirmation, response });
+    }).then(result => {
+      // Whatever came of it (carried out, cancelled, or not carried out because the asking session changed), the agent
+      // that asked is told once it is recorded; an answer refused as no longer current changed nothing and tells nothing.
+      // Only the id, the method and the state recorded go out: never a value read for the agent.
+      if (result?.id === id) try { this.decided(clone(row.actor), { id, state: result.state, command: { method: row.command.method } }, decision); } catch { /* The receipt stays readable. */ }
+      return result;
     }).finally(() => this.touch(row.actor));
   }
   rows(sessionId) {
