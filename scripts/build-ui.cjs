@@ -18,6 +18,14 @@ let css = read('app/renderer/styles.css') + '\n' + read('app/renderer/collaborat
 const palette = css.match(/:root\{([^}]*)\}/)[1];
 css = css.replace(/:root\{[^}]*\}/, '').replace(/body\{[^}]*\}/, '');
 css = `.naw{${palette};font-size:14px;height:100%;min-height:0;overflow:hidden;${css}}\n.naw>.sidebar{width:100%;height:100%}.naw>main{height:100%}`;
+// DSH lays its bottom slot (shell.bottom, where a panel plugin the person installs
+// sits) under all three columns, and the columns shrink by its height: an expanded
+// panel squeezed NAW's session list to a sliver. Keep the sidebar column full height
+// and lay the bottom slot under the columns to its right, as an editor's bottom panel
+// sits beside its navigator. With no occupant the slot is 0px tall and nothing moves.
+const frame = read('node_modules/@deepseek-ai/dsh-client-ui-layout/lib/client.js');
+if (frame.split('grid-template-rows:minmax(0,1fr) auto;').length !== 2 || !/_bottomRow\{[^}]*grid-column:1\/-1;/.test(frame) || frame.split('"data-shell-bottom": true').length !== 2) throw Error('Pinned DSH frame changed; requalify the full-height sidebar beside the bottom slot.');
+css += '\n:has(> [data-shell-bottom]) > :has(.naw[data-native-surface="sidebar"]){grid-row:1/-1}:has(> * .naw[data-native-surface="sidebar"]) > [data-shell-bottom]{grid-column:2/-1}';
 const bootstrap = read('app/dsh/bootstrap.js');
 const renderer = read('app/collaboration-spaces.cjs') + '\n' + read('app/room-mention.js') + '\n' + read('app/native-usage.js') + '\n' + read('app/room-threads.js') + '\n' + read('app/approval-policy.js') + '\n' + read('app/terminal-continuation.js') + '\n' + read('app/butler-entry-view.js') + '\n' + read('app/butler-reads-view.js') + '\n' + read('app/butler-review-policy.js') + '\n' + ['butler-review-model.js', 'butler-review-adapter.js', 'butler-review.js', 'sidebar-layout.js', 'fleet-observation.js', 'local-search.js', 'native-images.js', 'reading-list.js', 'search-view.js', 'session-composer.js', 'collaboration-overview.js', 'coordinator-context.js', 'collaboration-panorama.js', 'context-menu.js', 'mobile-setup.js', 'butler-entry.js', 'butler-reads.js', 'record-reminders.js', 'steward-record.js', 'handoff-queue.js', 'renderer.js'].map(name => read(`app/renderer/${name}`)).join('\n');
 const licensed = (name, entry) => `/*!\n${read(`node_modules/${name}/LICENSE`)}\n*/\n${read(`node_modules/${name}/${entry}`)}`;
