@@ -1,5 +1,6 @@
 const { uiError, uiNotice, setWarning } = require('./ui-errors.cjs');
 const { spaceWords } = require('./integrator-words.cjs');
+const { displayMessage } = require('./ui-locale.js');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
@@ -829,9 +830,10 @@ class RoomState {
       this.update({ queue }, undefined, id);
     }
   }
-  rotationEvent(ids, phase, oldName, detail, receiptId) {
+  // detailMessage: the notice that detail is written from (a failure's reason), so each reader sees it in their language.
+  rotationEvent(ids, phase, oldName, detail, receiptId, detailMessage) {
     if (receiptId !== undefined && (typeof receiptId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(receiptId))) throw Error('Invalid rotation receipt');
-    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', archived: 'notice.rotation.archived', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', needsTrust: 'notice.rotation.needsTrust', trustTimedOut: 'notice.rotation.trustTimedOut', trustTimeoutUnconfirmed: 'notice.rotation.trustTimeoutUnconfirmed', trustCleanupUnconfirmed: 'notice.rotation.trustCleanupUnconfirmed', trustStateInvalid: 'notice.rotation.trustStateInvalid', trustStateUnknown: 'notice.rotation.trustStateUnknown' };
+    const keys = { requested: 'notice.rotation.requested', done: 'notice.rotation.done', archived: 'notice.rotation.archived', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', deferred: 'notice.rotation.deferred', needsTrust: 'notice.rotation.needsTrust', trustTimedOut: 'notice.rotation.trustTimedOut', trustTimeoutUnconfirmed: 'notice.rotation.trustTimeoutUnconfirmed', trustCleanupUnconfirmed: 'notice.rotation.trustCleanupUnconfirmed', trustStateInvalid: 'notice.rotation.trustStateInvalid', trustStateUnknown: 'notice.rotation.trustStateUnknown' };
     for (const id of ids) {
       try {
         this.metadata(id);
@@ -840,8 +842,11 @@ class RoomState {
         continue;
       }
       if (receiptId && this.metadata(id).events.some(event => event.kind === 'rotation' && event.rotationReceipt === receiptId)) continue;
-      const params = phase === 'trustStateUnknown' ? {} : { name: oldName, detail: detail || '' };
-      const event = { kind: 'rotation', ...(receiptId ? { rotationReceipt: receiptId } : {}), ...uiNotice(keys[phase], params) };
+      const params = phase === 'trustStateUnknown' ? {} : phase === 'deferred' ? { name: oldName } : { name: oldName, detail: detail || '' };
+      const notice = uiNotice(keys[phase], params);
+      const cause = detailMessage && displayMessage(detailMessage, 'notice.', params.detail);
+      if (cause) notice.uiMessage = displayMessage({ ...notice.uiMessage, cause, causeParam: 'detail' }, 'notice.', notice.text) || notice.uiMessage;
+      const event = { kind: 'rotation', ...(receiptId ? { rotationReceipt: receiptId } : {}), ...notice };
       this.update({}, event, id);
     }
   }
