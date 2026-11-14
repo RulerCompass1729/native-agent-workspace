@@ -71,7 +71,7 @@ if (PROVIDER === 'codex') {
   // 0.168 is opened by the surface comparison (app/codex-qualification.cjs): method "schema", nothing held.
   assert.match(nativeVersion, /^codex-cli 0\.(164|165|166|167|168)\.\d+$/, 'A Codex version NAW supports');
 } else {
-  assert.match(nativeVersion, /^2\.1\.(307|308|309|310|311|316|317|318|319)\b/, 'A native version with verified chat sending');
+  assert.ok(require('../app/claude-pin.cjs').QUALIFIED.includes(nativeVersion.split(' ')[0]), `Claude ${nativeVersion} is not qualified in app/claude-pin.cjs; verify the native contract before sending a test task`);
 }
 const RESPONSE_LIMIT = 12;
 let application;
