@@ -1487,14 +1487,27 @@ async function boot() {
           }
           // Placement and archive state are consent targets. Background native
           // progress and the audit event itself must not invalidate consent.
+          const placement = s => ({ id: s.id, nativeId: s.nativeId, connectionRevision: s.connectionRevision,
+            nativeContextPending: s.nativeContextPending, archived: s.archived, roomIds: roomIds(s), placementRevision: s.placementRevision,
+            memberRevision: s.memberRevision, roomMembershipRevisions: s.roomMembershipRevisions,
+            ...(s.id === controlTarget && s.id !== actor.id ? { owner: s.owner, controlRevision: s.controlRevision, activeTurnId: s.activeTurnId,
+              approvalId: s.approval?.requestId, nativeApprovalIds: s.nativeApproval?.requests?.map(r => r.id), nativeInputRequired: s.nativeInputRequired } : {}) });
+          // A new session or space touches nothing that exists. Its consent is the asking session as it was, and which
+          // sessions or spaces already carry the requested name: one appearing or renamed onto it voids the card, so
+          // two answered cards cannot leave two of one name. Others the person confirms meanwhile do not (2026-11-13:
+          // a space and two sessions confirmed together, and only the space was made).
+          if (['create', 'spaceCreate'].includes(command.method)) {
+            const requested = command.method === 'create' ? command.arguments[0]?.name : command.arguments[0];
+            const name = typeof requested === 'string' ? requested.trim() : '';
+            const holders = command.method === 'create' ? sessionLabels.apply(metadata).sessions : metadata.rooms;
+            return { auditRooms: [...(auditRooms.size ? auditRooms : ['shared'])].sort(),
+              sessions: metadata.sessions.filter(s => s.id === actor.id).map(placement),
+              named: name ? holders.filter(x => x.name === name).map(x => x.id).sort() : [] };
+          }
           return { auditRooms: [...(auditRooms.size ? auditRooms : ['shared'])].sort(),
             ...(command.method === 'initial' ? { selected: context.view.selected } : {}),
             ...(command.method === 'pasteNativeContent' ? { clipboardRevision: context.clipboardRevision || null } : {}),
-            sessions: metadata.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, connectionRevision: s.connectionRevision,
-              nativeContextPending: s.nativeContextPending, archived: s.archived, roomIds: roomIds(s), placementRevision: s.placementRevision,
-              memberRevision: s.memberRevision, roomMembershipRevisions: s.roomMembershipRevisions,
-              ...(s.id === controlTarget && s.id !== actor.id ? { owner: s.owner, controlRevision: s.controlRevision, activeTurnId: s.activeTurnId,
-                approvalId: s.approval?.requestId, nativeApprovalIds: s.nativeApproval?.requests?.map(r => r.id), nativeInputRequired: s.nativeInputRequired } : {}) })),
+            sessions: metadata.sessions.map(placement),
             rooms: metadata.rooms.map(r => ({ id: r.id, name: r.name, archived: r.archived, memberOrder: r.memberOrder,
               restoreMembers: roomState.metadata(r.id).restoreMembers, restorePlacements: roomState.metadata(r.id).restorePlacements })),
             sessionArchives: roomState.value.sessionArchives };
