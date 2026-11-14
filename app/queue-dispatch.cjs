@@ -13,6 +13,7 @@ const { roomIds, membershipRevision, placementRevision } = require('./collaborat
 const { uiError } = require('./ui-errors.cjs');
 const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
+const { noticeText } = require('./answer-notices.cjs');
 
 const CAPABILITY = 'queueDispatchV1';
 const ITEM_TEXT_LIMIT = 6000;
@@ -37,6 +38,9 @@ function holdsMember(item) {
 const IDLE_SETTLE_MS = 8000;
 // The person's own activity in a session keeps NAW out of it for this long.
 const HUMAN_QUIET_MS = 2 * 60 * 1000;
+// What the person answered on an agent's own cards waits only this long after their last input to that session: the
+// answer is for that agent to go on with, but a line half typed in its terminal leaves no draft (answer-notices.cjs).
+const ANSWER_QUIET_MS = 20 * 1000;
 // A sent item whose send never returned a tag is not resent (no silent replay).
 const UNCONFIRMED_SEND_MS = 120000;
 // A refusal before anything was sent returns the item to the queue at most this often.
@@ -1709,6 +1713,9 @@ class QueueDispatcher {
     // Waking that butler when NAW has recorded something new (steward-wake.cjs), or null: it keeps the switch, the position
     // and the minute between wakes; a pass here finds the butler ready and sends (wakeSteward).
     this.stewardWake = options.stewardWake || null;
+    // What the person answered on an agent's confirmation cards, owed to that agent (answer-notices.cjs), or null; a
+    // pass here finds the agent ready and sends (notifyAnswers).
+    this.answerNotices = options.answerNotices || null;
     this.logFile = path.join(options.dataDir, 'rotation-log.jsonl');
     this.log = this.loadLog();
     this.chainsCache = null;
@@ -2184,6 +2191,10 @@ class QueueDispatcher {
     if (this.stewardWake && this.stewardWake.due()) {
       return true;
     }
+    // An agent owed the person's answers: passes go on until it is told.
+    if (this.answerNotices && this.answerNotices.waiting()) {
+      return true;
+    }
     const rooms = [this.roomState.value];
     for (const room of this.roomState.spaces.rooms) {
       rooms.push(room);
@@ -2212,6 +2223,18 @@ class QueueDispatcher {
       this.dirty = true;
     }
     return this.own;
+  }
+
+  // An answer owed to an agent may go once its hold and the person's short quiet in that session have both ended (the
+  // agent settling is settlingSoon's): a pass then, not at the next full one.
+  answerSoon(now) {
+    if (!this.answerNotices) return false;
+    if (this.answerNotices.endingSoon(now, this.tickMs * 2)) return true;
+    const quietMs = Math.min(this.humanQuietMs, ANSWER_QUIET_MS);
+    return this.answerNotices.due(now).some(({ sessionId }) => {
+      const end = this.humanAt.get(sessionId) + quietMs;
+      return Number.isFinite(end) && now >= end && now - end <= this.tickMs * 2;
+    });
   }
 
   // Someone just became idle or stopped typing: their time arrives without a new state event.
@@ -2322,7 +2345,8 @@ class QueueDispatcher {
     this.listen(this.client);
     const rotating = this.activeRotations().length > 0;
     const recoveringTrust = Object.entries(this.rotations).some(([id, record]) => !this.faultedRotations.has(id) && trustRecoveryPending(record));
-    const due = this.dirty || rotating || recoveringTrust || now - this.lastFullPass >= FULL_PASS_MS || this.settlingSoon(now) || now === this.lastMaintenance;
+    const due = this.dirty || rotating || recoveringTrust || now - this.lastFullPass >= FULL_PASS_MS || this.settlingSoon(now) || now === this.lastMaintenance ||
+      this.answerSoon(now);
     if (!due) {
       return;
     }
@@ -2385,6 +2409,7 @@ class QueueDispatcher {
       actions, engaged, ...this.trustAdmission() }));
     if (this.integration && !this.closed) await this.integrate();
     if (this.stewardWake && !this.closed) await this.wakeSteward(current, engaged);
+    if (this.answerNotices && !this.closed) await this.notifyAnswers(current, engaged);
   }
 
   // The designated butler, woken when NAW has recorded something new (steward-wake.cjs keeps the switch, the position,
@@ -2407,6 +2432,45 @@ class QueueDispatcher {
       await this.stewardWake.wake(fresh.session, model, (text, itemId) => this.send(fresh.session, text, itemId));
     } catch {
       // Nothing was sent, or the wake kept its own outcome: the next pass looks again.
+    }
+  }
+
+  // The person's answers on an agent's confirmation cards, told to that agent (answer-notices.cjs). One message for
+  // everything it is owed, once the answers stopped coming for a moment and the agent is ready and settled as a member
+  // is before its next queue item, the person has not typed into it for ANSWER_QUIET_MS (not the two minutes queue work
+  // waits: the person who sent a task and then answered the card wants the agent to go on), and it is in no rotation and
+  // holding no handoff; then the same send as a queue item, a NAW message under the person's automatic-message switch.
+  // An agent at work hears it after its turn: it is not ready until then.
+  async notifyAnswers(current, holding) {
+    const notices = this.answerNotices;
+    try { notices.prune(current.snapshot.sessions, current.now); } catch { return; }
+    const due = notices.due(current.now);
+    if (!due.length) return;
+    const rotations = Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id)));
+    // A queue item still running keeps its member out until its reply is settled; a member whose item waits for the
+    // person to decide is idle and hears the answer like any agent (its item stays waiting for the person). Read as the
+    // record is after this pass settled and sent its items (passes never overlap; only a pass sends an item).
+    const recorded = this.view().snapshot.rooms;
+    const rooms = (Array.isArray(recorded) ? recorded : []).map(room => ({ ...room, queue: (room?.queue || []).filter(item => item?.status === 'sent') }));
+    const engaged = engagedSessions(rotations, rooms);
+    for (const target of due) {
+      if (this.closed) return;
+      try {
+        const session = current.snapshot.sessions.find(s => s.id === target.sessionId);
+        if (!session || session.nativeId !== target.nativeId || !settled(session.id, this.idleSince, current.now, this.settleMs)) continue;
+        if (engaged.has(session.id) || Array.isArray(holding) && holding.includes(session.id)) continue;
+        const fresh = await this.freshReady(session.id, Math.min(this.humanQuietMs, ANSWER_QUIET_MS));
+        if (!fresh || fresh.session.nativeId !== target.nativeId) continue;
+        // Read after the wait: a receipt the agent read meanwhile is not told.
+        const told = notices.take(target);
+        if (!told.length) continue;
+        try {
+          await this.send(fresh.session, noticeText(told), `answer-notice:${randomUUID()}`);
+          notices.sent(target, told);
+        } catch { notices.failed(target); }
+      } catch {
+        // Nothing was sent: the next pass looks again.
+      }
     }
   }
 
@@ -2529,7 +2593,7 @@ class QueueDispatcher {
   }
 
   // Read fresh state once, right before sending; skip quietly if the member moved on.
-  async freshReady(sessionId) {
+  async freshReady(sessionId, quietMs = this.humanQuietMs) {
     if (this.isolation.unknown || Object.hasOwn(this.isolation.holds, sessionId)) return null;
     if (Object.values(this.rotations).some(record => quarantinedSuccessor(record) && record.newId === sessionId)) return null;
     await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
@@ -2540,7 +2604,7 @@ class QueueDispatcher {
     if (!session || !sessionReady(session, current.snapshot.wakePolicy).ready) {
       return null;
     }
-    if (humanRecent(sessionId, this.humanAt, current.now, this.humanQuietMs)) {
+    if (humanRecent(sessionId, this.humanAt, current.now, quietMs)) {
       return null;
     }
     return { ...current, session };
@@ -3269,6 +3333,7 @@ module.exports = {
   QUEUE_LIMIT,
   IDLE_SETTLE_MS,
   HUMAN_QUIET_MS,
+  ANSWER_QUIET_MS,
   ROTATE_AFTER_MS,
   CONTENT_LIMITS,
   QUIET_BEFORE_ROTATE_MS,

@@ -24,6 +24,7 @@ const { IntegratorRole } = require('./integrator-role.cjs');
 const { StewardRole, validDuty } = require('./steward-role.cjs');
 const stewardRecords = require('./steward-record.cjs');
 const { StewardWake } = require('./steward-wake.cjs');
+const { AnswerNotices } = require('./answer-notices.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
 const { ButlerReadAudit } = require('./butler-read-audit.cjs');
@@ -53,6 +54,8 @@ const applicationHandlers = new Map();
 let backgroundControl, backgroundUnavailable = false, operationsUnavailable = null, operationsBlocks = -1, stewardRecord = null, stewardOf = null;
 // Waking the butler when NAW has recorded something new (steward-wake.cjs): off until the person or the butler turns it on.
 let stewardWake = null;
+// The person's answers on agents' confirmation cards, owed to the agent that asked until the dispatcher tells it.
+const answerNotices = new AnswerNotices();
 let butlerClosing = false, butlerQuitAttempted = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
@@ -854,6 +857,8 @@ async function startQueueDispatcher() {
       observeQueueState: states => butlerIngress?.observeQueues(states),
       // The butler, woken on what NAW records when the person or the butler turned that on (steward-wake.cjs).
       stewardWake: stewardWake || undefined,
+      // The agent that asked, told what the person answered on its confirmation cards (answer-notices.cjs).
+      answerNotices,
     };
     if (backgroundTest && process.env.NAW_TEST_QUEUE_DIRECTORY_MIGRATION === '1') options.migrateDirectories = true;
     // B6 integration handoffs are closed in the daily app: only a verified isolated test run can
@@ -1422,6 +1427,8 @@ async function boot() {
   views = loaded.views;
   try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: () => { broadcastRoom().catch(() => {}); recordsChanged(); },
     confirmationPending: notifyBackgroundConfirmation,
+    decided: (actor, receipt, decision) => answerNotices.add(actor, receipt, decision),
+    receiptRead: (actor, id) => answerNotices.read(actor, id),
     project: projectBackgroundRecord,
     confirmation: (actor, command, action, context) => {
       // Validate only input shape and the owned in-memory token before asking.
