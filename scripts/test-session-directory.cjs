@@ -42,7 +42,10 @@ async function open(name) { await page.locator('#new-session').click(); await pa
 async function submit(name) { await page.locator('#confirm-create').click(); await page.locator('#create-dialog').waitFor({ state: 'hidden' }); return (await state()).sessions.find(s => s.name === name); }
 async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Own fixture startup'); client = await connect(profile, 'directory-observer');
-  app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [code], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+  // The app gets the service's default folder too. A test window's app reads its profile by its real path
+  // (/private/var/...), so its own guess (profile/workspace) would name the same folder another way; since 03b3bd9f
+  // the app remembers a chosen folder for the next opening unless it is the default one.
+  app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [code], env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: legacy, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(8000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
   // T-170: the space step below picks the default space, which a fresh profile hides until something uses it.
   await revealDefaultSpace(page);

@@ -52,6 +52,9 @@ const fault = (kind, when) => app.evaluate((_, f) => { globalThis.t115Faults.pus
 async function open(name, provider = 'codex') {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
   if (provider === 'codex') await page.locator('#initial-view').selectOption('chat');
+  // Since 03b3bd9f an opening starts in the repository of the last Git copy (or the last chosen folder). Every step
+  // here starts from an automatic new folder, as all openings did when it was written, and picks a folder itself.
+  await page.locator('#new-folder').click();
   await page.locator('#session-name').fill(name);
 }
 async function launch() {

@@ -281,7 +281,9 @@ async function run() {
   assert.equal(reopened.sessions.find(s=>s.id===b).nativeId,beforeTask.sessions.find(s=>s.id===b).nativeId);
   assert.equal(reopened.sessions.find(s=>s.id===b).roomId,null);
   assert.deepEqual(reopened.room.messages,publicTask);assert.equal(reopened.diagnostics.dispatches,2);
-  assert.equal(reopened.sessions.find(s=>s.id===a).messages.filter(m=>m.kind==='turn').length,5);
+  // Since 7b86b22b the page gets the messages only of the sessions it shows; B is shown here, so A's record is read
+  // from the service, where the page used to read it in full.
+  assert.equal((await client.call('initial')).sessions.find(s=>s.id===a).messages.filter(m=>m.kind==='turn').length,5);
   await page.locator('#room-nav').click();await page.locator('#room-record').click();
   await chooseRecipient(page,a);await fillRoomMessage(page,'控制场景：开始核查，然后私下接管。');await page.locator('#forward-button').click();
   await fixture('replyBound',a,{turnId:'control-turn'});
