@@ -519,8 +519,10 @@ for name, index in (('first', 0), ('middle', 4), ('last', 8), ('before a cut', 2
         clean = self.call("git", "rev-parse", "HEAD").stdout.strip()
         cases = {"secret in a message": ("message", "Synthetic note " + fake),
                  "private record in a message": ("message", CANARY),
-                 "personal handle as author": ("author", HANDLE + " <fixture@users.noreply.github.com>"),
-                 "personal email as author": ("author", "Fixture <fixture@" + "personal.invalid>")}
+                 "personal handle as author": ("author", (HANDLE, "fixture@users.noreply.github.com")),
+                 "personal email as author": ("author", ("Fixture", "fixture@" + "personal.invalid")),
+                 "personal handle as committer": ("committer", (HANDLE, "fixture@users.noreply.github.com")),
+                 "personal email as committer": ("committer", ("Fixture", "fixture@" + "personal.invalid"))}
         tips = {}
         for name, (kind, value) in cases.items():
             self.call("git", "checkout", "-q", "-B", "case", clean)
@@ -528,8 +530,14 @@ for name, index in (('first', 0), ('middle', 4), ('last', 8), ('before a cut', 2
             if kind == "message":
                 self.unsafe_commit(value)
             else:
+                role = kind.upper()
+                env = {**self.env, "GIT_%s_NAME" % role: value[0], "GIT_%s_EMAIL" % role: value[1]}
                 self.call("git", "-c", "core.hooksPath=" + str(self.base / "no-hooks"), "commit",
-                          "--allow-empty", "--author", value, "-qm", "Safe message")
+                          "--allow-empty", "-qm", "Safe message", env=env)
+                # Only the named role carries the personal identity.
+                author, committer = self.call("git", "log", "-1", "--format=%an <%ae>%n%cn <%ce>").stdout.splitlines()
+                personal = HANDLE if value[0] == HANDLE else value[1]
+                self.assertEqual((personal in author, personal in committer), (kind == "author", kind == "committer"))
             for i in range(3):  # later history after the dirty commit
                 self.file("history/after-%d.txt" % i, "safe fixture after %d\n" % i * 40)
                 self.call("git", "-c", "core.hooksPath=" + str(self.base / "no-hooks"), "commit", "-qm", "Later %d" % i)
@@ -558,18 +566,23 @@ for name, tip in TIPS.items():
         self.assertIn('one batch PASS 1', result.stdout)
         self.assertIn('gitleaks detected a secret', lines['secret in a message'])
         self.assertIn('private rule', lines['private record in a message'])
-        self.assertIn('private rule', lines['personal handle as author'])
-        self.assertRegex(lines['personal email as author'], 'non-noreply email|author/committer email')
+        for role in ("author", "committer"):
+            self.assertIn('private rule', lines['personal handle as ' + role])
+            self.assertRegex(lines['personal email as ' + role], 'non-noreply email|author/committer email')
 
     def test_gitleaks_failure_in_a_later_batch_blocks(self):
         failures = {
-            "timeout": "raise subprocess.TimeoutExpired('synthetic scanner', 135)",
-            "error exit": "return subprocess.CompletedProcess(arguments, 2, b'', b'')",
-            "clean exit, no report": "return subprocess.CompletedProcess(arguments, 0, b'', b'')",
-            "clean exit, unreadable report": "return write('not json')",
-            "clean exit, a finding reported": "return write('[{}]')",
+            "timeout": ("raise subprocess.TimeoutExpired('synthetic scanner', 135)",
+                        "gitleaks unavailable or timed out"),
+            "error exit": ("return subprocess.CompletedProcess(arguments, 2, b'', b'')",
+                           "gitleaks detected a secret or failed"),
+            "clean exit, no report": ("return subprocess.CompletedProcess(arguments, 0, b'', b'')",
+                                      "gitleaks result missing or unreadable"),
+            "clean exit, unreadable report": ("return write('not json')",
+                                              "gitleaks result missing or unreadable"),
+            "clean exit, a finding reported": ("return write('[{}]')", "gitleaks reported a secret"),
         }
-        for name, failure in failures.items():
+        for name, (failure, reason) in failures.items():
             with self.subTest(failure=name):
                 result = self.batched("""
 def tool(arguments, **options):
@@ -589,6 +602,7 @@ def scan_all():
 print(outcome(scan_all), len(calls))
 """.replace("FAILURE", failure), batch=3 * 400 + 2, tool="tool")
                 self.assertRegex(result.stdout, r"^BLOCKED .* 2$")
+                self.assertIn(reason, result.stdout)
                 self.assertNotIn("PASS", result.stdout)
 
     def test_gitleaks_that_exits_cleanly_without_a_report_blocks_a_commit(self):

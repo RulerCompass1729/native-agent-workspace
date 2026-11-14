@@ -240,6 +240,8 @@ class Scanner:
                 findings = json.loads(report.read_bytes())
             except (OSError, ValueError):
                 findings = None
+            if isinstance(findings, list) and findings:
+                raise Blocked("gitleaks reported a secret; output withheld")
             if findings != []:
                 raise Blocked("gitleaks result missing or unreadable; no pass issued")
         self.batches.append((len(self.parts), sum(map(len, self.parts))))

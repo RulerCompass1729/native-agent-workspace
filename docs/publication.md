@@ -76,8 +76,8 @@ exceeding either blocks rather than skips. On 2026-10-24, complete history reach
 67,690,301 bytes across 110 commits and 1,860 unique blobs, exceeding the old
 64 MiB total. On 2026-10-28, 301 reachable commits contained 2,691 unique
 blobs totaling 116,967,098 bytes; paths, historical patches and metadata added
-enough scan input to exceed the subsequent 128 MiB aggregate bound. The new
-192 MiB limit changes only that aggregate bound; every
+enough scan input to exceed the subsequent 128 MiB aggregate bound. The then-new
+192 MiB aggregate limit changed only that bound; every
 ref, tree, historical patch, message, identity and secret check remains required.
 Tests beyond 128 MiB cover clean input and late private/secret matches;
 the new total bound, per-item bound and tool error/timeout remain fail-closed.
@@ -117,13 +117,16 @@ person's approval, gitleaks now reads the input in batches of at most 192 MiB,
 each cut only between whole parts (a file version, patch, message, identity or
 ref list), with the same 120-second tool and 135-second process deadlines for
 each batch; the aggregate bound is 2 GiB. A batch passes only when gitleaks exits
-0 and its JSON report is an empty list. A timeout, any other exit, or a missing
-or unreadable report blocks, and the scan passes only when its batches together
-hold every part exactly once. The private, identity and generic checks still
+0 and its JSON report is an empty list. A timeout, any other exit, a reported
+finding, or a missing or unreadable report blocks, and the scan passes only when
+its batches together hold every part exactly once. Each batch has its own
+deadline, so the roughly 350 MiB single-run estimate above no longer applies;
+measured batches near 192 MiB took 64 to 70 seconds. The private, identity and generic checks still
 read every part. On the public history of that day (544 commits), the batched
 and the former single scan gave gitleaks byte-identical input and the same
 verdict. Ref, tree, historical patch, identity, message and secret coverage are
-unchanged, the guard prints one line per batch, and a successful full scan must
+unchanged, the guard prints one line per batch when a scan has more than one,
+and a successful full scan must
 still be observed before publication. The review record became one file per day
 on the same date, so that no single file approaches the 2 MiB item bound.
 A future asset or larger repository requires another reviewed handling decision,
