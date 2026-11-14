@@ -9,6 +9,15 @@ let collecting = null;
 // would land before the reply being written, so it waits, or runs as its own turn.
 let heldMidturn = null, midturnRead = null, personRevision = 0;
 let foreignSubmissions = 0;
+// The person's own message from the conversation box goes in beside a draft in the native prompt (the person,
+// 2026-11-13: 两边的输入可以不要锁定). Measured 2026-11-14 on these versions with a loopback API: prompt.submit with no
+// root turn running, and a mid-turn session.append at a tool boundary, leave the draft as typed (text and cursor),
+// during the turn and after it, and the draft never reaches the model. A submit while a root turn runs (Claude queues
+// it natively) was not measured, so it still waits, as does every other message (a NAW queue item, an automatic or
+// space message). appending: the message goes in as a mid-turn append.
+const draftKeptVersions = ['2.1.319', '2.1.321', '2.1.322', '2.1.323'];
+let draftKept = false;
+const draftRefuses = async ($, message, appending = false) => !(message.own === true && draftKept && (appending || rootIdle)) && Boolean((await $.prompt.read()).text);
 let foreignRevision = 0;
 let rootBinding = null;
 // Root transitions followed inside one process: SessionEnd reason -> SessionStart source.
@@ -652,7 +661,7 @@ async function listen($, ownGeneration) {
       let intentRevision = foreignRevision;
       if (message.midturn === true) {
         // A draft in the native prompt refuses it before any hold, as before (and again at dispatch).
-        if ((await $.prompt.read()).text) {
+        if (await draftRefuses($, message, true)) {
           await request($, '/result', { id: message.id, status: 'draft' }, binding);
           if (!stopped && generation === ownGeneration) $.clock.after(0, () => listen($, ownGeneration));
           return;
@@ -669,8 +678,7 @@ async function listen($, ownGeneration) {
         }
         intentRevision = foreignRevision;
       }
-      const draft = await $.prompt.read();
-      if (draft.text) await request($, '/result', { id: message.id, status: 'draft' }, binding);
+      if (await draftRefuses($, message)) await request($, '/result', { id: message.id, status: 'draft' }, binding);
       else {
         // Authorize before calling the API. Native 2.1.302 does not re-enter
         // this mod's own prompt.submit hook for its background submissions.
@@ -679,7 +687,7 @@ async function listen($, ownGeneration) {
         const verdict = await request($, '/authorize', { id: message.id, text: message.text }, binding);
         if (stopped || generation !== ownGeneration) return;
         if (!verdict.allowed) await request($, '/result', { id: message.id, status: 'blocked' }, binding);
-        else if ((await $.prompt.read()).text) await request($, '/result', { id: message.id, status: 'draft' }, binding);
+        else if (await draftRefuses($, message)) await request($, '/result', { id: message.id, status: 'draft' }, binding);
         else {
           if (stopped || generation !== ownGeneration || await $.session.id() !== binding.sessionId) return;
           if (stopped || generation !== ownGeneration) return;
@@ -724,7 +732,7 @@ async function listen($, ownGeneration) {
 async function holdMidturn($, message, binding, ownGeneration) {
   // The running turn reads the app's own text for it when there is one (a space message's frame).
   const appendText = typeof message.midturnText === 'string' && message.midturnText && message.midturnText.length <= 100000 ? message.midturnText : message.text;
-  const held = { id: message.id, text: message.text, appendText, binding: rootBinding, connection: binding, generation: ownGeneration, personRevision, outcome: null };
+  const held = { id: message.id, text: message.text, own: message.own === true, appendText, binding: rootBinding, connection: binding, generation: ownGeneration, personRevision, outcome: null };
   held.done = new Promise(resolve => { held.resolve = outcome => { if (!held.outcome) { held.outcome = outcome; resolve(held); } }; });
   if (!rootBinding?.nativeMidturnAppend || rootBinding.lease !== binding.lease || rootIdle) { held.resolve('ended'); return held.done; }
   heldMidturn = held;
@@ -749,11 +757,11 @@ async function takeMidturn($, binding) {
   const { id, text, appendText, connection } = held;
   try {
     if (personRevision !== held.personRevision) return await request($, '/result', { id, status: 'blocked', reason: 'input-changed' }, connection);
-    if ((await $.prompt.read()).text) return await request($, '/result', { id, status: 'draft' }, connection);
+    if (await draftRefuses($, held, true)) return await request($, '/result', { id, status: 'draft' }, connection);
     const verdict = await request($, '/authorize', { id, text }, connection);
     if (!verdict.allowed) return await request($, '/result', { id, status: 'blocked' }, connection);
     // As on the ordinary path, a draft or the person's own input during that round trip refuses it.
-    if ((await $.prompt.read()).text) return await request($, '/result', { id, status: 'draft' }, connection);
+    if (await draftRefuses($, held, true)) return await request($, '/result', { id, status: 'draft' }, connection);
     if (personRevision !== held.personRevision) return await request($, '/result', { id, status: 'blocked', reason: 'input-changed' }, connection);
     // Nothing is stored yet: a session or context that changed during that round trip still means not sent.
     if (binding !== rootBinding || stopped || generation !== held.generation) return await request($, '/result', { id, status: 'blocked', reason: 'context-changed' }, connection);
@@ -1339,6 +1347,7 @@ export function register(on) {
     queuedDisplayLookups.clear();
     const ownGeneration = ++generation;
     const nativeVersion = (await $.session.version()).version;
+    draftKept = !legacyOnly && draftKeptVersions.includes(nativeVersion);
     // 2.1.316 and 2.1.317: the free status-line usage read, session.model() and the
     // PostModelSwitch event are declared as on 2.1.312 (T-133).
     nativeUsageSupported = ['2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(nativeVersion);

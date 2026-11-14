@@ -87,6 +87,20 @@ test('the automatic-message switches and the person\'s draft stop a dispatch bef
   assert.equal(sent.length, 1);
 });
 
+// The person, 2026-11-13: 「两边的输入可以不要锁定」. Their own box send survives their typing in the terminal
+// (workspace.test.cjs); a NAW queue item does not: a key in the terminal is still the person stepping in.
+test('a key the person types in the terminal still takes back a queue item being sent', async t => {
+  const { w, ids } = await fixture(t);
+  const runtime = w.runtime(ids[0]); let valid;
+  runtime.terminal = { alive: true, input() {} };
+  runtime.send = async (_text, _tag, guard) => { valid = guard; };
+  await dispatch(w, ids[0]);
+  assert.equal(valid(), true);
+  assert.equal(valid.ownInput, undefined, 'Claude\'s mod still waits for a draft in the native prompt before a queue item');
+  w.input(ids[0], 'k', 'person');
+  assert.equal(valid(), false, 'The queue item is taken back');
+});
+
 // eddb1c16 (11-13): on Claude 2.1.322 a background task the dispatched turn starts and finishes notifies during that
 // turn, under its prompt id. NAW's own send is accepted and running then; nothing displaced it, so the item settles done.
 // A member on the real Claude adapter, sent one queue item that native accepts as prompt 'turn'.

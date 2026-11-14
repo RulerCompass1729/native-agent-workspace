@@ -197,6 +197,7 @@ test('shared waiting input binds only its next native prompt and preserves the s
   const source = w.room.messages.find(m => m.id === tag);
   assert.equal(source.status, 'awaiting-native'); assert.equal(source.replyTo, 'discussion-parent');
   assert.equal(source.deliveries[0].text, 'shared next task'); assert.ok(valid());
+  assert.equal(valid.ownInput, undefined, 'A shared queue message still waits for a draft in Claude\'s native prompt');
   r.emit('nativeBlock', { id: 'display:private', nativeId: s.nativeId, kind: 'response', turnId: 'private-turn', promptId: 'private-prompt', text: 'PRIVATE_ORIGINAL_BODY', status: 'streaming' });
   r.emit('complete', { tag: 'private-original', text: 'PRIVATE_ORIGINAL_BODY' });
   assert.ok(!JSON.stringify(w.room.messages).includes('PRIVATE_ORIGINAL_BODY'));
@@ -270,8 +271,9 @@ test('shared human message survives uncertain delivery and restart without repla
   const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);
   w.join(id, true);
   let reject;
-  r.send = () => new Promise((resolve, fail) => { reject = fail; });
+  let guard; r.send = (_text, _tag, value) => new Promise((resolve, fail) => { guard = value; reject = fail; });
   const sending = w.forward(id, 'human message remains visible', 'owner');
+  assert.equal(guard.ownInput, undefined, 'A space message still waits for a draft in Claude\'s native prompt');
   const failed = assert.rejects(sending, /uncertain/);
   const message = w.room.messages.at(-1);
   assert.equal(message.text, 'human message remains visible');
@@ -632,17 +634,64 @@ for (const edit of [false, true]) test('backend retirement before a rejected ACK
   assert.equal(w.get(id).messages.at(-1).status, 'unconfirmed');
   assert.equal(w.get(id).state, 'recoverable');
 });
-test('switching your own view does not cancel a pending send; actual input or takeover does', async t => {
+// The person, 2026-11-13: 「两边的输入可以不要锁定」. They send from the conversation box and go straight on typing in
+// the native terminal: their keys do not take back what they sent; a takeover, an interrupt or a turn they submit does.
+test('switching your own view or typing in the terminal does not cancel your pending send; takeover, interrupt or a submitted turn does', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   let allowed;
   r.send = async (_text, _tag, guard) => { allowed = guard; };
   r.terminal = { alive: true, input() {} };
+  const s = w.get(id), next = async text => { s.pendingTag = null; await w.send(id, text, 'owner'); };
   await w.send(id, 'test', 'owner');
+  assert.equal(allowed.ownInput, true, 'Claude\'s mod sends it beside a draft in the native prompt');
   w.claim(id, 'owner', 'terminal'); assert.equal(allowed(), true);
-  w.input(id, 'human input', 'owner'); assert.equal(allowed(), false);
-  w.get(id).pendingTag = null;
-  await w.send(id, 'another test', 'owner');
-  w.claim(id, 'second-view', 'chat'); assert.equal(allowed(), false);
+  w.input(id, 'human input', 'owner'); w.input(id, ' more', 'owner'); assert.equal(allowed(), true, 'Keys typed in the terminal leave the send valid');
+  w.claim(id, 'owner', 'chat'); assert.equal(allowed(), true);
+  w.claim(id, 'second-view', 'chat'); assert.equal(allowed(), false, 'Another window taking control still takes it back');
+  w.claim(id, 'owner', 'chat');
+  await next('after takeover'); w.input(id, 'k', 'owner'); assert.equal(allowed(), true);
+  r.interrupt = async () => ({ interrupted: true }); await w.interrupt(id, 'owner'); assert.equal(allowed(), false, 'An interrupt still takes it back');
+  await next('after interrupt'); w.input(id, 'k', 'owner');
+  r.emit('nativeInput', 'typed and submitted', { source: 'user' }); assert.equal(allowed(), false, 'A turn submitted in the terminal still displaces it');
+  // Review N1: an agent typing into the terminal (a background operation) still takes it back.
+  await next('before an agent types'); w.input(id, 'k', 'owner'); assert.equal(allowed(), true);
+  const agent = { provider: 'codex', id: 'agent', nativeId: 'agent-native', name: 'Agent', callId: 'call', turnId: 'turn', operationId: 'op' };
+  require('../background-operation.cjs').run(agent, () => w.input(id, 'agent key', 'owner'));
+  assert.equal(allowed(), false, 'Keys an agent types do not count as the person\'s');
+});
+test('a send refused while the person typed in the terminal returns its text to the box', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  r.terminal = { alive: true, input() {} };
+  let reject; r.send = () => new Promise((_resolve, fail) => { reject = fail; });
+  w.setDraft(id, 'sent from the box', 'owner');
+  const sending = w.send(id, 'sent from the box', 'owner'), rejected = assert.rejects(sending);
+  assert.equal(w.drafts.get(id), '');
+  w.input(id, 'typing in the terminal', 'owner');
+  reject(Object.assign(Error('Native draft'), { notSent: true })); await rejected;
+  assert.equal(w.drafts.get(id), 'sent from the box', 'The box gets its text back');
+  assert.equal(w.get(id).pendingTag, null);
+});
+test('private queued and steered input survive the person typing in the terminal; shared ones do not', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const s = w.get(id); r.terminal = { alive: true, input() {} };
+  let valid, accept;
+  s.state = 'working'; r.queueAvailable = true;
+  r.queue = (_text, _tag, guard) => new Promise(resolve => { valid = guard; accept = resolve; });
+  const queued = w.queue(id, 'next task', 'owner');
+  assert.equal(valid.ownInput, true, 'A private queue message goes in beside a native draft too');
+  w.input(id, 'typing', 'owner'); assert.equal(valid(), true, 'A held private queue message stays valid');
+  w.claim(id, 'second-view', 'chat'); assert.equal(valid(), false, 'A takeover still takes it back');
+  accept(); await queued; w.claim(id, 'owner', 'chat');
+  s.provider = 'codex'; r.steerAvailable = true; r.turnId = 'turn-1'; r.finishTurn = () => {};
+  r.steer = (_text, _tag, _turn, guard) => new Promise(resolve => { valid = guard; accept = resolve; });
+  const steered = w.steer(id, 'steer it', 'owner', 'turn-1');
+  w.input(id, 'typing', 'owner'); assert.equal(valid(), true, 'A private steer stays valid');
+  accept(); await steered;
+  w.join(id, true);
+  const shared = w.steer(id, 'shared steer', 'owner', 'turn-1', {});
+  assert.equal(valid(), true);
+  w.input(id, 'typing', 'owner'); assert.equal(valid(), false, 'A shared steer is still taken back by a key');
+  accept(); await shared.catch(() => {});
 });
 test('leaving during a pending handoff invalidates native submission without replacing its session', async t => {
   const { workspace: w, runtimes: [r], ids } = await fixture(t, 2);

@@ -32,7 +32,7 @@ for (const allowed of [false, true]) {
 // 2.1.322 and 2.1.323: a queued app message held for the running root turn's next tool boundary
 // (measured on the real CLI: appended there, the same turn's next request reads it).
 const midturnSession = '22222222-2222-4222-8222-222222222222';
-async function midturn($, on, options: { version?: string; granted?: boolean; hold?: boolean; allowed?: boolean; deny?: boolean; draft?: string; holdGate?: Promise<unknown>; authorizeGate?: Promise<unknown>; endOnAuthorize?: boolean; midturnText?: string } = {}) {
+async function midturn($, on, options: { version?: string; granted?: boolean; hold?: boolean; allowed?: boolean; deny?: boolean; draft?: string; holdGate?: Promise<unknown>; authorizeGate?: Promise<unknown>; endOnAuthorize?: boolean; midturnText?: string; own?: boolean; midturn?: boolean } = {}) {
   const raise = $, clock = mock.clock(on), calls = [], submitted = [], rows = [];
   // A refusing bottom stands for a plugin above that refuses the mod's own row.
   const stored = options.deny ? { appended: () => rows } : mock.session(on);
@@ -62,7 +62,7 @@ async function midturn($, on, options: { version?: string; granted?: boolean; ho
     let value: object = { observed: true };
     if (route === '/next') {
       if (delivered) await clock.sleep(1);
-      else { await gate; delivered = true; value = { id: 'app-held', text: 'HELD_TEXT', midturn: true, ...(options.midturnText ? { midturnText: options.midturnText } : {}) }; }
+      else { await gate; delivered = true; value = { id: 'app-held', text: 'HELD_TEXT', ...(options.midturn !== false ? { midturn: true } : {}), ...(options.midturnText ? { midturnText: options.midturnText } : {}), ...(options.own ? { own: true } : {}) }; }
     } else if (route === '/root-bind') value = { lease: 'synthetic-lease', observationEpoch: 'synthetic-epoch', nativeBlocks: true, nativeMidturnAppend: options.granted !== false };
     else if (route === '/hold') { await options.holdGate; value = { held: options.hold !== false }; }
     else if (route === '/authorize') {
@@ -265,4 +265,51 @@ test('2.1.322: a framed message whose turn ends first is submitted plain', async
   f.release(); await f.clock.settle();
   await $.turn.complete({ turnId: 'running-turn', ...ended }); await f.clock.settle();
   expect(f.submitted.map(e => e.text)).toEqual(['HELD_TEXT']); expect(f.held()).toEqual([]);
+});
+
+// The person, 2026-11-13: 「两边的输入可以不要锁定」. Their own message from the conversation box goes in beside a draft
+// in the native prompt (measured 2026-11-14 on 2.1.319, 2.1.321, 2.1.322 and 2.1.323 with a loopback API: the draft
+// stays as typed and never reaches the model). Every other message still waits for the draft.
+for (const version of ['2.1.322', '2.1.323']) test(`${version}: the person's own message enters the running turn beside a native draft typed before and during the hold`, async ($, on) => {
+  const f = await midturn($, on, { version, own: true, draft: 'typed before' });
+  await $.turn.start({ turnId: 'running-turn' });
+  f.release(); await f.clock.settle();
+  expect(f.routes()).toEqual(['/hold']);
+  f.setDraft('typed before and during'); await tool($); await f.clock.settle();
+  expect(f.routes()).toEqual(['/hold', '/authorize', '/result']);
+  expect(f.held().length).toBe(1);
+  expect(f.results()).toEqual([expect.objectContaining({ id: 'app-held', status: 'accepted', mode: 'append' })]);
+});
+for (const version of ['2.1.319', '2.1.321', '2.1.322', '2.1.323']) test(`${version}: the person's own message runs as its own turn beside a native draft`, async ($, on) => {
+  const f = await midturn($, on, { version, own: true, draft: 'typed before' });
+  f.release(); await f.clock.settle();
+  expect(f.routes()).toEqual(['/authorize', '/result']);
+  expect(f.submitted.map(e => e.text)).toEqual(['HELD_TEXT']);
+  expect(f.results().some(r => r.status === 'draft')).toBe(false);
+});
+for (const [version, own] of [['2.1.318', true], ['2.1.323', false]] as const) test(`${version}: ${own ? 'the person\'s own message, on a version not measured,' : 'a message that is not the person\'s own'} still waits for a native draft`, async ($, on) => {
+  const f = await midturn($, on, { version, own, draft: 'typed before' });
+  f.release(); await f.clock.settle();
+  expect(f.routes()).toEqual(['/result']);
+  expect(f.results()).toEqual([expect.objectContaining({ id: 'app-held', status: 'draft' })]);
+  expect(f.submitted).toEqual([]);
+});
+// Review B1 (2026-11-14): a submit while a root turn runs is queued natively, which the measurement did not cover, so the
+// person's own message still waits for the draft there: sent as queued (no mid-turn append on 2.1.319 and 2.1.321, or
+// not granted), or held for a boundary that is not granted.
+for (const [version, held, granted] of [['2.1.319', false, true], ['2.1.321', false, true], ['2.1.323', false, true], ['2.1.322', true, false]] as const) test(`${version}: the person's own message ${held ? 'held without a granted append' : 'queued'} during a running turn still waits for a native draft`, async ($, on) => {
+  const f = await midturn($, on, { version, own: true, draft: 'typed before', midturn: held, granted });
+  await $.turn.start({ turnId: 'running-turn' });
+  f.release(); await f.clock.settle();
+  expect(f.results()).toEqual([expect.objectContaining({ id: 'app-held', status: 'draft' })]);
+  expect(f.submitted).toEqual([]); expect(f.held()).toEqual([]);
+});
+test('2.1.323: the person\'s own message held for a boundary that never came runs as its own turn beside a native draft once the turn ends', async ($, on) => {
+  const f = await midturn($, on, { version: '2.1.323', own: true, draft: 'typed before' });
+  await $.turn.start({ turnId: 'running-turn' });
+  f.release(); await f.clock.settle();
+  expect(f.routes()).toEqual(['/hold']);
+  await $.turn.complete({ turnId: 'running-turn', ...ended }); await f.clock.settle();
+  expect(f.submitted.map(e => e.text)).toEqual(['HELD_TEXT']); expect(f.held()).toEqual([]);
+  expect(f.results().some(r => r.status === 'draft')).toBe(false);
 });
