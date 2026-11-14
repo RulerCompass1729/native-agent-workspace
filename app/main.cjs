@@ -741,7 +741,7 @@ function bindClient(context) {
   client.authorizeOperation = (method, args, roomId = 'shared') => {
     if (context.background) backgroundOperation.assertDeliveryPolicy(client.snapshot(), method, args);
     // The person working in a session keeps queued NAW work out of it for a while.
-    else if (HUMAN_SESSION_METHODS.has(method) && typeof args[0] === 'string' && !terminalReplyOnly(method, args)) queueDispatcher?.noteHuman(args[0]);
+    else if (humanSessionWork(method, args)) queueDispatcher?.noteHuman(args[0]);
     if (['send', 'queue', 'queueShared', 'steerShared', 'steer', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'answer', 'draft', 'resume'].includes(method)) {
       for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'queueShared', 'steerShared', 'run'].includes(method), roomId);
     }
@@ -809,6 +809,11 @@ const HUMAN_SESSION_METHODS = new Set(['prepareInput', 'input', 'draft', 'send',
 function terminalReplyOnly(method, args) {
   return method === 'input' && queueRules.terminalReplyOnly(args[1]);
 }
+// Nor is a window taking a session no open window holds as it shows it (renderer takeFreeSession): showing
+// a space's members must not hold their queued work back.
+function humanSessionWork(method, args) {
+  return HUMAN_SESSION_METHODS.has(method) && typeof args[0] === 'string' && !terminalReplyOnly(method, args) && !(method === 'claim' && args[2] === 'free');
+}
 // A key the person typed in a window's page: the composer's draft, the terminal (not its own replies), or a
 // space composer's text, which comes with every viewState. State for that page then waits for a pause.
 function typingKey(name, view, args) {
@@ -837,7 +842,8 @@ async function startQueueDispatcher() {
         }
         return null;
       },
-      connect: owner => connect(dataDir, owner),
+      // A connection of its own is no page a person sees: what it creates is the person's window's to use.
+      connect: owner => connect(dataDir, owner, { page: false }),
       labels: sessionLabels.labels,
       broadcast: broadcastRoom,
       notify: notifyRotation,
@@ -961,7 +967,7 @@ async function openWindow(saved) {
       view.active = false;
       try { saveViews(); } catch { view.active = true; }
     }
-    windows.delete(id); context.statePush?.close(); context.imagePreviews?.close(); context.client.close();
+    windows.delete(id); context.statePush?.close(); context.imagePreviews?.close(); context.client.close({ leave: !quitting && !context.failed });
   });
   try { await win.loadURL(entry); await ready; }
   catch (error) { discardReveal(context); if (quitting || win.isDestroyed()) return; throw new Error(startupMessage(error, displayLanguage())); }
@@ -1184,7 +1190,7 @@ async function replaceBackendSockets(key) {
   const replacements = [];
   try {
     for (const context of windows.values()) if (!context.win.isDestroyed()) {
-      const client = await connectService(path.join(dataDir, key), context.view.owner);
+      const client = await connectService(path.join(dataDir, key), context.view.owner, { page: !context.background });
       const replacement = { context, client }; replacements.push(replacement);
       replacement.state = await client.call('initial');
     }
@@ -1220,7 +1226,8 @@ async function runBackendSwitch(c, option, requireAuto = false, extra = {}) {
       await extra.beforeStops();
     }
     const result = await backendSwitch.switchBackend({ dataDir, key: option.backendKey, executablePath: process.execPath, expected: option.switch, requireAuto,
-      ensure: ensureService, owner: c.view.owner, sessionState: value => c.client.sessionState?.(value) || value.state, running: () => runningRelays(c.client), guard: extra.guard || null });
+      ensure: ensureService, owner: c.view.owner, sessionState: value => c.client.sessionState?.(value) || value.state, running: () => runningRelays(c.client), guard: extra.guard || null,
+      pageOwners: () => new Set([...windows.values()].filter(w => !w.win.isDestroyed() && !w.background).map(w => w.view.owner)) });
     // The move itself is done; a window that cannot reconnect is a separate problem.
     try { await replaceBackendSockets(option.backendKey); } catch { result.reconnectFailed = true; }
     return result;
@@ -1450,7 +1457,8 @@ async function boot() {
     context: async (actor, saved, kept) => {
       const view = saved || { owner: randomUUID(), selected: actor.id, mode: 'chat', preference: 'chat', active: false };
       backups(view);
-      const client = await connect(dataDir, view.owner);
+      // No one sees this window: the service never counts it as one that holds a session.
+      const client = await connect(dataDir, view.owner, { page: false });
       const win = new BrowserWindow({ ...windowOptions(), show: false, focusable: false, skipTaskbar: true });
       const context = { background: true, actor, win, client, view, failed: false };
       // What this agent's next background window takes over when this one is closed for lack of use. Not while a
@@ -2188,7 +2196,7 @@ async function boot() {
   });
   register('reconnect', async c => {
     await ensureService(dataDir, process.execPath);
-    const client = await connect(dataDir, c.view.owner), old = c.client;
+    const client = await connect(dataDir, c.view.owner, { page: !c.background }), old = c.client;
     c.client = client; bindClient(c); old.close(); await c.win.reload();
   });
   register('connectionUpdates', async c => {

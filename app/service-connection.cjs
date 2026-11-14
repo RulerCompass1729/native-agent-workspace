@@ -54,7 +54,9 @@ class ServiceClient extends EventEmitter {
   }
   close() { this.socket.end(); }
 }
-async function connectService(dataDir, owner) {
+// page: false for a connection no one sees, such as the hidden window an agent's request runs in. The service
+// does not count its owner as a window that holds a session (workspace.cjs viewConnected).
+async function connectService(dataDir, owner, { page = true } = {}) {
   const filename = path.join(dataDir, 'connection.json'); const stat = fs.statSync(filename);
   if (stat.uid !== process.getuid() || (stat.mode & 0o077)) throw uiError('error.connectionPermissions');
   const info = JSON.parse(fs.readFileSync(filename, 'utf8'));
@@ -67,7 +69,7 @@ async function connectService(dataDir, owner) {
     client.once('ready', () => { clearTimeout(timer); resolve(); });
     socket.once('error', () => { clearTimeout(timer); reject(uiError('error.serviceConnect')); });
     // stateDelta: this client rebuilds delta state frames. An older service ignores it and sends whole ones.
-    socket.once('connect', () => socket.write(JSON.stringify({ protocol: 1, owner, token: info.token, stateDelta: 1 }) + '\n'));
+    socket.once('connect', () => socket.write(JSON.stringify({ protocol: 1, owner, token: info.token, stateDelta: 1, ...(page ? {} : { page: false }) }) + '\n'));
   });
   return client;
 }

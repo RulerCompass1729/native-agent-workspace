@@ -420,7 +420,9 @@ function composerCurrent(binding) {
 }
 function saveSessionDraft(binding) {
   const s = state?.sessions.find(s => s.id === binding.id);
-  if (!s || s.owner !== owner || !composerCurrent(binding)) return;
+  if (!s || !composerCurrent(binding)) return;
+  // Text typed before this window has taken a free session becomes its draft once taken (updateState).
+  if (s.owner !== owner) { if (!heldElsewhere(s)) binding.typedWhileFree = true; return; }
   const revision = (draftRevisions.get(s.id) || 0) + 1; draftRevisions.set(s.id, revision);
   const pending = { text: binding.ui.input.value, revision }; pendingDrafts.set(s.id, pending); s.liveDraft = pending.text;
   attempt(async () => {
@@ -543,7 +545,7 @@ function renderColumnInput(host, record, visible) {
       if (sash.nextSibling !== binding.nativeHost) host.insertBefore(sash, binding.nativeHost);
     }
     else if (binding.ui.form.parentElement !== composerParking) composerParking.append(binding.ui.form);
-    updateSessionComposer(binding, record, true);
+    updateSessionComposer(binding, record, true); takeFreeSession(binding, record);
   }
   const nativeVisible = visible && (record.view === 'terminal' || record.terminalState?.alive === true) && binding !== soloComposer;
   binding.nativeVisible = nativeVisible; binding.nativeHost.hidden = !nativeVisible;
@@ -1088,6 +1090,13 @@ function updateState(next) {
   for (const [id, binding] of sessionComposers) {
     const previous = before.get(id), after = state.sessions.find(s => s.id === id);
     if (previous && after && (previous.owner !== owner || after.owner !== owner)) {
+      if (binding.typedWhileFree && !heldElsewhere(after)) {
+        if (after.owner === owner && composerCurrent(binding)) { binding.typedWhileFree = false; saveSessionDraft(binding); }
+        continue;
+      }
+      // Text typed while the session was free is kept as a recovery copy when another window got it first.
+      if (binding.typedWhileFree && binding.ui.input.value !== (after.liveDraft || '')) rememberDraftRecovery(id, binding.ui.input.value);
+      binding.typedWhileFree = false;
       const pending = pendingDrafts.get(id);
       if (pending && pending.text !== after.liveDraft) rememberDraftRecovery(id, pending.text);
       // An owning editor keeps its node/value across ordinary snapshots.
@@ -1239,8 +1248,9 @@ function claimView(id, next, revision, takeControl = false, contextCurrent) {
     // Waiting is not renewed consent to override a more recent human action.
     // Older native services have no atomic conditional-claim protocol; this
     // cancels stale queued intent, not changes after this local observation.
-    if (!target || target.owner !== expectedOwner || ((pending || contextCurrent) && target.controlRevision !== expectedControl) || (!takeControl && target.owner !== owner)) { render(); return false; }
-    await api.claim(id, next);
+    if (!target || target.owner !== expectedOwner || ((pending || contextCurrent) && target.controlRevision !== expectedControl) || (!takeControl && heldElsewhere(target))) { render(); return false; }
+    // A session no open window holds is taken only while still free (takeFreeSession): no takeover.
+    if (!takeControl && target.owner !== owner) await api.claim(id, next, 'free'); else await api.claim(id, next);
     if (!isCurrent()) return false;
     const acknowledged = await api.initial();
     if (!isCurrent()) return false;
@@ -1252,6 +1262,24 @@ function claimView(id, next, revision, takeControl = false, contextCurrent) {
   const clear = () => { if (viewClaims.get(id) === operation) viewClaims.delete(id); };
   operation.then(clear, clear); return operation;
 }
+// Taking such a session pauses nothing (Workspace.claim). It keeps its view, except that the
+// terminal tab takes it for the terminal, as choosing that tab does.
+const freeSessionMisses = new Map(), freeMissKey = s => `${s.owner}:${s.controlRevision || 0}`;
+function takeFreeSession(binding, s) {
+  if (s?.owner === owner) freeSessionMisses.delete(s.id);
+  if (!s || s.owner === owner || heldElsewhere(s) || disconnected || !nativeUsable(s) || viewClaims.has(s.id) || !composerCurrent(binding)) return;
+  const view = !binding.column && mode === 'terminal' || s.view === 'terminal' ? 'terminal' : 'chat';
+  attempt(async () => {
+    let taken = false;
+    try { taken = await claimView(s.id, view, selectionRevision, false, () => composerCurrent(binding)); }
+    finally {
+      // A composer that showed another session or was hidden meanwhile tries again when it shows this one.
+      // A refusal or a failure shows 接管此窗口 (heldElsewhere) until the owner or control changes.
+      if (taken || !composerCurrent(binding)) freeSessionMisses.delete(s.id); else { freeSessionMisses.set(s.id, freeMissKey(s)); render(); }
+    }
+    if (taken) render();
+  });
+}
 function soloAction(s, context = {}) {
   const choice = value => ({ ...value, label: uiText(value.labelKey), hint: uiText(value.hintKey) });
   if (!s || disconnected || s.archived) return choice({ kind: 'none', labelKey: s?.archived ? 'composer.archived' : 'composer.disconnected', hintKey: s?.archived ? 'composer.archivedHint' : 'composer.disconnectedHint' });
@@ -1259,7 +1287,7 @@ function soloAction(s, context = {}) {
   if (!nativeUsable(s)) return choice(canResume(s)
     ? { kind: 'resume', labelKey: 'composer.resume', hintKey: 'composer.resumeHint' }
     : { kind: 'none', labelKey: 'composer.unavailable', hintKey: 'composer.unavailableHint' });
-  if (s.owner !== owner) return choice({ kind: 'claim', labelKey: 'composer.claim', hintKey: 'composer.readOnlyHint' });
+  if (heldElsewhere(s)) return choice({ kind: 'claim', labelKey: 'composer.claim', hintKey: 'composer.readOnlyHint' });
   if (interruptPending(s)) return choice({ kind: 'send', labelKey: 'composer.waitInterrupt', hintKey: 'composer.interruptHint' });
   if (s.nativeInputRequired) return choice({ kind: 'terminal', labelKey: 'composer.terminal', hintKey: 'composer.nativeInputHint' });
   if (s.state === 'error' && s.failedTurnInputAvailable) return choice({ kind: 'send', labelKey: 'composer.send', hintKey: 'composer.failedHint' });
@@ -1281,6 +1309,11 @@ function soloAction(s, context = {}) {
         : 'composer.approvalHint'
     : s.state === 'working' ? 'composer.workingHint' : s.pendingTag ? 'composer.inputPendingHint' : 'composer.keyboardHint' });
 }
+// Only another window the person has open holds a session against this one. A session nobody
+// holds, or one held by a closed window or by the hidden window an agent's request ran in, is
+// taken by the window that shows it, without the takeover prompt (takeFreeSession). A service
+// from before that check (no freeClaim) still has every other window's session taken over.
+function heldElsewhere(s) { return Boolean(s && s.owner !== owner && (!s.freeClaim || s.owner != null && !s.ownerPageless || freeSessionMisses.get(s.id) === freeMissKey(s))); }
 function renderComposer(s) {
   renderDraftRecovery(s?.id);
   if (s) updateSessionComposer(activateSoloComposer(s.id), s, false);
@@ -4361,14 +4394,14 @@ function render() {
       }
       // The graphic follows the same layout state as the accessible name.
       $('terminal-maximize').toggleAttribute('data-restore', terminalLayout === 'maximized'); $('chat-maximize').toggleAttribute('data-restore', !terminalVisible);
-      ui.display.computed($('session-status'), 'text', () => `${s.archived ? uiText('native.archived') : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? uiText('native.codexUnverified', { version: s.nativeVersion || uiText('native.versionMissing') }) : ''}${claudePinText(s)}${s.activity ? ' · ' + (s.activityUiMessage ? ui.displayText(s.activity, s.activityUiMessage) : s.activity) : ''}${!own && s.owner ? uiText('native.otherWindow') : ''}${terminals.get(s.id)?.viewInput ? uiText('native.inputBuffered') : terminalUnclaimed(s, own, terminalVisible) ? uiText('native.terminalUnclaimed') : ''}`);
+      ui.display.computed($('session-status'), 'text', () => `${s.archived ? uiText('native.archived') : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? uiText('native.codexUnverified', { version: s.nativeVersion || uiText('native.versionMissing') }) : ''}${claudePinText(s)}${s.activity ? ' · ' + (s.activityUiMessage ? ui.displayText(s.activity, s.activityUiMessage) : s.activity) : ''}${!own && s.owner && !s.ownerPageless ? uiText('native.otherWindow') : ''}${terminals.get(s.id)?.viewInput ? uiText('native.inputBuffered') : terminalUnclaimed(s, own, terminalVisible) ? uiText('native.terminalUnclaimed') : ''}`);
       ui.display.computed($('session-status'), 'title', () => nativeVersionText(s));
-      $('take-control').hidden = own || !alive;
+      $('take-control').hidden = !heldElsewhere(s) || !alive;
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');
       $('terminal-controls').hidden = !terminalVisible;
       $('terminal-paste').disabled = !terminalCanInput(s.id) || !alive;
       $('messages').hidden = false; $('terminal-area').hidden = !terminalVisible; $('composer-wrap').hidden = false;
-      renderComposer(s); renderNativeActivity(s);
+      renderComposer(s); takeFreeSession(soloComposer, s); renderNativeActivity(s);
       $('interrupt').hidden = !own || !(['working', 'approval'].includes(s.state) || s.capacityRecovery?.status === 'scheduled');
       ui.display.text($('interrupt'), s.capacityRecovery?.status === 'scheduled' ? 'native.cancelContinue' : 'native.interrupt');
       $('interrupt').disabled = interruptPending(s);
@@ -4506,7 +4539,7 @@ async function switchMode(next, takeControl = false) {
   try {
     if (ending) await ending.done;
     if (!stillSelected()) return;
-    if ((takeControl || s.owner === owner) && !await claimView(s.id, next, revision, takeControl)) return;
+    if ((takeControl || !heldElsewhere(s)) && !await claimView(s.id, next, revision, takeControl)) return;
     if (!stillSelected()) return;
     if (queued && (terminals.get(s.id) !== entry || entry.generation !== (state.sessions.find(x => x.id === s.id)?.connectionRevision || 0) || !terminalCanInput(s.id))) { render(); focusTerminal(s.id); return; }
     if (queued && entry.viewInput === queued) {

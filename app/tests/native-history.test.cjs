@@ -177,7 +177,7 @@ test('workspace native version metadata follows its actual runtime RPC and never
     sessions: new Map([['test', { id: 'test', provider: 'codex', nativeVersion: '0.164.0', nativeVersionStatus: 'verified' }]]),
     runtimes: new Map([['test', runtime]]), host: { binaries: {}, rpc: { nativeVersion: '0.164.0' } },
     operator: { decorate: value => value },
-    sharedReplies: { activity: () => null }, drafts: new Map(), draftRevisions: new Map(), capacityRecoveries: new Map(), room: {}, versions: {},
+    sharedReplies: { activity: () => null }, drafts: new Map(), draftRevisions: new Map(), capacityRecoveries: new Map(), pagelessOwners: new Set(), room: {}, versions: {},
   });
   workspace.rooms = new Map([['shared', workspace.room]]);
   assert.equal(workspace.snapshot().sessions[0].nativeVersion, '0.163.0');

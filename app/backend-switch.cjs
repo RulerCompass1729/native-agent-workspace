@@ -242,13 +242,14 @@ async function endedByThisStop(client, session, wait) {
 }
 
 async function switchBackend({ dataDir, key, executablePath, expected, ensure, owner, applicationVersion = process.env.NAW_APP_VERSION,
-  sessionState, running = () => new Set(), requireAuto = false, commandLine = psCommand, now = Date.now, guard = null, settleMs = 10000 }) {
+  sessionState, running = () => new Set(), requireAuto = false, commandLine = psCommand, now = Date.now, guard = null, settleMs = 10000, pageOwners = () => new Set() }) {
   const directory = path.join(dataDir, key), stopped = [], confirmedByState = [];
   const effective = record => sessionState ? sessionState(record) : record.state;
-  // Each session is reconnected as its own owner, so its window keeps control.
+  // Each session is reconnected as its own owner, so its window keeps control. Only an owner whose window
+  // the person has open connects as a page: a closed or hidden window's sessions stay free to take.
   const resumeAs = async (session, fresh = false) => {
     const who = session.owner || owner; if (!who) throw uiError("error.backendSwitchWindowMissing");
-    const connection = await connectService(directory, who);
+    const connection = await connectService(directory, who, { page: pageOwners().has(who) });
     try {
       let proof = session.stoppedState;
       if (fresh) {

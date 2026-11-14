@@ -182,7 +182,9 @@ class PeerRunner {
       try {
         const records = new Map();
         for (const key of new Set(ids.map(id => routes[id]))) {
-          const client = await this.connect(path.join(root, key), owner);
+          // A run's own channel is not a window the person sees. While its owner's window is connected
+          // nothing changes; if it has no page connected here, its sessions are free until it connects here again.
+          const client = await this.connect(path.join(root, key), owner, { page: false });
           const channel = { client, key, owner }; this.channels.set(key, channel); valid();
           channel.state = await client.call('initial'); valid();
           if (roomId !== 'shared' && !channel.state.capabilities?.includes('collaborationSpacesV1') || !channel.state.capabilities?.includes(CAPABILITY) || mode === 'directed' && !channel.state.capabilities.includes(DIRECTED) || channel.state.storageWarning) throw uiError("error.peer.revocableInterfaceMissing");
@@ -293,7 +295,7 @@ class PeerRunner {
         // Retrying pause only verifies revocation; it never resends a task.
         results = await Promise.allSettled((this.lastChannels || []).map(async c => {
           if (!readLayout(this.root()).entries.includes(c.key)) throw uiError("error.peer.originalBackendUnconfirmed");
-          const client = await this.connect(path.join(this.root(), c.key), c.owner);
+          const client = await this.connect(path.join(this.root(), c.key), c.owner, { page: false });
           try {
             const state = await client.call('initial');
             if (!state.capabilities?.includes(CAPABILITY)) throw uiError("error.peer.originalBackendInterfaceMissing");

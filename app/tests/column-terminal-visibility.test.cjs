@@ -37,7 +37,7 @@ function setup({ view = 'chat', alive = true, solo = false, usable = true } = {}
     composerCurrent: value => value === binding && Boolean(binding.visible),
     columnTerminalSash: value => value.nativeSash ||= new Element(),
     columnTerminalHeight: () => 128, applyColumnTerminalHeight: () => calls.push('height'),
-    updateSessionComposer: () => {}, cancelViewInput: () => calls.push('cancel'),
+    updateSessionComposer: () => {}, takeFreeSession: () => {}, cancelViewInput: () => calls.push('cancel'),
     cancelColumnComposition: () => calls.push('cancelComposition'),
     ui: { display: { attribute: () => {} } }, participantLabel: () => 'Member',
     nativeUsable: () => usable, ensureTerminal: (...args) => { calls.push(['ensure', ...args]); return Promise.resolve(); },

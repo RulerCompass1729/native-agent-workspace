@@ -919,3 +919,17 @@ test('clearing 共同工作 passes on a service\'s report that cached images cou
     c.close();
   }
 });
+test('taking a free session goes straight to the service: no pause, no queue hold, and none from a service without the check', async () => {
+  const { c, next, old } = fixture();
+  for (const state of [next.state, next.real]) { state.capabilities.push('freeClaimV1'); state.sessions[0].owner = 'hidden-request-window'; }
+  let paused = 0;
+  c.pauseExcept = async () => { paused++; };
+  assert.deepEqual(['new', 'old'].map(id => c.snapshot().sessions.find(s => s.id === id).freeClaim), [true, false]);
+  assert.equal(await c.call('claim', 'new', 'chat', 'free'), true);
+  assert.deepEqual(next.calls.filter(([m]) => m === 'claim'), [['claim', 'new', 'chat', 'free']]);
+  assert.equal(paused, 0, 'an automatic take pauses no run');
+  // A service from before the free check could take a session another window holds: leave it to 接管此窗口.
+  assert.equal(await c.call('claim', 'old', 'chat', 'free'), false);
+  assert.equal(old.calls.some(([m]) => m === 'claim'), false);
+  c.close();
+});
