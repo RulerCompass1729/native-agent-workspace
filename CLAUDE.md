@@ -233,10 +233,13 @@ local branch or main; not installed, pushed or published):
   no running teammates. NAW sends idle members their next item and replaces long
   sessions with new ones, and it does neither for a session with a background
   command, an active goal or running teammates. A turn whose final message
-  starts with 「需要你决定：」 holds the member for the person. When the work
-  on the item ends in commits, the turn's final message has, after its first
-  line, one line of its own with exactly three words separated by single
-  spaces: `READY <branch> <commit>` (the branch that holds the work and its
+  starts with 「需要你决定：」 leaves its item open as 等你决定 for the person;
+  the member takes its next item meanwhile, in the same session, where the
+  person's answer arrives (NAW does not replace that session until the person
+  handles the item; 2026-11-13, a held member left four items waiting).
+  When the work on the item ends in commits, the turn's final message has,
+  after its first line, one line of its own with exactly three words
+  separated by single spaces: `READY <branch> <commit>` (the branch that holds the work and its
   head commit, 7 to 40 hex characters; plain text, with no quotes, backticks,
   bold, list marker or closing period). NAW keeps the line on the item and
   records the delivery in the space; an item without commits has no such
@@ -270,7 +273,7 @@ local branch or main; not installed, pushed or published):
      turn (AskUserQuestion). Write one line in the reply and one on the board:
      「请你定：<问题>；推荐 <X>，因为 <一句理由>；<HH:MM> PT 前没回就按推荐做」,
      with the deadline 20 minutes after sending. Do not start it with
-     「需要你决定：」, which makes NAW hold a queue member.
+     「需要你决定：」, which NAW records as an open decision for the person.
   3. While waiting, do not end the turn. First do the parts of the current item
      that do not depend on the answer (a queue member works only on items NAW
      sent it and on what the person asked it directly, and takes no other board
@@ -299,9 +302,10 @@ local branch or main; not installed, pushed or published):
      Write a hard-gate question as 「需要你决定：…（硬门，不按默认）」; the
      butler collects it into the person's list. First do any part of the
      current item that does not depend on it. Then a queue member ends its turn
-     with a final message whose first line is that question (NAW's existing
-     hold). An agent outside a queue (the integrator, the secretary, an agent
-     on the private task board), Claude or Codex, keeps working within
+     with a final message whose first line is that question (NAW marks the
+     item 等你决定 and sends the member its next item). An agent outside a
+     queue (the integrator, the secretary, an agent on the private task
+     board), Claude or Codex, keeps working within
      existing authorization or leaves one background command that waits for
      this answer, and does not end the turn idle.
   6. When the person is asked to look at the wording of interface text, items
