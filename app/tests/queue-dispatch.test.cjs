@@ -12,6 +12,8 @@ const HOUR = 60 * 60 * 1000;
 const NOW = 1_800_000_000_000;
 const AWAKE = { enabled: true };
 const GUARDED_STOP = 'guardedSessionStopV1';
+const CONDITIONAL_STOP = 'conditionalMaintenanceStopV1';
+const { sessionPlan, sameStop } = require('../backend-switch.cjs');
 
 function member(id, extra = {}) {
   return {
@@ -510,7 +512,7 @@ class FakeClient extends EventEmitter {
     this.calls = [];
     this.sequence = 0;
     this.reads = 0;
-    this.capabilities = [rules.CAPABILITY, GUARDED_STOP];
+    this.capabilities = [rules.CAPABILITY, GUARDED_STOP, CONDITIONAL_STOP];
   }
   snapshot() {
     this.reads += 1;
@@ -553,6 +555,35 @@ class FakeClient extends EventEmitter {
       const created = member(`new-${this.sequence}`, { name: args[0].name, createdAt: NOW, roomIds: [], roomId: null, cwd: args[0].cwd, model, view: args[0].view });
       this.state.sessions.push(created);
       return created.id;
+    }
+    if (method === 'stop' || method === 'maintenanceStop') {
+      if (this.sendBeforeStop) {
+        // The person's send was on its way when NAW last checked: the service handles it before the stop.
+        this.sendBeforeStop = false;
+        session.peerRevision = (session.peerRevision || 0) + 1;
+        session.pendingTag = 'person-send';
+        session.messages.push({ id: 'person-send', role: 'user', text: 'one more thing', status: 'submitted' });
+        session.state = 'working';
+      }
+    }
+    if (method === 'maintenanceStop') {
+      // As the service's conditional stop (workspace.cjs): refused, with nothing changed, unless the session
+      // is still exactly as proven.
+      const plan = sessionPlan({ ...session, draftRevision: session.draftRevision || 0 }, session.state);
+      if (!plan.stop || !sameStop(plan.stop, args[1]) || args[2] !== false) {
+        throw Object.assign(Error('changed'), { uiMessage: { key: 'error.backendSwitchSessionChanged' } });
+      }
+      if (this.refusesOwnReceipt) {
+        // As a real Claude stop on the service (maintenance-stop.test.cjs): the terminal's close ends the
+        // session and drops its runtime, SessionEnd revokes control once more, and the service then refuses
+        // its own receipt.
+        session.state = 'ended';
+        session.controlRevision = (session.controlRevision || 0) + 2;
+        session.connectionRevision = (session.connectionRevision || 0) + 2;
+        if (this.refusesOwnReceipt === 'other change') session.owner = 'another-window';
+        throw Object.assign(Error('unconfirmed'), { uiMessage: { key: 'error.backendSwitchDisconnectUnconfirmed' } });
+      }
+      return this.call('stop', session.id);
     }
     if (method === 'stop') {
       session.state = 'ended';
@@ -1926,6 +1957,74 @@ async function rotateTypedSession(t, snapshotFails, terminalClosed = false, type
   await dispatcher.schedule();
   return { client, notices, dir };
 }
+
+// 换续前发送不丢话 (2026-11-14): a send the person makes after NAW's last check reaches the old session before
+// the stop does. The stop is then refused by the service: the old session keeps the words and answers them,
+// the rotation is recorded as kept, and the designation (which follows only done lines) stays with it.
+for (const capable of [true, false]) test(`a send that reaches the old session just before its stop keeps it (${capable ? 'conditional stop' : 'old service'})`, async t => {
+  const notices = [];
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })],
+    { notify: kind => notices.push(kind) });
+  fakeMembership(room, client);
+  if (!capable) client.capabilities = [rules.CAPABILITY, GUARDED_STOP];
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  client.reply('a', '交接：在 feature 分支。');
+  await dispatcher.schedule();
+  const newId = client.state.sessions[1].id;
+  await dispatcher.schedule();
+  client.sendBeforeStop = capable;
+  await dispatcher.schedule();
+  const old = client.state.sessions.find(s => s.id === 'a');
+  assert.equal(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), false, 'the old process is not ended');
+  assert.equal(old.state, capable ? 'working' : 'idle');
+  if (capable) {
+    assert.equal(old.messages.at(-1).text, 'one more thing', 'the words are in the live session that answers them');
+    const asked = client.calls.find(call => call[0] === 'maintenanceStop');
+    assert.equal(asked[1], 'a');
+    assert.equal(asked[2].peerRevision, null, 'the proof is the state NAW judged, before the send');
+  } else {
+    assert.equal(client.calls.some(call => call[0] === 'maintenanceStop'), false, 'an old service is never asked to stop unconditionally');
+  }
+  assert.deepEqual(notices, ['kept']);
+  const log = fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const last = log.at(-1);
+  assert.equal(last.event, 'kept');
+  assert.equal(last.reason, capable ? 'changed-at-stop' : 'old-service', 'the log says why it was kept');
+  assert.equal(last.new.id, newId);
+  const { follow } = require('../queue-secretary.cjs');
+  assert.equal(follow(path.join(dir, 'rotation-log.jsonl'), { sessionId: 'a', nativeId: old.nativeId }).sessionId, 'a', 'the designation stays with the old session');
+  assert.equal(dispatcher.rotations.a.phase, 'kept');
+});
+
+// A Claude stop the service refuses its own receipt for (seen on the real 2.1.319 window, 2026-11-14): the
+// session settled ended with nothing else changed, so the rotation is done. Anything else moved: not proven.
+for (const refusal of ['own receipt', 'other change']) test(`a refused Claude stop receipt ${refusal === 'own receipt' ? 'that the settled session proves finishes the rotation' : 'with another change is not taken as done'}`, async t => {
+  const notices = [];
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })],
+    { notify: kind => notices.push(kind) });
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  client.reply('a', '交接：在 feature 分支。');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  client.refusesOwnReceipt = refusal;
+  await dispatcher.schedule();
+  const old = client.state.sessions.find(s => s.id === 'a');
+  assert.equal(old.state, 'ended');
+  assert.ok(client.calls.some(call => call[0] === 'maintenanceStop' && call[1] === 'a'));
+  const log = fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  if (refusal === 'own receipt') {
+    assert.ok(log.some(entry => entry.event === 'done' && entry.old.id === 'a'), 'the rotation is done');
+    assert.deepEqual(notices, ['done']);
+  } else {
+    assert.equal(log.some(entry => entry.event === 'done'), false, 'an unproven end is not recorded as this rotation\'s');
+    assert.equal(log.some(entry => entry.event === 'kept'), false);
+  }
+});
 
 test('before ending a session typed into, its terminal screen (an unsent prompt included) is saved', async t => {
   const { client, notices, dir } = await rotateTypedSession(t, false);
