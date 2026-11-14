@@ -8,6 +8,7 @@ const assert = require('node:assert/strict'), { randomUUID } = require('node:cry
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..'), scratch = require('./fixtures/test-scratch.cjs');
 const { connectService } = require('../app/service-connection.cjs'), { writeLayout } = require('../app/service-layout.cjs');
+const { textPattern } = require('./fixtures/ui-text.cjs'), locale = require('../app/ui-locale.js');
 const { _electron } = scratch.playwright(require('playwright'));
 const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.resolve(common, '..', '.local/gui-test-slot.lock'), token = randomUUID(), owner = randomUUID();
@@ -87,7 +88,10 @@ async function run() {
   const independent = id => page.locator(`[data-session-group="independent"] [data-session-row="${id}"] .session-link`);
   await check('02 drag onto the empty group heading joins', async () => {
     await independent(a).dragTo(page.locator(`[data-session-group="${space}"] h3`));
-    await until(async () => (await members()).includes(a), 'Joined by group heading'); assert.equal(await toastText(), '已移到「Claude 聊天室」。');
+    await until(async () => (await members()).includes(a), 'Joined by group heading');
+    // The page shows the notice after its own state read, which can finish after main has the new member: wait for it.
+    await page.locator('#toast-text', { hasText: textPattern('toast.joinedSpace') }).waitFor();
+    assert.equal(await toastText(), locale.format('zh', 'toast.joinedSpace', { arg1: 'Claude 聊天室' }));
   });
   await check('03 drag onto the space row joins', async () => {
     // T-145: the grouped view does not repeat the space rows (its headings are the list), so this drop target is checked in the flat view.
