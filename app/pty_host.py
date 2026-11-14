@@ -9,6 +9,7 @@ import signal
 import struct
 import sys
 import termios
+import time
 
 
 def emit(value):
@@ -59,8 +60,16 @@ def main():
     selector.register(fd, selectors.EVENT_READ, "pty")
     selector.register(sys.stdin.fileno(), selectors.EVENT_READ, "input")
     reaped = False
+    stop_deadline = None
+    killed = False
+    exit_code = None
 
     def terminate(*_):
+        nonlocal stop_deadline
+        if reaped or stop_deadline is not None:
+            return
+        # Preserve the former caller's full five-second graceful-exit budget.
+        stop_deadline = time.monotonic() + 5.0
         try:
             os.killpg(pid, signal.SIGTERM)
         except ProcessLookupError:
@@ -105,10 +114,50 @@ def main():
                     pending += data
                     if len(pending) > 2 * 1024 * 1024:
                         raise ValueError("Oversized terminal command")
-            finished, status = os.waitpid(pid, os.WNOHANG)
-            if finished:
-                reaped = True
-                emit({"type": "exit", "code": os.waitstatus_to_exitcode(status)})
+            if stop_deadline is not None:
+                if not reaped and time.monotonic() < stop_deadline:
+                    try:
+                        os.killpg(pid, 0)
+                        continue
+                    except (ProcessLookupError, PermissionError):
+                        # On macOS a zombie-only group returns EPERM. Reap it
+                        # promptly, but still require group absence below.
+                        # A live group we cannot signal stays unconfirmed.
+                        finished, status = os.waitpid(pid, os.WNOHANG)
+                        if not finished:
+                            continue
+                        reaped = True
+                        exit_code = os.waitstatus_to_exitcode(status)
+                if not reaped and not killed:
+                    # Keep our direct child unreaped until the last signal:
+                    # its PID (and thus this PTY's group ID) cannot be reused.
+                    # Descendants can survive even when the leader took TERM.
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError:
+                        # macOS can return EPERM for a zombie-only group.
+                        # Reaping plus ESRCH below, never EPERM, proves exit.
+                        pass
+                    killed = True
+            if not reaped:
+                finished, status = os.waitpid(pid, os.WNOHANG)
+                if finished:
+                    reaped = True
+                    exit_code = os.waitstatus_to_exitcode(status)
+            if reaped:
+                if stop_deadline is not None:
+                    try:
+                        os.killpg(pid, 0)
+                        continue
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError:
+                        continue
+                # An explicit stop is confirmed only after the owned group is
+                # gone, not merely after waitpid reaps its leader.
+                emit({"type": "exit", "code": exit_code})
                 return
     finally:
         if not reaped:

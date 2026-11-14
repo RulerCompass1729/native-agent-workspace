@@ -359,7 +359,9 @@ class Terminal extends EventEmitter {
   }
   snapshot() { return new Promise(resolve => this.screen.write('', () => resolve({ ...this.serializeFrame(), sequence: this.sequence, epoch: this.journal.epoch, observationIndex: this.journal.index, cols: this.screen.cols, rows: this.screen.rows, pid: this.pid, keyboardFlags: this.keyboardModes.flags, cursorModesVersion: 1 }))); }
   observe() { return new Promise(resolve => this.screen.write('', () => resolve({ ...this.journal.snapshot(), alive: this.alive }))); }
-  stop(timeout = 5000) {
+  // The worker gives TERM the original five seconds, then has time to reap
+  // the forced exit and confirm that the entire owned group is gone.
+  stop(timeout = 8000) {
     if (this.stopPending) return this.stopPending;
     if (!this.alive) return this.nativeExited ? Promise.resolve() : Promise.reject(uiError("error.nativeExitUnconfirmed"));
     this.stopPending = new Promise((resolve, reject) => {
