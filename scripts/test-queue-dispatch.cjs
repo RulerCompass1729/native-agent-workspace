@@ -943,17 +943,18 @@ async function run() {
   await expectSend(4, b, /任务四/, 'item after the member was unpaused');
   passed.push('A paused member was not sent its item until unpaused');
 
-  // 4) A reply that asks for a decision stops that member until the person marks it handled.
+  // 4) A reply that asks for a decision stays open for the person, and its member takes the next item
+  // meanwhile (11-13: a decision held its member for 88 minutes while four other items waited).
   await release(a, '需要你决定：要不要合并分支？');
   await until(async () => (await itemByText('任务三')).status === 'waiting', 'Waiting for decision');
   assert.ok((await events()).includes('队员甲 需要你决定：任务三'), 'decision record in the space');
-  await addItem('任务五', a);
-  await expectQuiet(4, 'No new item while a decision is pending');
   const waitingId = (await itemByText('任务三')).id;
-  await page.locator(`#queue-list [data-queue-item="${waitingId}"]`).getByRole('button', { name: '已处理', exact: true }).click();
-  await expectSend(5, a, /任务五/, 'item after the person handled the decision');
-  await capture('decision-handled');
-  passed.push('A decision request paused that member until the person marked it handled');
+  await addItem('任务五', a);
+  await expectSend(5, a, /【NAW 派活】[\s\S]*任务五/, 'next item while the decision stays open');
+  assert.equal((await itemByText('任务三')).status, 'waiting', 'the decision is still open for the person');
+  assert.equal(await page.locator(`#queue-list [data-queue-item="${waitingId}"] .queue-status`).innerText(), '等你决定 · 队员甲');
+  await capture('decision-open-member-working');
+  passed.push('A decision stayed open for the person while its member received the next item');
 
   // 4b) A turn that ends with nothing to say is left for the person to look at, and no longer keeps
   // its member from the next item (11-12: such items held their members until the person pressed a button).
@@ -963,8 +964,30 @@ async function run() {
   // It is left for the person to look at, not a decision (follow-up 4, 11-12).
   assert.ok((await events()).includes('队员甲 做的「任务五」留给你看一眼；它已经可以接下一项'), 'the space record leaves it to look at');
   assert.ok(!(await events()).includes('队员甲 需要你决定：任务五'), 'the space record does not ask for a decision');
+  // 4c) The person answers the decision in that member's own conversation: the answer reaches the same
+  // session that asked, and the person then marks the decision handled.
+  if (await page.locator('#queue-dialog').isVisible()) {
+    await page.locator('#close-queue').click();
+    await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
+  }
+  await page.locator(`#session-list .session-link[data-session-id="${a}"]`).click();
+  if (await page.locator('#chat-tab').isVisible()) {
+    await page.locator('#chat-tab').click();
+  }
+  await page.locator('#message-input').fill('合并吧，用 squash。');
+  await page.locator('#send-button').click();
+  await expectSend(6, a, /^合并吧，用 squash。$/, 'the person\'s answer to the member that asked');
+  assert.equal((await snapshot()).sessions.find(s => s.id === a).name, '队员甲', 'the same session, not a new one');
+  await release(a, '已按 squash 合并。');
+  await openSpace();
+  await page.locator('#room-queue').click();
+  await page.locator('#queue-dialog').waitFor();
+  await page.locator(`#queue-list [data-queue-item="${waitingId}"]`).getByRole('button', { name: '已处理', exact: true }).click();
+  await until(async () => (await itemByText('任务三')).status === 'done', 'The person handled the decision');
+  await capture('decision-answered-handled');
+  passed.push('The person\'s answer reached the member that asked, in the same session, and the decision closed when they marked it handled');
   await addItem('任务五乙', a);
-  await expectSend(6, a, /【NAW 派活】[\s\S]*任务五乙/, 'next item to a member whose last turn came back empty');
+  await expectSend(7, a, /【NAW 派活】[\s\S]*任务五乙/, 'next item to a member whose last turn came back empty');
   const leftId = (await itemByText('任务五')).id;
   assert.equal((await itemByText('任务五')).status, 'waiting', 'the empty turn stays open for the person');
   await page.locator(`#queue-list [data-queue-item="${leftId}"]`).getByRole('button', { name: '已处理', exact: true }).waitFor();
@@ -978,7 +1001,7 @@ async function run() {
   await page.locator(`#queue-list [data-queue-item="${cancelId}"]`).getByRole('button', { name: '取消', exact: true }).click();
   await until(async () => (await itemByText('任务六')).status === 'cancelled', 'Cancelled');
   await release(b, '任务四完成');
-  await expectQuiet(6, 'A cancelled item is not sent');
+  await expectQuiet(7, 'A cancelled item is not sent');
   passed.push('A cancelled item was not sent');
 
   // 5b) A member whose chat view the person has open and leaves alone still receives work.
@@ -991,7 +1014,7 @@ async function run() {
     await page.locator('#chat-tab').click();
   }
   await page.evaluate(([id, text]) => workspace.spaceAction('shared', 'queueAdd', [text, id]), [b, '任务九']);
-  await expectSend(7, b, /任务九/, 'item to a member whose view is open and idle');
+  await expectSend(8, b, /任务九/, 'item to a member whose view is open and idle');
   passed.push('A member whose view the person had open, but left alone, still received its item');
 
   // 6) Session rotation: an old member writes a handoff, a new member continues, the old one ends.
@@ -999,12 +1022,12 @@ async function run() {
   await relaunch({ NAW_TEST_QUEUE_CONTENT_LIMIT: '2' });
   await openSpace();
   await addItem('任务七', a);
-  await expectSend(8, a, /【NAW 换会话】[\s\S]*只写交接/, 'handoff request to the old member');
+  await expectSend(9, a, /【NAW 换会话】[\s\S]*只写交接/, 'handoff request to the old member');
   assert.equal((await itemByText('任务七')).status, 'queued', 'The old member does not get new work');
   await release(a, '交接：在 feature-x 分支，下一步跑全量测试。');
   await until(async () => (await snapshot()).sessions.some(s => s.name === '队员甲 · 续'), 'New member created', DISPATCH_LIMIT_MS);
   const fresh = (await snapshot()).sessions.find(s => s.name === '队员甲 · 续').id;
-  await expectSend(9, fresh, /你接手「队员甲」[\s\S]*feature-x 分支/, 'handoff to the new member');
+  await expectSend(10, fresh, /你接手「队员甲」[\s\S]*feature-x 分支/, 'handoff to the new member');
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).state === 'ended', 'Old member ended');
   assert.equal((await itemByText('任务七')).assignee, fresh, 'The queue follows the new member');
   const rotated = (await events()).some(text => /^NAW 换会话：「队员甲（[0-9a-f]{6}）」的工作已交给「队员甲 · 续（[0-9a-f]{6}）」/.test(text));
@@ -1021,7 +1044,7 @@ async function run() {
   assert.ok(chainTitles[0].includes(a) && chainTitles[1].includes(fresh), 'old then new session ids, in full, on each link');
   await capture('rotation-chain');
   await release(fresh, '已核对交接。');
-  await expectSend(10, fresh, /任务七/, 'queued item to the new member');
+  await expectSend(11, fresh, /任务七/, 'queued item to the new member');
   await capture('rotated');
   passed.push('An old member wrote a handoff; a new member took over its queue; the old process ended');
 
@@ -1059,7 +1082,7 @@ async function run() {
 
   await release(fresh, '收到');
   await until(async () => (await itemByText('任务七')).status === 'done', '任务七 finished', DISPATCH_LIMIT_MS);
-  assert.equal((await sends()).length, 10, 'settling the last item sends nothing new');
+  assert.equal((await sends()).length, 11, 'settling the last item sends nothing new');
   assert.equal((await itemByText('任务七')).reply, '收到', 'the reply is kept on the item');
   await page.locator('#room-queue').click();
   await page.locator('#queue-dialog').waitFor();
@@ -1140,7 +1163,7 @@ async function run() {
   await until(async () => (await snapshot()).sessions.find(s => s.id === b).name === UNBROKEN_NAME, 'The other member carries an unbroken 60-character name');
   await release(b, '需要你决定：这条还要继续吗？');
   await until(async () => (await itemByText('任务九')).status === 'waiting', '任务九 waits for the person', DISPATCH_LIMIT_MS);
-  assert.equal((await sends()).length, 10, 'holding an item for the person sends nothing new');
+  assert.equal((await sends()).length, 11, 'a decision for the person sends nothing new');
   const heldId = (await itemByText('任务九')).id;
   await page.locator('#queue-assignee').selectOption(b);
   const heldLayout = await queueLayout();

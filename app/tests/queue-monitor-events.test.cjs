@@ -273,7 +273,7 @@ test('a detached queue copy does not share the stored delivery line', t => {
 test('a member is told how to report a delivery in every dispatch and in the shared rules; the examples themselves are not deliveries', () => {
   const text = rules.dispatchText('Synthetic space', { text: 'Synthetic task' }), lines = text.split('\n');
   assert.equal(lines[0], '【NAW 派活】空间「Synthetic space」队列里的下一件：'); assert.equal(lines[2], 'Synthetic task');
-  assert.equal(lines[4], '做完这一件就结束本轮：不留后台命令（要等审查或测试，就在本轮里用长等待等到它结束）、不留运行中的队友、不开 goal，也不要自己去任务板认领别的任务，NAW 会接着派下一件。需要人来决定时，本轮最后一条回复的第一行写「需要你决定：」，NAW 会停派并提醒。',
+  assert.equal(lines[4], '做完这一件就结束本轮：不留后台命令（要等审查或测试，就在本轮里用长等待等到它结束）、不留运行中的队友、不开 goal，也不要自己去任务板认领别的任务，NAW 会接着派下一件。需要人来决定时，本轮最后一条回复的第一行写「需要你决定：」，NAW 会提醒人，并接着给你派下一件；人的答复会直接发到你这里。',
     'What members were already told is unchanged');
   assert.equal(lines.length, 6);
   assert.ok(lines[5].includes('READY <分支名> <分支上最新的提交号，7 到 40 位>') && lines[5].includes('没有提交就不写这一行'));
@@ -290,7 +290,7 @@ test('a member is told how to report a delivery in every dispatch and in the sha
     assert.ok(lines[5].includes(word), word);
     assert.equal(rules.readyLine('改好了。\n' + reply), null, reply);
   }
-  // The line goes after the first line: a decision request must stay first to hold the member.
+  // The line goes after the first line: a decision request must stay first to be read as one.
   assert.ok(lines[5].includes('不要放在第一行'));
   // What the instruction asks for is what settling recognises, also after a decision request and before closing remarks.
   assert.deepEqual(rules.readyLine('改好了，测试 12/12。\nREADY lane/member-task 0123abc'), { branch: 'lane/member-task', commit: '0123abc' });
