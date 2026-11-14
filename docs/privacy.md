@@ -341,3 +341,26 @@ not store private prompt text. Closing before receipt leaves an uncertain local
 row, does not resend it, and does not claim that native accepted work was canceled.
 These private caches remain local, follow the existing private reader removal,
 and never become room-sharing authority.
+
+## Declared local pages in their own window
+
+The person may list pages served on this computer in `local-pages.json` in the
+data folder: `{"pages": [{"id", "title", "url"}]}`, where each url is plain
+http on 127.0.0.1 or localhost. A DSH plugin in the main window calls
+`window.workspace.openLocalPage(id, path?)`; the path (for example `/?tab=x`)
+is resolved under the declared origin (from its root, not the declared url's
+path), and a full address is refused. The
+call is refused for background agents. The page opens in a separate window
+with its own persistent session per id (stored by Electron under the data
+folder's `Partitions/naw-local-page-<id>`), no preload and therefore no
+`window.workspace`, context isolation, sandbox and every permission refused.
+The session's request filter cancels page loads, frames, workers, fetches,
+redirects and WebSockets unless they go to the declared origin (or a WebSocket
+on the same host and port); top-level navigation to another origin is blocked,
+and `window.open` http(s) links go to the system browser. Two things do not
+pass through that filter: DNS prefetch hints, and WebRTC, which is set to use
+no direct UDP (`disable_non_proxied_udp`) but is not otherwise blocked; the
+page reaches no other service over HTTP. Downloads ask where to save through
+the ordinary save dialog.
+The main window's session and request filter are unchanged. Window size and
+position are kept in `local-page-windows.json`. Opening a page calls no model.

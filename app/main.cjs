@@ -16,6 +16,7 @@ const { submissionState, assertNativeCreation, capabilitiesFor } = require('./su
 const { omitHidden, reportShown, validShown } = require('./shown-sessions.cjs');
 const { searchRecords } = require('./renderer/local-search.js');
 const { readPreview, saveCopy, extensions: textExtensions, openMessageFile } = require('./local-files.cjs');
+const { createLocalPages } = require('./local-pages.cjs');
 const { ImagePreviews, imageSource } = require('./native-images.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
@@ -138,6 +139,7 @@ let pendingReveal = null;
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
 let dataDir, sessionLabels, roomState, queueSecretary, integratorRole, stewardRole, landingOwner = null, butlerIngress, butlerReadAudit = null, butlerBackend = null, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
+let localPages = null;
 let butlerRole = null, butlerPerson = null;
 let startupWindow, starting = false, wired = false;
 let applicationBuild, applicationMenu;
@@ -1155,7 +1157,7 @@ function register(name, handler) {
       }
       // Never silently fall back to an old backend that cannot retain actor
       // attribution or preserve the person's draft for these input paths.
-      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardWake']);
+      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'openLocalPage', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardWake']);
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
       // handler below still authenticates the secretary and person-only actions.
@@ -2307,6 +2309,13 @@ async function boot() {
     });
     if (answer.response === 1) return c.client.call('stop', id);
   });
+  // Pages the person declared in local-pages.json open in their own window; only that
+  // window's partition is configured, never the main window's session above.
+  register('openLocalPage', (c, id, requested) => (localPages ||= createLocalPages({
+    dataDir, BrowserWindow, session, shell, screen, uiError, displayText,
+    windowDefaults: { show: false, focusable: !backgroundTest }, backgroundThrottling: !backgroundTest,
+    present: win => { if (backgroundTest) { if (visibleTest) win.showInactive(); return; } if (win.isMinimized()) win.restore(); win.show(); win.focus(); },
+  })).open(id, requested, { background: c.background }));
   register('openExternal', (c, href) => { const url = new URL(href); if (!['http:', 'https:'].includes(url.protocol)) throw uiError("error.main.unsupportedLinkType"); return c.background ? { url: url.href } : shell.openExternal(url.href); });
   register('openMessageFile', (c, source, file, options) => openMessageFile({
     snapshot: async () => roomState.apply(await c.client.call('initial')),
