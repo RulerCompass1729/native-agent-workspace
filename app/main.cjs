@@ -1100,13 +1100,13 @@ async function cleanupSpaceImageCopies(c, roomId) {
     return images.removeUnusedSpaceImages(dataDir, roomId, keep, candidates);
   } catch { return { failed: true }; }
 }
-function connectionUpdateOptions(client, applicationVersion, profile) {
+function connectionUpdateOptions(client, applicationVersion, profile = roomState) {
   const alpha = value => typeof value === 'string' && value.match(/^((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-alpha\.(0|[1-9]\d*)$/);
   const current = alpha(applicationVersion), seen = new Set(), options = [];
-  const visibleIds = profile ? new Set(profile.apply(client.snapshot()).sessions.filter(record => !record.archived).map(record => record.id)) : null;
+  const visibleIds = new Set(profile.apply(client.snapshot()).sessions.filter(record => !record.archived).map(record => record.id));
   for (const entry of client.entries) {
     if (seen.has(entry.key)) continue; seen.add(entry.key);
-    const visible = entry.state.sessions.filter(record => visibleIds ? visibleIds.has(record.id) : !record.archived);
+    const visible = entry.state.sessions.filter(record => visibleIds.has(record.id));
     if (!visible.length || entry.state.runtimeVersion === applicationVersion) continue;
     const record = visible.find(value => value.nativeId) || visible[0], version = entry.state.runtimeVersion, reported = alpha(version);
     const old = reported && current && reported[1] === current[1] && Number.isSafeInteger(Number(reported[2])) && Number.isSafeInteger(Number(current[2])) && Number(reported[2]) < Number(current[2]);

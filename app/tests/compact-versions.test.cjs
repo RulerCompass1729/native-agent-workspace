@@ -40,13 +40,13 @@ test('summary counts unique nonarchived sessions, including hidden and grouped o
   assert.equal(context.backendVersionSummary([{ id: 's', runtimeVersion: current }], current).count, 0);
 });
 
-function mainOptions(client, version = current, profile) {
+function mainOptions(client, version = current, profile, desktopProfile = { apply: state => state }) {
   const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
   const start = main.indexOf('function connectionUpdateOptions('), end = main.indexOf('function register(', start);
   assert.ok(start >= 0 && end > start);
   const fn = vm.runInNewContext(main.slice(start, end) + ';connectionUpdateOptions', {
     continuationStatus: require('../service-client.cjs').continuationStatus, backendSwitch: require('../backend-switch.cjs'),
-    uiError: require('../ui-errors.cjs').uiError,
+    uiError: require('../ui-errors.cjs').uiError, roomState: desktopProfile,
   });
   return plain(fn(client, version, profile));
 }
@@ -61,6 +61,28 @@ test('profile-archived sessions are excluded from displayed counts but still blo
   assert.equal(options[0].count, 1); assert.equal(options[0].id, 'visible'); assert.equal(options[0].ready, false);
   profile.value.archivedSessions.push('visible'); assert.deepEqual(mainOptions(client, current, profile), []);
 });
+for (const allArchived of [false, true]) test(`omitting the profile uses desktop archives: ${allArchived ? 'all hidden' : 'mixed backend'}`, t => {
+  const os = require('node:os'), path = require('node:path'), { RoomState } = require('../room-state.cjs');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-default-version-archives-')); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const profile = new RoomState(directory); profile.value.archivedSessions = allArchived ? ['hidden', 'visible'] : ['hidden'];
+  const records = [{ id: 'hidden', nativeId: 'native-hidden', name: 'Hidden', state: 'working' },
+    { id: 'visible', nativeId: 'native-visible', name: 'Visible', state: 'ended' }];
+  assert.ok(records.every(record => !Object.hasOwn(record, 'archived')), 'Backend records have no desktop archive flag');
+  const entry = { key: 'old', state: { runtimeVersion: '0.1.0-alpha.120', sessions: records, capabilities: ['atomicShutdown'] } };
+  const client = { entries: [entry], snapshot: () => ({ sessions: records, room: { messages: [] } }) }, before = JSON.stringify(records);
+  const options = mainOptions(client, current, undefined, profile);
+  if (allArchived) assert.deepEqual(options, []);
+  else {
+    assert.equal(options.length, 1); assert.equal(options[0].id, 'visible'); assert.equal(options[0].count, 1);
+    assert.deepEqual(options[0].sessions, [{ id: 'visible', name: 'Visible' }]);
+    assert.equal(options[0].ready, false, 'An archived working sibling must still prevent backend continuation');
+  }
+  assert.equal(JSON.stringify(records), before, 'Reading the desktop archive must not mutate backend records');
+});
+test('an unavailable explicit profile cannot fall back to raw backend archive flags', () => {
+  const f = clientFixture();
+  assert.throws(() => mainOptions(f.client, current, null));
+});
 test('read-only update choices deduplicate backend owners and refuse mixed active/unknown/failed connections', () => {
   const entry = (key, version, sessions, extra = {}) => ({ key, state: { runtimeVersion: version, sessions, capabilities: ['atomicShutdown'], ...extra } });
   const ended = { id: 'ended', nativeId: 'native-ended', state: 'ended' };
@@ -68,7 +90,7 @@ test('read-only update choices deduplicate backend owners and refuse mixed activ
     entry('mixed', '0.1.0-alpha.118', [{ ...ended, id: 'old-ended' }, { id: 'busy', state: 'working', nativeId: 'native-busy' }]),
     entry('missing', undefined, [{ ...ended, id: 'unknown' }]), entry('newer', '0.1.0-alpha.140', [{ ...ended, id: 'newer' }]),
     entry('current', current, [{ ...ended, id: 'current' }]), entry('disk', '0.1.0-alpha.114', [{ ...ended, id: 'disk' }], { storageWarning: 'Synthetic refusal' })];
-  const client = { entries, control: { maintenance: new Set() } }, before = JSON.stringify(entries);
+  const client = { entries, control: { maintenance: new Set() }, snapshot() { return { sessions: this.entries.flatMap(e => e.state.sessions) }; } }, before = JSON.stringify(entries);
   const result = mainOptions(client);
   assert.equal(result.length, 5); assert.equal(result.filter(value => value.ready).length, 1);
   assert.equal(result.find(value => value.backendKey === 'old').count, 2);
@@ -104,6 +126,7 @@ function clientFixture() {
   const entry = { key: 'old', state: { runtimeVersion: '0.1.0-alpha.120', sessions: [{ id: 's', nativeId: 'native-s', state: 'ended' }], capabilities: ['atomicShutdown'] } };
   const events = { refresh: 0, dialog: 0, update: 0, maintenance: 0 }, client = {
     entries: [entry], control: { maintenance: new Set() },
+    snapshot() { return { sessions: entry.state.sessions }; },
     async refresh() { events.refresh++; }, route(id) { assert.equal(id, 's'); return entry; }, operationGuard() { return () => {}; },
     maintainService() { events.maintenance++; throw Error('Unexpected maintenance'); },
   };
