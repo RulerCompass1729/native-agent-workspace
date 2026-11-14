@@ -230,6 +230,9 @@ function searchFixture(messages, notes = '') {
   f.state.room = room; f.state.rooms = [room];
   Object.assign(c, { clearTimeout, structuredClone, spaceId: 'shared', selected: 'session-A', roomSession: '', roomSurface: 'overview', roomRecordScope: '', roomRecordReturn: null, roomFilterHistory: null, mode: 'chat', pendingRoomFilter: '', roomThread: '',
     activeSessionId: () => 'session-A', sessionShortId: id => id.slice(0, 6), spaceRecord: id => id === room.id ? room : null });
+  // Search names a session as people read it (an archived one carries the marker): the production helper.
+  const names = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
+  vm.runInContext(names.slice(names.indexOf('function archivedName('), names.indexOf('function sessionWindowTitle(')), c);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/search-view.js'), 'utf8'), c);
   c.openSearch();
   return { ...f, dialog, room, focused, get: id => f.controls.get(id) };

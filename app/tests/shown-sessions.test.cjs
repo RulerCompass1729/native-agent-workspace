@@ -238,7 +238,8 @@ test('every render ends by reporting what it shows', () => {
 
 test('the open session\'s list is hidden, never drawn as "no messages", should its messages still be missing', () => {
   const list = { hidden: false }, drawn = [];
-  const context = vm.createContext({ JSON, lastMessages: 'before', $: () => list, sessionMessages: s => s.messages, focusedReadingKey: id => id, messageViews: new Map(),
+  // state: the drawn signature also reads which sessions are archived (their names are marked in the messages).
+  const context = vm.createContext({ JSON, state: { sessions: [] }, lastMessages: 'before', $: () => list, sessionMessages: s => s.messages, focusedReadingKey: id => id, messageViews: new Map(),
     messageList: (_el, rows) => drawn.push(rows) });
   // render() shows the list again at its start each time (renderer.js: $('messages').hidden = false).
   vm.runInContext('function drawMessages(s) {\n' + between(renderer, '      const visibleMessages = sessionMessages(s);', '\n      renderAdvanced(s);') + '\n}', context);

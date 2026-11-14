@@ -457,8 +457,17 @@ function readingOwnMessage(message) {
   const locale = window.nativeWorkspaceLocale;
   return locale.displayMessage(message.uiMessage, 'notice.', message.text) || locale.displayMessage(message.uiMessage, 'error.', message.text);
 }
+// The member a queue item went to, when that session is archived now: the line names it with the
+// marker. The stored sentence is not rewritten, and restoring the session drops the marker again.
+function readingDispatchMember(message, descriptor) {
+  if (descriptor?.key !== 'notice.queue.dispatched' || !message.sessionId) return null;
+  const record = state.sessions.find(s => s.id === message.sessionId);
+  return record?.archived ? record : null;
+}
 function readingOwnText(message, descriptor) {
   const language = ui.language.getSnapshot().active;
+  const archived = readingDispatchMember(message, descriptor);
+  if (archived) return uiText(descriptor.key, { ...descriptor.params, name: archivedName(archived, descriptor.params.name) });
   if (['notice.capacityAutoContinueRouting', 'notice.capacityAutoContinueCapacity', 'notice.capacityAutoContinueForbidden'].includes(descriptor.key) && Number.isFinite(message.time) && Math.abs(message.time) <= 8640000000000000) {
     const time = new Date(message.time).toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit' });
     return uiText(descriptor.key, { ...descriptor.params, time });
@@ -966,7 +975,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       entry.spaceNotice.hidden = !spaceBody.notice;
     } else if (entry.spaceNotice) { ui.display.unbind(entry.spaceNotice); entry.spaceNotice.remove(); delete entry.spaceNotice; }
     const ownNotice = readingOwnMessage(m);
-    const noticeSignature = ownNotice ? JSON.stringify(ownNotice) : '';
+    const noticeSignature = ownNotice ? JSON.stringify([ownNotice, Boolean(readingDispatchMember(m, ownNotice))]) : '';
     if (entry.noticeSignature !== noticeSignature) {
       // A generated delivery caption can change while the original body does not.
       // Keep its selected text nodes; copy metadata still follows the new notice.

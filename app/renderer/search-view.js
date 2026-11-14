@@ -17,7 +17,7 @@ function openSearch(scope = 'all') {
   const currentOption = $('search-scope').querySelector('[value="current"]');
   currentOption.disabled = !current();
   const focused = current();
-  ui.display.computed(currentOption, 'text', () => focused ? uiText('search.currentName', { name: focused.name }) : uiText('search.current'));
+  ui.display.computed(currentOption, 'text', () => focused ? uiText('search.currentName', { name: archivedName(focused) }) : uiText('search.current'));
   $('search-scope').value = scope === 'current' && !current() ? 'room' : scope;
   $('search-input').value = ''; $('search-archived').checked = Boolean(current()?.archived);
   $('search-options').open = false;
@@ -43,7 +43,8 @@ async function renderSearch() {
       const source = result.provider ? (result.provider === 'claude' ? 'Claude' : 'Codex') + ' · ' + sessionShortId(result.sessionId) : uiText('search.sharedSpace');
       return [source, result.archived && uiText('search.archivedFlag'), result.role && uiText(['user', 'human'].includes(result.role) ? 'reading.you' : result.role === 'system' ? 'search.event' : 'search.agent')].filter(Boolean).join(' · ');
     });
-    const name = node('strong', result.name); if (result.nameKey) ui.display.text(name, result.nameKey);
+    // A space's archived flag stays in the small line; an archived session's name carries the marker.
+    const name = node('strong'); if (result.nameKey) ui.display.text(name, result.nameKey); else ui.display.computed(name, 'text', () => result.roomId ? result.name : archivedName(result, result.name));
     row.append(name, metadata);
     if (result.kind === 'message' || result.kind === 'shared') row.append(node('span', result.text));
     list.append(row);
