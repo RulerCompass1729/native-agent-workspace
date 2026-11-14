@@ -37,8 +37,9 @@ assert.ok(['claude', 'codex'].includes(PROVIDER), 'claude or codex');
 // no DeepSeek service and no real key are involved.
 // The person's two are deepseek-pro and deepseek-flash; the dialog's default is pro, at effort max.
 // NAW_TEST_QUEUE_LIVE=pro|flash instead runs one small item against the real DeepSeek service
-// (paid; only when the person has allowed it): the provider table and catalog are the person's,
-// the key comes only from the inherited DEEPSEEK_API_KEY variable, which nothing here reads.
+// (paid; only when the person has allowed it): the test writes a provider table like the person's
+// and copies only their model catalog; the key comes only from the inherited DEEPSEEK_API_KEY
+// variable, whose presence is checked and whose value nothing here reads or prints.
 const LIVE = process.env.NAW_TEST_QUEUE_LIVE || null;
 assert.ok(!LIVE || ['pro', 'flash'].includes(LIVE), 'NAW_TEST_QUEUE_LIVE is pro or flash');
 const PROFILE = LIVE ? 'naw-live-deepseek-pro' : process.env.NAW_TEST_QUEUE_PROFILE === '1' ? 'naw-fixture-deepseek-pro' : null;
@@ -386,23 +387,33 @@ async function openSpace() {
 // The live run's one item: a native_workspace call, a one-file commit, and the READY line.
 const LIVE_TASK = 'DEEPSEEK_LIVE 小任务，只做这几步：1) 调用一次 native_workspace 的 workspace_control 工具，参数 {"action":"catalog"}（只读），看到结果即可；2) 在当前文件夹新建 live.txt，内容一行 DEEPSEEK_LIVE_OK；3) 在当前文件夹运行 git add live.txt 和 git commit -m "DeepSeek live check"；4) 结束本轮，按要求另起一行写 READY 行（当前分支名和这个提交号）。不做别的事。';
 const LIVE_LIMIT_MS = 10 * 60 * 1000;
-// What the test answers for the person in the member's terminal: the one read-only catalog call and the task's
-// own file and git steps. Only the request itself is read (the text from its question on); anything else is
-// refused and stops the run.
-function liveAnswer(screen) {
-  const from = marker => screen.slice(screen.lastIndexOf(marker));
-  const risky = /\b(rm|curl|wget|sudo|ssh|scp|chmod|chown|push|reset|config|remote)\b|https?:/;
+// What the test answers for the person in the member's terminal: exactly the task's own requests, namely
+// the read-only catalog call, the edit of live.txt in the member's folder, and `git add live.txt` and
+// the commit. Only the request itself is read (from its question to its first choice); anything else
+// is refused and stops the run.
+const LIVE_COMMANDS = ['git add live.txt', 'git commit -m "DeepSeek live check"', 'git add live.txt && git commit -m "DeepSeek live check"'];
+function liveAnswer(screen, memberCwd) {
+  const request = marker => {
+    const lines = screen.slice(screen.lastIndexOf(marker) + marker.length).split('\n').map(line => line.trim());
+    const end = lines.findIndex(line => /^(›\s*)?1\. /u.test(line));
+    return end < 0 ? null : lines.slice(0, end).filter(Boolean);
+  };
   if (screen.includes('Allow the native_workspace MCP server')) {
-    const request = from('Allow the native_workspace MCP server');
-    return /"workspace_control"/.test(request) && /action: catalog/.test(request) ? 'allow' : 'refuse';
+    const lines = request('Allow the native_workspace MCP server');
+    return lines?.join('\n') === 'to run tool\n"workspace_control"?\naction: catalog' ? 'allow' : 'refuse';
   }
   if (screen.includes('Would you like to run the following command?')) {
-    const request = from('Would you like to run the following command?');
-    return /\bgit (add|commit)\b|live\.txt/.test(request) && !risky.test(request) ? 'allow' : 'refuse';
+    const lines = request('Would you like to run the following command?');
+    const at = lines ? lines.findIndex(line => line.startsWith('$ ')) : -1;
+    return at >= 0 && LIVE_COMMANDS.includes(lines.slice(at).join(' ').slice(2)) ? 'allow' : 'refuse';
   }
   if (screen.includes('Would you like to make the following edits?')) {
-    const request = from('Would you like to make the following edits?');
-    return /live\.txt/.test(request) && !risky.test(request) ? 'allow' : 'refuse';
+    const lines = request('Would you like to make the following edits?');
+    const at = lines ? lines.indexOf('Destination:') : -1;
+    const destination = at >= 0 ? lines.slice(at + 1).join('') : '';
+    // macOS shows the temporary folder as /var or /private/var.
+    const plain = file => file.replace(/^\/private\//u, '/');
+    return [memberCwd, fs.realpathSync(memberCwd)].some(folder => plain(path.join(folder, 'live.txt')) === plain(destination)) ? 'allow' : 'refuse';
   }
   return 'refuse';
 }
@@ -454,7 +465,7 @@ async function liveItem(first) {
       continue;
     }
     const screen = await rows();
-    const answer = liveAnswer(screen);
+    const answer = liveAnswer(screen, memberCwd);
     approvals.push({ method: member.approval?.method || null, answer });
     if (evidence) {
       fs.writeFileSync(path.join(evidence, `approval-${approvals.length}.txt`), `${member.approval?.method}\n${answer}\n\n${screen}`, { mode: 0o600 });
