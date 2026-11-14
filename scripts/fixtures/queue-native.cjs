@@ -63,6 +63,8 @@ NativeHost.prototype.create = function (record) {
     turns.delete(record.id);
     return { state: 'ended' };
   };
+  // Like the Claude adapter's (adapters.cjs): the service's last check, then the ordinary stop.
+  runtime.stopForMaintenance = check => { check(); return runtime.stop(); };
   runtime.send = (text, tag, guard) => new Promise((resolve, reject) => {
     if (failNext.delete(record.id)) { reject(Error('Synthetic send failure')); return; }
     if (!guard()) {
