@@ -363,4 +363,4 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
   return { key, resumed, left: left.map(s => s.id), confirmedByState };
 }
 
-module.exports = { backendPlan, sessionPlan, samePlan, sameStop, maintenanceProof, switchBackend, readSettings, writeSettings, readRecords, clearRecord, migrationSafe, migrationAcceptable, children, RECORD, SETTINGS };
+module.exports = { backendPlan, sessionPlan, samePlan, sameStop, maintenanceProof, endedByThisStop, switchBackend, readSettings, writeSettings, readRecords, clearRecord, migrationSafe, migrationAcceptable, children, RECORD, SETTINGS };

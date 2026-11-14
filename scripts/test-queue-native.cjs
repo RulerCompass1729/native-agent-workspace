@@ -15,7 +15,7 @@ const assert = require('node:assert/strict');
 const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..');
 const { connectService } = require('../app/service-client.cjs');
-const { executable } = require('../app/platform.cjs');
+const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs');
 
 const base = testScratch.directory(path.join(os.tmpdir(), 'naw-queue-native-'));
 const profile = path.join(base, 'profile');
@@ -290,15 +290,26 @@ async function cleanup() {
           await client.call('stop', session.id);
         }
       }
-      // A Codex session ends a moment after its stop returns, and the service refuses to close before then.
-      let open = [];
-      for (let n = 0; n < 100; n += 1) {
-        open = (await snapshot()).sessions.filter(s => !['ended', 'background'].includes(s.state)).map(s => s.state);
-        if (!open.length) break;
+      // A stop may settle a moment after it returns. A stopped Codex session the app-server still holds reports
+      // 'disconnected', not ended (adapters.cjs stop, deliberately), and the service refuses to close while one does.
+      const settled = s => ['ended', 'background'].includes(s.state) || s.provider === 'codex' && s.state === 'disconnected';
+      let state = await snapshot();
+      for (let n = 0; n < 100 && !state.sessions.every(settled); n += 1) {
         await sleep(100);
+        state = await snapshot();
       }
-      if (open.length) console.error('Sessions not ended before closing the service:', JSON.stringify(open));
-      await client.call('shutdown');
+      const open = state.sessions.filter(s => !['ended', 'background'].includes(s.state));
+      if (open.length && open.every(settled)) {
+        // This isolated profile owns its whole service: end it the way a signal does (daemon.cjs shutdown).
+        const identity = processIdentity(state.servicePid);
+        assert.ok(identity && processMayBeAlive(identity), 'The owned service is running');
+        process.kill(identity.pid, 'SIGTERM');
+        for (let n = 0; n < 150 && processMayBeAlive(identity); n += 1) await sleep(100);
+        assert.ok(!processMayBeAlive(identity), 'The owned service exits');
+      } else {
+        if (open.length) console.error('Sessions not ended before closing the service:', JSON.stringify(open.map(s => s.state)));
+        await client.call('shutdown');
+      }
     } finally {
       client.close();
     }

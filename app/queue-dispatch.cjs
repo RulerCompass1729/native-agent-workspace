@@ -14,6 +14,7 @@ const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 const { noticeText } = require('./answer-notices.cjs');
 const { CompactionCounter, claudeFiles, claudeProjects } = require('./compaction-count.cjs');
+const { sessionPlan, endedByThisStop } = require('./backend-switch.cjs');
 
 const CAPABILITY = 'queueDispatchV1';
 const ITEM_TEXT_LIMIT = 6000;
@@ -160,6 +161,10 @@ const CODEX_EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
 // memory just when the machine may be short of it.
 const MAX_ACTIVE_ROTATIONS = 1;
 const GUARDED_STOP_CAPABILITY = 'guardedSessionStopV1';
+// The service's stop that first checks the session is exactly as proven (workspace.cjs maintenanceStop).
+const CONDITIONAL_STOP_CAPABILITY = 'conditionalMaintenanceStopV1';
+// How long a refused receipt may take to settle into the end it proves (backend-switch.cjs settleMs).
+const STOP_SETTLE_MS = 10000;
 const NOTICE_STATES = ['pending', 'attempted', 'unknown'];
 const CLEANUP_STATES = ['pending', 'started', 'confirmed', 'unknown'];
 
@@ -2884,9 +2889,13 @@ class QueueDispatcher {
 
   // Used since this step read it (a keystroke in its terminal, the person's window)? Read fresh
   // state right before ending it.
-  async touchedSince(oldId, old) {
+  // `seen.latest` is then the state judged, for the stop that follows (stopUnchanged).
+  async touchedSince(oldId, old, seen = null) {
     await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
     const latest = this.view().snapshot.sessions.find(s => s.id === oldId);
+    if (seen) {
+      seen.latest = latest;
+    }
     if (!latest) {
       return false;
     }
@@ -2897,6 +2906,46 @@ class QueueDispatcher {
       return true;
     }
     return humanRecent(oldId, this.humanAt, this.now(), this.humanQuietMs);
+  }
+
+  // Ends the old process only if nothing moved since `latest`, the state the last check judged. The
+  // service compares it when the request arrives and again just before it commits: a send, a draft,
+  // a takeover or terminal input that reaches the service first (the window after that check) makes
+  // it refuse with nothing changed, and the session is kept. A plain stop would end it with the person's
+  // words unanswered. A service without that check is not stopped unconditionally either.
+  // Returns null once ended, else why it was kept (the rotation log's reason).
+  async stopUnchanged(oldId, latest) {
+    const target = this.client.route(oldId);
+    const guard = typeof this.client.operationGuard === 'function' ? this.client.operationGuard(target) : () => {};
+    guard();
+    if (!target.state.capabilities?.includes(CONDITIONAL_STOP_CAPABILITY)) {
+      return 'old-service';
+    }
+    // The proof is the service's own: the same fields, normalised as its check computes them.
+    const plan = latest && sessionPlan(latest, latest.state);
+    if (!plan || !plan.stop) {
+      return 'stop-unproven';
+    }
+    try {
+      guard();
+      await withTimeout(target.client.call('maintenanceStop', oldId, plan.stop, false), CALL_TIMEOUT_MS, 'stop-timeout');
+    } catch (error) {
+      const key = error && error.uiMessage && error.uiMessage.key;
+      if (key === 'error.backendSwitchSessionChanged') {
+        return 'changed-at-stop';
+      }
+      // The service refuses its own receipt when a Claude terminal ends itself during the stop (the backend
+      // switch meets the same): the settled session still proves this stop ended it and nothing else changed.
+      if (key === 'error.backendSwitchDisconnectUnconfirmed') {
+        guard();
+        const settled = await endedByThisStop(target.client, plan.stop, STOP_SETTLE_MS).catch(() => null);
+        if (settled) {
+          return null;
+        }
+      }
+      throw error;
+    }
+    return null;
   }
 
   // The old session is left as it is: one record, log line and notice, then a week's rest.
@@ -3417,7 +3466,7 @@ class QueueDispatcher {
       }
       // NAW cannot see a prompt typed but not sent in the native terminal: keep the screen first,
       // and keep the old session if its screen cannot be saved.
-      let unsaved = false, stoppedHere = false;
+      let unsaved = false, stoppedHere = false, keptAtStop = null;
       if (live && !inUse && old.terminalInputPending === true) {
         try {
           record.terminalFile = await this.saveTerminal(oldId);
@@ -3438,11 +3487,13 @@ class QueueDispatcher {
             // Leaving is cosmetic; ending the old process is what frees memory.
           }
         }
-        if (await this.touchedSince(oldId, old)) {
+        const seen = {};
+        if (await this.touchedSince(oldId, old, seen)) {
           inUse = true;
         } else {
-          await withTimeout(this.client.call('stop', oldId), CALL_TIMEOUT_MS, 'stop-timeout');
-          stoppedHere = true;
+          keptAtStop = await this.stopUnchanged(oldId, seen.latest);
+          inUse = Boolean(keptAtStop);
+          stoppedHere = !inUse;
         }
       }
       if (!record.oldId) {
@@ -3457,6 +3508,9 @@ class QueueDispatcher {
       }
       if (unsaved) {
         extra.reason = 'terminal-unsaved';
+      }
+      if (keptAtStop) {
+        extra.reason = keptAtStop;
       }
       const doneEntry = this.appendLog(outcome, record, extra);
       this.roomState.rotationEvent(record.roomIds, inUse ? 'oldKept' : 'done', oldLabel, newLabel);
