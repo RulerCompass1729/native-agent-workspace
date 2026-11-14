@@ -13,6 +13,7 @@ const NOW = 1_800_000_000_000;
 const AWAKE = { enabled: true };
 const GUARDED_STOP = 'guardedSessionStopV1';
 const CONDITIONAL_STOP = 'conditionalMaintenanceStopV1';
+const PARTICIPANT_STOP = 'participantMaintenanceStopV1';
 const { sessionPlan, sameStop } = require('../backend-switch.cjs');
 
 function member(id, extra = {}) {
@@ -512,7 +513,7 @@ class FakeClient extends EventEmitter {
     this.calls = [];
     this.sequence = 0;
     this.reads = 0;
-    this.capabilities = [rules.CAPABILITY, GUARDED_STOP, CONDITIONAL_STOP];
+    this.capabilities = [rules.CAPABILITY, GUARDED_STOP, CONDITIONAL_STOP, PARTICIPANT_STOP];
   }
   snapshot() {
     this.reads += 1;
@@ -568,10 +569,17 @@ class FakeClient extends EventEmitter {
     }
     if (method === 'maintenanceStop') {
       // As the service's conditional stop (workspace.cjs): refused, with nothing changed, unless the session
-      // is still exactly as proven.
-      const plan = sessionPlan({ ...session, draftRevision: session.draftRevision || 0 }, session.state);
+      // is still exactly as proven, and in no running relay.
+      const running = new Set(this.state.rooms.flatMap(r => r.run && r.run.status === 'running' ? r.run.ids || [] : []));
+      const plan = sessionPlan({ ...session, draftRevision: session.draftRevision || 0 }, session.state, running);
       if (!plan.stop || !sameStop(plan.stop, args[1]) || args[2] !== false) {
         throw Object.assign(Error('changed'), { uiMessage: { key: 'error.backendSwitchSessionChanged' } });
+      }
+      // Its stop pauses every relay the service holds, unless asked to pause only this session's
+      // (participant scope, from participantMaintenanceStopV1 on).
+      const scoped = this.capabilities.includes(PARTICIPANT_STOP) && args[3] === 'participant';
+      for (const r of this.state.rooms) {
+        if (r.run && r.run.status === 'running' && (!scoped || (r.run.ids || []).includes(session.id))) r.run.status = 'paused';
       }
       if (this.refusesOwnReceipt) {
         // As a real Claude stop on the service (maintenance-stop.test.cjs): the terminal's close ends the
@@ -1279,6 +1287,54 @@ test('a rotation whose old session already ended finishes at once even while a c
   assert.equal(dispatcher.rotations.a, undefined, 'record finished without waiting');
   assert.equal(client.calls.filter(call => call[0] === 'stop').length, 0, 'nothing left to stop');
 });
+
+// cd3e2a8d (2026-11-14): the rotation's stop pauses only the old session's own relays. A relay in another space that
+// the old session is not in no longer holds the rotation (it waited up to 30 minutes, then kept the old session) and
+// keeps running. One with the old session in it, one in a space it leaves (the test above), or any beside a service
+// that pauses every relay at a stop, still holds it.
+function otherSpaceRelay(t, ids, participantStop = true) {
+  const setup = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
+  const { room, client, dispatcher } = setup;
+  fakeMembership(room, client);
+  if (!participantStop) client.capabilities = client.capabilities.filter(cap => cap !== PARTICIPANT_STOP);
+  const otherRoom = room.create('Another team');
+  client.state.rooms.push({ id: otherRoom, revision: 0, run: null, messages: [] });
+  room.queueAdd('next task', 'a');
+  const run = { id: 'other-run', roomId: otherRoom, status: 'running', ids };
+  return { ...setup, run: () => client.state.rooms.find(r => r.id === otherRoom).run, start: async () => {
+    await dispatcher.start();
+    client.reply('a', '交接：分支 abc。');
+    await dispatcher.schedule();
+    await dispatcher.schedule();
+    client.state.rooms.find(r => r.id === otherRoom).run = run;
+    await dispatcher.schedule();
+  } };
+}
+
+test('a relay in another space without the old session does not hold its rotation, and keeps running', async t => {
+  const f = otherSpaceRelay(t, ['x', 'y']);
+  await f.start();
+  const stops = f.client.calls.filter(call => call[0] === 'maintenanceStop');
+  assert.equal(stops.length, 1, 'the old session is stopped now, not after the relay');
+  assert.equal(stops[0][4], 'participant', 'the service is asked to pause only this session\'s relays');
+  assert.equal(f.client.state.sessions[0].state, 'ended');
+  assert.equal(f.run().status, 'running', 'the other space\'s relay goes on');
+  assert.equal(f.dispatcher.rotations.a, undefined, 'the rotation is done');
+});
+
+for (const [label, ids, participantStop] of [['has the old session in it', ['a', 'y'], true], ['runs beside a service that pauses every relay at a stop', ['x', 'y'], false]]) {
+  test(`a relay in another space that ${label} still holds the rotation`, async t => {
+    const f = otherSpaceRelay(t, ids, participantStop);
+    await f.start();
+    assert.equal(f.client.calls.filter(call => call[0] === 'stop' || call[0] === 'maintenanceStop').length, 0, 'waits while the relay runs');
+    assert.equal(f.run().status, 'running');
+    assert.equal(f.dispatcher.rotations.a.phase, 'handed');
+    f.run().status = 'completed';
+    f.dispatcher.dirty = true;
+    await f.dispatcher.schedule();
+    assert.equal(f.client.state.sessions[0].state, 'ended', 'stopped once the relay ended');
+  });
+}
 
 test('only a terminal\'s own replies are ignored; every key the person presses counts', () => {
   const { isTerminalResponse } = require('../workspace.cjs');

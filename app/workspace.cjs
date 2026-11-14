@@ -1925,9 +1925,13 @@ class Workspace extends EventEmitter {
     if (this.approvalRoutes.get(id)?.get(requestId) === route) { route.approval = { ...route.approval, pending: true }; Object.assign(s, queue.snapshot()); }
     this.changed();
   }
-  maintenanceStop(id, expected, requireAuto = false) {
+  // `scope` 'participant' (participantMaintenanceStopV1): a rotation ends this one session, so its stop pauses
+  // only the relays, grants and continuations this session is in; another space's relay keeps running. Without
+  // it (the backend switch, which ends every session) the stop pauses all of them, as before.
+  maintenanceStop(id, expected, requireAuto = false, scope = null) {
     const { sessionPlan, sameStop } = require('./backend-switch.cjs');
     const s = this.get(id), runtime = this.runtime(id);
+    if (scope !== null && scope !== undefined && scope !== 'participant') throw uiError('error.backendSwitchSessionChanged', { name: s.name || id });
     const check = () => {
       const running = new Set();
       for (const room of this.rooms.values()) if (room.run?.status === 'running') for (const member of room.run.ids || []) running.add(member);
@@ -1939,7 +1943,7 @@ class Workspace extends EventEmitter {
           !plan.stop || !sameStop(plan.stop, expected) || (requireAuto && !plan.auto) || typeof runtime.stopForMaintenance !== 'function') throw uiError('error.backendSwitchSessionChanged', { name: s.name || id });
     };
     check();
-    return this.stop(id, { check, expected });
+    return this.stop(id, { check, expected, participantOnly: scope === 'participant' });
   }
   async stopUnusedSuccessor(id, proof) {
     // Automatic cleanup has narrower authority than a person's Stop action.
