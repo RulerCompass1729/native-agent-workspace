@@ -1379,10 +1379,12 @@ async function boot() {
       outboxBroker = await createOutboxBroker({ descriptorFile,
         bind: (identity, args, signal) => bindOriginalOutbox({ contexts: () => windows.values(), roomState }, identity, args, signal),
         bindControl: (identity, args, signal) => bindOriginalControl({ contexts: () => windows.values(), roomState }, identity, args, signal),
-        control: (binding, args) => {
+        control: async (binding, args) => {
           if (!backgroundControl) throw Error('Background control storage is unavailable');
           // The butler's own calls are written to 「大管家的记录」 first (steward-record.cjs); others run as they are.
-          return stewardRecord ? stewardRecord.around(binding.sender, args, () => backgroundControl.call(binding, args)) : backgroundControl.call(binding, args);
+          const result = await (stewardRecord ? stewardRecord.around(binding.sender, args, () => backgroundControl.call(binding, args)) : backgroundControl.call(binding, args));
+          // The agent gets its answer without NAW's own guard (queue 794d3cd7).
+          return background.agentReply(result);
         },
         createView: createStockOutboxView });
       process.env.NAW_OUTBOX_DESCRIPTOR = descriptorFile; outboxUnavailable = false;

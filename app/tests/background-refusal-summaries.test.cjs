@@ -386,3 +386,37 @@ test('a full legacy refusal file migrates its old hint without growing or erasin
   assert.equal(cold.data.padding.length, old.padding.length); assert.equal(cold.data.refusals.length, 1);
   assert.ok(fs.statSync(cold.file).size <= 32 * 1024 * 1024); assert.equal(f.writes, 0);
 });
+
+// Queue 794d3cd7 (大管家, 2026-11-13 20:35): every answer to an agent carried NAW's whole guard (all 36 sessions,
+// 10 KB and more), which the agent never uses. main.cjs answers each workspace_control call without it.
+test('an agent gets each answer without NAW\'s guard, while NAW keeps the guard', async t => {
+  const vm = require('node:vm'), { agentReply } = require('../background-control.cjs');
+  const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
+  const f = fixture(t);
+  // As many sessions as the person's list held when measured.
+  f.snapshot.sessions.push(...Array.from({ length: 34 }, (_, n) => ({ id: 'session-' + n, nativeId: 'native-' + n, name: 'Session ' + n, provider: n % 2 ? 'claude' : 'codex', cwd: '/work/repo-' + n, state: 'idle' })));
+  f.context.fingerprint = () => ({ auditRooms: ['shared'], rooms: [{ id: 'shared', name: 'Shared', memberOrder: f.snapshot.sessions.map(s => s.id) }], sessions: f.snapshot.sessions.map(s => ({ ...s })) });
+  const a = main.indexOf('        control: async (binding, args) => {'), b = main.indexOf('\n        createView:', a);
+  assert.ok(a > 0 && b > a, 'main.cjs answers every workspace_control call in one place');
+  const edge = vm.runInNewContext('(' + main.slice(a + '        control: '.length, b).trim().replace(/,$/, '') + ')',
+    { backgroundControl: f.controller, stewardRecord: null, background: require('../background-control.cjs'), Error });
+  const ask = request('spaceCreate', 'pending-create', ['Small']);
+  const pending = await edge(f.binding, ask);
+  assert.equal(pending.state, 'confirmation-required'); assert.equal(Object.hasOwn(pending, 'guard'), false);
+  const kept = f.controller.receipt(f.actor, 'pending-create');
+  assert.equal(kept.guard.sessions.length, 36, 'NAW keeps the whole guard to bind the person\'s answer');
+  const { guard: _guard, ...rest } = kept; assert.deepEqual(pending, { ...rest, retry: false }, 'everything else is as it was');
+  const before = Buffer.byteLength(JSON.stringify({ ...kept, retry: false })), after = Buffer.byteLength(JSON.stringify(pending));
+  t.diagnostic(JSON.stringify({ before, after })); assert.ok(after * 4 < before);
+  const receipt = await edge(f.binding, { action: 'receipt', operation_id: 'pending-create' });
+  assert.equal(receipt.receipt.id, 'pending-create'); assert.equal(Object.hasOwn(receipt.receipt, 'guard'), false);
+  const again = await edge(f.binding, ask);
+  assert.equal(again.duplicate, true); assert.equal(Object.hasOwn(again, 'guard'), false);
+  const done = await edge(f.binding, request('plain', 'plain-done', ['X']));
+  assert.equal(done.state, 'complete'); assert.equal(done.value, 1); assert.equal(Object.hasOwn(done, 'guard'), false);
+  // call() itself still answers with the guard (NAW's own uses), and agentReply changes no value it is given.
+  const own = await f.controller.call(f.binding, { action: 'receipt', operation_id: 'pending-create' });
+  assert.equal(own.receipt.guard.sessions.length, 36);
+  const copy = JSON.parse(JSON.stringify(own)); agentReply(own); assert.deepEqual(own, copy);
+  for (const value of [null, undefined, 'text', [{ guard: 1 }], { state: 'complete' }]) assert.deepEqual(agentReply(value), value);
+});
