@@ -929,14 +929,16 @@ test('the pause counts from the session\'s own last activity, and the butler\'s 
   assert.equal(dispatcher.deferredAt.size, 0, 'entries go once their quiet has passed or the session is gone');
 });
 
-test('a person-active failure saved by an older build no longer rests the member; other failures still do', t => {
+test('a person-active failure saved by an older build before any successor no longer rests the member; other failures still do', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-defer-load-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'queue-dispatch.json');
   const failed = (reason, extra = {}) => ({ phase: 'failed', failedAt: NOW - 1000, reason, oldNativeId: 'native-x', provider: 'claude', cwd: '/tmp', name: 'Agent x', roomIds: ['shared'], ...extra });
   const moved = failed('person-active', { newId: 'made', newCwd: '/synthetic/new' });
-  fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: failed('person-active'), b: failed('new-session-not-ready'), c: failed('handoff-missing'), d: moved } }), { mode: 0o600 });
-  assert.deepEqual(Object.keys(rules.readRotations(file, NOW)).sort(), ['b', 'c', 'd'], 'a successor in a moved directory keeps the record its hold names');
+  const unstopped = failed('person-active', { newId: 'left', newCwd: '/tmp' });
+  fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: failed('person-active'), b: failed('new-session-not-ready'), c: failed('handoff-missing'), d: moved, e: unstopped } }), { mode: 0o600 });
+  assert.deepEqual(Object.keys(rules.readRotations(file, NOW)).sort(), ['b', 'c', 'd', 'e'],
+    'a successor in a moved directory keeps the record its hold names; one whose stop was not confirmed keeps its week across a restart');
 });
 
 test('a person-active failure whose successor is in a moved directory keeps its record, so its isolation hold keeps its anchor', async t => {

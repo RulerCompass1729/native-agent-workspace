@@ -1781,9 +1781,10 @@ function readRotations(file, now, faults = {}) {
     if (record.phase === 'failed' && record.reason === 'cannot-carry:model-unknown') {
       continue;
     }
-    // The person used the old session (an older build rested it a week; see deferRotation). Trust records and a
-    // successor in a moved directory (its isolation hold names this record) keep theirs.
-    if (record.phase === 'failed' && record.reason === 'person-active' && !trustRecord(record) && !movedSuccessor(record)) {
+    // The person used the old session before a successor was made (an older build rested it a week; see
+    // deferRotation). Trust records and a record with a successor (its stop unconfirmed, its handoff confirmed, or
+    // its isolation hold naming this record) keep theirs, as failRotation keeps them.
+    if (record.phase === 'failed' && record.reason === 'person-active' && !trustRecord(record) && !validId(record.newId)) {
       continue;
     }
     if (record.phase === 'kept' && now - (record.keptAt || 0) > ROTATE_AFTER_MS) {
