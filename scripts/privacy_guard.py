@@ -7,6 +7,7 @@ This is an accidental-disclosure guard, not a sandbox or a legal certification.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -14,9 +15,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 MAX_BLOB = 2 * 1024 * 1024
-MAX_SCAN = 512 * 1024 * 1024
+MAX_SCAN = 2 * 1024 * 1024 * 1024
+# gitleaks reads each batch whole within its deadline. A batch is cut only between
+# parts, never inside a file, patch, message or identity, and every batch must pass.
+MAX_BATCH = 192 * 1024 * 1024
 CONFIG_KEY = "privacyGuard.privatePatternsFile"
 # A second rules file read only by this repository: identities, such as personal account
 # names, that must never appear beside the public one. Both files are required.
@@ -99,8 +104,11 @@ class Scanner:
         self.gitleaks = shutil.which("gitleaks")
         if not self.gitleaks:
             raise Blocked("gitleaks is required; install it before publishing")
-        self.parts = []
+        self.parts = []      # the current gitleaks batch
+        self.batch_size = 0  # its length as gitleaks reads it, separators included
         self.size = 0
+        self.added = 0
+        self.batches = []    # (parts, bytes of those parts) for each batch gitleaks passed
         self.blobs = set()
         self.commits = 0
 
@@ -121,8 +129,12 @@ class Scanner:
                 raise Blocked(f"{label}: {name} matched (value withheld)")
         if any(m.group(1).lower() not in SAFE_EMAIL_DOMAINS for m in EMAIL.finditer(text)):
             raise Blocked(f"{label}: non-example, non-noreply email (value withheld)")
+        if self.parts and self.batch_size + 1 + len(data) > MAX_BATCH:
+            self.flush()
+        self.batch_size += len(data) + (1 if self.parts else 0)
         self.parts.append(data)
         self.size += len(data)
+        self.added += 1
 
     def identity(self, data, label):
         """Each `name <email>` line must carry a noreply/example email: a handle or URL in
@@ -199,28 +211,55 @@ class Scanner:
             self.add(git("show", "--format=", "--root", "-m", "-p", "--text",
                          "--no-ext-diff", "--no-textconv", oid), "historical patch")
 
-    def finish(self):
+    def flush(self, last=False):
+        """Run gitleaks on the current batch. Only exit 0 with an empty report passes."""
+        data = b"\n".join(self.parts)
+        started = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="publication-scan-") as tmp:
             folder = Path(tmp)
             config = folder / "gitleaks.toml"
             config.write_text("[extend]\nuseDefault = true\n")
             ignore = folder / "empty-ignore"
             ignore.write_text("")
+            report = folder / "report.json"
             # No repo config, inline allow comments, baseline, or ignore file can
             # silently disable the standard secret scan.
             env = {k: v for k, v in os.environ.items() if not k.startswith("GITLEAKS_")}
             try:
                 p = subprocess.run([self.gitleaks, "stdin", "--no-banner", "--redact",
                                     "--config", str(config), "--gitleaks-ignore-path", str(ignore),
-                                    "--ignore-gitleaks-allow", "--timeout", "120"],
-                                   input=b"\n".join(self.parts), stdout=subprocess.PIPE,
+                                    "--ignore-gitleaks-allow", "--timeout", "120",
+                                    "--report-format", "json", "--report-path", str(report)],
+                                   input=data, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, cwd=tmp, env=env, timeout=135)
             except (OSError, subprocess.TimeoutExpired):
                 raise Blocked("gitleaks unavailable or timed out") from None
             if p.returncode:
                 raise Blocked("gitleaks detected a secret or failed; output withheld")
+            try:
+                findings = json.loads(report.read_bytes())
+            except (OSError, ValueError):
+                findings = None
+            if findings != []:
+                raise Blocked("gitleaks result missing or unreadable; no pass issued")
+        self.batches.append((len(self.parts), sum(map(len, self.parts))))
+        if not last or len(self.batches) > 1:
+            print(f"gitleaks batch {len(self.batches)}: {len(self.parts)} parts, "
+                  f"{len(data) / 2**20:.1f} MiB, passed in {time.monotonic() - started:.0f} s",
+                  file=sys.stderr, flush=True)
+        self.parts = []
+        self.batch_size = 0
+
+    def finish(self):
+        if self.parts or not self.batches:
+            self.flush(last=True)
+        # Every part that passed the checks above went to gitleaks exactly once.
+        if (sum(n for n, _ in self.batches) != self.added
+                or sum(size for _, size in self.batches) != self.size):
+            raise Blocked("gitleaks batches do not cover every scanned part; no pass issued")
         print(f"PASS privacy guard: {len(self.patterns)} private rules, generic checks, "
-              f"gitleaks; {len(self.blobs)} blobs, {self.commits} commits; no matches")
+              f"gitleaks in {len(self.batches)} batch(es) covering all {self.added} parts; "
+              f"{len(self.blobs)} blobs, {self.commits} commits; no matches")
 
 
 def install(path, identities):

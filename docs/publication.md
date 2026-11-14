@@ -71,7 +71,7 @@ silently turn off this guard's secret scan.
 
 At this preparation stage, database/export/log files, credentials, screenshots,
 archives, external symlinks, submodules, and non-UTF-8/binary content are blocked.
-The current finite limits are 2 MiB per scanned item and 512 MiB per scan;
+The current finite limits are 2 MiB per scanned item and 2 GiB per scan;
 exceeding either blocks rather than skips. On 2026-10-24, complete history reached
 67,690,301 bytes across 110 commits and 1,860 unique blobs, exceeding the old
 64 MiB total. On 2026-10-28, 301 reachable commits contained 2,691 unique
@@ -111,6 +111,21 @@ before publication. A complete scan with the new bound covered 264.1 MiB
 across 622 commits and 4,180 unique blobs, and its gitleaks step took 88.3
 seconds, so at this rate the 120-second tool deadline, not the byte bound, is
 likely to block first, at roughly 350 MiB; a timeout still blocks publication.
+On 2026-11-13 a push of main needed 1,183 MiB of scan input, most of it whole
+versions of one large review file, and was blocked at the 512 MiB bound. With the
+person's approval, gitleaks now reads the input in batches of at most 192 MiB,
+each cut only between whole parts (a file version, patch, message, identity or
+ref list), with the same 120-second tool and 135-second process deadlines for
+each batch; the aggregate bound is 2 GiB. A batch passes only when gitleaks exits
+0 and its JSON report is an empty list. A timeout, any other exit, or a missing
+or unreadable report blocks, and the scan passes only when its batches together
+hold every part exactly once. The private, identity and generic checks still
+read every part. On the public history of that day (544 commits), the batched
+and the former single scan gave gitleaks byte-identical input and the same
+verdict. Ref, tree, historical patch, identity, message and secret coverage are
+unchanged, the guard prints one line per batch, and a successful full scan must
+still be observed before publication. The review record became one file per day
+on the same date, so that no single file approaches the 2 MiB item bound.
 A future asset or larger repository requires another reviewed handling decision,
 not an unbounded scan, skipped history or publication bypass.
 

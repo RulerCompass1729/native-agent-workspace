@@ -262,7 +262,11 @@ from unittest.mock import patch
 from scripts.privacy_guard import Scanner
 scan = Scanner()
 scan.add(b'safe fixture\\n', 'synthetic record')
-with patch('scripts.privacy_guard.subprocess.run', return_value=subprocess.CompletedProcess([], 0, b'', b'')) as invoke:
+def clean(arguments, **options):
+    with open(arguments[arguments.index('--report-path') + 1], 'w') as report:
+        report.write('[]')
+    return subprocess.CompletedProcess(arguments, 0, b'', b'')
+with patch('scripts.privacy_guard.subprocess.run', side_effect=clean) as invoke:
     scan.finish()
 arguments, options = invoke.call_args
 assert arguments[0][arguments[0].index('--timeout') + 1] == '120'
@@ -387,10 +391,217 @@ except Blocked as error:
         self.assertIn('gitleaks detected a secret', result.stderr)
         self.assertNotIn(fake, result.stderr + result.stdout)
 
-    def test_new_total_limit_remains_fail_closed(self):
-        result = self.scan_many_parts("    while True:\n        scan.add(part, 'synthetic history beyond bound')\n")
+    def test_total_limit_remains_fail_closed(self):
+        # Reaching 2 GiB here would take minutes; the same check runs at a reachable size,
+        # and the real bound is pinned. A separate evidence run crosses the real 2 GiB.
+        code = """
+import sys
+import scripts.privacy_guard as pg
+assert pg.MAX_SCAN == 2 * 1024 ** 3 and pg.MAX_BATCH == 192 * 1024 ** 2
+assert pg.MAX_BLOB < pg.MAX_BATCH  # every part fits in a batch, so no part is ever cut
+pg.MAX_SCAN = 3 * 1024 * 1024
+scan = pg.Scanner()
+part = b'safe fixture line\\n' * 100000
+scan.add(part, 'synthetic history')
+print('first part accepted')
+try:
+    scan.add(part, 'synthetic history beyond bound')
+    scan.finish()
+except pg.Blocked as error:
+    print('BLOCKED privacy guard: ' + str(error), file=sys.stderr)
+    raise SystemExit(1)
+"""
+        result = self.call(sys.executable, '-c', code, ok=False)
         self.blocked(result)
+        self.assertIn('first part accepted', result.stdout)
         self.assertIn('scan size limit exceeded', result.stderr)
+
+    # Batches. MAX_BATCH is lowered inside an owned subprocess so that several real
+    # gitleaks batches run on small synthetic input; the guard code itself is unchanged.
+    BATCHED = """
+import json, subprocess, sys
+from unittest.mock import patch
+import scripts.privacy_guard as pg
+pg.MAX_BATCH = {batch}
+real = subprocess.run
+calls = []
+def gitleaks(arguments, **options):
+    if arguments[0] != pg.shutil.which('gitleaks'):
+        return real(arguments, **options)
+    calls.append(options['input'])
+    return {tool}(arguments, **options)
+def outcome(action):
+    calls.clear()
+    try:
+        with patch('scripts.privacy_guard.subprocess.run', side_effect=gitleaks):
+            action()
+        return 'PASS'
+    except pg.Blocked as error:
+        return 'BLOCKED ' + str(error)
+"""
+
+    def batched(self, body, batch, tool="real"):
+        result = self.call(sys.executable, '-c', self.BATCHED.format(batch=batch, tool=tool) + body, ok=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def test_batches_cover_every_part_once_and_cut_only_between_parts(self):
+        result = self.batched("""
+parts = [(b'safe fixture %02d ' % i) * (5 + (i * 37) % 60) + b'\\n' for i in range(40)]
+def scan_all():
+    global scan
+    scan = pg.Scanner()
+    for part in parts:
+        scan.add(part, 'synthetic part')
+    scan.finish()
+print(outcome(scan_all))
+assert len(calls) >= 3, len(calls)
+assert all(len(batch) <= pg.MAX_BATCH for batch in calls)
+assert b'\\n'.join(calls) == b'\\n'.join(parts)  # nothing lost, repeated or reordered
+i, counts = 0, []
+for batch in calls:  # each batch is whole consecutive parts
+    j = i
+    while b'\\n'.join(parts[i:j]) != batch:
+        j += 1
+        assert j <= len(parts), 'a batch does not end at a part boundary'
+    counts.append(j - i)
+    i = j
+assert i == len(parts)
+assert [n for n, _ in scan.batches] == counts
+print('batches', len(calls))
+""", batch=2000)
+        self.assertIn('PASS', result.stdout)
+        self.assertIn('covering all 40 parts', result.stdout)
+        lines = [line for line in result.stderr.splitlines() if line.startswith('gitleaks batch ')]
+        self.assertEqual(len(lines), int(result.stdout.split('batches ')[1]))
+
+    def test_a_secret_or_private_record_in_any_batch_blocks(self):
+        fake = 'gh' + 'p_' + 'A7b9C2d5E8f1G4h6J3k0L9m2N5p8Q1r4S7t0'
+        result = self.batched("""
+size = 400
+def padded(text):
+    return (text + ' ' + 'safe fixture ' * 40)[:size - 1].encode() + b'\\n'
+# Three parts per batch: parts 0-2, 3-5, 6-8.
+for name, index in (('first', 0), ('middle', 4), ('last', 8), ('before a cut', 2), ('after a cut', 3)):
+    for kind, value in (('secret', SECRET), ('private', CANARY)):
+        parts = [padded('safe fixture line %d' % i) for i in range(9)]
+        parts[index] = padded(value)
+        def scan_all():
+            scan = pg.Scanner()
+            for part in parts:
+                scan.add(part, 'synthetic part')
+            scan.finish()
+        verdict = outcome(scan_all)
+        print('|'.join((name, kind, str(index), str(len(calls)), verdict)))
+""".replace('SECRET', repr(fake)).replace('CANARY', repr(CANARY)), batch=3 * 400 + 2)
+        self.assertNotIn(fake, result.stdout + result.stderr)
+        self.assertNotIn(CANARY, result.stdout + result.stderr)
+        rows = [line.split('|') for line in result.stdout.splitlines()]
+        self.assertEqual(len(rows), 10)
+        for name, kind, index, calls, verdict in rows:
+            with self.subTest(position=name, kind=kind):
+                self.assertTrue(verdict.startswith('BLOCKED '), verdict)
+                if kind == 'secret':
+                    # Earlier batches passed; the batch holding the secret is the one that failed.
+                    self.assertEqual(int(calls), int(index) // 3 + 1)
+                    self.assertIn('gitleaks detected a secret', verdict)
+                else:
+                    # Refused by the private rules as it is added, before its batch reaches gitleaks;
+                    # a part that starts a batch is checked before the previous batch is sent.
+                    self.assertEqual(int(calls), max(0, (int(index) - 1) // 3))
+                    self.assertIn('private rule', verdict)
+
+    def test_history_across_batches_checks_messages_identities_and_secrets(self):
+        fake = 'gh' + 'p_' + 'A7b9C2d5E8f1G4h6J3k0L9m2N5p8Q1r4S7t0'
+        for i in range(6):
+            self.file("history/%d.txt" % i, "safe fixture %d\n" % i * 40)
+            self.call("git", "commit", "-qm", "Safe history %d" % i)
+        clean = self.call("git", "rev-parse", "HEAD").stdout.strip()
+        cases = {"secret in a message": ("message", "Synthetic note " + fake),
+                 "private record in a message": ("message", CANARY),
+                 "personal handle as author": ("author", HANDLE + " <fixture@users.noreply.github.com>"),
+                 "personal email as author": ("author", "Fixture <fixture@" + "personal.invalid>")}
+        tips = {}
+        for name, (kind, value) in cases.items():
+            self.call("git", "checkout", "-q", "-B", "case", clean)
+            self.file("history/case.txt", name + "\n")
+            if kind == "message":
+                self.unsafe_commit(value)
+            else:
+                self.call("git", "-c", "core.hooksPath=" + str(self.base / "no-hooks"), "commit",
+                          "--allow-empty", "--author", value, "-qm", "Safe message")
+            for i in range(3):  # later history after the dirty commit
+                self.file("history/after-%d.txt" % i, "safe fixture after %d\n" % i * 40)
+                self.call("git", "-c", "core.hooksPath=" + str(self.base / "no-hooks"), "commit", "-qm", "Later %d" % i)
+            tips[name] = self.call("git", "rev-parse", "HEAD").stdout.strip()
+        result = self.batched("""
+def history(tip):
+    def scan_all():
+        scan = pg.Scanner()
+        scan.history([tip])
+        scan.finish()
+    return scan_all
+print('clean', outcome(history(CLEAN)), len(calls))
+small = list(calls)
+pg.MAX_BATCH = 192 * 1024 * 1024
+print('one batch', outcome(history(CLEAN)), len(calls))
+assert len(small) >= 3 and len(calls) == 1 and b'\\n'.join(small) == calls[0]
+pg.MAX_BATCH = 1024
+for name, tip in TIPS.items():
+    print(name + ':', outcome(history(tip)))
+""".replace('CLEAN', repr(clean)).replace('TIPS', repr(tips)), batch=1024)
+        out = (result.stdout + result.stderr).lower()
+        for value in (fake, CANARY, HANDLE, "personal.invalid"):
+            self.assertNotIn(value.lower(), out)
+        lines = dict(line.split(': ', 1) for line in result.stdout.splitlines() if ': ' in line)
+        self.assertRegex(result.stdout, r"clean PASS \d+")
+        self.assertIn('one batch PASS 1', result.stdout)
+        self.assertIn('gitleaks detected a secret', lines['secret in a message'])
+        self.assertIn('private rule', lines['private record in a message'])
+        self.assertIn('private rule', lines['personal handle as author'])
+        self.assertRegex(lines['personal email as author'], 'non-noreply email|author/committer email')
+
+    def test_gitleaks_failure_in_a_later_batch_blocks(self):
+        failures = {
+            "timeout": "raise subprocess.TimeoutExpired('synthetic scanner', 135)",
+            "error exit": "return subprocess.CompletedProcess(arguments, 2, b'', b'')",
+            "clean exit, no report": "return subprocess.CompletedProcess(arguments, 0, b'', b'')",
+            "clean exit, unreadable report": "return write('not json')",
+            "clean exit, a finding reported": "return write('[{}]')",
+        }
+        for name, failure in failures.items():
+            with self.subTest(failure=name):
+                result = self.batched("""
+def tool(arguments, **options):
+    if len(calls) != 2:  # only the second of three batches fails
+        return real(arguments, **options)
+    def write(text):
+        with open(arguments[arguments.index('--report-path') + 1], 'w') as report:
+            report.write(text)
+        return subprocess.CompletedProcess(arguments, 0, b'', b'')
+    FAILURE
+parts = [b'safe fixture line %d\\n' % i * 20 for i in range(9)]
+def scan_all():
+    scan = pg.Scanner()
+    for part in parts:
+        scan.add(part, 'synthetic part')
+    scan.finish()
+print(outcome(scan_all), len(calls))
+""".replace("FAILURE", failure), batch=3 * 400 + 2, tool="tool")
+                self.assertRegex(result.stdout, r"^BLOCKED .* 2$")
+                self.assertNotIn("PASS", result.stdout)
+
+    def test_gitleaks_that_exits_cleanly_without_a_report_blocks_a_commit(self):
+        bins = self.base / "bin"
+        bins.mkdir()
+        fake = bins / "gitleaks"
+        fake.write_text("#!/bin/sh\ncat > /dev/null\nexit 0\n")
+        fake.chmod(0o700)
+        env = {**self.env, "PATH": str(bins) + os.pathsep + self.env["PATH"]}
+        self.file("note.txt")
+        result = self.call("git", "commit", "-qm", "Tool skipped its report", ok=False, env=env)
+        self.blocked(result)
+        self.assertIn("gitleaks result missing or unreadable", result.stderr)
 
     def test_oversized_content_is_blocked_not_skipped(self):
         self.file("large.txt", "a" * (2 * 1024 * 1024 + 1))
