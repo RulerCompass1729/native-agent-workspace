@@ -47,7 +47,7 @@ async function fixture(t, provider) {
   const confirm = pending => controller.decide(id, actor.nativeId, pending.id, 1);
   const named = name => labels.apply(workspace.snapshot()).sessions.filter(s => s.name === name);
   const spaces = name => rooms.apply(workspace.snapshot()).rooms.filter(r => r.name === name);
-  return { dir, workspace, client, rooms, labels, actor, other, ask, confirm, named, spaces };
+  return { dir, workspace, client, rooms, labels, actor, other, ask, confirm, named, spaces, controller };
 }
 const session = (f, name, extra = {}) => [{ provider: f.actor.provider, cwd: f.dir, name, ...extra }];
 for (const provider of ['claude', 'codex']) {
@@ -108,5 +108,58 @@ for (const provider of ['claude', 'codex']) {
     const late = await f.confirm(archive);
     assert.equal(late.state, 'unconfirmed'); assert.match(late.error, /operation target changed/i);
     assert.notEqual(f.rooms.apply(f.workspace.snapshot()).sessions.find(s => s.id === f.other).archived, true);
+  });
+}
+// 80184fc5 (2026-11-13): the butler asked to create "Claude 5" again under a new operation id while the first card
+// still waited; the person saw two equal cards side by side, each with the raw command twice and no sign that
+// skipPermissions loosens permissions, and nearly created two sessions.
+const rowFor = (f, controller, pending) => controller.rows(f.actor.id, f.labels.apply(f.rooms.apply(f.workspace.snapshot())))
+  .find(r => r.backgroundOperation.id === pending.id).backgroundOperation;
+for (const provider of ['claude', 'codex']) {
+  test(`${provider}: a creation card is one sentence with its risk marked, and its raw command once`, async t => {
+    const f = await fixture(t, provider);
+    const card = await f.ask('create', session(f, 'Claude 5', { skipPermissions: true }));
+    const row = rowFor(f, f.controller, card);
+    assert.deepEqual(row.summary, { action: 'create', method: 'create', risks: ['skipPermissions'], name: 'Claude 5', provider, folder: path.basename(f.dir) });
+    assert.equal(JSON.parse(row.arguments)[0].skipPermissions, true);
+    assert.equal(row.replacedBy, null); assert.equal(row.repeated, null);
+  });
+  test(`${provider}: a card asked again is void on the old card, and the old one cannot be confirmed after the new one`, async t => {
+    const f = await fixture(t, provider);
+    const first = await f.ask('create', session(f, 'Claude 5')), again = await f.ask('create', session(f, 'Claude 5'));
+    assert.notEqual(first.id, again.id);
+    assert.equal(rowFor(f, f.controller, first).replacedBy.state, 'waiting'); assert.equal(rowFor(f, f.controller, again).replacedBy, null);
+    // A request with other arguments is a different request, not a copy.
+    const other = await f.ask('create', session(f, 'Claude 6'));
+    assert.equal(rowFor(f, f.controller, other).replacedBy, null); assert.equal(rowFor(f, f.controller, again).replacedBy, null);
+    assert.equal((await f.confirm(again)).state, 'complete');
+    assert.equal(rowFor(f, f.controller, first).replacedBy.state, 'confirmed');
+    await assert.rejects(f.confirm(first), /同样的请求已在之后的卡上确认过/);
+    assert.equal(f.named('Claude 5').length, 1);
+    // Cancelling the old card stays possible: it releases the agent's slot and carries nothing out.
+    assert.equal((await f.controller.decide(f.actor.id, f.actor.nativeId, first.id, 0)).state, 'cancelled');
+  });
+  test(`${provider}: a card is refused once the same request was confirmed on any later card, even with a newer one still waiting`, async t => {
+    const f = await fixture(t, provider);
+    const first = await f.ask('create', session(f, 'Claude 5')), middle = await f.ask('create', session(f, 'Claude 5')), last = await f.ask('create', session(f, 'Claude 5'));
+    assert.equal((await f.confirm(middle)).state, 'complete');
+    assert.equal(rowFor(f, f.controller, first).replacedBy.state, 'waiting');
+    await assert.rejects(f.confirm(first), /同样的请求已在之后的卡上确认过/);
+    assert.equal(f.named('Claude 5').length, 1);
+    assert.equal((await f.controller.decide(f.actor.id, f.actor.nativeId, last.id, 0)).state, 'cancelled');
+  });
+  test(`${provider}: an agent's own view of its rows carries no card words`, async t => {
+    const f = await fixture(t, provider);
+    const card = await f.ask('create', session(f, 'Claude 5', { skipPermissions: true }));
+    const row = f.controller.rows(f.actor.id, null).find(r => r.backgroundOperation.id === card.id).backgroundOperation;
+    for (const field of ['summary', 'arguments', 'replacedBy', 'repeated', 'error']) assert.equal(Object.hasOwn(row, field), false, field);
+    assert.equal(row.state, 'confirmation-required');
+  });
+  test(`${provider}: a card for a request the person already confirmed says so`, async t => {
+    const f = await fixture(t, provider);
+    assert.equal((await f.confirm(await f.ask('create', session(f, 'Claude 5')))).state, 'complete');
+    const again = await f.ask('create', session(f, 'Claude 5')), other = await f.ask('create', session(f, 'Claude 6'));
+    assert.equal(typeof rowFor(f, f.controller, again).repeated.time, 'number'); assert.equal(rowFor(f, f.controller, again).replacedBy, null);
+    assert.equal(rowFor(f, f.controller, other).repeated, null);
   });
 }

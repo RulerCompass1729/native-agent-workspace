@@ -128,6 +128,48 @@ function maintenanceAction(method, args = [], actor) {
   if (method === 'spaceMerge' && ['commit', 'recover', 'undo'].includes(args[0])) return { commit: 'mergeSpaces', recover: 'recoverMerge', undo: 'undoMerge' }[args[0]];
   return null;
 }
+// What a card asks, as the parts of one sentence: the action, and the names, folder and flags in the command,
+// plus the risks to mark. Display only: the confirmation the person's answer is bound to (message, detail,
+// buttons) is not changed, and the full command stays in that detail. Every string is made visible as the
+// detail's are; a session or space name is looked up in `names` ({ sessions, rooms }) and left out when unknown.
+const askedByHandler = ['approve', 'operatorAction', 'wakePolicy', 'backendSwitchSettings', 'quitService', 'input'];
+function operationSummary(command, actor, names = {}) {
+  const method = command?.method, args = Array.isArray(command?.arguments) ? command.arguments : [];
+  if (typeof method !== 'string' || !method) return null;
+  const shown = value => typeof value === 'string' && value.trim() ? visibleText(value.trim().slice(0, 120)) : undefined;
+  const last = value => typeof value === 'string' ? shown(value.split(/[\\/]+/).filter(Boolean).pop()) : undefined;
+  const named = (list, id) => typeof id === 'string' && Array.isArray(list) ? shown(list.find(item => item?.id === id)?.name) : undefined;
+  const session = id => named(names.sessions, id), room = id => named(names.rooms, id);
+  const action = maintenanceAction(method, args, actor) || (askedByHandler.includes(method) ? method : null);
+  const summary = { action, method: visibleText(method), risks: [] };
+  const put = (key, value) => { if (value !== undefined) summary[key] = value; };
+  if (method === 'create' || method === 'importHistory') {
+    const options = (method === 'create' ? args[0] : args[1]) || {};
+    put('name', shown(options.name)); put('provider', ['claude', 'codex'].includes(options.provider) ? options.provider : undefined);
+    put('folder', last(options.cwd));
+    if (options.gitWorktree != null) summary.worktree = true;
+    // Claude's own permission modes loosen it too; dontAsk refuses what was not allowed beforehand, so it is not marked.
+    const mode = options.settings?.permissionMode;
+    if (options.skipPermissions === true || mode === 'bypassPermissions') summary.risks.push('skipPermissions');
+    else if (mode === 'acceptEdits') summary.risks.push('acceptEdits');
+    else if (mode === 'auto') summary.risks.push('autoApprove');
+  } else if (method === 'spaceCreate' || method === 'roomRename') put('name', shown(args[0]));
+  else if (method === 'spaceAction') {
+    put('room', room(args[0]));
+    if (args[1] === 'join') put('target', session(Array.isArray(args[2]) ? args[2][0] : undefined));
+    if (args[1] === 'rename') put('name', shown(Array.isArray(args[2]) ? args[2][0] : undefined));
+  } else if (method === 'rename') { put('target', session(args[0])); put('name', shown(args[1])); }
+  else if (method === 'runtimeLocation') put('program', ['claude', 'codex', 'python3'].includes(args[0]) ? args[0] : undefined);
+  else if (action === 'readConversation') put('target', session(conversationTarget(method, args, actor)));
+  else if (typeof args[0] === 'string') put('target', session(args[0]));
+  // Legacy commands without a space act on the shared one.
+  if (['join', 'archiveRoom', 'restoreRoom'].includes(method)) put('room', room('shared'));
+  if (Array.isArray(command.paths) && command.paths.length) { put('file', last(command.paths[0])); if (command.paths.length > 1) summary.files = command.paths.length; }
+  if (method === 'approve' && args[2] === 'accept') summary.risks.push('approvePermission');
+  if (['interrupt', 'pause', 'quitService'].includes(action)) summary.risks.push('stopsWork');
+  if (method === 'saveLocalFile') summary.risks.push('writesFile');
+  return summary;
+}
 function run(value, fn, request = null) { return scope.run({ actor: actor(value), request }, fn); }
 function message(recipient) {
   const a = current();
@@ -160,4 +202,4 @@ function inputGuard(workspace, ids, origin = current()) {
   if (!valid()) throw require('./ui-errors.cjs').uiError('error.backgroundMessagesDisabled');
   return valid;
 }
-module.exports = { actor, current, request, retainRefusalRows, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, run, message, activity, deliveryTargets, assertDeliveryPolicy, inputGuard, CAPABILITY: 'backgroundControlV1' };
+module.exports = { actor, current, request, retainRefusalRows, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, operationSummary, run, message, activity, deliveryTargets, assertDeliveryPolicy, inputGuard, CAPABILITY: 'backgroundControlV1' };

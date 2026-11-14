@@ -771,7 +771,7 @@ function displayState(snapshot, context, read = null) {
   const display = roomState.apply(sessionLabels.apply(submissionState(snapshot)), roomId);
   display.sessions = display.sessions.map(s => ({ ...s }));
   if (backgroundControl) for (const s of display.sessions) {
-    const rows = backgroundControl.rows(s.id);
+    const rows = backgroundControl.rows(s.id, context?.background ? null : display);
     if (rows.length) s.messages = [...s.messages, ...rows].sort((a, b) => a.time - b.time);
     if (context?.background) {
       s.liveDraft = ''; s.draft = '';
