@@ -13,7 +13,7 @@ const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--gi
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
 try { fs.mkdirSync(slot); } catch (e) { if (e.code !== 'EEXIST') throw e; console.error('GUI slot occupied; no launch.'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token, owner: 'secretary', task: 'background control isolated acceptance', pid: process.pid, at: new Date().toISOString() }));
-const pictures = path.join(os.homedir(), 'Pictures/naw-dogfood', new Date().toISOString().slice(0, 7), 'background-' + token);
+const pictures = path.join(process.env.NAW_PICTURES_DIR || path.join(os.homedir(), 'Pictures/naw-dogfood'), new Date().toISOString().slice(0, 7), 'background-' + token);
 fs.mkdirSync(pictures, { recursive: true });
 const checks = [], trace = [], errors = [];
 let profile, child, client, app, page, helper, sequence = 0, source, recipient;

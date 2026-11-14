@@ -18,7 +18,7 @@ const trustReceiptsMode = process.argv.includes('--trust-receipts');
 const trustTimeoutMs = trustTimeoutMode || trustReceiptsMode ? Number(process.env.NAW_B2_TEST_TRUST_TIMEOUT_MS || (trustReceiptsMode ? 45000 : 12000)) : null;
 if (trustTimeoutMs !== null) assert.ok(Number.isSafeInteger(trustTimeoutMs) && trustTimeoutMs >= 1000 && trustTimeoutMs <= 60000, 'The isolated trust timeout is between 1 and 60 seconds');
 const migration = process.argv.includes('--migration') || trustMode || trustTimeoutMode || trustReceiptsMode;
-const evidence = path.resolve(process.env.NAW_EVIDENCE_DIR || path.join(os.homedir(), 'Pictures/naw-dogfood', new Date().toISOString().slice(0, 7), 'b2-inheritance', String(Date.now())));
+const evidence = path.resolve(process.env.NAW_EVIDENCE_DIR || path.join(process.env.NAW_PICTURES_DIR || path.join(os.homedir(), 'Pictures/naw-dogfood'), new Date().toISOString().slice(0, 7), 'b2-inheritance', String(Date.now())));
 let existing = evidence; while (!fs.existsSync(existing)) existing = path.dirname(existing);
 const destination = path.join(fs.realpathSync(existing), path.relative(existing, evidence));
 for (const repo of [root, code].map(p => fs.realpathSync(p))) assert.ok(destination !== repo && !destination.startsWith(repo + path.sep), 'Evidence stays outside source repositories');

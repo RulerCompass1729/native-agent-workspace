@@ -108,6 +108,42 @@ class ScheduleTests(unittest.TestCase):
             self.assertEqual(result['status'], 'failed')
             self.assertEqual(result['error'], 'TimeoutError')
 
+    def test_report_is_archived_once_through_the_private_hook_outside_the_repository(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            helper = base/'helper'
+            body = '结论：证据不足\n发现与变化\n重合与价值\n下一步\n未知与审查\n跟踪名单\n归档钩子测试。'
+            helper.write_text('#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\nsys.stdin.read()\nPath(sys.argv[sys.argv.index("-o")+1]).write_text('+repr(body)+')\n')
+            helper.chmod(0o700)
+            calls = base/'calls.jsonl'
+            hook = base/'hook.py'
+            hook.write_text('import json\ndef archive(date, body, usage):\n'
+                            '    with open('+repr(str(calls))+', "a") as f: f.write(json.dumps([date, body, usage])+"\\n")\n'
+                            '    return {"report_id": "rr-1", "archived_sources": 3}\n')
+            now = datetime(2026,10,21,19,tzinfo=watch.PT)
+            # No hook configured: the report is kept and stays pending, nothing is archived.
+            self.assertEqual(watch.run(base/'unfiled', helper, now)['status'], 'completed')
+            self.assertNotIn('report_id', json.loads((base/'unfiled'/'state.json').read_text()))
+            # An incomplete hook result records no report id, so the report stays pending.
+            partial = base/'partial.py'
+            partial.write_text('def archive(date, body, usage):\n    return {"report_id": "rr-partial"}\n')
+            self.assertEqual(watch.run(base/'data', helper, now, archive_hook=str(partial))['status'], 'completed')
+            state = json.loads((base/'data'/'state.json').read_text())
+            self.assertEqual((state.get('report_id'), state.get('archive_error')), (None, 'KeyError'))
+            # A hook inside the public repository is refused and the report stays pending.
+            inside = watch.ROOT/'scripts'/'competitor-watch.py'
+            self.assertEqual(watch.run(base/'data', helper, now, archive_hook=str(inside))['status'], 'already-attempted')
+            self.assertFalse(calls.exists())
+            # The next tick with the private hook archives the pending report once.
+            for _ in range(2):
+                self.assertEqual(watch.run(base/'data', helper, now, archive_hook=str(hook))['status'], 'already-attempted')
+            state = json.loads((base/'data'/'state.json').read_text())
+            self.assertEqual((state['report_id'], state['archived_sources']), ('rr-1', 3))
+            self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()],
+                             [['2026-10-21', body, state.get('usage')]])
+            with self.assertRaises(ValueError):
+                watch.load_archive_hook(inside)
+
     def test_report_template_or_unsupported_decision_is_rejected(self):
         for text in ['结论：继续 / 收窄 / 转向 / 建议停止 / 证据不足',
                      'Here is the template: 结论：继续',

@@ -16,7 +16,7 @@ const common = require('node:child_process').execFileSync('git', ['rev-parse', '
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('Canonical GUI slot occupied; zero allocation and no launch.'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token, owner: 'Codex4', task: 'T164 1a four synthetic source journeys', pid: process.pid, at: new Date().toISOString() }));
-const pictures = path.join(os.homedir(), 'Pictures/naw-dogfood', new Date().toISOString().slice(0, 7), 't164-' + token);
+const pictures = path.join(process.env.NAW_PICTURES_DIR || path.join(os.homedir(), 'Pictures/naw-dogfood'), new Date().toISOString().slice(0, 7), 't164-' + token);
 let profile, cwd, child, client, app, page, source, sequence = 0, launchCount = 0, expired = false;
 const checks = [], errors = [], trace = [], geometry = [], activeStartedAt = Date.now();
 const guiProcesses = [];

@@ -2,6 +2,7 @@
 """Private maintainer research job; launchd supplies ticks, never an app feature."""
 import argparse
 import fcntl
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,6 @@ import signal
 import subprocess
 import sys
 import re
-import urllib.request
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -111,36 +111,33 @@ def save(path, data):
     tmp.replace(path)
 
 
-def archive(base, state, archive_root):
-    if not archive_root or state.get('report_id') or not state.get('report'):
+def load_archive_hook(path):
+    """The maintainer's local research library files the report through a private hook.
+
+    The hook is a Python file outside this repository defining
+    archive(date, body, usage) -> {'report_id': ..., 'archived_sources': n}; the
+    library's module names and address stay in that file, not in public code."""
+    path = Path(path).resolve(strict=True)
+    if path == ROOT or ROOT in path.parents:
+        raise ValueError('The archive hook must stay outside the public repository')
+    spec = importlib.util.spec_from_file_location('competitor_archive_hook', path)
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    return hook.archive
+
+
+def archive(base, state, archive_hook):
+    if not archive_hook or state.get('report_id') or not state.get('report'):
         return
-    # Existing local research library owns source capture, indexing and persistence.
-    sys.path.insert(0, str(archive_root))
-    from research_dashboard.decision_pipeline import log_report
-    body = Path(state['report']).read_text()
-    sources = []
-    for url in list(dict.fromkeys(re.findall(r'\]\((https://[^\s)]+)\)', body)))[:12]:
-        payload = {'title': 'Competitor watch source '+state['attempted_date'],
-                   'url': url, 'kind': 'article', 'tags': ['native-agent-workspace', 'daily-watch']}
-        req = urllib.request.Request('http://127.0.0.1:8001/api/library/sources',
-                                     data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
-        try:
-            with urllib.request.urlopen(req, timeout=20) as response:
-                captured = json.load(response)
-            if captured.get('source_id') and captured.get('n_chars', 0) > 0:
-                sources.append(captured['source_id'])
-        except Exception:
-            pass  # Full report retains links; report does not claim all captures passed.
-    result = log_report(ticker='', lane='reading', kind='reading_note', source='scheduled',
-                        headline='原生工作台竞品日报 '+state['attempted_date'],
-                        as_of=state['attempted_date'], tags=['native-agent-workspace', 'daily-watch'],
-                        source_ids=sources, body={'全文': body, '源文归档数量': len(sources), '原生报告用量': state.get('usage'),
-                                                '费用边界': '最多每日一次研究任务，可含多轮请求；12分钟不是金额或token硬上限。'})
-    state['report_id'] = result['report_id']
-    state['archived_sources'] = len(sources)
+    result = load_archive_hook(archive_hook)(date=state['attempted_date'], body=Path(state['report']).read_text(),
+                                             usage=state.get('usage'))
+    # Read both before recording either, so an incomplete result leaves the report pending.
+    report_id, archived = result['report_id'], result['archived_sources']
+    state['report_id'] = report_id
+    state['archived_sources'] = archived
 
 
-def run(base, codex, now, timeout=720, dry_run=False, archive_root=None, positioning_dir=None):
+def run(base, codex, now, timeout=720, dry_run=False, archive_hook=None, positioning_dir=None):
     base.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(base, 0o700)
     with (base/'run.lock').open('a') as lock:
@@ -157,7 +154,7 @@ def run(base, codex, now, timeout=720, dry_run=False, archive_root=None, positio
         if state.get('attempted_date', '') >= due:
             if not dry_run and state.get('report') and not state.get('report_id'):
                 try:
-                    archive(base, state, archive_root)
+                    archive(base, state, archive_hook)
                     save(state_file, state)
                 except Exception:
                     pass
@@ -227,7 +224,7 @@ def run(base, codex, now, timeout=720, dry_run=False, archive_root=None, positio
             state['usage'] = recorded_usage(log)
         save(state_file, state)
         try:
-            archive(base, state, archive_root)
+            archive(base, state, archive_hook)
         except Exception as error:
             state['archive_error'] = type(error).__name__
         save(state_file, state)
@@ -239,12 +236,12 @@ def main():
     parser.add_argument('--data-dir', type=Path, required=True)
     parser.add_argument('--codex', type=Path, required=True)
     parser.add_argument('--dry-run', action='store_true')
-    parser.add_argument('--archive-root', type=Path)
     parser.add_argument('--positioning-dir', type=Path)
     args = parser.parse_args()
     os.umask(0o077)
     result = run(args.data_dir, args.codex, datetime.now(PT), dry_run=args.dry_run,
-                 archive_root=args.archive_root, positioning_dir=args.positioning_dir)
+                 archive_hook=os.environ.get('NAW_COMPETITOR_ARCHIVE_HOOK') or None,
+                 positioning_dir=args.positioning_dir)
     if result['status'] not in ('already-running', 'already-attempted', 'not-due'):
         print(json.dumps(result, ensure_ascii=False))
     return 1 if result['status'] in ('failed', 'interrupted') else 0
