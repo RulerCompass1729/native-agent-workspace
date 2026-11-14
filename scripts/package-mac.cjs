@@ -153,6 +153,7 @@ async function build() {
       'legacy-shared.cjs',
       'local-files.cjs',
       'local-images.cjs',
+      'local-pages.cjs',
       'main.cjs',
       'managed-outbox-transport.cjs',
       'mobile-access.cjs',
