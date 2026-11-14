@@ -1,4 +1,5 @@
 const { uiError, uiNotice, uiActivity } = require('./ui-errors.cjs');
+const { readCodexProfile, catalogConfig } = require('./codex-profile.cjs');
 const { claudeUsage, codexAccountUsage } = require('./native-usage.js');
 const { EventEmitter } = require('node:events');
 const { spawn, execFileSync } = require('node:child_process');
@@ -382,14 +383,22 @@ const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 // A Codex session NAW's rotation created starts with the old session's model and reasoning
 // effort: as thread/start parameters in chat view, as command options for the native terminal.
+// A session started from one of the person's Codex profiles (DeepSeek pro / flash) gets the
+// profile's settings as its thread configuration (codex-profile.cjs); a model or effort asked
+// for as well replaces the profile's.
 function codexRequestedParams(record) {
   const requested = record.requestedSettings || {};
   const params = {};
-  if (requested.model) {
+  if (requested.profile) {
+    params.config = { ...readCodexProfile(requested.profile) };
+    if (requested.model) {
+      params.config.model = requested.model;
+    }
+  } else if (requested.model) {
     params.model = requested.model;
   }
   if (requested.effort) {
-    params.config = { model_reasoning_effort: requested.effort };
+    params.config = { ...params.config, model_reasoning_effort: requested.effort };
   }
   return params;
 }
@@ -397,6 +406,11 @@ function codexRequestedParams(record) {
 function codexRequestedArgs(record) {
   const requested = record.requestedSettings || {};
   const args = [];
+  if (requested.profile) {
+    for (const [key, value] of Object.entries(readCodexProfile(requested.profile))) {
+      args.push('-c', `${key}=${JSON.stringify(value)}`);
+    }
+  }
   if (requested.model) {
     args.push('-m', requested.model);
   }
@@ -404,6 +418,22 @@ function codexRequestedArgs(record) {
     args.push('-c', `model_reasoning_effort=${JSON.stringify(requested.effort)}`);
   }
   return args;
+}
+
+// A thread Codex loads again (after its service restarted) keeps its provider, model and effort
+// but not a profile's model catalog; it is given the catalog again. A profile that can no longer
+// be read resumes the thread as Codex has it.
+function codexResumeParams(record) {
+  const profile = record.requestedSettings?.profile;
+  if (!profile) {
+    return {};
+  }
+  try {
+    const config = catalogConfig(profile);
+    return config ? { config } : {};
+  } catch {
+    return {};
+  }
 }
 const FOLLOWED_ROOT_TRANSITIONS = { clear: 'clear', resume: 'fork' };
 // Claude's generated title is native metadata with no API: scan a bounded
@@ -1540,7 +1570,7 @@ class Codex extends EventEmitter {
       const revision = this.stateRevision, settings = this.nativeSettings;
       let result;
       try {
-        result = await rpc.call('thread/resume', { threadId: this.record.nativeId, ...(!this.record.externalHistory ? { cwd: this.record.cwd } : {}), excludeTurns: true });
+        result = await rpc.call('thread/resume', { threadId: this.record.nativeId, ...(!this.record.externalHistory ? { cwd: this.record.cwd } : {}), excludeTurns: true, ...codexResumeParams(this.record) });
         if (this.stopped) { this.finishRecoveryConnection?.(false); return; }
         if (!current()) throw uiError("error.backendChangedResumeCancelled");
         if (result.thread?.id !== this.record.nativeId) throw uiError("error.nativeResumeWrongIdentity");
@@ -1606,6 +1636,7 @@ class Codex extends EventEmitter {
           reject(uiError("error.backendChangedStartResultIgnored")); return;
         }
         this.record.nativeId = thread.id; this.nativeSessionId = thread.sessionId; this.emit('workspaceMcpProof'); this.host.codexTargets.set(thread.id, this);
+        this.observeModelProvider(thread.modelProvider);
         if (this.terminalNotificationSource) this.chatAvailable = true;
         this.emit('activity', ''); this.emit('model', model || thread.model || '原生未报告', model || thread.model ? undefined : uiNotice('notice.model.nativeUnreported').uiMessage); this.emit('state', 'idle'); resolve();
         if (!this.chatAvailable) this.observing = this.observeFirstTurn().catch(() => { if (!this.stopped) this.emit('activity', ...uiActivity("notice.activity.nativeConversationUnconfirmed")); });
@@ -1737,6 +1768,9 @@ class Codex extends EventEmitter {
       if (typeof id === 'string' && id) this.historyMessageItems.add(id);
     }
   }
+  observeModelProvider(value) {
+    if (typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value)) this.emit('modelProvider', value);
+  }
   observeSettings(settings, sourceRpc = this.terminalNotificationSource ? this.terminalRpc : this.host?.rpc) {
     if (!settings || typeof settings.model !== 'string' || !settings.model) return;
     // Public effective settings only. Never copy developer instructions or the
@@ -1750,7 +1784,10 @@ class Codex extends EventEmitter {
     this.emit('model', settings.model); this.emit('capability');
   }
   observeReplySettings(result, previous, sourceRpc = this.terminalNotificationSource ? this.terminalRpc : this.host?.rpc) {
-    if (typeof result?.thread?.id !== 'string' || !result.thread.id || result.thread.id !== this.record.nativeId || this.nativeSettings !== previous) return;
+    if (typeof result?.thread?.id !== 'string' || !result.thread.id || result.thread.id !== this.record.nativeId) return;
+    // The vendor Codex runs this thread's model with (openai, deepseek, ...): fixed for the thread.
+    this.observeModelProvider(result.modelProvider || result.thread.modelProvider);
+    if (this.nativeSettings !== previous) return;
     const model = result.model || result.thread.model;
     // A reply has effective model/effort, but no collaboration-mode report.
     // Keep a separately observed mode for this same native identity only.
@@ -2577,8 +2614,8 @@ class Codex extends EventEmitter {
     let rpc, child;
     const current = () => lifecycle === this.lifecycleRevision && !this.stopped &&
       (!rpc || (this.host.rpc === rpc && this.host.codexProcess === child));
-    // Re-subscribe to the owned thread. Omit every configuration override:
-    // thread/resume is not a new thread or a turn/start request.
+    // Re-subscribe to the owned thread. Omit every configuration override except a profile's
+    // model catalog (codexResumeParams): thread/resume is not a new thread or a turn/start request.
     this.chatAvailable = false; this.stopped = false;
     this.pending = null; this.turnId = null; this.turns.clear();
     this.liveMessageItems.clear(); this.liveToolItems.clear(); this.liveTextItems.clear(); this.nativeTextParts.clear();
@@ -2592,7 +2629,7 @@ class Codex extends EventEmitter {
       this.transportDisconnected = false;
       const settings = this.nativeSettings;
       let result;
-      try { result = await rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true }); }
+      try { result = await rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true, ...codexResumeParams(this.record) }); }
       catch (error) {
         if (!error.nativeMissingHistory || this.hasHistory || this.record.messages?.length || !current()) throw error;
         // Native creates its rollout on the first actual input. Confirm the
