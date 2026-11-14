@@ -54,9 +54,10 @@ async function fixture(t, provider) {
   const ask = (method, args, operationId = randomUUID()) => controller.call({ sender: actor, identity: { callId: 'call-' + operationId, turnId: 'turn' }, valid: () => true },
     { action: 'invoke', method, arguments: args, operation_id: operationId });
   const confirm = pending => controller.decide(id, actor.nativeId, pending.id, 1);
+  const cancel = pending => controller.decide(id, actor.nativeId, pending.id, 0);
   const named = name => labels.apply(workspace.snapshot()).sessions.filter(s => s.name === name);
   const spaces = name => rooms.apply(workspace.snapshot()).rooms.filter(r => r.name === name);
-  return { dir, workspace, client, rooms, labels, actor, other, ask, confirm, named, spaces, calls };
+  return { dir, workspace, client, rooms, labels, actor, other, ask, confirm, cancel, named, spaces, calls };
 }
 const archived = (f, id) => f.rooms.apply(f.workspace.snapshot()).sessions.find(s => s.id === id).archived;
 const addSession = f => f.workspace.create('codex', f.dir, 'owner', 'Unrelated');
@@ -113,13 +114,62 @@ for (const change of ['move', 'archive', 'native-id', 'pending-identity', 'recon
   });
 }
 for (const sameRoom of [false, true]) {
-  test(`two archive cards: ${sameRoom ? 'shared home changes the second saved placement' : 'independent targets both succeed'}`, async t => {
+  test(`two archive cards both succeed: ${sameRoom ? 'shared home' : 'independent targets'}`, async t => {
     const f = await fixture(t, 'codex'), b = await addSession(f);
     if (sameRoom) { await join(f, f.other); await join(f, b); }
     const aCard = await f.ask('archiveSession', [f.other]), bCard = await f.ask('archiveSession', [b]);
     const first = await f.confirm(aCard); assert.equal(first.state, 'complete', first.error); assert.equal(archived(f, f.other), true);
-    if (sameRoom) { await refused(f, bCard); assert.equal(archived(f, b), false); }
-    else { const second = await f.confirm(bCard); assert.equal(second.state, 'complete', second.error); assert.equal(archived(f, b), true); }
+    const second = await f.confirm(bCard); assert.equal(second.state, 'complete', second.error); assert.equal(archived(f, b), true);
+  });
+}
+for (const roomKind of ['shared', 'named']) for (const order of [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]) {
+  test(`${roomKind}: three archive cards succeed in order ${order.join('')} and restore to their original space`, async t => {
+    const f = await fixture(t, 'codex'), ids = [f.other, await addSession(f), await addSession(f)];
+    const room = roomKind === 'shared' ? 'shared' : f.rooms.create('Original');
+    for (const id of ids) await join(f, id, room);
+    const cards = [];
+    for (const id of ids) cards.push(await f.ask('archiveSession', [id]));
+    assert.ok(cards.every(card => card.state === 'confirmation-required'));
+    assert.ok(ids.every(id => !archived(f, id)), 'Asking must not archive any member');
+    for (const index of order) {
+      const result = await f.confirm(cards[index]);
+      assert.equal(result.state, 'complete', result.error); assert.equal(result.humanDecision, 1);
+      assert.equal(archived(f, ids[index]), true);
+      const before = f.calls.length;
+      await assert.rejects(f.confirm(cards[index]), /confirmation is no longer current/i);
+      assert.equal(f.calls.length, before, 'A replay cannot enter the business handler');
+    }
+    // Reopen desktop archive metadata to prove the saved homes survive a restart.
+    const cold = new RoomState(f.dir);
+    for (const index of [...order].reverse()) {
+      assert.equal(cold.value.sessionArchives[ids[index]].rooms[0].id, room);
+      const restored = await cold.restoreSession(f.client, ids[index]);
+      assert.equal(restored.placement, 'restored');
+      assert.deepEqual(f.workspace.get(ids[index]).roomIds, [room]);
+    }
+  });
+}
+test('cancelling one same-space archive does not approve it or void its sibling', async t => {
+  const f = await fixture(t, 'codex'), b = await addSession(f);
+  await join(f, f.other); await join(f, b);
+  const aCard = await f.ask('archiveSession', [f.other]), bCard = await f.ask('archiveSession', [b]);
+  assert.equal((await f.cancel(aCard)).state, 'cancelled'); assert.equal(archived(f, f.other), false);
+  assert.equal((await f.confirm(bCard)).state, 'complete'); assert.equal(archived(f, b), true);
+  await assert.rejects(f.confirm(aCard), /confirmation is no longer current/i);
+  assert.equal(archived(f, f.other), false);
+});
+for (const change of ['working', 'approval', 'active-turn', 'pending-input', 'deleted']) {
+  test(`same-space archive still refuses its own target becoming ${change}`, async t => {
+    const f = await fixture(t, 'codex'); await join(f, f.other);
+    const card = await f.ask('archiveSession', [f.other]);
+    if (change === 'working' || change === 'approval') f.workspace.runtimes.get(f.other).emit('state', change);
+    if (change === 'active-turn') f.workspace.runtimes.get(f.other).turnId = 'synthetic-active-turn';
+    if (change === 'pending-input') f.workspace.get(f.other).pendingTag = 'synthetic-pending-input';
+    if (change === 'deleted') { await f.workspace.stop(f.other); f.workspace.forget(f.other); }
+    const before = f.calls.length, result = await f.confirm(card);
+    assert.equal(result.state, 'unconfirmed', result.error);
+    assert.equal(f.calls.length, before, 'No handler or membership call after the target changed');
+    assert.equal(f.rooms.value.archivedSessions.includes(f.other), false);
   });
 }
 for (const change of ['restore', 'archive-record', 'saved-room', 'native-id', 'reconnect']) {
