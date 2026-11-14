@@ -199,7 +199,11 @@ async function run() {
   await page.locator('#chat-tab').press('Enter'); await until(async () => (await snapshot()).sessions.find(s => s.id === a).view === 'chat', 'Native view back to chat');
   await fixture('navigation-hold-claim', a); await page.locator('#terminal-tab').press('Enter');
   await until(async () => (await fixture('stats')).navigation.waitingClaims.includes(a), 'Real view claim held');
+  // 887d9fea (the person, 2026-11-13: 两边的输入可以不要锁定): the keys reach the terminal while the view change is held.
+  const typedBase = (await fixture('stats')).navigation.inputs.length;
+  const typedSince = async () => (await fixture('stats')).navigation.inputs.slice(typedBase).map(x => x.data).join('');
   await terminal(a).focus(); await page.keyboard.type('retained native text');
+  await until(async () => await typedSince() === 'retained native text', 'Keys typed while the view change is held reach the terminal at once');
   const queued = await fixture('stats');
   await staleOpenA.press('Enter');
   assert.equal((await view()).selected, a); assert.equal((await view()).mode, 'terminal');
@@ -209,10 +213,10 @@ async function run() {
   await until(() => page.locator('#toast .toast-action').count().then(n => n === 0), 'No current-session Open can cancel the queued edit'); await capture('05-native-queue-after-detach');
   assert.equal((await fixture('stats')).navigation.inputs.length, queued.navigation.inputs.length);
   await fixture('navigation-release-claim', a);
-  await until(async () => (await fixture('stats')).navigation.inputs.length === queued.navigation.inputs.length + 1, 'Existing queued input settles once after detach');
-  assert.equal((await fixture('stats')).navigation.inputs.at(-1).data, 'retained native text');
+  await until(async () => !(await fixture('stats')).navigation.waitingClaims.includes(a), 'The held view change settles after detach'); await delay(300);
+  assert.equal(await typedSince(), 'retained native text', 'Settling the view change after detach writes nothing again');
   assert.equal(await page.locator('.terminal-input-recovery:visible').count(), 0);
-  check('Solo terminal detach preserves an already queued native edit and its original pending view claim without cancelling or replaying it');
+  check('Solo terminal detach keeps the native text already written and its original pending view claim, without cancelling or replaying it');
 
   await joinFromSolo(a); await page.locator('#room-nav').click(); await header(a).locator('.collaboration-member-name').click();
   await page.locator('#terminal-tab').click(); await until(async () => (await snapshot()).sessions.find(s => s.id === a).view === 'terminal', 'Focused native view settled');

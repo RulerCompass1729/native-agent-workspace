@@ -199,7 +199,7 @@ test('switching to a left-out session waits for its messages; a later switch mea
   const switched = [], effects = [], waits = new Map();
   const context = vm.createContext({ selectionRevision: 0, roomSession: '', members: () => [], switched, terminals: new Map(), activeSessionId: () => 'shown',
     ensureMessages: ids => ids[0] === 'shown' ? null : new Promise(resolve => waits.set(ids[0], resolve)),
-    rememberRoomMemberView: () => effects.push('remember'), captureReadingViews: () => effects.push('capture'), suspendColumnInputs() {}, cancelViewInput: () => effects.push('cancel input') });
+    rememberRoomMemberView: () => effects.push('remember'), captureReadingViews: () => effects.push('capture'), suspendColumnInputs() {} });
   // Up to the switch itself: what runs before is what the old view must not suffer from a stale selection.
   vm.runInContext(between(renderer, 'async function select(', '\n  if (id === \'room\') roomSession = member;') + '\n  switched.push(id);\n}', context);
   await context.select('shown'); assert.deepEqual(switched, ['shown'], 'a shown session switches at once');

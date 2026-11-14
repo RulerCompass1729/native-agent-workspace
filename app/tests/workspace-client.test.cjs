@@ -925,6 +925,9 @@ test('taking a free session goes straight to the service: no pause, no queue hol
   let paused = 0;
   c.pauseExcept = async () => { paused++; };
   assert.deepEqual(['new', 'old'].map(id => c.snapshot().sessions.find(s => s.id === id).freeClaim), [true, false]);
+  assert.deepEqual(['new', 'old'].map(id => c.snapshot().sessions.find(s => s.id === id).eitherViewInput), [false, false]);
+  for (const state of [next.state, next.real]) state.capabilities.push('eitherViewInputV1');
+  assert.deepEqual(['new', 'old'].map(id => c.snapshot().sessions.find(s => s.id === id).eitherViewInput), [true, false], 'Only a service that takes keys on either side of the view says so');
   assert.equal(await c.call('claim', 'new', 'chat', 'free'), true);
   assert.deepEqual(next.calls.filter(([m]) => m === 'claim'), [['claim', 'new', 'chat', 'free']]);
   assert.equal(paused, 0, 'an automatic take pauses no run');

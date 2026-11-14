@@ -8,9 +8,9 @@ function between(start, end) {
 }
 const functions = [
   between('function updateState(', '\n// Like a native TUI queue'),
-  between('function currentTerminalDisplay(', '\nfunction canCaptureTerminal('),
+  between('function currentTerminalDisplay(', '\nfunction canFlushComposition('),
   between('function terminalCanInput(', '\nfunction currentTerminalDisplay('),
-  between('function focusTerminal(', '\n// 原生终端'),
+  between('function focusTerminal(', '\n// For a session this window controls'),
   between('function restoreTerminalContinuation(', '\nconst disposers'),
   between('async function ensureTerminal(', '\nfunction fitTerminal(')
 ].join('\n');
@@ -26,7 +26,7 @@ async function hydrate(change, snapshotEpoch = 'A') {
   const surface = { hidden: true, inert: true }, loading = { removed: false, remove() { this.removed = true; } };
   const c = vm.createContext({ Promise, Map, Number, Boolean, id: 's', owner: 'view', entry, term, surface, loading, state: { sessions: [record] }, terminals: new Map([['s', entry]]), intent: 1, selectionRevision: 1,
     projectSpace: s => s, legacyProgressOffline: () => false, latestViewStorage: undefined, sessionComposers: new Map(), queuedInputs: new Map(), queuedRoomInputs: new Map(), shownKnown: new Set(),
-    columnTerminalBinding: () => false, terminalContextVisible: () => true, nativeUsable: s => s?.state === 'idle', inputFocusAllowed: () => true, canCaptureTerminal: () => false, disconnected: false,
+    columnTerminalBinding: () => false, terminalContextVisible: () => true, nativeUsable: s => s?.state === 'idle', inputFocusAllowed: () => true, disconnected: false,
     activeSessionId: () => 's', syncTerminalMount() { calls.mounts++; }, fitTerminal() { calls.fits++; }, render() { calls.renders++; }, revealTerminalCursor() {}, document: { activeElement: null },
     uiError: key => new Error(key), ui: { display: { text(node, key) { node.key = key; } } },
     api: { async terminalSnapshot() { calls.snapshot++; return { buffer: 'SNAPSHOT', epoch: snapshotEpoch ?? undefined, sequence: 10, observationIndex: 10, cols: 20, rows: 5 }; }, async initial() { calls.initial++; return c.state; }, input() { calls.input++; throw Error('No native input in this test'); } }

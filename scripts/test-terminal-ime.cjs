@@ -259,7 +259,10 @@ async function run() {
   await page.locator('#take-control').click();
   await until(() => input.evaluate(el => document.activeElement === el), 'Explicit control returns');
   passed.push('Delayed/refused IME input preserves an explicit copy at its origin, never retries, keeps new typing/drafts separate and respects a newer owner');
-  // Ready-terminal input during a deliberately slow control acknowledgement.
+  // Ready-terminal input during a deliberately slow control acknowledgement. 887d9fea (the person, 2026-11-13:
+  // 两边的输入可以不要锁定): this window controls the session, so text and Enter reach the terminal at once; however the
+  // change ends, nothing is written again or kept as unsent.
+  const typedTo = async (target, base) => (await fixture()).inputs.slice(base).filter(x => x.id === target).map(x => x.data).join('');
   for (const outcome of ['release-claim', 'fail-claim', 'release-taken', 'cancel']) {
     await page.locator('#chat-tab').click();
     await until(async () => (await snapshot()).sessions.find(x => x.id === id).view === 'chat', 'Chat ready before held claim');
@@ -268,31 +271,22 @@ async function run() {
     await fixture('hold-claim', id); await page.locator('#terminal-tab').click();
     await page.keyboard.type('BUFFERED'); await page.keyboard.press('Enter');
     await until(async () => (await fixture()).claims.includes(id), 'Control held with input');
-    assert.equal((await fixture()).inputs.slice(queueBase).filter(x => x.id === id).length, 0, 'No write before authorization');
+    await until(async () => await typedTo(id, queueBase) === 'BUFFERED\r', 'Text and Enter reach the terminal while the change is pending');
     if (outcome === 'cancel') {
-      await cdp.send('Input.imeSetComposition', { text: '不要重放', selectionStart: 4, selectionEnd: 4 });
+      await cdp.send('Input.imeSetComposition', { text: '切走前的字', selectionStart: 5, selectionEnd: 5 });
       await page.locator(`[data-session-id="${other}"]`).click(); await page.keyboard.type('OTHER-ONLY');
+      await until(async () => await typedTo(other, queueBase) === 'OTHER-ONLY', 'The other session gets only its own keys');
     }
     await fixture(outcome === 'cancel' ? 'release-claim' : outcome, id);
-    if (outcome === 'release-claim') {
-      await until(async () => (await fixture()).inputs.slice(queueBase).filter(x => x.id === id).map(x => x.data).join('') === 'BUFFERED\r', 'Authorized input flush once and in order');
-    } else {
-      await page.locator(`[data-session-id="${id}"]`).click();
-      // Both surfaces are visible now. Deliberately focus the native input;
-      // visibility no longer establishes which surface owns the keyboard.
-      await page.locator('#terminal-tab').click();
-      await recovery.waitFor();
-      assert.equal((await fixture()).inputs.slice(queueBase).filter(x => x.id === id).length, 0, 'Cancelled/failed/new-owner input is never flushed');
-      assert.ok((await recovery.locator('textarea').inputValue()).startsWith('BUFFERED\n'), 'Unsubmitted input copy remains available');
-      if (outcome === 'cancel') {
-        assert.ok((await recovery.locator('textarea').inputValue()).includes('不要重放'));
-        assert.equal((await fixture()).inputs.slice(queueBase).filter(x => x.id === other).map(x => x.data).join(''), 'OTHER-ONLY');
-      }
-      await recovery.getByRole('button', { name: '关闭提示', exact: true }).click();
-      if (outcome === 'release-taken') { await page.locator('#take-control').click(); await until(() => input.evaluate(el => document.activeElement === el), 'Takeover after rejected queue'); }
-    }
+    await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#terminal-tab').click(); await delay(300);
+    const written = await typedTo(id, queueBase); console.log('Written to the session:', JSON.stringify(written));
+    // A composition interrupted by moving to another session commits at its origin, as on the ordinary terminal path
+    // ('未确认保留' above), once; it never reaches the session the person moved to.
+    assert.equal(written, outcome === 'cancel' ? 'BUFFERED\r切走前的字' : 'BUFFERED\r', 'Written once, never replayed, nothing from the other session');
+    assert.equal(await recovery.isVisible(), false, 'Nothing is left as unsent');
+    if (outcome === 'release-taken') { await page.locator('#take-control').click(); await until(() => input.evaluate(el => document.activeElement === el), 'Takeover after the other view took control'); }
   }
-  passed.push('Held control changes retain text/Enter until authorization; cancelled, rejected and newer-owner queues never write or replay their text or composition');
+  passed.push('Text and Enter typed during a held control change reach the terminal at once; released, failed, newer-owner and navigated-away changes never write them again or cross them into another session');
   const backBase = (await fixture()).inputs.length;
   await fixture('hold-input-ack', id);
   await cdp.send('Input.imeSetComposition', { text: '回到终端', selectionStart: 4, selectionEnd: 4 });
@@ -306,14 +300,13 @@ async function run() {
   await fixture('hold-claim', id); const replacedBase = (await fixture()).inputs.length;
   await page.locator('#terminal-tab').click(); await page.keyboard.type('OLD-CONNECTION');
   await until(async () => (await fixture()).claims.includes(id), 'Old connection claim held');
+  await until(async () => await typedTo(id, replacedBase) === 'OLD-CONNECTION', 'Keys reach the old connection at once');
   await fixture('replace', id);
   await until(async () => (await fixture()).pending.includes(id), 'Replacement snapshot pending');
-  await fixture('release', id); await fixture('release-claim', id);
-  await recovery.waitFor();
-  assert.equal(await recovery.locator('textarea').inputValue(), 'OLD-CONNECTION');
-  assert.equal((await fixture()).inputs.slice(replacedBase).length, 0, 'Old queue never writes to replacement connection');
-  await recovery.getByRole('button', { name: '关闭提示', exact: true }).click();
-  passed.push('Replacing a connection cancels old queued input and carries its copy into the new terminal surface');
+  await fixture('release', id); await fixture('release-claim', id); await delay(300);
+  assert.equal(await typedTo(id, replacedBase), 'OLD-CONNECTION', 'Nothing is written again into the replacement connection');
+  assert.equal(await recovery.isVisible(), false, 'Nothing is left as unsent');
+  passed.push('Replacing a connection writes nothing again into the new terminal and leaves nothing as unsent');
   // Click terminal output after another control owns focus.
   await openTerminalDisplay(page); await page.locator('#close-terminal-display').click();
   await page.locator(`[data-terminal-id="${id}"] .xterm-screen`).click({ position: { x: 40, y: 30 } });

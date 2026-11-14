@@ -161,17 +161,22 @@ test('busy queue and bound steering keep their usable routes, while an unbound t
   }
 });
 
-test('empty input, approval, owner and native-view reasons retain their existing precedence', () => {
+test('empty input, approval, owner and connection reasons retain their existing precedence; the native view adds none', () => {
   const empty = fixture(); empty.input.value = ''; empty.paint(false); empty.switch('en');
   assert.equal(empty.send.disabled, true); assert.equal(empty.hint.textContent, 'Enter to send · Shift Enter for a new line');
   for (const [record, column, hint, readOnly] of [
     [{ state: 'approval', approval: { id: 'original-approval' } }, false, /approval|confirm/i, false],
     [{ state: 'working', owner: 'another-view' }, false, /read-only/i, true],
-    [{ state: 'working', view: 'terminal' }, true, /enable input/i, true],
     [{ state: 'working', transportDisconnected: true }, false, /connection/i, true],
   ]) {
     const f = fixture(record); f.paint(column); f.switch('en');
     assert.match(f.hint.textContent, hint); assert.equal(f.input.readOnly, readOnly);
     f.input.event('keydown', { key: 'Enter' }); assert.deepEqual(f.actorCalls, []);
   }
+  // 887d9fea (the person, 2026-11-13: 两边的输入可以不要锁定): a column whose view is on the terminal side shows the
+  // conversation box exactly as on the conversation side, with no 启用对话输入 step.
+  const onChat = fixture({ state: 'working' }), onTerminal = fixture({ state: 'working', view: 'terminal' });
+  for (const f of [onChat, onTerminal]) { f.paint(true); f.switch('en'); }
+  assert.equal(onTerminal.hint.textContent, onChat.hint.textContent); assert.doesNotMatch(onTerminal.hint.textContent, /enable input/i);
+  assert.equal(onTerminal.input.readOnly, onChat.input.readOnly); assert.equal(Boolean(onTerminal.send.disabled), Boolean(onChat.send.disabled));
 });

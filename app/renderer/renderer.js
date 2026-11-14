@@ -499,7 +499,7 @@ async function sessionComposerAction(binding) {
   const s = state.sessions.find(s => s.id === binding.id), action = soloAction(s, { column: binding.column, mode: binding.column ? 'chat' : mode });
   if (binding.column) {
     if (action.kind === 'terminal') return activateColumnNative(binding);
-    if (['claim', 'chat'].includes(action.kind)) return changeColumnView(binding, 'chat', action.kind === 'claim');
+    if (action.kind === 'claim') return changeColumnView(binding, 'chat', true);
     if (action.kind === 'connect') {
       await api.prepareInput(s.id); if (!composerCurrent(binding)) return;
       updateState(await api.initial()); render();
@@ -509,7 +509,6 @@ async function sessionComposerAction(binding) {
     return;
   }
   if (action.kind === 'terminal') await switchMode('terminal');
-  else if (action.kind === 'chat') await switchMode('chat');
   else if (action.kind === 'connect') {
     const revision = selectionRevision; await api.prepareInput(s.id);
     if (revision !== selectionRevision || !composerCurrent(binding)) return;
@@ -526,7 +525,7 @@ function cancelColumnComposition(entry) {
 }
 function suspendColumnInputs() {
   for (const binding of sessionComposers.values()) if (binding.column && binding.visible) {
-    binding.revision++; binding.resizeAllowed = false; cancelViewInput(terminals.get(binding.id));
+    binding.revision++; binding.resizeAllowed = false;
     const entry = terminals.get(binding.id);
     if (entry) { cancelColumnComposition(entry); if (entry.composing) entry.term.blur(); }
     binding.ui.suspend();
@@ -538,7 +537,7 @@ function renderColumnInput(host, record, visible) {
   binding.columnHost = host; binding.nativeHost ||= node('div', undefined, 'column-native-host');
   if (binding !== soloComposer) {
     binding.column = true; binding.visible = visible;
-    if (wasVisible && !visible) { binding.revision++; binding.resizeAllowed = false; cancelViewInput(terminals.get(record.id)); binding.ui.suspend(); const entry = terminals.get(record.id); if (entry) { cancelColumnComposition(entry); entry.term.blur(); } }
+    if (wasVisible && !visible) { binding.revision++; binding.resizeAllowed = false; binding.ui.suspend(); const entry = terminals.get(record.id); if (entry) { cancelColumnComposition(entry); entry.term.blur(); } }
     if (visible) {
       if (binding.nativeHost.parentElement !== host) host.append(binding.nativeHost); if (binding.ui.form.parentElement !== host) host.append(binding.ui.form);
       const sash = columnTerminalSash(binding);
@@ -729,7 +728,7 @@ function removeColumnInput(id) {
   hideColumnTerminalHint(binding);
   binding.revision++; binding.visible = binding.nativeVisible = false; binding.resizeAllowed = false; binding.terminalDrag = null;
   binding.ui.suspend(); if (binding !== soloComposer) composerParking.append(binding.ui.form);
-  const entry = terminals.get(id); cancelViewInput(entry); if (entry) { cancelColumnComposition(entry); entry.term.blur(); } syncTerminalMount(id);
+  const entry = terminals.get(id); if (entry) { cancelColumnComposition(entry); entry.term.blur(); } syncTerminalMount(id);
 }
 async function changeColumnView(binding, next, takeControl = false) {
   if (!composerCurrent(binding) || !binding.column || binding.changing) return false;
@@ -830,7 +829,7 @@ function focusRoomMember(id, previous, originKey) {
     readingPositions[roomReturnReading.key] = structuredClone(roomReturnReading.position);
     roomReturnReading = null;
   }
-  const leaving = terminals.get(activeSessionId()); cancelViewInput(leaving);
+  const leaving = terminals.get(activeSessionId());
   if (leaving?.composing) leaving.term.blur();
   selectionRevision++;
   const key = spaceId === 'shared' ? `collaboration-focus:${id}` : `focus:${spaceId}:${id}`;
@@ -1297,7 +1296,6 @@ function soloAction(s, context = {}) {
     ? { kind: 'terminal', labelKey: 'composer.terminal', hintKey: 'composer.reloadHint' }
     : { kind: 'connect', labelKey: 'composer.connect', hintKey: 'composer.pluginHint' });
   if (s.chatAvailable === false || s.state === 'starting') return choice({ kind: 'terminal', labelKey: 'composer.terminal', hintKey: 'composer.useTerminalHint' });
-  if ((context.column || focusedRoomMember()) && (context.mode || mode) === 'chat' && s.view !== 'chat') return choice({ kind: 'chat', labelKey: 'composer.enableChat', hintKey: 'composer.enableChatHint' });
   if (s.legacyReaderPending && s.state === 'idle') return choice({ kind: 'send', labelKey: 'composer.send', hintKey: 'composer.readerPendingHint' });
   // Native runs a plugin's queued prompt only once idle; text typed in the TUI reaches the running turn.
   if (s.pendingQueue) return choice({ kind: 'send', labelKey: 'composer.waitNative', hintKey: s.midturnAvailable ? 'composer.queueMidturnPendingHint' : 'composer.queuePendingHint' });
@@ -1648,7 +1646,6 @@ async function select(id, requestedMode, member = roomSession, passive = false) 
   captureReadingViews(); suspendColumnInputs();
   if (!loading) revision = ++selectionRevision;
   const leaving = terminals.get(activeSessionId());
-  cancelViewInput(leaving);
   if (leaving?.composing) leaving.term.blur();
   if (revision !== selectionRevision) return;
   if (id === 'room') roomSession = member;
@@ -1697,51 +1694,26 @@ async function detach(id, source = spaceId) {
   sessionNoticeMessage("toast.detached", undefined, id);
 }
 function focusTerminal(id = activeSessionId()) {
-  if ((terminalCanInput(id) || canCaptureTerminal(id)) && inputFocusAllowed()) terminals.get(id).term.focus();
+  if (terminalCanInput(id) && inputFocusAllowed()) terminals.get(id).term.focus();
 }
-// 原生终端 is shown for a session this window controls, but the native view is not the terminal: a control change
-// failed, or the saved view was restored at start without one. The terminal takes no keys until 原生终端 is chosen
-// again, so the status says so (T-154) instead of a plain 「就绪」.
-function terminalUnclaimed(s, own, visible) {
-  return Boolean(own && visible && mode === 'terminal' && s.view !== 'terminal' && terminals.get(s.id)?.ready && !terminals.get(s.id)?.viewInput && !viewClaims.has(s.id) && !disconnected && nativeUsable(s));
-}
+// For a session this window controls, the terminal takes keys whichever side the session's view is on, as the
+// conversation box takes text: the person, 2026-11-13: 「对于 Claude 和 codex 这样支持的,我希望两边的输入可以不要锁定」.
+// The view only says which side the person is on (where a held question goes); choosing a side gives no input right.
 function terminalCanInput(id) {
   const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id);
-  return Boolean(entry?.ready && currentTerminalDisplay(entry, record) && terminalContextVisible(id) && nativeUsable(record) && record?.owner === owner && record?.view === 'terminal' && !state?.roomStorageWarning && !disconnected);
+  return Boolean(entry?.ready && currentTerminalDisplay(entry, record) && terminalContextVisible(id) && nativeUsable(record) && record?.owner === owner && terminalViewAccepts(record) && !state?.roomStorageWarning && !disconnected);
 }
+// The window that controls a session types into its terminal whichever side the view is on (the person, 2026-11-13:
+// 两边的输入可以不要锁定). A service from before that (no eitherViewInput) still needs the view on the terminal side.
+function terminalViewAccepts(record) { return Boolean(record && (record.eitherViewInput || record.view === 'terminal')); }
 function currentTerminalDisplay(entry, record) {
   if (columnTerminalBinding(record?.id) && (!entry?.epoch || !record?.terminalState?.epoch || entry.nativeId !== record.nativeId || record.nativeContextPending)) return false;
   return entry?.generation === (record?.connectionRevision || 0) && (!record?.recovering || record.terminalState?.alive === true) &&
     record?.terminalState?.alive !== false && (!entry?.epoch || !record?.terminalState?.epoch || entry.epoch === record.terminalState.epoch);
 }
-function canCaptureTerminal(id) {
-  const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id), pending = entry?.viewInput;
-  return Boolean(pending && currentTerminalDisplay(entry, record) && pending.revision === selectionRevision && id === activeSessionId() && mode === 'terminal' && entry.ready && entry.generation === (record?.connectionRevision || 0) && nativeUsable(record) && record.owner === pending.owner && !state?.roomStorageWarning && !disconnected);
-}
-function cancelViewInput(entry, error = uiError("error.switchCancelled")) {
-  const pending = entry?.viewInput; if (!pending) return;
-  entry.viewInput = null; pending.cancelled = true;
-  if (pending.text) entry.preserveUnconfirmed(pending.text, error);
-  pending.reject(error);
-}
 function canFlushComposition(id, token = terminals.get(id)?.composition) {
   const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id);
-  return Boolean(token && currentTerminalDisplay(entry, record) && !token.cancelled && !token.consumed && entry?.composition === token && !entry.composing && entry.ready && entry.generation === (record?.connectionRevision || 0) && nativeUsable(record) && record.owner === owner && record.view === 'terminal' && !state?.roomStorageWarning && !disconnected);
-}
-// Input held while a terminal's view was being switched is over without being sent: the switch failed, another
-// view took control, or the session or connection changed. Redraw now, so the status stops saying it is held and
-// the terminal stops taking keys. If the keyboard is still in that terminal, which can no longer take it, move it to
-// the native pane itself: nothing there can be pressed, so the rest of what is being typed cannot retry the switch
-// and reach the terminal after all. Choosing 原生终端 again retries.
-function releaseHeldTerminal(id, entry) {
-  render();
-  const surface = entry?.element.isConnected && entry.element.querySelector('.terminal-surface');
-  if (!surface?.contains(document.activeElement) || terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id)) return;
-  entry.term.blur();
-  const pane = $('native-pane');
-  if (!pane.getClientRects().length) return;
-  if (!pane.hasAttribute('tabindex')) { pane.tabIndex = -1; pane.addEventListener('blur', () => pane.removeAttribute('tabindex'), { once: true }); }
-  pane.focus({ preventScroll: true });
+  return Boolean(token && currentTerminalDisplay(entry, record) && !token.cancelled && !token.consumed && entry?.composition === token && !entry.composing && entry.ready && entry.generation === (record?.connectionRevision || 0) && nativeUsable(record) && record.owner === owner && terminalViewAccepts(record) && !state?.roomStorageWarning && !disconnected);
 }
 function clearFailedTerminal(id) {
   const entry = terminals.get(id);
@@ -3466,7 +3438,7 @@ function showRoomRecords(related = false) {
   captureReadingViews(); rememberRoomMemberView(); suspendColumnInputs();
   const selection = document.getSelection();
   if (record && selection?.rangeCount && !selection.isCollapsed && $('messages').contains(selection.anchorNode)) roomRecordSelections.set(spaceId, selection.getRangeAt(0).cloneRange());
-  const leaving = terminals.get(activeSessionId()); cancelViewInput(leaving);
+  const leaving = terminals.get(activeSessionId());
   if (leaving?.composing) leaving.term.blur();
   selectionRevision++;
   roomRecordScope = record?.id || ''; roomRecordReturn = record ? { id: record.id, nativeId: record.nativeId || '' } : null;
@@ -4394,7 +4366,7 @@ function render() {
       }
       // The graphic follows the same layout state as the accessible name.
       $('terminal-maximize').toggleAttribute('data-restore', terminalLayout === 'maximized'); $('chat-maximize').toggleAttribute('data-restore', !terminalVisible);
-      ui.display.computed($('session-status'), 'text', () => `${s.archived ? uiText('native.archived') : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? uiText('native.codexUnverified', { version: s.nativeVersion || uiText('native.versionMissing') }) : ''}${claudePinText(s)}${s.activity ? ' · ' + (s.activityUiMessage ? ui.displayText(s.activity, s.activityUiMessage) : s.activity) : ''}${!own && s.owner && !s.ownerPageless ? uiText('native.otherWindow') : ''}${terminals.get(s.id)?.viewInput ? uiText('native.inputBuffered') : terminalUnclaimed(s, own, terminalVisible) ? uiText('native.terminalUnclaimed') : ''}`);
+      ui.display.computed($('session-status'), 'text', () => `${s.archived ? uiText('native.archived') : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? uiText('native.codexUnverified', { version: s.nativeVersion || uiText('native.versionMissing') }) : ''}${claudePinText(s)}${s.activity ? ' · ' + (s.activityUiMessage ? ui.displayText(s.activity, s.activityUiMessage) : s.activity) : ''}${!own && s.owner && !s.ownerPageless ? uiText('native.otherWindow') : ''}`);
       ui.display.computed($('session-status'), 'title', () => nativeVersionText(s));
       $('take-control').hidden = !heldElsewhere(s) || !alive;
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');
@@ -4500,7 +4472,7 @@ function render() {
       if (!$('mention-list').hidden && mentionRoster !== mentionRosterKey()) showMentions();
       renderRoomOverview();
     }
-    for (const [id, entry] of terminals) entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id));
+    for (const [id, entry] of terminals) entry.term.options.disableStdin = !(terminalCanInput(id) || canFlushComposition(id));
     const approvalTarget = sharedSurface() ? (s?.nativeApproval || s?.approval || s?.state === 'approval' ? s : members().find(person => person.id === roomRecipient())) : s;
     const approvalParent = sharedSurface() ? $('room-record-view') : $('conversation-pane');
     if ($('approval').parentElement !== approvalParent) approvalParent.prepend($('approval'));
@@ -4515,18 +4487,11 @@ async function switchMode(next, takeControl = false) {
   if (next === 'terminal' && terminalLayout === 'hidden' || next === 'chat' && terminalLayout === 'maximized') terminalLayout = 'split';
   const revision = ++selectionRevision;
   const entry = terminals.get(s.id);
-  cancelViewInput(entry);
   if (entry?.composing) entry.term.blur();
   const ending = entry?.composition;
   const stillSelected = () => revision === selectionRevision && activeSessionId() === s.id;
-  let queued, delivered = false;
-  if (next === 'terminal' && !ending && entry?.ready && currentTerminalDisplay(entry, s) && s.owner === owner) {
-    queued = { revision, owner: s.owner, text: '' };
-    queued.done = new Promise((resolve, reject) => { queued.resolve = resolve; queued.reject = reject; });
-    queued.done.catch(() => {});
-    entry.viewInput = queued; mode = 'terminal'; render(); focusTerminal(s.id);
-  }
-  if (next === 'terminal' && ending && s.view === 'terminal' && s.owner === owner) { mode = 'terminal'; render(); focusTerminal(s.id); }
+  // A terminal this window controls takes keys at once (terminalCanInput); the view change below only follows it.
+  if (next === 'terminal' && s.owner === owner && (ending || entry?.ready && currentTerminalDisplay(entry, s))) { mode = 'terminal'; render(); focusTerminal(s.id); }
   // Editing a GUI draft needs no native control change. Offer its focus now,
   // while the native view acknowledgement or origin composition finishes.
   if (next === 'chat') {
@@ -4541,21 +4506,11 @@ async function switchMode(next, takeControl = false) {
     if (!stillSelected()) return;
     if ((takeControl || !heldElsewhere(s)) && !await claimView(s.id, next, revision, takeControl)) return;
     if (!stillSelected()) return;
-    if (queued && (terminals.get(s.id) !== entry || entry.generation !== (state.sessions.find(x => x.id === s.id)?.connectionRevision || 0) || !terminalCanInput(s.id))) { render(); focusTerminal(s.id); return; }
-    if (queued && entry.viewInput === queued) {
-      const text = queued.text;
-      entry.viewInput = null;
-      try { if (text) await api.input(s.id, text); queued.resolve(); delivered = true; }
-      catch (error) { queued.reject(error); if (text) entry.preserveUnconfirmed(text, error); throw error; }
-    }
-    if (!stillSelected()) return;
     mode = next; preference = next; clearFailedTerminal(s.id); render(); await persistView();
     if (!stillSelected()) return;
     if (next === 'terminal') { await ensureTerminal(s.id, true); if (stillSelected()) focusTerminal(s.id); }
     else if (inputFocusAllowed()) chatInput().focus();
   } finally {
-    if (queued && entry.viewInput === queued) cancelViewInput(entry);
-    if (queued && !delivered) releaseHeldTerminal(s.id, entry);
     if (pendingMode?.revision === revision) { pendingMode = undefined; render(); }
   }
 }
@@ -4586,7 +4541,7 @@ async function ensureTerminal(id, explicit = false) {
   if (record?.recovering && !record.terminalAvailable && !record.terminalState?.alive) return;
   const generation = record?.connectionRevision || 0;
   const old = terminals.get(id);
-  if (old && (old.generation !== generation || old.nativeId !== record?.nativeId)) { old.term.dispose(); old.element.remove(); terminals.delete(id); cancelViewInput(old, uiError("error.nativeConnectionChanged")); }
+  if (old && (old.generation !== generation || old.nativeId !== record?.nativeId)) { old.term.dispose(); old.element.remove(); terminals.delete(id); }
   if (old?.waitingForFirstTurn && terminals.get(id) === old &&
       (record?.activeTurnId && record.activeTurnId !== old.firstTurnAttemptId || hasAssistantMessage(record) && !old.firstTurnHadOutput)) {
     // A first-message instruction never launched a display. Once that same
@@ -4598,7 +4553,7 @@ async function ensureTerminal(id, explicit = false) {
   if (explicit && old?.ready && terminals.get(id) === old && !currentTerminalDisplay(old, record)) {
     if (record.owner !== owner || record.backendUnavailable || record.transportDisconnected || disconnected) throw uiError("error.sessionControl");
     if (record.terminalState?.alive === false && !record.terminalState.exitConfirmed) throw uiError("error.oldTerminalPending");
-    cancelViewInput(old); old.term.dispose(); old.element.remove(); terminals.delete(id);
+    old.term.dispose(); old.element.remove(); terminals.delete(id);
   }
   if (!explicit && !terminals.has(id) && record?.terminalState?.alive === false) return;
   if (terminals.has(id)) { const existing = terminals.get(id); syncTerminalMount(id); if (existing.ready) fitTerminal(id); return existing.pending; }
@@ -4622,7 +4577,7 @@ async function ensureTerminal(id, explicit = false) {
   const selection = term._core?._selectionService, mouse = term._core?.coreMouseService;
   if (typeof selection?.shouldForceSelection === 'function') {
     const nativeForce = selection.shouldForceSelection.bind(selection);
-    selection.shouldForceSelection = event => (!terminalCanInput(id) && !canCaptureTerminal(id)) || mouse?.activeEncoding === 'DEFAULT' || nativeForce(event);
+    selection.shouldForceSelection = event => !terminalCanInput(id) || mouse?.activeEncoding === 'DEFAULT' || nativeForce(event);
   }
   const intent = selectionRevision;
   const entry = { element, term, fit, generation, nativeId: record?.nativeId, ready: false, sequence: 0, queued: [], firstTurnAttemptId: record?.activeTurnId, firstTurnHadOutput: hasAssistantMessage(record) }; terminals.set(id, entry); syncTerminalMount(id);
@@ -4672,21 +4627,6 @@ async function ensureTerminal(id, explicit = false) {
     if (/^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\[\??\d+;[0-4]\$y$/.test(data) || /^\x1b\[[IO]$/.test(data) || /^\x1b\]/.test(data)) return;
     const token = entry.composition;
     if (token?.cancelled) return;
-    if (entry.viewInput && !canCaptureTerminal(id)) {
-      const error = uiError("error.inputSwitchExpired");
-      cancelViewInput(entry, error); preserveUnconfirmed(data, error);
-      const commits = takeCommits(data, true), refused = Promise.reject(error); refused.catch(() => {});
-      if (token && !commits.includes(token)) commits.push(token);
-      for (const commit of commits) { commit.consumed = true; commit.input = refused; }
-      return;
-    }
-    if (canCaptureTerminal(id)) {
-      const pending = entry.viewInput;
-      if (pending.text.length + data.length > 65536) { cancelViewInput(entry, uiError("error.bufferTooLong")); preserveUnconfirmed(data, uiError("error.inputNotSent")); render(); return; }
-      pending.text += data;
-      for (const commit of takeCommits(data, true)) { commit.consumed = true; commit.input = pending.done; }
-      return;
-    }
     const finishing = canFlushComposition(id, token);
     if (terminals.get(id) !== entry || (!terminalCanInput(id) && !finishing)) return;
     // Also on this ordinary path: the next composition may have begun before xterm handed over these commits.
@@ -4717,12 +4657,12 @@ async function ensureTerminal(id, explicit = false) {
     return finishing ? [newest] : [];
   };
   let confirmingEnter = false, blurValue, compositionSequence = 0;
-  element.addEventListener('compositionstart', () => { entry.columnReading = false; entry.composing = true; compositionSequence++; entry.compositionIntent = entry.viewInput; entry.compositionOrigin = { cancelled: false }; }, true);
+  element.addEventListener('compositionstart', () => { entry.columnReading = false; entry.composing = true; compositionSequence++; entry.compositionOrigin = { cancelled: false }; }, true);
   element.addEventListener('compositionend', event => {
     entry.composing = false;
     // Bubble after xterm's target listener: its textarea commit timer must run
     // before this barrier. Microtasks can run between native event listeners.
-    const token = { sequence: compositionSequence, consumed: false, text: event.data, cancelled: Boolean(entry.compositionIntent?.cancelled || entry.compositionOrigin?.cancelled) };
+    const token = { sequence: compositionSequence, consumed: false, text: event.data, cancelled: Boolean(entry.compositionOrigin?.cancelled) };
     token.done = new Promise((resolve, reject) => setTimeout(async () => {
       try {
         if (!token.consumed && token.text) {

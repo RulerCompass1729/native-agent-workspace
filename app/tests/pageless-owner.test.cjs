@@ -156,6 +156,7 @@ test('over real Unix RPC a free claim leaves a session another open window holds
   const open = async (owner, options) => { const client = await connectService(dir, owner, options); clients.push(client); return client; };
   const agent = await open('hidden-request-window', { page: false }), person = await open('person-window'), other = await open('other-window');
   assert.ok((await person.call('initial')).capabilities.includes('freeClaimV1'));
+  assert.ok((await person.call('initial')).capabilities.includes('eitherViewInputV1'), 'The service says it takes terminal keys on either side of the view (887d9fea)');
   const id = await agent.call('create', { provider: 'codex', cwd: dir, name: 'Created in the background', view: 'chat' });
   const record = async () => (await person.call('initial')).sessions.find(s => s.id === id);
   const control = (await record()).controlRevision;

@@ -178,7 +178,8 @@ async function run() {
   });
   await unchangedNative(before, stateBefore);
   await header(a).locator('.collaboration-member-name').click();
-  assert.equal(await page.locator('#send-button').innerText(), '启用对话输入');
+  // 887d9fea: its conversation box is not locked while its view is on the terminal side.
+  assert.notEqual(await page.locator('#send-button').innerText(), '启用对话输入'); assert.equal(await page.locator('#message-input').evaluate(el => el.readOnly), false);
   await unchangedNative(before, stateBefore);
   await page.locator('#room-overview').click();
   assert.equal(await page.evaluate(() => getSelection().toString()), selectionBeforeFocus);

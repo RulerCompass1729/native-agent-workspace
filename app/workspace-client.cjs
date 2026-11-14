@@ -126,7 +126,10 @@ class WorkspaceClient extends EventEmitter {
         const approvals = (legacyCodex ? native?.connected && native.approvals : s.approvals) || (approval ? [approval] : []);
         const approvalOverflow = legacyCodex ? Boolean(native?.connected && native.approvalOverflow) : Boolean(s.approvalOverflow);
         // freeClaim: this session's service takes it for a window only while no other open window holds it.
-        ids.add(s.id); sessions.push({ ...s, peerIdentity: peerIdentity(s), freeClaim: e.state.runtimeVersion !== '0.1.0-alpha.2' && Boolean(e.state.capabilities?.includes('freeClaimV1')), legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
+        // eitherViewInput: its service takes terminal keys from the controlling window on either side of the view; a
+        // service from before that refuses them while the view is on the conversation side.
+        ids.add(s.id); sessions.push({ ...s, peerIdentity: peerIdentity(s), freeClaim: e.state.runtimeVersion !== '0.1.0-alpha.2' && Boolean(e.state.capabilities?.includes('freeClaimV1')),
+          eitherViewInput: e.state.runtimeVersion !== '0.1.0-alpha.2' && Boolean(e.state.capabilities?.includes('eitherViewInputV1')), legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
           nativeInputRequired: Boolean(s.nativeInputRequired || reader?.nativeInputRequired),
           failedTurnInputAvailable: Boolean(s.failedTurnInputAvailable || failedTurnInputAvailable),
