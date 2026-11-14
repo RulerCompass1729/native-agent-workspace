@@ -43,6 +43,63 @@ function successor(selected, entries) {
   }
 }
 
+// The rotation log's finished and kept replacements, the only lines the selection rule reads (the secretary, the
+// integrator and the butler designation all follow them). The log only grows, so each call reads only what was
+// added since the last one: a long log is read once, not on every call, and has no size past which the
+// designation is lost (it was 32 MB; review note 5, 2026-11-14). Memory is the kept lines and one read; every
+// line must still parse, as before, or the record is an error, never "nobody".
+const LOG_READ = 4 * 1024 * 1024, LOG_LINE_MAX = 1024 * 1024, LOG_FILES = 8, LOG_MARK = 256;
+const logs = new Map();
+function rotationEdges(logFile) {
+  // Open first, then judge what was opened: a link is refused and nothing can be swapped in between.
+  const fd = fs.openSync(logFile, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid() || stat.mode & 0o077) throw Error('Unsafe rotation log');
+    let state = logs.get(logFile);
+    // The bytes just before where the last call stopped, to tell a file written over in place from one added to.
+    const mark = Buffer.alloc(state ? Math.min(state.offset, LOG_MARK) : 0);
+    if (mark.length) fs.readSync(fd, mark, 0, mark.length, state.offset - mark.length);
+    // Another file at the path, one cut shorter or written over: read again from its start.
+    if (!state || state.dev !== stat.dev || state.ino !== stat.ino || stat.size < state.offset || !mark.equals(state.mark)) {
+      state = { dev: stat.dev, ino: stat.ino, offset: 0, entries: [], broken: false, mark: Buffer.alloc(0) };
+      logs.delete(logFile);
+      logs.set(logFile, state);
+      if (logs.size > LOG_FILES) logs.delete(logs.keys().next().value);
+    }
+    if (state.broken) throw Error('Unreadable rotation log');
+    const take = line => {
+      if (!line.trim()) return;
+      const entry = JSON.parse(line);
+      if (['done', 'kept'].includes(entry?.event)) state.entries.push(entry);
+    };
+    let rest = Buffer.alloc(0);
+    try {
+      while (state.offset + rest.length < stat.size) {
+        const buffer = Buffer.allocUnsafe(Math.min(LOG_READ, stat.size - state.offset - rest.length));
+        const read = fs.readSync(fd, buffer, 0, buffer.length, state.offset + rest.length);
+        if (!read) break;
+        const data = rest.length ? Buffer.concat([rest, buffer.subarray(0, read)]) : buffer.subarray(0, read);
+        let start = 0;
+        for (let end = data.indexOf(10); end !== -1; end = data.indexOf(10, start)) {
+          take(data.subarray(start, end).toString('utf8'));
+          start = end + 1;
+        }
+        state.offset += start;
+        // data starts where the mark ends, so a short step still leaves the last LOG_MARK bytes (review, 2026-11-14).
+        if (start) state.mark = Buffer.from(Buffer.concat([state.mark, data.subarray(0, start)]).subarray(-LOG_MARK));
+        rest = Buffer.from(data.subarray(start));
+        if (rest.length > LOG_LINE_MAX) throw Error('Rotation log line too long');
+      }
+    } catch (error) { state.broken = true; throw error; }
+    // A last line without its newline yet is read as it is now, and again next time.
+    // A copy: a caller cannot change what the next call returns.
+    if (!rest.toString('utf8').trim()) return state.entries.slice();
+    const entry = JSON.parse(rest.toString('utf8'));
+    return ['done', 'kept'].includes(entry?.event) ? state.entries.concat([entry]) : state.entries.slice();
+  } finally { fs.closeSync(fd); }
+}
+
 // Where a session's standing went, by the same log and the same rule as the selection, one step at a time:
 // the session that replaced it, with the time that replacement was logged, or the same session when no
 // finished, unambiguous replacement exists. `replaced` says whether the log holds a replacement of it at
@@ -51,8 +108,7 @@ function follow(logFile, value) {
   const from = identity(value);
   let entries = [];
   try {
-    const text = readPrivate(logFile, 32 * 1024 * 1024);
-    entries = text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
+    entries = rotationEdges(logFile);
   } catch (error) { if (error.code !== 'ENOENT') throw uiError('error.queue.secretaryState'); }
   const edges = entries.filter(entry => ['done', 'kept'].includes(entry?.event) && entry.old?.id === from.sessionId);
   const spaces = [...new Set(edges.flatMap(entry => Array.isArray(entry.spaces) ? entry.spaces.filter(id => typeof id === 'string') : []))];
@@ -84,8 +140,7 @@ class QueueSecretary {
     if (!this.selected) return null;
     let entries = [];
     try {
-      const text = readPrivate(this.logFile, 32 * 1024 * 1024);
-      entries = text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
+      entries = rotationEdges(this.logFile);
     } catch (error) { if (error.code !== 'ENOENT') throw uiError('error.queue.secretaryState'); }
     return successor(this.selected, entries);
   }
@@ -125,4 +180,4 @@ class QueueSecretary {
 function usableRecord(actor, records) {
   return records.find(record => record.id === actor?.id && record.nativeId === actor?.nativeId && !record.archived && !record.nativeContextPending && !['ended', 'background'].includes(record.state)) || null;
 }
-module.exports = { QueueSecretary, successor, follow };
+module.exports = { QueueSecretary, successor, follow, rotationEdges };

@@ -1725,6 +1725,44 @@ test('a Claude transcript gives the model its session last used, read from the e
   assert.equal(rules.transcriptModel({ ...session, provider: 'codex' }, root), null);
   assert.equal(rules.transcriptModel({ ...session, nativeId: '../escape' }, root), null);
 });
+// Queue 794d3cd7 follow-up: the record is where Claude reported it, or under the folder as resolved (/var is
+// /private/var on macOS), under CLAUDE_CONFIG_DIR when set; looked up as the compaction counter does.
+test('794d3cd7: a transcript Claude reported, or under the resolved folder, gives the model too', t => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-transcripts-')));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const root = path.join(base, 'projects');
+  const own = { type: 'assistant', sessionId: TRANSCRIPT_ID, isSidechain: false };
+  // Reported by the hook, under a folder no stored cwd names.
+  const reported = path.join(base, 'elsewhere', `${TRANSCRIPT_ID}.jsonl`);
+  fs.mkdirSync(path.dirname(reported), { recursive: true });
+  fs.writeFileSync(reported, JSON.stringify({ ...own, message: { model: 'claude-opus-5-5', content: [] } }) + '\n');
+  const session = { provider: 'claude', nativeId: TRANSCRIPT_ID, cwd: '/nowhere/work', nativeTranscript: reported };
+  assert.equal(rules.transcriptModel(session, root), 'claude-opus-5-5');
+  assert.equal(rules.transcriptModel({ ...session, cwd: undefined }, root), 'claude-opus-5-5', 'with no folder stored');
+  assert.equal(rules.transcriptModel({ ...session, nativeTranscript: path.join(base, 'elsewhere', 'other.jsonl') }, root), null, 'another file name');
+  assert.equal(rules.transcriptModel({ ...session, nativeTranscript: `elsewhere/${TRANSCRIPT_ID}.jsonl` }, root), null, 'a relative path');
+  // Stored through a link, written under the folder it resolves to.
+  const real = path.join(base, 'real');
+  fs.mkdirSync(real);
+  const link = path.join(base, 'link');
+  fs.symlinkSync(real, link);
+  transcriptAt(root, real, [{ ...own, message: { model: 'claude-sonnet-5-5', content: [] } }]);
+  assert.equal(rules.transcriptModel({ provider: 'claude', nativeId: TRANSCRIPT_ID, cwd: link }, root), 'claude-sonnet-5-5');
+  // The reported file comes first.
+  assert.equal(rules.transcriptModel({ provider: 'claude', nativeId: TRANSCRIPT_ID, cwd: link, nativeTranscript: reported }, root), 'claude-opus-5-5');
+});
+test('794d3cd7: the dispatcher reads transcripts under CLAUDE_CONFIG_DIR when it is set', t => {
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  t.after(() => {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+  });
+  process.env.CLAUDE_CONFIG_DIR = path.join(os.tmpdir(), 'naw-claude-config');
+  assert.equal(dispatcherSetup(t, []).dispatcher.transcriptRoot, path.join(os.tmpdir(), 'naw-claude-config', 'projects'));
+  delete process.env.CLAUDE_CONFIG_DIR;
+  assert.equal(dispatcherSetup(t, []).dispatcher.transcriptRoot, path.join(os.homedir(), '.claude', 'projects'));
+  assert.equal(dispatcherSetup(t, [], { transcriptRoot: '/given' }).dispatcher.transcriptRoot, '/given');
+});
 test('a resumed Claude session whose model is unreported continues with the model its transcript last used', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-transcripts-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -3469,4 +3507,191 @@ for (const outcome of ['delivered', 'refused', 'uncertain']) test(`an item marke
   assert.equal(room.queueFind('shared', second).status, 'sent');
   assert.equal(client.sends('b').length, 1);
   assert.deepEqual(faults, []);
+});
+
+// Queue 794d3cd7 (the person, 2026-11-13): a conversation compacted again and again continues in a new
+// session through the same handoff, without waiting out a successor's day of rest, and the butler between turns.
+function fakeCompactions(counts) {
+  const seen = [];
+  return { seen, counts, async sample(sessions) { seen.push(sessions.map(session => session.id)); return new Map(Object.entries(counts)); } };
+}
+
+test('794d3cd7: a member compacted COMPACT_LIMIT times is rotated before its next item, or after thirty quiet minutes', () => {
+  assert.equal(rules.COMPACT_LIMIT, 3);
+  assert.equal(rules.QUIET_COMPACT_MS, 2 * 60000);
+  const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
+  const counted = n => ({ compactions: new Map([['a', n]]) });
+  const dispatch = [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' }];
+  assert.deepEqual(plan(rooms, [member('a')], counted(3)), [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 3 }]);
+  assert.deepEqual(plan(rooms, [member('a')], counted(7)), [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 7 }]);
+  assert.deepEqual(plan(rooms, [member('a')], counted(2)), dispatch);
+  assert.deepEqual(plan(rooms, [member('a')]), dispatch, 'no count known');
+  assert.deepEqual(plan(rooms, [member('a')], { compactions: new Map([['a', '5']]) }), dispatch, 'not a count');
+  assert.deepEqual(plan(rooms, [member('a')], { ...counted(1), compactLimit: 1 }), [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 1 }]);
+  // A long conversation keeps its own reason and words when both apply.
+  assert.deepEqual(plan(rooms, [member('a', { messages: heavyMessages() })], counted(3)), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+  // With nothing queued, a member waits out the usual thirty quiet minutes: the person may be talking to it.
+  const idle = [{ id: 'shared', name: 'Team', queue: [] }];
+  assert.deepEqual(plan(idle, [member('a', { lastActivityAt: NOW - 30 * 60000 })], counted(3)), [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 3 }]);
+  assert.deepEqual(plan(idle, [member('a', { lastActivityAt: NOW - 29 * 60000 })], counted(3)), [], 'a member is not cut into at a pause');
+  assert.deepEqual(plan(idle, [member('a', { lastActivityAt: NOW - 2 * 60000 })], counted(3)), []);
+  assert.deepEqual(plan(idle, [member('a', { lastActivityAt: NOW - 2 * 60000 })], { ...counted(3), butler: 'other' }), [], 'only the butler itself');
+  // The butler in a space: between two turns.
+  assert.deepEqual(plan(idle, [member('a', { lastActivityAt: NOW - 2 * 60000 })], { ...counted(3), butler: 'a' }), [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 3 }]);
+  assert.deepEqual(plan(idle, [member('a', { lastActivityAt: NOW - 90000 })], { ...counted(3), butler: 'a' }), [], 'still within a pause between turns');
+  assert.deepEqual(plan(idle, [member('a', { lastActivityAt: NOW - 5 * 60000 })], { ...counted(3), butler: 'a', humanAt: new Map([['a', NOW - 60000]]) }), [], 'the person just wrote to it');
+  assert.deepEqual(plan(idle, [member('a', { lastActivityAt: NOW - 5 * 60000, state: 'working' })], { ...counted(3), butler: 'a' }), []);
+  // The butler's other reasons keep their thirty quiet minutes.
+  assert.deepEqual(plan(idle, [member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages(), lastActivityAt: NOW - 5 * 60000 })], { butler: 'a' }), []);
+  // The other reasons keep their thirty and ten quiet minutes.
+  const heavy = member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages(), lastActivityAt: NOW - 5 * 60000 });
+  assert.deepEqual(plan(idle, [heavy]), []);
+});
+
+test('794d3cd7: a successor resting its day is still rotated for its own compactions; an old kept, failed or held one is not', () => {
+  const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
+  const successor = { phase: 'kept', keptAt: NOW - HOUR, oldNativeId: 'native-a', name: 'Agent a', roomIds: ['shared'], successorOf: 'old' };
+  const compact = { compactions: new Map([['a', 3]]) };
+  const dispatch = [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' }];
+  assert.deepEqual(plan(rooms, [member('a')], { ...compact, rotations: { a: successor } }), [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 3 }]);
+  // Its day of rest still holds against a long conversation and against memory.
+  const heavy = member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages() });
+  assert.deepEqual(plan(rooms, [heavy], { rotations: { a: successor } }), dispatch);
+  const memory = { memory: new Map([['a', 2 * 1024 ** 3]]), memoryLimit: 1024 ** 3, memoryMinAgeMs: 0 };
+  assert.deepEqual(plan(rooms, [member('a')], memory), [{ kind: 'rotate', sessionId: 'a', reason: 'memory' }]);
+  assert.deepEqual(plan(rooms, [member('a')], { ...memory, rotations: { a: successor } }), dispatch);
+  // An old session kept running beside its successor, a failed rotation, a record under trust recovery,
+  // a handed-off, model-waiting or blocked session: no rotation.
+  const others = [
+    { rotations: { a: { phase: 'kept', keptAt: NOW - HOUR, oldNativeId: 'native-a', name: 'Agent a', roomIds: ['shared'] } } },
+    { rotations: { a: { phase: 'failed', failedAt: NOW - HOUR, oldNativeId: 'native-a', name: 'Agent a', roomIds: ['shared'] } } },
+    { rotations: { a: { ...successor, trustNoticeId: 'notice-1' } } },
+    { rotations: { a: { ...successor, phase: 'requested' } } },
+    { handedOff: new Set(['a']) },
+    { waitingModel: new Set(['a']) },
+    { blockedRotations: new Set(['a']) },
+  ];
+  for (const extra of others) {
+    const actions = plan(rooms, [member('a')], { ...compact, ...extra });
+    assert.equal(actions.some(action => action.kind === 'rotate'), false, JSON.stringify(extra, (key, value) => value instanceof Set ? [...value] : value));
+  }
+});
+
+test('794d3cd7: the butler outside every space is rotated for its compactions between two turns', () => {
+  const plain = [{ id: 'shared', name: 'Team' }];
+  const butler = extra => member('b', { roomIds: [], roomId: null, lastActivityAt: NOW - 2 * 60000, ...extra });
+  const counted = { compactions: new Map([['b', 3]]), outside: ['b'], butler: 'b' };
+  assert.deepEqual(plan(plain, [butler()], counted), [{ kind: 'rotate', sessionId: 'b', reason: 'compact', compactions: 3 }]);
+  assert.deepEqual(plan(plain, [butler({ lastActivityAt: NOW - 60000 })], counted), []);
+  assert.deepEqual(plan(plain, [butler()], { compactions: counted.compactions }), [], 'a session in no space only as the butler');
+  assert.deepEqual(plan(plain, [butler({ state: 'working' })], counted), []);
+});
+
+test('794d3cd7: the dispatcher names the butler for its pause wherever it is, only as the very native session designated', async t => {
+  let steward = { sessionId: 'b', nativeId: 'native-b', duty: 'D' };
+  const { dispatcher } = dispatcherSetup(t, [], { steward: () => steward });
+  const inside = member('b');
+  assert.equal(dispatcher.stewardSession([inside]).steward, steward);
+  assert.equal(dispatcher.stewardSession([member('b', { roomIds: [], roomId: null })]).steward, steward);
+  assert.equal(dispatcher.stewardSession([{ ...inside, nativeId: 'native-other' }]), null);
+  assert.equal(dispatcher.stewardSession([]), null);
+  steward = () => { throw Error('unreadable'); };
+  assert.equal(dispatcherSetup(t, [], { steward }).dispatcher.stewardSession([inside]), null);
+  // Through a tick: the butler in a space, compacted three times, two minutes quiet, is asked for its handoff.
+  let window = null;
+  const busy = { compactions: fakeCompactions({ b: 3 }), clients: () => window };
+  const quiet = member('b', { cwd: '/tmp', lastActivityAt: NOW - 3 * 60000 });
+  const asked = dispatcherSetup(t, [quiet], { ...busy, steward: () => ({ sessionId: 'b', nativeId: 'native-b', duty: 'D' }) });
+  window = asked.client;
+  await asked.dispatcher.start();
+  await asked.dispatcher.schedule();
+  assert.match(asked.client.sends('b').at(-1)?.[2] || '', /^【NAW 换会话】这个会话的上下文已压缩 3 次/);
+  // Another member the same: it waits its thirty minutes.
+  const other = dispatcherSetup(t, [member('b', { cwd: '/tmp', lastActivityAt: NOW - 3 * 60000 })], { ...busy, steward: () => null });
+  window = other.client;
+  await other.dispatcher.start();
+  await other.dispatcher.schedule();
+  assert.equal(other.client.sends('b').length, 0);
+});
+
+test('794d3cd7: compactions are counted only for the sessions a pass may rotate', () => {
+  const rooms = [{ id: 'shared', name: 'Team' }, { id: 'old', name: 'Old', archived: true }];
+  const sessions = [
+    member('a'), member('b', { roomIds: ['old'], roomId: null }), member('c', { roomIds: [], roomId: null }),
+    member('d', { roomIds: [], roomId: null }), member('e', { archived: true }), member('f', { provider: 'terminal' }), member('g'),
+    member('h', { provider: 'codex' }),
+  ];
+  const ids = rules.rotationSubjects(rooms, sessions, ['c', 'missing'], new Set(['g'])).map(session => session.id).sort();
+  assert.deepEqual(ids, ['a', 'c', 'h']);
+});
+
+test('794d3cd7: a compacted member is asked for its handoff in words that say why; other reasons keep their words', async t => {
+  const fake = fakeCompactions({ a: 3, z: 9 });
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { cwd: '/tmp' }), member('z', { roomIds: [], roomId: null })], { compactions: fake });
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  const request = client.sends('a')[0][2];
+  assert.match(request, /^【NAW 换会话】这个会话的上下文已压缩 3 次。为了不再一次次压缩上下文，NAW 会开一个新会话接着做/);
+  assert.doesNotMatch(request, /释放内存/);
+  assert.match(request, /只写交接/);
+  assert.equal(room.value.queue[0].status, 'queued', 'the queued item waits for the successor');
+  const requested = room.value.events.find(event => event.uiMessage?.key === 'notice.rotation.requested');
+  assert.match(requested.text, /NAW 换会话（这个会话的上下文已压缩 3 次）/);
+  const logged = fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(logged.some(entry => entry.event === 'requested' && entry.reason === 'compact'), 'the log keeps the reason');
+  assert.deepEqual(fake.seen[0], ['a'], 'a session in no space that is not the butler is not read');
+  assert.equal(client.sends('z').length, 0);
+  assert.match(rules.handoffRequestText('X'), /^【NAW 换会话】X。为了释放内存，NAW 会开一个新会话接着做/);
+  assert.match(rules.handoffRequestText('X', 'content'), /^【NAW 换会话】X。为了释放内存，/);
+});
+
+test('794d3cd7: a successor compacted three times is replaced again within its day; its own count starts at its own start', async t => {
+  const fake = fakeCompactions({ a: 3 });
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { cwd: '/tmp' })], { compactions: fake });
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  client.reply('a', '交接：在 feature 分支 abc123，下一步跑测试。');
+  await dispatcher.schedule();
+  const newId = client.state.sessions[1].id;
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'queue-dispatch.json'), 'utf8'));
+  assert.equal(saved.rotations[newId].successorOf, 'a', 'the successor rests its day');
+  client.reply(newId, '已核对交接。');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  assert.match(client.sends(newId).at(-1)[2], /next task/, 'the successor took the queue');
+  client.reply(newId, 'next task finished');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  assert.equal(fake.seen.at(-1).includes('a'), false, 'the old session is not read again');
+  // Fresh, it has not been compacted; the next item goes to it.
+  fake.counts[newId] = 2;
+  room.queueAdd('second task', newId);
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  assert.match(client.sends(newId).at(-1)[2], /second task/);
+  client.reply(newId, 'second task finished');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  // Its third compaction within the day: asked for its handoff before the next item.
+  fake.counts[newId] = 3;
+  room.queueAdd('third task', newId);
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  assert.match(client.sends(newId).at(-1)[2], /^【NAW 换会话】这个会话的上下文已压缩 3 次/);
+  assert.equal(room.value.queue.at(-1).status, 'queued');
+});
+
+test('794d3cd7: a counter that fails or answers in another shape changes nothing', async t => {
+  for (const compactions of [{ async sample() { throw Error('unreadable'); } }, { async sample() { return { a: 9 }; } }]) {
+    const { room, client, dispatcher } = dispatcherSetup(t, [member('a')], { compactions });
+    room.queueAdd('plain task', 'a');
+    await dispatcher.start();
+    await dispatcher.schedule();
+    assert.match(client.sends('a')[0][2], /【NAW 派活】[\s\S]*plain task/);
+  }
 });

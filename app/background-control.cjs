@@ -47,6 +47,18 @@ function compactRead(record) {
   if (record.guard?.auditRooms) record.guard = { auditRooms: record.guard.auditRooms };
   else delete record.guard;
 }
+// What goes back to the agent that called (main.cjs, at the outbox edge). `guard` is NAW's own copy of what was
+// shown and of every target session, kept to bind a confirmation, deliver and route the audit; the agent never needs
+// it, and it was most of the larger answers (queue 794d3cd7, measured on the person's 173 records on 2026-11-14: the
+// 20 with a guard over 1 KB went from 9.3 KB median, 14.9 KB at most, to 1.1 KB and 1.2 KB). call() still returns it.
+function agentReply(result) {
+  const without = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || !Object.hasOwn(value, 'guard')) return value;
+    const { guard: _guard, ...rest } = value; return rest;
+  };
+  const reply = without(result);
+  return reply?.receipt && typeof reply.receipt === 'object' ? { ...reply, receipt: without(reply.receipt) } : reply;
+}
 function readTarget(record, value) {
   if (spaceFileRead(record.command)) return { roomId: record.command.arguments[0], fileId: record.command.arguments[1] };
   const source = record.command.arguments?.[0];
@@ -874,4 +886,4 @@ function dialog(context, kind, options, nativeDialog) {
   }
   throw new ConfirmationRequired({ kind, options });
 }
-module.exports = { BackgroundControl, ConfirmationRequired, PreconditionRefused, validate, tool, dialog };
+module.exports = { BackgroundControl, ConfirmationRequired, PreconditionRefused, validate, tool, dialog, agentReply };

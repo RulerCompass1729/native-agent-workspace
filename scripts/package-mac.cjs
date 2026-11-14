@@ -125,6 +125,7 @@ async function build() {
       'codex-terminal-bridge.cjs',
       'codex-tool-content.cjs',
       'collaboration-spaces.cjs',
+      'compaction-count.cjs',
       'computer-use-outbox-broker.cjs',
       'computer-use-outbox-native.cjs',
       'computer-use-outbox-owner.cjs',
