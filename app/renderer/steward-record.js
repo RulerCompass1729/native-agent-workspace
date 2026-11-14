@@ -12,13 +12,23 @@
   function bind({ dialog, document, api, text, display, usageLines = null, language = () => 'zh' }) {
     const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
     const format = text || ((key, params) => locale.format('zh', key, params));
-    const say = (el, key, params) => { if (display) display.text(el, key, params); else el.textContent = format(key, params); return el; };
+    const say = (el, key, params) => { if (display) display.text(el, key, params); else el.textContent = format(key, typeof params === 'function' ? params() : params); return el; };
     const make = (tag, cls, key, params) => { const el = document.createElement(tag); if (cls) el.className = cls; if (key) say(el, key, params); return el; };
     const pad = n => String(n).padStart(2, '0');
     // Today's steps show the time; earlier ones the day too.
     const when = (at, now) => { const d = new Date(at), t = new Date(now); const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
       return d.toDateString() === t.toDateString() ? time : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`; };
     const dash = value => value || '—';
+    // A session archived now (steward-record.cjs flags it) is named with the marker, read when the line paints so it
+    // follows the language; the stored name itself is unchanged.
+    const marked = (entry, params) => () => {
+      const name = value => format('session.archivedName', { name: value });
+      const out = { ...params };
+      if (entry.nameArchived && entry.name && Object.hasOwn(out, 'name')) out.name = name(entry.name);
+      const target = entry.read ? entry.read.targetArchived && entry.read.target : entry.targetArchived && entry.target;
+      if (target && Object.hasOwn(out, 'target')) out.target = name(target);
+      return out;
+    };
     // What it did, in a sentence: the few things a butler does most by name, anything else as its command.
     function what(entry, now = Date.now()) {
       if (entry.kind === 'role') return [`stewardRecord.role.${ROLES.includes(entry.event) ? entry.event : 'started'}`, { name: dash(entry.name) }];
@@ -105,7 +115,7 @@
         for (const entry of entries) {
           const tr = make('tr', attention(entry) ? 'attention' : ''), time = make('td', 'steward-record-time'), step = make('td'), end = make('td', 'steward-record-result');
           tr.dataset.kind = entry.kind; time.textContent = when(entry.at, view.at);
-          const [key, params] = what(entry, view.at); say(step, key, params);
+          const [key, params] = what(entry, view.at); say(step, key, marked(entry, params));
           const outcome = result(entry); if (outcome) say(end, ...outcome);
           // NAW's own words for a step that failed or was refused by a rule, as the agent was told them.
           if (entry.error) { const why = make('small', 'steward-record-error'); why.textContent = entry.error; end.append(document.createElement('br'), why); }

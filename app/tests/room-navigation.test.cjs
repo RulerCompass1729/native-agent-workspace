@@ -36,7 +36,7 @@ function harness(){
  });
  $('shared-input').value='@Agent a UNSENT';$('recipient').value='a';
  const fields=source.match(/const roomViewFields = (\[[^;]+\]);/);assert.ok(fields);vm.runInContext(`const roomViewFields=${fields[1]};`,ctx);
- const names=['focusRoomMember','rememberRoomMemberView','restoreRoomMemberView','openRoomMember','timeline','timelineParticipants','filteredTimeline','showRoomRecords','returnRoomRecordMember','clearRoomRecordFilter','restoreRoomRecordFilter','renderTimeline','refreshRoomMemberTabs','roomMemberStatusKey','refreshRoomMemberStatus','openRoomMemberStatus','captureRoomView','persistedRoomViews'];
+ const names=['focusRoomMember','rememberRoomMemberView','restoreRoomMemberView','openRoomMember','timeline','timelineParticipants','filteredTimeline','showRoomRecords','returnRoomRecordMember','clearRoomRecordFilter','restoreRoomRecordFilter','renderTimeline','refreshRoomMemberTabs','roomMemberStatusKey','refreshRoomMemberStatus','openRoomMemberStatus','captureRoomView','persistedRoomViews','archivedName'];
  for(const name of ['roomRecentPreview','roomNavigationKey','memberTabClick','renderRoomMemberTabs'])if(source.includes('function '+name+'('))names.push(name);
  vm.runInContext(names.map(actual).join('\n'),ctx);vm.runInContext(source.split('\n').find(l=>l.startsWith('const roomReadingKey =')),ctx);ctx.renderSnapshotMaterials=()=>{};
  if(!ctx.renderRoomMemberTabs){const from=source.indexOf("      const tabs = $('room-member-tabs');",source.indexOf('function render()'));const tail='      refreshRoomMemberTabs(people);';const to=source.indexOf(tail,from);assert.ok(from>=0&&to>from);vm.runInContext('function renderRoomMemberTabs(){const people=orderedMembers();\n'+source.slice(from,to+tail.length)+'\n}',ctx)}

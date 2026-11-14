@@ -2493,7 +2493,8 @@ function renderSessionChain() {
   const focusedId = list.contains(document.activeElement) ? document.activeElement.closest('[data-session-id]')?.dataset.sessionId : null;
   const rows = (model?.sessions || []).map(link => {
     const row = node('li', undefined, 'session-chain-row'); row.dataset.sessionId = link.id;
-    const name = button(link.name, () => openSessionChainSegment(link.id), 'session-chain-name'); name.disabled = !link.record;
+    const name = button('', () => openSessionChainSegment(link.id), 'session-chain-name'); name.disabled = !link.record;
+    ui.display.computed(name, 'text', () => archivedName(link.record, link.name));
     if (model.currentIds.includes(link.id)) name.setAttribute('aria-current', 'true');
     const detail = node('small');
     ui.display.computed(detail, 'text', () => [
@@ -2515,15 +2516,16 @@ function renderSessionHandoff(binding, s) {
     binding.ui.form.prepend(binding.chainNotice);
   }
   const notice = binding.chainNotice; notice.hidden = false;
-  const signature = JSON.stringify([link.continuedAt, link.successors, model.sessions.map(s => [s.id, s.name, Boolean(s.record)])]);
+  const signature = JSON.stringify([link.continuedAt, link.successors, model.sessions.map(s => [s.id, s.name, Boolean(s.record), Boolean(s.record?.archived)])]);
   if (notice.dataset.signature === signature) return;
   notice.dataset.signature = signature;
   const text = node('span');
-  ui.display.computed(text, 'text', () => uiText('chain.handedTo', { name: link.successors.map(edge => model.sessions.find(s => s.id === edge.id)?.name || edge.id).join(' / ') }) +
+  const successor = id => { const next = model.sessions.find(s => s.id === id); return next ? archivedName(next.record, next.name) : id; };
+  ui.display.computed(text, 'text', () => uiText('chain.handedTo', { name: link.successors.map(edge => successor(edge.id)).join(' / ') }) +
     (link.continuedAt === null ? '' : ' · ' + uiText('chain.continued', { time: sessionChainTime(link.continuedAt) })));
   const jumps = link.successors.map(edge => {
     const next = model.sessions.find(s => s.id === edge.id);
-    const jump = uiButton('chain.openNext', () => openSessionChainSegment(edge.id), 'small', { name: next?.name || edge.id });
+    const jump = uiButton('chain.openNext', () => openSessionChainSegment(edge.id), 'small', () => ({ name: successor(edge.id) }));
     jump.disabled = !next?.record; return jump;
   });
   const focused = notice.contains(document.activeElement) ? [...notice.children].indexOf(document.activeElement) : -1;
@@ -2531,9 +2533,10 @@ function renderSessionHandoff(binding, s) {
   if (focused > 0) notice.children[focused]?.focus({ preventScroll: true });
 }
 async function archiveChainSession(id) {
-  const others = sessionChainModel(id)?.sessions.filter(link => link.id !== id).map(link => link.name) || [];
+  const others = sessionChainModel(id)?.sessions.filter(link => link.id !== id) || [];
   await api.archiveSession(id);
-  if (others.length) toastMessage('chain.archiveNotice', { names: others.join(' / ') });
+  // Read the archived flags when the notice paints: the segments archived before this one carry the marker.
+  if (others.length) toastMessage('chain.archiveNotice', () => ({ names: others.map(link => archivedName(state.sessions.find(s => s.id === link.id), link.name)).join(' / ') }));
   else toastMessage('toast.sessionArchived');
 }
 function sessionMenuModel(id, row) {
@@ -3237,7 +3240,8 @@ function renderArchives() {
   for (const s of records) {
     const row = node('div', undefined, 'archive-item'); row.dataset.archivedSession = s.id;
     const info = node('small'); ui.display.computed(info, 'text', () => `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${stateText(s)}${uiText(['ended', 'recoverable'].includes(s.state) ? 'archive.continueHistory' : 'archive.processRetained')} · ${sessionTimes(s)}`);
-    row.append(node('strong', participantLabel(s, state.sessions)), info);
+    const name = node('strong'); ui.display.computed(name, 'text', () => participantLabel(s, state.sessions));
+    row.append(name, info);
     const actions = node('div', undefined, 'archive-session-actions');
     if (sessionChainModel(s.id)) actions.append(uiButton('chain.title', () => openSessionChain(s.id)));
     actions.append(uiButton('archive.restoreSession', () => restoreArchivedSession(s.id)));
@@ -3354,8 +3358,14 @@ function populateSelect(el, items) {
   el.title = el.selectedOptions[0]?.textContent || '';
 }
 function participantLabel(session, people = members()) {
-  return people.filter(s => s.name === session.name).length > 1 ? `${session.name} · ${session.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(session.id)}` : session.name;
+  return archivedName(session, people.filter(s => s.name === session.name).length > 1 ? `${session.name} · ${session.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(session.id)}` : session.name);
 }
+// An archived session keeps its stored name. Only what people read gets the
+// marker, worked out from the archived flag, so restoring a session drops it.
+function archivedName(record, name = record?.name) {
+  return record?.archived ? uiText('session.archivedName', { name }) : name;
+}
+function sessionWindowTitle(s) { return `${s?.name ? archivedName(s) : 'Native Workspace'} — Native Agent Workspace`; }
 function historicalParticipantLabel(name, id) {
   return `${name || uiText('identity.historicalMember')}${typeof id === 'string' && id ? ` · ${id.slice(0, 6)}` : uiText('identity.unrecorded')}`;
 }
@@ -3492,11 +3502,11 @@ function renderTimeline() {
   // Preserve an explicitly saved historical view even when its source is no
   // longer loaded. A person may clear it; opening records must not do so.
   if (chosen && !candidates.has(chosen)) candidates.set(chosen, null);
-  const filterSignature = JSON.stringify([...candidates].map(([id, name]) => [id, name, members().some(s => s.id === id)]));
+  const filterSignature = JSON.stringify([...candidates].map(([id, name]) => [id, name, members().some(s => s.id === id), Boolean(state.sessions.find(s => s.id === id)?.archived)]));
   if (filter.dataset.signature !== filterSignature) {
     filter.replaceChildren(uiNode('option', 'room.allMembers'));
     filter.firstChild.value = '';
-    for (const [id, name] of candidates) { const option = node('option'); ui.display.computed(option, 'text', () => `${name || uiText('identity.historicalMember')}${members().some(s => s.id === id) ? '' : uiText('room.detachedSuffix')} · ${id.slice(0, 6)}`); option.value = id; filter.append(option); }
+    for (const [id, name] of candidates) { const option = node('option'); ui.display.computed(option, 'text', () => `${name ? archivedName(state.sessions.find(s => s.id === id), name) : uiText('identity.historicalMember')}${members().some(s => s.id === id) ? '' : uiText('room.detachedSuffix')} · ${id.slice(0, 6)}`); option.value = id; filter.append(option); }
     filter.dataset.signature = filterSignature;
   }
   filter.value = candidates.has(chosen) ? chosen : '';
@@ -3511,7 +3521,7 @@ function renderTimeline() {
   $('room-record-clear').hidden = roomRecordReturn ? !roomRecordScope : !(roomRecordScope || chosen || $('room-search').value || roomThread);
   $('room-record-restore').hidden = !roomFilterHistory || Boolean(roomRecordReturn || roomRecordScope || chosen || $('room-search').value || roomThread);
   const messages = filteredTimeline();
-  const signature = JSON.stringify([messages, state.sessions.map(s => [s.id, s.name]), filter.value, $('room-search').value, roomThread, [...roomThreads.groups].map(([id, rows]) => [id, rows.length])]);
+  const signature = JSON.stringify([messages, state.sessions.map(s => [s.id, s.name, Boolean(s.archived)]), filter.value, $('room-search').value, roomThread, [...roomThreads.groups].map(([id, rows]) => [id, rows.length])]);
   if (signature !== lastRoomMessages) { messageList($('room-messages'), messages, true, roomReadingKey()); lastRoomMessages = signature; }
   const filtered = roomRecordScope || !roomRecordReturn && (filter.value || $('room-search').value || roomThread);
   ui.display.text($('timeline-count'), filtered ? 'room.filteredRecordCount' : 'room.recordCount', { count: messages.length, total: timeline().length }); $('copy-timeline').disabled = !messages.length;
@@ -3870,7 +3880,7 @@ function renderHeaderLayout(s, inRoom) {
   $('conversation-pane-toolbar').hidden = !compact;
   $('terminal-more').hidden = !compact;
   $('title').tabIndex = compact || compactRoom || focusedMember ? 0 : -1;
-  ui.display.computed($('title'), 'title', () => compact ? s.name : compactRoom || focusedMember ? state.room.unavailable ? uiText('space.unavailable') : spaceName(state.room) : '');
+  ui.display.computed($('title'), 'title', () => compact ? archivedName(s) : compactRoom || focusedMember ? state.room.unavailable ? uiText('space.unavailable') : spaceName(state.room) : '');
   $('title').onfocus = () => { if (header.classList.contains('compact-room') || header.classList.contains('focused-member')) { captureReadingViews(); restoreOverviewReading(); header.classList.add('reveal-room-title'); } };
   $('title').onblur = () => { if (header.classList.contains('reveal-room-title')) { captureReadingViews(); restoreOverviewReading(); header.classList.remove('reveal-room-title'); } };
   if (!compactRoom && !focusedMember) header.classList.remove('reveal-room-title');
@@ -4320,7 +4330,7 @@ function render() {
     $('chat-tab').parentElement.hidden = inRoom && !memberFocus;
     $('session-files').hidden = inRoom && !memberFocus;
     $('member-related-records').hidden = !memberFocus;
-    document.title = `${s?.name || 'Native Workspace'} — Native Agent Workspace`;
+    document.title = sessionWindowTitle(s);
     $('welcome').hidden = Boolean(s || inRoom || inPanorama); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
     $('panorama-view').hidden = !inPanorama;
     $('panorama-nav').classList.toggle('active', inPanorama);
@@ -4328,7 +4338,7 @@ function render() {
     $('return-panorama').hidden = !panoramaView.returning || inPanorama;
     if (inRoom && state.room.unavailable) ui.display.text($('title'), 'space.unavailable');
     else if (inRoom) ui.display.computed($('title'), 'text', () => spaceName(state.room));
-    else if (s?.name) { ui.display.unbind($('title')); $('title').textContent = s.name; }
+    else if (s?.name) ui.display.computed($('title'), 'text', () => archivedName(s));
     else ui.display.text($('title'), 'header.workspace');
     const warningText = (raw, message) => message ? ui.displayText(raw, message) : raw;
     const warning = () => [disconnected ? uiText('error.serviceDisconnectedNotice') : [warningText(state.storageWarning, state.storageWarningUiMessage), warningText(state.sessionNameWarning, state.sessionNameWarningUiMessage), warningText(state.roomStorageWarning, state.roomStorageWarningUiMessage), warningText(state.programWarning, state.programWarningUiMessage)].filter(Boolean).join(' '), warningText(state.viewStorageWarning, state.viewStorageWarningUiMessage)].filter(Boolean).join(' ');
@@ -4374,7 +4384,7 @@ function render() {
       $('interrupt').disabled = interruptPending(s);
       readLegacyProgress(s);
       const visibleMessages = sessionMessages(s);
-      const signature = JSON.stringify([s.name, visibleMessages, !visibleMessages.length && [s.state, Boolean(s.nativeApproval)]]);
+      const signature = JSON.stringify([s.name, state.sessions.filter(x => x.archived).map(x => x.id), visibleMessages, !visibleMessages.length && [s.state, Boolean(s.nativeApproval)]]);
       const readingKey = focusedReadingKey(s.id);
       // select() waits for the messages; should they still be missing, the list is hidden, never "no messages".
       if (s.messagesOmitted) { $('messages').hidden = true; lastMessages = ''; }
@@ -5297,7 +5307,7 @@ function queueHandoffModel(id) {
   for (const record of state.sessions) {
     if (inSpace(record, id) && !record.archived && record.state !== 'ended') members.push(record.id);
   }
-  return window.nativeWorkspaceHandoffQueue.model({ view: handoffView.view, failed: handoffView.failed === true, queue: spaceRecord(id)?.queue || [], sessions: state.sessions, members,
+  return window.nativeWorkspaceHandoffQueue.model({ view: handoffView.view, failed: handoffView.failed === true, queue: spaceRecord(id)?.queue || [], sessions: state.sessions.map(s => s.archived ? { ...s, name: archivedName(s) } : s), members,
     integrator: state.integrator || null, unnamed: uiText('identity.historicalMember'), generic: uiText('queue.handoff.theIntegrator'), dropping: queueDropping });
 }
 // The button that opens the panel says how many things in this space wait for the person.
@@ -5452,7 +5462,7 @@ function renderQueueHandoff(block) {
 function queueMemberName(id) {
   const record = state.sessions.find(s => s.id === id);
   if (record) {
-    return record.name;
+    return archivedName(record);
   }
   return sessionShortId(id);
 }
@@ -5512,10 +5522,9 @@ function queueRow(item, memberIds) {
   const creatorParams = creator?.kind === 'secretary' ? { name: creator.name, sessionId: creator.sessionId } : undefined;
   body.append(uiNode('div', creatorKey, creatorParams, 'queue-creator quiet'), node('div', text));
   let name = '';
-  if (item.sentTo) {
-    name = queueMemberName(item.sentTo);
-  } else if (item.assignee) {
-    name = queueMemberName(item.assignee);
+  const memberId = item.sentTo || item.assignee;
+  if (memberId) {
+    name = queueMemberName(memberId);
   }
   let statusKey = 'queue.status.' + item.status;
   // These two waiting kinds ask the person nothing: the item is left for them to look at (11-12). They are named
@@ -5530,7 +5539,8 @@ function queueRow(item, memberIds) {
   if (item.finishedBy === 'steward' && item.status === 'done') statusKey = 'queue.status.doneBySteward';
   let statusParams;
   if (statusKey !== 'queue.status.orphan' && statusKey !== 'queue.status.queued' && statusKey !== 'queue.status.cancelled' && statusKey !== 'queue.status.cancelledBySteward') {
-    statusParams = () => ({ name });
+    // Read again when the language changes: an archived member's marker is in the person's language.
+    statusParams = () => ({ name: memberId ? queueMemberName(memberId) : '' });
   }
   const status = uiNode('span', statusKey, statusParams, 'queue-status');
   if (name) {
@@ -5666,7 +5676,8 @@ function renderRotationChains() {
     }
   }
   host.hidden = chains.length === 0;
-  const signature = JSON.stringify(chains);
+  // Archiving or restoring a session in a chain changes its marker; the recorded chain itself does not change.
+  const signature = JSON.stringify([chains, chains.map(chain => chain.sessions.map(link => Boolean(state.sessions.find(s => s.id === link.id)?.archived)))]);
   if (list.dataset.signature === signature) return;
   list.dataset.signature = signature;
   const blocks = [];
@@ -5676,15 +5687,13 @@ function renderRotationChains() {
       const row = node('li');
       const id = link.id || '';
       const shortId = id ? sessionShortId(id) : '';
-      let name = link.name || '';
-      if (!name) {
-        name = queueMemberName(id);
-      }
+      const record = state.sessions.find(s => s.id === id);
+      const name = link.name || (record ? record.name : sessionShortId(id));
       let native = '—';
       if (link.nativeId) {
         native = link.nativeId.slice(0, 8);
       }
-      row.append(uiNode('span', 'queue.chainSession', { name, id: shortId, native }));
+      row.append(uiNode('span', 'queue.chainSession', () => ({ name: archivedName(record, name), id: shortId, native })));
       if (link.handedAt) {
         const time = new Date(link.handedAt).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         let key = 'queue.chainHanded';
@@ -6281,7 +6290,7 @@ for (const dialog of document.querySelectorAll('dialog')) {
 $('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').onclick = () => attempt(showSetup);
 $('close-setup').onclick = () => $('setup-dialog').close();
 $('ui-language').onchange = event => { void changeInterfaceLanguage(event.target.value); };
-disposers.push(ui.language.subscribe(() => { renderInterfaceLanguage(); renderSetupPrograms(true); butlerReviewView.refresh(); if (selected === 'panorama') document.title = uiText('panorama.windowTitle'); }));
+disposers.push(ui.language.subscribe(() => { renderInterfaceLanguage(); renderSetupPrograms(true); butlerReviewView.refresh(); if (selected === 'panorama') document.title = uiText('panorama.windowTitle'); else if (current()?.archived) document.title = sessionWindowTitle(current()); }));
 disposers.push(api.onLocale(value => { if (!value || typeof value !== 'object') return; languageWarning = ['unavailable', 'migrationNotSaved'].includes(value.warning) ? value.warning : null; if (!languageWarning) notifiedLanguageWarning = undefined; renderInterfaceLanguage(); reportLanguageWarning(); }));
 renderInterfaceLanguage();
 

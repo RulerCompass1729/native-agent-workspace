@@ -79,6 +79,8 @@ for (const column of [false, true]) test(`an ended rotated segment keeps its han
   });
   vm.runInContext(renderer.slice(renderer.indexOf('// Only recorded NAW handoffs'), renderer.indexOf('function renderDraftRecovery(')), f.context);
   vm.runInContext(renderer.slice(renderer.indexOf('function sessionChainTime('), renderer.indexOf('function sessionMenuModel(')), f.context);
+  // The notice names the successor as people read it (an archived one carries the marker): the production helper.
+  vm.runInContext(renderer.slice(renderer.indexOf('function archivedName('), renderer.indexOf('function sessionWindowTitle(')), f.context);
   const paint = () => column ? f.paint(true) : f.context.renderComposer(f.record);
   assert.equal(f.binding.ui.form, f.form, 'session-composer.create exposes the actual input form');
   f.input.event('compositionstart'); paint();

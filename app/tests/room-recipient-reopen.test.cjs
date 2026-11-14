@@ -48,7 +48,7 @@ function fixture(records, spaceId) {
     api: new Proxy({}, { get: (_, method) => (...args) => { calls.push([method, args]); throw Error('No dispatch/native API is allowed'); } }),
   });
   const constants = ['inSpace', 'pairRevision', 'storedSpaces', 'spaceRecord', 'roomViewFields', 'focusedRoomMember', 'activeSessionId', 'current', 'members'];
-  const functions = ['roomRecentPreview', 'participantLabel', 'populateSelect', 'rememberRoomMemberView', 'restoreRoomMemberView', 'captureRoomView', 'restoreRoomView', 'persistedRoomViews', 'roomRecipient', 'normalizeRoomMention', 'closeMentions', 'chooseMention'];
+  const functions = ['roomRecentPreview', 'participantLabel', 'archivedName', 'populateSelect', 'rememberRoomMemberView', 'restoreRoomMemberView', 'captureRoomView', 'restoreRoomView', 'persistedRoomViews', 'roomRecipient', 'normalizeRoomMention', 'closeMentions', 'chooseMention'];
   vm.runInContext(constants.map(actualConst).concat(functions.map(actualFunction)).join('\n'), context);
   return { context, element, calls };
 }

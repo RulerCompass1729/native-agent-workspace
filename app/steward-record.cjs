@@ -217,31 +217,34 @@ function cachedSteward(role) {
 function view(record, snapshot, { current = null, stateOf = () => null, readOf = () => null, wake = null, limit = 300, now = Date.now() } = {}) {
   const sessions = new Map((snapshot?.sessions || []).map(s => [s.id, s])), rooms = new Map([snapshot?.room, ...(snapshot?.rooms || [])].filter(Boolean).map(r => [r.id || 'shared', r]));
   const nameOf = id => typeof id === 'string' && sessions.has(id) ? sessions.get(id).name : null;
+  // A session archived now keeps its stored name here; the dialog adds the marker in the person's language.
+  // The flag is there only when it is archived, so a restored session drops it.
+  const archived = (id, flag = 'targetArchived') => typeof id === 'string' && sessions.get(id)?.archived ? { [flag]: true } : {};
   const spaceOf = id => typeof id === 'string' && rooms.has(id) ? rooms.get(id).name || id : null;
   const cut = value => typeof value === 'string' ? (value.length > 300 ? value.slice(0, 300) + '…' : value) : null;
   const entries = record.entries({ stateOf }).map(entry => {
-    if (entry.kind === 'role') return { at: entry.at, kind: 'role', event: entry.event, name: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null };
+    if (entry.kind === 'role') return { at: entry.at, kind: 'role', event: entry.event, name: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null, ...archived(entry.session?.id, 'nameArchived') };
     // NAW woke the butler of that time: whom, and whether the message went out. Not the position it named.
-    if (entry.kind === 'wake') return { at: entry.at, kind: 'wake', target: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null, state: entry.state, error: cut(entry.error), recorded: entry.recorded };
+    if (entry.kind === 'wake') return { at: entry.at, kind: 'wake', target: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null, ...archived(entry.session?.id), state: entry.state, error: cut(entry.error), recorded: entry.recorded };
     if (entry.kind === 'wakeSwitch') return { at: entry.at, kind: 'wakeSwitch', on: entry.on };
     let args = null; try { args = entry.arguments === null ? null : JSON.parse(entry.arguments); } catch { args = null; }
     const out = { at: entry.at, kind: entry.action === 'snapshot' ? 'snapshot' : 'invoke', method: entry.method, state: entry.state, reason: entry.reason, error: cut(entry.error), duplicate: entry.duplicate, recorded: entry.recorded };
     if (entry.method === 'spaceAction' && Array.isArray(args)) {
       Object.assign(out, { space: spaceOf(args[0]) || (typeof args[0] === 'string' ? args[0] : null), spaceAction: typeof args[1] === 'string' ? args[1].slice(0, 40) : null });
-      if (args[1] === 'queueAdd' && Array.isArray(args[2])) Object.assign(out, { text: cut(args[2][0]), target: nameOf(args[2][1]) });
+      if (args[1] === 'queueAdd' && Array.isArray(args[2])) Object.assign(out, { text: cut(args[2][0]), target: nameOf(args[2][1]), ...archived(args[2][1]) });
     } else if (entry.method === 'stewardWake' && Array.isArray(args)) {
       // The butler's own call on NAW's switch for waking it: turned on, turned off, or only looked at how it stands.
       out.wake = args.length === 0 ? 'check' : args.length === 1 && typeof args[0] === 'boolean' ? (args[0] ? 'on' : 'off') : null;
-    } else if (Array.isArray(args) && entry.method !== 'stewardEvents') out.target = nameOf(args[0]);
+    } else if (Array.isArray(args) && entry.method !== 'stewardEvents') Object.assign(out, { target: nameOf(args[0]), ...archived(args[0]) });
     // A read of another session's conversation (a snapshot NAW ran as `initial`, or one of its images): whom it read,
     // from what NAW actually ran rather than what was asked, and how far.
     if (entry.action === 'snapshot' || ['initial', 'previewImage'].includes(entry.method)) {
       let read = null; try { read = entry.operationId ? readOf(entry) : null; } catch { read = null; }
-      if (read?.gone === true) { out.read = { gone: true, image: entry.method === 'previewImage' }; delete out.target; }
+      if (read?.gone === true) { out.read = { gone: true, image: entry.method === 'previewImage' }; delete out.target; delete out.targetArchived; }
       else if (read && typeof read.sessionId === 'string' && read.sessionId) {
         out.read = { target: nameOf(read.sessionId) || (typeof read.name === 'string' ? read.name : null) || read.sessionId.slice(0, 8), image: entry.method === 'previewImage',
-          messages: Number.isSafeInteger(read.messages) ? read.messages : null, through: Number.isSafeInteger(read.through) ? read.through : null, unasked: read.unasked === true };
-        delete out.target;
+          messages: Number.isSafeInteger(read.messages) ? read.messages : null, through: Number.isSafeInteger(read.through) ? read.through : null, unasked: read.unasked === true, ...archived(read.sessionId) };
+        delete out.target; delete out.targetArchived;
       }
     }
     return out;
@@ -252,7 +255,7 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
     for (const row of s?.messages || []) {
       const wake = row.wake;
       if (!wake || wake.senderId !== period.session.id || wake.nativeId !== period.session.nativeId || !Number.isSafeInteger(wake.time) || wake.time < period.from || (period.to !== null && wake.time >= period.to)) continue;
-      entries.push({ at: wake.time, kind: 'message', target: nameOf(wake.recipientId), text: cut(wake.body), state: typeof wake.status === 'string' ? wake.status : null });
+      entries.push({ at: wake.time, kind: 'message', target: nameOf(wake.recipientId), ...archived(wake.recipientId), text: cut(wake.body), state: typeof wake.status === 'string' ? wake.status : null });
     }
   }
   entries.sort((a, b) => b.at - a.at);

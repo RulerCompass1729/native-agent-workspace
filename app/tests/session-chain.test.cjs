@@ -157,6 +157,10 @@ function uiFixture(entries, sessions) {
   const start = renderer.indexOf('function sessionChainTime('), end = renderer.indexOf('function sessionMenuModel(', start);
   assert.ok(start >= 0 && end > start, 'Production chain UI helpers must be present');
   vm.runInContext(renderer.slice(start, end), f.context);
+  // The production marker for an archived session's name (it reads the archived flag and the UI language).
+  const marker = renderer.indexOf('function archivedName('), markerEnd = renderer.indexOf('\n}\n', marker) + 3;
+  assert.ok(marker >= 0 && markerEnd > marker, 'Production archived-name marker must be present');
+  vm.runInContext(renderer.slice(marker, markerEnd), f.context);
   return { ...f, $, root, node, document, actions, notices,
     switch(language) { locale.setLanguage(language); locale.ui.display.refresh(root); },
   };
@@ -170,7 +174,9 @@ test('the same chain list opens from either end and opens an archived segment as
   assert.equal(f.$('session-chain-dialog').open, true);
   const rows = f.$('session-chain-list').children;
   assert.deepEqual(rows.map(row => row.dataset.sessionId), ['old', 'new']);
-  assert.equal(rows[0].children[0].textContent, old.name);
+  // The archived segment is marked in front of its unchanged stored name (the user, 11-13: 「[archived]」 before archived names).
+  assert.equal(rows[0].children[0].textContent, '[已归档] ' + old.name);
+  assert.equal(rows[1].children[0].textContent, 'new');
   assert.match(rows[0].textContent, /已归档/);
   assert.equal(rows[0].children[0].getAttribute('aria-current'), null);
   assert.equal(rows[1].children[0].getAttribute('aria-current'), 'true');
@@ -208,7 +214,9 @@ test('chain text switches language in place without navigating or changing raw n
   rows[0].children[0].focus(); const focused = f.document.activeElement;
   f.switch('en');
   assert.deepEqual(list.children, rows);
-  assert.deepEqual(rows.map(row => row.children[0].textContent), names);
+  // Only the archived marker follows the language; the stored names themselves stay byte for byte.
+  assert.deepEqual(names, ['[已归档] old', 'RAW 中文 <new> {name}']);
+  assert.deepEqual(rows.map(row => row.children[0].textContent), ['[archived] old', 'RAW 中文 <new> {name}']);
   assert.match(rows[0].textContent, /Archived/);
   assert.match(rows[0].textContent, /Conversation after handoff/);
   assert.match(rows[1].textContent, /Current segment/);
@@ -249,6 +257,21 @@ test('the old-segment notice preserves the composer, marks later messages and ju
   assert.equal(binding.chainNotice.hidden, true);
 });
 
+// Archived or restored elsewhere (another window, the butler) while the old segment is open: the notice follows the flag.
+test('the handoff notice repaints its successor\'s archived marker when that successor is archived or restored', () => {
+  const old = session('old', 0, { state: 'ended' }), next = session('new', 100, { name: '秘书 · 续' });
+  const f = uiFixture([handoff('old', 'new', 100)], [old, next]);
+  const form = f.node('form'); f.root.append(form);
+  const binding = { ui: { form } }, before = JSON.stringify(f.state);
+  f.context.renderSessionHandoff(binding, old);
+  assert.match(binding.chainNotice.textContent, /这段已交给「秘书 · 续」/);
+  next.archived = true; f.context.renderSessionHandoff(binding, old);
+  assert.match(binding.chainNotice.textContent, /这段已交给「\[已归档\] 秘书 · 续」/);
+  delete next.archived; f.context.renderSessionHandoff(binding, old);
+  assert.match(binding.chainNotice.textContent, /这段已交给「秘书 · 续」/);
+  assert.equal(JSON.stringify(f.state), before);
+});
+
 test('archiving one segment names its siblings and archives exactly that segment once', async () => {
   const f = uiFixture([handoff('old', 'middle', 100), handoff('middle', 'latest', 200)], [session('old'), session('middle', 100), session('latest', 200)]);
   const before = JSON.stringify(f.state);
@@ -256,8 +279,13 @@ test('archiving one segment names its siblings and archives exactly that segment
   assert.deepEqual(f.actions, [['archive', 'latest']]);
   assert.equal(f.notices.length, 1);
   assert.equal(f.notices[0].key, 'chain.archiveNotice');
-  assert.equal(f.notices[0].params.names, 'old / middle');
+  assert.equal(f.notices[0].params().names, 'old / middle');
   assert.equal(JSON.stringify(f.state), before);
+  // A sibling archived earlier is named with the marker when the notice paints, in the language shown then.
+  f.state.sessions.find(s => s.id === 'old').archived = true;
+  assert.equal(f.notices[0].params().names, '[已归档] old / middle');
+  f.switch('en');
+  assert.equal(f.notices[0].params().names, '[archived] old / middle');
 });
 
 test('missing recorded segments stay visible but disabled; stale clicks do not navigate', async () => {
