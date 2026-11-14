@@ -163,6 +163,8 @@ const MAX_ACTIVE_ROTATIONS = 1;
 const GUARDED_STOP_CAPABILITY = 'guardedSessionStopV1';
 // The service's stop that first checks the session is exactly as proven (workspace.cjs maintenanceStop).
 const CONDITIONAL_STOP_CAPABILITY = 'conditionalMaintenanceStopV1';
+// That stop pausing only the relays the stopped session is in, not every relay the service holds (cd3e2a8d).
+const PARTICIPANT_STOP_CAPABILITY = 'participantMaintenanceStopV1';
 // How long a refused receipt may take to settle into the end it proves (backend-switch.cjs settleMs).
 const STOP_SETTLE_MS = 10000;
 const NOTICE_STATES = ['pending', 'attempted', 'unknown'];
@@ -2979,11 +2981,16 @@ class QueueDispatcher {
   // it refuse with nothing changed, and the session is kept. A plain stop would end it with the person's
   // words unanswered. A service without that check is not stopped unconditionally either.
   // Returns null once ended, else why it was kept (the rotation log's reason).
-  async stopUnchanged(oldId, latest) {
+  // `scoped`: the finish step waited only for the old session's own relays (participantStop), so the stop must
+  // pause only those; a service that no longer offers that is not asked (relays elsewhere may be running).
+  async stopUnchanged(oldId, latest, scoped = false) {
     const target = this.client.route(oldId);
     const guard = typeof this.client.operationGuard === 'function' ? this.client.operationGuard(target) : () => {};
     guard();
     if (!target.state.capabilities?.includes(CONDITIONAL_STOP_CAPABILITY)) {
+      return 'old-service';
+    }
+    if (scoped && !target.state.capabilities.includes(PARTICIPANT_STOP_CAPABILITY)) {
       return 'old-service';
     }
     // The proof is the service's own: the same fields, normalised as its check computes them.
@@ -2993,7 +3000,8 @@ class QueueDispatcher {
     }
     try {
       guard();
-      await withTimeout(target.client.call('maintenanceStop', oldId, plan.stop, false), CALL_TIMEOUT_MS, 'stop-timeout');
+      const scope = scoped ? ['participant'] : [];
+      await withTimeout(target.client.call('maintenanceStop', oldId, plan.stop, false, ...scope), CALL_TIMEOUT_MS, 'stop-timeout');
     } catch (error) {
       const key = error && error.uiMessage && error.uiMessage.key;
       if (key === 'error.backendSwitchSessionChanged') {
@@ -3011,6 +3019,15 @@ class QueueDispatcher {
       throw error;
     }
     return null;
+  }
+
+  // Does the old session's service stop it pausing only its own relays? Unknown counts as no.
+  participantStop(oldId) {
+    try {
+      return Boolean(this.client.route(oldId).state.capabilities?.includes(PARTICIPANT_STOP_CAPABILITY));
+    } catch {
+      return false;
+    }
   }
 
   // The old session is left as it is: one record, log line and notice, then a week's rest.
@@ -3544,10 +3561,15 @@ class QueueDispatcher {
       }
       this.save();
       this.releaseTrustSuccessor(record);
-      // Ending a session pauses running collaborations; wait until none is running, but not forever.
+      // Ending the old session is refused while, or pauses, the relays it is in, and leaving its spaces pauses
+      // theirs: wait until none of those is running, but not forever. A service whose stop pauses only those
+      // (participantStop) leaves a relay elsewhere running, so that one no longer holds the rotation (cd3e2a8d);
+      // beside an older service, whose stop pauses every relay it holds, any running relay still does.
+      const scoped = this.participantStop(oldId);
       let collaborating = false;
       for (const room of snapshot.rooms || []) {
-        if (room.run && room.run.status === 'running') {
+        const run = room.run;
+        if (run && run.status === 'running' && (!scoped || !Array.isArray(record.roomIds) || record.roomIds.includes(room.id) || (run.ids || []).includes(oldId))) {
           collaborating = true;
         }
       }
@@ -3588,7 +3610,7 @@ class QueueDispatcher {
         if (await this.touchedSince(oldId, old, seen)) {
           inUse = true;
         } else {
-          keptAtStop = await this.stopUnchanged(oldId, seen.latest);
+          keptAtStop = await this.stopUnchanged(oldId, seen.latest, scoped);
           inUse = Boolean(keptAtStop);
           stoppedHere = !inUse;
         }

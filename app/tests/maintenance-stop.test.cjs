@@ -155,3 +155,24 @@ test('a legacy recoverable carry is rejected before any stops', () => {
   assert.equal(backendPlan(state).ready, false);
   state.sessions.push(f.s); assert.equal(backendPlan(state).ready, false);
 });
+
+// cd3e2a8d (2026-11-14): a rotation ends one old session. Its stop pauses only that session's relays, so another
+// space's relay keeps running; the backend switch, which ends every session, still pauses every relay.
+for (const scope of ['participant', undefined]) test(`a maintenance stop ${scope ? 'for one session leaves' : 'of the backend switch pauses'} another space's relay`, async () => {
+  const f = fixture(); delete f.w.pause;
+  const other = '7a1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8';
+  const run = { id: 'other-run', roomId: other, ids: ['someone-else'], status: 'running', steps: 1 };
+  f.w.rooms = new Map([['shared', { id: 'shared', revision: 0, run: null, messages: [] }], [other, { id: other, revision: 0, run, messages: [] }]]);
+  const revoked = []; f.w.peerLeases = { revoke: (_reason, id, roomId) => revoked.push([id, roomId]) };
+  const receipt = await f.w.maintenanceStop(f.s.id, f.expected, false, scope);
+  assert.equal(receipt.stopped, true); assert.equal(f.s.state, 'disconnected');
+  assert.equal(run.status, scope ? 'running' : 'paused');
+  if (scope) assert.deepEqual(revoked, [[f.s.id, undefined]], 'only grants that include this session are withdrawn');
+  else assert.ok(revoked.some(([id, roomId]) => id === undefined && roomId === undefined), 'every grant is withdrawn');
+});
+
+test('an unknown stop scope is refused before anything stops', () => {
+  const f = fixture();
+  assert.throws(() => f.w.maintenanceStop(f.s.id, f.expected, false, 'everyone-but-me'), error => error.uiMessage?.key === 'error.backendSwitchSessionChanged');
+  assert.deepEqual(f.calls, []); assert.equal(f.s.state, 'idle');
+});
