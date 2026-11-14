@@ -16,7 +16,7 @@ test('textPattern matches the current catalog text and rejects the old wording',
 });
 
 test('scripts that wait for join notices use catalog text, not a hard-coded wording', () => {
-  for (const name of ['grid-follow', 'forget-images', 'membership-navigation', 'room-waiting', 'create-space-choice']) {
+  for (const name of ['grid-follow', 'forget-images', 'membership-navigation', 'room-waiting', 'create-space-choice', 'space-join-empty']) {
     const source = fs.readFileSync(path.join(__dirname, '../../scripts', `test-${name}.cjs`), 'utf8');
     assert.match(source, /textPattern\('toast\.(?:joinedSpace|createdSessionJoined)'\)/, name);
     assert.doesNotMatch(source, /hasText: '已加入'|已加入\|已移到|新会话已移到/, name);
