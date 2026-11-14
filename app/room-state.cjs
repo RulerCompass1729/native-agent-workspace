@@ -725,7 +725,7 @@ class RoomState {
     const event = { kind: 'queue', ...uiNotice(by === 'steward' ? 'notice.queue.resolvedBySteward' : 'notice.queue.resolved', { text: queueRules.shortText(item.text) }) };
     this.queueReplace(id, itemId, { ...item, status: 'done', finishedAt: Date.now(), ...(by === 'steward' ? { finishedBy: 'steward' } : {}) }, event);
   }
-  queueMarkSent(id, itemId, sessionId, name, now) {
+  queueMarkSent(id, itemId, sessionId, name, now, afterDecision = false) {
     const item = this.queueFind(id, itemId);
     if (item.status !== 'queued') {
       throw uiError("error.queue.notQueued");
@@ -733,6 +733,12 @@ class RoomState {
     // The refusal that put it back is over once it is sent; attempts keeps the count (queueRequeue).
     const next = { ...item, status: 'sent', sentTo: sessionId, sentAt: now, tag: null };
     delete next.reason;
+    // Sent while that member's decision is open (queue-dispatch.cjs, replyAfter).
+    if (afterDecision) {
+      next.afterDecision = true;
+    } else {
+      delete next.afterDecision;
+    }
     const params = { text: queueRules.shortText(item.text), name };
     const event = { kind: 'queue', sessionId, ...uiNotice('notice.queue.dispatched', params) };
     this.queueReplace(id, itemId, next, event);
@@ -758,6 +764,7 @@ class RoomState {
     delete next.sentAt;
     delete next.tag;
     delete next.control;
+    delete next.afterDecision;
     this.queueReplace(id, itemId, next);
   }
   // reply is the member's own answer, kept so the queue row can show what came back.

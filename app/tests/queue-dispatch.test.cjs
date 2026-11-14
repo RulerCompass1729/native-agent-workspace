@@ -205,22 +205,63 @@ test('a reply that asks for a decision is left for the person; its member takes 
   ]);
   // From the next pass it takes its next item: its own, anyone's, or one in another of its spaces.
   const later = [{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'waiting' }), item('2', { assignee: 'a' }), item('3')] }];
-  assert.deepEqual(plan(later, [member('a', { messages })]), [{ kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a' }]);
+  // Each is marked as sent while that decision is open (afterDecision; see the next test).
+  const next = { kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a', afterDecision: true };
+  assert.deepEqual(plan(later, [member('a', { messages })]), [next]);
   const unassigned = [{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'waiting' }), item('2')] }];
-  assert.deepEqual(plan(unassigned, [member('a', { messages })]), [{ kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a' }]);
+  assert.deepEqual(plan(unassigned, [member('a', { messages })]), [next]);
   const two = 'abcdef01-2345-4678-9abc-def012345678';
   const elsewhere = [{ id: 'shared', name: 'One', queue: [sentItem({ status: 'waiting' })] }, { id: two, name: 'Two', queue: [item('2')] }];
-  assert.deepEqual(plan(elsewhere, [member('a', { messages, roomIds: ['shared', two] })]), [{ kind: 'dispatch', roomId: two, itemId: '2', sessionId: 'a' }]);
+  assert.deepEqual(plan(elsewhere, [member('a', { messages, roomIds: ['shared', two] })]), [{ ...next, roomId: two }]);
   // The person answers in that session, so NAW starts no new one while the decision is open: a member due for one
   // gets its next item where it is, and is not rotated when quiet either.
   const old = member('a', { createdAt: NOW - 25 * HOUR, messages: [...heavyMessages(), ...messages] });
-  assert.deepEqual(plan(later, [old]), [{ kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a' }]);
+  assert.deepEqual(plan(later, [old]), [next]);
   assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'waiting' })] }], [old]), []);
   // Once the person has handled it, the session is rotated as any other before its next item.
   const handled = [{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'done' }), item('2', { assignee: 'a' })] }];
   assert.deepEqual(plan(handled, [old]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
   // The person's answer goes first: while they have just written to the member, NAW sends it nothing.
   assert.deepEqual(plan(later, [member('a', { messages })], { humanAt: new Map([['a', NOW - 30000]]) }), []);
+  // A person-intervened or empty item asks nothing, so what follows it is sent as usual.
+  const looked = [{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'waiting', reason: 'no-reply' }), item('2')] }];
+  assert.deepEqual(plan(looked, [member('a', { messages })]), [{ kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a' }]);
+});
+
+test('an item sent while its member\'s decision is open keeps its own reply and READY line when the person answers that decision', t => {
+  // Independent review, 11-13: the person answering item 1 while the member works on item 2 made the answer's
+  // reply and READY line item 2's, or lost item 2's own. Item 2 is still left for the person to look at.
+  const messages = [
+    { id: 't1', role: 'user', text: 'NAW task', origin: 'naw-dispatch' },
+    { id: 'r1', role: 'assistant', text: '需要你决定：要不要合并？' },
+    { id: 't2', role: 'user', text: 'NAW task two', origin: 'naw-dispatch' },
+    { id: 'r2', role: 'assistant', text: '任务二完成\nREADY lane/x abc1234' },
+    { id: 'h1', role: 'user', text: '合并吧', origin: 'human' },
+    { id: 'r3', role: 'assistant', text: '已合并\nREADY lane/y def5678' },
+  ];
+  const second = extra => item('2', { status: 'sent', sentTo: 'a', sentAt: NOW - 20000, tag: 't2', control: 0, ...extra });
+  const rooms = extra => [{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'waiting' }), second(extra)] }];
+  const settle = { kind: 'settle', roomId: 'shared', itemId: '2', status: 'waiting', reason: 'person-intervened', sessionId: 'a' };
+  assert.deepEqual(plan(rooms({ afterDecision: true }), [member('a', { messages })]), [
+    { ...settle, reply: '任务二完成 READY lane/x abc1234', ready: { branch: 'lane/x', commit: 'abc1234' } },
+  ]);
+  // The person wrote before the member replied to item 2: it has no reply of its own yet.
+  const early = [...messages.slice(0, 3), messages[4], messages[5]];
+  assert.deepEqual(plan(rooms({ afterDecision: true }), [member('a', { messages: early })]), [settle]);
+  // Sent with no decision open, the person writing is about this item, and the last reply stands, as before.
+  assert.deepEqual(plan(rooms({}), [member('a', { messages })]), [
+    { ...settle, reply: '已合并 READY lane/y def5678', ready: { branch: 'lane/y', commit: 'def5678' } },
+  ]);
+  // The send records the mark and a refusal drops it.
+  const { room } = roomSetup(t);
+  const id = room.queueAdd('任务二', 'a');
+  room.queueMarkSent('shared', id, 'a', 'Agent a', NOW, true);
+  assert.equal(room.queueItems('shared')[0].afterDecision, true);
+  room.queueRequeue('shared', id, 'Synthetic refusal', 5, 'Agent a');
+  assert.equal(room.queueItems('shared')[0].afterDecision, undefined);
+  room.queueMarkSent('shared', id, 'a', 'Agent a', NOW);
+  assert.equal(room.queueItems('shared')[0].afterDecision, undefined);
+  assert.throws(() => rules.validateQueue([item('x', { afterDecision: 'yes' })]), /Invalid/);
 });
 
 test('a decision on an item that was refused once before it went out is still a decision: no new session until it is handled', t => {
@@ -241,8 +282,9 @@ test('a decision on an item that was refused once before it went out is still a 
   const old = member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages() });
   for (const items of [queue, saved]) {
     const rooms = [{ id: 'shared', name: 'Team', queue: items }];
-    assert.deepEqual(plan(rooms, [member('a')]), [{ kind: 'dispatch', roomId: 'shared', itemId: next, sessionId: 'a' }]);
-    assert.deepEqual(plan(rooms, [old]), [{ kind: 'dispatch', roomId: 'shared', itemId: next, sessionId: 'a' }]);
+    const sent = { kind: 'dispatch', roomId: 'shared', itemId: next, sessionId: 'a', afterDecision: true };
+    assert.deepEqual(plan(rooms, [member('a')]), [sent]);
+    assert.deepEqual(plan(rooms, [old]), [sent]);
     // With nothing queued behind it, the space can take more work.
     const open = [{ id: 'shared', name: 'Team', queue: [items[0]] }];
     const vacancy = rules.queueVacancies({ rooms: open, sessions: [member('a')], wakePolicy: AWAKE, idleSince: settledSince(['a']), now: NOW });

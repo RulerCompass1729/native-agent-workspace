@@ -952,6 +952,8 @@ async function run() {
   await addItem('任务五', a);
   await expectSend(5, a, /【NAW 派活】[\s\S]*任务五/, 'next item while the decision stays open');
   assert.equal((await itemByText('任务三')).status, 'waiting', 'the decision is still open for the person');
+  // So that an answer to 任务三 arriving now is not taken for 任务五's reply (queue-dispatch.cjs, replyAfter).
+  assert.equal((await itemByText('任务五')).afterDecision, true, 'sent while the decision is open');
   assert.equal(await page.locator(`#queue-list [data-queue-item="${waitingId}"] .queue-status`).innerText(), '等你决定 · 队员甲');
   await capture('decision-open-member-working');
   passed.push('A decision stayed open for the person while its member received the next item');
@@ -988,6 +990,7 @@ async function run() {
   passed.push('The person\'s answer reached the member that asked, in the same session, and the decision closed when they marked it handled');
   await addItem('任务五乙', a);
   await expectSend(7, a, /【NAW 派活】[\s\S]*任务五乙/, 'next item to a member whose last turn came back empty');
+  assert.equal((await itemByText('任务五乙')).afterDecision, undefined, 'sent after the decision was handled');
   const leftId = (await itemByText('任务五')).id;
   assert.equal((await itemByText('任务五')).status, 'waiting', 'the empty turn stays open for the person');
   await page.locator(`#queue-list [data-queue-item="${leftId}"]`).getByRole('button', { name: '已处理', exact: true }).waitFor();

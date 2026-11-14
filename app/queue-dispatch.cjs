@@ -297,6 +297,9 @@ function validateItem(item) {
   if (item.ready !== undefined && !validReady(item.ready)) {
     throw Error('Invalid queue delivery line');
   }
+  if (item.afterDecision !== undefined && item.afterDecision !== true) {
+    throw Error('Invalid queue delivery');
+  }
   // Who acted when it was not the person or the item's creator: only the butler, for now.
   for (const key of ['addedBy', 'finishedBy']) {
     if (item[key] !== undefined && item[key] !== 'steward') {
@@ -426,8 +429,11 @@ function startsWithDecision(text) {
 }
 
 // What followed a NAW message: the assistant replies and whether the person wrote
-// in between. When a native record replaced NAW's copy, use the send time.
-function replyAfter(session, tag, sentAt) {
+// in between. When a native record replaced NAW's copy, use the send time. With
+// untilHuman, the reply is what came before the person's first message: in a session
+// whose earlier decision is open, what the person writes may be its answer, and the
+// reply and READY line that follow belong to that (independent review, 11-13).
+function replyAfter(session, tag, sentAt, untilHuman = false) {
   let messages = [];
   if (Array.isArray(session.messages)) {
     messages = session.messages;
@@ -440,6 +446,7 @@ function replyAfter(session, tag, sentAt) {
   }
   const parts = [];
   let humanAfter = false;
+  let own = -1;
   for (let i = 0; i < messages.length; i += 1) {
     const message = messages[i];
     if (!message) {
@@ -455,6 +462,9 @@ function replyAfter(session, tag, sentAt) {
       continue;
     }
     if (message.role === 'user' && !automaticInput(message)) {
+      if (!humanAfter) {
+        own = parts.length;
+      }
       humanAfter = true;
     }
     if (message.role === 'assistant' && typeof message.text === 'string' && message.text.trim()) {
@@ -464,11 +474,12 @@ function replyAfter(session, tag, sentAt) {
   if (index < 0 && !parts.length) {
     return null;
   }
+  const kept = untilHuman && own >= 0 ? parts.slice(0, own) : parts;
   let last = '';
-  if (parts.length) {
-    last = parts[parts.length - 1];
+  if (kept.length) {
+    last = kept[kept.length - 1];
   }
-  return { found: true, text: parts.join('\n\n'), last, humanAfter, parts };
+  return { found: true, text: kept.join('\n\n'), last, humanAfter, parts: kept };
 }
 
 function memberIds(room, sessions) {
@@ -909,7 +920,7 @@ function planDispatch(input) {
         busy.add(member.id);
         continue;
       }
-      const reply = replyAfter(member, item.tag, item.sentAt);
+      const reply = replyAfter(member, item.tag, item.sentAt, item.afterDecision === true);
       const controlChanged = Number.isSafeInteger(item.control) && (member.controlRevision || 0) !== item.control;
       let status = 'done';
       let reason = '';
@@ -987,7 +998,12 @@ function planDispatch(input) {
         actions.push({ kind: 'rotate', sessionId: target.id, reason });
       } else {
         // Due but another rotation is running: it keeps working and is rotated later.
-        actions.push({ kind: 'dispatch', roomId: room.id, itemId: item.id, sessionId: target.id });
+        const action = { kind: 'dispatch', roomId: room.id, itemId: item.id, sessionId: target.id };
+        // Sent while a decision it asked is open: the person's answer may arrive during this item (replyAfter).
+        if (rotationOptions.asking.has(target.id)) {
+          action.afterDecision = true;
+        }
+        actions.push(action);
       }
     }
   }
@@ -2620,7 +2636,7 @@ class QueueDispatcher {
     }
     const name = this.name(session);
     // Record before sending: a crash after this point is never resent silently.
-    this.roomState.queueMarkSent(room.id, item.id, session.id, name, this.now());
+    this.roomState.queueMarkSent(room.id, item.id, session.id, name, this.now(), action.afterDecision === true);
     try {
       const tag = await this.send(session, dispatchText(room.name || '', item), item.id);
       if (this.stillSent(room.id, item.id)) this.roomState.queueSetDelivery(room.id, item.id, tag, session.controlRevision || 0);
