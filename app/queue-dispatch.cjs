@@ -872,6 +872,11 @@ function queueVacancies(input) {
 // 2026-11-14: an item added without a member went to the old session, so two contexts did one member's work).
 // While a successor of it (or of that successor) is still in the space, that space's unassigned items go there,
 // never to the old one. An item the chooser assigned to the old session by name still goes to it.
+// A successor in one of these states runs no native process that can take the work: stopped (a Codex stop ends
+// 'disconnected', workspace.cjs:2010-2013), crashed ('recoverable'), failed, backgrounded or being stopped. The
+// list is workspace.cjs:849's, plus 'stopping'. Independent review of this change, 2026-11-14: with 'ended' alone, a
+// stopped Codex successor kept its old session from the space's work for good.
+const SUCCESSOR_GONE_STATES = ['ended', 'stopping', 'background', 'recoverable', 'error', 'disconnected'];
 function carriedOn(id, handedOff, members, byId) {
   if (!handedOff || typeof handedOff.get !== 'function') {
     return false;
@@ -885,7 +890,7 @@ function carriedOn(id, handedOff, members, byId) {
     }
     seen.add(to);
     const session = byId.get(to);
-    if (members.has(to) && session && session.state !== 'ended') {
+    if (members.has(to) && session && !SUCCESSOR_GONE_STATES.includes(session.state)) {
       return true;
     }
     next.push(...(handedOff.get(to) || []));
@@ -1222,7 +1227,7 @@ function directoryHandoff(record, snapshot) {
 function handoffText(oldName, handoff, directoryNote = '', duty = '') {
   const after = duty
     ? '旧会话交完就结束，大管家由你接着当；要是人这时还在用旧会话，它就留给人用，大管家仍是它，直到人另行指定。'
-    : '旧会话交完就结束；要是人这时还在用它，就留给人用完自己关，这份活 NAW 之后只派给你。';
+    : '旧会话交完就结束；要是人这时还在用它，就留给人用完自己关，这个空间里没指定成员的活 NAW 之后派给你。';
   const text = body => [
     `【NAW 换会话】你接手「${oldName}」的工作，它写的交接如下：`,
     '',

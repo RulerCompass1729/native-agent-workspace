@@ -1977,7 +1977,7 @@ test('finding 2: after the old session is kept, an item added without a member g
   const { room, client, dispatcher, newId } = await keptBesideSuccessor(t);
   const handoff = client.sends(newId)[0][2];
   assert.doesNotMatch(handoff, /旧会话已经结束/, 'the handoff, sent before the outcome, does not claim the old one ended');
-  assert.match(handoff, /要是人这时还在用它，就留给人用完自己关，这份活 NAW 之后只派给你/);
+  assert.match(handoff, /要是人这时还在用它，就留给人用完自己关，这个空间里没指定成员的活 NAW 之后派给你/);
   const before = client.sends('a').length;
   room.queueAdd('C 的新一件（没指定成员）', null);
   await dispatcher.schedule();
@@ -2007,6 +2007,19 @@ test('finding 2: an item assigned to the kept old session by name still goes to 
   assert.equal(client.sends('a').length, before + 1);
   assert.match(client.sends('a').at(-1)[2], /没指定成员的/);
 });
+
+// Review of finding 2: a stopped Codex successor is 'disconnected', a crashed one 'recoverable'; neither carries the work.
+for (const state of ['disconnected', 'recoverable', 'error', 'background', 'stopping']) {
+  test(`finding 2: a successor that is ${state} no longer keeps the kept old session from the space's work`, async t => {
+    const { room, client, dispatcher, newId } = await keptBesideSuccessor(t);
+    client.state.sessions.find(s => s.id === newId).state = state;
+    const before = client.sends('a').length;
+    room.queueAdd('没指定成员的', null);
+    await dispatcher.schedule();
+    assert.equal(client.sends('a').length, before + 1);
+    assert.match(client.sends('a').at(-1)[2], /没指定成员的/);
+  });
+}
 
 test('finding 2: the butler\'s handoff says the designation stays with a kept old session', () => {
   const text = rules.handoffText('大管家', '交接', '', '【大管家职责】');
