@@ -934,8 +934,28 @@ test('a person-active failure saved by an older build no longer rests the member
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'queue-dispatch.json');
   const failed = (reason, extra = {}) => ({ phase: 'failed', failedAt: NOW - 1000, reason, oldNativeId: 'native-x', provider: 'claude', cwd: '/tmp', name: 'Agent x', roomIds: ['shared'], ...extra });
-  fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: failed('person-active'), b: failed('new-session-not-ready'), c: failed('handoff-missing') } }), { mode: 0o600 });
-  assert.deepEqual(Object.keys(rules.readRotations(file, NOW)).sort(), ['b', 'c']);
+  const moved = failed('person-active', { newId: 'made', newCwd: '/synthetic/new' });
+  fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: failed('person-active'), b: failed('new-session-not-ready'), c: failed('handoff-missing'), d: moved } }), { mode: 0o600 });
+  assert.deepEqual(Object.keys(rules.readRotations(file, NOW)).sort(), ['b', 'c', 'd'], 'a successor in a moved directory keeps the record its hold names');
+});
+
+test('a person-active failure whose successor is in a moved directory keeps its record, so its isolation hold keeps its anchor', async t => {
+  const { dir, room } = roomSetup(t);
+  const old = member('a', { cwd: '/synthetic/old' });
+  const fresh = member('made', { name: 'Agent a · 续', cwd: '/synthetic/new', roomIds: [], roomId: null });
+  const client = new FakeClient([old, fresh]); fakeMembership(room, client);
+  const record = { phase: 'created', oldId: 'a', oldNativeId: old.nativeId, oldControl: 0, requestedAt: NOW - 60000, provider: 'claude',
+    cwd: old.cwd, name: old.name, roomIds: ['shared'], newId: fresh.id, newCwd: fresh.cwd, newName: fresh.name, createdNewAt: NOW - 1000, handoff: 'Synthetic saved work', reason: 'compact' };
+  fs.writeFileSync(path.join(dir, 'queue-dispatch.json'), JSON.stringify({ version: 1, rotations: { a: record } }), { mode: 0o600 });
+  const make = () => new rules.QueueDispatcher({ roomState: room, dataDir: dir, now: () => NOW, connect: async () => client, settleMs: 0, tickMs: 3600000, notify() {} });
+  const dispatcher = make(); dispatcher.client = client; t.after(() => dispatcher.close());
+  assert.ok(room.directoryTrustIsolation().holds.made, 'the moved successor is held while it is unconfirmed');
+  await dispatcher.failRotation('a', dispatcher.rotations.a, 'person-active', NOW, client.snapshot());
+  assert.equal(dispatcher.rotations.a.phase, 'failed', 'the record the hold names stays');
+  assert.equal(dispatcher.deferredAt.has('a'), false);
+  assert.ok(rotationTexts(room.value.events).some(text => text.includes('你正在用这个会话')), 'its reason is still in words');
+  const restarted = make(); t.after(() => restarted.close());
+  assert.equal(restarted.faultedRotations.has('a'), false, 'a restart finds the hold and its record together');
 });
 
 test('if the old member is in use when the handoff lands, it is kept running', async t => {
