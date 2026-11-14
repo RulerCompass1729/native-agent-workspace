@@ -87,14 +87,17 @@ async function run() {
     assert.equal(mouseBefore.disableStdin, true, 'Mouse wheel starts from chat with an unfocused native pane');
     if (provider === 'codex') {
       await until(async () => (await fixture()).claims.includes(id), 'Wheel enters existing pending-control path');
-      assert.equal(await bytes(id), previous, 'No input before native control acknowledgement');
+      // This window controls the session, so its wheel reaches the terminal while the view change waits (99de2ebe;
+      // the person, 2026-11-13: 两边的输入可以不要锁定). Another window's control still stops it (below).
+      await until(async () => (await bytes(id)).length > previous.length, 'Wheel reaches the session it controls before the view change finishes');
       await fixture('release-claim', id);
+      await until(async () => !(await fixture()).claims.includes(id), 'View change finishes'); await delay(200);
     }
     await until(async () => (await bytes(id)).length > previous.length, 'Native wheel reaches its original session without a preparatory click');
     const delivered = (await bytes(id)).slice(previous.length); assert.match(delivered, /^\x1b\[<64;\d+;\d+M$/, 'One exact native SGR wheel-up event');
     await output(id, '\x1b[H\x1b[2JOlder native-program content');
     await until(() => host(id).locator('.xterm-rows').innerText().then(text => text.includes('Older native-program content')), 'Native program response remains raw');
-    checks.push(provider + ': native mouse wheel prepares existing control, preserves the first event through acknowledgement and renders original program output');
+    checks.push(provider + ': native mouse wheel prepares existing control, delivers its first event once and renders original program output');
     await page.locator('#chat-tab').click();
     await output(id, '\x1b[?1000l\x1b[?1006l\x1b[?1049h\x1b[HAlternate native program');
     await until(async () => (await observe(id)).buffer === 'alternate' && (await observe(id)).mouse === 'none', 'Alternate buffer without mouse tracking');
