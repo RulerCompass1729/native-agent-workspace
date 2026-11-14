@@ -119,10 +119,10 @@ async function service(directory, state, { onStop } = {}) {
   fs.writeFileSync(path.join(directory, 'service.lock'), String(child.pid));
   const server = net.createServer(socket => {
     sockets.add(socket); socket.on('close', () => sockets.delete(socket)); socket.on('error', () => {});
-    let owner;
+    let owner, page;
     readFrames(socket, REQUEST_BYTES, request => {
-        if (owner === undefined) { owner = request.owner; socket.write(JSON.stringify({ ready: true }) + '\n'); return; }
-        calls.push([request.method, request.args?.[0], owner, request.args?.[1]]);
+        if (owner === undefined) { owner = request.owner; page = request.page !== false; socket.write(JSON.stringify({ ready: true }) + '\n'); return; }
+        calls.push([request.method, request.args?.[0], owner, request.args?.[1], page]);
         let value = true, error = null, uiMessage = null;
         const record = state.sessions.find(s => s.id === request.args?.[0]);
         if (request.method === 'initial') value = state;
@@ -189,6 +189,15 @@ test('a Claude and a Codex session are stopped, the proven old service is retire
   assert.deepEqual(ownersOf(next, 'maintenanceResume'), ['c:view-a', 'x:view-b'], 'Each session keeps its previous owner');
   assert.ok(!next.calls.some(([m]) => ['send', 'queue', 'steer', 'run', 'input'].includes(m)), 'NAW sends nothing');
   assert.deepEqual(result, { key: h.key, resumed: ['c', 'x'], left: [], confirmedByState: [] }); assert.equal(record(h.dataDir, h.key), null);
+});
+// Review of the pageless owner (2026-11-13): reconnecting every session as a page made a closed or hidden
+// window hold its sessions again after an update, so the one open window needed 接管此窗口 once more.
+test('only a window the person has open reconnects its sessions as a page', async t => {
+  const h = harness(t, [claudeNew(), codexNew()]); const old = await h.old();
+  await switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', ensure: h.ensure(), owner: 'view-a', applicationVersion: '0.1.0-alpha.158',
+    commandLine: h.command(old), signal: h.signal(old), now: () => now, pageOwners: () => new Set(['view-a']) });
+  const resumed = h.services[1].calls.filter(([m]) => m === 'maintenanceResume').map(([, id, owner, , page]) => `${id}:${owner}:${page ? 'page' : 'pageless'}`);
+  assert.deepEqual(resumed, ['c:view-a:page', 'x:view-b:pageless'], 'The closed window view-b holds nothing against the open one');
 });
 test('an all-Claude backend is retired with its own shutdown call, never a signal', async t => {
   const h = harness(t, [claudeNew()]); const old = await h.old();

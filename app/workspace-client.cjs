@@ -125,7 +125,8 @@ class WorkspaceClient extends EventEmitter {
         }).decisions : [];
         const approvals = (legacyCodex ? native?.connected && native.approvals : s.approvals) || (approval ? [approval] : []);
         const approvalOverflow = legacyCodex ? Boolean(native?.connected && native.approvalOverflow) : Boolean(s.approvalOverflow);
-        ids.add(s.id); sessions.push({ ...s, peerIdentity: peerIdentity(s), legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
+        // freeClaim: this session's service takes it for a window only while no other open window holds it.
+        ids.add(s.id); sessions.push({ ...s, peerIdentity: peerIdentity(s), freeClaim: e.state.runtimeVersion !== '0.1.0-alpha.2' && Boolean(e.state.capabilities?.includes('freeClaimV1')), legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
           nativeInputRequired: Boolean(s.nativeInputRequired || reader?.nativeInputRequired),
           failedTurnInputAvailable: Boolean(s.failedTurnInputAvailable || failedTurnInputAvailable),
@@ -818,6 +819,10 @@ class WorkspaceClient extends EventEmitter {
       guard(); this.authorizeOperation?.(method, args, roomId); return this.invoke(target, roomId, method, args);
     }, undefined, false, false, roomId);
     const legacy = target.state.runtimeVersion === '0.1.0-alpha.2';
+    // Taking a session no open window holds (the renderer's takeFreeSession) is no takeover: nothing here is
+    // paused and no queued work is held back as the person's. The service takes it only while it is still
+    // free; a service without that check is left to the explicit takeover.
+    if (method === 'claim' && args[2] === 'free') return !legacy && target.state.capabilities?.includes('freeClaimV1') ? target.client.call(method, ...args) : false;
     if (legacy && ['claim', 'terminal', 'interrupt'].includes(method)) {
       const expected = { ...target.state.sessions.find(s => s.id === args[0]) };
       const owned = expected.owner === target.state.owner;
@@ -936,11 +941,13 @@ class WorkspaceClient extends EventEmitter {
     }, args[0], false, false, scoped && method === 'forward' ? roomId : undefined);
     return target.client.call(method, ...args);
   }
-  close() {
+  // leave: the person closed this window. Each service is told before its connection ends, so the window
+  // holds none of its sessions against the windows still open.
+  close({ leave = false } = {}) {
     if (this.closing) return;
     this.closing = true; this.socket.destroyed = true; this.control.revision++; this.control.manualEpoch++;
     for (const observer of this.legacyObservers.values()) observer.dispose(); this.legacyObservers.clear();
-    for (const e of this.entries) { e.closing = true; e.client.close(); }
+    for (const e of this.entries) { e.closing = true; if (leave) e.client.call('leave').catch(() => {}); e.client.close(); }
     this.control.views.delete(this);
     if (--this.control.clients === 0) { this.control.legacyInput?.close(); controls.delete(this.scope); }
   }

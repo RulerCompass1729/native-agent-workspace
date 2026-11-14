@@ -144,6 +144,10 @@ function spaceMidturnText(roomName, sender, text) {
 class Workspace extends EventEmitter {
   constructor(host, dataDir, newWorkspaceRoot = path.join(dataDir, 'session-workspaces')) {
     super(); this.host = host; this.dataDir = dataDir; this.newWorkspaceRoot = newWorkspaceRoot; this.sessions = new Map(); this.runtimes = new Map(); this.drafts = new Map(); this.draftRevisions = new Map();
+    // Open connections per view owner, and how many are pages a person sees. A window the person closed and
+    // the hidden window an agent's request runs in are pageless: they hold no session against a window that
+    // shows one (claim). Such an owner stays listed only while connected or holding a session.
+    this.viewOwners = new Map(); this.pagelessOwners = new Set();
     this.claudeAsks = new Map();
     this.mobileRequests = [];
     this.capacityRecoveries = new Map();
@@ -238,7 +242,7 @@ class Workspace extends EventEmitter {
     return Object.keys(usage).length || account ? { ...usage, ...(account ? { account } : {}) } : null;
   }
   snapshot() {
-    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, ...this.stuckFor(s), usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeStartupPrompt: directoryTrustPrompt(s, this.runtimes.get(s.id)), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), midturnAvailable: Boolean(this.runtimes.get(s.id)?.midturnAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
+    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, ...(this.pagelessOwners.has(s.owner) ? { ownerPageless: true } : {}), ...this.stuckFor(s), usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeStartupPrompt: directoryTrustPrompt(s, this.runtimes.get(s.id)), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), midturnAvailable: Boolean(this.runtimes.get(s.id)?.midturnAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
   }
   // kind is 'interrupt' or 'approval'.
   // An interrupt waits for as long as the turn it was sent to keeps running. A later tool or status
@@ -1247,21 +1251,46 @@ class Workspace extends EventEmitter {
     // in volatile memory. Failure closes dispatch, with the original on disk.
     if (roomId !== 'shared') { this.persist(); if (this.storageWarning) throw Object.assign(Error(this.storageWarning), { uiMessage: this.storageWarningUiMessage }); }
   }
-  claim(id, owner, view = 'chat', roomId) {
+  claim(id, owner, view = 'chat', roomId, free = false) {
     const s = this.get(id);
     if (!['chat', 'terminal'].includes(view)) throw uiError("error.workspace.unknownView");
+    // Taking a session no open window holds is not a takeover: nothing is paused and no queued input is revoked.
+    const heldOpen = s.owner !== owner && s.owner !== null && !this.pagelessOwners.has(s.owner);
+    if (free && heldOpen) return false;
     if (s.owner !== owner || s.view !== view) {
-      if (s.owner !== owner) { if (s.owner !== null) if (!backgroundOperation.current()) wake.human(this, id); if (roomId === undefined) this.pause('真人接管会话', undefined, false, uiActivity('notice.run.humanControl')[1]); else { this.pauseParticipant(id, '真人接管会话', false, uiActivity('notice.run.humanControl')[1]); this.pauseRoom(roomId, '真人接管会话', uiActivity('notice.run.humanControl')[1]); } s.controlRevision++; }
+      const previous = s.owner;
+      if (heldOpen) { if (!backgroundOperation.current()) wake.human(this, id); if (roomId === undefined) this.pause('真人接管会话', undefined, false, uiActivity('notice.run.humanControl')[1]); else { this.pauseParticipant(id, '真人接管会话', false, uiActivity('notice.run.humanControl')[1]); this.pauseRoom(roomId, '真人接管会话', uiActivity('notice.run.humanControl')[1]); } s.controlRevision++; }
       // Viewing the same session is not a new instruction. Real terminal input
       // still invalidates queued work; taking control from another view does too.
-      s.owner = owner; s.view = view; this.changed();
+      s.owner = owner; s.view = view;
+      // A closed or hidden window that no longer holds anything is not kept.
+      if (previous !== owner && this.pagelessOwners.has(previous) && !this.viewOwners.has(previous) && ![...this.sessions.values()].some(x => x.owner === previous)) this.pagelessOwners.delete(previous);
+      this.changed();
     }
     // A question held for the chat view goes back to the native dialog in the terminal.
     if (view === 'terminal') this.releaseQuestion(s, null);
   }
-  release(owner) {
-    // A disconnected view is not a stop instruction. Its stable owner ID may
-    // reconnect after a UI update; another view can explicitly take control.
+  viewConnected(owner, page = true) {
+    const open = this.viewOwners.get(owner) || { connections: 0, pages: 0, everPage: false };
+    open.connections++; if (page) { open.pages++; open.everPage = true; }
+    this.viewOwners.set(owner, open);
+    const was = this.pagelessOwners.has(owner);
+    if (open.everPage) this.pagelessOwners.delete(owner); else this.pagelessOwners.add(owner);
+    if (was !== this.pagelessOwners.has(owner)) this.changed();
+  }
+  release(owner, page = true, gone = false) {
+    // A disconnected view is not a stop instruction. A window that only lost its connection (the app quit,
+    // or its UI updated) still holds its sessions and has them when its stable owner ID reconnects. One
+    // the person closed (gone) holds none against the windows still open.
+    const open = this.viewOwners.get(owner);
+    if (open) {
+      open.connections--; if (page) open.pages--;
+      if (!open.connections) this.viewOwners.delete(owner);
+      if (!open.pages) {
+        const pageless = (gone || !open.everPage) && (open.connections || [...this.sessions.values()].some(s => s.owner === owner));
+        if (pageless) this.pagelessOwners.add(owner); else this.pagelessOwners.delete(owner);
+      }
+    }
     this.changed();
   }
   setDraft(id, text, owner) {

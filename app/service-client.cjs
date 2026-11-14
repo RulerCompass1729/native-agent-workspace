@@ -10,12 +10,12 @@ const { lockIdentity, readLock, createLock, releaseLock, ownerMayBeAlive } = req
 
 const serviceBinding = require('./service-binding.cjs');
 const { ServiceClient, connectService } = require('./service-connection.cjs');
-async function connect(dataDir, owner) {
+async function connect(dataDir, owner, options) {
   const layout = readLayout(dataDir);
   const entries = [];
   try {
     for (const key of layout.entries) {
-      const client = await connectService(path.join(dataDir, key), owner);
+      const client = await connectService(path.join(dataDir, key), owner, options);
       const entry = { key, client }; entries.push(entry); entry.state = await client.call('initial'); serviceBinding.assertBinding(entry.state.serviceBinding);
     }
     const client = new WorkspaceClient(entries, layout.active, dataDir); client.snapshot(); return client;

@@ -68,6 +68,7 @@ async function main() {
   workspace.on('terminal', data => broadcast('terminal', data));
   workspace.on('progress', data => broadcast('progress', data));
   let shuttingDown = false;
+  const leavingViews = new WeakSet();
   const dispatch = async (owner, method, args, client, roomId = 'shared', scoped = false, inputProof = false) => {
     if (binding && !['initial', 'ensureButlerRunner', 'shutdown'].includes(method)) throw serviceBinding.failure('butler-qualification-required');
     if (shuttingDown) throw uiError("error.backendClosingActionNotExecuted");
@@ -79,7 +80,7 @@ async function main() {
         await host.startCodex();
         return { binding, nativeReady: Boolean(host.rpc), credentialPresent: host.butlerCredentialPresent === true };
       }
-      case 'initial': host.resolvePrograms?.(); return { ...(binding ? { serviceBinding: binding } : {}), ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [background.CAPABILITY, ...mobileCapabilities, ...(fs.existsSync(path.join(__dirname, 'scoped-outbox-runtime.cjs')) ? ['scopedNativeOutboxV1'] : []), ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'queueDispatchV1', 'createSettingsV1', 'agentAddressedHandoffs', 'agentWakeV1', require('./session-wake.cjs').PREFLIGHT, 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'conditionalMaintenanceStopV1', 'guardedSessionStopV1', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer', 'programAvailabilityV1'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': host.resolvePrograms?.(); return { ...(binding ? { serviceBinding: binding } : {}), ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [background.CAPABILITY, ...mobileCapabilities, ...(fs.existsSync(path.join(__dirname, 'scoped-outbox-runtime.cjs')) ? ['scopedNativeOutboxV1'] : []), ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'queueDispatchV1', 'freeClaimV1', 'createSettingsV1', 'agentAddressedHandoffs', 'agentWakeV1', require('./session-wake.cjs').PREFLIGHT, 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'conditionalMaintenanceStopV1', 'guardedSessionStopV1', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer', 'programAvailabilityV1'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'mergeSnapshot': {
         if (roomId !== 'shared' || args.length !== 1) throw uiError("error.invalidSnapshotImport");
         return workspace.mergeSnapshot(args[0]);
@@ -136,7 +137,8 @@ async function main() {
         if (proof !== undefined && (!proof || proof.nativeId !== s.nativeId || proof.revision !== membershipRevision(s, roomId))) throw uiError("error.membershipIdentityChangedNoRevocation");
         return workspace.join(args[0], args[1], roomId);
       }
-      case 'claim': return workspace.claim(args[0], owner, args[1]);
+      // 'free': a window takes a session it shows only if no other open window holds it (Workspace.claim).
+      case 'claim': if (args[2] !== undefined && args[2] !== 'free') throw uiError("error.unsupportedLocalAction"); return workspace.claim(args[0], owner, args[1], undefined, args[2] === 'free');
       case 'send': {
         workspace.assertNativeContext(args[0], args[2]);
         if (/^\/[a-z-]+(?:\s|$)/i.test(args[1])) throw uiError("error.nativeCommandUseTerminal");
@@ -220,25 +222,27 @@ async function main() {
         if ([...workspace.sessions.values()].some(s => !['ended', 'background'].includes(s.state))) throw uiError("error.endNativeSessionsBeforeBackend");
         shuttingDown = true;
         setTimeout(shutdown, 100); return true;
+      // The window closes for good, not for an app quit or UI update: it holds no session afterwards (Workspace.release).
+      case 'leave': if (client) leavingViews.add(client); return null;
       default: throw uiError("error.unsupportedLocalAction");
     }
   };
   const server = net.createServer(client => {
     writers.set(client, createWriter(client));
-    let authenticated = false, owner = null;
+    let authenticated = false, owner = null, page = true;
     const authTimer = setTimeout(() => { if (!authenticated) client.destroy(); }, 3000);
     client.on('error', () => {});
     readFrames(client, REQUEST_BYTES, request => {
       if (!authenticated) {
-        if (request.token !== token || request.protocol !== 1 || typeof request.owner !== 'string' || request.owner.length > 100) { client.destroy(); return; }
-        authenticated = true; owner = request.owner; clients.add(client); if (request.stateDelta === 1) deltas.set(client, { sent: null, waiting: null }); clearTimeout(authTimer); send(client, { ready: true }); return;
+        if (request.token !== token || request.protocol !== 1 || typeof request.owner !== 'string' || request.owner.length > 100 || ![undefined, true, false].includes(request.page)) { client.destroy(); return; }
+        authenticated = true; owner = request.owner; page = request.page !== false; clients.add(client); workspace.viewConnected(owner, page); if (request.stateDelta === 1) deltas.set(client, { sent: null, waiting: null }); clearTimeout(authTimer); send(client, { ready: true }); return;
       }
       if (!Array.isArray(request.args) || request.args.length > (request.method === 'run' ? 7 : 5) || !Number.isInteger(request.id)) { client.destroy(); return; }
       Promise.resolve().then(() => request.backgroundActor
         ? background.run(request.backgroundActor, () => dispatch(owner, request.method, request.args, client))
         : dispatch(owner, request.method, request.args, client)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。', uiMessage: error.message ? displayMessage(error.uiMessage) : uiError('error.main.operationIncomplete').uiMessage }));
     });
-    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); deltas.delete(client); workspace.scopedOutboxDisconnected(client); workspace.peerLeases.disconnected(client); if (mobileCapabilities.length) workspace.mobileDisconnected(client); if (!shuttingDown) workspace.release(owner); });
+    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); deltas.delete(client); workspace.scopedOutboxDisconnected(client); workspace.peerLeases.disconnected(client); if (mobileCapabilities.length) workspace.mobileDisconnected(client); if (!shuttingDown) workspace.release(owner, page, leavingViews.has(client)); });
   });
   await new Promise(resolve => server.listen(endpoint, resolve)); fs.chmodSync(endpoint, 0o600);
   const connection = path.join(dataDir, 'connection.json'); const tmp = `${connection}.tmp`;
