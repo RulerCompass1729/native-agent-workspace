@@ -76,7 +76,7 @@ const sample = () => page.evaluate(() => {
         hint: shown(hint) ? { text: hint.textContent.trim(), lines: tops(whole), split: Object.fromEntries(['右键菜单', 'Option', 'context', 'menu', 'select'].map(w => [w, split(w)])) } : null }; })(),
     row: (() => { const lines = e => { const r = document.createRange(); r.selectNodeContents(e); return new Set([...r.getClientRects()].filter(c => c.width > 0.5).map(c => Math.round(c.top))).size; };
       const hint = q('#compose-hint'), stop = q('#interrupt'), wrap = q('#composer-wrap'), hs = getComputedStyle(hint);
-      return { send: lines(q('#send-button')), interrupt: shown(stop) ? lines(stop) : null, hint: lines(hint), basis: hs.flexBasis, grow: hs.flexGrow, sideways: wrap.scrollWidth - wrap.clientWidth, language: q('#ui-language').value }; })(),
+      return { send: lines(q('#send-button')), interrupt: shown(stop) ? lines(stop) : null, hint: lines(hint), basis: hs.flexBasis, grow: hs.flexGrow, floor: hs.minWidth, sideways: wrap.scrollWidth - wrap.clientWidth, language: q('#ui-language').value }; })(),
   };
 });
 const clear = 'rgba(0, 0, 0, 0)';
@@ -101,10 +101,11 @@ function header(s, label, { rows, hintLines }) {
   assert.ok(s.head.parts.find(v => v.id === 'terminal-selection-hint').font >= 10, `${label}: the hint's type is not smaller`);
 }
 // T-163, the row under the input. In the Chinese interface, in a card of 320px or more, the hint asks for 16em
-// and takes what is left once the labels are whole; anywhere else it is sized as it always was. Checking the
-// computed values catches the rule being switched off silently, for instance by a change to the language selector.
-const hintGivesWay = (s, label) => assert.deepEqual([s.row.language, s.row.basis, s.row.grow], ['zh', '176px', '1'], `${label}: in Chinese the hint asks for 16em and takes what is left (${s.row.basis}, ${s.row.grow})`);
-const hintAsBefore = (s, label) => assert.deepEqual([s.row.basis, s.row.grow], ['auto', '0'], `${label}: the hint is sized as before (${s.row.basis}, ${s.row.grow})`);
+// (or its own width when that is less), takes what is left once the labels are whole, and keeps its own width or
+// 44% of the row, whichever is less; anywhere else it is sized as it always was. Checking the computed values
+// catches the rule being switched off silently, for instance by a change to the language selector.
+const hintGivesWay = (s, label) => assert.deepEqual([s.row.language, s.row.basis, s.row.grow, s.row.floor], ['zh', 'calc-size(max-content, min(size, 176px))', '1', 'calc-size(max-content, min(size, 44%))'], `${label}: in Chinese the hint asks for 16em or its own width and takes what is left (${s.row.basis}, ${s.row.grow}, ${s.row.floor})`);
+const hintAsBefore = (s, label) => assert.deepEqual([s.row.basis, s.row.grow, s.row.floor], ['auto', '0', 'auto'], `${label}: the hint is sized as before (${s.row.basis}, ${s.row.grow}, ${s.row.floor})`);
 const wholeLabels = (s, label) => { assert.equal(s.row.send, 1, `${label}: the send control's label is on one line`); if (s.row.interrupt !== null) assert.equal(s.row.interrupt, 1, `${label}: the interrupt control's label is on one line`); };
 const inside = (inner, outer, label) => assert.ok(inner.x >= outer.x - 0.5 && inner.right <= outer.right + 0.5 && inner.y >= outer.y - 0.5 && inner.bottom <= outer.bottom + 0.5, label + ' stays inside its block');
 // What holds in every state of this surface.
@@ -145,7 +146,7 @@ async function labelsSweep() {
   const measure = before => page.evaluate(({ labels, hints, widths, interrupt, before }) => {
     const q = s => document.querySelector(s), card = q('#composer'), send = q('#send-button'), stop = q('#interrupt'), hint = q('#compose-hint'), wrap = q('#composer-wrap'), footer = q('#composer .composer-footer');
     const keep = { send: send.textContent, stop: stop.textContent, stopHidden: stop.hidden, hint: hint.textContent, width: wrap.style.width, self: wrap.style.alignSelf };
-    const earlier = document.createElement('style'); earlier.textContent = '#composer .session-compose-hint{flex:0 1 auto !important;max-width:none !important}'; if (before) document.head.append(earlier);
+    const earlier = document.createElement('style'); earlier.textContent = '#composer .session-compose-hint{flex:0 1 auto !important;max-width:none !important;min-width:auto !important}'; if (before) document.head.append(earlier);
     const lines = e => { const r = document.createRange(); r.selectNodeContents(e); return new Set([...r.getClientRects()].filter(c => c.width > 0.5).map(c => Math.round(c.top))).size; };
     const pad = parseFloat(getComputedStyle(wrap).paddingLeft) + parseFloat(getComputedStyle(wrap).paddingRight); wrap.style.alignSelf = 'flex-start';
     const out = [];
