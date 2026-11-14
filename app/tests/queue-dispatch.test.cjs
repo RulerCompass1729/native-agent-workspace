@@ -6,6 +6,7 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const rules = require('../queue-dispatch.cjs');
 const { RoomState } = require('../room-state.cjs');
+const uiLocale = require('../ui-locale.js');
 const { StewardRole } = require('../steward-role.cjs');
 
 const HOUR = 60 * 60 * 1000;
@@ -651,6 +652,8 @@ function dispatcherSetup(t, sessions, options = {}) {
   const client = new FakeClient(sessions);
   let now = NOW;
   let connects = 0;
+  // window: an open window serves the client, so the once-a-minute check of quiet members runs with no queued work.
+  const { window: windowed, ...rest } = options;
   const dispatcher = new rules.QueueDispatcher({
     roomState: room,
     dataDir: dir,
@@ -658,10 +661,11 @@ function dispatcherSetup(t, sessions, options = {}) {
       connects += 1;
       return client;
     },
+    ...(windowed ? { clients: () => client } : {}),
     now: () => now,
     settleMs: 0,
     tickMs: 3600000,
-    ...options,
+    ...rest,
   });
   t.after(() => dispatcher.close());
   return { room, client, dispatcher, advance: ms => { now += ms; }, dir, connects: () => connects };
@@ -893,23 +897,98 @@ test('an old member writes a handoff, a new member takes its queue, and the old 
   assert.match(work[1][2], /next task/);
 });
 
-test('the person using the old member during the handoff stops the rotation before a new session exists', async t => {
-  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
+// The 11-14 drill, finding 1: a person typing into the old session during its handoff rested the member a week.
+const rotationTexts = events => events.filter(event => event.kind === 'rotation')
+  .flatMap(event => ['zh', 'en'].map(locale => uiLocale.displayText(locale, event.text, event.uiMessage)));
+
+test('the person using the old member during the handoff pauses the rotation: nothing rests, and it is asked again once quiet', async t => {
+  const { room, client, dispatcher, advance, dir } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })], { window: true });
   fakeMembership(room, client);
   room.queueAdd('next task', 'a');
   await dispatcher.start();
   await dispatcher.schedule();
+  assert.equal(dispatcher.rotations.a.phase, 'requested');
   advance(1000);
   dispatcher.noteHuman('a');
   client.reply('a', '交接：分支 abc。');
   await dispatcher.schedule();
   assert.equal(client.calls.filter(call => call[0] === 'create').length, 0);
   assert.equal(client.calls.filter(call => call[0] === 'stop').length, 0);
-  const keys = [];
-  for (const event of room.value.events) {
-    keys.push(event.uiMessage.key);
-  }
-  assert.ok(keys.includes('notice.rotation.failed'));
+  assert.equal(dispatcher.rotations.a, undefined, 'nothing failed, so nothing rests');
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'queue-dispatch.json'), 'utf8'));
+  assert.equal(Object.hasOwn(saved.rotations || {}, 'a'), false);
+  const keys = room.value.events.filter(event => event.kind === 'rotation').map(event => event.uiMessage.key);
+  assert.deepEqual(keys, ['notice.rotation.requested', 'notice.rotation.deferred']);
+  const texts = rotationTexts(room.value.events);
+  assert.ok(texts.includes('NAW 换会话先停下：你在用「Agent a（a）」，等它安静下来再换；原会话保持不变'), texts.join('\n'));
+  assert.ok(texts.some(text => text.startsWith('NAW session rotation paused: you were using “Agent a（a）”')));
+  assert.equal(texts.some(text => /person-active/.test(text)), false);
+  assert.deepEqual(dispatcher.rotationEntries().map(entry => entry.event), ['requested', 'waiting']);
+  assert.equal(dispatcher.rotationEntries()[1].reason, 'person-active', 'the private log keeps the code');
+  // Past the person's two minutes its queued item goes to it; the handoff is not asked for again yet.
+  advance(3 * 60 * 1000);
+  await dispatcher.schedule();
+  assert.equal(dispatcher.rotations.a, undefined);
+  const sends = client.sends('a');
+  assert.match(sends[sends.length - 1][2], /next task/);
+  assert.equal(client.calls.filter(call => call[0] === 'dispatch' && call[1] === 'a').length, 2, 'one handoff request, then the item');
+  client.reply('a', 'done');
+  await dispatcher.schedule();
+  advance(20 * 60 * 1000);
+  await dispatcher.schedule();
+  assert.equal(dispatcher.rotations.a, undefined, 'still inside the member\'s thirty quiet minutes');
+  // Thirty quiet minutes after it was paused, the member is rotated again.
+  advance(11 * 60 * 1000);
+  await dispatcher.schedule();
+  assert.equal(dispatcher.rotations.a?.phase, 'requested', 'asked again once quiet');
+  assert.equal(dispatcher.rotationEntries().filter(entry => entry.event === 'requested').length, 2);
+});
+
+test('the pause counts from the session\'s own last activity, and the butler\'s compaction waits only its two minutes', t => {
+  const { dispatcher } = dispatcherSetup(t, []);
+  dispatcher.deferredAt.set('a', { at: NOW, due: 'compact' });
+  dispatcher.deferredAt.set('b', { at: NOW, due: 'compact' });
+  dispatcher.deferredAt.set('c', { at: NOW, due: 'memory' });
+  dispatcher.deferredAt.set('gone', { at: NOW, due: 'compact' });
+  const sessions = [member('a', { lastActivityAt: NOW + 25 * 60 * 1000 }), member('b'), member('c')];
+  const at = minutes => [...dispatcher.personDeferred(sessions, 'b', NOW + minutes * 60 * 1000)].sort();
+  assert.deepEqual(at(1), ['a', 'b', 'c']);
+  assert.deepEqual(at(3), ['a', 'c'], 'the butler\'s compaction waits two minutes');
+  assert.deepEqual(at(11), ['a'], 'memory waits ten');
+  assert.deepEqual(at(54), ['a'], 'thirty minutes from its last activity, not from the pause');
+  assert.deepEqual(at(56), []);
+  assert.equal(dispatcher.deferredAt.size, 0, 'entries go once their quiet has passed or the session is gone');
+});
+
+test('a person-active failure saved by an older build before any successor no longer rests the member; other failures still do', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-defer-load-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'queue-dispatch.json');
+  const failed = (reason, extra = {}) => ({ phase: 'failed', failedAt: NOW - 1000, reason, oldNativeId: 'native-x', provider: 'claude', cwd: '/tmp', name: 'Agent x', roomIds: ['shared'], ...extra });
+  const moved = failed('person-active', { newId: 'made', newCwd: '/synthetic/new' });
+  const unstopped = failed('person-active', { newId: 'left', newCwd: '/tmp' });
+  fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: { a: failed('person-active'), b: failed('new-session-not-ready'), c: failed('handoff-missing'), d: moved, e: unstopped } }), { mode: 0o600 });
+  assert.deepEqual(Object.keys(rules.readRotations(file, NOW)).sort(), ['b', 'c', 'd', 'e'],
+    'a successor in a moved directory keeps the record its hold names; one whose stop was not confirmed keeps its week across a restart');
+});
+
+test('a person-active failure whose successor is in a moved directory keeps its record, so its isolation hold keeps its anchor', async t => {
+  const { dir, room } = roomSetup(t);
+  const old = member('a', { cwd: '/synthetic/old' });
+  const fresh = member('made', { name: 'Agent a · 续', cwd: '/synthetic/new', roomIds: [], roomId: null });
+  const client = new FakeClient([old, fresh]); fakeMembership(room, client);
+  const record = { phase: 'created', oldId: 'a', oldNativeId: old.nativeId, oldControl: 0, requestedAt: NOW - 60000, provider: 'claude',
+    cwd: old.cwd, name: old.name, roomIds: ['shared'], newId: fresh.id, newCwd: fresh.cwd, newName: fresh.name, createdNewAt: NOW - 1000, handoff: 'Synthetic saved work', reason: 'compact' };
+  fs.writeFileSync(path.join(dir, 'queue-dispatch.json'), JSON.stringify({ version: 1, rotations: { a: record } }), { mode: 0o600 });
+  const make = () => new rules.QueueDispatcher({ roomState: room, dataDir: dir, now: () => NOW, connect: async () => client, settleMs: 0, tickMs: 3600000, notify() {} });
+  const dispatcher = make(); dispatcher.client = client; t.after(() => dispatcher.close());
+  assert.ok(room.directoryTrustIsolation().holds.made, 'the moved successor is held while it is unconfirmed');
+  await dispatcher.failRotation('a', dispatcher.rotations.a, 'person-active', NOW, client.snapshot());
+  assert.equal(dispatcher.rotations.a.phase, 'failed', 'the record the hold names stays');
+  assert.equal(dispatcher.deferredAt.has('a'), false);
+  assert.ok(rotationTexts(room.value.events).some(text => text.includes('你正在用这个会话')), 'its reason is still in words');
+  const restarted = make(); t.after(() => restarted.close());
+  assert.equal(restarted.faultedRotations.has('a'), false, 'a restart finds the hold and its record together');
 });
 
 test('if the old member is in use when the handoff lands, it is kept running', async t => {
@@ -964,6 +1043,18 @@ test('a new member that never gets ready ends the rotation, is stopped, and the 
   assert.ok(keys.includes('notice.rotation.failed'), 'the failure is recorded in the space');
   const sends = client.sends('a');
   assert.match(sends[sends.length - 1][2], /next task/, 'the old member then gets its next item');
+  // The reason reads as words in both languages; the code stays in the private log.
+  const texts = rotationTexts(room.value.events);
+  assert.ok(texts.includes('NAW 换会话没有完成：「Agent a（a）」（新会话没能启动好）；原会话保持不变'), texts.join('\n'));
+  assert.ok(texts.includes('NAW session rotation did not finish: “Agent a（a）” (the new session did not start properly); the original session is unchanged'));
+  assert.equal(texts.some(text => /new-session-not-ready/.test(text)), false);
+  assert.equal(dispatcher.rotationEntries().find(entry => entry.event === 'failed').reason, 'new-session-not-ready');
+  // A real failure still rests the member: thirty quiet minutes later it is not asked again.
+  client.reply('a', 'done');
+  advance(31 * 60 * 1000);
+  await dispatcher.schedule();
+  assert.equal(dispatcher.rotations.a.phase, 'failed');
+  assert.equal(dispatcher.rotationEntries().filter(entry => entry.event === 'requested').length, 1);
 });
 
 test('after a restart mid-creation, the session already created is adopted instead of a second one', async t => {
@@ -1030,7 +1121,7 @@ test('B2: old creating records adopt their old-directory successor before planni
   const { dir, room } = roomSetup(t), cwd = path.join(dir, 'workspace');
   const made = member('made', { name: 'Agent a · 续', cwd, createdAt: NOW - 1000, roomIds: [], roomId: null });
   const client = new FakeClient([member('a', { cwd }), made]); client.state.defaultWorkspace = cwd; fakeMembership(room, client);
-  fs.writeFileSync(path.join(dir, 'queue-dispatch.json'), JSON.stringify({ version: 1, rotations: { a: { phase: 'creating', oldNativeId: 'native-a', provider: 'claude', cwd, name: 'Agent a', roomIds: ['shared'], creatingAt: NOW - 2000 } } }), { mode: 0o600 });
+  fs.writeFileSync(path.join(dir, 'queue-dispatch.json'), JSON.stringify({ version: 1, rotations: { a: { phase: 'creating', oldNativeId: 'native-a', oldControl: 0, provider: 'claude', cwd, name: 'Agent a', roomIds: ['shared'], creatingAt: NOW - 2000 } } }), { mode: 0o600 });
   const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now: () => NOW, settleMs: 0, tickMs: 3600000, creationDefaults: () => ({ repository: '/synthetic/repo' }), migrateDirectories: true }); t.after(() => dispatcher.close());
   await dispatcher.start(); await dispatcher.schedule();
   assert.equal(dispatcher.rotations.a.newId, 'made'); assert.equal(client.calls.some(c => ['create', 'gitWorktreePreview'].includes(c[0])), false);

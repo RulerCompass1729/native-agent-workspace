@@ -9,7 +9,7 @@ const path = require('node:path');
 const cp = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { roomIds, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
-const { uiError } = require('./ui-errors.cjs');
+const { uiError, uiNotice } = require('./ui-errors.cjs');
 const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 const { noticeText } = require('./answer-notices.cjs');
@@ -775,6 +775,10 @@ function rotationReason(session, now, options, rotations) {
   if (options.asking && options.asking.has(session.id)) {
     return null;
   }
+  // The person used it while it was being rotated: it waits until it is quiet again (see personDeferred).
+  if (options.deferredRotations && options.deferredRotations.has(session.id)) {
+    return null;
+  }
   // A kept old session already has a successor carrying its work; the person ends it when done.
   if (options.handedOff && options.handedOff.has(session.id)) {
     return null;
@@ -921,6 +925,7 @@ function planDispatch(input) {
     compactLimit: input.compactLimit ?? COMPACT_LIMIT,
     handedOff: input.handedOff,
     waitingModel: input.waitingModel,
+    deferredRotations: input.deferredRotations,
     memory: input.memory,
     memoryLimit: input.memoryLimit ?? MEMORY_LIMIT_BYTES,
     memoryMinAgeMs: input.memoryMinAgeMs ?? MEMORY_MIN_AGE_MS,
@@ -1180,14 +1185,41 @@ function dispatchText(roomName, item) {
   ].join('\n');
 }
 
-function rotationWhy(reason, records, bytes, compactions) {
+// Why a rotation stopped, as the person reads it: the code stays in the private rotation log (the 11-14 drill showed
+// 「（person-active）」 in a space and an OS notice). null: the reason is already a sentence, shown as it is.
+const ROTATION_CAUSES = [
+  [/^person-active$/, 'personActive'],
+  [/^handoff-missing$/, 'handoffMissing'],
+  [/^handoff-request-/, 'handoffRequest'],
+  [/^handoff-unconfirmed$/, 'handoffUnconfirmed'],
+  [/^old-session-missing$/, 'oldMissing'],
+  [/^(new-session-(missing|not-ready|ambiguous)|create-timeout)$/, 'newNotReady'],
+  [/^(new-session-model-unreported|settings-differ:|cannot-carry:model-unknown$)/, 'settings'],
+  [/^cannot-carry:backend-cannot-carry-settings$/, 'backend'],
+  [/^cannot-carry:(permission-mode|collaboration-mode)$/, 'mode'],
+  [/^cannot-carry:(several-spaces|spaces-unreadable)$/, 'spaces'],
+  [/^(join|leave)-timeout$/, 'spaceMove'],
+  [/^(stop-timeout|native-stop-unconfirmed|guarded-stop-unavailable)$/, 'stop'],
+  [/^(invalid-worktree-directory|worktree-preview-timeout|new-session-directory-trust-unavailable|native-directory-trust)/, 'directory'],
+];
+function rotationCauseKey(code) {
+  const text = typeof code === 'string' ? code : '';
+  if (text && !/^[\w:.-]+$/.test(text)) {
+    return null;
+  }
+  const found = ROTATION_CAUSES.find(([pattern]) => pattern.test(text));
+  return `notice.rotation.cause.${found ? found[1] : 'other'}`;
+}
+
+// Why it is due, as the old session (in Chinese) and the spaces (in the reader's language) are told.
+function rotationWhyNotice(reason, records, bytes, compactions) {
   if (reason === 'memory') {
-    return `这个会话（连同它的子进程）已占用约 ${(bytes / 1073741824).toFixed(1)} GB 内存`;
+    return uiNotice('notice.rotation.why.memory', { gb: (bytes / 1073741824).toFixed(1) });
   }
   if (reason === 'compact') {
-    return `这个会话的上下文已压缩 ${compactions} 次`;
+    return uiNotice('notice.rotation.why.compact', { count: String(compactions) });
   }
-  return `这个会话已有 ${records} 条记录，内容很多`;
+  return uiNotice('notice.rotation.why.content', { count: String(records) });
 }
 
 function handoffRequestText(why, reason) {
@@ -1754,6 +1786,12 @@ function readRotations(file, now, faults = {}) {
     if (record.phase === 'failed' && record.reason === 'cannot-carry:model-unknown') {
       continue;
     }
+    // The person used the old session before a successor was made (an older build rested it a week; see
+    // deferRotation). Trust records and a record with a successor (its stop unconfirmed, its handoff confirmed, or
+    // its isolation hold naming this record) keep theirs, as failRotation keeps them.
+    if (record.phase === 'failed' && record.reason === 'person-active' && !trustRecord(record) && !validId(record.newId)) {
+      continue;
+    }
     if (record.phase === 'kept' && now - (record.keptAt || 0) > ROTATE_AFTER_MS) {
       continue;
     }
@@ -1807,6 +1845,8 @@ class QueueDispatcher {
     this.transcriptRoot = options.transcriptRoot || claudeProjects();
     // Sessions whose model is known nowhere yet: asked again after a while, never rested for a week.
     this.unknownModelAt = new Map();
+    // Rotations the person interrupted by using the old session: id -> { at, due } (in memory; see personDeferred).
+    this.deferredAt = new Map();
     // Each waits once in the log per app run, so a session that never reports is still traceable.
     this.loggedWaiting = new Set();
     this.memoryLimit = options.memoryLimit ?? MEMORY_LIMIT_BYTES;
@@ -2069,6 +2109,29 @@ class QueueDispatcher {
         if (entry.new && validId(entry.new.id || '')) {
           ids.get(entry.old.id).add(entry.new.id);
         }
+      }
+    }
+    return ids;
+  }
+
+  // A rotation the person interrupted waits for the quiet that member's rotation already needs (30 minutes; 10 for
+  // memory; 2 for the butler's compaction), counted from the later of the interruption and the session's last activity,
+  // so a queued item does not ask again while the person is still at it (the 11-14 drill, finding 1).
+  personDeferred(sessions, butler, now) {
+    const ids = new Set();
+    for (const [id, entry] of this.deferredAt) {
+      const session = sessions.find(s => s.id === id);
+      let quiet = this.quietMs;
+      if (entry.due === 'memory') {
+        quiet = QUIET_MEMORY_MS;
+      } else if (entry.due === 'compact' && id === butler) {
+        quiet = this.quietCompactMs;
+      }
+      const last = session ? Math.max(entry.at, lastActivityOf(session, now) ?? entry.at) : entry.at;
+      if (session && now - last < quiet) {
+        ids.add(id);
+      } else {
+        this.deferredAt.delete(id);
       }
     }
     return ids;
@@ -2526,6 +2589,7 @@ class QueueDispatcher {
     const compactions = await this.compactionCounts(current.snapshot, steward, handedOff, current.now);
     // B6: the session that holds an open handoff gets no queue work and is not rotated, so what
     // it writes until the handoff is closed is not a member's reply; it is not listed as vacant either.
+    const butler = this.stewardSession(current.snapshot.sessions)?.steward.sessionId;
     const engaged = this.integration ? this.integration.holding() : undefined;
     const actions = planDispatch({
       rooms: current.snapshot.rooms,
@@ -2539,6 +2603,7 @@ class QueueDispatcher {
       contentLimits: this.contentLimits,
       handedOff,
       waitingModel: this.waitingModel(current.now),
+      deferredRotations: this.personDeferred(current.snapshot.sessions, butler, current.now),
       quietMs: this.quietMs,
       compactions,
       compactLimit: this.compactLimit,
@@ -2550,7 +2615,7 @@ class QueueDispatcher {
       ...this.trustAdmission(),
       engaged,
       outside: steward ? [steward.sessionId] : [],
-      butler: this.stewardSession(current.snapshot.sessions)?.steward.sessionId,
+      butler,
     });
     for (const action of actions) {
       if (this.closed) {
@@ -2969,7 +3034,7 @@ class QueueDispatcher {
     this.rotations[session.id] = record;
     this.save();
     this.appendLog('failed', record, { reason: record.reason });
-    this.roomState.rotationEvent(record.roomIds, 'failed', this.label(session.id, record.name), record.reason);
+    this.failedEvent(record.roomIds, session.id, record);
     this.notify('failed', record);
   }
 
@@ -2980,7 +3045,8 @@ class QueueDispatcher {
     }
     const session = current.session;
     const reason = action.reason || 'content';
-    const why = rotationWhy(reason, recordCount(session), bytes || 0, action.compactions);
+    const whyNotice = rotationWhyNotice(reason, recordCount(session), bytes || 0, action.compactions);
+    const why = whyNotice.text;
     // Decided before the old session is asked anything: a successor must match it.
     let carry = carrySettings(session);
     if (carry.reason === 'model-unknown') {
@@ -3037,7 +3103,7 @@ class QueueDispatcher {
       record.tag = await this.send(session, handoffRequestText(why, reason), `rotation:${session.id}`);
       this.save();
       this.appendLog('requested', record, { reason, why });
-      this.roomState.rotationEvent(record.roomIds, 'requested', this.label(session.id, record.name), why);
+      this.roomState.rotationEvent(record.roomIds, 'requested', this.label(session.id, record.name), why, undefined, whyNotice.uiMessage);
     } catch (error) {
       if (errorKey(error) === NATIVE_DRAFT_KEY) {
         // The person has an unsent prompt there: ask again later, record no failure.
@@ -3050,7 +3116,7 @@ class QueueDispatcher {
         record.failedAt = current.now;
         record.reason = error.message || 'handoff-request-failed';
         this.appendLog('failed', record, { reason: record.reason });
-        this.roomState.rotationEvent(record.roomIds, 'failed', this.label(session.id, record.name), record.reason);
+        this.failedEvent(record.roomIds, session.id, record);
         this.notify('failed', record);
       }
       this.save();
@@ -3093,6 +3159,7 @@ class QueueDispatcher {
   // Undo what a failed rotation started; the old member keeps its session and work.
   async failRotation(oldId, record, reason, now, snapshot) {
     const phase = record.phase;
+    const due = record.reason;
     const trustTimedOut = phase === 'waiting-trust' && reason === 'native-directory-trust-timeout';
     record.phase = 'failed';
     record.failedAt = now;
@@ -3107,6 +3174,7 @@ class QueueDispatcher {
       return;
     }
     this.save();
+    let stopped = true;
     if (record.newId && !record.handoffConfirmed && ['joining', 'created', 'handed', 'waiting-trust'].includes(phase)) {
       for (const roomId of record.roomIds) {
         try {
@@ -3124,6 +3192,7 @@ class QueueDispatcher {
         await withTimeout(this.client.call('stop', record.newId), CALL_TIMEOUT_MS, 'stop-timeout');
       } catch {
         // Left for the person; it holds no handoff and no queued work.
+        stopped = false;
         if (trustTimedOut) {
           record.reason = reason = 'native-directory-trust-timeout-stop-unconfirmed';
           this.save();
@@ -3133,11 +3202,39 @@ class QueueDispatcher {
     if (!record.oldId) {
       record.oldId = oldId;
     }
+    // A successor in a moved directory is held under this record (holdTrustSuccessor); it keeps the failed record.
+    if (reason === 'person-active' && stopped && !record.handoffConfirmed && !movedSuccessor(record)) {
+      await this.deferRotation(oldId, record, due, now);
+      return;
+    }
     this.appendLog('failed', record, { reason });
     const outcome = trustTimedOut ? (reason === 'native-directory-trust-timeout-stop-unconfirmed' ? 'trustTimeoutUnconfirmed' : 'trustTimedOut') : 'failed';
-    this.roomState.rotationEvent(record.roomIds, outcome, this.label(oldId, record.name), trustTimedOut ? this.label(record.newId, record.newName) : reason);
+    if (trustTimedOut) {
+      this.roomState.rotationEvent(record.roomIds, outcome, this.label(oldId, record.name), this.label(record.newId, record.newName));
+    } else {
+      this.failedEvent(record.roomIds, oldId, record);
+    }
     this.notify(outcome, record);
     await this.broadcast();
+  }
+
+  // The person used the old session while it was being rotated (the 11-14 drill, finding 1: a week's rest for it).
+  // Nothing failed: the record goes, and the member is rotated again once quiet (personDeferred). No OS notice, since
+  // the person is at that session; the space says why the request stopped. Each new attempt asks for a handoff again.
+  async deferRotation(oldId, record, due, now) {
+    delete this.rotations[oldId];
+    this.save();
+    this.deferredAt.set(oldId, { at: now, due });
+    this.appendLog('waiting', record, { reason: 'person-active' });
+    this.roomState.rotationEvent(record.roomIds, 'deferred', this.label(oldId, record.name));
+    await this.broadcast();
+  }
+
+  // A failure in the spaces: its reason in the reader's language, never the code (rotationCauseKey).
+  failedEvent(ids, oldId, record, receipt) {
+    const key = rotationCauseKey(record.reason);
+    const cause = key ? uiNotice(key) : null;
+    this.roomState.rotationEvent(ids, 'failed', this.label(oldId, record.name), cause ? cause.text : record.reason, receipt, cause ? cause.uiMessage : undefined);
   }
 
   // One durable decision per visible wait. Never send an answer to native here.
@@ -3181,8 +3278,8 @@ class QueueDispatcher {
     };
     await attempt(effects, 'log', () => this.appendLog(event, record, { reason: record.reason, noticeId: receipt }));
     for (const id of record.roomIds) {
-      await attempt(effects.rooms, id, () => this.roomState.rotationEvent([id], outcome, this.label(oldId, record.name),
-        outcome === 'failed' ? record.reason : this.label(record.newId, record.newName), receipt));
+      await attempt(effects.rooms, id, () => outcome === 'failed' ? this.failedEvent([id], oldId, record, receipt)
+        : this.roomState.rotationEvent([id], outcome, this.label(oldId, record.name), this.label(record.newId, record.newName), receipt));
     }
     await attempt(effects, 'os', () => this.notify(outcome, record));
   }
@@ -3567,6 +3664,7 @@ module.exports = {
   sessionReady,
   queueVacancies,
   planDispatch,
+  rotationCauseKey,
   replyAfter,
   startsWithDecision,
   AUTOMATIC_ORIGINS,
