@@ -1496,7 +1496,8 @@ async function boot() {
         const scan = v => { if (typeof v === 'string') strings.add(v); else if (Array.isArray(v)) v.forEach(scan); else if (v && typeof v === 'object') Object.values(v).forEach(scan); };
         scan(command.arguments);
         const state = client.snapshot();
-        if (backgroundOperation.maintenanceAction(command.method, command.arguments, actor)) {
+        const maintenance = backgroundOperation.maintenanceAction(command.method, command.arguments, actor);
+        if (maintenance) {
           const metadata = roomState.apply(state), auditRooms = new Set();
           const controlTarget = ['interrupt', 'pause', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent'].includes(command.method) ? command.arguments[0] : null;
           for (const s of state.sessions) if (s.id === actor.id || strings.has(s.id)) {
@@ -1529,13 +1530,39 @@ async function boot() {
               sessions: metadata.sessions.filter(s => s.id === actor.id).map(placement),
               named: name ? holders.filter(x => x.name === name).map(x => x.id).sort() : [] };
           }
+          // Bind maintenance consent to the records it can change. Other cards may
+          // create, disconnect or archive independent sessions while this one waits.
+          let targets = null, targetRooms = null;
+          if (['archiveSession', 'restoreSession', 'resume', 'importHistory'].includes(maintenance)) {
+            if (maintenance === 'importHistory') {
+              const provider = command.arguments[1]?.provider ?? 'codex', requested = command.arguments[0];
+              // Match WorkspaceClient's provider-specific native history identity.
+              const nativeId = provider === 'claude' && typeof requested === 'string' ? requested.toLowerCase() : requested;
+              targets = new Set(metadata.sessions.filter(s => s.provider === provider && s.nativeId === nativeId).map(s => s.id));
+            } else targets = new Set([command.arguments[0]]);
+            targetRooms = new Set();
+            for (const s of metadata.sessions) if (targets.has(s.id)) roomIds(s).forEach(id => targetRooms.add(id));
+            for (const id of targets) roomState.value.sessionArchives[id]?.rooms.forEach(r => targetRooms.add(r.id));
+          } else if (['archiveRoom', 'restoreRoom'].includes(maintenance)) {
+            const id = command.method === 'spaceAction' ? command.arguments[0] : 'shared';
+            targetRooms = new Set([id]);
+            targets = new Set(metadata.sessions.filter(s => roomIds(s).includes(id)).map(s => s.id));
+            // Restore acts on detached saved members too, not just today's roster.
+            roomState.metadata(id).restoreMembers.forEach(member => targets.add(member));
+          }
+          if (targets) {
+            targets.add(actor.id); // Keep the asking session's placement/connection guard as well as checkActor.
+            targetRooms.forEach(id => auditRooms.add(id));
+          }
           return { auditRooms: [...(auditRooms.size ? auditRooms : ['shared'])].sort(),
             ...(command.method === 'initial' ? { selected: context.view.selected } : {}),
             ...(command.method === 'pasteNativeContent' ? { clipboardRevision: context.clipboardRevision || null } : {}),
-            sessions: metadata.sessions.map(placement),
-            rooms: metadata.rooms.map(r => ({ id: r.id, name: r.name, archived: r.archived, memberOrder: r.memberOrder,
+            sessions: metadata.sessions.filter(s => !targets || targets.has(s.id)).map(placement),
+            rooms: metadata.rooms.filter(r => !targetRooms || targetRooms.has(r.id)).map(r => ({ id: r.id, name: r.name, archived: r.archived, memberOrder: r.memberOrder,
+              // The roster changes a session's saved neighbour/slot and a room's archive plan.
+              ...(targetRooms ? { memberIds: metadata.sessions.filter(s => roomIds(s).includes(r.id)).map(s => s.id).sort() } : {}),
               restoreMembers: roomState.metadata(r.id).restoreMembers, restorePlacements: roomState.metadata(r.id).restorePlacements })),
-            sessionArchives: roomState.value.sessionArchives };
+            sessionArchives: targets ? Object.fromEntries(Object.entries(roomState.value.sessionArchives).filter(([id]) => targets.has(id))) : roomState.value.sessionArchives };
         }
         const global = ['quitService', 'clearSharedHistory', 'archiveRoom', 'switchBackend', 'continueConnection'].includes(command.method);
         return { sessions: roomState.apply(state).sessions.filter(s => global || strings.has(s.id)).map(s => ({ id: s.id, nativeId: s.nativeId, pid: s.pid, owner: s.owner, state: s.state, activeTurnId: s.activeTurnId, pendingTag: s.pendingTag, controlRevision: s.controlRevision,
