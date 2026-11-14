@@ -31,17 +31,19 @@ test('local and cross-window pending interruption keep the next draft editable w
   }
 });
 
-test('root column requires explicit chat view and never implies a passive takeover', () => {
+// 887d9fea: a column's conversation box takes text whichever side its view is on; another window's session still
+// needs 接管此窗口.
+test('a root column takes text on either side of its view and never implies a passive takeover', () => {
   const s = { id:'column', provider:'codex', state:'idle', owner:'owner', view:'terminal', chatAvailable:true };
   const context = { s, uiText, owner:'owner', disconnected:false, nativeUsable:()=>true, canResume:()=>false, focusedRoomMember:()=>false, mode:'terminal' };
   const action = () => vm.runInNewContext(interruptDecision + decision + ";soloAction(s,{column:true,mode:'chat'})", {...context});
-  assert.equal(action().kind,'chat');
+  assert.equal(action().kind,'send');
   s.owner='other';assert.equal(action().kind,'claim');
   s.owner='owner';s.view='chat';assert.equal(action().kind,'send');
   s.nativeInputRequired=true;assert.equal(action().kind,'terminal');
 });
 test('column native writes require positive matching native lifetime proof', () => {
-  const proof = source.slice(source.indexOf('function currentTerminalDisplay('),source.indexOf('function canCaptureTerminal('));
+  const proof = source.slice(source.indexOf('function currentTerminalDisplay('),source.indexOf('function canFlushComposition('));
   const entry={generation:2,nativeId:'native-a',epoch:'epoch-a'},record={id:'column',nativeId:'native-a',connectionRevision:2,terminalState:{alive:true,epoch:'epoch-a'}};
   const display=()=>vm.runInNewContext(proof+';currentTerminalDisplay(entry,record)',{entry,record,columnTerminalBinding:()=>({})});
   assert.equal(display(),true);

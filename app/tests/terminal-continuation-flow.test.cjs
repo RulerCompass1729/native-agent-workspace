@@ -236,7 +236,7 @@ test('live snapshot replay keeps already-authorized human input and rejects an o
     nativeId: 'synthetic-native', terminalState: { alive: true, epoch: target.entry.epoch } };
   Object.assign(target.entry, { generation: 0, nativeId: record.nativeId });
   const calls = []; let input;
-  const start = renderer.indexOf('function terminalCanInput('), end = renderer.indexOf('\nfunction cancelViewInput(', start);
+  const start = renderer.indexOf('function terminalCanInput('), end = renderer.indexOf('\nfunction canFlushComposition(', start);
   const onDataStart = renderer.indexOf('  term.onData(data => {'), onDataEnd = renderer.indexOf('\n  let confirmingEnter', onDataStart);
   assert.ok(start >= 0 && end > start && onDataStart >= 0 && onDataEnd > onDataStart);
   const context = { terminals: target.terminals, state: { sessions: [record] }, owner: record.owner, disconnected: false,
@@ -246,7 +246,7 @@ test('live snapshot replay keeps already-authorized human input and rejects an o
     uiError: code => Error(code), preserveUnconfirmed() { throw Error('Unexpected input uncertainty'); },
     toastError(error) { throw error; }, render() {} };
   const gate = vm.runInNewContext(renderer.slice(start, end) + '\nterminalCanInput', context);
-  context.canCaptureTerminal = () => false; context.canFlushComposition = () => false;
+  context.canFlushComposition = () => false;
   vm.runInNewContext(renderer.slice(onDataStart, onDataEnd), context);
   assert.equal(gate(target.id), true);
   // The observing terminal must not send its own DECRPM responses: the

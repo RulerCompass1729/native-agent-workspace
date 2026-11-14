@@ -28,7 +28,7 @@ function fixture() {
     $: element, focusedRoomMember: () => context.selected === 'room' && context.roomSurface === 'overview' && Boolean(context.roomSession),
     activeSessionId: () => context.selected === 'room' ? context.roomSession : context.selected,
     current: () => context.state.sessions.find(s => s.id === context.roomSession), members: () => context.state.sessions.filter(s => s.roomId === context.spaceId),
-    captureReadingViews: () => events.push(['capture']), suspendColumnInputs: () => events.push(['suspend']), cancelViewInput: () => events.push(['cancel-pending-view-input']),
+    captureReadingViews: () => events.push(['capture']), suspendColumnInputs: () => events.push(['suspend']),
     activateSoloComposer: id => events.push(['composer', id]), render: () => events.push(['render']), persistView: () => context.captureRoomView(),
     attempt: fn => fn(), normalizeRoomMention() {}, populateSelect() {}, roomRecipient: () => element('recipient').value,
     nativeWorkspaceMentions: { editHistory: () => ({}) }, toastMessage: key => notices.push(key),
@@ -45,7 +45,7 @@ test('member navigation restores its own mode and existing reading without any n
   c.focusRoomMember('b', 'a', 'collaboration:shared:b'); assert.equal(c.mode, 'chat');
   c.focusRoomMember('a', 'b', 'collaboration:shared:a'); assert.equal(c.mode, 'terminal'); assert.equal(c.terminalLayout, 'split');
   assert.equal(c.readingPositions['collaboration-focus:a'].top, 314); assert.deepEqual(plain(c.state.sessions), before);
-  assert.ok(f.events.some(x => x[0] === 'cancel-pending-view-input')); assert.deepEqual(f.nativeCalls, []);
+  assert.deepEqual(f.nativeCalls, []);
   c.state.sessions[0].nativeId = 'replacement-native'; c.restoreRoomMemberView('a'); assert.equal(c.mode, 'chat', 'a saved display choice does not cross native identity');
 });
 

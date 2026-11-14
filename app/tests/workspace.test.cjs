@@ -535,6 +535,20 @@ test('view changes and terminal device replies preserve sharing; unrelated compl
   assert.equal(w.room.messages.at(-1).text, 'shared result');
   assert.equal(w.get(id).pendingTag, null);
 });
+// The person, 2026-11-13: 「对于 Claude 和 codex 这样支持的,我希望两边的输入可以不要锁定」.
+test('the controlling window types into its terminal while the view is on the conversation side', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const inputs = []; r.terminal = { alive: true, input: data => inputs.push(data) };
+  w.claim(id, 'owner', 'chat'); w.setDraft(id, 'chat draft', 'owner');
+  const control = w.get(id).controlRevision;
+  w.input(id, 'a', 'owner');
+  assert.deepEqual(inputs, ['a']); assert.equal(w.get(id).view, 'chat', 'Typing does not move the view');
+  assert.equal(w.drafts.get(id), 'chat draft', 'The conversation draft stays as it was');
+  // A key is still the person acting in the native terminal: queued automation stays revoked as before.
+  assert.equal(w.get(id).controlRevision, control + 1);
+  assert.throws(() => w.input(id, 'b', 'another-window'), /另一个窗口|another window/i);
+  assert.deepEqual(inputs, ['a']);
+});
 test('sharing and interrupt preserve the native terminal view and accept the next human key', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   const inputs = []; r.terminal = { alive: true, input: data => inputs.push(data) };

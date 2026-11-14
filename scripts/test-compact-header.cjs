@@ -164,8 +164,9 @@ async function run() {
     await menu('#session-header-more'); await fixture('set-owner', id, original.owner); await page.getByRole('menu').waitFor({ state: 'hidden' }); assert.equal(await page.locator('#session-header-more').getAttribute('aria-expanded'), 'false');
     await fixture('native-permission', id, null); await fixture('set-state', id, 'idle'); await fixture('native-version', id, { version: '0.164.0' });
     await page.locator('#chat-tab').click(); await until(async () => (await snapshot()).sessions.find(s => s.id === id).view === 'chat', 'Chat control settled before bounded claim'); await fixture('hold-claim', id); await page.locator('#terminal-tab').click(); await until(async () => (await fixture()).claims.includes(id), 'Bounded pending view claim');
-    assert.ok((await page.locator('#session-status').innerText()).includes('输入暂存，尚未发送')); await capture('pending-input'); await fixture('fail-claim', id); await until(async () => !(await fixture()).claims.includes(id), 'Claim released without input');
-    check('Unverified version, original permission, other-window owner/takeover and pending-unsent input remain explicit; owner changes invalidate open header menus');
+    // 887d9fea: keys reach the terminal while the change is pending, so the status holds no input note.
+    assert.doesNotMatch(await page.locator('#session-status').innerText(), /输入暂存/); await capture('pending-claim'); await fixture('fail-claim', id); await until(async () => !(await fixture()).claims.includes(id), 'Claim released without input');
+    check('Unverified version, original permission, other-window owner/takeover remain explicit, a pending view change adds no held-input note; owner changes invalidate open header menus');
 
     await page.locator('#room-nav').click(); const ownerBeforeFocus = (await snapshot()).sessions.find(s => s.id === id).owner, callsBeforeFocus = (await fixture()).headerCalls.claim;
     await page.locator(`.collaboration-member-status[data-member-id="${id}"] button[aria-pressed]`).click(); await page.locator('#room-session #session-view').waitFor();

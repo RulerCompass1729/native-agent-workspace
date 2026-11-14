@@ -132,12 +132,18 @@ async function main() {
     await op(() => field(target).evaluate(el => { el.setSelectionRange(3, 11); window.__originalPrivateField = el; }));
     await op(() => page.locator('#shared-input').fill('POSITIVE_SHARED_UNSENT_DRAFT'));
     const owned = await snapshot(), stable = identities(owned), stats = await fixture('stats');
-    const screen = await op(() => page.evaluate(id => window.__liveColumn.read(id), target));
-    assert.equal(screen.disableStdin, true, 'Chat-owned terminal is still read only');
+    const beforeKey = await op(() => page.evaluate(id => window.__liveColumn.read(id), target));
+    // 887d9fea (the person, 2026-11-13: 两边的输入可以不要锁定): this window controls the session, so its column terminal
+    // takes keys while the view stays on the conversation side.
+    assert.equal(beforeKey.disableStdin, false, 'The terminal of a session this window controls takes keys on the conversation side');
     await op(() => terminal(target).locator('.xterm-helper-textarea').focus());
     await op(() => terminal(target).locator('.xterm-helper-textarea').press('x'));
-    await delay(100); assert.equal((await fixture('stats')).stats.inputs, stats.stats.inputs, 'Keys in the read-only column do not reach native');
-    note('An explicit chat claim retains terminal visibility; the native input gate still rejects a typed key');
+    await until(() => fixture('stats').then(r => r.stats.inputs === stats.stats.inputs + 1), 'The key in the column terminal reaches native');
+    assert.equal((await snapshot()).sessions.find(s => s.id === target).view, 'chat', 'Typing in the terminal does not move the view');
+    // The fixture echoes the key; the return check below compares against the screen after that echo.
+    await until(() => page.evaluate(([id, cursor]) => JSON.stringify(window.__liveColumn.read(id).cursor) !== cursor, [target, JSON.stringify(beforeKey.cursor)]), 'The echoed key is on the column screen');
+    const screen = await op(() => page.evaluate(id => window.__liveColumn.read(id), target));
+    note('An explicit chat claim retains terminal visibility, and its terminal takes a typed key while the view stays on the conversation side');
 
     await op(() => page.locator('#room-record').click());
     await op(() => page.locator('#room-overview').click());
@@ -175,7 +181,7 @@ async function main() {
 
     await op(() => reader(target).locator('.session-native-button').click());
     await until(async () => (await snapshot()).sessions.find(s => s.id === target).view === 'terminal', 'Explicit native button establishes the terminal input view');
-    await until(() => page.evaluate(id => !window.__liveColumn.read(id).disableStdin, target), 'Only the explicit native action enables terminal input');
+    await until(() => page.evaluate(id => !window.__liveColumn.read(id).disableStdin, target), 'The terminal still takes keys after the explicit native action');
     const beforeInput = await fixture('stats');
     await op(() => terminal(target).locator('.xterm-helper-textarea').focus()); await op(() => terminal(target).locator('.xterm-helper-textarea').press('Escape'));
     await until(() => fixture('stats').then(r => r.stats.inputs === beforeInput.stats.inputs + 1), 'Positive known fake input witness');
@@ -183,7 +189,7 @@ async function main() {
     assert.equal(afterInput.columnInputs.at(-1).id, target); assert.equal(afterInput.columnInputs.at(-1).data, '\x1b');
     assert.deepEqual(identities(await snapshot()), stable);
     assert.equal((await snapshot()).sessions.find(s => s.id === peer).view, 'chat');
-    assert.equal(afterInput.stats.inputs, 1); assert.equal(afterInput.stats.sends, 0);
+    assert.equal(afterInput.stats.inputs, 2); assert.equal(afterInput.stats.sends, 0);
     for (const key of guardedActions) assert.equal(afterInput.overviewCalls[key], 0, key);
     assert.equal(afterInput.overviewCalls.pause, beforeInput.overviewCalls.pause + 1, 'The one explicit native key retains the existing human-input pause');
     result.finalStats = afterInput; result.finalState = await snapshot();

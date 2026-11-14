@@ -21,7 +21,7 @@ class Element {
   get nextSibling() { return this.parentElement?.children[this.parentElement.children.indexOf(this) + 1]; }
 }
 function setup({ view = 'chat', alive = true, solo = false, usable = true } = {}) {
-  const record = { id: 'member', nativeId: 'original-native', owner: 'window', view, connectionRevision: 4,
+  const record = { id: 'member', nativeId: 'original-native', owner: 'window', view, eitherViewInput: true, connectionRevision: 4,
     terminalState: { alive, epoch: 'original-epoch' }, messages: [] };
   const host = new Element(), parking = new Element(), soloHost = new Element(), form = new Element();
   form.value = 'positive private draft'; form.selectionStart = 3; form.selectionEnd = 9;
@@ -37,7 +37,7 @@ function setup({ view = 'chat', alive = true, solo = false, usable = true } = {}
     composerCurrent: value => value === binding && Boolean(binding.visible),
     columnTerminalSash: value => value.nativeSash ||= new Element(),
     columnTerminalHeight: () => 128, applyColumnTerminalHeight: () => calls.push('height'),
-    updateSessionComposer: () => {}, takeFreeSession: () => {}, cancelViewInput: () => calls.push('cancel'),
+    updateSessionComposer: () => {}, takeFreeSession: () => {},
     cancelColumnComposition: () => calls.push('cancelComposition'),
     ui: { display: { attribute: () => {} } }, participantLabel: () => 'Member',
     nativeUsable: () => usable, ensureTerminal: (...args) => { calls.push(['ensure', ...args]); return Promise.resolve(); },
@@ -47,7 +47,7 @@ function setup({ view = 'chat', alive = true, solo = false, usable = true } = {}
   vm.runInContext(take('function renderColumnInput(', '// T-135:') + '\n' +
     take('function renderTerminal(', 'async function ensureTerminal(') + '\n' +
     take('function columnTerminalBinding(', 'const queuedInputs') + '\n' +
-    take('function terminalCanInput(', 'function canCaptureTerminal('), context);
+    take('function terminalCanInput(', 'function canFlushComposition('), context);
   return { context, record, host, parking, soloHost, form, binding, entry, calls,
     render: visible => context.renderColumnInput(host, record, visible),
     inputAllowed: () => context.terminalCanInput(record.id) };
@@ -67,12 +67,14 @@ test('a live chat-view member shows its existing terminal without changing draft
   assert.deepEqual(h.entry.cursor, { x: 5, y: 7 });
   assert.equal(h.binding.revision, 6);
   assert.deepEqual(h.calls, ['height', ['ensure', 'member']]);
-  assert.equal(h.inputAllowed(), false, 'Showing a live terminal must not turn a chat input claim into native input');
+  // 887d9fea: showing changes no claim (the record above is unchanged), and a terminal of a session this window
+  // controls takes keys whichever side its view is on (the person, 2026-11-13: 两边的输入可以不要锁定).
+  assert.equal(h.inputAllowed(), true, 'The shown terminal of a session this window controls takes keys on the conversation side');
 });
 
-test('native input still requires the explicit terminal view and the correct owner and display identity', () => {
+test('native input requires the correct owner and display identity, on either side of the view', () => {
   const h = setup(); h.render(true);
-  assert.equal(h.inputAllowed(), false);
+  assert.equal(h.inputAllowed(), true, 'The conversation-side view does not lock the terminal');
   h.record.view = 'terminal';
   h.render(true);
   assert.equal(h.inputAllowed(), true, 'Positive witness: the unchanged valid native claim can type');
@@ -83,6 +85,9 @@ test('native input still requires the explicit terminal view and the correct own
     target[field] = old;
     assert.equal(h.inputAllowed(), true, field + ' restored');
   }
+  // A service from before 887d9fea refuses terminal keys while the view is on the conversation side: keep its rule.
+  h.record.eitherViewInput = false; assert.equal(h.inputAllowed(), true, 'An older service still takes keys on the terminal side');
+  h.record.view = 'chat'; assert.equal(h.inputAllowed(), false, 'An older service gets no keys on the conversation side');
 });
 
 test('chat-view members with absent or stopped displays do not gain an empty terminal area', () => {
@@ -129,7 +134,7 @@ test('hiding and returning to the column preserves the same terminal and positiv
   assert.deepEqual([h.form.selectionStart, h.form.selectionEnd], [3, 9]);
   assert.deepEqual(h.entry.cursor, { x: 5, y: 7 });
   assert.equal(JSON.stringify(h.record), before);
-  assert.equal(h.inputAllowed(), false);
+  assert.equal(h.inputAllowed(), true);
 });
 
 test('an unavailable backend can show an existing live display but cannot start or accept native input', () => {

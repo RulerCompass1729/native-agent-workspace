@@ -1659,8 +1659,9 @@ class Workspace extends EventEmitter {
     const runtime = this.runtime(id);
     if (runtime.backendExitConfirmed) throw uiError("error.workspace.nativeExitedReadOnly");
     // Terminal-generated device/cursor replies are not human instructions.
+    // The window that controls the session types into its terminal whichever side its view is on (the person,
+    // 2026-11-13: 两边的输入可以不要锁定); the view only routes a held question.
     const response = isTerminalResponse(data);
-    if (!response && s.view !== 'terminal') throw uiError("error.workspace.useNativeTerminal");
     if (!response) { if (!backgroundOperation.current()) wake.human(this, id); this.cancelCapacity(id); this.pause('真人在原生终端操作', undefined, false, uiActivity('notice.run.humanTerminalAction')[1]); s.controlRevision++; s.terminalInputPending = true; }
     const t = runtime.terminal; if (!t?.alive) throw uiError("error.workspace.terminalNotConnected"); t.input(data);
   }

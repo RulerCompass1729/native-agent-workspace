@@ -84,20 +84,21 @@ async function run() {
   await toChat(a.id); await holdAndChoose(a.id); await fixture('fail-claim', a.id);
   await page.locator('#toast').filter({ hasText: 'Synthetic control failure' }).waitFor();
   // T-147: a ready terminal keeps focus while its claim is pending (switchMode; test-terminal-ime types into it then),
-  // and keeps it after the claim fails. What matters: nothing typed afterwards reaches A.
-  assert.equal(await page.locator('#terminal-paste').isDisabled(), true);
+  // and keeps it after the claim fails. 887d9fea (the person, 2026-11-13: 两边的输入可以不要锁定): this window still
+  // controls A, so what is typed afterwards reaches A once, and the view stays on the conversation side.
+  assert.equal(await page.locator('#terminal-paste').isDisabled(), false);
   await input(a.id).focus(); assert.equal(await focused(a.id), true, 'typing targets A\'s terminal');
-  await page.keyboard.type('AFTER-FAIL'); await delay(150); assert.equal(await text(a.id), 'FIRST-A'); await capture('typed-after-failed-claim');
+  await page.keyboard.type('AFTER-FAIL'); await until(async () => await text(a.id) === 'FIRST-AAFTER-FAIL', 'Typing after the failed change reaches A once'); await capture('typed-after-failed-claim');
   await delay(150); assert.equal((await snapshot()).sessions.find(s => s.id === a.id).view, 'chat'); assert.equal((await fixture('stats')).claims.length, 0);
   // The explicit retry: choosing the open member's 原生终端 again.
   await page.locator('#terminal-tab').click(); await until(() => focused(a.id), 'Explicit retry focuses');
-  passed.push('Failed control change stays gated and reports the error; explicit reselection retries');
+  passed.push('A failed control change reports the error and leaves A\'s terminal taking keys without moving the view; explicit reselection retries');
   await toChat(a.id); await holdAndChoose(a.id); await fixture('release-taken', a.id); await delay(150);
   assert.equal((await snapshot()).sessions.find(s => s.id === a.id).owner, 'other-test-view');
   assert.equal(await page.locator('#terminal-paste').isDisabled(), true);
   await input(a.id).focus(); assert.equal(await focused(a.id), true, 'typing targets A\'s terminal');
   await page.keyboard.type('AFTER-TAKEN'); await delay(150);
-  assert.equal(await text(a.id), 'FIRST-A'); await page.locator('#take-control').waitFor();
+  assert.equal(await text(a.id), 'FIRST-AAFTER-FAIL'); await page.locator('#take-control').waitFor();
   passed.push('An intervening owner change keeps the view read-only; focus recovery never reclaims control');
   assert.equal((await snapshot()).diagnostics.dispatches, 0); assert.equal(app.windows().length, 1); assert.deepEqual(errors, []); await capture('focus-complete');
   console.log(JSON.stringify({ passed, errors, nativeProviderProcesses: 0, nativeModelCalls: 0, oneWindow: true }));
