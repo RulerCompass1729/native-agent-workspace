@@ -234,3 +234,27 @@ test('a valid own message cannot authorize an unmentioned local file before huma
   const done = await f.controller.decide('agent', 'native-agent', approved.operation_id, 1);
   assert.equal(done.state, 'complete'); assert.equal(done.value.text, 'SYNTHETIC SEPARATE MATERIAL'); assert.equal(reads, 1);
 });
+test('a request sent again a minute later pops a new system notification; an immediate retry shares the one just shown', async t => {
+  // The person (2026-11-13, queue a3519cb6): 「我还是找不到你的这个按钮」. The agent asked again, the first card
+  // was still waiting, and the request sent again shared the first card's notification, so nothing popped up.
+  const f = fixture(t), notices = []; let clock = Date.parse('2026-11-13T20:20:00Z');
+  const controller = new BackgroundControl({ ...f.config, now: () => clock, confirmationPending: row => notices.push(row.id) });
+  const ask = (id, name = 'Synthetic space') => controller.call(f.binding, { action: 'invoke', method: 'spaceCreate', arguments: [name], operation_id: id });
+  assert.equal((await ask('first')).state, 'confirmation-required'); assert.deepEqual(notices, ['first']);
+  clock += 5000;
+  assert.equal((await ask('retry-burst')).state, 'confirmation-required');
+  assert.deepEqual(notices, ['first'], 'An immediate retry shares the notification just shown');
+  clock += 60000;
+  assert.equal((await ask('sent-again')).state, 'confirmation-required');
+  assert.deepEqual(notices, ['first', 'sent-again'], 'The first card is still waiting a minute later: the request sent again tells the person again');
+  clock += 20000;
+  assert.equal((await ask('sent-again-retry')).state, 'confirmation-required');
+  assert.deepEqual(notices, ['first', 'sent-again'], 'A retry right after the second notification shares that one');
+  assert.equal((await ask('other-request', 'Another space')).state, 'confirmation-required');
+  assert.deepEqual(notices, ['first', 'sent-again', 'other-request'], 'A different request is told on its own');
+  assert.equal((await ask('sent-again')).duplicate, true); assert.equal(notices.length, 3, 'The same operation id read back is not a new request');
+  clock -= 10 * 60000;
+  assert.equal((await ask('after-clock-back')).state, 'confirmation-required');
+  assert.deepEqual(notices.at(-1), 'after-clock-back', 'After the clock went back the window is unknown: the person is told');
+  assert.equal(controller.data.records.filter(r => r.state === 'confirmation-required').length, 6); assert.equal(f.writes.length, 0);
+});

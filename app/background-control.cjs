@@ -22,7 +22,7 @@ const settledStates = new Set(['complete', 'received', 'awaiting-native', 'cance
 const recordTime = r => Number.isSafeInteger(r.finishedAt) ? r.finishedAt : r.at;
 const checkArchived = r => { if (!r || !token(r.id) || !r.actor || !token(r.actor.id) || !r.command || !token(r.state)) throw Error('Invalid archived operation'); };
 const MAX_PENDING_PER_ACTOR = 32, MAX_PENDING = 128;
-const REFUSAL_WINDOW_MS = 60000, MAX_REFUSAL_SUMMARIES = 128;
+const REFUSAL_WINDOW_MS = 60000, MAX_REFUSAL_SUMMARIES = 128, NOTIFY_SHARE_MS = 60000;
 const REFUSAL_RETRY_HINT = 'invoke or snapshot: new operation_id or compacted refused ID is a fresh request.';
 const refusalRetry = () => ({ retryWithNewOperationId: true, retryHint: REFUSAL_RETRY_HINT });
 const admissionReasons = new Set(['confirmation-limit', 'originating-session-unavailable']);
@@ -775,11 +775,14 @@ class BackgroundControl {
       });
       const result = await this.finishAudit(actor, args.operation_id, context);
       if (result.state === 'confirmation-required' && result.confirmation?.kind === 'message' && !Object.hasOwn(result, 'confirmationNotifiedAt') && this.confirmationPending) {
-        const notified = this.data.records.find(r => r.id !== result.id && this.key(r.actor) === key && r.state === 'confirmation-required' &&
-          Object.hasOwn(r, 'confirmationNotifiedAt') && isDeepStrictEqual({ ...r.command, operation_id: args.operation_id }, args) && isDeepStrictEqual(r.guard, result.guard));
-        // Explicit operation IDs stay independent; a matching pending cohort
-        // shares one system notification until every request has been handled.
-        this.commit(d => { d.records.find(r => r.id === result.id && this.key(r.actor) === key).confirmationNotifiedAt = notified?.confirmationNotifiedAt ?? this.now(); });
+        const now = this.now(), notified = this.data.records.find(r => r.id !== result.id && this.key(r.actor) === key && r.state === 'confirmation-required' &&
+          Object.hasOwn(r, 'confirmationNotifiedAt') && now >= r.confirmationNotifiedAt && now - r.confirmationNotifiedAt < NOTIFY_SHARE_MS &&
+          isDeepStrictEqual({ ...r.command, operation_id: args.operation_id }, args) && isDeepStrictEqual(r.guard, result.guard));
+        // Explicit operation IDs stay independent. A matching request sent within
+        // a minute of a notification shares it; one sent again later, while the
+        // earlier card still waits, means the person missed it and is told again
+        // (as is one after the clock went back: in doubt, tell).
+        this.commit(d => { d.records.find(r => r.id === result.id && this.key(r.actor) === key).confirmationNotifiedAt = notified?.confirmationNotifiedAt ?? now; });
         if (!notified) try { await this.confirmationPending(this.receipt(actor, result.id)); } catch { /* The durable confirmation remains available. */ }
       }
       if (privateValue && result.state === 'complete') {
