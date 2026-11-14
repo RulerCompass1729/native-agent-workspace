@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { uiError } = require('./ui-errors.cjs');
-const { successor } = require('./queue-secretary.cjs');
+const { successor, rotationEdges } = require('./queue-secretary.cjs');
 
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(value);
 function identity(value) {
@@ -44,8 +44,7 @@ class IntegratorRole {
     if (!this.selected) return null;
     let entries = [];
     try {
-      const text = readPrivate(this.logFile, 32 * 1024 * 1024);
-      entries = text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
+      entries = rotationEdges(this.logFile);
     } catch (error) { if (error.code !== 'ENOENT') throw uiError('error.integrator.state'); }
     return successor(this.selected, entries);
   }

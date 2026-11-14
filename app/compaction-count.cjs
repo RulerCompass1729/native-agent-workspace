@@ -33,16 +33,22 @@ const MISSING_RETRY_MS = 10 * 60 * 1000;
 const CLAUDE_MARKER = Buffer.from('"subtype":"compact_boundary"');
 const CODEX_LINE = /^\{"timestamp":"[^"\\]{1,64}",(?:"ordinal":\d{1,20},)?"type":"compacted","payload":/;
 
-// The places the session's record may be, in the order looked at.
-async function claudeFiles(root, session) {
-  if (!NATIVE_ID.test(session.nativeId || '')) return [];
+// Where Claude keeps its records: <CLAUDE_CONFIG_DIR or ~/.claude>/projects.
+function claudeProjects(env = process.env) {
+  return path.join(env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects');
+}
+
+// The places the session's record may be, in the order looked at (also the model a successor
+// starts with, queue-dispatch.cjs transcriptModel).
+function claudeFiles(root, session) {
+  if (!session || !NATIVE_ID.test(session.nativeId || '')) return [];
   const name = `${session.nativeId}.jsonl`, files = [];
   const reported = session.nativeTranscript;
   if (typeof reported === 'string' && path.isAbsolute(reported) && path.basename(reported) === name) files.push(reported);
   if (typeof session.cwd === 'string' && session.cwd) {
     const folders = [session.cwd];
     try {
-      folders.push(await fs.promises.realpath(session.cwd));
+      folders.push(fs.realpathSync(session.cwd));
     } catch {
       // The folder may be gone.
     }
@@ -119,7 +125,7 @@ async function readOn(state, file, provider, nativeId, maxBytes, lineCap) {
 class CompactionCounter {
   constructor(options = {}) {
     const env = options.env || process.env;
-    this.claudeRoot = options.claudeRoot || path.join(env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects');
+    this.claudeRoot = options.claudeRoot || claudeProjects(env);
     this.codexRoot = options.codexRoot || path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions');
     this.passBytes = options.passBytes ?? PASS_BYTES;
     this.readBytes = options.readBytes ?? READ_BYTES;
@@ -143,6 +149,9 @@ class CompactionCounter {
     }
     const ids = new Set(listed.map(session => session.id));
     for (const id of this.states.keys()) if (!ids.has(id)) this.states.delete(id);
+    // A Codex session that is no longer listed is forgotten, so the map stays as small as the list.
+    const threads = new Set(listed.filter(session => session.provider === 'codex').map(session => session.nativeId));
+    for (const thread of this.codexFiles.keys()) if (!threads.has(thread)) this.codexFiles.delete(thread);
     // Each pass starts one session further on, so a large first read does not always go to the same one.
     const order = listed.length ? listed.slice(this.turn % listed.length).concat(listed.slice(0, this.turn % listed.length)) : [];
     this.turn += 1;
@@ -163,7 +172,8 @@ class CompactionCounter {
         const read = await readOn(state, file, session.provider, session.nativeId, Math.min(this.readBytes, Math.max(budget, this.lineCap + 1)), this.lineCap);
         if (read < 0) {
           this.states.delete(session.id);
-          if (session.provider === 'codex') this.codexFiles.delete(session.nativeId);
+          // A rollout found but not readable is looked for again only after the same wait as one not found.
+          if (session.provider === 'codex') this.codexFiles.set(session.nativeId, { missAt: now });
           continue;
         }
         budget -= read;
@@ -176,7 +186,7 @@ class CompactionCounter {
 
   async fileOf(session, now) {
     if (session.provider === 'claude') {
-      for (const file of await claudeFiles(this.claudeRoot, session)) {
+      for (const file of claudeFiles(this.claudeRoot, session)) {
         try {
           if ((await fs.promises.stat(file)).isFile()) return file;
         } catch {
@@ -216,4 +226,4 @@ async function findRollout(root, threadId) {
   return null;
 }
 
-module.exports = { CompactionCounter, compactionLine, readOn, findRollout, claudeFiles, LINE_CAP_BYTES, READ_BYTES, PASS_BYTES };
+module.exports = { CompactionCounter, compactionLine, readOn, findRollout, claudeFiles, claudeProjects, LINE_CAP_BYTES, READ_BYTES, PASS_BYTES };

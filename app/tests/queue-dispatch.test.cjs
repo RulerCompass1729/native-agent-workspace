@@ -1665,6 +1665,44 @@ test('a Claude transcript gives the model its session last used, read from the e
   assert.equal(rules.transcriptModel({ ...session, provider: 'codex' }, root), null);
   assert.equal(rules.transcriptModel({ ...session, nativeId: '../escape' }, root), null);
 });
+// Queue 794d3cd7 follow-up: the record is where Claude reported it, or under the folder as resolved (/var is
+// /private/var on macOS), under CLAUDE_CONFIG_DIR when set; looked up as the compaction counter does.
+test('794d3cd7: a transcript Claude reported, or under the resolved folder, gives the model too', t => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-transcripts-')));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const root = path.join(base, 'projects');
+  const own = { type: 'assistant', sessionId: TRANSCRIPT_ID, isSidechain: false };
+  // Reported by the hook, under a folder no stored cwd names.
+  const reported = path.join(base, 'elsewhere', `${TRANSCRIPT_ID}.jsonl`);
+  fs.mkdirSync(path.dirname(reported), { recursive: true });
+  fs.writeFileSync(reported, JSON.stringify({ ...own, message: { model: 'claude-opus-5-5', content: [] } }) + '\n');
+  const session = { provider: 'claude', nativeId: TRANSCRIPT_ID, cwd: '/nowhere/work', nativeTranscript: reported };
+  assert.equal(rules.transcriptModel(session, root), 'claude-opus-5-5');
+  assert.equal(rules.transcriptModel({ ...session, cwd: undefined }, root), 'claude-opus-5-5', 'with no folder stored');
+  assert.equal(rules.transcriptModel({ ...session, nativeTranscript: path.join(base, 'elsewhere', 'other.jsonl') }, root), null, 'another file name');
+  assert.equal(rules.transcriptModel({ ...session, nativeTranscript: `elsewhere/${TRANSCRIPT_ID}.jsonl` }, root), null, 'a relative path');
+  // Stored through a link, written under the folder it resolves to.
+  const real = path.join(base, 'real');
+  fs.mkdirSync(real);
+  const link = path.join(base, 'link');
+  fs.symlinkSync(real, link);
+  transcriptAt(root, real, [{ ...own, message: { model: 'claude-sonnet-5-5', content: [] } }]);
+  assert.equal(rules.transcriptModel({ provider: 'claude', nativeId: TRANSCRIPT_ID, cwd: link }, root), 'claude-sonnet-5-5');
+  // The reported file comes first.
+  assert.equal(rules.transcriptModel({ provider: 'claude', nativeId: TRANSCRIPT_ID, cwd: link, nativeTranscript: reported }, root), 'claude-opus-5-5');
+});
+test('794d3cd7: the dispatcher reads transcripts under CLAUDE_CONFIG_DIR when it is set', t => {
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  t.after(() => {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+  });
+  process.env.CLAUDE_CONFIG_DIR = path.join(os.tmpdir(), 'naw-claude-config');
+  assert.equal(dispatcherSetup(t, []).dispatcher.transcriptRoot, path.join(os.tmpdir(), 'naw-claude-config', 'projects'));
+  delete process.env.CLAUDE_CONFIG_DIR;
+  assert.equal(dispatcherSetup(t, []).dispatcher.transcriptRoot, path.join(os.homedir(), '.claude', 'projects'));
+  assert.equal(dispatcherSetup(t, [], { transcriptRoot: '/given' }).dispatcher.transcriptRoot, '/given');
+});
 test('a resumed Claude session whose model is unreported continues with the model its transcript last used', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-transcripts-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

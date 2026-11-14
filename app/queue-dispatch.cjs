@@ -5,7 +5,6 @@
 // are rotated into a new session with a written handoff (user 2026-11-08).
 // The policy functions are pure; QueueDispatcher runs them in the main process.
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
 const { randomUUID } = require('node:crypto');
@@ -14,7 +13,7 @@ const { uiError } = require('./ui-errors.cjs');
 const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 const { noticeText } = require('./answer-notices.cjs');
-const { CompactionCounter } = require('./compaction-count.cjs');
+const { CompactionCounter, claudeFiles, claudeProjects } = require('./compaction-count.cjs');
 
 const CAPABILITY = 'queueDispatchV1';
 const ITEM_TEXT_LIMIT = 6000;
@@ -588,28 +587,35 @@ function reportedModel(session) {
 
 // The model a Claude session's own transcript last recorded. A resumed Claude session reports its model only
 // with its next turn (SessionStart on --resume carries none), while --resume restores this one; a moved
-// session is always resumed. The transcript is ~/.claude/projects/<cwd with every character other than a
-// letter or digit as "-">/<native id>.jsonl; only its end is read.
+// session is always resumed. The transcript is the one Claude reported for the session, else
+// <CLAUDE_CONFIG_DIR or ~/.claude>/projects/<cwd with every character other than a letter or digit as "-">/
+// <native id>.jsonl for the folder as stored and as resolved (claudeFiles, compaction-count.cjs); only the
+// end of the first one there is read.
 const TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024;
 const NATIVE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function transcriptModel(session, root, maxBytes = TRANSCRIPT_TAIL_BYTES) {
-  if (session.provider !== 'claude' || typeof session.cwd !== 'string' || !NATIVE_ID_PATTERN.test(session.nativeId || '')) {
+  if (!session || session.provider !== 'claude' || !NATIVE_ID_PATTERN.test(session.nativeId || '')) {
     return null;
   }
-  const file = path.join(root, session.cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${session.nativeId}.jsonl`);
-  let text = '';
-  try {
-    const fd = fs.openSync(file, 'r');
+  let text = null;
+  for (const file of claudeFiles(root, session)) {
     try {
-      const size = fs.fstatSync(fd).size;
-      const length = Math.min(size, maxBytes);
-      const buffer = Buffer.alloc(length);
-      fs.readSync(fd, buffer, 0, length, size - length);
-      text = buffer.toString('utf8');
-    } finally {
-      fs.closeSync(fd);
+      const fd = fs.openSync(file, 'r');
+      try {
+        const size = fs.fstatSync(fd).size;
+        const length = Math.min(size, maxBytes);
+        const buffer = Buffer.alloc(length);
+        fs.readSync(fd, buffer, 0, length, size - length);
+        text = buffer.toString('utf8');
+      } finally {
+        fs.closeSync(fd);
+      }
+      break;
+    } catch {
+      // Not there: the next place.
     }
-  } catch {
+  }
+  if (text === null) {
     return null;
   }
   // From the end: the first line may be cut off, and synthetic entries carry no real model. Only the
@@ -1721,7 +1727,7 @@ class QueueDispatcher {
     // Counts each member's own compactions from the native records (compaction-count.cjs); the app turns it on.
     this.compactions = options.compactions || (options.countCompactions === true ? new CompactionCounter() : null);
     this.tickMs = options.tickMs ?? TICK_MS;
-    this.transcriptRoot = options.transcriptRoot || path.join(os.homedir(), '.claude', 'projects');
+    this.transcriptRoot = options.transcriptRoot || claudeProjects();
     // Sessions whose model is known nowhere yet: asked again after a while, never rested for a week.
     this.unknownModelAt = new Map();
     // Each waits once in the log per app run, so a session that never reports is still traceable.

@@ -68,7 +68,8 @@ if (!binary) {
 }
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
 if (PROVIDER === 'codex') {
-  assert.match(nativeVersion, /^codex-cli 0\.(164|165|166|167)\.\d+$/, 'A Codex version NAW supports');
+  // 0.168 is opened by the surface comparison (app/codex-qualification.cjs): method "schema", nothing held.
+  assert.match(nativeVersion, /^codex-cli 0\.(164|165|166|167|168)\.\d+$/, 'A Codex version NAW supports');
 } else {
   assert.match(nativeVersion, /^2\.1\.(307|308|309|310|311|316|317|318|319)\b/, 'A native version with verified chat sending');
 }
@@ -289,6 +290,14 @@ async function cleanup() {
           await client.call('stop', session.id);
         }
       }
+      // A Codex session ends a moment after its stop returns, and the service refuses to close before then.
+      let open = [];
+      for (let n = 0; n < 100; n += 1) {
+        open = (await snapshot()).sessions.filter(s => !['ended', 'background'].includes(s.state)).map(s => s.state);
+        if (!open.length) break;
+        await sleep(100);
+      }
+      if (open.length) console.error('Sessions not ended before closing the service:', JSON.stringify(open));
       await client.call('shutdown');
     } finally {
       client.close();
@@ -526,7 +535,12 @@ async function cleanup() {
   const archivedLog = rotationLog();
   assert.ok(archivedLog.findIndex(entry => entry.event === 'archived' && entry.old.id === first.id) > archivedLog.findIndex(entry => entry.event === 'done' && entry.old.id === first.id), 'after the done rotation');
   await until(async () => (await page.evaluate(() => workspace.initial())).sessions.find(s => s.id === first.id)?.archived === true, 'The old session is archived in the window', 30000);
-  // 归档 is collapsed by default: open it the way the person does, then read it.
+  // 归档 is collapsed by default: open it the way the person does, then read it. The queue dialog the
+  // Codex run left open would take the click (the Claude run closed it above).
+  if (await page.locator('#queue-dialog').isVisible()) {
+    await page.locator('#close-queue').click();
+    await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
+  }
   if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click();
   await page.locator('#archive-group-body').waitFor();
   await until(async () => (await page.locator('#archive-list').innerText()).includes('实测甲'), 'The old session is listed under 归档', 30000);

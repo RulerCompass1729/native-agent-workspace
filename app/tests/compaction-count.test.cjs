@@ -169,6 +169,27 @@ test('a record not there yet gives no count and is looked for again later; a ses
   assert.equal(none.size, 0);
 });
 
+test('review note 4: a rollout found but not readable waits like one not found; a Codex session that leaves is forgotten', async t => {
+  const r = roots(t);
+  const counter = new counting.CompactionCounter({ claudeRoot: r.claudeRoot, codexRoot: r.codexRoot, sampleMs: 0, missingRetryMs: 600000 });
+  const day = path.join(r.codexRoot, '2026', '11', '13');
+  fs.mkdirSync(day, { recursive: true });
+  const first = path.join(day, `rollout-2026-11-13T08-30-00-${THREAD}.jsonl`);
+  fs.writeFileSync(first, `${codexCompaction()}\n`);
+  assert.equal((await counter.sample([codex()], 0)).get('s2'), 1);
+  // The rollout goes away and the thread's record turns up on another day: not walked for again within ten minutes.
+  fs.rmSync(first);
+  const later = path.join(r.codexRoot, '2026', '11', '14');
+  fs.mkdirSync(later, { recursive: true });
+  fs.writeFileSync(path.join(later, `rollout-2026-11-14T08-30-00-${THREAD}.jsonl`), `${codexCompaction()}\n${codexCompaction()}\n`);
+  assert.equal((await counter.sample([codex()], 1000)).has('s2'), false, 'the open failure');
+  assert.equal((await counter.sample([codex()], 2000)).has('s2'), false, 'the next pass does not walk the folders');
+  assert.equal((await counter.sample([codex()], 601001)).get('s2'), 2, 'after the wait it is found again');
+  assert.equal(counter.codexFiles.size, 1);
+  await counter.sample([claude()], 601002);
+  assert.equal(counter.codexFiles.size, 0, 'a Codex session no longer listed is forgotten');
+});
+
 test('the default record folders follow the CLIs\' own settings', () => {
   const counter = new counting.CompactionCounter({ env: { CLAUDE_CONFIG_DIR: '/work/claude-config', CODEX_HOME: '/work/codex-home' } });
   assert.equal(counter.claudeRoot, '/work/claude-config/projects');
