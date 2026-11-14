@@ -71,6 +71,7 @@ async function build() {
     const sources = [
       'adapters.cjs',
       'addressed-handoffs.cjs',
+      'answer-notices.cjs',
       'approval-policy.js',
       'backend-switch.cjs',
       'background-control-native.cjs',

@@ -60,6 +60,19 @@ decision rechecks the original agent and target identities before executing.
 This interface grants no additional task authorization, changes no model or
 budget, and never approves a native tool on the person's behalf.
 
+Once the person confirms or cancels, NAW tells the initiating agent: one short
+NAW message with each operation id, the answer and the recorded state, pointing
+to the receipt. It goes when that agent is idle and settled, about 10 s after
+the person's last answer to it and at least 20 s after the person last typed
+into it; answers given in that time share one message. An agent at work hears
+it after its turn; a space member whose queue item still runs, once that item
+is settled. A member whose item waits for the person hears it too, and the item
+stays waiting. A follow-up card on the same operation is not told; the last
+answer is. A receipt the agent already read is not told again. NAW only
+tells: it never repeats or continues the operation. The automatic-message
+switches apply, and an answer not yet told is forgotten if NAW restarts (the
+receipt stays readable).
+
 The existing automatic-agent-message switches also apply to background input.
 If the global switch or any addressed recipient is disabled, send, forward,
 queue, steer, relay and terminal input are refused and recorded. This includes
