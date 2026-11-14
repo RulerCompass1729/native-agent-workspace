@@ -91,7 +91,7 @@ const parameters = {
   stewardEvents: ['position from the last read (through), or null to read from the start; the designated butler only. Returns {events, through, more}: what NAW recorded since, oldest first, a few at a time; while more is true, read again from through'],
   stewardWake: ['on: true or false to turn waking on events on or off; omit it to see how it stands. The designated butler or the person only; off by default. While on, NAW sends the butler, once it is idle and at most once a minute, one 【NAW 事件】 message naming a position: read stewardEvents from that position'],
   spaceFiles: ['roomId', 'fileId?; omit to import the explicit paths'], gitWorktreePreview: ['selected repository path', 'nonce', 'relative path'],
-  create: ['options: {provider,cwd,name,view?,gitWorktree?}'], nativeHistory: ['options?'], importHistory: ['nativeId', 'options'],
+  create: ['options: {provider,cwd,name,view?,gitWorktree?,skipPermissions?: true}', 'skipPermissions: true starts Claude with bypassPermissions, or Codex with approvalPolicy never and sandbox danger-full-access; omit for native permission defaults. False is not accepted. NAW human confirmation is still required.'], nativeHistory: ['options?'], importHistory: ['nativeId', 'options'],
   rename: ['sessionId', 'name'], sidebar: ['change'],
   send: ['sessionId', 'exact message', 'expectedNativeId'], forward: ['sessionId', 'exact message', 'expectedNativeId', 'replyTo?'],
   queue: ['sessionId', 'exact message', 'expectedNativeId'], queueShared: ['sessionId', 'exact message', 'expectedNativeId', 'replyTo?'],

@@ -15,13 +15,14 @@ async function fixture(t, provider) {
   const workspace = new Workspace(host, dir), rooms = new RoomState(dir), labels = new SessionLabels(dir); let controller;
   t.after(async () => { await controller?.close(); workspace.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   const id = await workspace.create(provider, dir, 'owner', 'Butler'), other = await workspace.create(provider, dir, 'owner', 'Other');
+  const createdOptions = [];
   const client = { snapshot: () => workspace.snapshot(), refresh: async () => workspace.snapshot(), close() {}, call: async (method, ...args) => {
     if (method === 'initial') return { ...workspace.snapshot(), capabilities: ['nativePermissionDefaults', 'singleHomeMoveV1'] };
     // Only the hand-made archive below reaches pause; a voided archive card must not.
     if (method === 'pause') return;
     // Only the hand-made join below moves a session.
     if (method === 'moveMembership') return workspace.moveMembership(...args);
-    if (method === 'create') { const o = args[0]; return workspace.create(o.provider, o.cwd, 'owner', o.name, o.view); }
+    if (method === 'create') { const o = args[0]; createdOptions.push(structuredClone(o)); return workspace.create(o.provider, o.cwd, 'owner', o.name, o.view, { skipPermissions: o.skipPermissions }); }
     throw Error('Unexpected business call: ' + method);
   } };
   // One backend that has adopted background control, as main.cjs checks before a non-local command.
@@ -47,7 +48,7 @@ async function fixture(t, provider) {
   const confirm = pending => controller.decide(id, actor.nativeId, pending.id, 1);
   const named = name => labels.apply(workspace.snapshot()).sessions.filter(s => s.name === name);
   const spaces = name => rooms.apply(workspace.snapshot()).rooms.filter(r => r.name === name);
-  return { dir, workspace, client, rooms, labels, actor, other, ask, confirm, named, spaces };
+  return { dir, workspace, client, rooms, labels, actor, other, ask, confirm, named, spaces, controller, createdOptions };
 }
 const session = (f, name, extra = {}) => [{ provider: f.actor.provider, cwd: f.dir, name, ...extra }];
 for (const provider of ['claude', 'codex']) {
@@ -110,3 +111,32 @@ for (const provider of ['claude', 'codex']) {
     assert.notEqual(f.rooms.apply(f.workspace.snapshot()).sessions.find(s => s.id === f.other).archived, true);
   });
 }
+
+for (const provider of ['claude', 'codex']) test(`${provider}: catalog describes skipPermissions and the confirmed create forwards it unchanged`, async t => {
+  const f = await fixture(t, provider);
+  const catalog = await f.controller.call({ sender: f.actor, identity: { callId: 'catalog', turnId: 'turn' }, valid: () => true }, { action: 'catalog' });
+  const description = catalog.commands.find(command => command.method === 'create').parameters.join(' ');
+  assert.match(description, /skipPermissions\?: true/);
+  assert.match(description, /omit.*native permission defaults/i);
+  assert.match(description, /human confirmation/i);
+  assert.match(description, /Claude with bypassPermissions/);
+  assert.match(description, /Codex with approvalPolicy never and sandbox danger-full-access/);
+  for (const extra of [{}, { skipPermissions: true }]) {
+    const options = session(f, Object.hasOwn(extra, 'skipPermissions') ? 'Explicit permissions' : 'Native defaults', extra)[0];
+    const before = f.createdOptions.length;
+    const pending = await f.ask('create', [options]);
+    assert.equal(pending.state, 'confirmation-required');
+    assert.equal(f.createdOptions.length, before, 'The permission option cannot bypass NAW confirmation');
+    assert.deepEqual(JSON.parse(pending.confirmation.options.detail).arguments, [options]);
+    assert.equal((await f.confirm(pending)).state, 'complete');
+    assert.deepEqual(f.createdOptions.at(-1), options, 'The actual main.cjs handler forwards every option unchanged');
+    const created = f.named(options.name)[0];
+    assert.equal(Object.hasOwn(created, 'skipPermissions'), extra.skipPermissions === true);
+    if (extra.skipPermissions) assert.equal(created.skipPermissions, true);
+  }
+  const invalid = await f.ask('create', session(f, 'Invalid permissions', { skipPermissions: false }));
+  assert.equal(invalid.state, 'confirmation-required');
+  const refused = await f.confirm(invalid);
+  assert.equal(refused.state, 'unconfirmed');
+  assert.equal(f.named('Invalid permissions').length, 0, 'False is forwarded to the real validator and refused');
+});
