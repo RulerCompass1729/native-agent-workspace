@@ -216,10 +216,15 @@ class RoomState {
   }
   create(name) {
     if (this.spacesWarning) throw Object.assign(Error(this.spacesWarning), { uiMessage: this.spacesWarningUiMessage });
-    const value = { ...initialRoom(validateName(name)), id: randomUUID() };
+    const validated = validateName(name);
+    this.assertSpaceNameAvailable(validated);
+    const value = { ...initialRoom(validated), id: randomUUID() };
     const spaces = { ...this.spaces, rooms: [...this.spaces.rooms, value] };
     this.write(this.spacesFile, spaces); this.spaces = spaces;
     return value.id;
+  }
+  assertSpaceNameAvailable(name, excludedIds = []) {
+    if (this.spaces.rooms.some(room => !excludedIds.includes(room.id) && room.name === name)) throw uiError("error.room.nameTaken", { name });
   }
   serial(action) {
     const operation = this.queue.then(action);
@@ -306,6 +311,7 @@ class RoomState {
           const cuts = this.mergeSources(snapshot, batch.sources.map(source => source.id));
           assertCurrentSources(batch, cuts);
           if (this.spaces.rooms.some(room => room.id === targetId)) throw uiError("error.room.mergeTargetExists");
+          this.assertSpaceNameAvailable(batch.name, batch.sources.map(source => source.id));
           for (const id of batch.memberIds) {
             const session = snapshot.sessions.find(s => s.id === id);
             if (!session || roomIds(session).length > 1) throw uiError('error.movePlacementAmbiguous');
@@ -558,6 +564,7 @@ class RoomState {
   rename(name, id = DEFAULT_ROOM_ID) {
     this.writable(id);
     const validated = validateName(name);
+    if (id !== DEFAULT_ROOM_ID) this.assertSpaceNameAvailable(validated, [id]);
     if (this.metadata(id).name !== validated) this.update({ name: validated }, { kind: 'rename', ...uiNotice('notice.room.renamed', { name: validated }) }, id);
   }
   notes(text, revision, id = DEFAULT_ROOM_ID) {
