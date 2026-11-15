@@ -139,3 +139,78 @@ test('a dead app descriptor can be replaced, while a live owner cannot be displa
   await assert.rejects(createOutboxBroker(options));
   assert.equal(JSON.parse(fs.readFileSync(descriptorFile)).issuer.pid, process.pid);
 });
+
+for (const stage of ['binding', 'execution', 'cleanup']) test(`control broker retains trusted failure diagnostics through ${stage} without replay`, async t => {
+  const { outboxError } = require('../computer-use-outbox-native.cjs');
+  let binds = 0, calls = 0, closes = 0;
+  const fail = () => { throw outboxError('control-changed', 'binding', 'Opaque native failure', stage === 'cleanup'); };
+  const command = { action: 'invoke', operation_id: 'diagnostic-control', method: 'rename', arguments: ['target', 'name'] };
+  const f = await fixture(t, {
+    bindControl: async () => { binds++; if (stage === 'binding') fail(); return { args: command, close() { closes++; if (stage === 'cleanup') fail(); } }; },
+    control: async () => { calls++; if (stage === 'execution') fail(); return { state: 'complete' }; },
+  });
+  const result = await requestOutbox(f.descriptorFile, identity, command, undefined, true);
+  assert.equal(result.state, 'unconfirmed'); assert.equal(result.retry, false);
+  assert.equal(result.failurePhase, 'binding'); assert.equal(result.failureReason, 'control-changed');
+  assert.equal(result.cleanupUnconfirmed, stage === 'cleanup' ? true : undefined);
+  assert.equal(binds, 1); assert.equal(calls, stage === 'binding' ? 0 : 1); assert.equal(closes, stage === 'binding' ? 0 : 1);
+});
+test('control diagnostics ignore enumerable lookalikes and keep an unclassified failure explicit', async t => {
+  const f = await fixture(t, { bindControl: async () => { throw Object.assign(Error('Unknown failure'), { failureReason: 'control-changed', failurePhase: 'view-send', privateBody: 'PRIVATE_CONTENT' }); }, control: async () => assert.fail('No operation') });
+  const result = await requestOutbox(f.descriptorFile, identity, { action: 'catalog' }, undefined, true);
+  assert.equal(result.failurePhase, 'binding'); assert.equal(result.failureReason, 'binding-unavailable');
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_CONTENT|view-send|control-changed/);
+});
+
+test('control cleanup failure keeps the executed operation identity without releasing its private value or replaying', async t => {
+  const { outboxError } = require('../computer-use-outbox-native.cjs');
+  let calls = 0;
+  const command = { action: 'invoke', operation_id: 'executed-control', method: 'rename', arguments: ['target', 'name'] };
+  const actor = { id: 'sender', nativeId: identity.nativeId, provider: 'codex' };
+  const f = await fixture(t, {
+    bindControl: async () => ({ args: command, close() { throw outboxError('cleanup-unconfirmed', 'cleanup'); } }),
+    control: async () => { calls++; return { state: 'complete', id: command.operation_id, actor, value: 'PRIVATE_RESULT_NOT_RELEASED' }; },
+  });
+  const result = await requestOutbox(f.descriptorFile, identity, command, undefined, true);
+  assert.equal(calls, 1); assert.equal(result.state, 'unconfirmed'); assert.equal(result.retry, false);
+  assert.equal(result.id, command.operation_id); assert.deepEqual(result.actor, actor);
+  assert.equal(result.failurePhase, 'cleanup'); assert.equal(result.cleanupUnconfirmed, true);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_RESULT_NOT_RELEASED/);
+});
+test('a control execution refusal keeps its named cause when cleanup also fails', async t => {
+  const { outboxError } = require('../computer-use-outbox-native.cjs');
+  const f = await fixture(t, {
+    bindControl: async () => ({ args: { action: 'catalog' }, close() { throw Error('Secondary cleanup failure'); } }),
+    control: async () => { throw outboxError('native-call-invalidated', 'binding', undefined, false, 'display-gap'); },
+  });
+  const result = await requestOutbox(f.descriptorFile, identity, { action: 'catalog' }, undefined, true);
+  assert.equal(result.failureReason, 'native-call-invalidated'); assert.equal(result.failureCheck, 'display-gap');
+  assert.equal(result.cleanupUnconfirmed, true); assert.equal(result.retry, false);
+});
+
+for (const cause of ['missing', 'consumed', 'root-changed', 'identity', 'arguments']) test(`real Claude native proof refusal reaches the broker receipt (${cause})`, async t => {
+  const native = require('../background-control-native.cjs');
+  const command = { action: 'invoke', operation_id: 'claude-proof-check', method: 'rename', arguments: ['target', 'name'] };
+  const runtime = { record: { provider: 'claude', nativeId: 'claude-native' }, nativeBlocks: true, terminal: { alive: true }, observationEpoch: 2,
+    liveTurn: { id: 'turn', promptId: 'prompt' }, validRootBinding: () => true };
+  const message = { arguments: command, turnId: 'turn', promptId: 'prompt', callId: 'call', epoch: 2 };
+  const proof = native.rootCall(runtime, message, new AbortController().signal, () => true);
+  const callIdentity = { ...proof.identity };
+  let request = command;
+  if (cause === 'missing') runtime.backgroundRootCalls.clear();
+  if (cause === 'consumed') native.consumeCredential(proof.credential);
+  if (cause === 'root-changed') runtime.liveTurn = { id: 'replacement', promptId: 'replacement' };
+  if (cause === 'identity') callIdentity.turnId = 'different';
+  if (cause === 'arguments') request = { ...command, arguments: ['other', 'name'] };
+  let operations = 0;
+  const f = await fixture(t, { bindControl: async (_identity, args, signal) => native.nativeCall(runtime, callIdentity, args, signal), control: async () => { operations++; } });
+  const result = await requestOutbox(f.descriptorFile, identity, request, undefined, true);
+  assert.equal(result.state, 'unconfirmed'); assert.equal(result.retry, false); assert.equal(operations, 0);
+  assert.equal(result.failurePhase, 'binding');
+  assert.equal(result.failureReason, { missing: 'native-call-missing', consumed: 'duplicate-call', 'root-changed': 'native-call-invalidated',
+    identity: 'native-call-identity-mismatch', arguments: 'native-call-arguments-mismatch' }[cause]);
+  if (cause === 'identity' || cause === 'arguments') {
+    assert.equal(native.consumeCredential(proof.credential).valid(), true, 'A mismatched request did not consume the original proof');
+    assert.throws(() => native.consumeCredential(proof.credential), /unavailable/, 'The accepted original proof remains single use');
+  }
+});

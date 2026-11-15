@@ -3,16 +3,18 @@ const FAIL = 'The original native outbox call could not be verified; no resend.'
 // Process-local tags only. Error messages, model arguments and enumerable
 // error properties never become diagnostics in the native tool's receipt.
 const failures = new WeakMap();
+const rootChecks = new Set(require('./native-root-proof.cjs').FAILURE_CHECKS);
 const phases = new Set(['admission', 'binding', 'view-open', 'lease', 'view-snapshot', 'view-send', 'native-receipt', 'receipt-render', 'cleanup']);
 const reasons = new Set(['invalid-request', 'cancelled', 'owner-closed', 'busy', 'binding-unavailable',
-  'provenance-unconfirmed', 'duplicate-call', 'turn-metadata-unconfirmed', 'caller-unavailable', 'recipient-unavailable',
+  'provenance-unconfirmed', 'duplicate-call', 'native-call-missing', 'native-call-invalidated',
+  'native-call-identity-mismatch', 'native-call-arguments-mismatch', 'turn-metadata-unconfirmed', 'caller-unavailable', 'recipient-unavailable',
   'recipient-not-idle', 'native-goal-unconfirmed', 'native-goal-disallows', 'wake-policy-unavailable', 'wake-limited', 'membership-changed', 'membership-unconfirmed', 'control-changed', 'control-unconfirmed', 'space-unavailable', 'view-unavailable', 'lease-unavailable',
   'snapshot-unavailable', 'ambiguous-target', 'grant-invalidated', 'send-unconfirmed', 'receipt-unconfirmed',
   'command-unconfirmed', 'command-failed', 'render-unconfirmed', 'cleanup-unconfirmed', 'operation-unconfirmed']);
-function outboxError(reason, phase, message = FAIL, cleanupUnconfirmed = false) {
+function outboxError(reason, phase, message = FAIL, cleanupUnconfirmed = false, failureCheck) {
   const error = new Error(message);
   failures.set(error, { failurePhase: phases.has(phase) ? phase : 'binding',
-    failureReason: reasons.has(reason) ? reason : 'operation-unconfirmed', ...(cleanupUnconfirmed ? { cleanupUnconfirmed: true } : {}) });
+    failureReason: reasons.has(reason) ? reason : 'operation-unconfirmed', ...(cleanupUnconfirmed ? { cleanupUnconfirmed: true } : {}), ...(rootChecks.has(failureCheck) ? { failureCheck } : {}) });
   return error;
 }
 function classifyOutboxFailure(error, phase, reason) {
@@ -74,7 +76,7 @@ async function nativeOutboxCall(runtime, identity, arguments_, signal, control =
         if (settled) return; settled = true; clearTimeout(timer); signal?.removeEventListener('abort', aborted);
         if (error) {
           const detail = classifyOutboxFailure(error, 'binding', 'turn-metadata-unconfirmed');
-          reject(outboxError(detail.failureReason, detail.failurePhase));
+          reject(outboxError(detail.failureReason, detail.failurePhase, undefined, detail.cleanupUnconfirmed === true, detail.failureCheck));
         } else resolve(value);
       };
       const aborted = () => finish(true), timer = setTimeout(aborted, 3000);

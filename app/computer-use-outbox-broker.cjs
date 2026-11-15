@@ -36,7 +36,7 @@ async function operateOutbox(binding, createView, signal) {
     const rendered = await box.flush();
     const result = rendered.renderFailed ? rendered : receipt;
     if (result.status === 'working') return result;
-    primary = result.failurePhase ? classifyOutboxFailure(outboxError(result.failureReason, result.failurePhase, undefined, result.cleanupUnconfirmed === true), phase, 'operation-unconfirmed')
+    primary = result.failurePhase ? classifyOutboxFailure(outboxError(result.failureReason, result.failurePhase, undefined, result.cleanupUnconfirmed === true, result.failureCheck), phase, 'operation-unconfirmed')
       : classifyOutboxFailure(null, rendered.renderFailed ? phase : result.messageId ? 'native-receipt' : 'view-send', rendered.renderFailed ? 'render-unconfirmed'
         : !result.messageId ? 'send-unconfirmed' : result.status === 'command-failed' ? 'command-failed' : result.nativeReceived ? 'command-unconfirmed' : 'receipt-unconfirmed');
     return { ...result, ...primary };
@@ -44,14 +44,14 @@ async function operateOutbox(binding, createView, signal) {
     primary = classifyOutboxFailure(error, phase, signal.aborted ? 'cancelled'
       : ({ 'view-open': 'view-unavailable', lease: 'lease-unavailable', 'view-snapshot': 'snapshot-unavailable',
         'view-send': 'send-unconfirmed', 'native-receipt': 'receipt-unconfirmed', 'receipt-render': 'render-unconfirmed' })[phase]);
-    throw outboxError(primary.failureReason, primary.failurePhase, undefined, primary.cleanupUnconfirmed === true);
+    throw outboxError(primary.failureReason, primary.failurePhase, undefined, primary.cleanupUnconfirmed === true, primary.failureCheck);
   } finally {
     // Do not disconnect the lease until the receipt has been gathered: a
     // native tool ACK is not receipt, and socket close revokes this view.
     try {
       try { if (box) await box.close(); } finally { signal.removeEventListener('abort', aborted); transport?.close(); socket?.destroy(); await binding.close(); }
     } catch {
-      throw outboxError(primary?.failureReason || 'cleanup-unconfirmed', primary?.failurePhase || 'cleanup', undefined, true);
+      throw outboxError(primary?.failureReason || 'cleanup-unconfirmed', primary?.failurePhase || 'cleanup', undefined, true, primary?.failureCheck);
     }
   }
 }
@@ -84,10 +84,22 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
     const abort = new AbortController(), cancelled = () => abort.abort();
     signal?.addEventListener('abort', cancelled, { once: true }); controllers.add(abort);
     const job = Promise.resolve().then(async () => {
-      let binding;
-      try { binding = await factory(abort.signal); return await control(binding, binding.args); }
-      finally { await binding?.close?.(); }
-    }).catch(error => ({ state: 'unconfirmed', error: error.message, retry: false })).finally(() => {
+      let binding, result, primary, refused = false;
+      try { binding = await factory(abort.signal); result = await control(binding, binding.args); }
+      catch (error) { primary = error; refused = true; }
+      try { await binding?.close?.(); }
+      catch (error) {
+        // Effects may already be durable. Keep only the operation identity so
+        // its receipt can be inspected; never release a private value on failure.
+        const detail = classifyOutboxFailure(refused ? primary : error, refused ? 'binding' : 'cleanup', refused ? 'binding-unavailable' : 'cleanup-unconfirmed');
+        return { ...(typeof result?.id === 'string' ? { id: result.id, ...(result.actor ? { actor: result.actor } : {}) } : {}),
+          state: 'unconfirmed', error: refused ? primary?.message : 'Native control cleanup could not be confirmed; do not resend.', retry: false,
+          ...detail, cleanupUnconfirmed: true };
+      }
+      if (refused) throw primary;
+      return result;
+    }).catch(error => ({ state: 'unconfirmed', error: error.message, retry: false,
+      ...classifyOutboxFailure(error, 'binding', 'binding-unavailable') })).finally(() => {
       signal?.removeEventListener('abort', cancelled); controllers.delete(abort); operations.delete(job);
     });
     operations.add(job); return job;

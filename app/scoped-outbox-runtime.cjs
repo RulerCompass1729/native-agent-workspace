@@ -23,19 +23,37 @@ class ScopedOutboxRuntime {
         (s.provider === 'codex' && (!token(runtime.nativeSessionId) || !runtime.host?.rpc)) || !control && (!isMember(s, 'shared') || !wake.enabled(w))) throw outboxError(reason, 'binding');
     return { s, runtime, nativeId: s.nativeId, pid: s.pid, owner: s.owner, control: s.controlRevision,
       connection: s.connectionRevision, peer: s.peerRevision, member: membershipRevision(s, 'shared'), hostRpc: runtime.host.rpc,
-      sessionId: runtime.nativeSessionId, lifecycle: runtime.lifecycleRevision, inputIdentity: sharedInputIdentity(s), wakeBoundary: wake.boundary(w) };
+      sessionId: runtime.nativeSessionId, lifecycle: runtime.lifecycleRevision, inputIdentity: control ? wake.sourceIdentity(w, s) : sharedInputIdentity(s), wakeBoundary: wake.boundary(w) };
   }
   stable(scope) {
+    return this.stabilityFailure(scope) === null;
+  }
+  stabilityFailure(scope) {
     try {
     const a = scope.actor, { s, runtime } = a, w = this.workspace;
-    return !w.closed && !w.storageWarning && !scope.closed && !scope.client.destroyed &&
-      (scope.control || wake.enabled(w) && wake.boundary(w) === a.wakeBoundary && (scope.kind === 'call' || !s.wakeDisabled)) && w.sessions.get(s.id) === s && w.runtimes.get(s.id) === runtime &&
-      !runtime.stopped && !runtime.transportDisconnected && !s.archived && !s.nativeContextPending &&
-      s.nativeId === a.nativeId && s.pid === a.pid && s.owner === a.owner && s.controlRevision === a.control &&
-      s.connectionRevision === a.connection && s.peerRevision === a.peer && runtime.host.rpc === a.hostRpc && runtime.nativeSessionId === a.sessionId &&
-      runtime.lifecycleRevision === a.lifecycle && (scope.control || isMember(s, 'shared') && membershipRevision(s, 'shared') === a.member) &&
-      isDeepStrictEqual(sharedInputIdentity(s), a.inputIdentity);
-    } catch { return false; }
+    if (w.closed || w.storageWarning) return 'scope-workspace';
+    if (scope.closed) return 'scope-closed';
+    if (scope.client.destroyed) return 'scope-client';
+    if (!scope.control && !(wake.enabled(w) && wake.boundary(w) === a.wakeBoundary && (scope.kind === 'call' || !s.wakeDisabled))) return 'scope-wake-policy';
+    if (w.sessions.get(s.id) !== s) return 'scope-session';
+    if (w.runtimes.get(s.id) !== runtime) return 'scope-runtime';
+    if (runtime.stopped || runtime.transportDisconnected || s.archived || s.nativeContextPending) return 'scope-native-state';
+    if (s.nativeId !== a.nativeId) return 'scope-native-id';
+    if (s.pid !== a.pid) return 'scope-pid';
+    if (s.owner !== a.owner) return 'scope-owner';
+    // Only a proved source control call uses the butler's existing input policy.
+    // Destination edits, other senders, takeover, stop and identity changes still revoke.
+    const input = scope.control ? wake.sourceIdentity(w, s) : sharedInputIdentity(s);
+    if ((scope.control ? input.controlRevision !== a.inputIdentity.controlRevision : s.controlRevision !== a.control)) return 'scope-control-revision';
+    if (s.connectionRevision !== a.connection) return 'scope-connection';
+    if ((scope.control ? input.peerRevision !== a.inputIdentity.peerRevision : s.peerRevision !== a.peer)) return 'scope-peer-revision';
+    if (runtime.host.rpc !== a.hostRpc) return 'scope-rpc';
+    if (runtime.nativeSessionId !== a.sessionId) return 'scope-session-id';
+    if (runtime.lifecycleRevision !== a.lifecycle) return 'scope-lifecycle';
+    if (!scope.control && !(isMember(s, 'shared') && membershipRevision(s, 'shared') === a.member)) return 'scope-membership';
+    if (!isDeepStrictEqual(input, a.inputIdentity)) return 'scope-input-identity';
+    return null;
+    } catch { return 'scope-input-identity'; }
   }
   ready(scope) {
     const { s, runtime } = scope.actor, w = this.workspace;
@@ -77,10 +95,13 @@ class ScopedOutboxRuntime {
   }
   check(scope) {
     if (scope.closed) return false;
-    let valid = false;
-    try { valid = this.stable(scope) && (scope.kind === 'call' ? scope.pendingProof || scope.proof?.valid() : scope.sent || this.ready(scope)); } catch {}
-    if (!valid) { this.emit(scope, { kind: 'invalidated' }); this.close(scope); }
-    return valid;
+    let failureCheck = this.stabilityFailure(scope);
+    try {
+      if (!failureCheck && !(scope.kind === 'call' ? scope.pendingProof || scope.proof?.valid() : scope.sent || this.ready(scope)))
+        failureCheck = scope.kind === 'call' ? scope.proof?.valid.failureCheck?.() || 'scope-native-proof' : 'scope-ready';
+    } catch { failureCheck = 'scope-native-proof'; }
+    if (failureCheck) { scope.failureCheck = failureCheck; this.emit(scope, { kind: 'invalidated', failureCheck }); this.close(scope); }
+    return !failureCheck;
   }
   close(scope) {
     if (!scope || scope.closed) return;
@@ -89,7 +110,7 @@ class ScopedOutboxRuntime {
   }
   owned(client, id) {
     const scope = this.scopes.get(id);
-    if (!scope || scope.client !== client || !this.check(scope)) throw outboxError('grant-invalidated', 'binding');
+    if (!scope || scope.client !== client || !this.check(scope)) throw outboxError('grant-invalidated', 'binding', undefined, false, scope?.failureCheck);
     return scope;
   }
   async request(client, action, p, notify) {
@@ -107,7 +128,7 @@ class ScopedOutboxRuntime {
         try {
           scope.proof = control ? await require('./background-control-native.cjs').nativeCall(actor.runtime, p.identity, args, scope.abort.signal)
             : await nativeOutboxCall(actor.runtime, p.identity, args, scope.abort.signal); scope.pendingProof = false;
-          if (!this.check(scope)) throw outboxError('provenance-unconfirmed', 'binding');
+          if (!this.check(scope)) throw outboxError('provenance-unconfirmed', 'binding', undefined, false, scope.failureCheck);
           return { ok: true, value: { token: scope.token, sender: { id: actor.s.id, nativeId: actor.nativeId,
             provider: actor.s.provider, name: actor.s.name || 'Agent' } } };
         } catch (error) { this.close(scope); throw error; }

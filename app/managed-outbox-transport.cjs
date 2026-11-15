@@ -10,7 +10,7 @@ async function request(client, action, value) {
   try {
     const response = await Promise.race([client.call('scopedOutbox', action, value),
       new Promise((_, reject) => { timer = setTimeout(() => reject(outboxError(action === 'close' ? 'cleanup-unconfirmed' : 'operation-unconfirmed', action === 'close' ? 'cleanup' : action === 'send' ? 'view-send' : 'binding')), action === 'send' ? 35000 : 5000); timer.unref(); })]);
-    if (response?.ok !== true) throw outboxError(response?.failureReason, response?.failurePhase);
+    if (response?.ok !== true) throw outboxError(response?.failureReason, response?.failurePhase, undefined, response?.cleanupUnconfirmed === true, response?.failureCheck);
     return response.value;
   } finally { clearTimeout(timer); }
 }
@@ -21,7 +21,7 @@ class ScopeLink extends EventEmitter {
       if (this.closed || data?.op !== this.op || !token(data.token)) return;
       if (!this.token) { if (this.early.length < 4) this.early.push(data); return; }
       if (data.token !== this.token) return;
-      if (data.kind === 'invalidated') { this.live = false; this.serverClosed = true; this.emit('invalidated'); return; }
+      if (data.kind === 'invalidated') { this.failure = outboxError('grant-invalidated', 'binding', undefined, false, data.failureCheck); this.live = false; this.serverClosed = true; this.emit('invalidated'); return; }
       if (data.kind !== 'receipt' || !this.tag) return;
       const r = data.receipt;
       if (r?.source !== 'codex-native' || r.nativeId !== this.nativeId || r.inputTag !== this.tag || r.nativeReceived !== true || !token(r.turnId)) return;
@@ -42,12 +42,12 @@ class ScopeLink extends EventEmitter {
     if (!token(value?.token) || this.closed || this.signal?.aborted) throw outboxError('grant-invalidated', 'binding');
     this.token = value.token;
     const early = this.early; this.early = []; for (const data of early) this.received(data);
-    if (!this.live) throw outboxError('grant-invalidated', 'binding');
+    if (!this.live) throw this.failure || outboxError('grant-invalidated', 'binding');
   }
   async check() {
-    if (!this.live || this.closed) throw outboxError('grant-invalidated', 'binding');
+    if (!this.live || this.closed) throw this.failure || outboxError('grant-invalidated', 'binding');
     const result = await request(this.client, 'check', { token: this.token });
-    if (!this.live || result?.valid !== true) throw outboxError('grant-invalidated', 'binding');
+    if (!this.live || result?.valid !== true) throw this.failure || outboxError('grant-invalidated', 'binding');
   }
   subscribe(listener) {
     this.on('receipt', listener); if (this.latest) listener(this.latest);
@@ -65,7 +65,7 @@ class ScopeLink extends EventEmitter {
 async function cleanupFailure(link, error) {
   try { await link.close(); } catch {
     const detail = classifyOutboxFailure(error, 'binding', 'binding-unavailable');
-    throw outboxError(detail.failureReason, detail.failurePhase, undefined, true);
+    throw outboxError(detail.failureReason, detail.failurePhase, undefined, true, detail.failureCheck);
   }
   throw error;
 }

@@ -82,7 +82,7 @@ function existingTransports(contexts) {
       try { return { bridge, record, target: await bridge.prepareOutbox(entry, record, grant) }; }
       catch (error) {
         const detail = classifyOutboxFailure(error, 'binding', 'recipient-unavailable');
-        throw outboxError(detail.failureReason, detail.failurePhase, FAIL, detail.cleanupUnconfirmed);
+        throw outboxError(detail.failureReason, detail.failurePhase, FAIL, detail.cleanupUnconfirmed, detail.failureCheck);
       }
     }
   }
@@ -115,7 +115,7 @@ async function bindOriginalOutbox(deps, identity, args, signal) {
   } catch (error) {
     try { await proof?.close?.(); } catch {
       const detail = classifyOutboxFailure(error, 'binding', 'binding-unavailable');
-      throw outboxError(detail.failureReason, detail.failurePhase, FAIL, true);
+      throw outboxError(detail.failureReason, detail.failurePhase, FAIL, true, detail.failureCheck);
     }
     throw error;
   }
@@ -140,7 +140,8 @@ async function bindClaudeControl(deps, credential, signal) {
 function bindClaudeOutbox(deps, credential, signal) {
   let proof;
   try { proof = consumeRootOutboxProof(credential); }
-  catch { throw outboxError('provenance-unconfirmed', 'binding', 'Native root outbox call could not be verified'); }
+  catch (error) { const detail = classifyOutboxFailure(error, 'binding', 'provenance-unconfirmed');
+    throw outboxError(detail.failureReason, detail.failurePhase, 'Native root outbox call could not be verified', detail.cleanupUnconfirmed === true, detail.failureCheck); }
   const transports = existingTransports(deps.contexts);
   const caller = transports.find(s => s.provider === 'claude' && s.nativeId === proof.target.record.nativeId, 'caller-unavailable');
   if (caller.root !== proof.target) throw outboxError('provenance-unconfirmed', 'binding', FAIL);
@@ -248,7 +249,7 @@ async function bindRecipient({ roomState }, { available, find, prepareRecipient 
           });
       } catch (error) {
         const detail = classifyOutboxFailure(error, 'view-send', lastReason || 'send-unconfirmed');
-        throw outboxError(detail.failureReason, detail.failurePhase, FAIL);
+        throw outboxError(detail.failureReason, detail.failurePhase, FAIL, false, detail.failureCheck);
       }
       monitor.bind(tag); return tag;
     },
@@ -262,7 +263,7 @@ async function bindRecipient({ roomState }, { available, find, prepareRecipient 
     try { await prepared?.bridge.releaseOutbox?.(prepared.record, prepared.target); }
     catch {
       const detail = classifyOutboxFailure(error, 'binding', 'binding-unavailable');
-      throw outboxError(detail.failureReason, detail.failurePhase, FAIL, true);
+      throw outboxError(detail.failureReason, detail.failurePhase, FAIL, true, detail.failureCheck);
     }
     throw error;
   }
