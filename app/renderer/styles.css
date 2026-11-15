@@ -468,13 +468,20 @@ header h1, header p { overflow-wrap: anywhere; }
 /* T-163: the row under the single-session input, in the Chinese interface. The hint and the controls used to
    give way together, each in proportion to its full width, so a full-sentence hint claimed most of a short
    row and the controls' labels broke (a Chinese label breaks as soon as its control loses one pixel). The
-   hint now asks for 16em, a readable width for prose, and takes what is left once the labels are on one
-   line; when 16em and the whole labels do not fit, everything gives way in proportion as before.
+   hint now asks for 16em, a readable width for prose, or its own width when that is less, and takes what is
+   left once the labels are on one line; when that and the whole labels do not fit, everything gives way in
+   proportion as before, except that the hint keeps its own width or 44% of the row, whichever is less.
+   - Its own width: a hint shorter than 16em that asked for 16em took room it did not use, and the label
+     工具结束时送进本轮 ↑ broke one character earlier at 320px (the row grew 50.5 → 53px).
+   - 44%: with 中断回复 shown as well, that label stayed whole but squeezed a long hint into six lines, and
+     the row grew (86 → 90px at 320px, 53 → 60px at 440px). With the probe over the same sweep, a 42% floor
+     still leaves one row taller than the earlier sizing, 43% none; 44% keeps a margin. The cost: 25
+     combinations where a label breaks that is whole on main, none in more lines than with the earlier
+     sizing.
    The two conditions keep the rule to where it was measured to cost nothing: with every label and hint in
    the catalog, at card widths from 150 to 600px, no control further out of the card, no more sideways
    scroll, no label in more lines and no row taller than with the earlier sizing. That is a measurement, not
-   a property of the rule (a hint shorter than 16em stops giving way sooner than it used to);
-   scripts/test-session-split-density.cjs repeats it at fourteen card widths.
+   a property of the rule; scripts/test-session-split-density.cjs repeats it at fourteen card widths.
    - Chinese only: English hints are long enough that 16em costs them lines. The page's lang attribute does
      not follow the interface language, so the language selector's state is read, as the setup dialog's
      own rules do; without that selector the rule stops applying.
@@ -482,7 +489,8 @@ header h1, header p { overflow-wrap: anywhere; }
      area is the size container the condition asks. */
 #composer-wrap{container-type:inline-size}
 @container (min-width:320px){
-  &:has(#ui-language>option[value="zh"]:checked) #composer .session-compose-hint{flex:1 1 16em;max-width:max-content}
+  &:has(#ui-language>option[value="zh"]:checked) #composer .session-compose-hint{flex:1 1 16em;max-width:max-content;
+    flex-basis:calc-size(max-content, min(size, 16em));min-width:calc-size(max-content, min(size, 44%))}
 }
 #advanced{padding:5px 16px 7px}
 #room-composer{padding:10px 16px}
