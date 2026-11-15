@@ -171,6 +171,7 @@ async function build() {
       'native-directory-trust.cjs',
       'native-history.cjs',
       'native-images.cjs',
+      'native-root-proof.cjs',
       'native-usage.js',
       'observation.cjs',
       'operator-control.cjs',
