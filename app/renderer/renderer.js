@@ -4676,12 +4676,26 @@ function renderNativeActivity(s) {
   ui.display.computed($('native-phase'), 'text', () => (s.name || 'Codex') + ' · ' + label() + (slow ? uiText('native.slowTool') : ''));
   ui.display.computed($('native-elapsed'), 'text', () => seconds === null ? '' : uiText('native.used', { elapsed: elapsedText(seconds) }));
 }
+// A reported status turns stale 5 s after its last observation, and the window shows that once: render
+// reads nativeStatusFresh. It stays stale until a newer snapshot, which renders anyway. Redrawing the
+// whole window every second meanwhile kept an idle page busy for as long as any session waited on a
+// long tool or a permission (2026-11-15), so only a status that has just turned stale redraws it.
+let staleStatusKeys = new Set();
+function newlyStaleStatus(sessions) {
+  const keys = new Set();
+  for (const s of sessions) for (const [kind, value] of [['activity', s.sharedActivity], ['approval', s.nativeApproval]]) {
+    if (value && !nativeStatusFresh(value)) keys.add(`${s.id}\n${kind}\n${value.observedAt}`);
+  }
+  const added = [...keys].some(key => !staleStatusKeys.has(key));
+  staleStatusKeys = keys;
+  return added;
+}
 const nativeActivityClock = setInterval(() => {
   if (!state) return;
   renderNativeActivity(current());
   if (selected === 'room') { roomOverview?.refresh(); refreshRoomMemberTabs(); }
   if (selected === 'panorama') panorama?.refresh();
-  if (state.sessions.some(s => s.sharedActivity && !nativeStatusFresh(s.sharedActivity) || s.nativeApproval && !nativeStatusFresh(s.nativeApproval))) render();
+  if (newlyStaleStatus(state.sessions)) render();
 }, 1000);
 function render() {
   if (!state || rendering) return;
