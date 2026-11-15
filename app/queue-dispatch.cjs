@@ -10,6 +10,7 @@ const cp = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { roomIds, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
 const { uiError, uiNotice } = require('./ui-errors.cjs');
+const { displayMessage } = require('./ui-locale.js');
 const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 const { noticeText } = require('./answer-notices.cjs');
@@ -1229,8 +1230,8 @@ function dispatchText(roomName, item) {
   ].join('\n');
 }
 
-// Why a rotation stopped, as the person reads it: the code stays in the private rotation log (the 11-14 drill showed
-// 「（person-active）」 in a space and an OS notice). null: the reason is already a sentence, shown as it is.
+// Human-readable explanations for space/OS notices; structured reason codes are
+// separate metadata. null: the supplied reason is already a sentence.
 const ROTATION_CAUSES = [
   [/^person-active$/, 'personActive'],
   [/^handoff-missing$/, 'handoffMissing'],
@@ -1253,6 +1254,25 @@ function rotationCauseKey(code) {
   }
   const found = ROTATION_CAUSES.find(([pattern]) => pattern.test(text));
   return `notice.rotation.cause.${found ? found[1] : 'other'}`;
+}
+
+const ROTATION_WAIT_CODES = new Set(['missing', 'archived', 'backend-update-needed', 'automatic-messages-off', 'paused',
+  'not-idle', 'busy', 'unavailable', 'background-unconfirmed', 'background-work', 'person-typing', 'native-goal-active',
+  'team-running', 'person-recent', 'trust-unknown', 'trust-hold', 'refresh-failed', 'refresh-timeout',
+  'handoff-request-not-sent', 'handoff-request-failed', 'rotation-failed']);
+const ROTATION_FAILURE_CODES = new Set(['person-active', 'handoff-missing', 'handoff-request-unconfirmed',
+  'handoff-request-timeout', 'handoff-unconfirmed', 'old-session-missing', 'new-session-missing',
+  'new-session-not-ready', 'new-session-ambiguous', 'create-timeout', 'new-session-model-unreported',
+  'join-timeout', 'leave-timeout', 'stop-timeout', 'native-stop-unconfirmed', 'guarded-stop-unavailable',
+  'invalid-worktree-directory', 'worktree-preview-timeout', 'new-session-directory-trust-unavailable',
+  'native-directory-trust', 'native-directory-trust-timeout', 'native-directory-trust-timeout-stop-unconfirmed']);
+// Public failure/wait metadata contains reason codes, never native error text.
+function rotationReasonCode(value, fallback = 'rotation-failed') {
+  if (typeof value !== 'string') return fallback;
+  if (ROTATION_WAIT_CODES.has(value) || ROTATION_FAILURE_CODES.has(value) || displayMessage({ version: 1, key: value }, 'error.')) return value;
+  if (/^cannot-carry:(model-unknown|backend-cannot-carry-settings|permission-mode|collaboration-mode|several-spaces|spaces-unreadable)$/.test(value) ||
+      /^settings-differ:(pending|model|model-provider|permission-mode|effort)$/.test(value)) return value;
+  return fallback;
 }
 
 // Why it is due, as the old session (in Chinese) and the spaces (in the reader's language) are told.
@@ -1907,6 +1927,7 @@ class QueueDispatcher {
     this.vacancySince = new Map();
     this.vacancyIdentity = new Map();
     this.humanAt = new Map();
+    this.rotationWaitReasons = new Map();
     this.pending = null;
     this.again = false;
     this.closed = false;
@@ -2672,7 +2693,7 @@ class QueueDispatcher {
       } else if (action.kind === 'dispatch') {
         await this.dispatch(action, waits);
       } else if (action.kind === 'rotate') {
-        await this.requestHandoff(action, sample.memory.get(action.sessionId));
+        await this.requestHandoff(action, sample.memory.get(action.sessionId), current.snapshot);
       }
     }
     // In memory only: the person and the butler read why each queued item is still waiting (queue item 5614a65c).
@@ -3113,9 +3134,17 @@ class QueueDispatcher {
     this.notify('failed', record);
   }
 
-  async requestHandoff(action, bytes) {
-    const current = await this.freshReady(action.sessionId);
+  async requestHandoff(action, bytes, plannedSnapshot = this.client.snapshot()) {
+    // Keep the last known membership: the fresh read itself can fail.
+    const expected = plannedSnapshot.sessions.find(session => session.id === action.sessionId), whyReady = {};
+    let current;
+    try { current = await this.freshReady(action.sessionId, this.humanQuietMs, whyReady); }
+    catch (error) {
+      if (!this.closed) this.rotationWait(expected, error?.message === 'refresh-timeout' ? 'refresh-timeout' : 'refresh-failed');
+      return;
+    }
     if (!current) {
+      this.rotationWait(expected, whyReady.reason || 'not-idle');
       return;
     }
     const session = current.session;
@@ -3178,6 +3207,7 @@ class QueueDispatcher {
     this.save();
     try {
       record.tag = await this.send(session, handoffRequestText(why, reason), `rotation:${session.id}`);
+      this.rotationWaitReasons.delete(session.id);
       this.save();
       this.appendLog('requested', record, { reason, why });
       this.roomState.rotationEvent(record.roomIds, 'requested', this.label(session.id, record.name), why, undefined, whyNotice.uiMessage);
@@ -3188,10 +3218,12 @@ class QueueDispatcher {
       }
       if (notSent(error)) {
         delete this.rotations[session.id];
+        this.rotationWait(session, errorKey(error) === NATIVE_DRAFT_KEY ? 'person-typing'
+          : rotationReasonCode(errorKey(error) || error?.message, 'handoff-request-not-sent'));
       } else {
         record.phase = 'failed';
         record.failedAt = current.now;
-        record.reason = error.message || 'handoff-request-failed';
+        record.reason = rotationReasonCode(errorKey(error) || error?.message, 'handoff-request-failed');
         this.appendLog('failed', record, { reason: record.reason });
         this.failedEvent(record.roomIds, session.id, record);
         this.notify('failed', record);
@@ -3235,6 +3267,7 @@ class QueueDispatcher {
 
   // Undo what a failed rotation started; the old member keeps its session and work.
   async failRotation(oldId, record, reason, now, snapshot) {
+    reason = rotationReasonCode(reason);
     const phase = record.phase;
     const due = record.reason;
     const trustTimedOut = phase === 'waiting-trust' && reason === 'native-directory-trust-timeout';
@@ -3307,11 +3340,30 @@ class QueueDispatcher {
     await this.broadcast();
   }
 
-  // A failure in the spaces: its reason in the reader's language, never the code (rotationCauseKey).
+  // A bounded record per changed wait. It never rests, stops or replaces the
+  // old member. An accepted handoff request starts a new episode.
+  rotationWait(session, reason) {
+    if (!session || this.closed) return;
+    const code = rotationReasonCode(reason), spaces = roomIds(session);
+    const identity = JSON.stringify([session.nativeId, spaces.slice().sort(), code]);
+    if (this.rotationWaitReasons.get(session.id) === identity) return;
+    const record = { oldId: session.id, oldNativeId: session.nativeId, name: this.name(session), roomIds: spaces };
+    this.appendLog('waiting', record, { reason: code });
+    const key = ['refresh-failed', 'refresh-timeout'].includes(code) ? 'notice.rotation.cause.refresh'
+      : ['person-typing', 'person-recent'].includes(code) ? 'notice.rotation.cause.personActive'
+      : code.startsWith('handoff-request-') ? 'notice.rotation.cause.handoffRequest' : 'notice.rotation.cause.notReady';
+    const cause = uiNotice(key);
+    this.roomState.rotationEvent(spaces, 'waiting', this.label(session.id, record.name), cause.text, undefined, cause.uiMessage,
+      { sessionId: session.id, reason: code });
+    this.rotationWaitReasons.set(session.id, identity);
+    this.broadcast().catch(() => {});
+  }
+
+  // Human-readable cause plus a structured code for space members/the butler.
   failedEvent(ids, oldId, record, receipt) {
-    const key = rotationCauseKey(record.reason);
-    const cause = key ? uiNotice(key) : null;
-    this.roomState.rotationEvent(ids, 'failed', this.label(oldId, record.name), cause ? cause.text : record.reason, receipt, cause ? cause.uiMessage : undefined);
+    const reason = rotationReasonCode(record.reason), cause = uiNotice(rotationCauseKey(reason));
+    this.roomState.rotationEvent(ids, 'failed', this.label(oldId, record.name), cause.text, receipt, cause.uiMessage,
+      { sessionId: oldId, reason });
   }
 
   // One durable decision per visible wait. Never send an answer to native here.

@@ -52,3 +52,14 @@ test('why a queued item waits is shown where its reason is: to members and the b
   assert.equal(JSON.stringify(secretary).includes('person-typing'), false);
   assert.equal(JSON.stringify(result).includes('WAIT_SECRET'), false);
 });
+
+test('rotation reason codes are shared only with space members and the designated butler access', () => {
+  const source = fixture(), event = { kind: 'rotation', rotationReason: { sessionId: 'agent', reason: 'refresh-failed' } };
+  source.rooms[0].events = [event];
+  for (const access of [{ roomIds: [A], secretary: false }, { roomIds: [A, B], secretary: false }]) {
+    assert.deepEqual(conversationSnapshot(source, actor, null, 'room', access).rooms[0].events, [event]);
+  }
+  for (const access of [{ roomIds: [], secretary: false }, { roomIds: [A, B], secretary: true }]) {
+    assert.equal(conversationSnapshot(source, actor, null, 'room', access).rooms[0].events, undefined);
+  }
+});

@@ -4104,3 +4104,107 @@ test('a refusal right before sending is recorded as the item\'s wait by its key'
   assert.equal(client.sends().length, 0);
   assert.deepEqual(room.apply(client.snapshot()).rooms.find(r => r.id === 'shared').queue[0].wait, [{ sessionId: 'a', reason: 'backend-update-needed' }]);
 });
+
+const rotationReasonEvents = room => room.metadata('shared').events.filter(event => event.rotationReason);
+test('a failed fresh rotation read records a safe reason, keeps the work, and does not stall another member', async t => {
+  const f = dispatcherSetup(t, [member('a'), member('b')], { compactions: { async sample() { return new Map([['a', 3], ['b', 0]]); } } });
+  const first = f.room.queueAdd('ORIGINAL_A_WORK', 'a'), second = f.room.queueAdd('ORIGINAL_B_WORK', 'b');
+  const refresh = f.client.refresh.bind(f.client); let fail = true;
+  f.client.refresh = async () => { if (fail) { fail = false; throw Error('PRIVATE_NATIVE_BODY /private/source'); } return refresh(); };
+  await assert.doesNotReject(f.dispatcher.start());
+  assert.equal(f.room.queueFind('shared', first).status, 'queued');
+  assert.equal(f.room.queueFind('shared', second).status, 'sent');
+  assert.deepEqual(rotationReasonEvents(f.room)[0]?.rotationReason, { sessionId: 'a', reason: 'refresh-failed' });
+  assert.equal(JSON.stringify(f.room.metadata('shared').events).includes('PRIVATE_NATIVE_BODY'), false);
+  assert.equal(f.dispatcher.rotations.a, undefined, 'A read failure grants no week of rest or replacement');
+  assert.equal(f.client.calls.some(call => ['stop', 'create'].includes(call[0])), false);
+  f.dispatcher.dirty = true; await f.dispatcher.schedule();
+  assert.equal(f.dispatcher.rotations.a.phase, 'requested', 'The unchanged work can retry the real handoff');
+});
+
+test('repeated failed rotation reads are recorded once per native identity and reason', async t => {
+  const f = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages() })]);
+  f.room.queueAdd('keep this task', 'a');
+  f.client.refresh = async () => { throw Error('refresh-timeout'); };
+  await f.dispatcher.start();
+  for (let n = 0; n < 3; n++) { f.dispatcher.dirty = true; await assert.doesNotReject(f.dispatcher.schedule()); }
+  assert.equal(rotationReasonEvents(f.room).length, 1);
+  assert.deepEqual(rotationReasonEvents(f.room)[0].rotationReason, { sessionId: 'a', reason: 'refresh-timeout' });
+  assert.equal(f.dispatcher.rotationEntries().filter(row => row.event === 'waiting' && row.reason === 'refresh-timeout').length, 1);
+  assert.equal(f.client.sends().length, 0); assert.equal(f.room.value.queue[0].status, 'queued');
+});
+
+test('a member that becomes working at the fresh rotation read is left working with a reason code', async t => {
+  const f = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages() })]);
+  f.room.queueAdd('keep this task', 'a'); f.client.busyOnRefresh = true;
+  await f.dispatcher.start();
+  assert.deepEqual(rotationReasonEvents(f.room)[0]?.rotationReason, { sessionId: 'a', reason: 'not-idle' });
+  assert.equal(f.client.state.sessions[0].state, 'working'); assert.equal(f.room.value.queue[0].status, 'queued');
+  assert.equal(f.client.calls.some(call => ['stop', 'create', 'dispatch'].includes(call[0])), false);
+});
+
+test('cannot carry collaboration mode is visible by code and keeps the original member and assigned work', async t => {
+  const f = dispatcherSetup(t, [member('a', { provider: 'codex', nativeSettings: { mode: 'plan' }, createdAt: NOW - 30 * HOUR, messages: heavyMessages('codex') })]);
+  const id = f.room.queueAdd('keep this assigned task', 'a'); await f.dispatcher.start();
+  assert.equal(f.dispatcher.rotations.a.reason, 'cannot-carry:collaboration-mode');
+  assert.deepEqual(rotationReasonEvents(f.room)[0]?.rotationReason, { sessionId: 'a', reason: 'cannot-carry:collaboration-mode' });
+  assert.equal(f.room.queueFind('shared', id).status, 'queued');
+  assert.equal(f.client.calls.some(call => ['stop', 'create'].includes(call[0])), false);
+  f.dispatcher.dirty = true; await f.dispatcher.schedule();
+  assert.equal(f.room.queueFind('shared', id).status, 'sent', 'Existing carry refusal leaves queued work on its original member');
+  assert.equal(f.room.queueFind('shared', id).sentTo, 'a');
+});
+
+test('an unconfirmed handoff failure exposes a fixed code, never the native error body', async t => {
+  const f = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages() })]);
+  f.room.queueAdd('original task', 'a');
+  const call = f.client.call.bind(f.client);
+  f.client.call = async (method, ...args) => { if (method === 'dispatch') throw Error('PRIVATE_HANDOFF_BODY with transcript text'); return call(method, ...args); };
+  await f.dispatcher.start();
+  assert.deepEqual(rotationReasonEvents(f.room)[0]?.rotationReason, { sessionId: 'a', reason: 'handoff-request-failed' });
+  assert.equal(JSON.stringify(f.room.metadata('shared').events).includes('PRIVATE_HANDOFF_BODY'), false);
+  assert.equal(f.room.value.queue[0].status, 'queued');
+  assert.equal(f.client.calls.some(row => ['stop', 'create'].includes(row[0])), false);
+});
+
+test('a native draft refusal is recorded as waiting, without a failed rotation or native-error body', async t => {
+  const f = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages() })]);
+  f.room.queueAdd('original task', 'a');
+  const call = f.client.call.bind(f.client);
+  f.client.call = async (method, ...args) => { if (method === 'dispatch') throw Object.assign(Error('PRIVATE_DRAFT_BODY'), { uiMessage: { key: 'error.submission.nativeDraft' } }); return call(method, ...args); };
+  await f.dispatcher.start();
+  assert.deepEqual(rotationReasonEvents(f.room)[0]?.rotationReason, { sessionId: 'a', reason: 'person-typing' });
+  assert.equal(f.dispatcher.rotations.a, undefined);
+  assert.equal(f.room.value.queue[0].status, 'queued');
+  assert.equal(JSON.stringify(f.room.metadata('shared').events).includes('PRIVATE_DRAFT_BODY'), false);
+});
+
+test('repeated unsent handoff requests retain one visible wait and keep the original task', async t => {
+  const f = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages() })]);
+  f.room.queueAdd('original task', 'a');
+  f.client.call = async () => { throw Object.assign(Error('PRIVATE_UNSENT_BODY'), { notSent: true }); };
+  await f.dispatcher.start();
+  for (let n = 0; n < 3; n++) { f.dispatcher.dirty = true; await f.dispatcher.schedule(); }
+  assert.equal(rotationReasonEvents(f.room).length, 1);
+  assert.equal(rotationReasonEvents(f.room)[0]?.rotationReason.reason, 'handoff-request-not-sent');
+  assert.equal(f.dispatcher.rotations.a, undefined); assert.equal(f.room.value.queue[0].status, 'queued');
+});
+
+test('native text resembling a reason prefix never becomes a shared rotation code', async t => {
+  const f = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages() })]);
+  f.room.queueAdd('original task', 'a');
+  f.client.call = async () => { throw Error('handoff-request-private-synthetic-body'); };
+  await f.dispatcher.start();
+  assert.deepEqual(rotationReasonEvents(f.room)[0]?.rotationReason, { sessionId: 'a', reason: 'handoff-request-failed' });
+  assert.equal(JSON.stringify(f.room.metadata('shared').events).includes('private-synthetic-body'), false);
+});
+
+test('a later rotation failure keeps assigned work and publishes only a fixed code', async t => {
+  const f = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages() })]);
+  f.room.queueAdd('original task', 'a'); await f.dispatcher.start();
+  await f.dispatcher.failRotation('a', f.dispatcher.rotations.a, 'PRIVATE_CREATE_BODY with transcript', NOW, f.client.snapshot());
+  assert.deepEqual(rotationReasonEvents(f.room).at(-1)?.rotationReason, { sessionId: 'a', reason: 'rotation-failed' });
+  assert.equal(f.room.value.queue[0].status, 'queued'); assert.equal(f.room.value.queue[0].assignee, 'a');
+  assert.equal(f.client.state.sessions[0].state, 'working', 'The old member is not stopped');
+  assert.equal(JSON.stringify(f.room.metadata('shared').events).includes('PRIVATE_CREATE_BODY'), false);
+});
