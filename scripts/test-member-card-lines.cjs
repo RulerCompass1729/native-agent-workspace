@@ -1,8 +1,9 @@
-// T-163: the lines of a member's column in a space's member overview (grid layout). Source Electron in a hidden
-// window, the synthetic overview backend, no provider process and no model. Checks that one boundary is drawn
-// by one line (name row to column, conversation to terminal) and, more importantly, what must stay as it was:
-// names, states, drafts, who has the input, the controls and their sizes, the drag handle when it is pointed
-// at, focused or dragged, the list layout, and a narrow container, where a column is not under its name.
+// T-163, reworked 2026-11-15 as member cards: the lines of a member's card in a space's member overview (grid layout).
+// Source Electron in a hidden window, the synthetic overview backend, no provider process and no model. Checks that
+// each member is one bordered card with its name row inside it, that one boundary is drawn by one line (name row to
+// content, conversation to terminal) and, more importantly, what must stay as it was: names, states, drafts, who has
+// the input, the controls and their sizes, the drag handle when it is pointed at, focused or dragged, the list
+// layout, and a narrow container, where the cards stack.
 const scratch = require('./fixtures/test-scratch.cjs');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto'), { execFileSync } = require('node:child_process');
@@ -43,7 +44,8 @@ const sample = () => page.evaluate(() => {
   const shown = e => Boolean(e && e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
   const box = e => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, right: r.right, bottom: r.bottom }; };
   const host = document.querySelector('#collaboration-overview'), strip = host.querySelector('.collaboration-statuses');
-  const text = (scope, selector) => { const e = scope.querySelector(selector); return shown(e) && e.getBoundingClientRect().height > 2 ? e.textContent.trim() : ''; };
+  // A name's text without its maker mark, which sits inside the name since 1ad3910d.
+  const text = (scope, selector) => { const e = scope.querySelector(selector); if (!(shown(e) && e.getBoundingClientRect().height > 2)) return ''; const c = e.cloneNode(true); c.querySelectorAll('.vendor-mark').forEach(v => v.remove()); return c.textContent.trim(); };
   const font = (scope, selector) => { const e = scope.querySelector(selector); return e ? parseFloat(getComputedStyle(e).fontSize) : null; };
   const members = [...host.querySelectorAll('.collaboration-member-status')].filter(shown).map(row => {
     const id = row.dataset.memberId, column = [...host.querySelectorAll('.collaboration-member-reader')].find(e => e.dataset.memberId === id && shown(e));
@@ -64,7 +66,7 @@ const sample = () => page.evaluate(() => {
       name: text(row, '.collaboration-member-name'), nameFont: font(row, '.collaboration-member-name'), more: shown(row.querySelector('.collaboration-member-more')) ? box(row.querySelector('.collaboration-member-more')) : null,
       stateText: text(row, '.collaboration-member-state'), stateFont: font(row, '.collaboration-member-state'), stateColor: getComputedStyle(row.querySelector('.collaboration-member-state')).color, child: text(row, '.collaboration-member-child-compact'),
       column: column ? { box: box(column), top: [cs.borderTopWidth, cs.borderTopStyle, cs.borderTopColor], sides: [cs.borderLeftWidth, cs.borderRightWidth, cs.borderBottomWidth] } : null,
-      unit: unit && getComputedStyle(unit).display !== 'contents' ? { box: box(unit), borders: [getComputedStyle(unit).borderTopWidth, getComputedStyle(unit).borderBottomWidth] } : null,
+      unit: unit && getComputedStyle(unit).display !== 'contents' ? { box: box(unit), borders: ['Top', 'Right', 'Bottom', 'Left'].map(side => getComputedStyle(unit)['border' + side + 'Width']) } : null,
       messages: shown(list) ? { box: box(list), originals: [(list.textContent.match(/的第 \d 条原文/g) || []).length, (list.textContent.match(/Original message \d of member/g) || []).length], font: parseFloat(getComputedStyle(list.querySelector('.message-body') || list).fontSize) } : null, input };
   });
   const guide = document.querySelector('.column-terminal-guide'), tip = document.querySelector('.column-terminal-hint');
@@ -72,23 +74,20 @@ const sample = () => page.evaluate(() => {
     strip: shown(strip) ? { box: box(strip), paddingBottom: getComputedStyle(strip).paddingBottom } : null,
     guide: shown(guide) ? box(guide) : null, tip: shown(tip) ? tip.textContent : '', spaceDraft: document.querySelector('#shared-input').value };
 });
-// One boundary, one line: the name row has no rule of its own and sits just above its column, whose top border
-// is the line between a name and its content.
-function oneLineUnderNames(s, label) {
-  assert.equal(s.strip.paddingBottom, '2px', label + ': the name rows sit 2px above their columns');
+// One card per member, one boundary, one line: the name row is inside the member's bordered card, and its bottom
+// rule is the line between the name and the member's own content, which starts right under it with no frame of its own.
+// The same holds in a narrow container, where the cards stack.
+function cards(s, label) {
+  assert.equal(s.strip, null, label + ': no separate row of names above the cards');
   for (const m of s.members) {
-    assert.deepEqual(m.borders, ['0px', '0px', '0px', '0px'], `${label}: ${m.name} has no rule or box of its own`);
+    assert.ok(m.unit && m.unit.borders.every(v => v === '1px'), `${label}: ${m.name} is one bordered card`);
+    assert.ok(m.row.y >= m.unit.box.y - 0.6 && m.column.box.bottom <= m.unit.box.bottom + 0.6, `${label}: ${m.name}: name and content are inside the card`);
+    assert.deepEqual(m.borders, ['0px', '0px', '1px', '0px'], `${label}: ${m.name}: the name row's bottom rule is the one line`); assert.notEqual(m.bottomColor, clear);
     assert.equal(m.background, clear, `${label}: ${m.name} has no colour block`);
-    assert.ok(Math.abs(m.column.box.y - m.row.bottom - 2) < 0.6, `${label}: ${m.name} sits 2px above its column (${m.column.box.y - m.row.bottom})`);
-    assert.ok(Math.abs(m.column.box.x - m.row.x) < 0.6 && Math.abs(m.column.box.w - m.row.w) < 0.6, `${label}: ${m.name} is exactly as wide as its column`);
-    assert.deepEqual(m.column.top.slice(0, 2), ['1px', 'solid'], `${label}: the column's top border is the one line`); assert.notEqual(m.column.top[2], clear);
-    assert.deepEqual(m.column.sides, ['1px', '1px', '1px'], `${label}: the column keeps its frame`);
+    assert.ok(Math.abs(m.column.box.y - m.row.bottom) < 0.6, `${label}: ${m.name}: its content starts right under that line (${m.column.box.y - m.row.bottom})`);
+    assert.ok(Math.abs(m.column.box.x - m.row.x) < 0.6 && Math.abs(m.column.box.w - m.row.w) < 0.6, `${label}: ${m.name} is exactly as wide as its content`);
+    assert.deepEqual([m.column.top[0], ...m.column.sides], ['0px', '0px', '0px', '0px'], `${label}: ${m.name}: the content draws no second line or frame inside the card`);
   }
-}
-// The name row as it was before T-163, for a narrow container, where the columns stack and are not under their names.
-function ruleUnderNames(s, label) {
-  assert.equal(s.strip.paddingBottom, '5px', label + ': the name rows keep their spacing');
-  for (const m of s.members) { assert.deepEqual(m.borders, ['0px', '0px', '1px', '0px'], `${label}: ${m.name} keeps its bottom rule`); assert.notEqual(m.bottomColor, clear); }
 }
 // What a person reads and uses on the cards, whatever the lines do.
 function content(s, label, expected) {
@@ -167,9 +166,9 @@ async function run() {
 
   // 1) Grid layout: one line between a name and its column.
   assert.deepEqual([s.flags.list, s.flags.focused, s.flags.brief], ['false', 'false', 'false']);
-  content(s, 'grid', zh); oneLineUnderNames(s, 'grid');
+  content(s, 'grid', zh); cards(s, 'grid');
   await capture('01-grid-zh');
-  check('Grid: each name row has no rule or box of its own and sits 2px above its column, whose top border is the one line; names, states, child task and menu buttons are as before');
+  check('Grid: each member is one bordered card; its name row is inside it and the row\'s bottom rule is the one line above its content; names, states, child task and menu buttons are as before');
 
   // 2) Between conversation and terminal: one line at rest, with the terminal directly under the handle.
   columns(s, 'grid', zh);
@@ -212,12 +211,12 @@ async function run() {
   columns(s, 'after a drag', zh);
   check(`Dragging the handle resizes the terminal with the guide on the handle throughout (handle counted as pointed at mid-drag: ${held}); afterwards one line again`);
 
-  // 6) Simplified information: the same columns with a short summary; names still label their columns with one line.
+  // 6) Simplified information: the same cards with a short summary; one line between each name and its content.
   await page.getByRole('button', { name: '简化信息', exact: true }).click(); await until(async () => await flag('brief') === 'true', 'Simplified information is on'); await settled();
-  s = await sample(); content(s, 'simplified', zh); oneLineUnderNames(s, 'simplified'); assert.ok(s.members.every(m => !m.input), 'Simplified: no column input, as before');
+  s = await sample(); content(s, 'simplified', zh); cards(s, 'simplified'); assert.ok(s.members.every(m => !m.input), 'Simplified: no column input, as before');
   await capture('05-simplified-zh');
   await page.getByRole('button', { name: '简化信息', exact: true }).click(); await until(async () => await flag('brief') === 'false', 'Simplified information is off'); await settled();
-  check('Simplified information: one line between each name and its column');
+  check('Simplified information: the same cards, one line between each name and its content');
 
   // 7) List layout: one bordered unit per member, as before.
   await page.locator('.collaboration-layout-controls button').nth(1).click(); await until(async () => await flag('listUnits') === 'true', 'The list layout'); await settled();
@@ -234,28 +233,29 @@ async function run() {
   await capture('07-one-member-opened-zh');
   await page.locator('#room-overview').click(); await until(async () => await flag('focused') === 'false', 'Back to the whole space'); await page.locator('#collaboration-overview .collaboration-member-reader').nth(3).waitFor(); await settled();
   await page.mouse.move(2, 2); await settled();
-  s = await sample(); content(s, 'back to the grid', zh); oneLineUnderNames(s, 'back to the grid'); columns(s, 'back to the grid', zh);
-  check('One member opened and back: the overview is replaced by that member\'s session, and on return every column has its single lines, drafts and controls');
+  s = await sample(); content(s, 'back to the grid', zh); cards(s, 'back to the grid'); columns(s, 'back to the grid', zh);
+  check('One member opened and back: the overview is replaced by that member\'s session, and on return every card has its single lines, drafts and controls');
 
-  // 9) A narrow container stacks the columns under a wrapped row of names. The window cannot be made that narrow
-  //    (its minimum width is 850), so the overview itself is held to 590px to reach that layout.
+  // 9) A narrow container: since 8ef6ac7a the cards stay side by side while each has 140px, otherwise they wrap.
+  //    Either way each card keeps its own name. The window cannot be made that narrow (its minimum width is 850),
+  //    so the overview itself is held to 590px.
   await host.evaluate(e => { e.style.width = '590px'; }); await settled();
-  s = await sample(); assert.ok(s.width <= 600); content(s, 'narrow container', zh); ruleUnderNames(s, 'narrow container');
-  assert.ok(s.members[1].column.box.y > s.members[0].column.box.bottom - 1, 'Narrow container: the columns are stacked');
+  s = await sample(); assert.ok(s.width <= 600); content(s, 'narrow container', zh); cards(s, 'narrow container');
+  for (const m of s.members) assert.ok(m.unit.box.w >= 130, `Narrow container: ${m.name}'s card keeps a readable width (${m.unit.box.w})`);
   for (const m of s.members) assert.equal(m.input.sash.line.color, clear, 'Narrow container: still one line above each terminal');
   await capture('08-narrow-container-zh');
   await host.evaluate(e => { e.style.width = ''; }); await settled();
-  check('Narrow container (columns stacked): the names keep their bottom rule; one line above each terminal');
+  check('Narrow container: each card keeps its name inside with one line under it; one line above each terminal');
 
   // 10) English and the small window.
   await language('en'); await size(850, 600); await page.mouse.move(2, 2); await settled();
   s = await sample();
   const en = { ...zh, child: '1 subtasks running', states: [['working', 'Working'], ['approval', 'Awaiting approval'], ['idle', 'Session ready'], ['error', 'Needs attention']],
     buttons: [[['Native input', false], ['Send ↑', true]], [['Take control here', false]], [['Native input', false], ['Send ↑', true]], [['Open native terminal', false]]] };
-  content(s, 'en 850x600', en); oneLineUnderNames(s, 'en 850x600'); columns(s, 'en 850x600', en);
+  content(s, 'en 850x600', en); cards(s, 'en 850x600'); columns(s, 'en 850x600', en);
   await capture('09-small-en');
   await size(1240, 850); await language('zh'); await settled();
-  s = await sample(); content(s, 'zh again', zh); oneLineUnderNames(s, 'zh again'); columns(s, 'zh again', zh);
+  s = await sample(); content(s, 'zh again', zh); cards(s, 'zh again'); columns(s, 'zh again', zh);
   check('English in the small window, then Chinese again: the same single lines, texts, states, drafts and controls');
 
   // Looking at the overview, pointing, focusing and resizing a terminal sent nothing and gave no input to any session.

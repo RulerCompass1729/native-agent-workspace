@@ -68,35 +68,75 @@ async function main() {
     const readers = document.querySelector('.collaboration-readers');
     const units = [...readers.querySelectorAll('.collaboration-member-unit')];
     const visible = units.filter(u => !u.hidden);
-    const widths = visible.map(u => Math.round(u.querySelector('.collaboration-member-reader').getBoundingClientRect().width));
-    const heights = visible.map(u => Math.round(u.querySelector('.collaboration-member-reader').getBoundingClientRect().height));
+    // A row of the grid is a member's card: its head, then its reader.
+    const widths = visible.map(u => Math.round(u.getBoundingClientRect().width));
+    const heights = visible.map(u => Math.round(u.getBoundingClientRect().height));
     const grips = visible.map(u => !u.querySelector('.collaboration-resize').hidden);
     const nameOverflow = [...document.querySelectorAll('.collaboration-name-text')].filter(t => t.scrollWidth > t.clientWidth + 1).length;
     const showMore = document.querySelector('.collaboration-show-more');
     const headers = document.querySelector('.collaboration-statuses'), chipsMore = document.querySelector('.collaboration-chips-more');
     let chipsMoreFits = false, chipsMoreText = null;
+    const shownChips = headers && !headers.hidden ? [...headers.querySelectorAll('.collaboration-member-chip')].filter(c => !c.hidden) : [];
+    const chipLines = new Set(shownChips.map(c => c.offsetTop)).size;
     if (chipsMore && !chipsMore.hidden) {
       chipsMoreText = chipsMore.textContent;
-      const chip = headers?.querySelector('.collaboration-member-status');
+      const chip = headers?.querySelector('.collaboration-member-chip');
       const rowH = chip ? chip.offsetHeight + (parseFloat(getComputedStyle(headers).gap) || 0) : 32;
       chipsMoreFits = chipsMore.offsetTop + chipsMore.offsetHeight <= rowH * 2 + 1;
     }
     return { visible: visible.length, total: units.length, widths, heights, grips, nameOverflow,
       showMore: showMore && !showMore.hidden ? showMore.textContent : null,
       scrollable: readers.scrollHeight > readers.clientHeight + 1, clientH: readers.clientHeight,
-      overflowY: getComputedStyle(readers).overflowY, chipsMoreFits, chipsMoreText };
+      overflowY: getComputedStyle(readers).overflowY, chipsMoreFits, chipsMoreText, chipsShown: shownChips.length, chipLines };
   });
+  // Each member's name sits in its own card (.collaboration-member-unit) above its own reader.
+  const cards = () => page.evaluate(() => {
+    const host = document.querySelector('#collaboration-overview');
+    const heads = [...host.querySelectorAll('.collaboration-member-status')];
+    return [...host.querySelectorAll('.collaboration-member-reader')].map(reader => {
+      const id = reader.dataset.memberId, unit = reader.closest('.collaboration-member-unit');
+      const name = heads.find(h => h.dataset.memberId === id)?.querySelector('.collaboration-member-name');
+      const shown = Boolean(unit && !unit.hidden && reader.getClientRects().length);
+      const n = name?.getBoundingClientRect(), r = reader.getBoundingClientRect(), u = unit?.getBoundingClientRect();
+      return { id, label: name?.textContent.trim() || '', inOwnUnit: Boolean(name && unit && unit.dataset.memberId === id && unit.contains(name)),
+        beforeReader: Boolean(name && name.compareDocumentPosition(reader) & Node.DOCUMENT_POSITION_FOLLOWING), shown,
+        above: shown ? n.bottom <= r.top + 0.5 : null, withinCard: shown ? n.left >= u.left - 0.5 && n.right <= u.right + 0.5 && n.top >= u.top - 0.5 : null };
+    });
+  });
+  const ownCards = (list, label) => {
+    assert.equal(list.length, membersCount, `${label}: one reader per member`);
+    for (const c of list) {
+      assert.ok(c.inOwnUnit, `${label}: ${c.label || c.id}'s name is inside its own .collaboration-member-unit`);
+      assert.ok(c.beforeReader, `${label}: ${c.label || c.id}'s name comes before its own reader`);
+      if (c.shown) assert.ok(c.above && c.withinCard, `${label}: ${c.label || c.id}'s name is drawn inside its card, above its reader`);
+    }
+    assert.ok(list.some(c => c.shown), `${label}: at least one card is shown`);
+  };
   await shot([1240, 820], '1240-open');
-  const m1240 = await measure();
+  const m1240 = await measure(), c1240 = await cards();
+  console.log('CARDS 1240-open', JSON.stringify(c1240.map(c => [c.inOwnUnit, c.beforeReader, c.above].map(Number).join(''))));
+  // 5. Names belong to their own cards (6 members at 1240 with the side panel open; 20 members at 1240).
+  check(5, () => ownCards(c1240, '1240 open'));
+  // Card-head close-up: the first two cards' frames, heads and the one line under each head.
+  if (membersCount <= 6) {
+    const clip = await page.evaluate(() => {
+      const units = [...document.querySelectorAll('.collaboration-member-unit')].slice(0, 2).map(u => u.getBoundingClientRect());
+      const head = document.querySelector('.collaboration-member-unit>.collaboration-member-status').getBoundingClientRect();
+      return { x: Math.max(0, units[0].left - 8), y: Math.max(0, units[0].top - 8), width: units[units.length - 1].right - units[0].left + 16, height: head.bottom - units[0].top + 48 };
+    });
+    await page.screenshot({ path: path.join(pictures, `${tag}-m${membersCount}-card-head.png`), clip });
+    console.log('SHOT', path.join(pictures, `${tag}-m${membersCount}-card-head.png`));
+  }
   // 1. A fitting member set keeps the old full grid (6 members at 1240, sidebar open).
-  check(1, () => {
+  if (membersCount <= 6) check(1, () => {
     assert.equal(m1240.visible, membersCount, 'fitting members are all shown at 1240');
     assert.equal(m1240.showMore, null, 'no reveal button when everyone fits');
   });
-  // 2. The folded "+N" stays inside the two visible chip lines.
+  // 2. The index of names takes at most two lines: every chip when they fit, otherwise a "+N" fold inside them.
   if (membersCount >= 12) check(2, () => {
-    assert.ok(m1240.chipsMoreText, 'the +N fold is present');
-    assert.ok(m1240.chipsMoreFits, 'the +N fold stays within two lines');
+    if (membersCount >= 20) assert.ok(m1240.chipsMoreText, 'the +N fold is present for 20 members');
+    if (m1240.chipsMoreText) assert.ok(m1240.chipsMoreFits, 'the +N fold stays within two lines');
+    else assert.ok(m1240.chipsShown === membersCount && m1240.chipLines <= 2, `without a fold every member's chip is shown within two lines (${m1240.chipsShown}, ${m1240.chipLines} lines)`);
   });
   // Folded name-band close-up (the +N fold) before expanding.
   if (membersCount >= 12) {
@@ -107,7 +147,9 @@ async function main() {
   await page.evaluate(() => { const panel = document.getElementById('activity-stream'); if (panel) panel.hidden = true; const layout = document.getElementById('room-layout'); if (layout) layout.classList.remove('stream-open'); });
   await shot([1240, 820], '1240-collapsed');
   await shot([850, 600], '850');
-  const m850 = await measure();
+  const m850 = await measure(), c850 = await cards();
+  console.log('CARDS 850', JSON.stringify(c850.map(c => [c.inOwnUnit, c.beforeReader, c.above].map(Number).join(''))));
+  check(5, () => ownCards(c850, '850'));
   // 4. The reveal button states how many are already shown.
   if (membersCount >= 6) check(4, () => {
     assert.ok(m850.showMore, 'a reveal button is present when members do not fit');

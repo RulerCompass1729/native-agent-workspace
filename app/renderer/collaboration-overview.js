@@ -107,7 +107,7 @@
     const showMore = button('', () => {
       const previous = visibleLimit;
       visibleRows += 1; memberLimits.set(roomKey, visibleRows); render();
-      requestAnimationFrame(() => { const pane = panes.get(records[previous]?.id); pane?.reader.scrollIntoView({ block: 'start' }); });
+      requestAnimationFrame(() => { const pane = panes.get(records[previous]?.id); pane?.unit.scrollIntoView({ block: 'start' }); });
     }, 'collaboration-show-more');
     const chipsMore = button('', () => { chipsExpanded = !chipsExpanded; render(); }, 'collaboration-chips-more');
     const empty = el('p', undefined, 'quiet collaboration-empty'); display.text(empty, 'collab.empty');
@@ -159,7 +159,8 @@
         else if (record.state === 'approval') alertKey = 'state.approval';
         else if (record.claudeQuestion || record.approval?.method === 'item/tool/requestUserInput') alertKey = 'state.question';
         else if (record.approvals?.length || record.nativeApproval?.requests?.length) alertKey = 'state.approval';
-        if (alertKey) display.text(pane.alert, alertKey); else { display.unbind(pane.alert); setText(pane.alert, ''); }
+        pane.chip.dataset.state = pane.header.dataset.state; pane.chip.dataset.alert = pane.header.dataset.alert;
+        for (const node of [pane.alert, pane.chipAlert]) if (alertKey) display.text(node, alertKey); else { display.unbind(node); setText(node, ''); }
       }
     }
     function setWidths() {
@@ -194,7 +195,7 @@
     }
     function layoutChips() {
       if (!progressive || layout === 'list' || focused || !records.length) { chipsMore.hidden = true; headers.style.maxHeight = ''; headers.style.overflow = ''; return; }
-      const chips = [...headers.querySelectorAll('.collaboration-member-status')];
+      const chips = [...headers.querySelectorAll('.collaboration-member-chip')];
       if (!chips.length) { chipsMore.hidden = true; return; }
       for (const chip of chips) chip.hidden = false;
       headers.style.maxHeight = ''; headers.style.overflow = '';
@@ -325,8 +326,13 @@
       const input = el('div', undefined, 'collaboration-member-input'); input.hidden = true;
       const nativeFooter = el('div', undefined, 'column-native-footer'); nativeFooter.hidden = true;
       reader.append(messages, short, input, nativeFooter, grip);
-      const unit = el('div', undefined, 'collaboration-member-unit'); unit.dataset.memberId = record.id; unit.append(reader);
-      return pane = { header, name, nameText, nameSuffix, more, next, status, child, compactChild, freshness, alert, unit, reader, messages, input, nativeFooter, heading, short, quote, truncation, source, notice, grip };
+      // Every member is one card: its head (handle, maker, name, menu, state) above its own conversation and input.
+      const unit = el('div', undefined, 'collaboration-member-unit'); unit.dataset.memberId = record.id; unit.append(header, reader);
+      // With many members the band above the cards is an index of everyone, including members whose cards are not shown yet.
+      const chip = button('', () => focus(focused === record.id ? '' : record.id), 'collaboration-member-chip'); chip.dataset.memberId = record.id;
+      const chipName = el('span', undefined, 'collaboration-chip-name'), chipAlert = el('span', undefined, 'collaboration-member-alert');
+      chip.append(chipName, chipAlert);
+      return pane = { header, name, nameText, nameSuffix, more, next, status, child, compactChild, freshness, alert, unit, reader, messages, input, nativeFooter, heading, short, quote, truncation, source, notice, grip, chip, chipName, chipAlert };
     }
     function render() {
       const reordered = [...readers.children].map(n => n.dataset.memberId).join('\n') !== records.map(r => r.id).join('\n');
@@ -341,10 +347,12 @@
       back.hidden = !focused; simplify.hidden = Boolean(focused) || !contentVisible; layouts.hidden = Boolean(focused) || !contentVisible; readers.hidden = Boolean(focused) || !contentVisible; empty.hidden = records.length > 0 || !contentVisible;
       const columnInput = layout === 'grid' && !focused && !brief && contentVisible;
       const listUnits = layout === 'list' && !focused && contentVisible;
-      host.dataset.listUnits = String(listUnits); headers.hidden = listUnits;
+      host.dataset.listUnits = String(listUnits);
       capacity = Math.max(1, Math.floor((readers.clientWidth || host.clientWidth) / 300));
       progressive = records.length * 140 > (readers.clientWidth || host.clientWidth);
       host.dataset.progressive = String(progressive);
+      const chipIndex = progressive && layout === 'grid' && !focused && contentVisible;
+      headers.hidden = !chipIndex; host.dataset.band = String(chipIndex);
       if (!progressive) visibleLimit = records.length;
       else {
         visibleRows = Math.max(1, memberLimits.get(roomKey) || 1);
@@ -352,13 +360,18 @@
       }
       const retained = new Set(records.map(r => r.id));
       for (const [id, pane] of panes) if (!retained.has(id)) {
-        options.disposeInput?.(id); options.disposeMessages?.(pane.messages); pane.header.remove(); pane.unit.remove(); panes.delete(id); weights.delete(id);
+        options.disposeInput?.(id); options.disposeMessages?.(pane.messages); pane.header.remove(); pane.unit.remove(); pane.chip.remove(); panes.delete(id); weights.delete(id);
       }
       records.forEach((record, i) => {
         let pane = panes.get(record.id); if (!pane) { pane = makePane(record); panes.set(record.id, pane); }
         const label = options.label(record), suffix = label.startsWith(record.name) ? label.slice(record.name.length) : '';
         options.renderIdentity?.(pane.name, record);
         setText(pane.nameText, suffix ? record.name : label); setText(pane.nameSuffix, suffix);
+        if (chipIndex) {
+          options.renderIdentity?.(pane.chip, record); setText(pane.chipName, label);
+          pane.chip.title = label; display.attribute(pane.chip, 'aria-label', 'collab.focus', { name: label });
+          if (headers.children[i] !== pane.chip) headers.insertBefore(pane.chip, headers.children[i] || null);
+        } else pane.chip.remove();
         pane.name.dataset.orderHandle = String(canOrder());
         display.computed(pane.name, 'title', () => label + (canOrder() ? ` · ${locale.format(language(), 'collab.orderHelp')}` : ''));
         display.attribute(pane.name, 'aria-label', 'collab.focus', { name: label }); pane.name.setAttribute('aria-pressed', String(focused === record.id));
@@ -384,9 +397,6 @@
         display.attribute(pane.messages, 'aria-label', 'collab.originalSession', { name: label });
         display.attribute(pane.grip, 'aria-label', 'collab.columnWidth', { name: label });
         // Stable nodes preserve text selection, process expansion and anchors.
-        if (listUnits) {
-          if (pane.header.parentElement !== pane.unit) pane.unit.insertBefore(pane.header, pane.reader);
-        } else if (headers.children[i] !== pane.header) headers.insertBefore(pane.header, headers.children[i] || null);
         if (readers.children[i] !== pane.unit) readers.insertBefore(pane.unit, readers.children[i] || null);
         if (!focused && !brief && contentVisible && i < visibleLimit) options.renderMessages(pane.messages, record, options.messages(record), key(record.id));
         if (brief) {

@@ -88,6 +88,7 @@ async function run() {
   const overview = page.locator('#collaboration-overview'), list = overview.locator('.collaboration-readers');
   const reader = id => overview.locator(`.collaboration-member-reader[data-member-id="${id}"] .messages`);
   const header = id => overview.locator(`.collaboration-member-status[data-member-id="${id}"]`);
+  const inOwnCard = el => el.parentElement.classList.contains('collaboration-member-unit') && el.parentElement.dataset.memberId === el.dataset.memberId;
   const layout = name => page.getByRole('button', { name, exact: true });
   await overview.locator('.collaboration-member-reader').nth(3).waitFor();
   await page.evaluate(() => { globalThis.listOriginalNodes = [...document.querySelectorAll('.collaboration-member-reader')].map(r => [r, r.querySelector('.messages')]); });
@@ -155,8 +156,9 @@ async function run() {
   });
   const selected = await page.evaluate(() => getSelection().toString());
   await layout('网格').click();
-  assert.equal(await overview.locator('.collaboration-statuses').isVisible(), true);
-  for (const id of ids) assert.equal(await header(id).evaluate(el => el.parentElement.classList.contains('collaboration-statuses')), true);
+  // 2026-11-15 member cards: in the grid too, each name row is inside its own member's card; no separate band of names.
+  assert.equal(await overview.locator('.collaboration-statuses').isVisible(), false);
+  for (const id of ids) assert.equal(await header(id).evaluate(inOwnCard), true);
   await layout('列表').click();
   assert.equal(await page.evaluate(() => getSelection().toString()), selected);
   await until(async () => { const a = await readingAnchor(reader(ids[0])); return a?.id === anchor.id && Math.abs(a.offset - anchor.offset) < 3; }, 'Layout restores the same original anchor after its frame');
@@ -173,7 +175,7 @@ async function run() {
   await until(async () => { const a = await readingAnchor(reader(ids[0])); return a?.id === anchor.id && Math.abs(a.offset - anchor.offset) < 3; }, 'Brief return restores original position');
   await page.evaluate(() => getSelection().removeAllRanges());
   await page.locator('#room-record').click();
-  for (const id of ids) assert.equal(await header(id).evaluate(el => el.parentElement.classList.contains('collaboration-statuses')), true);
+  for (const id of ids) assert.equal(await header(id).evaluate(inOwnCard), true);
   await page.locator('#room-overview').click();
   const passiveAfter = await fixture('stats');
   for (const key of ['inputs', 'sends', 'interruptions']) assert.deepEqual(passiveAfter[key], fixtureBefore[key]);
@@ -183,7 +185,7 @@ async function run() {
   await page.locator('#room-session #session-view').waitFor();
   // a58e456: with a member open the cards are hidden and each member's state shows on its tab. T-121 A: that member's
   // own tab returns to the whole space, like ← 返回共同工作, and focus returns to its card.
-  for (const id of ids) { assert.equal(await page.locator(`#room-member-tabs [data-room-session="${id}"]`).isVisible(), true); assert.equal(await header(id).evaluate(el => el.parentElement.classList.contains('collaboration-statuses')), true); }
+  for (const id of ids) { assert.equal(await page.locator(`#room-member-tabs [data-room-session="${id}"]`).isVisible(), true); assert.equal(await header(id).evaluate(inOwnCard), true); }
   await page.locator(`#room-member-tabs [data-room-session="${ids[0]}"]`).click();
   assert.equal(await name.evaluate(el => document.activeElement === el), true);
   for (const id of ids) assert.equal(await header(id).evaluate(el => el.parentElement.dataset.memberId === el.dataset.memberId), true);
