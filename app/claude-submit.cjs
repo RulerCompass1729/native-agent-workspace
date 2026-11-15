@@ -1,3 +1,5 @@
+const { rootValidity } = require('./native-root-proof.cjs');
+const { outboxError, classifyOutboxFailure } = require('./computer-use-outbox-native.cjs');
 const { uiError } = require('./ui-errors.cjs');
 // Private Unix-socket transport for Claude's native prompt.submit API.
 // No terminal writes, TCP listener, model calls, or automatic send retries.
@@ -99,13 +101,11 @@ class SubmissionChannel extends EventEmitter {
 const outboxProofs = new WeakMap(), outboxCalls = new WeakMap();
 const validToken = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && !/[\x00-\x1f\x7f]/.test(value);
 function rootOutboxProof(target, message, signal, stillTarget) {
-  const root = target.rootTurn, live = target.liveTurn;
-  const valid = () => !signal.aborted && stillTarget() && target.retainedReader === true && target.nativeBlocks === true &&
-    !target.disposed && !target.rootEnding && target.terminal?.alive && !target.nativeInputRequired && !target.record.nativeContextPending &&
-    target.validRootBinding(message) && message.epoch === target.observationEpoch && !target.displayGap &&
-    root && target.rootTurn === root && root.status === 'working' && root.id === message.turnId && root.promptId === message.promptId &&
-    live && target.liveTurn === live && live.id === message.turnId && live.promptId === message.promptId && !target.livePermissions?.size;
-  if (!['turnId', 'promptId', 'callId'].every(key => validToken(message[key])) || !valid()) throw Error('Native root outbox authority is unavailable');
+  const root = target.rootTurn;
+  const valid = rootValidity(target, message, signal, stillTarget, true);
+  if (!['turnId', 'promptId', 'callId'].every(key => validToken(message[key]))) throw outboxError('provenance-unconfirmed', 'binding', 'Native root outbox authority is unavailable');
+  const check = valid.failureCheck();
+  if (check) throw outboxError('native-call-invalidated', 'binding', 'Native root outbox authority is unavailable', false, check);
   let calls = outboxCalls.get(target);
   if (calls?.root !== root) { calls = { root, ids: new Set() }; outboxCalls.set(target, calls); }
   if (calls.ids.has(message.callId) || calls.ids.size >= 64) throw Error('Native root outbox call was already used');
@@ -117,7 +117,11 @@ function rootOutboxProof(target, message, signal, stillTarget) {
 }
 function consumeRootOutboxProof(proof) {
   const value = outboxProofs.get(proof);
-  if (!value || value.consumed || !value.valid()) throw Error('Native root outbox call could not be verified');
+  const refused = (reason, check) => outboxError(reason, 'binding', 'Native root outbox call could not be verified', false, check);
+  if (!value) throw refused('native-call-missing');
+  if (value.consumed) throw refused('duplicate-call');
+  const check = value.valid.failureCheck();
+  if (check) throw refused('native-call-invalidated', check);
   value.consumed = true;
   return { target: value.target, args: value.args, valid: value.valid };
 }
@@ -156,7 +160,7 @@ function createSubmissionServer(filename, targets, { restrictedOutboxCall, backg
             ? await backgroundControlCall(proof.credential, abort.signal)
             : await require('./computer-use-outbox-tool.cjs').requestOutbox(process.env.NAW_OUTBOX_DESCRIPTOR, proof.identity, proof.args, abort.signal, true);
           if (!res.destroyed) res.end(JSON.stringify(result));
-        } catch (error) { if (!res.destroyed) res.end(JSON.stringify({ state: 'unconfirmed', error: error.message, retry: false })); }
+        } catch (error) { if (!res.destroyed) res.end(JSON.stringify({ state: 'unconfirmed', error: error.message, retry: false, ...classifyOutboxFailure(error, 'binding', 'binding-unavailable') })); }
         finally { res.off('close', closed); }
         return;
       }

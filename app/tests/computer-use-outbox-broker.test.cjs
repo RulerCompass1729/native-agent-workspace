@@ -162,6 +162,32 @@ test('control diagnostics ignore enumerable lookalikes and keep an unclassified 
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_CONTENT|view-send|control-changed/);
 });
 
+test('control cleanup failure keeps the executed operation identity without releasing its private value or replaying', async t => {
+  const { outboxError } = require('../computer-use-outbox-native.cjs');
+  let calls = 0;
+  const command = { action: 'invoke', operation_id: 'executed-control', method: 'rename', arguments: ['target', 'name'] };
+  const actor = { id: 'sender', nativeId: identity.nativeId, provider: 'codex' };
+  const f = await fixture(t, {
+    bindControl: async () => ({ args: command, close() { throw outboxError('cleanup-unconfirmed', 'cleanup'); } }),
+    control: async () => { calls++; return { state: 'complete', id: command.operation_id, actor, value: 'PRIVATE_RESULT_NOT_RELEASED' }; },
+  });
+  const result = await requestOutbox(f.descriptorFile, identity, command, undefined, true);
+  assert.equal(calls, 1); assert.equal(result.state, 'unconfirmed'); assert.equal(result.retry, false);
+  assert.equal(result.id, command.operation_id); assert.deepEqual(result.actor, actor);
+  assert.equal(result.failurePhase, 'cleanup'); assert.equal(result.cleanupUnconfirmed, true);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_RESULT_NOT_RELEASED/);
+});
+test('a control execution refusal keeps its named cause when cleanup also fails', async t => {
+  const { outboxError } = require('../computer-use-outbox-native.cjs');
+  const f = await fixture(t, {
+    bindControl: async () => ({ args: { action: 'catalog' }, close() { throw Error('Secondary cleanup failure'); } }),
+    control: async () => { throw outboxError('native-call-invalidated', 'binding', undefined, false, 'display-gap'); },
+  });
+  const result = await requestOutbox(f.descriptorFile, identity, { action: 'catalog' }, undefined, true);
+  assert.equal(result.failureReason, 'native-call-invalidated'); assert.equal(result.failureCheck, 'display-gap');
+  assert.equal(result.cleanupUnconfirmed, true); assert.equal(result.retry, false);
+});
+
 for (const cause of ['missing', 'consumed', 'root-changed', 'identity', 'arguments']) test(`real Claude native proof refusal reaches the broker receipt (${cause})`, async t => {
   const native = require('../background-control-native.cjs');
   const command = { action: 'invoke', operation_id: 'claude-proof-check', method: 'rename', arguments: ['target', 'name'] };

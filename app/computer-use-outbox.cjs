@@ -124,8 +124,8 @@ async function openOutbox(verifiedGrant, { createView, forwardOnce, watchReceipt
   } catch (error) {
     const detail = classifyOutboxFailure(error, phase, phase === 'view-open' ? 'view-unavailable' : 'lease-unavailable');
     try { if (lease) await lease.close(); else if (view?.close) await view.close(); }
-    catch { throw outboxError(detail.failureReason, detail.failurePhase, REFUSED, true); }
-    throw outboxError(detail.failureReason, detail.failurePhase, REFUSED, detail.cleanupUnconfirmed === true);
+    catch { throw outboxError(detail.failureReason, detail.failurePhase, REFUSED, true, detail.failureCheck); }
+    throw outboxError(detail.failureReason, detail.failurePhase, REFUSED, detail.cleanupUnconfirmed === true, detail.failureCheck);
   }
 }
 
