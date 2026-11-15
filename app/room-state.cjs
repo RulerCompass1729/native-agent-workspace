@@ -9,7 +9,7 @@ const { validateName } = require('./session-labels.cjs');
 const { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
 const { captureSource, prepareBatch, assertCurrentSources, sameOperation, validateBatch } = require('./space-merge.cjs');
 const queueRules = require('./queue-dispatch.cjs');
-const { currentFleet } = require('./renderer/fleet-observation.js');
+const { archiveIdle } = require('./renderer/fleet-observation.js');
 const { queueOutcomeSource, storedQueueSource } = require('./butler-ingress.cjs');
 const { queueReadySource } = require('./butler-ready.cjs');
 const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f]/u.test(id);
@@ -1144,6 +1144,11 @@ class RoomState {
           expected.connectionRevision !== undefined && expected.connectionRevision !== (before.connectionRevision || 0))) throw uiError("error.room.membershipChangedNoRevocation");
       const prior = roomIds(before), modern = (before.serviceCapabilities || snapshot.capabilities || []).includes('singleHomeMoveV1') && !(legacyDetach && prior.length > 1);
       const guarded = expected?.unusedSuccessor === true;
+      const idleArchive = expected?.archiveIdle === true;
+      if (idleArchive && join) throw uiError('error.invalidMemberAction');
+      // Older writers ignore unknown proof fields; never fall back to a detach
+      // that cannot enforce this archive's idle requirement atomically.
+      if (idleArchive && (!modern || !(before.serviceCapabilities || snapshot.capabilities || []).includes('archiveIdleMoveV1'))) throw uiError('error.movePlacementUnsupported');
       if (guarded) {
         if (!modern || !(before.serviceCapabilities || snapshot.capabilities || []).includes('guardedSessionStopV1')) throw uiError('error.movePlacementUnsupported');
         if (snapshot.storageWarning || this.spacesWarning) throw Object.assign(Error(snapshot.storageWarning || this.spacesWarning), { uiMessage: snapshot.storageWarning ? snapshot.storageWarningUiMessage : this.spacesWarningUiMessage });
@@ -1157,7 +1162,8 @@ class RoomState {
       let move;
       if (modern) {
         const proof = { operationId: expected?.operationId || randomUUID(), nativeId: before.nativeId,
-          revision: placementRevision(before), connectionRevision: before.connectionRevision || 0, ...(guarded ? { unusedSuccessor: true } : {}) };
+          revision: placementRevision(before), connectionRevision: before.connectionRevision || 0,
+          ...(guarded ? { unusedSuccessor: true } : {}), ...(idleArchive ? { archiveIdle: true } : {}) };
         try { move = recovered ? { ...before.placementReceipt, changed: true } : await client.call('moveMembership', id, join ? room : null, proof); }
         catch (error) {
           // Lost replies are reconciled from the same writer's saved receipt, never retried.
@@ -1168,8 +1174,8 @@ class RoomState {
       } else {
         // Preserve old literal standalone join/leave. Never emulate A->B with two writes.
         if (join && prior.length) throw uiError('error.movePlacementUnsupported');
-        // Archives retain the old backend's literal membership path, like room
-        // archive. It has no atomic placement receipt: validate the saved cut
+        // Individual archives retain the old backend's literal membership path;
+        // room-owned archives require the atomic guard above. Without a receipt, validate the saved cut
         // above, issue once, and refuse a changed cut after an uncertain reply.
         const remoteExpected = archivePlacement ? undefined : expected;
         if (typeof client.callSpace === 'function') await client.callSpace(room, 'join', remoteExpected === undefined ? [id, join] : [id, join, { nativeId: remoteExpected.nativeId, revision: remoteExpected.revision ?? membershipRevision(before, room) }]);
@@ -1263,7 +1269,8 @@ class RoomState {
           plan = { ...plan, rooms: plan.rooms.map((r, i) => i === index ? { ...r, expected } : r) };
           this.update({ sessionArchives: { ...this.value.sessionArchives, [id]: plan } }); step = plan.rooms[index];
         }
-        await this.changeMember(client, id, false, label, step.id, step.expected, true);
+        await this.changeMember(client, id, false, label, step.id,
+          archivedByRoom ? { ...step.expected, archiveIdle: true } : step.expected, true);
         const after = (await client.call('initial')).sessions.find(s => s.id === id);
         plan = { ...plan, checkpoint: restorePlacement(after), rooms: plan.rooms.map((r, i) => i === index ? { ...r, done: true } : r) };
         this.update({ sessionArchives: { ...this.value.sessionArchives, [id]: plan } });
@@ -1340,12 +1347,7 @@ class RoomState {
       return { restored: true, placement, ...(notice || {}) };
   }
   roomArchiveIdle(session) {
-    if (!session || !['idle', 'ended'].includes(session.state) || session.backendUnavailable || session.transportDisconnected || session.nativeContextPending ||
-        session.activeTurnId || session.pendingTag || session.pendingQueue || session.pendingSteer || session.nativeInputRequired ||
-        session.approval || session.nativeApproval?.requests?.length || session.nativeGoal?.status === 'active' ||
-        session.background > 0 || session.scheduled > 0) return false;
-    const fleet = currentFleet(session);
-    return !fleet.running && !fleet.unknown && !fleet.work.unconfirmed;
+    return archiveIdle(session);
   }
   roomArchivePlan(snapshot, room = DEFAULT_ROOM_ID) {
     const value = this.metadata(room);

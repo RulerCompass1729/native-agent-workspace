@@ -11,7 +11,7 @@ async function fixture(t) {
   for (const name of ['First', 'Middle', 'Last']) ids.push(await w.create('codex', dir, 'owner', name));
   let moves = 0;
   const client = { snapshot: () => w.snapshot(), call: async (method, ...args) => {
-    if (method === 'initial') return { ...w.snapshot(), capabilities: ['singleHomeMoveV1'] };
+    if (method === 'initial') return { ...w.snapshot(), capabilities: ['singleHomeMoveV1', 'archiveIdleMoveV1'] };
     if (method === 'pause' || method === 'pauseSpace') return;
     if (method === 'moveMembership') { moves++; return w.moveMembership(...args); }
     throw Error('Unexpected model/native action: ' + method);

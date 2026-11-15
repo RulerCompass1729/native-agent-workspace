@@ -60,6 +60,16 @@
     return { ...fleet, children, settled: children.length < fleet.children.length, work,
       running: children.filter(c => c.status === 'running').length, unknown: children.filter(c => c.status === 'unknown').length };
   }
+  // Shared by the desktop's archive plan and the owning backend's synchronous
+  // placement writer. Observation only: never query or start a native agent.
+  function archiveIdle(session) {
+    if (!session || !['idle', 'ended'].includes(session.state) || session.backendUnavailable || session.transportDisconnected || session.nativeContextPending ||
+        session.activeTurnId || session.pendingTag || session.pendingQueue || session.pendingSteer || session.nativeInputRequired ||
+        session.approval || session.nativeApproval?.requests?.length || session.nativeGoal?.status === 'active' ||
+        session.background > 0 || session.scheduled > 0) return false;
+    const fleet = currentFleet(session);
+    return !fleet.running && !fleet.unknown && !fleet.work.unconfirmed;
+  }
   // `text` renders catalog keys in the display language (T-60); without it the Chinese originals stay.
   function goalStatus(record, connected = true, text = defaultText) {
     text ||= defaultText;
@@ -93,7 +103,7 @@
     const fleet = currentFleet(record, connected);
     return fleet.work.count || fleet.running ? 'bg-work' : fleet.work.unconfirmed || fleet.unknown ? 'bg-unknown' : '';
   }
-  const api = { observedFleet, currentFleet, fleetStatus, backgroundWork, workTone, goalStatus };
+  const api = { observedFleet, currentFleet, archiveIdle, fleetStatus, backgroundWork, workTone, goalStatus };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else target.nativeWorkspaceFleet = api;
 })(typeof window === 'undefined' ? globalThis : window);

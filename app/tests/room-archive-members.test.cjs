@@ -15,7 +15,7 @@ async function fixture(t, provider = 'codex', named = true) {
   const room = named ? rooms.create('Original') : 'shared', other = rooms.create('Other');
   const ids = [], moves = [];
   const client = { snapshot: () => workspace.snapshot(), refresh: async () => workspace.snapshot(), call: async (method, ...args) => {
-    if (method === 'initial') return { ...workspace.snapshot(), capabilities: ['singleHomeMoveV1'] };
+    if (method === 'initial') return { ...workspace.snapshot(), capabilities: ['singleHomeMoveV1', 'archiveIdleMoveV1'] };
     if (method === 'pause' || method === 'pauseSpace') return;
     if (method === 'moveMembership') { moves.push(args); return workspace.moveMembership(...args); }
     if (method === 'join' || method === 'joinSpace') {
@@ -33,6 +33,107 @@ async function fixture(t, provider = 'codex', named = true) {
   moves.length = 0;
   return { dir, workspace, rooms, room, other, ids, client, moves };
 }
+for (const provider of ['claude', 'codex']) for (const named of [false, true]) {
+  test(`${provider}, ${named ? 'named' : 'default'} space: becoming working at the archive receiver leaves placement and routing intact`, async t => {
+    const f = await fixture(t, provider, named), id = f.ids[0], call = f.client.call;
+    let before, disk, room, grant, injected = false;
+    const pauses = [], pause = f.workspace.pauseRoom.bind(f.workspace);
+    f.workspace.pauseRoom = (...args) => { pauses.push(args[0]); return pause(...args); };
+    f.client.call = async (method, ...args) => {
+      if (method === 'moveMembership' && args[0] === id && args[1] === null && !injected) {
+        injected = true;
+        const runtime = f.workspace.runtimes.get(id);
+        runtime.emit('state', 'working');
+        // Accepted shared work begins after the desktop's last idle snapshot.
+        f.workspace.sharedReplies.authorize(f.workspace.get(id), runtime, 'accepted', { id: 'source' }, null, f.room);
+        grant = f.workspace.sharedReplies.grants.get('accepted');
+        assert.equal(f.workspace.sharedReplies.valid(grant), true);
+        before = structuredClone(f.workspace.get(id));
+        disk = fs.readFileSync(path.join(f.dir, 'workspace.json'), 'utf8');
+        room = structuredClone(f.workspace.rooms.get(f.room));
+      }
+      return call(method, ...args);
+    };
+    await assert.rejects(f.rooms.archiveRoom(f.client, undefined, f.room), error => error.uiMessage?.key === 'error.planWorking');
+    assert.equal(injected, true);
+    assert.deepEqual(roomIds(f.workspace.get(id)), [f.room], 'A refused archive must not detach the busy member');
+    assert.deepEqual(f.workspace.get(id), before, 'No placement receipt or revision may change');
+    assert.equal(fs.readFileSync(path.join(f.dir, 'workspace.json'), 'utf8'), disk);
+    assert.deepEqual(f.workspace.rooms.get(f.room), room);
+    assert.deepEqual(pauses, [], 'No routing pause at the refused mutation');
+    assert.equal(grant.closed, false); assert.equal(f.workspace.sharedReplies.valid(grant), true);
+    assert.equal(f.rooms.metadata(f.room).archived, false);
+    assert.deepEqual(f.rooms.value.archivedSessions, []);
+    assert.ok(!f.rooms.metadata(f.room).events.some(e => e.kind === 'leave' && e.sessionId === id));
+    // The persisted intent remains retryable; it cannot bypass the new guard.
+    f.workspace.runtimes.get(id).emit('state', 'idle');
+    if (provider === 'claude') f.workspace.runtimes.get(id).emit('background', { count: 0, scheduled: 0, kinds: [] });
+    const cold = new RoomState(f.dir);
+    await cold.archiveRoom(f.client, undefined, f.room);
+    assert.equal(cold.value.archivedSessions.includes(id), true);
+    await new RoomState(f.dir).restoreRoom(f.client, undefined, f.room);
+    assert.deepEqual(roomIds(f.workspace.get(id)), [f.room]);
+  });
+}
+for (const [name, change] of [
+  ['active turn', (s, r) => { r.turnId = 'new-turn'; }],
+  ['queued input', (s, r) => { r.pendingQueue = { tag: 'queued' }; }],
+  ['pending steer', (s, r) => { r.pendingSteer = { tag: 'steer' }; }],
+  ['native input', (s, r) => { r.nativeInputRequired = true; }],
+  ['native approval', (s, r) => { r.nativeApproval = { requests: [{ id: 'approval' }] }; }],
+  ['active goal', (s, r) => { r.nativeGoalSnapshot = () => ({ status: 'active' }); }],
+  ['lost transport', (s, r) => { r.transportDisconnected = true; }],
+  ['exited backend', (s, r) => { r.backendExitConfirmed = true; }],
+  ['background work', s => { s.background = 1; }],
+  ['unconfirmed work', s => { s.backgroundStale = true; }],
+  ['scheduled work', s => { s.scheduled = 1; }],
+  ['running teammate', s => { s.fleet = [{ event: 'SubagentStart', id: 'child', stale: false }]; }],
+  ['unknown teammate', s => { s.fleet = [{ event: 'thread/started', id: 'child', stale: false }]; }],
+]) test(`archive receiver checks live ${name} before touching placement`, async t => {
+  const f = await fixture(t), id = f.ids[0], call = f.client.call, before = structuredClone(f.workspace.get(id));
+  let injected = false;
+  f.client.call = async (method, ...args) => {
+    if (method === 'moveMembership' && args[0] === id && !injected) {
+      injected = true; change(f.workspace.get(id), f.workspace.runtimes.get(id));
+    }
+    return call(method, ...args);
+  };
+  await assert.rejects(f.rooms.archiveRoom(f.client, undefined, f.room), error => error.uiMessage?.key === 'error.planWorking');
+  assert.equal(injected, true);
+  assert.deepEqual(roomIds(f.workspace.get(id)), [f.room]);
+  assert.deepEqual(f.workspace.get(id).placementReceipt, before.placementReceipt);
+  assert.equal(f.workspace.get(id).placementRevision, before.placementRevision);
+  assert.equal(f.rooms.metadata(f.room).archived, false);
+  assert.deepEqual(f.rooms.value.archivedSessions, []);
+});
+for (const capabilities of [[], ['singleHomeMoveV1'], ['archiveIdleMoveV1']]) test(`space archive refuses a writer without both archive guards: ${capabilities}`, async t => {
+  const f = await fixture(t), call = f.client.call, before = f.workspace.snapshot();
+  f.client.call = async (method, ...args) => {
+    const result = await call(method, ...args);
+    return method === 'initial' ? { ...result, capabilities } : result;
+  };
+  await assert.rejects(f.rooms.archiveRoom(f.client, undefined, f.room), error => error.uiMessage?.key === 'error.movePlacementUnsupported');
+  assert.deepEqual(f.workspace.snapshot(), before); assert.deepEqual(f.moves, []);
+  assert.equal(f.rooms.metadata(f.room).archived, false); assert.deepEqual(f.rooms.value.archivedSessions, []);
+});
+test('space archive checks the member owning service capability, not another backend capability', async t => {
+  const f = await fixture(t);
+  f.workspace.get(f.ids[0]).serviceCapabilities = ['singleHomeMoveV1'];
+  await assert.rejects(f.rooms.archiveRoom(f.client, undefined, f.room), error => error.uiMessage?.key === 'error.movePlacementUnsupported');
+  assert.deepEqual(f.moves, []); assert.deepEqual(roomIds(f.workspace.get(f.ids[0])), [f.room]);
+});
+test('archive guard cannot authorize a join; a saved successful detach receipt can still reconcile after work starts', async t => {
+  const f = await fixture(t), id = f.ids[0], s = f.workspace.get(id);
+  const proof = { operationId: randomUUID(), nativeId: s.nativeId, revision: s.placementRevision,
+    connectionRevision: s.connectionRevision || 0, archiveIdle: true };
+  assert.throws(() => f.workspace.moveMembership(id, f.other, proof), error => error.uiMessage?.key === 'error.invalidMemberAction');
+  assert.deepEqual(roomIds(s), [f.room]);
+  const receipt = f.workspace.moveMembership(id, null, proof);
+  f.workspace.runtimes.get(id).emit('state', 'working');
+  const before = structuredClone(s);
+  assert.deepEqual(f.workspace.moveMembership(id, null, proof), { ...receipt, replayed: true });
+  assert.deepEqual(s, before);
+});
 for (const provider of ['claude', 'codex']) for (const named of [false, true]) {
   test(`${provider}, ${named ? 'named' : 'default'} space: archive eligible members and restore them after reopening`, async t => {
     const f = await fixture(t, provider, named), [idle, ended, working, elsewhere] = f.ids;

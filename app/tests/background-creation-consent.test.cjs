@@ -20,7 +20,7 @@ async function fixture(t, provider) {
   const calls = [];
   const client = { snapshot: () => workspace.snapshot(), refresh: async () => workspace.snapshot(), close() {}, call: async (method, ...args) => {
     calls.push(method);
-    if (method === 'initial') return { ...workspace.snapshot(), capabilities: ['nativePermissionDefaults', 'singleHomeMoveV1'] };
+    if (method === 'initial') return { ...workspace.snapshot(), capabilities: ['nativePermissionDefaults', 'singleHomeMoveV1', 'archiveIdleMoveV1'] };
     // Synthetic transport only: archive pauses routing, never a native process.
     if (method === 'pause' || method === 'pauseSpace') return;
     if (method === 'moveMembership') return workspace.moveMembership(...args);

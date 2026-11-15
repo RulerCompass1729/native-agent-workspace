@@ -112,7 +112,7 @@ function metadataClient(f) {
   const client = {
     async call(method, ...args) {
       calls.push({ method, args });
-      if (method === 'initial') return { ...f.w.snapshot(), capabilities: controls.capabilities || ['collaborationSpacesV1', 'singleHomeMoveV1', 'guardedSessionStopV1'] };
+      if (method === 'initial') return { ...f.w.snapshot(), capabilities: controls.capabilities || ['collaborationSpacesV1', 'singleHomeMoveV1', 'archiveIdleMoveV1', 'guardedSessionStopV1'] };
       if (method === 'moveMembership') { controls.beforeMove?.(); const result = f.w.moveMembership(...args); if (controls.loseReply) { controls.loseReply = false; throw Error('Synthetic lost reply'); } return result; }
       throw Error('Unexpected metadata request');
     },
