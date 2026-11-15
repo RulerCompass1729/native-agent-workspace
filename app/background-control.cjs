@@ -901,6 +901,19 @@ class BackgroundControl {
           ...(r.error ? { error: operation.visibleText(String(r.error)) } : {}),
           ...(r.state === 'confirmation-required' ? { replacedBy: this.replacement(r, own), repeated: this.repeated(r, own) } : {}) } : {}) } }));
   }
+  // Human-window waiting strip: reuse the conversation card and its warnings.
+  pending(names = {}) {
+    const rows = new Map();
+    return this.data.records.filter(r => r.state === 'confirmation-required' && r.confirmation?.kind === 'message' &&
+      Array.isArray(r.confirmation.options?.buttons) && !this.replacement(r)).map(r => {
+      if (!rows.has(r.actor.id)) rows.set(r.actor.id, this.rows(r.actor.id, names));
+      const message = rows.get(r.actor.id).find(m => m.backgroundOperation.id === r.id && m.backgroundOperation.nativeId === r.actor.nativeId);
+      const options = message.backgroundOperation.confirmation.options;
+      return { id: message.id, operationId: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId,
+        actorName: operation.visibleText(r.actor.name), title: options.message, detail: options.detail || '',
+        buttons: options.buttons, cancelId: options.cancelId ?? 0, time: r.at, message };
+    });
+  }
   async close() {
     this.closed = true; clearInterval(this.sweeper);
     this.readCopies.clear(); this.readBytes = 0;

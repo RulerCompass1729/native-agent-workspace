@@ -18,7 +18,7 @@ function fixture() {
   element('shared-input').value = 'Unsent room material'; element('recipient').value = 'b';
   element('room-filter').value = 'departed'; element('room-search').value = 'old source';
   const sessions = ['a', 'b'].map(id => ({ id, nativeId: `native-${id}`, roomId: 'shared', liveDraft: `Unsent private ${id}`, queuedInputs: [{ id: `queued-${id}`, text: `Original queued ${id}` }] }));
-  const context = vm.createContext({
+  const context = vm.createContext({getActivityStream:()=>null,
     structuredClone, roomViews: {}, spaceId: 'shared', selected: 'room', roomSurface: 'overview', roomSession: 'a', mode: 'terminal', terminalLayout: 'split',
     roomRecordScope: '', roomRecordReturn: null, roomFilterHistory: null, roomRecordSelections: new Map(), readingPositions: { 'collaboration-focus:a': { top: 314, follow: false, anchor: 'original', offset: 4 } },
     roomReturnReading: null, roomThread: 'old-thread', roomReplyTo: 'reply-original', pendingRoomFilter: '', selectionRevision: 4,

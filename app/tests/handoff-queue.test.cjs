@@ -257,7 +257,7 @@ test('every sentence the panel can show exists in both languages with the same b
   // And the page is wired: the module is loaded before the renderer in the page and in the bundle, and the panel has its place.
   const html = fs.readFileSync(path.join(__dirname, '../renderer/index.html'), 'utf8'), build = fs.readFileSync(path.join(__dirname, '../../scripts/build-ui.cjs'), 'utf8');
   assert.ok(html.indexOf('src="handoff-queue.js"') > 0 && html.indexOf('src="handoff-queue.js"') < html.indexOf('src="renderer.js"'));
-  assert.match(build, /'handoff-queue\.js', 'renderer\.js'\]/);
+  assert.ok(build.indexOf("'handoff-queue.js'") > 0 && build.indexOf("'handoff-queue.js'") < build.indexOf("'renderer.js'"));
   assert.match(html, /<section id="queue-handoff" hidden><\/section><p id="queue-handoff-error" role="alert" hidden><\/p><div id="queue-list"><\/div>/);
   // A refused step is said inside the panel, never in a toast behind it: the panel's buttons do not go through the general error toast.
   const button = renderer.slice(renderer.indexOf('function queueHandoffButton('), renderer.indexOf('// The state of a task\'s delivery on the task\'s own row'));

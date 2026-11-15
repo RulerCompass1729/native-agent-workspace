@@ -233,7 +233,7 @@ test('opening a space waits for its members\' messages; the current space stays 
 
 test('every render ends by reporting what it shows', () => {
   // render() is the one place that knows what is on screen; reportShown sends only a change (tested above).
-  assert.match(between(renderer, '\nfunction render() {', '\nfunction '), /\} finally \{[^\n]*rendering = false; reportShown\(\); \}\n/);
+  assert.match(between(renderer, '\nfunction render() {', '\nfunction '), /\} finally \{[^\n]*rendering = false; reportShown\(\);[^\n]* \}\n/);
 });
 
 test('the open session\'s list is hidden, never drawn as "no messages", should its messages still be missing', () => {

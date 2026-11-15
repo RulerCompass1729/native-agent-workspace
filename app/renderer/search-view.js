@@ -160,6 +160,8 @@ async function showRoomRecord(roomId, messageId, query = '') {
     toast(uiText('search.sharedRemoved')); return false;
   }
   await selectSpace(roomId);
+  const stream = getActivityStream();
+  if (stream) { stream.open(roomId, '', messageId); return true; }
   roomRecordScope = ''; roomRecordReturn = null;
   $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = ''; roomThread = '';
   roomSurface = 'records';
