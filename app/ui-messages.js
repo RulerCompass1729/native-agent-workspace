@@ -2,6 +2,8 @@
 (function (root) {
   const messages = {
   "zh": {
+    "vendor.label": "{vendor} 模型 · 在 {shell} 里运行",
+    "vendor.unreported": "在 {shell} 里运行 · 模型厂商未报告",
     "error.butlerReview.conflict": "另一窗口已修改记录；本次未确认保存，当前标记仍保留。请重新打开并核对。",
     "error.butlerReview.capacity": "记录存储已满；本次未保存，当前标记仍保留。",
     "error.butlerReview.personOnly": "只有你的窗口可以查看和确认记录。",
@@ -3101,6 +3103,8 @@
     "butler.reads.retry": "再读一次"
   },
   "en": {
+    "vendor.label": "{vendor} model · runs in {shell}",
+    "vendor.unreported": "Runs in {shell} · model vendor not reported",
     "error.butlerReview.conflict": "Another window changed this record. Saving has not been confirmed and your marks remain. Reopen and check the record.",
     "error.butlerReview.capacity": "Record storage is full. Nothing was saved and your marks remain.",
     "error.butlerReview.personOnly": "Only your window can read and confirm these records.",

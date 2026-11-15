@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
+const vendorMarks = require('./fixtures/vendor-marks.cjs');
 const locale = require('../ui-locale.js'), spaces = require('../collaboration-spaces.cjs');
 
 // The window side of the butler the person talks to (大管家), step 1: which sessions the lists hold, what the menus
@@ -14,6 +15,8 @@ class Element {
   append(...values) { this.children.push(...values); }
   replaceChildren(...values) { this.children = values; }
   querySelectorAll(tag) { return this.children.flatMap(child => [...(child.tag === tag ? [child] : []), ...child.querySelectorAll(tag)]); }
+  setAttribute(name, value) { (this.attributes ??= {})[name] = String(value); }
+  getAttribute(name) { return this.attributes?.[name] ?? null; }
   focus() { this.focused = true; }
   close() { this.open = false; }
   showModal() { this.open = true; }
@@ -27,11 +30,12 @@ function fixture({ sessions, steward = null, order = [], disconnected = false, r
     api: { steward: async (id, text) => { calls.push(id); duties.push(text); if (refuse) throw refuse; state.steward = id === null ? null : { sessionId: id, nativeId: 'native-' + id }; return duty === undefined ? (id === null ? null : { duty: { state: 'sent' } }) : duty; }, initial: async () => state },
     toastMessage: (key, params) => toasts.push(locale.format('zh', key, params())),
     uiText: (key, params) => locale.format('zh', key, params), updateState: next => { calls.push('state'); return next; }, render: () => calls.push('render'), select: async id => { selected.push(id); },
-    ui: { display: { text: (el, key) => { el.textContent = locale.format('zh', key); }, computed: (el, _slot, read) => { el.textContent = read(); } }, showError: (el, error) => { shown.push(error); el.textContent = 'shown'; },
+    ui: { display: { text: (el, key) => { el.textContent = locale.format('zh', key); }, computed: (el, slot, read) => { if (slot === 'text') el.textContent = read(); else el.setAttribute(slot, read()); } }, showError: (el, error) => { shown.push(error); el.textContent = 'shown'; },
       errorText: error => error.uiMessage ? locale.format('zh', error.uiMessage.key, error.uiMessage.params) : error.message },
     node: (tag, text, cls) => { const el = new Element(tag, text); if (cls) el.className = cls; return el; }, icon: provider => new Element('span', provider),
     spaceRecord: id => state.rooms.find(room => room.id === id), spaceName: room => room.name, sidebarPresentation: record => ({ compact: record.state === 'working' ? '正在工作' : '会话就绪' }),
     contentMenu: null, sessionMenu: null, roomMenu: null, dialogTickets: new Map() });
+  vendorMarks(renderer, context);
   vm.runInContext(cut('function sidebarSessions() {', 'function sameNameSessions('), context);
   vm.runInContext(cut('function stewardAction(record) {', '// The integrator is one session outside every space (B6).'), context);
   vm.runInContext(cut('function openTransientDialog(id) {', 'let trustScope = null'), context);
@@ -93,6 +97,9 @@ test('the chooser lists the butler first, says why a session cannot be chosen, d
   assert.equal(f.$('steward-dialog').open, true);
   assert.deepEqual(f.rows(), [['BUTLER', zh('steward.choose.current'), false, true], ['MEMBER', zh('steward.choose.inSpace', { space: '网站改版' }), true, false], ['FREE', '正在工作', false, false],
     ['RAW', zh('steward.choose.unusable'), true, false], ['DONE', zh('steward.choose.unusable'), true, false]], 'The archived session is not listed');
+  // The vendor mark beside each name is one labelled image, so a screen reader hears who made the model, not a bare letter.
+  const mark = f.$('steward-list').children[0].children[1], label = zh('vendor.label', { vendor: 'Anthropic', shell: 'Claude Code' });
+  assert.deepEqual([mark.getAttribute('role'), mark.getAttribute('aria-label'), mark.getAttribute('title')], ['img', label, label]);
   // The butler chosen: confirming sends it the duty statement again, and the button says so.
   assert.deepEqual([f.$('steward-none').hidden, f.$('steward-confirm').disabled, f.$('steward-confirm').textContent], [true, false, zh('steward.choose.resend')]);
   assert.deepEqual([f.$('steward-duty').hidden, f.$('steward-duty-label').hidden, f.$('steward-duty').value], [false, false, zh('steward.duty.default')], 'The default text of the person\'s language, to edit');

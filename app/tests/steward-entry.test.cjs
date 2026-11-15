@@ -300,7 +300,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   assert.match(source, /const warning = \[outboxWarning, secretaryWarning, integratorWarning, stewardWarning\]/);
   assert.match(source, /queueSecretary: secretary, integrator, \.\.\.handoffEnabled, steward, /);
   // The duty statement the person chose is shown to the person's windows only, never in an agent's view.
-  assert.ok(source.includes("steward, ...(context?.background ? {} : { stewardDuty }), "));
+  assert.ok(source.includes("steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), "));
   // The start of the app names the window that lands: the first one restored, or the one opened when none is.
   assert.match(source, /const restore = views\.filter\(v => v\.active\);\n[^\n]*\n[^\n]*\n  landingOwner = restore\.length > 1 \? null : \(restore\[0\] \|\| views\.at\(-1\)\)\?\.owner \|\| null;\n/);
   // The rule itself, as written: one restored window lands, the last view when none was open, and none of several.

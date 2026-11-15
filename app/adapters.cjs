@@ -1605,7 +1605,7 @@ class Codex extends EventEmitter {
         if (this.stopped || rpc !== this.host.rpc || child !== this.host.codexProcess) {
           reject(uiError("error.backendChangedStartResultIgnored")); return;
         }
-        this.record.nativeId = thread.id; this.nativeSessionId = thread.sessionId; this.emit('workspaceMcpProof'); this.host.codexTargets.set(thread.id, this);
+        this.record.nativeId = thread.id; this.observeModelProvider(thread.modelProvider); this.nativeSessionId = thread.sessionId; this.emit('workspaceMcpProof'); this.host.codexTargets.set(thread.id, this);
         if (this.terminalNotificationSource) this.chatAvailable = true;
         this.emit('activity', ''); this.emit('model', model || thread.model || '原生未报告', model || thread.model ? undefined : uiNotice('notice.model.nativeUnreported').uiMessage); this.emit('state', 'idle'); resolve();
         if (!this.chatAvailable) this.observing = this.observeFirstTurn().catch(() => { if (!this.stopped) this.emit('activity', ...uiActivity("notice.activity.nativeConversationUnconfirmed")); });
@@ -1749,8 +1749,13 @@ class Codex extends EventEmitter {
       lifecycle: this.lifecycleRevision, effortKnown: settings.effort === null || typeof settings.effort === 'string' && !!settings.effort };
     this.emit('model', settings.model); this.emit('capability');
   }
+  observeModelProvider(value) {
+    if (typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value)) this.emit('modelProvider', value);
+  }
   observeReplySettings(result, previous, sourceRpc = this.terminalNotificationSource ? this.terminalRpc : this.host?.rpc) {
-    if (typeof result?.thread?.id !== 'string' || !result.thread.id || result.thread.id !== this.record.nativeId || this.nativeSettings !== previous) return;
+    if (typeof result?.thread?.id !== 'string' || !result.thread.id || result.thread.id !== this.record.nativeId) return;
+    this.observeModelProvider(result.modelProvider || result.thread.modelProvider);
+    if (this.nativeSettings !== previous) return;
     const model = result.model || result.thread.model;
     // A reply has effective model/effort, but no collaboration-mode report.
     // Keep a separately observed mode for this same native identity only.

@@ -838,7 +838,10 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     const snapshotSource = room && m.snapshotSource && state.room.merge?.sources.find(source => source.id === m.snapshotSource.roomId);
     const snapshotName = snapshotSource ? mergeSourceLabel(snapshotSource, state.room.merge.sources) : '';
     const ownGap = m.kind === 'gap' && m.role === 'system' && Boolean(readingOwnMessage(m));
-    const headingKey = JSON.stringify([ownGap, name, m.uiNameMessage, m.uiTitleMessage, m.legacyOriginalTitleUiMessage, m.status, messageTime, spaceStatus, m.manualReply, nativeTitle, entry.exploration?.error, m.exitCode, m.incomplete, m.volatile, m.sharingStopped, m.sharingStoppedUiMessage, snapshotName]);
+    // In a space's record, a row a session wrote (its reply or tool row) carries that session's vendor mark
+    // before its name. NAW's own rows (dispatch, join, pause notices) name a session but were not written by it.
+    const maker = room && (m.role === 'assistant' || m.role === 'tool') && m.sessionId ? state.sessions.find(x => x.id === m.sessionId) : null, makerMark = maker ? sessionMaker(maker) : null;
+    const headingKey = JSON.stringify([ownGap, makerMark && [makerMark.vendor, makerMark.shell], name, m.uiNameMessage, m.uiTitleMessage, m.legacyOriginalTitleUiMessage, m.status, messageTime, spaceStatus, m.manualReply, nativeTitle, entry.exploration?.error, m.exitCode, m.incomplete, m.volatile, m.sharingStopped, m.sharingStoppedUiMessage, snapshotName]);
     if (entry.headingKey !== headingKey) {
       const authorId = room && (m.sessionId || m.recipientId);
       const author = authorId ? button(name, () => { $('room-filter').value = authorId; renderTimeline(); attempt(persistView); }, 'message-author') : node('strong', name);
@@ -848,6 +851,11 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         ui.display.computed(author, 'title', label); ui.display.computed(author, 'aria-label', label);
       }
       entry.heading.replaceChildren(author); entry.headingKey = headingKey;
+      if (maker) {
+        const mark = icon(maker, true); mark.setAttribute('role', 'img');
+        ui.display.computed(mark, 'aria-label', () => makerLabel(maker)); ui.display.computed(mark, 'title', () => makerLabel(maker));
+        entry.heading.prepend(mark);
+      }
       if (snapshotSource) {
         const source = button('', () => {
           openSearch('all'); return openSearchResult({ kind: 'shared', roomId: m.snapshotSource.roomId, messageId: m.snapshotSource.messageId });

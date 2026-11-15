@@ -43,6 +43,7 @@ function fixture(t, provider = 'codex', extra = {}) {
   state.sessions[0].roomIds = ['shared'];
   const sandbox = { background: require('../background-control.cjs'), omitHidden: require('../shown-sessions.cjs').omitHidden, backgroundOperation: operation, submissionState: s => s, sessionLabels: { apply: s => s }, roomState: { apply: s => s, value: { sessionArchives: {} }, metadata: () => ({ restoreMembers: [], restorePlacements: {} }) },
     queueSecretary: { current: () => sandbox.secretary || null }, backgroundControl: null, roomPeerIdentity: () => ({ nativeId: 'metadata' }), endedByMove: () => [], queueDispatcher: null, butlerIngress: null,
+    localVendorIcons: () => ({ openai: 'PRIVATE_VENDOR_IMAGE' }),
     viewStorageWarning: '', viewStorageWarningUiMessage: null, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
     displayText: (key, params) => locale.format('zh', key, params), uiError: require('../ui-errors.cjs').uiError, applicationBuild: {}, app: { getVersion: () => 'fixture' }, localeWarning: '', preflight: () => ({}), notifyCapacity() {},
     validViews: require('../view-store.cjs').validViews, saveViews() {}, structuredClone, register: (name, handler) => handlers.set(name, handler), roomIds: s => s.roomIds || [] };
@@ -398,9 +399,10 @@ test('the final actual initial handler filters its view, preflight, build and fu
   f.sandbox.applicationBuild = { version: 'fixture', commit: null, installedAt: null, future: 'PRIVATE_BUILD' };
   f.sandbox.preflight = () => ({ codex: true, claude: false, python: true, paths: { codex: 'PRIVATE_PATH' } });
   const hosted = (await f.controller.call(f.binding, { action: 'snapshot' })).value;
-  for (const secret of ['PRIVATE_VIEW_BODY','PRIVATE_QUERY','PRIVATE_TOP','PRIVATE_LEASE','PRIVATE_BUILD','PRIVATE_PATH']) assert.equal(JSON.stringify(hosted).includes(secret), false, secret);
+  for (const secret of ['PRIVATE_VIEW_BODY','PRIVATE_QUERY','PRIVATE_TOP','PRIVATE_LEASE','PRIVATE_BUILD','PRIVATE_PATH','PRIVATE_VENDOR_IMAGE']) assert.equal(JSON.stringify(hosted).includes(secret), false, secret);
   const human = await f.config.handlers.get('initial')({ background: false, client: c.client, view: c.view });
   assert.equal(human.viewState.sharedDraft, 'PRIVATE_VIEW_BODY'); assert.equal(human.preflight.paths.codex, 'PRIVATE_PATH');
+  assert.equal(human.vendorIcons.openai, 'PRIVATE_VENDOR_IMAGE');
 });
 test('published space images require current membership for every source check; a private draft stays this view own data', async t => {
   const f = fixture(t), c = await f.controller.view(f.actor), sandbox = f.sandbox;

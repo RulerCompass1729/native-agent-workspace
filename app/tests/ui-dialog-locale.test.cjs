@@ -1,5 +1,6 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
+const vendorMarks = require('./fixtures/vendor-marks.cjs');
 const locale = require('../ui-locale.js'), spaces = require('../collaboration-spaces.cjs');
 const renderer = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
 const bootstrap = fs.readFileSync(path.join(__dirname, '../dsh/bootstrap.js'), 'utf8');
@@ -70,6 +71,7 @@ function fixture() {
     const a = renderer.indexOf(start), b = renderer.indexOf(end, a + start.length); assert.ok(a >= 0 && b > a, start);
     vm.runInContext(renderer.slice(a, b), context);
   };
+  vendorMarks(renderer, context);
   load('const uiNode =', 'const states =');
   load('const dialogTickets =', 'let trustScope =');
   load('function openNotes(', 'function appendedDraft(');

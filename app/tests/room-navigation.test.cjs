@@ -1,5 +1,6 @@
 // Existing renderer functions, with the established locale and DOM test helpers.
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const vendorMarks = require('./fixtures/vendor-marks.cjs');
 const os=require('node:os'),path=require('node:path'),{ViewStore}=require('../view-store.cjs');
 const localeUI=require('./fixtures/locale-ui.cjs'),spaces=require('../collaboration-spaces.cjs'),threads=require('../room-threads.js');
 const source=fs.readFileSync(require.resolve('../renderer/renderer.js'),'utf8');
@@ -35,6 +36,7 @@ function harness(){
   nativeWorkspaceMentions:{editHistory:()=>({})},messageList(){},api:new Proxy({},{get:(_,name)=>(...args)=>{calls.native.push([name,args]);throw Error('Navigation reached native API')}})
  });
  $('shared-input').value='@Agent a UNSENT';$('recipient').value='a';
+ vendorMarks(source,ctx);
  const fields=source.match(/const roomViewFields = (\[[^;]+\]);/);assert.ok(fields);vm.runInContext(`const roomViewFields=${fields[1]};`,ctx);
  const names=['focusRoomMember','rememberRoomMemberView','restoreRoomMemberView','openRoomMember','timeline','timelineParticipants','filteredTimeline','showRoomRecords','returnRoomRecordMember','clearRoomRecordFilter','restoreRoomRecordFilter','renderTimeline','refreshRoomMemberTabs','roomMemberStatusKey','refreshRoomMemberStatus','openRoomMemberStatus','captureRoomView','persistedRoomViews','archivedName'];
  for(const name of ['roomRecentPreview','roomNavigationKey','memberTabClick','renderRoomMemberTabs'])if(source.includes('function '+name+'('))names.push(name);
@@ -95,11 +97,11 @@ test('opening an explicit search result from recent-all retains the canonical hi
 // T-121 A: the open member's own tab returns to all members; another member's tab still opens that member.
 test('clicking the open member tab returns to all members, but not on a double-click or Control-click',()=>{
  const{ctx,$}=harness();ctx.renderRoomMemberTabs();const tabs=$('room-member-tabs').children,a=tabs.find(t=>t.dataset.roomSession==='a'),b=tabs.find(t=>t.dataset.roomSession==='b');
- assert.equal(a.getAttribute('aria-pressed'),'true');assert.equal(a.getAttribute('title'),ctx.uiText('room.tabRestoreHint',{label:'Agent a · a'}));assert.equal(b.getAttribute('title'),ctx.uiText('room.tabHint',{label:'Agent b · b'}));
+ assert.equal(a.getAttribute('aria-pressed'),'true');assert.equal(a.getAttribute('title'),ctx.uiText('room.tabRestoreHint',{label:'Agent a · Runs in Codex · model vendor not reported · a'}));assert.equal(b.getAttribute('title'),ctx.uiText('room.tabHint',{label:'Agent b · Runs in Codex · model vendor not reported · b'}));
  ctx.memberTabClick('a',{detail:2});assert.equal(ctx.roomSession,'a','The second click of a double-click stays');
  ctx.memberTabClick('a',{detail:1,ctrlKey:true});assert.equal(ctx.roomSession,'a','A Control-click stays');
  ctx.memberTabClick('a',{detail:1});assert.equal(ctx.roomSession,'');assert.equal(ctx.roomSurface,'overview');
- ctx.renderRoomMemberTabs();assert.equal(a.getAttribute('aria-pressed'),'false');assert.equal(a.getAttribute('title'),ctx.uiText('room.tabHint',{label:'Agent a · a'}));
+ ctx.renderRoomMemberTabs();assert.equal(a.getAttribute('aria-pressed'),'false');assert.equal(a.getAttribute('title'),ctx.uiText('room.tabHint',{label:'Agent a · Runs in Codex · model vendor not reported · a'}));
  ctx.memberTabClick('b',{detail:1});assert.equal(ctx.roomSession,'b','Another member tab opens that member');
  ctx.memberTabClick('b',{detail:0});assert.equal(ctx.roomSession,'','Enter or Space on the open tab returns too');
  a.click();assert.equal(ctx.roomSession,'a','The tab listener opens a member');
