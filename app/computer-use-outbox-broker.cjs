@@ -87,7 +87,8 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
       let binding;
       try { binding = await factory(abort.signal); return await control(binding, binding.args); }
       finally { await binding?.close?.(); }
-    }).catch(error => ({ state: 'unconfirmed', error: error.message, retry: false })).finally(() => {
+    }).catch(error => ({ state: 'unconfirmed', error: error.message, retry: false,
+      ...classifyOutboxFailure(error, 'binding', 'binding-unavailable') })).finally(() => {
       signal?.removeEventListener('abort', cancelled); controllers.delete(abort); operations.delete(job);
     });
     operations.add(job); return job;

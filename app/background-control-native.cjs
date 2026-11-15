@@ -1,5 +1,6 @@
 const { isDeepStrictEqual } = require('node:util');
 const { validate } = require('./background-control.cjs');
+const { outboxError } = require('./computer-use-outbox-native.cjs');
 const credentials = new WeakMap();
 function rootCall(target, message, signal, stillTarget) {
   const args = validate(message.arguments), live = target.liveTurn, epoch = target.observationEpoch;
@@ -20,7 +21,14 @@ function rootCall(target, message, signal, stillTarget) {
   return { credential, identity, args };
 }
 function consume(call, identity, args) {
-  if (!call || call.consumed || !call.valid() || !isDeepStrictEqual(call.identity, identity) || !isDeepStrictEqual(call.args, validate(args))) throw Error('Native control proof is unavailable');
+  // Keep the same admission checks, but distinguish their fixed refusal codes
+  // on the existing native receipt. Never include identity or argument values.
+  const refused = reason => outboxError(reason, 'binding', 'Native control proof is unavailable');
+  if (!call) throw refused('native-call-missing');
+  if (call.consumed) throw refused('duplicate-call');
+  if (!call.valid()) throw refused('native-call-invalidated');
+  if (!isDeepStrictEqual(call.identity, identity)) throw refused('native-call-identity-mismatch');
+  if (!isDeepStrictEqual(call.args, validate(args))) throw refused('native-call-arguments-mismatch');
   call.consumed = true;
   return { args: call.args, identity: call.identity, target: call.target, valid: call.valid };
 }

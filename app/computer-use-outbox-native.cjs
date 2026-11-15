@@ -5,7 +5,8 @@ const FAIL = 'The original native outbox call could not be verified; no resend.'
 const failures = new WeakMap();
 const phases = new Set(['admission', 'binding', 'view-open', 'lease', 'view-snapshot', 'view-send', 'native-receipt', 'receipt-render', 'cleanup']);
 const reasons = new Set(['invalid-request', 'cancelled', 'owner-closed', 'busy', 'binding-unavailable',
-  'provenance-unconfirmed', 'duplicate-call', 'turn-metadata-unconfirmed', 'caller-unavailable', 'recipient-unavailable',
+  'provenance-unconfirmed', 'duplicate-call', 'native-call-missing', 'native-call-invalidated',
+  'native-call-identity-mismatch', 'native-call-arguments-mismatch', 'turn-metadata-unconfirmed', 'caller-unavailable', 'recipient-unavailable',
   'recipient-not-idle', 'native-goal-unconfirmed', 'native-goal-disallows', 'wake-policy-unavailable', 'wake-limited', 'membership-changed', 'membership-unconfirmed', 'control-changed', 'control-unconfirmed', 'space-unavailable', 'view-unavailable', 'lease-unavailable',
   'snapshot-unavailable', 'ambiguous-target', 'grant-invalidated', 'send-unconfirmed', 'receipt-unconfirmed',
   'command-unconfirmed', 'command-failed', 'render-unconfirmed', 'cleanup-unconfirmed', 'operation-unconfirmed']);
