@@ -1,0 +1,31 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
+const path = require('node:path');
+const { pythonExecutable } = require('../platform.cjs');
+
+function probe(t, scenario) {
+  const python = pythonExecutable(); assert.ok(python, 'A Python runtime is required');
+  const result = JSON.parse(execFileSync(python, [path.join(__dirname, 'fixtures/pty-reap-signal.py'),
+    path.join(__dirname, '../pty_host.py'), scenario], { encoding: 'utf8', timeout: 5000 }));
+  t.diagnostic(JSON.stringify(result));
+  assert.equal(result.records.filter(r => r.type === 'exit').length, 1, 'The worker exits once');
+  assert.equal(result.schedule.reaped, true, 'The schedule actually reaches the kernel reap');
+  return result;
+}
+test('SIGTERM between kernel reap and the Python flag never signals a reused process group', t => {
+  const result = probe(t, 'signal-after-reap');
+  assert.equal(result.schedule.injected, true, 'SIGTERM is delivered inside waitpid after the kernel reap');
+  assert.deepEqual(result.signals, [], 'No TERM or KILL may address the now-foreign group');
+});
+for (const scenario of ['signal-while-alive', 'stubborn-then-reuse']) test(`${scenario}: stop still reaches the owned group with its full grace period`, t => {
+  const result = probe(t, scenario);
+  if (scenario === 'signal-while-alive') assert.equal(result.schedule.injected, true);
+  assert.deepEqual(result.signals.map(s => [s.signal, s.target]), [[15, 'owned-group'], [9, 'owned-group']]);
+  assert.ok(result.signals[1].at - result.signals[0].at >= 5, 'Allow five seconds after actual TERM delivery');
+});
+test('a zombie-only group can be reaped promptly without signalling a reused identity', t => {
+  const result = probe(t, 'zombie-eperm');
+  assert.deepEqual(result.signals.map(s => [s.signal, s.target]), [[15, 'owned-group']]);
+  assert.ok(result.schedule.clock < 5, 'No unnecessary force-kill deadline wait');
+});

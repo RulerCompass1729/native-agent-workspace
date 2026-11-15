@@ -60,11 +60,12 @@ def main():
     selector.register(fd, selectors.EVENT_READ, "pty")
     selector.register(sys.stdin.fileno(), selectors.EVENT_READ, "input")
     reaped = False
+    stop_requested = False
     stop_deadline = None
     killed = False
     exit_code = None
 
-    def terminate(*_):
+    def terminate():
         nonlocal stop_deadline
         if reaped or stop_deadline is not None:
             return
@@ -75,10 +76,19 @@ def main():
         except ProcessLookupError:
             pass
 
-    signal.signal(signal.SIGTERM, terminate)
+    def request_stop(*_):
+        nonlocal stop_requested
+        # waitpid may already have released the PID when Python dispatches a
+        # signal, before the caller records reaped=True. Only the main loop
+        # may signal the owned group; this callback must never use its old ID.
+        stop_requested = True
+
+    signal.signal(signal.SIGTERM, request_stop)
     try:
         running = True
         while running:
+            if stop_requested:
+                terminate()
             # Drain retained frames before waiting for another fd event; the
             # writer may already be idle after sending configuration + input.
             while b"\n" in pending:
