@@ -115,7 +115,7 @@ test('record navigation validates before changing views, including archived and 
   const source=fs.readFileSync(require.resolve('../renderer/search-view.js'),'utf8');
   const calls=[],nodes=new Map(), $=id=>{if(!nodes.has(id))nodes.set(id,{value:'draft'});return nodes.get(id);};
   let current={events:[{id:'event'}],messages:[{id:'message'}]};
-  const c={spaceRecord:()=>current,toast:x=>calls.push(x),uiText:x=>x,$,
+  const c={getActivityStream:()=>null,spaceRecord:()=>current,toast:x=>calls.push(x),uiText:x=>x,$,
     selectSpace:async id=>calls.push(id),selectRoom:async()=>{},roomReadingKey:()=>'',pointToMessage:(_el,_key,id)=>calls.push(id)};
   vm.createContext(c);vm.runInContext(section(source,'async function showRoomRecord(', '\nasync function returnToReading('),c);
   for(const [room,id] of [[null,'event'],[{archived:true,events:[{id:'event'}]},'event'],[current,'missing'],[current,42]]){

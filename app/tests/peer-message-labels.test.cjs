@@ -17,6 +17,16 @@ function label(lang, sessions, row) {
   return result;
 }
 for (const lang of ['en', 'zh']) {
+  test(lang + ': an audit keeps the original actor when that record now holds another native session', () => {
+    const row = { role: 'system', kind: 'control-audit', sessionId: sender,
+      controlAudit: { actor: { id: sender, nativeId: 'old-native', name: 'Original actor' } } };
+    assert.equal(label(lang, [{ ...record(sender, 'Replacement'), nativeId: 'new-native' }], row), 'Original actor · abcdef');
+  });
+  test(lang + ': a queue dispatch names NAW as sender, not the member receiving the work', () => {
+    const row = { role: 'system', kind: 'queue', sessionId: recipient,
+      uiMessage: { key: 'notice.queue.dispatched', params: { name: 'Receiver', text: 'Synthetic task' } } };
+    assert.equal(label(lang, [record(recipient, 'Receiver')], row), locale.format(lang, 'identity.workspace'));
+  });
   test(lang + ': a recorded background send names its agent instead of attributing it to the person', () => {
     const row = { role: 'human', recipientId: recipient, name: 'Original agent → Receiver',
       agentControl: { id: sender, name: 'Original agent', nativeId: 'original-native', operationId: 'actual-send' }, text: 'Exact body' };

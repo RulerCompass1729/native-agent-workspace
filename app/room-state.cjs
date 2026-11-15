@@ -103,7 +103,7 @@ function queueFacts(room, roomId, previous, next, queue) {
     // The name NAW recorded when it sent this member its item; a member holds one item at a time.
     const name = room.events.findLast(e => e.sessionId === next.sentTo && e.uiMessage?.key === 'notice.queue.dispatched')?.uiMessage?.params?.name;
     const params = { text: queueRules.shortText(next.text), branch: next.ready.branch, commit: next.ready.commit.slice(0, 12) };
-    facts.push({ kind: 'queue', ...(next.sentTo ? { sessionId: next.sentTo } : {}),
+    facts.push({ kind: 'queue', itemId: next.id, ...(next.sentTo ? { sessionId: next.sentTo } : {}),
       ...(name ? uiNotice('notice.queue.ready', { ...params, name }) : uiNotice('notice.queue.readyUnnamed', params)),
       monitor: { kind: 'ready', key: `ready:${roomId}:${next.id}`, itemId: next.id, branch: next.ready.branch, commit: next.ready.commit },
       butlerSource: queueReadySource(roomId, next, name) });
@@ -620,7 +620,7 @@ class RoomState {
     }
     const checked = queueRules.validateQueue(queue);
     const noticed = queueFacts(this.metadata(id), id, previous, next, checked);
-    return this.update({ queue: checked, ...noticed.fields }, event, id, noticed.facts);
+    return this.update({ queue: checked, ...noticed.fields }, event ? { ...event, itemId } : event, id, noticed.facts);
   }
   // `by` is 'steward' when the butler acts (steward step 2, batch 4): kept on the item, which older builds read as it is.
   queueAdd(text, assignee, id = DEFAULT_ROOM_ID, creator, by = null) {
@@ -656,7 +656,7 @@ class RoomState {
         params.sessionId = item.creator.sessionId;
       } else notice = 'notice.queue.addedByPerson';
     }
-    const event = { kind: 'queue', ...uiNotice(notice, params) };
+    const event = { kind: 'queue', itemId: item.id, ...uiNotice(notice, params) };
     this.update({ queue }, event, id);
     return item.id;
   }

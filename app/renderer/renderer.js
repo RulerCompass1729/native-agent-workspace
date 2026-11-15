@@ -190,6 +190,7 @@ let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPr
 let latestViewStorage, latestViewStorageUiMessage;
 let roomSession = '', selectionRevision = 0, pendingMode;
 let roomSurface = 'overview', roomOverview;
+let activityStream;
 let panorama, panoramaOrigin, roomReturnReading;
 let panoramaView = { layout: 'list', query: '', spaceId: '', top: 0, returning: false };
 let spaceId = 'shared', sidebarView = 'flat', hoverSpace = '';
@@ -3463,8 +3464,8 @@ function historicalParticipantLabel(name, id) {
 }
 function roomMessageLabel(m) {
   const displayName = ui.displayText(m.name, m.uiNameMessage);
-  if (m.agentControl) {
-    const actor = m.agentControl;
+  if (m.agentControl || m.controlAudit?.actor) {
+    const actor = m.agentControl || m.controlAudit.actor;
     const source = state.sessions.find(s => s.id === actor.id && s.nativeId === actor.nativeId);
     const sender = source ? participantLabel(source, state.sessions) : historicalParticipantLabel(actor.name, actor.id);
     const target = state.sessions.find(s => s.id === m.recipientId);
@@ -3491,6 +3492,9 @@ function roomMessageLabel(m) {
     const sender = s ? participantLabel(s, state.sessions) : p.senderId ? historicalParticipantLabel(p.senderName || uiText('identity.historicalSession'), p.senderId) : p.senderName ? `「${p.senderName}」` : uiText('identity.unknownSession');
     return uiText('identity.unverifiedSender', { name: sender, recipient: r ? participantLabel(r, state.sessions) : historicalParticipantLabel(p.recipientName || uiText('identity.historicalSession'), p.recipientId) });
   }
+  // Queue/monitor rows are NAW's notices about a member; sessionId identifies
+  // their subject, not an assistant who spoke. Native streamed rows are separate.
+  if (m.role === 'system' && ['queue', 'monitor'].includes(m.kind)) return uiText('identity.workspace');
   const person = state.sessions.find(s => s.id === (m.role === 'human' ? m.recipientId : m.sessionId));
   if (person) return (m.role === 'human' ? uiText('identity.youTo') : '') + participantLabel(person, state.sessions);
   const id = m.role === 'human' ? m.recipientId : m.sessionId;
@@ -3529,7 +3533,31 @@ function filteredTimeline() {
   return timeline().filter(m => (related || !roomThread || roomThreads.roots.get(m.id) === roomThread) && (!id || timelineParticipants(m).includes(id)) && (!query || m.text.toLocaleLowerCase().includes(query)));
 }
 
+function getActivityStream() {
+  if (!window.nativeWorkspaceActivityStream) return null;
+  return activityStream ||= window.nativeWorkspaceActivityStream.bind({
+    document, state: () => state, rooms: allSpaces, roomName: spaceName,
+    isMember: (session, id) => Boolean(session && inSpace(session, id)), inRoom: () => selected === 'room',
+    text: uiText, displayText: (text, notice) => ui.displayText(text, notice), label: roomMessageLabel,
+    language: () => ui.language.getSnapshot().active, connected: () => !disconnected, attempt,
+    selectSpace, confirmation: showBackgroundConfirmation, card: renderBackgroundControls,
+    toggleChanged: () => requestAnimationFrame(refreshColumnTerminalHeights),
+    original: async target => {
+      const loading = ensureMessages([target.sessionId]); if (loading) await loading;
+      const record = state.sessions.find(s => s.id === target.sessionId && (!target.nativeId || s.nativeId === target.nativeId));
+      if (!record) { toastMessage('toast.originalRemoved'); return false; }
+      await select(record.id, 'chat');
+      if (!target.messageId || !pointToMessage($('messages'), record.id, target.messageId)) toastMessage('stream.openedSession');
+      return true;
+    },
+  });
+}
 function showRoomRecords(related = false) {
+  const stream = getActivityStream();
+  if (stream) {
+    if (related) stream.open(spaceId, current()?.id || ''); else stream.toggle(spaceId);
+    return;
+  }
   const record = related && focusedRoomMember() ? current() : null;
   if (related && !record) return;
   captureReadingViews(); rememberRoomMemberView(); suspendColumnInputs();
@@ -4384,6 +4412,9 @@ const nativeActivityClock = setInterval(() => {
 }, 1000);
 function render() {
   if (!state || rendering) return;
+  // A saved full-page records view opens as the new sidebar beside the members.
+  const restoreStream = selected === 'room' && roomSurface === 'records' && Boolean(window.nativeWorkspaceActivityStream);
+  if (restoreStream) roomSurface = 'overview';
   // The entry is not part of the window state: the window asks for it once here, and again on its own events.
   butlerEntry.start();
   if ($('butler-row')?.hidden === true && $('butler-review-dialog')?.open) $('butler-review-dialog').close();
@@ -4576,7 +4607,7 @@ function render() {
     renderApproval(approvalTarget, approvalTarget?.owner === owner);
     renderRename(); updateSelectedSharing();
     if (removedRoomFocus) focusRemainingMember(removedRoomFocus.origin, removedRoomFocus.index);
-  } finally { restoreVisibleReading(); rendering = false; reportShown(); }
+  } finally { restoreVisibleReading(); rendering = false; reportShown(); const stream = getActivityStream(); if (restoreStream) stream?.open(spaceId); else stream?.render(); }
 }
 async function switchMode(next, takeControl = false) {
   captureReadingViews();
