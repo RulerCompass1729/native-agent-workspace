@@ -46,9 +46,10 @@ function validViews(views) {
     owners.add(view.owner);
     if (view.active !== undefined && typeof view.active !== 'boolean') return false;
     if (view.spaceId !== undefined && !roomId(view.spaceId)) return false;
-    if (view.sidebarView !== undefined && !['flat', 'grouped'].includes(view.sidebarView)) return false;
+    if (view.sidebarView !== undefined && !['flat', 'grouped', 'folder'].includes(view.sidebarView)) return false;
     if (view.sidebarSpaceFilter !== undefined && view.sidebarSpaceFilter !== '' && !roomId(view.sidebarSpaceFilter)) return false;
     if (view.sidebarCollapsedGroups !== undefined && (!Array.isArray(view.sidebarCollapsedGroups) || view.sidebarCollapsedGroups.length > 1000 || view.sidebarCollapsedGroups.some(id => id !== 'independent' && !roomId(id)) || new Set(view.sidebarCollapsedGroups).size !== view.sidebarCollapsedGroups.length)) return false;
+    if (view.sidebarCollapsedFolders !== undefined && (!Array.isArray(view.sidebarCollapsedFolders) || view.sidebarCollapsedFolders.length > 200 || view.sidebarCollapsedFolders.some(key => !text(key, 4096) || !key) || new Set(view.sidebarCollapsedFolders).size !== view.sidebarCollapsedFolders.length)) return false;
     if (view.columnTerminalHeights !== undefined && (!object(view.columnTerminalHeights) || Object.keys(view.columnTerminalHeights).length > 200 ||
         Object.entries(view.columnTerminalHeights).some(([id, height]) => !text(id, 100) || !id || !Number.isSafeInteger(height) || height < 32 || height > 4000))) return false;
     if (view.panorama !== undefined) {

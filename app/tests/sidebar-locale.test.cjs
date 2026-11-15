@@ -16,6 +16,8 @@ class Element {
   hasAttribute(key) { return this.attrs.has(key); }
   removeAttribute(key) { this.attrs.delete(key); }
   add(option) { this.append(option); }
+  get nextSibling() { const siblings = this.parentElement?.children || []; return siblings[siblings.indexOf(this) + 1] || null; }
+  after(...nodes) { const next = this.nextSibling; for (const node of nodes) this.parentElement.insertBefore(node, next); }
   append(...nodes) { for (const node of nodes) this.insertBefore(node, null); }
   insertBefore(node, before) { node.remove(); node.parentElement = this; const index = before ? this.children.indexOf(before) : -1; this.children.splice(index < 0 ? this.children.length : index, 0, node); }
   replaceChildren(...nodes) { for (const child of [...this.children]) child.remove(); this.content = ''; this.append(...nodes); }
@@ -145,7 +147,8 @@ for (const [stored, zh, en] of [[spaces.DEFAULT_ROOM_NAME, '共同工作', 'Shar
   // Everything the sidebar shows or names, including a plain title property.
   const strings = element => [element.content, element.title, ...element.attrs.values(), ...element.children.flatMap(strings)].filter(value => typeof value === 'string');
   const expect = (name, language) => {
-    assert.equal(group.title.textContent, `${name} · 1`, language);
+    assert.equal(group.card.name.textContent, name, language);
+    assert.equal(group.card.meta.textContent, locale.format(language, 'sidebar.hierarchy.cardCount', { count: 1 }) + ' · ' + locale.format(language, 'sidebar.hierarchy.cardWorking', { count: 1 }));
     assert.equal(group.title.getAttribute('aria-label'), locale.format(language, 'sidebar.openSpace', { name }));
     for (const slot of ['aria-label', 'title']) {
       assert.equal(group.more.getAttribute(slot), locale.format(language, 'sidebar.spaceActions', { name }), slot);

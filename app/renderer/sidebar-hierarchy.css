@@ -1,0 +1,74 @@
+/* Folder rows, folder view and the existing conversation toolbar path. */
+& {
+  --hier-folder-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'%3E%3Cpath d='M1.75 4.25a1 1 0 0 1 1-1h3.4l1.5 1.6h5.6a1 1 0 0 1 1 1v6.9a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z'/%3E%3C/svg%3E");
+  --hier-branch-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='4.5' cy='3.5' r='1.6'/%3E%3Ccircle cx='4.5' cy='12.5' r='1.6'/%3E%3Ccircle cx='11.5' cy='5.5' r='1.6'/%3E%3Cpath d='M4.5 5.1v5.8M11.5 7.1c0 2.4-2 3-5.4 3.9'/%3E%3C/svg%3E");
+}
+/* Breadcrumb 「空间 › 文件夹」 at the left of the bar under the header (the header itself is unchanged); full path in its tooltip. */
+& .hier-crumb{display:block;flex:0 1 auto;text-overflow:ellipsis;min-width:0;margin:0 auto 0 4px !important;overflow:hidden;color:var(--muted);font-size:12px;font-weight:500;white-space:nowrap}
+& .hier-crumb::before{content:"";display:inline-block;margin-right:5px;vertical-align:-2px;width:13px;height:13px;background:currentColor;-webkit-mask:var(--hier-folder-icon) center/contain no-repeat;mask:var(--hier-folder-icon) center/contain no-repeat}
+& .hier-crumb[hidden]{display:none}
+
+&[data-native-surface="sidebar"]:not([data-collapsed="true"]){
+  /* Line 1: the name, then role, chain and added-items tags. */
+  .session-link .label{grid-template-columns:minmax(0,1fr) auto auto auto auto}
+  .session-link .label>.hier-tags{grid-column:5;grid-row:1;display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
+  .hier-tags>span{padding:0 4px;border-radius:4px;font-size:10px;font-weight:600;line-height:15px}
+  .hier-tags>span[hidden]{display:none}
+  .hier-tags:not(:has(>span:not([hidden]))){display:none}
+  .hier-role{background:color-mix(in srgb,var(--green) 15%,transparent);color:color-mix(in srgb,var(--green) 85%,var(--ink))}
+  .hier-parts{background:color-mix(in srgb,var(--ink) 7%,transparent);color:var(--muted);font-weight:500!important}
+  .hier-added{background:color-mix(in srgb,#3a6ea5 14%,transparent);color:#335f8f}
+  /* Line 2: the task the member is doing (or the state words when they need the person), and the time. */
+  .session-link .label>.session-metadata{grid-template-columns:minmax(0,1fr) auto;row-gap:1px}
+  .session-link .label>.session-metadata>small{grid-column:1;grid-row:1}
+  .session-link .label>.session-metadata>.session-time{grid-column:2;grid-row:1}
+  .session-metadata>.hier-task{grid-column:1;grid-row:1;display:none;min-width:0;overflow:hidden;color:var(--ink);font-size:11px;line-height:1.5;white-space:nowrap;text-overflow:ellipsis}
+  .session-row[data-hier-show="task"] .session-metadata>small{display:none}
+  .session-row[data-hier-show="task"] .session-metadata>.hier-task{display:block}
+  /* Line 3: where it works, then its spaces (the flat and folder views). */
+  .session-metadata>.hier-line{grid-column:1/-1;grid-row:2;display:flex;align-items:center;gap:4px;min-width:0;overflow:hidden}
+  .session-metadata>.hier-line[hidden]{display:none}
+  .hier-folder{display:block;flex:0 1 auto;min-width:0;overflow:hidden;color:var(--muted);font-size:10.5px;line-height:15px;white-space:nowrap;text-overflow:ellipsis}
+  .hier-folder[hidden]{display:none}
+  .hier-folder::before{content:"";display:inline-block;width:11px;height:11px;margin-right:3px;vertical-align:-1.5px;background:currentColor;-webkit-mask:var(--hier-folder-icon) center/contain no-repeat;mask:var(--hier-folder-icon) center/contain no-repeat}
+  .hier-folder:is([data-kind="worktree"],[data-kind="main"])::before{-webkit-mask-image:var(--hier-branch-icon);mask-image:var(--hier-branch-icon)}
+  .hier-line>.session-space-badges{flex:1 1 auto;min-width:0;margin:0}
+  .hier-line>.session-space-badges[hidden]{display:none}
+  .hier-line>.session-space-badges .space-badge{flex:0 1 auto;width:auto}
+
+  /* Space view: the space heading stays at the top while its members scroll (VS Code's sticky scroll). */
+  #session-list[data-hier-view="space"] .session-space-group>h3{position:sticky;top:0;z-index:2;background:var(--raised)}
+  #session-list[data-hier-view="space"] .session-space-group:not([data-session-group="independent"])>h3{background:var(--raised)}
+
+  /* Folder view (Orca's repository → worktree → agent): one foldable section per folder. */
+  .session-view-switch{flex-wrap:nowrap}
+  #sessions-folders{white-space:nowrap}
+  .hier-folder-group{margin:0 0 6px}
+  .hier-folder-heading{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:3px;min-height:32px;margin:0;padding:0 6px 0 0;border-radius:6px;background:var(--panel);color:var(--ink);font-size:12.5px;font-weight:650}
+  .hier-folder-heading:hover{background:var(--hover)}
+  .hier-folder-toggle{display:inline-grid;place-items:center;flex:none;width:24px;height:24px;min-height:0;padding:0;border:0;border-radius:5px;background:transparent;color:var(--muted)}
+  .hier-folder-toggle[aria-expanded="false"] svg{transform:rotate(-90deg)}
+  .hier-folder-icon{flex:none;width:15px;height:15px;background:var(--muted);-webkit-mask:var(--hier-folder-icon) center/contain no-repeat;mask:var(--hier-folder-icon) center/contain no-repeat;cursor:pointer}
+  .hier-folder-group[data-kind="made"] .hier-folder-icon,.hier-folder-group[data-kind="unknown"] .hier-folder-icon{opacity:.55}
+  .hier-folder-group[data-kind="made"] .hier-folder-name,.hier-folder-group[data-kind="unknown"] .hier-folder-name{color:var(--muted);font-weight:550}
+  .hier-folder-name{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer}
+  .hier-folder-count{flex:none;margin-left:auto;color:var(--muted);font-size:11px;font-weight:500}
+  .hier-folder-attention{flex:none;margin-left:auto;padding:0 5px;border-radius:999px;background:#b26345;color:#fff;font-size:10.5px;line-height:16px}
+  .hier-folder-attention:not([hidden])+.hier-folder-count{margin-left:4px}
+  .hier-folder-attention[hidden]{display:none}
+  /* The guide line shows which rows belong to the folder, as in the space view. */
+  .hier-folder-body{margin-left:11px;padding-left:3px;border-left:1px solid var(--border)}
+  .hier-folder-body[hidden]{display:none}
+}
+/* Narrow rail: avatars only, as today; a folder heading becomes a thin divider. */
+&[data-native-surface="sidebar"][data-collapsed="true"]{
+  .hier-tags,.hier-task,.hier-line{display:none!important}
+  /* The heading leaves the rail (and the accessibility tree); an empty pseudo-element draws the divider. */
+  .hier-folder-heading{display:none}
+  .hier-folder-group::before{content:'';display:block;height:0;margin:6px 8px;border-top:1px solid var(--border)}
+  .hier-folder-body[hidden]{display:block!important}
+}
+
+/* Path and view switches share the existing toolbar; only the path gives up width. */
+.conversation-pane-toolbar .hier-crumb{flex:0 1 auto;max-width:50%;margin-right:auto!important}
+.conversation-pane-toolbar:has(.hier-crumb:not([hidden])){min-width:0}
