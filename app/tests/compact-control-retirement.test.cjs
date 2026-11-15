@@ -74,7 +74,9 @@ export function compactState() { return { promptId: rootPrompt?.id ?? null, turn
       if (settingsHook) f.r.hook({ hook_event_name: 'SessionStart', session_id: f.s.nativeId, source: 'compact' });
       return {};
     });
-    for (let i = 0; i < 50 && !observed.includes('control:compact'); i++) await new Promise(resolve => setImmediate(resolve));
+    // enqueueBlock flushes on clock.after(0) (a timer), so yield to timers and
+    // wait for both the observed compact row and, when refused, the declared gap.
+    for (let i = 0; i < 100 && (!observed.includes('control:compact') || refuseCompact && !mod.compactState().observationGap); i++) await new Promise(resolve => setTimeout(resolve, 2));
     await new Promise(resolve => setImmediate(resolve));
   };
   return { mod, compact, observed };
