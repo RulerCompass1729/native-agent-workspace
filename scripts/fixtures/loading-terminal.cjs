@@ -88,7 +88,7 @@ process.on('message', q => {
   // A Claude session that can take a queued message while working. A queued message is only recorded: it is never
   // delivered, so a test that expects none can tell.
   if (q.method === 'queue-capable') {
-    const r = runtimes.get(q.target); r.queueAvailable = Boolean(q.value);
+    const r = runtimes.get(q.target); r.queueAvailable = Boolean(q.value); r.midturnAvailable = q.value === 'midturn';
     r.queue = async text => { queued.push({ id: q.target, text }); throw Error('Synthetic queue does not deliver'); };
     r.emit('capability');
   }
