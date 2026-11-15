@@ -16,6 +16,7 @@ function probe(t, scenario) {
 test('SIGTERM between kernel reap and the Python flag never signals a reused process group', t => {
   const result = probe(t, 'signal-after-reap');
   assert.equal(result.schedule.injected, true, 'SIGTERM is delivered inside waitpid after the kernel reap');
+  assert.ok(result.schedule.group_checks > 2, "A stop at the reap boundary requires group absence before confirmation");
   assert.deepEqual(result.signals, [], 'No TERM or KILL may address the now-foreign group');
 });
 for (const scenario of ['signal-while-alive', 'stubborn-then-reuse']) test(`${scenario}: stop still reaches the owned group with its full grace period`, t => {
@@ -28,4 +29,23 @@ test('a zombie-only group can be reaped promptly without signalling a reused ide
   const result = probe(t, 'zombie-eperm');
   assert.deepEqual(result.signals.map(s => [s.signal, s.target]), [[15, 'owned-group']]);
   assert.ok(result.schedule.clock < 5, 'No unnecessary force-kill deadline wait');
+});
+
+test('SIGTERM during select is handled before natural reap and clears a surviving owned child', t => {
+  const result = probe(t, 'signal-before-natural-reap');
+  assert.equal(result.schedule.injected, true);
+  assert.deepEqual(result.signals.map(s => [s.signal, s.target]), [[15, 'owned-group'], [9, 'owned-group']]);
+  assert.ok(result.signals[1].at - result.signals[0].at >= 5);
+  assert.equal(result.schedule.child_alive, false, 'No numeric exit while the owned child survives');
+});
+
+test('real PTY stop during select waits for the surviving child before confirming exit', { timeout: 25000 }, t => {
+  const python = pythonExecutable(); assert.ok(python);
+  const result = JSON.parse(execFileSync(python, [path.join(__dirname, 'fixtures/pty-stop-during-select.py'),
+    path.join(__dirname, '../pty_host.py')], { encoding: 'utf8', timeout: 22000 }));
+  t.diagnostic(JSON.stringify(result));
+  assert.equal(result.workerReturnCode, 0, result.stderr);
+  assert.equal(result.childAliveAfterExit, false, 'A numeric exit must not leave the same-group child alive');
+  assert.ok(Number.isInteger(result.records.find(row => row.type === 'exit')?.code));
+  assert.ok(result.elapsed >= 5, 'The stubborn child retains the full TERM grace period');
 });

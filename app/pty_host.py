@@ -124,6 +124,10 @@ def main():
                     pending += data
                     if len(pending) > 2 * 1024 * 1024:
                         raise ValueError("Oversized terminal command")
+            # select/read may dispatch SIGTERM after the loop's first check.
+            # Handle that request while the unreaped leader still owns its ID.
+            if stop_requested:
+                terminate()
             if stop_deadline is not None:
                 if not reaped and time.monotonic() < stop_deadline:
                     try:
@@ -157,7 +161,10 @@ def main():
                     reaped = True
                     exit_code = os.waitstatus_to_exitcode(status)
             if reaped:
-                if stop_deadline is not None:
+                # A callback dispatched inside waitpid cannot safely signal the
+                # released identity. It still requires group absence: never
+                # turn that late stop into a false numeric exit confirmation.
+                if stop_deadline is not None or stop_requested:
                     try:
                         os.killpg(pid, 0)
                         continue

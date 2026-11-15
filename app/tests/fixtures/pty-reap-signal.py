@@ -13,7 +13,7 @@ host, scenario = sys.argv[1:]
 namespace = {"__name__": "scheduled_pty_worker"}
 exec(compile(pathlib.Path(host).read_text(), host, "exec"), namespace)
 state = {"clock": 0.0, "reaped": False, "killed": False,
-         "group_checks": 0, "loops": 0, "injected": False}
+         "group_checks": 0, "loops": 0, "injected": False, "child_alive": True}
 signals, handlers = [], {}
 packet = (json.dumps({"argv": ["synthetic-not-executed"], "cwd": "/"}) + "\n").encode()
 if scenario in ("stubborn-then-reuse", "zombie-eperm"):
@@ -34,6 +34,9 @@ class Selector:
         state["clock"] += timeout
         state["loops"] += 1
         assert state["loops"] <= 30, "Worker did not finish the finite schedule"
+        if scenario == "signal-before-natural-reap" and not state["injected"]:
+            state["injected"] = True
+            handlers[15](15, None)
         return []
 
 
@@ -44,6 +47,11 @@ def killpg(pid, sig):
                         "target": "foreign-reused-group" if state["reaped"] else "owned-group"})
         if sig == 9:
             state["killed"] = True
+            state["child_alive"] = False
+        return
+    if scenario == "signal-before-natural-reap":
+        if not state["child_alive"]:
+            raise ProcessLookupError()
         return
     if state["reaped"]:
         state["group_checks"] += 1
@@ -56,6 +64,9 @@ def killpg(pid, sig):
 
 def waitpid(pid, flags):
     assert pid == 424242 and flags == 1
+    if scenario == "signal-before-natural-reap":
+        state["reaped"] = True
+        return pid, 0
     if scenario == "signal-after-reap":
         state["reaped"] = True
         state["injected"] = True
