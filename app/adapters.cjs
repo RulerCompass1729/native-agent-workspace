@@ -1281,7 +1281,15 @@ class Claude extends EventEmitter {
       text: event.message || '', status: event.hook_event_name === 'StopFailure' ? 'failed' : 'observed',
     });
     switch (event.hook_event_name) {
-      case 'SessionStart': if (this.rootEnding) break; this.ready = true; this.emit('state', 'idle'); if (!this.nativeModelEpoch || this.nativeModelEpoch !== this.observationEpoch) this.emit('model', event.model || '原生未报告', event.model ? undefined : uiNotice('notice.model.nativeUnreported').uiMessage); break;
+      case 'SessionStart':
+        if (this.rootEnding) break;
+        if (event.source === 'compact') {
+          // A compaction restarts the context without ending the root. The old
+          // live turn no longer authorizes a background control call; the next
+          // person or NAW turn re-authorizes.
+          this.rootTurn = null; this.liveTurn = null; this.startedRootTurn = null; this.livePermissions.clear();
+        }
+        this.ready = true; this.emit('state', 'idle'); if (!this.nativeModelEpoch || this.nativeModelEpoch !== this.observationEpoch) this.emit('model', event.model || '原生未报告', event.model ? undefined : uiNotice('notice.model.nativeUnreported').uiMessage); break;
       case 'UserPromptSubmit': {
         if (this.liveTurn && (!event.prompt_id || event.prompt_id !== this.liveTurn.promptId)) this.liveTurn.question = false;
         // A settings hook observing a prompt is not its acceptance. The native
