@@ -89,6 +89,15 @@ test('target metadata save failure prevents import and all source archive/detach
   assert.equal(f.counters.imports, 0); assert.equal(f.calls.some(call => call.method === 'pause'), false);
   assert.equal(f.state.metadata(f.a).archived, false);
 });
+
+test('a keep merge target cannot reuse a still-active source name', async t => {
+  const f = fixture(t);
+  const batch = await f.preview({ name: 'A', disposition: 'keep' });
+  await assert.rejects(f.state.mergeCommit(f.client, batch.operationId, batch.binding), /已经存在/);
+  assert.equal(f.counters.imports, 0);
+  assert.equal(f.state.metadata(f.a).archived, false);
+  assert.equal(f.state.metadata(f.b).archived, false);
+});
 test('target backend failure or missing copied row leaves sources intact and C unavailable', async t => {
   for (const mode of ['failImport', 'dropRow']) {
     const f = fixture(t), batch = await f.preview({ disposition: 'archive' }); f.controls[mode] = true;
