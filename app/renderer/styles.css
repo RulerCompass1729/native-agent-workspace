@@ -853,6 +853,7 @@ header h1, header p { overflow-wrap: anywhere; }
 .background-details > summary { width:max-content; max-width:100%; color:var(--muted); cursor:pointer; }
 .background-details > pre { max-height:240px; margin:4px 0 0; padding:8px; overflow:auto; border-radius:4px; background:var(--panel); font-size:11px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .background-buttons { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+.background-buttons button { white-space:nowrap; }
 .operator-unread { font-weight:600; }
 .operator-grant { display:flex; flex-wrap:wrap; gap:10px; width:100%; }
 .operator-grant label { display:flex; flex-direction:column; gap:4px; max-width:100%; }
