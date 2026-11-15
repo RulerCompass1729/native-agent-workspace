@@ -58,6 +58,9 @@
     next[index] = Math.max(floor, Math.min(pair - floor, weights[index] + delta / total * sum));
     next[index + 1] = pair - next[index]; return next;
   }
+  // Progressive reveal is remembered per space for the app session, so switching
+  // spaces keeps how many member columns the person had expanded.
+  const memberLimits = new Map();
   function create(options) {
     const doc = options.host.ownerDocument, host = options.host, display = options.display;
     const language = () => options.language.getSnapshot().active;
@@ -65,6 +68,8 @@
     const setText = (n, text) => { if (n.textContent !== text) n.textContent = text; };
     const button = (text, action, cls) => { const n = el('button', text, cls); n.type = 'button'; n.addEventListener('click', action); return n; };
     const panes = new Map(); let records = [], connected = true, contentVisible = true, brief = false, layout = 'grid', focused = '', weights = new Map(), originSelection, briefSelection, dragging;
+    const roomKey = options.roomId || 'shared';
+    let capacity = 1, visibleLimit = 0, visibleRows = 1, chipsExpanded = false, progressive = false;
     const orderType = 'application/x-native-room-member-order';
     const canOrder = () => Boolean(options.onMove && connected && contentVisible && !focused);
     const orderStatus = el('span', undefined, 'collaboration-order-status'); orderStatus.setAttribute('role', 'status');
@@ -99,8 +104,20 @@
     toolbar.append(back, layouts, simplify);
     const headers = el('div', undefined, 'collaboration-statuses'); display.attribute(headers, 'aria-label', 'collab.memberStatus');
     const readers = el('div', undefined, 'collaboration-readers');
+    const showMore = button('', () => {
+      const previous = visibleLimit;
+      visibleRows += 1; memberLimits.set(roomKey, visibleRows); render();
+      requestAnimationFrame(() => { const pane = panes.get(records[previous]?.id); pane?.unit.scrollIntoView({ block: 'start' }); });
+    }, 'collaboration-show-more');
+    const chipsMore = button('', () => { chipsExpanded = !chipsExpanded; render(); }, 'collaboration-chips-more');
     const empty = el('p', undefined, 'quiet collaboration-empty'); display.text(empty, 'collab.empty');
-    host.classList.add('collaboration-overview'); host.append(toolbar, headers, readers, empty, orderStatus);
+    headers.append(chipsMore);
+    host.classList.add('collaboration-overview'); host.append(toolbar, headers, readers, showMore, empty, orderStatus);
+    const widthObserver = new ResizeObserver(() => {
+      const next = Math.max(1, Math.floor((readers.clientWidth || host.clientWidth) / 300));
+      if (next !== capacity) { capacity = next; if (!focused && layout === 'grid') render(); }
+    });
+    widthObserver.observe(readers);
     function key(id) { return `collaboration:${options.roomId || 'shared'}:${id}`; }
     function selectedRange() {
       const selection = doc.getSelection();
@@ -135,19 +152,69 @@
         display.computed(pane.compactChild, 'title', () => statusFacts(record, connected, Date.now(), language()).child);
         pane.freshness.classList.toggle('compact-status-hidden', !facts.freshnessReported);
         pane.header.dataset.state = record.state || 'unknown'; pane.header.dataset.stale = String(facts.stale);
+        const needs = record.state === 'approval' || record.state === 'error' || Boolean(record.approval || record.claudeQuestion || record.approvals?.length || record.nativeApproval?.requests?.length);
+        pane.header.dataset.alert = String(needs);
+        let alertKey = '';
+        if (record.state === 'error') alertKey = 'state.error';
+        else if (record.state === 'approval') alertKey = 'state.approval';
+        else if (record.claudeQuestion || record.approval?.method === 'item/tool/requestUserInput') alertKey = 'state.question';
+        else if (record.approvals?.length || record.nativeApproval?.requests?.length) alertKey = 'state.approval';
+        pane.chip.dataset.state = pane.header.dataset.state; pane.chip.dataset.alert = pane.header.dataset.alert;
+        for (const node of [pane.alert, pane.chipAlert]) if (alertKey) display.text(node, alertKey); else { display.unbind(node); setText(node, ''); }
       }
     }
     function setWidths() {
-      const columns = records.map(record => `${weights.get(record.id) || 1}fr`).join(' ') || '1fr';
-      host.style.setProperty('--collaboration-columns', columns);
-      for (let i = 0; i < records.length; i++) {
-        const pane = panes.get(records[i].id); pane.grip.hidden = i === records.length - 1 || layout === 'list' || Boolean(focused);
+      const width = readers.clientWidth || host.clientWidth;
+      capacity = Math.max(1, Math.floor(width / 300));
+      const total = records.length, allFit = total * 140 <= width;
+      if (allFit) {
+        host.style.setProperty('--collaboration-columns', records.map(record => `${weights.get(record.id) || 1}fr`).join(' ') || '1fr');
+      } else {
+        host.style.setProperty('--collaboration-columns', `repeat(${capacity}, minmax(300px, 1fr))`);
+      }
+      host.style.setProperty('--collaboration-row-min', `${readers.clientHeight || 300}px`);
+      for (let i = 0; i < total; i++) {
+        const pane = panes.get(records[i].id); pane.grip.hidden = !allFit || i === total - 1 || layout === 'list' || Boolean(focused);
         pane.grip.setAttribute('aria-valuenow', String(Math.round((weights.get(records[i].id) || 1) * 100)));
       }
     }
     function resize(index, delta, total) {
       const values = records.map(r => weights.get(r.id) || 1), next = adjustedWidths(values, index, delta, total);
       records.forEach((r, i) => weights.set(r.id, next[i])); setWidths();
+    }
+    function updateProgressiveControls() {
+      const remaining = records.length - visibleLimit;
+      if (progressive && remaining > 0 && layout === 'grid' && !focused) {
+        const next = Math.min(capacity, remaining);
+        showMore.hidden = false;
+        display.text(showMore, 'collab.showRows', () => ({ count: next, shown: visibleLimit, total: records.length }));
+      } else {
+        showMore.hidden = true;
+      }
+      requestAnimationFrame(layoutChips);
+    }
+    function layoutChips() {
+      if (!progressive || layout === 'list' || focused || !records.length) { chipsMore.hidden = true; headers.style.maxHeight = ''; headers.style.overflow = ''; return; }
+      const chips = [...headers.querySelectorAll('.collaboration-member-chip')];
+      if (!chips.length) { chipsMore.hidden = true; return; }
+      for (const chip of chips) chip.hidden = false;
+      headers.style.maxHeight = ''; headers.style.overflow = '';
+      if (chipsExpanded) { chipsMore.hidden = false; setText(chipsMore, locale.format(language(), 'collab.collapseChips')); return; }
+      const rowHeight = chips[0].offsetHeight + (parseFloat(getComputedStyle(headers).gap) || 0);
+      const maxHeight = rowHeight * 2;
+      headers.style.maxHeight = `${maxHeight}px`; headers.style.overflow = 'hidden';
+      let folded = 0;
+      for (const chip of chips) if (chip.offsetTop >= maxHeight - 1) { chip.hidden = true; folded++; }
+      chipsMore.hidden = false;
+      const fits = () => chipsMore.offsetTop + chipsMore.offsetHeight <= maxHeight + 1;
+      setText(chipsMore, `+${folded}`);
+      while (folded < chips.length && !fits()) {
+        const visible = chips.filter(chip => !chip.hidden), last = visible[visible.length - 1];
+        if (!last || last === chipsMore) break;
+        last.hidden = true; folded++; setText(chipsMore, `+${folded}`);
+      }
+      if (!folded) { chipsMore.hidden = true; headers.style.maxHeight = ''; headers.style.overflow = ''; }
+      else display.attribute(chipsMore, 'aria-label', 'collab.expandChips', () => ({ count: folded }));
     }
     function makePane(record) {
       const header = el('section', undefined, 'collaboration-member-status'); header.dataset.memberId = record.id;
@@ -224,6 +291,8 @@
         showMemberMenu(event);
       });
       heading.append(name, more, next);
+      const alert = el('span', undefined, 'collaboration-member-alert'); alert.setAttribute('role', 'status');
+      heading.insertBefore(alert, more);
       const status = el('span', undefined, 'collaboration-member-state'); status.setAttribute('role', 'status');
       const child = el('span', undefined, 'collaboration-member-child compact-status-hidden'), freshness = el('span', undefined, 'collaboration-member-freshness');
       const compactChild = el('span', undefined, 'collaboration-member-child-compact'); compactChild.setAttribute('aria-hidden', 'true');
@@ -257,8 +326,13 @@
       const input = el('div', undefined, 'collaboration-member-input'); input.hidden = true;
       const nativeFooter = el('div', undefined, 'column-native-footer'); nativeFooter.hidden = true;
       reader.append(messages, short, input, nativeFooter, grip);
-      const unit = el('div', undefined, 'collaboration-member-unit'); unit.dataset.memberId = record.id; unit.append(reader);
-      return pane = { header, name, nameText, nameSuffix, more, next, status, child, compactChild, freshness, unit, reader, messages, input, nativeFooter, heading, short, quote, truncation, source, notice, grip };
+      // Every member is one card: its head (handle, maker, name, menu, state) above its own conversation and input.
+      const unit = el('div', undefined, 'collaboration-member-unit'); unit.dataset.memberId = record.id; unit.append(header, reader);
+      // With many members the band above the cards is an index of everyone, including members whose cards are not shown yet.
+      const chip = button('', () => focus(focused === record.id ? '' : record.id), 'collaboration-member-chip'); chip.dataset.memberId = record.id;
+      const chipName = el('span', undefined, 'collaboration-chip-name'), chipAlert = el('span', undefined, 'collaboration-member-alert');
+      chip.append(chipName, chipAlert);
+      return pane = { header, name, nameText, nameSuffix, more, next, status, child, compactChild, freshness, alert, unit, reader, messages, input, nativeFooter, heading, short, quote, truncation, source, notice, grip, chip, chipName, chipAlert };
     }
     function render() {
       const reordered = [...readers.children].map(n => n.dataset.memberId).join('\n') !== records.map(r => r.id).join('\n');
@@ -273,16 +347,32 @@
       back.hidden = !focused; simplify.hidden = Boolean(focused) || !contentVisible; layouts.hidden = Boolean(focused) || !contentVisible; readers.hidden = Boolean(focused) || !contentVisible; empty.hidden = records.length > 0 || !contentVisible;
       const columnInput = layout === 'grid' && !focused && !brief && contentVisible;
       const listUnits = layout === 'list' && !focused && contentVisible;
-      host.dataset.listUnits = String(listUnits); headers.hidden = listUnits;
+      host.dataset.listUnits = String(listUnits);
+      capacity = Math.max(1, Math.floor((readers.clientWidth || host.clientWidth) / 300));
+      progressive = records.length * 140 > (readers.clientWidth || host.clientWidth);
+      host.dataset.progressive = String(progressive);
+      const chipIndex = progressive && layout === 'grid' && !focused && contentVisible;
+      headers.hidden = !chipIndex; host.dataset.band = String(chipIndex);
+      // List already scrolls; grid's row limit must not hide list members.
+      if (!progressive || layout === 'list') visibleLimit = records.length;
+      else {
+        visibleRows = Math.max(1, memberLimits.get(roomKey) || 1);
+        visibleLimit = Math.min(records.length, visibleRows * capacity);
+      }
       const retained = new Set(records.map(r => r.id));
       for (const [id, pane] of panes) if (!retained.has(id)) {
-        options.disposeInput?.(id); options.disposeMessages?.(pane.messages); pane.header.remove(); pane.unit.remove(); panes.delete(id); weights.delete(id);
+        options.disposeInput?.(id); options.disposeMessages?.(pane.messages); pane.header.remove(); pane.unit.remove(); pane.chip.remove(); panes.delete(id); weights.delete(id);
       }
       records.forEach((record, i) => {
         let pane = panes.get(record.id); if (!pane) { pane = makePane(record); panes.set(record.id, pane); }
         const label = options.label(record), suffix = label.startsWith(record.name) ? label.slice(record.name.length) : '';
         options.renderIdentity?.(pane.name, record);
         setText(pane.nameText, suffix ? record.name : label); setText(pane.nameSuffix, suffix);
+        if (chipIndex) {
+          options.renderIdentity?.(pane.chip, record); setText(pane.chipName, label);
+          pane.chip.title = label; display.attribute(pane.chip, 'aria-label', 'collab.focus', { name: label });
+          if (headers.children[i] !== pane.chip) headers.insertBefore(pane.chip, headers.children[i] || null);
+        } else pane.chip.remove();
         pane.name.dataset.orderHandle = String(canOrder());
         display.computed(pane.name, 'title', () => label + (canOrder() ? ` · ${locale.format(language(), 'collab.orderHelp')}` : ''));
         display.attribute(pane.name, 'aria-label', 'collab.focus', { name: label }); pane.name.setAttribute('aria-pressed', String(focused === record.id));
@@ -298,6 +388,7 @@
         const nativeVisible = options.renderInput?.(pane.input, record, columnInput) || false;
         pane.reader.classList.toggle('has-column-input', columnInput);
         pane.nativeFooter.hidden = !nativeVisible;
+        pane.unit.hidden = i >= visibleLimit;
         const nextParent = nativeVisible ? pane.nativeFooter : pane.heading;
         if (pane.next.parentElement !== nextParent) nextParent.append(pane.next);
         pane.next.hidden = (!listUnits && !nativeVisible) || i === records.length - 1;
@@ -307,11 +398,8 @@
         display.attribute(pane.messages, 'aria-label', 'collab.originalSession', { name: label });
         display.attribute(pane.grip, 'aria-label', 'collab.columnWidth', { name: label });
         // Stable nodes preserve text selection, process expansion and anchors.
-        if (listUnits) {
-          if (pane.header.parentElement !== pane.unit) pane.unit.insertBefore(pane.header, pane.reader);
-        } else if (headers.children[i] !== pane.header) headers.insertBefore(pane.header, headers.children[i] || null);
         if (readers.children[i] !== pane.unit) readers.insertBefore(pane.unit, readers.children[i] || null);
-        if (!focused && !brief && contentVisible) options.renderMessages(pane.messages, record, options.messages(record), key(record.id));
+        if (!focused && !brief && contentVisible && i < visibleLimit) options.renderMessages(pane.messages, record, options.messages(record), key(record.id));
         if (brief) {
           const snippet = excerpt(record, options.messages(record));
           pane.snippet = snippet;
@@ -324,7 +412,7 @@
           } else { display.unbind(pane.notice); setText(pane.notice, ''); }
         }
       });
-      setWidths(); refreshStatus();
+      setWidths(); refreshStatus(); updateProgressiveControls();
       for (const [messages, top, left, short, briefTop] of scrolls) { messages.scrollTop = top; messages.scrollLeft = left; short.scrollTop = briefTop; }
       if (anchor?.isConnected && host.dataset.listUnits === 'true') readers.scrollTop += anchor.getBoundingClientRect().top - readers.getBoundingClientRect().top - anchorOffset;
       if (active?.isConnected && doc.activeElement === doc.body && host.contains(active)) active.focus({ preventScroll: true });
@@ -339,7 +427,7 @@
         render();
       },
       focus, key, toolbar, refresh: refreshStatus, get focused() { return focused; },
-      dispose() { toolbar.remove(); for (const [id, pane] of panes) { options.disposeInput?.(id); options.disposeMessages?.(pane.messages); } panes.clear(); host.replaceChildren(); },
+      dispose() { widthObserver.disconnect(); toolbar.remove(); for (const [id, pane] of panes) { options.disposeInput?.(id); options.disposeMessages?.(pane.messages); } panes.clear(); host.replaceChildren(); },
     };
   }
   return { create, statusFacts, excerpt, adjustedWidths };

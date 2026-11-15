@@ -6,6 +6,7 @@
 .collaboration-toolbar [aria-pressed="true"]{background:var(--green);color:white}
 .collaboration-statuses,.collaboration-readers{display:grid;grid-template-columns:var(--collaboration-columns,1fr);min-width:0;gap:8px;padding:0 12px}
 .collaboration-statuses{padding-bottom:8px;align-items:stretch}
+.collaboration-readers{grid-auto-rows:minmax(var(--collaboration-row-min,0px),1fr);min-height:0}
 .collaboration-member-status{display:flex;flex-direction:column;gap:3px;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--panel);min-width:0}
 .collaboration-member-heading{display:flex;align-items:flex-start;gap:6px;min-width:0}
 .collaboration-member-heading>.collaboration-member-name{flex:1;min-width:0}
@@ -36,7 +37,7 @@
 .collaboration-member-unit.member-order-before::after{top:5px}
 .collaboration-member-unit.member-order-after::after{bottom:5px}
 .collaboration-order-status{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
-.collaboration-readers{padding-bottom:8px;overflow:hidden;align-items:stretch}
+.collaboration-readers{padding-bottom:8px;overflow:auto;align-items:stretch}
 .collaboration-member-reader{position:relative;display:grid;grid-template-rows:minmax(0,1fr);min-width:0;min-height:0;border:1px solid var(--border);border-radius:8px;overflow:visible;background:var(--surface)}
 .collaboration-messages{min-height:0;min-width:0;height:100%;overflow:auto;padding:10px 12px;overscroll-behavior:contain;scrollbar-gutter:stable}
 .collaboration-messages .message{max-width:100%;min-width:0}
@@ -49,10 +50,15 @@
 .collaboration-brief>.quiet{display:block;margin-top:6px}
 .collaboration-resize{position:absolute;right:-8px;top:0;bottom:0;width:8px;z-index:2;cursor:col-resize;touch-action:none;border-radius:4px}
 .collaboration-resize:hover,.collaboration-resize:focus-visible{background:var(--green)}
-.collaboration-member-unit{display:contents}
+/* Each member is one card in every layout and at every member count: its head (handle, maker, name, menu, state)
+   inside the card frame, then one 1px line (the head's bottom border), then its own conversation and input. */
+.collaboration-member-unit{display:grid;grid-template-rows:auto minmax(0,1fr);min-width:0;min-height:0;border:1px solid var(--border);border-radius:3px;background:var(--surface)}
+.collaboration-member-unit>.collaboration-member-reader{border:0;border-radius:0 0 3px 3px}
 .collaboration-member-next{position:absolute;left:6px;top:3px;z-index:3;max-width:calc(100% - 12px);padding:2px 4px;font-size:11px;line-height:16px;white-space:normal;overflow-wrap:anywhere}
 .collaboration-member-next:not(:focus-visible){width:1px;height:1px;padding:0;border:0;clip-path:inset(50%);overflow:hidden}
 .collaboration-overview[data-list-units="true"]{grid-template-rows:auto minmax(0,1fr)}
+/* With few members the cards carry the names, so there is no band above them. */
+.collaboration-overview[data-band="false"]{grid-template-rows:auto minmax(0,1fr)}
 .collaboration-overview[data-list-units="true"] .collaboration-toolbar{padding:1px 12px}
 .collaboration-overview[data-list-units="true"] .collaboration-toolbar button{min-height:24px;padding:2px 6px;font-size:12px;line-height:16px}
 .collaboration-overview[data-list-units="true"] .collaboration-readers{grid-template-columns:minmax(0,1fr);grid-auto-rows:minmax(72px,1fr);gap:2px;padding-bottom:2px;overflow:auto;scrollbar-gutter:stable}
@@ -80,17 +86,30 @@
 /* Maximize only the personal native view, retaining the shared state band. */
 #room-layout.collaboration-focus.terminal-maximized>#room-record-view{display:flex}
 #room-layout.collaboration-focus.terminal-maximized #conversation-pane{display:none}
-@container(max-width:600px){
-  .collaboration-statuses{grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr))}
-  .collaboration-readers{grid-template-columns:minmax(0,1fr);overflow:auto;grid-auto-rows:300px}
-  .collaboration-resize{display:none}
-}
+/* Progressive mode: above the same cards, a wrapping index of every member (chips with a status dot); a member
+   that needs attention adds one short reused status word after the name. A chip opens that member. */
+.collaboration-overview[data-progressive="true"] .collaboration-statuses{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 12px 8px;min-height:0}
+.collaboration-member-chip{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;min-width:0;max-width:100%;padding:3px 10px;border:1px solid var(--border);border-radius:999px;background:var(--panel);font-size:12px;line-height:16px;font-weight:600;white-space:nowrap}
+.collaboration-member-chip::before{content:'';width:7px;height:7px;border-radius:50%;flex:none;background:#6b8761}
+.collaboration-member-chip::after{content:"↗";color:var(--muted);font-weight:400}
+.collaboration-member-chip[data-state="working"]::before,.collaboration-member-chip[data-state="starting"]::before,.collaboration-member-chip[data-state="stopping"]::before{background:#b78c42}
+.collaboration-member-chip[data-state="ended"]::before,.collaboration-member-chip[data-state="disconnected"]::before,.collaboration-member-chip[data-state="recoverable"]::before{background:#adb0a7}
+.collaboration-member-chip[data-alert="true"]::before{background:#b26345}
+.collaboration-member-chip .vendor-mark{flex:none}
+.collaboration-chip-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.collaboration-member-alert{display:none;font-size:11px;color:var(--warning,#9a6700);white-space:nowrap}
+.collaboration-member-chip[data-alert="true"] .collaboration-member-alert{display:inline}
+.collaboration-chips-more{flex:none;padding:3px 9px;font-size:12px}
+.collaboration-show-more{margin:4px 12px 8px;padding:6px 10px;font-size:12px;justify-self:start;align-self:start}
 /* Root collaboration keeps original facts available to assistive technology. */
 .collaboration-overview[data-external-toolbar="true"]{grid-template-rows:auto minmax(0,1fr)}
 .collaboration-overview[data-external-toolbar="true"][data-list-units="true"]{grid-template-rows:minmax(0,1fr)}
+.collaboration-overview[data-external-toolbar="true"][data-band="false"]{grid-template-rows:minmax(0,1fr)}
 .collaboration-overview[data-external-toolbar="true"][data-content="false"]{grid-template-rows:auto}
 .compact-room-surface .collaboration-member-status,
 .compact-room-surface .collaboration-overview[data-list-units="true"] .collaboration-member-status{display:flex;flex-flow:row wrap;align-content:flex-start;align-items:center;gap:2px 6px;padding:3px 6px}
+/* The grid card's 1px frame takes 1px from each side of its head; keep the name's width as before. */
+.compact-room-surface .collaboration-member-unit>.collaboration-member-status{padding-left:5px;padding-right:5px}
 .compact-room-surface .collaboration-member-heading{flex:1 0 100%;align-items:center}
 .compact-room-surface .collaboration-member-name{display:flex;align-items:baseline;gap:2px;font-size:12px;line-height:16px;white-space:nowrap;overflow:hidden}
 .compact-room-surface .collaboration-name-text{min-width:0;overflow:hidden;text-overflow:ellipsis}
@@ -118,13 +137,6 @@
 .collaboration-statuses { padding-bottom: 5px; }
 .collaboration-member-status { border-left: 0; border-right: 0; border-top: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
 .collaboration-member-reader { border-radius: 3px; }
-/* T-163: in the grid a member's name row is the label of the column under it. It draws no rule of its own and
-   sits 2px above the column, whose top border is the one line between a name and its content. A narrow
-   container stacks the columns under a wrapped row of names, so there the names keep their rule. */
-@container (width > 600px) {
-  .collaboration-statuses { padding-bottom: 2px; }
-  .collaboration-member-status { border-bottom: 0; }
-}
 .collaboration-toolbar { padding: 5px 8px; gap: 6px; }
 .collaboration-messages { padding: 8px 9px; }
 #room-composer { padding: 8px 12px; }
