@@ -1,5 +1,6 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
+const { randomUUID } = require('node:crypto');
 const renderer = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
 const { format } = require('../ui-locale.js');
 const { RoomState } = require('../room-state.cjs');
@@ -70,4 +71,28 @@ test('creating or renaming a space to an existing name is rejected', t => {
   room.rename('Gamma', beta);
   assert.equal(room.metadata(beta).name, 'Gamma');
   assert.equal(room.metadata(alpha).name, 'Alpha');
+});
+
+test('the default space joins the name comparison on create and rename', t => {
+  const { room } = setup(t);
+  const defaultName = room.value.name;
+  assert.throws(() => room.create(defaultName), /已经存在/);
+  const a = room.create('A');
+  assert.throws(() => room.rename('A'), /已经存在/);
+  assert.equal(room.value.name, defaultName);
+  room.rename('Home');
+  assert.equal(room.value.name, 'Home');
+});
+
+test('saving an unchanged name on a historical duplicate is a no-op', t => {
+  const { dir, room } = setup(t);
+  room.create('Dup');
+  const spaces = JSON.parse(fs.readFileSync(room.spacesFile, 'utf8'));
+  const duplicate = { ...spaces.rooms[0], id: randomUUID() };
+  spaces.rooms.push(duplicate);
+  fs.writeFileSync(room.spacesFile, JSON.stringify(spaces), { mode: 0o600 });
+  const reloaded = new RoomState(dir);
+  assert.equal(reloaded.spaces.rooms.filter(value => value.name === 'Dup').length, 2);
+  reloaded.rename('Dup', duplicate.id);
+  assert.equal(reloaded.metadata(duplicate.id).name, 'Dup');
 });

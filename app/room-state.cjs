@@ -224,6 +224,7 @@ class RoomState {
     return value.id;
   }
   assertSpaceNameAvailable(name, excludedIds = []) {
+    if (!excludedIds.includes(DEFAULT_ROOM_ID) && this.value.name === name) throw uiError("error.room.nameTaken", { name });
     if (this.spaces.rooms.some(room => !excludedIds.includes(room.id) && room.name === name)) throw uiError("error.room.nameTaken", { name });
   }
   serial(action) {
@@ -311,7 +312,9 @@ class RoomState {
           const cuts = this.mergeSources(snapshot, batch.sources.map(source => source.id));
           assertCurrentSources(batch, cuts);
           if (this.spaces.rooms.some(room => room.id === targetId)) throw uiError("error.room.mergeTargetExists");
-          this.assertSpaceNameAvailable(batch.name, batch.sources.map(source => source.id));
+          // A keep merge leaves its sources active, so their names stay taken. Only
+          // an archive merge frees source names for the target to reuse.
+          this.assertSpaceNameAvailable(batch.name, batch.disposition === 'archive' ? batch.sources.map(source => source.id) : []);
           for (const id of batch.memberIds) {
             const session = snapshot.sessions.find(s => s.id === id);
             if (!session || roomIds(session).length > 1) throw uiError('error.movePlacementAmbiguous');
@@ -564,8 +567,9 @@ class RoomState {
   rename(name, id = DEFAULT_ROOM_ID) {
     this.writable(id);
     const validated = validateName(name);
-    if (id !== DEFAULT_ROOM_ID) this.assertSpaceNameAvailable(validated, [id]);
-    if (this.metadata(id).name !== validated) this.update({ name: validated }, { kind: 'rename', ...uiNotice('notice.room.renamed', { name: validated }) }, id);
+    if (this.metadata(id).name === validated) return;
+    this.assertSpaceNameAvailable(validated, [id]);
+    this.update({ name: validated }, { kind: 'rename', ...uiNotice('notice.room.renamed', { name: validated }) }, id);
   }
   notes(text, revision, id = DEFAULT_ROOM_ID) {
     this.writable(id);
