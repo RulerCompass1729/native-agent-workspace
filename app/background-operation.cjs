@@ -62,7 +62,9 @@ function conversationSnapshot(value, actor, read = null, selected = value?.viewS
     const projected = { ...pick(room, ['id', 'name', 'archived', 'unavailable', 'revision', 'metadataRevision', 'queueRevision', 'memberOrder']),
       ...(member ? pick(room, ['notes', 'messages', 'events', 'files', 'run', 'snapshotBatches', 'merge']) : {}) };
     if (Array.isArray(room.queue)) projected.queue = room.queue.map(item => ({ ...scalars(item, member ? [...queueMetadata, 'text', 'reply', 'reason'] : queueMetadata),
-      ...(item.creator ? { creator: scalars(item.creator, ['kind', 'name', 'sessionId']) } : {}), ...(member ? pick(item, ['reasonUiMessage']) : {}) }));
+      ...(item.creator ? { creator: scalars(item.creator, ['kind', 'name', 'sessionId']) } : {}), ...(member ? pick(item, ['reasonUiMessage']) : {}),
+      // Why NAW has not sent it yet, member by member: reason keys only, shown as the item's reason is.
+      ...(member && Array.isArray(item.wait) ? { wait: item.wait.map(entry => scalars(entry, ['sessionId', 'reason', 'readiness'])) } : {}) }));
     return projected;
   });
   if (value.room) result.room = result.rooms.find(room => room.id === value.room.id) || pick(value.room, ['id', 'name', 'archived', 'unavailable']);

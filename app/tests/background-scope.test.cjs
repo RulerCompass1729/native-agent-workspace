@@ -42,3 +42,13 @@ test('hosted top-level and nested metadata use explicit fields, including final 
   assert.deepEqual(result.preflight, { claude: true, codex: false, python: true });
   assert.equal(result.butler.intake, 'ready'); assert.equal(result.appBuild.version, 'fixture');
 });
+test('why a queued item waits is shown where its reason is: to members and the butler, never to the secretary', () => {
+  const source = fixture();
+  for (const room of source.rooms) room.queue[0] = { ...room.queue[0], status: 'queued', wait: [{ sessionId: 'agent', reason: 'person-typing', readiness: 'busy', note: 'WAIT_SECRET' }] };
+  const result = conversationSnapshot(source, actor, null, 'room', { roomIds: [A], secretary: false });
+  assert.deepEqual(result.rooms[0].queue[0].wait, [{ sessionId: 'agent', reason: 'person-typing', readiness: 'busy' }]);
+  assert.equal(result.rooms[1].queue[0].wait, undefined, 'not in a space it is not a member of');
+  const secretary = conversationSnapshot(source, actor, null, 'room', { roomIds: [A, B], secretary: true });
+  assert.equal(JSON.stringify(secretary).includes('person-typing'), false);
+  assert.equal(JSON.stringify(result).includes('WAIT_SECRET'), false);
+});

@@ -898,6 +898,43 @@ async function backgroundScenario(a) {
     syntheticDispatches: (await sends()).length, nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
 }
 
+// Queue item 5614a65c (11-15): a member finished its item, a single "/" stayed in its composer, and the next item
+// assigned to it waited 52 minutes with nothing saying why. The gate holds as before; the queued item now says why.
+async function waitScenario(b) {
+  const member = async () => (await snapshot()).sessions.find(s => s.id === b);
+  const compose = async text => {
+    if (await page.locator('#queue-dialog').isVisible()) {
+      await page.locator('#close-queue').click();
+      await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
+    }
+    await page.locator(`#session-list .session-link[data-session-id="${b}"]`).click();
+    if (await page.locator('#chat-tab').isVisible()) await page.locator('#chat-tab').click();
+    await page.locator('#message-input').fill(text);
+    await until(async () => (await member()).liveDraft === text, `Draft ${JSON.stringify(text)} stored`);
+  };
+  await addItem('先做的一件', b);
+  await expectSend(1, b, /先做的一件/, 'first item to the member');
+  await compose('/');
+  await release(b, '先做的一件做完了');
+  await openSpace();
+  await addItem('后来的一件', b);
+  const expected = [{ sessionId: b, reason: 'sent-item-open', readiness: 'person-typing' }];
+  await until(async () => JSON.stringify((await itemByText('后来的一件')).wait) === JSON.stringify(expected), 'The queued item says why it waits', 20000)
+    .catch(async error => { console.log(JSON.stringify({ observedWait: (await itemByText('后来的一件')).wait ?? null })); throw error; });
+  await expectQuiet(1, 'Nothing more is sent while the draft is there', 5000);
+  assert.equal((await itemByText('先做的一件')).status, 'sent', 'the finished item waits on the same gate');
+  passed.push('An idle member with a lone "/" in its composer got nothing, and its queued item said why: sent-item-open, person-typing');
+  await compose('');
+  await openSpace();
+  await expectSend(2, b, /后来的一件/, 'next item once the draft is gone');
+  assert.equal((await itemByText('先做的一件')).status, 'done');
+  assert.equal((await itemByText('后来的一件')).wait, undefined, 'a sent item carries no wait');
+  passed.push('Once the draft was cleared, the finished item settled and the queued one was sent');
+  assert.deepEqual(errors, []);
+  console.log(JSON.stringify({ passed, wait: expected.map(entry => ({ ...entry, sessionId: 'member' })), syntheticDispatches: (await sends()).length,
+    nativeProviderProcessesByConstruction: 0, modelCallsByConstruction: 0, timings }));
+}
+
 async function run() {
   console.log('Fixture profile:', profile);
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon');
@@ -914,6 +951,7 @@ async function run() {
   if (process.env.NAW_TEST_OPEN_WORK === '1') return openScenario(a, b);
   if (process.env.NAW_TEST_GRANT_SUCCESSION === '1') return successionScenario(a);
   if (process.env.NAW_TEST_DECISION_NOTICE === '1') return decisionNoticeScenario(a, b);
+  if (process.env.NAW_TEST_QUEUE_WAIT === '1') return waitScenario(b);
 
   // 1) Two idle members each get exactly one item; NAW, not the person, sends them.
   await addItem('任务一');

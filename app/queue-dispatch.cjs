@@ -965,20 +965,30 @@ function planDispatch(input) {
     return !humanRecent(session.id, humanAt, now, humanQuietMs);
   }
   const actions = [];
+  // Why each queued item was not sent on this pass, member by member (input.waits, filled when the caller passes a
+  // Map). Queue item 5614a65c, 11-15: a member sat idle for 43 minutes while an item assigned to it waited, and
+  // nothing said why (its composer held one character). `why` keeps the first reason each busy member was held for.
+  const waits = input.waits instanceof Map ? input.waits : null;
+  const why = new Map();
+  const busy = new Set();
+  function hold(id, reason) {
+    busy.add(id);
+    if (!why.has(id)) why.set(id, reason);
+  }
   // Sessions the caller says are engaged in something else of NAW's own (B6: the session an open
   // integration handoff was sent to) start out busy: no queued item, no rotation.
-  const busy = new Set(Array.isArray(input.engaged) ? input.engaged : []);
-  for (const id of input.heldSessions || []) busy.add(id);
-  if (input.quarantineUnknown) for (const session of sessions) busy.add(session.id);
+  for (const id of Array.isArray(input.engaged) ? input.engaged : []) hold(id, 'integration');
+  for (const id of input.heldSessions || []) hold(id, 'trust-hold');
+  if (input.quarantineUnknown) for (const session of sessions) hold(session.id, 'trust-unknown');
   let rotationSlots = MAX_ACTIVE_ROTATIONS;
   for (const id of Object.keys(rotations)) {
     const record = rotations[id];
-    if (quarantinedSuccessor(record) && record.newId !== id) busy.add(record.newId);
+    if (quarantinedSuccessor(record) && record.newId !== id) hold(record.newId, 'trust-hold');
     if (record && !RESTING_PHASES.includes(record.phase)) {
       rotationSlots -= 1;
-      busy.add(id);
+      hold(id, 'rotating');
       if (record.newId && !record.handoffConfirmed) {
-        busy.add(record.newId);
+        hold(record.newId, 'rotating');
       }
     }
   }
@@ -986,9 +996,19 @@ function planDispatch(input) {
   for (const room of rooms) {
     if (room.run && room.run.status === 'running' && Array.isArray(room.run.ids)) {
       for (const id of room.run.ids) {
-        busy.add(id);
+        hold(id, 'space-run');
       }
     }
+  }
+  // A member the pass did not send an item to: why it held (`reason`), and why its session is not ready to take
+  // one (`readiness`, sessionReady's reason) when that is so too; a member held by an item it was sent and not yet
+  // settled waits on the same readiness.
+  function waitOf(id) {
+    const ready = sessionReady(byId.get(id), input.wakePolicy);
+    if (busy.has(id)) return ready.ready ? { sessionId: id, reason: why.get(id) } : { sessionId: id, reason: why.get(id), readiness: ready.reason };
+    if (!ready.ready) return { sessionId: id, reason: ready.reason };
+    if (!settled(id, idleSince, now, settleMs)) return { sessionId: id, reason: 'settling' };
+    return { sessionId: id, reason: 'person-recent' };
   }
   // 1) Settle items already sent.
   for (const room of rooms) {
@@ -1004,7 +1024,7 @@ function planDispatch(input) {
         if (now - (item.sentAt || 0) > UNCONFIRMED_SEND_MS) {
           actions.push({ kind: 'settle', roomId: room.id, itemId: item.id, status: 'failed', reason: 'send-unconfirmed', sessionId: item.sentTo });
         } else {
-          busy.add(item.sentTo);
+          hold(item.sentTo, 'send-unconfirmed');
         }
         continue;
       }
@@ -1013,7 +1033,7 @@ function planDispatch(input) {
         continue;
       }
       if (member.state !== 'idle' || member.pendingTag || !settled(member.id, idleSince, now, settleMs)) {
-        busy.add(member.id);
+        hold(member.id, 'sent-item-open');
         continue;
       }
       const reply = replyAfter(member, item.tag, item.sentAt, item.afterDecision === true);
@@ -1051,13 +1071,14 @@ function planDispatch(input) {
       }
       actions.push(action);
       if (status !== 'done') {
-        busy.add(member.id);
+        hold(member.id, 'previous-item');
       }
     }
   }
   // 2) Send the next queued item to each ready member, one item per member.
   for (const room of rooms) {
     if (room.archived) {
+      if (waits) for (const item of room.queue || []) if (item.status === 'queued') waits.set(item.id, [{ reason: 'space-archived' }]);
       continue;
     }
     const members = memberIds(room, sessions);
@@ -1087,13 +1108,19 @@ function planDispatch(input) {
         break;
       }
       if (!target) {
+        if (!waits) continue;
+        if (candidates.length) waits.set(item.id, candidates.map(waitOf));
+        else if (item.assignee) waits.set(item.id, [{ sessionId: item.assignee, reason: 'not-member' }]);
+        else waits.set(item.id, [{ reason: 'no-members' }]);
         continue;
       }
-      busy.add(target.id);
+      hold(target.id, 'took-item');
       const reason = rotationReason(target, now, rotationOptions, rotations);
       if (reason && rotationSlots > 0) {
         rotationSlots -= 1;
         actions.push(rotateAction(target.id, reason, rotationOptions));
+        // The member is replaced before it takes more work; the item waits for that.
+        if (waits) waits.set(item.id, [{ sessionId: target.id, reason: 'rotating' }]);
       } else {
         // Due but another rotation is running: it keeps working and is rotated later.
         const action = { kind: 'dispatch', roomId: room.id, itemId: item.id, sessionId: target.id };
@@ -2607,8 +2634,10 @@ class QueueDispatcher {
     // B6: the session that holds an open handoff gets no queue work and is not rotated, so what
     // it writes until the handoff is closed is not a member's reply; it is not listed as vacant either.
     const butler = this.stewardSession(current.snapshot.sessions)?.steward.sessionId;
+    const waits = new Map();
     const engaged = this.integration ? this.integration.holding() : undefined;
     const actions = planDispatch({
+      waits,
       rooms: current.snapshot.rooms,
       sessions: current.snapshot.sessions,
       wakePolicy: current.snapshot.wakePolicy,
@@ -2641,11 +2670,13 @@ class QueueDispatcher {
       if (action.kind === 'settle') {
         this.settle(action, current.snapshot);
       } else if (action.kind === 'dispatch') {
-        await this.dispatch(action);
+        await this.dispatch(action, waits);
       } else if (action.kind === 'rotate') {
         await this.requestHandoff(action, sample.memory.get(action.sessionId));
       }
     }
+    // In memory only: the person and the butler read why each queued item is still waiting (queue item 5614a65c).
+    if (this.roomState.setQueueWaits(waits)) this.broadcast().catch(() => {});
     if (this.observeQueueState) await this.observeQueueState(queueVacancies({ ...current.snapshot,
       idleSince: this.vacancySince, humanAt: this.humanAt, now: current.now,
       settleMs: this.settleMs, humanQuietMs: this.humanQuietMs,
@@ -2843,19 +2874,27 @@ class QueueDispatcher {
     return steward.duty;
   }
 
-  // Read fresh state once, right before sending; skip quietly if the member moved on.
-  async freshReady(sessionId, quietMs = this.humanQuietMs) {
-    if (this.isolation.unknown || Object.hasOwn(this.isolation.holds, sessionId)) return null;
-    if (Object.values(this.rotations).some(record => quarantinedSuccessor(record) && record.newId === sessionId)) return null;
+  // Read fresh state once, right before sending; skip if the member moved on (`why.reason` says how, when given).
+  async freshReady(sessionId, quietMs = this.humanQuietMs, why = {}) {
+    const held = () => {
+      if (this.isolation.unknown) return 'trust-unknown';
+      if (Object.hasOwn(this.isolation.holds, sessionId)) return 'trust-hold';
+      return Object.values(this.rotations).some(record => quarantinedSuccessor(record) && record.newId === sessionId) ? 'trust-hold' : '';
+    };
+    why.reason = held();
+    if (why.reason) return null;
     await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
     const current = this.view();
-    if (this.isolation.unknown || Object.hasOwn(this.isolation.holds, sessionId)) return null;
-    if (Object.values(this.rotations).some(record => quarantinedSuccessor(record) && record.newId === sessionId)) return null;
+    why.reason = held();
+    if (why.reason) return null;
     const session = current.snapshot.sessions.find(s => s.id === sessionId);
-    if (!session || !sessionReady(session, current.snapshot.wakePolicy).ready) {
+    const ready = sessionReady(session, current.snapshot.wakePolicy);
+    if (!ready.ready) {
+      why.reason = ready.reason;
       return null;
     }
     if (humanRecent(sessionId, this.humanAt, current.now, quietMs)) {
+      why.reason = 'person-recent';
       return null;
     }
     return { ...current, session };
@@ -2898,9 +2937,11 @@ class QueueDispatcher {
     throw Error('NAW did not receive a delivery tag');
   }
 
-  async dispatch(action) {
-    const current = await this.freshReady(action.sessionId);
+  async dispatch(action, waits = null) {
+    const why = {};
+    const current = await this.freshReady(action.sessionId, this.humanQuietMs, why);
     if (!current) {
+      waits?.set(action.itemId, [{ sessionId: action.sessionId, reason: why.reason }]);
       return;
     }
     const room = current.snapshot.rooms.find(r => r.id === action.roomId);
@@ -2915,8 +2956,10 @@ class QueueDispatcher {
     try {
       this.roomState.assertAvailable(session.id, true, room.id);
       this.preflight(session);
-    } catch {
-      // Nothing was recorded or sent; the next pass looks again.
+    } catch (error) {
+      // Nothing was recorded or sent; the next pass looks again. The refusal's key, never its text.
+      const message = typeof error?.message === 'string' ? error.message : '';
+      waits?.set(item.id, [{ sessionId: session.id, reason: errorKey(error) || (/^[a-z][a-z-]{0,60}$/.test(message) ? message : 'refused') }]);
       return;
     }
     const name = this.name(session);

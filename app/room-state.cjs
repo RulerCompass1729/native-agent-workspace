@@ -119,14 +119,17 @@ function queueFacts(room, roomId, previous, next, queue) {
   return { facts, fields };
 }
 
-// A detached copy of a space queue for display and dispatch decisions.
-function copyQueue(queue) {
+// A detached copy of a space queue for display and dispatch decisions. A queued item the dispatcher's last pass did
+// not send carries why, member by member (`wait`, RoomState.setQueueWaits).
+function copyQueue(queue, waits = null) {
   const copy = [];
   if (!Array.isArray(queue)) {
     return copy;
   }
   for (const item of queue) {
-    copy.push({ ...item, ...(item.creator ? { creator: { ...item.creator } } : {}), ...(item.ready ? { ready: { ...item.ready } } : {}) });
+    const wait = item.status === 'queued' && waits ? waits.get(item.id) : undefined;
+    copy.push({ ...item, ...(item.creator ? { creator: { ...item.creator } } : {}), ...(item.ready ? { ready: { ...item.ready } } : {}),
+      ...(wait ? { wait: wait.map(entry => ({ ...entry })) } : {}) });
   }
   return copy;
 }
@@ -161,6 +164,7 @@ class RoomState {
     this.queue = Promise.resolve();
     this.gates = new Set();
     this.mergePreviews = new Map();
+    this.queueWaits = new Map();
     this.mergeJobs = new Map();
     try {
       const stat = fs.lstatSync(this.file);
@@ -1512,11 +1516,20 @@ class RoomState {
     this.update(fields, undefined, room);
     if (value.merge) this.mergePreviews.delete(value.merge.batch.operationId);
   }
+  // Why each queued item was not sent on the dispatcher's last pass (queue-dispatch.cjs planDispatch `waits`): kept in
+  // memory only and replaced on every pass. Returns whether it changed, so the windows are told.
+  setQueueWaits(waits) {
+    const next = new Map();
+    for (const [id, list] of waits || []) next.set(id, list.map(entry => ({ ...entry })));
+    const changed = JSON.stringify([...next]) !== JSON.stringify([...this.queueWaits]);
+    this.queueWaits = next;
+    return changed;
+  }
   apply(snapshot, selected = DEFAULT_ROOM_ID) {
     const metadata = [{ ...this.value, id: DEFAULT_ROOM_ID }, ...this.spaces.rooms];
     const rooms = metadata.map(value => {
       const backend = (snapshot.rooms || [snapshot.room]).find(r => r?.id === value.id || value.id === DEFAULT_ROOM_ID && r && !r.id);
-      return { ...(backend || { id: value.id, revision: 0, run: null, messages: [] }), id: value.id, name: value.name, notes: value.notes, metadataRevision: value.revision, events: displayEvents(value.events), archived: value.archived, memberOrder: [...value.memberOrder], files: value.files.map(f => ({ ...f })), queue: copyQueue(value.queue),
+      return { ...(backend || { id: value.id, revision: 0, run: null, messages: [] }), id: value.id, name: value.name, notes: value.notes, metadataRevision: value.revision, events: displayEvents(value.events), archived: value.archived, memberOrder: [...value.memberOrder], files: value.files.map(f => ({ ...f })), queue: copyQueue(value.queue, this.queueWaits),
         ...(value.merge ? { merge: { operationId: value.merge.batch.operationId, binding: value.merge.batch.binding, stage: value.merge.stage,
           imported: value.merge.imported, failures: [...value.merge.failures], failuresUiMessage: value.merge.failuresUiMessage || null, undoKeptTarget: Boolean(value.merge.undoKeptTarget),
           sources: value.merge.sources.map(source => ({ id: source.id, name: value.merge.batch.sources.find(original => original.id === source.id)?.name, status: source.status, error: source.error || '', errorUiMessage: source.errorUiMessage || null })),

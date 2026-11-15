@@ -4043,3 +4043,64 @@ test('794d3cd7: a counter that fails or answers in another shape changes nothing
     assert.match(client.sends('a')[0][2], /【NAW 派活】[\s\S]*plain task/);
   }
 });
+
+// Queue item 5614a65c (11-15): an idle member never got the item assigned to it, and the item it had been sent before
+// stayed unsettled for 26 minutes; nothing said why (its composer held a single "/"). The person-typing gate stays as it
+// is; each pass now records, member by member, why every queued item was not sent.
+test('the planner records why each queued item was not sent, member by member, and returns the same actions', () => {
+  const rooms = [{ id: 'shared', queue: [
+    item('sent-before', { assignee: 'b', status: 'sent', sentTo: 'b', tag: 'tag-1', sentAt: NOW - 600000 }),
+    item('for-b', { assignee: 'b' }),
+    item('for-anyone'),
+    item('for-stranger', { assignee: 'x' }),
+  ] }, { id: 'old', archived: true, queue: [item('in-archive')] }];
+  // The dispatcher's view drops a member from idleSince while its session is not ready (QueueDispatcher.view).
+  const sessions = [member('b', { liveDraft: '/' }), member('c', { state: 'working' })];
+  const waits = new Map();
+  const actions = plan(rooms, sessions, { waits, idleSince: new Map() });
+  assert.deepEqual(actions, [], 'nothing is settled or sent: the gate itself is unchanged');
+  assert.deepEqual(plan(rooms, sessions, { idleSince: new Map() }), actions, 'the same actions without a waits map');
+  assert.deepEqual(Object.fromEntries(waits), {
+    'for-b': [{ sessionId: 'b', reason: 'sent-item-open', readiness: 'person-typing' }],
+    'for-anyone': [{ sessionId: 'b', reason: 'sent-item-open', readiness: 'person-typing' }, { sessionId: 'c', reason: 'not-idle' }],
+    'for-stranger': [{ sessionId: 'x', reason: 'not-member' }],
+    'in-archive': [{ reason: 'space-archived' }],
+  });
+  const alone = new Map();
+  plan([{ id: 'shared', queue: [item('for-b', { assignee: 'b' })] }], [member('b', { liveDraft: '/' })], { waits: alone, idleSince: new Map() });
+  assert.deepEqual(Object.fromEntries(alone), { 'for-b': [{ sessionId: 'b', reason: 'person-typing' }] });
+  const sent = new Map();
+  assert.deepEqual(plan([{ id: 'shared', queue: [item('for-b', { assignee: 'b' })] }], [member('b')], { waits: sent }).map(action => action.kind), ['dispatch']);
+  assert.equal(sent.size, 0, 'an item sent on this pass has no wait');
+});
+
+test('the dispatcher shows why a queued item waits, in memory only, and drops it once the item is sent', async t => {
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('b', { liveDraft: '/' })]);
+  room.queueAdd('assigned task', 'b');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.equal(client.sends().length, 0, 'the person-typing gate still holds');
+  const waiting = () => room.apply(client.snapshot()).rooms.find(r => r.id === 'shared').queue[0];
+  assert.deepEqual(waiting().wait, [{ sessionId: 'b', reason: 'person-typing' }]);
+  for (const name of fs.readdirSync(dir)) {
+    if (name.endsWith('.json')) assert.equal(fs.readFileSync(path.join(dir, name), 'utf8').includes('person-typing'), false, `${name} keeps no wait`);
+  }
+  client.state.sessions[0].liveDraft = '';
+  client.emit('state');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  assert.equal(client.sends().length, 1, 'sent once the draft is gone');
+  assert.equal(waiting().status, 'sent');
+  assert.equal(waiting().wait, undefined);
+});
+
+test('a refusal right before sending is recorded as the item\'s wait by its key', async t => {
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a')]);
+  room.queueAdd('task', 'a');
+  // The session says it can take a NAW input, but its backend connection cannot (QueueDispatcher.preflight).
+  client.capabilities = [GUARDED_STOP];
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.equal(client.sends().length, 0);
+  assert.deepEqual(room.apply(client.snapshot()).rooms.find(r => r.id === 'shared').queue[0].wait, [{ sessionId: 'a', reason: 'backend-update-needed' }]);
+});
