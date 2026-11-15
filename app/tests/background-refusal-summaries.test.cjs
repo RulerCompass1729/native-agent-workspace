@@ -420,3 +420,66 @@ test('an agent gets each answer without NAW\'s guard, while NAW keeps the guard'
   const copy = JSON.parse(JSON.stringify(own)); agentReply(own); assert.deepEqual(own, copy);
   for (const value of [null, undefined, 'text', [{ guard: 1 }], { state: 'complete' }]) assert.deepEqual(agentReply(value), value);
 });
+
+// A compacted refusal used to discard which check failed. These are synthetic
+// branch reproductions, not a diagnosis of a historical first-invoke failure.
+for (const phase of ['admission', 'confirmation']) for (const cause of ['roster', 'missing', 'native-id', 'archived', 'context-pending'])
+test(`${phase}: an unavailable origin retains its exact check without authorizing work (${cause})`, async t => {
+  const f = fixture(t);
+  t.after(() => f.controller.close());
+  if (cause === 'roster') f.context.confirmationActors = () => { throw Error('PRIVATE_ROSTER_FAILURE'); };
+  if (cause === 'missing') f.snapshot.sessions.shift();
+  if (cause === 'native-id') f.snapshot.sessions[0].nativeId = 'replacement';
+  if (cause === 'archived') f.snapshot.sessions[0].archived = true;
+  if (cause === 'context-pending') f.snapshot.sessions[0].nativeContextPending = { reason: 'clear' };
+  const args = request(phase === 'admission' ? 'spaceCreate' : 'stop', `${phase}-${cause}`, ['Target']);
+  const result = await f.controller.call(f.binding, args);
+  assert.equal(result.state, 'not-executed');
+  assert.equal(result.reason, 'originating-session-unavailable');
+  assert.equal(result.originCheck, `${phase}-${cause}`);
+  assert.equal(f.writes, 0); assert.equal(f.notices.length, 0);
+  const cold = new BackgroundControl(f.config); t.after(() => cold.close());
+  assert.equal(cold.receipt(f.actor, args.operation_id).originCheck, result.originCheck);
+  assert.equal(JSON.stringify(result).includes('PRIVATE_ROSTER_FAILURE'), false);
+  assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('PRIVATE_ROSTER_FAILURE'), false);
+});
+for (const cause of ['refresh', 'native-call', 'closed', 'fingerprint'])
+test(`confirmation: failure in ${cause} keeps the branch through refusal compaction`, async t => {
+  const f = fixture(t); let refreshes = 0, fingerprints = 0;
+  t.after(() => f.controller.close());
+  const fingerprint = f.context.fingerprint;
+  f.context.refresh = async () => {
+    if (++refreshes !== 2) return;
+    if (cause === 'refresh') throw Error('PRIVATE_BACKEND_FAILURE');
+    if (cause === 'closed') f.controller.closed = true;
+  };
+  f.binding.valid = () => !(cause === 'native-call' && refreshes === 2);
+  f.context.fingerprint = args => {
+    if (++fingerprints === 3 && cause === 'fingerprint') throw Error('PRIVATE_FINGERPRINT_FAILURE');
+    return fingerprint(args);
+  };
+  const args = request('stop', 'first-refused', ['Target']);
+  const result = await f.controller.call(f.binding, args);
+  assert.equal(result.reason, 'originating-session-unavailable');
+  assert.equal(result.originCheck, `confirmation-${cause}`);
+  assert.equal(f.writes, 0); assert.equal(f.notices.length, 0);
+  const cold = new BackgroundControl(f.config); t.after(() => cold.close());
+  assert.equal(cold.receipt(f.actor, args.operation_id).originCheck, result.originCheck);
+  assert.doesNotMatch(JSON.stringify(result) + fs.readFileSync(f.controller.file, 'utf8'), /PRIVATE_.*_FAILURE/);
+});
+test('two origin failures in one summary retain their own check, and a valid first invocation still asks once', async t => {
+  const f = fixture(t); t.after(() => f.controller.close());
+  const initial = await f.controller.call(f.binding, request('spaceCreate', 'first-valid', ['Target']));
+  assert.equal(initial.state, 'confirmation-required'); assert.equal(initial.originCheck, undefined);
+  assert.equal(f.writes, 0); assert.equal(f.notices.length, 1);
+  f.snapshot.sessions[0].archived = true;
+  const archived = await f.controller.call(f.binding, request('spaceCreate', 'archived-origin', ['Target']));
+  f.snapshot.sessions[0].archived = false; f.snapshot.sessions[0].nativeId = 'replacement';
+  const replaced = await f.controller.call(f.binding, request('spaceCreate', 'replaced-origin', ['Target']));
+  assert.equal(archived.summaryId, replaced.summaryId);
+  const cold = new BackgroundControl(f.config); t.after(() => cold.close());
+  assert.equal(cold.receipt(f.actor, 'archived-origin').originCheck, 'admission-archived');
+  assert.equal(cold.receipt(f.actor, 'replaced-origin').originCheck, 'admission-native-id');
+  assert.equal(cold.receipt(f.actor, archived.summaryId).originCheck, undefined, 'An aggregate has no single failure branch');
+  assert.equal(f.writes, 0);
+});

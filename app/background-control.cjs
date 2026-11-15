@@ -26,6 +26,8 @@ const REFUSAL_WINDOW_MS = 60000, MAX_REFUSAL_SUMMARIES = 128, NOTIFY_SHARE_MS = 
 const REFUSAL_RETRY_HINT = 'invoke or snapshot: new operation_id or compacted refused ID is a fresh request.';
 const refusalRetry = () => ({ retryWithNewOperationId: true, retryHint: REFUSAL_RETRY_HINT });
 const admissionReasons = new Set(['confirmation-limit', 'originating-session-unavailable']);
+// Fixed branch names only: backend errors can contain another session's text or paths.
+const validOriginCheck = value => typeof value === 'string' && /^(?:(?:admission|confirmation)-(?:roster|missing|native-id|archived|context-pending)|confirmation-(?:refresh|native-call|closed|fingerprint))$/.test(value);
 const preconditionReasons = new Set(['invalid-file-path-count', 'file-preview-changed', 'conversation-access-denied', 'space-file-membership-required', 'conversation-target-unavailable']);
 const summarizedReasons = new Set([...admissionReasons, 'another-operation-running', 'explicit-paths-required', ...preconditionReasons]);
 const positiveCount = n => Number.isSafeInteger(n) && n > 0;
@@ -91,7 +93,7 @@ const parameters = {
   stewardEvents: ['position from the last read (through), or null to read from the start; the designated butler only. Returns {events, through, more}: what NAW recorded since, oldest first, a few at a time; while more is true, read again from through'],
   stewardWake: ['on: true or false to turn waking on events on or off; omit it to see how it stands. The designated butler or the person only; off by default. While on, NAW sends the butler, once it is idle and at most once a minute, one 【NAW 事件】 message naming a position: read stewardEvents from that position'],
   spaceFiles: ['roomId', 'fileId?; omit to import the explicit paths'], gitWorktreePreview: ['selected repository path', 'nonce', 'relative path'],
-  create: ['options: {provider,cwd,name,view?,gitWorktree?}'], nativeHistory: ['options?'], importHistory: ['nativeId', 'options'],
+  create: ['options: {provider,cwd,name,view?,gitWorktree?,skipPermissions?: true}', 'skipPermissions: true starts Claude with bypassPermissions, or Codex with approvalPolicy never and sandbox danger-full-access; omit for native permission defaults. False is not accepted. NAW human confirmation is still required.'], nativeHistory: ['options?'], importHistory: ['nativeId', 'options'],
   rename: ['sessionId', 'name'], sidebar: ['change'],
   send: ['sessionId', 'exact message', 'expectedNativeId'], forward: ['sessionId', 'exact message', 'expectedNativeId', 'replyTo?'],
   queue: ['sessionId', 'exact message', 'expectedNativeId'], queueShared: ['sessionId', 'exact message', 'expectedNativeId', 'replyTo?'],
@@ -448,7 +450,10 @@ class BackgroundControl {
     let record = this.data.records.find(own) || this.archived.get(this.key(sender) + ':' + id) || this.data.refusals.find(own);
     if (!record && !exact) {
       const alias = this.data.refusalReceipts.find(own);
-      if (alias) record = this.data.refusals.find(r => r.id === alias.summaryId && this.key(r.actor) === this.key(sender));
+      if (alias) {
+        record = this.data.refusals.find(r => r.id === alias.summaryId && this.key(r.actor) === this.key(sender));
+        if (record && validOriginCheck(alias.originCheck)) record = { ...record, originCheck: alias.originCheck };
+      }
     }
     return record ? this.project(clone(record), context) : null;
   }
@@ -505,7 +510,8 @@ class BackgroundControl {
     }
     return this.receipt(actor, id);
   }
-  async recordRefusal(actor, args, context, reason) {
+  async recordRefusal(actor, args, context, reason, originCheck) {
+    const diagnostic = reason === 'originating-session-unavailable' && validOriginCheck(originCheck) ? { originCheck } : {};
     const key = this.key(actor), now = this.now(); let guard, id;
     try { guard = controlGuard(context, args); } catch { /* A failed refresh must still refuse safely. */ }
     let rooms = guard?.auditRooms;
@@ -536,7 +542,7 @@ class BackgroundControl {
         refusalSummary: { ...clone(count), reason, windowStart: start, windowEnd: start + REFUSAL_WINDOW_MS, sequence: state.sequence } };
       d.refusals = [...d.refusals.filter(r => r.id !== id), record];
       d.refusalReceipts = [...d.refusalReceipts.filter(r => !(r.id === args.operation_id && this.key(r.actor) === key)),
-        { id: args.operation_id, actor: { id: actor.id, nativeId: actor.nativeId, provider: actor.provider }, summaryId: id }];
+        { id: args.operation_id, actor: { id: actor.id, nativeId: actor.nativeId, provider: actor.provider }, summaryId: id, ...diagnostic }];
     });
     const summary = clone(this.data.refusals.find(r => r.id === id)); let auditError;
     try { await this.publish(summary, context); }
@@ -546,16 +552,19 @@ class BackgroundControl {
     }
     return { ...refusalDetails(reason), ...refusalRetry(),
       id: args.operation_id, actor, method: args.method,
-      guard: { auditRooms: rooms }, summaryId: id, count: summary.refusalSummary.count,
+      guard: { auditRooms: rooms }, summaryId: id, count: summary.refusalSummary.count, ...diagnostic,
       ...(auditError ? { auditError } : {}) };
   }
-  confirmationRefusal(actor, args, context, guard) {
+  confirmationRefusal(actor, args, context, guard, diagnostic = {}) {
+    const unavailable = cause => { diagnostic.cause = cause; return 'originating-session-unavailable'; };
     let sessions;
     try { sessions = typeof context.confirmationActors === 'function' ? context.confirmationActors() : guard?.sessions; }
-    catch { return 'originating-session-unavailable'; }
+    catch { return unavailable('roster'); }
     const requester = Array.isArray(sessions) && sessions.find(s => s.id === actor.id);
-    if (!requester || requester.nativeId !== actor.nativeId || requester.archived || requester.nativeContextPending)
-      return 'originating-session-unavailable';
+    if (!requester) return unavailable('missing');
+    if (requester.nativeId !== actor.nativeId) return unavailable('native-id');
+    if (requester.archived) return unavailable('archived');
+    if (requester.nativeContextPending) return unavailable('context-pending');
     const key = this.key(actor), pending = this.data.records.filter(r =>
       !(r.id === args.operation_id && this.key(r.actor) === key) &&
       (r.state === 'confirmation-required' && r.confirmation?.kind === 'message' || r.state === 'running' && operation.maintenanceAction(r.command.method, r.command.arguments, r.actor)) &&
@@ -634,8 +643,8 @@ class BackgroundControl {
     const handler = !['backgroundDecision', 'uiReady'].includes(args.method) && this.handlers.get(args.method);
     const key = this.key(sender);
     const actor = operation.actor({ ...sender, callId: identity.callId, turnId: identity.turnId, operationId: args.operation_id });
-    const refuse = reason => {
-      if (admissionReasons.has(reason) || reason === 'another-operation-running' && operation.maintenanceAction(args.method, args.arguments, actor)) return this.recordRefusal(actor, args, context, reason);
+    const refuse = (reason, originCheck) => {
+      if (admissionReasons.has(reason) || reason === 'another-operation-running' && operation.maintenanceAction(args.method, args.arguments, actor)) return this.recordRefusal(actor, args, context, reason, originCheck);
       const refusal = { ...refusalDetails(reason), method: args.method };
       if (!operation.maintenanceAction(args.method, args.arguments, actor)) return refusal;
       const guard = controlGuard(context, args);
@@ -659,8 +668,8 @@ class BackgroundControl {
     if (this.inflight.has(key)) return refuse('another-operation-running');
     const guard = controlGuard(context, args);
     if (operation.maintenanceAction(args.method, args.arguments, actor)) {
-      const reason = this.confirmationRefusal(actor, args, context, guard);
-      if (reason) return refuse(reason);
+      const diagnostic = {}, reason = this.confirmationRefusal(actor, args, context, guard, diagnostic);
+      if (reason) return refuse(reason, diagnostic.cause && 'admission-' + diagnostic.cause);
     }
     // The real folder handler's first action is this single-path open dialog.
     // Refuse before entering it; arbitrary handlers may have effects before a
@@ -683,7 +692,7 @@ class BackgroundControl {
   }
   async perform(actor, args, context, valid, approved) {
     const key = this.key(actor), handler = this.handlers.get(args.method);
-      let state, value, error, confirmation, delivery, refusal, preconditionError, handlerEntered = false;
+      let state, value, error, confirmation, delivery, refusal, originCheck, preconditionError, handlerEntered = false;
       try {
         await valid();
         if (this.closed) throw Error('Background control is closing');
@@ -744,14 +753,20 @@ class BackgroundControl {
         else if (e instanceof ConfirmationRequired && e.confirmation?.kind === 'message') {
           // Refresh first; the quota decision and pending-row commit below have
           // no await between them. Concurrent actors cannot both take slot128.
+          let checking = 'refresh';
           try {
-            await context.refresh?.(); await valid();
+            await context.refresh?.(); checking = 'native-call'; await valid();
+            checking = 'closed';
             if (this.closed) throw Error('Background control is closing');
-            const reason = this.confirmationRefusal(actor, args, context, controlGuard(context, args));
-            if (reason) { refusal = refusalDetails(reason); state = refusal.state; }
+            checking = 'fingerprint';
+            const guard = controlGuard(context, args), diagnostic = {};
+            checking = 'roster';
+            const reason = this.confirmationRefusal(actor, args, context, guard, diagnostic);
+            if (reason) { refusal = refusalDetails(reason); state = refusal.state; originCheck = diagnostic.cause && 'confirmation-' + diagnostic.cause; }
             else { state = 'confirmation-required'; confirmation = e.confirmation; }
           } catch (refreshError) {
             refusal = refusalDetails('originating-session-unavailable'); state = refusal.state;
+            originCheck = 'confirmation-' + checking;
             error = String(refreshError.message || 'The originating session could not be refreshed').slice(0, 2048);
           }
         }
@@ -768,7 +783,7 @@ class BackgroundControl {
         state = 'unconfirmed'; error = 'A follow-up confirmation was refused after approval; inspect the original operation and do not repeat it.';
       }
       if (refusal && (admissionReasons.has(refusal.reason) || preconditionError && !approved)) {
-        const result = await this.recordRefusal(actor, args, context, refusal.reason);
+        const result = await this.recordRefusal(actor, args, context, refusal.reason, originCheck);
         return { ...result, ...(preconditionError ? { error } : {}) };
       }
       const privateValue = value !== undefined && privateRead(args), readValue = privateValue ? clone(value) : null;
