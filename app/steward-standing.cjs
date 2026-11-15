@@ -13,13 +13,16 @@ const localAction = command => {
 // Native defaults and named Codex profiles depend on directory configuration.
 // Only an explicit permission mode can be compared without guessing that config.
 function creationCovered(options, peers) {
-  if (!options || options.gitWorktree != null || options.settings?.profile) return false;
+  if (!options || options.fork != null || options.gitWorktree != null || options.settings?.profile) return false;
   const mode = options.skipPermissions === true ? 'bypassPermissions' : options.settings?.permissionMode;
-  if (!['claude', 'codex'].includes(options.provider)) return false;
+  // Codex observations currently omit approval/sandbox changes. Its launch flag
+  // cannot prove today's permissions: keep creation behind human consent.
+  if (options.provider !== 'claude') return false;
   return peers.some(p => p.provider === options.provider && !p.archived &&
-    (p.skipPermissions === true || p.nativePermissionMode === 'bypassPermissions'
+    ((p.nativePermissionMode ? p.nativePermissionMode === 'bypassPermissions' : p.skipPermissions === true)
       ? mode === 'bypassPermissions' || options.provider === 'claude' && ['plan', 'default', 'acceptEdits', 'dontAsk', 'auto'].includes(mode)
-      : options.provider === 'claude' && mode && mode === p.nativePermissionMode));
+      : options.provider === 'claude' && mode && mode === p.nativePermissionMode && options.newDirectory !== true &&
+        typeof options.cwd === 'string' && typeof p.cwd === 'string' && path.resolve(options.cwd) === path.resolve(p.cwd)));
 }
 class StewardStanding {
   constructor(directory, { role, person, now = Date.now }) {

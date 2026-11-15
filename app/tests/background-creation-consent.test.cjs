@@ -38,14 +38,14 @@ async function fixture(t, provider) {
   const scope = vm.createContext({ context: c, client, actor, roomState: rooms, sessionLabels: labels, backgroundOperation: operation, roomIds: require('../collaboration-spaces.cjs').roomIds,
     applicationHandlers: handlers, ipcMain: { handle() {} }, showDialog: (context, kind, options) => dialog(context, kind, options), displayText: (key, params) => require('../ui-locale.js').format('en', key, params), uiError: require('../ui-errors.cjs').uiError,
     assertNativeCreation: require('../submission-policy.cjs').assertNativeCreation, capabilitiesFor: () => ['resume', 'resubscribe', 'transportReconnect'],
-    validRoomId: require('../collaboration-spaces.cjs').roomId,
-    creationDefaults: { remember() { throw Error('A background creation must not save desktop defaults'); } }, broadcastRoom: async () => {} });
+    validRoomId: require('../collaboration-spaces.cjs').roomId, keepStewardOutside() {},
+    creationDefaults: { remember() { throw Error('A background creation must not save desktop defaults'); } }, broadcastRoom: async () => {}, broadcastName() {} });
   vm.runInContext(part('function controlRequestActors(', '\nfunction projectBackgroundRecord('), scope);
   vm.runInContext(part('      context.confirmationActors =', '      context.fingerprint ='), scope);
   vm.runInContext(part('      context.fingerprint = command =>', '\n      context.delivery ='), scope);
   vm.runInContext(part('function roomArchiveDetail(', '\nfunction register('), scope);
   vm.runInContext(part('function register(', '\nasync function replaceBackendSockets('), scope);
-  for (const [start, end] of [["  register('archiveSession',", "  register('spaceMerge',"], ["  register('spaceAction',", "  register('spaceFiles',"],
+  for (const [start, end] of [["  register('rename',", "  register('sidebar',"], ["  register('join',", "  register('roomNotes',"], ["  register('archiveSession',", "  register('spaceMerge',"], ["  register('spaceAction',", "  register('spaceFiles',"],
     ["  register('create',", "  register('nativeHistory',"], ["  register('importHistory',", "  register('butlerReview',"],
     ["  for (const action of ['resume', 'forget'])", "  register('stop',"]])
     vm.runInContext(part(start, end), scope);
@@ -404,4 +404,55 @@ test('a background archive cannot expand consent after its guard check and befor
   const result = await f.confirm(card);
   assert.equal(result.state, 'unconfirmed'); assert.equal(archived(f, f.other), false);
   assert.equal(f.rooms.value.archived, false);
+});
+
+// 5614a65c: two real pending cards, not a manually mutated fingerprint.
+for (const method of ['join', 'spaceRename']) test(`scoped consent: an unrelated same-space join does not void ${method}`, async t => {
+  const f = await fixture(t, 'codex'), target = f.rooms.create('Destination');
+  const a = await f.workspace.create('codex', f.dir, 'owner', 'First member');
+  const first = await f.ask('spaceAction', [target, 'join', [a, true]]);
+  const second = await f.ask('spaceAction', [target, method === 'join' ? 'join' : 'rename', method === 'join' ? [f.other, true] : ['Renamed']]);
+  assert.equal(first.state, 'confirmation-required'); assert.equal(second.state, 'confirmation-required');
+  assert.equal((await f.confirm(first)).state, 'complete');
+  const result = await f.confirm(second); assert.equal(result.state, 'complete', JSON.stringify(result));
+  if (method === 'join') assert.ok(require('../collaboration-spaces.cjs').roomIds(f.workspace.get(f.other)).includes(target));
+  else assert.equal(f.rooms.metadata(target).name, 'Renamed');
+});
+for (const change of ['archive', 'move', 'occupiedName']) test(`scoped consent: a changed target still voids the card: ${change}`, async t => {
+  const f = await fixture(t, 'codex'), target = f.rooms.create('Destination');
+  const card = await f.ask('spaceAction', [target, change === 'occupiedName' ? 'rename' : 'join', change === 'occupiedName' ? ['New name'] : [f.other, true]]);
+  assert.equal(card.state, 'confirmation-required');
+  if (change === 'archive') await f.rooms.archiveRoom(f.client, f.labels.labels, target);
+  if (change === 'move') await f.rooms.membership(f.client, f.other, true, undefined, f.rooms.create('Elsewhere'));
+  if (change === 'occupiedName') f.rooms.create('New name');
+  await refused(f, card);
+});
+
+for (const kind of ['legacyJoin', 'legacyRoomRename']) test(`scoped consent: ${kind} survives unrelated membership and archive metadata`, async t => {
+  const f = await fixture(t, 'codex'), a = await f.workspace.create('codex', f.dir, 'owner', 'Another');
+  const first = await f.ask('join', [a, true]);
+  const second = await f.ask(kind === 'legacyJoin' ? 'join' : 'roomRename', kind === 'legacyJoin' ? [f.other, true] : ['New shared name']);
+  assert.equal((await f.confirm(first)).state, 'complete');
+  const unrelated = await f.workspace.create('codex', f.dir, 'owner', 'Archived elsewhere');
+  await f.rooms.archiveSession(f.client, unrelated);
+  assert.equal((await f.confirm(second)).state, 'complete');
+});
+for (const kind of ['renameTarget', 'renameActor', 'renameArchive']) test(`scoped consent: own space or actor change refuses rename: ${kind}`, async t => {
+  const f = await fixture(t, 'codex'), target = f.rooms.create('Target');
+  const card = await f.ask('spaceAction', [target, 'rename', ['Next']]);
+  if (kind === 'renameTarget') f.rooms.rename('Someone changed it', target);
+  if (kind === 'renameActor') f.workspace.get(f.actor.id).connectionRevision = 99;
+  if (kind === 'renameArchive') await f.rooms.archiveRoom(f.client, f.labels.labels, target);
+  await refused(f, card);
+});
+
+for (const change of ['unrelated', 'ownName', 'occupiedName']) test(`scoped consent: session rename protects only its target: ${change}`, async t => {
+  const f = await fixture(t, 'codex'), target = f.other;
+  const card = await f.ask('rename', [target, 'Renamed member']);
+  assert.equal(card.state, 'confirmation-required');
+  if (change === 'unrelated') { f.rooms.create('Unrelated'); await f.workspace.create('codex', f.dir, 'owner', 'Another'); }
+  if (change === 'ownName') f.labels.set(target, 'Changed already');
+  if (change === 'occupiedName') await f.workspace.create('codex', f.dir, 'owner', 'Renamed member');
+  if (change === 'unrelated') { assert.equal((await f.confirm(card)).state, 'complete'); assert.equal(f.named('Renamed member')[0].id, target); }
+  else await refused(f, card);
 });

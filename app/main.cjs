@@ -1500,6 +1500,7 @@ async function boot() {
       buttons: [displayText('common.cancel'), displayText('background.confirm')], defaultId: 0, cancelId: 0 }; },
     audit: auditBackgroundOperation,
     unasked: (actor, _command, action, context) => action === 'readConversation' && stewardReadsUnasked(actor, context.client.snapshot()),
+    retireHold: () => (outboxBroker?.active?.() || 0) > 0,
     standing: (actor, command, context) => {
       const state = sessionLabels.apply(roomState.apply(context.client.snapshot()));
       const grant = stewardStanding.take(actor, command, state, context.view.spaceId || 'shared');
@@ -1516,7 +1517,6 @@ async function boot() {
     },
     standingValid: (actor, command, context, grant) => stewardStanding.valid(actor, command,
       sessionLabels.apply(roomState.apply(context.client.snapshot())), context.view.spaceId || 'shared', grant),
-    retireHold: () => (outboxBroker?.active?.() || 0) > 0,
     context: async (actor, saved, kept) => {
       const view = saved || { owner: randomUUID(), selected: actor.id, mode: 'chat', preference: 'chat', active: false };
       backups(view);
@@ -1571,6 +1571,36 @@ async function boot() {
             memberRevision: s.memberRevision, roomMembershipRevisions: s.roomMembershipRevisions,
             ...(s.id === controlTarget && s.id !== actor.id ? { owner: s.owner, controlRevision: s.controlRevision, activeTurnId: s.activeTurnId,
               approvalId: s.approval?.requestId, nativeApprovalIds: s.nativeApproval?.requests?.map(r => r.id), nativeInputRequired: s.nativeInputRequired } : {}) });
+          // These operations do not depend on another member's progress, roster
+          // ordering, unrelated archives or space notes. Keep identity/placement
+          // for the actual member and actor, and only the affected space facts.
+          if (['joinRoom', 'leaveRoom'].includes(maintenance)) {
+            const targetId = command.method === 'spaceAction' ? command.arguments[2]?.[0] : command.arguments[0];
+            const destination = command.method === 'spaceAction' ? command.arguments[0] : 'shared';
+            const target = metadata.sessions.find(s => s.id === targetId);
+            const affected = new Set([destination, ...(target ? roomIds(target) : [])]);
+            return { auditRooms: [...auditRooms].sort(),
+              sessions: metadata.sessions.filter(s => s.id === actor.id || s.id === targetId).map(placement),
+              rooms: metadata.rooms.filter(r => affected.has(r.id)).map(r => ({ id: r.id, archived: r.archived })),
+              sessionArchives: { [targetId]: roomState.value.sessionArchives[targetId] || null } };
+          }
+          if (maintenance === 'renameRoom') {
+            const targetId = command.method === 'spaceAction' ? command.arguments[0] : 'shared';
+            const requested = command.method === 'spaceAction' ? command.arguments[2]?.[0] : command.arguments[0];
+            const name = typeof requested === 'string' ? requested.trim() : '';
+            return { auditRooms: [...auditRooms].sort(),
+              sessions: metadata.sessions.filter(s => s.id === actor.id).map(placement),
+              rooms: metadata.rooms.filter(r => r.id === targetId).map(r => ({ id: r.id, name: r.name, archived: r.archived })),
+              named: metadata.rooms.filter(r => r.id !== targetId && r.name === name).map(r => r.id).sort() };
+          }
+          if (maintenance === 'rename') {
+            const targetId = command.arguments[0], name = typeof command.arguments[1] === 'string' ? command.arguments[1].trim() : '';
+            const named = sessionLabels.apply(metadata).sessions;
+            return { auditRooms: [...auditRooms].sort(),
+              sessions: metadata.sessions.filter(s => s.id === actor.id || s.id === targetId).map(s => ({ ...placement(s),
+                ...(s.id === targetId ? { name: named.find(x => x.id === targetId)?.name } : {}) })),
+              named: named.filter(s => s.id !== targetId && s.name === name).map(s => s.id).sort() };
+          }
           // A new session or space touches nothing that exists. Its consent is the asking session as it was, and which
           // sessions or spaces already carry the requested name: one appearing or renamed onto it voids the card, so
           // two answered cards cannot leave two of one name. Others the person confirms meanwhile do not (2026-11-13:

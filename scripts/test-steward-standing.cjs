@@ -63,7 +63,7 @@ async function main() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Synthetic service ready');
   client = await connectService(profile, 'human-view');
   const source = await client.call('create', { provider: 'codex', cwd: profile, name: '工作管家', view: 'chat' });
-  const peer = await client.call('create', { provider: 'codex', cwd: profile, name: '开发成员', skipPermissions: true, view: 'chat' });
+  const peer = await client.call('create', { provider: 'claude', cwd: profile, name: '开发成员', skipPermissions: true, view: 'chat' });
   await client.call('join', peer, true);
   const state = await client.call('initial'), actor = state.sessions.find(s => s.id === source);
   // Seed only the synthetic designation. The tested permission is changed through the real user checkbox.
@@ -98,9 +98,10 @@ async function main() {
   await shot('zh-on-1240', 1240); await shot('zh-on-850', 850); await dialog.getByRole('button', { name: '完成', exact: true }).click();
   const unknown = await control('stewardStanding', [true]); assert.equal(unknown.state, 'not-executed'); assert.equal(unknown.reason, 'unknown-command');
   record('switch defaults off; person can enable it; agent cannot invoke it');
-  const created = await control('create', [{ provider: 'codex', cwd: profile, name: '新开发成员', skipPermissions: true, view: 'chat' }]);
+  const created = await control('create', [{ provider: 'claude', cwd: profile, name: '新开发成员', skipPermissions: true, view: 'chat' }]);
   assert.equal(created.state, 'complete', JSON.stringify(created)); assert.equal(created.approvedBy, 'standing');
   const joined = await control('join', [created.value, true]); assert.equal(joined.state, 'complete', JSON.stringify(joined)); assert.equal(joined.approvedBy, 'standing');
+  await fixture('backgroundReport', created.value);
   const archived = await control('archiveSession', [created.value]); assert.equal(archived.state, 'complete', JSON.stringify(archived)); assert.equal(archived.approvedBy, 'standing');
   const s = await page.evaluate(() => workspace.initial()); assert.equal(s.backgroundConfirmations.length, 0);
   const lines = s.room.events.filter(e => e.controlAudit?.approvedBy === 'standing');

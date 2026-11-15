@@ -47,7 +47,7 @@ test('standing policy: person-only switch, role/native identity, exact allowlist
   role.set({ sessionId: f.actor.id, nativeId: f.actor.nativeId });
   let now = 10000000;
   const policy = () => new StewardStanding(f.config.dataDir, { role, person: c => c === human, now: () => now });
-  let p = policy(); const state = { sessions: [{ ...f.actor, roomId: null }, { id: 'peer', provider: 'codex', roomId: 'shared', skipPermissions: true }], rooms: [] };
+  let p = policy(); const state = { sessions: [{ ...f.actor, roomId: null }, { id: 'peer', provider: 'claude', roomId: 'shared', skipPermissions: true, nativePermissionMode: 'bypassPermissions' }], rooms: [] };
   const cmd = (method, args = []) => ({ method, arguments: args, operation_id: method + now });
   assert.equal(p.take(f.actor, cmd('join'), state, 'shared'), null);
   assert.throws(() => p.set({}, true), /person window/); p.set(human, true);
@@ -57,11 +57,11 @@ test('standing policy: person-only switch, role/native identity, exact allowlist
   for (const method of ['forget', 'initial', 'openLocalFile', 'saveLocalFile', 'runtimeLocation', 'pause', 'interrupt', 'input', 'answer', 'terminal', 'spaceMerge'])
     assert.equal(p.take(f.actor, cmd(method), state, 'shared'), null, method);
   assert.equal(p.take(f.actor, cmd('spaceAction', ['shared', 'clearSharedHistory', []]), state, 'shared'), null);
-  assert.equal(p.take(f.actor, cmd('create', [{ provider: 'codex', skipPermissions: true }]), state, 'other-room'), null);
-  const grant = p.take(f.actor, cmd('create', [{ provider: 'codex', skipPermissions: true }]), state, 'shared'); assert.ok(grant);
-  state.sessions[1].skipPermissions = false;
-  assert.equal(p.valid(f.actor, cmd('create', [{ provider: 'codex', skipPermissions: true }]), state, 'shared', grant), false);
-  assert.equal(p.take(f.actor, cmd('create', [{ provider: 'codex', skipPermissions: true }]), state, 'shared'), null, 'Wider permission asks');
+  assert.equal(p.take(f.actor, cmd('create', [{ provider: 'claude', skipPermissions: true }]), state, 'other-room'), null);
+  const grant = p.take(f.actor, cmd('create', [{ provider: 'claude', skipPermissions: true }]), state, 'shared'); assert.ok(grant);
+  state.sessions[1].skipPermissions = false; state.sessions[1].nativePermissionMode = 'plan';
+  assert.equal(p.valid(f.actor, cmd('create', [{ provider: 'claude', skipPermissions: true }]), state, 'shared', grant), false);
+  assert.equal(p.take(f.actor, cmd('create', [{ provider: 'claude', skipPermissions: true }]), state, 'shared'), null, 'Wider permission asks');
   assert.equal(p.take(f.actor, cmd('create', [{ provider: 'codex', settings: { profile: 'unverified' } }]), state, 'shared'), null);
   p.set(human, false); assert.equal(p.take(f.actor, cmd('join'), state, 'shared'), null);
   p.set(human, true);
@@ -72,4 +72,38 @@ test('standing policy: person-only switch, role/native identity, exact allowlist
   role.set({ sessionId: 'replacement', nativeId: 'native-replacement' }); assert.equal(p.view().on, false);
   fs.writeFileSync(p.file, 'broken', { mode: 0o600 }); assert.equal(p.view().unavailable, true);
   assert.equal(p.take(f.actor, cmd('join'), state, 'shared'), null);
+});
+for (const reason of ['off', 'otherSteward', 'wider', 'limit']) test(`standing integration falls back to a real confirmation: ${reason}`, async t => {
+  const f = fixture(t), role = new StewardRole(f.config.dataDir), human = {};
+  role.set({ sessionId: f.actor.id, nativeId: f.actor.nativeId });
+  const p = new StewardStanding(f.config.dataDir, { role, person: c => c === human });
+  const state = { sessions: [{ ...f.actor, roomId: null }], rooms: [] };
+  if (reason !== 'off') p.set(human, true);
+  if (reason === 'otherSteward') role.set({ sessionId: 'another', nativeId: 'native-another' });
+  if (reason === 'limit') for (let n = 0; n < 30; n++) assert.ok(p.take(f.actor, { method: 'join', arguments: ['target', true], operation_id: 'reserve-' + n }, state, 'shared'));
+  f.controller.standing = (actor, command) => p.take(actor, command, state, 'shared');
+  f.controller.standingValid = (actor, command, _c, grant) => p.valid(actor, command, state, 'shared', grant);
+  const result = await f.ask(reason === 'wider' ? 'create' : 'join');
+  assert.equal(result.state, 'confirmation-required'); assert.equal(result.approvedBy, undefined); assert.deepEqual(f.effects, []);
+});
+
+test('non-bypass creation must use the same directory as its permission baseline', () => {
+  const { creationCovered } = require('../steward-standing.cjs');
+  const peer = { provider: 'claude', nativePermissionMode: 'acceptEdits', cwd: '/synthetic/project' };
+  const options = { provider: 'claude', cwd: '/synthetic', settings: { permissionMode: 'acceptEdits' } };
+  assert.equal(creationCovered(options, [peer]), false);
+  assert.equal(creationCovered({ ...options, cwd: peer.cwd }, [peer]), true);
+  assert.equal(creationCovered({ ...options, cwd: peer.cwd, newDirectory: true }, [peer]), false);
+});
+
+test('current native permission overrides an earlier bypass launch', () => {
+  const { creationCovered } = require('../steward-standing.cjs');
+  const peer = { provider: 'claude', cwd: '/synthetic', skipPermissions: true, nativePermissionMode: 'plan' };
+  assert.equal(creationCovered({ provider: 'claude', cwd: peer.cwd, skipPermissions: true }, [peer]), false);
+  assert.equal(creationCovered({ provider: 'claude', cwd: peer.cwd, settings: { permissionMode: 'plan' } }, [peer]), true);
+});
+
+test('Codex creation asks until effective approval and sandbox permissions are observable', () => {
+ const { creationCovered } = require('../steward-standing.cjs');
+ assert.equal(creationCovered({ provider:'codex',skipPermissions:true }, [{ provider:'codex',skipPermissions:true }]), false);
 });
