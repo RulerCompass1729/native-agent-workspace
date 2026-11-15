@@ -2,6 +2,7 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
 const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '../..');
+const generated = new Set(['dsh/client.js']);
 
 // Execute the real copied module graph, not a second expected-filename list.
 // Requiring Workspace does not construct a service, native engine or model.
@@ -17,7 +18,11 @@ for (const [manifest, variable] of [['app/service-client.cjs', 'names'], ['scrip
       assert.equal(typeof name, 'string');
       const target = path.join(directory, name);
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(path.join(root, 'app', name), target);
+      // scripts/build-ui.cjs writes dsh/client.js and Git ignores it; Workspace never
+      // loads it. A checkout that has not built the UI still checks this module graph.
+      const source = path.join(root, 'app', name);
+      if (generated.has(name) && !fs.existsSync(source)) fs.writeFileSync(target, '');
+      else fs.copyFileSync(source, target);
     }
     const load = () => spawnSync(process.execPath, ['-e',
       'const assert = require("node:assert/strict"); const { Workspace } = require(process.argv[1]); assert.equal(typeof Workspace, "function"); Workspace.prototype.assertMaintenanceShutdown.call({ sessions: new Map(), stops: new Map(), rooms: new Map() }, []);',
