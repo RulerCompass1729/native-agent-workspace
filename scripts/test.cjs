@@ -3,7 +3,7 @@
 // residue check happens BEFORE fallback removal, so cleanup cannot mask a leak.
 const fs = require('node:fs'), path = require('node:path');
 const { spawn } = require('node:child_process');
-const { identity, readRecords, removeOwned } = require('./fixtures/test-temp.cjs');
+const { guards, identity, inside, mayExist, readRecords, removeOwned } = require('./fixtures/test-temp.cjs');
 const root = path.resolve(__dirname, '..');
 async function run(args = process.argv.slice(2)) {
   // Keep Unix socket paths short. This exact owned directory is the only tree
@@ -28,15 +28,21 @@ async function run(args = process.argv.slice(2)) {
       child = spawn(process.execPath, ['--test', ...args, ...files], { cwd: root, env, stdio: 'inherit' });
       child.once('error', reject); child.once('close', (code, stopped) => resolve({ code, signal: stopped }));
     });
-    const records = readRecords(journal), errors = [];
+    const records = readRecords(journal), errors = [], guard = guards(records), kept = [];
     // A worker killed before its exit handler gets the same identity-checked
     // cleanup here. Records outside this suite are only exact mkdtemp receipts.
-    for (const record of [...records].reverse()) if (!record.delegated) try { removeOwned(record); } catch (error) { errors.push(error.message); }
+    // A directory on the path of a delegated profile that may still exist is
+    // kept and reported, never removed with it.
+    for (const record of [...records].reverse()) if (!record.delegated) {
+      const by = guard(record);
+      if (by) kept.push({ path: record.path, by });
+      else try { removeOwned(record); } catch (error) { errors.push(error.message); }
+    }
     const leftovers = fs.readdirSync(temporary, { withFileTypes: true }).filter(entry => entry.isDirectory() && entry.name.startsWith('naw-')).map(entry => path.join(temporary, entry.name));
-    const registered = records.filter(record => fs.existsSync(record.path));
+    const registered = records.filter(record => mayExist(record.path));
     const extra = [...new Set([...leftovers, ...registered.map(record => record.path)])];
-    retain = registered.some(record => record.delegated && (record.path === temporary || record.path.startsWith(temporary + path.sep))) || errors.length > 0;
-    report = { scope: owned, retained: retain, created: records.length, before: 0, after: extra.length, errors, leftovers: extra.map(file => ({
+    retain = kept.length > 0 || registered.some(record => record.delegated && inside(temporary, record.path)) || errors.length > 0;
+    report = { scope: owned, retained: retain, created: records.length, before: 0, after: extra.length, errors, protected: kept, leftovers: extra.map(file => ({
       prefix: path.basename(file).replace(/-[^-]+$/, ''),
       source: records.find(record => record.path === file)?.source || 'unregistered temporary directory',
       path: file,
@@ -44,6 +50,7 @@ async function run(args = process.argv.slice(2)) {
     if (env.NAW_TEST_TEMP_REPORT) fs.writeFileSync(env.NAW_TEST_TEMP_REPORT, JSON.stringify({ ...report, records }, null, 2));
     console.log(`TEMP GUARD: ${extra.length || errors.length ? 'FAIL' : 'PASS'} before=0 after=${extra.length} created=${records.length}`);
     for (const item of report.leftovers) console.error(`TEMP LEAK: ${item.prefix} | ${item.source} | ${item.path}`);
+    for (const item of kept) console.error(`TEMP PROTECTED: ${item.path} | kept for ${item.by}`);
     for (const error of errors) console.error('TEMP CLEANUP: ' + error);
     if (retain) console.error('TEMP RETAINED: protected or uncertain cleanup; inspect ' + temporary);
     return result.code || (result.signal || signal ? 1 : 0) || (extra.length || errors.length ? 1 : 0);

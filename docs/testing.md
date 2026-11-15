@@ -13,7 +13,10 @@ reconciles those receipts after workers finish, including a child killed before
 its exit handler runs. A replaced directory never inherits deletion permission.
 The existing `test-scratch` helper keeps authority over its own process-aware
 cleanup. If it refuses cleanup, the command fails and retains that scope; a
-second cleanup layer does not override its safety decision. Nested commands
+second cleanup layer does not override its safety decision. While such a profile
+may still exist, no owned directory that holds it or lies inside it is removed,
+even when its creator was killed or the profile came from another process; the
+command prints each one as `TEMP PROTECTED` and fails. Nested commands
 follow the same rule. Existing system temporary directories are neither adopted
 nor swept.
 

@@ -14,6 +14,14 @@ function removeOwned(record) {
       stat.uid !== record.uid || fs.realpathSync(record.path) !== record.path) throw Error('Temporary directory identity changed: ' + record.path);
   fs.rmSync(record.path, { recursive: true });
 }
+// A delegated directory belongs to test-scratch's process-aware cleanup. While
+// it may still exist, nothing on its path is removed here: neither a directory
+// holding it nor one inside it. A failed lstat counts as still existing.
+const mayExist = file => { try { fs.lstatSync(file); return true; } catch (error) { return error.code !== 'ENOENT'; } };
+function guards(records) {
+  const kept = records.filter(record => record.delegated && mayExist(record.path)).map(record => record.path);
+  return record => kept.find(file => inside(record.path, file) || inside(file, record.path));
+}
 function registry(journal, roots) {
   const owned = [];
   const track = directory => {
@@ -25,8 +33,13 @@ function registry(journal, roots) {
     owned.push(record);
   };
   const cleanup = () => {
-    const errors = [];
-    for (const record of [...owned].reverse()) if (!record.delegated) try { removeOwned(record); } catch (error) { errors.push(error.message); }
+    const errors = [], removable = owned.filter(record => !record.delegated).reverse();
+    if (!removable.length) return errors;
+    let guard;
+    // Another process may have delegated a directory inside one of ours.
+    // Unreadable receipts leave every directory to the suite parent.
+    try { guard = guards([...owned, ...readRecords(path.dirname(journal))]); } catch { return errors; }
+    for (const record of removable) if (!guard(record)) try { removeOwned(record); } catch (error) { errors.push(error.message); }
     return errors;
   };
   const delegate = directory => {
@@ -69,5 +82,5 @@ function install(directory) {
     if (errors.length) { console.error(errors.join('\n')); process.exitCode ||= 1; }
   });
 }
-module.exports = { identity, inside, registry, removeOwned, readRecords };
+module.exports = { identity, inside, guards, mayExist, registry, removeOwned, readRecords };
 if (process.env.NAW_TEST_TEMP_JOURNAL) install(process.env.NAW_TEST_TEMP_JOURNAL);

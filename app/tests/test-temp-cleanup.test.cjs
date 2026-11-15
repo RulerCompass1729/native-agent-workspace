@@ -96,3 +96,58 @@ test('a protected scratch owner refusing cleanup makes the suite fail and preser
   assert.equal(result.report.after, 1);
   assert.equal(fs.readFileSync(path.join(result.report.leftovers[0].path, 'keep'), 'utf8'), 'unconfirmed resource');
 });
+// A protected profile inside an ordinary owned directory: removing that
+// directory would remove the profile, so its whole path must survive.
+const scratchModule = JSON.stringify(path.resolve(__dirname, '../../scripts/fixtures/test-scratch.cjs'));
+const nested = ending => `
+  const test = require('node:test'), fs = require('node:fs'), os = require('node:os'), path = require('node:path'), cp = require('node:child_process');
+  const scratch = require(${scratchModule});
+  test('a scratch profile nested in an owned directory', async () => {
+    const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-nested-parent-')));
+    const old = process.env.TMPDIR; process.env.TMPDIR = parent;
+    const profile = scratch.directory(path.join(parent, 'naw-nested-profile-')); process.env.TMPDIR = old;
+    fs.writeFileSync(path.join(profile, 'keep'), 'retained by its owner');
+    ${ending}
+  });
+`;
+function assertKept(result) {
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout, /TEMP GUARD: FAIL/);
+  assert.equal(result.report.retained, true, 'A protected profile keeps its suite scope');
+  const profile = result.report.records.find(record => record.delegated);
+  const parent = result.report.records.find(record => !record.delegated && profile.path.startsWith(record.path + path.sep));
+  assert.equal(fs.readFileSync(path.join(profile.path, 'keep'), 'utf8'), 'retained by its owner');
+  assert.ok(result.report.leftovers.some(item => item.path === parent.path), 'The kept parent is reported, not deleted');
+  assert.ok(result.report.protected.some(item => item.path === parent.path && item.by === profile.path));
+}
+test('a refused process check keeps a protected profile nested in an owned directory', t => {
+  const result = fixture(t, nested(`
+    const original = cp.execFileSync;
+    cp.execFileSync = function (file, args, ...rest) {
+      if (file === '/bin/ps' && args[0] === '-axo') throw Error('synthetic process census unavailable');
+      return original.call(this, file, args, ...rest);
+    };
+    await assert.rejects(scratch.release(), /census unavailable/);
+  `).replace("cp = require('node:child_process');", "cp = require('node:child_process'), assert = require('node:assert');"));
+  assertKept(result);
+});
+test('a killed worker keeps a protected profile nested in an owned directory', t => {
+  const result = fixture(t, nested(`process.kill(process.pid, 'SIGKILL');`));
+  assertKept(result);
+});
+test('a worker keeps its own directory when another process protects a directory inside it', t => {
+  const result = fixture(t, `
+    const test = require('node:test'), fs = require('node:fs'), os = require('node:os'), path = require('node:path'), cp = require('node:child_process');
+    test('protected by a child process', () => {
+      const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-shared-parent-')));
+      const child = cp.spawnSync(process.execPath, ['-e', [
+        "const fs=require('node:fs'),path=require('node:path');",
+        "const d=fs.mkdtempSync(path.join(process.argv[1],'naw-child-profile-'));",
+        "globalThis[Symbol.for('naw.testTemp.delegate')](d);",
+        "fs.writeFileSync(path.join(d,'keep'),'retained by its owner');",
+      ].join(''), parent], { env: process.env });
+      if (child.status !== 0) throw Error(String(child.stderr));
+    });
+  `);
+  assertKept(result);
+});
