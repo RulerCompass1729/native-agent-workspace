@@ -284,3 +284,145 @@ for (const retry of ['archive', 'restore']) test(`a save failure after detach re
   assert.equal(cold.value.archivedSessions.includes(id), false);
   assert.equal(f.moves.filter(args => args[0] === id && args[1] === null).length, 1);
 });
+
+const placement = s => ({ nativeId: s.nativeId ?? null, connectionRevision: s.connectionRevision || 0,
+  revision: s.placementRevision || 0, signature: JSON.stringify([roomIds(s).sort(), s.memberRevision || 0,
+    Object.entries(s.roomMembershipRevisions || {}).sort(([a], [b]) => a.localeCompare(b))]) });
+const archiveNotice = (rooms, room, id) => rooms.metadata(room).events.find(e => e.kind === 'archive-member' && e.sessionId === id);
+
+test('ended legacy records reported as unknown by workspace_sessions archive with historical unknown children', async t => {
+  const f = await fixture(t, 'claude'), id = f.ids[1], s = f.workspace.get(id);
+  s.fleet = Array.from({ length: 13 }, (_, n) => ({ event: 'SubagentStart', id: `historical-${n}`, stale: true }));
+  const { OperatorControl } = require('../operator-control.cjs');
+  assert.equal(OperatorControl.prototype.localMetadata.call({ w: f.workspace }, s).state, 'unknown');
+  assert.equal(require('../renderer/fleet-observation.js').currentFleet(s).unknown, 13);
+  await f.rooms.archiveRoom(f.client, undefined, f.room);
+  assert.equal(f.rooms.value.archivedSessions.includes(id), true, 'Ended history must not prevent archiving the conversation');
+  await new RoomState(f.dir).restoreRoom(f.client, undefined, f.room);
+  assert.deepEqual(roomIds(f.workspace.get(id)), [f.room]);
+  assert.equal(require('../renderer/fleet-observation.js').currentFleet(s).unknown, 13, 'Archiving never declares old children complete');
+});
+
+test('an ended member of an older writer archives locally without an unguarded detach', async t => {
+  const f = await fixture(t), id = f.ids[1], s = f.workspace.get(id);
+  s.serviceCapabilities = []; s.fleet = [{ event: 'SubagentStart', id: 'old-child', stale: true }];
+  const call = f.client.call;
+  f.client.call = async (method, ...args) => {
+    const value = await call(method, ...args);
+    if (method === 'initial') value.sessions.find(s => s.id === id).backendUnavailable = true;
+    return value;
+  };
+  await f.rooms.archiveRoom(f.client, undefined, f.room);
+  assert.equal(f.rooms.value.archivedSessions.includes(id), true);
+  assert.ok(!f.moves.some(args => args[0] === id), 'No unguarded mutation is sent to an older writer');
+  await new RoomState(f.dir).restoreRoom(f.client, undefined, f.room);
+  assert.deepEqual(roomIds(f.workspace.get(id)), [f.room]);
+  assert.equal(new RoomState(f.dir).value.archivedSessions.includes(id), false);
+});
+
+test('a retained writer with the older archive guard can archive ended historical fleet records locally', async t => {
+  const f = await fixture(t), id = f.ids[1], call = f.client.call;
+  f.workspace.get(id).fleet = [{ event: 'SubagentStart', id: 'historical-child', stale: true }];
+  f.client.call = async (method, ...args) => {
+    // The retained backend has the capability but its older predicate still
+    // refuses every unknown child, including historical ones of an ended root.
+    if (method === 'moveMembership' && args[0] === id && args[2].archiveIdle) throw require('../ui-errors.cjs').uiError('error.planWorking');
+    return call(method, ...args);
+  };
+  await f.rooms.archiveRoom(f.client, undefined, f.room);
+  assert.equal(f.rooms.value.archivedSessions.includes(id), true);
+  await new RoomState(f.dir).restoreRoom(f.client, undefined, f.room);
+  assert.deepEqual(roomIds(f.workspace.get(id)), [f.room]);
+});
+
+test('historical observations arriving after a partial ended-member detach do not block its saved retry', async t => {
+  const f = await fixture(t), id = f.ids[1], update = f.rooms.update.bind(f.rooms); let failed = false;
+  f.rooms.update = (fields, ...args) => {
+    if (!failed && fields.sessionArchives?.[id]?.rooms[0]?.done) { failed = true; throw Error('synthetic save failure'); }
+    return update(fields, ...args);
+  };
+  await assert.rejects(f.rooms.archiveRoom(f.client, undefined, f.room), /synthetic save failure/);
+  f.workspace.get(id).fleet = [{ event: 'SubagentStart', id: 'historical-child', stale: true }];
+  const cold = new RoomState(f.dir); await cold.archiveRoom(f.client, undefined, f.room);
+  assert.equal(cold.value.archivedSessions.includes(id), true);
+  assert.equal(f.moves.filter(args => args[0] === id && args[1] === null).length, 1);
+  await new RoomState(f.dir).restoreRoom(f.client, undefined, f.room);
+  assert.deepEqual(roomIds(f.workspace.get(id)), [f.room]);
+});
+
+async function oldRoomOnlyArchive(f, ids) {
+  const proofs = {};
+  for (const id of ids) {
+    await f.rooms.changeMember(f.client, id, false, undefined, f.room, undefined, true);
+    proofs[id] = placement(f.workspace.get(id));
+  }
+  f.rooms.update({ archived: true, restoreMembers: ids, restorePlacements: proofs }, undefined, f.room);
+  f.moves.length = 0;
+}
+test('repeat archive repairs six old room-only spills from disk, is idempotent, and restores the group', async t => {
+  const f = await fixture(t), ids = [...f.ids.slice(0, 2)];
+  for (let n = 0; n < 4; n++) {
+    const id = await f.workspace.create('claude', f.dir, 'owner', `Former member ${n}`);
+    await f.rooms.membership(f.client, id, true, undefined, f.room); ids.push(id);
+  }
+  for (const id of ids) { await f.workspace.stop(id); f.workspace.get(id).fleet = [{ event: 'SubagentStart', id: 'historical', stale: true }]; }
+  await oldRoomOnlyArchive(f, ids);
+  const cold = new RoomState(f.dir);
+  await cold.archiveRoom(f.client, undefined, f.room);
+  assert.deepEqual(cold.value.archivedSessions.slice().sort(), ids.slice().sort());
+  assert.equal(f.moves.length, 0, 'Already detached members need no backend move');
+  await new RoomState(f.dir).archiveRoom(f.client, undefined, f.room);
+  assert.equal(new RoomState(f.dir).value.archivedSessions.length, 6);
+  await new RoomState(f.dir).restoreRoom(f.client, undefined, f.room);
+  for (const id of ids) assert.deepEqual(roomIds(f.workspace.get(id)), [f.room]);
+  assert.deepEqual(new RoomState(f.dir).value.archivedSessions, []);
+});
+
+test('space archive records who stays working or genuinely unknown without changing their homes', async t => {
+  const f = await fixture(t), [unknown, , working] = f.ids;
+  f.workspace.get(unknown).state = 'unknown';
+  await f.rooms.archiveRoom(f.client, undefined, f.room);
+  for (const [id, reason] of [[unknown, 'unconfirmed'], [working, 'working']]) {
+    assert.deepEqual(roomIds(f.workspace.get(id)), [f.room]);
+    assert.equal(f.rooms.value.archivedSessions.includes(id), false);
+    assert.equal(archiveNotice(f.rooms, f.room, id)?.archiveReason, reason);
+  }
+});
+
+test('a late busy member is named in the successful archive record', async t => {
+  const f = await fixture(t), [first, second] = f.ids, call = f.client.call;
+  f.client.call = async (method, ...args) => {
+    const result = await call(method, ...args);
+    if (method === 'moveMembership' && args[0] === first) f.workspace.get(second).state = 'working';
+    return result;
+  };
+  await f.rooms.archiveRoom(f.client, undefined, f.room);
+  assert.equal(archiveNotice(f.rooms, f.room, second)?.archiveReason, 'working');
+  assert.deepEqual(roomIds(f.workspace.get(second)), [f.room]);
+});
+
+test('repeat archive refuses changed placement, a reused identity and missing former members with a named reason', async t => {
+  const f = await fixture(t), ids = f.ids.slice(0, 3);
+  await oldRoomOnlyArchive(f, ids);
+  await f.rooms.membership(f.client, ids[0], true, undefined, f.other);
+  f.workspace.get(ids[1]).nativeId = randomUUID();
+  f.workspace.sessions.delete(ids[2]);
+  const cold = new RoomState(f.dir); await cold.archiveRoom(f.client, undefined, f.room);
+  assert.deepEqual(cold.value.archivedSessions, []);
+  for (const id of ids) assert.equal(archiveNotice(cold, f.room, id)?.archiveReason, 'changed');
+  assert.deepEqual(roomIds(f.workspace.get(ids[0])), [f.other]);
+});
+
+test('a failure after detach names the member, fails the receipt and remains restorable', async t => {
+  const f = await fixture(t), id = f.ids[0], call = f.client.call;
+  f.client.call = async (method, ...args) => {
+    const result = await call(method, ...args);
+    if (method === 'moveMembership' && args[0] === id) f.workspace.get(id).state = 'working';
+    return result;
+  };
+  await assert.rejects(f.rooms.archiveRoom(f.client, undefined, f.room), e => e.uiMessage?.key === 'error.planWorking');
+  assert.equal(f.rooms.metadata(f.room).archived, false);
+  assert.equal(archiveNotice(f.rooms, f.room, id)?.archiveReason, 'failed');
+  await new RoomState(f.dir).restoreRoom(f.client, undefined, f.room);
+  assert.deepEqual(roomIds(f.workspace.get(id)), [f.room]);
+});

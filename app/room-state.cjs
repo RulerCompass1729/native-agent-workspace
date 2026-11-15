@@ -9,7 +9,7 @@ const { validateName } = require('./session-labels.cjs');
 const { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
 const { captureSource, prepareBatch, assertCurrentSources, sameOperation, validateBatch } = require('./space-merge.cjs');
 const queueRules = require('./queue-dispatch.cjs');
-const { archiveIdle } = require('./renderer/fleet-observation.js');
+const { archiveIdle, currentFleet } = require('./renderer/fleet-observation.js');
 const { queueOutcomeSource, storedQueueSource } = require('./butler-ingress.cjs');
 const { queueReadySource } = require('./butler-ready.cjs');
 const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f]/u.test(id);
@@ -1257,6 +1257,20 @@ class RoomState {
         this.update({ sessionArchives: { ...this.value.sessionArchives, [id]: plan } });
       }
       if ((session.nativeId ?? null) !== plan.nativeId || plan.detached) throw uiError('error.room.sessionRestoreChanged');
+      const capabilities = session.serviceCapabilities || snapshot.capabilities || [];
+      if (archivedByRoom && session.state === 'ended' && roomIds(session).length === 1 && isMember(session, archivedByRoom) &&
+          (currentFleet(session).unknown || session.backendUnavailable || session.transportDisconnected ||
+            !['singleHomeMoveV1', 'archiveIdleMoveV1'].every(cap => capabilities.includes(cap)))) {
+        // Older writers cannot guard a detach, or still reject historical fleet
+        // observations. Keep the ended member's home and archive only the local
+        // conversation; restoration accepts this same home. No native stop/join.
+        const current = (await client.call('initial')).sessions.find(s => s.id === id);
+        if (!current || current.state !== 'ended' || !this.roomArchiveIdle(current) ||
+            !isDeepStrictEqual(restorePlacement(current), plan.checkpoint) ||
+            roomIds(current).length !== 1 || !isMember(current, archivedByRoom)) throw uiError('error.room.sessionRestoreChanged');
+        this.saveRoomSessionArchive(current, archivedByRoom, plan.rooms[0]);
+        return;
+      }
       for (let index = 0; index < plan.rooms.length; index++) {
         let step = plan.rooms[index]; if (step.done) continue;
         const current = (await client.call('initial')).sessions.find(s => s.id === id);
@@ -1349,14 +1363,39 @@ class RoomState {
   roomArchiveIdle(session) {
     return archiveIdle(session);
   }
+  saveRoomSessionArchive(session, room, step) {
+    const cut = restorePlacement(session);
+    this.update({ archivedSessions: [...new Set([...this.value.archivedSessions, session.id])],
+      sessionArchives: { ...this.value.sessionArchives, [session.id]: { nativeId: session.nativeId ?? null,
+        rooms: [{ ...step, done: true }], checkpoint: cut, detached: cut, archivedByRoom: room } } });
+  }
+  archiveMemberNotice(room, id, session, labels, reason, error) {
+    const name = labels?.get(id) || session?.name || id;
+    const failure = error?.uiMessage?.key;
+    const key = reason !== 'failed' ? reason : failure === 'error.planWorking' ? 'failedWorking'
+      : failure === 'error.movePlacementUnsupported' ? 'failedUnsupported'
+      : failure === 'error.room.sessionRestoreChanged' || failure === 'error.movePlacementChanged' ? 'failedChanged' : 'failed';
+    this.update({}, { kind: 'archive-member', sessionId: id, name, archiveReason: reason,
+      ...(failure ? { archiveError: failure } : {}), ...uiNotice(`notice.room.archiveMember.${key}`, { name }) }, room);
+  }
+  archiveKeepReason(session) {
+    if (!session) return 'changed';
+    if (roomIds(session).length > 1) return 'elsewhere';
+    return ['working', 'starting', 'stopping', 'approval', 'background'].includes(session.state) ||
+      session.activeTurnId || session.pendingTag || session.pendingQueue || session.pendingSteer || session.nativeInputRequired ||
+      session.approval || session.nativeApproval?.requests?.length || session.nativeGoal?.status === 'active' ||
+      session.background > 0 || session.scheduled > 0 || currentFleet(session).running ? 'working' : 'unconfirmed';
+  }
   roomArchivePlan(snapshot, room = DEFAULT_ROOM_ID) {
     const value = this.metadata(room);
-    const pending = id => value.restoreMembers.includes(id) && this.value.sessionArchives[id]?.archivedByRoom === room && !this.value.archivedSessions.includes(id);
-    const members = snapshot.sessions.filter(s => isMember(s, room) || pending(s.id));
-    const archive = members.filter(s => this.roomArchiveIdle(s) && !this.value.archivedSessions.includes(s.id) &&
-      (roomIds(s).length === 1 && isMember(s, room) || pending(s.id) && roomIds(s).length === 0)).map(s => s.id);
-    return { room, name: value.name, archived: value.archived, archive, keep: members.filter(s => !archive.includes(s.id)).map(s => s.id),
-      members: members.map(s => ({ id: s.id, ...restorePlacement(s) })) };
+    const pending = id => value.restoreMembers.includes(id) && !this.value.archivedSessions.includes(id);
+    const members = snapshot.sessions.filter(s => !this.value.archivedSessions.includes(s.id) && (isMember(s, room) || pending(s.id)));
+    const archive = members.filter(s => this.roomArchiveIdle(s) && (roomIds(s).length === 1 && isMember(s, room) ||
+      pending(s.id) && !roomIds(s).length && (this.value.sessionArchives[s.id]?.archivedByRoom === room ||
+        isDeepStrictEqual(restorePlacement(s), value.restorePlacements[s.id])))).map(s => s.id);
+    const missing = value.restoreMembers.filter(id => pending(id) && !snapshot.sessions.some(s => s.id === id));
+    return { room, name: value.name, archived: value.archived, archive, keep: [...members.filter(s => !archive.includes(s.id)).map(s => s.id), ...missing],
+      members: [...members.map(s => ({ id: s.id, ...restorePlacement(s) })), ...missing.map(id => ({ id, missing: true }))] };
   }
   archiveRoom(client, labels, room = DEFAULT_ROOM_ID, approved) {
     const gate = room === DEFAULT_ROOM_ID ? 'room' : `room:${room}`;
@@ -1365,23 +1404,45 @@ class RoomState {
     this.gates.add(gate);
     return this.enqueue(client, async () => {
       const value = this.metadata(room);
-      if (value.archived) return;
       const snapshot = await client.call('initial'), plan = this.roomArchivePlan(snapshot, room);
       if (approved && !isDeepStrictEqual(plan, approved)) throw uiError('error.room.sessionRestoreChanged');
+      if (value.archived && !plan.archive.length && !plan.keep.length) return;
       // Persist the intent first. Each session's saved archive owns its original
       // placement and room provenance, including retries after a partial detach.
       const restoreMembers = [...new Set([...value.restoreMembers, ...plan.archive])];
       this.update({ restoreMembers }, undefined, room);
+      for (const id of plan.keep) {
+        const current = snapshot.sessions.find(s => s.id === id);
+        const saved = this.value.sessionArchives[id];
+        const proof = saved?.archivedByRoom === room ? saved.checkpoint : value.restorePlacements?.[id];
+        const changed = !current || !isMember(current, room) && (!proof || !isDeepStrictEqual(restorePlacement(current), proof));
+        this.archiveMemberNotice(room, id, current, labels, changed ? 'changed' : this.archiveKeepReason(current));
+      }
       for (const id of plan.archive) {
         if (this.value.archivedSessions.includes(id)) continue;
         const saved = this.value.sessionArchives[id], current = (await client.call('initial')).sessions.find(s => s.id === id);
         const owned = saved?.archivedByRoom === room;
-        if (!current || !this.roomArchiveIdle(current)) continue;
-        if (!owned && (!plan.archive.includes(id) || roomIds(current).length !== 1 || !isMember(current, room))) continue;
-        if (!owned && !isDeepStrictEqual({ id, ...restorePlacement(current) }, plan.members.find(s => s.id === id))) throw uiError('error.room.sessionRestoreChanged');
-        if (owned && (!isDeepStrictEqual(restorePlacement(current), saved.checkpoint) &&
-            !saved.rooms.some(r => r.expected?.operationId && r.expected.operationId === current.placementReceipt?.operationId))) throw uiError('error.room.sessionRestoreChanged');
-        await this.archiveSessionNow(client, id, labels?.get(id), { archivedByRoom: room });
+        if (!current || !this.roomArchiveIdle(current)) {
+          this.archiveMemberNotice(room, id, current, labels, this.archiveKeepReason(current)); continue;
+        }
+        try {
+          if (!owned && !isDeepStrictEqual({ id, ...restorePlacement(current) }, plan.members.find(s => s.id === id))) throw uiError('error.room.sessionRestoreChanged');
+          if (!saved && !roomIds(current).length && value.restoreMembers.includes(id) &&
+              isDeepStrictEqual(restorePlacement(current), value.restorePlacements?.[id])) {
+            // The old room-only archive already detached this exact identity. Its
+            // saved cut authorizes local repair, never a second backend mutation.
+            const index = value.restoreMembers.indexOf(id);
+            this.saveRoomSessionArchive(current, room, { id: room, index, next: value.restoreMembers[index + 1] || null, expected: null });
+            continue;
+          }
+          if (!owned && (roomIds(current).length !== 1 || !isMember(current, room))) throw uiError('error.room.sessionRestoreChanged');
+          if (owned && (!isDeepStrictEqual(restorePlacement(current), saved.checkpoint) &&
+              !saved.rooms.some(r => r.expected?.operationId && r.expected.operationId === current.placementReceipt?.operationId))) throw uiError('error.room.sessionRestoreChanged');
+          await this.archiveSessionNow(client, id, labels?.get(id), { archivedByRoom: room });
+        } catch (error) {
+          this.archiveMemberNotice(room, id, current, labels, 'failed', error);
+          throw error;
+        }
       }
       this.update({ archived: true }, { kind: 'archive', ...uiNotice('notice.room.archived') }, room);
     }, undefined, room).finally(() => this.gates.delete(gate));

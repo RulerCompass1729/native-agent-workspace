@@ -63,10 +63,15 @@
   // Shared by the desktop's archive plan and the owning backend's synchronous
   // placement writer. Observation only: never query or start a native agent.
   function archiveIdle(session) {
-    if (!session || !['idle', 'ended'].includes(session.state) || session.backendUnavailable || session.transportDisconnected || session.nativeContextPending ||
+    if (!session || !['idle', 'ended'].includes(session.state) || session.nativeContextPending ||
         session.activeTurnId || session.pendingTag || session.pendingQueue || session.pendingSteer || session.nativeInputRequired ||
         session.approval || session.nativeApproval?.requests?.length || session.nativeGoal?.status === 'active' ||
         session.background > 0 || session.scheduled > 0) return false;
+    // Archiving an ended conversation is a local organization action, not a
+    // claim that its historical children finished. Their unknown observations
+    // remain visible after restore. An unavailable idle backend is still unsafe.
+    if (session.state === 'ended') return true;
+    if (session.backendUnavailable || session.transportDisconnected) return false;
     const fleet = currentFleet(session);
     return !fleet.running && !fleet.unknown && !fleet.work.unconfirmed;
   }
