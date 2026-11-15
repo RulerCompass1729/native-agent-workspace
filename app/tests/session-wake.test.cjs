@@ -917,15 +917,95 @@ test('words that run as their own later turn do not reopen the turn they waited 
   await f.finish();
   assert.equal(f.writes.length, 0);
 });
-test('the butler, after reading the person, may message a recipient it already registered one for in that turn (wake proposal, items 2 and 3)', async t => {
+test('the butler keeps staged messages and its per-recipient limit when the person speaks and is read', async t => {
   const f = await personSpeaks(t, { steward: true });
-  assert.equal((await f.send(f.b, 'First version.', 'one')).status, 'staged');
-  f.read(await f.say('Change it.'));
-  assert.equal((await f.send(f.b, 'Changed version.', 'two')).status, 'staged');
-  await assert.rejects(f.send(f.b, 'Third.', 'three'), /这一轮已经给这个收件方登记过一条/);
+  const second = await f.target.create('codex', f.root, 'target-owner', 'Second receiver');
+  assert.equal((await f.send(f.b, 'First task.', 'one')).status, 'staged');
+  const words = await f.say('Also tell the second member.');
+  assert.equal((await f.send(second, 'Second task.', 'two')).status, 'staged', 'no waiting for a native read');
+  f.read(words);
+  await assert.rejects(f.send(f.b, 'Duplicate task.', 'three'), /这一轮已经给这个收件方登记过一条/);
+  assert.equal(f.ra.wakeTurn.epoch || 0, 0, 'speaking does not replenish the same turn budget');
   await f.finish();
-  assert.equal(f.writes.length, 1); assert.match(f.writes[0].text, /\nChanged version\.$/);
-  assert.deepEqual(f.sent().map(m => m.wake.status), ['cancelled', 'submitted']);
+  assert.equal(f.writes.length, 2);
+  assert.deepEqual(f.sent().map(m => m.wake.status), ['submitted', 'submitted']);
+});
+for (const steward of [true, false]) test(`late first prompt hook after turn-start: ${steward ? 'butler keeps' : 'ordinary sender retains'} its input policy`, async t => {
+  const f = await personSpeaks(t, { steward });
+  const promptId = f.ra.liveTurn.promptId, turn = f.ra.wakeTurn, control = f.s.controlRevision;
+  // The native display already linked the prompt; its settings hook follows on another socket.
+  f.s.messages.push({ id: `claude-prompt-${promptId}`, role: 'user', origin: 'native', nativeId: f.s.nativeId, text: 'Agreed.' });
+  f.ra.hook({ hook_event_name: 'UserPromptSubmit', session_id: f.s.nativeId, prompt_id: promptId, prompt: 'Agreed.', source: 'user' });
+  assert.equal(f.s.controlRevision, control + 1);
+  assert.equal(f.ra.wakeTurn, turn, 'the late hook has no turnId and does not call nativeStart again');
+  assert.equal(f.ra.wakeTurn.awaiting, undefined, 'this is not the queued/read path');
+  if (steward) {
+    assert.equal((await f.send(f.b, 'First call of the new turn.', 'first')).status, 'staged');
+    await f.finish(); assert.equal(f.writes.length, 1);
+  } else await assert.rejects(f.send(f.b, 'Same ordinary rule.', 'first'), refusedAs('error.wake.turnRevokedByHuman'));
+});
+for (const [name, act] of Object.entries({
+  stop: async f => { f.ra.interrupt = async () => ({ interrupted: true }); await f.source.interrupt(f.a, 'source-owner'); },
+  takeover: f => f.source.claim(f.a, 'another-owner'),
+  'pause all': f => f.source.pauseAll('Explicit stop.'),
+  'automatic messages off': f => require('../session-wake.cjs').setPolicy(f.source, null, false),
+})) test(`butler input cannot restore authority after ${name}`, async t => {
+  const f = await personSpeaks(t, { steward: true });
+  await f.send(f.b, 'Pending task.', 'before');
+  await act(f);
+  f.ra.emit('nativeInput', 'Later words.', { id: 'later-words', source: 'user' });
+  await assert.rejects(f.send(f.b, 'Must not go.', 'after'), refusedAs('error.wake.turnRevokedByHuman'));
+  await f.finish(); assert.equal(f.writes.length, 0);
+});
+
+for (const [steward, end, permission] of [[true, 'complete', false], [false, 'complete', false], [true, 'failed', false], [true, 'complete', true]]) test(`observed native input and turn end preserve only the butler's completed input-only turn (${steward}/${end}/${permission})`, async t => {
+  const f = await personSpeaks(t, { steward });
+  f.ra.terminal = { alive: true };
+  const bound = f.ra.bindRoot({ sessionId: f.s.nativeId, nativeBlocks: true, nativeInlineInput: true, nativePromptInput: true, addressedTool: true });
+  let sequence = 0;
+  const observe = value => f.ra.observeBlock({ sessionId: f.s.nativeId, lease: bound.lease, epoch: bound.observationEpoch, block: true, sequence: ++sequence, ...value });
+  observe({ id: 'control:turn-start', kind: 'control', turnId: 'observed-turn', promptId: 'observed-prompt', status: 'running' });
+  await f.send(f.b, 'Keep the pending task.', 'pending');
+  observe({ id: 'control:input', kind: 'control', status: 'complete' });
+  if (permission) observe({ id: 'control:permission', kind: 'control', status: 'complete', turnId: 'observed-turn', permissionId: 'permission:one' });
+  observe({ id: 'turn:observed-turn', kind: 'turn', turnId: 'observed-turn', status: end });
+  for (let n = 0; n < 8; n++) await tick();
+  const expected = steward && end === 'complete' && !permission;
+  assert.equal(f.writes.length, expected ? 1 : 0);
+  assert.equal(f.sent()[0].wake.status, expected ? 'submitted' : 'cancelled');
+});
+
+for (const [name, data, keeps] of [['text', 'hello\r', true], ['paste', '\x1b[200~pasted text\x1b[201~', true], ['Esc', '\x1b', false], ['Ctrl-C', '\x03', false]]) test(`butler terminal ${name} keeps only message input authorized`, async t => {
+  const f = await butler(t, 2), keys = [];
+  f.s.view = 'terminal'; f.ra.terminal = { alive: true, input: data => keys.push(data) };
+  await f.send(f.ids[0], 'Already staged.', 'first');
+  f.source.input(f.a, data, 'source-owner');
+  assert.deepEqual(keys, [data]);
+  if (keeps) assert.equal((await f.send(f.ids[1], 'After input.', 'second')).status, 'staged');
+  else await assert.rejects(f.send(f.ids[1], 'After stop.', 'second'), refusedAs('error.wake.turnRevokedByHuman'));
+  await f.finish(); assert.equal(f.writes.length, keeps ? 2 : 0);
+});
+test('the butler keeps its authority when a Codex human steer enters its running turn', async t => {
+  const f = await butler(t, 2); f.ra.steerAvailable = true; f.ra.finishTurn = () => {};
+  f.ra.steer = async (_text, _tag, turnId, valid) => { assert.equal(turnId, f.ra.turnId); assert.equal(valid(), true); };
+  await f.send(f.ids[0], 'Before steering.', 'first');
+  await f.source.steer(f.a, 'Also tell the other member.', 'source-owner', f.ra.turnId);
+  assert.equal((await f.send(f.ids[1], 'After steering.', 'second')).status, 'staged');
+  await f.finish(); assert.equal(f.writes.length, 2);
+});
+test('butler input during recipient lookup preserves the pending call, while a stop still wins', async t => {
+  for (const stop of [false, true]) {
+    const f = await personSpeaks(t, { steward: true }), lookup = f.source.peerRunner.lookupWake.bind(f.source.peerRunner);
+    f.source.peerRunner.lookupWake = async (...args) => {
+      const result = await lookup(...args);
+      if (stop) { f.ra.interrupt = async () => ({ interrupted: true }); await f.source.interrupt(f.a, 'source-owner'); }
+      await f.say('A clarification while looking up the receiver.');
+      return result;
+    };
+    if (stop) await assert.rejects(f.send(f.b, 'Must not go.', 'one'), refusedAs('error.wake.authorizationInvalidated'));
+    else assert.equal((await f.send(f.b, 'Still authorized.', 'one')).status, 'staged');
+    await f.finish(); assert.equal(f.writes.length, stop ? 0 : 1);
+  }
 });
 
 // Option A (board 11-12 21:2x, the person 「按你推荐的来」): 「大管家 60 秒限制选 A：被拒的自动消息先存着、每分钟补送一条，
