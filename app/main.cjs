@@ -2,6 +2,13 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, sessi
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+// The window loads app/dsh/client.js, which scripts/build-ui.cjs writes and Git
+// ignores. A source checkout without it would open on "Failed to load plugins".
+// Electron's isPackaged is a boolean; unit tests run this file with a fake app.
+if (app.isPackaged === false && !fs.existsSync(path.join(__dirname, 'dsh', 'client.js'))) {
+  console.error('app/dsh/client.js is missing: run `node scripts/build-ui.cjs` first (it is generated, not in Git). No window opened.');
+  process.exit(1);
+}
 const { randomUUID } = require('node:crypto');
 const { ensureService, connect, connectService, continuationStatus, continueService } = require('./service-client.cjs');
 const { createStatePush } = require('./state-push.cjs');
