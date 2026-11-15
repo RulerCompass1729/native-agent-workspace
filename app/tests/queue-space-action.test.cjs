@@ -253,9 +253,11 @@ test('the butler, in no space, reads every space as a member; others keep their 
   steward = Error('unreadable'); assert.deepEqual(access(butler), { roomIds: [], secretary: true });
   // What the agent's view then holds: queue text and space content for every space.
   steward = { sessionId: 'butler', nativeId: 'native-butler' }; secretary = null;
-  const value = { sessions: snapshot.sessions, room: { id: 'shared' }, rooms: [{ id: 'web', name: 'Web', notes: 'N', queue: [{ id: 'q', status: 'queued', text: 'Fix it', assignee: null, createdAt: 1 }] }] };
+  const rotation = { kind: 'rotation', rotationReason: { sessionId: 'member', reason: 'refresh-failed' } };
+  const value = { sessions: snapshot.sessions, room: { id: 'shared' }, rooms: [{ id: 'web', name: 'Web', notes: 'N', events: [rotation], queue: [{ id: 'q', status: 'queued', text: 'Fix it', assignee: null, createdAt: 1 }] }] };
   const view = backgroundOperation.conversationSnapshot(value, { ...butler, name: 'B', provider: 'claude' }, null, undefined, context.conversationAccess(butler, snapshot));
   assert.deepEqual([view.rooms[0].notes, view.rooms[0].queue[0].text], ['N', 'Fix it']);
+  assert.deepEqual(view.rooms[0].events[0], rotation, 'The real butler access path includes structured rotation reasons');
 });
 
 // Follow-up 2 (11-12): in the person's data, item 87a3b4c0 named an assignee no session had (it shared only its

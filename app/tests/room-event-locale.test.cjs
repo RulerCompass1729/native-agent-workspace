@@ -27,3 +27,16 @@ test('actual room event producers persist bilingual owned notices while names, f
   assert.equal(record.nativeId, 'native-original'); assert.equal(record.model, 'RAW 模型'); assert.equal(record.pid, 17); assert.equal(record.liveDraft, 'UNSENT 中文');
   assert.throws(() => room.notes('x'.repeat(8001), room.value.revision), /8000/);
 });
+
+test('rotation read failures persist safe reason metadata and a bilingual retry notice', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-rotation-reason-')); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const room = new RoomState(directory), cause = locale.createNotice('notice.rotation.cause.refresh');
+  room.rotationEvent(['shared'], 'waiting', 'Synthetic member', cause.text, undefined, cause.uiMessage,
+    { sessionId: 'synthetic', reason: 'refresh-failed' });
+  const event = new RoomState(directory).metadata().events.at(-1);
+  assert.deepEqual(event.rotationReason, { sessionId: 'synthetic', reason: 'refresh-failed' });
+  assert.match(locale.displayText('zh', event.text, event.uiMessage), /未能读取最新状态.*原会话和工作保留/);
+  assert.match(locale.displayText('en', event.text, event.uiMessage), /latest state.*session and work are kept/);
+  assert.throws(() => room.rotationEvent(['shared'], 'waiting', 'Synthetic member', '', undefined, undefined,
+    { sessionId: 'synthetic', reason: 'PRIVATE BODY with spaces' }), /Invalid rotation reason/);
+});

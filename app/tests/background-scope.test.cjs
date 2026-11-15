@@ -42,3 +42,14 @@ test('hosted top-level and nested metadata use explicit fields, including final 
   assert.deepEqual(result.preflight, { claude: true, codex: false, python: true });
   assert.equal(result.butler.intake, 'ready'); assert.equal(result.appBuild.version, 'fixture');
 });
+
+test('rotation reason codes are shared only with space members and the designated butler access', () => {
+  const source = fixture(), event = { kind: 'rotation', rotationReason: { sessionId: 'agent', reason: 'refresh-failed' } };
+  source.rooms[0].events = [event];
+  for (const access of [{ roomIds: [A], secretary: false }, { roomIds: [A, B], secretary: false }]) {
+    assert.deepEqual(conversationSnapshot(source, actor, null, 'room', access).rooms[0].events, [event]);
+  }
+  for (const access of [{ roomIds: [], secretary: false }, { roomIds: [A, B], secretary: true }]) {
+    assert.equal(conversationSnapshot(source, actor, null, 'room', access).rooms[0].events, undefined);
+  }
+});
