@@ -524,6 +524,38 @@ function claudePromptIdentity(file, nativeId, promptId) {
   } catch { return null; }
   finally { if (fd !== undefined) fs.closeSync(fd); }
 }
+// A prompt typed during a turn waits in native's queue, and the person can take it back before it is read: ↑
+// (popAll) or picking it (popOne) moves it into the editor, cancelling clears it (remove, cleared_on_cancel). Native
+// journals each as a `queue-operation` row with the prompt's text (2.1.321–2.1.323 bundles; measured on 2.1.323,
+// 11-15). Read this session's queue rows from `offset`, bounded, with where each starts. Delivery rows (dequeue)
+// carry no text: the caller keeps any text with an enqueue left.
+const QUEUE_TAKEN_BACK = new Set(['popAll', 'popOne']);
+function claudeQueueRows(file, nativeId, offset) {
+  const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+  if (!uuid.test(nativeId || '') || !Number.isSafeInteger(offset) || offset < 0 || typeof file !== 'string' || !path.isAbsolute(file) || path.basename(file) !== `${nativeId}.jsonl`) return null;
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.uid !== process.getuid() || stat.size < offset || stat.size - offset > 8388608) return null;
+    const buffer = Buffer.alloc(stat.size - offset), rows = [];
+    fs.readSync(fd, buffer, 0, buffer.length, offset);
+    let at = 0;
+    while (at < buffer.length) {
+      const next = buffer.indexOf(10, at), end = next < 0 ? buffer.length : next, line = buffer.toString('utf8', at, end);
+      if (line.includes('"queue-operation"')) {
+        try {
+          const row = JSON.parse(line);
+          const kind = row.operation === 'enqueue' ? 'queued' : QUEUE_TAKEN_BACK.has(row.operation) || row.operation === 'remove' && row.reason === 'cleared_on_cancel' ? 'taken' : null;
+          if (kind && row.type === 'queue-operation' && row.sessionId === nativeId && typeof row.content === 'string') rows.push({ at: offset + at, kind, text: row.content });
+        } catch { /* a torn line proves nothing */ }
+      }
+      at = end + 1;
+    }
+    return rows;
+  } catch { return null; }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
+}
 // A running claude process whose arguments name this native session ID.
 function claudeHolder(nativeId, strict = false) {
   if (!/^[a-f0-9-]{36}$/i.test(nativeId || '')) return null;
@@ -1222,6 +1254,8 @@ class Claude extends EventEmitter {
       const title = claudeGeneratedTitle(event.transcript_path, this.record.nativeId);
       if (title && title !== this.generatedTitle) { this.generatedTitle = title; this.emit('nativeTitle', title); }
     }
+    // At a turn's end the prompts typed during it were read, are still waiting, or were taken back.
+    if (['Stop', 'StopFailure'].includes(event.hook_event_name)) this.withdrawQueued();
     if (event.hook_event_name === 'StopFailure') {
       // Settings hooks may arrive after ordered native events, or after a
       // human has submitted B while A's failure is still being reported.
@@ -1263,6 +1297,10 @@ class Claude extends EventEmitter {
         // submit is recorded here, our own sends included, so the first text per id is known. A later,
         // different text gets its own row, `-q<tag>` from its text (the mod tags the turn it starts the same
         // way), and is not the running turn's input: T-141, it would re-capture that turn's wake authority.
+        // Where this prompt's turn begins in the journal: queue rows of the prompts typed during it come later.
+        if (event.prompt_id && !this.promptTexts?.has(event.prompt_id) && !this.firstPromptRow(event.prompt_id)) this.queueWindowStart(event.prompt_id);
+        // A typed prompt taken back before this one is not shown as sent (an edited one comes back as this one).
+        this.withdrawQueued();
         const firstText = event.prompt_id ? this.promptFirstText(event.prompt_id, event.prompt) : undefined;
         const laterText = Boolean(event.prompt_id) && typeof event.prompt === 'string' && typeof firstText === 'string' && event.prompt !== firstText;
         const rowId = !event.prompt_id ? null : laterText ? `claude-prompt-${event.prompt_id}-q${promptTextTag(event.prompt)}` : `claude-prompt-${event.prompt_id}`;
@@ -1282,6 +1320,10 @@ class Claude extends EventEmitter {
           // The first hook may follow turn-start. A repeated id is still input,
           // but must not recapture that turn's wake proof, even for identical text.
           if (!this.nativePromptInput) this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: rowId, ...(!laterText && !promptAlreadyAnnounced && this.liveTurn?.promptId === event.prompt_id ? { turnId: this.liveTurn.id } : {}), ...(typeof event.source === 'string' ? { source: event.source } : {}), ...(superseded ? { superseded } : {}) } : undefined);
+          if (!this.nativePromptInput && laterText) {
+            this.queuedRows ||= new Map(); this.queuedRows.delete(rowId); this.queuedRows.set(rowId, { promptId: event.prompt_id, text: event.prompt });
+            while (this.queuedRows.size > 16) this.queuedRows.delete(this.queuedRows.keys().next().value);
+          }
         }
         break;
       }
@@ -1332,6 +1374,33 @@ class Claude extends EventEmitter {
   firstPromptRow(id) {
     return this.record.messages?.find(m => m.id === `claude-prompt-${id}` && m.role === 'user' && m.origin === 'native' &&
       this.record.nativeId && m.nativeId === this.record.nativeId && typeof m.text === 'string');
+  }
+  queueWindowStart(promptId) {
+    let size = null;
+    if (this.nativeTranscript) {
+      try { const stat = fs.lstatSync(this.nativeTranscript); if (stat.isFile()) size = stat.size; } catch (error) { if (error.code === 'ENOENT') size = 0; }
+    }
+    this.queueWindows ||= new Map(); this.queueWindows.delete(promptId);
+    if (size !== null) this.queueWindows.set(promptId, size);
+    while (this.queueWindows.size > 4) this.queueWindows.delete(this.queueWindows.keys().next().value);
+  }
+  // Remove the row of each prompt typed during a turn that the person took back from native's queue: every enqueue
+  // of its text since its turn began was taken back. Without a known window (a restarted adapter), a readable
+  // journal or one within bounds, nothing is removed.
+  withdrawQueued() {
+    if (!this.queuedRows?.size) return;
+    for (const [id, row] of this.queuedRows) if (this.queueWindows?.get(row.promptId) === undefined) this.queuedRows.delete(id);
+    if (!this.queuedRows.size) return;
+    const from = Math.min(...[...this.queuedRows.values()].map(row => this.queueWindows.get(row.promptId)));
+    const rows = claudeQueueRows(this.nativeTranscript, this.record.nativeId, from);
+    if (!rows) return;
+    for (const [id, row] of [...this.queuedRows]) {
+      const start = this.queueWindows.get(row.promptId), mine = rows.filter(r => r.at >= start && r.text === row.text);
+      const queued = mine.filter(r => r.kind === 'queued').length, taken = mine.length - queued;
+      if (!queued || taken < queued) continue;
+      this.queuedRows.delete(id);
+      this.emit('nativeInputWithdrawn', { id, nativeId: this.record.nativeId });
+    }
   }
   promptFirstText(id, text) {
     this.promptTexts ||= new Map();

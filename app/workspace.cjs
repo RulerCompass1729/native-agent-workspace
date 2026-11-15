@@ -985,6 +985,14 @@ class Workspace extends EventEmitter {
       }
       this.changed();
     });
+    // A prompt typed during a turn and taken back from native's queue unsent (edited with ↑, deleted, cleared on
+    // cancel): the native terminal no longer shows it as sent, so neither does the conversation.
+    on('nativeInputWithdrawn', ({ id, nativeId }) => {
+      if (nativeId !== s.nativeId || !/^claude-prompt-[a-f0-9-]{36}-q[a-f0-9]{8}$/i.test(id || '')) return;
+      const at = s.messages.findIndex(m => m.id === id && m.role === 'user' && m.origin === 'native' && (!m.nativeId || m.nativeId === nativeId) && !m.turnId);
+      if (at < 0) return;
+      s.messages.splice(at, 1); this.changed();
+    });
     on('nativeInputImages', event => { if (require('./native-images.cjs').applyInputImages(s, event)) this.changed(); });
     on('spaceImagesAccepted', receipt => {
       if (receipt?.nativeId !== s.nativeId || receipt.basis !== 'native-local-image-echo') return;
