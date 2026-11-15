@@ -76,8 +76,25 @@ function setPolicy(w, id, value) {
 }
 function snapshot(w) { try { return { enabled: enabled(w), ...(w.wakeGuardFailure ? { warning: w.wakeGuardFailure, warningUiMessage: w.wakeGuardFailureUiMessage || null } : {}) }; } catch { const fallback = uiError('error.warning.wakeGuardUnavailable'); return { enabled: false, unavailable: true, warning: w.wakeGuardFailure || fallback.message, warningUiMessage: w.wakeGuardFailure ? w.wakeGuardFailureUiMessage || null : fallback.uiMessage }; } }
 // The sender's human-control state when its turn started. A person taking over,
-// typing, queueing or steering later in that turn withdraws the turn's wake authority.
-const humanProof = s => s ? JSON.stringify([s.owner ?? null, s.controlRevision || 0, s.connectionRevision || 0]) : null;
+// typing, queueing or steering later withdraws an ordinary sender's wake authority.
+// Only the designated butler keeps its wake permission across ordinary input. Count the
+// exact control/peer changes made by input, without hiding takeover, stop, connection,
+// membership or permission changes. Runtime-only: reopening never replays a wake.
+const inputChanges = new WeakMap();
+function messageInput(w, s, { control = 0, peer = 0 }) {
+  if (!isSteward(w, s)) return;
+  const prior = inputChanges.get(s) || { control: 0, peer: 0 };
+  inputChanges.set(s, { control: prior.control + control, peer: prior.peer + peer });
+}
+function sourceIdentity(w, s) {
+  const proof = identity(s), input = inputChanges.get(s);
+  if (input && isSteward(w, s)) {
+    if (input.control) proof.controlRevision -= input.control;
+    if (input.peer) proof.peerRevision -= input.peer;
+  }
+  return proof;
+}
+const humanProof = (w, s) => s ? JSON.stringify([s.owner ?? null, sourceIdentity(w, s).controlRevision || 0, s.connectionRevision || 0]) : null;
 function nativeStart(w, r, info, s) {
   // A wake still staged from an earlier turn of this native session: that turn's end never reached NAW (a failed turn
   // with no capacity report, a lost end row), so "after its turn ends normally" can no longer happen. Withdrawn now,
@@ -86,9 +103,11 @@ function nativeStart(w, r, info, s) {
     const earlier = new Set((s?.messages || []).filter(m => m.wake?.status === 'staged' && m.wake.nativeId === info.nativeId && m.wake.turnId !== info.turnId).map(m => m.wake.turnId));
     for (const turnId of earlier) complete(w, s, r, { nativeId: info.nativeId, turnId, status: 'unreported' });
   } catch { /* Withdrawn at the next start, or at reopen. */ }
-  try { r.wakeTurn = { nativeId: info.nativeId, turnId: info.turnId, boundary: boundary(w), human: humanProof(s) }; }
+  try { r.wakeTurn = { nativeId: info.nativeId, turnId: info.turnId, boundary: boundary(w), human: humanProof(w, s) }; }
   catch { r.wakeTurn = null; }
 }
+// Ordinary senders keep the earlier read-to-renew policy; the butler's input does not
+// revoke or renew its turn budget (the person, 2026-11-14).
 // The person's words, queued into the sender's running turn (the wake proposal, item 3, board 11-12 16:44: 「③只做读到
 // 真人的话后重新授权、不在真人的话后附行」). Their control change ends what the turn may send, as before; once native
 // confirms that the turn read them (Claude: the turn's next model request carried them), the turn may send again, since
@@ -96,11 +115,13 @@ function nativeStart(w, r, info, s) {
 // the sender's old identity and are cancelled when the turn ends. A later person action, a takeover, pausing
 // everything or a new connection changes the proof again, and the read authorizes nothing. `humanQueued` notes the
 // person's latest such words (taken right after their control change); `humanRead` is their read.
-function humanQueued(r, s, tag) {
+function humanQueued(w, r, s, tag) {
+  if (isSteward(w, s)) return;
   const turn = r.wakeTurn;
-  if (turn && turn.nativeId === s.nativeId && turn.turnId === r.turnId) turn.awaiting = { tag, human: humanProof(s) };
+  if (turn && turn.nativeId === s.nativeId && turn.turnId === r.turnId) turn.awaiting = { tag, human: humanProof(w, s) };
 }
-function humanRead(r, s, tag, turnId) {
+function humanRead(w, r, s, tag, turnId) {
+  if (isSteward(w, s)) return false;
   const turn = r.wakeTurn, awaiting = turn?.awaiting;
   if (!awaiting || awaiting.tag !== tag) return false;
   delete turn.awaiting;
@@ -118,7 +139,7 @@ function humanNotRead(r, tag) {
 // Still to be read: the refusal says the turn can send again once it has, rather than that it is over for the turn.
 function awaitingRead(w, r, s, native) {
   const awaiting = r.wakeTurn?.awaiting;
-  return Boolean(awaiting && native?.valid?.() !== false && r.wakeTurn.boundary === boundary(w) && humanProof(s) === awaiting.human);
+  return Boolean(awaiting && native?.valid?.() !== false && r.wakeTurn.boundary === boundary(w) && humanProof(w, s) === awaiting.human);
 }
 function identity(s) { return require('./peer-handoffs.cjs').identity(s); }
 function same(s, expected) { return s && JSON.stringify(identity(s)) === JSON.stringify(expected); }
@@ -128,8 +149,8 @@ function sourceIssue(w, s, r, intent) {
   if (w.runtimes.get(s.id) !== r || r.stopped || r.transportDisconnected) return { code: 'source-runtime-changed' };
   if (!enabled(w)) return { code: 'automatic-messages-disabled' };
   if (boundary(w) !== intent.boundary) return { code: 'authorization-boundary-changed' };
-  if (!same(s, intent.sourceProof)) {
-    const current = identity(s);
+  const current = sourceIdentity(w, s);
+  if (JSON.stringify(current) !== JSON.stringify(intent.sourceProof)) {
     // Record field names only, never owner IDs, process details or draft contents.
     return { code: 'source-identity-changed', fields: Object.keys(current).filter(key => JSON.stringify(current[key]) !== JSON.stringify(intent.sourceProof?.[key])) };
   }
@@ -192,7 +213,7 @@ function stewardLimit(taken, recipient) {
   if (new Set(taken).size >= STEWARD_RECIPIENTS) throw uiError("error.wake.turnRecipientLimit", { limit: STEWARD_RECIPIENTS });
 }
 function stage(w, s, r, native, args) {
-  if (r.wakeTurn?.boundary !== boundary(w) || native?.valid?.() === false || r.wakeTurn.human !== humanProof(s)) throw uiError(awaitingRead(w, r, s, native) ? "error.wake.turnAwaitingHumanRead" : "error.wake.turnRevokedByHuman");
+  if (r.wakeTurn?.boundary !== boundary(w) || native?.valid?.() === false || r.wakeTurn.human !== humanProof(w, s)) throw uiError(awaitingRead(w, r, s, native) ? "error.wake.turnAwaitingHumanRead" : "error.wake.turnRevokedByHuman");
   // Item 3: the calls the turn made before it read the person's words do not count against what it sends after.
   const epoch = r.wakeTurn.epoch || 0;
   const turn = r.wakeStagePending?.turnId === native?.turnId && r.wakeStagePending.nativeId === native?.nativeId && r.wakeStagePending.epoch === epoch ? r.wakeStagePending : null;
@@ -236,7 +257,7 @@ async function stageOnce(w, s, r, native, args) {
     stewardLimit(earlier.map(m => m.wake.recipientId), args.recipient_id);
   }
   const intent = { id: randomUUID(), nativeId: native.nativeId, turnId: native.turnId, callId: native.callId, senderId: s.id, senderName: s.name,
-    sourceProof: identity(s), recipientId: args.recipient_id, body: args.message, boundary: turn.boundary, ...(epoch ? { epoch } : {}), time: Date.now(), status: 'staged' };
+    sourceProof: sourceIdentity(w, s), recipientId: args.recipient_id, body: args.message, boundary: turn.boundary, ...(epoch ? { epoch } : {}), time: Date.now(), status: 'staged' };
   if (!sourceValid(w, s, r, intent)) throw uiError("error.wake.turnRevokedByHumanOrSetting");
   if (!w.peerRunner) throw uiError("error.wake.backendUnsupported");
   const target = await w.peerRunner.lookupWake(args.recipient_id, { id: intent.id, boundary: intent.boundary });
@@ -288,7 +309,10 @@ function complete(w, s, r, info) {
   for (const row of s.messages || []) {
     const intent = row.wake;
     if (intent?.status !== 'staged' || intent.nativeId !== info.nativeId || intent.turnId !== info.turnId) continue;
-    let issue = info.status !== 'completed' ? { code: 'turn-not-completed' } : sourceIssue(w, s, r, intent), reason = info.status;
+    // Input can end Claude's sharing proof even when the native turn completed. Only the
+    // butler keeps wake authority then; missing/failed/permission-boundary ends still cancel.
+    const completed = info.status === 'completed' || info.status === 'boundary' && info.completedAfterInput === true && isSteward(w, s);
+    let issue = !completed ? { code: 'turn-not-completed' } : sourceIssue(w, s, r, intent), reason = info.status;
     if (!issue && row !== first(intent.epoch || 0) && !(steward ??= isSteward(w, s))) { issue = { code: 'steward-role-ended' }; reason = 'steward'; }
     if (issue) {
       intent.cancellation = { ...issue, nativeStatus: info.status ?? null, at: Date.now() };
@@ -515,4 +539,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, humanQueued, humanRead, humanNotRead, stage, complete, take, receive, check, validateArgs, root, retryHeld };
+module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, humanQueued, humanRead, humanNotRead, stage, complete, take, receive, check, validateArgs, root, retryHeld };

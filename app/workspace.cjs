@@ -756,7 +756,7 @@ class Workspace extends EventEmitter {
     on('background', info => { if (this.runtimes.get(s.id) !== runtime || info.nativeId !== s.nativeId) return;
       setActivity(s, ...uiActivity("notice.activity.claudeBackground", { arg1: info.backgroundId.slice(0, 8), arg2: info.backgroundId.slice(0, 8) })); });
     on('sharingBoundary', reason => this.peerLeases?.revoke('原生输入或权限边界已变化：' + reason, s.id, undefined, { version: 1, key: 'notice.peer.nativeBoundary', params: { reason } }));
-    on('nativeControlBoundary', reason => { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生输入或权限边界已变化：' + reason, s.id, undefined, { version: 1, key: 'notice.peer.nativeBoundary', params: { reason } }); });
+    on('nativeControlBoundary', reason => { s.peerRevision = (s.peerRevision || 0) + 1; if (reason === 'control:input') wake.messageInput(this, s, { peer: 1 }); this.peerLeases?.revoke('原生输入或权限边界已变化：' + reason, s.id, undefined, { version: 1, key: 'notice.peer.nativeBoundary', params: { reason } }); });
     on('capability', () => this.changed());
     on('nativeTurnStart', info => wake.nativeStart(this, runtime, info, s));
     // Reading only: the inputs a native turn started from head its group. A row
@@ -942,7 +942,7 @@ class Workspace extends EventEmitter {
       if (!machine && item?.source === 'user') this.operatorHuman(s.id);
       this.cancelCapacity(s.id);
       // It still interrupts a desktop send it displaced; that send is not retried.
-      if (!machine) { wake.human(this, s.id); this.pause('真人在原生终端输入', undefined, false, uiActivity('notice.run.humanTerminalInput')[1]); s.controlRevision++; }
+      if (!machine) { wake.human(this, s.id); this.pause('真人在原生终端输入', undefined, false, uiActivity('notice.run.humanTerminalInput')[1]); s.controlRevision++; wake.messageInput(this, s, { control: 1 }); }
       else if (item?.superseded) { this.pause('原生自动输入抢在交接发送之前开始；请核对后再继续。', undefined, false, uiActivity('notice.run.machineSuperseded')[1]); s.controlRevision++; }
       runtime.workspaceMcpCalls?.clear();
       if (item?.turnId && item.turnId === runtime.turnId) wake.nativeStart(this, runtime, { nativeId: s.nativeId, turnId: item.turnId }, s);
@@ -975,7 +975,7 @@ class Workspace extends EventEmitter {
       let found = false;
       for (const list of this.messageLists(s)) for (const m of list) if (m.id === tag && m.deliveredInto) { m.nativeRead = true; found = true; }
       // The person's words read in the turn they were queued into: it may send again (the wake proposal, item 3).
-      if (found) { wake.humanRead(runtime, s, tag, turnId); this.changed(); }
+      if (found) { wake.humanRead(this, runtime, s, tag, turnId); this.changed(); }
     });
     on('submitted', tag => {
       const input = s.messages.find(m => m.id === tag);
@@ -1383,6 +1383,7 @@ class Workspace extends EventEmitter {
     } else if (!route) {
       if (s.owner !== owner) throw uiError("error.workspace.takeControlFirst");
       s.peerRevision = (s.peerRevision || 0) + 1;
+      if (!recovery && !backgroundOperation.current()) wake.messageInput(this, s, { peer: 1 });
       if (recovery) this.pauseParticipant(id, `${RECOVERY_REASONS[recovery.reason].pause}自动继续；原协作交接保持暂停`, true, uiActivity(`notice.run.automatic${RECOVERY_REASONS[recovery.reason].key}`)[1]);
       else { if (!backgroundOperation.current()) wake.human(this, id); if (forward) { this.pauseParticipant(id, '真人输入优先', false, uiActivity('notice.run.humanPriority')[1]); this.pauseRoom(forward.roomId || 'shared', '真人输入优先', uiActivity('notice.run.humanPriority')[1]); } else this.pause('真人输入优先', undefined, false, uiActivity('notice.run.humanPriority')[1]); }
     }
@@ -1472,9 +1473,9 @@ class Workspace extends EventEmitter {
     if (s.owner !== controller || s.provider !== 'claude' || s.state !== 'working' || s.approval || !runtime.queueAvailable || runtime.pendingQueue) throw uiError("error.workspace.nativeWaitingInputUnavailable");
     s.peerRevision = (s.peerRevision || 0) + 1;
     if (shared) { this.pauseParticipant(id, '真人追加等待输入', false, uiActivity('notice.run.humanQueue')[1]); this.pauseRoom(roomId, '真人追加等待输入', uiActivity('notice.run.humanQueue')[1]); } else this.pause('真人追加等待输入', undefined, false, uiActivity('notice.run.humanQueue')[1]);
-    // A shared queue continues the current public task until native pickup;
-    // private input still revokes its output scope immediately.
+    // Private input still ends the old public reply scope; only the butler's wake permission survives.
     if (!shared) s.controlRevision++;
+    if (!shared && !backgroundOperation.current()) wake.messageInput(this, s, { control: 1, peer: 1 });
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
     const sameControl = !shared && !backgroundOperation.current() ? this.ownControl(s) : () => s.controlRevision === control;
     const valid = () => backgroundValid() && this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending &&
@@ -1490,7 +1491,7 @@ class Workspace extends EventEmitter {
     // The wake proposal, item 3: once the running turn reads the person's words, it may send automatic messages again.
     // Only words offered into the running turn can be read there; any other outcome leaves the turn revoked.
     const readable = !shared && !backgroundOperation.current() && midturn.midturn === true;
-    if (readable) wake.humanQueued(runtime, s, tag);
+    if (readable) wake.humanQueued(this, runtime, s, tag);
     const message = { id: tag, role: 'user', text, origin: 'human', ...backgroundOperation.message(), status: 'awaiting-native', inputMode: 'queue', ...midturn, time: Date.now() };
     if (shared) {
       const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, uiNameMessage: backgroundOperation.current() ? undefined : youToName(s.name), ...backgroundOperation.message(s.name), text, status: 'awaiting-native', inputMode: 'queue', ...midturn, time: Date.now(), deliveryTracked: true,
@@ -1557,6 +1558,7 @@ class Workspace extends EventEmitter {
     if (s.owner !== controller || s.provider !== 'codex' || s.state !== 'working' || s.approval ||
       !runtime.steerAvailable || runtime.pendingSteer || typeof expectedTurnId !== 'string' || !expectedTurnId || runtime.turnId !== expectedTurnId) throw uiError("error.workspace.nativeTurnOrControlChanged");
     if (shared) { this.pauseParticipant(id, '真人追加指令', false, uiActivity('notice.run.humanSteer')[1]); this.pauseRoom(roomId, '真人追加指令', uiActivity('notice.run.humanSteer')[1]); } else this.pause('真人追加指令', undefined, false, uiActivity('notice.run.humanSteer')[1]); s.controlRevision++;
+    if (!shared && !backgroundOperation.current()) wake.messageInput(this, s, { control: 1 });
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
     const sameControl = !shared && !backgroundOperation.current() ? this.ownControl(s) : () => s.controlRevision === control;
     const valid = () => backgroundValid() && this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending && sameControl() &&
@@ -1680,7 +1682,16 @@ class Workspace extends EventEmitter {
     // The window that controls the session types into its terminal whichever side its view is on (the person,
     // 2026-11-13: 两边的输入可以不要锁定); the view only routes a held question.
     const response = isTerminalResponse(data);
-    if (!response) { if (!backgroundOperation.current()) wake.human(this, id); this.cancelCapacity(id); this.pause('真人在原生终端操作', undefined, false, uiActivity('notice.run.humanTerminalAction')[1]); s.controlRevision++; if (!backgroundOperation.current()) this.terminalKeys.set(id, (this.terminalKeys.get(id) || 0) + 1); s.terminalInputPending = true; }
+    if (!response) {
+      if (!backgroundOperation.current()) wake.human(this, id);
+      this.cancelCapacity(id); this.pause('真人在原生终端操作', undefined, false, uiActivity('notice.run.humanTerminalAction')[1]); s.controlRevision++;
+      if (!backgroundOperation.current()) {
+        this.terminalKeys.set(id, (this.terminalKeys.get(id) || 0) + 1);
+        // Text, paste and editing keep the butler's wake permission; native Esc/Ctrl-C still withdraw it.
+        if (data !== '\x1b' && !data.includes('\x03')) wake.messageInput(this, s, { control: 1 });
+      }
+      s.terminalInputPending = true;
+    }
     const t = runtime.terminal; if (!t?.alive) throw uiError("error.workspace.terminalNotConnected"); t.input(data);
   }
   resize(id, owner, cols, rows) { const s = this.get(id); if (s.owner === owner && Number.isInteger(cols) && Number.isInteger(rows)) this.runtime(id).terminal?.resize(cols, rows); }

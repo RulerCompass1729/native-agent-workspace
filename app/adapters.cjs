@@ -846,6 +846,7 @@ class Claude extends EventEmitter {
         }
         if (this.liveTurn && (message.id === 'control:input' || message.boundaryOnly && (!message.promptId || message.promptId !== this.liveTurn.promptId || message.turnId !== this.liveTurn.id))) this.liveTurn.question = false;
         if (this.startedRootTurn?.ended) this.startedRootTurn.inputRevoked = true;
+        if (this.startedRootTurn) this.startedRootTurn.inputOnlyBoundary = this.startedRootTurn.inputOnlyBoundary !== false && message.id === 'control:input';
         this.rootTurn = null;
         // Current sessions need this boundary too: the classic permission/state
         // event can arrive later or be coalesced before a peer sees a snapshot.
@@ -872,6 +873,7 @@ class Claude extends EventEmitter {
     if (freshInline) {
       this.rootTurn = null;
       if (this.startedRootTurn?.ended) this.startedRootTurn.inputRevoked = true;
+      if (this.startedRootTurn) this.startedRootTurn.inputOnlyBoundary = this.startedRootTurn.inputOnlyBoundary !== false;
       this.emit('nativeControlBoundary', 'control:input');
       this.emit('sharingBoundary', 'control:input');
     }
@@ -962,7 +964,8 @@ class Claude extends EventEmitter {
     // without that authority, so the wake is withdrawn with its reason.
     if (kind === 'turn' && this.startedRootTurn?.id === turnId && !this.rootTurn && !this.startedRootTurn.endReported && !message.replayed && !message.gap) {
       this.startedRootTurn.endReported = true;
-      this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId, status: 'boundary' });
+      this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId, status: 'boundary',
+        ...(this.startedRootTurn.inputOnlyBoundary === true && status === 'complete' && !incomplete && !turn.incomplete ? { completedAfterInput: true } : {}) });
     }
     if (kind === 'turn' && status === 'complete' && this.startedRootTurn?.id === turnId && !message.replayed && !message.gap) {
       this.startedRootTurn.completed = true;
