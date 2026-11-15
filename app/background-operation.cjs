@@ -109,10 +109,11 @@ function confirmationDetail(command, snapshot, context) {
       ? { kind: 'image', ...context.clipboardImage.getSize() } : { kind: 'text', text: context?.clipboardText || '' } } : {}) }, null, 2));
 }
 // One policy point for workspace_control maintenance. Native tool permission is
-// not person consent for a new session, placement or archive. No role currently
-// bypasses this gate; a future metered manager policy must be added here.
+// not person consent for a new session, placement or archive. Standing permission
+// is checked separately by steward-standing.cjs; this classification always applies.
 function maintenanceAction(method, args = [], actor) {
   if (conversationTarget(method, args, actor)) return 'readConversation';
+  if (method === 'roomMemberOrder' || method === 'spaceAction' && args[1] === 'memberOrder') return 'memberOrder';
   if (method === 'roomRename' || method === 'spaceAction' && args[1] === 'rename') return 'renameRoom';
   if (['create', 'spaceCreate', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'resume', 'importHistory'].includes(method)) return method;
   if (['runtimeLocation', 'openLocalFile', 'saveLocalFile', 'spaceFiles', 'openMessageFile'].includes(method)) return method;

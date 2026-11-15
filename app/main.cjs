@@ -23,6 +23,8 @@ const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary, follow: followRotation } = require('./queue-secretary.cjs');
 const { IntegratorRole } = require('./integrator-role.cjs');
 const { StewardRole, validDuty } = require('./steward-role.cjs');
+const { StewardStanding } = require('./steward-standing.cjs');
+let stewardStanding;
 const stewardRecords = require('./steward-record.cjs');
 const { StewardWake } = require('./steward-wake.cjs');
 const { AnswerNotices } = require('./answer-notices.cjs');
@@ -485,7 +487,9 @@ async function carryGrants(client, snapshot, now = Date.now()) {
   }
 }
 function auditBackgroundOperation(record) {
-  roomState.recordControlOperation(record, record.guard?.auditRooms || ['shared']);
+  const rooms = new Set(record.guard?.auditRooms || ['shared']);
+  if (record.approvedBy === 'standing' && record.state === 'complete' && record.command.method === 'spaceCreate' && typeof record.value === 'string') rooms.add(record.value);
+  roomState.recordControlOperation(record, [...rooms]);
   // Consent depends on the durable event, never on every window completing a
   // read. A disconnected or slow window cannot hold cancellation or execution.
   broadcastRoom().catch(() => {});
@@ -1450,6 +1454,7 @@ async function boot() {
   integratorRole = new IntegratorRole(dataDir);
   // Who the person designated as the butler they talk to; what it lets that session do is listed in steward-role.cjs.
   stewardRole = new StewardRole(dataDir);
+  stewardStanding = new StewardStanding(dataDir, { role: stewardRole, person: isCurrentHumanContext });
   // What the butler does through NAW, under its own name (steward step 2, batch 1). One that cannot be read stops
   // only the butler's calls, and the bell says so.
   stewardOf = stewardRecords.cachedSteward(stewardRole);
@@ -1496,6 +1501,25 @@ async function boot() {
     audit: auditBackgroundOperation,
     unasked: (actor, _command, action, context) => action === 'readConversation' && stewardReadsUnasked(actor, context.client.snapshot()),
     retireHold: () => (outboxBroker?.active?.() || 0) > 0,
+    standing: (actor, command, context) => {
+      const state = sessionLabels.apply(roomState.apply(context.client.snapshot()));
+      const grant = stewardStanding.take(actor, command, state, context.view.spaceId || 'shared');
+      if (!grant) return null;
+      const action = backgroundOperation.maintenanceAction(command.method, command.arguments, actor);
+      const old = state.sessions.find(s => s.id === command.arguments[0]);
+      const room = state.rooms.find(r => r.id === (command.method === 'spaceAction' ? command.arguments[0] : 'shared'));
+      const kind = ['create', 'spaceCreate'].includes(action) ? 'created' : ['joinRoom', 'leaveRoom'].includes(action) ? 'placement'
+        : ['rename', 'renameRoom'].includes(action) ? 'rename' : ['archiveSession', 'archiveRoom'].includes(action) ? 'archived'
+        : ['restoreSession', 'restoreRoom'].includes(action) ? 'restored' : 'order';
+      const target = grant.summary?.name || grant.summary?.target || grant.summary?.room || room?.name || displayText('standing.newSession');
+      return { ...grant, actionText: displayText('background.action.' + action),
+        target: grant.creation ? displayText('standing.creationTarget', { target, model: grant.creation.model ?? displayText('standing.nativeDefault'),
+          effort: grant.creation.effort ?? displayText('standing.nativeDefault') }) : target,
+        undo: displayText('standing.undo.' + kind, { previous: kind === 'order' ? (room?.memberOrder || []).map(id => state.sessions.find(s => s.id === id)?.name || id).join('、') : old?.name || room?.name || '',
+          home: (grant.before.rooms || []).map(id => state.rooms.find(r => r.id === id)?.name || '').filter(Boolean).join('、') || displayText('sidebar.independent') }) };
+    },
+    standingValid: (actor, command, context, grant) => stewardStanding.valid(actor, command,
+      sessionLabels.apply(roomState.apply(context.client.snapshot())), context.view.spaceId || 'shared', grant),
     context: async (actor, saved, kept) => {
       const view = saved || { owner: randomUUID(), selected: actor.id, mode: 'chat', preference: 'chat', active: false };
       backups(view);
@@ -1550,6 +1574,36 @@ async function boot() {
             memberRevision: s.memberRevision, roomMembershipRevisions: s.roomMembershipRevisions,
             ...(s.id === controlTarget && s.id !== actor.id ? { owner: s.owner, controlRevision: s.controlRevision, activeTurnId: s.activeTurnId,
               approvalId: s.approval?.requestId, nativeApprovalIds: s.nativeApproval?.requests?.map(r => r.id), nativeInputRequired: s.nativeInputRequired } : {}) });
+          // These operations do not depend on another member's progress, roster
+          // ordering, unrelated archives or space notes. Keep identity/placement
+          // for the actual member and actor, and only the affected space facts.
+          if (['joinRoom', 'leaveRoom'].includes(maintenance)) {
+            const targetId = command.method === 'spaceAction' ? command.arguments[2]?.[0] : command.arguments[0];
+            const destination = command.method === 'spaceAction' ? command.arguments[0] : 'shared';
+            const target = metadata.sessions.find(s => s.id === targetId);
+            const affected = new Set([destination, ...(target ? roomIds(target) : [])]);
+            return { auditRooms: [...auditRooms].sort(),
+              sessions: metadata.sessions.filter(s => s.id === actor.id || s.id === targetId).map(placement),
+              rooms: metadata.rooms.filter(r => affected.has(r.id)).map(r => ({ id: r.id, archived: r.archived })),
+              sessionArchives: { [targetId]: roomState.value.sessionArchives[targetId] || null } };
+          }
+          if (maintenance === 'renameRoom') {
+            const targetId = command.method === 'spaceAction' ? command.arguments[0] : 'shared';
+            const requested = command.method === 'spaceAction' ? command.arguments[2]?.[0] : command.arguments[0];
+            const name = typeof requested === 'string' ? requested.trim() : '';
+            return { auditRooms: [...auditRooms].sort(),
+              sessions: metadata.sessions.filter(s => s.id === actor.id).map(placement),
+              rooms: metadata.rooms.filter(r => r.id === targetId).map(r => ({ id: r.id, name: r.name, archived: r.archived })),
+              named: metadata.rooms.filter(r => r.id !== targetId && r.name === name).map(r => r.id).sort() };
+          }
+          if (maintenance === 'rename') {
+            const targetId = command.arguments[0], name = typeof command.arguments[1] === 'string' ? command.arguments[1].trim() : '';
+            const named = sessionLabels.apply(metadata).sessions;
+            return { auditRooms: [...auditRooms].sort(),
+              sessions: metadata.sessions.filter(s => s.id === actor.id || s.id === targetId).map(s => ({ ...placement(s),
+                ...(s.id === targetId ? { name: named.find(x => x.id === targetId)?.name } : {}) })),
+              named: named.filter(s => s.id !== targetId && s.name === name).map(s => s.id).sort() };
+          }
           // A new session or space touches nothing that exists. Its consent is the asking session as it was, and which
           // sessions or spaces already carry the requested name: one appearing or renamed onto it voids the card, so
           // two answered cards cannot leave two of one name. Others the person confirms meanwhile do not (2026-11-13:
@@ -2073,6 +2127,12 @@ async function boot() {
       return { duty: { state: 'not-sent', error: { message: message || uiError('error.main.operationIncomplete').message, ...(uiMessage ? { uiMessage } : {}) } } };
     }
   });
+  register('stewardStanding', async (c, on) => {
+    if (!isCurrentHumanContext(c)) throw uiError('error.steward.personOnly');
+    const value = on === undefined ? stewardStanding.view() : stewardStanding.set(c, on);
+    await broadcastRoom(); return value;
+  });
+  applicationHandlers.delete('stewardStanding');
   // What the butler reads to report to the person only what is new (the person, 2026-11-09: 「我希望 NAW 自己可以监控
   // 自己的 agent，并通过自带的 agent（aka 大管家）来进行汇报」): the business events NAW already records without a
   // model (deliveries, decisions, failures, blocked steps, a space whose queue ran empty), after the position its last

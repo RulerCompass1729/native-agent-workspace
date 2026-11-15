@@ -310,7 +310,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   // Both calls are answered by this desktop, with or without a backend that supports background control.
   assert.match(source, /name === 'handoff' \|\| name === 'steward' \|\| /); assert.match(source, /'chooseFolder', 'copy', 'landing', /);
   const preload = fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8');
-  assert.match(preload, /'runtimeLocation', 'retrySave', 'steward', 'stewardRecord', 'stewardWake', 'landing'\]\) \{/);
+  assert.match(preload, /'runtimeLocation', 'retrySave', 'steward', 'stewardRecord', 'stewardStanding', 'stewardWake', 'landing'\]\) \{/);
   assert.equal(source.match(/stewardRole\.set\(/g).length, 2, 'Only the entry writes the designation');
   // Step 2, batch 2: every join meets one guard (a session NAW opened for a space, a rotation's successor included),
   // and the designation is made in the same queue the joins run in.
