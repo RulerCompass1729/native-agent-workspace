@@ -34,7 +34,8 @@ test('pending confirmations are projected only into human windows, never agent s
     backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
     queueSecretary: null, integratorRole: null, stewardRole: null, queueDispatcher: null, butlerIngress: null,
     viewStorageWarning: '', viewStorageWarningUiMessage: null, endedByMove: () => [], roomPeerIdentity: () => null,
-    backgroundOperation: { conversationSnapshot: x => x }, conversationAccess: () => null };
+    backgroundOperation: { conversationSnapshot: x => x }, conversationAccess: () => null,
+    localVendorIcons: () => ({}) };
   vm.runInNewContext(body + ';this.displayState = displayState', context);
   const human = context.displayState({ sessions: [] }, { view: {} });
   assert.equal(human.backgroundConfirmations[0].id, 'human-card'); assert.equal(reads, 1);
