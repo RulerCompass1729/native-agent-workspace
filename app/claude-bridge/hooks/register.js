@@ -1320,9 +1320,15 @@ export function register(on) {
             queuedPrompts = [...queuedPrompts, { binding, promptId: e.prompt_id, text: e.prompt }];
           else queuedPrompts = [];
         } else if (rootIdle) queuedPrompts = [];
-        // firstText: the text this id was first submitted with; a later, different one is a typed prompt (T-138 display).
-        const firstText = rootPrompt?.id === e.prompt_id && rootPrompt.binding === binding ? rootPrompt.firstText : e.prompt;
-        rootPrompt = { id: e.prompt_id, binding, pending: rootIdle, firstText };
+        // A mid-turn prompt with a different id heads no turn by its id (I141) and
+        // must not displace the prompt that authorizes the running turn. Its line was
+        // already dropped above; only a prompt that starts a turn, or the same id kept
+        // in line (T-138), may name the turn's authorization.
+        if (rootIdle || rootPrompt?.id === e.prompt_id) {
+          // firstText: the text this id was first submitted with; a later, different one is a typed prompt (T-138 display).
+          const firstText = rootPrompt?.id === e.prompt_id && rootPrompt.binding === binding ? rootPrompt.firstText : e.prompt;
+          rootPrompt = { id: e.prompt_id, binding, pending: rootIdle, firstText };
+        }
         // T-133: this prompt's id and text tag, for an image its prompt block may carry (2.1.316/2.1.317). NAW gives
         // the image to the row of that prompt id whose own text has that tag; no one's memory decides, so a hot
         // reload here cannot send the image to another row.
@@ -1403,6 +1409,12 @@ export function register(on) {
       if (rootTransitions.length >= 64) rootSyncBlocked = true;
       else rootTransitions.push({ sessionId: previousId, nextSessionId: e.session_id, source: e.source, model: e.model });
       $.clock.after(0, () => syncRoot($));
+    } else if (!e.agent_id && e.source === 'compact') {
+      // A background compaction restarts the context without a session end. The
+      // running turn's prompt no longer authorizes operations; the next person or
+      // NAW turn re-authorizes (the old pair must not survive the compact).
+      rootPrompt = null; promptTurns.clear(); activeTurn = null; shellTurn = null;
+      rootIdle = true; queuedPrompts = [];
     }
     return next(e);
   });
