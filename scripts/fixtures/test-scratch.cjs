@@ -18,6 +18,9 @@ function directory(prefix) {
   if (![canonical(os.tmpdir()), canonical('/tmp')].includes(parent) || !path.basename(prefix).startsWith('naw-')) throw Error('Test scratch requires a naw- prefix directly under an OS temporary directory');
   const file = fs.mkdtempSync(prefix), real = canonical(file), stat = fs.lstatSync(real);
   fs.chmodSync(real, 0o700); roots.set(real, { ino: stat.ino, dev: stat.dev, aliases: [real, path.resolve(file)] });
+  // The suite must respect this helper's process/identity checks, including a
+  // refusal to remove a profile whose native process is still unconfirmed.
+  globalThis[Symbol.for('naw.testTemp.delegate')]?.(real);
   return file;
 }
 function pidAlive(pid) {
