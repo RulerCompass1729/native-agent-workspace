@@ -58,6 +58,9 @@
     next[index] = Math.max(floor, Math.min(pair - floor, weights[index] + delta / total * sum));
     next[index + 1] = pair - next[index]; return next;
   }
+  // Progressive reveal is remembered per space for the app session, so switching
+  // spaces keeps how many member columns the person had expanded.
+  const memberLimits = new Map();
   function create(options) {
     const doc = options.host.ownerDocument, host = options.host, display = options.display;
     const language = () => options.language.getSnapshot().active;
@@ -65,6 +68,8 @@
     const setText = (n, text) => { if (n.textContent !== text) n.textContent = text; };
     const button = (text, action, cls) => { const n = el('button', text, cls); n.type = 'button'; n.addEventListener('click', action); return n; };
     const panes = new Map(); let records = [], connected = true, contentVisible = true, brief = false, layout = 'grid', focused = '', weights = new Map(), originSelection, briefSelection, dragging;
+    const roomKey = options.roomId || 'shared';
+    let capacity = 1, visibleLimit = 0, visibleRows = 1, chipsExpanded = false;
     const orderType = 'application/x-native-room-member-order';
     const canOrder = () => Boolean(options.onMove && connected && contentVisible && !focused);
     const orderStatus = el('span', undefined, 'collaboration-order-status'); orderStatus.setAttribute('role', 'status');
@@ -99,8 +104,16 @@
     toolbar.append(back, layouts, simplify);
     const headers = el('div', undefined, 'collaboration-statuses'); display.attribute(headers, 'aria-label', 'collab.memberStatus');
     const readers = el('div', undefined, 'collaboration-readers');
+    const showMore = button('', () => { visibleRows += 1; memberLimits.set(roomKey, visibleRows); render(); }, 'collaboration-show-more');
+    const chipsMore = button('', () => { chipsExpanded = !chipsExpanded; render(); }, 'collaboration-chips-more');
     const empty = el('p', undefined, 'quiet collaboration-empty'); display.text(empty, 'collab.empty');
-    host.classList.add('collaboration-overview'); host.append(toolbar, headers, readers, empty, orderStatus);
+    headers.append(chipsMore);
+    host.classList.add('collaboration-overview'); host.append(toolbar, headers, readers, showMore, empty, orderStatus);
+    const widthObserver = new ResizeObserver(() => {
+      const next = Math.max(1, Math.floor((readers.clientWidth || host.clientWidth) / 300));
+      if (next !== capacity) { capacity = next; if (!focused && layout === 'grid') render(); }
+    });
+    widthObserver.observe(readers);
     function key(id) { return `collaboration:${options.roomId || 'shared'}:${id}`; }
     function selectedRange() {
       const selection = doc.getSelection();
@@ -135,19 +148,53 @@
         display.computed(pane.compactChild, 'title', () => statusFacts(record, connected, Date.now(), language()).child);
         pane.freshness.classList.toggle('compact-status-hidden', !facts.freshnessReported);
         pane.header.dataset.state = record.state || 'unknown'; pane.header.dataset.stale = String(facts.stale);
+        pane.header.dataset.alert = String(record.state === 'approval' || record.state === 'error' || Boolean(record.approval || record.claudeQuestion || record.approvals?.length || record.nativeApproval?.requests?.length));
       }
     }
     function setWidths() {
-      const columns = records.map(record => `${weights.get(record.id) || 1}fr`).join(' ') || '1fr';
-      host.style.setProperty('--collaboration-columns', columns);
-      for (let i = 0; i < records.length; i++) {
-        const pane = panes.get(records[i].id); pane.grip.hidden = i === records.length - 1 || layout === 'list' || Boolean(focused);
+      capacity = Math.max(1, Math.floor((readers.clientWidth || host.clientWidth) / 300));
+      const total = records.length, allFit = total <= capacity;
+      if (allFit) {
+        host.style.setProperty('--collaboration-columns', records.map(record => `minmax(300px, ${weights.get(record.id) || 1}fr)`).join(' ') || 'minmax(300px, 1fr)');
+      } else {
+        host.style.setProperty('--collaboration-columns', `repeat(${capacity}, minmax(300px, 1fr))`);
+      }
+      for (let i = 0; i < total; i++) {
+        const pane = panes.get(records[i].id); pane.grip.hidden = !allFit || i === total - 1 || layout === 'list' || Boolean(focused);
         pane.grip.setAttribute('aria-valuenow', String(Math.round((weights.get(records[i].id) || 1) * 100)));
       }
     }
     function resize(index, delta, total) {
       const values = records.map(r => weights.get(r.id) || 1), next = adjustedWidths(values, index, delta, total);
       records.forEach((r, i) => weights.set(r.id, next[i])); setWidths();
+    }
+    function updateProgressiveControls() {
+      const remaining = records.length - visibleLimit;
+      if (remaining > 0 && layout === 'grid' && !focused) {
+        const next = Math.min(capacity, remaining);
+        showMore.hidden = false;
+        display.text(showMore, 'collab.showRows', () => ({ count: next, left: remaining - next }));
+      } else {
+        showMore.hidden = true;
+      }
+      requestAnimationFrame(layoutChips);
+    }
+    function layoutChips() {
+      if (layout === 'list' || focused || !records.length) { chipsMore.hidden = true; headers.style.maxHeight = ''; headers.style.overflow = ''; return; }
+      const chips = [...headers.querySelectorAll('.collaboration-member-status')];
+      if (!chips.length) { chipsMore.hidden = true; return; }
+      const rowHeight = chips[0].offsetHeight + (parseFloat(getComputedStyle(headers).gap) || 0);
+      const maxHeight = rowHeight * 2;
+      const folded = chips.filter(chip => chip.offsetTop >= maxHeight - 1).length;
+      if (folded > 0) {
+        chipsMore.hidden = false;
+        setText(chipsMore, chipsExpanded ? locale.format(language(), 'collab.collapseChips') : `+${folded}`);
+        display.attribute(chipsMore, 'aria-label', 'collab.expandChips', () => ({ count: folded }));
+        if (chipsExpanded) { headers.style.maxHeight = ''; headers.style.overflow = ''; }
+        else { headers.style.maxHeight = `${maxHeight}px`; headers.style.overflow = 'hidden'; }
+      } else {
+        chipsMore.hidden = true; headers.style.maxHeight = ''; headers.style.overflow = '';
+      }
     }
     function makePane(record) {
       const header = el('section', undefined, 'collaboration-member-status'); header.dataset.memberId = record.id;
@@ -274,6 +321,13 @@
       const columnInput = layout === 'grid' && !focused && !brief && contentVisible;
       const listUnits = layout === 'list' && !focused && contentVisible;
       host.dataset.listUnits = String(listUnits); headers.hidden = listUnits;
+      capacity = Math.max(1, Math.floor((readers.clientWidth || host.clientWidth) / 300));
+      const allFit = records.length <= capacity;
+      if (allFit) visibleLimit = records.length;
+      else {
+        visibleRows = Math.max(1, memberLimits.get(roomKey) || 1);
+        visibleLimit = Math.min(records.length, visibleRows * capacity);
+      }
       const retained = new Set(records.map(r => r.id));
       for (const [id, pane] of panes) if (!retained.has(id)) {
         options.disposeInput?.(id); options.disposeMessages?.(pane.messages); pane.header.remove(); pane.unit.remove(); panes.delete(id); weights.delete(id);
@@ -298,6 +352,7 @@
         const nativeVisible = options.renderInput?.(pane.input, record, columnInput) || false;
         pane.reader.classList.toggle('has-column-input', columnInput);
         pane.nativeFooter.hidden = !nativeVisible;
+        pane.unit.hidden = i >= visibleLimit;
         const nextParent = nativeVisible ? pane.nativeFooter : pane.heading;
         if (pane.next.parentElement !== nextParent) nextParent.append(pane.next);
         pane.next.hidden = (!listUnits && !nativeVisible) || i === records.length - 1;
@@ -311,7 +366,7 @@
           if (pane.header.parentElement !== pane.unit) pane.unit.insertBefore(pane.header, pane.reader);
         } else if (headers.children[i] !== pane.header) headers.insertBefore(pane.header, headers.children[i] || null);
         if (readers.children[i] !== pane.unit) readers.insertBefore(pane.unit, readers.children[i] || null);
-        if (!focused && !brief && contentVisible) options.renderMessages(pane.messages, record, options.messages(record), key(record.id));
+        if (!focused && !brief && contentVisible && i < visibleLimit) options.renderMessages(pane.messages, record, options.messages(record), key(record.id));
         if (brief) {
           const snippet = excerpt(record, options.messages(record));
           pane.snippet = snippet;
@@ -324,7 +379,7 @@
           } else { display.unbind(pane.notice); setText(pane.notice, ''); }
         }
       });
-      setWidths(); refreshStatus();
+      setWidths(); refreshStatus(); updateProgressiveControls();
       for (const [messages, top, left, short, briefTop] of scrolls) { messages.scrollTop = top; messages.scrollLeft = left; short.scrollTop = briefTop; }
       if (anchor?.isConnected && host.dataset.listUnits === 'true') readers.scrollTop += anchor.getBoundingClientRect().top - readers.getBoundingClientRect().top - anchorOffset;
       if (active?.isConnected && doc.activeElement === doc.body && host.contains(active)) active.focus({ preventScroll: true });
@@ -339,7 +394,7 @@
         render();
       },
       focus, key, toolbar, refresh: refreshStatus, get focused() { return focused; },
-      dispose() { toolbar.remove(); for (const [id, pane] of panes) { options.disposeInput?.(id); options.disposeMessages?.(pane.messages); } panes.clear(); host.replaceChildren(); },
+      dispose() { widthObserver.disconnect(); toolbar.remove(); for (const [id, pane] of panes) { options.disposeInput?.(id); options.disposeMessages?.(pane.messages); } panes.clear(); host.replaceChildren(); },
     };
   }
   return { create, statusFacts, excerpt, adjustedWidths };

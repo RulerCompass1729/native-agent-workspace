@@ -4,8 +4,8 @@
 .collaboration-toolbar>button:last-child{margin-left:auto}
 .collaboration-layout-controls{display:flex;gap:4px}
 .collaboration-toolbar [aria-pressed="true"]{background:var(--green);color:white}
-.collaboration-statuses,.collaboration-readers{display:grid;grid-template-columns:var(--collaboration-columns,1fr);min-width:0;gap:8px;padding:0 12px}
-.collaboration-statuses{padding-bottom:8px;align-items:stretch}
+.collaboration-statuses{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 12px 8px;min-width:0;min-height:0}
+.collaboration-readers{display:grid;grid-template-columns:var(--collaboration-columns,minmax(300px,1fr));grid-auto-rows:minmax(0,1fr);min-width:0;min-height:0;gap:8px;padding:0 12px}
 .collaboration-member-status{display:flex;flex-direction:column;gap:3px;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--panel);min-width:0}
 .collaboration-member-heading{display:flex;align-items:flex-start;gap:6px;min-width:0}
 .collaboration-member-heading>.collaboration-member-name{flex:1;min-width:0}
@@ -80,11 +80,27 @@
 /* Maximize only the personal native view, retaining the shared state band. */
 #room-layout.collaboration-focus.terminal-maximized>#room-record-view{display:flex}
 #room-layout.collaboration-focus.terminal-maximized #conversation-pane{display:none}
-@container(max-width:600px){
-  .collaboration-statuses{grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr))}
-  .collaboration-readers{grid-template-columns:minmax(0,1fr);overflow:auto;grid-auto-rows:300px}
-  .collaboration-resize{display:none}
+/* Grid mode: every member is a name chip; its status lives in the leading dot. */
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-status{
+  display:inline-flex;flex-direction:row;align-items:center;gap:6px;flex:0 0 auto;
+  padding:3px 10px;border:1px solid var(--border);border-radius:999px;background:var(--panel);min-width:0;max-width:100%;
 }
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-status::before{content:'';width:7px;height:7px;border-radius:50%;flex:none;background:#6b8761}
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-status[data-state="working"]::before,
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-status[data-state="starting"]::before,
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-status[data-state="stopping"]::before{background:#b78c42}
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-status[data-state="ended"]::before,
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-status[data-state="disconnected"]::before,
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-status[data-state="recoverable"]::before{background:#adb0a7}
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-status[data-alert="true"]::before{background:#b26345}
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-heading{flex:none;align-items:center}
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-name{white-space:nowrap;overflow:visible;max-width:none}
+.collaboration-overview:not([data-list-units="true"]) .collaboration-name-text{overflow:visible;text-overflow:clip}
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-state,
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-child,
+.collaboration-overview:not([data-list-units="true"]) .collaboration-member-freshness{display:none}
+.collaboration-chips-more{flex:none;padding:3px 9px;font-size:12px}
+.collaboration-show-more{margin:4px 12px 8px;padding:6px 10px;font-size:12px;justify-self:start;align-self:start}
 /* Root collaboration keeps original facts available to assistive technology. */
 .collaboration-overview[data-external-toolbar="true"]{grid-template-rows:auto minmax(0,1fr)}
 .collaboration-overview[data-external-toolbar="true"][data-list-units="true"]{grid-template-rows:minmax(0,1fr)}
