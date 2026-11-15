@@ -23,6 +23,8 @@ const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary, follow: followRotation } = require('./queue-secretary.cjs');
 const { IntegratorRole } = require('./integrator-role.cjs');
 const { StewardRole, validDuty } = require('./steward-role.cjs');
+const { StewardStanding } = require('./steward-standing.cjs');
+let stewardStanding;
 const stewardRecords = require('./steward-record.cjs');
 const { StewardWake } = require('./steward-wake.cjs');
 const { AnswerNotices } = require('./answer-notices.cjs');
@@ -485,7 +487,9 @@ async function carryGrants(client, snapshot, now = Date.now()) {
   }
 }
 function auditBackgroundOperation(record) {
-  roomState.recordControlOperation(record, record.guard?.auditRooms || ['shared']);
+  const rooms = new Set(record.guard?.auditRooms || ['shared']);
+  if (record.approvedBy === 'standing' && record.state === 'complete' && record.command.method === 'spaceCreate' && typeof record.value === 'string') rooms.add(record.value);
+  roomState.recordControlOperation(record, [...rooms]);
   // Consent depends on the durable event, never on every window completing a
   // read. A disconnected or slow window cannot hold cancellation or execution.
   broadcastRoom().catch(() => {});
@@ -1450,6 +1454,7 @@ async function boot() {
   integratorRole = new IntegratorRole(dataDir);
   // Who the person designated as the butler they talk to; what it lets that session do is listed in steward-role.cjs.
   stewardRole = new StewardRole(dataDir);
+  stewardStanding = new StewardStanding(dataDir, { role: stewardRole, person: isCurrentHumanContext });
   // What the butler does through NAW, under its own name (steward step 2, batch 1). One that cannot be read stops
   // only the butler's calls, and the bell says so.
   stewardOf = stewardRecords.cachedSteward(stewardRole);
@@ -1495,6 +1500,22 @@ async function boot() {
       buttons: [displayText('common.cancel'), displayText('background.confirm')], defaultId: 0, cancelId: 0 }; },
     audit: auditBackgroundOperation,
     unasked: (actor, _command, action, context) => action === 'readConversation' && stewardReadsUnasked(actor, context.client.snapshot()),
+    standing: (actor, command, context) => {
+      const state = sessionLabels.apply(roomState.apply(context.client.snapshot()));
+      const grant = stewardStanding.take(actor, command, state, context.view.spaceId || 'shared');
+      if (!grant) return null;
+      const action = backgroundOperation.maintenanceAction(command.method, command.arguments, actor);
+      const old = state.sessions.find(s => s.id === command.arguments[0]);
+      const room = state.rooms.find(r => r.id === (command.method === 'spaceAction' ? command.arguments[0] : 'shared'));
+      const kind = ['create', 'spaceCreate'].includes(action) ? 'created' : ['joinRoom', 'leaveRoom'].includes(action) ? 'placement'
+        : ['rename', 'renameRoom'].includes(action) ? 'rename' : ['archiveSession', 'archiveRoom'].includes(action) ? 'archived'
+        : ['restoreSession', 'restoreRoom'].includes(action) ? 'restored' : 'order';
+      return { ...grant, actionText: displayText('background.action.' + action), target: grant.summary?.name || grant.summary?.target || grant.summary?.room || room?.name || displayText('standing.newSession'),
+        undo: displayText('standing.undo.' + kind, { previous: kind === 'order' ? (room?.memberOrder || []).map(id => state.sessions.find(s => s.id === id)?.name || id).join('、') : old?.name || room?.name || '',
+          home: (grant.before.rooms || []).map(id => state.rooms.find(r => r.id === id)?.name || '').filter(Boolean).join('、') || displayText('sidebar.independent') }) };
+    },
+    standingValid: (actor, command, context, grant) => stewardStanding.valid(actor, command,
+      sessionLabels.apply(roomState.apply(context.client.snapshot())), context.view.spaceId || 'shared', grant),
     retireHold: () => (outboxBroker?.active?.() || 0) > 0,
     context: async (actor, saved, kept) => {
       const view = saved || { owner: randomUUID(), selected: actor.id, mode: 'chat', preference: 'chat', active: false };
@@ -2073,6 +2094,12 @@ async function boot() {
       return { duty: { state: 'not-sent', error: { message: message || uiError('error.main.operationIncomplete').message, ...(uiMessage ? { uiMessage } : {}) } } };
     }
   });
+  register('stewardStanding', async (c, on) => {
+    if (!isCurrentHumanContext(c)) throw uiError('error.steward.personOnly');
+    const value = on === undefined ? stewardStanding.view() : stewardStanding.set(c, on);
+    await broadcastRoom(); return value;
+  });
+  applicationHandlers.delete('stewardStanding');
   // What the butler reads to report to the person only what is new (the person, 2026-11-09: 「我希望 NAW 自己可以监控
   // 自己的 agent，并通过自带的 agent（aka 大管家）来进行汇报」): the business events NAW already records without a
   // model (deliveries, decisions, failures, blocked steps, a space whose queue ran empty), after the position its last

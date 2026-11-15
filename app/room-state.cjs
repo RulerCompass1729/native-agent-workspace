@@ -520,7 +520,10 @@ class RoomState {
     const available = rooms.filter(id => id === DEFAULT_ROOM_ID || this.spaces.rooms.some(r => r.id === id));
     for (const room of new Set(available.length ? available : [DEFAULT_ROOM_ID])) {
       const value = this.metadata(room), previous = value.events.find(e => e.id === id);
-      const next = { ...event, time: previous?.time || event.time };
+      const standing = record.approvedBy === 'standing' && record.standing;
+      const next = { ...event, time: previous?.time || event.time,
+        ...(standing ? { ...uiNotice('notice.background.standing.' + state, { name, command: standing.actionText || record.command.method, target: standing.target || '', undo: standing.undo || '' }),
+          controlAudit: { ...event.controlAudit, approvedBy: 'standing', undo: standing.undo } } : {}) };
       const events = previous ? value.events.map(e => e.id === id ? next : e) : [...value.events, next];
       // Audit-only changes do not edit notes or invalidate a merge preview's
       // source cut. They stay in the source space rather than copied snapshots.

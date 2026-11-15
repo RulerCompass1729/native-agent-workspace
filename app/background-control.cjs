@@ -155,7 +155,7 @@ const compactRefusal = row => { row.guard = { auditRooms: row.guard?.auditRooms 
 const queuedDelivery = args => ['queue', 'queueShared'].includes(args.method === 'spaceAction' ? args.arguments?.[1] : args.method);
 class BackgroundControl {
   constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now, readCopyBytes = MAX_RECORD_BYTES,
-    retireAfter = RETIRE_AFTER, retireHold = () => false, unasked = () => false, stagedPollMs = 200, decided = () => {}, receiptRead = () => {} }) {
+    retireAfter = RETIRE_AFTER, retireHold = () => false, unasked = () => false, standing = () => null, standingValid = () => false, stagedPollMs = 200, decided = () => {}, receiptRead = () => {} }) {
     if (!Number.isSafeInteger(readCopyBytes) || readCopyBytes < 1 || readCopyBytes > MAX_RECORD_BYTES) throw Error('Invalid read copy budget');
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
     this.data = { version: STATE_VERSION, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
@@ -171,6 +171,7 @@ class BackgroundControl {
     // Whether a read of another session's conversation runs without the person's confirmation: main.cjs answers yes
     // only for the designated butler in no space (the person, 2026-11-12 14:24). Its preconditions are still checked.
     this.unasked = unasked;
+    this.standing = standing; this.standingValid = standingValid;
     this.confirmationPending = confirmationPending;
     // The person's answer on a card, once its outcome is recorded, and the agent reading a receipt itself: what main.cjs
     // tells the agent that asked (answer-notices.cjs). Neither can change an outcome.
@@ -717,15 +718,21 @@ class BackgroundControl {
             }
             // A read the person already answered keeps that answer: it is theirs, released as an approved read.
             const unasked = !approved && action === 'readConversation' && this.unasked(actor, args, action, context) === true;
-            if (!unasked) {
+            const standing = !approved && !unasked ? this.standing(actor, args, context) : null;
+            if (!unasked && !standing) {
               const answer = await dialog(context, 'message', options);
               if (answer.response !== 1) return { cancelled: true };
             }
             request.maintenanceApproved = true;
             // Marked on the record itself: its audit line and the read's release say it was not confirmed by the person.
             if (unasked) this.commit(data => { data.records.find(r => r.id === row.id && this.key(r.actor) === key).unasked = true; });
+            if (standing) this.commit(data => { Object.assign(data.records.find(r => r.id === row.id && this.key(r.actor) === key), { approvedBy: 'standing', standing }); });
             // If the event writer is broken, fail before an approved mutation.
-            await this.publish({ ...row, state: 'running', ...(unasked ? { unasked: true } : {}) }, context);
+            await this.publish({ ...row, state: 'running', ...(unasked ? { unasked: true } : {}), ...(standing ? { approvedBy: 'standing', standing } : {}) }, context);
+            if (standing) {
+              await context.refresh?.(); await valid();
+              if (!this.standingValid(actor, args, context, standing) || !isDeepStrictEqual(row.guard, controlGuard(context, args))) throw Error('Standing permission or operation target changed before execution');
+            }
             if (spaceFileRead(args)) {
               this.commit(data => { data.records.find(r => r.id === row.id && this.key(r.actor) === key).readAuthorization = { roomId: args.arguments[0], fileId: args.arguments[1] }; });
             } else if (action === 'readConversation' || terminalReads.has(args.method)) {

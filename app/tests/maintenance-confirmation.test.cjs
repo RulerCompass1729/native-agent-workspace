@@ -121,7 +121,7 @@ for (const provider of ['claude', 'codex']) for (const [index, [method, args]] o
 });
 test('read-only merge phases and unrelated queue metadata do not acquire a maintenance gate', () => {
   for (const phase of ['preview', 'status', 'discard']) assert.equal(operation.maintenanceAction('spaceMerge', [phase, {}]), null);
-  for (const phase of ['queueAdd', 'queueCancel', 'queueResolve', 'notes', 'memberOrder']) assert.equal(operation.maintenanceAction('spaceAction', ['shared', phase, []]), null);
+  for (const phase of ['queueAdd', 'queueCancel', 'queueResolve', 'notes']) assert.equal(operation.maintenanceAction('spaceAction', ['shared', phase, []]), null);
 });
 test('a confirmed operation refuses a changed fingerprint and records the refusal', async t => {
   const f = fixture(t), fingerprint = f.context.fingerprint; let placement = 1; f.context.fingerprint = () => ({ ...fingerprint(), placement });
@@ -257,4 +257,9 @@ test('a request sent again a minute later pops a new system notification; an imm
   assert.equal((await ask('after-clock-back')).state, 'confirmation-required');
   assert.deepEqual(notices.at(-1), 'after-clock-back', 'After the clock went back the window is unknown: the person is told');
   assert.equal(controller.data.records.filter(r => r.state === 'confirmation-required').length, 6); assert.equal(f.writes.length, 0);
+});
+
+test('member ordering uses the maintenance gate so standing actions get audited', () => {
+  assert.equal(operation.maintenanceAction('roomMemberOrder', []), 'memberOrder');
+  assert.equal(operation.maintenanceAction('spaceAction', ['shared', 'memberOrder', []]), 'memberOrder');
 });

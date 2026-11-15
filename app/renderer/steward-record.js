@@ -67,6 +67,20 @@
     const attention = entry => ['confirmation-required', 'not-executed', 'unconfirmed', 'not-sent'].includes(entry.state) || !['role', 'message', 'wakeSwitch'].includes(entry.kind) && !entry.state;
     // NAW's switch for waking the butler when it records something new: the person's to see and turn off here (the
     // approved words for the butler: 「看得见、能关」), off by default. Changed in place, so focus stays on it.
+    async function standingSwitch() {
+      const box = make('section', 'steward-record-wake'), label = make('label'), input = document.createElement('input');
+      input.type = 'checkbox'; input.dataset.action = 'steward-standing'; label.append(input, make('span', '', 'standing.switch'));
+      const note = make('p', 'records-note', 'standing.scope'), status = make('p', 'records-note'); status.setAttribute('role', 'status');
+      const show = value => { input.checked = value.on === true; say(status, value.unavailable ? 'standing.unavailable' : value.on ? 'standing.on' : 'standing.off'); };
+      try { show(await api.stewardStanding()); } catch { input.disabled = true; say(status, 'standing.unavailable'); }
+      input.addEventListener('change', async () => {
+        const previous = !input.checked; input.disabled = true;
+        try { show(await api.stewardStanding(input.checked)); }
+        catch (error) { input.checked = previous; status.textContent = String(error.message || error); }
+        finally { input.disabled = false; }
+      });
+      box.append(label, note, status); return box;
+    }
     function wakeSwitch(state, now) {
       const box = make('div', 'steward-record-wake'), label = make('label'), input = document.createElement('input'), words = make('span', '', 'stewardRecord.wake.switch');
       input.type = 'checkbox'; input.dataset.action = 'steward-wake'; label.append(input, words);
@@ -104,6 +118,7 @@
       if (current && view.waiting?.count > 0) { const minutes = Math.floor(Math.max(0, view.at - view.waiting.since) / 60000);
         dialog.append(make('p', 'steward-record-waiting', minutes ? 'stewardRecord.waiting' : 'stewardRecord.waitingNew', { count: view.waiting.count, minutes })); }
       if (current && view.wake) dialog.append(wakeSwitch(view.wake, view.at));
+      if (current && typeof api.stewardStanding === 'function') standingSwitch().then(box => { if (dialog.open) dialog.querySelector('h2').after(box); });
       if (view?.writeFailed) dialog.append(make('p', 'records-note', 'stewardRecord.writeFailed'));
       dialog.append(make('h3', '', 'stewardRecord.heading'));
       const entries = view?.entries || [];
