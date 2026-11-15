@@ -14,6 +14,7 @@ const { NativeHistory, claudeMetadata, nativeId, codexVersionInfo } = require('.
 const spaces = require('./collaboration-spaces.cjs');
 const { uiError, uiNotice, uiActivity, setActivity, setWarning } = require('./ui-errors.cjs');
 const { displayMessage } = require('./ui-locale.js');
+const { archiveIdle } = require('./renderer/fleet-observation.js');
 // A person's row to one session keeps 「你 → 名字」 and carries its catalog name (T-60). Null when the name
 // is not a plain string, so the raw text shows as before.
 // The row fields of an automatic message from another agent (session-wake.cjs), whichever native way it went in.
@@ -34,8 +35,7 @@ const wake = require('./session-wake.cjs');
 // An interrupt the native side has not confirmed. When observed background work keeps the turn running (11-09: a
 // sub-agent held an interrupted Claude turn for 45 minutes behind a generic notice), say what, since when NAW saw
 // it, and where it can be stopped. Only what NAW observed: agent names from hook events, counts from the last report.
-// Running = a SubagentStart in this run with no later SubagentStop, as in renderer/fleet-observation.js (the backend
-// runtime does not carry renderer files).
+// Running = a SubagentStart in this run with no later SubagentStop, as in renderer/fleet-observation.js.
 function interruptActivity(s) {
   const children = new Map();
   for (const event of s.fleet || []) if (['SubagentStart', 'SubagentStop'].includes(event.event) && event.id) {
@@ -1217,6 +1217,7 @@ class Workspace extends EventEmitter {
         proof.connectionRevision !== (s.connectionRevision || 0) || s.nativeContextPending || this.stops.has(id)) throw uiError('error.movePlacementChanged');
     if (destination !== null && !spaces.roomId(destination)) throw uiError('error.invalidMemberAction');
     if (proof.unusedSuccessor === true && destination !== null) throw uiError('error.invalidMemberAction');
+    if (proof.archiveIdle === true && destination !== null) throw uiError('error.invalidMemberAction');
     const previous = spaces.roomIds(s), last = s.placementReceipt;
     if (previous.length > 1) throw uiError('error.movePlacementAmbiguous');
     if (last?.operationId === proof.operationId) {
@@ -1226,6 +1227,16 @@ class Workspace extends EventEmitter {
     }
     if (proof.revision !== generation) throw uiError('error.movePlacementChanged');
     if (this.storageWarning) throw Object.assign(Error(this.storageWarning), { uiMessage: this.storageWarningUiMessage });
+    if (proof.archiveIdle === true) {
+      const runtime = this.runtimes.get(id);
+      // Use live runtime fields, as initial/snapshot does. This check and the
+      // write below have no await between them, and precede all routing changes.
+      if (!archiveIdle({ ...s, activeTurnId: runtime?.turnId || null,
+        pendingQueue: runtime?.pendingQueue || null, pendingSteer: runtime?.pendingSteer || null,
+        nativeInputRequired: Boolean(runtime?.nativeInputRequired), nativeApproval: runtime?.nativeApproval || null,
+        ...(s.provider === 'codex' ? { nativeGoal: runtime?.nativeGoalSnapshot?.() || null } : {}),
+        backendUnavailable: Boolean(runtime?.backendExitConfirmed), transportDisconnected: Boolean(runtime?.transportDisconnected) })) throw uiError('error.planWorking');
+    }
     const next = spaces.withPlacement(s, destination);
     if (next === s) return { changed: false, roomId: destination, nativeId: s.nativeId, revision: generation };
     const receipt = { operationId: proof.operationId, nativeId: s.nativeId,

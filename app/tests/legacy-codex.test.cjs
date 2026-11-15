@@ -592,12 +592,19 @@ for (const change of ['peer-leave-rejoin', 'peer-archive', 'own-leave', 'room-pa
   if (change === 'peer-archive') await room.archiveSession(f.router, 'peer');
   if (change === 'own-leave') await room.membership(f.router, f.record.id, false);
   if (change === 'room-pause') await f.router.call('pause');
-  if (change === 'room-archive') await room.archiveRoom(f.router);
+  if (change === 'room-archive') {
+    await room.archiveRoom(f.router);
+    assert.ok(f.state.sessions.every(s => s.roomId === 'shared'), 'Running members keep their membership');
+    assert.deepEqual(room.value.archivedSessions, []);
+  }
   f.event('item/completed', { turnId: 'active', item: { id: 'answer', type: 'agentMessage', text: 'before after' } });
   f.event('turn/completed', { turn: { id: 'active', status: 'completed' } }); await tick();
   const row = f.bridge.sharedMessages().find(m => m.role === 'assistant');
-  assert.equal(row.text, change.startsWith('peer-') ? 'before after' : 'before');
-  assert.equal(Boolean(row.finalReply), change.startsWith('peer-'));
+  // Space archive leaves running members and their already accepted shared
+  // replies intact; explicit pause/leave still closes that reply authority.
+  const retained = change.startsWith('peer-') || change === 'room-archive';
+  assert.equal(row.text, retained ? 'before after' : 'before');
+  assert.equal(Boolean(row.finalReply), retained);
   assert.equal(f.calls.filter(c => c.method === 'turn/steer').length, 1);
   assert.equal(f.calls.some(c => ['turn/start', 'turn/interrupt'].includes(c.method)), false);
 });

@@ -9,6 +9,7 @@ const { validateName } = require('./session-labels.cjs');
 const { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
 const { captureSource, prepareBatch, assertCurrentSources, sameOperation, validateBatch } = require('./space-merge.cjs');
 const queueRules = require('./queue-dispatch.cjs');
+const { archiveIdle } = require('./renderer/fleet-observation.js');
 const { queueOutcomeSource, storedQueueSource } = require('./butler-ingress.cjs');
 const { queueReadySource } = require('./butler-ready.cjs');
 const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f]/u.test(id);
@@ -58,7 +59,7 @@ function validSessionArchive(p) {
     new Set(p.rooms.map(r => r?.id)).size === p.rooms.length && p.rooms.every(r => r && roomId(r.id) && Number.isSafeInteger(r.index) && r.index >= 0 && r.index <= 10000 &&
       (r.next === undefined || r.next === null || orderId(r.next)) &&
       typeof r.done === 'boolean' && (r.expected === null || validMove(r.expected))) &&
-    validPlacement(p.checkpoint) && (p.detached === null || validPlacement(p.detached)) && (p.restoreExpected === undefined || validMove(p.restoreExpected));
+    (p.archivedByRoom === undefined || roomId(p.archivedByRoom) && p.rooms.length === 1 && p.rooms[0].id === p.archivedByRoom) && validPlacement(p.checkpoint) && (p.detached === null || validPlacement(p.detached)) && (p.restoreExpected === undefined || validMove(p.restoreExpected));
 }
 function validControlAudit(a) {
   const token = v => typeof v === 'string' && v.length > 0 && v.length <= 160 && !/[\u0000-\u001f\u007f]/u.test(v);
@@ -1143,6 +1144,11 @@ class RoomState {
           expected.connectionRevision !== undefined && expected.connectionRevision !== (before.connectionRevision || 0))) throw uiError("error.room.membershipChangedNoRevocation");
       const prior = roomIds(before), modern = (before.serviceCapabilities || snapshot.capabilities || []).includes('singleHomeMoveV1') && !(legacyDetach && prior.length > 1);
       const guarded = expected?.unusedSuccessor === true;
+      const idleArchive = expected?.archiveIdle === true;
+      if (idleArchive && join) throw uiError('error.invalidMemberAction');
+      // Older writers ignore unknown proof fields; never fall back to a detach
+      // that cannot enforce this archive's idle requirement atomically.
+      if (idleArchive && (!modern || !(before.serviceCapabilities || snapshot.capabilities || []).includes('archiveIdleMoveV1'))) throw uiError('error.movePlacementUnsupported');
       if (guarded) {
         if (!modern || !(before.serviceCapabilities || snapshot.capabilities || []).includes('guardedSessionStopV1')) throw uiError('error.movePlacementUnsupported');
         if (snapshot.storageWarning || this.spacesWarning) throw Object.assign(Error(snapshot.storageWarning || this.spacesWarning), { uiMessage: snapshot.storageWarning ? snapshot.storageWarningUiMessage : this.spacesWarningUiMessage });
@@ -1156,7 +1162,8 @@ class RoomState {
       let move;
       if (modern) {
         const proof = { operationId: expected?.operationId || randomUUID(), nativeId: before.nativeId,
-          revision: placementRevision(before), connectionRevision: before.connectionRevision || 0, ...(guarded ? { unusedSuccessor: true } : {}) };
+          revision: placementRevision(before), connectionRevision: before.connectionRevision || 0,
+          ...(guarded ? { unusedSuccessor: true } : {}), ...(idleArchive ? { archiveIdle: true } : {}) };
         try { move = recovered ? { ...before.placementReceipt, changed: true } : await client.call('moveMembership', id, join ? room : null, proof); }
         catch (error) {
           // Lost replies are reconciled from the same writer's saved receipt, never retried.
@@ -1167,8 +1174,8 @@ class RoomState {
       } else {
         // Preserve old literal standalone join/leave. Never emulate A->B with two writes.
         if (join && prior.length) throw uiError('error.movePlacementUnsupported');
-        // Archives retain the old backend's literal membership path, like room
-        // archive. It has no atomic placement receipt: validate the saved cut
+        // Individual archives retain the old backend's literal membership path;
+        // room-owned archives require the atomic guard above. Without a receipt, validate the saved cut
         // above, issue once, and refuse a changed cut after an uncertain reply.
         const remoteExpected = archivePlacement ? undefined : expected;
         if (typeof client.callSpace === 'function') await client.callSpace(room, 'join', remoteExpected === undefined ? [id, join] : [id, join, { nativeId: remoteExpected.nativeId, revision: remoteExpected.revision ?? membershipRevision(before, room) }]);
@@ -1213,16 +1220,23 @@ class RoomState {
     try { spaces = typeof client.snapshot === 'function' ? roomIds(client.snapshot().sessions.find(s => s.id === id)) : DEFAULT_ROOM_ID; }
     catch { return Promise.reject(uiError("error.sessionMissing")); }
     this.gates.add(id);
-    const action = async () => {
+    const action = () => this.archiveSessionNow(client, id, label, { automatic });
+    return (automatic ? this.serial(action) : this.enqueue(client, action, id, spaces)).finally(() => this.gates.delete(id));
+  }
+  // Called only inside this.queue; public entry points own gates and serialization.
+  async archiveSessionNow(client, id, label, { automatic = false, archivedByRoom } = {}) {
       if (this.value.archivedSessions.includes(id)) return;
       const snapshot = await client.call('initial'), session = snapshot.sessions.find(s => s.id === id);
       if (!session) throw uiError("error.sessionMissing");
+      if (archivedByRoom && !this.roomArchiveIdle(session)) throw uiError('error.planWorking');
       if (automatic && roomIds(session).length) throw uiError('error.room.sessionRestoreChanged');
       let plan = Object.hasOwn(this.value.sessionArchives, id) ? this.value.sessionArchives[id] : null;
+      if (archivedByRoom && plan && plan.archivedByRoom !== archivedByRoom) throw uiError('error.room.sessionRestoreChanged');
       const pending = plan?.rooms.find(r => !r.done);
       if (plan && ((session.nativeId ?? null) !== plan.nativeId || plan.detached ||
           JSON.stringify(restorePlacement(session)) !== JSON.stringify(plan.checkpoint) &&
           !(pending?.expected && session.placementReceipt?.operationId === pending.expected.operationId))) {
+        if (archivedByRoom) throw uiError('error.room.sessionRestoreChanged');
         // A failed archive is not a permanent reservation on a session. A new
         // explicit archive starts at its current location, never the stale one.
         const remaining = { ...this.value.sessionArchives }; delete remaining[id];
@@ -1239,7 +1253,7 @@ class RoomState {
           const index = order.indexOf(id);
           return { id: space, index, next: order[index + 1] || null, expected: null, done: false };
         });
-        plan = { nativeId: session.nativeId ?? null, rooms, checkpoint: restorePlacement(session), detached: null };
+        plan = { nativeId: session.nativeId ?? null, rooms, checkpoint: restorePlacement(session), detached: null, ...(archivedByRoom ? { archivedByRoom } : {}) };
         this.update({ sessionArchives: { ...this.value.sessionArchives, [id]: plan } });
       }
       if ((session.nativeId ?? null) !== plan.nativeId || plan.detached) throw uiError('error.room.sessionRestoreChanged');
@@ -1247,6 +1261,7 @@ class RoomState {
         let step = plan.rooms[index]; if (step.done) continue;
         const current = (await client.call('initial')).sessions.find(s => s.id === id);
         if (!current || (current.nativeId ?? null) !== plan.nativeId) throw uiError('error.room.sessionRestoreChanged');
+        if (archivedByRoom && !this.roomArchiveIdle(current)) throw uiError('error.planWorking');
         if (!step.expected) {
           if (!isMember(current, step.id)) throw uiError('error.room.sessionRestoreChanged');
           const expected = { operationId: randomUUID(), nativeId: current.nativeId ?? null, revision: membershipRevision(current, step.id),
@@ -1254,7 +1269,8 @@ class RoomState {
           plan = { ...plan, rooms: plan.rooms.map((r, i) => i === index ? { ...r, expected } : r) };
           this.update({ sessionArchives: { ...this.value.sessionArchives, [id]: plan } }); step = plan.rooms[index];
         }
-        await this.changeMember(client, id, false, label, step.id, step.expected, true);
+        await this.changeMember(client, id, false, label, step.id,
+          archivedByRoom ? { ...step.expected, archiveIdle: true } : step.expected, true);
         const after = (await client.call('initial')).sessions.find(s => s.id === id);
         plan = { ...plan, checkpoint: restorePlacement(after), rooms: plan.rooms.map((r, i) => i === index ? { ...r, done: true } : r) };
         this.update({ sessionArchives: { ...this.value.sessionArchives, [id]: plan } });
@@ -1262,16 +1278,17 @@ class RoomState {
       const current = (await client.call('initial')).sessions.find(s => s.id === id);
       if (!current || (current.nativeId ?? null) !== plan.nativeId || roomIds(current).length ||
           JSON.stringify(restorePlacement(current)) !== JSON.stringify(plan.checkpoint)) throw uiError('error.room.sessionRestoreChanged');
+      if (archivedByRoom && !this.roomArchiveIdle(current)) throw uiError('error.planWorking');
       plan = { ...plan, detached: restorePlacement(current) };
       this.update({ archivedSessions: [...this.value.archivedSessions, id], sessionArchives: { ...this.value.sessionArchives, [id]: plan } });
-    };
-    return (automatic ? this.serial(action) : this.enqueue(client, action, id, spaces)).finally(() => this.gates.delete(id));
   }
   restoreSession(client, id, label) {
     if (!orderId(id)) return Promise.reject(uiError('error.main.invalidSession'));
     if (this.gates.has(id)) return Promise.reject(uiError("error.room.sessionArchiving"));
     this.gates.add(id);
-    return this.serial(async () => {
+    return this.serial(() => this.restoreSessionNow(client, id, label)).finally(() => this.gates.delete(id));
+  }
+  async restoreSessionNow(client, id, label, restoringRoom) {
       const saved = Object.hasOwn(this.value.sessionArchives, id) ? this.value.sessionArchives[id] : null;
       if (!this.value.archivedSessions.includes(id)) {
         if (saved) { const remaining = { ...this.value.sessionArchives }; delete remaining[id]; this.update({ sessionArchives: remaining }); }
@@ -1287,7 +1304,7 @@ class RoomState {
         const place = saved.rooms[0];
         if (place) {
           let metadata; try { metadata = this.metadata(place.id); } catch { throw uiError('error.room.sessionRestoreUnavailable'); }
-          if (metadata.archived) throw uiError('error.room.sessionRestoreUnavailable');
+          if (metadata.archived && !(restoringRoom === place.id && saved.archivedByRoom === restoringRoom)) throw uiError('error.room.sessionRestoreUnavailable');
           let plan = saved;
           if (!plan.restoreExpected || !recovered && plan.restoreExpected.connectionRevision !== (current.connectionRevision || 0)) {
             plan = { ...plan, restoreExpected: { operationId: randomUUID(), nativeId: current.nativeId ?? null, revision: membershipRevision(current, place.id),
@@ -1318,15 +1335,30 @@ class RoomState {
           this.commit({ ...metadata, memberOrder: [...rest.slice(0, offset), id, ...rest.slice(offset)] }, place.id);
         }
         placement = 'restored';
-      } catch { /* Retain any actual current placement; never steal another home. */ }
+      } catch (error) {
+        // Room restore remains retryable after backend/disk failure; individual
+        // restore still offers its existing standalone fallback.
+        if (restoringRoom) throw error;
+      }
       const remaining = { ...this.value.sessionArchives }; delete remaining[id];
       const notice = placement === 'restored' ? null : uiNotice('notice.room.sessionRestoreFallback');
       this.update({ archivedSessions: this.value.archivedSessions.filter(value => value !== id), sessionArchives: remaining },
         notice ? { kind: 'restore-session', sessionId: id, ...notice } : undefined);
       return { restored: true, placement, ...(notice || {}) };
-    }).finally(() => this.gates.delete(id));
   }
-  archiveRoom(client, labels, room = DEFAULT_ROOM_ID) {
+  roomArchiveIdle(session) {
+    return archiveIdle(session);
+  }
+  roomArchivePlan(snapshot, room = DEFAULT_ROOM_ID) {
+    const value = this.metadata(room);
+    const pending = id => value.restoreMembers.includes(id) && this.value.sessionArchives[id]?.archivedByRoom === room && !this.value.archivedSessions.includes(id);
+    const members = snapshot.sessions.filter(s => isMember(s, room) || pending(s.id));
+    const archive = members.filter(s => this.roomArchiveIdle(s) && !this.value.archivedSessions.includes(s.id) &&
+      (roomIds(s).length === 1 && isMember(s, room) || pending(s.id) && roomIds(s).length === 0)).map(s => s.id);
+    return { room, name: value.name, archived: value.archived, archive, keep: members.filter(s => !archive.includes(s.id)).map(s => s.id),
+      members: members.map(s => ({ id: s.id, ...restorePlacement(s) })) };
+  }
+  archiveRoom(client, labels, room = DEFAULT_ROOM_ID, approved) {
     const gate = room === DEFAULT_ROOM_ID ? 'room' : `room:${room}`;
     try { this.metadata(room); } catch (error) { return Promise.reject(error); }
     if (this.gates.has(gate)) return Promise.reject(uiError("error.room.workspaceBusy"));
@@ -1334,16 +1366,22 @@ class RoomState {
     return this.enqueue(client, async () => {
       const value = this.metadata(room);
       if (value.archived) return;
-      const members = (await client.call('initial')).sessions.filter(s => isMember(s, room));
-      // Save the intended roster before detaching so a partial failure cannot
-      // lose the information needed for an explicit restore/retry.
-      const restoreMembers = [...new Set([...value.restoreMembers, ...members.map(s => s.id)])];
+      const snapshot = await client.call('initial'), plan = this.roomArchivePlan(snapshot, room);
+      if (approved && !isDeepStrictEqual(plan, approved)) throw uiError('error.room.sessionRestoreChanged');
+      // Persist the intent first. Each session's saved archive owns its original
+      // placement and room provenance, including retries after a partial detach.
+      const restoreMembers = [...new Set([...value.restoreMembers, ...plan.archive])];
       this.update({ restoreMembers }, undefined, room);
-      for (const s of members) {
-        await this.changeMember(client, s.id, false, labels?.get(s.id), room, undefined, true);
-        const current = (await client.call('initial')).sessions.find(record => record.id === s.id);
-        if (!current) throw uiError('error.sessionMissing');
-        this.update({ restorePlacements: { ...this.metadata(room).restorePlacements, [s.id]: restorePlacement(current) } }, undefined, room);
+      for (const id of plan.archive) {
+        if (this.value.archivedSessions.includes(id)) continue;
+        const saved = this.value.sessionArchives[id], current = (await client.call('initial')).sessions.find(s => s.id === id);
+        const owned = saved?.archivedByRoom === room;
+        if (!current || !this.roomArchiveIdle(current)) continue;
+        if (!owned && (!plan.archive.includes(id) || roomIds(current).length !== 1 || !isMember(current, room))) continue;
+        if (!owned && !isDeepStrictEqual({ id, ...restorePlacement(current) }, plan.members.find(s => s.id === id))) throw uiError('error.room.sessionRestoreChanged');
+        if (owned && (!isDeepStrictEqual(restorePlacement(current), saved.checkpoint) &&
+            !saved.rooms.some(r => r.expected?.operationId && r.expected.operationId === current.placementReceipt?.operationId))) throw uiError('error.room.sessionRestoreChanged');
+        await this.archiveSessionNow(client, id, labels?.get(id), { archivedByRoom: room });
       }
       this.update({ archived: true }, { kind: 'archive', ...uiNotice('notice.room.archived') }, room);
     }, undefined, room).finally(() => this.gates.delete(gate));
@@ -1357,9 +1395,33 @@ class RoomState {
       const value = this.metadata(room);
       if (!value.archived && !value.restoreMembers.length) return;
       const sessions = (await client.call('initial')).sessions;
-      const wanted = value.restoreMembers.filter(id => sessions.some(s => s.id === id) && !this.value.archivedSessions.includes(id));
+      const wanted = value.restoreMembers.filter(id => sessions.some(s => s.id === id) && (!this.value.archivedSessions.includes(id) || this.value.sessionArchives[id]?.archivedByRoom === room));
       const skipped = [];
       for (const id of wanted) {
+        const saved = this.value.sessionArchives[id];
+        if (saved?.archivedByRoom === room) {
+          const current = (await client.call('initial')).sessions.find(s => s.id === id);
+          const recovered = saved.restoreExpected && current?.placementReceipt?.operationId === saved.restoreExpected.operationId;
+          if (!current || (current.nativeId ?? null) !== saved.nativeId) { skipped.push(id); continue; }
+          if (!saved.detached) {
+            // A local save can fail after the backend detached. Its exact saved
+            // checkpoint/receipt is enough to restore, without replaying detach.
+            const receipt = saved.rooms[0]?.expected?.operationId && saved.rooms[0].expected.operationId === current.placementReceipt?.operationId;
+            if (!sameHome(current, saved.checkpoint) && !receipt) { skipped.push(id); continue; }
+            if (isMember(current, room)) {
+              const remaining = { ...this.value.sessionArchives }; delete remaining[id];
+              this.update({ sessionArchives: remaining }); continue;
+            }
+            if (roomIds(current).length) { skipped.push(id); continue; }
+            this.update({ archivedSessions: [...new Set([...this.value.archivedSessions, id])], sessionArchives: { ...this.value.sessionArchives,
+              [id]: { ...saved, detached: restorePlacement(current) } } });
+          } else if (!recovered && !sameHome(current, saved.detached)) { skipped.push(id); continue; }
+          try { this.joinGuard?.(id); } catch { skipped.push(id); continue; }
+          await this.restoreSessionNow(client, id, labels?.get(id), room);
+          this.update({ restoreMembers: this.metadata(room).restoreMembers.filter(value => value !== id) }, undefined, room);
+          continue;
+        }
+
         const current = (await client.call('initial')).sessions.find(s => s.id === id), proof = this.metadata(room).restorePlacements?.[id];
         if (current && roomIds(current).length === 1 && isMember(current, room)) continue;
         if (!current || !proof || roomIds(current).length || JSON.stringify(restorePlacement(current)) !== JSON.stringify(proof)) { skipped.push(id); continue; }

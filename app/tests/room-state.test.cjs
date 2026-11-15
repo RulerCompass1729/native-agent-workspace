@@ -1,7 +1,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { RoomState } = require('../room-state.cjs');
-const { withMembership, roomIds, isMember } = require('../collaboration-spaces.cjs');
+const { withMembership, withPlacement, placementRevision, roomIds, isMember } = require('../collaboration-spaces.cjs');
 function setup(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-room-state-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -68,10 +68,21 @@ test('a late clear cannot erase notes saved after its confirmation', t => {
   room.notes('Newer note', revision); assert.throws(() => room.clear(revision), /清除期间更新/);
   assert.equal(room.value.notes, 'Newer note'); assert.ok(room.value.events.some(e => e.text.includes('Newer note')));
 });
-function archiveFixture() {
-  const records = [{ id: 'one', name: 'Duplicate', roomId: 'shared', nativeId: 'native-one', pid: 123, liveDraft: 'private' }, { id: 'two', name: 'Duplicate', roomId: 'shared', nativeId: 'native-two', pid: 456 }];
+function archiveFixture(modern = false) {
+  const records = [{ id: 'one', state: 'idle', name: 'Duplicate', roomId: 'shared', nativeId: 'native-one', pid: 123, liveDraft: 'private' }, { id: 'two', state: 'idle', name: 'Duplicate', roomId: 'shared', nativeId: 'native-two', pid: 456 }];
   const calls = [];
-  const client = { call: async (method, id, join) => { calls.push([method, id, join]); if (method === 'initial') return { sessions: structuredClone(records) }; if (method === 'join') records.find(s => s.id === id).roomId = join ? 'shared' : null; } };
+  const client = { call: async (method, id, join, proof) => {
+    calls.push([method, id, join]);
+    if (method === 'initial') return { sessions: structuredClone(records), capabilities: modern ? ['singleHomeMoveV1', 'archiveIdleMoveV1'] : [] };
+    if (method === 'join') records.find(s => s.id === id).roomId = join ? 'shared' : null;
+    if (method === 'moveMembership') {
+      const record = records.find(s => s.id === id), previousRoomId = roomIds(record)[0] || null;
+      Object.assign(record, withPlacement(record, join));
+      record.placementReceipt = { operationId: proof.operationId, nativeId: record.nativeId, previousRoomId, roomId: join,
+        beforeRevision: proof.revision, revision: placementRevision(record), connectionRevision: record.connectionRevision || 0 };
+      return { ...record.placementReceipt, changed: true };
+    }
+  } };
   return { records, calls, client };
 }
 test('member order persists independently of notes revisions, events, sidebar and native records', t => {
@@ -132,21 +143,21 @@ test('failed member-order atomic save keeps original order and file while remain
   assert.deepEqual(fs.readdirSync(dir), ['room-state.json']);
 });
 test('archive and restore retain identities and notes; session archive detaches; room restore excludes separately archived stable IDs', async t => {
-  const { dir, room } = setup(t), { records, calls, client } = archiveFixture();
-  room.notes('Shared note', 0); await room.archiveRoom(client); assert.equal(room.value.archived, true); assert.ok(records.every(s => s.roomId === null));
+  const { dir, room } = setup(t), { records, calls, client } = archiveFixture(true);
+  room.notes('Shared note', 0); await room.archiveSession(client, 'two'); await room.archiveRoom(client); assert.equal(room.value.archived, true); assert.ok(records.every(s => s.roomId === null));
   await room.archiveSession(client, 'two'); assert.throws(() => room.assertAvailable('two'), /归档/);
   const cold = new RoomState(dir); assert.equal(cold.value.archived, true); assert.equal(cold.value.notes, 'Shared note');
   await cold.restoreRoom(client); assert.equal(records[0].roomId, 'shared'); assert.equal(records[1].roomId, null); assert.equal(cold.value.archived, false);
-  await cold.restoreSession(client, 'two'); assert.doesNotThrow(() => cold.assertAvailable('two')); assert.equal(records[1].roomId, null, 'Solo restore does not silently rejoin');
+  await cold.restoreSession(client, 'two'); assert.doesNotThrow(() => cold.assertAvailable('two')); assert.equal(records[1].roomId, 'shared', 'The independently archived member restores only when explicitly requested');
   assert.equal(records[0].nativeId, 'native-one'); assert.equal(records[0].pid, 123); assert.equal(records[0].liveDraft, 'private');
-  assert.ok(calls.every(([method]) => ['pause', 'initial', 'join'].includes(method)));
+  assert.ok(calls.every(([method]) => ['pause', 'initial', 'moveMembership'].includes(method)));
 });
 test('archive gates apply before awaited pause; failure never claims successful archive and retry preserves original roster', async t => {
-  const { room } = setup(t), { records, client } = archiveFixture();
+  const { room } = setup(t), { records, client } = archiveFixture(true);
   const original = client.call; let release, fail = true;
   client.call = async (method, ...args) => {
     if (method === 'pause') await new Promise(resolve => { release = resolve; });
-    if (method === 'join' && args[0] === 'two' && fail) throw Error('Synthetic detach failure');
+    if (method === 'moveMembership' && args[0] === 'two' && fail) throw Error('Synthetic detach failure');
     return original(method, ...args);
   };
   const pending = room.archiveRoom(client); assert.throws(() => room.assertAvailable('one', true), /归档/); release(); await assert.rejects(pending, /detach failure/);
@@ -154,27 +165,27 @@ test('archive gates apply before awaited pause; failure never claims successful 
   fail = false; const retry = room.archiveRoom(client); release(); await retry; assert.equal(room.value.archived, true); assert.deepEqual(room.value.restoreMembers, ['one', 'two']);
 });
 test('partial room restore survives cold reopen and retry without duplicate joins or restoring a separately archived session', async t => {
-  const { dir, room } = setup(t), { records, calls, client } = archiveFixture();
+  const { dir, room } = setup(t), { records, calls, client } = archiveFixture(true);
   records.push({ id: 'three', name: 'Duplicate', roomId: 'shared', nativeId: 'native-three', pid: 789 });
-  await room.archiveRoom(client); await room.archiveSession(client, 'three');
+  await room.archiveSession(client, 'three'); await room.archiveRoom(client);
   const original = client.call;
   client.call = async (method, ...args) => {
-    if (method === 'join' && args[0] === 'two' && args[1]) throw Error('Synthetic restore failure');
+    if (method === 'moveMembership' && args[0] === 'two' && args[1]) throw Error('Synthetic restore failure');
     return original(method, ...args);
   };
   await assert.rejects(room.restoreRoom(client), /restore failure/);
   assert.equal(room.value.archived, true); assert.equal(records[0].roomId, 'shared');
   assert.equal(records[1].roomId, null); assert.equal(records[2].roomId, null);
-  assert.deepEqual(room.value.restoreMembers, ['two', 'three'], 'Completed restores are not replayed after a later failure');
+  assert.deepEqual(room.value.restoreMembers, ['two'], 'Completed restores are not replayed after a later failure');
   const cold = new RoomState(dir); assert.equal(cold.value.archived, true);
   assert.throws(() => cold.assertAvailable('one', true), /归档/);
   client.call = original; await cold.restoreRoom(client);
   assert.equal(cold.value.archived, false); assert.deepEqual(cold.value.restoreMembers, []);
   assert.equal(records[0].roomId, 'shared'); assert.equal(records[1].roomId, 'shared'); assert.equal(records[2].roomId, null);
   assert.equal(cold.value.events.filter(e => e.kind === 'join' && e.sessionId === 'one').length, 1);
-  assert.equal(calls.filter(([method, id, join]) => method === 'join' && id === 'one' && join).length, 1);
+  assert.equal(calls.filter(([method, id, join]) => method === 'moveMembership' && id === 'one' && join).length, 1);
   assert.deepEqual(records.map(s => s.nativeId), ['native-one', 'native-two', 'native-three']);
-  assert.ok(calls.every(([method]) => ['pause', 'initial', 'join'].includes(method)));
+  assert.ok(calls.every(([method]) => ['pause', 'initial', 'moveMembership'].includes(method)));
 });
 test('new spaces preserve legacy bytes and isolate names, notes, file references and optimistic revisions across reopen', t => {
   const { dir, room } = setup(t);
@@ -215,8 +226,8 @@ test('legacy multi-home archive detaches explicitly and restore does not recreat
   record = withMembership(withMembership(record, a, true), b, true);
   assert.deepEqual(roomIds(record), ['shared', a, b]);
   await room.archiveRoom(client, null, a);
-  assert.deepEqual(roomIds(record), ['shared', b]); assert.equal(room.metadata(a).archived, true); assert.equal(room.metadata(b).archived, false);
-  await room.restoreRoom(client, null, a); assert.equal(isMember(record, a), false, 'Restore preserves the later/other homes instead of adding another');
+  assert.deepEqual(roomIds(record), ['shared', a, b]); assert.equal(room.metadata(a).archived, true); assert.equal(room.metadata(b).archived, false);
+  await room.restoreRoom(client, null, a); assert.equal(isMember(record, a), true, 'Space archive and restore leave a multi-home member unchanged');
   await room.archiveSession(client, 'one'); assert.deepEqual(roomIds(record), []);
   assert.equal(record.nativeId, 'original'); assert.equal(record.pid, 123); assert.equal(record.liveDraft, 'unsent');
   const restored = await room.restoreSession(client, 'one'); assert.equal(restored.restored, true); assert.equal(restored.placement, 'unavailable');
@@ -257,7 +268,7 @@ test('ordering a shared native session within one group leaves every other group
   assert.ok(records.every(r => roomIds(r).length === 2));
 });
 test('restoring a space leaves out a former member that may not join now, and still restores (steward step 2, batch 2, review 1)', async t => {
-  const { room } = setup(t), { records, client } = archiveFixture();
+  const { room } = setup(t), { records, client } = archiveFixture(true);
   await room.archiveRoom(client); assert.ok(records.every(s => s.roomId === null));
   room.joinGuard = id => { if (id === 'one') throw Error('The butler stays outside'); };
   await room.restoreRoom(client);

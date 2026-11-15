@@ -1142,6 +1142,27 @@ function showDialog(c, kind, options) {
   const method = { message: 'showMessageBox', open: 'showOpenDialog', save: 'showSaveDialog' }[kind];
   return background.dialog(c, kind, options, (win, value) => dialog[method](win, value));
 }
+function roomArchiveDetail(state, room = 'shared') {
+  const plan = roomState.roomArchivePlan(state, room);
+  const names = ids => ids.map(id => {
+    const session = state.sessions.find(s => s.id === id);
+    return `${backgroundOperation.visibleText(sessionLabels.labels.get(id) || session?.name || id)} (${id})`;
+  }).join(', ') || '—';
+  return displayText('archive.roomConfirmation', { archive: names(plan.archive), keep: names(plan.keep) });
+}
+async function archiveRoomConfirmed(c, room = 'shared') {
+  const snapshot = await c.client.call('initial'), approved = roomState.roomArchivePlan(snapshot, room);
+  if (c.background) {
+    const request = backgroundOperation.request();
+    if (!request?.maintenanceApproved || JSON.stringify(request.guard?.archivePlan) !== JSON.stringify(approved)) throw uiError('error.room.sessionRestoreChanged');
+  } else {
+    const answer = await showDialog(c, 'message', { type: 'warning', message: displayText('background.action.archiveRoom'),
+      detail: roomArchiveDetail(snapshot, room), buttons: [displayText('common.cancel'), displayText('background.confirm')], defaultId: 0, cancelId: 0 });
+    if (answer.response !== 1) return false;
+  }
+  await roomState.archiveRoom(c.client, sessionLabels.labels, room, approved);
+  return true;
+}
 function register(name, handler) {
   applicationHandlers.set(name, async (c, ...args) => {
     if (c.background) {
@@ -1466,7 +1487,7 @@ async function boot() {
       return { type: 'warning',
       message: action === 'readConversation' ? displayText('background.readConversationTitle', { name: backgroundOperation.visibleText(actor.name), target: backgroundOperation.visibleText(target.name) })
         : displayText('background.maintenanceTitle', { name: backgroundOperation.visibleText(actor.name), command: displayText('background.action.' + action) }),
-      detail: backgroundOperation.confirmationDetail(command, state, context),
+      detail: [backgroundOperation.confirmationDetail(command, state, context), ...(action === 'archiveRoom' ? [roomArchiveDetail(state, command.method === 'spaceAction' ? command.arguments[0] : 'shared')] : [])].join('\n\n'),
       buttons: [displayText('common.cancel'), displayText('background.confirm')], defaultId: 0, cancelId: 0 }; },
     audit: auditBackgroundOperation,
     unasked: (actor, _command, action, context) => action === 'readConversation' && stewardReadsUnasked(actor, context.client.snapshot()),
@@ -1499,6 +1520,13 @@ async function boot() {
         const maintenance = backgroundOperation.maintenanceAction(command.method, command.arguments, actor);
         if (maintenance) {
           const metadata = roomState.apply(state), auditRooms = new Set();
+          if (maintenance === 'archiveSession') {
+            const target = metadata.sessions.find(s => s.id === command.arguments[0]);
+            if (target && (['starting', 'working', 'approval', 'stopping', 'background'].includes(target.state) ||
+                target.activeTurnId || target.pendingTag || target.pendingQueue || target.pendingSteer || target.nativeInputRequired ||
+                target.approval || target.nativeApproval?.requests?.length || target.nativeGoal?.status === 'active' ||
+                target.background > 0 || target.scheduled > 0)) throw uiError('error.planWorking');
+          }
           const controlTarget = ['interrupt', 'pause', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent'].includes(command.method) ? command.arguments[0] : null;
           for (const s of state.sessions) if (s.id === actor.id || strings.has(s.id)) {
             roomIds(s).forEach(id => auditRooms.add(id));
@@ -1557,10 +1585,12 @@ async function boot() {
           return { auditRooms: [...(auditRooms.size ? auditRooms : ['shared'])].sort(),
             ...(command.method === 'initial' ? { selected: context.view.selected } : {}),
             ...(command.method === 'pasteNativeContent' ? { clipboardRevision: context.clipboardRevision || null } : {}),
+            ...(maintenance === 'archiveRoom' ? { archivePlan: roomState.roomArchivePlan(state, command.method === 'spaceAction' ? command.arguments[0] : 'shared') } : {}),
             sessions: metadata.sessions.filter(s => !targets || targets.has(s.id)).map(placement),
             rooms: metadata.rooms.filter(r => !targetRooms || targetRooms.has(r.id)).map(r => ({ id: r.id, name: r.name, archived: r.archived, memberOrder: r.memberOrder,
-              // The roster changes a session's saved neighbour/slot and a room's archive plan.
-              ...(targetRooms ? { memberIds: metadata.sessions.filter(s => roomIds(s).includes(r.id)).map(s => s.id).sort() } : {}),
+              // Session archive saves its neighbour/slot when it executes. Other
+              // members leaving must not void its card; whole-room consent still binds the roster.
+              ...(targetRooms && maintenance !== 'archiveSession' ? { memberIds: metadata.sessions.filter(s => roomIds(s).includes(r.id)).map(s => s.id).sort() } : {}),
               restoreMembers: roomState.metadata(r.id).restoreMembers, restorePlacements: roomState.metadata(r.id).restorePlacements })),
             sessionArchives: targets ? Object.fromEntries(Object.entries(roomState.value.sessionArchives).filter(([id]) => targets.has(id))) : roomState.value.sessionArchives };
         }
@@ -1635,7 +1665,7 @@ async function boot() {
     try { return await roomState.restoreSession(c.client, id, sessionLabels.labels.get(id)); }
     finally { await broadcastRoom(); }
   });
-  register('archiveRoom', async c => { try { await roomState.archiveRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });
+  register('archiveRoom', async c => { try { return await archiveRoomConfirmed(c); } finally { await broadcastRoom(); } });
   register('restoreRoom', async c => { try { await roomState.restoreRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });
   register('spaceCreate', async (_c, name) => { const id = roomState.create(name); await broadcastRoom(); return id; });
   register('spaceMerge', async (c, action, value) => {
@@ -1671,7 +1701,7 @@ async function boot() {
     else if (action === 'notes') roomState.notes(args[0], args[1], roomId);
     else if (action === 'memberOrder') roomState.moveMember(args[0], (await c.client.call('initial')).sessions, roomId);
     else if (action === 'archive' || action === 'restore') {
-      try { return await roomState[action === 'archive' ? 'archiveRoom' : 'restoreRoom'](c.client, sessionLabels.labels, roomId); }
+      try { return action === 'archive' ? await archiveRoomConfirmed(c, roomId) : await roomState.restoreRoom(c.client, sessionLabels.labels, roomId); }
       finally { await broadcastRoom(); }
     } else if (action === 'removeFile') roomState.removeFile(args[0], args[1], roomId);
     else if (['queueAdd', 'queueCancel', 'queueResolve', 'queueClaim'].includes(action)) {

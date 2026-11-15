@@ -21,7 +21,7 @@ async function fixture(t, provider) {
   const createdOptions = [];
   const client = { snapshot: () => workspace.snapshot(), refresh: async () => workspace.snapshot(), close() {}, call: async (method, ...args) => {
     calls.push(method);
-    if (method === 'initial') return { ...workspace.snapshot(), capabilities: ['nativePermissionDefaults', 'singleHomeMoveV1'] };
+    if (method === 'initial') return { ...workspace.snapshot(), capabilities: ['nativePermissionDefaults', 'singleHomeMoveV1', 'archiveIdleMoveV1'] };
     // Synthetic transport only: archive pauses routing, never a native process.
     if (method === 'pause' || method === 'pauseSpace') return;
     if (method === 'moveMembership') return workspace.moveMembership(...args);
@@ -36,28 +36,29 @@ async function fixture(t, provider) {
   const c = { background: true, actor, client, view: {}, refresh: client.refresh, win: { destroy() {}, isDestroyed: () => false } };
   const handlers = new Map();
   const scope = vm.createContext({ context: c, client, actor, roomState: rooms, sessionLabels: labels, backgroundOperation: operation, roomIds: require('../collaboration-spaces.cjs').roomIds,
-    applicationHandlers: handlers, ipcMain: { handle() {} }, showDialog: (context, kind, options) => dialog(context, kind, options), displayText: key => key, uiError: require('../ui-errors.cjs').uiError,
+    applicationHandlers: handlers, ipcMain: { handle() {} }, showDialog: (context, kind, options) => dialog(context, kind, options), displayText: (key, params) => require('../ui-locale.js').format('en', key, params), uiError: require('../ui-errors.cjs').uiError,
     assertNativeCreation: require('../submission-policy.cjs').assertNativeCreation, capabilitiesFor: () => ['resume', 'resubscribe', 'transportReconnect'],
     validRoomId: require('../collaboration-spaces.cjs').roomId,
     creationDefaults: { remember() { throw Error('A background creation must not save desktop defaults'); } }, broadcastRoom: async () => {} });
   vm.runInContext(part('function controlRequestActors(', '\nfunction projectBackgroundRecord('), scope);
   vm.runInContext(part('      context.confirmationActors =', '      context.fingerprint ='), scope);
   vm.runInContext(part('      context.fingerprint = command =>', '\n      context.delivery ='), scope);
+  vm.runInContext(part('function roomArchiveDetail(', '\nfunction register('), scope);
   vm.runInContext(part('function register(', '\nasync function replaceBackendSockets('), scope);
   for (const [start, end] of [["  register('archiveSession',", "  register('spaceMerge',"], ["  register('spaceAction',", "  register('spaceFiles',"],
     ["  register('create',", "  register('nativeHistory',"], ["  register('importHistory',", "  register('butlerReview',"],
     ["  for (const action of ['resume', 'forget'])", "  register('stop',"]])
     vm.runInContext(part(start, end), scope);
   // The card carries what main.cjs shows: its detail names the sessions and spaces the request refers to.
-  const confirmation = (_actor, command) => ({ type: 'warning', message: 'Maintenance', detail: operation.confirmationDetail(command, labels.apply(rooms.apply(client.snapshot()))),
-    buttons: ['Cancel', 'Confirm'], defaultId: 0, cancelId: 0 });
+  const confirmation = vm.runInContext('(' + part('    confirmation: (actor, command, action, context) => {', '\n    audit:').trim().slice('confirmation: '.length).replace(/,$/, '') + ')', scope);
   controller = new BackgroundControl({ dataDir: dir, handlers, context: () => c, confirmation, audit() {} });
   const ask = (method, args, operationId = randomUUID()) => controller.call({ sender: actor, identity: { callId: 'call-' + operationId, turnId: 'turn' }, valid: () => true },
     { action: 'invoke', method, arguments: args, operation_id: operationId });
   const confirm = pending => controller.decide(id, actor.nativeId, pending.id, 1);
+  const cancel = pending => controller.decide(id, actor.nativeId, pending.id, 0);
   const named = name => labels.apply(workspace.snapshot()).sessions.filter(s => s.name === name);
   const spaces = name => rooms.apply(workspace.snapshot()).rooms.filter(r => r.name === name);
-  return { dir, workspace, client, rooms, labels, actor, other, ask, confirm, named, spaces, calls, controller, createdOptions };
+  return { dir, workspace, client, rooms, labels, actor, other, ask, confirm, cancel, named, spaces, calls, controller, createdOptions };
 }
 const archived = (f, id) => f.rooms.apply(f.workspace.snapshot()).sessions.find(s => s.id === id).archived;
 const addSession = f => f.workspace.create('codex', f.dir, 'owner', 'Unrelated');
@@ -114,13 +115,62 @@ for (const change of ['move', 'archive', 'native-id', 'pending-identity', 'recon
   });
 }
 for (const sameRoom of [false, true]) {
-  test(`two archive cards: ${sameRoom ? 'shared home changes the second saved placement' : 'independent targets both succeed'}`, async t => {
+  test(`two archive cards both succeed: ${sameRoom ? 'shared home' : 'independent targets'}`, async t => {
     const f = await fixture(t, 'codex'), b = await addSession(f);
     if (sameRoom) { await join(f, f.other); await join(f, b); }
     const aCard = await f.ask('archiveSession', [f.other]), bCard = await f.ask('archiveSession', [b]);
     const first = await f.confirm(aCard); assert.equal(first.state, 'complete', first.error); assert.equal(archived(f, f.other), true);
-    if (sameRoom) { await refused(f, bCard); assert.equal(archived(f, b), false); }
-    else { const second = await f.confirm(bCard); assert.equal(second.state, 'complete', second.error); assert.equal(archived(f, b), true); }
+    const second = await f.confirm(bCard); assert.equal(second.state, 'complete', second.error); assert.equal(archived(f, b), true);
+  });
+}
+for (const roomKind of ['shared', 'named']) for (const order of [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]) {
+  test(`${roomKind}: three archive cards succeed in order ${order.join('')} and restore to their original space`, async t => {
+    const f = await fixture(t, 'codex'), ids = [f.other, await addSession(f), await addSession(f)];
+    const room = roomKind === 'shared' ? 'shared' : f.rooms.create('Original');
+    for (const id of ids) await join(f, id, room);
+    const cards = [];
+    for (const id of ids) cards.push(await f.ask('archiveSession', [id]));
+    assert.ok(cards.every(card => card.state === 'confirmation-required'));
+    assert.ok(ids.every(id => !archived(f, id)), 'Asking must not archive any member');
+    for (const index of order) {
+      const result = await f.confirm(cards[index]);
+      assert.equal(result.state, 'complete', result.error); assert.equal(result.humanDecision, 1);
+      assert.equal(archived(f, ids[index]), true);
+      const before = f.calls.length;
+      await assert.rejects(f.confirm(cards[index]), /confirmation is no longer current/i);
+      assert.equal(f.calls.length, before, 'A replay cannot enter the business handler');
+    }
+    // Reopen desktop archive metadata to prove the saved homes survive a restart.
+    const cold = new RoomState(f.dir);
+    for (const index of [...order].reverse()) {
+      assert.equal(cold.value.sessionArchives[ids[index]].rooms[0].id, room);
+      const restored = await cold.restoreSession(f.client, ids[index]);
+      assert.equal(restored.placement, 'restored');
+      assert.deepEqual(f.workspace.get(ids[index]).roomIds, [room]);
+    }
+  });
+}
+test('cancelling one same-space archive does not approve it or void its sibling', async t => {
+  const f = await fixture(t, 'codex'), b = await addSession(f);
+  await join(f, f.other); await join(f, b);
+  const aCard = await f.ask('archiveSession', [f.other]), bCard = await f.ask('archiveSession', [b]);
+  assert.equal((await f.cancel(aCard)).state, 'cancelled'); assert.equal(archived(f, f.other), false);
+  assert.equal((await f.confirm(bCard)).state, 'complete'); assert.equal(archived(f, b), true);
+  await assert.rejects(f.confirm(aCard), /confirmation is no longer current/i);
+  assert.equal(archived(f, f.other), false);
+});
+for (const change of ['working', 'approval', 'active-turn', 'pending-input', 'deleted']) {
+  test(`same-space archive still refuses its own target becoming ${change}`, async t => {
+    const f = await fixture(t, 'codex'); await join(f, f.other);
+    const card = await f.ask('archiveSession', [f.other]);
+    if (change === 'working' || change === 'approval') f.workspace.runtimes.get(f.other).emit('state', change);
+    if (change === 'active-turn') f.workspace.runtimes.get(f.other).turnId = 'synthetic-active-turn';
+    if (change === 'pending-input') f.workspace.get(f.other).pendingTag = 'synthetic-pending-input';
+    if (change === 'deleted') { await f.workspace.stop(f.other); f.workspace.forget(f.other); }
+    const before = f.calls.length, result = await f.confirm(card);
+    assert.equal(result.state, 'unconfirmed', result.error);
+    assert.equal(f.calls.length, before, 'No handler or membership call after the target changed');
+    assert.equal(f.rooms.value.archivedSessions.includes(f.other), false);
   });
 }
 for (const change of ['restore', 'archive-record', 'saved-room', 'native-id', 'reconnect']) {
@@ -156,9 +206,9 @@ for (const method of ['archiveRoom', 'restoreRoom', 'spaceArchive', 'spaceRestor
       await join(f, f.other, room);
       if (restore) await f.rooms.archiveRoom(f.client, f.labels.labels, room);
       const card = await f.ask(scoped ? 'spaceAction' : method, scoped ? [room, restore ? 'restore' : 'archive', []] : []);
-      if (change === 'member-move') await join(f, f.other, f.rooms.create('Destination'));
+      if (change === 'member-move') { if (restore) await f.rooms.restoreSession(f.client, f.other); await join(f, f.other, f.rooms.create('Destination')); }
       if (change === 'member-reconnect') { await f.workspace.stop(f.other); await f.workspace.resume(f.other, 'owner'); }
-      if (change === 'member-archive') await f.rooms.archiveSession(f.client, f.other);
+      if (change === 'member-archive') await f.rooms[restore ? 'restoreSession' : 'archiveSession'](f.client, f.other);
       if (change === 'room-name') f.rooms.rename('Changed target', room);
       if (change === 'room-archive-state') await f.rooms[restore ? 'restoreRoom' : 'archiveRoom'](f.client, f.labels.labels, room);
       await refused(f, card);
@@ -332,3 +382,26 @@ for (const provider of ['claude', 'codex']) {
     assert.equal(rowFor(f, f.controller, other).repeated, null);
   });
 }
+for (const named of [false, true]) for (const change of ['idle-to-working', 'working-to-idle']) {
+  test(`space archive consent binds eligible members: ${named ? 'named' : 'shared'}, ${change}`, async t => {
+    const f = await fixture(t, 'codex'), room = named ? f.rooms.create('Target') : 'shared';
+    await join(f, f.other, room);
+    f.workspace.get(f.other).state = change === 'idle-to-working' ? 'idle' : 'working';
+    const card = await f.ask(named ? 'spaceAction' : 'archiveRoom', named ? [room, 'archive', []] : []);
+    assert.ok(card.confirmation.options.detail.includes(f.other));
+    f.workspace.get(f.other).state = change === 'idle-to-working' ? 'working' : 'idle';
+    await refused(f, card); assert.equal(archived(f, f.other), false);
+  });
+}
+test('a background archive cannot expand consent after its guard check and before the handler runs', async t => {
+  const f = await fixture(t, 'codex'); await join(f, f.other);
+  f.workspace.get(f.other).state = 'working';
+  const card = await f.ask('archiveRoom', []), call = f.client.call;
+  f.client.call = async (method, ...args) => {
+    if (method === 'initial') f.workspace.get(f.other).state = 'idle';
+    return call(method, ...args);
+  };
+  const result = await f.confirm(card);
+  assert.equal(result.state, 'unconfirmed'); assert.equal(archived(f, f.other), false);
+  assert.equal(f.rooms.value.archived, false);
+});
