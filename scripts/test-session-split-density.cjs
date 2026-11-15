@@ -1,7 +1,7 @@
 // T-163: the single-session page's conversation/terminal boundary and input area. Source Electron in a hidden
 // window, the synthetic loading-terminal backend, no provider process and no model. Checks what the five
 // spacing rules do and, more importantly, what they must leave alone: text, states, the draft, who has the
-// input, the controls and their sizes, the type size and the height of the input box. Also the row under the
+// input, the controls and their accessible sizes, the type size and the height of the input box. Also the row under the
 // input: in the Chinese interface the hint gives way before a button's label breaks, and nowhere does a
 // button, a label or the row come out worse than with the earlier styles. And the terminal pane's header: its
 // hint and buttons stay together on the title's row wherever they fit, with the hint giving way first.
@@ -18,7 +18,7 @@ fs.mkdirSync(evidence, { recursive: true });
 const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('Canonical GUI slot occupied; zero allocation and no launch.'); process.exit(75); }
-fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token, owner: 'Claude3', task: 'T163 session split density', pid: process.pid, at: new Date().toISOString() }));
+fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token, owner: 'Codex B', task: 'compact input controls and T163 density', pid: process.pid, at: new Date().toISOString() }));
 const benign = new Set(['PATH', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'HOME', 'SHELL', 'USER', 'LOGNAME', 'TZ', 'TERM', 'COLORTERM', 'COMMAND_MODE', '__CF_USER_TEXT_ENCODING']);
 const env = extra => ({ ...Object.fromEntries(Object.entries(process.env).filter(([key]) => benign.has(key))), ...extra });
 let profile, child, client, app, page, sequence = 0;
@@ -146,7 +146,8 @@ async function labelsSweep() {
   const measure = before => page.evaluate(({ labels, hints, widths, interrupt, before }) => {
     const q = s => document.querySelector(s), card = q('#composer'), send = q('#send-button'), stop = q('#interrupt'), hint = q('#compose-hint'), wrap = q('#composer-wrap'), footer = q('#composer .composer-footer');
     const keep = { send: send.textContent, stop: stop.textContent, stopHidden: stop.hidden, hint: hint.textContent, width: wrap.style.width, self: wrap.style.alignSelf };
-    const earlier = document.createElement('style'); earlier.textContent = '#composer .session-compose-hint{flex:0 1 auto !important;max-width:none !important;min-width:auto !important}'; if (before) document.head.append(earlier);
+    const earlier = document.createElement('style'); earlier.textContent = '#composer .session-compose-hint{flex:0 1 auto !important;max-width:none !important;min-width:auto !important}' +
+      '#composer .composer-footer{gap:9px !important}#composer .composer-footer button{padding:9px 13px !important;min-height:0 !important}'; if (before) document.head.append(earlier);
     const lines = e => { const r = document.createRange(); r.selectNodeContents(e); return new Set([...r.getClientRects()].filter(c => c.width > 0.5).map(c => Math.round(c.top))).size; };
     const pad = parseFloat(getComputedStyle(wrap).paddingLeft) + parseFloat(getComputedStyle(wrap).paddingRight); wrap.style.alignSelf = 'flex-start';
     const out = [];
@@ -168,7 +169,6 @@ async function labelsSweep() {
   const name = i => { const l = Math.floor(i / hints.length) % labels.length, withStop = Math.floor(i / hints.length / labels.length); return `${withStop ? catalog['native.interrupt'] + ' + ' : ''}${labels[l]} | ${hints[i % hints.length].slice(0, 24)}`; };
   widths.forEach((w, wi) => { for (let i = 0; i < was[wi].length / n; i++) {
     const a = was[wi].slice(i * n, i * n + n), b = now[wi].slice(i * n, i * n + n), at = `card ${w}px, ${name(i)}`; tally.compared++;
-    if (w < 320) { assert.deepEqual(b, a, `${at}: under 320px the row is as it was`); continue; }
     if (a.some((v, k) => v !== b[k])) tally.changed++;
     assert.ok(b[0] <= a[0] + 5, `${at}: no control sticks out of the card further than before (${a[0] / 10} to ${b[0] / 10}px)`);
     assert.ok(b[4] <= a[4], `${at}: no more sideways scroll than before (${a[4]} to ${b[4]}px)`);
@@ -179,6 +179,48 @@ async function labelsSweep() {
   assert.ok(tally.wholeNow > tally.wholeBefore && tally.shorter > 0, `The rule keeps more labels whole and makes rows shorter (${tally.wholeBefore} to ${tally.wholeNow} whole, ${tally.shorter} shorter)`);
   tally.labels = labels.length; tally.hints = hints.length;
   return tally;
+}
+// Same real controls and synthetic native state at the two requested window sizes.
+// The earlier padding/spacing is measured in the same frame, so comparison does
+// not depend on different drafts, fonts, runtime state or a second application.
+async function compactControls(id) {
+  const label = require('../app/ui-messages.js').zh['composer.queueMidturn'];
+  await fixture('queue-capable', id, 'midturn');
+  await until(async () => await page.locator('#send-button').innerText() === label, 'The long mid-turn send label is shown');
+  const measurements = [];
+  for (const [name, width, height] of [['wide', 1240, 820], ['narrow', 850, 600]]) {
+    await size(width, height);
+    const metrics = await page.evaluate(() => {
+      const footer = document.querySelector('#composer .composer-footer'), card = document.querySelector('#composer');
+      const read = () => {
+        const buttons = [...footer.querySelectorAll('button')].filter(e => !e.hidden);
+        return { row: footer.getBoundingClientRect().height, card: card.getBoundingClientRect().toJSON(),
+          gap: parseFloat(getComputedStyle(footer).gap), buttons: buttons.map(e => ({ id: e.id, text: e.textContent,
+            width: e.getBoundingClientRect().width, height: e.getBoundingClientRect().height,
+            font: getComputedStyle(e).fontSize, tab: e.tabIndex, disabled: e.disabled })) };
+      };
+      const now = read(), old = document.createElement('style');
+      old.textContent = '#composer .composer-footer{gap:9px!important}#composer .composer-footer button{padding:9px 13px!important;min-height:0!important;border-radius:8px!important}';
+      document.head.append(old); const before = read(); old.remove();
+      return { before, now };
+    });
+    measurements.push({ name, width, height, ...metrics });
+    await capture(`compact-${name}-${width}x${height}`);
+    await page.locator('#composer').screenshot({ path: path.join(evidence, `compact-${name}-input.png`) });
+  }
+  fs.writeFileSync(path.join(evidence, 'compact-controls.json'), JSON.stringify(measurements, null, 2));
+  for (const m of measurements) {
+    assert.ok(m.now.row <= m.before.row + .5, `${m.name}: the row must not grow (${m.before.row} to ${m.now.row})`);
+    assert.deepEqual(m.now.buttons.map(b => b.text), m.before.buttons.map(b => b.text), 'The complete action labels remain');
+    assert.deepEqual(m.now.buttons.map(b => b.id), ['interrupt', 'send-button']);
+    assert.ok(m.now.buttons.every(b => b.font === '12px' && b.height >= 30 && b.tab === 0 && !b.disabled), 'Readable, reachable controls retain a 30px minimum height');
+  }
+  const wide = measurements[0], widthOf = row => row.buttons.reduce((n, b) => n + b.width, 0) + row.gap;
+  assert.ok(widthOf(wide.now) <= widthOf(wide.before) - 10,
+    `The two controls occupy at least 10px less width (${widthOf(wide.before)} to ${widthOf(wide.now)})`);
+  assert.ok(wide.now.buttons.every((b, i) => b.height <= wide.before.buttons[i].height - 4), 'The wide-window buttons are at least 4px shorter');
+  await fixture('queue-capable', id, false); await size(1240, 850);
+  check('Compact controls at 1240x820 and 850x600: less width, no taller row, complete labels, 12px text, 30px targets and keyboard access; screenshots retained');
 }
 async function language(code) {
   await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption(code);
@@ -275,6 +317,7 @@ async function run() {
   assert.ok(Math.abs(s.card.h - idleCard) < 0.6, `working: the input card is as tall as when idle (${s.card.h} and ${idleCard})`);
   await capture('04-working-zh');
   check('Working: the activity line and the interrupt control are there and inside their blocks; both labels are on one line and the card is as tall as when idle');
+  await compactControls(id);
 
   // 6) Waiting for the person: the banner sits directly under the header, with no stray rule after it.
   child.send({ id: ++sequence, method: 'native-permission', target: id, value: { id: 'permission-1', kind: 'permission', title: 'Bash', detail: 'synthetic, nothing runs', options: [{ id: 'allow', label: '允许一次' }, { id: 'deny', label: '拒绝' }] } });
@@ -311,7 +354,7 @@ async function run() {
   assert.ok(Math.abs(s.card.h - idleCard) < 0.6, `zh 850x600 working: the input card is as tall as when idle (${s.card.h})`);
   assert.ok(s.wrapScroll.scrollHeight <= s.wrapScroll.clientHeight + 1, `zh 850x600 working: the input area fits without scrolling (${s.wrapScroll.scrollHeight} in ${s.wrapScroll.clientHeight})`);
   await capture('07b-small-working-zh'); await working(false);
-  // English: the row is sized as it always was, idle and working, at both sizes.
+  // English: the hint keeps its earlier flex sizing, idle and working, at both sizes.
   await size(1240, 850); await language('en'); s = await sample(); invariants(s, 'en 1240x850', draft);
   assert.equal(s.hintText, 'Enter to send · Shift Enter for a new line'); hintAsBefore(s, 'en 1240x850');
   header(s, 'en 1240x850', { rows: 1, hintLines: 2 });
@@ -326,9 +369,9 @@ async function run() {
   assert.ok(s.wrapScroll.scrollHeight <= s.wrapScroll.clientHeight + 1, `en 850x600: the input area fits without scrolling (${s.wrapScroll.scrollHeight} in ${s.wrapScroll.clientHeight})`);
   await capture('09-small-en');
   await size(1240, 850); await language('zh');
-  check('Small window and English: the same spacing, nothing leaves the card, and the input area fits without scrolling; working in the small Chinese window keeps whole labels; in English the row is sized as before; the terminal header is one 33px row in Chinese at all three sizes and in English at 1240 and 1000 wide, with the hint on two lines broken at a space where the row is short, and two rows only in the small English window');
+  check('Small window and English: the same spacing, nothing leaves the card, and the input area fits without scrolling; working in the small Chinese window keeps whole labels; in English the hint keeps its earlier flex sizing; the terminal header is one 33px row in Chinese at all three sizes and in English at 1240 and 1000 wide, with the hint on two lines broken at a space where the row is short, and two rows only in the small English window');
 
-  // 8b) The divider dragged to its stop: the card is far narrower than 320px and the row is sized as before.
+  // 8b) The divider dragged to its stop: the card is far narrower than 320px and the hint keeps its earlier sizing.
   const drag = async fraction => { const divider = page.locator('#session-layout > .split-divider'), d = await divider.boundingBox(), host = await page.locator('#session-layout').boundingBox(), from = d.x + d.width / 2, to = host.x + host.width * fraction;
     await page.mouse.move(from, d.y + 120); await page.mouse.down(); for (let n = 1; n <= 6; n++) await page.mouse.move(from + (to - from) * n / 6, d.y + 120); await page.mouse.up(); await page.mouse.move(host.x + host.width - 40, host.y + 300); await settled();
     return divider.getAttribute('aria-valuenow'); };
@@ -336,7 +379,7 @@ async function run() {
   s = await sample(); assert.ok(s.card.w < 320, `With the divider at its stop the card is narrow (${s.card.w})`); hintAsBefore(s, 'narrow card'); assert.equal(s.row.sideways, 0, 'narrow card: no sideways scroll'); inside(s.send, s.card, 'narrow card: the send control');
   await capture('09b-narrow-card-zh');
   assert.equal(await drag(0.5), '50', 'The divider is back in the middle'); s = await sample(); hintGivesWay(s, 'divider back in the middle');
-  check('Divider at its 20% stop: the card is under 320px, the row is sized as before and nothing scrolls sideways; back in the middle the rule applies again');
+  check('Divider at its 20% stop: the card is under 320px, the hint keeps its earlier sizing and nothing scrolls sideways; back in the middle the rule applies again');
 
   // 8c) The terminal pane from its narrowest to its widest: nothing in its header leaves the header or the window.
   //     Under a 300px header the wrapper lays out nothing and the row wraps item by item as it always did.
@@ -371,7 +414,7 @@ async function run() {
   const swept = await labelsSweep();
   check('Conversation only: the input area has the same spacing; the disclosure starts at the conversation\'s left edge, the centred card being narrower as before');
   s = await sample(); invariants(s, 'after the sweep', draft, false);
-  check(`Every label soloAction can choose (${swept.labels}) beside every hint in the catalog (${swept.hints}), with and without the interrupt control, at fourteen card widths (${swept.compared} comparisons with the earlier sizing): under 320px nothing differs; from 320px no control further out, no more sideways scroll, no label in more lines, no row taller; ${swept.wholeBefore} to ${swept.wholeNow} rows have whole labels and ${swept.shorter} are shorter`);
+  check(`Every label soloAction can choose (${swept.labels}) beside every hint in the catalog (${swept.hints}), with and without the interrupt control, at fourteen card widths (${swept.compared} comparisons with the earlier sizing): at every width no control further out, no more sideways scroll, no label in more lines, no row taller; ${swept.wholeBefore} to ${swept.wholeNow} rows have whole labels and ${swept.shorter} are shorter`);
 
   // 10) An ended session: the input area offers to continue it, inside the same card.
   child.send({ id: ++sequence, method: 'set-state', target: id, value: 'ended' });

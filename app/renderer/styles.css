@@ -465,6 +465,9 @@ header h1, header p { overflow-wrap: anywhere; }
    input starts at the card's left edge. */
 #composer-wrap{padding:6px 16px 8px}
 #composer-wrap .session-composer{padding:10px 12px}
+/* Compact the single-session action row without changing its labels or input height. */
+#composer-wrap .composer-footer{gap:5px}
+#composer-wrap .composer-footer button{padding:5px 7px;min-height:30px;border-radius:6px}
 /* T-163: the row under the single-session input, in the Chinese interface. The hint and the controls used to
    give way together, each in proportion to its full width, so a full-sentence hint claimed most of a short
    row and the controls' labels broke (a Chinese label breaks as soon as its control loses one pixel). The
@@ -485,7 +488,7 @@ header h1, header p { overflow-wrap: anywhere; }
    - Chinese only: English hints are long enough that 16em costs them lines. The page's lang attribute does
      not follow the interface language, so the language selector's state is read, as the setup dialog's
      own rules do; without that selector the rule stops applying.
-   - A card of 320px or more: in a narrower one (the divider near its stop) the row is as it was. The input
+   - A card of 320px or more: in a narrower one (the divider near its stop) the hint keeps its earlier sizing. The input
      area is the size container the condition asks. */
 #composer-wrap{container-type:inline-size}
 @container (min-width:320px){
