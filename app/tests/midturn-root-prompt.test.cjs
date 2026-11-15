@@ -86,3 +86,52 @@ test('a peer-sourced mid-turn prompt does not take over the running turn authori
   assert.equal(tagged, 'naw-peer');
   assert.equal(mod.midturnState().promptId, PROMPT_ONE);
 });
+
+test('a compact boundary retires the running turn authorization', async () => {
+  const { mod, hooks } = await bridge();
+  mod.prepareMidturn();
+  const api = { clock: { after() { return { cancel() {} }; } }, session: { id: async () => 'fixture-root' } };
+  await hooks.get('classic.UserPromptSubmit')(api, { agent_id: undefined, session_id: 'fixture-root', prompt_id: PROMPT_TWO, prompt: 'human insertion', source: undefined }, async () => ({}));
+  await hooks.get('classic.SessionStart')(api, { agent_id: undefined, session_id: 'fixture-root', source: 'compact' }, async () => ({}));
+  const control = hooks.get('tool.call:mcp__native_workspace__workspace_control');
+  const { args, next, $ } = controlHarness();
+  const result = await control($, { ...args, tool_use_id: 'after-compact-call' }, next);
+  assert.ok(result.deny, 'a compact boundary must not reuse old authorization');
+});
+
+test('compact prevents the adapter from minting or consuming the old authorization', async () => {
+  const { Claude } = require('../adapters.cjs');
+  const { EventEmitter } = require('node:events');
+  const { SubmissionChannel } = require('../claude-submit.cjs');
+  const native = require('../background-control-native.cjs');
+  const target = Object.create(Claude.prototype); EventEmitter.call(target);
+  target.record = { id: 'fixture', nativeId: 'fixture-root', provider: 'claude', messages: [], state: 'idle' };
+  target.terminal = { alive: true };
+  target.submission = new SubmissionChannel();
+  target.ready = true;
+  target.bindRoot({ sessionId: 'fixture-root', nativeBlocks: true, nativeTurnRecords: true });
+  target.rootLease = 'fixture-lease'; target.observationEpoch = 'fixture-epoch';
+  const hook = (name, extra = {}) => target.hook({ hook_event_name: name, session_id: 'fixture-root', ...extra });
+  hook('UserPromptSubmit', { prompt_id: PROMPT_ONE, prompt: 'first text' });
+  target.observeRoot({ block: true, sessionId: 'fixture-root', lease: target.rootLease, epoch: target.observationEpoch, sequence: 1, id: 'control:turn-start', kind: 'control', turnId: 'turn-one', promptId: PROMPT_ONE, status: 'running' });
+  const { mod, hooks } = await bridge();
+  mod.prepareMidturn();
+  const api = { clock: { after() { return { cancel() {} }; } }, session: { id: async () => 'fixture-root' } };
+  const submit = { agent_id: undefined, session_id: 'fixture-root', prompt_id: PROMPT_TWO, prompt: 'human insertion', source: undefined };
+  await hooks.get('classic.UserPromptSubmit')(api, submit, async () => { hook('UserPromptSubmit', { prompt_id: PROMPT_TWO, prompt: 'human insertion' }); return {}; });
+  await hooks.get('classic.SessionStart')(api, { agent_id: undefined, session_id: 'fixture-root', source: 'compact' }, async () => { hook('SessionStart', { source: 'compact' }); return {}; });
+  let minted = 0, consumed = 0;
+  const { args, next, $ } = controlHarness();
+  args.arguments = ['fixture-target', 'Synthetic new name'];
+  $.http.fetch = async (_url, spec) => {
+    const body = JSON.parse(spec.body);
+    const proof = native.rootCall(target, body, new AbortController().signal, () => true);
+    minted++;
+    native.consumeCredential(proof.credential);
+    consumed++;
+    return { ok: true, text: JSON.stringify({ state: 'complete', id: 'fixture-proof-only' }) };
+  };
+  const result = await hooks.get('tool.call:mcp__native_workspace__workspace_control')($, { ...args, tool_use_id: 'fixture-actual-engine-call' }, next);
+  assert.equal(consumed, 0, 'compact must prevent consumption of old authorization');
+  target.submission.close();
+});

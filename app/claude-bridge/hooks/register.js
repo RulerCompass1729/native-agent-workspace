@@ -1409,6 +1409,12 @@ export function register(on) {
       if (rootTransitions.length >= 64) rootSyncBlocked = true;
       else rootTransitions.push({ sessionId: previousId, nextSessionId: e.session_id, source: e.source, model: e.model });
       $.clock.after(0, () => syncRoot($));
+    } else if (!e.agent_id && e.source === 'compact') {
+      // A background compaction restarts the context without a session end. The
+      // running turn's prompt no longer authorizes operations; the next person or
+      // NAW turn re-authorizes (the old pair must not survive the compact).
+      rootPrompt = null; promptTurns.clear(); activeTurn = null; shellTurn = null;
+      rootIdle = true; queuedPrompts = [];
     }
     return next(e);
   });
