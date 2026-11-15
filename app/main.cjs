@@ -1511,7 +1511,10 @@ async function boot() {
       const kind = ['create', 'spaceCreate'].includes(action) ? 'created' : ['joinRoom', 'leaveRoom'].includes(action) ? 'placement'
         : ['rename', 'renameRoom'].includes(action) ? 'rename' : ['archiveSession', 'archiveRoom'].includes(action) ? 'archived'
         : ['restoreSession', 'restoreRoom'].includes(action) ? 'restored' : 'order';
-      return { ...grant, actionText: displayText('background.action.' + action), target: grant.summary?.name || grant.summary?.target || grant.summary?.room || room?.name || displayText('standing.newSession'),
+      const target = grant.summary?.name || grant.summary?.target || grant.summary?.room || room?.name || displayText('standing.newSession');
+      return { ...grant, actionText: displayText('background.action.' + action),
+        target: grant.creation ? displayText('standing.creationTarget', { target, model: grant.creation.model ?? displayText('standing.nativeDefault'),
+          effort: grant.creation.effort ?? displayText('standing.nativeDefault') }) : target,
         undo: displayText('standing.undo.' + kind, { previous: kind === 'order' ? (room?.memberOrder || []).map(id => state.sessions.find(s => s.id === id)?.name || id).join('、') : old?.name || room?.name || '',
           home: (grant.before.rooms || []).map(id => state.rooms.find(r => r.id === id)?.name || '').filter(Boolean).join('、') || displayText('sidebar.independent') }) };
     },

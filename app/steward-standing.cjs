@@ -18,7 +18,12 @@ function creationCovered(options, peers) {
   // Codex observations currently omit approval/sandbox changes. Its launch flag
   // cannot prove today's permissions: keep creation behind human consent.
   if (options.provider !== 'claude') return false;
+  // Explicit cost settings must match current native observations, not old launch requests.
+  // An omitted value keeps the person's provider default; no price inference is made.
+  const settingMatches = (key, observed) => options.settings?.[key] === undefined ||
+    typeof options.settings[key] === 'string' && !!observed && options.settings[key] === observed;
   return peers.some(p => p.provider === options.provider && !p.archived &&
+    settingMatches('model', p.model) && settingMatches('effort', p.nativeEffort) &&
     ((p.nativePermissionMode ? p.nativePermissionMode === 'bypassPermissions' : p.skipPermissions === true)
       ? mode === 'bypassPermissions' || options.provider === 'claude' && ['plan', 'default', 'acceptEdits', 'dontAsk', 'auto'].includes(mode)
       : options.provider === 'claude' && mode && mode === p.nativePermissionMode && options.newDirectory !== true &&
@@ -77,8 +82,11 @@ class StewardStanding {
     const names = require('./background-operation.cjs'), summary = names.operationSummary(command, actor, state);
     const target = state.sessions.find(x => x.id === command.arguments?.[0]);
     const before = { name: target?.name, rooms: target ? roomIds(target) : [], room: state.rooms?.find(x => x.id === roomId)?.name, order: state.rooms?.find(x => x.id === roomId)?.memberOrder || [] };
-    this.write({ ...s, used: [...used, { at: now, id: actor.nativeId + ':' + command.operation_id }] });
-    return { revision: s.revision, action: localAction(command), summary, before };
+    // These are the requested settings; null explicitly means the person's native default.
+    const creation = command.method === 'create' ? { model: command.arguments[0].settings?.model ?? null,
+      effort: command.arguments[0].settings?.effort ?? null } : undefined;
+    this.write({ ...s, used: [...used, { at: now, id: actor.nativeId + ':' + command.operation_id, ...(creation ? { creation } : {}) }] });
+    return { revision: s.revision, action: localAction(command), summary, before, ...(creation ? { creation } : {}) };
   }
   valid(actor, command, state, roomId, grant) {
     try { return this.authorized(actor, command, state, roomId)?.revision === grant.revision; } catch { return false; }

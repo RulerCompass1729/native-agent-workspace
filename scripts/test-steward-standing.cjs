@@ -57,7 +57,7 @@ function mcp() {
 
 async function main() {
   child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [profile], {
-    execArgv: ['--require', path.join(root, 'scripts/fixtures/background-control.cjs')],
+    execArgv: ['--require', path.join(root, 'scripts/fixtures/steward-standing-native.cjs')],
     env: { ...process.env, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: profile, NAW_APP_VERSION: require(path.join(code, 'package.json')).version },
     stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Synthetic service ready');
@@ -89,8 +89,12 @@ async function main() {
     await toggle.waitFor();
   }
   const shots = [];
-  async function shot(name, width) {
-    await (await app.browserWindow(page)).evaluate((w, size) => w.setContentSize(size, 820), width); await delay(200); checkForeground();
+  async function shot(name, width, height = 820) {
+    name = 'cost-' + name;
+    await (await app.browserWindow(page)).evaluate((w, size) => w.setContentSize(size.width, size.height), { width, height }); await delay(200); checkForeground();
+    if (name.includes('confirm')) {
+      await page.locator('.background-card').filter({ hasText: '需确认的配置' }).evaluate(el => el.scrollIntoView({ block: 'start' }));await delay(100);
+    }
     await page.screenshot({ path: path.join(pictures, name + '.png') }); shots.push(name + '.png');
   }
   await open(); assert.equal(await toggle.isChecked(), false); await shot('zh-off-850', 850);
@@ -98,6 +102,27 @@ async function main() {
   await shot('zh-on-1240', 1240); await shot('zh-on-850', 850); await dialog.getByRole('button', { name: '完成', exact: true }).click();
   const unknown = await control('stewardStanding', [true]); assert.equal(unknown.state, 'not-executed'); assert.equal(unknown.reason, 'unknown-command');
   record('switch defaults off; person can enable it; agent cannot invoke it');
+  const sessionsBefore = (await page.evaluate(() => workspace.initial())).sessions.length;
+  const changed = await control('create', [{ provider: 'claude', cwd: profile, name: '需确认的配置', skipPermissions: true,
+    settings: { model: 'synthetic-model-b', effort: 'max' } }]);
+  assert.equal(changed.state, 'confirmation-required'); assert.equal(changed.approvedBy, undefined);
+  assert.match(changed.confirmation.options.detail, /synthetic-model-b/); assert.match(changed.confirmation.options.detail, /max/);
+  assert.equal((await page.evaluate(() => workspace.initial())).sessions.length, sessionsBefore);
+  const card = page.locator('.background-card').filter({ hasText: '需确认的配置' });await card.waitFor();
+  await page.locator('#chat-maximize').click();
+  await card.locator('details summary').click();await shot('zh-confirm-1240',1240);await shot('zh-confirm-850',850);
+  await shot('zh-confirm-full',850,1100);
+  await page.evaluate(r => workspace.backgroundDecision(r.actor.id, r.actor.nativeId, r.id, 0), changed);
+  await page.locator('#chat-maximize').click();
+  const effortOnly = await control('create', [{ provider: 'claude', cwd: profile, name: '需确认的思考强度', skipPermissions: true,
+    settings: { model: 'synthetic-model-a', effort: 'max' } }]);
+  assert.equal(effortOnly.state, 'confirmation-required');
+  await page.evaluate(r => workspace.backgroundDecision(r.actor.id, r.actor.nativeId, r.id, 0), effortOnly);
+  record('changed model or effort asks before creating a session; the real card contains both selections');
+  const matching = await control('create', [{ provider: 'claude', cwd: profile, name: '同配置成员', skipPermissions: true,
+    settings: { model: 'synthetic-model-a', effort: 'low' } }]);
+  assert.equal(matching.state, 'complete');assert.equal(matching.approvedBy, 'standing');
+  assert.deepEqual(matching.standing.creation, { model: 'synthetic-model-a', effort: 'low' });
   const created = await control('create', [{ provider: 'claude', cwd: profile, name: '新开发成员', skipPermissions: true, view: 'chat' }]);
   assert.equal(created.state, 'complete', JSON.stringify(created)); assert.equal(created.approvedBy, 'standing');
   const joined = await control('join', [created.value, true]); assert.equal(joined.state, 'complete', JSON.stringify(joined)); assert.equal(joined.approvedBy, 'standing');
@@ -105,7 +130,13 @@ async function main() {
   const archived = await control('archiveSession', [created.value]); assert.equal(archived.state, 'complete', JSON.stringify(archived)); assert.equal(archived.approvedBy, 'standing');
   const s = await page.evaluate(() => workspace.initial()); assert.equal(s.backgroundConfirmations.length, 0);
   const lines = s.room.events.filter(e => e.controlAudit?.approvedBy === 'standing');
-  assert.equal(lines.length, 3); assert.ok(lines.every(e => e.uiMessage.params.undo));
+  assert.equal(lines.length, 4); assert.ok(lines.every(e => e.uiMessage.params.undo));
+  const createdLine = lines.find(e => e.controlAudit.operationId === matching.id);
+  assert.deepEqual(createdLine.controlAudit.creation, { model: 'synthetic-model-a', effort: 'low' });
+  assert.match(createdLine.uiMessage.params.target, /synthetic-model-a/);assert.match(createdLine.uiMessage.params.target, /low/);
+  const defaultLine = lines.find(e => e.controlAudit.operationId === created.id);
+  assert.deepEqual(defaultLine.controlAudit.creation, { model: null, effort: null });assert.match(defaultLine.uiMessage.params.target, /原生默认/);
+  record('matching settings and provider defaults stay covered and appear in durable audit');
   record('real MCP create, join and archive execute without cards; durable audit lines and standing receipts');
   await revealDefaultSpace(page); await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await shot('zh-audit-1240', 1240); await shot('zh-audit-850', 850);
@@ -123,7 +154,7 @@ async function main() {
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focused: w.isFocused() })));
   assert.ok(windows.every(w => !w.visible && !w.focused));
   fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ checks, shots, stats, windows, errors }, null, 2));
-  fs.writeFileSync(path.join(pictures, 'index.html'), '<!doctype html><meta charset="utf-8"><title>常设许可 · 待用户看图</title><style>body{font:16px sans-serif;max-width:1200px;margin:30px auto}img{width:100%;border:1px solid #ccc}</style><h1>大管家常设许可 · 待你看图确认</h1><p>用户开一次；每小时最多30次本地整理。其余敏感操作仍确认。可随时关，每次有记录和撤销办法。</p>' + shots.map(s => `<h2>${s}</h2><a href="${s}"><img loading="lazy" src="${s}"></a>`).join(''));
+  fs.writeFileSync(path.join(pictures, 'index.html'), '<!doctype html><meta charset="utf-8"><title>常设许可 · 待用户看图</title><style>body{font:16px sans-serif;max-width:1200px;margin:30px auto}img{width:100%;border:1px solid #ccc}</style><h1>大管家常设许可 · 待你看图确认</h1><p>用户开一次；每小时最多30次本地整理。模型和思考强度仅原生默认或与同一已有成员一致；其他配置仍确认。可随时关，每次有记录和撤销办法。</p>' + shots.map(s => `<h2>${s}</h2><a href="${s}"><img loading="lazy" src="${s}"></a>`).join(''));
   console.log(JSON.stringify({ pass: checks.length, fail: 0, skip: 0, screenshots: shots.length, modelCalls: 0 }));
 }
 main().catch(async e => { console.error(e.stack); process.exitCode = 1; if (page && !page.isClosed()) {
