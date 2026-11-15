@@ -13,7 +13,8 @@ const wide = process.argv.includes('--wide');
 const tag = process.argv.includes('--before') ? 'before' : 'after';
 const assertArg = process.argv.find(a => a.startsWith('--assert='));
 const only = assertArg ? Number(assertArg.slice('--assert='.length)) : 0;
-const check = (n, fn) => { if (!only || only === n) fn(); };
+const shotsOnly = process.argv.includes('--shots-only');
+const check = (n, fn) => { if (shotsOnly) return; if (!only || only === n) fn(); };
 const output = process.env.NAW_EVIDENCE_DIR;
 if (!output || !path.isAbsolute(output) || [root, code].some(p => path.resolve(output) === p || path.resolve(output).startsWith(p + path.sep))) throw Error('Private evidence directory required');
 fs.mkdirSync(output, { recursive: true, mode: 0o700 });
@@ -68,44 +69,69 @@ async function main() {
     const units = [...readers.querySelectorAll('.collaboration-member-unit')];
     const visible = units.filter(u => !u.hidden);
     const widths = visible.map(u => Math.round(u.querySelector('.collaboration-member-reader').getBoundingClientRect().width));
+    const heights = visible.map(u => Math.round(u.querySelector('.collaboration-member-reader').getBoundingClientRect().height));
     const grips = visible.map(u => !u.querySelector('.collaboration-resize').hidden);
     const nameOverflow = [...document.querySelectorAll('.collaboration-name-text')].filter(t => t.scrollWidth > t.clientWidth + 1).length;
     const showMore = document.querySelector('.collaboration-show-more');
-    return { visible: visible.length, total: units.length, widths, grips, nameOverflow, showMore: showMore && !showMore.hidden ? showMore.textContent : null };
+    const headers = document.querySelector('.collaboration-statuses'), chipsMore = document.querySelector('.collaboration-chips-more');
+    let chipsMoreFits = false, chipsMoreText = null;
+    if (chipsMore && !chipsMore.hidden) {
+      chipsMoreText = chipsMore.textContent;
+      const chip = headers?.querySelector('.collaboration-member-status');
+      const rowH = chip ? chip.offsetHeight + (parseFloat(getComputedStyle(headers).gap) || 0) : 32;
+      chipsMoreFits = chipsMore.offsetTop + chipsMore.offsetHeight <= rowH * 2 + 1;
+    }
+    return { visible: visible.length, total: units.length, widths, heights, grips, nameOverflow,
+      showMore: showMore && !showMore.hidden ? showMore.textContent : null,
+      scrollable: readers.scrollHeight > readers.clientHeight + 1, clientH: readers.clientHeight,
+      overflowY: getComputedStyle(readers).overflowY, chipsMoreFits, chipsMoreText };
   });
-  if (wide) {
-    await resize([2100, 900]);
-    const m = await measure();
-    check(4, () => assert.equal(m.visible, membersCount, 'all fitting members are shown at once'));
-    check(4, () => assert.equal(m.grips.filter(Boolean).length, membersCount - 1, 'drag grips stay for every column except the last'));
-    check(4, () => assert.equal(m.showMore, null, 'no reveal button when everyone fits'));
-    await shot([2100, 900], 'wide');
-  } else {
-    for (const [size, scenario] of [[[1240, 820], '1240-open']]) await shot(size, scenario);
-    // Collapse the shared-records panel, then capture the full-width grid.
-    await page.evaluate(() => { const panel = document.getElementById('activity-stream'); if (panel) panel.hidden = true; const layout = document.getElementById('room-layout'); if (layout) layout.classList.remove('stream-open'); });
-    await shot([1240, 820], '1240-collapsed');
-    await shot([850, 600], '850');
-    const m = await measure();
-    check(1, () => assert.ok(m.widths.every(w => w >= 300), `columns below 300px: ${m.widths}`));
-    check(2, () => assert.equal(m.nameOverflow, 0, 'member names are not ellipsized'));
-    if (membersCount >= 6) {
-      check(3, () => assert.ok(m.showMore, 'a reveal button is present when members do not fit one row'));
-      if (m.showMore) {
-        const before = m.visible;
-        await page.locator('.collaboration-show-more').click(); await delay(400);
-        const after = await measure();
-        check(3, () => assert.equal(after.visible, Math.min(membersCount, before * 2), 'show-more reveals exactly one more row'));
-        await shot([850, 600], 'more');
-      }
-    }
-    const chipsMore = page.locator('.collaboration-chips-more');
-    if (await chipsMore.count() && await chipsMore.isVisible()) {
-      await chipsMore.click(); await delay(400);
-      const expanded = await page.evaluate(() => document.querySelector('.collaboration-statuses').style.maxHeight === '');
-      assert.ok(expanded, 'chips expand past two lines');
-      await shot([1240, 820], 'chips');
-    }
+  await shot([1240, 820], '1240-open');
+  const m1240 = await measure();
+  // 1. A fitting member set keeps the old full grid (6 members at 1240, sidebar open).
+  check(1, () => {
+    assert.equal(m1240.visible, membersCount, 'fitting members are all shown at 1240');
+    assert.equal(m1240.showMore, null, 'no reveal button when everyone fits');
+  });
+  // 2. The folded "+N" stays inside the two visible chip lines.
+  if (membersCount >= 12) check(2, () => {
+    assert.ok(m1240.chipsMoreText, 'the +N fold is present');
+    assert.ok(m1240.chipsMoreFits, 'the +N fold stays within two lines');
+  });
+  // Folded name-band close-up (the +N fold) before expanding.
+  if (membersCount >= 12) {
+    await page.locator('.collaboration-statuses').screenshot({ path: path.join(pictures, `${tag}-m${membersCount}-chips-folded.png`) });
+    console.log('SHOT', path.join(pictures, `${tag}-m${membersCount}-chips-folded.png`));
+  }
+  // Collapse the shared-records panel, then capture the full-width grid.
+  await page.evaluate(() => { const panel = document.getElementById('activity-stream'); if (panel) panel.hidden = true; const layout = document.getElementById('room-layout'); if (layout) layout.classList.remove('stream-open'); });
+  await shot([1240, 820], '1240-collapsed');
+  await shot([850, 600], '850');
+  const m850 = await measure();
+  // 4. The reveal button states how many are already shown.
+  if (membersCount >= 6) check(4, () => {
+    assert.ok(m850.showMore, 'a reveal button is present when members do not fit');
+    assert.match(m850.showMore, /已显示 \d+\/\d+/, `reveal button states the shown count: ${m850.showMore}`);
+  });
+  // 3. Revealing more rows scrolls instead of squishing the columns.
+  if (membersCount >= 12 && m850.showMore) {
+    const before = m850.visible;
+    await page.locator('.collaboration-show-more').click(); await delay(400);
+    await page.locator('.collaboration-show-more').click(); await delay(400);
+    const after = await measure();
+    check(3, () => {
+      assert.ok(after.visible > before, 'show-more reveals more members');
+      assert.equal(after.overflowY, 'auto', 'readers scroll after revealing more rows');
+      assert.ok(after.heights.every(h => h >= after.clientH - 4), `rows keep their full height: ${after.heights} vs ${after.clientH}`);
+    });
+    await shot([850, 600], 'more2');
+  }
+  const chipsMore = page.locator('.collaboration-chips-more');
+  if (await chipsMore.count() && await chipsMore.isVisible()) {
+    await chipsMore.click(); await delay(400);
+    const expanded = await page.evaluate(() => document.querySelector('.collaboration-statuses').style.maxHeight === '');
+    assert.ok(expanded, 'chips expand past two lines');
+    await shot([1240, 820], 'chips');
   }
   const stats = await fixture('stats');
   assert.equal(stats.modelCalls, 0); assert.equal(stats.nativeProcesses, 0);

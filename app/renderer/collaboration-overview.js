@@ -69,7 +69,7 @@
     const button = (text, action, cls) => { const n = el('button', text, cls); n.type = 'button'; n.addEventListener('click', action); return n; };
     const panes = new Map(); let records = [], connected = true, contentVisible = true, brief = false, layout = 'grid', focused = '', weights = new Map(), originSelection, briefSelection, dragging;
     const roomKey = options.roomId || 'shared';
-    let capacity = 1, visibleLimit = 0, visibleRows = 1, chipsExpanded = false;
+    let capacity = 1, visibleLimit = 0, visibleRows = 1, chipsExpanded = false, progressive = false;
     const orderType = 'application/x-native-room-member-order';
     const canOrder = () => Boolean(options.onMove && connected && contentVisible && !focused);
     const orderStatus = el('span', undefined, 'collaboration-order-status'); orderStatus.setAttribute('role', 'status');
@@ -104,7 +104,11 @@
     toolbar.append(back, layouts, simplify);
     const headers = el('div', undefined, 'collaboration-statuses'); display.attribute(headers, 'aria-label', 'collab.memberStatus');
     const readers = el('div', undefined, 'collaboration-readers');
-    const showMore = button('', () => { visibleRows += 1; memberLimits.set(roomKey, visibleRows); render(); }, 'collaboration-show-more');
+    const showMore = button('', () => {
+      const previous = visibleLimit;
+      visibleRows += 1; memberLimits.set(roomKey, visibleRows); render();
+      requestAnimationFrame(() => { const pane = panes.get(records[previous]?.id); pane?.reader.scrollIntoView({ block: 'start' }); });
+    }, 'collaboration-show-more');
     const chipsMore = button('', () => { chipsExpanded = !chipsExpanded; render(); }, 'collaboration-chips-more');
     const empty = el('p', undefined, 'quiet collaboration-empty'); display.text(empty, 'collab.empty');
     headers.append(chipsMore);
@@ -148,17 +152,26 @@
         display.computed(pane.compactChild, 'title', () => statusFacts(record, connected, Date.now(), language()).child);
         pane.freshness.classList.toggle('compact-status-hidden', !facts.freshnessReported);
         pane.header.dataset.state = record.state || 'unknown'; pane.header.dataset.stale = String(facts.stale);
-        pane.header.dataset.alert = String(record.state === 'approval' || record.state === 'error' || Boolean(record.approval || record.claudeQuestion || record.approvals?.length || record.nativeApproval?.requests?.length));
+        const needs = record.state === 'approval' || record.state === 'error' || Boolean(record.approval || record.claudeQuestion || record.approvals?.length || record.nativeApproval?.requests?.length);
+        pane.header.dataset.alert = String(needs);
+        let alertKey = '';
+        if (record.state === 'error') alertKey = 'state.error';
+        else if (record.state === 'approval') alertKey = 'state.approval';
+        else if (record.claudeQuestion || record.approval?.method === 'item/tool/requestUserInput') alertKey = 'state.question';
+        else if (record.approvals?.length || record.nativeApproval?.requests?.length) alertKey = 'state.approval';
+        if (alertKey) display.text(pane.alert, alertKey); else { display.unbind(pane.alert); setText(pane.alert, ''); }
       }
     }
     function setWidths() {
-      capacity = Math.max(1, Math.floor((readers.clientWidth || host.clientWidth) / 300));
-      const total = records.length, allFit = total <= capacity;
+      const width = readers.clientWidth || host.clientWidth;
+      capacity = Math.max(1, Math.floor(width / 300));
+      const total = records.length, allFit = total * 140 <= width;
       if (allFit) {
-        host.style.setProperty('--collaboration-columns', records.map(record => `minmax(300px, ${weights.get(record.id) || 1}fr)`).join(' ') || 'minmax(300px, 1fr)');
+        host.style.setProperty('--collaboration-columns', records.map(record => `${weights.get(record.id) || 1}fr`).join(' ') || '1fr');
       } else {
         host.style.setProperty('--collaboration-columns', `repeat(${capacity}, minmax(300px, 1fr))`);
       }
+      host.style.setProperty('--collaboration-row-min', `${readers.clientHeight || 300}px`);
       for (let i = 0; i < total; i++) {
         const pane = panes.get(records[i].id); pane.grip.hidden = !allFit || i === total - 1 || layout === 'list' || Boolean(focused);
         pane.grip.setAttribute('aria-valuenow', String(Math.round((weights.get(records[i].id) || 1) * 100)));
@@ -170,31 +183,37 @@
     }
     function updateProgressiveControls() {
       const remaining = records.length - visibleLimit;
-      if (remaining > 0 && layout === 'grid' && !focused) {
+      if (progressive && remaining > 0 && layout === 'grid' && !focused) {
         const next = Math.min(capacity, remaining);
         showMore.hidden = false;
-        display.text(showMore, 'collab.showRows', () => ({ count: next, left: remaining - next }));
+        display.text(showMore, 'collab.showRows', () => ({ count: next, shown: visibleLimit, total: records.length }));
       } else {
         showMore.hidden = true;
       }
       requestAnimationFrame(layoutChips);
     }
     function layoutChips() {
-      if (layout === 'list' || focused || !records.length) { chipsMore.hidden = true; headers.style.maxHeight = ''; headers.style.overflow = ''; return; }
+      if (!progressive || layout === 'list' || focused || !records.length) { chipsMore.hidden = true; headers.style.maxHeight = ''; headers.style.overflow = ''; return; }
       const chips = [...headers.querySelectorAll('.collaboration-member-status')];
       if (!chips.length) { chipsMore.hidden = true; return; }
+      for (const chip of chips) chip.hidden = false;
+      headers.style.maxHeight = ''; headers.style.overflow = '';
+      if (chipsExpanded) { chipsMore.hidden = false; setText(chipsMore, locale.format(language(), 'collab.collapseChips')); return; }
       const rowHeight = chips[0].offsetHeight + (parseFloat(getComputedStyle(headers).gap) || 0);
       const maxHeight = rowHeight * 2;
-      const folded = chips.filter(chip => chip.offsetTop >= maxHeight - 1).length;
-      if (folded > 0) {
-        chipsMore.hidden = false;
-        setText(chipsMore, chipsExpanded ? locale.format(language(), 'collab.collapseChips') : `+${folded}`);
-        display.attribute(chipsMore, 'aria-label', 'collab.expandChips', () => ({ count: folded }));
-        if (chipsExpanded) { headers.style.maxHeight = ''; headers.style.overflow = ''; }
-        else { headers.style.maxHeight = `${maxHeight}px`; headers.style.overflow = 'hidden'; }
-      } else {
-        chipsMore.hidden = true; headers.style.maxHeight = ''; headers.style.overflow = '';
+      headers.style.maxHeight = `${maxHeight}px`; headers.style.overflow = 'hidden';
+      let folded = 0;
+      for (const chip of chips) if (chip.offsetTop >= maxHeight - 1) { chip.hidden = true; folded++; }
+      chipsMore.hidden = false;
+      const fits = () => chipsMore.offsetTop + chipsMore.offsetHeight <= maxHeight + 1;
+      setText(chipsMore, `+${folded}`);
+      while (folded < chips.length && !fits()) {
+        const visible = chips.filter(chip => !chip.hidden), last = visible[visible.length - 1];
+        if (!last || last === chipsMore) break;
+        last.hidden = true; folded++; setText(chipsMore, `+${folded}`);
       }
+      if (!folded) { chipsMore.hidden = true; headers.style.maxHeight = ''; headers.style.overflow = ''; }
+      else display.attribute(chipsMore, 'aria-label', 'collab.expandChips', () => ({ count: folded }));
     }
     function makePane(record) {
       const header = el('section', undefined, 'collaboration-member-status'); header.dataset.memberId = record.id;
@@ -271,6 +290,8 @@
         showMemberMenu(event);
       });
       heading.append(name, more, next);
+      const alert = el('span', undefined, 'collaboration-member-alert'); alert.setAttribute('role', 'status');
+      heading.insertBefore(alert, more);
       const status = el('span', undefined, 'collaboration-member-state'); status.setAttribute('role', 'status');
       const child = el('span', undefined, 'collaboration-member-child compact-status-hidden'), freshness = el('span', undefined, 'collaboration-member-freshness');
       const compactChild = el('span', undefined, 'collaboration-member-child-compact'); compactChild.setAttribute('aria-hidden', 'true');
@@ -305,7 +326,7 @@
       const nativeFooter = el('div', undefined, 'column-native-footer'); nativeFooter.hidden = true;
       reader.append(messages, short, input, nativeFooter, grip);
       const unit = el('div', undefined, 'collaboration-member-unit'); unit.dataset.memberId = record.id; unit.append(reader);
-      return pane = { header, name, nameText, nameSuffix, more, next, status, child, compactChild, freshness, unit, reader, messages, input, nativeFooter, heading, short, quote, truncation, source, notice, grip };
+      return pane = { header, name, nameText, nameSuffix, more, next, status, child, compactChild, freshness, alert, unit, reader, messages, input, nativeFooter, heading, short, quote, truncation, source, notice, grip };
     }
     function render() {
       const reordered = [...readers.children].map(n => n.dataset.memberId).join('\n') !== records.map(r => r.id).join('\n');
@@ -322,8 +343,9 @@
       const listUnits = layout === 'list' && !focused && contentVisible;
       host.dataset.listUnits = String(listUnits); headers.hidden = listUnits;
       capacity = Math.max(1, Math.floor((readers.clientWidth || host.clientWidth) / 300));
-      const allFit = records.length <= capacity;
-      if (allFit) visibleLimit = records.length;
+      progressive = records.length * 140 > (readers.clientWidth || host.clientWidth);
+      host.dataset.progressive = String(progressive);
+      if (!progressive) visibleLimit = records.length;
       else {
         visibleRows = Math.max(1, memberLimits.get(roomKey) || 1);
         visibleLimit = Math.min(records.length, visibleRows * capacity);
