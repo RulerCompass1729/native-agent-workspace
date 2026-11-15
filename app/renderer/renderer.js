@@ -883,8 +883,9 @@ function refreshRoomMemberTabs(people = orderedMembers()) {
       const facts = window.nativeWorkspaceCollaboration.statusFacts(member, !disconnected, Date.now(), ui.language.getSnapshot().active);
       return [facts.state, facts.compactChild, facts.freshnessReported ? facts.freshness : ''].filter(Boolean).join(' · ');
     });
-    ui.display.attribute(tab, 'title', tab.getAttribute('aria-pressed') === 'true' ? 'room.tabRestoreHint' : 'room.tabHint', { label: `${member.name} · ${sessionShortId(member.id)}` });
-    ui.display.computed(tab, 'aria-label', () => `${member.name} · ${sessionShortId(member.id)} · ${tab.querySelector('.room-member-state').textContent}`);
+    const mark = tab.querySelector('.vendor-mark'); if (mark) paintVendorMark(mark, member);
+    ui.display.attribute(tab, 'title', tab.getAttribute('aria-pressed') === 'true' ? 'room.tabRestoreHint' : 'room.tabHint', () => ({ label: `${member.name} · ${makerLabel(member)} · ${sessionShortId(member.id)}` }));
+    ui.display.computed(tab, 'aria-label', () => `${member.name} · ${makerLabel(member)} · ${sessionShortId(member.id)} · ${tab.querySelector('.room-member-state').textContent}`);
     tab.classList.toggle('needs-attention', Boolean(count));
   }
   ui.display.text($('room-member-status'), attention ? 'room.memberStatesAttention' : 'room.memberStatesCount', { count: people.length, attention });
@@ -944,7 +945,8 @@ function renderRoomMemberTabs(people = orderedMembers()) {
     if (!tab) {
       tab = node('button'); tab.type = 'button'; tab.addEventListener('click', event => attempt(() => memberTabClick(member.id, event))); tab.dataset.roomSession = member.id;
       const heading = node('span', undefined, 'room-member-heading');
-      heading.append(node('span', undefined, 'room-member-name'), node('span', undefined, 'room-member-id'));
+      const mark = icon(member, true); mark.setAttribute('aria-hidden', 'true');
+      heading.append(mark, node('span', undefined, 'room-member-name'), node('span', undefined, 'room-member-id'));
       tab.append(heading, node('span', undefined, 'room-member-state'));
       draggableSession(tab, member.id);
     }
@@ -959,7 +961,7 @@ function renderRoomMemberTabs(people = orderedMembers()) {
 }
 function roomNavigationKey(event) {
   if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey) return;
-  const routes = [$('room-overview'), $('room-record'), ...$('room-member-tabs').children], index = routes.indexOf(event.target);
+  const routes = [$('room-overview'), $('room-record'), ...($('room-member-tabs').hidden ? [] : $('room-member-tabs').children)], index = routes.indexOf(event.target);
   if (index < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
   event.preventDefault();
   const next = event.key === 'Home' ? 0 : event.key === 'End' ? routes.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + routes.length) % routes.length;
@@ -1042,6 +1044,11 @@ function renderRoomOverview() {
     beforeInputLayout: suspendColumnInputs,
     beforeLayout: () => { captureReadingViews(); restoreOverviewReading(); }, onLayout: () => { refreshColumnTerminalHeights(); restoreOverviewReading(); }, onFocus: focusRoomMember,
     decorateHeader: (handle, record) => draggableSession(handle, record.id),
+    renderIdentity: (handle, record) => {
+      let mark = handle.querySelector('.vendor-mark');
+      if (!mark) { mark = icon(record, true); handle.prepend(mark); }
+      paintVendorMark(mark, record); mark.title = makerLabel(record);
+    },
     onMemberMenu: openMemberMenu,
     onSource: (el, key, source) => {
       if (!pointToMessage(el, key, source.messageId)) toastMessage("toast.originalRemoved");
@@ -1054,7 +1061,7 @@ function renderRoomOverview() {
   roomOverview.update(orderedMembers(), !disconnected, !records, focused ? roomSession : '');
   renderHeaderLayout(current(), selected === 'room');
   $('room-overview').setAttribute('aria-pressed', String(!records && !focused)); $('room-record').setAttribute('aria-pressed', String(records));
-  $('room-member-tabs').hidden = false;
+  $('room-member-tabs').hidden = !focused && !records;
   if (roomOverview) roomOverview.toolbar.hidden = focused || records;
   // The header's row now holds what this page shows of it.
   fitRoomTabs();
@@ -1832,7 +1839,40 @@ function openSpaceRegionMenu(point, anchor = $('new-space')) {
   contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
   roomMenu = ui.menu({ items: [{ id: 'create', label: uiText('menu.newSpace'), labelKey: 'menu.newSpace' }, { id: 'merge', label: uiText('menu.mergeSpaces'), labelKey: 'menu.mergeSpaces', disabled: allSpaces().filter(room => !room.archived).length < 2 }], getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : anchor.getBoundingClientRect(), onSelect: action => action === 'merge' ? openSpaceMerge() : openSpaceCreate(), onClose: () => { roomMenu = null; if (anchor.isConnected) anchor.focus({ preventScroll: true }); } });
 }
-function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
+// Native-reported vendor identity is independent of the program running it.
+// Optional local PNGs stay outside the public repository; letters work without them.
+const VENDOR_MARKS = { anthropic: ['A', 'Anthropic'], openai: ['O', 'OpenAI'], deepseek: ['D', 'DeepSeek'] };
+const SHELL_NAMES = { claude: 'Claude Code', codex: 'Codex' };
+function sessionMaker(record) {
+  const shell = record?.shell || record?.provider;
+  const vendor = typeof record?.vendor === 'string' && record.vendor ? record.vendor : shell === 'claude' ? 'anthropic' : null;
+  const [mark, vendorName] = Object.hasOwn(VENDOR_MARKS, vendor) ? VENDOR_MARKS[vendor] : vendor ? [vendor[0].toUpperCase() + (vendor[1] || '·'), vendor] : [shell === 'claude' ? 'Cl' : 'Cx', ''];
+  return { vendor, shell, shellName: SHELL_NAMES[shell] || '', mark, vendorName, tone: Object.hasOwn(VENDOR_MARKS, vendor) ? vendor : vendor ? 'other' : 'unknown' };
+}
+function makerLabel(record) {
+  const maker = sessionMaker(record);
+  return maker.vendor ? uiText('vendor.label', { vendor: maker.vendorName, shell: maker.shellName }) : uiText('vendor.unreported', { shell: maker.shellName });
+}
+// Paints the mark in place, so a row keeps its other children (the sidebar's state dot) when Codex
+// reports the vendor later.
+function paintVendorMark(element, record, text) {
+  const maker = sessionMaker(record);
+  element.className = `agent-icon vendor-mark vendor-${maker.tone}${element.classList.contains('small') ? ' small' : ''}`;
+  element.dataset.vendor = maker.vendor || '';
+  let label = element.firstChild;
+  if (label?.nodeType !== Node.TEXT_NODE) { label = document.createTextNode(''); element.prepend(label); }
+  label.nodeValue = text ?? maker.mark;
+  const source = typeof state !== 'undefined' && state.vendorIcons?.[maker.vendor];
+  let image = element.querySelector?.('.vendor-image');
+  if (typeof source === 'string' && source.startsWith('data:image/png;base64,') && element.failedVendorSource !== source) {
+    if (!image) { image = node('img', undefined, 'vendor-image'); image.alt = ''; image.setAttribute('aria-hidden', 'true'); element.append(image); }
+    image.onerror = () => { element.failedVendorSource = source; image.remove(); label.nodeValue = text ?? maker.mark; };
+    if (image.getAttribute('src') !== source) image.src = source;
+    label.nodeValue = '';
+  } else if (image) image.remove();
+  return element;
+}
+function icon(record, small = false) { return paintVendorMark(node('span', undefined, small ? 'small' : ''), record); }
 async function select(id, requestedMode, member = roomSession, passive = false) {
   // The old view stays until the new one has its messages; another selection meanwhile wins. Counted once,
   // before the wait: a caller reads selectionRevision right after calling (operateNative).
@@ -2874,7 +2914,8 @@ function renderStewardChooser() {
     else if (reason) ui.display.text(note, 'steward.choose.unusable');
     else if (current) ui.display.text(note, 'steward.choose.current');
     else ui.display.computed(note, 'text', () => sidebarPresentation(record).compact);
-    text.append(name, note); row.append(radio, icon(record.provider), text); return row;
+    text.append(name, note); const mark = icon(record); mark.setAttribute('role', 'img');
+    ui.display.computed(mark, 'title', () => makerLabel(record)); ui.display.computed(mark, 'aria-label', () => makerLabel(record)); row.append(radio, mark, text); return row;
   }));
   if (held) [...list.querySelectorAll('input')].find(input => input.value === held && !input.disabled)?.focus({ preventScroll: true });
   $('steward-none').hidden = candidates.some(item => !item.reason);
@@ -3379,17 +3420,18 @@ function renderSessions() {
       version.setAttribute('aria-hidden', 'true'); dot.setAttribute('aria-hidden', 'true'); marker.setAttribute('aria-hidden', 'true');
       metadata.append(badges, status, time); label.append(name, version, shortId, metadata);
       // T-142: the status mark sits on the avatar's top-right corner, where a glance finds it.
-      const avatar = icon(record.provider); if (steward) avatar.textContent = '◆'; avatar.append(dot); link.append(avatar, label, marker);
+      const avatar = icon(record, false); avatar.append(dot); link.append(avatar, label, marker);
       const more = button('⋯', () => openSessionMenu(record.id, undefined, key), 'session-more'); more.dataset.sessionMenu = record.id;
       more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
       more.addEventListener('pointerdown', event => { if (sessionMenu?.rowKey === key) event.stopPropagation(); });
       element.addEventListener('contextmenu', event => { if (event.target.closest('#rename-editor')) return; event.preventDefault(); openSessionMenu(record.id, { x: event.clientX, y: event.clientY }, key); });
       element.addEventListener('keydown', event => { if (event.target.closest('#rename-editor')) return; if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); openSessionMenu(record.id, undefined, key); } });
-      element.append(link, more); row = { element, link, more, name, shortId, badges, status, dot, marker, time, version, sessionId: record.id, spaceId: group }; sessionRows.set(key, row);
+      element.append(link, more); row = { element, link, more, avatar, name, shortId, badges, status, dot, marker, time, version, sessionId: record.id, spaceId: group }; sessionRows.set(key, row);
     }
     const memberships = allSpaces().filter(r => !r.archived && inSpace(record, r.id)), membershipNames = () => memberships.map(r => spaceName(r)).join('、');
     const presentation = sidebarPresentation(record);
-    const plainLabel = () => `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${sidebarPresentation(record).full}`;
+    paintVendorMark(row.avatar, record, steward ? '◆' : undefined);
+    const plainLabel = () => `${record.name} · ${makerLabel(record)} · ${sessionShortId(record.id)} · ${sidebarPresentation(record).full}`;
     const label = () => steward ? uiText('steward.rowLabel', { details: plainLabel() }) : plainLabel();
     const association = () => memberships.length ? uiText('sidebar.memberships', { names: membershipNames() }) : uiText('sidebar.independent');
     const occurrence = () => grouped && memberships.length > 1 ? uiText('sidebar.sameIdentity') : '';
@@ -4135,7 +4177,7 @@ let roomTabsFit = '', roomTabsWindow = null;
 function fitRoomTabs(measure = false) {
   const header = $('header'), tabs = $('room-tabs');
   if (measure || !roomTabsWindow) roomTabsWindow = [innerWidth, innerHeight];
-  if (!header.classList.contains('compact-room') || tabs.parentElement !== header) { header.classList.remove('room-tabs-two-rows'); roomTabsFit = ''; return; }
+  if ($('room-member-tabs').hidden || !header.classList.contains('compact-room') || tabs.parentElement !== header) { header.classList.remove('room-tabs-two-rows'); roomTabsFit = ''; return; }
   const names = [...$('room-member-tabs').children].map(tab => tab.querySelector('.room-member-name')), tall = roomTabsWindow[1] >= ROOM_TABS.height;
   const controls = [...tabs.querySelectorAll(':scope > button, .collaboration-toolbar > *')].map(item => item.closest('[hidden]') ? '' : item.textContent);
   const key = [roomTabsWindow[0], tall, document.querySelector('.naw[data-native-surface="sidebar"]')?.dataset.collapsed, ...controls, '', ...names.map(name => name.textContent)].join('\n');
@@ -4149,6 +4191,20 @@ function fitRoomTabs(measure = false) {
   const two = tall && names.some(name => name.scrollWidth > name.clientWidth + 1 && name.clientWidth < ROOM_TABS.name);
   if (two) header.classList.add('room-tabs-two-rows');
   if (two || was) restoreOverviewReading();
+}
+// Reuse the actual controls and their handlers; moving a tab never starts a session.
+function renderPaneSwitches(s, inRoom, terminalVisible) {
+  const compact = Boolean(s && !inRoom), original = $('reading-mode-controls');
+  const chat = $('chat-pane-tabs'), native = $('native-pane-tabs');
+  const move = (element, target) => { if (element.parentElement !== target) target.append(element); };
+  move($('chat-tab'), compact ? terminalVisible && terminalLayout === 'maximized' ? native : chat : original);
+  move($('terminal-tab'), compact ? terminalVisible ? native : chat : original);
+  for (const [id, present] of [['chat-tab', !terminalVisible || terminalLayout !== 'maximized'], ['terminal-tab', terminalVisible]]) {
+    $(id).classList.toggle('pane-present', compact && present);
+    $(id).classList.toggle('pane-restore', compact && !present);
+  }
+  chat.hidden = native.hidden = !compact;
+  $('native-pane-title').hidden = compact;
 }
 function renderHeaderLayout(s, inRoom) {
   const compact = Boolean(s && !inRoom), toolbar = $('session-toolbar');
@@ -4636,7 +4692,8 @@ function render() {
     $('session-layout').classList.toggle('terminal-maximized', (!inRoom || memberFocus) && terminalVisible && terminalLayout === 'maximized');
     $('session-layout').classList.toggle('native-only', inRoom && !memberFocus);
     $('conversation-pane').hidden = inRoom && !memberFocus;
-    $('chat-tab').parentElement.hidden = inRoom && !memberFocus;
+    $('reading-mode-controls').hidden = inRoom && !memberFocus;
+    renderPaneSwitches(s, inRoom, terminalVisible);
     $('session-files').hidden = inRoom && !memberFocus;
     $('member-related-records').hidden = !memberFocus;
     document.title = sessionWindowTitle(s);

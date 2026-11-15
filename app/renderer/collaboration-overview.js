@@ -281,6 +281,7 @@
       records.forEach((record, i) => {
         let pane = panes.get(record.id); if (!pane) { pane = makePane(record); panes.set(record.id, pane); }
         const label = options.label(record), suffix = label.startsWith(record.name) ? label.slice(record.name.length) : '';
+        options.renderIdentity?.(pane.name, record);
         setText(pane.nameText, suffix ? record.name : label); setText(pane.nameSuffix, suffix);
         pane.name.dataset.orderHandle = String(canOrder());
         display.computed(pane.name, 'title', () => label + (canOrder() ? ` · ${locale.format(language(), 'collab.orderHelp')}` : ''));

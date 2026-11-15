@@ -221,6 +221,7 @@ async function build() {
       'ui-locale.js',
       'ui-messages.js',
       'ui-parent-lease.cjs',
+      'vendor-icons.cjs',
       'view-drafts.cjs',
       'view-store.cjs',
       'window-placement.cjs',

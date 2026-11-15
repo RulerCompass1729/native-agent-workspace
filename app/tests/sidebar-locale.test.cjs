@@ -1,5 +1,6 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), vm = require('node:vm');
+const vendorMarks = require('./fixtures/vendor-marks.cjs');
 const locale = require('../ui-locale.js'), spaces = require('../collaboration-spaces.cjs');
 const renderer = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
 const bootstrap = fs.readFileSync(require.resolve('../dsh/bootstrap.js'), 'utf8');
@@ -46,6 +47,7 @@ function fixture() {
     api: new Proxy({}, { get(_target, method) { calls.push(method); throw Error('Locale repaint reached product API: ' + method); } }),
     dialogTickets: new Map(), Option: function(text,value) { return Object.assign(node('option', text), { value }); }, creatingSession: false, newDirectory: false, gitPreviewLoading: false, gitWorktreePlan: null, folder: '/synthetic/original', invalidateGitPreview: () => calls.push('invalidateGitPreview'),
   });
+  vendorMarks(renderer, context);
   function load(from, to) { const a = renderer.indexOf(from), b = renderer.indexOf(to, a + from.length); assert.ok(a >= 0 && b > a, from); vm.runInContext(renderer.slice(a, b), context); }
   load('const uiNode =', 'let state,'); load('function sessionTime(', 'function renderDraftRecovery(');
   load('function sidebarSessions(', 'async function restoreArchivedSession('); load('function renderSpaceNavigation(', 'function openSpaceCreate('); load('function createReadiness(', 'function renderArchives('); vm.runInContext(['createSpaceChoice', 'renderCreateSpaces'].map(name => renderer.match(new RegExp('function ' + name + '\\([\\s\\S]*?\\n}'))[0]).join('\n'), context); $('create-space-kind').value = 'independent';

@@ -859,7 +859,10 @@ class Workspace extends EventEmitter {
     on('inputRequired', () => this.changed());
     on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = s.provider === 'codex' ? processIdentity(runtime.host?.codexProcess?.pid) : null; this.changed(); });
     // Kept with the record: the vendor icon needs it before the session runs again.
-    on('modelProvider', value => { if (s.modelProvider !== value) { s.modelProvider = value; this.changed(); } });
+    on('modelProvider', value => {
+      if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value) || s.modelProvider === value) return;
+      s.modelProvider = value; this.changed(); this.persist();
+    });
     on('model', (model, uiMessage) => { s.model = model; const message = displayMessage(uiMessage, 'notice.', model); if (message) s.modelUiMessage = message; else delete s.modelUiMessage; this.changed(); });
     on('askQuestion', ask => this.holdQuestion(s, runtime, ask));
     // Only a session nobody named takes the native title; a rename is a desktop label and always wins.
