@@ -1415,6 +1415,10 @@ export function register(on) {
       // NAW turn re-authorizes (the old pair must not survive the compact).
       rootPrompt = null; promptTurns.clear(); activeTurn = null; shellTurn = null;
       rootIdle = true; queuedPrompts = [];
+      // NAW's issued scopes check its own turn references, not this module: retire
+      // them in order on the observation channel. An older NAW refuses the row,
+      // which is then a declared gap, also retiring them.
+      enqueueBlock($, { id: 'control:compact', kind: 'control', status: 'complete' });
     }
     return next(e);
   });

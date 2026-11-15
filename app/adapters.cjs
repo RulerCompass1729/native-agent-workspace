@@ -881,6 +881,11 @@ class Claude extends EventEmitter {
           this.livePermissions.clear();
           if (this.rootTurn) { this.nativeInputRequired = false; this.emit('inputRequired', false); }
         }
+      } else if (message.id === 'control:compact') {
+        if (message.status !== 'complete') throw Error('Invalid native compact');
+        // In order with the turn start that granted it, and also for a retained
+        // reader, which has no settings hook. A replay retires too (fail closed).
+        this.retireRootAuthority();
       } else if (message.id === 'control:heartbeat') {
         // The observation lease has its own liveness proof; a held native
         // submit may legitimately leave the independent input poll pending.
@@ -1110,6 +1115,13 @@ class Claude extends EventEmitter {
     this.nativeAbortRequest = null; clearTimeout(request.timer);
     this.nativeInputRequired = false; this.emit('inputRequired', false); request.resolve({ interrupted: true });
   }
+  // A native compaction keeps the session but ends the running turn's authority:
+  // every issued root call, outbox proof and control scope checks these
+  // references (native-root-proof.cjs). The next person or NAW turn re-authorizes;
+  // its turn start is new, and the compacted turn's id stays tombstoned.
+  retireRootAuthority() {
+    this.rootTurn = null; this.liveTurn = null; this.startedRootTurn = null; this.livePermissions?.clear();
+  }
   observeRootGap(message) {
     if (!this.validRootBinding(message) || !this.observationEpoch || message.epoch !== this.observationEpoch) throw Error('Invalid native observation');
     this.cancelNativeAbort(); this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear();
@@ -1283,12 +1295,10 @@ class Claude extends EventEmitter {
     switch (event.hook_event_name) {
       case 'SessionStart':
         if (this.rootEnding) break;
-        if (event.source === 'compact') {
-          // A compaction restarts the context without ending the root. The old
-          // live turn no longer authorizes a background control call; the next
-          // person or NAW turn re-authorizes.
-          this.rootTurn = null; this.liveTurn = null; this.startedRootTurn = null; this.livePermissions.clear();
-        }
+        // A compaction restarts the context without ending the root. The ordered
+        // observation also carries it (control:compact); this settings hook is the
+        // second path, for a bridge copy that does not send it yet.
+        if (event.source === 'compact') this.retireRootAuthority();
         this.ready = true; this.emit('state', 'idle'); if (!this.nativeModelEpoch || this.nativeModelEpoch !== this.observationEpoch) this.emit('model', event.model || '原生未报告', event.model ? undefined : uiNotice('notice.model.nativeUnreported').uiMessage); break;
       case 'UserPromptSubmit': {
         if (this.liveTurn && (!event.prompt_id || event.prompt_id !== this.liveTurn.promptId)) this.liveTurn.question = false;
