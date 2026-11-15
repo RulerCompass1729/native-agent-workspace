@@ -364,3 +364,21 @@ page reaches no other service over HTTP. Downloads ask where to save through
 the ordinary save dialog.
 The main window's session and request filter are unchanged. Window size and
 position are kept in `local-page-windows.json`. Opening a page calls no model.
+
+## DeepSeek members (2026-11-13)
+
+A DeepSeek member is a native Codex session started from one of the person's
+Codex profiles whose provider is DeepSeek. Codex sends that member's work to
+DeepSeek's service (the `base_url` of the person's provider table, normally
+`api.deepseek.com`), not to OpenAI: its prompts, the files it reads, its command
+and tool output, and whatever a space or queue routes to it, including other
+members' messages. Inviting it into a space makes DeepSeek a recipient of what
+that space routes to it. NAW records each such session with vendor `deepseek`
+and shell `codex`; in this version the session list does not mark the vendor,
+and the model name in the session header shows it. NAW never reads, stores or
+passes the API key: Codex reads the environment variable its provider table
+names (`env_key`), and NAW does not configure that variable. From a profile NAW
+takes only its top-level `model*` keys, so a profile cannot change approval,
+sandbox, analytics or MCP settings. DeepSeek's handling and retention of what it
+receives follow DeepSeek's own terms; this section discloses the destination and
+is not a claim that the provider keeps the content private.

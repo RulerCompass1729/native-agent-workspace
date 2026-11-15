@@ -1949,7 +1949,7 @@ $('privacy-dialog').addEventListener('close', event => {
 function openCreate(provider = 'claude') {
   if (creatingSession) return;
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
-  $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = false;
+  $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = false; $('create-profile').replaceChildren();
   $('create-space-kind').value = 'independent'; $('create-space-existing').value = ''; $('create-space-name').value = ''; delete $('create-space-name').dataset.edited;
   resetCreateDirectory(); ui.display.unbind($('create-error')); $('create-error').textContent = '';
   const ticket = openTransientDialog('create-dialog'); ticket.directoryDefaults = {}; createReadiness();
@@ -3153,8 +3153,10 @@ function renderSessions() {
 function createReadiness() {
   if (!$('create-dialog').open) return;
   renderCreateSpaces();
-  const historyProvider = document.querySelector('input[name="provider"]:checked').value;
-  $('open-native-history').hidden = !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
+  renderCreateProfiles();
+  const historyProvider = chosenProvider();
+  // Codex history continues a thread with its own vendor; it is not offered for a new DeepSeek member.
+  $('open-native-history').hidden = deepseekChosen() || !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
   $('claude-history-id-option').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeHistory');
   if ($('claude-history-id-option').hidden) $('claude-history-id').value = '';
   const takeover = historyProvider === 'claude' && $('claude-history-id').value.trim();
@@ -3197,19 +3199,44 @@ function createReadiness() {
     ui.display.text($('create-readiness'), 'create.backendMissing');
     return;
   }
-  const provider = document.querySelector('input[name="provider"]:checked').value;
-  const ready = state.preflight?.python && state.preflight?.[provider];
+  const provider = chosenProvider();
+  const ready = state.preflight?.python && state.preflight?.[provider] && (!deepseekChosen() || Boolean($('create-profile').value));
   $('confirm-create').disabled = creatingSession || Boolean(createTicket?.directoryDefaults) || !ready || Boolean(takeover && (newDirectory || gitSelected)) || (gitSelected && (newDirectory || !gitSupported || gitPreviewLoading || !gitWorktreePlan));
   const readinessKey = takeover && (newDirectory || gitSelected) ? 'create.takeoverDirectory' : ready ? null : 'create.missingPrograms';
   ui.display.computed($('create-readiness'), 'text', () => readinessKey ? uiText(readinessKey) : '');
   createSpaceReadiness(true);
 }
 // T-115: a space choice locks nothing until the session exists; then everything but 仅继续加入 and 关闭 is locked.
+// A DeepSeek member runs in Codex from one of the person's Codex profiles naming DeepSeek
+// (2026-11-13): offered only when the service lists such a profile and can start from it.
+function deepseekProfiles() {
+  return state.capabilities?.includes('createSettingsProfileV1') && Array.isArray(state.codexProfiles)
+    ? state.codexProfiles.filter(profile => profile?.modelProvider === 'deepseek' && typeof profile.name === 'string' && typeof profile.model === 'string') : [];
+}
+function deepseekChosen() { return document.querySelector('input[name="provider"]:checked').value === 'deepseek'; }
+function chosenProvider() { return deepseekChosen() ? 'codex' : document.querySelector('input[name="provider"]:checked').value; }
+function renderCreateProfiles() {
+  const profiles = deepseekProfiles(), select = $('create-profile');
+  $('deepseek-provider').hidden = !profiles.length;
+  if (!profiles.length) {
+    if (deepseekChosen()) document.querySelector('input[name="provider"][value="claude"]').checked = true;
+    select.hidden = $('create-profile-label').hidden = true;
+    return;
+  }
+  const names = profiles.map(profile => profile.name);
+  if ([...select.options].map(option => option.value).join('\n') !== names.join('\n')) {
+    const kept = select.value;
+    select.replaceChildren(...profiles.map(profile => { const option = document.createElement('option'); option.value = profile.name; option.textContent = profile.model; return option; }));
+    // The person's default is pro (2026-11-13); flash stays a choice.
+    select.value = names.includes(kept) ? kept : (profiles.find(profile => /-pro$/.test(profile.model)) || profiles[0]).name;
+  }
+  select.hidden = $('create-profile-label').hidden = !deepseekChosen();
+}
 function createSpaceReadiness(final = false) {
   const ticket = dialogTickets.get($('create-dialog')), creation = ticket?.creation, spaced = $('create-space-kind').value !== 'independent';
   const takeover = document.querySelector('input[name="provider"]:checked').value === 'claude' && $('claude-history-id').value.trim();
   const stopped = Boolean(creation || ticket?.created); // a session from this opening exists, or may (I159)
-  for (const input of $('create-dialog').querySelectorAll('input[name="provider"], #session-name, #claude-history-id, #skip-permissions, #initial-view')) input.disabled = stopped;
+  for (const input of $('create-dialog').querySelectorAll('input[name="provider"], #session-name, #claude-history-id, #skip-permissions, #initial-view, #create-profile')) input.disabled = stopped;
   ui.display.text($('cancel-create'), stopped ? 'create.closeKeep' : 'common.cancel');
   // Continuing an existing session doesn't take the space choice yet; say so rather than drop it.
   $('create-space-help').hidden = !spaced;
@@ -5007,7 +5034,10 @@ $('create-form').onsubmit = event => { event.preventDefault();
   creatingSession = true; ui.display.unbind($('create-error')); $('create-error').textContent = ''; createReadiness();
   const submittedFolder = worktree?.cwd || folder, priorIds = new Set(state.sessions.map(s => s.id));
   let createdId = ''; // T-115: once the service returns the new session's id, a later failed read can't lose it
-  try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = createdId = await api.create({ provider, cwd: worktree?.source || folder, name: $('session-name').value, view, ...(worktree ? { gitWorktree: worktree } : newDirectory ? { newDirectory: true } : {}), skipPermissions: $('skip-permissions').checked || undefined }); updateState(await api.initial()); render();
+  try { const provider = chosenProvider(), view = provider === 'codex' ? $('initial-view').value : preference; preference = view;
+    // DeepSeek at its highest effort (the person, 2026-11-13); DeepSeek refuses Codex's ultra.
+    const settings = deepseekChosen() ? { profile: $('create-profile').value, effort: 'max' } : undefined;
+    const id = createdId = await api.create({ provider, cwd: worktree?.source || folder, name: $('session-name').value, view, ...(worktree ? { gitWorktree: worktree } : newDirectory ? { newDirectory: true } : {}), skipPermissions: $('skip-permissions').checked || undefined, ...(settings ? { settings } : {}) }); updateState(await api.initial()); render();
     if (choice.kind !== 'independent') { ticket.creation = { choice, sessionId: id, view, roomId: choice.roomId || '' }; creatingSession = false; await finishCreateSpace(ticket, revision); return; }
     // I160: the session exists from here on, so this opening creates no other, even if it stays open (the selection moved).
     ticket.created = id;
@@ -6237,7 +6267,7 @@ for (const dialog of document.querySelectorAll('dialog')) {
       for (const id of ['session-name', 'claude-history-id']) $(id).value = '';
       for (const id of ['chosen-folder', 'create-error', 'create-readiness', 'create-permission-note', 'create-space-help', 'git-worktree-source-help', 'git-worktree-preview']) { ui.display.unbind($(id)); $(id).textContent = ''; }
       $('skip-permissions').checked = false; folder = ''; newDirectory = false;
-      $('initial-view').value = '';
+      $('initial-view').value = ''; $('create-profile').replaceChildren();
       for (const input of dialog.querySelectorAll('input[name="provider"]')) input.checked = false;
     } else if (dialog.id === 'setup-dialog') {
       mobileSetup.close();
@@ -6269,6 +6299,7 @@ renderInterfaceLanguage();
 
 for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
 $('claude-history-id').oninput = createReadiness;
+$('create-profile').onchange = createReadiness;
 $('create-space-kind').onchange = () => { if ($('create-space-kind').value === 'new' && !$('create-space-name').dataset.edited) $('create-space-name').value = $('session-name').value.trim(); createReadiness(); };
 $('create-space-existing').onchange = createReadiness;
 $('create-space-name').oninput = () => { $('create-space-name').dataset.edited = 'true'; createReadiness(); };

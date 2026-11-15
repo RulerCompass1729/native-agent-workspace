@@ -85,6 +85,15 @@ const CLAUDE_PERMISSION_MODES = ['acceptEdits', 'auto', 'bypassPermissions', 'ma
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,119}$/;
 const CODEX_EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
+const { readCodexProfile, PROFILE_PATTERN: CODEX_PROFILE_PATTERN } = require('./codex-profile.cjs');
+// Who made the model a session runs (vendor) and which native program runs it (shell), for the
+// interface to tell DeepSeek-through-Codex from Codex. A Codex vendor is the model provider
+// Codex reports for the thread (or, before that, the one its profile names); null until known.
+function sessionMaker(s) {
+  const vendor = s.provider === 'claude' ? 'anthropic' : typeof s.modelProvider === 'string' ? s.modelProvider : null;
+  return { vendor, shell: s.provider };
+}
+const otherVendor = s => s.provider === 'codex' && typeof s.modelProvider === 'string' && s.modelProvider !== 'openai';
 function createSettings(provider, settings) {
   if (settings === undefined || settings === null) {
     return null;
@@ -93,7 +102,7 @@ function createSettings(provider, settings) {
     throw uiError("error.workspace.invalidSettings");
   }
   for (const key of Object.keys(settings)) {
-    if (!['model', 'effort', 'permissionMode'].includes(key)) {
+    if (!['model', 'effort', 'permissionMode', 'profile'].includes(key)) {
       throw uiError("error.workspace.invalidSettings");
     }
   }
@@ -119,6 +128,13 @@ function createSettings(provider, settings) {
       throw uiError("error.workspace.invalidSettings");
     }
     result.permissionMode = settings.permissionMode;
+  }
+  // One of the person's Codex profiles (DeepSeek pro / flash), see codex-profile.cjs.
+  if (settings.profile !== undefined) {
+    if (provider !== 'codex' || typeof settings.profile !== 'string' || !CODEX_PROFILE_PATTERN.test(settings.profile)) {
+      throw uiError("error.workspace.invalidSettings");
+    }
+    result.profile = settings.profile;
   }
   if (!Object.keys(result).length) {
     return null;
@@ -239,12 +255,14 @@ class Workspace extends EventEmitter {
     if (s.provider !== 'codex') return s.usage;
     const { account: _oldAccount, ...usage } = s.usage || {};
     const runtime = this.runtimes.get(s.id);
-    const account = runtime && !runtime.stopped && !runtime.transportDisconnected && !runtime.host?.closed
+    // The account limits are those of the person's OpenAI sign-in; another vendor's session
+    // (DeepSeek through Codex) does not use them, and shows its own tokens only.
+    const account = runtime && !runtime.stopped && !runtime.transportDisconnected && !runtime.host?.closed && !otherVendor(s)
       ? runtime.host?.codexAccountUsage : null;
     return Object.keys(usage).length || account ? { ...usage, ...(account ? { account } : {}) } : null;
   }
   snapshot() {
-    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, ...(this.pagelessOwners.has(s.owner) ? { ownerPageless: true } : {}), ...this.stuckFor(s), usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeStartupPrompt: directoryTrustPrompt(s, this.runtimes.get(s.id)), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), midturnAvailable: Boolean(this.runtimes.get(s.id)?.midturnAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
+    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, ...sessionMaker(s), ...(this.pagelessOwners.has(s.owner) ? { ownerPageless: true } : {}), ...this.stuckFor(s), usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeStartupPrompt: directoryTrustPrompt(s, this.runtimes.get(s.id)), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), midturnAvailable: Boolean(this.runtimes.get(s.id)?.midturnAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
   }
   // kind is 'interrupt' or 'approval'.
   // An interrupt waits for as long as the turn it was sent to keeps running. A later tool or status
@@ -455,6 +473,9 @@ class Workspace extends EventEmitter {
   async create(provider, cwd, owner, name, view = 'chat', { fork, skipPermissions, newDirectory, gitWorktree: worktreePlan, settings } = {}, reserve = null) {
     if (!['chat', 'terminal'].includes(view)) throw uiError("error.workspace.unknownView");
     const requestedSettings = createSettings(provider, settings);
+    // The model vendor the session will run, until Codex reports the one it uses: a missing or
+    // unreadable profile refuses the creation here, before any native process starts.
+    const profileProvider = requestedSettings?.profile ? readCodexProfile(requestedSettings.profile).model_provider : undefined;
     if (skipPermissions != null && skipPermissions !== true) throw uiError("error.workspace.invalidPermissions");
     if (fork != null && (fork !== 'picker' || provider !== 'claude')) throw uiError("error.workspace.invalidBranch");
     if (newDirectory != null && newDirectory !== true) throw uiError("error.workspace.invalidNewDirectory");
@@ -490,7 +511,7 @@ class Workspace extends EventEmitter {
     }
     const id = randomUUID();
     const now = Date.now();
-    const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: sessionName, createdAt: now, lastActivityAt: now, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', modelUiMessage: uiNotice('notice.model.nativeDefault').uiMessage, usage: null, pendingTag: null, activity: '', approval: null, pid: null, ...(requestedSettings ? { requestedSettings } : {}) };
+    const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: sessionName, createdAt: now, lastActivityAt: now, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', modelUiMessage: uiNotice('notice.model.nativeDefault').uiMessage, usage: null, pendingTag: null, activity: '', approval: null, pid: null, ...(requestedSettings ? { requestedSettings } : {}), ...(typeof profileProvider === 'string' ? { modelProvider: profileProvider } : {}) };
     if (fork) record.forkPicker = true;
     if (worktreePlan) {
       record.worktreePreparation = { ...worktreePlan, status: 'preparing' };
@@ -837,6 +858,8 @@ class Workspace extends EventEmitter {
     });
     on('inputRequired', () => this.changed());
     on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = s.provider === 'codex' ? processIdentity(runtime.host?.codexProcess?.pid) : null; this.changed(); });
+    // Kept with the record: the vendor icon needs it before the session runs again.
+    on('modelProvider', value => { if (s.modelProvider !== value) { s.modelProvider = value; this.changed(); } });
     on('model', (model, uiMessage) => { s.model = model; const message = displayMessage(uiMessage, 'notice.', model); if (message) s.modelUiMessage = message; else delete s.modelUiMessage; this.changed(); });
     on('askQuestion', ask => this.holdQuestion(s, runtime, ask));
     // Only a session nobody named takes the native title; a rename is a desktop label and always wins.
@@ -2134,4 +2157,4 @@ class Workspace extends EventEmitter {
   }
 }
 
-module.exports = { Workspace, cleanText, isTerminalResponse, createSettings, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS };
+module.exports = { Workspace, cleanText, isTerminalResponse, createSettings, sessionMaker, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS };

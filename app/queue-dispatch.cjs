@@ -152,6 +152,8 @@ const ROTATION_PHASES = ['requested', 'creating', 'joining', 'created', 'handed'
 const RESTING_PHASES = ['failed', 'kept'];
 // The active backend can start a session with given settings (workspace.cjs createSettings).
 const CREATE_SETTINGS_CAPABILITY = 'createSettingsV1';
+// ... and from one of the person's Codex profiles (DeepSeek pro / flash, codex-profile.cjs).
+const CREATE_PROFILE_CAPABILITY = 'createSettingsProfileV1';
 // What a new session can be started with; must match workspace.cjs (a test compares them).
 const CLAUDE_PERMISSION_MODES = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -703,6 +705,12 @@ function carrySettings(session) {
     if (typeof native.effort === 'string' && CODEX_EFFORT_PATTERN.test(native.effort)) {
       settings.effort = native.effort;
     }
+    // A session started from a Codex profile (DeepSeek) runs its successor from the same one:
+    // the profile names the vendor and its model catalog, which a model name alone does not.
+    const profile = session.requestedSettings && session.requestedSettings.profile;
+    if (typeof profile === 'string' && profile) {
+      settings.profile = profile;
+    }
   }
   // A Codex successor starts in chat view: a new native Codex terminal starts its thread only
   // after native prompts (trust, sign-in) that no one is there to answer, and chat view runs no
@@ -711,11 +719,14 @@ function carrySettings(session) {
   if (session.provider === 'claude' && session.view === 'terminal') {
     view = 'terminal';
   }
+  if (session.provider === 'codex' && typeof session.modelProvider === 'string' && session.modelProvider) {
+    return { settings, view, modelProvider: session.modelProvider };
+  }
   return { settings, view };
 }
 
 // Does the new session report what it was started with? 'pending' until it reports a model.
-function settingsMismatch(carry, fresh) {
+function settingsMismatch(carry, fresh, modelProvider = null) {
   if (!carry) {
     return null;
   }
@@ -727,6 +738,10 @@ function settingsMismatch(carry, fresh) {
     if (model !== carry.model) {
       return 'model';
     }
+  }
+  // The vendor the old session ran (DeepSeek through Codex) must be the successor's.
+  if (modelProvider && fresh.modelProvider && fresh.modelProvider !== modelProvider) {
+    return 'model-provider';
   }
   if (fresh.provider === 'claude') {
     if (carry.permissionMode && fresh.nativePermissionMode && fresh.nativePermissionMode !== carry.permissionMode) {
@@ -3088,7 +3103,8 @@ class QueueDispatcher {
       return;
     }
     let refusal = carry.reason;
-    if (!refusal && !(current.snapshot.capabilities || []).includes(CREATE_SETTINGS_CAPABILITY)) {
+    const capabilities = current.snapshot.capabilities || [];
+    if (!refusal && (!capabilities.includes(CREATE_SETTINGS_CAPABILITY) || (carry.settings.profile && !capabilities.includes(CREATE_PROFILE_CAPABILITY)))) {
       refusal = 'backend-cannot-carry-settings';
     }
     if (refusal) {
@@ -3100,6 +3116,7 @@ class QueueDispatcher {
       reason,
       why,
       carry: carry.settings,
+      ...(carry.modelProvider ? { modelProvider: carry.modelProvider } : {}),
       view: carry.view,
       phase: 'requested',
       requestedAt: current.now,
@@ -3521,7 +3538,7 @@ class QueueDispatcher {
         throw Error('person-active');
       }
       // The new session must report the old one's model (and, once reported, effort and mode).
-      const mismatch = settingsMismatch(record.carry, fresh);
+      const mismatch = settingsMismatch(record.carry, fresh, record.modelProvider || null);
       if (mismatch === 'pending') {
         if (now - (record.createdNewAt || now) > NEW_SESSION_READY_MS) {
           throw Error('new-session-model-unreported');
@@ -3551,7 +3568,7 @@ class QueueDispatcher {
         return;
       }
       // Effort and permission mode are often reported only with the first prompt: compare again.
-      const mismatch = settingsMismatch(record.carry, fresh);
+      const mismatch = settingsMismatch(record.carry, fresh, record.modelProvider || null);
       if (mismatch && mismatch !== 'pending') {
         throw Error(`settings-differ:${mismatch}`);
       }
@@ -3717,6 +3734,7 @@ module.exports = {
   transcriptModel,
   settingsMismatch,
   CREATE_SETTINGS_CAPABILITY,
+  CREATE_PROFILE_CAPABILITY,
   CLAUDE_PERMISSION_MODES,
   CLAUDE_EFFORTS,
   MEMORY_LIMIT_BYTES,

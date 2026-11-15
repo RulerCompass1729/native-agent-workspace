@@ -1828,6 +1828,14 @@ test('a successor carries the old model, effort, permission mode and view; what 
   assert.deepEqual(rules.carrySettings(planning), { reason: 'collaboration-mode' });
   const twoSpaces = member('a', { roomIds: ['shared', '308f55b3-ec97-467c-a2b8-1ecc47562029'] });
   assert.deepEqual(rules.carrySettings(twoSpaces), { reason: 'several-spaces' });
+  // DeepSeek through Codex: the successor starts from the same Codex profile, and must run the same vendor.
+  const deepseek = member('d', { provider: 'codex', model: 'deepseek-v4-pro', modelProvider: 'deepseek', requestedSettings: { profile: 'deepseek-pro' }, nativeSettings: { model: 'deepseek-v4-pro', effort: 'high', mode: null } });
+  assert.deepEqual(rules.carrySettings(deepseek), { settings: { model: 'deepseek-v4-pro', effort: 'high', profile: 'deepseek-pro' }, view: 'chat', modelProvider: 'deepseek' });
+  assert.equal(rules.settingsMismatch({ model: 'deepseek-v4-pro', profile: 'deepseek-pro' }, member('n', { provider: 'codex', modelProvider: 'openai', nativeSettings: { model: 'deepseek-v4-pro', effort: 'high' } }), 'deepseek'), 'model-provider');
+  assert.equal(rules.settingsMismatch({ model: 'deepseek-v4-pro', profile: 'deepseek-pro' }, member('n', { provider: 'codex', modelProvider: 'deepseek', nativeSettings: { model: 'deepseek-v4-pro', effort: 'high' } }), 'deepseek'), null);
+  // The carried settings are what the backend accepts.
+  const { createSettings } = require('../workspace.cjs');
+  assert.deepEqual(createSettings('codex', rules.carrySettings(deepseek).settings), { model: 'deepseek-v4-pro', effort: 'high', profile: 'deepseek-pro' });
   // The lists match what the backend accepts.
   const workspace = require('../workspace.cjs');
   assert.deepEqual(rules.CLAUDE_PERMISSION_MODES, workspace.CLAUDE_PERMISSION_MODES);
@@ -2058,6 +2066,20 @@ test('without the backend support for carried settings no rotation starts', asyn
   await dispatcher.schedule();
   assert.deepEqual(notices, [['failed', 'cannot-carry:backend-cannot-carry-settings']]);
   assert.equal(client.sends('a').some(call => /【NAW 换会话】/.test(call[2])), false);
+});
+
+test('a DeepSeek member is not rotated by a backend that cannot start a session from a Codex profile', async t => {
+  const notices = [];
+  const deepseek = member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages('codex'), cwd: '/tmp', provider: 'codex', model: 'deepseek-v4-pro', modelProvider: 'deepseek', requestedSettings: { profile: 'deepseek-pro' }, nativeSettings: { model: 'deepseek-v4-pro', effort: 'high', mode: null } });
+  const { room, client, dispatcher } = dispatcherSetup(t, [deepseek], {
+    notify: (kind, record) => notices.push([kind, record.reason]),
+  });
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.deepEqual(notices, [['failed', 'cannot-carry:backend-cannot-carry-settings']]);
+  assert.equal(client.calls.some(call => call[0] === 'create'), false, 'a successor without the profile would run another vendor');
 });
 
 test('a successor that reports another permission mode with its first prompt does not keep the work', async t => {

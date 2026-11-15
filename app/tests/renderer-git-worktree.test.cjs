@@ -23,7 +23,7 @@ function fixture() {
   context.attempt=fn=>{context.pending=fn();};
   vm.createContext(context);
   // T-115: createReadiness also renders the space choice; an independent session (the default) keeps these checks unchanged.
-  const names=['openCreate','resetCreateDirectory','invalidateGitPreview','refreshGitPreview','scheduleGitPreview','createReadiness','renderCreateSpaces','createSpaceReadiness','createSpaceChoice'];
+  const names=['openCreate','resetCreateDirectory','invalidateGitPreview','refreshGitPreview','scheduleGitPreview','createReadiness','renderCreateSpaces','createSpaceReadiness','createSpaceChoice','deepseekProfiles','deepseekChosen','chosenProvider','renderCreateProfiles'];
   const declarations=names.map(name=>source.match(new RegExp('(?:async )?function '+name+'\\([\\s\\S]*?\\n}'))?.[0]);
   assert.ok(declarations.every(Boolean));
   get('create-space-kind').value='independent';

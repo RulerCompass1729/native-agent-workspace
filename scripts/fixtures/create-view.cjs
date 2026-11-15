@@ -4,8 +4,10 @@ const assert = require('node:assert/strict');
 async function createIn(page, view) {
   const choice = page.locator('#initial-view');
   const provider = await page.locator('input[name="provider"]:checked').getAttribute('value');
-  assert.equal(await choice.isVisible(), provider === 'codex', 'Only Codex asks where a new session starts');
-  if (provider === 'codex') await choice.selectOption(view);
+  // A DeepSeek member runs in Codex, so it is asked too.
+  const codex = ['codex', 'deepseek'].includes(provider);
+  assert.equal(await choice.isVisible(), codex, 'Only Codex asks where a new session starts');
+  if (codex) await choice.selectOption(view);
   await page.locator('#confirm-create').click();
   // Closing the dialog and selecting the new session happen in one renderer task.
   await page.locator('#create-dialog').waitFor({ state: 'hidden' });

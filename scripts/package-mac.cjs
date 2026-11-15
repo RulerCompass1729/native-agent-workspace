@@ -119,6 +119,7 @@ async function build() {
       'claude-pin.cjs',
       'claude-submit.cjs',
       'claude_hook.py',
+      'codex-profile.cjs',
       'codex-qualification.cjs',
       'codex-surface.cjs',
       'codex-surface/0.167.0.json',
