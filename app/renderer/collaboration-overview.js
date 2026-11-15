@@ -353,7 +353,8 @@
       host.dataset.progressive = String(progressive);
       const chipIndex = progressive && layout === 'grid' && !focused && contentVisible;
       headers.hidden = !chipIndex; host.dataset.band = String(chipIndex);
-      if (!progressive) visibleLimit = records.length;
+      // List already scrolls; grid's row limit must not hide list members.
+      if (!progressive || layout === 'list') visibleLimit = records.length;
       else {
         visibleRows = Math.max(1, memberLimits.get(roomKey) || 1);
         visibleLimit = Math.min(records.length, visibleRows * capacity);

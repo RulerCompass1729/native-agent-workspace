@@ -19,9 +19,8 @@ const output = process.env.NAW_EVIDENCE_DIR;
 if (!output || !path.isAbsolute(output) || [root, code].some(p => path.resolve(output) === p || path.resolve(output).startsWith(p + path.sep))) throw Error('Private evidence directory required');
 fs.mkdirSync(output, { recursive: true, mode: 0o700 });
 const pictures = path.join(process.env.NAW_PICTURES_DIR || path.join(os.homedir(), 'Pictures/naw-dogfood'), `many-members-${tag}-${membersCount}-${randomId()}`);
-fs.mkdirSync(pictures, { recursive: true, mode: 0o700 });
 function randomId() { return Math.random().toString(36).slice(2, 10); }
-const slot = path.join(code, '.local/gui-test-slot.lock'), token = randomId() + randomId();
+const slot = process.env.NAW_GUI_TEST_SLOT || path.join(code, '.local/gui-test-slot.lock'), token = randomId() + randomId();
 fs.mkdirSync(path.dirname(slot), { recursive: true });
 try { fs.mkdirSync(slot); } catch (e) { if (e.code !== 'EEXIST') throw e; console.error('GUI slot occupied'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token, pid: process.pid, task: 'many members hidden synthetic test' }));
@@ -38,6 +37,7 @@ function fixture(method, target, value) {
   });
 }
 async function main() {
+  fs.mkdirSync(pictures, { recursive: true, mode: 0o700 });
   child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [profile], {
     execArgv: ['--require', path.join(root, 'scripts/fixtures/activity-stream.cjs')],
     env: { ...process.env, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: profile, NAW_APP_VERSION: require(path.join(code, 'package.json')).version },
@@ -58,6 +58,7 @@ async function main() {
   await page.locator('#room-nav').waitFor({ state: 'visible', timeout: 30000 }); await delay(300); await page.locator('#room-nav').click();
   await page.locator('.collaboration-readers').waitFor();
   const win = await app.browserWindow(page);
+  assert.equal(await win.evaluate(w => w.isVisible() || w.isFocused()), false, 'The isolated window stays hidden and unfocused');
   async function resize(size) { await win.evaluate((w, [w2, h2]) => w.setContentSize(w2, h2), size); await delay(700); }
   async function shot(size, scenario) {
     await resize(size);
@@ -174,6 +175,77 @@ async function main() {
     const expanded = await page.evaluate(() => document.querySelector('.collaboration-statuses').style.maxHeight === '');
     assert.ok(expanded, 'chips expand past two lines');
     await shot([1240, 820], 'chips');
+  }
+  if (!shotsOnly && !only) {
+    const results = [], failures = [];
+    const runCheck = async (name, fn) => {
+      try { await fn(); results.push({ name, passed: true }); console.log('PASS', name); }
+      catch (error) { results.push({ name, passed: false, error: error.stack }); failures.push(error); console.error('FAIL', name, error.message); }
+    };
+    const controls = page.locator('.collaboration-layout-controls');
+    const gridButton = controls.getByRole('button', { name: '网格', exact: true });
+    const listButton = controls.getByRole('button', { name: '列表', exact: true });
+    const order = () => page.locator('.collaboration-readers>.collaboration-member-unit').evaluateAll(nodes => nodes.map(n => n.dataset.memberId));
+    // The wide case keeps the real shared-record panel open, as in the reported failure.
+    const panel = page.locator('#activity-stream');
+    if (!await panel.isVisible()) await page.locator('#room-record').click();
+    for (const size of [[1240, 820], [850, 600]]) {
+      await resize(size);
+      await gridButton.click(); await delay(150);
+      const gridBefore = await measure();
+      await listButton.click(); await delay(150);
+      const listState = await measure();
+      console.log('LIST', size[0], JSON.stringify(listState));
+      await runCheck(`${size[0]} list: every member is reachable by scrolling`, async () => {
+        assert.equal(listState.visible, membersCount, 'List must expose every member without a grid reveal control');
+        assert.equal(listState.showMore, null);
+        assert.equal(listState.overflowY, 'auto');
+        for (const id of await order()) {
+          const card = page.locator(`.collaboration-readers>.collaboration-member-unit[data-member-id="${id}"]`);
+          await card.scrollIntoViewIfNeeded();
+          assert.equal(await card.evaluate(node => {
+            const r = node.getBoundingClientRect(), viewport = node.parentElement.getBoundingClientRect();
+            return !node.hidden && r.height > 0 && r.bottom > viewport.top && r.top < viewport.bottom;
+          }), true, `Member ${id} can enter the scrolling viewport`);
+        }
+      });
+      await page.locator('.collaboration-readers').evaluate(node => { node.scrollTop = 0; });
+      const file = path.join(pictures, `m${membersCount}-list-${size[0]}.png`);
+      await page.screenshot({ path: file }); console.log('SHOT', file);
+      await gridButton.click(); await delay(150);
+      await runCheck(`${size[0]} list round trip preserves grid reveal progress`, async () => {
+        assert.equal((await measure()).visible, gridBefore.visible);
+      });
+    }
+    // Keep two drag targets in the same visible grid row, matching the original
+    // passing ordering probe; list reachability above retains the side panel.
+    if (await panel.isVisible()) await page.locator('#room-record').click();
+    await resize([1240, 820]); await gridButton.click(); await delay(200);
+    const beforeOrder = await order();
+    const first = beforeOrder[0], second = beforeOrder[1];
+    const name = id => page.locator(`.collaboration-member-unit[data-member-id="${id}"] .collaboration-member-name`);
+    const destination = page.locator(`.collaboration-member-unit[data-member-id="${second}"]>.collaboration-member-status`);
+    await page.locator('.collaboration-readers').evaluate(node => { node.scrollTop = 0; });
+    await runCheck('actual name drag preserves member-card ordering', async () => {
+      const box = await destination.boundingBox();
+      await name(first).dragTo(destination, { targetPosition: { x: box.width - 3, y: box.height - 3 } }); await delay(200);
+      const after = await order();
+      assert.notDeepEqual(after, beforeOrder); assert.equal(after.indexOf(first), after.indexOf(second) + 1);
+    });
+    await runCheck('Alt+ArrowDown preserves keyboard ordering', async () => {
+      const before = await order(), index = before.indexOf(second), neighbor = before[index + 1];
+      await name(second).press('Alt+ArrowDown'); await delay(200);
+      const after = await order(); assert.equal(after.indexOf(second), index + 1); assert.equal(after[index], neighbor);
+    });
+    await runCheck('grid can reveal every member after visiting list', async () => {
+      for (let n = 0; n < membersCount && await page.locator('.collaboration-show-more').isVisible(); n++) {
+        await page.locator('.collaboration-show-more').click();
+      }
+      assert.equal((await measure()).visible, membersCount);
+    });
+    fs.writeFileSync(path.join(output, 'list-regression.json'), JSON.stringify(results, null, 2));
+    console.log(`LIST RESULT passed=${results.filter(r => r.passed).length} failed=${failures.length}`);
+    assert.equal(failures.length, 0, 'Every list, grid and ordering check must pass');
   }
   const stats = await fixture('stats');
   assert.equal(stats.modelCalls, 0); assert.equal(stats.nativeProcesses, 0);
