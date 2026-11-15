@@ -817,6 +817,29 @@ header h1, header p { overflow-wrap: anywhere; }
 .operator-controls strong { flex-basis:100%; }
 .message.operator-attention { border-inline-start:3px solid var(--accent,#9a6e18); }
 .operator-question { font-weight:600; }
+/* A background operation: one sentence, its risks marked, the raw command folded once; a card asked again later is
+   grey and has no buttons (80184fc5). */
+.message.system:has(>.background-operation) { display:block; }
+.background-operation { margin-top:4px; font-size:12px; }
+.background-operation .background-line { margin:0; display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 8px; }
+.background-operation .background-state { color:var(--muted); }
+.background-operation .background-sentence { color:var(--ink); font-weight:600; overflow-wrap:anywhere; }
+.message.background-card { margin-block:6px; padding:10px 12px; border:1px solid var(--warning,#9a6700); border-inline-start-width:4px; border-radius:6px; background:var(--dsw-alias-state-warn-tertiary,#fff3dc); }
+.message.background-card .background-state { padding:1px 7px; border-radius:4px; background:var(--warning,#9a6700); color:#fff; font-weight:600; }
+.message.background-card .background-sentence { font-size:13px; }
+.message.background-void { margin-block:6px; padding:10px 12px; border:1px dashed var(--border); border-radius:6px; background:var(--panel); }
+.message.background-void .background-state { padding:1px 7px; border-radius:4px; background:var(--border); color:var(--muted); font-weight:600; }
+.message.background-void .background-sentence { color:var(--muted); font-weight:400; text-decoration:line-through; }
+.background-risks { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 0; padding:0; list-style:none; }
+.background-risk { padding:1px 7px; border:1px solid currentColor; border-radius:4px; background:var(--dsw-alias-bg-layer-2,#fff); color:var(--dsw-alias-state-danger-label,#a03525); font-weight:600; }
+.background-risk::before { content:"⚠ "; }
+.background-note { margin:6px 0 0; color:var(--muted); overflow-wrap:anywhere; }
+.background-note.is-warning, .background-error { color:var(--dsw-alias-state-danger-label,#a03525); }
+.background-error { margin:4px 0 0; overflow-wrap:anywhere; }
+.background-details { margin-top:6px; }
+.background-details > summary { width:max-content; max-width:100%; color:var(--muted); cursor:pointer; }
+.background-details > pre { max-height:240px; margin:4px 0 0; padding:8px; overflow:auto; border-radius:4px; background:var(--panel); font-size:11px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.background-buttons { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
 .operator-unread { font-weight:600; }
 .operator-grant { display:flex; flex-wrap:wrap; gap:10px; width:100%; }
 .operator-grant label { display:flex; flex-direction:column; gap:4px; max-width:100%; }

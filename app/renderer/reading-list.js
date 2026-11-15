@@ -98,6 +98,32 @@ function readingMessageClock(message, now = Date.now(), language = []) {
   return { text: (sameDay ? '' : date.toLocaleDateString(language) + ' ') + time, dateTime: date.toISOString(), full: date.toLocaleString(language, { hourCycle: 'h23' }) };
 }
 function readingDisplayClock(message) { return readingMessageClock(message, Date.now(), ui.language.getSnapshot().active); }
+// NAW's own tools, said as what they do rather than by their internal names (mcp__native_workspace__… from
+// Claude, native_workspace.… from Codex). The full input stays in the expandable original.
+function readingNawTool(message) {
+  const match = typeof message.title === 'string' && /^(?:mcp__native_workspace__|native_workspace\.)workspace_(control|message|open|report|sessions)$/.exec(message.title);
+  if (!match) return null;
+  let input = {};
+  try { const value = JSON.parse(message.input || '{}'); if (value && typeof value === 'object' && !Array.isArray(value)) input = value; } catch { /* shown as is when expanded */ }
+  return { tool: match[1], input };
+}
+// The page's text lookup answers an unknown key with the key itself, so a name this build has no words for is
+// checked here (the shared table throws on it) and said as a call instead.
+function uiTextKnown(key) { try { window.nativeWorkspaceLocale.format('en', key); return true; } catch { return false; } }
+function readingNawToolPreview(tool) {
+  const { input } = tool, text = value => typeof value === 'string' && value.trim() ? value.trim().slice(0, 120) : '';
+  if (tool.tool === 'control' && input.action === 'invoke' && text(input.method)) {
+    const action = uiTextKnown('background.action.' + input.method) ? uiText('background.action.' + input.method) : uiText('background.card.call', { method: text(input.method) });
+    const args = Array.isArray(input.arguments) ? input.arguments : [], name = text(input.method === 'create' ? args[0]?.name : input.method === 'spaceCreate' ? args[0] : '');
+    return name ? uiText('background.card.named', { action, name }) : action;
+  }
+  if (tool.tool === 'control') return ['catalog', 'snapshot', 'receipt'].includes(input.action) ? uiText('reading.nawTool.' + input.action) : '';
+  if (tool.tool === 'message' && text(input.recipient_id)) {
+    const target = state.sessions.find(s => s.id === input.recipient_id);
+    return uiText('reading.nawTool.messageTo', { name: target ? participantLabel(target, state.sessions) : text(input.recipient_id) });
+  }
+  return tool.tool === 'open' && text(input.name) ? uiText('background.card.named', { action: uiText('background.action.create'), name: text(input.name) }) : '';
+}
 function readingActionLabel(message, author) {
   const key = message.toolKind === 'commandExecution' || message.title === 'Bash' ? 'reading.commandOutput'
     : ['user', 'human'].includes(message.role) ? 'reading.input'
@@ -819,6 +845,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     if (m.backgroundOperation || entry.backgroundControls) renderBackgroundControls(entry, m);
     entry.item.classList.toggle('native-notice', Boolean(m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && session?.nativeContexts?.some(c => c.boundaryId === m.id))));
     const nativeTitle = entry.exploration ? entry.exploration.active ? 'Exploring' : 'Explored' : m.toolKind === 'commandExecution' ? ['running', 'streaming'].includes(m.status) ? 'Running' : m.commandSource === 'userShell' ? 'You ran' : 'Ran' : m.kind === 'summary' && m.title === '过程摘要' || m.kind === 'plan' && m.title === '计划' || m.toolKind === 'webSearch' && ['搜索网页', '打开网页', '页内查找'].includes(m.title) || m.toolKind === 'fileChange' && m.title === '文件修改' ? '' : m.title;
+    const nawTool = readingNawTool(m);
     const messageName = () => {
       if (wake) {
         const target = state.sessions.find(s => s.id === wake.recipientId);
@@ -857,7 +884,8 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       }
       if (nativeTitle) {
         const title = node('span'), message = window.nativeWorkspaceLocale.displayMessage(m.uiTitleMessage, 'notice.');
-        if (message && message.key === 'notice.legacyTitle' && ['last', 'old'].includes(message.params.status)) ui.display.text(title, message.key, () => ({ title: ui.displayText(m.legacyOriginalTitle, m.legacyOriginalTitleUiMessage) || message.params.title || uiText('notice.legacyNative'), status: uiText(message.params.status === 'last' ? 'notice.legacyLast' : 'notice.legacyOld') }));
+        if (nawTool) ui.display.text(title, 'reading.nawTool.' + nawTool.tool);
+        else if (message && message.key === 'notice.legacyTitle' && ['last', 'old'].includes(message.params.status)) ui.display.text(title, message.key, () => ({ title: ui.displayText(m.legacyOriginalTitle, m.legacyOriginalTitleUiMessage) || message.params.title || uiText('notice.legacyNative'), status: uiText(message.params.status === 'last' ? 'notice.legacyLast' : 'notice.legacyOld') }));
         else if (message && message.key !== 'notice.legacyTitle' && window.nativeWorkspaceLocale.displayMessage(message, 'notice.', nativeTitle)) ui.display.text(title, message.key, message.params); else title.textContent = nativeTitle;
         entry.heading.append(title);
       }
@@ -914,7 +942,8 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         catch { /* The expandable original remains authoritative. */ }
       }
       const preview = wake ? '' : (failedTool && !entry.exploration && m.toolKind !== 'commandExecution' && m.title !== 'Bash' && m.text?.trim() ? m.text : entry.exploration || m.toolKind === 'webSearch' ? '' : m.toolKind === 'commandExecution' ? nativeCommandPreview(m) : inputPreview || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
-      if (entry.preview.textContent !== preview) entry.preview.textContent = preview;
+      if (nawTool && !failedTool) ui.display.computed(entry.preview, 'text', () => readingNawToolPreview(nawTool));
+      else { ui.display.unbind(entry.preview); if (entry.preview.textContent !== preview) entry.preview.textContent = preview; }
       updateProcessTail(entry);
     }
     entry.share.hidden = context.passive === true || m.role === 'system';
@@ -1001,7 +1030,8 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     const footer = readingTurnFooter(m);
     entry.item.classList.toggle('native-metadata-only', m.kind === 'turn' && !displayText);
     entry.heading.hidden = m.kind === 'turn' && !displayText;
-    entry.body.hidden = entry.heading.hidden || Boolean(m.role === 'human' && m.imageDraftVersion && m.images?.length && !displayText);
+    // A background operation's sentence and folded details stand for its raw text (still what copy and search use).
+    entry.body.hidden = entry.heading.hidden || Boolean(m.role === 'human' && m.imageDraftVersion && m.images?.length && !displayText) || Boolean(m.kind === 'background-operation' && m.backgroundOperation?.summary);
     if (footer) {
       if (!entry.footer) { entry.footer = node('footer', undefined, 'reading-turn-footer'); entry.item.append(entry.footer); }
       const finals = originals.filter(other => other.role === 'assistant' && (other.finalReply || ['final_answer', 'finalAnswer'].includes(other.phase)) &&

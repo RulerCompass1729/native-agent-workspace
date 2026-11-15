@@ -145,6 +145,11 @@ function refusalDetails(reason) {
     retryHint: REFUSAL_RETRY_HINT,
   } : {}) };
 }
+// What a carried-out record keeps of its guard (the sessions' ids and native ids, and the audit spaces): enough
+// to tell whether two cards asked about the same targets after one of them was answered.
+const guardTargets = guard => guard && typeof guard === 'object' ? { auditRooms: guard.auditRooms ?? null,
+  sessions: Array.isArray(guard.sessions) ? guard.sessions.map(s => [s?.id ?? null, s?.nativeId ?? null]) : null } : null;
+const confirmedDecision = r => Number.isSafeInteger(r.humanDecision) && r.humanDecision !== (r.confirmation?.options?.cancelId ?? 0);
 const compactRefusal = row => { row.guard = { auditRooms: row.guard?.auditRooms || ['shared'] }; };
 // Input queued for a native session: answered once NAW recorded it, not when native took it.
 const queuedDelivery = args => ['queue', 'queueShared'].includes(args.method === 'spaceAction' ? args.arguments?.[1] : args.method);
@@ -830,6 +835,7 @@ class BackgroundControl {
     if (!row || row.state !== 'confirmation-required' || row.confirmation?.kind !== 'message' || !Array.isArray(row.confirmation.options.buttons) ||
         !Number.isSafeInteger(response) || response < 0 || response >= row.confirmation.options.buttons.length || this.inflight.has(this.key(row.actor))) throw Error('This confirmation is no longer current');
     const decision = response === (row.confirmation.options.cancelId ?? 0) ? 'cancelled' : 'confirmed';
+    if (decision === 'confirmed' && this.sameRequests(row).some(({ r, later }) => later && confirmedDecision(r))) throw require('./ui-errors.cjs').uiError('error.background.confirmedOnLaterCard');
     // Reserved synchronously, so no window is closed while the person's answer is carried out.
     return this.exclusive(row.actor, async () => {
     const context = await this.view(row.actor, row.command.view_id);
@@ -856,13 +862,44 @@ class BackgroundControl {
       return result;
     }).finally(() => this.touch(row.actor));
   }
-  rows(sessionId) {
-    return [...(this.archivedBySession.get(sessionId) || []), ...this.data.records.filter(r => r.actor.id === sessionId)].map(r => ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
+  // The same request asked on another card: the same agent, the same command under another operation id, against
+  // the same targets (the guard the implicit-id reuse also compares). Explicit ids stay separate requests; this is
+  // only what the person is told on the cards. The page answers only the newest waiting card, and a card whose
+  // request was already confirmed on a later one is refused here, so one request is not carried out twice by mistake.
+  sameRequests(row, all = [...(this.archivedBySession.get(row.actor.id) || []), ...this.data.records]) {
+    const key = this.key(row.actor), own = all.indexOf(row);
+    return all.map((r, index) => ({ r, later: r.at > row.at || r.at === row.at && index > own })).filter(({ r }) => r !== row && this.key(r.actor) === key &&
+      r.command?.method === row.command.method && isDeepStrictEqual({ ...r.command, operation_id: row.command.operation_id }, row.command) &&
+      (r.state === 'confirmation-required' ? isDeepStrictEqual(r.guard ?? null, row.guard ?? null) : isDeepStrictEqual(guardTargets(r.guard), guardTargets(row.guard))));
+  }
+  replacement(row, all) {
+    if (row?.state !== 'confirmation-required') return null;
+    const later = this.sameRequests(row, all).filter(item => item.later).map(item => item.r), newest = list => list.reduce((a, b) => (b.time > a.time ? b : a), list[0]);
+    const waiting = later.filter(r => r.state === 'confirmation-required' && r.confirmation?.kind === 'message').map(r => ({ time: r.at, state: 'waiting' }));
+    if (waiting.length) return newest(waiting);
+    const answered = later.filter(r => Number.isSafeInteger(r.humanDecision)).map(r => ({ time: r.humanDecisionAt ?? r.finishedAt ?? r.at,
+      state: confirmedDecision(r) ? 'confirmed' : 'cancelled' }));
+    return answered.length ? newest(answered) : null;
+  }
+  // The person already confirmed this same request on an earlier card: confirming this one does it again.
+  repeated(row, all) {
+    if (row?.state !== 'confirmation-required') return null;
+    const done = this.sameRequests(row, all).filter(({ r, later }) => !later && confirmedDecision(r))
+      .map(({ r }) => r.humanDecisionAt ?? r.finishedAt ?? r.at);
+    return done.length ? { time: Math.max(...done) } : null;
+  }
+  // `names` is the page's display state; an agent's own view (null) gets the rows as before, without the card's words.
+  rows(sessionId, names = {}) {
+    const own = [...(this.archivedBySession.get(sessionId) || []), ...this.data.records.filter(r => r.actor.id === sessionId)];
+    return own.map(r => ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
       name: operation.visibleText(r.actor.name), time: r.at, status: ['running', 'awaiting-native'].includes(r.state) ? 'working' : ['complete', 'received', 'cancelled'].includes(r.state) ? 'complete' : 'error',
       text: operation.visibleText(`${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', 'not-executed': '未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`),
       backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state,
         confirmation: r.confirmation ? { ...r.confirmation, options: visibleOptions(r.confirmation.options) } : null,
-        resultNotice: r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null } }));
+        resultNotice: r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null,
+        ...(names ? { summary: operation.operationSummary(r.command, r.actor, names), arguments: operation.visibleText(JSON.stringify(r.command.arguments ?? [], null, 2)),
+          ...(r.error ? { error: operation.visibleText(String(r.error)) } : {}),
+          ...(r.state === 'confirmation-required' ? { replacedBy: this.replacement(r, own), repeated: this.repeated(r, own) } : {}) } : {}) } }));
   }
   async close() {
     this.closed = true; clearInterval(this.sweeper);

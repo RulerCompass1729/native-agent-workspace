@@ -2279,29 +2279,89 @@ async function setOperatorEnabled(id, enabled) {
   await api.operatorAction(id, 'enabled', enabled);
   toastMessage(enabled ? 'operator.enableNote' : 'operator.disabledNote');
 }
+// A background operation is said as one sentence: what the agent asks or did, with the names, folder and flags
+// in its command, and the risks marked. The raw command shows once, folded under 「详情」. A card the agent asked
+// again later is greyed with the reason and has no buttons: only the newest card can be answered (main refuses
+// the old one too). Every line follows the display language; the stored card text stays what was asked.
+function backgroundActionText(summary) {
+  return summary.action && uiTextKnown('background.action.' + summary.action) ? uiText('background.action.' + summary.action) : uiText('background.card.call', { method: summary.method });
+}
+function backgroundSummaryText(summary) {
+  const action = backgroundActionText(summary);
+  const parts = [summary.name ? uiText('background.card.named', { action, name: summary.name }) : action];
+  if (summary.target) parts.push(uiText('background.card.session', { name: summary.target }));
+  if (summary.room) parts.push(uiText('background.card.room', { name: summary.room }));
+  if (summary.provider) parts.push(summary.provider === 'codex' ? 'Codex' : 'Claude');
+  if (summary.program) parts.push(summary.program);
+  if (summary.folder) parts.push(uiText('background.card.folder', { name: summary.folder }));
+  if (summary.worktree) parts.push(uiText('background.card.worktree'));
+  if (summary.file) parts.push(uiText(summary.files ? 'background.card.files' : 'background.card.file', { name: summary.file, count: summary.files || 1 }));
+  return parts.join(' · ');
+}
+const backgroundStates = ['running', 'complete', 'received', 'awaiting-native', 'confirmation-required', 'cancelled', 'not-executed', 'unconfirmed'];
+const backgroundClock = time => new Date(time).toLocaleTimeString(ui.language.getSnapshot().active, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+// The two buttons main always asks with are said in the display language; any other set keeps its stored labels.
+function backgroundButtonKeys(options) {
+  const keys = ['common.cancel', 'background.confirm'], format = window.nativeWorkspaceLocale.format;
+  return options.buttons.length === 2 && (options.cancelId ?? 0) === 0 && keys.every((key, i) => ['zh', 'en'].some(locale => format(locale, key) === options.buttons[i])) ? keys : null;
+}
 function renderBackgroundControls(entry, message) {
   const op = message.backgroundOperation, question = op?.state === 'confirmation-required' && op.confirmation;
+  const card = question?.kind === 'message' && Array.isArray(question.options?.buttons), summary = op?.summary;
+  // Before the unchanged-record return: the reading list rewrites the row's class name on every pass.
+  entry.item.classList.toggle('background-card', Boolean(card && !op.replacedBy));
+  entry.item.classList.toggle('background-void', Boolean(card && op.replacedBy));
   const key = JSON.stringify([op, disconnected]);
   if (key === entry.backgroundKey) return;
   entry.backgroundKey = key;
-  entry.backgroundControls?.remove(); entry.backgroundControls = null;
-  if (op?.resultNotice) {
-    const notice = node('p'); ui.display.text(notice, op.resultNotice.key, op.resultNotice.params);
-    entry.backgroundControls = notice; entry.actions.before(notice);
+  if (entry.backgroundControls) { for (const el of entry.backgroundControls.querySelectorAll('*')) ui.display.unbind(el); ui.display.unbind(entry.backgroundControls); entry.backgroundControls.remove(); }
+  entry.backgroundControls = null;
+  if (!op || !summary && !card && !op.resultNotice) return;
+  const box = node('div', undefined, `background-operation${card ? ' background-controls' : ''}`);
+  entry.backgroundControls = box; entry.actions.before(box);
+  const line = node('p', undefined, 'background-line'), state = node('span', undefined, 'background-state'), sentence = node('span', undefined, 'background-sentence');
+  const stateKey = op.replacedBy ? 'background.card.void' : card ? 'background.card.waiting' : backgroundStates.includes(op.state) ? 'background.state.' + op.state : '';
+  if (stateKey) ui.display.text(state, stateKey); else state.textContent = op.state;
+  if (summary) ui.display.computed(sentence, 'text', () => backgroundSummaryText(summary));
+  else if (card) sentence.textContent = question.options.message || '';
+  line.append(state, sentence);
+  if (summary || card) box.append(line);
+  if (summary?.risks?.length) {
+    const risks = node('ul', undefined, 'background-risks');
+    for (const risk of summary.risks) risks.append(uiNode('li', 'background.risk.' + risk, undefined, 'background-risk'));
+    box.append(risks);
   }
-  if (question?.kind !== 'message' || !Array.isArray(question.options?.buttons)) return;
-  const controls = node('div', undefined, 'operator-controls background-controls'); entry.backgroundControls = controls; entry.actions.before(controls);
-  controls.append(node('strong', question.options.message), node('p', question.options.detail || ''));
+  if (op.error && !card) box.append(node('p', op.error, 'background-error'));
+  if (op.replacedBy) {
+    const reason = node('p', undefined, 'background-note');
+    ui.display.computed(reason, 'text', () => uiText('background.card.replaced.' + op.replacedBy.state, { time: backgroundClock(op.replacedBy.time) }));
+    box.append(reason);
+  } else if (card && op.repeated) {
+    const note = node('p', undefined, 'background-note is-warning');
+    ui.display.computed(note, 'text', () => uiText('background.card.repeated', { time: backgroundClock(op.repeated.time) }));
+    box.append(note);
+  }
+  if (op.resultNotice) { const notice = node('p'); ui.display.text(notice, op.resultNotice.key, op.resultNotice.params); box.append(notice); }
+  const raw = card ? question.options.detail : op.arguments;
+  if (raw) {
+    const details = node('details', undefined, 'background-details'), label = uiNode('summary', 'background.card.details');
+    details.append(label, node('pre', raw)); box.append(details);
+  }
+  if (!card || op.replacedBy) return;
+  const buttons = node('div', undefined, 'background-buttons'), keys = backgroundButtonKeys(question.options);
   question.options.buttons.forEach((label, response) => {
-    const button = node('button', label, 'small'); button.disabled = disconnected;
+    const cancel = response === (question.options.cancelId ?? 0);
+    const button = node('button', keys ? '' : label, cancel ? 'small' : 'small primary'); button.disabled = disconnected;
+    if (keys) ui.display.text(button, keys[response]);
     button.addEventListener('click', async () => {
       button.disabled = true;
       try { await api.backgroundDecision(op.sessionId, op.nativeId, op.id, response); }
       catch (error) { toast(error); }
       finally { button.disabled = disconnected; }
     });
-    controls.append(button);
+    buttons.append(button);
   });
+  box.append(buttons);
 }
 function renderOperatorControls(entry, message, context = {}) {
   const clearCancel = () => { entry.operatorCancelWarning?.remove(); entry.operatorCancelWarning = null; entry.operatorCancelKey = ''; };
