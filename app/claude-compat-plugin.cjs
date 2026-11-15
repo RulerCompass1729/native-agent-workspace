@@ -110,7 +110,9 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
     // for the typed 403 check.
     'cb7b68b49295a021c97e0fa0fb048ac86ecf412ee404422515207be0cf9bb82c',
     // Exact main d7264c70 compatibility copy before the person's own message went in beside a native draft.
-    '76c82e89cea86df1aa94506a01a0a0f7fd1b5d4a1a1eae88e49a8e3b3af083ab']);
+    '76c82e89cea86df1aa94506a01a0a0f7fd1b5d4a1a1eae88e49a8e3b3af083ab',
+    // Exact main 71820d56 compatibility copy before a mid-turn prompt with a different id kept the running turn's authorization.
+    'e2136b59826bf636dc4e8c8413d48d6ccaa2c608b44228d401ab6c7d37d7cc35']);
   const upgrades = new Set();
   for (const [name, content] of files) {
     const filename = path.join(directory, name);
