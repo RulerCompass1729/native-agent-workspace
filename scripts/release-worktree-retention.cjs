@@ -58,7 +58,7 @@ function planWorktrees({ names, installed, building = null, keepLatest = 3 }) {
 
 // Paths any process has open or as its working directory. Fails safe: null means unknown, so nothing is removed.
 function openPaths() {
-  const res = run('lsof', ['-nP', '-Fn']);
+  const res = run('/usr/sbin/lsof', ['-nP', '-Fn']);
   if (res.status !== 0 || !res.stdout.trim()) return null;
   return res.stdout.split('\n').filter(line => line.startsWith('n/')).map(line => line.slice(1));
 }

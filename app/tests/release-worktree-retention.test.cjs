@@ -121,3 +121,20 @@ test('package-mac runs retention only after a successful whole build, and a rete
   assert.ok(call < body.indexOf('} finally {'), 'on the success path, not in finally');
   assert.match(body.slice(report, body.indexOf('} finally {')), /try \{[^]*retainReleaseWorktrees\([^]*\} catch \(error\) \{ console\.error\(/, 'its error is reported, not rethrown');
 });
+
+
+test('the real lsof scan sees held files when PATH excludes the system sbin directory', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-retention-path-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'held.txt'); fs.writeFileSync(file, 'held\n');
+  const fd = fs.openSync(file, 'r'); t.after(() => fs.closeSync(fd));
+  const modulePath = path.resolve(__dirname, '../../scripts/release-worktree-retention.cjs');
+  const result = spawnSync(process.execPath, ['-e',
+    'const open = require(process.argv[1]).openPaths(); process.stdout.write(JSON.stringify({ answered: Array.isArray(open), held: open?.includes(process.argv[2]) === true }))', modulePath, fs.realpathSync(file)], {
+    env: { ...process.env, PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 30000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const observation = JSON.parse(result.stdout);
+  assert.equal(observation.answered, true, 'lsof answered without the system sbin directory in PATH');
+  assert.equal(observation.held, true, 'the actual held file remains protected');
+});
