@@ -1,3 +1,28 @@
+## Test temporary directories
+
+`npm test` runs the Node suite through `scripts/test.cjs`. It preserves the native
+test output and failure status, and adds a temporary-directory residue check.
+Run `npm run build:ui` first in a fresh checkout to generate the existing UI
+payload required by package-content tests. Arguments such as `npm test -- --test-concurrency=6` pass to Node; a specific test
+file may also be supplied. Calling `node --test` directly does not run this guard.
+
+The command owns one short, private TMPDIR. A test-only preload records the exact
+path, filesystem identity and creating file for synchronous, callback and promise
+`mkdtemp` calls. Workers remove their own directories on exit. The command also
+reconciles those receipts after workers finish, including a child killed before
+its exit handler runs. A replaced directory never inherits deletion permission.
+The existing `test-scratch` helper keeps authority over its own process-aware
+cleanup. If it refuses cleanup, the command fails and retains that scope; a
+second cleanup layer does not override its safety decision. Nested commands
+follow the same rule. Existing system temporary directories are neither adopted
+nor swept.
+
+The final check runs before fallback removal: an uncovered producer leaving a
+new `naw-*` directory makes the command fail and prints its prefix. The command
+then removes only its own sandbox. `NAW_TEST_TEMP_REPORT` may name a private JSON
+report outside the sandbox to retain the source receipts. This is test-only;
+normal application or provider startup does not load the preload.
+
 # Bounded testing
 
 ## Alpha.211: managed outbox package and ordinary GUI update
