@@ -9,6 +9,7 @@ import signal
 import struct
 import sys
 import termios
+import time
 
 
 def emit(value):
@@ -59,17 +60,35 @@ def main():
     selector.register(fd, selectors.EVENT_READ, "pty")
     selector.register(sys.stdin.fileno(), selectors.EVENT_READ, "input")
     reaped = False
+    stop_requested = False
+    stop_deadline = None
+    killed = False
+    exit_code = None
 
-    def terminate(*_):
+    def terminate():
+        nonlocal stop_deadline
+        if reaped or stop_deadline is not None:
+            return
+        # Preserve the former caller's full five-second graceful-exit budget.
+        stop_deadline = time.monotonic() + 5.0
         try:
             os.killpg(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
 
-    signal.signal(signal.SIGTERM, terminate)
+    def request_stop(*_):
+        nonlocal stop_requested
+        # waitpid may already have released the PID when Python dispatches a
+        # signal, before the caller records reaped=True. Only the main loop
+        # may signal the owned group; this callback must never use its old ID.
+        stop_requested = True
+
+    signal.signal(signal.SIGTERM, request_stop)
     try:
         running = True
         while running:
+            if stop_requested:
+                terminate()
             # Drain retained frames before waiting for another fd event; the
             # writer may already be idle after sending configuration + input.
             while b"\n" in pending:
@@ -105,10 +124,57 @@ def main():
                     pending += data
                     if len(pending) > 2 * 1024 * 1024:
                         raise ValueError("Oversized terminal command")
-            finished, status = os.waitpid(pid, os.WNOHANG)
-            if finished:
-                reaped = True
-                emit({"type": "exit", "code": os.waitstatus_to_exitcode(status)})
+            # select/read may dispatch SIGTERM after the loop's first check.
+            # Handle that request while the unreaped leader still owns its ID.
+            if stop_requested:
+                terminate()
+            if stop_deadline is not None:
+                if not reaped and time.monotonic() < stop_deadline:
+                    try:
+                        os.killpg(pid, 0)
+                        continue
+                    except (ProcessLookupError, PermissionError):
+                        # On macOS a zombie-only group returns EPERM. Reap it
+                        # promptly, but still require group absence below.
+                        # A live group we cannot signal stays unconfirmed.
+                        finished, status = os.waitpid(pid, os.WNOHANG)
+                        if not finished:
+                            continue
+                        reaped = True
+                        exit_code = os.waitstatus_to_exitcode(status)
+                if not reaped and not killed:
+                    # Keep our direct child unreaped until the last signal:
+                    # its PID (and thus this PTY's group ID) cannot be reused.
+                    # Descendants can survive even when the leader took TERM.
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError:
+                        # macOS can return EPERM for a zombie-only group.
+                        # Reaping plus ESRCH below, never EPERM, proves exit.
+                        pass
+                    killed = True
+            if not reaped:
+                finished, status = os.waitpid(pid, os.WNOHANG)
+                if finished:
+                    reaped = True
+                    exit_code = os.waitstatus_to_exitcode(status)
+            if reaped:
+                # A callback dispatched inside waitpid cannot safely signal the
+                # released identity. It still requires group absence: never
+                # turn that late stop into a false numeric exit confirmation.
+                if stop_deadline is not None or stop_requested:
+                    try:
+                        os.killpg(pid, 0)
+                        continue
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError:
+                        continue
+                # An explicit stop is confirmed only after the owned group is
+                # gone, not merely after waitpid reaps its leader.
+                emit({"type": "exit", "code": exit_code})
                 return
     finally:
         if not reaped:
