@@ -12,7 +12,7 @@ const body = html.split('<body>')[1].split('<script')[0];
 const sidebarEnd = body.indexOf('</aside>') + '</aside>'.length;
 const sidebar = body.slice(0, sidebarEnd);
 const main = body.slice(sidebarEnd);
-let css = read('app/renderer/styles.css') + '\n' + read('app/renderer/collaboration-overview.css') + '\n' + read('app/renderer/collaboration-panorama.css') + '\n' + read('app/renderer/sidebar-layout.css') + '\n' + read('app/renderer/native-images.css') + '\n' + read('app/renderer/butler-review.css');
+let css = read('app/renderer/styles.css') + '\n' + read('app/renderer/collaboration-overview.css') + '\n' + read('app/renderer/collaboration-panorama.css') + '\n' + read('app/renderer/sidebar-layout.css') + '\n' + read('app/renderer/native-images.css') + '\n' + read('app/renderer/butler-review.css') + '\n' + read('app/renderer/sidebar-look.css') + '\n' + read('app/renderer/sidebar-hierarchy.css');
 // Keep the original palette declarations for both the standalone document and
 // DSH surfaces. Foreground and background must follow the same theme snapshot.
 const palette = css.match(/:root\{([^}]*)\}/)[1];

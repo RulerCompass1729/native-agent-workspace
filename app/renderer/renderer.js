@@ -194,6 +194,7 @@ let panorama, panoramaOrigin, roomReturnReading;
 let panoramaView = { layout: 'list', query: '', spaceId: '', top: 0, returning: false };
 let spaceId = 'shared', sidebarView = 'flat', hoverSpace = '';
 let sidebarCollapsedGroups = new Set();
+let sidebarCollapsedFolders = new Set();
 // T-135: each grid column's terminal height, by session, saved with this window's view.
 let columnTerminalHeights = {};
 const COLUMN_TERMINAL = { initial: 112, min: 64, most: 4000, step: 16, conversation: 80 };
@@ -1163,6 +1164,196 @@ function sessionActivityTime(s) {
   return latest === null ? uiText('time.unknown') : uiText('time.estimated', { time: sessionTime(latest) });
 }
 const sessionTimes = s => uiText('time.session', { created: sessionTime(s.createdAt) || uiText('time.unrecorded'), activity: sessionActivityTime(s) });
+// Sidebar folder facts use only recorded paths and worktree preparation; no filesystem probes.
+const hierBase = folder => String(folder).replace(/\/+$/, '').split('/').pop() || String(folder);
+const hierText = () => ({
+  folderView: uiText('sidebar.hierarchy.folderView'), made: uiText('sidebar.hierarchy.made'), madeOne: uiText('sidebar.hierarchy.madeOne'), main: uiText('sidebar.hierarchy.main'), unknown: uiText('sidebar.hierarchy.unknown'),
+  steward: uiText('butler.name'), integrator: uiText('sidebar.hierarchy.integrator'), secretary: uiText('sidebar.hierarchy.secretary'), independent: uiText('sidebar.independent'),
+  worktree: id => uiText('sidebar.hierarchy.worktree', { id }), parts: count => uiText('sidebar.hierarchy.parts', { count }), part: (index, count) => uiText('sidebar.hierarchy.part', { index, count }),
+  partsTitle: count => uiText('sidebar.hierarchy.partsTitle', { count }), added: count => uiText('sidebar.hierarchy.added', { count }), addedTitle: list => uiText('sidebar.hierarchy.addedTitle', { list }),
+  doingTitle: text => uiText('sidebar.hierarchy.doingTitle', { text }), folder: (path, branch) => uiText('sidebar.hierarchy.folderPath', { path }) + (branch ? '\n' + uiText('sidebar.hierarchy.folderBranch', { branch }) : ''),
+  expand: name => uiText('sidebar.expand', { name }), collapse: name => uiText('sidebar.collapse', { name }), sessions: count => uiText('sidebar.hierarchy.sessions', { count }),
+});
+const hierFirstLine = text => { const line = String(text || '').split('\n').map(part => part.trim()).find(Boolean) || ''; return line.length > 80 ? line.slice(0, 79) + '…' : line; };
+const hierFolderActive = () => sidebarView === 'folder';
+// Disambiguate equal folder names using the shortest recorded parent suffix, never a filesystem probe.
+function hierFolderName(folder) {
+  const parts = folder.replace(/\/+$/, '').split('/').filter(Boolean);
+  const peers = state.sessions.filter(s => !s.archived).map(s => s.worktreePreparation?.repository || s.cwd).filter(p => typeof p === 'string' && p.replace(/\/+$/, '') !== folder.replace(/\/+$/, '')).map(p => p.replace(/\/+$/, '').split('/').filter(Boolean));
+  for (let n = 1; n <= parts.length; n++) {
+    const label = parts.slice(-n).join('/');
+    if (!peers.some(p => p.slice(-n).join('/') === label)) return label;
+  }
+  return folder;
+}
+// Where a session works, from its record. A NAW worktree's branch is NAW's own (naw/session-…), so the worktree is
+// named by its short id; the full path and branch are in the tooltip.
+function hierFolder(record) {
+  const text = hierText(), cwd = typeof record.cwd === 'string' && record.cwd ? record.cwd.replace(/\/+$/, '') || '/' : '', plan = record.worktreePreparation;
+  if (plan && typeof plan.repository === 'string' && plan.repository) {
+    const short = String(plan.nonce || '').replace(/-/g, '').slice(0, 6);
+    return { kind: 'worktree', group: plan.repository, name: hierFolderName(plan.repository), leaf: short ? text.worktree(short) : hierBase(cwd || plan.target || '') || text.worktree('').trim(), path: cwd || plan.target || '', branch: typeof plan.branch === 'string' ? plan.branch : '' };
+  }
+  const root = typeof state.newWorkspaceRoot === 'string' ? state.newWorkspaceRoot.replace(/\/+$/, '') : '';
+  if (cwd && root && cwd.startsWith(root + '/') && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(cwd.slice(root.length + 1))) return { kind: 'made', group: ':made', name: text.made, leaf: '', path: cwd, branch: '' };
+  if (cwd && state.sessions.some(s => s.worktreePreparation?.repository?.replace(/\/+$/, '') === cwd)) return { kind: 'main', group: cwd, name: hierFolderName(cwd), leaf: text.main, path: cwd, branch: '' };
+  if (cwd) return { kind: 'folder', group: cwd, name: hierFolderName(cwd), leaf: '', path: cwd, branch: '' };
+  return { kind: 'unknown', group: ':unknown', name: text.unknown, leaf: '', path: '', branch: '' };
+}
+// The queue item NAW sent this session and has not settled, and the open items this session added.
+function hierQueueFacts(record) {
+  let doing = null; const added = [];
+  for (const room of allSpaces()) for (const item of room.queue || []) {
+    if (!item || !['queued', 'sent', 'waiting'].includes(item.status)) continue;
+    if (!doing && item.status !== 'queued' && item.sentTo === record.id) doing = item;
+    if (item.creator?.kind === 'secretary' && item.creator.sessionId === record.id) added.push(item);
+  }
+  return { doing, added };
+}
+function hierRole(record) {
+  const text = hierText();
+  return state.steward?.sessionId === record.id ? text.steward : state.integrator?.sessionId === record.id ? text.integrator : state.queueSecretary?.sessionId === record.id ? text.secretary : '';
+}
+function hierPlace(folder) {
+  return folder.kind === 'worktree' || folder.kind === 'main' ? `${folder.name} › ${folder.leaf}` : folder.kind === 'folder' ? folder.name : '';
+}
+function hierViewButton() {
+  const folders = $('sessions-folders'), active = hierFolderActive();
+  folders.setAttribute('aria-pressed', String(active));
+  if (active) $('sessions-flat').setAttribute('aria-pressed', 'false');
+}
+function toggleSidebarFolder(key) {
+  if (sidebarCollapsedFolders.has(key)) sidebarCollapsedFolders.delete(key);
+  else {
+    if (sidebarCollapsedFolders.size >= 200) { toastMessage('sidebar.hierarchy.folderFoldLimit'); return; }
+    sidebarCollapsedFolders.add(key);
+  }
+  renderSessions(); attempt(persistView);
+}
+// Folder view: one foldable section per repository or folder, rows under it; called from renderSessions.
+const hierSections = new Map();
+function hierFolderContainers(visible, list) {
+  if (!visible || !hierFolderActive()) { for (const section of hierSections.values()) section.element.remove(); hierSections.clear(); return null; }
+  const text = hierText(), groups = new Map();
+  for (const record of visible) {
+    const folder = hierFolder(record);
+    if (!groups.has(folder.group)) groups.set(folder.group, { folder, records: [] });
+    const group = groups.get(folder.group); group.records.push(record);
+    if (folder.kind === 'worktree' || folder.kind === 'main') group.folder = { ...folder, kind: 'repository', path: folder.kind === 'main' ? folder.path : folder.group };
+  }
+  const rank = { repository: 0, folder: 1, made: 2, unknown: 3 };
+  const ordered = [...groups.entries()].sort(([, a], [, b]) => rank[a.folder.kind] - rank[b.folder.kind] || a.folder.name.localeCompare(b.folder.name));
+  const containers = new Map(), keep = new Set();
+  ordered.forEach(([key, group], index) => {
+    let section = hierSections.get(key);
+    if (!section) {
+      const element = node('section', undefined, 'hier-folder-group'), heading = node('h3', undefined, 'hier-folder-heading'), body = node('div', undefined, 'hier-folder-body');
+      const toggle = button('', () => toggleSidebarFolder(key), 'hier-folder-toggle');
+      toggle.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
+      const icon = node('span', undefined, 'hier-folder-icon'), name = node('span', undefined, 'hier-folder-name'), count = node('span', undefined, 'hier-folder-count'), attention = node('span', undefined, 'hier-folder-attention');
+      icon.setAttribute('aria-hidden', 'true'); name.addEventListener('click', () => toggle.click()); icon.addEventListener('click', () => toggle.click());
+      body.id = `hier-folder-${crypto.randomUUID()}`; attention.id = `${body.id}-attention`; toggle.setAttribute('aria-controls', body.id);
+      heading.append(toggle, icon, name, attention, count); element.append(heading, body); element.dataset.hierFolder = key;
+      section = { element, heading, toggle, icon, name, count, attention, body }; hierSections.set(key, section);
+    }
+    const folder = group.folder, closed = sidebarCollapsedFolders.has(key);
+    section.element.dataset.kind = folder.kind;
+    ui.display.computed(section.name, 'text', () => hierFolder(group.records[0]).name); section.count.textContent = String(group.records.length);
+    ui.display.computed(section.heading, 'title', () => folder.kind === 'made' || folder.kind === 'unknown' ? `${hierFolder(group.records[0]).name} · ${hierText().sessions(group.records.length)}` : `${hierText().folder(folder.path)}\n${hierText().sessions(group.records.length)}`);
+    section.toggle.setAttribute('aria-expanded', String(!closed));
+    ui.display.computed(section.toggle, 'aria-label', () => closed ? hierText().expand(hierFolder(group.records[0]).name) : hierText().collapse(hierFolder(group.records[0]).name));
+    // As with the space groups, hidden follows the fold and the narrow rail's CSS still lists a folded section's rows.
+    const rowsHidden = closed && list.closest('.naw')?.dataset.collapsed !== 'true';
+    const menuRow = sessionMenu?.kind === 'session' && sessionRows.get(sessionMenu.rowKey);
+    const closeMenu = rowsHidden && sessionMenu?.kind === 'session' && section.body.contains(menuRow?.element || sessionMenu.anchor);
+    const hiddenFocus = rowsHidden && (section.body.contains(document.activeElement) || closeMenu);
+    section.body.hidden = closed;
+    if (closeMenu) sessionMenu.close();
+    if (hiddenFocus) section.toggle.focus({ preventScroll: true });
+    // A folded section says how many of its sessions need attention, as a folded space group does.
+    const attention = typeof sidebarPresentation === 'function' ? group.records.filter(record => sidebarPresentation(record).marker === '!') : [];
+    section.attention.hidden = !closed || !attention.length; section.attention.textContent = attention.length ? `!${attention.length}` : '';
+    if (section.attention.hidden) { section.attention.removeAttribute('title'); section.attention.removeAttribute('aria-label'); section.toggle.removeAttribute('aria-describedby'); }
+    else { const facts = () => uiText('sidebar.attentionFacts', { count: attention.length, facts: attention.map(record => `${record.name} · ${sidebarPresentation(record).full}`).join('; ') }); ui.display.computed(section.attention, 'title', facts); ui.display.computed(section.attention, 'aria-label', facts); section.toggle.setAttribute('aria-describedby', section.attention.id); }
+    const slot = list.children[index]; if (slot !== section.element) list.insertBefore(section.element, slot || null);
+    keep.add(key);
+    for (const record of group.records) containers.set(record.id, section.body);
+  });
+  for (const [key, section] of hierSections) if (!keep.has(key)) { section.element.remove(); hierSections.delete(key); }
+  return containers;
+}
+function decorateSidebarHierarchy() {
+  const text = hierText(), folderView = hierFolderActive();
+  hierViewButton();
+  $('session-list').dataset.hierView = folderView ? 'folder' : sidebarView === 'grouped' ? 'space' : 'flat';
+  for (const row of sessionRows.values()) {
+    const record = state.sessions.find(item => item.id === row.sessionId); if (!record) continue;
+    if (!row.hier) {
+      const parts = { tags: node('span', undefined, 'hier-tags'), role: node('span', undefined, 'hier-role'), parts: node('span', undefined, 'hier-parts'), added: node('span', undefined, 'hier-added'),
+        task: node('span', undefined, 'hier-task'), line: node('span', undefined, 'hier-line'), folder: node('span', undefined, 'hier-folder') };
+      parts.tags.append(parts.role, parts.parts, parts.added); row.name.after(parts.tags);
+      row.status.after(parts.task);
+      // The space badges move onto the folder line, so one line carries where the session is and works.
+      parts.line.append(parts.folder, row.badges); row.time.after(parts.line);
+      row.hier = parts;
+    }
+    const steward = row.element.classList.contains('steward-row'), folder = hierFolder(record), queue = hierQueueFacts(record), presentation = sidebarPresentation(record);
+    const role = steward ? '' : hierRole(record);
+    ui.display.computed(row.hier.role, 'text', () => steward ? '' : hierRole(record)); row.hier.role.hidden = !role;
+    const chain = sessionChainModel(record.id), links = chain?.sessions || [], at = links.findIndex(link => link.id === record.id);
+    const long = links.length > 1 && at >= 0;
+    ui.display.computed(row.hier.parts, 'text', () => !long ? '' : at === links.length - 1 ? hierText().parts(links.length) : hierText().part(at + 1, links.length));
+    ui.display.computed(row.hier.parts, 'title', () => long ? hierText().partsTitle(links.length) : ''); row.hier.parts.hidden = !long;
+    ui.display.computed(row.hier.added, 'text', () => queue.added.length ? hierText().added(queue.added.length) : ''); row.hier.added.hidden = !queue.added.length;
+    ui.display.computed(row.hier.added, 'title', () => queue.added.length ? hierText().addedTitle(queue.added.map(item => '· ' + hierFirstLine(item.text)).join('\n')) : '');
+    const doing = queue.doing ? hierFirstLine(queue.doing.text) : '';
+    row.hier.task.textContent = doing; ui.display.computed(row.hier.task, 'title', () => doing ? hierText().doingTitle(doing) : '');
+    // What needs the person, or failed, keeps its state words; otherwise the task says more than 「会话就绪」.
+    row.element.dataset.hierShow = doing && presentation.marker !== '!' ? 'task' : 'status';
+    const place = folderView ? folder.leaf : hierPlace(folder) || (folder.kind === 'made' ? text.madeOne : folder.name);
+    ui.display.computed(row.hier.folder, 'text', () => { const f = hierFolder(record); return folderView ? f.leaf : hierPlace(f) || (f.kind === 'made' ? hierText().madeOne : f.name); }); row.hier.folder.hidden = !place;
+    row.hier.folder.dataset.kind = folder.kind;
+    ui.display.computed(row.hier.folder, 'title', () => folder.path ? hierText().folder(folder.path, folder.branch) : '');
+    row.hier.line.hidden = !place && (row.badges.hidden || !row.badges.childElementCount);
+    const where = folder.path ? text.folder(folder.path, folder.branch) : folder.name;
+    ui.display.computed(row.link, 'aria-description', () => [steward ? '' : hierRole(record), long && row.hier.parts.textContent, doing && hierText().doingTitle(doing), folder.path ? hierText().folder(folder.path, folder.branch) : hierFolder(record).name, queue.added.length && hierText().added(queue.added.length)].filter(Boolean).join(' · '));
+
+  }
+}
+function hierHeaderCrumb(record) {
+  let crumb = document.getElementById('sidebar-folder-path');
+  if (!record) { if (crumb) crumb.hidden = true; return; }
+  if (!crumb) { crumb = node('span', undefined, 'hier-crumb'); crumb.id = 'sidebar-folder-path'; }
+  // Keep the path at the left of the existing conversation toolbar, before the view switch.
+  const bar = $('conversation-pane-toolbar');
+  if (bar.firstChild !== crumb) bar.insertBefore(crumb, bar.firstChild);
+  ui.display.computed(crumb, 'text', () => {
+    const text = hierText(), rooms = allSpaces().filter(room => !room.archived && inSpace(record, room.id)), folder = hierFolder(record);
+    const space = rooms.length ? spaceName(rooms[0]) + (rooms.length > 1 ? ` +${rooms.length - 1}` : '') : text.independent;
+    const place = hierPlace(folder) || (folder.kind === 'made' ? text.madeOne : folder.name);
+    return [space, place].filter(Boolean).join(' › ');
+  });
+  ui.display.computed(crumb, 'title', () => { const folder = hierFolder(record); return folder.path ? hierText().folder(folder.path, folder.branch) : folder.name; });
+  crumb.hidden = false;
+}
+function renderSidebarSpaceCard(entry, group) {
+  ui.display.unbind(entry.title);
+  if (!entry.card || !entry.title.contains(entry.card.tile)) {
+    const tile = node('span', undefined, 'sidebar-space-tile'), lines = node('span', undefined, 'sidebar-space-lines'), name = node('span', undefined, 'sidebar-space-name'), meta = node('span', undefined, 'sidebar-space-meta');
+    tile.setAttribute('aria-hidden', 'true'); lines.append(name, meta); entry.title.replaceChildren(tile, lines); entry.card = { tile, name, meta };
+  }
+  const name = () => group.room ? spaceName(group.room) : uiText('sidebar.independent');
+  entry.title.classList.toggle('sidebar-independent', !group.room);
+  entry.card.tile.hidden = !group.room;
+  ui.display.computed(entry.card.tile, 'text', () => Array.from(name().trim())[0]?.toUpperCase() || '·');
+  ui.display.computed(entry.card.name, 'text', name);
+  ui.display.computed(entry.card.meta, 'text', () => {
+    const working = group.people.filter(s => sidebarPresentation(s).tone === 'working').length;
+    const waiting = group.people.filter(s => sidebarPresentation(s).marker === '!').length;
+    return group.room ? working || waiting ? [uiText('sidebar.hierarchy.cardCount', { count: group.people.length }), working && uiText('sidebar.hierarchy.cardWorking', { count: working }), waiting && uiText('sidebar.hierarchy.cardWaiting', { count: waiting })].filter(Boolean).join(' · ') : uiText('sidebar.hierarchy.cardMembers', { count: group.people.length }) : String(group.people.length);
+  });
+}
+
 // Only recorded NAW handoffs connect sessions. Names and native resume actions do not.
 function sessionChainModel(id) {
   const chains = state.rotationChains || [], ids = new Set([id]), included = new Set();
@@ -1200,6 +1391,12 @@ function sessionChainModel(id) {
       continuedAt: after.length ? Math.max(...after.map(m => m.time)) : null };
   }).sort((a, b) => (a.startedAt ?? -Infinity) - (b.startedAt ?? -Infinity) || a.id.localeCompare(b.id));
   return { sessions, currentIds: sessions.filter(link => !link.successors.length).map(link => link.id) };
+}
+// A later segment names the segment(s) that handed over to it; the header chip opens the whole chain from there.
+function sessionChainOrigin(id) {
+  const model = sessionChainModel(id);
+  const previous = model ? model.sessions.filter(link => link.successors.some(edge => edge.id === id)) : [];
+  return previous.length ? { previous, count: model.sessions.length } : null;
 }
 function renderDraftRecovery(id) {
   const copies = draftRecoveries.get(id) || [], list = $('draft-recovery-list');
@@ -1454,7 +1651,7 @@ function projectSpace(next) {
     return { ...s, peerIdentity: { ...identity, ...(spaceId === 'shared' ? {} : { roomId: spaceId, roomMemberRevision: pairRevision(s) }) }, sharedActivity: s.sharedActivities?.[spaceId] || (spaceId === 'shared' ? s.sharedActivity : null) };
   }), room: room || { id: spaceId, name: uiText('sidebar.spaceUnavailableName'), archived: true, unavailable: true, messages: [], events: [], notes: '', files: [], memberOrder: [] } };
 }
-function persistView() { normalizeRoomMention(); captureReadingViews(); const view = captureRoomView(); return api.viewState({ readingPositions, panorama: panoramaView, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, sidebarCollapsedGroups: [...sidebarCollapsedGroups], columnTerminalHeights, roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: view.roomFilter, roomSearch: view.roomSearch, roomThread: view.roomThread, roomReplyTo }); }
+function persistView() { normalizeRoomMention(); captureReadingViews(); const view = captureRoomView(); return api.viewState({ readingPositions, panorama: panoramaView, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, sidebarCollapsedGroups: [...sidebarCollapsedGroups], sidebarCollapsedFolders: [...sidebarCollapsedFolders], columnTerminalHeights, roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: view.roomFilter, roomSearch: view.roomSearch, roomThread: view.roomThread, roomReplyTo }); }
 // Opening a space never changes which sessions the sidebar lists (T-132).
 async function selectSpace(id) {
   if (!spaceRecord(id)) throw uiError("error.spaceUnavailable");
@@ -2236,6 +2433,8 @@ function openRename(id, origin, roomId = spaceId) {
 function revealRenameRow(row) {
   const group = row.closest('.session-space-group');
   if (group && sidebarCollapsedGroups.has(group.dataset.sessionGroup)) toggleSidebarGroup(group.dataset.sessionGroup);
+  const folder = row.closest('.hier-folder-group');
+  if (folder && sidebarCollapsedFolders.has(folder.dataset.hierFolder)) toggleSidebarFolder(folder.dataset.hierFolder);
   ui.revealSidebar();
 }
 function renameProblem(target = renameTarget) {
@@ -2270,11 +2469,14 @@ function closeRename(returnFocus = true) {
   $('rename-editor').hidden = true; $('header').parentElement.append($('rename-editor'));
   target.row.classList.remove('is-renaming'); target.label.hidden = false; render();
   if (returnFocus) {
-    const action = target.origin?.isConnected && target.origin.getClientRects().length ? target.origin : target.id === 'room' ? $('room-more') : sessionRow(target.id)?.more;
+    // If the sidebar folded to the rail meanwhile, ⋯ is not drawn there (sidebar-look.css): the row's own button takes focus.
+    const row = target.id === 'room' ? null : sessionRow(target.id);
+    const action = target.origin?.isConnected && target.origin.getClientRects().length ? target.origin : target.id === 'room' ? $('room-more') : row?.link && !row.more?.getClientRects().length ? row.link : row?.more;
     (action?.getClientRects().length && !action.disabled ? action : $(target.id === 'room' ? 'workspace-toggle' : 'solo-drop')).focus({ preventScroll: true });
   }
 }
-function focusSessionAction(id) { if (id === 'room') $('room-more').focus(); else sessionRow(id)?.more.focus(); }
+// The collapsed rail does not draw ⋯ (sidebar-look.css); focus then goes back to the row's own button.
+function focusSessionAction(id) { if (id === 'room') { $('room-more').focus(); return; } const row = sessionRow(id); if (!row) return; (row.link && !row.more.getClientRects().length ? row.link : row.more).focus(); }
 async function setOperatorEnabled(id, enabled) {
   await api.operatorAction(id, 'enabled', enabled);
   toastMessage(enabled ? 'operator.enableNote' : 'operator.disabledNote');
@@ -2537,6 +2739,15 @@ function renderSessionHandoff(binding, s) {
   notice.replaceChildren(text, ...jumps);
   if (focused > 0) notice.children[focused]?.focus({ preventScroll: true });
 }
+// 「接自「X」· 共 N 段」 beside a standalone session's title; the first segment has nothing before it and shows none.
+function renderSessionChainChip(s) {
+  const chip = $('session-chain-chip'), origin = s ? sessionChainOrigin(s.id) : null;
+  chip.hidden = !origin; chip.dataset.sessionId = origin ? s.id : '';
+  if (!origin) return;
+  const names = () => origin.previous.map(link => archivedName(link.record, link.name)).join(' / ');
+  ui.display.computed(chip, 'text', () => uiText('chain.from', { name: names(), count: origin.count }));
+  ui.display.attribute(chip, 'title', 'chain.menu', { count: origin.count });
+}
 async function archiveChainSession(id) {
   const others = sessionChainModel(id)?.sessions.filter(link => link.id !== id) || [];
   await api.archiveSession(id);
@@ -2677,7 +2888,8 @@ function openSessionMenu(id, point, rowKey = id) {
     items: model.items,
     // The facts make this menu taller than the window can fit above or below the row; anchoring at the
     // trigger's right edge keeps the clamped menu beside ⋯, so a second click still closes it.
-    getAnchorRect: () => { if (point) return { left: point.x, right: point.x, top: point.y, bottom: point.y }; const box = row.more.getBoundingClientRect(); return { left: box.right, right: box.right, top: box.top, bottom: box.bottom, width: 0, height: box.height }; },
+    // Where ⋯ is not drawn (the collapsed rail, Shift+F10), the row's own button is the anchor instead of the window corner.
+    getAnchorRect: () => { if (point) return { left: point.x, right: point.x, top: point.y, bottom: point.y }; let box = row.more.getBoundingClientRect(); if (!box.width && !box.height && row.link) box = row.link.getBoundingClientRect(); return { left: box.right, right: box.right, top: box.top, bottom: box.bottom, width: 0, height: box.height }; },
     onClose: () => { sessionMenu = null; row.more.setAttribute('aria-expanded', 'false'); if (row.more.isConnected && row.more.getClientRects().length) row.more.focus({ preventScroll: true }); else focusSessionAction(id); },
     onSelect: action => {
       if (disconnected || !state.sessions.some(s => s.id === id)) return;
@@ -3017,6 +3229,7 @@ function renderSessions() {
   const visible = sidebarSessions();
   const grouped = sidebarView === 'grouped', occurrences = [], containers = new Map();
   const list = $('session-list');
+  const folderOf = typeof hierFolderContainers === 'function' ? hierFolderContainers(grouped ? null : visible, list) : null;
   $('sessions-flat').setAttribute('aria-pressed', String(!grouped)); $('sessions-grouped').setAttribute('aria-pressed', String(grouped));
   if (grouped) {
     const groups = allSpaces().filter(r => !r.archived).map(r => ({ id: r.id, room: r, people: orderedMembers(r.id).filter(s => visible.includes(s)) }));
@@ -3055,7 +3268,8 @@ function renderSessions() {
         ui.display.attribute(entry.more, 'aria-label', 'sidebar.spaceActions', () => ({ name: groupName() })); ui.display.attribute(entry.more, 'title', 'sidebar.spaceActions', () => ({ name: groupName() }));
         entry.more.disabled = disconnected || renameTarget?.id === 'room' && renameTarget.roomId === group.id;
       }
-      ui.display.text(entry.title, 'sidebar.groupCount', () => ({ name: groupName(), count: group.people.length })); entry.title.className = group.id ? `session-space-heading ${roomTone(group.id)}` : 'session-space-heading';
+      if (typeof renderSidebarSpaceCard === 'function') renderSidebarSpaceCard(entry, group);
+      else ui.display.text(entry.title, 'sidebar.groupCount', () => ({ name: groupName(), count: group.people.length })); entry.title.className = group.id ? `session-space-heading ${roomTone(group.id)}` : 'session-space-heading';
       // The open space is marked on its heading, as on its 协作空间 row (hidden in this view).
       const open = Boolean(group.id) && selected === 'room' && spaceId === group.id;
       entry.title.classList.toggle('active', open); if (open) entry.title.setAttribute('aria-current', 'page'); else entry.title.removeAttribute('aria-current');
@@ -3084,7 +3298,7 @@ function renderSessions() {
     for (const [id, group] of sidebarGroups) if (!containers.has(id)) group.element.remove();
   } else {
     for (const group of sidebarGroups.values()) group.element.remove();
-    for (const record of visible) occurrences.push({ record, key: record.id, group: null, container: list });
+    for (const record of visible) occurrences.push({ record, key: record.id, group: null, container: folderOf?.get(record.id) || list });
   }
   const keys = new Set(occurrences.map(row => row.key));
   // The butler's own row: the same row any session has, in the entry's place above the lists.
@@ -3148,6 +3362,7 @@ function renderSessions() {
     const index = positions.get(container) || 0, slot = container.children[index]; if (slot !== row.element) container.insertBefore(row.element, slot || null); positions.set(container, index + 1);
   }
   highlightSpace(hoverSpace);
+  if (typeof decorateSidebarHierarchy === 'function') decorateSidebarHierarchy();
 }
 
 function createReadiness() {
@@ -3886,6 +4101,8 @@ function renderHeaderLayout(s, inRoom) {
   $('terminal-more').hidden = !compact;
   $('title').tabIndex = compact || compactRoom || focusedMember ? 0 : -1;
   ui.display.computed($('title'), 'title', () => compact ? archivedName(s) : compactRoom || focusedMember ? state.room.unavailable ? uiText('space.unavailable') : spaceName(state.room) : '');
+  if (typeof renderSessionChainChip === 'function') renderSessionChainChip(compact ? s : null);
+  if (typeof hierHeaderCrumb === 'function') hierHeaderCrumb(compact ? s : null);
   $('title').onfocus = () => { if (header.classList.contains('compact-room') || header.classList.contains('focused-member')) { captureReadingViews(); restoreOverviewReading(); header.classList.add('reveal-room-title'); } };
   $('title').onblur = () => { if (header.classList.contains('reveal-room-title')) { captureReadingViews(); restoreOverviewReading(); header.classList.remove('reveal-room-title'); } };
   if (!compactRoom && !focusedMember) header.classList.remove('reveal-room-title');
@@ -5121,7 +5338,7 @@ $('workspace-group').addEventListener('contextmenu', event => {
   event.preventDefault(); event.stopPropagation(); openSpaceRegionMenu({ x: event.clientX, y: event.clientY });
 });
 $('workspace-toggle').addEventListener('keydown', event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); event.stopPropagation(); openSpaceRegionMenu(undefined, $('workspace-toggle')); } });
-for (const [id, view] of [['sessions-flat', 'flat'], ['sessions-grouped', 'grouped']]) $(id).onclick = () => { sidebarView = view; sessionMenu?.close(); render(); attempt(persistView); $(id).focus(); };
+for (const [id, view] of [['sessions-flat', 'flat'], ['sessions-grouped', 'grouped'], ['sessions-folders', 'folder']]) $(id).onclick = () => { sidebarView = view; sessionMenu?.close(); render(); attempt(persistView); $(id).focus(); };
 $('room-nav').onclick = () => attempt(() => selectSpace('shared'));
 $('panorama-nav').onclick = () => attempt(openPanorama);
 $('create-first-space').onclick = openSpaceCreate;
@@ -6201,6 +6418,23 @@ $('steward-cancel').onclick = () => $('steward-dialog').close();
 $('steward-confirm').onclick = () => attempt(confirmSteward);
 $('steward-dialog').addEventListener('close', () => { if ($('steward-dialog').open) return; stewardChoice = ''; $('steward-list').replaceChildren(); $('steward-error').hidden = true; });
 $('close-session-chain').onclick = () => $('session-chain-dialog').close();
+$('session-chain-chip').onclick = () => { const id = $('session-chain-chip').dataset.sessionId; if (id) openSessionChain(id); };
+// The sidebar's collapse button mirrors DSH's state (⌥⌘B, the narrow-window rail) and asks DSH to toggle it.
+function syncSidebarToggle() {
+  const toggle = $('sidebar-toggle'), surface = toggle.closest('.naw[data-native-surface="sidebar"]');
+  if (surface && !syncSidebarToggle.watching) {
+    syncSidebarToggle.watching = new MutationObserver(syncSidebarToggle);
+    syncSidebarToggle.watching.observe(surface, { attributes: true, attributeFilter: ['data-collapsed'] });
+  }
+  const rail = surface?.dataset.collapsed === 'true', key = rail ? 'sidebar.showPanel' : 'sidebar.hidePanel';
+  toggle.setAttribute('aria-expanded', String(!rail));
+  ui.display.attribute(toggle, 'aria-label', key);
+  ui.display.computed(toggle, 'title', () => uiText('sidebar.panelShortcut', { action: uiText(key) }));
+}
+$('sidebar-toggle').onclick = () => ui.toggleSidebar();
+syncSidebarToggle();
+// The selected card hierarchy is the only production sidebar look.
+document.documentElement.dataset.sidebarLook = 'b';
 $('session-chain-dialog').addEventListener('close', () => {
   if ($('session-chain-dialog').open) return;
   sessionChainId = null; $('session-chain-list').replaceChildren();
@@ -6284,6 +6518,7 @@ attempt(async () => {
   if (!roomViews.shared) roomViews.shared = Object.fromEntries(roomViewFields.filter(k => state.viewState[k] !== undefined).map(k => [k, state.viewState[k]]));
   spaceId = state.viewState.spaceId || 'shared'; sidebarView = state.viewState.sidebarView || 'flat';
   sidebarCollapsedGroups = new Set(state.viewState.sidebarCollapsedGroups || []);
+  sidebarCollapsedFolders = new Set(state.viewState.sidebarCollapsedFolders || []);
   columnTerminalHeights = { ...(state.viewState.columnTerminalHeights || {}) };
   state = projectSpace(state); const savedRoomView = roomViews[spaceId] || {};
   owner = state.owner; folder = state.defaultWorkspace; preference = state.viewState.preference || 'terminal'; mode = state.viewState.mode || preference;

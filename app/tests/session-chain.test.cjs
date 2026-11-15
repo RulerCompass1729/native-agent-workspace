@@ -297,3 +297,39 @@ test('missing recorded segments stay visible but disabled; stale clicks do not n
   assert.deepEqual(f.actions, []);
   assert.equal(f.$('session-chain-dialog').open, true);
 });
+
+test('a later segment names the segment before it: 「接自「X」· 共 N 段」; the first segment and sessions outside a chain show none', () => {
+  const f = uiFixture([handoff('old', 'middle', 100), handoff('middle', 'latest', 200)], [session('old', 0, { archived: true, state: 'ended' }), session('middle', 100), session('latest', 200), session('alone', 50)]);
+  const before = JSON.stringify(f.state), chip = f.$('session-chain-chip'), record = id => f.state.sessions.find(s => s.id === id);
+  assert.deepEqual(Array.from(f.context.sessionChainOrigin('latest').previous, link => link.id), ['middle']);
+  assert.equal(f.context.sessionChainOrigin('latest').count, 3);
+  assert.equal(f.context.sessionChainOrigin('old'), null);
+  assert.equal(f.context.sessionChainOrigin('alone'), null);
+  f.context.renderSessionChainChip(record('latest'));
+  assert.equal(chip.hidden, false);
+  assert.equal(chip.dataset.sessionId, 'latest');
+  assert.equal(chip.textContent, '接自「middle」· 共 3 段');
+  assert.equal(chip.getAttribute('title'), '这串会话（3 段）');
+  // The predecessor is archived: its name carries the marker, in the language shown now.
+  f.context.renderSessionChainChip(record('middle'));
+  assert.equal(chip.textContent, '接自「[已归档] old」· 共 3 段');
+  f.switch('en');
+  assert.equal(chip.textContent, 'Continued from “[archived] old” · 3 segments');
+  assert.equal(chip.getAttribute('title'), 'Conversation chain (3 segments)');
+  f.switch('zh');
+  for (const s of [record('old'), record('alone'), null]) {
+    f.context.renderSessionChainChip(s);
+    assert.equal(chip.hidden, true);
+    assert.equal(chip.dataset.sessionId, '');
+  }
+  assert.equal(JSON.stringify(f.state), before);
+});
+
+test('a segment continued from two kept branches names both, and the chip opens the same whole chain', () => {
+  const f = uiFixture([handoff('a', 'joined', 100, 'kept'), handoff('b', 'joined', 200)], [session('a'), session('b', 50), session('joined', 200)]);
+  f.context.renderSessionChainChip(f.state.sessions.find(s => s.id === 'joined'));
+  assert.equal(f.$('session-chain-chip').textContent, '接自「a / b」· 共 3 段');
+  f.context.openSessionChain(f.$('session-chain-chip').dataset.sessionId);
+  assert.equal(f.$('session-chain-dialog').open, true);
+  assert.deepEqual(f.$('session-chain-list').children.map(row => row.dataset.sessionId), ['a', 'b', 'joined']);
+});

@@ -168,6 +168,9 @@ window.__ModuleLoader__.load({
           revealSidebar() {
             if (document.querySelector('.naw[data-native-surface="sidebar"]')?.dataset.collapsed === 'true') ctx.layout.toggleSidebar();
           },
+          // The sidebar's visible collapse button uses the same DSH toggle as ⌥⌘B; DSH keeps the state,
+          // including the automatic rail below its narrow-window width.
+          toggleSidebar() { ctx.layout.toggleSidebar(); },
           // Reuse the pinned DSH menu's positioning, theme and arrow navigation.
           menu({ items, getAnchorRect, onSelect, onClose, contextElement }) {
             const opener = document.activeElement;
