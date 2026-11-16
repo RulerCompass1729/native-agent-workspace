@@ -33,13 +33,17 @@ async function action(gate, name, target, text) {
 }
 test('both provider factories explicitly select the same view entry and preserve default/approval settings', () => {
   assert.equal(computerUseMcpServer().args.at(-1), '--serve');
-  const server = computerUseMcpServer({ viewLeaseFile: '/tmp/owned/lease.json' });
-  assert.deepEqual(server.args.slice(-2), ['--serve-view', '/tmp/owned/lease.json']);
+  const lease = '/tmp/owned/approval/lease.json';
+  const server = computerUseMcpServer({ viewLeaseFile: lease });
+  assert.deepEqual(server.args, ['--disable-sigusr1', require.resolve('../native-computer-use.cjs'), '--serve-view', lease]);
   assert.deepEqual(server.env, { ELECTRON_RUN_AS_NODE: '1' });
   assert.throws(() => computerUseMcpServer({ viewLeaseFile: 'relative' }));
-  const flags = codexComputerUseMcpArgs({ viewLeaseFile: '/tmp/owned/lease.json' });
+  const flags = codexComputerUseMcpArgs({ viewLeaseFile: lease });
   assert.deepEqual(JSON.parse(flags[3].split('=').slice(1).join('=')), server.args);
-  assert.equal(flags.length, 6); assert.ok(!JSON.stringify(flags).includes('approval'));
+  assert.equal(flags.length, 6);
+  assert.deepEqual(flags.filter((_, i) => i % 2).map(flag => flag.slice(0, flag.indexOf('='))),
+    ['mcp_servers.peekaboo.command', 'mcp_servers.peekaboo.args', 'mcp_servers.peekaboo.env.ELECTRON_RUN_AS_NODE'],
+    'only the owned MCP settings are allowed; a file path may contain approval');
   assert.deepEqual(viewTools().tools.map(t => t.name), ['browser_snapshot', 'browser_click', 'browser_type']);
 });
 test('real composer journey preserves exact text, uses stock typing, and never claims delivery', async () => {

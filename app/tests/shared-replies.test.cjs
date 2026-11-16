@@ -136,7 +136,9 @@ for (const reason of ['leave', 'takeover', 'disconnect', 'interrupt', 'gap', 'pe
   if (reason === 'gap') block(0, { id: 'gap:one', kind: 'gap', text: 'missing output' });
   if (reason === 'permission') {
     a.record = w.get(ids[0]);
-    require('../adapters.cjs').Claude.prototype.hook.call(a, { session_id: a.record.nativeId, hook_event_name: 'PermissionRequest' });
+    // Exercise the hook with its real adapter collaborators, not an isolated method.
+    Object.setPrototypeOf(a, require('../adapters.cjs').Claude.prototype);
+    a.hook({ session_id: a.record.nativeId, hook_event_name: 'PermissionRequest' });
     a.emit('state', 'working');
   }
   assert.equal(row.status, 'unconfirmed'); assert.ok(row.sharingStopped);

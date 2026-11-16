@@ -69,4 +69,18 @@ function terminalDialogPrompt(session, runtime) {
   const value = readTerminalDialogPrompt(session, runtime);
   frames.set(terminal, { stamp, value }); return value;
 }
-module.exports = { terminalDialogPrompt };
+// Positive evidence that Claude has returned to its empty editor. Missing or
+// unreadable rows, ordinary output and a choice cursor are not an idle proof.
+function claudeEmptyPrompt(runtime) {
+  if (!runtime?.terminal?.alive) return false;
+  try {
+    const screen = runtime.terminal.screen, buffer = screen?.buffer?.active;
+    if (!buffer || !Number.isSafeInteger(screen.rows) || screen.rows < 1 || screen.rows > 200 ||
+        !Number.isSafeInteger(screen.cols) || screen.cols < 1 || screen.cols > 400 ||
+        !Number.isSafeInteger(buffer.baseY) || buffer.baseY < 0 ||
+        !Number.isSafeInteger(buffer.cursorY) || buffer.cursorY < 0 || buffer.cursorY >= screen.rows) return false;
+    const line = buffer.getLine(buffer.baseY + buffer.cursorY);
+    return Boolean(line && !line.isWrapped && /^\s*❯[ \t\u00a0]*$/.test(line.translateToString(true)));
+  } catch { return false; }
+}
+module.exports = { terminalDialogPrompt, claudeEmptyPrompt };
