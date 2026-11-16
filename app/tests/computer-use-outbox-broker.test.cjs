@@ -187,6 +187,34 @@ test('a control execution refusal keeps its named cause when cleanup also fails'
   assert.equal(result.failureReason, 'native-call-invalidated'); assert.equal(result.failureCheck, 'display-gap');
   assert.equal(result.cleanupUnconfirmed, true); assert.equal(result.retry, false);
 });
+test('a managed scope close that answers late, but answers, keeps a complete control result complete', async t => {
+  // 2026-11-15 12:03 PT, daily 253: a butler queueAdd was durably complete with its queue item created,
+  // but the caller got "could not be verified" with no operation id. With a valid token the service's
+  // close cannot answer ok:false; only this transport's own close timer can raise that error after
+  // a complete result, and the queueAdds around it took 6-9 s each. Here the close answers after 5.5 s.
+  const { EventEmitter } = require('node:events');
+  const { openManagedCall } = require('../managed-outbox-transport.cjs');
+  const command = { action: 'invoke', operation_id: 'late-close', method: 'rename', arguments: ['target', 'name'] };
+  const actor = { id: 'sender', nativeId: identity.nativeId, provider: 'claude' };
+  const client = new EventEmitter(), actions = [];
+  client.call = async (method, action, value) => {
+    assert.equal(method, 'scopedOutbox'); actions.push(action);
+    if (action === 'controlCall') return { ok: true, value: { token: 'scope-token', sender: { ...actor, name: 'Butler' } } };
+    assert.equal(action, 'close'); assert.deepEqual(value, { token: 'scope-token' });
+    await new Promise(resolve => setTimeout(resolve, 5500));
+    return { ok: true, value: true };
+  };
+  const entry = { client, closed: false, state: { capabilities: ['scopedNativeOutboxV1', 'backgroundControlV1'] } };
+  let calls = 0;
+  const f = await fixture(t, {
+    bindControl: (caller, body, signal) => openManagedCall(entry, { id: actor.id, provider: actor.provider }, caller, body, signal, true),
+    control: async () => { calls++; return { state: 'complete', id: command.operation_id, actor, value: 'queued' }; },
+  });
+  const result = await requestOutbox(f.descriptorFile, identity, command, undefined, true);
+  assert.deepEqual(actions, ['controlCall', 'close']); assert.equal(calls, 1);
+  assert.equal(result.state, 'complete', `got ${result.state}: ${result.failureReason}/${result.failurePhase}`);
+  assert.equal(result.id, command.operation_id); assert.equal(result.value, 'queued');
+});
 
 for (const cause of ['missing', 'consumed', 'root-changed', 'identity', 'arguments']) test(`real Claude native proof refusal reaches the broker receipt (${cause})`, async t => {
   const native = require('../background-control-native.cjs');
