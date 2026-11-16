@@ -1669,6 +1669,9 @@ async function boot() {
             targets = new Set(metadata.sessions.filter(s => roomIds(s).includes(id)).map(s => s.id));
             // Restore acts on detached saved members too, not just today's roster.
             roomState.metadata(id).restoreMembers.forEach(member => targets.add(member));
+          } else {
+            const scope = backgroundOperation.maintenanceTargets(command, actor, metadata);
+            if (scope) { targets = new Set(scope.sessions); targetRooms = new Set(scope.rooms); }
           }
           if (targets) {
             targets.add(actor.id); // Keep the asking session's placement/connection guard as well as checkActor.

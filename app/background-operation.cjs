@@ -131,6 +131,24 @@ function maintenanceAction(method, args = [], actor) {
   if (method === 'spaceMerge' && ['commit', 'recover', 'undo'].includes(args[0])) return { commit: 'mergeSpaces', recover: 'recoverMerge', undo: 'undoMerge' }[args[0]];
   return null;
 }
+// Scope only the generic maintenance cases whose existing objects are known.
+// Archive, placement, rename and creation have their own fingerprint branches;
+// global pause, merge and unknown operations retain their existing broad guard.
+function maintenanceTargets(command, actor, snapshot) {
+  const { method, arguments: args = [] } = command;
+  const sessions = new Set(), rooms = new Set(), add = (set, id) => { if (typeof id === 'string' && id) set.add(id); };
+  const conversation = conversationTarget(method, args, actor);
+  if (conversation) sessions.add(conversation);
+  else if (['interrupt', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent', 'openLocalFile'].includes(method)) add(sessions, args[0]);
+  else if (method === 'runtimeLocation' || method === 'saveLocalFile') { /* Only the actor is an existing session target. */ }
+  else if (method === 'openMessageFile') { add(sessions, args[0]?.sessionId); add(rooms, args[0]?.roomId); }
+  else if (method === 'spaceFiles') add(rooms, args[0]);
+  else if (method === 'roomMemberOrder' || method === 'spaceAction' && args[1] === 'memberOrder') {
+    const id = method === 'roomMemberOrder' ? 'shared' : args[0]; add(rooms, id);
+    for (const session of snapshot.sessions) if (require('./collaboration-spaces.cjs').roomIds(session).includes(id)) sessions.add(session.id);
+  } else return null;
+  return { sessions: [...sessions], rooms: [...rooms] };
+}
 // What a card asks, as the parts of one sentence: the action, and the names, folder and flags in the command,
 // plus the risks to mark. Display only: the confirmation the person's answer is bound to (message, detail,
 // buttons) is not changed, and the full command stays in that detail. Every string is made visible as the
@@ -239,4 +257,4 @@ function inputGuard(workspace, ids, origin = current()) {
   if (!valid()) throw require('./ui-errors.cjs').uiError('error.backgroundMessagesDisabled');
   return valid;
 }
-module.exports = { actor, current, request, retainRefusalRows, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, operationSummary, run, message, activity, deliveryTargets, assertDeliveryPolicy, terminalInputProof, checkTerminalInput, inputGuard, CAPABILITY: 'backgroundControlV1' };
+module.exports = { actor, current, request, retainRefusalRows, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, maintenanceTargets, operationSummary, run, message, activity, deliveryTargets, assertDeliveryPolicy, terminalInputProof, checkTerminalInput, inputGuard, CAPABILITY: 'backgroundControlV1' };
