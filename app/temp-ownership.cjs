@@ -16,25 +16,42 @@ function privateDirectory(directory, create = false) {
   const expected=process.platform==='darwin'?path.resolve(directory).replace(/^\/(var|tmp)(?=\/|$)/,'/private/$1'):path.resolve(directory);
   if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== process.getuid() || s.mode & 0o077 || fs.realpathSync(directory) !== expected) throw Error('Unsafe temporary ownership store');
 }
-// register() atomically links a new receipt through this private directory.
-// Bind its identity and nanosecond change times, without loading the inventory.
-function revision(registryDir = defaultDirectory()) {
+// A directory timestamp is not a modification sequence (HFS+ is second-grained).
+// Stream receipt names and bounded content into the same digest Python checks.
+// Enumeration-order changes may conservatively refuse cleanup, never permit it.
+function revision(registryDir = defaultDirectory(), check = () => {}) {
+  const deadline=performance.now()+10000;
   privateDirectory(registryDir);
   const s=fs.lstatSync(registryDir,{bigint:true});
   if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==BigInt(process.getuid())||s.mode&0o077n)throw Error('Unsafe temporary ownership store');
-  return {path:fs.realpathSync(registryDir),identity:[s.dev,s.ino,s.uid,s.mode,s.mtimeNs,s.ctimeNs].map(String)};
+  const hash=createHash('sha256'),directory=fs.opendirSync(registryDir);
+  try {let file;while((file=directory.readSync())) {
+    check();if(performance.now()>=deadline)throw Error('Temporary ownership proof budget exhausted');
+    if(!receiptName(file.name))continue;
+    const bytes=receiptBytes(path.join(registryDir,file.name));
+    hash.update(file.name+'\0'+bytes.length+'\0').update(bytes);
+  }} finally {directory.closeSync();}
+  check();
+  return {path:fs.realpathSync(registryDir),identity:[s.dev,s.ino,s.uid,s.mode,s.mtimeNs,s.ctimeNs].map(String),inventory:hash.digest('hex')};
 }
 function valid(r) {
   return r?.version === 1 && r.kind === 'naw-test' && typeof r.path === 'string' && path.isAbsolute(r.path) && /^[a-f0-9]{64}$/.test(r.id) &&
     ['uid','dev','ino'].every(k=>Number.isSafeInteger(r[k]) && r[k]>=0) && r.uid===process.getuid() && Number.isFinite(r.createdAt) &&
     Number.isSafeInteger(r.owner?.pid) && r.owner.pid>1 && typeof r.owner.started==='string' && Boolean(r.owner.started) && typeof r.creator==='string';
 }
-function entry(file) {
+function receiptBytes(file) {
   // A FIFO must not block before fstat can reject non-regular entries.
   const fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
   try {const s=fs.fstatSync(fd);if(!s.isFile()||s.uid!==process.getuid()||s.mode&0o077||s.size>8192)throw Error('Unsafe temporary ownership entry');
-    const r=JSON.parse(fs.readFileSync(fd,'utf8'));if(!valid(r)||path.basename(file)!==r.id+'.json')throw Error('Invalid temporary ownership receipt');return r;
+    const bytes=Buffer.alloc(8193);let length=0,n;
+    while(length<bytes.length&&(n=fs.readSync(fd,bytes,length,bytes.length-length,null)))length+=n;
+    if(length>8192||length!==s.size)throw Error('Temporary ownership entry changed');
+    return bytes.subarray(0,length);
   } finally {fs.closeSync(fd);}
+}
+function entry(file) {
+  const r=JSON.parse(receiptBytes(file).toString('utf8'));
+  if(!valid(r)||path.basename(file)!==r.id+'.json')throw Error('Invalid temporary ownership receipt');return r;
 }
 let creator;
 function register(directory, { registryDir = defaultDirectory(), now = Date.now, owner } = {}) {

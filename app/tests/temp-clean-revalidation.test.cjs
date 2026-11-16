@@ -171,3 +171,18 @@ test('a bounded result refresh discards incomplete candidates instead of keeping
   assert.equal(status.directories,0);assert.equal(status.anomaly,'inspection-unavailable');assert.equal(status.shown,true);
   assert.ok(fs.existsSync(first));assert.ok(fs.existsSync(second));assert.deepEqual(f.manager.candidates,[]);
 });
+test('registry content proof notices an in-place receipt change without any directory timestamp change',t=>{
+  const f=fixture(t);f.candidate();const before=ownership.revision(f.registryDir),record=ownership.read(f.registryDir)[0];
+  fs.writeFileSync(path.join(f.registryDir,record.id+'.json'),JSON.stringify({...record,creator:'changed synthetic creator'}));
+  const after=ownership.revision(f.registryDir);
+  assert.deepEqual(after.identity,before.identity,'Only the existing receipt content changed');
+  assert.notEqual(after.inventory,before.inventory,'Content, not directory timestamps, must bind the inventory');
+});
+test('registry content proof checks its budget for stray entries and closes the stream on failure',t=>{
+  const f=fixture(t);f.candidate();fs.writeFileSync(path.join(f.registryDir,'.DS_Store'),'unrelated');
+  const open=fs.opendirSync;let handle,checks=0;
+  t.mock.method(fs,'opendirSync',(...args)=>{handle=open(...args);return handle;});
+  assert.throws(()=>ownership.revision(f.registryDir,()=>{if(++checks===2)throw Error('synthetic proof deadline');}),/synthetic proof deadline/);
+  assert.equal(checks,2);assert.throws(()=>handle.readSync(),{code:'ERR_DIR_CLOSED'});
+  assert.equal(fs.readFileSync(path.join(f.registryDir,'.DS_Store'),'utf8'),'unrelated');
+});

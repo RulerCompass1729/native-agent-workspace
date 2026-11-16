@@ -155,7 +155,7 @@ class TempReminders {
         try {
           // Independently inspect each directory at execution; never extend a grant
           // to a newly discovered candidate or trust a cached lsof/mount result.
-          const registry=ownership.revision(this.registryDir);
+          const registry=ownership.revision(this.registryDir,check);
           let record=null,liveOverlap=false;
           for await(const batch of ownership.batches(this.registryDir,check)) for(const r of batch) {
             check();
@@ -174,7 +174,7 @@ class TempReminders {
           this.person(c);check();
           // No asynchronous gap between the final registry check and dispatch.
           // Python carries this same proof across its own system inspection.
-          if(JSON.stringify(ownership.revision(this.registryDir))!==JSON.stringify(registry))throw changed();
+          if(JSON.stringify(ownership.revision(this.registryDir,check))!==JSON.stringify(registry))throw changed();
           const receipt=await remove(current,this.roots,registry); result.bytes+=receipt.bytes;
           if(receipt.removed) {result.cleaned++;try{ownership.forget(record.id,this.registryDir);}catch{result.bookkeepingFailed=true;}}
           else {result.skipped++;result.reasons[receipt.registryChanged===true&&receipt.untouched===true&&receipt.bytes===0?'changed':'unverified']++;}

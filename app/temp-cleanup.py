@@ -4,7 +4,7 @@ No glob/discovery, no arbitrary recursive rmtree. The main process owns admissio
 open-file/mount checks and the person-bound snapshot; this helper rechecks every
 entry and holds directory descriptors rather than following replacement paths.
 """
-import json, os, stat, sys, subprocess, re
+import json, os, stat, sys, subprocess, re, hashlib, time
 
 class RegistryChanged(Exception): pass
 
@@ -15,6 +15,22 @@ def registry_current(fd, proof):
         if not stat.S_ISDIR(current.st_mode) or current.st_uid!=os.getuid() or current.st_mode&0o077 or \
             (current.st_dev,current.st_ino)!=(held.st_dev,held.st_ino) or observed!=proof['identity']:
             raise RegistryChanged()
+        digest=hashlib.sha256(); deadline=time.monotonic()+5
+        # Constant retained memory, no whole-store list or timestamp precision
+        # assumption. Different enumeration order can only refuse a deletion.
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                if time.monotonic()>=deadline: raise ValueError('registry proof budget exhausted')
+                if not re.fullmatch(r'[a-fA-F0-9]{64}\.json',entry.name): continue
+                source=os.open(entry.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd)
+                with os.fdopen(source,'rb') as receipt:
+                    s=os.fstat(receipt.fileno())
+                    if not stat.S_ISREG(s.st_mode) or s.st_uid!=os.getuid() or s.st_mode&0o077 or s.st_size>8192:
+                        raise ValueError('unsafe registry entry')
+                    content=receipt.read(8193)
+                    if len(content)>8192 or len(content)!=s.st_size: raise ValueError('registry entry changed')
+                digest.update((entry.name+'\0'+str(len(content))+'\0').encode('ascii')); digest.update(content)
+        if digest.hexdigest()!=proof['inventory']: raise RegistryChanged()
     except OSError: raise RegistryChanged()
 
 def open_directory_chain(directory):
@@ -65,7 +81,8 @@ def main():
     try:
         proof=request['registry']
         if not isinstance(proof,dict) or not os.path.isabs(proof['path']) or proof['path']!=os.path.realpath(proof['path']) or \
-            not isinstance(proof['identity'],list) or len(proof['identity'])!=6 or not all(isinstance(v,str) for v in proof['identity']):
+            not isinstance(proof['identity'],list) or len(proof['identity'])!=6 or not all(isinstance(v,str) for v in proof['identity']) or \
+            not isinstance(proof.get('inventory'),str) or not re.fullmatch(r'[a-f0-9]{64}',proof['inventory']):
             raise ValueError('invalid registry snapshot')
         try: registry_fd=open_directory_chain(proof['path'])
         except OSError: raise RegistryChanged()
