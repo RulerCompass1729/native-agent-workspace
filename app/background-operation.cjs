@@ -199,6 +199,36 @@ function assertDeliveryPolicy(snapshot, method, args) {
     const target = snapshot.sessions?.find(s => s.id === id); return !target || target.wakeDisabled;
   }))) throw require('./ui-errors.cjs').uiError('error.backgroundMessagesDisabled');
 }
+// A confirmation binds metadata, never terminal text or conversation content.
+function terminalInputProof(session) {
+  const terminal = session?.terminalState;
+  if (!session?.nativeId || !terminal?.alive || typeof terminal.epoch !== 'string' ||
+      !Number.isSafeInteger(terminal.observationIndex)) return null;
+  const dialog = session.nativeTerminalDialog;
+  return { version: 1, targetId: session.id, nativeId: session.nativeId,
+    connectionRevision: session.connectionRevision || 0, controlRevision: session.controlRevision || 0,
+    state: session.state, activeTurnId: session.activeTurnId || null, pendingTag: session.pendingTag || null,
+    terminalEpoch: terminal.epoch, observationIndex: terminal.observationIndex,
+    stateMark: dialog && Number.isSafeInteger(dialog.since) ? { kind: dialog.kind, since: dialog.since } : { frame: terminal.observationIndex },
+    nativeInputRequired: session.nativeInputRequired === true,
+    approval: require('node:crypto').createHash('sha256').update(JSON.stringify([session.approval || null, session.nativeApproval || null])).digest('hex') };
+}
+function checkTerminalInput(expected, snapshot, targetId) {
+  if (!snapshot || !Array.isArray(snapshot.sessions)) return { status: 'unknown', reason: 'evidence-unavailable' };
+  const current = snapshot.sessions.find(s => s.id === targetId);
+  if (!current) return { status: snapshot.unavailable ? 'unknown' : 'invalid', reason: snapshot.unavailable ? 'temporarily-unavailable' : 'target-missing' };
+  if (current.archived) return { status: 'invalid', reason: 'target-archived' };
+  if (snapshot.unavailable || current.backendUnavailable || current.transportDisconnected || current.nativeContextPending || !current.terminalState?.alive)
+    return { status: 'unknown', reason: 'temporarily-unavailable' };
+  const waiting = current.nativeInputRequired || current.nativeTerminalDialog || current.approval || current.nativeApproval?.requests?.length;
+  if (!waiting && (current.state === 'working' || current.pendingTag || current.activeTurnId)) return { status: 'invalid', reason: 'target-working' };
+  if (!expected || expected.version !== 1) return { status: 'unknown', reason: 'evidence-unavailable' };
+  if (expected.targetId !== targetId || current.nativeId !== expected.nativeId || (current.connectionRevision || 0) !== expected.connectionRevision)
+    return { status: 'invalid', reason: 'identity-changed' };
+  const proof = terminalInputProof(current);
+  if (!proof) return { status: 'unknown', reason: 'evidence-unavailable' };
+  return require('node:util').isDeepStrictEqual(proof, expected) ? { status: 'valid' } : { status: 'invalid', reason: 'state-changed' };
+}
 function inputGuard(workspace, ids, origin = current()) {
   // Capture provenance: native may call the guard after this async scope exits.
   const valid = () => {
@@ -209,4 +239,4 @@ function inputGuard(workspace, ids, origin = current()) {
   if (!valid()) throw require('./ui-errors.cjs').uiError('error.backgroundMessagesDisabled');
   return valid;
 }
-module.exports = { actor, current, request, retainRefusalRows, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, operationSummary, run, message, activity, deliveryTargets, assertDeliveryPolicy, inputGuard, CAPABILITY: 'backgroundControlV1' };
+module.exports = { actor, current, request, retainRefusalRows, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, operationSummary, run, message, activity, deliveryTargets, assertDeliveryPolicy, terminalInputProof, checkTerminalInput, inputGuard, CAPABILITY: 'backgroundControlV1' };

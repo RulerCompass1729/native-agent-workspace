@@ -21,7 +21,7 @@ function fixture(t, provider = 'codex') {
   const room = new RoomState(dir), writes = [], handlers = new Map();
   for (const [method] of cases) handlers.set(method, (_c, ...args) => { writes.push({ method, args }); return 'applied'; });
   const context = { background: true, view: {}, checkActor: async () => {}, client: { close() {} }, win: { destroy() {} } };
-  const snapshot = { sessions: [{ id: 'agent', nativeId: 'native-agent' }, { id: 'target', nativeId: 'native-target' }] };
+  const snapshot = { sessions: [{ id: 'agent', nativeId: 'native-agent' }, { id: 'target', nativeId: 'native-target' }].map(s => ({ ...s, state: 'idle', terminalState: { alive: true, epoch: 'synthetic-' + s.id, observationIndex: 1 } })) };
   context.client.snapshot = () => snapshot;
   context.fingerprint = () => ({ sessions: snapshot.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, archived: s.archived, nativeContextPending: s.nativeContextPending })) });
   const sender = { id: 'agent', nativeId: 'native-agent', name: 'Agent', provider };
@@ -193,7 +193,7 @@ test(`actual main input wrapper preserves own pending-approval protection withou
   const f = fixture(t), handlers = new Map(), vm = require('node:vm');
   const source = fs.readFileSync(require.resolve('../main.cjs'), 'utf8'), start = source.indexOf('function register('), end = source.indexOf('\nasync function replaceBackendSockets(', start);
   assert.ok(start > 0 && end > start);
-  const state = { wakePolicy: { enabled: true }, sessions: [{ id: target, ...(pending ? { approval: { requestId: 'native-question' } } : {}) }] };
+  const state = { wakePolicy: { enabled: true }, sessions: f.context.client.snapshot().sessions.map(s => ({ ...s, ...(s.id === target && pending ? { approval: { requestId: 'native-question' } } : {}) })) };
   Object.assign(f.context.client, { refresh: async () => {}, snapshot: () => state, call: async method => { assert.equal(method, 'initial'); return state; }, entries: [{ state: { ...state, capabilities: [operation.CAPABILITY] } }] });
   const scope = { applicationHandlers: handlers, backgroundOperation: operation, ipcMain: { handle() {} },
     showDialog: (context, kind, options) => require('../background-control.cjs').dialog(context, kind, JSON.parse(JSON.stringify(options))),

@@ -37,6 +37,8 @@ class ServiceClient extends EventEmitter {
   }
   receivedOrder(value) { return this.receipts.get(value); }
   call(method, ...args) {
+    // A retained old daemon must reject this method, never ignore a new guard argument.
+    if (method === 'input' && args[2] !== undefined) method = 'inputIfCurrent';
     return new Promise((resolve, reject) => {
       if (this.socket.destroyed) return reject(uiError('error.serviceDisconnected'));
       const id = ++this.sequence;

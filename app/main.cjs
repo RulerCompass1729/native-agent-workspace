@@ -1206,7 +1206,7 @@ function register(name, handler) {
       }
       // Never silently fall back to an old backend that cannot retain actor
       // attribution or preserve the person's draft for these input paths.
-      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'openLocalPage', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardWake']);
+      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'openLocalPage', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardWake', 'backgroundWithdraw']);
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
       // handler below still authenticates the secretary and person-only actions.
@@ -1543,6 +1543,7 @@ async function boot() {
       context.metadataOnly = () => !conversationReaderAllowed(actor);
       context.refresh = () => client.refresh();
       context.confirmationActors = () => controlRequestActors(client);
+      context.terminalConsentSnapshot = () => ({ ...roomState.apply(client.snapshot()), unavailable: Boolean(client.socket?.destroyed || client.closing || client.entries?.some(e => e.closed || e.closing || e.client.socket.destroyed)) });
       context.checkActor = async () => {
         await context.refresh();
         const record = context.confirmationActors().find(s => s.id === actor.id);
@@ -1705,8 +1706,14 @@ async function boot() {
     if (c.background) throw Error('An agent cannot confirm its own background request');
     return backgroundControl.decide(sessionId, nativeId, id, response);
   });
+  register('backgroundWithdraw', (c, id) => {
+    if (!c.background) throw uiError('error.background.withdrawNotPending');
+    return backgroundControl.withdraw(c.actor, id, c);
+  });
   for (const name of ['prepareInput', 'observe', 'unobserve', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve', 'answer', 'wakePolicy', 'operatorAction']) register(name, (c, ...args) => {
     if (['prepareInput', 'claim', 'terminal', 'input', 'approve', 'answer'].includes(name)) roomState.assertAvailable(args[0]);
+    const approved = c.background && backgroundOperation.request()?.approved;
+    if (name === 'input' && approved) return c.client.call(name, args[0], args[1], { proof: approved.terminalConsent, expiresAt: approved.expiresAt });
     return c.client.call(name, ...args);
   });
   register('retrySave', async c => {

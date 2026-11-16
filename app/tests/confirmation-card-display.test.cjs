@@ -120,7 +120,9 @@ test('a card keeps its frame when the reading list redraws an unchanged record',
   const confirmation = { kind: 'message', options: { buttons: ['取消', '确认此操作'] } };
   for (const [op, expected] of [[{ state: 'confirmation-required', confirmation }, ['background-card']],
     [{ state: 'confirmation-required', confirmation, replacedBy: { time: 1, state: 'waiting' } }, ['background-void']],
-    [{ state: 'complete' }, []]]) {
+    [{ state: 'complete' }, []],
+    [{ state: 'confirmation-required', confirmation, disposition: 'invalidated' }, ['background-void']],
+    [{ state: 'not-executed', disposition: 'expired' }, ['background-void']]]) {
     classes.clear();
     const entry = { item, backgroundKey: JSON.stringify([op, false]) };
     sandbox.renderBackgroundControls(entry, { backgroundOperation: op });
