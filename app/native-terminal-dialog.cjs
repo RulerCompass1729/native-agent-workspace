@@ -3,6 +3,11 @@
 // This observes a choice; it neither answers it nor changes native agent state.
 const observed = new WeakMap(), frames = new WeakMap(), regions = new WeakMap();
 const plainEdge = line => line.replace(/^[\s│┃╭╰─┌└]+|[\s│┃╮╯─┐┘]+$/g, '');
+const keyLegend = text => /\b(?:enter|return)\b.*\b(?:confirm|select|continue|submit|set|accept|proceed|choose)\b/i.test(text) &&
+  /\besc(?:ape)?\b.*\b(?:cancel|back|exit|dismiss)[ .·│]*$/i.test(text);
+// Only a complete instruction-only tail may lose hard line breaks. Arbitrary
+// payload after an action, or another Enter/Return instruction, is not a footer.
+const standaloneKeyLegend = /^(?:press\s+)?(?:enter|return)\s+to\s+(?:confirm|select|continue|submit|accept|proceed|choose|set(?:\s+as\s+default)?)(?:\s*·\s*s\s+to\s+use\s+this\s+session\s+only)?\s*(?:or|·)\s*esc(?:ape)?\s+to\s+(?:cancel|back|exit|dismiss)[ .·│]*$/i;
 function dismiss(runtime) {
   observed.delete(runtime);
   const previous = regions.get(runtime);
@@ -28,8 +33,7 @@ function readTerminalDialogPrompt(session, runtime) {
     const footer = lines.slice(-3).join(' ');
     // The native key legend AND a selected multi-choice list must be current.
     // Requiring both avoids classifying ordinary prose, drafts and slash menus.
-    if (!/\b(?:enter|return)\b.*\b(?:confirm|select|continue|submit|set|accept|proceed|choose)\b/i.test(footer) ||
-        !/\besc(?:ape)?\b.*\b(?:cancel|back|exit|dismiss)[ .·│]*$/i.test(footer)) { return dismiss(runtime); }
+    if (!keyLegend(footer)) { return dismiss(runtime); }
     const choice = /^\s*[│┃]?\s*(?:[❯›>●]\s*)?\d+[.)]\s+\S/;
     const selected = /^\s*[│┃]?\s*[❯›>●]\s+\S/;
     const indexes = lines.map((line, i) => choice.test(line) ? i : -1).filter(i => i >= 0);
@@ -43,13 +47,24 @@ function readTerminalDialogPrompt(session, runtime) {
     const heading = before.findLast(line => /[?？]$/.test(line.text) || /^(?:select|choose|confirm|allow|approve|permission|trust|folder)\b/i.test(line.text)) || before.at(-1);
     const title = (heading?.text || '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200);
     if (!title) return dismiss(runtime);
-    // Hard-wrapped option details and controls after numbered choices also
-    // affect what Enter does. Stop at the native key legend, not its last number.
-    let last = lines.length - 1;
-    while (last > first && (!plainEdge(lines[last]) || /\b(?:enter|return)\b.*\b(?:confirm|select|continue|submit|set|accept|proceed|choose)\b|\besc(?:ape)?\b.*\b(?:cancel|back|exit|dismiss)\b/i.test(lines[last]))) last--;
-    // The region (including the selected marker) never leaves this WeakMap.
-    // Ignore only layout padding/borders so cosmetic repaint/resize is stable.
-    const key = lines.slice(heading.index, last + 1).map(plainEdge).join('\n');
+    // Until a separate legend is established, every row may be option content,
+    // including a dot-only relative path. The region stays only in this WeakMap.
+    const last = lines.length - 1;
+    let key = lines.slice(heading.index).map(plainEdge).join('\n');
+    const indent = line => line.replace(/^\s*[│┃]/, '').match(/^\s*/)[0].length;
+    const optionIndent = Math.min(...(indexes.length >= 2 ? indexes : [first, first + 1]).map(i => indent(lines[i])));
+    // Start at the final independent instruction, keeping any earlier body
+    // (including instruction-shaped text) verbatim. Unknown tails stay strict.
+    const earliest = Math.max(first + 2, (indexes.at(-1) ?? first) + 1, lines.length - 3);
+    for (let i = last; i >= earliest; i--) {
+      if (indent(lines[i]) > optionIndent || !/^(?:press\s+)?(?:enter|return)\b/i.test(plainEdge(lines[i]))) continue;
+      if (!standaloneKeyLegend.test(lines.slice(i).map(plainEdge).join(' '))) continue;
+      let end = last;
+      while (end > i && /^[ .·│]*$/.test(plainEdge(lines[end]))) end--;
+      const legend = lines.slice(i, end + 1).map(plainEdge).join(' ');
+      key = lines.slice(heading.index, i).map(plainEdge).join('\n') + '\n' + legend;
+      break;
+    }
     const previous = observed.get(runtime), memory = regions.get(runtime);
     if (previous?.title === title && memory?.key === key) return previous;
     const prompt = previous?.title === title

@@ -5,7 +5,7 @@ const operation = require('../background-operation.cjs');
 const { Workspace } = require('../workspace.cjs');
 const { EventEmitter } = require('node:events');
 const { TerminalJournal } = require('../observation.cjs');
-async function fixture(t) {
+async function fixture(t, { realDetector = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-stale-consent-')); fs.chmodSync(dir, 0o700);
   let clock = 1800000000000, archived = false, disconnected = false;
   const bytes = [], runtimes = new Map();
@@ -16,6 +16,10 @@ async function fixture(t) {
       if (cols === this.cols && rows === this.rows) return;
       this.cols = cols; this.rows = rows; journal.append('resize', '', cols, rows, () => 'Synthetic terminal');
     } };
+    if (realDetector) {
+      const screen = new (require('@xterm/headless').Terminal)({ cols: 100, rows: 30, allowProposedApi: true });
+      runtime.terminal.screen = screen; t.after(() => screen.dispose());
+    }
     runtime.start = async () => runtime.emit('state', 'idle'); runtime.stop = async () => ({ state: 'ended' });
     runtimes.set(record.id, runtime); return runtime;
   } };
@@ -24,7 +28,7 @@ async function fixture(t) {
   // Both the desktop projection and Workspace.input's final conditional write
   // must observe the same synthetic dialog, including on the pre-detector base.
   const nativeSnapshot = w.snapshot.bind(w);
-  w.snapshot = () => {
+  if (!realDetector) w.snapshot = () => {
     const value = nativeSnapshot();
     return { ...value, sessions: value.sessions.map(s => ({ ...s, nativeTerminalDialog: runtimes.get(s.id)?.nativeTerminalDialog })) };
   };
@@ -236,4 +240,202 @@ for (const change of ['output', 'resize']) test(`without a dialog ${change} stil
   else runtime.terminal.journal.append('output', 'Synthetic redraw', 100, 30, () => 'Synthetic redraw');
   const result = await f.confirm(card);
   assert.equal(result.disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
+
+// PF12 uses the real cooked-screen detector in BOTH Workspace snapshots,
+// through confirmation and the last conditional write. No dialog is injected.
+function statusDialog({ title = 'Switch model?', body = 'Only change the synthetic model.',
+  options = ['Use model-x', 'Keep current'], selected = 0, setting = 'Effort: High', status = '.', wrapped = false } = {}) {
+  return '\x1b[2J\x1b[H' + [title, body, ...options.map((text, i) => `${i === selected ? '❯' : ' '} ${i + 1}. ${text}`), setting,
+    wrapped ? 'Press enter to\r\nconfirm or esc to cancel' : 'Press enter to confirm or esc to cancel', status].join('\r\n');
+}
+async function statusFixture(t, initial = {}) {
+  const f = await fixture(t, { realDetector: true }), runtime = f.runtimes.get(f.target);
+  f.draw = async text => {
+    await new Promise(resolve => runtime.terminal.screen.write(text, resolve));
+    runtime.terminal.journal.append('output', text, 100, 30, () => text);
+    return f.w.snapshot().sessions.find(s => s.id === f.target);
+  };
+  await f.draw(statusDialog(initial));
+  return { ...f, runtime, current: () => f.w.snapshot().sessions.find(s => s.id === f.target) };
+}
+for (const wrapped of [false, true]) for (const data of ['\x1b', '\r', '2']) test(`PF12 real detector: status below ${wrapped ? 'wrapped' : 'single-line'} legend preserves ${JSON.stringify(data)} card`, async t => {
+  const f = await statusFixture(t, { wrapped }), before = f.current();
+  assert.ok(before.nativeTerminalDialog, 'The original screen must be a detected dialog');
+  const card = await f.ask('input', [f.target, data]); assert.equal(card.state, 'confirmation-required');
+  await f.draw(statusDialog({ status: '..', wrapped }));
+  const after = f.current(); assert.ok(after.nativeTerminalDialog, 'The repaint must still be detected');
+  assert.notEqual(after.terminalState.observationIndex, before.terminalState.observationIndex);
+  const result = await f.confirm(card);
+  assert.equal(result.state, 'complete', JSON.stringify({ reason: result.reason, disposition: result.disposition, bytes: f.bytes })); assert.deepEqual(f.bytes, [data]);
+  assert.deepEqual(after.nativeTerminalDialog, before.nativeTerminalDialog, 'Status does not change the observed episode or revision');
+  await assert.rejects(f.confirm(card)); assert.deepEqual(f.bytes, [data], 'A duplicate decision never writes again');
+});
+test('PF12 real detector: a legend rewrapped during the status repaint preserves its card', async t => {
+  const f = await statusFixture(t), before = f.current(), card = await f.ask();
+  await f.draw(statusDialog({ status: '..', wrapped: true }));
+  const result = await f.confirm(card);
+  assert.equal(result.state, 'complete', JSON.stringify({ reason: result.reason, disposition: result.disposition, bytes: f.bytes }));
+  assert.deepEqual(f.bytes, ['\x1b']); assert.deepEqual(f.current().nativeTerminalDialog, before.nativeTerminalDialog);
+});
+
+const statusChanges = [
+  ['question', f => f.draw(statusDialog({ title: 'Choose a provider?', status: '..' }))],
+  ['option', f => f.draw(statusDialog({ options: ['Use model-y', 'Keep current'], status: '..' }))],
+  ['highlight', f => f.draw(statusDialog({ selected: 1, status: '..' }))],
+  ['body', f => f.draw(statusDialog({ body: 'Also change the synthetic directory.', status: '..' }))],
+  ['wrapped option detail', f => f.draw(statusDialog({ options: ['Use model-x', 'Keep current\r\n     Change synthetic directory'], status: '..' }))],
+  ['setting after options', f => f.draw(statusDialog({ setting: 'Effort: Low', status: '..' }))],
+  ['approval body', f => { f.runtime.nativeApproval = { requests: [{ id: 'same-request', title: 'Approve local action B' }] }; }],
+  ['dialog replacement', async f => { await f.draw('\x1b[2J\x1b[Hworking'); await f.draw(statusDialog({ status: '..' })); }],
+  ['selection away and back', async f => { await f.draw(statusDialog({ selected: 1 })); await f.draw(statusDialog({ status: '..' })); }],
+  ['unrecognized trailing status', f => f.draw(statusDialog({ status: 'unrecognized trailing text' }))],
+  ['epoch', f => { f.runtime.terminal.journal.epoch = 'replacement-epoch'; }],
+];
+for (const [change, mutate] of statusChanges) test(`PF12 real detector: ${change} still invalidates without a terminal byte`, async t => {
+  const f = await statusFixture(t);
+  if (change === 'approval body') f.runtime.nativeApproval = { requests: [{ id: 'same-request', title: 'Approve local action A' }] };
+  assert.ok(f.current().nativeTerminalDialog);
+  const card = await f.ask(); assert.equal(card.state, 'confirmation-required');
+  await mutate(f);
+  const result = await f.confirm(card);
+  assert.equal(result.disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
+test('PF12 real detector: output without a dialog still invalidates the strict frame proof without bytes', async t => {
+  const f = await statusFixture(t); await f.draw('\x1b[2J\x1b[Hplain output');
+  assert.equal(f.current().nativeTerminalDialog, null);
+  const card = await f.ask(); assert.equal(card.state, 'confirmation-required');
+  await f.draw('\x1b[2J\x1b[Hmore output');
+  assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
+test('PF12 real detector: option change after confirmation checks is refused at the last native input boundary', async t => {
+  const f = await statusFixture(t), card = await f.ask(), original = f.handlers.get('input');
+  f.handlers.set('input', async (...args) => {
+    await f.draw(statusDialog({ options: ['Use model-y', 'Keep current'], status: '..' }));
+    return original(...args);
+  });
+  assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
+test('PF12 real detector: shortcut text inside options cannot truncate the option signature', async t => {
+  const f = await statusFixture(t);
+  const ambiguous = model => `\x1b[2J\x1b[HSwitch model?\r\n❯ 1. Use ${model}; Enter to confirm\r\n  2. No; Esc to cancel\r\n.`;
+  await f.draw(ambiguous('model-x')); assert.ok(f.current().nativeTerminalDialog);
+  const card = await f.ask(); assert.equal(card.state, 'confirmation-required');
+  await f.draw(ambiguous('model-y'));
+  assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
+
+test('PF12 BLOCK: indented shortcut continuation is not an independent legend', async t => {
+  const f = await statusFixture(t);
+  const frame = folder => '\x1b[2J\x1b[HChoose working directory?\r\n  1. Cancel\r\n❯ 2. Open directory\r\n     Press Enter to confirm or Esc to cancel\r\n     ' + folder;
+  await f.draw(frame('.')); assert.ok(f.current().nativeTerminalDialog);
+  const card = await f.ask('input', [f.target, '\r']);
+  await f.draw(frame('..'));
+  const result = await f.confirm(card);
+  assert.deepEqual(f.bytes, [], 'An indented option continuation cannot authorize dropping later content');
+  assert.equal(result.disposition, 'invalidated');
+});
+test('PF12 BLOCK: a candidate legend must contain its own complete key instructions', async t => {
+  const f = await statusFixture(t);
+  const frame = folder => '\x1b[2J\x1b[HChoose working directory?\r\n  1. Cancel\r\n❯ 2. Open directory; Enter to confirm\r\nEnter folder; Esc to cancel\r\n' + folder;
+  await f.draw(frame('.')); assert.ok(f.current().nativeTerminalDialog);
+  const card = await f.ask('input', [f.target, '\r']); await f.draw(frame('..'));
+  const result = await f.confirm(card);
+  assert.deepEqual(f.bytes, []); assert.equal(result.disposition, 'invalidated');
+});
+test('PF12 control: a separately aligned bordered legend still permits status repaint once', async t => {
+  const f = await statusFixture(t);
+  const frame = status => '\x1b[2J\x1b[H' + statusDialog({ status }).replace(/^\x1b\[2J\x1b\[H/, '').split('\r\n').map(line => '│ ' + line + ' │').join('\r\n');
+  await f.draw(frame('.')); const before = f.current().nativeTerminalDialog; assert.ok(before);
+  const card = await f.ask('input', [f.target, '\r']); await f.draw(frame('..'));
+  assert.equal((await f.confirm(card)).state, 'complete'); assert.deepEqual(f.bytes, ['\r']);
+  assert.deepEqual(f.current().nativeTerminalDialog, before);
+});
+
+
+test('PF12 BLOCK: a dot-only wrapped option path is content when shortcut words are inside the option',async t=>{
+ const f=await statusFixture(t);
+ const frame=folder=>'\x1b[2J\x1b[HChoose working directory?\r\n  1. Cancel\r\n❯ 2. Open directory; Enter to confirm or Esc to cancel\r\n     '+folder;
+ const before=await f.draw(frame('.'));assert.ok(before.nativeTerminalDialog);
+ const viewport=()=>Array.from({length:f.runtime.terminal.screen.rows},(_,i)=>{const l=f.runtime.terminal.screen.buffer.active.getLine(i);return {text:l.translateToString(true),wrapped:l.isWrapped};}).filter(l=>l.text);
+ const beforeRows=viewport();
+ const card=await f.ask('input',[f.target,'\r']);assert.equal(card.state,'confirmation-required');
+ const after=await f.draw(frame('..'));assert.ok(after.nativeTerminalDialog);
+ const result=await f.confirm(card);
+ t.diagnostic(JSON.stringify({beforeRows,afterRows:viewport(),before:before.nativeTerminalDialog,after:after.nativeTerminalDialog,result:result.state,disposition:result.disposition,bytes:f.bytes}));
+ assert.deepEqual(f.bytes,[],'A dot-only last-option directory change must not be mistaken for pulsing footer status');
+ assert.equal(result.disposition,'invalidated');
+});
+test('PF12 BLOCK: dot-only option detail before a separate legend remains protected',async t=>{
+ const f=await statusFixture(t);
+ const frame=folder=>'\x1b[2J\x1b[HChoose working directory?\r\n  1. Cancel\r\n❯ 2. Open directory\r\n     '+folder+'\r\nPress Enter to confirm or Esc to cancel\r\n.';
+ await f.draw(frame('.'));const card=await f.ask();await f.draw(frame('..'));
+ const result=await f.confirm(card);assert.equal(result.disposition,'invalidated');assert.deepEqual(f.bytes,[]);
+});
+test('PF12 BLOCK: standalone legend words remain bound during a footer rewrap',async t=>{
+ const f=await statusFixture(t);
+ const frame=text=>'\x1b[2J\x1b[HSelect model\r\n  1. Default\r\n❯ 2. Opus\r\n  3. Haiku\r\n◉ xHigh effort ←/→ to adjust\r\nUse /fast to turn on Fast mode.\r\n'+text+'\r\n.';
+ await f.draw(frame('Enter to set as default · s to use this session\r\nonly · Esc to cancel'));const card=await f.ask();
+ await f.draw(frame('Enter to use this session only · s to set as default\r\n· Esc to cancel'));
+ const result=await f.confirm(card);assert.equal(result.disposition,'invalidated');assert.deepEqual(f.bytes,[]);
+});
+
+
+const returnFrame=(legend,status='.')=>'\x1b[2J\x1b[HSelect model\r\n❯ 1. Model X\r\n  2. Cancel\r\n'+legend+'\r\n'+status;
+test('PF12 Return: rewrapping a Return legend keeps the same words and executes once',async t=>{
+ const f=await statusFixture(t);await f.draw(returnFrame('Press Return to confirm or Escape to cancel'));
+ const card=await f.ask();await f.draw(returnFrame('Press Return to\r\nconfirm or Escape to cancel','..'));
+ assert.equal((await f.confirm(card)).state,'complete');assert.deepEqual(f.bytes,['\x1b']);
+});
+test('PF12 Return: changing a Return legend word revokes input without bytes',async t=>{
+ const f=await statusFixture(t);await f.draw(returnFrame('Press Return to confirm or Escape to cancel'));
+ const card=await f.ask();await f.draw(returnFrame('Press Return to\r\nselect or Escape to cancel','..'));
+ assert.equal((await f.confirm(card)).disposition,'invalidated');assert.deepEqual(f.bytes,[]);
+});
+
+const boundaryClear='\x1b[2J\x1b[H',boundaryLegend='Press Enter to confirm or Esc to cancel';
+async function boundaryReject(t,before,after){const f=await statusFixture(t);const a=await f.draw(boundaryClear+before.join('\r\n'));assert.ok(a.nativeTerminalDialog);const card=await f.ask('input',[f.target,'\r']);const rows=()=>Array.from({length:f.runtime.terminal.screen.rows},(_,i)=>{const l=f.runtime.terminal.screen.buffer.active.getLine(i);return {text:l.translateToString(true),wrapped:l.isWrapped};}).filter(l=>l.text);const beforeRows=rows();const z=await f.draw(boundaryClear+after.join('\r\n'));const result=await f.confirm(card);t.diagnostic(JSON.stringify({beforeRows,afterRows:rows(),before:a.nativeTerminalDialog,after:z.nativeTerminalDialog,result:result.state,disposition:result.disposition,bytes:f.bytes}));assert.deepEqual(f.bytes,[]);assert.equal(result.disposition,'invalidated');}
+test('PF12 second BLOCK: unnumbered option with dot continuation has no independent legend',async t=>{
+ // This accepted legacy layout keeps the Esc instruction in its second option.
+ const accepted=p=>['Choose directory?','❯ Open directory; Enter to confirm','  Cancel; Esc to cancel','  '+p];
+ await boundaryReject(t,accepted('.'),accepted('..'));
+});
+test('PF12 second BLOCK: legend between numbered choices cannot exclude a later dot path',async t=>{
+ const frame=p=>['Choose directory?','  1. Cancel',boundaryLegend,'❯ 2. Open directory; Esc to cancel','     '+p];
+ await boundaryReject(t,frame('.'),frame('..'));
+});
+test('PF12 second BLOCK: legend-like continuation in the body before a final legend keeps the path',async t=>{
+ const frame=p=>['Choose directory?','  1. Cancel','❯ 2. Open directory','     '+boundaryLegend,'     '+p,boundaryLegend];
+ await boundaryReject(t,frame('.'),frame('..'));
+});
+test('PF12 second BLOCK: body beginning Enter must not borrow a later complete legend to normalize command lines',async t=>{
+ const frame=body=>['Choose shell action?','  1. Cancel','❯ 2. Run the command shown below',...body,boundaryLegend];
+ await boundaryReject(t,frame(['Enter command: printf A','printf B']),frame(['Enter command: printf','A printf B']));
+});
+
+test('PF12 second BLOCK: Return body cannot borrow the following complete legend', async t => {
+  const frame = body => ['Choose shell action?', '  1. Cancel', '❯ 2. Run command', ...body, boundaryLegend];
+  await boundaryReject(t, frame(['Return command: printf A', 'printf B']), frame(['Return command: printf', 'A printf B']));
+});
+for (const key of ['Enter', 'Return']) test(`PF12 second BLOCK: ${key} action-like body with an Esc-only tail keeps hard lines`, async t => {
+  const frame = body => ['Choose shell action?', '  1. Cancel', '❯ 2. Run command', ...body, 'Esc to cancel'];
+  await boundaryReject(t, frame([`${key} to confirm printf A`, 'printf B']), frame([`${key} to confirm printf`, 'A printf B']));
+});
+test('PF12 second BLOCK: even instruction-shaped body lines stay bound before a final legend', async t => {
+  const frame = body => ['Choose shell action?', '  1. Cancel', '❯ 2. Run command', ...body, boundaryLegend];
+  await boundaryReject(t, frame(['Enter to confirm', 'or Esc to cancel']), frame(['Enter to', 'confirm or Esc to cancel']));
+});
+test('PF12 second BLOCK: a body cannot borrow a differently introduced trailing legend', async t => {
+  const frame = body => ['Choose shell action?', '  1. Cancel', '❯ 2. Run command', ...body, 'Use Enter to confirm or Esc to cancel'];
+  await boundaryReject(t, frame(['Return command: printf A', 'printf B']), frame(['Return command: printf', 'A printf B']));
+});
+test('PF12 second control: complete model key instructions still rewrap and repaint once', async t => {
+  const f = await statusFixture(t);
+  const frame = (legend, status) => boundaryClear + ['Select model', '  1. Default', '❯ 2. Model X', legend, status].join('\r\n');
+  await f.draw(frame('Enter to set as default · s to use this session\r\nonly · Esc to cancel', '.'));
+  const before = f.current().nativeTerminalDialog, card = await f.ask('input', [f.target, '\r']);
+  await f.draw(frame('Enter to set as default · s to use this\r\nsession only · Esc to cancel', '..'));
+  assert.equal((await f.confirm(card)).state, 'complete'); assert.deepEqual(f.bytes, ['\r']);
+  assert.deepEqual(f.current().nativeTerminalDialog, before);
+  await assert.rejects(f.confirm(card)); assert.deepEqual(f.bytes, ['\r']);
 });
