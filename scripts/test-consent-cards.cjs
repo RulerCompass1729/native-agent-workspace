@@ -70,6 +70,32 @@ async function main() {
     env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid), NAW_TEST_UI_LANGUAGE: 'zh' }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(12000); page.on('pageerror', e => errors.push(e.message));
   await page.locator('#new-session').waitFor({ timeout: 45000 }); await revealDefaultSpace(page);
+  // Observe and forward the real shared clock, including cancellation. Preserve
+  // callback execution, arguments and timing without mutating product DOM/state.
+  function observeClock() {
+    const timeout = window.setTimeout, cancel = window.clearTimeout, active = new Set();
+    const counts = { scheduled: 0, fired: 0 };
+    window.setTimeout = function (callback, ms, ...args) {
+      if (ms !== 1000 || typeof callback !== 'function' || !callback.toString().includes('.background-state[data-expires-at]')) return timeout.call(this, callback, ms, ...args);
+      counts.scheduled++;
+      const id = timeout.call(this, function (...values) { active.delete(id); counts.fired++; return callback.apply(this, values); }, ms, ...args);
+      active.add(id); return id;
+    };
+    window.clearTimeout = function (id) { active.delete(id); return cancel.call(this, id); };
+    window.consentClockSnapshot = () => ({ ...counts, active: active.size });
+  }
+  await page.addInitScript(observeClock); await page.evaluate(observeClock);
+  const clockProbe = () => page.evaluate(() => ({ timers: window.consentClockSnapshot(),
+    states: [...document.querySelectorAll('.background-state[data-expires-at]')].map(n => ({ text: n.textContent, expiresAt: n.dataset.expiresAt, void: Boolean(n.closest('.background-void')) })) }));
+  async function idleClock(label) {
+    // A detached-card timer may perform one final bounded check after removal.
+    await delay(1200);
+    const before = await clockProbe(); await delay(2400); const after = await clockProbe();
+    console.log('IDLE CLOCK', JSON.stringify({ label, before, after }));
+    assert.deepEqual(after.timers, before.timers, label + ': no clock scheduling or callbacks while idle');
+    assert.equal(after.timers.active, 0, label + ': no retained timeout');
+    assert.deepEqual(after.states, [], label + ': no stale countdown markers');
+  }
   checkForeground();
   await page.evaluate(() => workspace.roomRename('项目协作'));
   const rpc = mcp(); await rpc('initialize');
@@ -119,6 +145,28 @@ async function main() {
     assert.ok(metrics.scroll <= metrics.width, 'No horizontal page overflow');
     for (const b of metrics.buttons) assert.ok(b.scroll <= b.width + 1, 'Button label fits: ' + b.text);
   }
+  // First open, with no conversation card to have already started the shared clock.
+  assert.equal(await page.locator('.background-state[data-expires-at]').count(), 0);
+  await panel(true);
+  const clocks = page.locator('#stream-waiting-list .background-state[data-expires-at]');
+  assert.equal(await clocks.count(), 2);
+  const mounted = await clocks.elementHandles();
+  const clockSnapshot = () => clocks.evaluateAll(nodes => nodes.map(n => ({ text: n.textContent, expiresAt: n.dataset.expiresAt })));
+  const initialClocks = await clockSnapshot(), startedAt = Date.now();
+  await delay(1600);
+  const nextClocks = await clockSnapshot();
+  console.log('COUNTDOWN', JSON.stringify({ before: initialClocks, after: nextClocks, elapsedMs: Date.now() - startedAt }));
+  for (const [index, initial] of initialClocks.entries()) {
+    assert.ok(await mounted[index].evaluate(n => n.isConnected), 'The same card stays mounted without a state redraw');
+    assert.equal(nextClocks[index].expiresAt, initial.expiresAt, 'Ticking preserves the stored deadline');
+    assert.notEqual(nextClocks[index].text, initial.text, 'First-open waiting countdown changes within 1.6 seconds');
+  }
+  assert.equal((await clockProbe()).timers.active, 1, 'Both cards use one observed shared timer');
+  record('both first-open waiting countdowns tick without a conversation card or deadline change');
+  await panel(false);
+  await idleClock('Closing the list with no conversation cards');
+  for (const handle of mounted) { assert.equal(await handle.evaluate(n => n.isConnected), false); await handle.dispose(); }
+  record('removing the last visible countdown stops the clock');
   for (const lang of ['zh', 'en']) for (const variant of ['implemented']) {
     await page.reload(); await page.locator('#new-session').waitFor(); await language(lang);
     await page.locator(`.session-link[data-session-id="${other}"]`).click();
@@ -157,9 +205,34 @@ async function main() {
   await pending(clear).locator('.background-buttons button:not(.primary)').click();
   await until(() => page.locator('#stream-waiting').isHidden(), 'Last cancellation clears the strip');
   const final = await client.call('initial');
+  assert.equal(await page.evaluate(async () => (await workspace.initial()).backgroundConfirmations.length), 0, 'No pending human confirmations');
+  await page.locator(`.session-link[data-session-id="${source}"]`).click(); await page.locator('#chat-tab').click();
+  assert.ok(await page.locator('#conversation-pane .background-void').count(), 'Historical superseded cards are still rendered');
+  await idleClock('Zero pending confirmations with old cards in the initiator conversation');
+  record('zero pending confirmations leave historical cards without a running clock');
   assert.equal(final.sessions.length, 2);
   await page.locator(`.session-link[data-session-id="${other}"]`).click(); await page.locator('#chat-tab').click();
   assert.equal(await page.locator('#message-input').inputValue(), '保留这份未发送的草稿。');
+  const again = await control('clearSharedHistory', []);
+  await until(async () => (await page.evaluate(() => workspace.initial())).backgroundConfirmations.length === 1, 'A new confirmation arrives');
+  await panel(true);
+  const renewed = pending(again).locator('.background-state[data-expires-at]');
+  const text = await renewed.textContent(), deadline = await renewed.getAttribute('data-expires-at');
+  await delay(1600);
+  assert.notEqual(await renewed.textContent(), text, 'The clock restarts for a new pending confirmation');
+  assert.equal(await renewed.getAttribute('data-expires-at'), deadline, 'Restart does not change the deadline');
+  const replacedNode = await renewed.elementHandle();
+  await panel(false); await panel(true);
+  assert.equal(await replacedNode.evaluate(n => n.isConnected), false, 'List repaint detaches the old countdown node');
+  await replacedNode.dispose();
+  assert.equal(await renewed.getAttribute('data-expires-at'), deadline, 'Repaint preserves the deadline');
+  const repaintedText = await renewed.textContent(); await delay(1600);
+  assert.notEqual(await renewed.textContent(), repaintedText, 'The replacement node keeps ticking');
+  assert.equal((await clockProbe()).timers.active, 1, 'Repaint retains only one shared timer');
+  await pending(again).locator('.background-buttons button:not(.primary)').click();
+  await until(() => page.locator('#stream-waiting').isHidden(), 'The renewed confirmation is cancelled');
+  await idleClock('Cancelling the renewed confirmation');
+  record('new confirmations restart the clock; repaint replaces nodes without retaining timers');
   assert.equal(fs.existsSync(createArgs[0].cwd), false, 'No requested directory created');
   const stats = await fixture('stats'); assert.equal(stats.modelCalls, 0); assert.equal(stats.nativeProcesses, 0);
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focused: w.isFocused() })));
