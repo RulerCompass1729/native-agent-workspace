@@ -4,7 +4,7 @@ test('pending strip uses the conversation card and excludes replaced requests', 
   const record = (id, state = 'confirmation-required') => ({ id, state, at: 1,
     actor: { id: 'a', nativeId: 'native-a', name: 'Agent A' }, command: { method: 'rename', arguments: ['a', 'New name'] },
     confirmation: { kind: 'message', options: { message: 'Confirm rename', detail: 'Full warning', buttons: ['Cancel', 'Confirm'], cancelId: 0 } } });
-  const f = Object.create(BackgroundControl.prototype);
+  const f = Object.create(BackgroundControl.prototype); f.now = () => 1000; f.inflight = new Map();
   f.data = { records: [record('old'), record('current'), record('done', 'complete')] };
   f.archivedBySession = new Map(); f.replacement = r => r.id === 'old' ? { state: 'waiting' } : null;
   const cards = f.pending();
@@ -14,7 +14,7 @@ test('pending strip uses the conversation card and excludes replaced requests', 
   assert.deepEqual(cards[0].buttons, ['Cancel', 'Confirm']);
 });
 test('actual replacement rules remove both a retried card and one answered on a newer card', () => {
-  const f = Object.create(BackgroundControl.prototype); f.archivedBySession = new Map();
+  const f = Object.create(BackgroundControl.prototype); f.now = () => 1000; f.inflight = new Map(); f.archivedBySession = new Map();
   const record = (id, at) => ({ id, at, state: 'confirmation-required', actor: { id: 'a', nativeId: 'native-a', name: 'A' },
     command: { method: 'rename', arguments: ['target', 'New name'], operation_id: id }, guard: { revision: 1 },
     confirmation: { kind: 'message', options: { message: 'Confirm', detail: 'Full warning', buttons: ['Cancel', 'Confirm'] } } });
@@ -45,7 +45,7 @@ test('pending confirmations are projected only into human windows, never agent s
 });
 
 test('a reused operation ID after native replacement never picks an archived card', () => {
-  const f = Object.create(BackgroundControl.prototype);
+  const f = Object.create(BackgroundControl.prototype); f.now = () => 1000; f.inflight = new Map();
   const make = nativeId => ({ id: 'same-operation', at: 1, state: 'confirmation-required', actor: { id: 'a', nativeId, name: 'A' },
     command: { method: 'rename', arguments: ['target', nativeId] },
     confirmation: { kind: 'message', options: { message: 'Confirm', buttons: ['Cancel', 'Confirm'] } } });

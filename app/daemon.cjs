@@ -179,6 +179,9 @@ async function main() {
       }
       case 'terminal': return workspace.terminal(args[0], owner);
       case 'terminalSnapshot': return workspace.terminalSnapshot(args[0], owner);
+      case 'inputIfCurrent':
+        if (!args[2]?.proof || !Number.isSafeInteger(args[2].expiresAt)) throw uiError('error.background.terminalUnverifiable');
+        return workspace.input(args[0], args[1], owner, args[2]);
       case 'input': return workspace.input(args[0], args[1], owner);
       case 'resize': return workspace.resize(args[0], owner, args[1], args[2]);
       case 'interrupt': return workspace.interrupt(args[0], owner);

@@ -22,6 +22,9 @@ const settledStates = new Set(['complete', 'received', 'awaiting-native', 'cance
 const recordTime = r => Number.isSafeInteger(r.finishedAt) ? r.finishedAt : r.at;
 const checkArchived = r => { if (!r || !token(r.id) || !r.actor || !token(r.actor.id) || !r.command || !token(r.state)) throw Error('Invalid archived operation'); };
 const MAX_PENDING_PER_ACTOR = 32, MAX_PENDING = 128;
+// Person-approved 2026-11-15: one policy point for new and retained pending cards.
+const CONFIRMATION_TTL_MS = Object.freeze({ input: 2 * 60 * 1000, other: 10 * 60 * 1000 });
+const confirmationExpiresAt = row => Number.isSafeInteger(row?.at) && row.at >= 0 ? row.at + (row.command?.method === 'input' ? CONFIRMATION_TTL_MS.input : CONFIRMATION_TTL_MS.other) : null;
 const REFUSAL_WINDOW_MS = 60000, MAX_REFUSAL_SUMMARIES = 128, NOTIFY_SHARE_MS = 60000;
 const REFUSAL_RETRY_HINT = 'invoke or snapshot: new operation_id or compacted refused ID is a fresh request.';
 const refusalRetry = () => ({ retryWithNewOperationId: true, retryHint: REFUSAL_RETRY_HINT });
@@ -82,6 +85,7 @@ const parameters = {
   initial: ['Selected foreign conversation requires confirmation; read the resulting operation receipt after approval. The designated butler in no space reads it without confirmation and gets it in the same answer.'], preflight: [], dataDirectory: [], retrySave: [], reconnect: [], connectionUpdates: [], quitService: [],
   interfaceSettings: ['action: describe|update', 'namespace: locale|client-ui-theme (update only)', 'patch (update only)', 'current revision from describe (update only)'],
   prepareInput: ['sessionId'], observe: ['sessionId'], unobserve: ['sessionId'], claim: ['sessionId', 'mode: chat|terminal'],
+  backgroundWithdraw: ['operationId of your own pending confirmation; cancels without execution'],
   terminal: ['sessionId'], terminalSnapshot: ['sessionId'], input: ['sessionId', 'exact terminal input'], resize: ['sessionId', 'cols', 'rows'],
   interrupt: ['sessionId'], pause: [], approve: ['sessionId', 'requestId', 'decision: accept|decline|cancel'], answer: ['sessionId', 'requestId', 'answers'],
   wakePolicy: ['sessionId or null for global', 'enabled?'], operatorAction: ['sessionId', 'action', 'value?'],
@@ -149,7 +153,7 @@ function refusalDetails(reason) {
 // to tell whether two cards asked about the same targets after one of them was answered.
 const guardTargets = guard => guard && typeof guard === 'object' ? { auditRooms: guard.auditRooms ?? null,
   sessions: Array.isArray(guard.sessions) ? guard.sessions.map(s => [s?.id ?? null, s?.nativeId ?? null]) : null } : null;
-const confirmedDecision = r => Number.isSafeInteger(r.humanDecision) && r.humanDecision !== (r.confirmation?.options?.cancelId ?? 0);
+const confirmedDecision = r => (!r.disposition || r.handlerStarted) && Number.isSafeInteger(r.humanDecision) && r.humanDecision !== (r.confirmation?.options?.cancelId ?? 0);
 const compactRefusal = row => { row.guard = { auditRooms: row.guard?.auditRooms || ['shared'] }; };
 // Input queued for a native session: answered once NAW recorded it, not when native took it.
 const queuedDelivery = args => ['queue', 'queueShared'].includes(args.method === 'spaceAction' ? args.arguments?.[1] : args.method);
@@ -218,6 +222,7 @@ class BackgroundControl {
         }
       });
     } catch (e) { this.failed = true; throw e; }
+    this.expirePending(); this.scheduleExpiry();
   }
   // Every settled record, and what deleted blocks held (operation ids that must never run again), read whole.
   loadHistory() {
@@ -326,11 +331,58 @@ class BackgroundControl {
       try { fs.writeFileSync(fd, text); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
       fs.renameSync(temporary, this.file); renamed = true;
       const dir = fs.openSync(path.dirname(this.file), 'r'); try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
-      this.data = next; this.changed();
+      this.data = next; this.scheduleExpiry(); this.changed();
     } catch (error) {
       this.failed = true; if (!renamed) fs.rmSync(temporary, { force: true });
       throw Error('Background operation save is unconfirmed; no automatic replay', { cause: error });
     }
+  }
+  settlementFields(row, disposition, reason) {
+    // A follow-up question can be reached after effects. Only its remaining work is cancelled.
+    return { state: row.handlerStarted ? 'unconfirmed' : disposition === 'withdrawn' ? 'cancelled' : 'not-executed', disposition, reason,
+      stateUiMessage: { key: 'background.card.' + disposition + (row.handlerStarted ? 'AfterStart' : ''), params: {} },
+      resultNotice: { key: row.handlerStarted ? 'background.card.reason.partial-operation' : 'background.card.reason.' + reason, params: {} }, finishedAt: this.now() };
+  }
+  settlePending(row, disposition, reason) {
+    this.commit(data => {
+      const current = data.records.find(r => this.key(r.actor) === this.key(row.actor) && r.id === row.id);
+      if (!current || current.state !== 'confirmation-required') throw Error('This confirmation was already handled');
+      Object.assign(current, this.settlementFields(current, disposition, reason));
+    });
+    return this.receipt(row.actor, row.id);
+  }
+  expired(row) { return row.state === 'confirmation-required' && confirmationExpiresAt(row) !== null && this.now() >= confirmationExpiresAt(row); }
+  expiryFields(row) { return { ...this.settlementFields(row, 'expired', 'deadline-elapsed'), finishedAt: confirmationExpiresAt(row) }; }
+  expirePending() {
+    if (this.closed || this.failed) return;
+    const now = this.now(), due = this.data.records.filter(r => r.state === 'confirmation-required' && !this.inflight.has(this.key(r.actor)) &&
+      confirmationExpiresAt(r) !== null && now >= confirmationExpiresAt(r));
+    if (!due.length) return;
+    const keys = new Set(due.map(r => this.key(r.actor) + ':' + r.id));
+    this.commit(data => { for (const row of data.records) if (keys.has(this.key(row.actor) + ':' + row.id)) {
+      Object.assign(row, this.settlementFields(row, 'expired', 'deadline-elapsed'));
+    } });
+  }
+  scheduleExpiry() {
+    clearTimeout(this.expiryTimer); this.expiryTimer = null;
+    if (this.closed || this.failed) return;
+    const deadlines = this.data.records.filter(r => r.state === 'confirmation-required' && (!this.expired(r) || !this.inflight.has(this.key(r.actor)))).map(confirmationExpiresAt).filter(v => v !== null);
+    if (!deadlines.length) return;
+    this.expiryTimer = setTimeout(() => { try { this.expirePending(); } catch { /* The failed store blocks execution; stop its timer. */ } this.scheduleExpiry(); this.changed(); }, Math.max(1, Math.min(2147483647, Math.min(...deadlines) - this.now())));
+    this.expiryTimer.unref?.();
+  }
+  terminalSnapshot(context) {
+    try { return context.terminalConsentSnapshot?.() || context.client?.snapshot?.() || null; } catch { return null; }
+  }
+  async withdraw(actor, id, context) {
+    const request = operation.request();
+    if (!request || request.context !== context || request.args.method !== 'backgroundWithdraw' || this.key(request.actor) !== this.key(actor) || !token(id))
+      throw require('./ui-errors.cjs').uiError('error.background.withdrawNotPending');
+    // The enclosing perform owns this actor's slot, shared with human decide(). No await before mutation.
+    const row = this.data.records.find(r => r.id === id && this.key(r.actor) === this.key(actor));
+    if (!row || row.state !== 'confirmation-required') throw require('./ui-errors.cjs').uiError('error.background.withdrawNotPending');
+    if (confirmationExpiresAt(row) !== null && this.now() >= confirmationExpiresAt(row)) return this.settlePending(row, 'expired', 'deadline-elapsed');
+    return this.settlePending(row, 'withdrawn', 'withdrawn-by-originator');
   }
   key(sender) { return `${sender.provider}:${sender.id}:${sender.nativeId}`; }
   catalog() { return [...this.handlers.keys()].filter(name => !['backgroundDecision', 'uiReady'].includes(name)).sort().map(name => ({ method: name, parameters: parameters[name] || [],
@@ -562,6 +614,7 @@ class BackgroundControl {
       ...(auditError ? { auditError } : {}) };
   }
   confirmationRefusal(actor, args, context, guard, diagnostic = {}) {
+    this.expirePending();
     const unavailable = cause => { diagnostic.cause = cause; return 'originating-session-unavailable'; };
     let sessions;
     try { sessions = typeof context.confirmationActors === 'function' ? context.confirmationActors() : guard?.sessions; }
@@ -573,7 +626,7 @@ class BackgroundControl {
     if (requester.nativeContextPending) return unavailable('context-pending');
     const key = this.key(actor), pending = this.data.records.filter(r =>
       !(r.id === args.operation_id && this.key(r.actor) === key) &&
-      (r.state === 'confirmation-required' && r.confirmation?.kind === 'message' || r.state === 'running' && operation.maintenanceAction(r.command.method, r.command.arguments, r.actor)) &&
+      (r.state === 'confirmation-required' && !this.expired(r) && r.confirmation?.kind === 'message' || r.state === 'running' && operation.maintenanceAction(r.command.method, r.command.arguments, r.actor)) &&
       sessions.some(s => s.id === r.actor.id && s.nativeId === r.actor.nativeId && !s.archived && !s.nativeContextPending));
     return pending.length >= MAX_PENDING || pending.filter(r => this.key(r.actor) === key).length >= MAX_PENDING_PER_ACTOR ? 'confirmation-limit' : null;
   }
@@ -587,7 +640,7 @@ class BackgroundControl {
     if (this.closed) throw Error('Background control is closing');
     let args = validate(input); const { sender, identity } = binding;
     const valid = async () => { await binding.refresh?.(); if (!binding.valid()) throw Error('The originating native call is no longer valid'); };
-    await valid();
+    await valid(); this.expirePending();
     if (args.action === 'catalog') return { state: 'complete', commands: this.catalog(), background: true };
     if (args.action === 'receipt') {
       const saved = this.receipt(sender, args.operation_id), gone = !saved && this.deletedReply(sender, args.operation_id);
@@ -682,7 +735,7 @@ class BackgroundControl {
     // selector, so their selector errors must retain their original records.
     if (args.method === 'chooseFolder' && args.paths?.length !== 1) return this.recordRefusal(actor, args, context, 'explicit-paths-required');
     // Save intent before calling ANY mutation, including an independent draft.
-    this.commit(d => d.records.push({ id: args.operation_id, actor, command: args, guard, state: 'running', at: this.now() }));
+    this.commit(d => d.records.push({ id: args.operation_id, actor, command: args, guard, ...(args.method === 'input' ? { terminalConsent: operation.terminalInputProof(this.terminalSnapshot(context)?.sessions?.find(s => s.id === args.arguments[0])) } : {}), state: 'running', at: this.now() }));
     return this.execute(actor, args, context, valid);
   }
   exclusive(actor, work) {
@@ -691,16 +744,18 @@ class BackgroundControl {
     // Reserve synchronously, before context lookup, identity refresh or prompts.
     const job = Promise.resolve().then(work);
     this.inflight.set(key, job);
-    return job.finally(() => { if (this.inflight.get(key) === job) this.inflight.delete(key); });
+    return job.finally(() => { if (this.inflight.get(key) === job) this.inflight.delete(key); this.expirePending(); this.scheduleExpiry(); });
   }
   execute(actor, args, context, valid, approved) {
     return this.exclusive(actor, () => this.perform(actor, args, context, valid, approved));
   }
   async perform(actor, args, context, valid, approved) {
     const key = this.key(actor), handler = this.handlers.get(args.method);
-      let state, value, error, confirmation, delivery, refusal, originCheck, preconditionError, handlerEntered = false;
+    const checkDeadline = () => { if (approved && this.now() >= approved.expiresAt) throw require('./ui-errors.cjs').uiError('error.background.confirmationExpired'); };
+      let state, value, error, confirmation, delivery, refusal, originCheck, preconditionError, disposition, reason, handlerEntered = false;
       try {
         await valid();
+        checkDeadline();
         if (this.closed) throw Error('Background control is closing');
         const row = this.receipt(actor, args.operation_id);
         if (row.guard && !isDeepStrictEqual(row.guard, controlGuard(context, args))) throw Error('The operation target changed before execution');
@@ -743,6 +798,7 @@ class BackgroundControl {
               if (terminalReads.has(args.method)) terminalTarget = target;
             }
           }
+          checkDeadline();
           handlerEntered = true;
           if (!terminalTarget) return handler(context, ...args.arguments);
           const result = await handler(context, ...args.arguments), frozen = result === undefined ? undefined : clone(result);
@@ -761,7 +817,13 @@ class BackgroundControl {
         delivery = await context.delivery?.(args, value, actor, row.guard);
         state = delivery ? delivery.nativeReceived ? 'received' : 'awaiting-native' : 'complete';
       } catch (e) {
-        if (preconditionError && e === preconditionError) { refusal = refusalDetails(e.reason); state = refusal.state; error = e.message.slice(0, 2048); }
+        if (approved && ['error.background.confirmationExpired', 'error.background.terminalInvalidated', 'error.background.terminalUnverifiable'].includes(e.uiMessage?.key)) {
+          const unknown = e.uiMessage.key === 'error.background.terminalUnverifiable';
+          disposition = unknown ? undefined : e.uiMessage.key === 'error.background.confirmationExpired' ? 'expired' : 'invalidated';
+          reason = unknown ? 'temporarily-unavailable' : disposition === 'expired' ? 'deadline-elapsed' : 'state-changed';
+          state = unknown ? 'confirmation-required' : 'not-executed'; confirmation = unknown ? approved.confirmation : undefined;
+        }
+        else if (preconditionError && e === preconditionError) { refusal = refusalDetails(e.reason); state = refusal.state; error = e.message.slice(0, 2048); }
         else if (e instanceof ConfirmationRequired && e.confirmation?.kind === 'message') {
           // Refresh first; the quota decision and pending-row commit below have
           // no await between them. Concurrent actors cannot both take slot128.
@@ -807,7 +869,7 @@ class BackgroundControl {
         // Only a resumable handler needs this marker. A later approval cannot
         // claim non-execution if an earlier handler may already have had effects.
         if (handlerEntered && state === 'confirmation-required') row.handlerStarted = true;
-        Object.assign(row, { state, finishedAt: this.now(), ...(privateValue ? { readTarget: target, readState: row.readAuthorization ? 'pending' : 'consumed',
+        Object.assign(row, { state, ...(reason ? { reason, resultNotice: { key: 'background.card.reason.' + reason, params: {} } } : {}), ...(disposition ? this.settlementFields(row, disposition, reason) : {}), finishedAt: this.now(), ...(privateValue ? { readTarget: target, readState: row.readAuthorization ? 'pending' : 'consumed',
           ...(!row.readAuthorization ? { readConsumedAt: this.now() } : {}) } : value === undefined ? {} : { value: clone(value) }),
           ...(delivery ? { delivery } : {}), ...(error ? { error } : {}), ...(confirmation ? { confirmation } : {}) });
         if (refusal) { Object.assign(row, refusal); if (!approved || preconditionError) compactRefusal(row); }
@@ -845,9 +907,15 @@ class BackgroundControl {
     if (decision === 'confirmed' && this.sameRequests(row).some(({ r, later }) => later && confirmedDecision(r))) throw require('./ui-errors.cjs').uiError('error.background.confirmedOnLaterCard');
     // Reserved synchronously, so no window is closed while the person's answer is carried out.
     return this.exclusive(row.actor, async () => {
+    if (confirmationExpiresAt(row) !== null && this.now() >= confirmationExpiresAt(row)) return this.settlePending(row, 'expired', 'deadline-elapsed');
     const context = await this.view(row.actor, row.command.view_id);
     try { await context.checkActor(); }
     catch (error) {
+      if (confirmationExpiresAt(row) !== null && this.now() >= confirmationExpiresAt(row)) return this.settlePending(row, 'expired', 'deadline-elapsed');
+      if (row.command.method === 'input') {
+        this.commit(d => { const r = d.records.find(r => r.id === id && this.key(r.actor) === this.key(row.actor)); Object.assign(r, { reason: 'temporarily-unavailable', resultNotice: { key: 'background.card.reason.temporarily-unavailable', params: {} } }); });
+        return this.receipt(row.actor, id);
+      }
       this.commit(d => { const r = d.records.find(r => r.id === id && this.key(r.actor) === this.key(row.actor));
         delete r.confirmation;
         Object.assign(r, { state: 'unconfirmed', error: String(error.message).slice(0, 2048), finishedAt: this.now() }); });
@@ -859,8 +927,25 @@ class BackgroundControl {
       this.commit(d => { const r = d.records.find(r => r.id === id && r.actor.id === sessionId && r.actor.nativeId === nativeId); Object.assign(r, { state: 'cancelled', humanDecision: response, finishedAt: this.now() }); });
       return this.finishAudit(row.actor, id, context);
     }
-    this.commit(d => { const r = d.records.find(r => r.id === id && r.actor.id === sessionId && r.actor.nativeId === nativeId); Object.assign(r, { state: 'running', humanDecision: response, humanDecisionAt: this.now() }); });
-    return this.perform(row.actor, row.command, context, () => context.checkActor(), { operationId: id, confirmation: row.confirmation, response });
+    if (confirmationExpiresAt(row) === null) {
+      this.commit(d => { const r = d.records.find(r => r.id === id && this.key(r.actor) === this.key(row.actor)); Object.assign(r, { reason: 'evidence-unavailable', resultNotice: { key: 'background.card.reason.evidence-unavailable', params: {} } }); });
+      return this.receipt(row.actor, id);
+    }
+    if (this.now() >= confirmationExpiresAt(row)) return this.settlePending(row, 'expired', 'deadline-elapsed');
+    if (row.command.method === 'input') {
+      const check = operation.checkTerminalInput(row.terminalConsent, this.terminalSnapshot(context), row.command.arguments[0]);
+      if (check.status === 'invalid') return this.settlePending(row, 'invalidated', check.reason);
+      const snapshot = this.terminalSnapshot(context), target = snapshot?.sessions?.find(s => s.id === row.command.arguments[0]);
+      const observable = target && !snapshot.unavailable && !target.transportDisconnected && !target.backendUnavailable && !target.nativeContextPending;
+      if (observable) try { if (row.guard && !isDeepStrictEqual(row.guard, controlGuard(context, row.command))) return this.settlePending(row, 'invalidated', 'state-changed'); }
+      catch { return this.receipt(row.actor, id); }
+      if (check.status !== 'valid') {
+        this.commit(d => { const r = d.records.find(r => r.id === id && this.key(r.actor) === this.key(row.actor)); Object.assign(r, { reason: check.reason, resultNotice: { key: 'background.card.reason.' + check.reason, params: {} } }); });
+        return this.receipt(row.actor, id);
+      }
+    }
+    this.commit(d => { const r = d.records.find(r => r.id === id && r.actor.id === sessionId && r.actor.nativeId === nativeId); delete r.reason; delete r.resultNotice; delete r.stateUiMessage; Object.assign(r, { state: 'running', humanDecision: response, humanDecisionAt: this.now() }); });
+    return this.perform(row.actor, row.command, context, () => context.checkActor(), { operationId: id, confirmation: row.confirmation, response, terminalConsent: row.terminalConsent, expiresAt: confirmationExpiresAt(row) });
     }).then(result => {
       // Whatever came of it (carried out, cancelled, or not carried out because the asking session changed), the agent
       // that asked is told once it is recorded; an answer refused as no longer current changed nothing and tells nothing.
@@ -897,21 +982,23 @@ class BackgroundControl {
   }
   // `names` is the page's display state; an agent's own view (null) gets the rows as before, without the card's words.
   rows(sessionId, names = {}) {
+    this.expirePending();
     const own = [...(this.archivedBySession.get(sessionId) || []), ...this.data.records.filter(r => r.actor.id === sessionId)];
-    return own.map(r => ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
+    return own.map(saved => { const r = this.expired(saved) ? { ...saved, ...this.expiryFields(saved) } : saved; return ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
       name: operation.visibleText(r.actor.name), time: r.at, status: ['running', 'awaiting-native'].includes(r.state) ? 'working' : ['complete', 'received', 'cancelled'].includes(r.state) ? 'complete' : 'error',
-      text: operation.visibleText(`${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', 'not-executed': '未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`),
-      backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state,
+      text: operation.visibleText(`${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${r.disposition ? require('./ui-locale.js').format('zh', r.stateUiMessage.key) : ({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', 'not-executed': '未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`),
+      backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state, ...(r.disposition ? { disposition: r.disposition, stateUiMessage: r.stateUiMessage } : {}), ...(r.state === 'confirmation-required' ? { expiresAt: confirmationExpiresAt(r) } : {}),
         confirmation: r.confirmation ? { ...r.confirmation, options: visibleOptions(r.confirmation.options) } : null,
-        resultNotice: r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null,
+        resultNotice: r.resultNotice || (r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null),
         ...(names ? { summary: operation.operationSummary(r.command, r.actor, names), arguments: operation.visibleText(JSON.stringify(r.command.arguments ?? [], null, 2)),
           ...(r.error ? { error: operation.visibleText(String(r.error)) } : {}),
-          ...(r.state === 'confirmation-required' ? { replacedBy: this.replacement(r, own), repeated: this.repeated(r, own) } : {}) } : {}) } }));
+          ...(r.state === 'confirmation-required' ? { replacedBy: this.replacement(r, own), repeated: this.repeated(r, own) } : {}) } : {}) } }); });
   }
   // Human-window waiting strip: reuse the conversation card and its warnings.
   pending(names = {}) {
+    this.expirePending();
     const rows = new Map();
-    return this.data.records.filter(r => r.state === 'confirmation-required' && r.confirmation?.kind === 'message' &&
+    return this.data.records.filter(r => r.state === 'confirmation-required' && !this.expired(r) && r.confirmation?.kind === 'message' &&
       Array.isArray(r.confirmation.options?.buttons) && !this.replacement(r)).map(r => {
       if (!rows.has(r.actor.id)) rows.set(r.actor.id, this.rows(r.actor.id, names));
       const message = rows.get(r.actor.id).find(m => m.backgroundOperation.id === r.id && m.backgroundOperation.nativeId === r.actor.nativeId);
@@ -922,7 +1009,7 @@ class BackgroundControl {
     });
   }
   async close() {
-    this.closed = true; clearInterval(this.sweeper);
+    this.closed = true; clearTimeout(this.expiryTimer); this.expiryTimer = null; clearInterval(this.sweeper);
     this.readCopies.clear(); this.readBytes = 0;
     // Close our connections first so a queued native wait cannot hold GUI quit.
     // The native session and any input already accepted by it remain untouched.
@@ -958,4 +1045,4 @@ function dialog(context, kind, options, nativeDialog) {
   }
   throw new ConfirmationRequired({ kind, options });
 }
-module.exports = { BackgroundControl, ConfirmationRequired, PreconditionRefused, validate, tool, dialog, agentReply };
+module.exports = { BackgroundControl, ConfirmationRequired, PreconditionRefused, validate, tool, dialog, agentReply, CONFIRMATION_TTL_MS, confirmationExpiresAt };

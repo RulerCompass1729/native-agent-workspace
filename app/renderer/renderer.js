@@ -2548,12 +2548,27 @@ function backgroundButtonKeys(options) {
   const keys = ['common.cancel', 'background.confirm'], format = window.nativeWorkspaceLocale.format;
   return options.buttons.length === 2 && (options.cancelId ?? 0) === 0 && keys.every((key, i) => ['zh', 'en'].some(locale => format(locale, key) === options.buttons[i])) ? keys : null;
 }
+// One clock for the existing status spans; no state RPC or model work per tick.
+let backgroundExpiryClock;
+function backgroundRemaining(line) {
+  const seconds = Math.max(0, Math.ceil((Number(line.dataset.expiresAt) - Date.now()) / 1000));
+  const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  ui.display.text(line, seconds ? 'background.card.remaining' : 'background.card.elapsed', { time });
+}
+function scheduleBackgroundExpiryClock() {
+  clearTimeout(backgroundExpiryClock);
+  if (!document.querySelector('.background-state[data-expires-at]')) return;
+  backgroundExpiryClock = setTimeout(() => {
+    for (const line of document.querySelectorAll('.background-state[data-expires-at]')) backgroundRemaining(line);
+    scheduleBackgroundExpiryClock();
+  }, 1000);
+}
 function renderBackgroundControls(entry, message) {
   const op = message.backgroundOperation, question = op?.state === 'confirmation-required' && op.confirmation;
   const card = question?.kind === 'message' && Array.isArray(question.options?.buttons), summary = op?.summary;
   // Before the unchanged-record return: the reading list rewrites the row's class name on every pass.
-  entry.item.classList.toggle('background-card', Boolean(card && !op.replacedBy));
-  entry.item.classList.toggle('background-void', Boolean(card && op.replacedBy));
+  entry.item.classList.toggle('background-card', Boolean(card && !op.replacedBy && !op.disposition));
+  entry.item.classList.toggle('background-void', Boolean(op?.disposition || card && op.replacedBy));
   const key = JSON.stringify([op, disconnected]);
   if (key === entry.backgroundKey) return;
   entry.backgroundKey = key;
@@ -2563,8 +2578,9 @@ function renderBackgroundControls(entry, message) {
   const box = node('div', undefined, `background-operation${card ? ' background-controls' : ''}`);
   entry.backgroundControls = box; entry.actions.before(box);
   const line = node('p', undefined, 'background-line'), state = node('span', undefined, 'background-state'), sentence = node('span', undefined, 'background-sentence');
-  const stateKey = op.replacedBy ? 'background.card.void' : card ? 'background.card.waiting' : backgroundStates.includes(op.state) ? 'background.state.' + op.state : '';
+  const stateKey = op.stateUiMessage?.key || (op.replacedBy ? 'background.card.void' : card ? 'background.card.waiting' : backgroundStates.includes(op.state) ? 'background.state.' + op.state : '');
   if (stateKey) ui.display.text(state, stateKey); else state.textContent = op.state;
+  if (card && Number.isSafeInteger(op.expiresAt)) { state.dataset.expiresAt = String(op.expiresAt); backgroundRemaining(state); scheduleBackgroundExpiryClock(); }
   if (summary) ui.display.computed(sentence, 'text', () => backgroundSummaryText(summary));
   else if (card) sentence.textContent = question.options.message || '';
   line.append(state, sentence);
@@ -2590,7 +2606,7 @@ function renderBackgroundControls(entry, message) {
     const details = node('details', undefined, 'background-details'), label = uiNode('summary', 'background.card.details');
     details.append(label, node('pre', raw)); box.append(details);
   }
-  if (!card || op.replacedBy) return;
+  if (!card || op.replacedBy || op.disposition) return;
   const buttons = node('div', undefined, 'background-buttons'), keys = backgroundButtonKeys(question.options);
   question.options.buttons.forEach((label, response) => {
     const cancel = response === (question.options.cancelId ?? 0);
@@ -6753,4 +6769,4 @@ attempt(async () => {
   await select(landing ? landing.id : state.viewState.selected || '', mode); await api.uiReady(); reportLanguageWarning();
 });
 const disposeContentMenus = bindContentMenus();
-return () => { clearInterval(nativeActivityClock); roomOverview?.dispose(); document.removeEventListener('toggle', updateSelectedSharing, true); document.removeEventListener('selectionchange', documentSelectionChanged); document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); disposeReadingViews(); disposeContentMenus(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };
+return () => { clearTimeout(backgroundExpiryClock); clearInterval(nativeActivityClock); roomOverview?.dispose(); document.removeEventListener('toggle', updateSelectedSharing, true); document.removeEventListener('selectionchange', documentSelectionChanged); document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); disposeReadingViews(); disposeContentMenus(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };

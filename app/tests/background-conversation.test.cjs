@@ -378,7 +378,8 @@ test('navigation receipts do not expose native questions, while changed question
   const pending = await f.controller.call(f.binding, command('input', ['agent', 'input'])); assert.equal(pending.state, 'confirmation-required');
   assert.match(pending.guard.sessions[0].approval, /^sha256:[a-f0-9]{64}$/);
   f.state.sessions[0].approval.params.command = 'CHANGED_NATIVE_QUESTION';
-  assert.equal((await f.controller.decide('agent', 'native-agent', pending.id, 1)).state, 'unconfirmed'); assert.equal(writes, 0);
+  const refused = await f.controller.decide('agent', 'native-agent', pending.id, 1);
+  assert.equal(refused.state, 'unconfirmed'); assert.equal(refused.disposition, 'invalidated'); assert.equal(refused.resultNotice.key, 'background.card.reason.partial-operation'); assert.equal(writes, 0);
   assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('CHANGED_NATIVE_QUESTION'), false);
 });
 for (const mode of ['leave', 'secretary', 'native']) test(`a frozen receipt uses current space authority, not saved membership: ${mode}`, async t => {
