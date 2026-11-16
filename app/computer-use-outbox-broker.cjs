@@ -82,13 +82,17 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
   const socketPath = path.join(dir, 'outbox.sock'), capability = crypto.randomBytes(32).toString('hex');
   const sockets = new Set(), operations = new Set(), controllers = new Set(); let busy = false, closed = false, closing;
   // Waits for cleanup until answerBy at most; the cleanup itself still runs and counts as under way.
-  const cleanupBy = (cleanup, answerBy) => {
+  const cleanupBy = (cleanup, answerBy, cleanupTimeoutMs) => {
     const pending = Promise.resolve(cleanup);
     if (!Number.isFinite(answerBy)) return pending;
     operations.add(pending); pending.catch(() => {}).finally(() => operations.delete(pending));
+    const remaining = Math.max(0, answerBy - Date.now());
+    // Near the connection limit we cannot afford the managed close's full wait.
+    // Give a ready acknowledgement one second, then answer unconfirmed while still owning cleanup.
+    const wait = Number.isFinite(cleanupTimeoutMs) && remaining < cleanupTimeoutMs ? Math.min(remaining, ANSWER_MARGIN_MS) : remaining;
     let timer;
     return Promise.race([pending, new Promise((_, reject) => {
-      timer = setTimeout(() => reject(outboxError('cleanup-unconfirmed', 'cleanup')), Math.max(0, answerBy - Date.now()));
+      timer = setTimeout(() => reject(outboxError('cleanup-unconfirmed', 'cleanup')), wait);
     })]).finally(() => clearTimeout(timer));
   };
   const submitControlAuthenticated = (factory, signal, answerBy) => {
@@ -100,7 +104,7 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
       let binding, result, primary, refused = false;
       try { binding = await factory(abort.signal); result = await control(binding, binding.args); }
       catch (error) { primary = error; refused = true; }
-      try { await cleanupBy(binding?.close?.(), answerBy); }
+      try { await cleanupBy(binding?.close?.(), answerBy, binding?.cleanupTimeoutMs); }
       catch (error) {
         // Effects may already be durable. Keep only the operation identity so
         // its receipt can be inspected; never release a private value on failure.
