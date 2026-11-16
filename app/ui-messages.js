@@ -22,6 +22,8 @@
     "records.temp.person": "由你本人操作",
     "records.temp.unavailable": "临时文件暂时无法核查",
     "records.temp.inspectionFailed": "本次检查未完成，暂不提供清理。可以稍后重新打开提醒。",
+    "records.temp.registrationIncomplete": "临时目录登记尚未完成，可能仍在进行，也可能曾异常中断；无法确认，暂不清理。不会自动重置登记记录。",
+    "records.temp.registrationUnavailable": "临时目录登记的校验信息无法读取或不安全，暂不清理。不会自动重建登记记录。",
     "records.temp.failed": "未能完成本次操作。请重新打开提醒查看结果；不会自动重试清理。",
 
     "vendor.label": "{vendor} 模型 · 在 {shell} 里运行",
@@ -3325,6 +3327,8 @@
     "records.temp.person": "For you to act on",
     "records.temp.unavailable": "Temporary files could not be checked",
     "records.temp.inspectionFailed": "This check did not finish. Cleanup is unavailable. Open reminders again later.",
+    "records.temp.registrationIncomplete": "Temporary folder registration is incomplete. It may still be running or may have been interrupted. Cleanup is unavailable; registration records will not be reset automatically.",
+    "records.temp.registrationUnavailable": "Temporary folder registration metadata is unreadable or unsafe. Cleanup is unavailable; registration records will not be rebuilt automatically.",
     "records.temp.failed": "The operation could not be completed. Reopen reminders to check the result. Cleanup will not retry automatically.",
 
     "vendor.label": "{vendor} model · runs in {shell}",

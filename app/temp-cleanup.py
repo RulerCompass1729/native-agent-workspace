@@ -6,7 +6,8 @@ entry and holds directory descriptors rather than following replacement paths.
 """
 import json, os, stat, sys, subprocess, re, hashlib, time
 
-class RegistryChanged(Exception): pass
+class RegistryChanged(Exception):
+    def __init__(self, issue=None): self.issue=issue
 
 def registration_generation(fd):
     descriptors=[]
@@ -15,14 +16,15 @@ def registration_generation(fd):
         for s in (held,current):
             if not stat.S_ISREG(s.st_mode) or s.st_uid!=os.getuid() or s.st_mode&0o077 or s.st_nlink!=1 or s.st_size>16*1024*1024:
                 raise ValueError('unsafe registration counter')
-        if (held.st_dev,held.st_ino)!=(current.st_dev,current.st_ino): raise RegistryChanged()
+        if (held.st_dev,held.st_ino)!=(current.st_dev,current.st_ino): raise RegistryChanged('metadata-unavailable')
         return [str(held.st_dev),str(held.st_ino),str(held.st_uid),str(held.st_mode),str(held.st_size)]
     try:
         names=('registration-started','registration-finished')
         for name in names: descriptors.append(os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd))
         started=counter(descriptors[0],names[0]); finished=counter(descriptors[1],names[1])
-        if started!=counter(descriptors[0],names[0]) or started[4]!=finished[4]: raise RegistryChanged()
+        if started!=counter(descriptors[0],names[0]) or started[4]!=finished[4]: raise RegistryChanged('incomplete')
         return {'started':started,'finished':finished}
+    except (OSError, ValueError): raise RegistryChanged('metadata-unavailable')
     finally:
         for source in descriptors: os.close(source)
 
@@ -156,8 +158,10 @@ def main():
         registry_current(registry_fd,proof)
         os.rmdir(os.path.basename(root),dir_fd=parent)
         print(json.dumps({'removed':True,'bytes':removed_bytes}))
-    except RegistryChanged:
-        print(json.dumps({'removed':False,'bytes':removed_bytes,'registryChanged':True,'untouched':removed_entries==0}))
+    except RegistryChanged as error:
+        result={'removed':False,'bytes':removed_bytes,'registryChanged':True,'untouched':removed_entries==0}
+        if error.issue: result['registrationIssue']=error.issue
+        print(json.dumps(result))
     except Exception:
         print(json.dumps({'removed':False,'bytes':removed_bytes}))
     finally:

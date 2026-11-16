@@ -38,14 +38,25 @@ function openCounters(registryDir,create=false) {
 }
 const registrationChanged=()=>Object.assign(Error('Temporary registration changed'),{code:'TEMP_CHANGED'});
 function generation(registryDir,create=false) {
-  const fds=openCounters(registryDir,create);
+  let fds=[];
   try {
+    fds=openCounters(registryDir,create);
     const started=counter(fds[0],path.join(registryDir,counterNames[0])),finished=counter(fds[1],path.join(registryDir,counterNames[1]));
     const again=counter(fds[0],path.join(registryDir,counterNames[0]));
-    if(JSON.stringify(started)!==JSON.stringify(again))throw registrationChanged();
-    if(started[4]!==finished[4])throw Error('Temporary registration is incomplete; cleanup unverified');
+    if(JSON.stringify(started)!==JSON.stringify(again))throw Object.assign(registrationChanged(),{registrationIssue:'incomplete'});
+    if(started[4]!==finished[4])throw Object.assign(Error('Temporary registration is incomplete; cleanup unverified'),{registrationIssue:'incomplete'});
     return {started,finished};
+  } catch(error) {
+    error.registrationIssue ||= 'metadata-unavailable';throw error;
   } finally {for(const fd of fds)fs.closeSync(fd);}
+}
+// Read-only diagnosis, never reconciliation. Anonymous increments cannot prove
+// whether a missing completion belongs to a dead writer or a paused live one.
+function checkRegistration(registryDir=defaultDirectory()) {
+  try {privateDirectory(registryDir);}catch(error){if(error.code==='ENOENT')return;throw error;}
+  const present=counterNames.map(name=>{try{fs.lstatSync(path.join(registryDir,name));return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}});
+  if(!present.some(Boolean))return; // Existing pre-protocol inventory admission.
+  return generation(registryDir);
 }
 function advance(fd,file) {
   if(Number(counter(fd,file)[4])>=COUNTER_LIMIT)throw Error('Temporary registration counter is full');
@@ -57,7 +68,7 @@ function advance(fd,file) {
 function revision(registryDir = defaultDirectory(), check = () => {}) {
   const deadline=performance.now()+10000;
   privateDirectory(registryDir);
-  const registered=generation(registryDir,true);
+  const registered=checkRegistration(registryDir)||generation(registryDir,true);
   const s=fs.lstatSync(registryDir,{bigint:true});
   if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==BigInt(process.getuid())||s.mode&0o077n)throw Error('Unsafe temporary ownership store');
   const hash=createHash('sha256'),directory=fs.opendirSync(registryDir);
@@ -160,4 +171,4 @@ async function pruneMissing(registryDir = defaultDirectory()) {
   }
   return removed;
 }
-module.exports={register,read,batches,forget,forgetMissing,pruneMissing,defaultDirectory,roots,inside,revision};
+module.exports={register,read,batches,forget,forgetMissing,pruneMissing,defaultDirectory,roots,inside,revision,checkRegistration};

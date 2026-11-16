@@ -37,6 +37,7 @@
       return ['records.item.unreadable', { blocks: entry.blocks, from: entry.fromSequence, through: entry.throughSequence }];
     }
     // The reminders: one section per record with something due, in the order the records are listed.
+    const registrationText = issue => issue === 'incomplete' ? 'records.temp.registrationIncomplete' : issue === 'metadata-unavailable' ? 'records.temp.registrationUnavailable' : null;
     function draw() {
       dialog.dataset.view = 'reminders'; dialog.replaceChildren();
       const title = make('h2', '', 'records.title'); title.id = (dialog.id || 'records-dialog') + '-title'; dialog.setAttribute('aria-labelledby', title.id);
@@ -50,7 +51,7 @@
       if (lastResult) {
         const result = make('section', 'records-temp-result'); result.setAttribute('role', 'status');
         result.append(make('h3', '', 'records.temp.result', { count: lastResult.cleaned }), make('p', '', 'records.temp.freed', { size: tempSize(lastResult.bytes) }));
-        if (lastResult.skipped) result.append(make('p', '', lastResult.reasons?.unverified ? 'records.temp.unverified' : lastResult.reasons?.busy === lastResult.skipped ? 'records.temp.keptBusy' : 'records.temp.kept', { count: lastResult.skipped }));
+        if (lastResult.skipped) result.append(make('p', '', registrationText(lastResult.registrationIssue) || (lastResult.reasons?.unverified ? 'records.temp.unverified' : lastResult.reasons?.busy === lastResult.skipped ? 'records.temp.keptBusy' : 'records.temp.kept'), { count: lastResult.skipped }));
         if (lastResult.bookkeepingFailed) result.append(make('p', '', 'records.temp.bookkeepingFailed'));
         dialog.append(result);
       }
@@ -65,7 +66,7 @@
           }
           section.append(facts);
         }
-        section.append(make('p', '', temp.anomaly ? 'records.temp.inspectionFailed' : 'records.temp.about'));
+        section.append(make('p', '', registrationText(temp.registrationIssue) || (temp.anomaly ? 'records.temp.inspectionFailed' : 'records.temp.about')));
         const actions = make('div', 'records-actions'), clean = control('records.temp.clean', 'tempClean', async () => {
           if (working) return; working = true; cleanupFailed = false; clean.disabled = true;
           try { const done = await api.records('tempClean', temp.ticket); lastResult = done.result; current = done; }
