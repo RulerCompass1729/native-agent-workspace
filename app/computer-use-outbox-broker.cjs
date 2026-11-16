@@ -55,7 +55,10 @@ async function operateOutbox(binding, createView, signal) {
     }
   }
 }
-async function createOutboxBroker({ descriptorFile, bind, createView, bindControl, control }) {
+// Each connection is answered within this limit or dropped; tests shorten it. Waiting
+// for cleanup stops a second earlier, so a control answer still reaches its caller.
+const CONNECTION_MS = 100000, ANSWER_MARGIN_MS = 1000;
+async function createOutboxBroker({ descriptorFile, bind, createView, bindControl, control, connectionMs = CONNECTION_MS }) {
   if (!path.isAbsolute(descriptorFile) || ![bind, createView].every(f => typeof f === 'function')) throw Error('Outbox owner unavailable');
   const issuer = processIdentity(process.pid);
   if (!issuer) throw Error('Outbox process identity unavailable');
@@ -78,7 +81,17 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
   const dir = fs.mkdtempSync(path.join(fs.realpathSync('/tmp'), 'naw-outbox-owner-')); fs.chmodSync(dir, 0o700);
   const socketPath = path.join(dir, 'outbox.sock'), capability = crypto.randomBytes(32).toString('hex');
   const sockets = new Set(), operations = new Set(), controllers = new Set(); let busy = false, closed = false, closing;
-  const submitControlAuthenticated = (factory, signal) => {
+  // Waits for cleanup until answerBy at most; the cleanup itself still runs and counts as under way.
+  const cleanupBy = (cleanup, answerBy) => {
+    const pending = Promise.resolve(cleanup);
+    if (!Number.isFinite(answerBy)) return pending;
+    operations.add(pending); pending.catch(() => {}).finally(() => operations.delete(pending));
+    let timer;
+    return Promise.race([pending, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(outboxError('cleanup-unconfirmed', 'cleanup')), Math.max(0, answerBy - Date.now()));
+    })]).finally(() => clearTimeout(timer));
+  };
+  const submitControlAuthenticated = (factory, signal, answerBy) => {
     if (closed || signal?.aborted || typeof factory !== 'function' || typeof control !== 'function' || controllers.size >= 32)
       return Promise.resolve({ state: 'not-executed', reason: 'background-control-unavailable', retry: false });
     const abort = new AbortController(), cancelled = () => abort.abort();
@@ -87,7 +100,7 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
       let binding, result, primary, refused = false;
       try { binding = await factory(abort.signal); result = await control(binding, binding.args); }
       catch (error) { primary = error; refused = true; }
-      try { await binding?.close?.(); }
+      try { await cleanupBy(binding?.close?.(), answerBy); }
       catch (error) {
         // Effects may already be durable. Keep only the operation identity so
         // its receipt can be inspected; never release a private value on failure.
@@ -123,7 +136,7 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
   const server = net.createServer(socket => {
     sockets.add(socket); socket.on('error', () => {});
     const abort = new AbortController(); let data = '', accepted = false;
-    const timer = setTimeout(() => { abort.abort(); socket.destroy(); }, 100000);
+    const timer = setTimeout(() => { abort.abort(); socket.destroy(); }, connectionMs), answerBy = Date.now() + connectionMs - ANSWER_MARGIN_MS;
     socket.on('close', () => { clearTimeout(timer); abort.abort(); sockets.delete(socket); });
     socket.setEncoding('utf8');
     socket.on('data', part => {
@@ -139,7 +152,7 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
             !crypto.timingSafeEqual(Buffer.from(capability), Buffer.from(request.capability))) return failed('admission', 'invalid-request');
         if (background) {
           if (typeof bindControl !== 'function') return { state: 'not-executed', reason: 'background-control-unavailable', retry: false };
-          return submitControlAuthenticated(signal => bindControl(request.identity, request.arguments, signal), abort.signal);
+          return submitControlAuthenticated(signal => bindControl(request.identity, request.arguments, signal), abort.signal, answerBy);
         }
         if (closed || busy) return failed('admission', closed ? 'owner-closed' : 'busy');
         return submitAuthenticated(signal => bind(request.identity, request.arguments, signal), abort.signal);
@@ -155,7 +168,7 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
       for (const socket of sockets) socket.destroy();
       for (const controller of controllers) controller.abort();
       await new Promise(resolve => server.close(resolve));
-      await Promise.allSettled([...operations]);
+      while (operations.size) await Promise.allSettled([...operations]);
       if (descriptorIdentity) {
         const current = fs.lstatSync(descriptorFile);
         if (current.ino === descriptorIdentity.ino && current.dev === descriptorIdentity.dev) fs.unlinkSync(descriptorFile);

@@ -5,11 +5,16 @@ const { outboxError, classifyOutboxFailure } = require('./computer-use-outbox-na
 const CAPABILITY = 'scopedNativeOutboxV1';
 const token = v => typeof v === 'string' && v.length > 0 && v.length <= 160 && !/[\x00-\x1f\x7f]/.test(v);
 function supported(entry) { return entry.state.capabilities?.includes(CAPABILITY) === true && !entry.closed; }
+// How long a scoped request waits for the service (5 s otherwise). A close usually runs after the work,
+// which may already be durable: on 2026-11-15 a queueAdd completed, its close answered after 5 s and the
+// caller was told unconfirmed. Close waits 15 s; the outbox broker stops waiting earlier when its
+// connection limit is near, so a control answer keeps its operation id.
+const WAIT = { send: 35000, close: 15000 };
 async function request(client, action, value) {
   let timer;
   try {
     const response = await Promise.race([client.call('scopedOutbox', action, value),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(outboxError(action === 'close' ? 'cleanup-unconfirmed' : 'operation-unconfirmed', action === 'close' ? 'cleanup' : action === 'send' ? 'view-send' : 'binding')), action === 'send' ? 35000 : 5000); timer.unref(); })]);
+      new Promise((_, reject) => { timer = setTimeout(() => reject(outboxError(action === 'close' ? 'cleanup-unconfirmed' : 'operation-unconfirmed', action === 'close' ? 'cleanup' : action === 'send' ? 'view-send' : 'binding')), WAIT[action] || 5000); timer.unref(); })]);
     if (response?.ok !== true) throw outboxError(response?.failureReason, response?.failurePhase, undefined, response?.cleanupUnconfirmed === true, response?.failureCheck);
     return response.value;
   } finally { clearTimeout(timer); }

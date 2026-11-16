@@ -187,7 +187,109 @@ test('a control execution refusal keeps its named cause when cleanup also fails'
   assert.equal(result.failureReason, 'native-call-invalidated'); assert.equal(result.failureCheck, 'display-gap');
   assert.equal(result.cleanupUnconfirmed, true); assert.equal(result.retry, false);
 });
+test('a managed scope close that answers late, but answers, keeps a complete control result complete', async t => {
+  // 2026-11-15 12:03 PT, daily 253: a butler queueAdd was durably complete with its queue item created,
+  // but the caller got "could not be verified" with no operation id. With a valid token the service's
+  // close cannot answer ok:false; only this transport's own close timer can raise that error after
+  // a complete result, and the queueAdds around it took 6-9 s each. Here the close answers after 5.5 s.
+  const { EventEmitter } = require('node:events');
+  const { openManagedCall } = require('../managed-outbox-transport.cjs');
+  const command = { action: 'invoke', operation_id: 'late-close', method: 'rename', arguments: ['target', 'name'] };
+  const actor = { id: 'sender', nativeId: identity.nativeId, provider: 'claude' };
+  const client = new EventEmitter(), actions = [];
+  client.call = async (method, action, value) => {
+    assert.equal(method, 'scopedOutbox'); actions.push(action);
+    if (action === 'controlCall') return { ok: true, value: { token: 'scope-token', sender: { ...actor, name: 'Butler' } } };
+    assert.equal(action, 'close'); assert.deepEqual(value, { token: 'scope-token' });
+    await new Promise(resolve => setTimeout(resolve, 5500));
+    return { ok: true, value: true };
+  };
+  const entry = { client, closed: false, state: { capabilities: ['scopedNativeOutboxV1', 'backgroundControlV1'] } };
+  let calls = 0;
+  const f = await fixture(t, {
+    bindControl: (caller, body, signal) => openManagedCall(entry, { id: actor.id, provider: actor.provider }, caller, body, signal, true),
+    control: async () => { calls++; return { state: 'complete', id: command.operation_id, actor, value: 'queued' }; },
+  });
+  const result = await requestOutbox(f.descriptorFile, identity, command, undefined, true);
+  assert.deepEqual(actions, ['controlCall', 'close']); assert.equal(calls, 1);
+  assert.equal(result.state, 'complete', `got ${result.state}: ${result.failureReason}/${result.failurePhase}`);
+  assert.equal(result.id, command.operation_id); assert.equal(result.value, 'queued');
+});
 
+test('a complete control result whose close outlasts the connection limit still answers with its id', async t => {
+  // Codex E, review of da4a16cc: work done at 86 s plus a 16 s close passed the 100 s connection limit, which
+  // dropped the answer and its operation id; with 5 s the caller got unconfirmed with the id at 91 s.
+  // Here the limit is 7 s, the work is done at 0.5 s and the close does not answer.
+  const { EventEmitter } = require('node:events');
+  const { openManagedCall } = require('../managed-outbox-transport.cjs');
+  const command = { action: 'invoke', operation_id: 'late-close', method: 'rename', arguments: ['target', 'name'] };
+  const actor = { id: 'sender', nativeId: identity.nativeId, provider: 'claude' };
+  const client = new EventEmitter(), actions = []; let release;
+  client.call = async (method, action) => {
+    actions.push(action);
+    if (action === 'controlCall') return { ok: true, value: { token: 'scope-token', sender: { ...actor, name: 'Butler' } } };
+    await new Promise(resolve => { release = resolve; }); return { ok: true, value: true };
+  };
+  const entry = { client, closed: false, state: { capabilities: ['scopedNativeOutboxV1', 'backgroundControlV1'] } };
+  let calls = 0;
+  const f = await fixture(t, { connectionMs: 7000,
+    bindControl: (caller, body, signal) => openManagedCall(entry, { id: actor.id, provider: actor.provider }, caller, body, signal, true),
+    control: async () => { calls++; await new Promise(resolve => setTimeout(resolve, 500)); return { state: 'complete', id: command.operation_id, actor, value: 'queued' }; },
+  });
+  const started = Date.now();
+  const result = await requestOutbox(f.descriptorFile, identity, command, undefined, true).catch(error => ({ transport: error.message }));
+  const elapsed = Date.now() - started; release?.();
+  assert.deepEqual(actions, ['controlCall', 'close']); assert.equal(calls, 1);
+  assert.equal(result.id, command.operation_id, `no id after ${elapsed} ms: ${JSON.stringify(result)}`);
+  assert.deepEqual(result.actor, actor); assert.equal(result.state, 'unconfirmed'); assert.equal(result.retry, false);
+  assert.equal(result.failureReason, 'cleanup-unconfirmed'); assert.equal(result.failurePhase, 'cleanup');
+  assert.equal(result.cleanupUnconfirmed, true); assert.equal(result.value, undefined);
+  assert.ok(elapsed < 7000, `answered after ${elapsed} ms`);
+});
+test('shutdown during control business waits for cleanup registered after closing began', { timeout: 5000 }, async t => {
+  const { EventEmitter } = require('node:events');
+  const { openManagedCall } = require('../managed-outbox-transport.cjs');
+  const command = { action: 'invoke', operation_id: 'shutdown-op', method: 'rename', arguments: ['target', 'name'] };
+  const actor = { id: 'sender', nativeId: identity.nativeId, provider: 'claude' };
+  const client = new EventEmitter(), actions = [];
+  let releaseBusiness, releaseCleanup, businessEntered;
+  const entered = new Promise(resolve => { businessEntered = resolve; });
+  const business = new Promise(resolve => { releaseBusiness = resolve; });
+  const cleanup = new Promise(resolve => { releaseCleanup = resolve; });
+  client.call = async (method, action) => {
+    assert.equal(method, 'scopedOutbox'); actions.push(action);
+    if (action === 'controlCall') return { ok: true, value: { token: 'scope-token', sender: { ...actor, name: 'Butler' } } };
+    assert.equal(action, 'close'); await cleanup; return { ok: true, value: true };
+  };
+  const entry = { client, closed: false, state: { capabilities: ['scopedNativeOutboxV1', 'backgroundControlV1'] } };
+  let calls = 0;
+  const f = await fixture(t, { connectionMs: 1200,
+    bindControl: (caller, body, signal) => openManagedCall(entry, { id: actor.id, provider: actor.provider }, caller, body, signal, true),
+    control: async () => {
+      calls++; businessEntered(); await business;
+      return { state: 'complete', id: command.operation_id, actor, value: 'queued' };
+    } });
+  let closing, request;
+  try {
+    request = requestOutbox(f.descriptorFile, identity, command, undefined, true).catch(error => ({ transport: error.message }));
+    await Promise.race([entered, new Promise((_, reject) => setTimeout(() => reject(Error('business did not start')), 1000))]);
+    let closeReturned = false;
+    closing = f.broker.close().then(() => { closeReturned = true; });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    releaseBusiness();
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.equal(closeReturned, false, 'close returned while cleanup remained active');
+    assert.equal(f.broker.active(), 1);
+    releaseCleanup();
+    await closing;
+    await request;
+    assert.equal(f.broker.active(), 0);
+    assert.equal(calls, 1);
+    assert.deepEqual(actions, ['controlCall', 'close']);
+  } finally {
+    releaseBusiness?.(); releaseCleanup?.(); await closing; await request;
+  }
+});
 for (const cause of ['missing', 'consumed', 'root-changed', 'identity', 'arguments']) test(`real Claude native proof refusal reaches the broker receipt (${cause})`, async t => {
   const native = require('../background-control-native.cjs');
   const command = { action: 'invoke', operation_id: 'claude-proof-check', method: 'rename', arguments: ['target', 'name'] };
