@@ -3,6 +3,9 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const { createHash } = require('node:crypto');
 const { lockIdentity } = require('./service-lock.cjs');
 const inside = (root, file) => file === root || file.startsWith(root + path.sep);
+// Unrelated store entries grant no ownership. Receipt-shaped entries still
+// pass through entry(), including noncanonical hex casing, and fail closed.
+const receiptName = name => /^[a-f0-9]{64}\.json$/i.test(name);
 const receiptId = r => createHash('sha256').update(JSON.stringify([r.path,r.dev,r.ino,r.uid ?? process.getuid()])).digest('hex');
 const roots = () => [...new Set([os.tmpdir(), '/tmp'].map(p => fs.realpathSync(p)))];
 const defaultDirectory = () => process.env.NAW_TEMP_REGISTRY_DIR || path.join(process.env.NAW_DATA_DIR ||
@@ -46,11 +49,8 @@ function register(directory, { registryDir = defaultDirectory(), now = Date.now,
 }
 function read(registryDir = defaultDirectory()) {
   try { privateDirectory(registryDir); } catch(error) { if(error.code==='ENOENT') return []; throw error; }
-  const names=fs.readdirSync(registryDir).filter(name=>!/^\.pending-[a-f0-9-]{36}$/.test(name)); if(names.length>50000) throw Error('Temporary ownership inventory is too large');
-  return names.map(name=>{
-    if(!/^[a-f0-9]{64}\.json$/.test(name)) throw Error('Unknown temporary ownership entry');
-    return entry(path.join(registryDir,name));
-  });
+  const names=fs.readdirSync(registryDir).filter(receiptName); if(names.length>50000) throw Error('Temporary ownership inventory is too large');
+  return names.map(name=>entry(path.join(registryDir,name)));
 }
 // Stream bounded batches so the small read() inventory limit cannot prevent
 // a large ENOENT backlog from being pruned by the scanner.
@@ -58,8 +58,7 @@ async function* batches(registryDir = defaultDirectory()) {
   try { privateDirectory(registryDir); } catch(error) { if(error.code==='ENOENT') return; throw error; }
   const directory=await fs.promises.opendir(registryDir);let batch=[];
   for await (const file of directory) {
-    if(/^\.pending-[a-f0-9-]{36}$/.test(file.name))continue;
-    if(!/^[a-f0-9]{64}\.json$/.test(file.name))throw Error('Unknown temporary ownership entry');
+    if(!receiptName(file.name))continue;
     try {batch.push(entry(path.join(registryDir,file.name)));}
     catch(error) {if(error.code!=='ENOENT')throw error;}
     if(batch.length===256){yield batch;batch=[];await new Promise(resolve=>setImmediate(resolve));}
