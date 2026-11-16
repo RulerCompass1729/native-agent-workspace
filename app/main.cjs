@@ -161,8 +161,21 @@ let mobileBroker;
 let mobileListener, mobileOpening = false, mobileGeneration = 0, mobileStopped = Promise.resolve(true), mobileExpiry;
 function appMobileBroker() {
   if (!primary || quitting || !dataDir) throw Error('The local mobile entry is unavailable.');
-  if (!mobileBroker) mobileBroker = new (require('./mobile-broker.cjs').MobileBroker)(dataDir, { exclusive: () => primary && !quitting, changed: () => watchAppMobile(MOBILE_RESPONSE_GRACE_MS) });
+  if (!mobileBroker) mobileBroker = new (require('./mobile-broker.cjs').MobileBroker)(dataDir, { exclusive: () => primary && !quitting, changed: () => watchAppMobile(MOBILE_RESPONSE_GRACE_MS), desktop: appMobileWorkspace(), onHumanInput: id => queueDispatcher?.noteHuman(id) });
   return mobileBroker;
+}
+function appMobileWorkspace() {
+  return new (require('./mobile-workspace.cjs').MobileWorkspace)({
+    snapshot: client => displayState(client.snapshot()), roomState, labels: sessionLabels.labels,
+    records: {
+      status: () => recordReminders.status(dataDir, Date.now(), { unavailable: {
+        ...(operationsUnavailable ? { operations: operationsUnavailable } : {}),
+        ...(stewardRecord?.failed ? { steward: stewardRecord.loadError ? 'history' : 'other' } : {}),
+      } }),
+      acknowledge: (...args) => recordReminders.acknowledge(dataDir, ...args),
+    },
+    broadcast: () => broadcastRoom(), schedule: () => queueDispatcher?.schedule(),
+  });
 }
 // The listener stays open only while a pairing link or paired device is unexpired. When the phone logs out, or the link
 // or device expires, NAW revokes and closes it. A logout closes it only after its own response has had time to leave.
@@ -192,12 +205,13 @@ function stopAppMobileListener() {
 }
 async function beginAppMobile(options) {
   const keys = ['actor', 'origin', 'selection', 'replace', 'port', 'carrierConfirmed'];
-  if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).length !== keys.length || keys.some(key => !Object.hasOwn(options, key)) ||
+  if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => ![...keys, 'workspace'].includes(key)) || keys.some(key => !Object.hasOwn(options, key)) ||
       options.carrierConfirmed !== true || !Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535 || options.port !== 0 && options.port < 1024 || mobileOpening) throw Error('Mobile setup is unavailable or incomplete.');
   const broker = appMobileBroker(), handler = require('./mobile-http.cjs').createMobileHandler({ broker, origin: options.origin, actor: options.actor });
   const generation = ++mobileGeneration; mobileOpening = true; let authorityChanged = false;
   try {
-    const challenge = await broker.beginPairing({ actor: options.actor, origin: options.origin, selection: options.selection, replace: options.replace });
+    const challenge = await broker.beginPairing({ actor: options.actor, origin: options.origin, selection: options.selection, replace: options.replace,
+      ...(Object.hasOwn(options, 'workspace') ? { workspace: options.workspace } : {}) });
     authorityChanged = true;
     if (generation !== mobileGeneration || quitting) throw Error('Mobile setup cancelled.');
     stopAppMobileListener();
@@ -2514,8 +2528,16 @@ async function boot() {
     const room = (display.rooms || [display.room]).find(r => (r?.id || 'shared') === spaceId) || null;
     return searchRecords({ ...display, room }, query, { scope: options.scope, sessionId: options.sessionId, archived: Boolean(options.archived), limit: options.limit });
   });
-  register('mobilePairing', (_c, selection) => beginAppMobile(selection));
-  register('mobileRevoke', () => revokeAppMobile());
+  register('mobilePairing', (c, selection) => {
+    if (!isCurrentHumanContext(c)) throw uiError('error.operator.desktopOnly');
+    return beginAppMobile(selection);
+  });
+  register('mobileRevoke', c => {
+    if (!isCurrentHumanContext(c)) throw uiError('error.operator.desktopOnly');
+    return revokeAppMobile();
+  });
+  applicationHandlers.delete('mobilePairing');
+  applicationHandlers.delete('mobileRevoke');
   register('readingState', (c, positions, panorama) => {
     const checked = readingState(positions);
     if (panorama !== undefined && !validViews([{ owner: c.view.owner, panorama }])) throw uiError("error.panoramaReadingInvalid");

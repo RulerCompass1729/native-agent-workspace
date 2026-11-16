@@ -208,6 +208,6 @@
   }
   const exported = { createMobileClient, mount, KEY };
   if (typeof module === 'object' && module.exports) module.exports = exported;
-  else { global.NAWMobile = exported; mount(global.document, global.location, global.history,
+  else { global.NAWMobile = exported; if (!global.document.documentElement.hasAttribute('data-workspace-ui')) mount(global.document, global.location, global.history,
     { getItem: key => global.localStorage.getItem(key), setItem: (key, value) => global.localStorage.setItem(key, value) }, global.fetch.bind(global), global.crypto); }
 })(globalThis);

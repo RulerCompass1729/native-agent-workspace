@@ -38,9 +38,10 @@ function fixture() {
   }
   // Main state the current register() and before-quit read; no outbox broker in this fixture.
   const context = vm.createContext({ primary: true, quitting: false, dataDir: '/synthetic/profile', Error, AbortController, now: 1000, setTimeout(fn, ms) { const id = ++timerSeq; timers.set(id, { fn, ms }); return id; }, clearTimeout(id) { timers.delete(id); },
-    applicationHandlers: new Map(), uiLocale: require('../ui-locale.js'), uiError: require('../ui-errors.cjs').uiError, butlerBackend: null, butlerClosing: false, butlerQuitAttempted: false, outboxClosing: false, outboxQuitFailed: false, outboxBroker: null, backgroundControl: null,
+    applicationHandlers: new Map(), roomState: {}, sessionLabels: { labels: new Map() }, uiLocale: require('../ui-locale.js'), uiError: require('../ui-errors.cjs').uiError, butlerBackend: null, butlerClosing: false, butlerQuitAttempted: false, outboxClosing: false, outboxQuitFailed: false, outboxBroker: null, backgroundControl: null,
     require(name) {
       if (name === './mobile-broker.cjs') return { MobileBroker: Broker };
+      if (name === './mobile-workspace.cjs') return require('../mobile-workspace.cjs');
       if (name === './mobile-http.cjs') return { createMobileHandler(value) { calls.push({ method: 'fixedHandler', origin: value.origin, actor: value.actor }); return () => {}; } };
       if (name === 'node:http') return { createServer(options) { calls.push({ method: 'constructHTTP', options }); const server = new Server(); servers.push(server); return server; } };
       assert.fail('Unexpected Main dependency: ' + name);
@@ -51,15 +52,31 @@ function fixture() {
   });
   vm.runInContext(source.slice(source.indexOf('let mobileBroker;'), source.indexOf('const startupFile =')), context);
   vm.runInContext(source.slice(source.indexOf('function register('), source.indexOf('async function boot(')), context);
+  vm.runInContext(source.slice(source.indexOf('function isCurrentHumanContext('), source.indexOf('function showDialog(')), context);
   const start = source.indexOf("register('mobilePairing'");
   vm.runInContext(source.slice(start, source.indexOf("register('readingState'", start)), context);
   vm.runInContext(source.slice(source.lastIndexOf("app.on('before-quit'"), source.indexOf('// Deliberately no native shutdown')), context);
-  const frame = { url: 'https://ui.invalid/' }, sender = { id: 7, mainFrame: frame }; context.windows.set(7, { win: { isDestroyed: () => false, getBounds: () => ({}) }, view: {} });
+  const frame = { url: 'https://ui.invalid/' }, sender = { id: 7, mainFrame: frame }; context.windows.set(7, { win: { webContents: { id: 7 }, isDestroyed: () => false, getBounds: () => ({}) }, view: {} });
   const selection = { actor: 'synthetic-human', origin: 'https://mobile.invalid', selection: [{ sessionId: 'a', actions: ['read'] }], replace: false, port: 0, carrierConfirmed: true };
   context.Date = { now: () => context.now };
   const fire = () => { const due = [...timers]; timers.clear(); for (const [, timer] of due) timer.fn(); };
   return { context, calls, handlers, servers, timers, fire, selection, releasePair: () => releasePair(), quit: event => quit(event), event: { sender, senderFrame: frame } };
 }
+for (const method of ['mobilePairing', 'mobileRevoke']) test(`${method} refuses an agent context before any mobile authority or listener change`, async () => {
+  const f = fixture(); f.context.windows.get(7).background = true;
+  const result = await f.handlers.get('workspace:' + method)(f.event, f.selection);
+  assert.equal(result.ok, false);
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.servers.length, 0);
+});
+test('mobile pairing and revocation are absent from the agent control catalog and invocation handlers', () => {
+  const f = fixture(), { BackgroundControl } = require('../background-control.cjs');
+  const methods = BackgroundControl.prototype.catalog.call({ handlers: f.context.applicationHandlers }).map(row => row.method);
+  for (const method of ['mobilePairing', 'mobileRevoke']) {
+    assert.equal(methods.includes(method), false);
+    assert.equal(f.context.applicationHandlers.has(method), false);
+  }
+});
 test('boot registration is lazy and stopping an unused mobile entry creates neither broker nor authorization', () => {
   const f = fixture(); assert.deepEqual(f.calls, []);
   assert.equal(f.context.revokeAppMobile().authorizationRevoked, true); assert.deepEqual(f.calls, []);
@@ -154,7 +171,7 @@ test('the existing GUI payload list includes the app-local broker and its existi
   const start = recipe.indexOf('const sources = ['), end = recipe.indexOf('for (const name of sources)', start);
   assert.ok(start > 0 && end > start);
   const names = vm.runInNewContext(recipe.slice(start, end) + ';sources');
-  for (const name of ['mobile-broker.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-http.cjs', 'mobile-web/index.html', 'mobile-web/client.js', 'mobile-web/style.css']) {
+  for (const name of ['mobile-broker.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-http.cjs', 'mobile-workspace.cjs', 'mobile-web/workspace.js', 'mobile-web/index.html', 'mobile-web/client.js', 'mobile-web/style.css']) {
     assert.equal(names.filter(value => value === name).length, 1); assert.ok(fs.statSync(require.resolve('../' + name)).isFile());
   }
 });
