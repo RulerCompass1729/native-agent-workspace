@@ -2563,9 +2563,17 @@ function backgroundRemaining(line) {
 function scheduleBackgroundExpiryClock() {
   clearTimeout(backgroundExpiryClock);
   backgroundExpiryClock = setTimeout(() => {
+    backgroundExpiryClock = undefined;
     // Cards may still be detached while rendering; inspect after they mount.
+    // Cached conversation rows can outlive their confirmation. Only the current
+    // human waiting list owns a countdown; never retain a row between ticks.
+    const pending = new Set((state?.backgroundConfirmations || []).map(card => card.id));
+    for (const line of document.querySelectorAll('.background-state[data-expires-at]')) {
+      const row = line.closest('[data-message-id], [data-waiting-id]');
+      if (!pending.has(row?.dataset.messageId || row?.dataset.waitingId)) { delete line.dataset.expiresAt; continue; }
+      backgroundRemaining(line);
+    }
     if (!document.querySelector('.background-state[data-expires-at]')) return;
-    for (const line of document.querySelectorAll('.background-state[data-expires-at]')) backgroundRemaining(line);
     scheduleBackgroundExpiryClock();
   }, 1000);
 }
@@ -2586,7 +2594,7 @@ function renderBackgroundControls(entry, message) {
   const line = node('p', undefined, 'background-line'), state = node('span', undefined, 'background-state'), sentence = node('span', undefined, 'background-sentence');
   const stateKey = op.stateUiMessage?.key || (op.replacedBy ? 'background.card.void' : card ? 'background.card.waiting' : backgroundStates.includes(op.state) ? 'background.state.' + op.state : '');
   if (stateKey) ui.display.text(state, stateKey); else state.textContent = op.state;
-  if (card && Number.isSafeInteger(op.expiresAt)) { state.dataset.expiresAt = String(op.expiresAt); backgroundRemaining(state); scheduleBackgroundExpiryClock(); }
+  if (card && !op.replacedBy && !op.disposition && Number.isSafeInteger(op.expiresAt)) { state.dataset.expiresAt = String(op.expiresAt); backgroundRemaining(state); scheduleBackgroundExpiryClock(); }
   if (summary) ui.display.computed(sentence, 'text', () => backgroundSummaryText(summary));
   else if (card) sentence.textContent = question.options.message || '';
   line.append(state, sentence);
