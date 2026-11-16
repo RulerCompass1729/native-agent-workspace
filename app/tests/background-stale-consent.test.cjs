@@ -392,3 +392,50 @@ test('PF12 Return: changing a Return legend word revokes input without bytes',as
  const card=await f.ask();await f.draw(returnFrame('Press Return to\r\nselect or Escape to cancel','..'));
  assert.equal((await f.confirm(card)).disposition,'invalidated');assert.deepEqual(f.bytes,[]);
 });
+
+const boundaryClear='\x1b[2J\x1b[H',boundaryLegend='Press Enter to confirm or Esc to cancel';
+async function boundaryReject(t,before,after){const f=await statusFixture(t);const a=await f.draw(boundaryClear+before.join('\r\n'));assert.ok(a.nativeTerminalDialog);const card=await f.ask('input',[f.target,'\r']);const rows=()=>Array.from({length:f.runtime.terminal.screen.rows},(_,i)=>{const l=f.runtime.terminal.screen.buffer.active.getLine(i);return {text:l.translateToString(true),wrapped:l.isWrapped};}).filter(l=>l.text);const beforeRows=rows();const z=await f.draw(boundaryClear+after.join('\r\n'));const result=await f.confirm(card);t.diagnostic(JSON.stringify({beforeRows,afterRows:rows(),before:a.nativeTerminalDialog,after:z.nativeTerminalDialog,result:result.state,disposition:result.disposition,bytes:f.bytes}));assert.deepEqual(f.bytes,[]);assert.equal(result.disposition,'invalidated');}
+test('PF12 second BLOCK: unnumbered option with dot continuation has no independent legend',async t=>{
+ // This accepted legacy layout keeps the Esc instruction in its second option.
+ const accepted=p=>['Choose directory?','❯ Open directory; Enter to confirm','  Cancel; Esc to cancel','  '+p];
+ await boundaryReject(t,accepted('.'),accepted('..'));
+});
+test('PF12 second BLOCK: legend between numbered choices cannot exclude a later dot path',async t=>{
+ const frame=p=>['Choose directory?','  1. Cancel',boundaryLegend,'❯ 2. Open directory; Esc to cancel','     '+p];
+ await boundaryReject(t,frame('.'),frame('..'));
+});
+test('PF12 second BLOCK: legend-like continuation in the body before a final legend keeps the path',async t=>{
+ const frame=p=>['Choose directory?','  1. Cancel','❯ 2. Open directory','     '+boundaryLegend,'     '+p,boundaryLegend];
+ await boundaryReject(t,frame('.'),frame('..'));
+});
+test('PF12 second BLOCK: body beginning Enter must not borrow a later complete legend to normalize command lines',async t=>{
+ const frame=body=>['Choose shell action?','  1. Cancel','❯ 2. Run the command shown below',...body,boundaryLegend];
+ await boundaryReject(t,frame(['Enter command: printf A','printf B']),frame(['Enter command: printf','A printf B']));
+});
+
+test('PF12 second BLOCK: Return body cannot borrow the following complete legend', async t => {
+  const frame = body => ['Choose shell action?', '  1. Cancel', '❯ 2. Run command', ...body, boundaryLegend];
+  await boundaryReject(t, frame(['Return command: printf A', 'printf B']), frame(['Return command: printf', 'A printf B']));
+});
+for (const key of ['Enter', 'Return']) test(`PF12 second BLOCK: ${key} action-like body with an Esc-only tail keeps hard lines`, async t => {
+  const frame = body => ['Choose shell action?', '  1. Cancel', '❯ 2. Run command', ...body, 'Esc to cancel'];
+  await boundaryReject(t, frame([`${key} to confirm printf A`, 'printf B']), frame([`${key} to confirm printf`, 'A printf B']));
+});
+test('PF12 second BLOCK: even instruction-shaped body lines stay bound before a final legend', async t => {
+  const frame = body => ['Choose shell action?', '  1. Cancel', '❯ 2. Run command', ...body, boundaryLegend];
+  await boundaryReject(t, frame(['Enter to confirm', 'or Esc to cancel']), frame(['Enter to', 'confirm or Esc to cancel']));
+});
+test('PF12 second BLOCK: a body cannot borrow a differently introduced trailing legend', async t => {
+  const frame = body => ['Choose shell action?', '  1. Cancel', '❯ 2. Run command', ...body, 'Use Enter to confirm or Esc to cancel'];
+  await boundaryReject(t, frame(['Return command: printf A', 'printf B']), frame(['Return command: printf', 'A printf B']));
+});
+test('PF12 second control: complete model key instructions still rewrap and repaint once', async t => {
+  const f = await statusFixture(t);
+  const frame = (legend, status) => boundaryClear + ['Select model', '  1. Default', '❯ 2. Model X', legend, status].join('\r\n');
+  await f.draw(frame('Enter to set as default · s to use this session\r\nonly · Esc to cancel', '.'));
+  const before = f.current().nativeTerminalDialog, card = await f.ask('input', [f.target, '\r']);
+  await f.draw(frame('Enter to set as default · s to use this\r\nsession only · Esc to cancel', '..'));
+  assert.equal((await f.confirm(card)).state, 'complete'); assert.deepEqual(f.bytes, ['\r']);
+  assert.deepEqual(f.current().nativeTerminalDialog, before);
+  await assert.rejects(f.confirm(card)); assert.deepEqual(f.bytes, ['\r']);
+});

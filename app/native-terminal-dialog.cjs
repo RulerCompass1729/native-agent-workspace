@@ -5,6 +5,9 @@ const observed = new WeakMap(), frames = new WeakMap(), regions = new WeakMap();
 const plainEdge = line => line.replace(/^[\s│┃╭╰─┌└]+|[\s│┃╮╯─┐┘]+$/g, '');
 const keyLegend = text => /\b(?:enter|return)\b.*\b(?:confirm|select|continue|submit|set|accept|proceed|choose)\b/i.test(text) &&
   /\besc(?:ape)?\b.*\b(?:cancel|back|exit|dismiss)[ .·│]*$/i.test(text);
+// Only a complete instruction-only tail may lose hard line breaks. Arbitrary
+// payload after an action, or another Enter/Return instruction, is not a footer.
+const standaloneKeyLegend = /^(?:press\s+)?(?:enter|return)\s+to\s+(?:confirm|select|continue|submit|accept|proceed|choose|set(?:\s+as\s+default)?)(?:\s*·\s*s\s+to\s+use\s+this\s+session\s+only)?\s*(?:or|·)\s*esc(?:ape)?\s+to\s+(?:cancel|back|exit|dismiss)[ .·│]*$/i;
 function dismiss(runtime) {
   observed.delete(runtime);
   const previous = regions.get(runtime);
@@ -50,11 +53,12 @@ function readTerminalDialogPrompt(session, runtime) {
     let key = lines.slice(heading.index).map(plainEdge).join('\n');
     const indent = line => line.replace(/^\s*[│┃]/, '').match(/^\s*/)[0].length;
     const optionIndent = Math.min(...(indexes.length >= 2 ? indexes : [first, first + 1]).map(i => indent(lines[i])));
-    // Require a complete standalone key instruction after the choices, aligned
-    // outside their hanging continuations. Ambiguous layouts keep the full key.
-    for (let i = Math.max(first + 2, (indexes.at(-1) ?? first) + 1, lines.length - 3); i <= last; i++) {
+    // Start at the final independent instruction, keeping any earlier body
+    // (including instruction-shaped text) verbatim. Unknown tails stay strict.
+    const earliest = Math.max(first + 2, (indexes.at(-1) ?? first) + 1, lines.length - 3);
+    for (let i = last; i >= earliest; i--) {
       if (indent(lines[i]) > optionIndent || !/^(?:press\s+)?(?:enter|return)\b/i.test(plainEdge(lines[i]))) continue;
-      if (!keyLegend(lines.slice(i).map(plainEdge).join(' '))) continue;
+      if (!standaloneKeyLegend.test(lines.slice(i).map(plainEdge).join(' '))) continue;
       let end = last;
       while (end > i && /^[ .·│]*$/.test(plainEdge(lines[end]))) end--;
       const legend = lines.slice(i, end + 1).map(plainEdge).join(' ');
