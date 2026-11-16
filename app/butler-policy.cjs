@@ -7,7 +7,7 @@ const plain = v => v && typeof v === 'object' && !Array.isArray(v) && [Object.pr
 const fail = (code = 'ERR_BUTLER_BUSINESS_DATA') => { throw Object.assign(Error('Invalid butler business data'), { code }); };
 const obviousSecret = /\b(?:DEEPSEEK_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY)\s*[=:]\s*\S+|Authorization\s*:\s*Bearer\s+\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----/iu;
 const id = (v, limit = 200) => typeof v === 'string' && v.length > 0 && v.length <= limit && !/[\s\u0000-\u001f\u007f]/u.test(v) && !obviousSecret.test(v);
-const EVENT_KINDS = ['request', 'queue-empty', 'ready', 'decision', 'failure', 'blocked', 'recovery'];
+const EVENT_KINDS = ['request', 'queue-empty', 'ready', 'done', 'decision', 'failure', 'blocked', 'recovery'];
 const QUEUE_STATUSES = ['queued', 'sent', 'waiting', 'done', 'failed', 'cancelled'];
 const MAX_BUSINESS_INDEX_BYTES = 128 * 1024;
 const PAYLOAD_LIMITS = { text: 12000, title: 400, spaceId: 200, spaceName: 200, memberName: 200,

@@ -77,6 +77,10 @@ test('the dispatcher hands the line to the space record with the outcome', () =>
     stillSent: rules.QueueDispatcher.prototype.stillSent, name: () => 'Member', broadcast: async () => {} },
     { kind: 'settle', roomId: 'shared', itemId: '1', status: 'done', sessionId: 'a', reply: 'line', ready: READY }, { sessions: [{ id: 'a' }] });
   assert.deepEqual(calls, [['shared', '1', 'done', '', 'Member', 'line', undefined, READY]]);
+  rules.QueueDispatcher.prototype.settle.call({ roomState: { queueFind: () => ({ status: 'sent' }), queueSettle: (...args) => calls.push(args) },
+    stillSent: rules.QueueDispatcher.prototype.stillSent, name: () => 'Member', broadcast: async () => {} },
+    { kind: 'settle', roomId: 'shared', itemId: '2', status: 'done', sessionId: 'a', reply: 'PASS More detail', reportTitle: 'PASS' }, { sessions: [{ id: 'a' }] });
+  assert.deepEqual(calls[1], ['shared', '2', 'done', '', 'Member', 'PASS More detail', undefined, undefined, 'PASS']);
 });
 
 test('E2: a finished item with a delivery line is recorded once, with the write that finished it', t => {
@@ -96,8 +100,9 @@ test('E2: a finished item with a delivery line is recorded once, with the write 
   assert.equal(f.facts('ready').length, 1);
 });
 
-test('E2: a finished item without a delivery line stays a status only; a 40-character commit is shown short', t => {
-  const f = room(t), plain = f.sent('Write the notes'), before = f.state.metadata().events.length;
+test('E2: a person-assigned finished item without a delivery line stays a status only; a 40-character commit is shown short', t => {
+  const f = room(t), plain = f.state.queueAdd('Write the notes', null, 'shared', { kind: 'person', name: 'Synthetic person', sessionId: null });
+  f.send(plain); const before = f.state.metadata().events.length;
   f.add('Keeps the space busy');
   f.state.queueSettle('shared', plain, 'done', '', 'Member', 'Notes written.');
   assert.equal(f.state.metadata().events.length, before + 1, 'Only the added item wrote a record');

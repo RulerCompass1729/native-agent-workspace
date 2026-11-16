@@ -10,7 +10,8 @@ const sameRole = (saved, current) => saved?.selectionRevision === current.select
 const day = time => new Date(time).toISOString().slice(0, 10);
 const stableId = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const cost = value => Number.isSafeInteger(value) && value >= 0;
-const wakes = e => ['request', 'queue-empty', 'ready', 'recovery'].includes(e.kind);
+const delivery = e => ['ready', 'done'].includes(e.kind);
+const wakes = e => delivery(e) || ['request', 'queue-empty', 'recovery'].includes(e.kind);
 
 class ButlerController {
   constructor({ role, ledger, backend, view, run, publish = null, ask = null, onBlocked = null, estimateBatchCost = () => null,
@@ -82,7 +83,7 @@ class ButlerController {
     return this.dispatchPersisted(event, recovery, false);
   }
   dispatchPersisted(event, recovery, retry) {
-    if (event.kind === 'ready') {
+    if (delivery(event)) {
       if (!this.running) this.armReady();
       return recovery.status === 'blocked' ? recovery : { status: 'batched' };
     }
@@ -92,7 +93,7 @@ class ButlerController {
   }
   armReady() {
     if (this.closed || this.timer !== null) return;
-    const first = this.ledger.pendingEvents().find(e => e.kind === 'ready');
+    const first = this.ledger.pendingEvents().find(delivery);
     if (first) this.timer = this.schedule(() => {
       this.timer = null;
       this.drain().catch(() => {
@@ -114,7 +115,7 @@ class ButlerController {
     }
     const pending = this.ledger.pendingEvents();
     if (pending.some(e => ['request', 'queue-empty', 'recovery'].includes(e.kind))) return this.drain();
-    this.armReady(); return { status: pending.some(e => e.kind === 'ready') ? 'batched' : 'empty' };
+    this.armReady(); return { status: pending.some(delivery) ? 'batched' : 'empty' };
   }
   authenticatedSelection() {
     try {

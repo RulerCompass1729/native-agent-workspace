@@ -1,16 +1,16 @@
 'use strict';
-// Typed B6 READY facts only. No reply parsing, native history or execution.
+// Typed queue delivery facts. No native history or execution.
 const { createHash } = require('node:crypto');
-const { validReady, ITEM_TEXT_LIMIT } = require('./queue-dispatch.cjs');
+const { validReady, ITEM_TEXT_LIMIT, ITEM_REPLY_LIMIT } = require('./queue-dispatch.cjs');
 const { validateEvent } = require('./butler-policy.cjs');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const keyPart = value => typeof value === 'string' ? value : null;
 const identity = (roomId, itemId) => [keyPart(roomId), keyPart(itemId)];
-const eventId = (roomId, itemId) => `butler-ready:${hash(identity(roomId, itemId))}`;
-const sourceRef = (roomId, itemId) => typeof roomId === 'string' && typeof itemId === 'string'
-  ? `queue-ready:${roomId}:${itemId}` : `queue-ready-parent:${hash(identity(roomId, itemId))}`;
-const parentRef = (roomId, parentId) => typeof roomId === 'string' && typeof parentId === 'string'
-  ? `queue-ready-parent:${roomId}:${parentId}` : `queue-ready-parent:${hash(identity(roomId, parentId))}`;
+const eventId = (roomId, itemId, kind = 'ready') => `butler-${kind}:${hash(identity(roomId, itemId))}`;
+const sourceRef = (roomId, itemId, kind = 'ready') => typeof roomId === 'string' && typeof itemId === 'string'
+  ? `queue-${kind}:${roomId}:${itemId}` : `queue-${kind}-parent:${hash(identity(roomId, itemId))}`;
+const parentRef = (roomId, parentId, kind = 'ready') => typeof roomId === 'string' && typeof parentId === 'string'
+  ? `queue-${kind}-parent:${roomId}:${parentId}` : `queue-${kind}-parent:${hash(identity(roomId, parentId))}`;
 const title = ready => `READY ${ready.branch} ${ready.commit}`;
 const invalid = () => { throw Error('Invalid typed READY source'); };
 
@@ -18,7 +18,7 @@ function checkedIdentity(roomId, itemId) {
   return validateEvent({ eventId: 'ready-identity', sourceRef: 'ready-identity', kind: 'blocked',
     payload: { spaceId: roomId, itemId } }).payload;
 }
-function blocked(id, ref, reason, roomId, itemId) {
+function blocked(id, ref, reason, roomId, itemId, kind = 'ready') {
   // Keep individually valid IDs, never rejected business text or opaque data.
   const payload = { reason };
   for (const [field, value] of [['spaceId', roomId], ['itemId', itemId]]) {
@@ -28,7 +28,7 @@ function blocked(id, ref, reason, roomId, itemId) {
     } catch { /* A malformed ID is represented only by the stable fallback hash. */ }
   }
   try { return validateEvent({ eventId: id, sourceRef: ref, kind: 'blocked', payload }); }
-  catch { return validateEvent({ eventId: id, sourceRef: `queue-ready-parent:${hash(identity(roomId, itemId))}`,
+  catch { return validateEvent({ eventId: id, sourceRef: `queue-${kind}-parent:${hash(identity(roomId, itemId))}`,
     kind: 'blocked', payload }); }
 }
 
@@ -73,4 +73,46 @@ function storedReadySource(roomId, parentEvent) {
   }
 }
 
-module.exports = { queueReadySource, storedReadySource };
+function queueDoneSource(roomId, item, memberName, reportTitle) {
+  if (!item || item.status !== 'done' || item.addedBy !== 'steward' || item.ready) return null;
+  const itemId = item.id, id = eventId(roomId, itemId, 'done'), ref = sourceRef(roomId, itemId, 'done');
+  try {
+    checkedIdentity(roomId, itemId);
+    if (typeof reportTitle !== 'string' || reportTitle.length > 200 ||
+        item.reply !== undefined && (typeof item.reply !== 'string' || item.reply.length > ITEM_REPLY_LIMIT)) invalid();
+    const payload = { spaceId: roomId, itemId, title: reportTitle };
+    if (item.reply) payload.text = item.reply;
+    if (item.sentTo !== undefined && item.sentTo !== null) payload.memberId = item.sentTo;
+    if (memberName !== undefined) payload.memberName = memberName;
+    return validateEvent({ eventId: id, sourceRef: ref, kind: 'done', payload });
+  } catch { return blocked(id, ref, 'input-rejected', roomId, itemId, 'done'); }
+}
+
+function storedDoneSource(roomId, parentEvent) {
+  const parentId = parentEvent?.id, monitor = parentEvent?.monitor;
+  let itemId, ref;
+  try {
+    if (parentEvent.role !== 'system' || parentEvent.kind !== 'queue' ||
+        monitor?.kind !== 'done' || monitor.addedBy !== 'steward') invalid();
+    itemId = monitor.itemId; checkedIdentity(roomId, itemId);
+    if (monitor.key !== `done:${roomId}:${itemId}`) invalid();
+    ref = sourceRef(roomId, itemId, 'done');
+    const value = validateEvent(parentEvent.butlerSource);
+    if (value.eventId !== eventId(roomId, itemId, 'done') || value.sourceRef !== ref ||
+        value.payload.spaceId !== roomId || value.payload.itemId !== itemId ||
+        value.payload.memberId !== undefined && value.payload.memberId !== parentEvent.sessionId) invalid();
+    const keys = Object.keys(value.payload);
+    if (value.kind === 'done') {
+      if (value.payload.title !== parentEvent.text || value.payload.title.length > 200 ||
+          value.payload.text !== undefined && value.payload.text.length > ITEM_REPLY_LIMIT ||
+          keys.some(key => !['spaceId', 'itemId', 'title', 'text', 'memberId', 'memberName'].includes(key))) invalid();
+    } else if (value.kind !== 'blocked' || value.payload.reason !== 'input-rejected' ||
+        keys.some(key => !['spaceId', 'itemId', 'reason'].includes(key))) invalid();
+    return value;
+  } catch {
+    return blocked(`butler-done-rejected:${hash(identity(roomId, parentId))}`,
+      ref || parentRef(roomId, parentId, 'done'), 'source-invalid', roomId, itemId || parentId, 'done');
+  }
+}
+
+module.exports = { queueReadySource, storedReadySource, queueDoneSource, storedDoneSource };

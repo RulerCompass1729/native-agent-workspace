@@ -43,6 +43,18 @@ function fixture(t, options = {}) {
 }
 const ready = (env, model = 'claude-test-model') => env.wake.wake(env.session, model, env.send);
 
+test('a new done event uses the existing steward switch and position-only wake without resending', async t => {
+  const env = fixture(t), event = n => ({ eventId: `done-${n}`, sourceRef: `queue-done:shared:item-${n}`, kind: 'done',
+    payload: { itemId: `item-${n}`, title: 'PASS', text: 'Synthetic report body' } });
+  env.ledger.ingest(event(1)); assert.equal(await ready(env), null); assert.equal(env.sends.length, 0);
+  env.wake.set(true); assert.equal(env.wake.due(), false, 'Enabling does not replay existing events');
+  const before = env.ledger.latest(); env.ledger.ingest(event(2)); assert.equal(env.wake.due(), true);
+  await ready(env); assert.equal(env.sends.length, 1); assert.ok(env.sends[0][0].includes(before));
+  assert.doesNotMatch(env.sends[0][0], /Synthetic report|PASS|item-2/);
+  assert.equal(env.wake.due(), false); await ready(env); assert.equal(env.sends.length, 1);
+  env.wake.set(false); env.ledger.ingest(event(3)); assert.equal(await ready(env), null); assert.equal(env.sends.length, 1);
+});
+
 test('off by default: nothing recorded is a reason to wake the butler until it is turned on', async t => {
   const env = fixture(t);
   env.ledger.ingest(failure(1));

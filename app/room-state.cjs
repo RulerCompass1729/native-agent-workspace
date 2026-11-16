@@ -11,7 +11,7 @@ const { captureSource, prepareBatch, assertCurrentSources, sameOperation, valida
 const queueRules = require('./queue-dispatch.cjs');
 const { archiveIdle, currentFleet } = require('./renderer/fleet-observation.js');
 const { queueOutcomeSource, storedQueueSource } = require('./butler-ingress.cjs');
-const { queueReadySource } = require('./butler-ready.cjs');
+const { queueReadySource, queueDoneSource } = require('./butler-ready.cjs');
 const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f]/u.test(id);
 const memberOrder = value => Array.isArray(value) && value.length <= 10000 ? [...new Set(value.filter(orderId))] : [];
 const contentEvents = events => events.filter(e => !(e.kind === 'control-audit' && e.controlAudit));
@@ -93,12 +93,13 @@ function validateRoom(data) {
 // What NAW notices about a queue from the write that changed it (B6 E1 and E2). Both are
 // records only: no model, no message and no notification follows from them here.
 // - A delivery line (READY <branch> <commit>) is recorded once, when its item becomes done.
+// - A steward-assigned ordinary done is a separate report fact; person-assigned items stay quiet.
 // - A queue that runs dry is recorded by the write that took its last queued or sent item
 //   away, and by no other write. The space counts these, so each record has its own key and
 //   a restart, a later write or an older build that added items cannot repeat one.
 const queueRound = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
 const toSend = item => ['queued', 'sent'].includes(item.status);
-function queueFacts(room, roomId, previous, next, queue) {
+function queueFacts(room, roomId, previous, next, queue, replyTitle) {
   const facts = [], fields = {};
   if (previous && next && previous.status !== 'done' && next.status === 'done' && next.ready) {
     // The name NAW recorded when it sent this member its item; a member holds one item at a time.
@@ -108,6 +109,13 @@ function queueFacts(room, roomId, previous, next, queue) {
       ...(name ? uiNotice('notice.queue.ready', { ...params, name }) : uiNotice('notice.queue.readyUnnamed', params)),
       monitor: { kind: 'ready', key: `ready:${roomId}:${next.id}`, itemId: next.id, branch: next.ready.branch, commit: next.ready.commit },
       butlerSource: queueReadySource(roomId, next, name) });
+  } else if (previous?.status === 'sent' && next?.status === 'done' && !next.ready &&
+      previous.addedBy === 'steward' && next.addedBy === 'steward') {
+    const name = room.events.findLast(e => e.sessionId === next.sentTo && e.uiMessage?.key === 'notice.queue.dispatched')?.uiMessage?.params?.name;
+    const title = queueRules.reportTitle(replyTitle ?? next.reply);
+    facts.push({ kind: 'queue', itemId: next.id, sessionId: next.sentTo, text: title,
+      monitor: { kind: 'done', key: `done:${roomId}:${next.id}`, itemId: next.id, addedBy: 'steward' },
+      butlerSource: queueDoneSource(roomId, next, name, title) });
   }
   if (previous && next && toSend(previous) && !toSend(next) && !queue.some(toSend)) {
     const round = queueRound(room.queueDryRound) + 1, waiting = queue.filter(item => item.status === 'waiting').length;
@@ -508,9 +516,9 @@ class RoomState {
     const noticed = facts.map(fact => ({ id: randomUUID(), role: 'system', time, ...fact }));
     const events = record || noticed.length ? [...value.events, ...noticed, ...(record ? [record] : [])] : (fields.events || value.events);
     this.commit({ ...value, ...fields, revision: value.revision + 1, events }, id);
-    // The queue change, complete task source and typed fact are durable before
+    // The queue change, delivery source and typed fact are durable before
     // intake can see them. A failed auxiliary consumer cannot undo this write.
-    for (const fact of noticed) if (fact.monitor?.kind === 'ready' && fact.butlerSource) {
+    for (const fact of noticed) if (['ready', 'done'].includes(fact.monitor?.kind) && fact.butlerSource) {
       try { this.onButlerReady?.(id, fact.id); } catch { /* The stored source is replayable. */ }
     }
     return record?.id || null;
@@ -626,7 +634,7 @@ class RoomState {
     }
     throw uiError("error.queue.itemMissing");
   }
-  queueReplace(id, itemId, next, event) {
+  queueReplace(id, itemId, next, event, reportTitle) {
     this.writable(id);
     const queue = [];
     let previous = null;
@@ -639,7 +647,7 @@ class RoomState {
       }
     }
     const checked = queueRules.validateQueue(queue);
-    const noticed = queueFacts(this.metadata(id), id, previous, next, checked);
+    const noticed = queueFacts(this.metadata(id), id, previous, next, checked, reportTitle);
     return this.update({ queue: checked, ...noticed.fields }, event ? { ...event, itemId } : event, id, noticed.facts);
   }
   // `by` is 'steward' when the butler acts (steward step 2, batch 4): kept on the item, which older builds read as it is.
@@ -789,7 +797,7 @@ class RoomState {
     this.queueReplace(id, itemId, next);
   }
   // reply is the member's own answer, kept so the queue row can show what came back.
-  queueSettle(id, itemId, status, reason, name, reply = '', question, ready) {
+  queueSettle(id, itemId, status, reason, name, reply = '', question, ready, reportTitle) {
     const item = this.queueFind(id, itemId);
     if (item.status !== 'sent') {
       throw uiError("error.queue.notSent");
@@ -825,7 +833,7 @@ class RoomState {
         memberId: item.sentTo, memberName: name, task: item.text, question: decisionQuestion });
       if (source) event.butlerSource = source;
     }
-    const eventId = this.queueReplace(id, itemId, next, event);
+    const eventId = this.queueReplace(id, itemId, next, event, reportTitle);
     if (eventId && needsPerson) {
       try {
         this.onQueueOutcome?.({ roomId: id, itemId, eventId, status, reason, memberId: item.sentTo,

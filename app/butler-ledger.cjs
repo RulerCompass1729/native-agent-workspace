@@ -9,7 +9,7 @@ const { validateEvent } = require('./butler-policy.cjs');
 const { projectReview } = require('./butler-review-projection.cjs');
 const { agreementSummary } = require('./butler-review-policy.js');
 
-const EVENT_KINDS = ['request', 'queue-empty', 'ready', 'decision', 'failure', 'blocked', 'recovery'];
+const EVENT_KINDS = ['request', 'queue-empty', 'ready', 'done', 'decision', 'failure', 'blocked', 'recovery'];
 const ACTION_KINDS = ['queue', 'open', 'archive', 'question', 'report'];
 const PAYLOAD_LIMITS = { text: 12000, title: 400, spaceId: 200, spaceName: 200, memberName: 200,
   memberId: 200, itemId: 200, outcome: 200, reason: 2000, decisionKind: 200, questionKey: 600, supersedes: 200 };

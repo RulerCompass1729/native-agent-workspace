@@ -4,7 +4,7 @@
 const { createHash } = require('node:crypto');
 const { ButlerLedger } = require('./butler-ledger.cjs');
 const { validateEvent } = require('./butler-policy.cjs');
-const { storedReadySource } = require('./butler-ready.cjs');
+const { storedReadySource, storedDoneSource } = require('./butler-ready.cjs');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const unavailable = () => Object.assign(Error('Butler source unavailable'), { code: 'BUTLER_SOURCE_UNAVAILABLE' });
 const clipped = (value, limit) => typeof value === 'string' && value ? value.slice(0, limit) : undefined;
@@ -35,6 +35,9 @@ function queueOutcomeSource(outcome) {
 // newly rejected source cannot change the availability of its original space.
 function storedQueueSource(roomId, event) {
   const source = event.butlerSource;
+  if (event.monitor?.kind === 'done' || source?.kind === 'done' ||
+      typeof source?.eventId === 'string' && source.eventId.startsWith('butler-done:') ||
+      typeof source?.sourceRef === 'string' && source.sourceRef.startsWith('queue-done:')) return storedDoneSource(roomId, event);
   if (event.monitor?.kind === 'ready' || source?.kind === 'ready' ||
       typeof source?.eventId === 'string' && source.eventId.startsWith('butler-ready:') ||
       typeof source?.sourceRef === 'string' && source.sourceRef.startsWith('queue-ready:')) return storedReadySource(roomId, event);
@@ -162,7 +165,7 @@ class ButlerIngress {
 }
 
 function bindQueueOutcomes(roomState, ingress, notify) {
-  // B6's typed completion fact is separate from B1 decision/failure delivery.
+  // The existing callback carries typed READY/done facts, separate from B1 decision/failure delivery.
   // No controller or model is notified while the host remains dormant.
   roomState.onButlerReady = (roomId, eventId) => ingress?.captureOutcome(roomId, eventId);
   roomState.onQueueOutcome = outcome => {
