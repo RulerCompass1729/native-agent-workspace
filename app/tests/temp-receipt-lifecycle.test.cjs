@@ -32,8 +32,9 @@ test('one scan streams orphan receipts without the bounded reader and still offe
  own.register(dir,{registryDir:reg,owner:dead,now:()=>old});const record=own.read(reg)[0];
  // Cross multiple real 256-entry batches, without writing 50,001 files on every run.
  const orphanCount=513;
+ const receiptCount=()=>fs.readdirSync(reg).filter(name=>/^[a-f0-9]{64}\.json$/i.test(name)).length;
  for(let i=0;i<orphanCount;i++){const r={...record,path:path.join(area,'gone-'+i),ino:record.ino+i+1};r.id=createHash('sha256').update(JSON.stringify([r.path,r.dev,r.ino,r.uid])).digest('hex');fs.writeFileSync(path.join(reg,r.id+'.json'),JSON.stringify(r),{mode:0o600});}
- assert.equal(fs.readdirSync(reg).length,orphanCount+1);
+ assert.equal(receiptCount(),orphanCount+1);
  // The old scan hit read()'s inventory limit before pruning. Guard it before
  // loading the scanner, so even a captured read reference cannot hide that bug.
  const boundedRead=t.mock.method(own,'read',()=>{throw Error('Scan must not use the bounded receipt reader');});
@@ -43,5 +44,5 @@ test('one scan streams orphan receipts without the bounded reader and still offe
   const manager=new TempReminders({dataDir,registryDir:reg,roots:[area],now:()=>now,isAlive:()=>false,isPerson:()=>true,inspect:async()=>({opened:[],mounted:[]})});
   status=await manager.status();
  } finally {boundedRead.mock.restore();}
- console.log('RECEIPT CLIFF before='+(orphanCount+1)+' after='+fs.readdirSync(reg).length+' candidates='+status.directories+' anomaly='+status.anomaly+' boundedReads='+boundedRead.mock.callCount());assert.equal(status.anomaly,null,'Inventory size must not prevent the missing-path sweep');assert.equal(boundedRead.mock.callCount(),0,'Scan must remain independent of the bounded inventory reader');assert.equal(status.directories,1);assert.equal(status.shown,true);assert.equal(fs.readdirSync(reg).length,1);assert.equal(own.read(reg)[0].path,dir);
+ console.log('RECEIPT CLIFF before='+(orphanCount+1)+' after='+receiptCount()+' candidates='+status.directories+' anomaly='+status.anomaly+' boundedReads='+boundedRead.mock.callCount());assert.equal(status.anomaly,null,'Inventory size must not prevent the missing-path sweep');assert.equal(boundedRead.mock.callCount(),0,'Scan must remain independent of the bounded inventory reader');assert.equal(status.directories,1);assert.equal(status.shown,true);assert.equal(receiptCount(),1);assert.equal(own.read(reg)[0].path,dir);
 });
