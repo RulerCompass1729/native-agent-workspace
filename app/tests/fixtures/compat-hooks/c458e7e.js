@@ -1,0 +1,1384 @@
+// This session-local mod uses Claude Code's public API. No prompt rewriting,
+// extra model requests, terminal key injection, or global plugin installation.
+let stopped = false;
+let generation = 0;
+const legacyOnly = false;
+let collecting = null;
+// A queued app message held for the running root turn's next tool boundary (2.1.322 and
+// 2.1.323, measured): appended there, the turn's next request reads it. Elsewhere a mod's row
+// would land before the reply being written, so it waits, or runs as its own turn.
+let heldMidturn = null, midturnRead = null, personRevision = 0;
+let foreignSubmissions = 0;
+let foreignRevision = 0;
+let rootBinding = null;
+// Root transitions followed inside one process: SessionEnd reason -> SessionStart source.
+const FOLLOWED_ROOT_TRANSITIONS = { clear: 'clear', resume: 'fork' };
+const rootEnds = new Map();
+const rootTransitions = [];
+let syncingRoot = false;
+let syncRootAgain = false;
+let rootSyncBlocked = false;
+let contextTransitions = false;
+let nativeBlocks = false;
+let addressedTool = false;
+const operatorSchemas = {
+  workspace_sessions: [],
+  workspace_open: ['action_id', 'provider', 'cwd', 'name', 'task', 'permission', 'grant_id'],
+  workspace_report: ['request_id', 'dispatch_id', 'state', 'body', 'question'],
+};
+let operatorTools = [];
+let addressedReading = false;
+async function observeAddressedTool($, ownGeneration) {
+  if (!nativeBlocks || legacyOnly || stopped || ownGeneration !== generation || addressedReading) return;
+  const binding = rootBinding;
+  addressedReading = true;
+  try {
+    const catalog = await $.tool.list(), available = catalog.some(t => t.name === 'mcp__native_workspace__workspace_message');
+    if (!binding || binding !== rootBinding || stopped || ownGeneration !== generation) return;
+    const operators = Object.keys(operatorSchemas).filter(name => catalog.some(t => t.name === `mcp__native_workspace__${name}`));
+    if (available !== addressedTool) { await request($, '/addressed-capability', { available }, binding); addressedTool = available; }
+    if (JSON.stringify(operators) !== JSON.stringify(operatorTools)) { await request($, '/operator-capability', { tools: operators }, binding); operatorTools = operators; }
+  } catch { /* Keep the previously confirmed capability; actual calls still validate. */ }
+  finally { addressedReading = false; }
+}
+let nativeModelSupported = false;
+let modelReadRevision = 0;
+let modelReads = 0, modelReadAgain = false;
+async function observeModel($) {
+  const binding = rootBinding, revision = ++modelReadRevision, ownGeneration = generation;
+  if (!nativeModelSupported || !binding || stopped) return;
+  // Metadata cannot hold input polling or buffered native output. Native API
+  // reads are not abortable; cap in-flight reads and coalesce later switches.
+  if (modelReads >= 2) { modelReadAgain = true; return; }
+  const epoch = binding.observationEpoch;
+  modelReads++;
+  try {
+    const model = await $.session.model();
+    const sessionId = await $.session.id();
+    if (stopped || generation !== ownGeneration || revision !== modelReadRevision ||
+      rootBinding !== binding || binding.observationEpoch !== epoch || sessionId !== binding.sessionId || typeof model !== 'string' ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]{0,159}$/.test(model)) return;
+    enqueueBlock($, { id: 'control:model', kind: 'control', status: 'complete', model }, binding);
+  } catch { /* Missing native metadata never triggers a model request or fallback. */ }
+  finally {
+    modelReads--;
+    if (modelReadAgain) { modelReadAgain = false; observeModel($); }
+  }
+}
+let nativeUsageSupported = false, usageReading = false, usageReadAgain = false, usageRevision = 0;
+async function observeUsage($) {
+  const binding = rootBinding, revision = ++usageRevision, ownGeneration = generation;
+  if (!nativeUsageSupported || !binding || stopped) return;
+  if (usageReading) { usageReadAgain = true; return; }
+  const epoch = binding.observationEpoch;
+  usageReading = true;
+  try {
+    // No breakdown: the native status-line metadata is free. Never request
+    // /context's full token-count calls or change the person's status line.
+    const value = await $.session.usage();
+    const sessionId = await $.session.id();
+    if (stopped || ownGeneration !== generation || revision !== usageRevision || binding !== rootBinding ||
+      epoch !== binding.observationEpoch || sessionId !== binding.sessionId) return;
+    if (!Number.isSafeInteger(value?.context?.window) || value.context.window <= 0) return;
+    const usage = { context: { window: value.context?.window, tokens: value.context?.tokens, percent: value.context?.percent },
+      cost: { usd: value.cost?.usd }, rateLimits: (Array.isArray(value.rateLimits) ? value.rateLimits : []).slice(0, 8).map(r => ({ kind: r?.kind, percentUsed: r?.percentUsed, resetsAt: r?.resetsAt })) };
+    enqueueBlock($, { id: 'control:usage', kind: 'control', status: 'complete', usage }, binding);
+  } catch { /* Retain the last dated reading; unknown is never zero. */ }
+  finally { usageReading = false; if (usageReadAgain) { usageReadAgain = false; observeUsage($); } }
+}
+let activeTurn = null;
+let lastPhase = null;
+const rootToolCalls = new Map();
+const nativeReadImages = new Map();
+const nativeImageEncodedLimit = 1398104; // 1 MiB, before base64, same consumer bound.
+function nativeImagePart(part) {
+  const source = part?.source;
+  return part?.type === 'image' && source?.type === 'base64' &&
+    ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(source.media_type) &&
+    typeof source.data === 'string' && source.data.length > 0 && source.data.length <= nativeImageEncodedLimit;
+}
+// One list for every bind path (first bind, observer rebind), so they cannot disagree (T-133).
+// 2.1.321/322 stay off: their declarations leave Read tool_response unknown;
+// the exact-version image producer shape has not been qualified.
+const nativeMediaVersion = version => ['2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319'].includes(version);
+function mediaIncomplete(parts, binding, complete = true) {
+  return Array.isArray(parts) && parts.some(part => part?.type !== 'text' && !(complete && binding?.nativeMedia && nativeImagePart(part)));
+}
+// T-133: images of a prompt shown from the settings hook, as media for its row; same limits as enqueueWithImages.
+function enqueuePromptImages($, key, parts, binding) {
+  let index = 0;
+  for (const part of parts) {
+    if (part?.type !== 'image') continue;
+    const imagePayload = index === 16 ? { index, unavailable: '其余图片超过本地预览上限，请在原生终端核对。' }
+      : !nativeImagePart(part) ? { index, unavailable: '原生图片超过 1 MB、格式不支持或不是本机图片内容。' }
+      : { index, mime: part.source.media_type, data: part.source.data };
+    enqueueBlock($, { id: `prompt:${key}`, kind: 'prompt-media', status: 'complete', mediaOnly: true, imagePayload }, binding);
+    if (++index > 16) break;
+  }
+}
+function enqueueWithImages($, row, parts, binding = rootBinding) {
+  const count = binding?.nativeMedia && row.status === 'complete' && Array.isArray(parts) ? Math.min(17, parts.filter(part => part?.type === 'image').length) : 0;
+  // The original frame already records missing media if a later frame is lost.
+  if (count) row = { ...row, imageCount: count };
+  enqueueBlock($, row, binding);
+  if (!binding?.nativeMedia || !Array.isArray(parts) || row.status !== 'complete') return;
+  let index = 0;
+  const toolId = row.kind === 'tool' && row.id.startsWith('tool:') ? row.id.slice(5) : undefined;
+  const fact = toolId && nativeReadImages.get(toolId);
+  for (const part of parts) {
+    if (part?.type !== 'image') continue;
+    let imagePayload;
+    if (index === 16) { imagePayload = { index, unavailable: '其余图片超过本地预览上限，请在原生终端核对。' }; }
+    else if (!nativeImagePart(part)) imagePayload = { index, unavailable: '原生图片超过 1 MB、格式不支持或不是本机图片内容。' };
+    else {
+      imagePayload = { index, mime: part.source.media_type, data: part.source.data };
+      // This is a label only. Pixels always come from the accepted native
+      // block; the possibly changed original path is never reread.
+      if (fact?.binding === binding && fact.data === part.source.data && fact.mime === part.source.media_type) imagePayload.sourcePath = fact.path;
+    }
+    enqueueBlock($, { id: row.id, kind: row.kind, status: 'complete', mediaOnly: true, imagePayload }, binding);
+    if (++index > 16) break;
+  }
+  if (toolId) nativeReadImages.delete(toolId);
+}
+function observePhase($, phase, binding = rootBinding, turnId = activeTurn) {
+  if (!nativeBlocks || stopped || !binding || binding !== rootBinding || !turnId || turnId !== activeTurn ||
+      (lastPhase?.binding === binding && lastPhase.turnId === turnId && lastPhase.phase === phase)) return;
+  lastPhase = { binding, turnId, phase };
+  enqueueBlock($, { id: 'control:activity', kind: 'control', status: 'complete', turnId, phase }, binding);
+}
+function heartbeat($, binding, ownGeneration) {
+  $.clock.after(1000, () => {
+    if (stopped || rootBinding !== binding || generation !== ownGeneration || rootEnds.has(binding.sessionId)) return;
+    if (activeTurn && !displayTurns.get(activeTurn)?.ended) enqueueBlock($, { id: 'control:heartbeat', kind: 'control', status: 'complete' }, binding);
+    heartbeat($, binding, ownGeneration);
+  });
+}
+// Only native turn identity + a complete matching final display can authorize
+// a reply body. Raw Stop text must not bypass a display transform.
+const displayTurns = new Map();
+const promptTurns = new Map(), displayTurnLinks = new Map();
+let rootPrompt = null;
+// T-138 (2.1.316, 2.1.317, measured): a prompt typed while a root turn runs raises UserPromptSubmit
+// once, at enqueue, with the running prompt's id. If no mid-turn point takes it (that is a
+// queued_command delivery into the running turn), it later starts its own turn, and that
+// turn.start's text is the prompt verbatim. Only that exact match with the first prompt still in
+// line lets the new turn act on it; anything else leaves the turn ambiguous, as before.
+let queuedPrompts = [];
+const queuedPromptIdentities = new Map();
+const queuedDisplayLookups = new Map();
+// The journal's accepted user UUID bridges classic's new prompt id to the
+// existing, qualified queued-turn link. This is for reading, never authority.
+async function queuedDisplayLink($, e, binding) {
+  if (legacyOnly || !binding.nativeQueuedPromptLinks || !queuedPromptIdentities.size) return null;
+  let result;
+  try {
+    const version = (await $.session.version()).version;
+    if (!['2.1.321', '2.1.322', '2.1.323'].includes(version)) return null;
+    result = await request($, '/prompt-identity', { promptId: e.prompt_id, epoch: binding.observationEpoch }, binding);
+  }
+  catch { return null; }
+  const linked = queuedPromptIdentities.get(result?.uuid);
+  if (rootBinding !== binding || linked?.binding !== binding || stopped) return null;
+  return { binding, turnId: linked.turnId, promptId: e.prompt_id, displayOnly: true };
+}
+// T-138 display: a prompt typed during a turn shares that turn's prompt id on 2.1.316/2.1.317. NAW's
+// adapter stores it as `claude-prompt-<id>-q<tag>`, the tag made from its text by this same function
+// (adapters.cjs promptTextTag; a test pins the two equal), so a turn it starts can name its row with
+// no shared history: a hot reload here loses nothing.
+// T-133: each prompt text's id and text tag, for images its prompt block carries.
+const promptImageRows = new Map();
+const promptTextTag = text => { let h = 0x811c9dc5; for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0; return h.toString(16).padStart(8, '0'); };
+// The foreign submissions now in flight, with their origins (UserPromptSubmit fires inside one): only
+// the person's own composer input can join the line. This mod's own submissions never reach this hook.
+// A set, not a saved-and-restored value: interleaved submissions do not exit in reverse order.
+const foreignInFlight = new Set();
+// Turn records (2.1.316 and 2.1.317): the person's `!` commands, the inputs that start
+// a root turn and that turn's own clock. Order is the only link: an input taken
+// while no root turn runs belongs to the next root turn.start, and a turn this
+// mod's own submission started claims nothing (its shared reply stays its own).
+// Anything taken during a root turn is dropped at that turn's end.
+let rootIdle = true;
+let shellInput = null;
+let turnTriggers = [];
+let shellTurn = null;
+let expectPrompt = null; // a root prompt went on: its own row is next, never a `!` command
+// Narration (2.1.316 and 2.1.317): the engine itself decides which thinking blocks are
+// the model's running explanation, and draws exactly those as AssistantMessage
+// summaries keyed by the stored row's uuid. NAW shows what the terminal drew,
+// never re-deciding from the block. A drawing joins only a root thinking row
+// appended during a root turn; its place is that row's place in the stream.
+const narrationSources = new Map(), pendingDrawings = new Map();
+const emittedRows = new Set(), rootRows = [];
+let rootRowSeq = 0, narrationOrder = 0;
+function publishNarration($, uuid, source, text) {
+  source.published = true;
+  // Drawn a frame after its row landed: if a later row already went out,
+  // place the explanation before it, as the terminal does.
+  const before = rootRows.find(row => row.seq > source.seq)?.id;
+  enqueueBlock($, { id: `narration:${uuid}`, kind: 'narration', turnId: source.turnId, text, status: 'complete', order: source.order,
+    ...(before ? { beforeId: before } : {}) }, source.binding);
+}
+function trimLinks(map) { while (map.size > 64) map.delete(map.keys().next().value); }
+function displayTurn(id, binding) {
+  let turn = displayTurns.get(id);
+  if (!turn || turn.binding !== binding) {
+    turn = { binding, blocks: new Map(), incomplete: false }; displayTurns.set(id, turn);
+    while (displayTurns.size > 8) displayTurns.delete(displayTurns.keys().next().value);
+  }
+  return turn;
+}
+function failureText(turn) {
+  return turn.failedPrompt && !turn.failureAmbiguous && turn.failure?.text || '';
+}
+function creditFailureText(text) {
+  return /^(?:You're out of usage credits|Credit balance is too low)(?:[.\s]|$)/.test(text);
+}
+function publishFailure($, turnId, turn, binding) {
+  // A confirmed failed root permits the person's next input independently of
+  // whether native's error prose matched a known display format.
+  if (turn.ended && turn.endReason === 'error' && turn.failedPrompt) {
+    const detail = failureText(turn);
+    enqueueBlock($, { id: `turn:${turnId}`, turnId, kind: 'turn', status: 'failed',
+      text: turn.endingText + (detail ? `\n${detail}` : ''), incomplete: Boolean(turn.failureAmbiguous), failedRequest: true, ...turn.clock,
+      ...(!turn.failureAmbiguous && turn.failure ? { errorMessageId: turn.failure.uuid,
+        ...(turn.failure.credits ? { failureCause: 'usageCredits' } : {}) } : {}) }, binding);
+  }
+}
+function rowText(content) {
+  return typeof content === 'string' ? content : Array.isArray(content)
+    ? content.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') : '';
+}
+// The two rows processBashCommand appends, on door `command`: its input, then
+// stdout+stderr, or stderr alone (failed to start or not run). Any other shape
+// is left unshown, as before; an ambiguous separator is never guessed apart.
+function shellOutput(value) {
+  const separator = '</bash-stdout><bash-stderr>', end = '</bash-stderr>';
+  if (value.startsWith('<bash-stdout>') && value.endsWith(end) && value.split(separator).length === 2) {
+    const [out, err] = value.slice('<bash-stdout>'.length, -end.length).split(separator);
+    return { text: out && err ? `${out.replace(/\n$/, '')}\n${err}` : out || err, status: 'complete' };
+  }
+  if (value.startsWith('<bash-stderr>') && value.indexOf(end) === value.length - end.length && value.indexOf('<bash-stderr>', 1) === -1) {
+    return { text: value.slice('<bash-stderr>'.length, -end.length), status: 'failed' };
+  }
+  return null;
+}
+function triggerTurn(trigger, binding) {
+  if (!binding?.nativeTurnRecords || binding !== rootBinding) return;
+  turnTriggers = [...turnTriggers.filter(t => t.binding === binding), { ...trigger, binding }].slice(-8);
+}
+function publishShell($, pending, output) {
+  const id = `tool:shell-${pending.uuid}`;
+  enqueueBlock($, { id, kind: 'tool', title: 'Bash', userShell: true, input: pending.command,
+    text: output ? output.text : '', status: output ? output.status : 'complete', ...(output ? {} : { incomplete: true }) }, pending.binding);
+  triggerTurn({ row: id }, pending.binding);
+}
+function flushShell($) {
+  const pending = shellInput; shellInput = null;
+  if (pending && !pending.unproven) publishShell($, pending, null);
+}
+function observeShell($, e, result, binding) {
+  const pending = shellInput; shellInput = null;
+  const message = result.message;
+  // A typed prompt that merely looks like `<bash-input>` is filed on door
+  // `command` too; it follows its own UserPromptSubmit, which `!` never raises.
+  // Such a row counts only if its output pairs with it, as only `!` output does.
+  const typed = expectPrompt === binding && message?.type === 'user' && !message.isMeta && ['prompt', 'command'].includes(e.door);
+  if (typed) expectPrompt = null;
+  const value = message?.type === 'user' && !message.isMeta && e.door === 'command' ? rowText(message.content) : null;
+  if (pending) {
+    // Only the very next root append can be its output.
+    const output = pending.binding === binding && value !== null ? shellOutput(value) : null;
+    if (output || !pending.unproven) publishShell($, pending, output);
+    if (output) return;
+  }
+  const input = value === null ? null : /^<bash-input>([\s\S]*)<\/bash-input>$/.exec(value);
+  if (input && !input[1].includes('</bash-input>')) shellInput = { binding, uuid: result.uuid, command: input[1], ...(typed ? { unproven: true } : {}) };
+}
+const observations = [];
+let observing = false;
+let observationGap = false;
+let observationGapRevision = 0;
+let observationRequests = 0;
+let observerReconnect = false;
+let observerRebinding = null;
+let observerBindRequest = null;
+// A loss is declared on the next row or poll delivered, which can be older than the lost row (a row dropped as it
+// is made, while older rows still wait). `gapThrough` is the last sequence numbered when anything was lost: only a
+// turn whose start is numbered above it began after every loss (steward step 2, batch 0).
+function markObservationGap(binding) {
+  if (binding && binding.lease === rootBinding?.lease) {
+    observationGap = true; observationGapRevision++;
+    rootBinding.gapThrough = Math.max(rootBinding.gapThrough || 0, rootBinding.observationSequence || 0);
+  }
+}
+
+function enqueueBlock($, row, binding = rootBinding) {
+  // Model metadata does not enable the separately qualified content/control capabilities.
+  if ((!nativeBlocks && !(nativeModelSupported && row.kind === 'control' && row.id === 'control:model')) || !binding || binding !== rootBinding || stopped) return;
+  // No synchronous IO in a display hook. Keep the entire accepted batch; an
+  // overrun is an explicit gap, never a sliced fragment presented as complete.
+  let size = JSON.stringify(row).length;
+  const media = row.mediaOnly === true && binding.nativeMedia;
+  if (size > (media ? 1500000 : 500000)) { markObservationGap(binding); return; }
+  if (media && observations.reduce((n, x) => n + JSON.stringify(x.row).length, 0) + size > 4000000) {
+    row = { ...row, imagePayload: { index: row.imagePayload.index, unavailable: '图片观察暂时超过本地缓冲上限，请在原生终端核对。' } };
+    size = JSON.stringify(row).length;
+  }
+  // Image enrichment never evicts an earlier original text/control record.
+  if (media && (observations.length >= 256 || observations.reduce((n, x) => n + JSON.stringify(x.row).length, 0) + size > 4000000)) { markObservationGap(binding); return; }
+  while (observations.length >= 256 || observations.reduce((n, x) => n + JSON.stringify(x.row).length, 0) + size > 4000000) {
+    observations.shift(); markObservationGap(binding);
+  }
+  observations.push({ row: { ...row, block: true, sequence: ++binding.observationSequence, epoch: binding.observationEpoch }, binding });
+  if (row.kind !== 'control' && row.kind !== 'narration' && !row.mediaOnly && !emittedRows.has(row.id)) {
+    emittedRows.add(row.id); if (emittedRows.size > 512) emittedRows.delete(emittedRows.values().next().value);
+    rootRows.push({ seq: ++rootRowSeq, id: row.id }); if (rootRows.length > 64) rootRows.shift();
+  }
+  if (!observing) { observing = true; $.clock.after(0, () => flushObservations($)); }
+}
+
+function observeAppend($, e, result, binding, turnId, candidate, nativeApiError, nativeCreditError) {
+  if ((!contextTransitions && !nativeBlocks) || !binding || stopped || rootBinding !== binding || e.agentId ||
+    result?.deny || result?.uuid !== e.uuid || !/^[a-f0-9-]{36}$/i.test(result?.uuid || '')) return;
+  const message = result.message;
+  // A queued prompt taken into the running turn starts no turn of its own; which one was taken is
+  // not exact (the engine frames its text), so none of the line can head a later turn (T-138).
+  if (e.door === 'delivery' && message?.type === 'attachment' && message.name === 'queued_command') queuedPrompts = [];
+  if (nativeBlocks && binding.nativeTurnRecords) observeShell($, e, result, binding);
+  if (!message || message.isMeta || !Array.isArray(message.content)) return;
+  const text = blocks => typeof blocks === 'string' ? blocks : Array.isArray(blocks)
+    ? blocks.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') : '';
+  // The engine keeps a queued composer's accepted row before its own turn
+  // starts. Attach only to the same already tracked head; never an automatic
+  // input, a child, an injected delivery or a guessed assistant message.
+  const queued = queuedPrompts[0];
+  if (rootIdle && queued?.binding === binding && e.door === 'prompt' && e.origin?.kind === 'composer' &&
+    message?.type === 'user' && text(message.content) === queued.text) {
+    if (queued.nativeUuid && queued.nativeUuid !== result.uuid) queued.identityAmbiguous = true;
+    queued.nativeUuid = result.uuid;
+  }
+  if (nativeBlocks) {
+    // A queue record is virtual; only the accepted conversation attachment is
+    // a display row. Its UUID and final content come from the native engine.
+    const queuedHuman = e.door === 'delivery' && ['composer', 'bridge'].includes(e.origin?.kind);
+    const queuedEngine = e.door === 'attachment' && e.origin?.kind === 'engine' && message.role === 'user';
+    // Native queued deliveries can use the system channel, with no API role.
+    // Keep the final accepted rendering, including native framing; never strip
+    // it or infer a human author from the text of an unrelated delivery.
+    if (binding.nativeInlineInput && (queuedHuman || queuedEngine) && message.type === 'attachment' &&
+      message.name === 'queued_command') {
+      const inputTurn = typeof turnId === 'string' && turnId && !displayTurns.get(turnId)?.ended ? turnId : undefined;
+      enqueueWithImages($, { id: `prompt:${result.uuid}`, kind: 'input', turnId: inputTurn,
+        text: text(message.content), title: '工作中插入', inputMode: 'native-inline',
+        status: 'complete', incomplete: [e.message?.content, message.content].some(blocks => mediaIncomplete(blocks, binding)) }, message.content, binding);
+    }
+    // Retained hosts have no stable GUI user-row ID. Observe the accepted
+    // native append instead of guessing a match to a random legacy cache ID.
+    if (legacyOnly && e.door === 'prompt' && message.type === 'user') {
+      const nonText = mediaIncomplete(message.content, binding);
+      enqueueWithImages($, { id: `prompt:${result.uuid}`, kind: 'input',
+        text: text(message.content), status: 'complete', incomplete: nonText,
+        ...(candidate === collecting && !candidate?.invalid && candidate?.appends === 1 && candidate?.tag && text(message.content) === candidate.text ? { inputTag: candidate.tag } : {}) }, message.content, binding);
+    }
+    // A qualified managed reader uses accepted IDs for ordinary input too.
+    // This mod's own submissions already have their visible app row.
+    if (!legacyOnly && binding.nativePromptInput && e.door === 'prompt' && message.type === 'user' &&
+      !(e.origin?.kind === 'plugin' && e.origin.name === 'native-workspace-submit')) {
+      enqueueWithImages($, { id: `prompt:${result.uuid}`, kind: 'input', inputMode: 'native-prompt',
+        text: text(message.content), status: 'complete', incomplete: mediaIncomplete(message.content, binding) }, message.content, binding);
+    }
+    // 2.1.316/2.1.317 (T-133, measured): a prompt typed in the terminal is shown from the settings hook, which
+    // carries no image. The person's prompt block (origin composer) does; its pixels go to that row, named
+    // at its UserPromptSubmit. The block comes before its turn starts, also for a prompt typed mid-turn.
+    if (!legacyOnly && !binding.nativePromptInput && binding.nativeMedia && e.door === 'prompt' && message.type === 'user' && e.origin?.kind === 'composer') {
+      const row = promptImageRows.get(text(message.content));
+      if (row?.binding === binding && message.content.some(part => part?.type === 'image')) { promptImageRows.delete(text(message.content)); enqueuePromptImages($, row.key, message.content, binding); }
+    }
+    // Display IDs and saved transcript IDs are different namespaces. Text is
+    // collected from MessageDisplay only, not guessed equal to an append/Stop.
+    if (e.door === 'response' && e.origin?.kind === 'model' && message.type === 'assistant') {
+      if (binding.nativeNarration && !rootIdle && turnId && message.content.some(b => b?.type === 'thinking' && typeof b.thinking === 'string' && b.thinking.trim())) {
+        const source = { binding, turnId, seq: rootRowSeq, order: ++narrationOrder };
+        narrationSources.set(result.uuid, source);
+        while (narrationSources.size > 64) narrationSources.delete(narrationSources.keys().next().value);
+        // The terminal can draw a row before its append resolves here.
+        const drawn = pendingDrawings.get(result.uuid);
+        if (drawn?.binding === binding) { pendingDrawings.delete(result.uuid); publishNarration($, result.uuid, source, drawn.text); }
+      }
+      // Engine-generated API failures bypass MessageDisplay. Classify the
+      // inspected native stand-in, but keep only the downstream stored text.
+      // A failed prompt and error turn boundary must independently agree.
+      if (turnId && nativeApiError &&
+        message.content.every(b => b?.type === 'text' && typeof b.text === 'string')) {
+        const turn = displayTurn(turnId, binding), detail = text(message.content);
+        if (detail.length <= 500000) {
+          if (turn.failure && turn.failure.uuid !== result.uuid) turn.failureAmbiguous = true;
+          else turn.failure = { uuid: result.uuid, text: detail, credits: nativeCreditError && creditFailureText(detail) };
+          publishFailure($, turnId, turn, binding);
+        } else markObservationGap(binding);
+      }
+      for (const block of message.content) if (block?.type === 'tool_use' && typeof block.id === 'string') {
+        enqueueBlock($, { id: `tool:${block.id}`, kind: 'tool', turnId,
+          title: block.name || '', input: JSON.stringify(block.input || {}, null, 2), status: 'running' });
+      }
+    } else if (e.door === 'tool-result' && e.origin?.kind === 'tool' && message.type === 'user') {
+      for (const block of message.content) if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+        const nonText = mediaIncomplete(block.content, binding, !block.is_error);
+        enqueueWithImages($, { id: `tool:${block.tool_use_id}`, kind: 'tool',
+          title: e.origin.tool || '', text: text(block.content), status: block.is_error ? 'failed' : 'complete', incomplete: nonText }, block.content, binding);
+        if (block.is_error) nativeReadImages.delete(block.tool_use_id);
+      }
+    }
+    return;
+  }
+  const rows = [];
+  if (e.door === 'response' && e.origin?.kind === 'model' && message.type === 'assistant') {
+    rows.push({ id: result.uuid, kind: 'response', text: text(message.content) });
+  } else if (e.door === 'tool-result' && e.origin?.kind === 'tool' && message.type === 'user') {
+    for (const [index, block] of message.content.entries()) if (block?.type === 'tool_result') {
+      rows.push({ id: `${result.uuid}:${index}`, kind: 'tool-output', title: typeof e.origin.tool === 'string' ? e.origin.tool.slice(0, 200) : '',
+        text: text(block.content), nonText: Array.isArray(block.content) && block.content.some(b => b?.type !== 'text') });
+    }
+  }
+  for (const row of rows) {
+    if (!row.text && !row.nonText) continue;
+    row.truncated = row.text.length > 12000;
+    row.text = row.text.slice(-12000);
+    row.sequence = ++binding.observationSequence;
+    row.epoch = binding.observationEpoch;
+    // Bounded, private observation only. Native append never waits for local
+    // delivery. Retired root observations cannot bind a new root or send work.
+    while (observations.length >= 64 || observations.reduce((n, x) => n + x.row.text.length, 0) + row.text.length > 256000) {
+      observations.shift(); markObservationGap(binding);
+    }
+    observations.push({ row, binding });
+  }
+  if (!observing && observations.length) {
+    observing = true; $.clock.after(0, () => flushObservations($));
+  }
+}
+
+async function flushObservations($) {
+  let retry = false;
+  try {
+    while (observations.length) {
+      const entry = observations[0], { binding } = entry;
+      if (stopped || binding !== rootBinding) { observations.shift(); continue; }
+      if (legacyOnly && observerReconnect) {
+        try { await refreshLegacyObserver($, generation); observerReconnect = false; }
+        catch (error) {
+          if (error.code === 'OBSERVER_IDENTITY') { markObservationGap(binding); if (observations[0] === entry) observations.shift(); continue; }
+          retry = true; break;
+        }
+        if (stopped || binding !== rootBinding) continue;
+      }
+      const row = entry.row;
+      const gap = observationGap, revision = observationGapRevision, gapThrough = binding.gapThrough || 0;
+      try {
+        // The native HTTP API exposes no abort option. Bound outstanding calls
+        // as well as our wait: a stalled old root cannot hold the new queue, nor
+        // can repeated timeouts accumulate unbounded host requests.
+        if (observationRequests >= 2) throw Error('Observation transport busy');
+        observationRequests++;
+        const sending = request($, '/observation', { ...row, gap, ...(gap ? { gapThrough } : {}) }, binding).finally(() => { observationRequests--; });
+        let timer;
+        const deadline = new Promise((_, reject) => { timer = $.clock.after(1500, () => reject(Error('Observation timeout'))); });
+        let observed;
+        try { observed = await Promise.race([sending, deadline]); } finally { timer?.cancel(); }
+        // Native control must not hold the observation queue. Its exact result
+        // and submission settlement return separately; no automatic retry.
+        if (observed?.abort) $.clock.after(0, () => abortNativeTurn($, binding, observed.abort).catch(() => {}));
+        if (entry.row !== row && binding === rootBinding) continue;
+        if (binding === rootBinding && revision === observationGapRevision) observationGap = false;
+      } catch (error) {
+        if (entry.row !== row && binding === rootBinding) continue;
+        // A retained CLI outlives the GUI transport. Retry observation only,
+        // within the existing bounded queue; the native prompt is never replayed.
+        if (legacyOnly && !stopped && binding === rootBinding && error.status !== 409) {
+          observerReconnect = true;
+          retry = true; break;
+        }
+        markObservationGap(binding);
+      }
+      // A display-hook overrun may already have evicted this in-flight entry.
+      if (observations[0] === entry) observations.shift();
+    }
+  } finally {
+    // One observation retry timer, independent of the command listener held
+    // in prompt.submit. Stop/end drains it; hooks never await this transport.
+    if (retry) $.clock.after(1000, () => flushObservations($));
+    else observing = false;
+  }
+}
+
+async function abortNativeTurn($, binding, command) {
+  if (stopped || binding !== rootBinding || rootEnds.has(binding.sessionId) ||
+      command.epoch !== binding.observationEpoch || command.turnId !== activeTurn ||
+      !/^[a-f0-9-]{36}$/i.test(command.id || '') || displayTurns.get(activeTurn)?.ended) return;
+  // Only our submission that this turn belongs to is the stopped turn's. A queued one still waiting for its own
+  // turn (2.1.316/2.1.317, T-133) is not: native runs it after the stop, so waiting for it would never settle in time.
+  const pending = collecting?.turns.includes(command.turnId) ? collecting : null;
+  const report = submitSettled => request($, '/abort-result', { id: command.id, epoch: command.epoch, turnId: command.turnId, status: 'aborted', submitSettled }, binding);
+  try { await $.turn.abort({ turnId: command.turnId }); }
+  catch { await request($, '/abort-result', { id: command.id, epoch: command.epoch, turnId: command.turnId, status: 'failed' }, binding); return; }
+  if (stopped || binding !== rootBinding) return;
+  await report(!pending || pending.finished === true);
+  if (pending && !pending.finished) pending.settled.then(() => {
+    if (!stopped && binding === rootBinding) report(true).catch(() => {});
+  });
+}
+
+async function refreshLegacyObserver($, ownGeneration) {
+  if (observerRebinding) return observerRebinding;
+  const previous = rootBinding;
+  const changed = () => Object.assign(Error('Observer identity changed'), { code: 'OBSERVER_IDENTITY' });
+  const refresh = async () => {
+    const binding = await connection($);
+    if (!legacyOnly || stopped || generation !== ownGeneration || rootBinding !== previous ||
+      !previous || binding.sessionId !== previous.sessionId || binding.socketPath !== previous.socketPath ||
+      rootEnds.has(previous.sessionId)) throw changed();
+    if (binding.token === previous.token) return;
+    const version = (await $.session.version()).version;
+    // Native HTTP cannot be aborted. Reuse one metadata request for this
+    // credential across wait timeouts; repeating root-bind would rotate epochs.
+    if (!observerBindRequest || observerBindRequest.token !== binding.token || observerBindRequest.generation !== ownGeneration) {
+      if (observationRequests >= 2) throw Error('Observation transport busy');
+      observationRequests++;
+      observerBindRequest = { token: binding.token, generation: ownGeneration,
+        promise: request($, '/root-bind', { nativeBlocks, nativeQueue: version === '2.1.302',
+          nativeInlineInput: ['2.1.310', '2.1.311', '2.1.312'].includes(version),
+          nativePromptInput: false, nativeMedia: nativeMediaVersion(version),
+          nativeSharedDisplay: nativeBlocks && version === '2.1.302' }, binding).finally(() => { observationRequests--; }) };
+    }
+    const pending = observerBindRequest;
+    let timer, result;
+    const deadline = new Promise((_, reject) => { timer = $.clock.after(1500, () => reject(Object.assign(Error('Observer rebind timeout'), { code: 'OBSERVER_TIMEOUT' }))); });
+    try { result = await Promise.race([pending.promise, deadline]); }
+    catch (error) { if (error.code !== 'OBSERVER_TIMEOUT' && observerBindRequest === pending) observerBindRequest = null; throw error; }
+    finally { timer?.cancel(); }
+    const current = await connection($);
+    if (stopped || generation !== ownGeneration || rootBinding !== previous ||
+      await $.session.id() !== previous.sessionId || typeof result.lease !== 'string' || result.nativeBlocks !== true) throw changed();
+    if (current.token !== binding.token || current.sessionId !== binding.sessionId || current.socketPath !== binding.socketPath) throw Error('Observer connection changed');
+    // Preserve native display/prompt links only for this same live root. Command
+    // listeners hold a separate connection value: their old receipt/grant must
+    // still go to its old credential, never to this new observer.
+    Object.assign(previous, binding, { lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0, gapThrough: 0,
+      nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: false,
+      nativeMedia: nativeBlocks && nativeMediaVersion(version) && result.nativeMedia === true });
+    nativeReadImages.clear();
+    for (const entry of observations) if (entry.binding === previous) {
+      entry.row = { ...entry.row, epoch: previous.observationEpoch, sequence: ++previous.observationSequence, replayed: true };
+    }
+    if (observerBindRequest === pending) observerBindRequest = null;
+    observeModel($); observeUsage($);
+  };
+  observerRebinding = refresh();
+  try { await observerRebinding; } finally { observerRebinding = null; }
+}
+
+async function connection($) {
+  const sessionId = await $.session.id();
+  const socketPath = await $.env.get('NAW_SUBMIT_SOCKET');
+  const token = await $.env.get('NAW_HOOK_TOKEN');
+  if (socketPath && token) {
+    if (rootBinding && rootBinding.sessionId !== sessionId) throw Error('Root context changed');
+    return { socketPath, token, sessionId, ...(rootBinding ? { lease: rootBinding.lease } : {}) };
+  }
+  // Old workspace processes already have a private hooks directory. A
+  // descriptor there lets this mod attach without restarting the native CLI.
+  const hook = await $.env.get('NAW_HOOK_SOCKET');
+  if (!hook || !token || !/^[a-f0-9-]{36}$/i.test(sessionId) || !hook.endsWith('/hooks.sock')) throw Error('Workspace connection unavailable');
+  const directory = hook.slice(0, -'hooks.sock'.length);
+  const descriptor = JSON.parse(await $.fs.read(directory + 'gui-' + sessionId + '.json'));
+  if (descriptor.sessionId !== sessionId || descriptor.socketPath !== directory + 'gui-submit.sock' || !/^[a-f0-9]{64}$/.test(descriptor.token)) throw Error('Workspace connection unavailable');
+  return { ...descriptor, ...(rootBinding?.token === descriptor.token && rootBinding.sessionId === sessionId ? { lease: rootBinding.lease } : {}) };
+}
+
+async function request($, route, body, binding) {
+  const { socketPath, token, sessionId, lease } = binding || await connection($);
+  if (!socketPath || !token) throw new Error('Workspace connection unavailable');
+  // A trailing lost observation must be visible even without another append.
+  // Piggyback a gap on the existing independent control poll/reconnect path.
+  const reportGap = route === '/next' && observationGap && lease === rootBinding?.lease;
+  const gapRevision = observationGapRevision;
+  const response = await $.http.fetch('http://localhost' + route, {
+    socketPath, method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Workspace-Token': token },
+    body: JSON.stringify({ ...body, sessionId, ...(lease ? { lease } : {}), ...(reportGap ? { observationGap: true, epoch: rootBinding.observationEpoch, gapThrough: rootBinding.gapThrough || 0 } : {}) }),
+  });
+  if (!response.ok) { const error = new Error('Workspace connection refused'); error.status = response.status; throw error; }
+  if (reportGap && lease === rootBinding?.lease && gapRevision === observationGapRevision) observationGap = false;
+  return JSON.parse(response.text);
+}
+
+async function listen($, ownGeneration) {
+  if (stopped || generation !== ownGeneration) return;
+  try {
+    observeAddressedTool($, ownGeneration);
+    const binding = await connection($);
+    // A GUI reopen rotates only the compatibility credential. Rebind the
+    // observer to that same native root; never repeat a pending submission.
+    if (legacyOnly && binding.nativeBlocks && nativeBlocks &&
+      (!rootBinding || rootBinding.token !== binding.token)) {
+      if (!rootBinding) return await bindRoot($, ownGeneration);
+      await refreshLegacyObserver($, ownGeneration);
+      return await listen($, ownGeneration);
+    }
+    const message = await request($, '/next', {}, binding);
+    if (stopped || generation !== ownGeneration) return;
+    if (message.closed) {
+      if (binding.compat) $.clock.after(1000, () => listen($, ownGeneration));
+      else stopped = true;
+      return;
+    }
+    if (message.id && typeof message.text === 'string') {
+      let intentRevision = foreignRevision;
+      if (message.midturn === true) {
+        // A draft in the native prompt refuses it before any hold, as before (and again at dispatch).
+        if ((await $.prompt.read()).text) {
+          await request($, '/result', { id: message.id, status: 'draft' }, binding);
+          if (!stopped && generation === ownGeneration) $.clock.after(0, () => listen($, ownGeneration));
+          return;
+        }
+        const held = await holdMidturn($, message, binding, ownGeneration);
+        if (stopped || generation !== ownGeneration) return;
+        if (held.outcome !== 'ended') { $.clock.after(0, () => listen($, ownGeneration)); return; }
+        // The root turn ended before a tool boundary: the ordinary path below runs it as its
+        // own turn. The person's own input during the hold makes this message stale.
+        if (personRevision !== held.personRevision) {
+          await request($, '/result', { id: message.id, status: 'blocked', reason: 'input-changed' }, binding);
+          if (!stopped && generation === ownGeneration) $.clock.after(0, () => listen($, ownGeneration));
+          return;
+        }
+        intentRevision = foreignRevision;
+      }
+      const draft = await $.prompt.read();
+      if (draft.text) await request($, '/result', { id: message.id, status: 'draft' }, binding);
+      else {
+        // Authorize before calling the API. Native 2.1.302 does not re-enter
+        // this mod's own prompt.submit hook for its background submissions.
+        // The local grant is the dispatch boundary: later human actions can
+        // interrupt native work, but must not pretend an accepted send vanished.
+        const verdict = await request($, '/authorize', { id: message.id, text: message.text }, binding);
+        if (stopped || generation !== ownGeneration) return;
+        if (!verdict.allowed) await request($, '/result', { id: message.id, status: 'blocked' }, binding);
+        else if ((await $.prompt.read()).text) await request($, '/result', { id: message.id, status: 'draft' }, binding);
+        else {
+          if (stopped || generation !== ownGeneration || await $.session.id() !== binding.sessionId) return;
+          if (stopped || generation !== ownGeneration) return;
+          if (foreignRevision !== intentRevision || foreignSubmissions) {
+            await request($, '/result', { id: message.id, status: 'blocked', reason: 'input-changed' }, binding);
+            if (!stopped && generation === ownGeneration) $.clock.after(0, () => listen($, ownGeneration));
+            return;
+          }
+          const candidate = { tag: message.id, events: [], turns: [], appends: 0, text: message.text, invalid: foreignSubmissions !== 0 };
+          candidate.settled = new Promise(resolve => { candidate.resolveSettled = resolve; });
+          collecting = candidate;
+          let result;
+          try { result = await $.prompt.submit({ text: message.text, asUser: true }); }
+          finally { candidate.finished = true; candidate.resolveSettled(); if (collecting === candidate) collecting = null; }
+          const event = candidate.events[0];
+          const promptId = !candidate.invalid && !stopped && generation === ownGeneration &&
+            candidate.events.length === 1 && candidate.appends === 1 && event.session_id === binding.sessionId &&
+            !event.agent_id && typeof event.prompt_id === 'string' &&
+            /^[a-f0-9-]{36}$/i.test(event.prompt_id) &&
+            event.prompt === message.text && result.text === message.text &&
+            result.origin?.kind === 'plugin' &&
+            result.origin.name === (legacyOnly ? 'native-workspace-compat' : 'native-workspace-submit')
+            ? event.prompt_id : undefined;
+          // Acceptance and reply attribution are separate. Missing/ambiguous
+          // identity never changes an accepted send into a retryable failure.
+          await request($, '/result', { id: message.id, status: result.drop ? 'blocked' : 'accepted', reason: result.drop ? 'native-rejection' : undefined, promptId,
+            turnId: promptId && candidate.turns.length === 1 ? candidate.turns[0] : undefined }, binding);
+        }
+      }
+    }
+    if (!stopped && generation === ownGeneration) $.clock.after(0, () => listen($, ownGeneration));
+  } catch {
+    // Never replay a request whose result is uncertain. Reconnect only to wait
+    // for future explicit requests, without retaining the old message.
+    if (!stopped && generation === ownGeneration) $.clock.after(1000, () => listen($, ownGeneration));
+  }
+}
+
+// Holds one app message for the running root turn. Resolves the hold with its outcome:
+// 'taken' (dispatched or refused at a tool boundary), 'ended' (the root turn ended first,
+// or none was running), 'dropped' (the app did not keep it), 'stopped'.
+async function holdMidturn($, message, binding, ownGeneration) {
+  // The running turn reads the app's own text for it when there is one (a space message's frame).
+  const appendText = typeof message.midturnText === 'string' && message.midturnText && message.midturnText.length <= 100000 ? message.midturnText : message.text;
+  const held = { id: message.id, text: message.text, appendText, binding: rootBinding, connection: binding, generation: ownGeneration, personRevision, outcome: null };
+  held.done = new Promise(resolve => { held.resolve = outcome => { if (!held.outcome) { held.outcome = outcome; resolve(held); } }; });
+  if (!rootBinding?.nativeMidturnAppend || rootBinding.lease !== binding.lease || rootIdle) { held.resolve('ended'); return held.done; }
+  heldMidturn = held;
+  try {
+    // The app keeps waiting past its usual first-answer limit only after this.
+    // A boundary may have taken it while /hold was in flight: then that take settles it.
+    if ((await request($, '/hold', { id: message.id }, binding)).held !== true && heldMidturn === held) releaseHeld(held, 'dropped');
+  } catch { if (heldMidturn === held) releaseHeld(held, 'dropped'); }
+  if (heldMidturn === held && (rootIdle || rootBinding !== held.binding)) releaseHeld(held, 'ended');
+  return held.done;
+}
+function releaseHeld(held, outcome) {
+  if (held && heldMidturn === held) heldMidturn = null;
+  held?.resolve(outcome);
+}
+// At a root tool boundary: after the tool's result exists, before the hook returns it.
+// One fresh authorization per dispatch; an uncertain outcome is reported, never retried.
+async function takeMidturn($, binding) {
+  const held = heldMidturn;
+  if (!held || held.binding !== binding || binding !== rootBinding || stopped || generation !== held.generation || rootIdle) return;
+  heldMidturn = null;
+  const { id, text, appendText, connection } = held;
+  try {
+    if (personRevision !== held.personRevision) return await request($, '/result', { id, status: 'blocked', reason: 'input-changed' }, connection);
+    if ((await $.prompt.read()).text) return await request($, '/result', { id, status: 'draft' }, connection);
+    const verdict = await request($, '/authorize', { id, text }, connection);
+    if (!verdict.allowed) return await request($, '/result', { id, status: 'blocked' }, connection);
+    // As on the ordinary path, a draft or the person's own input during that round trip refuses it.
+    if ((await $.prompt.read()).text) return await request($, '/result', { id, status: 'draft' }, connection);
+    if (personRevision !== held.personRevision) return await request($, '/result', { id, status: 'blocked', reason: 'input-changed' }, connection);
+    // Nothing is stored yet: a session or context that changed during that round trip still means not sent.
+    if (binding !== rootBinding || stopped || generation !== held.generation) return await request($, '/result', { id, status: 'blocked', reason: 'context-changed' }, connection);
+    let stored;
+    try { stored = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: appendText }] } }); }
+    catch { return await request($, '/result', { id, status: 'unconfirmed', reason: 'native-append' }, connection); }
+    const uuid = typeof stored?.uuid === 'string' && /^[a-f0-9-]{36}$/i.test(stored.uuid) ? stored.uuid : null;
+    // A refusal stores nothing; a row without its id is not proof either way.
+    if (stored?.deny !== undefined || !uuid) return await request($, '/result', { id, status: stored?.deny !== undefined ? 'blocked' : 'unconfirmed', reason: 'native-rejection' }, connection);
+    if (binding === rootBinding) midturnRead = { id, uuid, binding, connection };
+    await request($, '/result', { id, status: 'accepted', mode: 'append', uuid, turnId: activeTurn }, connection);
+  } catch { /* The app ends an uncertain wait at the next poll; nothing is resent. */ }
+  finally { held.resolve('taken'); }
+}
+
+async function bindRoot($, ownGeneration) {
+  const binding = await connection($);
+  const version = (await $.session.version()).version;
+  // 2.1.316 and 2.1.317 (T-133, measured): our submission made mid-turn waits for the running turn to end, then runs
+  // as its own turn under a new prompt id, and the submit resolves at that turn's start; it is never taken into the
+  // running turn. So its receipt names its own prompt and turn.
+  const result = await request($, '/root-bind', { nativeBlocks, addressedTool, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(version)),
+    nativeInlineInput: ['2.1.310', '2.1.311', '2.1.312'].includes(version),
+    nativePromptInput: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
+    // On 2.1.316 and 2.1.317 only tool results carry images; prompt images need the input gates, which stay off.
+    nativeMedia: nativeMediaVersion(version),
+    // 2.1.316 and 2.1.317: turn.abort is qualified (T-133), and so is capacity recovery, which reads the native
+    // transcript and continues the session (T-32): their bundles build the same API-error row (isApiErrorMessage,
+    // apiErrorStatus) and StopFailure input (prompt, session, agent, transcript) as 2.1.312, by read-only comparison;
+    // no real 529 was reproduced on those versions. Capacity recovery is independent of abort: 2.1.318/319/321/322/323
+    // retain these failure contracts and produce typed 529 rows against a local error fixture (no paid inference).
+    nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(version),
+    nativeCapacity: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(version),
+    nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302',
+    nativeQueuedPromptLinks: !legacyOnly && ['2.1.321', '2.1.322', '2.1.323'].includes(version),
+    // 2.1.322 and 2.1.323 (measured, loopback model, -p and TUI): a $.session.append made while a root
+    // tool call runs is stored after that tool's result and read by the same turn's next request.
+    nativeMidturnAppend: !legacyOnly && ['2.1.322', '2.1.323'].includes(version),
+    nativeTurnRecords: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(version),
+    nativeNarration: !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(version) }, binding);
+  if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
+  nativeBlocks = nativeBlocks && result.nativeBlocks === true;
+  rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0, gapThrough: 0,
+    nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
+    nativeMedia: nativeBlocks && nativeMediaVersion(version) && result.nativeMedia === true,
+    nativeQueuedPromptLinks: nativeBlocks && !legacyOnly && result.nativeQueuedPromptLinks === true,
+    nativeMidturnAppend: nativeBlocks && !legacyOnly && ['2.1.322', '2.1.323'].includes(version) && result.nativeMidturnAppend === true,
+    nativeTurnRecords: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(version) && result.nativeTurnRecords === true,
+    nativeNarration: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(version) && result.nativeNarration === true };
+  nativeReadImages.clear();
+  heartbeat($, rootBinding, ownGeneration);
+  // Native MCP connection may finish just after session.start. One early
+  // metadata refresh avoids waiting for the existing /next poll to return.
+  if (!legacyOnly) $.clock.after(500, () => observeAddressedTool($, ownGeneration));
+  observeModel($); observeUsage($);
+  await listen($, ownGeneration);
+}
+
+async function syncRoot($) {
+  if (rootSyncBlocked || !rootBinding) return;
+  if (syncingRoot) { syncRootAgain = true; return; }
+  syncingRoot = true;
+  syncRootAgain = false;
+  let retry = false;
+  try {
+    while (rootEnds.has(rootBinding.sessionId)) {
+      const ending = rootEnds.get(rootBinding.sessionId);
+      if (!ending.confirmed) {
+        await request($, '/root-end', { reason: ending.reason }, rootBinding);
+        ending.confirmed = true;
+      }
+      const transition = rootTransitions[0];
+      const expectedSource = FOLLOWED_ROOT_TRANSITIONS[ending.reason];
+      if (!transition || transition.sessionId !== rootBinding.sessionId || !expectedSource || expectedSource !== transition.source) return;
+      // A fork was admitted before the engine reported it as current; confirm
+      // that now unless a later queued transition already proves it was.
+      if (transition.source === 'fork' && rootTransitions.length === 1 && await $.session.id() !== transition.nextSessionId) {
+        // Bounded: a root that never becomes current is dropped, leaving the
+        // GUI closed for this context instead of polling for the process lifetime.
+        transition.confirmAttempts = (transition.confirmAttempts || 0) + 1;
+        if (transition.confirmAttempts > 30) { rootTransitions.shift(); return; }
+        throw Error('Root not yet current'); // retried below
+      }
+      const result = await request($, '/root-clear', { nextSessionId: transition.nextSessionId,
+        source: transition.source, model: transition.model }, rootBinding);
+      if (typeof result.lease !== 'string') throw Error('Root lease missing');
+      rootEnds.delete(rootBinding.sessionId);
+      rootBinding = { ...rootBinding, sessionId: transition.nextSessionId, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0, gapThrough: 0,
+        nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
+        nativeMedia: nativeBlocks && rootBinding.nativeMedia && result.nativeMedia === true,
+        nativeTurnRecords: nativeBlocks && rootBinding.nativeTurnRecords === true && result.nativeTurnRecords === true,
+        nativeNarration: nativeBlocks && rootBinding.nativeNarration === true && result.nativeNarration === true };
+      nativeReadImages.clear();
+      observationGap = false; observationGapRevision++;
+      rootTransitions.shift();
+    }
+    const revision = generation, currentId = await $.session.id();
+    if (revision !== generation || rootTransitions.length || rootEnds.has(rootBinding.sessionId)) {
+      syncRootAgain = true; return;
+    }
+    if (!rootSyncBlocked && stopped && currentId === rootBinding.sessionId) {
+      stopped = false; const ownGeneration = generation;
+      $.clock.after(0, () => listen($, ownGeneration));
+    }
+  } catch {
+    // Retry identity metadata only, in order. Never replay a native command or
+    // prompt. Each queued transition was proven by classic.SessionStart while
+    // $.session.id() still identified that root, even if it has since ended.
+    retry = true;
+  } finally {
+    syncingRoot = false;
+    if (!rootSyncBlocked && (syncRootAgain || retry)) $.clock.after(syncRootAgain ? 0 : 1000, () => syncRoot($));
+  }
+}
+
+export function register(on) {
+  on('tool.describe', { tool: 'mcp__native_workspace__workspace_control' }, async ($, e, next) => ({ ...await next(e), isDeferred: false }));
+  on('tool.call', { tool: 'mcp__native_workspace__workspace_control' }, async ($, e, next) => {
+    if (legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET')) return next(e);
+    const binding = rootBinding, turnId = activeTurn, promptId = rootPrompt?.id, link = promptId && promptTurns.get(promptId);
+    if (stopped || !nativeBlocks || !binding || !turnId || !promptId || link?.binding !== binding || link.turnId !== turnId || link.ambiguous || e.agentId ||
+        next.origin?.plugin !== 'engine' || e.tool_use_id === undefined || observationGap) return { deny: 'Background control requires the actual native root call.' };
+    const args = Object.fromEntries(['action', 'view_id', 'method', 'arguments', 'operation_id', 'paths'].filter(k => Object.hasOwn(e, k)).map(k => [k, e[k]]));
+    const executed = await next(e); let approved;
+    try { approved = JSON.parse(executed.text); } catch {}
+    if (executed.deny || executed.isError) return executed;
+    const canonical = v => v && typeof v === 'object' ? Array.isArray(v) ? v.map(canonical) : Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])])) : v;
+    if (approved?.approved !== true || JSON.stringify(canonical(approved.background)) !== JSON.stringify(canonical(args)) || stopped || rootBinding !== binding || activeTurn !== turnId || rootPrompt?.id !== promptId || observationGap)
+      return { deny: 'Native permission, arguments or root connection changed; no operation was taken.' };
+    try {
+      const result = await request($, '/background-control', { turnId, promptId, callId: e.tool_use_id, epoch: binding.observationEpoch, arguments: args }, binding);
+      return { result: JSON.stringify(result), isError: !['complete', 'received', 'awaiting-native'].includes(result.state) };
+    } catch { return { deny: 'Background operation result is unconfirmed. Read its saved receipt; do not resend.' }; }
+  });
+  for (const [name, keys] of Object.entries(operatorSchemas)) {
+    const tool = `mcp__native_workspace__${name}`;
+    on('tool.describe', { tool }, async ($, e, next) => ({ ...await next(e), isDeferred: false }));
+    on('tool.call', { tool }, async ($, e, next) => {
+      if (legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET')) return next(e);
+      const binding = rootBinding, turnId = activeTurn, promptId = rootPrompt?.id, link = promptId && promptTurns.get(promptId);
+      if (legacyOnly || !operatorTools.includes(name) || stopped || !binding || !turnId || !promptId || link?.binding !== binding || link.turnId !== turnId || link.ambiguous || e.agentId ||
+        next.origin?.plugin !== 'engine' || e.tool_use_id === undefined || observationGap) return { deny: 'Operator calls require this confirmed native root turn and its unambiguous prompt.' };
+      const args = Object.fromEntries(keys.filter(k => Object.hasOwn(e, k)).map(k => [k, e[k]]));
+      // Keep native hooks, rules and permission approval on the real MCP path.
+      const executed = await next(e); let approved;
+      try { approved = JSON.parse(executed.text); } catch { /* No exact helper approval. */ }
+      if (executed.deny || executed.isError) return executed;
+      if (approved?.approved !== true || approved.operator !== name || !approved.arguments || Object.keys(approved.arguments).length !== Object.keys(args).length ||
+          Object.keys(args).some(k => approved.arguments[k] !== args[k])) return { deny: 'Native operator approval or arguments changed; no action was taken.' };
+      if (stopped || rootBinding !== binding || activeTurn !== turnId || rootPrompt?.id !== promptId || observationGap) return { deny: 'Native root turn or observation connection changed; no action was taken.' };
+      try {
+        const result = await request($, '/operator-call', { tool: name, turnId, promptId, callId: e.tool_use_id, epoch: binding.observationEpoch, arguments: args }, binding);
+        return { result: JSON.stringify(result), isError: ['refused', 'duplicate', 'unconfirmed'].includes(result.status) };
+      } catch { return { deny: 'The local result is unconfirmed; do not retry. Ask the person to inspect the saved records.' }; }
+    });
+  }
+  on('tool.describe', { tool: 'mcp__native_workspace__workspace_message' }, async ($, e, next) => ({ ...await next(e), isDeferred: false }));
+  on('tool.call', { tool: 'mcp__native_workspace__workspace_message' }, async ($, e, next) => {
+    // A compat copy left in a session's folder also loads when NAW itself
+    // starts Claude there; that launch's own mod owns this tool (T-100).
+    if (legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET')) return next(e);
+    const binding = rootBinding, turnId = activeTurn, promptId = rootPrompt?.id, link = promptId && promptTurns.get(promptId);
+    // A turn with no UserPromptSubmit of its own (a person's `!` command, for
+    // one) still sees the last prompt here. Only the one turn that prompt
+    // started may stage a message, as for sharing a reply (T-100).
+    if (!addressedTool || stopped || !binding || !turnId || !promptId || link?.binding !== binding || link.turnId !== turnId || link.ambiguous || e.agentId ||
+      next.origin?.plugin !== 'engine' || e.tool_use_id === undefined) return { deny: '没有本原生主会话的定向协作授权。' };
+    const args = { recipient_id: e.recipient_id, message: e.message };
+    // Let Claude run the real MCP call: PreToolUse, configured rules, native
+    // approval and any managed hooks all remain on the execution path.
+    const executed = await next(e);
+    let approved;
+    try { approved = JSON.parse(executed.text); } catch { /* Refused or not our exact MCP result. */ }
+    if (executed.deny || executed.isError || approved?.approved !== true || approved.recipient_id !== args.recipient_id || approved.message !== args.message) {
+      await request($, '/addressed-failed', { turnId, promptId, callId: e.tool_use_id, epoch: binding.observationEpoch }, binding).catch(() => {});
+      if (executed.deny || executed.isError) return executed;
+      return { deny: '原生工具结果或输入已变化；没有安排转交。' };
+    }
+    if (stopped || rootBinding !== binding || activeTurn !== turnId || rootPrompt?.id !== promptId || observationGap) return { deny: '原生回合或连接已变化，未安排转交。' };
+    try {
+      const result = await request($, '/addressed-message', { turnId, promptId, callId: e.tool_use_id, epoch: binding.observationEpoch, arguments: args }, binding);
+      return { result: JSON.stringify(result), isError: result.status !== 'staged' };
+    } catch { return { deny: '本地接收结果未确认；不要重试，请让真人核对。' }; }
+  });
+  on('classic.PostModelSwitch', async ($, e, next) => {
+    const binding = rootBinding, ownGeneration = generation;
+    const watching = nativeModelSupported && !stopped && binding && !e.agent_id && e.session_id === binding.sessionId;
+    const revision = watching ? ++modelReadRevision : null;
+    if (watching) modelReadAgain = false;
+    const result = await next(e);
+    // The native post-switch event carries the resolved selection. A query
+    // inside this hook can still see the previous value on retained runtimes.
+    if (watching && !stopped && rootBinding === binding && generation === ownGeneration && revision === modelReadRevision &&
+      typeof e.to_model === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]{0,159}$/.test(e.to_model)) {
+      enqueueBlock($, { id: 'control:model', kind: 'control', status: 'complete', model: e.to_model }, binding);
+    }
+    return result;
+  }).catch(($, e, next) => next(e));
+  on('tool.call', async ($, e, next) => {
+    const binding = rootBinding;
+    if (!nativeBlocks || e.agentId || !e.tool_use_id || next.origin?.plugin !== 'engine' || next.origin?.tier !== 'core') return next(e);
+    const call = { binding, turnId: activeTurn, id: `permission:${e.tool_use_id}`, tool: e.tool, progress: false };
+    rootToolCalls.set(e.tool_use_id, call);
+    try {
+      const result = await next(e);
+      if (heldMidturn && binding === rootBinding) await takeMidturn($, binding);
+      return result;
+    }
+    finally {
+      if (rootToolCalls.get(e.tool_use_id) === call) rootToolCalls.delete(e.tool_use_id);
+      if (binding === rootBinding) enqueueBlock($, { id: 'control:permission-end', kind: 'control', status: 'complete', permissionId: call.id }, binding);
+    }
+  }).catch(($, e, next) => next(e));
+  on('classic.PostToolUse', async ($, e, next) => {
+    const binding = rootBinding, call = rootToolCalls.get(e.tool_use_id), ownGeneration = generation;
+    let fact;
+    try {
+      const file = e.tool_response?.file, name = e.tool_input?.file_path;
+      if (binding?.nativeMedia && call?.binding === binding && call.tool === 'Read' && e.tool_name === 'Read' &&
+        !e.agent_id && e.session_id === binding.sessionId && next.origin?.plugin === 'engine' && next.origin?.tier === 'core' &&
+        e.tool_response?.type === 'image' && typeof file?.base64 === 'string' && file.base64.length <= nativeImageEncodedLimit &&
+        ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type) && typeof name === 'string' && name.startsWith('/') && name.length <= 8192 && !/[\u0000-\u001f\u007f]/u.test(name)) {
+        // Capture scalars before downstream hooks can mutate their objects.
+        fact = { binding, path: name, data: file.base64, mime: file.type };
+      }
+    } catch { /* A missing optional path label cannot change the native tool. */ }
+    const result = await next(e);
+    try {
+      if (fact && binding === rootBinding && ownGeneration === generation && !stopped && !rootEnds.has(binding.sessionId) &&
+        result?.continue !== false && result?.decision !== 'block' && result?.updatedToolOutput === undefined && result?.updatedMCPToolOutput === undefined) {
+        nativeReadImages.set(e.tool_use_id, fact);
+        while (nativeReadImages.size > 64 || [...nativeReadImages.values()].reduce((n, value) => n + value.data.length, 0) > 4000000) nativeReadImages.delete(nativeReadImages.keys().next().value);
+      }
+    } catch { /* Only the optional label is dropped; relay the exact result. */ }
+    return result;
+  });
+  on('tool.check', async ($, e, next) => {
+    const call = rootToolCalls.get(e.tool_use_id), result = await next(e);
+    if (!call || e.agentId || call.binding !== rootBinding || next.origin?.plugin !== 'engine' || next.origin?.tier !== 'core' || result.decision !== 'ask') return result;
+    let input = '', incomplete = false;
+    try { input = JSON.stringify(e.input ?? {}, null, 2); if (input.length > 500000) { input = ''; incomplete = true; } } catch { incomplete = true; }
+    enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete', permissionId: call.id,
+      turnId: call.turnId, title: e.tool || '', input, incomplete }, call.binding);
+    return result;
+  }).catch(($, e, next) => next(e));
+  on('ui.render', { component: 'AskUserQuestion' }, ($, e, next) => {
+    const call = rootToolCalls.get(e.requestId);
+    // This native dialog can open without a tool permission request. Observe
+    // its own exact root tool ID; leave all input and selection with the TUI.
+    if (e.surface === 'terminal' && call && call.binding === rootBinding && next.origin?.plugin === 'engine' && next.origin?.tier === 'core') {
+      let input = '', incomplete = false;
+      try { input = JSON.stringify({ questions: e.props.questions }, null, 2); if (input.length > 500000) { input = ''; incomplete = true; } } catch { incomplete = true; }
+      if (call.questionInput !== input) {
+        call.questionInput = input;
+        enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete', permissionId: call.id,
+          turnId: call.turnId, title: e.props.tool, input, incomplete }, call.binding);
+      }
+    }
+    return next(e);
+  }).catch(($, e, next) => next(e));
+  on('ui.render', { component: 'ToolProgress' }, ($, e, next) => {
+    const call = rootToolCalls.get(e.props.tool_use_id);
+    if (call && !call.progress && call.binding === rootBinding && e.props.kind === 'background_hint' && next.origin?.plugin === 'engine' && next.origin?.tier === 'core') {
+      call.progress = true;
+      enqueueBlock($, { id: 'control:permission-end', kind: 'control', status: 'complete', permissionId: call.id }, call.binding);
+      observePhase($, 'tool', call.binding, call.turnId);
+    }
+    return next(e);
+  }).catch(($, e, next) => next(e));
+  // The retained compatibility copy (legacyOnly) never shows narration.
+  if (!legacyOnly) on('ui.render', { component: 'AssistantMessage' }, ($, e, next) => {
+    const result = next(e); // the drawing is never changed or delayed
+    try {
+      if (e.surface === 'terminal' && e.props?.isSummary === true && next.origin?.plugin === 'engine' && next.origin?.tier === 'core' &&
+        typeof e.requestId === 'string' && typeof e.props.text === 'string' && e.props.text.trim()) {
+        const source = narrationSources.get(e.requestId);
+        if (source) { if (!source.published && source.binding === rootBinding) publishNarration($, e.requestId, source, e.props.text); }
+        else if (!rootIdle && rootBinding?.nativeNarration && !pendingDrawings.has(e.requestId)) {
+          // Drawn before its row was stored: wait, bounded, for that root row.
+          pendingDrawings.set(e.requestId, { binding: rootBinding, text: e.props.text });
+          while (pendingDrawings.size > 16) pendingDrawings.delete(pendingDrawings.keys().next().value);
+        }
+      }
+    } catch { /* reading only */ }
+    return result;
+  }).catch(($, e, next) => next(e));
+  on('classic.PermissionRequest', ($, e, next) => {
+    // Ordered with display observations, before native permission handling.
+    // No permission decision or tool payload is copied into the shared room.
+    const binding = rootBinding;
+    if (e.agent_id || e.session_id !== binding?.sessionId) return next(e);
+    const link = promptTurns.get(e.prompt_id);
+    const turnId = link?.binding === binding && !link.ambiguous ? link.turnId : undefined;
+    enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete', boundaryOnly: true,
+      turnId, promptId: e.prompt_id }, binding);
+    return next(e);
+  }).catch(($, e, next) => { markObservationGap(rootBinding); return next(e); });
+  on('classic.StopFailure', async ($, e, next) => {
+    const binding = rootBinding, prompt = promptTurns.get(e.prompt_id), ownGeneration = generation;
+    const result = await next(e);
+    if (nativeBlocks && binding && binding === rootBinding && ownGeneration === generation && !e.agent_id &&
+      e.session_id === binding.sessionId && prompt?.binding === binding && !prompt.ambiguous) {
+      const turn = displayTurn(prompt.turnId, binding);
+      turn.failedPrompt = true;
+      publishFailure($, prompt.turnId, turn, binding);
+    }
+    // StopFailure may carry a previous/untransformed assistant message. Never
+    // use it as the error body or as a completed assistant reply.
+    return result;
+  }).catch(($, e, next) => { markObservationGap(rootBinding); return next(e); });
+  on('classic.MessageDisplay', async ($, e, next) => {
+    const binding = rootBinding;
+    const result = await next(e);
+    try {
+      if (nativeBlocks && !e.agent_id && binding === rootBinding && e.session_id === binding?.sessionId) {
+        const visible = typeof result?.displayContent === 'string' ? result.displayContent : e.delta;
+        // Classic display IDs and mod engine turn IDs are distinct namespaces.
+        // Join through native prompt_id, then pin the display-turn link. A later
+        // typed prompt must not reassign an already streaming display message.
+        const key = `${binding.sessionId}:${e.turn_id}`;
+        let link = displayTurnLinks.get(key);
+        const prompt = promptTurns.get(e.prompt_id);
+        if (!link && prompt?.binding === binding && !prompt.ambiguous) {
+          link = prompt; displayTurnLinks.set(key, link); trimLinks(displayTurnLinks);
+        }
+        if (!link) {
+          let lookup = queuedDisplayLookups.get(key);
+          if (lookup?.binding !== binding) {
+            lookup = queuedDisplayLookups.size < 64 ? { binding, promise: queuedDisplayLink($, e, binding) } : null;
+            if (lookup) queuedDisplayLookups.set(key, lookup);
+          }
+          // Overlapping chunks wait on the same promise in arrival order.
+          // Never evict a live lookup: overflow simply has no identity proof.
+          const resolved = lookup ? await lookup.promise : null;
+          if (lookup && queuedDisplayLookups.get(key) === lookup) queuedDisplayLookups.delete(key);
+          if (binding !== rootBinding) return result;
+          // Another display callback may have published while the journal
+          // request was pending. Its pinned namespace always wins.
+          link = displayTurnLinks.get(key) || resolved;
+          if (link) { displayTurnLinks.set(key, link); trimLinks(displayTurnLinks); }
+        }
+        // A `!` command's turn raises no UserPromptSubmit, so its display names
+        // an unknown prompt. Only while that root turn runs (shellTurn clears at
+        // its end) is the text read as its own, for reading; it never proves a
+        // final reply for sharing.
+        if (!link && !prompt && shellTurn?.binding === binding && shellTurn.turnId === activeTurn) {
+          link = { binding, turnId: activeTurn, promptId: e.prompt_id, shell: true }; displayTurnLinks.set(key, link); trimLinks(displayTurnLinks);
+        }
+        // A missing bounded journal proof stays unknown for this whole drawn
+        // turn. Never retag a row already published in another namespace.
+        if (!link && binding.nativeQueuedPromptLinks) {
+          link = { binding, turnId: `display:${e.turn_id}`, promptId: e.prompt_id, displayOnly: true };
+          displayTurnLinks.set(key, link); trimLinks(displayTurnLinks);
+        }
+        const turnId = link?.turnId || `display:${e.turn_id}`;
+        const turn = displayTurn(turnId, binding);
+        if (!link || link.promptId !== e.prompt_id || link.shell || link.displayOnly) turn.incomplete = true;
+        let block = turn.blocks.get(e.message_id);
+        if (!block) { block = { raw: '', index: -1 }; turn.blocks.set(e.message_id, block); }
+        if (block.index + 1 !== e.index || turn.ended) turn.incomplete = true;
+        block.index = e.index; block.raw += e.delta; block.final = e.final;
+        turn.last = e.message_id;
+        if (turn.blocks.size > 64 || [...turn.blocks.values()].reduce((n, b) => n + b.raw.length, 0) > 500000) {
+          turn.blocks.clear(); turn.incomplete = true;
+        }
+        enqueueBlock($, { id: `display:${e.message_id}`, turnId, displayTurnId: e.turn_id, promptId: e.prompt_id, kind: 'response', index: e.index,
+          delta: visible, status: e.final ? 'complete' : 'streaming' }, binding);
+      }
+    } catch { markObservationGap(binding); }
+    return result;
+  }).catch(($, e, next) => next(e));
+  on('turn.start', ($, e, next) => {
+    if (!e.agentId) {
+      // A new root turn after idle, with no newer UserPromptSubmit and not this mod's own
+      // submission, is a queued prompt's own turn only if its text is the first one in line.
+      let queuedTurn = false, queuedRow = null, queuedIdentityRow = false;
+      if (rootIdle && queuedPrompts.length) {
+        const first = queuedPrompts[0];
+        queuedTurn = !collecting && rootPrompt?.binding === rootBinding && !rootPrompt.pending && first.binding === rootBinding &&
+          first.promptId === rootPrompt.id && typeof e.text === 'string' && e.text === first.text;
+        queuedPrompts = queuedTurn ? queuedPrompts.slice(1) : [];
+        // The queued prompt's own row heads this turn (T-138 display).
+        if (queuedTurn && first.text !== rootPrompt.firstText) queuedRow = `${first.promptId}-q${promptTextTag(first.text)}`;
+        // Reuse that limited queued-turn proof; the UUID bridge does not make
+        // identical pending rows or a hash collision distinguishable.
+        if (queuedRow && first.nativeUuid && !first.identityAmbiguous &&
+          !queuedPrompts.some(q => q.binding === rootBinding && `${q.promptId}-q${promptTextTag(q.text)}` === queuedRow)) {
+          queuedPromptIdentities.set(first.nativeUuid, { binding: rootBinding, turnId: e.turnId });
+          queuedIdentityRow = true;
+          trimLinks(queuedPromptIdentities);
+        }
+      }
+      activeTurn = e.turnId;
+      lastPhase = null;
+      flushShell($);
+      const triggers = rootIdle && !collecting
+        ? [...(rootBinding?.nativeTurnRecords ? turnTriggers.filter(t => t.binding === rootBinding) : []),
+          ...(queuedRow && (rootBinding?.nativeTurnRecords || rootBinding?.nativeQueuedPromptLinks && queuedIdentityRow) ? [{ prompt: queuedRow, binding: rootBinding }] : [])].slice(-8) : [];
+      turnTriggers = []; rootIdle = false; expectPrompt = null;
+      shellTurn = triggers.length && !triggers.some(t => t.prompt) ? { binding: rootBinding, turnId: e.turnId } : null;
+      enqueueBlock($, { id: 'control:turn-start', kind: 'control', turnId: e.turnId, promptId: rootPrompt?.id, status: 'running',
+        ...(triggers.length ? { triggers: { prompts: triggers.filter(t => t.prompt).map(t => t.prompt), rows: triggers.filter(t => t.row).map(t => t.row) } } : {}) });
+      // Native contract: root turn.start follows UserPromptSubmit. Repeated
+      // starts for the same prompt are ambiguous, never a sharing authority.
+      if (rootPrompt?.binding === rootBinding) {
+        const previous = promptTurns.get(rootPrompt.id);
+        // A prompt heads one turn: a later start under it (a `!` command) is ambiguous.
+        promptTurns.set(rootPrompt.id, { binding: rootBinding, turnId: e.turnId, promptId: rootPrompt.id,
+          ambiguous: !queuedTurn && (Boolean(previous && previous.turnId !== e.turnId) || (!rootPrompt.pending && previous?.turnId !== e.turnId)) }); trimLinks(promptTurns);
+        rootPrompt.pending = false;
+      }
+      if (collecting) collecting.turns.push(e.turnId);
+    }
+    return next(e);
+  }).catch(($, e, next) => next(e));
+  on('turn.step', async function* ($, e, next) {
+    const binding = rootBinding;
+    // The first root request after the append carries the row (measured): it reached the model.
+    if (!e.agentId && midturnRead) {
+      const read = midturnRead; midturnRead = null;
+      if (read.binding === binding) request($, '/midturn-read', { id: read.id, uuid: read.uuid, turnId: e.turnId }, read.connection).catch(() => {});
+    }
+    if (e.agentId || e.turnId !== activeTurn || next.origin?.plugin !== 'engine' || next.origin?.tier !== 'core') return yield* next(e);
+    observePhase($, 'requesting', binding, e.turnId);
+    const iterator = next(e)[Symbol.asyncIterator](); let finished = false, sent;
+    try {
+      while (true) {
+        const item = await iterator.next(sent);
+        if (item.done) { finished = true; return item.value; }
+        const phase = ['thinking', 'text', 'input', 'tool'].includes(item.value?.kind) ? item.value.kind : null;
+        if (phase) observePhase($, phase, binding, e.turnId);
+        sent = yield item.value;
+      }
+    } finally { if (!finished) await iterator.return?.(); }
+  }).catch(async function* ($, e, next) { return yield* next(e); });
+  on('turn.complete', async ($, e, next) => {
+    const binding = rootBinding;
+    // The turn's own end, read before later hooks (Stop hooks can take seconds).
+    let endedAt;
+    if (!e.agentId && binding?.nativeTurnRecords) try { endedAt = await $.clock.now(); } catch { /* clock is optional */ }
+    const result = await next(e);
+    try {
+      // Flush first: an unpaired `!` from inside this turn is shown, never claimed later.
+      if (!e.agentId) { flushShell($); rootIdle = true; turnTriggers = []; shellTurn = null; expectPrompt = null; pendingDrawings.clear(); }
+      // No tool boundary came: the held message runs as its own turn.
+      if (!e.agentId && heldMidturn) releaseHeld(heldMidturn, 'ended');
+      if (!e.agentId && binding === rootBinding) {
+        observeUsage($);
+        const turn = displayTurn(e.turnId, binding), final = turn.blocks.get(turn.last);
+        // Text equality is only a completeness check inside an explicit native
+        // turn, never a substitute for prompt/turn identity. Forward the display
+        // ID, not the possibly unredacted answer.
+        const finalDisplayId = turn?.binding === binding && !turn.incomplete && final?.final &&
+          typeof e.answer === 'string' && final.raw.trimEnd() === e.answer.trimEnd() ? `display:${turn.last}` : undefined;
+        turn.ended = true; turn.endReason = e.reason;
+        turn.endingText = '';
+        turn.clock = binding?.nativeTurnRecords ? { ...(Number.isSafeInteger(e.durationMs) && e.durationMs >= 0 ? { nativeDurationMs: e.durationMs } : {}),
+          ...(Number.isFinite(endedAt) ? { nativeCompletedAt: endedAt } : {}) } : {};
+        enqueueBlock($, { id: `turn:${e.turnId}`, turnId: e.turnId, kind: 'turn', finalDisplayId, ...turn.clock,
+          text: turn.endingText + (e.reason === 'error' && failureText(turn) ? `\n${failureText(turn)}` : ''),
+          status: e.reason === 'aborted' ? 'interrupted' : e.reason === 'answer' ? 'complete' : 'failed',
+          failedRequest: e.reason === 'error' && turn.failedPrompt === true,
+          ...(e.reason === 'error' && turn.failedPrompt && turn.failure && !turn.failureAmbiguous ? { errorMessageId: turn.failure.uuid,
+            ...(turn.failure.credits ? { failureCause: 'usageCredits' } : {}) } : {}) }, binding);
+      }
+    } catch { markObservationGap(binding); }
+    return result;
+  }).catch(($, e, next) => next(e));
+  on('session.append', async ($, e, next) => {
+    const observationBinding = rootBinding;
+    const observationTurn = activeTurn, observationEpoch = observationBinding?.observationEpoch, observationGeneration = generation;
+    const content = e.message?.content;
+    const nativeFailureRow = e.door === 'response' && e.origin?.kind === 'model' && e.origin.model === '<synthetic>' &&
+      e.message?.type === 'assistant' && content?.length === 1 && content[0]?.type === 'text' &&
+      typeof content[0].text === 'string';
+    const nativeCreditError = nativeFailureRow && creditFailureText(content[0].text);
+    const nativeApiError = nativeFailureRow && (/^API Error: /.test(content[0].text) || nativeCreditError);
+    if (collecting && e.door === 'prompt') {
+      collecting.appends++;
+      // The native engine pins origin. A previously queued foreign prompt also
+      // appends before its turn starts; it cannot masquerade as our submission.
+      const name = legacyOnly ? 'native-workspace-compat' : 'native-workspace-submit';
+      if (e.agentId || typeof e.uuid !== 'string' || !/^[a-f0-9-]{36}$/i.test(e.uuid) ||
+        e.origin?.kind !== 'plugin' || e.origin.name !== name ||
+        e.origin.asUser !== true || e.message?.type !== 'user' || e.message.role !== 'user' ||
+        !Array.isArray(e.message.content) || e.message.content.length !== 1 ||
+        e.message.content[0].type !== 'text' || e.message.content[0].text !== collecting.text ||
+        collecting.events.length !== 1) collecting.invalid = true;
+    }
+    const candidate = collecting;
+    try {
+      const result = await next(e);
+      try {
+        if (observationGeneration === generation && observationBinding?.observationEpoch === observationEpoch) observeAppend($, e, result, observationBinding, observationTurn, candidate, nativeApiError, nativeCreditError);
+        else markObservationGap(observationBinding);
+        if (!e.agentId && e.door === 'response' && observationBinding === rootBinding) observeUsage($);
+      }
+      catch { markObservationGap(observationBinding); } // Never fail native append.
+      return result;
+    }
+    catch (error) { if (candidate) candidate.invalid = true; throw error; }
+  }).catch(async ($, e, next) => {
+    if (collecting) collecting.invalid = true;
+    return next(e); // Native catch continuation is replay-safe.
+  });
+  on('prompt.submit', async ($, e, next) => {
+    // Native skips the caller's own submit hook. Every other ingress, including
+    // identical human text, invalidates correlation without changing its input.
+    foreignSubmissions++;
+    foreignRevision++;
+    if (['composer', 'bridge'].includes(e.origin?.kind)) personRevision++;
+    if (collecting) collecting.invalid = true;
+    enqueueBlock($, { id: 'control:input', kind: 'control', status: 'complete' });
+    const inFlight = { origin: e.origin?.kind || null }; foreignInFlight.add(inFlight);
+    try { return await next(e); }
+    finally { foreignSubmissions--; foreignInFlight.delete(inFlight); }
+  }).catch(async ($, e, next) => {
+    foreignRevision++;
+    if (collecting) collecting.invalid = true;
+    return next(e);
+  });
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    const root = !e.agent_id && e.session_id === rootBinding?.sessionId && /^[a-f0-9-]{36}$/i.test(e.prompt_id || ''), binding = rootBinding;
+    if (root && shellInput?.binding === binding) shellInput = null; // a typed lookalike, not a `!` command
+    const candidate = collecting;
+    // Read before the settings hooks run (they can take seconds): the one foreign submission this
+    // prompt arrives in, if exactly one is in flight (T-138).
+    const composerTyped = foreignInFlight.size === 1 && [...foreignInFlight][0].origin === 'composer';
+    // T-137: a Claude Code cross-session message arrives as a submission whose engine-pinned origin is
+    // `peer`; its UserPromptSubmit carries no source. Tag it `naw-peer` for the settings hooks below (NAW's
+    // own hook forwards `source`), so NAW never takes another agent's message for the person's input.
+    // Measured on 2.1.317: a module's rewrite of this input reaches the settings hooks after it. The person's
+    // own settings hooks see the tag too; it is NAW's, not a value Claude Code sends. NAW's own submission
+    // is not in foreignInFlight, so one arriving inside a peer submission can carry the tag; the adapter
+    // matches NAW's own sends before reading any source.
+    const peer = root && foreignInFlight.size === 1 && [...foreignInFlight][0].origin === 'peer' && e.source === undefined;
+    if (candidate) {
+      // Count all events, including malformed/unknown identities. Filtering
+      // first could make an unrelated event look like the only candidate.
+      if (candidate.events.length < 2) candidate.events.push(e);
+      else candidate.invalid = true;
+    }
+    try {
+      const result = await next(peer ? { ...e, source: 'naw-peer' } : e);
+      // Only a prompt that goes on can head a turn; a blocked one never does.
+      if (root && binding === rootBinding && result?.block === undefined && !result?.preventContinuation) {
+        // Only a prompt that goes on may name, and authorize, the turn it starts;
+        // a blocked one must not become the prompt of a later `!` turn (T-100, I140).
+        // A prompt delivered into a running root turn (2.1.312 queued_command,
+        // 2.1.316 mid-turn input) heads no turn by its id (I141). On 2.1.316/2.1.317 one
+        // typed during the turn shares the running prompt's id; it is kept in line, and
+        // may head its own later turn only by an exact text match (T-138).
+        if (!rootIdle && rootPrompt?.binding === binding) {
+          // Only the person's composer input, under the running prompt's id; anything else drops the line.
+          if (rootPrompt.id === e.prompt_id && composerTyped && !candidate && typeof e.prompt === 'string' && e.prompt && queuedPrompts.length < 8)
+            queuedPrompts = [...queuedPrompts, { binding, promptId: e.prompt_id, text: e.prompt }];
+          else queuedPrompts = [];
+        } else if (rootIdle) queuedPrompts = [];
+        // firstText: the text this id was first submitted with; a later, different one is a typed prompt (T-138 display).
+        const firstText = rootPrompt?.id === e.prompt_id && rootPrompt.binding === binding ? rootPrompt.firstText : e.prompt;
+        rootPrompt = { id: e.prompt_id, binding, pending: rootIdle, firstText };
+        // T-133: this prompt's id and text tag, for an image its prompt block may carry (2.1.316/2.1.317). NAW gives
+        // the image to the row of that prompt id whose own text has that tag; no one's memory decides, so a hot
+        // reload here cannot send the image to another row.
+        if (!legacyOnly && binding.nativeMedia && !binding.nativePromptInput && typeof e.prompt === 'string' && e.prompt && /^[a-f0-9-]{36}$/i.test(e.prompt_id || '')) {
+          promptImageRows.set(e.prompt, { binding, key: `${e.prompt_id}-q${promptTextTag(e.prompt)}` });
+          while (promptImageRows.size > 8) promptImageRows.delete(promptImageRows.keys().next().value);
+        }
+        triggerTurn({ prompt: e.prompt_id }, binding);
+        if (binding?.nativeTurnRecords) expectPrompt = binding;
+      }
+      return result;
+    }
+    catch (error) { if (candidate) candidate.invalid = true; throw error; }
+  }).catch(async ($, e, next) => {
+    if (collecting) collecting.invalid = true;
+    return next(e);
+  });
+  on('session.start', async ($, e, next) => {
+    if (collecting) collecting.invalid = true;
+    rootIdle = true; turnTriggers = []; shellInput = null; shellTurn = null; expectPrompt = null; pendingDrawings.clear(); queuedPrompts = [];
+    queuedPromptIdentities.clear();
+    queuedDisplayLookups.clear();
+    const ownGeneration = ++generation;
+    const nativeVersion = (await $.session.version()).version;
+    // 2.1.316 and 2.1.317: the free status-line usage read, session.model() and the
+    // PostModelSwitch event are declared as on 2.1.312 (T-133).
+    nativeUsageSupported = ['2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(nativeVersion);
+    nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(nativeVersion);
+    nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308', '2.1.309', '2.1.310'].includes(nativeVersion)
+      : ['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(nativeVersion);
+    // 2.1.321/322: narration, terminal turn records, free usage and context transitions
+    // match 2.1.319 declarations and pass the same guarded fixtures. 2.1.323: the declarations
+    // this mod uses differ from 2.1.322's in comments and an optional ToolInfo field, and $.tool.list()
+    // (observeAddressedTool) now reads through other plugins' tool.list hooks, while an mcp.connect hook
+    // can hold the workspace server back: either way the tool reads as absent, as the model sees it, so
+    // the workspace tools stay off. It adds Progress, theme grounds and AbovePromptList, none hooked here.
+    // Media stays off pending its producer contract; queue, capacity and direct input have separate gates.
+    // 2.1.318 and 2.1.319 (T-171): native blocks too, so workspace messages have their turn identity. Their
+    // declarations differ from 2.1.317's only in declarations this mod does not use (model.fork effort, the
+    // backdrop/theme API, command results, turn attribution). Their display/usage/transition contracts also
+    // match 2.1.317; input, queue, abort and capacity keep their separate qualification gates.
+    // 2.1.316 and 2.1.317 (2.1.317's engine API only adds to 2.1.316's, T-133): root binding, native
+    // blocks (turn identity for workspace messages), abort, usage, model, media and queue; inline input stays off.
+    contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(nativeVersion);
+    const version = nativeVersion.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
+    const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));
+    stopped = !supported;
+    addressedTool = false;
+    operatorTools = [];
+    // The explicit versions also allow transitions, but this deferred callback reads
+    // mutable transition state; keep bootstrap qualification separate.
+    if (supported && await $.env.get('NAW_HOOK_TOKEN') && !(legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET'))) $.clock.after(0, () => (contextTransitions || (!legacyOnly && ['2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323'].includes(nativeVersion))) ? bindRoot($, ownGeneration).catch(() => {}) : listen($, ownGeneration));
+    return next(e);
+  });
+  on('session.end', async ($, e, next) => {
+    if (collecting) collecting.invalid = true;
+    stopped = true; generation++; releaseHeld(heldMidturn, 'stopped'); midturnRead = null;
+    const known = rootBinding && (e.sessionId === rootBinding.sessionId || rootTransitions.some(t => t.nextSessionId === e.sessionId));
+    if (known) {
+      if (rootEnds.size >= 64 && !rootEnds.has(e.sessionId)) rootSyncBlocked = true;
+      else rootEnds.set(e.sessionId, { reason: e.reason });
+      $.clock.after(0, () => syncRoot($));
+    }
+    return next(e);
+  });
+  on('classic.SessionStart', async ($, e, next) => {
+    const previousId = rootTransitions.at(-1)?.nextSessionId || rootBinding?.sessionId;
+    // A /clear reports the new id as current before this hook; a /branch (fork)
+    // still answers the ending id here and swaps afterwards, so the new id is
+    // confirmed again before the transition is sent.
+    const currentId = contextTransitions ? await $.session.id() : null;
+    const expectedStart = FOLLOWED_ROOT_TRANSITIONS[rootEnds.get(previousId)?.reason];
+    if (contextTransitions && expectedStart && expectedStart === e.source && !e.agent_id &&
+      e.session_id !== previousId && (e.session_id === currentId || (e.source === 'fork' && currentId === previousId))) {
+      if (collecting) collecting.invalid = true;
+      stopped = true; generation++; releaseHeld(heldMidturn, 'stopped'); midturnRead = null;
+      if (rootTransitions.length >= 64) rootSyncBlocked = true;
+      else rootTransitions.push({ sessionId: previousId, nextSessionId: e.session_id, source: e.source, model: e.model });
+      $.clock.after(0, () => syncRoot($));
+    }
+    return next(e);
+  });
+}

@@ -3,6 +3,16 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const { LegacyInput, installPlugin } = require('../legacy-input.cjs');
 const { processIdentity } = require('../platform.cjs');
 
+const compatHookFixtures = require('./fixtures/compat-hooks/index.json');
+
+function historicalCompatHook(commit) {
+  const { file, blob } = compatHookFixtures[commit];
+  const bytes = fs.readFileSync(path.join(__dirname, 'fixtures/compat-hooks', file));
+  const actual = crypto.createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+  assert.equal(actual, blob, `Historical hook ${commit} must match its original Git blob`);
+  return bytes.toString('utf8').replace('const legacyOnly = false;', 'const legacyOnly = true;');
+}
+
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'legacy-input-')), directory = path.join(root, 'socket'), cwd = path.join(root, 'work');
   fs.mkdirSync(directory, { mode: 0o700 }); fs.mkdirSync(cwd);
@@ -467,7 +477,7 @@ test('recently committed compatibility hooks can upgrade to this working tree', 
 // It must upgrade even after it leaves the last six hook commits; one changed byte still makes it someone else's.
 test('the exact operator-grant hook copy upgrades and an edited copy of it stays', t => {
   const { cwd } = fixture(t), file = path.join(cwd, '.claude/skills/native-workspace-compat/hooks/register.js');
-  const prior = require('node:child_process').execFileSync('git', ['show', '9245065:app/claude-bridge/hooks/register.js'], { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8' }).replace('const legacyOnly = false;', 'const legacyOnly = true;');
+  const prior = historicalCompatHook('9245065');
   installPlugin(cwd); const current = fs.readFileSync(file, 'utf8'); assert.notEqual(prior, current);
   fs.writeFileSync(file, prior); installPlugin(cwd); assert.equal(fs.readFileSync(file, 'utf8'), current);
   fs.writeFileSync(file, prior + ' '); assert.throws(() => installPlugin(cwd), /未覆盖/);
@@ -502,8 +512,7 @@ test('a launch leaves an unsafe or edited compat copy untouched and never writes
 for (const commit of ['e5eafe74d62dade8310f0bb52d68be7a1b9b0421', '6345e63181f69e941e4e3c3d77a0004d84cf4879', '3d5adca1c8478827b6897cc78e7d18ace9e446ea', 'ccea1a6669b1c40ebbf5648998bfdec6c24affbf', 'dea4132', '9401ba0', '8f8b331', '2695aa8', '88e8678', '64876c8', '532d984', 'c458e7e', 'd7264c70'])
   test(`committed compat copy ${commit.slice(0, 7)} upgrades when NAW starts Claude in its folder; edited copies stay`, t => {
     const { cwd } = fixture(t), file = path.join(cwd, '.claude/skills/native-workspace-compat/hooks/register.js');
-    const prior = require('node:child_process').execFileSync('git', ['show', `${commit}:app/claude-bridge/hooks/register.js`],
-      { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8' }).replace('const legacyOnly = false;', 'const legacyOnly = true;');
+    const prior = historicalCompatHook(commit);
     installPlugin(cwd); const current = fs.readFileSync(file, 'utf8'); fs.writeFileSync(file, prior);
     assert.equal(installPlugin(cwd, { existingOnly: true }), true); assert.equal(fs.readFileSync(file, 'utf8'), current);
     const edited = prior + '\n// Human customization\n'; fs.writeFileSync(file, edited);
