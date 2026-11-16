@@ -253,7 +253,7 @@ except Blocked as error:
 """
         result = self.call(sys.executable, '-c', code, ok=False)
         self.blocked(result)
-        self.assertIn('gitleaks unavailable or timed out', result.stderr)
+        self.assertIn('gitleaks batch 1 timed out', result.stderr)
 
     def test_complete_history_scanner_keeps_a_finite_tool_and_process_deadline(self):
         code = """
@@ -397,7 +397,7 @@ except Blocked as error:
         code = """
 import sys
 import scripts.privacy_guard as pg
-assert pg.MAX_SCAN == 2 * 1024 ** 3 and pg.MAX_BATCH == 192 * 1024 ** 2
+assert pg.MAX_SCAN == 2 * 1024 ** 3 and pg.MAX_BATCH == 32 * 1024 ** 2
 assert pg.MAX_BLOB < pg.MAX_BATCH  # every part fits in a batch, so no part is ever cut
 pg.MAX_SCAN = 3 * 1024 * 1024
 scan = pg.Scanner()
@@ -573,9 +573,9 @@ for name, tip in TIPS.items():
     def test_gitleaks_failure_in_a_later_batch_blocks(self):
         failures = {
             "timeout": ("raise subprocess.TimeoutExpired('synthetic scanner', 135)",
-                        "gitleaks unavailable or timed out"),
+                        "gitleaks batch 2 timed out"),
             "error exit": ("return subprocess.CompletedProcess(arguments, 2, b'', b'')",
-                           "gitleaks detected a secret or failed"),
+                           "gitleaks batch 2 failed"),
             "clean exit, no report": ("return subprocess.CompletedProcess(arguments, 0, b'', b'')",
                                       "gitleaks result missing or unreadable"),
             "clean exit, unreadable report": ("return write('not json')",

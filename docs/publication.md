@@ -163,3 +163,13 @@ These tests run real Git commands against disposable local repositories and bare
 remotes. They generate only synthetic data, make no network pushes, and exercise
 both blocked publication and a successful clean commit/push. Hook bypasses inside
 tests simulate preexisting unsafe history only; they are not a production workflow.
+
+
+On 2026-11-16, the per-batch capacity became 32 MiB to leave more time for each
+batch under load. The tool still has a 120-second deadline and its parent a
+135-second deadline; the 2 MiB per-part and 2 GiB total limits are unchanged.
+Parts are still sent whole, in order, and every part must be covered by passed
+batches. No scan cache is used. A tool or process timeout blocks and identifies
+the failed batch without claiming a secret was found. Findings use a distinct
+exit code; other tool failures and missing/unreadable reports also block. Raw
+scanner output, reports, private rules and matched values remain withheld.

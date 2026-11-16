@@ -21,7 +21,11 @@ MAX_BLOB = 2 * 1024 * 1024
 MAX_SCAN = 2 * 1024 * 1024 * 1024
 # gitleaks reads each batch whole within its deadline. A batch is cut only between
 # parts, never inside a file, patch, message or identity, and every batch must pass.
-MAX_BATCH = 192 * 1024 * 1024
+MAX_BATCH = 32 * 1024 * 1024
+GITLEAKS_TIMEOUT = 120
+GITLEAKS_GRACE = 15
+# Give findings a distinct exit status: stdin scan errors also exit 1.
+GITLEAKS_FINDINGS_EXIT = 23
 CONFIG_KEY = "privacyGuard.privatePatternsFile"
 # A second rules file read only by this repository: identities, such as personal account
 # names, that must never appear beside the public one. Both files are required.
@@ -215,6 +219,7 @@ class Scanner:
         """Run gitleaks on the current batch. Only exit 0 with an empty report passes."""
         data = b"\n".join(self.parts)
         started = time.monotonic()
+        batch = len(self.batches) + 1
         with tempfile.TemporaryDirectory(prefix="publication-scan-") as tmp:
             folder = Path(tmp)
             config = folder / "gitleaks.toml"
@@ -228,22 +233,35 @@ class Scanner:
             try:
                 p = subprocess.run([self.gitleaks, "stdin", "--no-banner", "--redact",
                                     "--config", str(config), "--gitleaks-ignore-path", str(ignore),
-                                    "--ignore-gitleaks-allow", "--timeout", "120",
+                                    "--ignore-gitleaks-allow", "--timeout", str(GITLEAKS_TIMEOUT),
+                                    "--exit-code", str(GITLEAKS_FINDINGS_EXIT),
                                     "--report-format", "json", "--report-path", str(report)],
                                    input=data, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, cwd=tmp, env=env, timeout=135)
-            except (OSError, subprocess.TimeoutExpired):
-                raise Blocked("gitleaks unavailable or timed out") from None
+                                   stderr=subprocess.PIPE, cwd=tmp, env=env,
+                                   timeout=GITLEAKS_TIMEOUT + GITLEAKS_GRACE)
+            except subprocess.TimeoutExpired:
+                raise Blocked(f"gitleaks batch {batch} timed out at the process deadline "
+                              f"({GITLEAKS_TIMEOUT + GITLEAKS_GRACE} s); no pass issued") from None
+            except OSError:
+                raise Blocked(f"gitleaks batch {batch} unavailable; no pass issued") from None
+            # Go's context timeout is a stdin scan error, not a finding. Match
+            # only its fixed marker; never echo stderr, reports or input values.
+            if b"context deadline exceeded" in p.stderr.lower():
+                raise Blocked(f"gitleaks batch {batch} timed out at the tool deadline "
+                              f"({GITLEAKS_TIMEOUT} s); no pass issued")
+            if p.returncode == GITLEAKS_FINDINGS_EXIT:
+                raise Blocked(f"gitleaks detected a secret in batch {batch}; output withheld")
             if p.returncode:
-                raise Blocked("gitleaks detected a secret or failed; output withheld")
+                raise Blocked(f"gitleaks batch {batch} failed (exit {p.returncode}); "
+                              "no pass issued; output withheld")
             try:
                 findings = json.loads(report.read_bytes())
             except (OSError, ValueError):
                 findings = None
             if isinstance(findings, list) and findings:
-                raise Blocked("gitleaks reported a secret; output withheld")
+                raise Blocked(f"gitleaks reported a secret in batch {batch}; output withheld")
             if findings != []:
-                raise Blocked("gitleaks result missing or unreadable; no pass issued")
+                raise Blocked(f"gitleaks result missing or unreadable for batch {batch}; no pass issued")
         self.batches.append((len(self.parts), sum(map(len, self.parts))))
         if not last or len(self.batches) > 1:
             print(f"gitleaks batch {len(self.batches)}: {len(self.parts)} parts, "
