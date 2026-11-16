@@ -44,12 +44,23 @@ function readTerminalDialogPrompt(session, runtime) {
     const title = (heading?.text || '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200);
     if (!title) return dismiss(runtime);
     // Hard-wrapped option details and controls after numbered choices also
-    // affect what Enter does. Stop at the native key legend, not its last number.
+    // affect what Enter does. Keep the legend too: shortcut words can also
+    // occur in an option. Only trailing status/padding admitted by the footer
+    // gate is outside the region, so a pulsing dot row cannot revoke consent.
     let last = lines.length - 1;
-    while (last > first && (!plainEdge(lines[last]) || /\b(?:enter|return)\b.*\b(?:confirm|select|continue|submit|set|accept|proceed|choose)\b|\besc(?:ape)?\b.*\b(?:cancel|back|exit|dismiss)\b/i.test(lines[last]))) last--;
+    while (last > first && /^[ .·│]*$/.test(plainEdge(lines[last]))) last--;
     // The region (including the selected marker) never leaves this WeakMap.
-    // Ignore only layout padding/borders so cosmetic repaint/resize is stable.
-    const key = lines.slice(heading.index, last + 1).map(plainEdge).join('\n');
+    // Keep all dialog content; normalize layout edges and footer wrapping.
+    let key = lines.slice(heading.index, last + 1).map(plainEdge).join('\n');
+    // A standalone footer can hard-wrap on repaint. Retain every word, but
+    // normalize those line breaks; never treat a numbered option as a legend.
+    for (let i = Math.max(first + 2, (indexes.at(-1) ?? first) + 1, lines.length - 3); i <= last; i++) {
+      if (!/^(?:press\s+)?(?:enter|return)\b/i.test(plainEdge(lines[i]))) continue;
+      const legend = lines.slice(i, last + 1).map(plainEdge).join(' ');
+      if (!/\besc(?:ape)?\b.*\b(?:cancel|back|exit|dismiss)[ .·│]*$/i.test(legend)) continue;
+      key = lines.slice(heading.index, i).map(plainEdge).join('\n') + '\n' + legend;
+      break;
+    }
     const previous = observed.get(runtime), memory = regions.get(runtime);
     if (previous?.title === title && memory?.key === key) return previous;
     const prompt = previous?.title === title

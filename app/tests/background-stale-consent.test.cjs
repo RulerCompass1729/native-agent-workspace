@@ -5,7 +5,7 @@ const operation = require('../background-operation.cjs');
 const { Workspace } = require('../workspace.cjs');
 const { EventEmitter } = require('node:events');
 const { TerminalJournal } = require('../observation.cjs');
-async function fixture(t) {
+async function fixture(t, { realDetector = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-stale-consent-')); fs.chmodSync(dir, 0o700);
   let clock = 1800000000000, archived = false, disconnected = false;
   const bytes = [], runtimes = new Map();
@@ -16,6 +16,10 @@ async function fixture(t) {
       if (cols === this.cols && rows === this.rows) return;
       this.cols = cols; this.rows = rows; journal.append('resize', '', cols, rows, () => 'Synthetic terminal');
     } };
+    if (realDetector) {
+      const screen = new (require('@xterm/headless').Terminal)({ cols: 100, rows: 30, allowProposedApi: true });
+      runtime.terminal.screen = screen; t.after(() => screen.dispose());
+    }
     runtime.start = async () => runtime.emit('state', 'idle'); runtime.stop = async () => ({ state: 'ended' });
     runtimes.set(record.id, runtime); return runtime;
   } };
@@ -24,7 +28,7 @@ async function fixture(t) {
   // Both the desktop projection and Workspace.input's final conditional write
   // must observe the same synthetic dialog, including on the pre-detector base.
   const nativeSnapshot = w.snapshot.bind(w);
-  w.snapshot = () => {
+  if (!realDetector) w.snapshot = () => {
     const value = nativeSnapshot();
     return { ...value, sessions: value.sessions.map(s => ({ ...s, nativeTerminalDialog: runtimes.get(s.id)?.nativeTerminalDialog })) };
   };
@@ -236,4 +240,87 @@ for (const change of ['output', 'resize']) test(`without a dialog ${change} stil
   else runtime.terminal.journal.append('output', 'Synthetic redraw', 100, 30, () => 'Synthetic redraw');
   const result = await f.confirm(card);
   assert.equal(result.disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
+
+// PF12 uses the real cooked-screen detector in BOTH Workspace snapshots,
+// through confirmation and the last conditional write. No dialog is injected.
+function statusDialog({ title = 'Switch model?', body = 'Only change the synthetic model.',
+  options = ['Use model-x', 'Keep current'], selected = 0, setting = 'Effort: High', status = '.', wrapped = false } = {}) {
+  return '\x1b[2J\x1b[H' + [title, body, ...options.map((text, i) => `${i === selected ? '❯' : ' '} ${i + 1}. ${text}`), setting,
+    wrapped ? 'Press enter to\r\nconfirm or esc to cancel' : 'Press enter to confirm or esc to cancel', status].join('\r\n');
+}
+async function statusFixture(t, initial = {}) {
+  const f = await fixture(t, { realDetector: true }), runtime = f.runtimes.get(f.target);
+  f.draw = async text => {
+    await new Promise(resolve => runtime.terminal.screen.write(text, resolve));
+    runtime.terminal.journal.append('output', text, 100, 30, () => text);
+    return f.w.snapshot().sessions.find(s => s.id === f.target);
+  };
+  await f.draw(statusDialog(initial));
+  return { ...f, runtime, current: () => f.w.snapshot().sessions.find(s => s.id === f.target) };
+}
+for (const wrapped of [false, true]) for (const data of ['\x1b', '\r', '2']) test(`PF12 real detector: status below ${wrapped ? 'wrapped' : 'single-line'} legend preserves ${JSON.stringify(data)} card`, async t => {
+  const f = await statusFixture(t, { wrapped }), before = f.current();
+  assert.ok(before.nativeTerminalDialog, 'The original screen must be a detected dialog');
+  const card = await f.ask('input', [f.target, data]); assert.equal(card.state, 'confirmation-required');
+  await f.draw(statusDialog({ status: '..', wrapped }));
+  const after = f.current(); assert.ok(after.nativeTerminalDialog, 'The repaint must still be detected');
+  assert.notEqual(after.terminalState.observationIndex, before.terminalState.observationIndex);
+  const result = await f.confirm(card);
+  assert.equal(result.state, 'complete', JSON.stringify({ reason: result.reason, disposition: result.disposition, bytes: f.bytes })); assert.deepEqual(f.bytes, [data]);
+  assert.deepEqual(after.nativeTerminalDialog, before.nativeTerminalDialog, 'Status does not change the observed episode or revision');
+  await assert.rejects(f.confirm(card)); assert.deepEqual(f.bytes, [data], 'A duplicate decision never writes again');
+});
+test('PF12 real detector: a legend rewrapped during the status repaint preserves its card', async t => {
+  const f = await statusFixture(t), before = f.current(), card = await f.ask();
+  await f.draw(statusDialog({ status: '..', wrapped: true }));
+  const result = await f.confirm(card);
+  assert.equal(result.state, 'complete', JSON.stringify({ reason: result.reason, disposition: result.disposition, bytes: f.bytes }));
+  assert.deepEqual(f.bytes, ['\x1b']); assert.deepEqual(f.current().nativeTerminalDialog, before.nativeTerminalDialog);
+});
+
+const statusChanges = [
+  ['question', f => f.draw(statusDialog({ title: 'Choose a provider?', status: '..' }))],
+  ['option', f => f.draw(statusDialog({ options: ['Use model-y', 'Keep current'], status: '..' }))],
+  ['highlight', f => f.draw(statusDialog({ selected: 1, status: '..' }))],
+  ['body', f => f.draw(statusDialog({ body: 'Also change the synthetic directory.', status: '..' }))],
+  ['wrapped option detail', f => f.draw(statusDialog({ options: ['Use model-x', 'Keep current\r\n     Change synthetic directory'], status: '..' }))],
+  ['setting after options', f => f.draw(statusDialog({ setting: 'Effort: Low', status: '..' }))],
+  ['approval body', f => { f.runtime.nativeApproval = { requests: [{ id: 'same-request', title: 'Approve local action B' }] }; }],
+  ['dialog replacement', async f => { await f.draw('\x1b[2J\x1b[Hworking'); await f.draw(statusDialog({ status: '..' })); }],
+  ['selection away and back', async f => { await f.draw(statusDialog({ selected: 1 })); await f.draw(statusDialog({ status: '..' })); }],
+  ['unrecognized trailing status', f => f.draw(statusDialog({ status: 'unrecognized trailing text' }))],
+  ['epoch', f => { f.runtime.terminal.journal.epoch = 'replacement-epoch'; }],
+];
+for (const [change, mutate] of statusChanges) test(`PF12 real detector: ${change} still invalidates without a terminal byte`, async t => {
+  const f = await statusFixture(t);
+  if (change === 'approval body') f.runtime.nativeApproval = { requests: [{ id: 'same-request', title: 'Approve local action A' }] };
+  assert.ok(f.current().nativeTerminalDialog);
+  const card = await f.ask(); assert.equal(card.state, 'confirmation-required');
+  await mutate(f);
+  const result = await f.confirm(card);
+  assert.equal(result.disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
+test('PF12 real detector: output without a dialog still invalidates the strict frame proof without bytes', async t => {
+  const f = await statusFixture(t); await f.draw('\x1b[2J\x1b[Hplain output');
+  assert.equal(f.current().nativeTerminalDialog, null);
+  const card = await f.ask(); assert.equal(card.state, 'confirmation-required');
+  await f.draw('\x1b[2J\x1b[Hmore output');
+  assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
+test('PF12 real detector: option change after confirmation checks is refused at the last native input boundary', async t => {
+  const f = await statusFixture(t), card = await f.ask(), original = f.handlers.get('input');
+  f.handlers.set('input', async (...args) => {
+    await f.draw(statusDialog({ options: ['Use model-y', 'Keep current'], status: '..' }));
+    return original(...args);
+  });
+  assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
+test('PF12 real detector: shortcut text inside options cannot truncate the option signature', async t => {
+  const f = await statusFixture(t);
+  const ambiguous = model => `\x1b[2J\x1b[HSwitch model?\r\n❯ 1. Use ${model}; Enter to confirm\r\n  2. No; Esc to cancel\r\n.`;
+  await f.draw(ambiguous('model-x')); assert.ok(f.current().nativeTerminalDialog);
+  const card = await f.ask(); assert.equal(card.state, 'confirmation-required');
+  await f.draw(ambiguous('model-y'));
+  assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
 });
