@@ -7,6 +7,22 @@ window.__ModuleLoader__.load({
     const { MarkdownText, MarkdownDelegateProvider, Menu } = require('@deepseek-ai/dsh-client-ui-primitives');
     const templates = { sidebar: /* SIDEBAR_TEMPLATE */, main: /* MAIN_TEMPLATE */ };
     const styles = /* LOCAL_STYLES */;
+    // Shell membership is structural. Mark it once per sidebar mount instead
+    // of asking CSS to inspect every changing terminal/message descendant.
+    function bindShellFrame(surface) {
+      let column = surface;
+      while (column.parentElement) {
+        const frame = column.parentElement;
+        if (Array.from(frame.children).some(child => child.hasAttribute('data-shell-bottom'))) {
+          const sidebar = column;
+          frame.setAttribute('data-naw-shell-frame', '');
+          sidebar.setAttribute('data-naw-shell-sidebar', '');
+          return () => { sidebar.removeAttribute('data-naw-shell-sidebar'); frame.removeAttribute('data-naw-shell-frame'); };
+        }
+        column = frame;
+      }
+      return () => {};
+    }
     // Only project-template nodes registered before native content is inserted
     // can be refreshed. An identical attribute in a native reply grants nothing.
     function createDisplayBindings(translate) {
@@ -236,13 +252,14 @@ window.__ModuleLoader__.load({
         function Surface({ kind, collapsed }) {
           const ref = React.useRef(null);
           React.useLayoutEffect(() => {
+            const releaseShell = kind === 'sidebar' ? bindShellFrame(ref.current) : () => {};
             // These templates are build-time project markup, never model text.
             const parsed = new DOMParser().parseFromString(templates[kind], 'text/html');
             display.template(parsed.body);
             ref.current.replaceChildren(...parsed.body.childNodes);
             mounted++;
             if (mounted === 2) cleanup = mountWorkspace(ui);
-            return () => { cleanup?.(); cleanup = undefined; mounted--; };
+            return () => { cleanup?.(); cleanup = undefined; mounted--; releaseShell(); };
           }, [kind]);
           return React.createElement('div', { ref, className: 'naw', 'data-native-surface': kind, 'data-collapsed': Boolean(collapsed), style: collapsed ? { overflow: 'hidden' } : undefined });
         }
