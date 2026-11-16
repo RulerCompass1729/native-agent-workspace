@@ -57,12 +57,15 @@ function fixture(t, provider = 'codex', extra = {}) {
   const confirmation = vm.runInContext('(' + main.slice(a + '    confirmation: '.length, b).trim().replace(/,$/, '') + ')', sandbox);
   const config = { dataDir: dir, handlers, confirmation, audit: record => audits.push(record), confirmationPending: record => notices.push(record),
     project: (record, context) => sandbox.projectBackgroundRecord ? sandbox.projectBackgroundRecord(record, context) : record,
-    context: async (_actor, saved) => {
+    context: async (actor, saved) => {
       const client = { snapshot: () => state, refresh: async () => {}, call: async method => { assert.equal(method, 'initial'); return state; }, close() {} };
       const c = { background: true, actor, view: saved || { owner: randomUUID(), selected: actor.id, mode: 'chat', preference: 'chat', active: false }, client, checkActor() {}, refresh: client.refresh, win: { isDestroyed: () => false, destroy() {} } };
       sandbox.context = c; sandbox.client = client; sandbox.actor = actor;
-      if (main.includes('      context.metadataOnly =')) vm.runInContext(part('      context.metadataOnly =', '\n      context.refresh ='), sandbox);
-      vm.runInContext(part('      context.fingerprint = command =>', '\n      context.delivery ='), sandbox); contexts.push(c); return c;
+      // Production captures this context's actor/client lexically. A shared VM
+      // global would silently rebind older views when a second actor opens one.
+      const scope = vm.createContext({ ...sandbox, context: c, client, actor });
+      if (main.includes('      context.metadataOnly =')) vm.runInContext(part('      context.metadataOnly =', '\n      context.refresh ='), scope);
+      vm.runInContext(part('      context.fingerprint = command =>', '\n      context.delivery ='), scope); contexts.push(c); return c;
     }, ...extra };
   const controller = new BackgroundControl(config); sandbox.backgroundControl = controller;
   const binding = { sender: actor, identity: { callId: randomUUID(), turnId: 'turn' }, valid: () => true };
@@ -182,8 +185,11 @@ test('a cancelled read does not suppress an independent view or another actor', 
   assert.equal(independent.state, 'confirmation-required'); assert.notEqual(independent.id, cancelled.id);
   const otherBinding = { ...f.binding, sender: { ...f.actor, id: 'third', nativeId: 'native-third', name: 'Third actor' } };
   const c = await f.controller.view(otherBinding.sender); c.view.selected = 'other';
+  assert.equal(c.actor.id, 'third');
   const other = await f.controller.call(otherBinding, { action: 'snapshot' });
   assert.equal(other.state, 'confirmation-required'); assert.notEqual(other.id, cancelled.id);
+  const original = await f.controller.call(f.binding, command('initial', [], 'return-to-original-actor'));
+  assert.equal(original.state, 'confirmation-required');
 });
 for (const provider of ['claude', 'codex']) test(`${provider}: explicit read operations remain independent without repeating a pending notification`, async t => {
   const f = fixture(t, provider); await f.select('other');
