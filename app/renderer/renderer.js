@@ -1316,13 +1316,12 @@ function decorateSidebarHierarchy() {
     ui.display.computed(row.hier.added, 'text', () => queue.added.length ? hierText().added(queue.added.length) : ''); row.hier.added.hidden = !queue.added.length;
     ui.display.computed(row.hier.added, 'title', () => queue.added.length ? hierText().addedTitle(queue.added.map(item => '· ' + hierFirstLine(item.text)).join('\n')) : '');
     const doing = queue.doing ? hierFirstLine(queue.doing.text) : '';
-    row.hier.task.textContent = doing; ui.display.computed(row.hier.task, 'title', () => doing ? hierText().doingTitle(doing) : '');
+    row.hier.task.textContent = doing;
     // What needs the person, or failed, keeps its state words; otherwise the task says more than 「会话就绪」.
     row.element.dataset.hierShow = doing && presentation.marker !== '!' ? 'task' : 'status';
     const place = folderView ? folder.leaf : hierPlace(folder) || (folder.kind === 'made' ? text.madeOne : folder.name);
     ui.display.computed(row.hier.folder, 'text', () => { const f = hierFolder(record); return folderView ? f.leaf : hierPlace(f) || (f.kind === 'made' ? hierText().madeOne : f.name); }); row.hier.folder.hidden = !place;
     row.hier.folder.dataset.kind = folder.kind;
-    ui.display.computed(row.hier.folder, 'title', () => folder.path ? hierText().folder(folder.path, folder.branch) : '');
     row.hier.line.hidden = !place && (row.badges.hidden || !row.badges.childElementCount);
     const where = folder.path ? text.folder(folder.path, folder.branch) : folder.name;
     ui.display.computed(row.link, 'aria-description', () => [steward ? '' : hierRole(record), long && row.hier.parts.textContent, doing && hierText().doingTitle(doing), folder.path ? hierText().folder(folder.path, folder.branch) : hierFolder(record).name, queue.added.length && hierText().added(queue.added.length)].filter(Boolean).join(' · '));
@@ -1361,6 +1360,71 @@ function renderSidebarSpaceCard(entry, group) {
     const waiting = group.people.filter(s => sidebarPresentation(s).marker === '!').length;
     return group.room ? working || waiting ? [uiText('sidebar.hierarchy.cardCount', { count: group.people.length }), working && uiText('sidebar.hierarchy.cardWorking', { count: working }), waiting && uiText('sidebar.hierarchy.cardWaiting', { count: waiting })].filter(Boolean).join(' · ') : uiText('sidebar.hierarchy.cardMembers', { count: group.people.length }) : String(group.people.length);
   });
+}
+
+// Hover details (11-15 round 2): what a row's tooltips carried, in one card, from the state the sidebar already has.
+// No ids, version notice, chain parts or conversation text; the row keeps its full accessible name and description.
+let sidebarHoverCard = null;
+function hoverDetail(list, key, ...values) {
+  const value = node('dd'); value.append(...values.filter(part => part !== null && part !== undefined && part !== ''));
+  list.append(node('dt', uiText(key)), value);
+}
+function hoverAvatar(record, text) {
+  const presentation = sidebarPresentation(record), avatar = paintVendorMark(node('span'), record, text), dot = node('span');
+  dot.className = `state-dot ${presentation.tone}${presentation.workTone ? ' ' + presentation.workTone : ''}`; avatar.append(dot);
+  return avatar;
+}
+function hoverSessionCard(record, steward) {
+  const presentation = sidebarPresentation(record), head = node('div', undefined, 'hover-card-head'), lines = node('div', undefined, 'hover-card-lines');
+  const title = node('div', undefined, 'hover-card-title'), role = hierRole(record), status = node('div', presentation.full, 'hover-card-status');
+  title.append(node('span', record.name, 'hover-card-name')); if (role) title.append(node('span', role, 'hover-card-role'));
+  status.dataset.tone = presentation.tone; lines.append(title, status); head.append(hoverAvatar(record, steward ? '◆' : undefined), lines);
+  const facts = node('dl'), maker = sessionMaker(record), made = [maker.vendor ? maker.vendorName : '', maker.shellName].filter(Boolean).join(' · ');
+  const model = record.model ? node('span', ui.displayText(record.model, record.modelUiMessage), 'hover-card-nowrap') : null;
+  hoverDetail(facts, 'hover.backend', made + (made && model ? ' · ' : ''), model);
+  const spaces = allSpaces().filter(room => !room.archived && inSpace(record, room.id)).map(room => spaceName(room));
+  hoverDetail(facts, 'hover.spaces', spaces.length ? spaces.join(uiText('hover.separator')) : uiText('sidebar.independent'));
+  const { doing } = hierQueueFacts(record);
+  if (doing) hoverDetail(facts, 'hover.doing', hierFirstLine(doing.text), doing.status === 'waiting' ? node('span', ' · ' + uiText('hover.waiting'), 'hover-card-muted') : null);
+  const folder = hierFolder(record);
+  hoverDetail(facts, 'hover.folder', folder.path ? node('span', folder.path, 'hover-card-path') : node('span', uiText('hover.unrecorded'), 'hover-card-muted'),
+    folder.branch ? node('span', uiText('hover.branch', { branch: folder.branch }), 'hover-card-sub') : null);
+  hoverDetail(facts, 'hover.time', sessionTimes(record));
+  return [head, facts];
+}
+function hoverSpaceCard(room) {
+  const people = orderedMembers(room.id), head = node('div', undefined, 'hover-card-head'), lines = node('div', undefined, 'hover-card-lines'), title = node('div', undefined, 'hover-card-title');
+  const tile = node('span', Array.from(spaceName(room).trim())[0]?.toUpperCase() || '·', `sidebar-space-tile ${roomTone(room.id)}`); tile.setAttribute('aria-hidden', 'true');
+  title.append(node('span', spaceName(room), 'hover-card-name')); lines.append(title, node('div', uiText('hover.members', { count: people.length }), 'hover-card-status')); head.append(tile, lines);
+  // Six rows at most: five members and 「还有 N 位」 when there are more.
+  const list = node('ul', undefined, 'hover-card-members'), shown = people.length > 6 ? people.slice(0, 5) : people;
+  for (const person of shown) {
+    const presentation = sidebarPresentation(person), item = node('li'), state = node('span', presentation.compact, 'hover-card-member-state');
+    state.dataset.tone = presentation.tone; item.append(hoverAvatar(person), node('span', person.name, 'hover-card-member-name'), state); list.append(item);
+  }
+  if (people.length > shown.length) list.append(node('li', uiText('hover.more', { count: people.length - shown.length }), 'hover-card-more'));
+  const open = (room.queue || []).filter(item => item && ['queued', 'sent', 'waiting'].includes(item.status)), count = status => open.filter(item => item.status === status).length;
+  const queue = node('dl');
+  hoverDetail(queue, 'hover.queue', open.length ? uiText('hover.queueCounts', { queued: count('queued'), sent: count('sent'), waiting: count('waiting') }) : node('span', uiText('hover.queueEmpty'), 'hover-card-muted'));
+  return [head, people.length ? list : null, queue];
+}
+// Which item an element belongs to: a session row (by its occurrence, so the same session in two spaces is two
+// items) or a space heading. Keyboard focus counts only on the row's link and the heading's name button.
+function sidebarHoverItem(element, how) {
+  if (element.closest('#rename-editor')) return null;
+  const row = element.closest(how === 'focus' ? '.session-link' : '[data-session-row]')?.closest('[data-session-row]');
+  if (row?.dataset.occurrence) return { key: 'row:' + row.dataset.occurrence };
+  const heading = how === 'focus' ? element.closest('.session-space-heading')?.closest('h3') : element.closest('.session-space-group > h3');
+  const group = heading?.parentElement?.dataset.sessionGroup;
+  return group && group !== 'independent' ? { key: 'space:' + group } : null;
+}
+function sidebarHoverBuild(key) {
+  if (key.startsWith('row:')) {
+    const row = sessionRows.get(key.slice(4)), record = row && state.sessions.find(item => item.id === row.sessionId);
+    return record && row.element.isConnected && !row.element.closest('[hidden]') ? { anchor: row.element, kind: 'session', content: hoverSessionCard(record, row.element.classList.contains('steward-row')) } : null;
+  }
+  const id = key.slice(6), room = allSpaces().find(item => item.id === id && !item.archived), heading = sidebarGroups.get(id)?.title.closest('h3');
+  return room && heading?.isConnected ? { anchor: heading, kind: 'space', content: hoverSpaceCard(room) } : null;
 }
 
 // Only recorded NAW handoffs connect sessions. Names and native resume actions do not.
@@ -3459,14 +3523,14 @@ function renderSessions() {
     const association = () => memberships.length ? uiText('sidebar.memberships', { names: membershipNames() }) : uiText('sidebar.independent');
     const occurrence = () => grouped && memberships.length > 1 ? uiText('sidebar.sameIdentity') : '';
     const version = () => backendVersionNotice(record, state.appVersion);
-    row.link.disabled = false; ui.display.computed(row.link, 'aria-label', () => `${label()} · ${association()}${occurrence()} · ${sessionTimes(record)}${version() ? ' · ' + version().title : ''}`); ui.display.computed(row.link, 'title', () => `${label()}\n${association()}${occurrence()}\n${sessionTimes(record)}${version() ? '\n' + version().title : ''}`);
+    row.link.disabled = false; ui.display.computed(row.link, 'aria-label', () => `${label()} · ${association()}${occurrence()} · ${sessionTimes(record)}${version() ? ' · ' + version().title : ''}`);
     const badgeKey = JSON.stringify(memberships.map(r => [r.id, spaceName(r)]));
     row.badges.hidden = Boolean(grouped && group);
     if (row.badgeKey !== badgeKey) {
       // One badge plus a count keeps membership on its line; the badge shows the space's whole name and CSS
-      // shortens it only by the width it has (T-144). The full list is in the title and details.
-      row.badges.replaceChildren(...memberships.slice(0, 1).map(r => { const badge = node('span', undefined, `space-badge ${roomTone(r.id)}`); ui.display.computed(badge, 'text', () => spaceName(r)); ui.display.attribute(badge, 'title', 'sidebar.spaceBadge', () => ({ name: spaceName(r) })); return badge; }));
-      if (memberships.length > 1) { const more = node('span', `+${memberships.length - 1}`, 'space-badge space-badge-more'); ui.display.computed(more, 'title', membershipNames); row.badges.append(more); }
+      // shortens it only by the width it has (T-144). The full list is in the hover card and the row's label.
+      row.badges.replaceChildren(...memberships.slice(0, 1).map(r => { const badge = node('span', undefined, `space-badge ${roomTone(r.id)}`); ui.display.computed(badge, 'text', () => spaceName(r)); return badge; }));
+      if (memberships.length > 1) { const more = node('span', `+${memberships.length - 1}`, 'space-badge space-badge-more'); row.badges.append(more); }
       row.badgeKey = badgeKey;
     }
     ui.display.computed(row.badges, 'aria-label', association);
@@ -3481,13 +3545,14 @@ function renderSessions() {
     if (steward) { ui.display.text(row.name, 'butler.name'); row.shortId.textContent = ''; ui.display.computed(row.status, 'text', () => uiText('steward.rowStatus', { name: record.name, status: sidebarPresentation(record).compact })); }
     else { row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); ui.display.computed(row.status, 'text', () => sidebarPresentation(record).compact); }
     row.element.classList.toggle('same-name', repeated.has(record.id));
-    row.time.textContent = sessionActivityTime(record); row.time.title = sessionTimes(record);
-    row.dot.className = `state-dot ${presentation.tone}${presentation.workTone ? ' ' + presentation.workTone : ''}`; ui.display.computed(row.dot, 'title', () => sidebarPresentation(record).full); row.dot.dataset.nativeState = record.state;
-    row.marker.textContent = presentation.marker; ui.display.computed(row.marker, 'title', () => sidebarPresentation(record).full); row.element.classList.toggle('has-status-detail', presentation.detail);
+    row.time.textContent = sessionActivityTime(record);
+    row.dot.className = `state-dot ${presentation.tone}${presentation.workTone ? ' ' + presentation.workTone : ''}`; row.dot.dataset.nativeState = record.state;
+    row.marker.textContent = presentation.marker; row.element.classList.toggle('has-status-detail', presentation.detail);
     const index = positions.get(container) || 0, slot = container.children[index]; if (slot !== row.element) container.insertBefore(row.element, slot || null); positions.set(container, index + 1);
   }
   highlightSpace(hoverSpace);
   if (typeof decorateSidebarHierarchy === 'function') decorateSidebarHierarchy();
+  if (typeof sidebarHoverCard !== 'undefined' && sidebarHoverCard) sidebarHoverCard.refresh();
 }
 
 function createReadiness() {
@@ -6713,6 +6778,11 @@ for (const dialog of document.querySelectorAll('dialog')) {
 }
 $('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').onclick = () => attempt(showSetup);
 $('close-setup').onclick = () => $('setup-dialog').close();
+sidebarHoverCard = (() => {
+  const list = $('session-list'), surface = list?.closest('.naw') || list?.closest('.sidebar');
+  return surface && window.nativeWorkspaceHoverCard ? window.nativeWorkspaceHoverCard.mount({ root: surface, surface, resolve: sidebarHoverItem, build: sidebarHoverBuild }) : null;
+})();
+disposers.push(() => sidebarHoverCard?.dispose(), ui.language.subscribe(() => sidebarHoverCard?.dismiss()));
 $('ui-language').onchange = event => { void changeInterfaceLanguage(event.target.value); };
 disposers.push(ui.language.subscribe(() => { renderInterfaceLanguage(); renderSetupPrograms(true); butlerReviewView.refresh(); if (selected === 'panorama') document.title = uiText('panorama.windowTitle'); else if (current()?.archived) document.title = sessionWindowTitle(current()); }));
 disposers.push(api.onLocale(value => { if (!value || typeof value !== 'object') return; languageWarning = ['unavailable', 'migrationNotSaved'].includes(value.warning) ? value.warning : null; if (!languageWarning) notifiedLanguageWarning = undefined; renderInterfaceLanguage(); reportLanguageWarning(); }));
