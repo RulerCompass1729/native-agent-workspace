@@ -7,8 +7,8 @@ const token = v => typeof v === 'string' && v.length > 0 && v.length <= 160 && !
 function supported(entry) { return entry.state.capabilities?.includes(CAPABILITY) === true && !entry.closed; }
 // How long a scoped request waits for the service (5 s otherwise). A close usually runs after the work,
 // which may already be durable: on 2026-11-15 a queueAdd completed, its close answered after 5 s and the
-// caller was told unconfirmed. Close waits 15 s; a send, its close and the binding's close (65 s) stay
-// under the native tool's 110 s.
+// caller was told unconfirmed. Close waits 15 s; the outbox broker stops waiting earlier when its
+// connection limit is near, so a control answer keeps its operation id.
 const WAIT = { send: 35000, close: 15000 };
 async function request(client, action, value) {
   let timer;
