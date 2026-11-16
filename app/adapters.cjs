@@ -750,6 +750,18 @@ class Claude extends EventEmitter {
   validRootBinding(message) {
     return Boolean(this.rootLease && !this.rootEnding && message.lease === this.rootLease && message.sessionId === this.record.nativeId);
   }
+  observeCreationSetting(name, value) {
+    this.creationSettings ||= {};
+    this.creationSettings[name] = { value, observedAt: Date.now(), nativeId: this.record.nativeId,
+      epoch: this.observationEpoch, controlRevision: this.record.controlRevision || 0 };
+  }
+  creationSettingsSnapshot() {
+    if (!this.ready || !this.terminal?.alive || this.disposed || this.rootEnding || this.displayGap || !this.rootLease || !this.observationEpoch) return null;
+    const controlRevision = this.record.controlRevision || 0, current = value => value && value.nativeId === this.record.nativeId &&
+      value.epoch === this.observationEpoch && value.controlRevision === controlRevision ? { value: value.value, observedAt: value.observedAt } : null;
+    return { nativeId: this.record.nativeId, controlRevision,
+      model: current(this.creationSettings?.model), effort: current(this.creationSettings?.effort) };
+  }
   async promptIdentity(message) {
     // Native can flush the accepted user row just after the first display
     // hook. Bound this one metadata request to five reads with 25ms gaps,
@@ -857,7 +869,11 @@ class Claude extends EventEmitter {
         return { observed: true };
       } else if (message.id === 'control:model') {
         // Metadata is not an input/turn boundary and grants no sharing authority.
-        if (!message.replayed) { this.nativeModelEpoch = this.observationEpoch; this.emit('model', message.model); }
+        if (!message.replayed) {
+          this.nativeModelEpoch = this.observationEpoch;
+          if (!this.displayGap) this.observeCreationSetting('model', message.model);
+          this.emit('model', message.model);
+        }
         return { observed: true };
       } else if (message.id === 'control:turn-start') {
         if (!/^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId || '') || message.status !== 'running') throw Error('Invalid native turn start');
@@ -1126,6 +1142,7 @@ class Claude extends EventEmitter {
   }
   observeRootGap(message) {
     if (!this.validRootBinding(message) || !this.observationEpoch || message.epoch !== this.observationEpoch) throw Error('Invalid native observation');
+    this.creationSettings = null;
     this.cancelNativeAbort(); this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear();
     if (this.startedRootTurn) this.startedRootTurn.inputRevoked = true;
     this.displayGap = true; for (const turn of this.displayProofs?.values() || []) turn.incomplete = true;
@@ -1282,6 +1299,12 @@ class Claude extends EventEmitter {
     if (this.record.forkPicker && event.hook_event_name === 'SessionStart') { this.record.forkPicker = false; this.emit('capability'); }
     const mode = PERMISSION_MODES.includes(event.permission_mode) ? event.permission_mode : this.record.nativePermissionMode;
     const effort = EFFORT_LEVELS.includes(event.effort?.level) ? event.effort.level : this.record.nativeEffort;
+    // A late startup hook can carry the old launch effort. Only subsequent
+    // explicit root observations supply authority for standing creation.
+    if (event.hook_event_name !== 'SessionStart' && event.effort !== undefined) {
+      if (EFFORT_LEVELS.includes(event.effort?.level)) this.observeCreationSetting('effort', event.effort.level);
+      else if (this.creationSettings) delete this.creationSettings.effort;
+    }
     if (mode !== this.record.nativePermissionMode || effort !== this.record.nativeEffort) {
       this.record.nativePermissionMode = mode; this.record.nativeEffort = effort; this.emit('capability');
     }
