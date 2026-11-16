@@ -8,7 +8,7 @@ const button = (text, action, cls) => { const el = node('button', text, cls); el
 const uiNode = (tag, key, params, cls) => { const el = node(tag, undefined, cls); ui.display.text(el, key, params); return el; };
 const uiButton = (key, action, cls, params) => { const el = button('', action, cls); ui.display.text(el, key, params); return el; };
 const states = { starting: 'state.starting', idle: 'state.idle', working: 'state.working', approval: 'state.approval', stopping: 'state.stopping', disconnected: 'state.disconnected', recoverable: 'state.recoverable', ended: 'state.ended', background: 'state.background', error: 'state.error' };
-const stateText = record => uiText(states[record.state] || 'state.unknown');
+const stateText = record => record.nativeTerminalDialog ? uiText('state.terminalDialog', { title: record.nativeTerminalDialog.title }) : uiText(states[record.state] || 'state.unknown');
 // An unfollowed native /resume leaves the process running in another session.
 const switchedAway = record => record.state === 'stopping' && record.nativeContextPending?.reason === 'resume';
 function exhaustedRecovery(record) {
@@ -5910,6 +5910,8 @@ function queueRow(item, memberIds) {
     // Read again when the language changes: an archived member's marker is in the person's language.
     statusParams = () => ({ name: memberId ? queueMemberName(memberId) : '' });
   }
+  const dialogs = item.status === 'queued' ? state.sessions.filter(s => memberIds.has(s.id) && (!item.assignee || s.id === item.assignee) && s.nativeTerminalDialog) : [];
+  if (dialogs.length) { statusKey = 'state.terminalDialog'; statusParams = () => ({ title: dialogs.map(s => s.name + ' · ' + s.nativeTerminalDialog.title).join('、') }); }
   const status = uiNode('span', statusKey, statusParams, 'queue-status');
   if (name) {
     status.title = name;
@@ -5959,7 +5961,7 @@ function renderQueue() {
   const needUpdate = [];
   for (const record of state.sessions) {
     if (inSpace(record, queueSpace) && !record.archived) {
-      members.push({ id: record.id, name: record.name });
+      members.push({ id: record.id, name: record.name, nativeTerminalDialog: record.nativeTerminalDialog || null });
       memberIds.add(record.id);
       if (!(record.serviceCapabilities || []).includes('queueDispatchV1')) {
         needUpdate.push(record.name);
