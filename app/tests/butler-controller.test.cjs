@@ -45,6 +45,23 @@ function completeFixtureBatch(f, event, actions) {
   f.ledger.completeBatch(batch.batchId, selection, { actions });
   return { batch, selection, attempt: attempt.attempt };
 }
+test('done reports survive restart and share the READY deadline without becoming code deliveries or questions', async t => {
+  const f = fixture(t, { run: async (input, selection) => envelope(input, selection) });
+  await f.controller.receive(f.event('done-1', 'done'));
+  const first = [...f.timers.values()][0]; assert.equal(first.delay, 30000);
+  f.advance(10000); await f.controller.receive(f.event('done-2', 'done'));
+  assert.equal(f.timers.size, 1); assert.equal([...f.timers.values()][0], first);
+  f.controller.close();
+  const restored = f.reopen();
+  assert.equal((await restored.controller.resume()).status, 'batched');
+  const timer = [...f.timers.values()][0]; assert.equal(timer.delay, 20000);
+  f.timers.clear(); timer.fn(); await restored.controller.running;
+  assert.equal(f.calls.length, 1); assert.deepEqual(f.calls[0].events.map(e => e.kind), ['done', 'done']);
+  assert.equal(restored.ledger.pendingEvents().length, 0); assert.equal(f.questions.length, 0);
+  assert.equal(f.reports.length, 0, 'A report completion must not synthesize a READY code-delivery report');
+  assert.equal((await restored.controller.notifyPersisted('event-done-1')).status, 'duplicate');
+  assert.equal(f.calls.length, 1); restored.controller.close();
+});
 test('READY has one non-extending timer and a report even when the model emits no actions', async t => {
   const f = fixture(t, { run: async (input, selection) => envelope(input, selection) }); await f.controller.receive(f.event(1, 'ready'));
   const first = [...f.timers.values()][0]; assert.equal(first.delay, 30000);

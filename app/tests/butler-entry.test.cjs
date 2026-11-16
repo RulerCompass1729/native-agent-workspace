@@ -389,6 +389,9 @@ test('the sentence about what is sent was written for what the core can put befo
   // two shapes below: what buildInput returns for input that uses every field, and what the butler's one read
   // capability returns for a space with a delivered item. A new field in either fails here first: read the sentence
   // again before changing these lists.
+  // done adds a shared completion-report summary for a steward-assigned task,
+  // using the existing title/text/identity payload. It adds no conversation field
+  // or read capability; both catalogs must state this event category explicitly.
   const paths = value => { const found = new Set(); const walk = (item, at) => {
     if (Array.isArray(item)) { for (const child of item) walk(child, at + '[]'); return; }
     if (item && typeof item === 'object') { for (const [key, child] of Object.entries(item)) walk(child, at ? `${at}.${key}` : key); return; }
@@ -396,7 +399,7 @@ test('the sentence about what is sent was written for what the core can put befo
   }; walk(value, ''); return [...found].sort(); };
   const policy = fs.readFileSync(path.join(__dirname, '../butler-policy.cjs'), 'utf8');
   const list = pattern => [...policy.match(pattern)[1].matchAll(/'([^']+)'|(\w+):/g)].map(match => match[1] || match[2]);
-  const kinds = ['request', 'queue-empty', 'ready', 'decision', 'failure', 'blocked', 'recovery'], statuses = ['queued', 'sent', 'waiting', 'done', 'failed', 'cancelled'];
+  const kinds = ['request', 'queue-empty', 'ready', 'done', 'decision', 'failure', 'blocked', 'recovery'], statuses = ['queued', 'sent', 'waiting', 'done', 'failed', 'cancelled'];
   const payload = ['text', 'title', 'spaceId', 'spaceName', 'memberName', 'memberId', 'itemId', 'outcome', 'reason', 'decisionKind', 'questionKey', 'supersedes'];
   assert.deepEqual(list(/const EVENT_KINDS = \[([^\]]+)\]/), kinds); assert.deepEqual(list(/const PAYLOAD_LIMITS = \{([^}]+)\}/), payload);
   // Private-looking extras on the way in must not come out.
@@ -409,6 +412,7 @@ test('the sentence about what is sent was written for what the core can put befo
     'spaces[].id', 'spaces[].name', 'spaces[].writable', ...statuses.map(status => `spaces[].queueCounts.${status}`),
     'pendingQuestions[].questionId', 'pendingQuestions[].sourceRef', 'pendingQuestions[].decisionKind', 'pendingQuestions[].text', 'pendingQuestions[].decisionSource'].sort());
   assert.equal(/not sent|not-sent|\/not\/sent/.test(JSON.stringify(input)), false);
+  assert.deepEqual(input.events.map(event => event.kind), kinds, 'The disclosed event categories reach the model without being dropped or relabeled');
   // The read capability, on the product's own room state in a scratch directory.
   const { ButlerBusiness } = require('../butler-business.cjs'), { RoomState } = require('../room-state.cjs'), { ButlerRole } = require('../butler-role.cjs'), { ButlerReadAudit } = require('../butler-read-audit.cjs');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-butler-entry-sent-')); fs.chmodSync(directory, 0o700); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -426,8 +430,8 @@ test('the sentence about what is sent was written for what the core can put befo
   assert.deepEqual(records({ kind: 'queue', spaceId: 'shared' }), [...space, 'assignee', 'finishedAt', 'itemId', 'ready.branch', 'ready.commit', 'sentAt', 'status', 'text'].sort());
   assert.deepEqual(records({ kind: 'deliveries', spaceId: 'shared', fromTime: Date.now() - 3_600_000, throughTime: Date.now() + 3_600_000 }),
     [...space, 'branch', 'commit', 'eventId', 'itemId', 'itemRecordRef', 'kind', 'sourceTask', 'sourceTaskStatus', 'status'].sort());
-  for (const language of ['zh', 'en']) for (const part of language === 'zh' ? ['你对它说的话', '答复', '队列正文', '交付记录', '分支名', '提交号', '失败或被拦下的原因', '空间名', '成员名', '状态', '时间', '内部编号'] :
-    ['What you say to it', 'answers', 'queue text', 'delivery records', 'branch names', 'commit ids', 'failure and block reasons', 'space names', 'member names', 'status', 'times', 'internal ids']) assert.ok(messages[language]['butler.confirm.sentValue'].includes(part), part);
+  for (const language of ['zh', 'en']) for (const part of language === 'zh' ? ['你对它说的话', '答复', '队列正文', '交付记录', '分支名', '提交号', '大管家所派任务的完成报告摘要', '失败或被拦下的原因', '空间名', '成员名', '状态', '时间', '内部编号'] :
+    ['What you say to it', 'answers', 'queue text', 'delivery records', 'branch names', 'commit ids', 'completion report summaries for tasks assigned by the butler', 'failure and block reasons', 'space names', 'member names', 'status', 'times', 'internal ids']) assert.ok(messages[language]['butler.confirm.sentValue'].includes(part), part);
 });
 
 test('the page loads the view before the entry and the entry before the renderer, in the page and in the bundle', () => {

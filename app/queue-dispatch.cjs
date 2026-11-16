@@ -1073,6 +1073,9 @@ function planDispatch(input) {
       const ready = reply ? readyLine(reply.last) : null;
       if (ready) {
         action.ready = ready;
+      } else if (status === 'done' && item.addedBy === 'steward') {
+        // Preserve the actual first line before the queue's compact reply is flattened.
+        action.reportTitle = reportTitle(reply?.last);
       }
       actions.push(action);
       if (status !== 'done') {
@@ -1369,6 +1372,11 @@ function decisionLine(reply, task = '') {
   const marker = DECISION_MARKERS.find(value => first.startsWith(value));
   const question = (marker ? first.slice(marker.length) : first).trim();
   return shortText(question || task, 60);
+}
+
+function reportTitle(reply) {
+  const first = typeof reply === 'string' ? plainReply(reply).trimStart().split(/\r\n|[\n\r\u2028\u2029]/u)[0] : '';
+  return shortText(replyLine(first), 200) || 'Completed';
 }
 
 // A member that delivers code writes one line in its reply: READY <branch> <commit>.
@@ -2854,7 +2862,8 @@ class QueueDispatcher {
     if (session) {
       name = this.name(session);
     }
-    this.roomState.queueSettle(action.roomId, action.itemId, action.status, action.reason || '', name, action.reply || '', action.question, action.ready);
+    const report = action.reportTitle === undefined ? [] : [action.reportTitle];
+    this.roomState.queueSettle(action.roomId, action.itemId, action.status, action.reason || '', name, action.reply || '', action.question, action.ready, ...report);
     this.broadcast().catch(() => {});
   }
 
@@ -3783,6 +3792,7 @@ class QueueDispatcher {
 module.exports = {
   CAPABILITY,
   ITEM_TEXT_LIMIT,
+  ITEM_REPLY_LIMIT,
   QUEUE_LIMIT,
   IDLE_SETTLE_MS,
   HUMAN_QUIET_MS,
@@ -3814,6 +3824,7 @@ module.exports = {
   handoffText,
   shortText,
   decisionLine,
+  reportTitle,
   readyLine,
   validReady,
   notSent,
