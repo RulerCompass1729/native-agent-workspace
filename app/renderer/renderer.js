@@ -3734,6 +3734,7 @@ function renderInterfaceLanguage() {
   const entry = $('setup-button');
   entry.querySelector('.rail-label').textContent = uiText('common.settings');
   entry.setAttribute('aria-label', uiText('common.settings')); entry.title = uiText('common.settings');
+  activityStream?.render();
 }
 async function changeInterfaceLanguage(value) {
   if (changingLanguage) { renderInterfaceLanguage(); return; }
