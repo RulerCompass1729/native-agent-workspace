@@ -93,8 +93,16 @@ class TempReminders {
   }
   async status(force=false,check) {
     if(this.pending) return this.pending;
-    if(!force&&this.cached&&this.now()-this.lastScan<DAY&&this.now()>=this.lastScan) return this.cached;
-    this.pending=this.scan(check).finally(()=>{this.pending=null;}); return this.pending;
+    if(!force&&this.lastScan!==null&&this.cached&&this.now()-this.lastScan<DAY&&this.now()>=this.lastScan) return this.cached;
+    this.pending=this.scan(check).catch(error=>{
+      const notify=this.cached?.anomaly!=='storage-unavailable';
+      // All readers must see the failure instead of an earlier quiet cache.
+      // Keep it ephemeral, grant no candidate, and retry on the next read.
+      this.cached={...this.saved.reminder,id:'naw-temp-files',checkedAt:this.now(),directories:0,bytes:0,oldestDay:null,oldestAt:null,shown:true,anomaly:'storage-unavailable'};
+      this.candidates=[];this.lastScan=null;
+      if(notify)try{Promise.resolve(this.changed()).catch(()=>{});}catch{}
+      throw error;
+    }).finally(()=>{this.pending=null;}); return this.pending;
   }
   async scan(check=()=>{}) {
     const now=this.now(); let entries=[],anomaly=null;
@@ -186,16 +194,19 @@ class TempReminders {
     } finally {this.busy=false;this.finish();}
   }
 }
+function tempSummary(r) {
+  const n=k=>{if(!Number.isSafeInteger(r[k])||r[k]<0)throw Error('Invalid reminder count');return r[k];};
+  if(typeof r.shown!=='boolean')throw Error('Invalid reminder state');
+  const out={id:'naw-temp-files',version:n('version'),state:r.anomaly||r.state==='unavailable'?'unavailable':r.shown?'ready':'quiet',checkedAt:n('checkedAt'),directories:n('directories'),bytes:n('bytes'),oldestDay:/^\d{4}-\d{2}-\d{2}$/.test(r.oldestDay)?r.oldestDay:null,shown:r.shown===true,result:null};
+  if(r.result) out.result=Object.fromEntries(['at','cleaned','bytes','skipped'].map(k=>{if(!Number.isSafeInteger(r.result[k])||r.result[k]<0)throw Error('Invalid cleanup result');return [k,r.result[k]];}));
+  return out;
+}
 function readSummary(dataDir) {
   const file=path.join(dataDir,'temp-reminders.json'),fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
   try {
     const stat=fs.fstatSync(fd); if(!stat.isFile()||stat.uid!==process.getuid()||stat.mode&0o077||stat.size>65536) throw Error('Unsafe reminder summary');
     const value=JSON.parse(fs.readFileSync(fd,'utf8')); if(value.version!==1||value.reminder?.id!=='naw-temp-files') throw Error('Invalid reminder summary');
-    const r=value.reminder,n=k=>{if(!Number.isSafeInteger(r[k])||r[k]<0)throw Error('Invalid reminder count');return r[k];};
-    if(typeof r.shown!=='boolean')throw Error('Invalid reminder state');
-    const out={id:'naw-temp-files',version:n('version'),state:r.anomaly?'unavailable':r.shown?'ready':'quiet',checkedAt:n('checkedAt'),directories:n('directories'),bytes:n('bytes'),oldestDay:/^\d{4}-\d{2}-\d{2}$/.test(r.oldestDay)?r.oldestDay:null,shown:r.shown===true,result:null};
-    if(r.result) out.result=Object.fromEntries(['at','cleaned','bytes','skipped'].map(k=>{if(!Number.isSafeInteger(r.result[k])||r.result[k]<0)throw Error('Invalid cleanup result');return [k,r.result[k]];}));
-    return out;
+    return tempSummary(value.reminder);
   } finally {fs.closeSync(fd);}
 }
-module.exports={TempReminders,readSummary,inspectSystem,shouldShow,DAY,LINE};
+module.exports={TempReminders,readSummary,tempSummary,inspectSystem,shouldShow,DAY,LINE};

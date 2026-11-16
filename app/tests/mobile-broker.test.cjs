@@ -7,7 +7,7 @@ const filename = require.resolve('../mobile-broker.cjs'), requireFromBroker = cr
 const source = fs.readFileSync(filename, 'utf8');
 const actor = 'synthetic-human', origin = 'https://mobile.invalid';
 
-function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput } = {}) {
+function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput, pushOptions } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-mobile-broker-'))), original = fs.statSync(root);
   let exclusive = true, wrongRoot = false, failRevoke = false, holdRead = false, holdSend = false, loseAck = false;
   const calls = [], clients = [], receipts = new Map(), sent = [], answered = [];
@@ -62,7 +62,7 @@ function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput }
       if (name === './mobile-session.cjs' && requestLimit !== undefined) return { MAX_REQUESTS: requestLimit };
       return requireFromBroker(name);
     } }, { filename });
-  const changes = [], broker = new module.exports.MobileBroker(root, { exclusive: () => exclusive, changed: () => changes.push('changed'), desktop, onHumanInput });
+  const changes = [], broker = new module.exports.MobileBroker(root, { exclusive: () => exclusive, changed: () => changes.push('changed'), desktop, onHumanInput, pushOptions });
   const selection = [{ sessionId: record.id, actions: ['read', 'send', 'answer'] }];
   async function pair(actions = selection[0].actions, replace = false, workspace) {
     const challenge = await broker.beginPairing({ actor, origin, selection: [{ sessionId: record.id, actions }], replace, ...(workspace ? { workspace } : {}) });
@@ -79,6 +79,33 @@ function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput }
 test('construction is disabled and makes no connection, grant or native call', t => {
   const f = fixture(t); assert.deepEqual(fs.readdirSync(f.root), []); assert.equal(f.clients.length, 0); assert.deepEqual(f.calls, []);
   assert.throws(() => f.broker.session({ token: 'x', actor }), { code: 'MOBILE_BROKER_DENIED' });
+});
+test('push uses the same desktop count and dies on logout, revoke, re-pair or source disconnect', async t => {
+  for (const end of ['logout', 'revoke', 'repair', 'disconnect']) {
+    const messages = [], key = require('node:crypto').createECDH('prime256v1'); key.generateKeys();
+    const desktop = { grant: (_c, g) => g, records: { status: () => ({ count: 19, private: 'PRIVATE_SOURCE' }) } };
+    const f = fixture(t, { desktop, pushOptions: { transport: async d => { messages.push(d); return 201; } } });
+    const { auth } = await f.pair(undefined, false, { roomIds: [], records: true });
+    assert.equal(f.broker.pushInfo(auth).publicKey.length, 87);
+    const value = { action: 'subscribe', subscription: { endpoint: 'https://web.push.apple.com/synthetic', expirationTime: null,
+      keys: { p256dh: key.getPublicKey().toString('base64url'), auth: Buffer.alloc(16, 7).toString('base64url') } } };
+    assert.throws(() => f.broker.pushAction({ ...auth, csrf: 'x'.repeat(43) }, value)); assert.equal(messages.length, 0);
+    f.broker.pushAction(auth, value); await f.broker.refreshPush(); assert.equal(messages.length, 1);
+    const plain = require('http_ece').decrypt(messages[0].body, { version: 'aes128gcm', privateKey: key, authSecret: value.subscription.keys.auth });
+    assert.deepEqual(JSON.parse(plain), { count: desktop.records.status().count });
+    if (end === 'logout') f.broker.logout(auth);
+    else if (end === 'revoke') f.broker.revoke();
+    else if (end === 'repair') await f.pair(undefined, true, { roomIds: [], records: true });
+    else f.clients.at(-1).emit('closed');
+    desktop.records.status = () => ({ count: 999 }); await f.broker.refreshPush();
+    assert.equal(messages.length, 1); assert.throws(() => f.broker.pushAction(auth, value));
+  }
+});
+test('native read/send authority never implies reminder push permission', async t => {
+  const f = fixture(t, { desktop: { grant: (_c, g) => g, records: { status: () => ({ count: 3 }) } } });
+  const { auth } = await f.pair(undefined, false, { roomIds: [], records: false });
+  assert.throws(() => f.broker.pushInfo(auth));
+  assert.throws(() => f.broker.pushAction(auth, { action: 'subscribe', subscription: {} }));
 });
 test('revocation while original broker connect is held closes its late client without creating a pending grant', async t => {
   const f = fixture(t, { holdConnect: true });

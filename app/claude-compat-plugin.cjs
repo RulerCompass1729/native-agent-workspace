@@ -118,7 +118,10 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
     // Exact 50054c04 compatibility copy before the compact boundary went on the ordered observation channel.
     '120a4e7eeac041072bc92ef1fe45425a0aa3e3f506c3d7a792817d7437e58b9f',
     // Exact a547753d compatibility copy (hook bedeeb99) before native approval lifecycle repair.
-    '5e042a00add4cbee54ca8d70ecccef56c177fdd6c74c389a9f14dbfa27bdc5db']);
+    '5e042a00add4cbee54ca8d70ecccef56c177fdd6c74c389a9f14dbfa27bdc5db',
+    // Exact main cc6fa282 and reviewed 5b744d75 outputs before PF08 integration.
+    '4249c0489fc3eee1eedc5331df5bb405d0a1a1ad21f9753e39de6b58b21819a9',
+    '7dd32382a130b0a25f55427fef827bf77649f58fd1b044d34aed127268c5f8d8']);
   const upgrades = new Set();
   for (const [name, content] of files) {
     const filename = path.join(directory, name);

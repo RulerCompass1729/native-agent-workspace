@@ -21,7 +21,7 @@ function fixture() {
     set: value => { writes.push(value); return new Promise((resolve, reject) => { save = { accept() { accepted = value; resolve(); for (const fn of observers) fn(); }, reject }; }); },
     subscribe: fn => { observers.push(fn); return () => {}; } } };
   // Nothing is open (selected ''), so the window title an archived session would carry is not repainted.
-  const context = vm.createContext({ selected: '', current: () => null, ui, state, document, $: id => { assert.ok(nodes.has(id), 'Locale-only control must not reach another surface'); return nodes.get(id); }, uiText: ui.language.text,
+  const context = vm.createContext({ selected: '', current: () => null, ui, state, document, $: id => { assert.ok(nodes.has(id), 'Locale-only control must not reach another surface'); return nodes.get(id); }, uiText: ui.language.text, activityStream: undefined,
     toast() {}, butlerReviewView: { refresh() { reviewRefreshes++; } }, api: new Proxy({}, { get(_target, key) { if (key === 'onLocale') return () => () => {}; calls.push(key); throw Error('Unexpected native/product API'); } }), disposers: [] });
   vm.runInContext(renderer.slice(begin, end), context);
   const hook = renderer.indexOf("$('ui-language').onchange =");

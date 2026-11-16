@@ -57,7 +57,7 @@ const { createStockOutboxView } = require('./computer-use-outbox-view.cjs');
 const background = require('./background-control.cjs');
 const recordReminders = require('./record-reminders.cjs');
 const { inspectTextPaths, openTextPath } = require('./text-paths.cjs');
-const { TempReminders } = require('./temp-reminders.cjs');
+const { TempReminders, readSummary: readTempSummary, tempSummary } = require('./temp-reminders.cjs');
 let tempReminders = null, tempRemindersTimer = null, tempQuitWaiting = false;
 function currentTempReminders() {
   tempReminders ||= new TempReminders({ dataDir, isPerson: isCurrentHumanContext, changed: () => recordsChanged(true) });
@@ -166,6 +166,17 @@ let startupWindow, starting = false, wired = false;
 let applicationBuild, applicationMenu;
 let mobileBroker;
 let mobileListener, mobileOpening = false, mobileGeneration = 0, mobileStopped = Promise.resolve(true), mobileExpiry;
+// One status contract for the desktop bell, scoped phone reads and count push.
+function appRecordsStatus(snapshot = null, suppliedTemp = null) {
+  const records = recordReminders.status(dataDir, Date.now(), { unavailable: {
+    ...(operationsUnavailable ? { operations: operationsUnavailable } : {}),
+    ...(stewardRecord?.failed ? { steward: stewardRecord.loadError ? 'history' : 'other' } : {}),
+  } });
+  let temp;
+  try { temp = suppliedTemp ? tempSummary(suppliedTemp) : tempReminders?.cached ? tempSummary(tempReminders.cached) : readTempSummary(dataDir); }
+  catch { temp = { id: 'naw-temp-files', version: 0, state: 'unavailable', checkedAt: Date.now(), directories: 0, bytes: 0, oldestDay: null, shown: true, result: null }; }
+  return { ...records, temp, count: records.count + (temp.shown ? 1 : 0) };
+}
 function appMobileBroker() {
   if (!primary || quitting || !dataDir) throw Error('The local mobile entry is unavailable.');
   if (!mobileBroker) mobileBroker = new (require('./mobile-broker.cjs').MobileBroker)(dataDir, { exclusive: () => primary && !quitting, changed: () => watchAppMobile(MOBILE_RESPONSE_GRACE_MS), desktop: appMobileWorkspace(), onHumanInput: id => queueDispatcher?.noteHuman(id) });
@@ -175,11 +186,8 @@ function appMobileWorkspace() {
   return new (require('./mobile-workspace.cjs').MobileWorkspace)({
     snapshot: client => displayState(client.snapshot()), roomState, labels: sessionLabels.labels,
     records: {
-      status: () => recordReminders.status(dataDir, Date.now(), { unavailable: {
-        ...(operationsUnavailable ? { operations: operationsUnavailable } : {}),
-        ...(stewardRecord?.failed ? { steward: stewardRecord.loadError ? 'history' : 'other' } : {}),
-      } }),
-      acknowledge: (...args) => recordReminders.acknowledge(dataDir, ...args),
+      status: appRecordsStatus,
+      acknowledge: (...args) => { const result = recordReminders.acknowledge(dataDir, ...args); mobileBroker?.refreshPush(); return result; },
     },
     broadcast: () => broadcastRoom(), schedule: () => queueDispatcher?.schedule(),
   });
@@ -708,6 +716,7 @@ async function assertSpaceFileReader(context, roomId) {
 // ran out (2026-11-10). Everything sent to a window's page goes through here or through pushState.
 // The bell works its reminders out again when a block of the operations record is sealed or added, not by polling.
 function recordsChanged(force = false) {
+  mobileBroker?.refreshPush();
   let count = -1; try { count = backgroundControl?.archive?.manifest.blocks.length ?? -1; } catch { /* Read again next time. */ }
   if (!force && count === operationsBlocks && backgroundControl) return;
   operationsBlocks = count;
@@ -1669,6 +1678,9 @@ async function boot() {
             targets = new Set(metadata.sessions.filter(s => roomIds(s).includes(id)).map(s => s.id));
             // Restore acts on detached saved members too, not just today's roster.
             roomState.metadata(id).restoreMembers.forEach(member => targets.add(member));
+          } else {
+            const scope = backgroundOperation.maintenanceTargets(command, actor, metadata, client);
+            if (scope) { targets = new Set(scope.sessions); targetRooms = new Set(scope.rooms); }
           }
           if (targets) {
             targets.add(actor.id); // Keep the asking session's placement/connection guard as well as checkActor.
@@ -2015,20 +2027,19 @@ async function boot() {
   // no agent command (removed from the agent catalog below), and nothing here deletes a block.
   register('records', async (c, action, ...args) => {
     if (!isCurrentHumanContext(c)) throw uiError('error.records.personOnly');
-    const name = args[0], unavailable = { ...(operationsUnavailable ? { operations: operationsUnavailable } : {}), ...(stewardRecord?.failed ? { steward: stewardRecord.loadError ? 'history' : 'other' } : {}) };
+    const name = args[0];
     const status = async (force = false) => {
-      const records = recordReminders.status(dataDir, Date.now(), { unavailable });
       let temp;
       try { temp = await currentTempReminders().present(c, force); }
-      catch { if (!isCurrentHumanContext(c)) throw uiError('error.records.personOnly'); temp = { id: 'naw-temp-files', version: 0, directories: 0, bytes: 0, shown: true, anomaly: 'inspection-unavailable' }; }
-      return { ...records, temp, count: records.count + (temp.shown ? 1 : 0) };
+      catch { if (!isCurrentHumanContext(c)) throw uiError('error.records.personOnly'); temp = { id: 'naw-temp-files', version: 0, checkedAt: Date.now(), directories: 0, bytes: 0, shown: true, anomaly: 'inspection-unavailable' }; }
+      return { ...appRecordsStatus(null, temp), temp };
     };
     if (action === 'status' && (args.length === 0 || args.length === 1 && args[0] === true)) return status(args[0] === true);
     if (action === 'tempClean' && args.length === 1 && tempReminders) { const result = await tempReminders.clean(c, args[0]); return { ...await status(), result }; }
     if (action === 'tempAcknowledge' && args.length === 1 && tempReminders) { await tempReminders.acknowledge(c, args[0]); return status(); }
     if (action !== 'status' && action !== 'chooseFolder' && !recordReminders.RECORDS.includes(name)) throw uiError('error.records.unknown');
     try {
-      if (action === 'acknowledge' && args.length === 3) { recordReminders.acknowledge(dataDir, name, args[1], args[2]); return status(); }
+      if (action === 'acknowledge' && args.length === 3) { recordReminders.acknowledge(dataDir, name, args[1], args[2]); mobileBroker?.refreshPush(); return status(); }
       if (action === 'blocks' && args.length === 1) return recordReminders.blocks(dataDir, name, Date.now());
       if (action === 'chooseFolder' && args.length === 0) {
         const result = await showDialog(c, 'open', { title: displayText('records.export.chooseTitle'), properties: ['openDirectory', 'createDirectory'] });

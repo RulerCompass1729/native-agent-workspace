@@ -16,12 +16,48 @@ function privateDirectory(directory, create = false) {
   const expected=process.platform==='darwin'?path.resolve(directory).replace(/^\/(var|tmp)(?=\/|$)/,'/private/$1'):path.resolve(directory);
   if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== process.getuid() || s.mode & 0o077 || fs.realpathSync(directory) !== expected) throw Error('Unsafe temporary ownership store');
 }
+// Atomic one-byte O_APPEND writes provide a monotone generation, independent
+// of directory timestamp precision or enumeration position. Two counters also
+// make a registration already in progress visible to a new cleanup proof.
+const counterNames=['registration-started','registration-finished'], COUNTER_LIMIT=16*1024*1024;
+function counter(fd,file) {
+  const s=fs.fstatSync(fd,{bigint:true}),current=fs.lstatSync(file,{bigint:true});
+  for(const value of [s,current])if(!value.isFile()||value.isSymbolicLink()||value.uid!==BigInt(process.getuid())||value.mode&0o077n||value.nlink!==1n||value.size>BigInt(COUNTER_LIMIT))throw Error('Unsafe temporary registration counter');
+  if(s.dev!==current.dev||s.ino!==current.ino)throw Error('Temporary registration counter replaced');
+  return [s.dev,s.ino,s.uid,s.mode,s.size].map(String);
+}
+function openCounters(registryDir,create=false) {
+  const fds=[];
+  try {
+    for(const name of counterNames) {
+      const file=path.join(registryDir,name),flags=(create?fs.constants.O_RDWR|fs.constants.O_APPEND|fs.constants.O_CREAT:fs.constants.O_RDONLY)|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK;
+      const fd=fs.openSync(file,flags,0o600);fds.push(fd);counter(fd,file);
+    }
+    return fds;
+  } catch(error) {for(const fd of fds)fs.closeSync(fd);throw error;}
+}
+const registrationChanged=()=>Object.assign(Error('Temporary registration changed'),{code:'TEMP_CHANGED'});
+function generation(registryDir,create=false) {
+  const fds=openCounters(registryDir,create);
+  try {
+    const started=counter(fds[0],path.join(registryDir,counterNames[0])),finished=counter(fds[1],path.join(registryDir,counterNames[1]));
+    const again=counter(fds[0],path.join(registryDir,counterNames[0]));
+    if(JSON.stringify(started)!==JSON.stringify(again))throw registrationChanged();
+    if(started[4]!==finished[4])throw Error('Temporary registration is incomplete; cleanup unverified');
+    return {started,finished};
+  } finally {for(const fd of fds)fs.closeSync(fd);}
+}
+function advance(fd,file) {
+  if(Number(counter(fd,file)[4])>=COUNTER_LIMIT)throw Error('Temporary registration counter is full');
+  if(fs.writeSync(fd,Buffer.from([0]))!==1)throw Error('Temporary registration counter write failed');
+}
 // A directory timestamp is not a modification sequence (HFS+ is second-grained).
-// Stream receipt names and bounded content into the same digest Python checks.
-// Enumeration-order changes may conservatively refuse cleanup, never permit it.
+// Bind content as well, but never treat a single enumeration as proof that no
+// registration began: bracket it with the generation shared with Python.
 function revision(registryDir = defaultDirectory(), check = () => {}) {
   const deadline=performance.now()+10000;
   privateDirectory(registryDir);
+  const registered=generation(registryDir,true);
   const s=fs.lstatSync(registryDir,{bigint:true});
   if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==BigInt(process.getuid())||s.mode&0o077n)throw Error('Unsafe temporary ownership store');
   const hash=createHash('sha256'),directory=fs.opendirSync(registryDir);
@@ -32,7 +68,8 @@ function revision(registryDir = defaultDirectory(), check = () => {}) {
     hash.update(file.name+'\0'+bytes.length+'\0').update(bytes);
   }} finally {directory.closeSync();}
   check();
-  return {path:fs.realpathSync(registryDir),identity:[s.dev,s.ino,s.uid,s.mode,s.mtimeNs,s.ctimeNs].map(String),inventory:hash.digest('hex')};
+  if(JSON.stringify(generation(registryDir))!==JSON.stringify(registered))throw registrationChanged();
+  return {path:fs.realpathSync(registryDir),identity:[s.dev,s.ino,s.uid,s.mode,s.mtimeNs,s.ctimeNs].map(String),inventory:hash.digest('hex'),generation:registered};
 }
 function valid(r) {
   return r?.version === 1 && r.kind === 'naw-test' && typeof r.path === 'string' && path.isAbsolute(r.path) && /^[a-f0-9]{64}$/.test(r.id) &&
@@ -55,23 +92,31 @@ function entry(file) {
 }
 let creator;
 function register(directory, { registryDir = defaultDirectory(), now = Date.now, owner } = {}) {
-  const s=fs.lstatSync(directory), file=fs.realpathSync(directory);
-  if (!s.isDirectory() || s.isSymbolicLink() || s.uid!==process.getuid() || !roots().some(root=>file!==root && inside(root,file))) throw Error('Temporary ownership requires a created directory under a system temporary root');
-  owner ||= (creator ||= lockIdentity(process.pid));
-  if (!owner?.started) throw Error('Temporary creator identity unavailable');
-  const record={version:1,kind:'naw-test',path:file,uid:s.uid,dev:s.dev,ino:s.ino,createdAt:now(),owner,
-    creator:path.basename(process.argv[1] || 'NAW test')};
-  record.id=receiptId(record);
   privateDirectory(registryDir,true);
-  const target=path.join(registryDir,record.id+'.json');
-  const pending=path.join(registryDir,'.pending-'+require('node:crypto').randomUUID());
+  const counters=openCounters(registryDir,true);let began=false;
   try {
-    fs.writeFileSync(pending,JSON.stringify(record),{mode:0o600,flag:'wx'});
-    try {fs.linkSync(pending,target);}
-    catch(error) {if(error.code!=='EEXIST')throw error;
-      const prior=entry(target);if(prior.path!==file||prior.dev!==s.dev||prior.ino!==s.ino)throw Error('Temporary ownership receipt changed');}
-  } finally {try{fs.unlinkSync(pending);}catch(error){if(error.code!=='ENOENT')throw error;}}
-  return record.id;
+    // Publish before target/owner inspection can retain a pre-deletion view.
+    advance(counters[0],path.join(registryDir,counterNames[0]));began=true;
+    const s=fs.lstatSync(directory), file=fs.realpathSync(directory);
+    if (!s.isDirectory() || s.isSymbolicLink() || s.uid!==process.getuid() || !roots().some(root=>file!==root && inside(root,file))) throw Error('Temporary ownership requires a created directory under a system temporary root');
+    owner ||= (creator ||= lockIdentity(process.pid));
+    if (!owner?.started) throw Error('Temporary creator identity unavailable');
+    const record={version:1,kind:'naw-test',path:file,uid:s.uid,dev:s.dev,ino:s.ino,createdAt:now(),owner,
+      creator:path.basename(process.argv[1] || 'NAW test')};
+    record.id=receiptId(record);
+    const target=path.join(registryDir,record.id+'.json');
+    const pending=path.join(registryDir,'.pending-'+require('node:crypto').randomUUID());
+    try {
+      fs.writeFileSync(pending,JSON.stringify(record),{mode:0o600,flag:'wx'});
+      try {fs.linkSync(pending,target);}
+      catch(error) {if(error.code!=='EEXIST')throw error;
+        const prior=entry(target);if(prior.path!==file||prior.dev!==s.dev||prior.ino!==s.ino)throw Error('Temporary ownership receipt changed');}
+    } finally {try{fs.unlinkSync(pending);}catch(error){if(error.code!=='ENOENT')throw error;}}
+    return record.id;
+  } finally {
+    try {if(began)advance(counters[1],path.join(registryDir,counterNames[1]));}
+    finally {for(const fd of counters)fs.closeSync(fd);}
+  }
 }
 function read(registryDir = defaultDirectory()) {
   try { privateDirectory(registryDir); } catch(error) { if(error.code==='ENOENT') return []; throw error; }

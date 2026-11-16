@@ -25,13 +25,24 @@ test('an outer suite also forgets missing receipts from a retained inner suite',
  const result=spawnSync(process.execPath,['scripts/test.cjs',outer],{env:f.env,cwd:root,encoding:'utf8',timeout:30000});
  assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout,/TEMP GUARD: PASS/);assert.equal(storeCount(f.home),0,'Inner journals must not leave dangling receipts in the default store');
 });
-test('one scan heals over-limit orphan receipts and still offers the real old candidate',async t=>{
+test('one scan streams orphan receipts without the bounded reader and still offers the real old candidate',async t=>{
  const f=fixture(t),dataDir=path.join(f.base,'profile'),reg=path.join(f.base,'registry'),area=path.join(f.base,'area');fs.mkdirSync(dataDir,{mode:0o700});fs.mkdirSync(area);
- const own=require('../temp-ownership.cjs'),{TempReminders}=require('../temp-reminders.cjs'),now=Date.now(),old=now-8*86400000,dead={pid:2**30,started:'synthetic exited owner'};
+ const own=require('../temp-ownership.cjs'),now=Date.now(),old=now-8*86400000,dead={pid:2**30,started:'synthetic exited owner'};
  const dir=fs.mkdtempSync(path.join(area,'owned-'));fs.writeFileSync(path.join(dir,'data'),'synthetic');for(const p of [path.join(dir,'data'),dir])fs.utimesSync(p,new Date(old),new Date(old));
  own.register(dir,{registryDir:reg,owner:dead,now:()=>old});const record=own.read(reg)[0];
- for(let i=0;i<50001;i++){const r={...record,path:path.join(area,'gone-'+i),ino:record.ino+i+1};r.id=createHash('sha256').update(JSON.stringify([r.path,r.dev,r.ino,r.uid])).digest('hex');fs.writeFileSync(path.join(reg,r.id+'.json'),JSON.stringify(r),{mode:0o600});}
- assert.equal(fs.readdirSync(reg).length,50002);
- const manager=new TempReminders({dataDir,registryDir:reg,roots:[area],now:()=>now,isAlive:()=>false,isPerson:()=>true,inspect:async()=>({opened:[],mounted:[]})});
- const status=await manager.status();console.log('RECEIPT CLIFF before=50002 after='+fs.readdirSync(reg).length+' candidates='+status.directories+' anomaly='+status.anomaly);assert.equal(status.anomaly,null,'Inventory size must not prevent the missing-path sweep');assert.equal(status.directories,1);assert.equal(status.shown,true);assert.equal(fs.readdirSync(reg).length,1);assert.equal(own.read(reg)[0].path,dir);
+ // Cross multiple real 256-entry batches, without writing 50,001 files on every run.
+ const orphanCount=513;
+ const receiptCount=()=>fs.readdirSync(reg).filter(name=>/^[a-f0-9]{64}\.json$/i.test(name)).length;
+ for(let i=0;i<orphanCount;i++){const r={...record,path:path.join(area,'gone-'+i),ino:record.ino+i+1};r.id=createHash('sha256').update(JSON.stringify([r.path,r.dev,r.ino,r.uid])).digest('hex');fs.writeFileSync(path.join(reg,r.id+'.json'),JSON.stringify(r),{mode:0o600});}
+ assert.equal(receiptCount(),orphanCount+1);
+ // The old scan hit read()'s inventory limit before pruning. Guard it before
+ // loading the scanner, so even a captured read reference cannot hide that bug.
+ const boundedRead=t.mock.method(own,'read',()=>{throw Error('Scan must not use the bounded receipt reader');});
+ let status;
+ try {
+  const {TempReminders}=require('../temp-reminders.cjs');
+  const manager=new TempReminders({dataDir,registryDir:reg,roots:[area],now:()=>now,isAlive:()=>false,isPerson:()=>true,inspect:async()=>({opened:[],mounted:[]})});
+  status=await manager.status();
+ } finally {boundedRead.mock.restore();}
+ console.log('RECEIPT CLIFF before='+(orphanCount+1)+' after='+receiptCount()+' candidates='+status.directories+' anomaly='+status.anomaly+' boundedReads='+boundedRead.mock.callCount());assert.equal(status.anomaly,null,'Inventory size must not prevent the missing-path sweep');assert.equal(boundedRead.mock.callCount(),0,'Scan must remain independent of the bounded inventory reader');assert.equal(status.directories,1);assert.equal(status.shown,true);assert.equal(receiptCount(),1);assert.equal(own.read(reg)[0].path,dir);
 });

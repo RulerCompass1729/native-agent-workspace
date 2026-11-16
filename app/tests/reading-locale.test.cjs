@@ -46,7 +46,7 @@ class Element {
 }
 function fixture(messages, room = false, roomMetadata = {}, imageAPI = {}) {
   let language = 'zh', resolveCopy;
-  const notices = [], copies = [], calls = [], markdown = [], root = new Element();
+  const notices = [], copies = [], calls = [], markdown = [], displayReads = [], labelReads = [], root = new Element();
   const uiText = (key, params) => locale.format(language, key, params);
   const display = createBindings(uiText);
   const controls = new Map(['room-search', 'room-filter'].map(id => [id, { value: '' }]));
@@ -62,10 +62,10 @@ function fixture(messages, room = false, roomMetadata = {}, imageAPI = {}) {
     calls.push(key); throw Error('Locale refresh called product API: ' + key);
   } });
   const context = vm.createContext({ spaceName: room => room?.name, console, Intl, Date, uiText, node, document, state, api,
-    ui: { language: { getSnapshot: () => ({ active: language }) }, display, displayText: (raw, message) => locale.displayText(language, raw, message), createError: locale.createError, markdown(el, text) { markdown.push(text); el.textContent = text; }, clearMarkdown() {} },
+    ui: { language: { getSnapshot: () => ({ active: language }) }, display, displayText: (raw, message) => { displayReads.push(raw); return locale.displayText(language, raw, message); }, createError: locale.createError, markdown(el, text) { markdown.push(text); el.textContent = text; }, clearMarkdown() {} },
     window: { nativeWorkspaceLocale: locale, getSelection: () => selection }, current: () => session,
     button: (text, action, cls) => { const el = node('button', text, cls); el.onclick = action; return el; },
-    $: id => controls.get(id), roomMessageLabel: m => m.name || 'Original member',
+    $: id => controls.get(id), roomMessageLabel: m => { labelReads.push(m.id); return m.name || 'Original member'; },
     participantLabel: person => person.name, historicalParticipantLabel: (name, id) => name || id,
     roomThreads: { roots: new Map(), groups: new Map() },
     ResizeObserver: class { observe() {} disconnect() {} },
@@ -83,10 +83,43 @@ function fixture(messages, room = false, roomMetadata = {}, imageAPI = {}) {
   vm.runInContext('scheduleReading = () => {}; updateJump = () => {};', context);
   context.messageList(root, messages, room, room ? 'room' : session.id);
   const view = vm.runInContext('messageViews.values().next().value', context);
-  return { context, display, root, view, state, document, calls, copies, notices, markdown,
+  return { context, display, root, view, state, document, calls, copies, notices, markdown, displayReads, labelReads,
     controls, switch(value) { language = value; display.refresh(root); }, acceptCopy() { resolveCopy(); } };
 }
 const plain = value => JSON.parse(JSON.stringify(value));
+
+test('author resolution after a draw remains live for changed data and language', () => {
+  const rows = [{ id: 'live-author', role: 'user', name: 'FIRST_AUTHOR', text: 'ORIGINAL body' }];
+  const f = fixture(rows), entry = f.view.entries.get(rows[0].id), author = entry.heading.firstChild;
+  rows[0].name = 'UPDATED_AUTHOR'; f.display.refresh(f.root);
+  assert.equal(author.textContent, rows[0].name, 'A retained binding sees data changes without another messageList call');
+  assert.ok(entry.copyText.getAttribute('aria-label').includes(rows[0].name));
+  rows[0].name = ''; f.switch('en');
+  assert.equal(author.textContent, locale.format('en', 'reading.you'));
+  assert.equal(entry.copyText.getAttribute('aria-label'), 'Copy: input from You');
+  f.switch('zh'); assert.equal(author.textContent, locale.format('zh', 'reading.you'));
+  assert.equal(entry.body.textContent, 'ORIGINAL body'); assert.deepEqual(f.calls, []);
+});
+
+test('an interrupted draw releases the temporary author value', () => {
+  const rows = [{ id: 'interrupted-author', role: 'assistant', name: 'INITIAL_AUTHOR', text: 'Initial body' }], f = fixture(rows);
+  rows[0].name = 'BEFORE_PAINT'; rows[0].text = 'Updated body';
+  f.context.ui.markdown = () => { throw Error('Synthetic paint failure'); };
+  assert.throws(() => f.context.messageList(f.root, rows, false, f.state.sessions[0].id), /Synthetic paint failure/);
+  const author = f.view.entries.get(rows[0].id).heading.firstChild;
+  rows[0].name = 'AFTER_PAINT'; f.display.refresh(f.root);
+  assert.equal(author.textContent, rows[0].name, 'Retained labels remain live after a failed draw');
+});
+
+for (const room of [false, true]) test(`one ${room ? 'shared' : 'conversation'} row resolves its author once per synchronous draw`, () => {
+  const rows = [{ id: 'counted-author', role: room ? 'human' : 'user', recipientId: 'session-A', name: 'COUNTED_AUTHOR', text: 'Synthetic original body', time: 1000 }];
+  const f = fixture(rows, room), reads = () => room ? f.labelReads.filter(id => id === rows[0].id).length : f.displayReads.filter(raw => raw === rows[0].name).length;
+  assert.equal(reads(), 1, 'Heading and accessible action labels share one author resolution');
+  f.labelReads.length = f.displayReads.length = 0;
+  f.context.messageList(f.root, rows, room, room ? 'room' : f.state.sessions[0].id);
+  assert.equal(reads(), 1, 'An unchanged redraw resolves the current author once');
+  assert.deepEqual(f.calls, []);
+});
 
 test('typed own notices copy their visible language while retaining original records and clear stale metadata', async () => {
   const own = locale.createNotice('notice.legacyOffline'), rows = [{ id: 'own-notice', kind: 'notice', role: 'system', ...own }], original = rows[0].text;

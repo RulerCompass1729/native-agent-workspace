@@ -29,18 +29,20 @@ class MobileBroker {
   #access; #root; #scope; #client = null; #epoch = 0; #csrf = null; #changed;
   #contexts = new Map(); #requests = new Map();
   #desktop; #human; #workspaceGrant = null; #workspaceRequests = new Map();
+  #push = null; #pushOptions;
   // changed() runs after the phone pairs or logs out, so the app can close its listener when nothing stays open.
-  constructor(root, { exclusive, changed, desktop, onHumanInput = () => {} } = {}) {
+  constructor(root, { exclusive, changed, desktop, onHumanInput = () => {}, pushOptions = {} } = {}) {
     this.#access = new MobileAccess(root, { exclusive });
     this.#changed = typeof changed === 'function' ? changed : () => {};
     this.#root = this.#access.root;
     this.#desktop = desktop || null;
     this.#human = onHumanInput;
+    this.#pushOptions = pushOptions;
     // WorkspaceClient shares human boundaries by the exact app scope string.
     // Keep that spelling while separately verifying its canonical authority.
     this.#scope = root;
   }
-  #forget() { this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); }
+  #forget() { this.#push?.close(); this.#push = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); }
   #disconnect() { const client = this.#client; this.#client = null; client?.close(); }
   #bound() {
     const client = this.#client;
@@ -164,6 +166,34 @@ class MobileBroker {
     this.#workspaceState(auth);
     return result;
   }
+  #pushAuthority() {
+    try {
+      this.#bound();
+      if (this.#access.closed || this.#access.disabledMarker()) return null;
+      const s = this.#access.load();
+      if (!s.enabled || !s.device || s.device.until <= this.#access.time() ||
+          this.#workspaceGrant?.generation !== s.generation || this.#workspaceGrant.value.records !== true) return null;
+      return fingerprint([s.issuer, s.generation, s.device.id, s.device.until]);
+    } catch { return null; }
+  }
+  pushInfo(auth) {
+    this.#workspaceState(auth);
+    if (!this.#pushAuthority()) throw denied();
+    this.#push ||= new (require('./mobile-push.cjs').MobilePush)({ ...this.#pushOptions,
+      authority: () => this.#pushAuthority(), count: () => this.#desktop.records.status().count });
+    return this.#push.configuration();
+  }
+  pushAction(auth, value) {
+    this.#workspaceState(auth, true);
+    if (exact(value, ['action']) && value.action === 'unsubscribe') {
+      this.#push?.close(); this.#push = null;
+      return { enabled: false, state: 'off', lastSubmittedAt: null };
+    }
+    if (!exact(value, ['action', 'subscription']) || value.action !== 'subscribe') throw denied();
+    this.pushInfo(auth); this.#push.subscribe(value.subscription); this.refreshPush();
+    return this.#push.status();
+  }
+  refreshPush() { return this.#push?.refresh(); }
   async workspaceAction(auth, value) {
     this.#workspaceState(auth, true);
     if (!value || typeof value !== 'object' || Array.isArray(value) || !uuid(value.requestId)) throw denied();

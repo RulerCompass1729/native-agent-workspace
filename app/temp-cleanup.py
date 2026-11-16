@@ -8,16 +8,35 @@ import json, os, stat, sys, subprocess, re, hashlib, time
 
 class RegistryChanged(Exception): pass
 
+def registration_generation(fd):
+    descriptors=[]
+    def counter(source,name):
+        held=os.fstat(source); current=os.stat(name,dir_fd=fd,follow_symlinks=False)
+        for s in (held,current):
+            if not stat.S_ISREG(s.st_mode) or s.st_uid!=os.getuid() or s.st_mode&0o077 or s.st_nlink!=1 or s.st_size>16*1024*1024:
+                raise ValueError('unsafe registration counter')
+        if (held.st_dev,held.st_ino)!=(current.st_dev,current.st_ino): raise RegistryChanged()
+        return [str(held.st_dev),str(held.st_ino),str(held.st_uid),str(held.st_mode),str(held.st_size)]
+    try:
+        names=('registration-started','registration-finished')
+        for name in names: descriptors.append(os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd))
+        started=counter(descriptors[0],names[0]); finished=counter(descriptors[1],names[1])
+        if started!=counter(descriptors[0],names[0]) or started[4]!=finished[4]: raise RegistryChanged()
+        return {'started':started,'finished':finished}
+    finally:
+        for source in descriptors: os.close(source)
+
 def registry_current(fd, proof):
     try:
+        if registration_generation(fd)!=proof['generation']: raise RegistryChanged()
         held=os.fstat(fd); current=os.lstat(proof['path'])
         observed=[str(held.st_dev),str(held.st_ino),str(held.st_uid),str(held.st_mode),str(held.st_mtime_ns),str(held.st_ctime_ns)]
         if not stat.S_ISDIR(current.st_mode) or current.st_uid!=os.getuid() or current.st_mode&0o077 or \
             (current.st_dev,current.st_ino)!=(held.st_dev,held.st_ino) or observed!=proof['identity']:
             raise RegistryChanged()
         digest=hashlib.sha256(); deadline=time.monotonic()+5
-        # Constant retained memory, no whole-store list or timestamp precision
-        # assumption. Different enumeration order can only refuse a deletion.
+        # Generation checks bracket the real iterator: a legal registration
+        # behind its cursor cannot be mistaken for an unchanged inventory.
         with os.scandir(fd) as entries:
             for entry in entries:
                 if time.monotonic()>=deadline: raise ValueError('registry proof budget exhausted')
@@ -30,7 +49,7 @@ def registry_current(fd, proof):
                     content=receipt.read(8193)
                     if len(content)>8192 or len(content)!=s.st_size: raise ValueError('registry entry changed')
                 digest.update((entry.name+'\0'+str(len(content))+'\0').encode('ascii')); digest.update(content)
-        if digest.hexdigest()!=proof['inventory']: raise RegistryChanged()
+        if registration_generation(fd)!=proof['generation'] or digest.hexdigest()!=proof['inventory']: raise RegistryChanged()
     except OSError: raise RegistryChanged()
 
 def open_directory_chain(directory):
@@ -84,6 +103,8 @@ def main():
             not isinstance(proof['identity'],list) or len(proof['identity'])!=6 or not all(isinstance(v,str) for v in proof['identity']) or \
             not isinstance(proof.get('inventory'),str) or not re.fullmatch(r'[a-f0-9]{64}',proof['inventory']):
             raise ValueError('invalid registry snapshot')
+        if not isinstance(proof.get('generation'),dict) or any(not isinstance(proof['generation'].get(k),list) or len(proof['generation'][k])!=5 or not all(isinstance(v,str) for v in proof['generation'][k]) for k in ('started','finished')):
+            raise ValueError('invalid registration generation')
         try: registry_fd=open_directory_chain(proof['path'])
         except OSError: raise RegistryChanged()
         registry_current(registry_fd,proof)

@@ -272,6 +272,19 @@ class WorkspaceClient extends EventEmitter {
     }));
     return this.snapshot(roomId);
   }
+  // The consent fingerprint and the actual control route share these branch
+  // conditions. This describes side effects; it never grants control itself.
+  controlPauseScope(method, args, target = this.route(args[0])) {
+    if (method === 'interrupt') return 'all';
+    if (method === 'input') return isTerminalResponse(args[1]) ? 'target' : 'all';
+    if (method === 'claim' && args[2] === 'free') return 'target';
+    if (!['claim', 'terminal'].includes(method)) return null;
+    const record = target.state.sessions.find(s => s.id === args[0]);
+    const owned = target.state.runtimeVersion === '0.1.0-alpha.2'
+      ? record?.owner === target.state.owner
+      : typeof target.state.owner === 'string' && record?.owner === target.state.owner;
+    return owned ? 'target' : 'all';
+  }
   async pauseExcept(target, roomId, participant) {
     // Run intent is shared by every window and registered before its RPC, not
     // inferred from a delayed display snapshot. Use the originating connection
@@ -829,10 +842,11 @@ class WorkspaceClient extends EventEmitter {
     if (legacy && ['claim', 'terminal', 'interrupt'].includes(method)) {
       const expected = { ...target.state.sessions.find(s => s.id === args[0]) };
       const owned = expected.owner === target.state.owner;
+      const pauseScope = this.controlPauseScope(method, args, target);
       const ownerRevision = this.control.legacyOwners.get(args[0])?.revision;
       if (method === 'interrupt' && !owned) throw uiError("error.client.takeControlBeforeInterrupt");
       const operation = () => this.legacyMutation(target, async () => {
-        if (!owned || method === 'interrupt') await this.pauseExcept(null);
+        if (pauseScope === 'all') await this.pauseExcept(null);
         guard(); await this.refresh(roomId); guard(); this.authorizeOperation?.(method, args, roomId);
         const current = target.state.sessions.find(s => s.id === args[0]);
         if (!current || current.owner !== expected.owner || current.nativeId !== expected.nativeId || current.pid !== expected.pid
@@ -937,9 +951,9 @@ class WorkspaceClient extends EventEmitter {
     }
     if (['send', 'forward'].includes(method)) assertSubmission(target.state, [args[0]]);
     if (method === 'forward') assertSharing(target.state, [args[0]]);
-    const ownView = ['claim', 'terminal'].includes(method) && typeof target.state.owner === 'string' && target.state.sessions.find(s => s.id === args[0])?.owner === target.state.owner;
+    const ownView = ['claim', 'terminal'].includes(method) && this.controlPauseScope(method, args, target) === 'target';
     if (ownView) return target.client.call(method, ...args);
-    if (['join', 'claim', 'terminal', 'send', 'interrupt', 'forward', 'stop', 'resume'].includes(method) || (method === 'input' && !isTerminalResponse(args[1]))) return this.intervene(async () => {
+    if (['join', 'claim', 'terminal', 'send', 'interrupt', 'forward', 'stop', 'resume'].includes(method) || (method === 'input' && this.controlPauseScope(method, args, target) === 'all')) return this.intervene(async () => {
       await this.pauseExcept(null, scoped && method === 'forward' ? roomId : undefined, args[0]); guard(); contextGuard(); this.authorizeOperation?.(method, args, roomId); return this.invoke(target, roomId, method, args, false, sharedInputProofs);
     }, args[0], false, false, scoped && method === 'forward' ? roomId : undefined);
     return target.client.call(method, ...args);

@@ -54,6 +54,25 @@ function fixture() {
   return { $, state, people, root, calls, layoutWrites, document, context, load, run: code => vm.runInContext(code, context), refresh(value) { language = value; display.refresh(root); } };
 }
 
+test('unchanged sidebar name, short ID and time skip text writes while changed values repaint', () => {
+  const f = fixture(); f.run('renderSessions()');
+  const row = f.context.sessionRows.get(f.people[0].id), writes = { name: 0, shortId: 0, time: 0 };
+  const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'textContent');
+  for (const field of Object.keys(writes)) Object.defineProperty(row[field], 'textContent', {
+    get() { return descriptor.get.call(this); },
+    set(value) { writes[field]++; descriptor.set.call(this, value); },
+  });
+  for (let i = 0; i < 50; i++) f.run('renderSessions()');
+  assert.deepEqual(writes, { name: 0, shortId: 0, time: 0 });
+  f.people[0].name = 'Changed original name';
+  f.context.sessionShortId = () => 'changed-id'; f.context.sessionActivityTime = () => 'changed time';
+  f.run('renderSessions()');
+  assert.deepEqual(writes, { name: 1, shortId: 1, time: 1 });
+  assert.equal(row.name.textContent, 'Changed original name');
+  assert.equal(row.shortId.textContent, 'changed-id'); assert.equal(row.time.textContent, 'changed time');
+  assert.deepEqual(f.calls, []);
+});
+
 for (const [name, rooms, hidden] of [
   ['no stored spaces', [], true],
   ['untouched hidden default space', [{ id: 'shared', name: 'Untouched', archived: false }], true],

@@ -89,16 +89,22 @@ async function main() {
   for (const size of [[1240, 820], [850, 600]]) await capture(size, 'waiting');
   // Assertions at 850x600.
   await win.evaluate(w => w.setContentSize(850, 600)); await delay(600);
+  // Progressive layouts initially show only one card here. Measure all six names.
+  const shownNames = page.locator('#collaboration-overview .collaboration-member-unit .collaboration-name-text:visible');
+  for (let i = 0; i < ids.length && await shownNames.count() < ids.length; i++) {
+    await page.locator('#collaboration-overview .collaboration-show-more').click();
+  }
+  await until(async () => await shownNames.count() === ids.length, 'All six member cards shown');
   const state = await page.evaluate(() => {
     const rect = s => { const r = document.querySelector(s)?.getBoundingClientRect(); return r ? { left: r.left, right: r.right, width: r.width } : null; };
     const messageButtons = () => [...document.querySelectorAll('.message .background-buttons button')];
     const cancel = messageButtons().find(b => b.textContent === '取消');
-    const confirm = messageButtons().find(b => b.textContent === '确认此操作');
+    const confirm = messageButtons().find(b => b.classList.contains('primary'));
     return {
       stream: rect('#activity-stream'), readers: rect('.collaboration-readers'),
       whiteSpace: confirm ? getComputedStyle(confirm).whiteSpace : null,
       confirmH: confirm?.clientHeight ?? null, cancelH: cancel?.clientHeight ?? null,
-      namesOverflow: [...document.querySelectorAll('.collaboration-name-text')].map(t => t.scrollWidth > t.clientWidth)
+      names: [...document.querySelectorAll('#collaboration-overview .collaboration-member-unit .collaboration-name-text')].map(t => ({ name: t.textContent.trim(), width: t.clientWidth, content: t.scrollWidth }))
     };
   });
   // 1. The confirmation button stays on one line (no taller than the single-line cancel button).
@@ -108,7 +114,8 @@ async function main() {
   // 2. The shared-records panel does not cover the member grid.
   assert.ok(state.readers.right <= state.stream.left + 1, `panel overlaps grid (grid right ${state.readers.right}, panel left ${state.stream.left})`);
   // 3. Member names are not ellipsized, so each member stays distinguishable.
-  assert.ok(state.namesOverflow.length > 0 && state.namesOverflow.every(Boolean) === false, `member names truncated: ${JSON.stringify(state.namesOverflow)}`);
+  assert.equal(state.names.length, ids.length, 'Every member name is measured');
+  for (const name of state.names) assert.ok(name.width > 0 && name.content <= name.width, `member name truncated or hidden: ${name.name} (${name.content}px in ${name.width}px)`);
   const stats = await fixture('stats');
   assert.equal(stats.modelCalls, 0); assert.equal(stats.nativeProcesses, 0);
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focused: w.isFocused() })));

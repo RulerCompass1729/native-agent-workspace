@@ -73,6 +73,33 @@ test('each change sends only the messages after the first one that differs, and 
   assert.equal(r.rebuilt.sessions[0].state, 'working'); assert.equal(r.rebuilt.version, 2);
 });
 
+test('a carried digest list needs no element reads while a newly digested edit still compares and rebuilds exactly', () => {
+  let reads = 0;
+  const live = liveState(), messages = Array.from({ length: 2000 }, (_, i) => message('b' + i, 'unchanged history'));
+  // Observe work on the encoder's digest array, without replacing the encoder
+  // or its comparison: Array.map's result keeps its usual array semantics.
+  Object.defineProperty(messages, 'map', { value(callback) {
+    return new Proxy(Array.prototype.map.call(this, callback), { get(target, key, receiver) {
+      if (typeof key === 'string' && /^(0|[1-9]\d*)$/.test(key)) reads++;
+      return Reflect.get(target, key, receiver);
+    } });
+  } });
+  live.sessions[1].messages = messages;
+  const encoder = createStateEncoder(text => text, () => 0);
+  let rebuilt = step(encoder, null, live).rebuilt;
+  live.sessions[0].messages.push(message('new-a', 'only A changed')); reads = 0;
+  let r = step(encoder, rebuilt, live, new Set(['a'])); rebuilt = r.rebuilt;
+  assert.equal(reads, 0, 'unchanged B carries the same digest array; its 2000 elements need no comparison');
+  assert.equal(kept(r.delta, 'sessions', 'b'), messages.length);
+  // Changed records get new digests, even if they share the original messages
+  // array: never infer unchanged content from that live array's identity.
+  messages[0].text = 'edited in place'; reads = 0;
+  r = step(encoder, rebuilt, live, new Set(['b']));
+  assert.ok(reads > 0, 'new digests still compare to the previous content');
+  assert.equal(kept(r.delta, 'sessions', 'b'), undefined);
+  assert.equal(r.rebuilt.sessions[1].messages[0].text, 'edited in place');
+});
+
 test('a long history that grows by one message goes as that message, not the history', () => {
   const encoder = createStateEncoder(), live = liveState();
   live.sessions[0].messages = Array.from({ length: 500 }, (_, i) => message(`h${i}`, 'x'.repeat(2000)));

@@ -153,7 +153,7 @@ test('the page has the entry above everything else, the mark before the title an
   // The row is the same row any session has, in the entry's place; it is not dragged and not reordered.
   assert.ok(renderer.includes("if (butler) { const key = `steward:${butler.id}`; occurrences.unshift({ record: butler, key, group: null, container: $('steward-slot'), steward: true }); keys.add(key); }"));
   assert.ok(renderer.includes("if (steward) element.classList.add('steward-row'); else { draggableSession(link, record.id, true, group || ''); sidebarDropRow(element, record.id, group); }"));
-  assert.ok(renderer.includes("if (steward) { ui.display.text(row.name, 'butler.name'); row.shortId.textContent = ''; ui.display.computed(row.status, 'text', () => uiText('steward.rowStatus', { name: record.name, status: sidebarPresentation(record).compact })); }"));
+  assert.ok(renderer.includes("if (steward) { ui.display.text(row.name, 'butler.name'); if (row.shortId.textContent !== '') row.shortId.textContent = ''; ui.display.computed(row.status, 'text', () => uiText('steward.rowStatus', { name: record.name, status: sidebarPresentation(record).compact })); }"));
   assert.ok(renderer.includes("...(index >= 0 && index < visible.length - 1 ? [{ id: 'down'"), 'A row that is not in the list is not offered "move down"');
   assert.ok(renderer.includes("const roomItems = isSteward && !window.nativeWorkspaceSpaces.roomIds(record).length ? [] :"));
   // Both menus offer the same items and carry them out the same way; the butler's header has no "join".

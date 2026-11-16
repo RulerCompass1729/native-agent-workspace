@@ -752,7 +752,7 @@ class BackgroundControl {
   async perform(actor, args, context, valid, approved) {
     const key = this.key(actor), handler = this.handlers.get(args.method);
     const checkDeadline = () => { if (approved && this.now() >= approved.expiresAt) throw require('./ui-errors.cjs').uiError('error.background.confirmationExpired'); };
-      let state, value, error, confirmation, delivery, refusal, originCheck, preconditionError, disposition, reason, handlerEntered = false;
+      let state, value, error, confirmation, delivery, refusal, originCheck, preconditionError, standingFailure, disposition, reason, handlerEntered = false;
       try {
         await valid();
         checkDeadline();
@@ -773,7 +773,14 @@ class BackgroundControl {
             }
             // A read the person already answered keeps that answer: it is theirs, released as an approved read.
             const unasked = !approved && action === 'readConversation' && this.unasked(actor, args, action, context) === true;
-            const standing = !approved && !unasked ? this.standing(actor, args, context) : null;
+            let standing = null;
+            try { if (!approved && !unasked) standing = this.standing(actor, args, context); }
+            catch (failure) {
+              // Reserving standing usage precedes the handler. A prior handler's
+              // possible effects must never acquire a safe-to-retry receipt.
+              if (!row.handlerStarted) standingFailure = { value: failure };
+              throw failure;
+            }
             if (!unasked && !standing) {
               const answer = await dialog(context, 'message', options);
               if (answer.response !== 1) return { cancelled: true };
@@ -822,6 +829,11 @@ class BackgroundControl {
           disposition = unknown ? undefined : e.uiMessage.key === 'error.background.confirmationExpired' ? 'expired' : 'invalidated';
           reason = unknown ? 'temporarily-unavailable' : disposition === 'expired' ? 'deadline-elapsed' : 'state-changed';
           state = unknown ? 'confirmation-required' : 'not-executed'; confirmation = unknown ? approved.confirmation : undefined;
+        }
+        else if (standingFailure && Object.is(e, standingFailure.value) && !handlerEntered) {
+          refusal = { ...refusalDetails('standing-authorization-unavailable'), retryWithNewOperationId: true,
+            retryHint: 'The operation did not execute. Retry with a new operation_id.' };
+          state = refusal.state; error = typeof e?.message === 'string' ? e.message.slice(0, 2048) : 'The operation did not execute.';
         }
         else if (preconditionError && e === preconditionError) { refusal = refusalDetails(e.reason); state = refusal.state; error = e.message.slice(0, 2048); }
         else if (e instanceof ConfirmationRequired && e.confirmation?.kind === 'message') {

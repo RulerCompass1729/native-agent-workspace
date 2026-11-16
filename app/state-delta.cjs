@@ -74,7 +74,9 @@ function createStateEncoder(hash = digest, clock = Date.now) {
           if (!deltas.has(base)) deltas.set(base, encodeFrame({ event: 'state', delta: 1, data: mapRecords(snapshot, (key, record) => {
             const after = now.get(key), earlier = before.get(key);
             if (!after || !earlier || !record || !Array.isArray(record.messages)) return record;
-            let keep = 0;
+            // Carried digests are the same immutable array; this says nothing
+            // about the identity of the live, possibly edited message array.
+            let keep = after === earlier ? after.length : 0;
             while (keep < after.length && keep < earlier.length && after[keep] === earlier[keep]) keep++;
             return keep ? { ...record, messages: record.messages.slice(keep), messagesKeep: keep } : record;
           }) }));

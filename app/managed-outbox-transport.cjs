@@ -83,7 +83,7 @@ async function openManagedCall(entry, caller, identity, args, signal, control = 
     link.bind(value);
     const s = value.sender;
     if (s?.id !== caller.id || s.nativeId !== identity.nativeId || s.provider !== (control ? caller.provider : 'codex') || !token(s.name)) throw outboxError('provenance-unconfirmed', 'binding');
-    return { args, sender: { id: s.id, nativeId: s.nativeId, provider: s.provider, name: s.name },
+    return { args, sender: { id: s.id, nativeId: s.nativeId, provider: s.provider, name: s.name }, cleanupTimeoutMs: WAIT.close,
       valid: () => link.live && !link.closed && !signal?.aborted, refresh: () => link.check(), close: () => link.close() };
   } catch (error) { return cleanupFailure(link, error); }
 }

@@ -3551,10 +3551,10 @@ function renderSessions() {
     const moreParams = () => ({ name: record.name, id: sessionShortId(record.id), space: group ? ` · ${spaceName(spaceRecord(group))}` : '' }); ui.display.attribute(row.more, 'aria-label', 'sidebar.sessionActions', moreParams); ui.display.attribute(row.more, 'title', 'sidebar.sessionActions', moreParams); row.more.disabled = renameTarget?.id === record.id;
     ui.display.computed(row.more, 'aria-description', () => sidebarDetails(record).join(' · '));
     // The butler's row is named for what it is; which session it is stands on the line below, before its state.
-    if (steward) { ui.display.text(row.name, 'butler.name'); row.shortId.textContent = ''; ui.display.computed(row.status, 'text', () => uiText('steward.rowStatus', { name: record.name, status: sidebarPresentation(record).compact })); }
-    else { row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); ui.display.computed(row.status, 'text', () => sidebarPresentation(record).compact); }
+    if (steward) { ui.display.text(row.name, 'butler.name'); if (row.shortId.textContent !== '') row.shortId.textContent = ''; ui.display.computed(row.status, 'text', () => uiText('steward.rowStatus', { name: record.name, status: sidebarPresentation(record).compact })); }
+    else { if (row.name.textContent !== record.name) row.name.textContent = record.name; const shortId = sessionShortId(record.id); if (row.shortId.textContent !== shortId) row.shortId.textContent = shortId; ui.display.computed(row.status, 'text', () => sidebarPresentation(record).compact); }
     row.element.classList.toggle('same-name', repeated.has(record.id));
-    row.time.textContent = sessionActivityTime(record);
+    const timeText = sessionActivityTime(record); if (row.time.textContent !== timeText) row.time.textContent = timeText;
     row.dot.className = `state-dot ${presentation.tone}${presentation.workTone ? ' ' + presentation.workTone : ''}`; row.dot.dataset.nativeState = record.state;
     row.marker.textContent = presentation.marker; row.element.classList.toggle('has-status-detail', presentation.detail);
     const index = positions.get(container) || 0, slot = container.children[index]; if (slot !== row.element) container.insertBefore(row.element, slot || null); positions.set(container, index + 1);
@@ -3734,6 +3734,7 @@ function renderInterfaceLanguage() {
   const entry = $('setup-button');
   entry.querySelector('.rail-label').textContent = uiText('common.settings');
   entry.setAttribute('aria-label', uiText('common.settings')); entry.title = uiText('common.settings');
+  activityStream?.render();
 }
 async function changeInterfaceLanguage(value) {
   if (changingLanguage) { renderInterfaceLanguage(); return; }
