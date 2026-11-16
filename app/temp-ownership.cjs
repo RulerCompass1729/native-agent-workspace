@@ -16,6 +16,14 @@ function privateDirectory(directory, create = false) {
   const expected=process.platform==='darwin'?path.resolve(directory).replace(/^\/(var|tmp)(?=\/|$)/,'/private/$1'):path.resolve(directory);
   if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== process.getuid() || s.mode & 0o077 || fs.realpathSync(directory) !== expected) throw Error('Unsafe temporary ownership store');
 }
+// register() atomically links a new receipt through this private directory.
+// Bind its identity and nanosecond change times, without loading the inventory.
+function revision(registryDir = defaultDirectory()) {
+  privateDirectory(registryDir);
+  const s=fs.lstatSync(registryDir,{bigint:true});
+  if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==BigInt(process.getuid())||s.mode&0o077n)throw Error('Unsafe temporary ownership store');
+  return {path:fs.realpathSync(registryDir),identity:[s.dev,s.ino,s.uid,s.mode,s.mtimeNs,s.ctimeNs].map(String)};
+}
 function valid(r) {
   return r?.version === 1 && r.kind === 'naw-test' && typeof r.path === 'string' && path.isAbsolute(r.path) && /^[a-f0-9]{64}$/.test(r.id) &&
     ['uid','dev','ino'].every(k=>Number.isSafeInteger(r[k]) && r[k]>=0) && r.uid===process.getuid() && Number.isFinite(r.createdAt) &&
@@ -90,4 +98,4 @@ async function pruneMissing(registryDir = defaultDirectory()) {
   }
   return removed;
 }
-module.exports={register,read,batches,forget,forgetMissing,pruneMissing,defaultDirectory,roots,inside};
+module.exports={register,read,batches,forget,forgetMissing,pruneMissing,defaultDirectory,roots,inside,revision};

@@ -61,14 +61,14 @@ async function tree(record,roots,system,protectedPaths,now,check=()=>{}) {
   if(JSON.stringify(ident(await fs.promises.lstat(file,{bigint:true})))!==JSON.stringify(entries[0].identity)) throw changed();
   return {record,entries,bytes};
 }
-function remove(snapshot,roots) {
+function remove(snapshot,roots,registry) {
   return new Promise(resolve=>{
     const python=pythonExecutable(); if(!python) return resolve({removed:false,bytes:0});
     const child=execFile(python,[path.join(__dirname,'temp-cleanup.py')],{timeout:30000,maxBuffer:8192},(error,stdout)=>{
       try { if(error) throw error; const r=JSON.parse(stdout); if(typeof r.removed!=='boolean'||!Number.isSafeInteger(r.bytes)||r.bytes<0) throw Error('Invalid removal receipt'); resolve(r); }
       catch { resolve({removed:false,bytes:0}); }
     });
-    child.stdin.on('error',()=>{}); child.stdin.end(JSON.stringify({path:snapshot.record.path,owner:snapshot.record.owner,roots,entries:snapshot.entries}));
+    child.stdin.on('error',()=>{}); child.stdin.end(JSON.stringify({path:snapshot.record.path,owner:snapshot.record.owner,roots,entries:snapshot.entries,registry}));
   });
 }
 class TempReminders {
@@ -155,6 +155,7 @@ class TempReminders {
         try {
           // Independently inspect each directory at execution; never extend a grant
           // to a newly discovered candidate or trust a cached lsof/mount result.
+          const registry=ownership.revision(this.registryDir);
           let record=null,liveOverlap=false;
           for await(const batch of ownership.batches(this.registryDir,check)) for(const r of batch) {
             check();
@@ -171,9 +172,12 @@ class TempReminders {
           if(!current) {result.skipped++;result.reasons.busy++;continue;}
           if(JSON.stringify(current.entries)!==JSON.stringify(before.entries)) {result.skipped++;result.reasons.changed++;continue;}
           this.person(c);check();
-          const receipt=await remove(current,this.roots); result.bytes+=receipt.bytes;
+          // No asynchronous gap between the final registry check and dispatch.
+          // Python carries this same proof across its own system inspection.
+          if(JSON.stringify(ownership.revision(this.registryDir))!==JSON.stringify(registry))throw changed();
+          const receipt=await remove(current,this.roots,registry); result.bytes+=receipt.bytes;
           if(receipt.removed) {result.cleaned++;try{ownership.forget(record.id,this.registryDir);}catch{result.bookkeepingFailed=true;}}
-          else {result.skipped++;result.reasons.unverified++;}
+          else {result.skipped++;result.reasons[receipt.registryChanged===true&&receipt.untouched===true&&receipt.bytes===0?'changed':'unverified']++;}
         } catch(error) {result.skipped++;result.reasons[error.code==='TEMP_CHANGED'?'changed':'unverified']++;}
       }
       try {this.save({...this.cached,result}); await this.status(true,check);}
