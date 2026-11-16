@@ -28,7 +28,7 @@
     const work = fleet.backgroundWork(record, live, text);
     const base = record.state === 'idle' && (work.count || work.unconfirmed) ? work.text : text(Object.hasOwn(labels, record.state) ? labels[record.state] : 'collab.stateMissing');
     const question = record.approval?.method === 'item/tool/requestUserInput';
-    const state = !live ? text('collab.connectionUnknown') : record.nativeContextPending ? text('collab.contextUnknown') : record.claudeQuestion || question && record.approval.params?.isBlocking !== false
+    const state = !live ? text('collab.connectionUnknown') : record.nativeTerminalDialog ? text('state.terminalDialog', { title: record.nativeTerminalDialog.title }) : record.nativeContextPending ? text('collab.contextUnknown') : record.claudeQuestion || question && record.approval.params?.isBlocking !== false
       ? text('state.question') : question ? text('collab.hasQuestion', { state: base }) : base;
     const pending = record.nativeApproval?.requests?.length || record.approvals?.length || 0;
     // Short form of the child facts: say what is running or unknown (T-145); the full text keeps 部分观察.

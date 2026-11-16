@@ -135,6 +135,7 @@ const NOT_SENT_KEYS = [
   'error.workspace.handoffExpired',
   'error.backgroundMessagesDisabled',
   'error.queue.personTyping',
+  'error.queue.terminalDialog',
   'error.workspace.claudeSubmitDisconnected',
   'error.workspace.nativeFirstMessageRequired',
   'error.nativeInterruptPending',
@@ -394,6 +395,9 @@ function sessionReady(session, wakePolicy) {
   }
   if (session.wakeDisabled) {
     return { ready: false, reason: 'paused' };
+  }
+  if (session.nativeTerminalDialog) {
+    return { ready: false, reason: 'native-terminal-dialog' };
   }
   if (session.state !== 'idle') {
     return { ready: false, reason: 'not-idle' };
@@ -2999,7 +3003,7 @@ class QueueDispatcher {
       } else if (notSent(error)) {
         // A prompt the person left unsent there does not use up the item's attempts: it waits.
         let attempts = NOT_SENT_ATTEMPTS;
-        if (errorKey(error) === NATIVE_DRAFT_KEY) {
+        if ([NATIVE_DRAFT_KEY, 'error.queue.terminalDialog'].includes(errorKey(error))) {
           attempts = Infinity;
         }
         this.roomState.queueRequeue(room.id, item.id, error.message || 'not-sent', attempts, name);
