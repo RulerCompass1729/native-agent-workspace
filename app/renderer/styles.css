@@ -1155,3 +1155,7 @@ dialog .steward-record-wake input[type=checkbox] { width: auto; margin: 0; }
 .compact-session-surface #session-files { margin-left: auto; }
 .compact-session-surface .conversation-pane-toolbar { justify-content: flex-start; }
 .compact-session-surface .native-pane-actions { margin-left: auto; }
+
+/* Only the hovered, verified text range changes while Command is held. */
+.naw-markdown.cmd-path-hover, .naw-markdown.cmd-path-hover code { cursor: pointer; }
+::highlight(naw-cmd-path) { text-decoration: underline; text-underline-offset: 3px; }

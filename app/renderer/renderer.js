@@ -5006,6 +5006,7 @@ async function ensureTerminal(id, explicit = false) {
   // move the cursor: xterm would type arrow keys into the native program and clear the selection.
   const term = new Terminal({ fontFamily: '"MesloLGS NF", Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, altClickMovesCursor: false, disableStdin: true, theme: { ...theme } });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(surface);
+  const textLinks = window.nawCmdLinks.bindTerminal(term, { api, onError: toastError });
   // Fullscreen Claude turns on mouse reporting, so xterm hands a drag to the program. A view
   // that cannot send input (another window's session, a space member column) would drop
   // that drag, so it selects locally instead. A view that can send input, or is switching to
@@ -5016,7 +5017,7 @@ async function ensureTerminal(id, explicit = false) {
   const selection = term._core?._selectionService, mouse = term._core?.coreMouseService;
   if (typeof selection?.shouldForceSelection === 'function') {
     const nativeForce = selection.shouldForceSelection.bind(selection);
-    selection.shouldForceSelection = event => !terminalCanInput(id) || mouse?.activeEncoding === 'DEFAULT' || nativeForce(event);
+    selection.shouldForceSelection = event => textLinks.shouldForceSelection(event) || !terminalCanInput(id) || mouse?.activeEncoding === 'DEFAULT' || nativeForce(event);
   }
   const intent = selectionRevision;
   const entry = { element, term, fit, generation, nativeId: record?.nativeId, ready: false, sequence: 0, queued: [], firstTurnAttemptId: record?.activeTurnId, firstTurnHadOutput: hasAssistantMessage(record) }; terminals.set(id, entry); syncTerminalMount(id);
