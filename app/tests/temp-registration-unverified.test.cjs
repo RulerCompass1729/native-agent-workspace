@@ -36,10 +36,12 @@ async function kept(f,prepared,issue='incomplete') {
   assert.equal(readSummary(f.dataDir).result.registrationIssue,issue);
   assert.deepEqual(inventory(f),before,'Repeated status reads do not repair anonymous history');
 }
-test('A1: finished ENOSPC stays safely blocked with an explicit reason after storage and later registration recover',async t=>{
-  const f=fixture(t),prepared=await f.prepare(),finished=fs.statSync(path.join(f.registryDir,'registration-finished')),write=fs.writeSync;
-  const mock=t.mock.method(fs,'writeSync',(fd,...args)=>{const s=fs.fstatSync(fd);if(s.dev===finished.dev&&s.ino===finished.ino)throw Object.assign(Error('synthetic ENOSPC'),{code:'ENOSPC'});return write(fd,...args);});
-  assert.throws(()=>ownership.register(f.nested,{registryDir:f.registryDir}),{code:'ENOSPC'});mock.mock.restore();assert.deepEqual(sizes(f),[2,1]);
+test('A1: a departed writer\'s finished ENOSPC stays unverified after storage and later registration recover',async t=>{
+  const f=fixture(t),prepared=await f.prepare();
+  // The live writer's own in-memory debt is covered by temp-registration-debt.
+  // A different process must never infer that writer's missing completion.
+  const script="const fs=require('node:fs'),path=require('node:path'),own=require(process.argv[1]),registry=process.argv[3],finished=fs.statSync(path.join(registry,'registration-finished')),write=fs.writeSync;fs.writeSync=(fd,...args)=>{const s=fs.fstatSync(fd);if(s.dev===finished.dev&&s.ino===finished.ino)throw Object.assign(Error('synthetic ENOSPC'),{code:'ENOSPC'});return write(fd,...args)};try{own.register(process.argv[2],{registryDir:registry})}catch(e){if(e.code!=='ENOSPC')throw e};";
+  execFileSync(process.execPath,['-e',script,require.resolve('../temp-ownership.cjs'),f.nested,f.registryDir],{timeout:10000});assert.deepEqual(sizes(f),[2,1]);
   assert.equal((await f.manager.status(true)).registrationIssue,'incomplete');
   assert.equal(f.helper(prepared.request).registrationIssue,'incomplete');
   const other=path.join(f.base,'later');fs.mkdirSync(other);ownership.register(other,{registryDir:f.registryDir});assert.deepEqual(sizes(f),[3,2]);

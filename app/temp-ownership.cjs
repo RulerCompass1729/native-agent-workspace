@@ -37,6 +37,36 @@ function openCounters(registryDir,create=false) {
   } catch(error) {for(const fd of fds)fs.closeSync(fd);throw error;}
 }
 const registrationChanged=()=>Object.assign(Error('Temporary registration changed'),{code:'TEMP_CHANGED'});
+const completionDebts=new Map(), RETRY_LIMIT=64;
+const storeKey=directory=>process.platform==='darwin'?path.resolve(directory).replace(/^\/(var|tmp)(?=\/|$)/,'/private/$1'):path.resolve(directory);
+const closeAll=fds=>{for(const fd of fds)try{fs.closeSync(fd);}catch{}};
+const debtUnavailable=()=>Object.assign(Error('Temporary completion debt cannot be verified'),{registrationIssue:'metadata-unavailable'});
+function debtBinding(registryDir,fds) {
+  const directory=fs.fstatSync(fds[0],{bigint:true}),named=fs.lstatSync(registryDir,{bigint:true});
+  if(directory.dev!==named.dev||directory.ino!==named.ino)throw debtUnavailable();
+  const started=counter(fds[1],path.join(registryDir,counterNames[0])),finished=counter(fds[2],path.join(registryDir,counterNames[1]));
+  return {identity:JSON.stringify([String(directory.dev),String(directory.ino),...started.slice(0,4),...finished.slice(0,4)]),started:Number(started[4]),finished:Number(finished[4])};
+}
+// Only this isolate's completed register() attempts can owe a completion.
+// Held descriptors pin the original directory/counters; never reopen/create a
+// replacement or infer a completion from age, a PID, or an anonymous disk gap.
+function retryCompletions(registryDir=defaultDirectory()) {
+  const key=storeKey(registryDir),debt=completionDebts.get(key);
+  if(!debt)return false;
+  if(debt.busy)return true; // Synchronous callbacks may reenter register().
+  debt.busy=true;
+  try {
+    for(let attempts=0;debt.owed&&attempts<RETRY_LIMIT;attempts++) {
+      let current;
+      try {privateDirectory(registryDir);current=debtBinding(registryDir,debt.fds);}catch{throw debtUnavailable();}
+      if(debt.blocked||current.identity!==debt.identity||current.started<debt.started||current.finished<debt.finished||current.started-current.finished<debt.owed)throw debtUnavailable();
+      try {advance(debt.fds[2],path.join(registryDir,counterNames[1]));}catch{return true;}
+      debt.owed--;debt.finished=Math.max(debt.finished,current.finished+1);
+    }
+    if(!debt.owed){completionDebts.delete(key);closeAll(debt.fds);}
+    return true;
+  } finally {debt.busy=false;}
+}
 function generation(registryDir,create=false) {
   let fds=[];
   try {
@@ -50,9 +80,10 @@ function generation(registryDir,create=false) {
     error.registrationIssue ||= 'metadata-unavailable';throw error;
   } finally {for(const fd of fds)fs.closeSync(fd);}
 }
-// Read-only diagnosis, never reconciliation. Anonymous increments cannot prove
-// whether a missing completion belongs to a dead writer or a paused live one.
+// Settle only locally recorded completions, then diagnose the disk counters.
+// Anonymous increments cannot distinguish a dead writer from a paused one.
 function checkRegistration(registryDir=defaultDirectory()) {
+  retryCompletions(registryDir);
   try {privateDirectory(registryDir);}catch(error){if(error.code==='ENOENT')return;throw error;}
   const present=counterNames.map(name=>{try{fs.lstatSync(path.join(registryDir,name));return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}});
   if(!present.some(Boolean))return; // Existing pre-protocol inventory admission.
@@ -104,10 +135,13 @@ function entry(file) {
 let creator;
 function register(directory, { registryDir = defaultDirectory(), now = Date.now, owner } = {}) {
   privateDirectory(registryDir,true);
-  const counters=openCounters(registryDir,true);let began=false;
+  retryCompletions(registryDir);
+  const key=storeKey(registryDir),fds=[];let began=false,retained=false,binding;
   try {
+    fds.push(fs.openSync(registryDir,fs.constants.O_RDONLY|fs.constants.O_DIRECTORY|fs.constants.O_NOFOLLOW));
+    fds.push(...openCounters(registryDir,true));binding=debtBinding(registryDir,fds);
     // Publish before target/owner inspection can retain a pre-deletion view.
-    advance(counters[0],path.join(registryDir,counterNames[0]));began=true;
+    advance(fds[1],path.join(registryDir,counterNames[0]));began=true;
     const s=fs.lstatSync(directory), file=fs.realpathSync(directory);
     if (!s.isDirectory() || s.isSymbolicLink() || s.uid!==process.getuid() || !roots().some(root=>file!==root && inside(root,file))) throw Error('Temporary ownership requires a created directory under a system temporary root');
     owner ||= (creator ||= lockIdentity(process.pid));
@@ -125,8 +159,16 @@ function register(directory, { registryDir = defaultDirectory(), now = Date.now,
     } finally {try{fs.unlinkSync(pending);}catch(error){if(error.code!=='ENOENT')throw error;}}
     return record.id;
   } finally {
-    try {if(began)advance(counters[1],path.join(registryDir,counterNames[1]));}
-    finally {for(const fd of counters)fs.closeSync(fd);}
+    try {if(began)try {advance(fds[2],path.join(registryDir,counterNames[1]));}
+      catch(error) {
+        // The entire receipt attempt (including pending-file cleanup) has
+        // unwound. Publishing its completion later cannot precede its receipt.
+        const debt=completionDebts.get(key);
+        if(debt){debt.owed++;debt.blocked ||= debt.identity!==binding.identity;debt.started=Math.max(debt.started,binding.started+1);debt.finished=Math.max(debt.finished,binding.finished);}
+        else {completionDebts.set(key,{...binding,started:binding.started+1,fds,owed:1,busy:false});retained=true;}
+        throw error;
+      }
+    } finally {if(!retained)closeAll(fds);}
   }
 }
 function read(registryDir = defaultDirectory()) {
@@ -171,4 +213,4 @@ async function pruneMissing(registryDir = defaultDirectory()) {
   }
   return removed;
 }
-module.exports={register,read,batches,forget,forgetMissing,pruneMissing,defaultDirectory,roots,inside,revision,checkRegistration};
+module.exports={register,read,batches,forget,forgetMissing,pruneMissing,defaultDirectory,roots,inside,revision,checkRegistration,retryCompletions};

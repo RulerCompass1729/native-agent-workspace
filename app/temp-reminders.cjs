@@ -92,6 +92,11 @@ class TempReminders {
     return this.cached;
   }
   async status(force=false,check) {
+    // Retry before the daily cache, but keep an unchanged refusal cached so
+    // recordsChanged does not trigger a scan/save/notification feedback loop.
+    let registrationIssue;
+    try {ownership.checkRegistration(this.registryDir);}catch(error){registrationIssue=error.registrationIssue;}
+    if(registrationIssue!==this.cached?.registrationIssue)force=true;
     if(this.pending) return this.pending;
     if(!force&&this.lastScan!==null&&this.cached&&this.now()-this.lastScan<DAY&&this.now()>=this.lastScan) return this.cached;
     this.pending=this.scan(check).catch(error=>{
@@ -158,6 +163,7 @@ class TempReminders {
     };
     this.finished=new Promise(resolve=>{this.finish=resolve;});
     try {
+      try {ownership.retryCompletions(this.registryDir);}catch{ /* Per-candidate proofs and the final scan retain the reason. */ }
       for(const [index,before] of grant.entries.entries()) {
         try {this.person(c);check();} catch {
           const remaining=grant.entries.length-index;result.skipped+=remaining;result.reasons.unverified+=remaining;break;
