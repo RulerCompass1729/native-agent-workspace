@@ -4,21 +4,34 @@ const { BackgroundControl, dialog } = require('../background-control.cjs');
 const operation = require('../background-operation.cjs');
 const { Workspace } = require('../workspace.cjs');
 const { EventEmitter } = require('node:events');
+const { TerminalJournal } = require('../observation.cjs');
 async function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-stale-consent-')); fs.chmodSync(dir, 0o700);
   let clock = 1800000000000, archived = false, disconnected = false;
   const bytes = [], runtimes = new Map();
   const host = { binaries: {}, close() {}, create(record) {
-    const runtime = new EventEmitter(); runtime.terminal = { alive: true, journal: { epoch: 'epoch-' + record.id, index: 1 }, input: data => bytes.push(data) };
+    const runtime = new EventEmitter(), journal = new TerminalJournal(100, 30);
+    journal.append('output', 'Synthetic terminal', 100, 30, () => 'Synthetic terminal');
+    runtime.terminal = { alive: true, journal, cols: 100, rows: 30, input: data => bytes.push(data), resize(cols, rows) {
+      if (cols === this.cols && rows === this.rows) return;
+      this.cols = cols; this.rows = rows; journal.append('resize', '', cols, rows, () => 'Synthetic terminal');
+    } };
     runtime.start = async () => runtime.emit('state', 'idle'); runtime.stop = async () => ({ state: 'ended' });
     runtimes.set(record.id, runtime); return runtime;
   } };
   const w = new Workspace(host, dir), id = await w.create('claude', dir, 'owner', 'Requester');
   const target = await w.create('claude', dir, 'owner', 'Target');
+  // Both the desktop projection and Workspace.input's final conditional write
+  // must observe the same synthetic dialog, including on the pre-detector base.
+  const nativeSnapshot = w.snapshot.bind(w);
+  w.snapshot = () => {
+    const value = nativeSnapshot();
+    return { ...value, sessions: value.sessions.map(s => ({ ...s, nativeTerminalDialog: runtimes.get(s.id)?.nativeTerminalDialog })) };
+  };
   const actor = { id, nativeId: w.get(id).nativeId, provider: 'claude', name: 'Requester' };
   let missing = false;
   const snapshot = () => ({ ...w.snapshot(), sessions: w.snapshot().sessions.filter(s => !missing || s.id !== target).map(s => ({ ...s,
-    archived: s.id === target && archived, transportDisconnected: s.id === target && disconnected, nativeTerminalDialog: runtimes.get(s.id).nativeTerminalDialog,
+    archived: s.id === target && archived, transportDisconnected: s.id === target && disconnected,
     terminalState: { ...s.terminalState, observationIndex: runtimes.get(s.id).terminal.journal.index },
   })) });
   const client = { snapshot, close() {} };
@@ -57,7 +70,6 @@ test('same-title replacement dialog is a different instance', async t => {
   const f = await fixture(t), runtime = f.runtimes.get(f.target);
   runtime.nativeTerminalDialog = { kind: 'choice', title: 'Synthetic choice?', since: 1 };
   const card = await f.ask(); runtime.nativeTerminalDialog = { ...runtime.nativeTerminalDialog, since: 2 };
-  f.runtimes.get(f.target).terminal.journal.index++;
   const result = await f.confirm(card); assert.deepEqual(f.bytes, []); assert.equal(result.disposition, 'invalidated');
 });
 test('valid card executes once, and an uncertain observation never writes', async t => {
@@ -187,4 +199,41 @@ test('native conditional write also rejects the exact deadline before any termin
   const before = f.w.get(f.target).controlRevision || 0;
   assert.throws(() => f.w.input(f.target, '\x1b', 'owner', { proof, expiresAt: Date.now() }), e => e.uiMessage?.key === 'error.background.confirmationExpired');
   assert.deepEqual(f.bytes, []); assert.equal(f.w.get(f.target).controlRevision || 0, before);
+});
+
+
+// F1/F2: both the desktop and native conditional-write snapshot must see the dialog.
+for (const change of ['none', 'output-1', 'output-5', 'resize']) test(`same dialog survives ${change} and sends Esc once`, async t => {
+  const f = await fixture(t), runtime = f.runtimes.get(f.target);
+  runtime.nativeTerminalDialog = { kind: 'choice', title: 'Synthetic choice?', since: 1 };
+  const card = await f.ask(), index = runtime.terminal.journal.index;
+  assert.deepEqual(operation.terminalInputProof(f.w.snapshot().sessions.find(s => s.id === f.target)), card.terminalConsent,
+    'The daemon and desktop agree before any redraw');
+  const count = change === 'output-1' ? 1 : change === 'output-5' ? 5 : 0;
+  for (let i = 0; i < count; i++) runtime.terminal.journal.append('output', 'Synthetic redraw', runtime.terminal.cols, runtime.terminal.rows, () => 'Synthetic redraw');
+  if (change === 'resize') f.w.resize(f.target, 'owner', 80, 24);
+  assert.equal(runtime.terminal.journal.index, index + (count || (change === 'resize' ? 1 : 0)));
+  const result = await f.confirm(card);
+  assert.equal(result.state, 'complete', result.error || result.reason);
+  assert.deepEqual(f.bytes, ['\x1b']);
+  await assert.rejects(f.confirm(card)); assert.deepEqual(f.bytes, ['\x1b']);
+});
+test('same-title new dialog at the same observation index rejects solely by its instance', async t => {
+  const f = await fixture(t), runtime = f.runtimes.get(f.target);
+  runtime.nativeTerminalDialog = { kind: 'choice', title: 'Synthetic choice?', since: 1 };
+  const card = await f.ask(), index = runtime.terminal.journal.index;
+  runtime.nativeTerminalDialog = { ...runtime.nativeTerminalDialog, since: 2 };
+  assert.deepEqual(f.w.snapshot().sessions.find(s => s.id === f.target).nativeTerminalDialog,
+    f.c.terminalConsentSnapshot().sessions.find(s => s.id === f.target).nativeTerminalDialog, 'Both sides see the replacement instance');
+  assert.equal(runtime.terminal.journal.index, index, 'A frame bump cannot make this test pass');
+  const result = await f.confirm(card);
+  assert.equal(result.disposition, 'invalidated'); assert.equal(result.reason, 'state-changed');
+  assert.deepEqual(f.bytes, []);
+});
+for (const change of ['output', 'resize']) test(`without a dialog ${change} still invalidates the input card`, async t => {
+  const f = await fixture(t), runtime = f.runtimes.get(f.target), card = await f.ask();
+  if (change === 'resize') f.w.resize(f.target, 'owner', 80, 24);
+  else runtime.terminal.journal.append('output', 'Synthetic redraw', 100, 30, () => 'Synthetic redraw');
+  const result = await f.confirm(card);
+  assert.equal(result.disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
 });

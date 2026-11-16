@@ -37,7 +37,7 @@ function fixture(method, target, value) {
   const id = ++sequence;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { child.off('message', receive); reject(Error('Fixture response timeout')); }, 8000);
-    const receive = r => { if ((method === 'backgroundProof' ? r.proofRequestId : r.requestId) !== id) return; clearTimeout(timer); child.off('message', receive); r.error ? reject(Error(r.error)) : resolve(r); };
+    const receive = r => { if ((method === 'backgroundProof' ? r.proofRequestId : method.startsWith('consent') ? r.consentRequestId : r.requestId) !== id) return; clearTimeout(timer); child.off('message', receive); r.error ? reject(Error(r.error)) : resolve(r); };
     child.on('message', receive); child.send({ id, method, target, value });
   });
 }
@@ -128,6 +128,31 @@ async function run() {
   const valid = await control(invoke('input', [recipient, '\x1b']));
   assert.equal((await decide(valid, 1)).state, 'complete');
   assert.equal((await fixture('stats')).inputs.length, 1);
+  let inputCount = 1;
+  for (const change of ['none', 'output-1', 'output-5', 'resize']) {
+    const dialog = { kind: 'choice', title: 'Synthetic choice?', since: 100 };
+    await fixture('consentDialog', recipient, dialog);
+    const pending = await control(invoke('input', [recipient, '\x1b']));
+    const native = await fixture('consentProof', recipient);
+    assert.deepEqual(native.proof, pending.terminalConsent, 'Desktop and daemon bind the same dialog');
+    if (change.startsWith('output-')) await fixture('consentOutput', recipient, Number(change.slice(7)));
+    if (change === 'resize') await fixture('consentResize', recipient, [80, 24]);
+    const result = await decide(pending, 1);
+    assert.equal(result.state, 'complete', result.error || result.reason);
+    const stats = await fixture('stats'); assert.equal(stats.inputs.length, ++inputCount);
+    assert.equal(stats.inputs.at(-1).data, '\x1b');
+    checks.push(`Same dialog + ${change}: one Esc through actual GUI and daemon`);
+  }
+  const beforeReplacement = await fixture('consentProof', recipient);
+  const replaced = await control(invoke('input', [recipient, '\x1b']));
+  await fixture('consentDialog', recipient, { ...beforeReplacement.dialog, since: 101 });
+  const afterReplacement = await fixture('consentProof', recipient);
+  assert.equal(afterReplacement.proof.stateMark.since, 101);
+  const replacementResult = await decide(replaced, 1);
+  assert.equal(replacementResult.disposition, 'invalidated');
+  assert.equal((await fixture('stats')).inputs.length, inputCount);
+  checks.push('Same-title replacement on both sides: no Esc');
+  await fixture('consentDialog', recipient, null);
   const expire = await control(invoke('input', [recipient, '\x1b']));
   await app.evaluate(() => { const c = globalThis.consentFixtureController; c.now = () => Date.now() + 120001; c.expirePending(); });
   await until(async () => (await control({ action: 'receipt', operation_id: expire.id })).receipt.disposition === 'expired', 'Expired card settled');
@@ -152,7 +177,7 @@ async function run() {
       await page.screenshot({ path: path.join(pictures, `pending-consent-${language}-${width}.png`) });
     }
   }
-  assert.equal((await fixture('stats')).inputs.length, 1);
+  assert.equal((await fixture('stats')).inputs.length, inputCount);
   await checkDesktopState('desktop-final');
   assert.deepEqual(errors, []);
   save('result', { passed: true, checks, modelCalls: 0, nativeProcesses: 0, installed: false, pictures });

@@ -204,7 +204,7 @@ function terminalInputProof(session) {
   return { version: 1, targetId: session.id, nativeId: session.nativeId,
     connectionRevision: session.connectionRevision || 0, controlRevision: session.controlRevision || 0,
     state: session.state, activeTurnId: session.activeTurnId || null, pendingTag: session.pendingTag || null,
-    terminalEpoch: terminal.epoch, observationIndex: terminal.observationIndex,
+    terminalEpoch: terminal.epoch,
     stateMark: dialog && Number.isSafeInteger(dialog.since) ? { kind: dialog.kind, since: dialog.since } : { frame: terminal.observationIndex },
     nativeInputRequired: session.nativeInputRequired === true,
     approval: require('node:crypto').createHash('sha256').update(JSON.stringify([session.approval || null, session.nativeApproval || null])).digest('hex') };
