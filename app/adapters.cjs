@@ -546,8 +546,8 @@ function claudeQueueRows(file, nativeId, offset) {
       if (line.includes('"queue-operation"')) {
         try {
           const row = JSON.parse(line);
-          const kind = row.operation === 'enqueue' ? 'queued' : QUEUE_TAKEN_BACK.has(row.operation) || row.operation === 'remove' && row.reason === 'cleared_on_cancel' ? 'taken' : null;
-          if (kind && row.type === 'queue-operation' && row.sessionId === nativeId && typeof row.content === 'string') rows.push({ at: offset + at, kind, text: row.content });
+          const kind = row.operation === 'enqueue' ? 'queued' : QUEUE_TAKEN_BACK.has(row.operation) || row.operation === 'remove' && row.reason === 'cleared_on_cancel' ? 'taken' : row.operation === 'remove' && row.reason === 'absorbed_mid_turn' ? 'read' : null;
+          if (kind && row.type === 'queue-operation' && row.sessionId === nativeId && typeof row.content === 'string') rows.push({ at: offset + at, kind, text: row.content, time: Number.isFinite(Date.parse(row.timestamp)) ? Date.parse(row.timestamp) : null });
         } catch { /* a torn line proves nothing */ }
       }
       at = end + 1;
@@ -687,6 +687,7 @@ class Claude extends EventEmitter {
     this.terminal.on('closed', result => this.terminalClosed(result));
   }
   terminalClosed(result) {
+    this.cancelQueueRefresh();
     this.cancelNativeAbort(); this.ready = false; this.submission.close();
     if (!result.confirmed) { this.emit('activity', ...uiActivity("notice.activity.terminalDisconnectedExitUnconfirmed")); this.emit('state', 'error'); return; }
     // Native /background ends this root like /exit, then its daemon starts the
@@ -893,7 +894,12 @@ class Claude extends EventEmitter {
           // that sharing authority); `announced` is how many prompts UserPromptSubmit had announced by then.
           this.startedRootTurn = message.replayed || message.gap ? null : { id: message.turnId, promptId: message.promptId, announced: this.announceCount || 0, completed: false };
           if (this.rootTurn) this.emit('nativeTurnStart', { nativeId: this.record.nativeId, turnId: message.turnId });
-          if (message.triggers) this.emit('nativeTurnTriggers', { nativeId: this.record.nativeId, turnId: message.turnId, prompts: message.triggers.prompts, rows: message.triggers.rows });
+          if (message.triggers) {
+            this.withdrawQueued();
+            // The old text-only link cannot choose between equal queue entries.
+            const prompts=message.triggers.prompts.filter(id=>!this.queuedRows?.get(`claude-prompt-${id}`)?.multiple);
+            if(prompts.length||message.triggers.rows.length)this.emit('nativeTurnTriggers', { nativeId: this.record.nativeId, turnId: message.turnId, prompts, rows: message.triggers.rows });
+          }
           this.liveTurn = this.rootTurn ? { id: message.turnId, promptId: message.promptId, phase: 'requesting', label: 'requesting' } : null;
           this.livePermissions.clear();
           if (this.rootTurn) { this.nativeInputRequired = false; this.emit('inputRequired', false); }
@@ -1364,10 +1370,12 @@ class Claude extends EventEmitter {
         // way), and is not the running turn's input: T-141, it would re-capture that turn's wake authority.
         // Where this prompt's turn begins in the journal: queue rows of the prompts typed during it come later.
         if (event.prompt_id && !this.promptTexts?.has(event.prompt_id) && !this.firstPromptRow(event.prompt_id)) this.queueWindowStart(event.prompt_id);
-        // A typed prompt taken back before this one is not shown as sent (an edited one comes back as this one).
-        this.withdrawQueued();
         const firstText = event.prompt_id ? this.promptFirstText(event.prompt_id, event.prompt) : undefined;
         const laterText = Boolean(event.prompt_id) && typeof event.prompt === 'string' && typeof firstText === 'string' && event.prompt !== firstText;
+        if(!this.nativePromptInput&&event.prompt_id&&typeof event.prompt==='string')
+          this.queueOrigin(event,promptAlreadyAnnounced||laterText);
+        // A typed prompt taken back before this one is not shown as sent (an edited one comes back as this one).
+        this.withdrawQueued();
         const rowId = !event.prompt_id ? null : laterText ? `claude-prompt-${event.prompt_id}-q${promptTextTag(event.prompt)}` : `claude-prompt-${event.prompt_id}`;
         const entering = this.queued || this.pending;
         if (entering && !entering.accepted && this.submission.pending?.authorized && event.prompt === entering.text) {
@@ -1385,10 +1393,9 @@ class Claude extends EventEmitter {
           // The first hook may follow turn-start. A repeated id is still input,
           // but must not recapture that turn's wake proof, even for identical text.
           if (!this.nativePromptInput) this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: rowId, ...(!laterText && !promptAlreadyAnnounced && this.liveTurn?.promptId === event.prompt_id ? { turnId: this.liveTurn.id } : {}), ...(typeof event.source === 'string' ? { source: event.source } : {}), ...(superseded ? { superseded } : {}) } : undefined);
-          if (!this.nativePromptInput && laterText) {
-            this.queuedRows ||= new Map(); this.queuedRows.delete(rowId); this.queuedRows.set(rowId, { promptId: event.prompt_id, text: event.prompt });
-            while (this.queuedRows.size > 16) this.queuedRows.delete(this.queuedRows.keys().next().value);
-          }
+        }
+        if (!this.nativePromptInput && event.prompt_id && typeof event.prompt === 'string') {
+          if(promptAlreadyAnnounced||laterText)this.refreshQueuedSoon();
         }
         break;
       }
@@ -1449,22 +1456,103 @@ class Claude extends EventEmitter {
     if (size !== null) this.queueWindows.set(promptId, size);
     while (this.queueWindows.size > 4) this.queueWindows.delete(this.queueWindows.keys().next().value);
   }
-  // Remove the row of each prompt typed during a turn that the person took back from native's queue: every enqueue
-  // of its text since its turn began was taken back. Without a known window (a restarted adapter), a readable
-  // journal or one within bounds, nothing is removed.
+  queueOrigin(event,queued) {
+    const key=`claude-prompt-${event.prompt_id}-q${promptTextTag(event.prompt)}`;
+    this.queuedRows ||= new Map();const prior=this.queuedRows.get(key);
+    const row=prior?.nativeId===this.record.nativeId?prior:{promptId:event.prompt_id,text:event.prompt,nativeId:this.record.nativeId,origins:[]};
+    this.queuedRows.delete(key);this.queuedRows.set(key,row);
+    while(this.queuedRows.size>16)this.queuedRows.delete(this.queuedRows.keys().next().value);
+    let human=false;
+    this.emit('nativeInputOrigin',event.prompt,{source:event.source},value=>{human=value===true;});
+    let at;
+    try {const s=fs.lstatSync(this.nativeTranscript);if(s.isFile()&&!s.isSymbolicLink()&&s.uid===process.getuid()&&Number.isSafeInteger(s.size))at=s.size;}
+    catch(error){if(error.code==='ENOENT'&&this.queueWindows?.get(event.prompt_id)===0)at=0;}
+    if(at===undefined){row.unverified=true;return;}
+    // Byte boundaries bind source observations to later enqueues. A later
+    // human hook cannot erase a peer/unknown interval, including equal text.
+    const bits=human&&queued?1:2,last=row.origins.at(-1),anchor=this.record.messages?.at(-1);
+    const afterId=anchor&&(!anchor.nativeId||anchor.nativeId===row.nativeId)?anchor.id:undefined;
+    if(last&&at<last.at){row.unverified=true;return;}
+    // Several hooks may precede one journal flush. Count equal observations,
+    // keeping separate runs when the source or progress anchor changes.
+    if(last?.at===at&&last.bits===bits&&last.afterId===afterId&&Number.isSafeInteger(last.count+1))last.count++;
+    else if(row.origins.length<256)row.origins.push({at,bits,count:1,afterId});
+    else row.origins[255].bits=2; // Unknown overflow never becomes another human copy.
+  }
+  cancelQueueRefresh() {
+    clearTimeout(this.queueRefreshTimer);clearTimeout(this.queueRefreshDeadline);
+    this.queueRefreshWatch?.close();this.queueRefreshWatch=null;
+  }
+  refreshQueuedSoon() {
+    this.cancelQueueRefresh();const nativeId=this.record.nativeId;
+    const refresh=()=>{
+      if(this.disposed||!this.terminal?.alive||this.record.nativeId!==nativeId)return this.cancelQueueRefresh();
+      try {this.withdrawQueued();} catch { /* Keep the existing display if its journal/view became unavailable. */ }
+    };
+    const soon=()=>{clearTimeout(this.queueRefreshTimer);this.queueRefreshTimer=setTimeout(refresh,50);this.queueRefreshTimer.unref?.();};
+    // Enqueue is written after the settings hook returns. Observe its file,
+    // coalesced and for at most the hook's two-second lifetime, not by polling.
+    try {
+      const s=fs.lstatSync(this.nativeTranscript);
+      if(s.isFile()&&!s.isSymbolicLink()&&s.uid===process.getuid()) {
+        this.queueRefreshWatch=fs.watch(this.nativeTranscript,{persistent:false},soon);
+        this.queueRefreshWatch.on('error',()=>this.cancelQueueRefresh());
+      }
+    } catch { /* A not-yet-created journal is checked once at the deadline. */ }
+    soon();this.queueRefreshDeadline=setTimeout(()=>{this.cancelQueueRefresh();refresh();},2000);this.queueRefreshDeadline.unref?.();
+  }
+  // Queue occurrence offsets distinguish equal text; reading the same journal
+  // twice does not create another input. No journal proof means no row removal.
   withdrawQueued() {
     if (!this.queuedRows?.size) return;
-    for (const [id, row] of this.queuedRows) if (this.queueWindows?.get(row.promptId) === undefined) this.queuedRows.delete(id);
+    for (const [id, row] of this.queuedRows) if (row.nativeId!==this.record.nativeId||this.queueWindows?.get(row.promptId) === undefined) this.queuedRows.delete(id);
     if (!this.queuedRows.size) return;
     const from = Math.min(...[...this.queuedRows.values()].map(row => this.queueWindows.get(row.promptId)));
     const rows = claudeQueueRows(this.nativeTranscript, this.record.nativeId, from);
     if (!rows) return;
     for (const [id, row] of [...this.queuedRows]) {
-      const start = this.queueWindows.get(row.promptId), mine = rows.filter(r => r.at >= start && r.text === row.text);
-      const queued = mine.filter(r => r.kind === 'queued').length, taken = mine.length - queued;
-      if (!queued || taken < queued) continue;
-      this.queuedRows.delete(id);
-      this.emit('nativeInputWithdrawn', { id, nativeId: this.record.nativeId });
+      const start = this.queueWindows.get(row.promptId),end=Math.min(Infinity,...[...this.queueWindows.values()].filter(at=>at>start));
+      const mine = rows.filter(r => r.at >= start && r.at < end && r.text === row.text);
+      const occurrences=[],origins=[],originsUsed=new Map();
+      for(const observation of row.origins||[]) {
+        let group=origins.at(-1);
+        if(!group||group.at!==observation.at){group={at:observation.at,proofs:[],count:0,allHuman:true};origins.push(group);}
+        if(Number.isSafeInteger(observation.count)&&observation.count>0&&Number.isSafeInteger(group.count+observation.count)) {
+          group.count+=observation.count;group.proofs.push({through:group.count,afterId:observation.afterId});
+        } else group.allHuman=false;
+        if(observation.bits!==1)group.allHuman=false;
+      }
+      for(const entry of mine) {
+        if(entry.kind==='queued') {
+          const key=occurrences.length?`${id}-e${entry.at.toString(16)}`:id;
+          const origin=origins.findLast(item=>item.at<=entry.at),used=originsUsed.get(origin)||0,proof=origin?.proofs.find(item=>item.through>used);
+          const human=!row.unverified&&origin?.allHuman===true&&Boolean(proof);
+          if(human)originsUsed.set(origin,used+1);
+          occurrences.push({id:key,time:entry.time,human,afterId:proof?.afterId,
+            read:false,taken:false,linked:this.record.messages?.some(m=>m.id===key&&m.turnId)});
+        } else if(entry.kind==='read') {
+          const read=occurrences.find(item=>!item.taken&&!item.read);if(read)read.read=true;
+        } else {
+          // Withdraw one still waiting copy, preserving delivered/turn-linked
+          // rows. Equal text carries no native per-copy ID; never grant a turn
+          // link from that ambiguity (multiple below).
+          const taken=occurrences.findLast(item=>!item.taken&&!item.read&&!item.linked);if(taken)taken.taken=true;
+        }
+      }
+      if(!occurrences.length)continue;
+      row.multiple=occurrences.length>1;
+      const taken=new Set(occurrences.filter(item=>item.taken).map(item=>item.id));
+      const proven=occurrences.filter(item=>!item.taken&&item.human);
+      // Each source observation proves at most one copy. An already displayed
+      // human fallback also occupies a slot, even when its enqueue is unknown.
+      const displayed=(this.record.messages||[]).filter(m=>m.role==='user'&&m.origin==='native'&&(!m.nativeId||m.nativeId===this.record.nativeId)&&
+        m.text===row.text&&!m.inputSource&&(m.id===id||m.id?.startsWith(id+'-e'))&&(!taken.has(m.id)||m.turnId));
+      let slots=Math.max(0,proven.length-displayed.length);
+      for(const item of proven)if(!this.record.messages?.some(m=>m.id===item.id)&&slots>0) {
+        this.emit('nativeQueuedInput',{id:item.id,baseId:id,nativeId:this.record.nativeId,text:row.text,time:item.time,afterId:item.afterId});slots--;
+      }
+      for(const message of [...(this.record.messages||[])])if(message.role==='user'&&message.origin==='native'&&message.text===row.text&&
+          taken.has(message.id))this.emit('nativeInputWithdrawn',{id:message.id,nativeId:this.record.nativeId});
     }
   }
   promptFirstText(id, text) {
@@ -1630,7 +1718,7 @@ class Claude extends EventEmitter {
   }
   async openTerminal() { return this.terminal; }
   stopForMaintenance(check) { check(); return this.stop(); }
-  async stop() { this.cancelNativeAbort(); clearTimeout(this.closedAwaitingBackground); this.closedAwaitingBackground = null; await this.terminal.stop(); this.host.hookTargets.delete(this.token); return { state: 'ended' }; }
+  async stop() { this.cancelQueueRefresh(); this.cancelNativeAbort(); clearTimeout(this.closedAwaitingBackground); this.closedAwaitingBackground = null; await this.terminal.stop(); this.host.hookTargets.delete(this.token); return { state: 'ended' }; }
 }
 
 class Rpc extends EventEmitter {
