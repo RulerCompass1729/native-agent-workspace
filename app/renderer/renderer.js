@@ -2562,9 +2562,8 @@ function backgroundRemaining(line) {
 }
 function scheduleBackgroundExpiryClock() {
   clearTimeout(backgroundExpiryClock);
+  if (!document.querySelector('.background-state[data-expires-at]')) return;
   backgroundExpiryClock = setTimeout(() => {
-    // Cards may still be detached while rendering; inspect after they mount.
-    if (!document.querySelector('.background-state[data-expires-at]')) return;
     for (const line of document.querySelectorAll('.background-state[data-expires-at]')) backgroundRemaining(line);
     scheduleBackgroundExpiryClock();
   }, 1000);
