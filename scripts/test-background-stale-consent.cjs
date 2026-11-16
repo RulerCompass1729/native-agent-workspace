@@ -102,8 +102,11 @@ async function run() {
   async function decide(record, response) {
     assert.equal(record.state, 'confirmation-required', JSON.stringify(record));
     assert.equal(record.confirmation.kind, 'message');
-    const card = page.locator(`[data-message-id="background:${record.actor.nativeId}:${record.id}"]`);
-    await card.getByRole('button', { name: record.confirmation.options.buttons[response], exact: true }).click();
+    const card = page.locator(`#conversation-pane [data-message-id="background:${record.actor.nativeId}:${record.id}"]`);
+    const buttons = card.locator('.background-buttons button');
+    await buttons.first().waitFor({ state: 'visible' });
+    assert.equal(await buttons.count(), record.confirmation.options.buttons.length, 'The exact card preserves every response index');
+    await buttons.nth(response).click();
     await until(() => {
       const saved = JSON.parse(fs.readFileSync(path.join(profile, 'background-operations.json'))).records.find(r => r.id === record.id);
       return saved && !['running', 'confirmation-required'].includes(saved.state);
@@ -130,7 +133,7 @@ async function run() {
   assert.equal((await fixture('stats')).inputs.length, 1);
   let inputCount = 1;
   for (const change of ['none', 'output-1', 'output-5', 'resize']) {
-    const dialog = { kind: 'choice', title: 'Synthetic choice?', since: 100 };
+    const dialog = { kind: 'choice', title: 'Synthetic choice?', since: 100, revision: 0 };
     await fixture('consentDialog', recipient, dialog);
     const pending = await control(invoke('input', [recipient, '\x1b']));
     const native = await fixture('consentProof', recipient);
@@ -169,7 +172,7 @@ async function run() {
       await until(async () => (await expiredCard.innerText()).includes(language === 'zh' ? '已过期' : 'Expired'), 'Localized expiry');
       await expiredCard.scrollIntoViewIfNeeded();
       assert.ok(await page.locator('.background-state[data-expires-at]').count(), 'Pending card has remaining time');
-      assert.equal(await expiredCard.getByRole('button', { name: language === 'zh' ? '确认此操作' : 'Confirm this action', exact: true }).count(), 0);
+      assert.equal(await expiredCard.locator('.background-buttons button').count(), 0, 'Expired card has no action in either display language');
       await page.screenshot({ path: path.join(pictures, `stale-consent-${language}-${width}.png`) });
       const waitingCard = page.locator(`[data-message-id="background:${waiting.actor.nativeId}:${waiting.id}"]`);
       await waitingCard.scrollIntoViewIfNeeded();
@@ -182,7 +185,12 @@ async function run() {
   assert.deepEqual(errors, []);
   save('result', { passed: true, checks, modelCalls: 0, nativeProcesses: 0, installed: false, pictures });
 }
-(async () => { try { await run(); } catch (e) { save('result', { passed: false, checks, error: e.stack, errors, installed: false }); process.exitCode = 1; }
+(async () => { try { await run(); } catch (e) {
+    if (page && !page.isClosed()) {
+      await page.screenshot({ path: path.join(pictures, 'failure.png') }).catch(() => {});
+      fs.writeFileSync(path.join(evidence, 'failure.txt'), await page.locator('body').innerText().catch(() => 'unavailable'));
+    }
+    save('result', { passed: false, checks, error: e.stack, errors, installed: false }); process.exitCode = 1; }
   finally {
     if (helper) helper.stdin.end();
     if (client) client.close();

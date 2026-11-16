@@ -59,8 +59,15 @@ function storedQueueSource(roomId, event) {
 class ButlerIngress {
   constructor(directory, { roomState, ledger = new ButlerLedger(directory) } = {}) {
     if (!roomState || typeof roomState.butlerSources !== 'function') throw unavailable();
-    this.roomState = roomState; this.ledger = ledger; this.errors = new Map();
-    for (const event of ledger.snapshot().events) this.sourceStatus(event);
+    this.roomState = roomState; this.ledger = ledger; this.errors = new Map(); this.terminalDialogs = new Map();
+    for (const event of ledger.snapshot().events) {
+      this.sourceStatus(event);
+      // Keep the saved payload immutable, including a member's former name.
+      const match = /^terminal-dialog:([a-f0-9]{64}):(open|ended)$/.exec(event.eventId);
+      if (!match || event.sourceRef !== `terminal-dialog:${event.payload.memberId}`) continue;
+      if (event.kind === 'blocked' && event.payload.reason === 'native-terminal-dialog') this.terminalDialogs.set(event.payload.memberId, { identity: match[1] });
+      else if (event.kind === 'recovery' && event.payload.reason === 'native-terminal-dialog-ended') this.terminalDialogs.delete(event.payload.memberId);
+    }
   }
   sourceStatus(event) {
     if (event.kind === 'blocked' && ['input-rejected', 'source-invalid'].includes(event.payload.reason)) this.errors.set(event.sourceRef, 'source-rejected');
@@ -85,7 +92,7 @@ class ButlerIngress {
         if (reserved.shouldNotify) this.ledger.ackDelivery(reserved.deliveryId, 'unknown');
         questionReceipt = { questionId: reserved.question.questionId, deliveryId: reserved.deliveryId };
       }
-      if (['decision', 'failure', 'blocked'].includes(event.kind)) this.ledger.consumeRecorded([event.eventId]);
+      if (['decision', 'failure', 'blocked'].includes(event.kind) || event.kind === 'recovery' && event.payload.reason === 'native-terminal-dialog-ended') this.ledger.consumeRecorded([event.eventId]);
       this.sourceStatus(event);
       return { status: 'recorded', eventId: event.eventId, ...questionReceipt };
     } catch { this.errors.set(scope, 'source-unavailable'); throw unavailable(); }
@@ -110,6 +117,25 @@ class ButlerIngress {
       if (failed) throw unavailable();
       this.errors.delete('source-store'); return { status: 'recorded', count };
     } catch { this.errors.set('source-store', 'source-unavailable'); throw unavailable(); }
+  }
+  // Terminal titles only, explicitly requested for stewardEvents. No transcript or model call.
+  observeTerminalDialogs(sessions = []) {
+    for (const session of sessions) {
+      const current = session.nativeTerminalDialog, previous = this.terminalDialogs.get(session.id);
+      // A disconnected or older backend cannot prove the choice disappeared.
+      if (!current && previous && (!Object.hasOwn(session, 'nativeTerminalDialog') || !session.terminalState?.alive || session.backendUnavailable || session.transportDisconnected || ['ended', 'recoverable', 'disconnected', 'background'].includes(session.state))) continue;
+      const identity = current ? hash([session.id, session.nativeId, current.since, current.title]) : null;
+      if (identity === previous?.identity || !identity && !previous) continue;
+      const episode = identity || previous.identity;
+      const sourceRef = `terminal-dialog:${session.id}`;
+      const payload = { memberId: session.id, reason: current ? 'native-terminal-dialog' : 'native-terminal-dialog-ended' };
+      if (clipped(session.name, 200)) payload.memberName = clipped(session.name, 200);
+      if (current) payload.title = current.title;
+      try { validateEvent({ eventId: 'terminal-dialog-check', sourceRef, kind: current ? 'blocked' : 'recovery', payload }); }
+      catch { delete payload.title; delete payload.memberName; }
+      this.record({ eventId: `terminal-dialog:${episode}:${current ? 'open' : 'ended'}`, sourceRef, kind: current ? 'blocked' : 'recovery', payload });
+      if (current) this.terminalDialogs.set(session.id, { identity }); else this.terminalDialogs.delete(session.id);
+    }
   }
   observeQueues(states) {
     let failed = false;

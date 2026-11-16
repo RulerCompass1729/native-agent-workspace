@@ -143,7 +143,9 @@ function operationSummary(command, actor, names = {}) {
   const last = value => typeof value === 'string' ? shown(value.split(/[\\/]+/).filter(Boolean).pop()) : undefined;
   const named = (list, id) => typeof id === 'string' && Array.isArray(list) ? shown(list.find(item => item?.id === id)?.name) : undefined;
   const session = id => named(names.sessions, id), room = id => named(names.rooms, id);
-  const action = maintenanceAction(method, args, actor) || (askedByHandler.includes(method) ? method : null);
+  // Display classification only; the maintenance/consent policy above is unchanged.
+  const clearsHistory = method === 'clearSharedHistory' || method === 'spaceAction' && args[1] === 'clearSharedHistory';
+  const action = clearsHistory ? 'clearSharedHistory' : maintenanceAction(method, args, actor) || (askedByHandler.includes(method) ? method : null);
   const summary = { action, method: visibleText(method), risks: [] };
   const put = (key, value) => { if (value !== undefined) summary[key] = value; };
   if (method === 'create' || method === 'importHistory') {
@@ -157,6 +159,7 @@ function operationSummary(command, actor, names = {}) {
     else if (mode === 'acceptEdits') summary.risks.push('acceptEdits');
     else if (mode === 'auto') summary.risks.push('autoApprove');
   } else if (method === 'spaceCreate' || method === 'roomRename') put('name', shown(args[0]));
+  else if (method === 'clearSharedHistory') put('room', room('shared'));
   else if (method === 'spaceAction') {
     put('room', room(args[0]));
     if (args[1] === 'join') put('target', session(Array.isArray(args[2]) ? args[2][0] : undefined));
@@ -167,6 +170,7 @@ function operationSummary(command, actor, names = {}) {
   else if (typeof args[0] === 'string') put('target', session(args[0]));
   // Legacy commands without a space act on the shared one.
   if (['join', 'archiveRoom', 'restoreRoom'].includes(method)) put('room', room('shared'));
+  if (clearsHistory) summary.risks.push('deletesSharedHistory');
   if (Array.isArray(command.paths) && command.paths.length) { put('file', last(command.paths[0])); if (command.paths.length > 1) summary.files = command.paths.length; }
   if (method === 'approve' && args[2] === 'accept') summary.risks.push('approvePermission');
   if (['interrupt', 'pause', 'quitService'].includes(action)) summary.risks.push('stopsWork');
@@ -205,7 +209,7 @@ function terminalInputProof(session) {
     connectionRevision: session.connectionRevision || 0, controlRevision: session.controlRevision || 0,
     state: session.state, activeTurnId: session.activeTurnId || null, pendingTag: session.pendingTag || null,
     terminalEpoch: terminal.epoch,
-    stateMark: dialog && Number.isSafeInteger(dialog.since) ? { kind: dialog.kind, since: dialog.since } : { frame: terminal.observationIndex },
+    stateMark: dialog && Number.isSafeInteger(dialog.since) && Number.isSafeInteger(dialog.revision) && dialog.revision >= 0 ? { kind: dialog.kind, since: dialog.since, revision: dialog.revision } : { frame: terminal.observationIndex },
     nativeInputRequired: session.nativeInputRequired === true,
     approval: require('node:crypto').createHash('sha256').update(JSON.stringify([session.approval || null, session.nativeApproval || null])).digest('hex') };
 }

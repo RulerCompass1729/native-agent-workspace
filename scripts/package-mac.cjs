@@ -172,6 +172,7 @@ async function build() {
       'native-history.cjs',
       'native-images.cjs',
       'native-root-proof.cjs',
+      'native-terminal-dialog.cjs',
       'native-usage.js',
       'observation.cjs',
       'operator-control.cjs',

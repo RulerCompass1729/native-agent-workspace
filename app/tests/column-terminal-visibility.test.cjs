@@ -66,7 +66,8 @@ test('a live chat-view member shows its existing terminal without changing draft
   assert.equal(h.context.terminals.get(h.record.id), originalEntry);
   assert.deepEqual(h.entry.cursor, { x: 5, y: 7 });
   assert.equal(h.binding.revision, 6);
-  assert.deepEqual(h.calls, ['height', ['ensure', 'member']]);
+  // Drawing a column measures nothing: the space measures all its columns after drawing them (space-column-layout.test.cjs).
+  assert.deepEqual(h.calls, [['ensure', 'member']]);
   // 887d9fea: showing changes no claim (the record above is unchanged), and a terminal of a session this window
   // controls takes keys whichever side its view is on (the person, 2026-11-13: 两边的输入可以不要锁定).
   assert.equal(h.inputAllowed(), true, 'The shown terminal of a session this window controls takes keys on the conversation side');
@@ -107,7 +108,7 @@ test('an explicit terminal view retains its existing stopped-display area withou
   assert.equal(h.render(true), true);
   assert.equal(h.binding.nativeHost.hidden, false);
   assert.equal(h.inputAllowed(), false);
-  assert.deepEqual(h.calls, ['height']);
+  assert.deepEqual(h.calls, []);
 });
 
 test('a solo composer keeps its terminal outside the column', () => {
@@ -141,7 +142,7 @@ test('an unavailable backend can show an existing live display but cannot start 
   const h = setup({ usable: false });
   assert.equal(h.render(true), true);
   assert.equal(h.entry.element.parentElement, h.binding.nativeHost);
-  assert.deepEqual(h.calls, ['height']);
+  assert.deepEqual(h.calls, []);
   h.record.view = 'terminal';
   assert.equal(h.inputAllowed(), false);
 });

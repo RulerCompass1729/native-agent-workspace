@@ -68,7 +68,7 @@ test('old Esc card cannot write into a member that has started work', async t =>
 });
 test('same-title replacement dialog is a different instance', async t => {
   const f = await fixture(t), runtime = f.runtimes.get(f.target);
-  runtime.nativeTerminalDialog = { kind: 'choice', title: 'Synthetic choice?', since: 1 };
+  runtime.nativeTerminalDialog = { kind: 'choice', title: 'Synthetic choice?', since: 1, revision: 0 };
   const card = await f.ask(); runtime.nativeTerminalDialog = { ...runtime.nativeTerminalDialog, since: 2 };
   const result = await f.confirm(card); assert.deepEqual(f.bytes, []); assert.equal(result.disposition, 'invalidated');
 });
@@ -205,7 +205,7 @@ test('native conditional write also rejects the exact deadline before any termin
 // F1/F2: both the desktop and native conditional-write snapshot must see the dialog.
 for (const change of ['none', 'output-1', 'output-5', 'resize']) test(`same dialog survives ${change} and sends Esc once`, async t => {
   const f = await fixture(t), runtime = f.runtimes.get(f.target);
-  runtime.nativeTerminalDialog = { kind: 'choice', title: 'Synthetic choice?', since: 1 };
+  runtime.nativeTerminalDialog = { kind: 'choice', title: 'Synthetic choice?', since: 1, revision: 0 };
   const card = await f.ask(), index = runtime.terminal.journal.index;
   assert.deepEqual(operation.terminalInputProof(f.w.snapshot().sessions.find(s => s.id === f.target)), card.terminalConsent,
     'The daemon and desktop agree before any redraw');
@@ -220,7 +220,7 @@ for (const change of ['none', 'output-1', 'output-5', 'resize']) test(`same dial
 });
 test('same-title new dialog at the same observation index rejects solely by its instance', async t => {
   const f = await fixture(t), runtime = f.runtimes.get(f.target);
-  runtime.nativeTerminalDialog = { kind: 'choice', title: 'Synthetic choice?', since: 1 };
+  runtime.nativeTerminalDialog = { kind: 'choice', title: 'Synthetic choice?', since: 1, revision: 0 };
   const card = await f.ask(), index = runtime.terminal.journal.index;
   runtime.nativeTerminalDialog = { ...runtime.nativeTerminalDialog, since: 2 };
   assert.deepEqual(f.w.snapshot().sessions.find(s => s.id === f.target).nativeTerminalDialog,
