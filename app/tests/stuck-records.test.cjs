@@ -9,6 +9,13 @@ const { Claude } = require('../adapters.cjs'), { Workspace } = require('../works
 const { RoomState } = require('../room-state.cjs'), locale = require('../ui-locale.js');
 
 const START = Date.UTC(2026, 10, 10, 20, 0), MINUTE = 60000, LIMIT = 5 * MINUTE;
+async function closeBackend(w, dir) {
+  w.close();
+  const deadline = performance.now() + 5000;
+  while (w.saveWriting && performance.now() < deadline) await new Promise(resolve => setImmediate(resolve));
+  assert.ok(!w.saveWriting, 'The fixture writer settles before its directory is removed');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
 function backend(t) {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: START });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-stuck-backend-')), w = new Workspace({ binaries: {}, close() {} }, dir);
@@ -19,7 +26,7 @@ function backend(t) {
   w.sessions.set(s.id, s); w.runtimes.set(s.id, r); w.bind(s, r);
   r.nativeAbortAvailable = false; r.rootTurn = { id: 'native-turn', status: 'working' }; r.ready = true; r.chatAvailable = true;
   let changes = 0; w.on('change', () => { changes += 1; });
-  t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => closeBackend(w, dir));
   const marks = () => w.snapshot().sessions.find(session => session.id === s.id).stuck;
   return { w, r, s, dir, marks, changes: () => changes, tick: ms => t.mock.timers.tick(ms) };
 }
@@ -48,7 +55,7 @@ test('E4 backend: the timer firing is what makes the wait due, even when the wal
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const realNow = Date.now; let clock = START; Date.now = () => clock; t.after(() => { Date.now = realNow; });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-stuck-clock-')), w = new Workspace({ binaries: {}, close() {} }, dir);
-  t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => closeBackend(w, dir));
   const s = { id: 'synthetic', name: 'Synthetic', provider: 'codex', state: 'approval', messages: [], fleet: [], approvals: [{ requestId: 'r', params: {} }] };
   w.sessions.set(s.id, s); w.runtimes.set(s.id, {}); let changes = 0; w.on('change', () => { changes += 1; });
   w.noteWait(s, 'approval');
