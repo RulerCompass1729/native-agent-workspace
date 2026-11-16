@@ -854,6 +854,18 @@ header h1, header p { overflow-wrap: anywhere; }
 .background-details > pre { max-height:240px; margin:4px 0 0; padding:8px; overflow:auto; border-radius:4px; background:var(--panel); font-size:11px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .background-buttons { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
 .background-buttons button { white-space:nowrap; }
+/* Match the approved rendered preview, including the existing DSH-scoped dimensions. */
+.background-controls .background-line { flex-direction:column; }
+.background-controls .background-state { font-size:11px; font-weight:500; }
+.background-controls .background-sentence { font-size:14px; line-height:1.65; }
+.background-controls .background-risk { display:inline-block; line-height:1.5; }
+.background-controls .background-risks:has(.background-risk-delete) { margin:12px 0 18px; }
+.background-controls .background-risk-delete { border-color:#cb7b70; background:#fff0ed; color:#943d32; line-height:1.7; }
+.background-void .background-risk { background:var(--hover); border-color:var(--border); color:var(--muted); }
+.background-controls .background-buttons { justify-content:flex-end; }
+.background-controls .background-buttons button { min-height:34px; }
+.background-controls .background-buttons button.primary { font-weight:600; }
+
 .operator-unread { font-weight:600; }
 .operator-grant { display:flex; flex-wrap:wrap; gap:10px; width:100%; }
 .operator-grant label { display:flex; flex-direction:column; gap:4px; max-width:100%; }
