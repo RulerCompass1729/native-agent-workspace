@@ -24,13 +24,17 @@
         return true;
       },
       update(view) {
-        input.readOnly = view.readOnly; input.disabled = false;
-        input.placeholder = view.placeholder; input.setAttribute('aria-label', view.inputLabel);
-        send.textContent = view.label; send.type = view.submit ? 'submit' : 'button'; send.disabled = view.disabled;
-        if (view.actionLabel) send.setAttribute('aria-label', view.actionLabel); else send.removeAttribute('aria-label');
-        hint.textContent = view.hint; hint.hidden = !view.hint;
-        native.hidden = !view.showNative; native.disabled = view.nativeDisabled;
-        if (view.nativeLabel) native.setAttribute('aria-label', view.nativeLabel);
+        // A space redraws every column's input: what already shows is left as it is. Writing equal text still
+        // replaces its node, so the page was laid out again for each column (2026-11-15, space-column-layout.test.cjs).
+        const set = (el, name, value) => { if (el[name] !== value) el[name] = value; };
+        const attribute = (el, name, value) => { if (el.getAttribute(name) !== String(value)) el.setAttribute(name, value); };
+        set(input, 'readOnly', Boolean(view.readOnly)); set(input, 'disabled', false);
+        set(input, 'placeholder', String(view.placeholder)); attribute(input, 'aria-label', view.inputLabel);
+        set(send, 'textContent', String(view.label ?? '')); set(send, 'type', view.submit ? 'submit' : 'button'); set(send, 'disabled', Boolean(view.disabled));
+        if (view.actionLabel) attribute(send, 'aria-label', view.actionLabel); else send.removeAttribute('aria-label');
+        set(hint, 'textContent', String(view.hint ?? '')); set(hint, 'hidden', !view.hint);
+        set(native, 'hidden', !view.showNative); set(native, 'disabled', Boolean(view.nativeDisabled));
+        if (view.nativeLabel) attribute(native, 'aria-label', view.nativeLabel);
       },
       suspend() { if (form.contains(form.ownerDocument.activeElement)) form.ownerDocument.activeElement.blur(); },
       dispose() { disposed = true; for (const remove of listeners) remove(); },
