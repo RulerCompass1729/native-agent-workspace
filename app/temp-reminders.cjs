@@ -5,6 +5,7 @@ const {randomUUID}=require('node:crypto'), {promisify}=require('node:util');
 const ownership=require('./temp-ownership.cjs'), {pythonExecutable}=require('./platform.cjs');
 const {lockIdentity}=require('./service-lock.cjs');
 const run=promisify(execFile), DAY=86400000, LINE=512*1024*1024, WEEK=7*DAY;
+const CLEAN_CHECK_MS=10000, CLEAN_REFRESH_ENTRIES=50000;
 const intersects=(a,b)=>ownership.inside(a,b)||ownership.inside(b,a);
 const ident=s=>[Number(s.dev),Number(s.ino),Number(s.uid),Number(s.size),s.mtimeNs.toString(),s.ctimeNs.toString()];
 const protectedNames=new Set(['.git','.naw-keep','auth.json','.credentials.json','credentials','rollouts','evidence']);
@@ -13,6 +14,7 @@ function ownerAlive(owner) {
   const current=lockIdentity(owner.pid); return !current||current.started===owner.started;
 }
 const ineligible=()=>Object.assign(Error('Protected temporary content'),{code:'TEMP_INELIGIBLE'});
+const changed=()=>Object.assign(Error('Temporary directory identity changed'),{code:'TEMP_CHANGED'});
 function liveRuntimeMetadata(file,expected) {
   const fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
   try {
@@ -35,14 +37,15 @@ async function inspectSystem() {
   return {opened:files.stdout.split('\n').filter(s=>s.startsWith('n/')).map(s=>normalized(s.slice(1).replace(/ \(deleted\)$/,''))),
     mounted:mounts.stdout.split('\n').map(s=>s.match(/ on (.*) \(/)?.[1]).filter(Boolean).map(normalized)};
 }
-async function tree(record,roots,system,protectedPaths,now) {
+async function tree(record,roots,system,protectedPaths,now,check=()=>{}) {
   const file=record.path;
   if(!roots.some(root=>file!==root&&ownership.inside(root,file)) || protectedPaths.some(p=>intersects(p,file))) return null;
   const first=await fs.promises.lstat(file,{bigint:true});
-  if(!first.isDirectory() || first.isSymbolicLink() || Number(first.uid)!==record.uid || Number(first.dev)!==record.dev || Number(first.ino)!==record.ino || await fs.promises.realpath(file)!==file) return null;
+  if(!first.isDirectory() || first.isSymbolicLink() || Number(first.uid)!==record.uid || Number(first.dev)!==record.dev || Number(first.ino)!==record.ino || await fs.promises.realpath(file)!==file) throw changed();
   if(system.opened.some(p=>ownership.inside(file,p)) || system.mounted.some(p=>ownership.inside(file,p)||roots.some(root=>ownership.inside(root,p))&&ownership.inside(p,file))) return null;
   const entries=[]; let bytes=0,newest=0;
   async function visit(folder,name) {
+    check(entries.length);
     if(entries.length>=50000) throw Error('Temporary tree too large');
     const s=await fs.promises.lstat(folder,{bigint:true});
     if(Number(s.uid)!==record.uid || Number(s.dev)!==record.dev || s.isSymbolicLink() || (!s.isDirectory()&&!s.isFile()) || s.isFile()&&s.nlink!==1n) throw ineligible();
@@ -55,22 +58,22 @@ async function tree(record,roots,system,protectedPaths,now) {
   await visit(file,'');
   if(now-newest<DAY) return null;
   // Read the root again: a concurrent subtree insertion is never a valid snapshot.
-  if(JSON.stringify(ident(await fs.promises.lstat(file,{bigint:true})))!==JSON.stringify(entries[0].identity)) return null;
+  if(JSON.stringify(ident(await fs.promises.lstat(file,{bigint:true})))!==JSON.stringify(entries[0].identity)) throw changed();
   return {record,entries,bytes};
 }
-function remove(snapshot,roots) {
+function remove(snapshot,roots,registry) {
   return new Promise(resolve=>{
     const python=pythonExecutable(); if(!python) return resolve({removed:false,bytes:0});
     const child=execFile(python,[path.join(__dirname,'temp-cleanup.py')],{timeout:30000,maxBuffer:8192},(error,stdout)=>{
       try { if(error) throw error; const r=JSON.parse(stdout); if(typeof r.removed!=='boolean'||!Number.isSafeInteger(r.bytes)||r.bytes<0) throw Error('Invalid removal receipt'); resolve(r); }
       catch { resolve({removed:false,bytes:0}); }
     });
-    child.stdin.on('error',()=>{}); child.stdin.end(JSON.stringify({path:snapshot.record.path,owner:snapshot.record.owner,roots,entries:snapshot.entries}));
+    child.stdin.on('error',()=>{}); child.stdin.end(JSON.stringify({path:snapshot.record.path,owner:snapshot.record.owner,roots,entries:snapshot.entries,registry}));
   });
 }
 class TempReminders {
-  constructor({dataDir,registryDir=ownership.defaultDirectory(),roots=ownership.roots(),now=Date.now,inspect=inspectSystem,isAlive=ownerAlive,isPerson,changed=()=>{}}) {
-    Object.assign(this,{dataDir,registryDir,roots:[...new Set(roots.map(p=>fs.realpathSync(p)))],now,inspect,isAlive,isPerson,changed});
+  constructor({dataDir,registryDir=ownership.defaultDirectory(),roots=ownership.roots(),now=Date.now,monotonic=()=>performance.now(),inspect=inspectSystem,isAlive=ownerAlive,isPerson,changed=()=>{}}) {
+    Object.assign(this,{dataDir,registryDir,roots:[...new Set(roots.map(p=>fs.realpathSync(p)))],now,monotonic,inspect,isAlive,isPerson,changed});
     this.file=path.join(dataDir,'temp-reminders.json'); this.tickets=new WeakMap(); this.candidates=[]; this.cached=null; this.lastScan=null; this.busy=false;
     try { const fd=fs.openSync(this.file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
       try { const s=fs.fstatSync(fd); if(!s.isFile()||s.uid!==process.getuid()||s.mode&0o077||s.size>65536) throw Error('Unsafe reminder state'); this.saved=JSON.parse(fs.readFileSync(fd,'utf8')); }
@@ -88,10 +91,10 @@ class TempReminders {
     try { Promise.resolve(this.changed()).catch(()=>{}); } catch { /* A closed view does not undo a durable result. */ }
     return this.cached;
   }
-  async status(force=false) {
+  async status(force=false,check) {
     if(this.pending) return this.pending;
     if(!force&&this.lastScan!==null&&this.cached&&this.now()-this.lastScan<DAY&&this.now()>=this.lastScan) return this.cached;
-    this.pending=this.scan().catch(error=>{
+    this.pending=this.scan(check).catch(error=>{
       const notify=this.cached?.anomaly!=='storage-unavailable';
       // All readers must see the failure instead of an earlier quiet cache.
       // Keep it ephemeral, grant no candidate, and retry on the next read.
@@ -101,20 +104,22 @@ class TempReminders {
       throw error;
     }).finally(()=>{this.pending=null;}); return this.pending;
   }
-  async scan() {
+  async scan(check=()=>{}) {
     const now=this.now(); let entries=[],anomaly=null;
     try {
       const available=[];
       const alive=new Map(); const live=r=>{ const key=JSON.stringify(r.owner); if(!alive.has(key)) alive.set(key,this.isAlive(r.owner)); return alive.get(key); };
-      for await(const batch of ownership.batches(this.registryDir)) for(const r of batch) { if(!this.roots.some(root=>r.path!==root&&ownership.inside(root,r.path)) || path.resolve(r.path)!==r.path) continue;
+      for await(const batch of ownership.batches(this.registryDir,check)) for(const r of batch) { check(available.length); if(!this.roots.some(root=>r.path!==root&&ownership.inside(root,r.path)) || path.resolve(r.path)!==r.path) continue;
         try { await fs.promises.lstat(r.path); available.push(r); }
         catch(error) { if(error.code==='ENOENT') ownership.forgetMissing(r,this.registryDir); else throw error; } }
       const protectedPaths=available.filter(live).map(r=>r.path);
       const system=available.some(r=>!live(r))?await this.inspect():{opened:[],mounted:[]};
+      let retained=available.length;
       for(const r of available.sort((a,b)=>a.path.length-b.path.length)) {
+        check(retained);
         if(live(r)||entries.some(e=>ownership.inside(e.record.path,r.path))) continue;
-        try { const e=await tree(r,this.roots,system,protectedPaths,now); if(e) entries.push(e); }
-        catch(error) { if(!['ENOENT','TEMP_INELIGIBLE'].includes(error.code)) anomaly='inspection-unavailable'; }
+        try { const e=await tree(r,this.roots,system,protectedPaths,now,size=>check(retained+size)); if(e) {entries.push(e);retained+=e.entries.length;} }
+        catch(error) { if(error.code==='TEMP_BUDGET')throw error; if(!['ENOENT','TEMP_INELIGIBLE','TEMP_CHANGED'].includes(error.code)) anomaly='inspection-unavailable'; }
       }
     } catch { anomaly='inspection-unavailable'; entries=[]; }
     this.candidates=entries; this.lastScan=now;
@@ -144,29 +149,46 @@ class TempReminders {
   async clean(c,ticket) {
     const grant=this.take(c,ticket,true); if(this.busy) throw Error('Temporary cleanup already running');
     this.busy=true; const result={at:this.now(),cleaned:0,bytes:0,skipped:0,reasons:{busy:0,changed:0,unverified:0}};
+    // One monotonic budget for execution-time inventory checks and the final
+    // refresh. A deadline/retained-metadata limit fails closed, never deletes.
+    const deadline=this.monotonic()+CLEAN_CHECK_MS,check=(retained=0)=>{
+      if(this.monotonic()>=deadline||retained>=CLEAN_REFRESH_ENTRIES) throw Object.assign(Error('Temporary inspection budget exhausted'),{code:'TEMP_BUDGET'});
+    };
     this.finished=new Promise(resolve=>{this.finish=resolve;});
     try {
       for(const [index,before] of grant.entries.entries()) {
-        try {this.person(c);} catch {
+        try {this.person(c);check();} catch {
           const remaining=grant.entries.length-index;result.skipped+=remaining;result.reasons.unverified+=remaining;break;
         }
         try {
           // Independently inspect each directory at execution; never extend a grant
           // to a newly discovered candidate or trust a cached lsof/mount result.
-          const records=ownership.read(this.registryDir), record=records.find(r=>r.id===before.record.id);
-          if(!record || this.isAlive(record.owner)) {result.skipped++;result.reasons.busy++;continue;}
+          const registry=ownership.revision(this.registryDir,check);
+          let record=null,liveOverlap=false;
+          for await(const batch of ownership.batches(this.registryDir,check)) for(const r of batch) {
+            check();
+            if(r.id===before.record.id)record=r;
+            if(intersects(before.record.path,r.path)&&this.isAlive(r.owner))liveOverlap=true;
+          }
+          // Retain one receipt and a boolean, not the whole inventory. Finish
+          // the stream: a later live child or unsafe receipt must still block.
+          if(!record)throw Error('Temporary ownership receipt missing');
+          if(['path','uid','dev','ino'].some(k=>record[k]!==before.record[k])||JSON.stringify(record.owner)!==JSON.stringify(before.record.owner))throw changed();
+          if(liveOverlap) {result.skipped++;result.reasons.busy++;continue;}
           const system=await this.inspect(); this.person(c);
-          const protectedPaths=records.filter(r=>this.isAlive(r.owner)).map(r=>r.path);
-          const current=await tree(record,this.roots,system,protectedPaths,this.now());
+          const current=await tree(record,this.roots,system,[],this.now(),check);
           if(!current) {result.skipped++;result.reasons.busy++;continue;}
           if(JSON.stringify(current.entries)!==JSON.stringify(before.entries)) {result.skipped++;result.reasons.changed++;continue;}
-          this.person(c);
-          const receipt=await remove(current,this.roots); result.bytes+=receipt.bytes;
+          this.person(c);check();
+          // No asynchronous gap between the final registry check and dispatch.
+          // Python carries this same proof across its own system inspection.
+          if(JSON.stringify(ownership.revision(this.registryDir,check))!==JSON.stringify(registry))throw changed();
+          const receipt=await remove(current,this.roots,registry); result.bytes+=receipt.bytes;
           if(receipt.removed) {result.cleaned++;try{ownership.forget(record.id,this.registryDir);}catch{result.bookkeepingFailed=true;}}
-          else {result.skipped++;result.reasons.unverified++;}
-        } catch {result.skipped++;result.reasons.unverified++;}
+          else {result.skipped++;result.reasons[receipt.registryChanged===true&&receipt.untouched===true&&receipt.bytes===0?'changed':'unverified']++;}
+        } catch(error) {result.skipped++;result.reasons[error.code==='TEMP_CHANGED'?'changed':'unverified']++;}
       }
-      try {this.save({...this.cached,result}); await this.status(true);}
+      try {this.save({...this.cached,result}); await this.status(true,check);}
       catch {result.bookkeepingFailed=true;this.cached={...this.cached,result,shown:true,anomaly:'storage-unavailable'};this.saved.reminder=this.cached;}
       return result;
     } finally {this.busy=false;this.finish();}

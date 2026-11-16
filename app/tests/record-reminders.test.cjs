@@ -125,6 +125,22 @@ function page(t, dir, now = NOW) {
   return { view, button, badge, dialog, calls, out, find, answer: hook => { deleteAnswer = hook; }, changed: () => onChanged?.(), unavailable: value => { unavailable = value; }, text: () => dialog.all().filter(node => !node.hidden).map(node => node.textContent).filter(Boolean).join('\n') };
 }
 
+for (const language of ['zh','en']) test(`a changed temporary directory uses the existing kept result rather than the in-use-only result (${language})`,async()=>{
+  const dialog=new Element('dialog'),button=new Element('button'),badge=new Element('span'),document={createElement:tag=>new Element(tag)};
+  const format=(key,params)=>locale.format(language,key,params),result={cleaned:0,bytes:0,skipped:1,reasons:{busy:0,changed:1,unverified:0}};
+  let status={count:1,records:[],temp:{shown:true,directories:1,bytes:4096,oldestDay:'2026-11-01',ticket:'synthetic-person-ticket'}};
+  const api={records:async action=>{
+    if(action==='tempClean') {status={count:0,records:[],temp:{shown:false}};return {...status,result};}
+    assert.equal(action,'status');return status;
+  }};
+  const view=bind({button,badge,dialog,document,api,text:format});await view.open();
+  await dialog.all().find(node=>node.dataset.action==='tempClean').fire('click');
+  const text=dialog.all().map(node=>node.textContent).join('\n');
+  assert.ok(text.includes(format('records.temp.kept',{count:1})));
+  assert.equal(text.includes(format('records.temp.keptBusy',{count:1})),false);
+  assert.ok(dialog.all().some(node=>node.attributes.role==='status'));
+});
+
 test('the bell stays present when empty; its dialog says what, and "知道了" puts the item away', async t => {
   const dir = folder(t); readLog(dir, 33);
   const quiet = page(t, folder(t)); await quiet.view.refresh();
