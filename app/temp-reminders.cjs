@@ -92,6 +92,11 @@ class TempReminders {
     return this.cached;
   }
   async status(force=false,check) {
+    // Retry before the daily cache, but keep an unchanged refusal cached so
+    // recordsChanged does not trigger a scan/save/notification feedback loop.
+    let registrationIssue;
+    try {ownership.checkRegistration(this.registryDir);}catch(error){registrationIssue=error.registrationIssue;}
+    if(registrationIssue!==this.cached?.registrationIssue)force=true;
     if(this.pending) return this.pending;
     if(!force&&this.lastScan!==null&&this.cached&&this.now()-this.lastScan<DAY&&this.now()>=this.lastScan) return this.cached;
     this.pending=this.scan(check).catch(error=>{
@@ -105,8 +110,9 @@ class TempReminders {
     }).finally(()=>{this.pending=null;}); return this.pending;
   }
   async scan(check=()=>{}) {
-    const now=this.now(); let entries=[],anomaly=null;
+    const now=this.now(); let entries=[],anomaly=null,registrationIssue;
     try {
+      ownership.checkRegistration(this.registryDir);
       const available=[];
       const alive=new Map(); const live=r=>{ const key=JSON.stringify(r.owner); if(!alive.has(key)) alive.set(key,this.isAlive(r.owner)); return alive.get(key); };
       for await(const batch of ownership.batches(this.registryDir,check)) for(const r of batch) { check(available.length); if(!this.roots.some(root=>r.path!==root&&ownership.inside(root,r.path)) || path.resolve(r.path)!==r.path) continue;
@@ -121,13 +127,14 @@ class TempReminders {
         try { const e=await tree(r,this.roots,system,protectedPaths,now,size=>check(retained+size)); if(e) {entries.push(e);retained+=e.entries.length;} }
         catch(error) { if(error.code==='TEMP_BUDGET')throw error; if(!['ENOENT','TEMP_INELIGIBLE','TEMP_CHANGED'].includes(error.code)) anomaly='inspection-unavailable'; }
       }
-    } catch { anomaly='inspection-unavailable'; entries=[]; }
+      ownership.checkRegistration(this.registryDir);
+    } catch(error) { registrationIssue=error.registrationIssue;anomaly=registrationIssue?'registration-unverified':'inspection-unavailable'; entries=[]; }
     this.candidates=entries; this.lastScan=now;
     const bytes=entries.reduce((s,e)=>s+e.bytes,0), oldest=entries.length?Math.min(...entries.map(e=>e.record.createdAt)):null;
     const anomalyVersion=(this.saved.reminder.anomalyVersion||0)+(anomaly&&this.saved.reminder.anomaly!==anomaly?1:0);
     const shown=shouldShow({bytes,oldestAt:oldest,anomaly,anomalyVersion},this.saved.ack,now);
     return this.save({checkedAt:now,directories:entries.length,bytes,oldestDay:oldest===null?null:new Date(oldest).toISOString().slice(0,10),oldestAt:oldest,
-      shown:Boolean(shown),anomaly,anomalyVersion,result:this.saved.reminder.result});
+      shown:Boolean(shown),anomaly,anomalyVersion,...(registrationIssue?{registrationIssue}:{}),result:this.saved.reminder.result});
   }
   person(c) { if(typeof this.isPerson!=='function'||!this.isPerson(c)) throw Error('Temporary cleanup is person-only'); }
   async present(c,force=false) {
@@ -156,6 +163,7 @@ class TempReminders {
     };
     this.finished=new Promise(resolve=>{this.finish=resolve;});
     try {
+      try {ownership.retryCompletions(this.registryDir);}catch{ /* Per-candidate proofs and the final scan retain the reason. */ }
       for(const [index,before] of grant.entries.entries()) {
         try {this.person(c);check();} catch {
           const remaining=grant.entries.length-index;result.skipped+=remaining;result.reasons.unverified+=remaining;break;
@@ -185,8 +193,8 @@ class TempReminders {
           if(JSON.stringify(ownership.revision(this.registryDir,check))!==JSON.stringify(registry))throw changed();
           const receipt=await remove(current,this.roots,registry); result.bytes+=receipt.bytes;
           if(receipt.removed) {result.cleaned++;try{ownership.forget(record.id,this.registryDir);}catch{result.bookkeepingFailed=true;}}
-          else {result.skipped++;result.reasons[receipt.registryChanged===true&&receipt.untouched===true&&receipt.bytes===0?'changed':'unverified']++;}
-        } catch(error) {result.skipped++;result.reasons[error.code==='TEMP_CHANGED'?'changed':'unverified']++;}
+          else {result.skipped++;result.reasons[receipt.registryChanged===true&&receipt.untouched===true&&receipt.bytes===0&&!receipt.registrationIssue?'changed':'unverified']++;if(receipt.registrationIssue)result.registrationIssue=receipt.registrationIssue;}
+        } catch(error) {result.skipped++;result.reasons[error.code==='TEMP_CHANGED'?'changed':'unverified']++;if(error.registrationIssue)result.registrationIssue=error.registrationIssue;}
       }
       try {this.save({...this.cached,result}); await this.status(true,check);}
       catch {result.bookkeepingFailed=true;this.cached={...this.cached,result,shown:true,anomaly:'storage-unavailable'};this.saved.reminder=this.cached;}
@@ -199,6 +207,10 @@ function tempSummary(r) {
   if(typeof r.shown!=='boolean')throw Error('Invalid reminder state');
   const out={id:'naw-temp-files',version:n('version'),state:r.anomaly||r.state==='unavailable'?'unavailable':r.shown?'ready':'quiet',checkedAt:n('checkedAt'),directories:n('directories'),bytes:n('bytes'),oldestDay:/^\d{4}-\d{2}-\d{2}$/.test(r.oldestDay)?r.oldestDay:null,shown:r.shown===true,result:null};
   if(r.result) out.result=Object.fromEntries(['at','cleaned','bytes','skipped'].map(k=>{if(!Number.isSafeInteger(r.result[k])||r.result[k]<0)throw Error('Invalid cleanup result');return [k,r.result[k]];}));
+  for(const [source,target] of [[r,out],[r.result,out.result]])if(source?.registrationIssue!==undefined) {
+    if(!['incomplete','metadata-unavailable'].includes(source.registrationIssue))throw Error('Invalid registration issue');
+    target.registrationIssue=source.registrationIssue;
+  }
   return out;
 }
 function readSummary(dataDir) {
