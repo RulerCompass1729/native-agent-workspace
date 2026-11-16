@@ -30,6 +30,34 @@
     const link = document.createElement('input'); link.id = 'mobile-pair-link'; link.readOnly = true; link.autocomplete = 'off';
     const linkBox = labelled('mobile.link', link); linkBox.hidden = true;
     section.append(prepare, revoke, linkBox, status); container.append(section);
+    const approval = document.createElement('fieldset'), approvalTitle = document.createElement('legend'); say(approvalTitle, 'mobile.approvalTitle'); approval.append(approvalTitle);
+    const approvalInfo = document.createElement('p'), fingerprint = document.createElement('output'); fingerprint.id = 'mobile-approval-fingerprint';
+    const approvalBegin = say(document.createElement('button'), 'mobile.approvalBegin'), approvalRefresh = say(document.createElement('button'), 'mobile.approvalRefresh'), approvalConfirm = say(document.createElement('button'), 'mobile.approvalConfirm'), approvalRevoke = say(document.createElement('button'), 'mobile.approvalRevoke');
+    for (const [button, id] of [[approvalBegin, 'begin'], [approvalRefresh, 'refresh'], [approvalConfirm, 'confirm'], [approvalRevoke, 'revoke']]) { button.type = 'button'; button.id = 'mobile-approval-' + id; }
+    const matched = document.createElement('input'), enabled = document.createElement('input'); matched.type = enabled.type = 'checkbox'; matched.id = 'mobile-approval-matched'; enabled.id = 'mobile-approval-enabled';
+    approval.append(approvalInfo, labelled('mobile.approvalFingerprint', fingerprint), approvalBegin, approvalRefresh, labelled('mobile.approvalMatched', matched), approvalConfirm, labelled('mobile.approvalEnable', enabled), approvalRevoke); section.append(approval);
+    let approvalValue = null;
+    function showApproval(value) {
+      approvalValue = value; matched.checked = false; enabled.indeterminate = false; enabled.checked = value?.enabled === true;
+      enabled.disabled = !value?.registered; approvalConfirm.disabled = true; approvalBegin.disabled = !value?.paired;
+      fingerprint.value = ((value?.pending?.fingerprint || value?.fingerprint || '').match(/.{1,8}/g) || []).join(' ');
+      approvalInfo.textContent = value?.pending ? format('mobile.approvalCode', { code: value.pending.code }) : format(value?.paired ? 'mobile.approvalHelp' : 'mobile.approvalPairFirst');
+    }
+    async function approvalAction(method, value) {
+      if (!opened || typeof api[method] !== 'function') return;
+      const ticket = revision;
+      try { await api[method](value); const next = await api.mobileApprovalStatus(); if (opened && revision === ticket) showApproval(next); }
+      catch { if (opened && revision === ticket) { enabled.indeterminate = true; enabled.disabled = true; approvalConfirm.disabled = true; say(approvalInfo, 'mobile.approvalUnconfirmed'); } }
+    }
+    approvalBegin.addEventListener('click', () => approvalAction('mobileApprovalBegin'));
+    approvalRefresh.addEventListener('click', () => approvalAction('mobileApprovalStatus'));
+    approvalRevoke.addEventListener('click', () => approvalAction('mobileApprovalRevoke'));
+    matched.addEventListener('change', () => { approvalConfirm.disabled = !(matched.checked && approvalValue?.pending?.ready); });
+    approvalConfirm.addEventListener('click', () => {
+      const pending = approvalValue?.pending;
+      if (matched.checked && pending?.ready) approvalAction('mobileApprovalConfirm', { registrationId: pending.registrationId, fingerprint: pending.fingerprint });
+    });
+    enabled.addEventListener('change', () => approvalAction('mobileApprovalEnable', { enabled: enabled.checked, registrationId: approvalValue?.registrationId }));
     let revision = 0, timer, opened = false, busy = false, selections = [], roomSelections = [];
     const clearLink = () => { clearTimer(timer); timer = undefined; link.value = ''; linkBox.hidden = true; };
     function open() {
@@ -51,6 +79,7 @@
         box.append(label, labelled('mobile.allowSend', send), labelled('mobile.allowAnswer', answer)); choices.append(box); selections.push({ id: record.id, nativeId: record.nativeId, read, send, answer });
       }
       say(status, 'mobile.idle');
+      showApproval(null); approvalAction('mobileApprovalStatus');
     }
     async function pair() {
       if (!opened || busy) return;
@@ -87,6 +116,7 @@
     function close() {
       revision++; opened = false; busy = false; clearLink(); origin.value = actor.value = ''; port.value = '0'; carrier.checked = replace.checked = false;
       selections = []; roomSelections = []; records.checked = false; spaces.replaceChildren(); choices.replaceChildren(); quiet(status); prepare.disabled = false; section.open = false;
+      showApproval(null);
     }
     prepare.addEventListener('click', pair); revoke.addEventListener('click', stop);
     return { open, close, dispose() { close(); section.remove(); } };

@@ -189,6 +189,7 @@ function appMobileWorkspace() {
       status: appRecordsStatus,
       acknowledge: (...args) => { const result = recordReminders.acknowledge(dataDir, ...args); mobileBroker?.refreshPush(); return result; },
     },
+    confirmation: (...args) => backgroundControl.mobileBinding(...args), decide: (...args) => backgroundControl.decide(...args),
     broadcast: () => broadcastRoom(), schedule: () => queueDispatcher?.schedule(),
   });
 }
@@ -2568,6 +2569,13 @@ async function boot() {
   });
   applicationHandlers.delete('mobilePairing');
   applicationHandlers.delete('mobileRevoke');
+  for (const [method, name] of Object.entries({ mobileApprovalStatus: 'approvalStatus', mobileApprovalBegin: 'approvalBegin', mobileApprovalConfirm: 'approvalConfirm', mobileApprovalEnable: 'approvalEnable', mobileApprovalRevoke: 'approvalRevoke' })) {
+    register(method, (c, value) => {
+      if (!isCurrentHumanContext(c)) throw uiError('error.operator.desktopOnly');
+      return appMobileBroker()[name](value);
+    });
+    applicationHandlers.delete(method);
+  }
   register('readingState', (c, positions, panorama) => {
     const checked = readingState(positions);
     if (panorama !== undefined && !validViews([{ owner: c.view.owner, panorama }])) throw uiError("error.panoramaReadingInvalid");

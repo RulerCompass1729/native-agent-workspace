@@ -9,6 +9,9 @@ const exact = (value, keys) => value && typeof value === 'object' && !Array.isAr
 const HTTP_ERROR = Symbol('mobile-transport-error');
 const reject = (status, code) => Object.assign(new Error(code), { status, code, [HTTP_ERROR]: true });
 const types = { '/mobile/': ['index.html', 'text/html; charset=utf-8'], '/mobile/client.js': ['client.js', 'text/javascript; charset=utf-8'], '/mobile/workspace.js': ['workspace.js', 'text/javascript; charset=utf-8'], '/mobile/push.js': ['push.js', 'text/javascript; charset=utf-8'], '/mobile/sw.js': ['sw.js', 'text/javascript; charset=utf-8'], '/mobile/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'], '/mobile/style.css': ['style.css', 'text/css; charset=utf-8'] };
+types['/mobile/passkeys.js'] = ['passkeys.js', 'text/javascript; charset=utf-8'];
+const consentRoutes = { '/mobile/consent/registration/options': 'registrationOptions', '/mobile/consent/register': 'registerPasskey',
+  '/mobile/consent/registration/proof': 'registrationProof', '/mobile/consent/options': 'decisionOptions', '/mobile/consent/decide': 'decide', '/mobile/consent/receipt': 'decisionReceipt' };
 function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutMs = 3000 }) {
   const site = new URL(origin);
   if (site.protocol !== 'https:' || site.origin !== origin || site.username || site.password || typeof actor !== 'string' || !actor || actor.length > 320 || /[\x00-\x1f\x7f]/.test(actor) ||
@@ -99,7 +102,7 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
       }
       const reading = request.method === 'GET' && request.url.match(/^\/mobile\/read\/([A-Za-z0-9_-]{1,100})$/);
       if (reading) return respond(response, 200, await broker.read(auth(values), reading[1]));
-      if (request.method !== 'POST' || !['/mobile/pair', '/mobile/send', '/mobile/answer', '/mobile/receipt', '/mobile/logout', '/mobile/workspace/action', '/mobile/push'].includes(request.url)) throw reject(404, 'MOBILE_NOT_FOUND');
+      if (request.method !== 'POST' || !['/mobile/pair', '/mobile/send', '/mobile/answer', '/mobile/receipt', '/mobile/logout', '/mobile/workspace/action', '/mobile/push', ...Object.keys(consentRoutes)].includes(request.url)) throw reject(404, 'MOBILE_NOT_FOUND');
       if (values.origin !== origin) throw reject(403, 'MOBILE_DENIED');
       const value = await body(request, values, request.url === '/mobile/pair' ? 4096 : 65536);
       if (request.url === '/mobile/pair') {
@@ -115,6 +118,11 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
       if (request.url === '/mobile/push') {
         if (typeof broker.pushAction !== 'function') throw reject(403, 'MOBILE_DENIED');
         return respond(response, 200, broker.pushAction(credentials, value));
+      }
+      if (Object.hasOwn(consentRoutes, request.url)) {
+        const method = consentRoutes[request.url];
+        if (typeof broker[method] !== 'function') throw reject(403, 'MOBILE_DENIED');
+        dispatch = true; return respond(response, 200, await broker[method](credentials, value));
       }
       if (request.url === '/mobile/workspace/action') {
         if (typeof broker.workspaceAction !== 'function' || !['queueAdd', 'queueCancel', 'queueResolve', 'recordAcknowledge', 'receipt'].includes(value.action)) throw reject(403, 'MOBILE_DENIED');

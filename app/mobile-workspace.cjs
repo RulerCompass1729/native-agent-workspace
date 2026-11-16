@@ -3,6 +3,8 @@
 // No listener, native process, reminder store or generic application-command API.
 const { roomIds } = require('./collaboration-spaces.cjs');
 const queueRules = require('./queue-dispatch.cjs');
+const { createHash } = require('node:crypto');
+const presentation = card => 'sha256:' + createHash('sha256').update(JSON.stringify([card.title, card.detail])).digest('hex');
 const denied = () => Object.assign(Error('Mobile workspace authorization or state changed'), { code: 'MOBILE_WORKSPACE_DENIED', notSent: true });
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const identifier = s => typeof s === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(s);
@@ -23,9 +25,9 @@ function conversation(rows = [], sessionId) {
   return { messages: result.reverse(), earlierMessagesOmitted: omitted };
 }
 class MobileWorkspace {
-  constructor({ snapshot, roomState, labels = new Map(), records, broadcast = async () => {}, schedule = () => {}, now = Date.now }) {
+  constructor({ snapshot, roomState, labels = new Map(), records, confirmation, decide, broadcast = async () => {}, schedule = () => {}, now = Date.now }) {
     if (typeof snapshot !== 'function' || !roomState || !records || typeof records.status !== 'function' || typeof records.acknowledge !== 'function') throw denied();
-    Object.assign(this, { snapshot, roomState, labels, records, broadcast, schedule, now });
+    Object.assign(this, { snapshot, roomState, labels, records, confirmation, decide, broadcast, schedule, now });
   }
   grant(client, value) {
     if (!exact(value, ['roomIds', 'records']) || !Array.isArray(value.roomIds) || value.roomIds.length > 32 ||
@@ -65,6 +67,12 @@ class MobileWorkspace {
         expiresAt: Number.isSafeInteger(operation?.expiresAt) ? operation.expiresAt : null,
         state: operation?.state || 'confirmation-required', disposition: operation?.disposition || null, canDecide: false });
     }
+    for (const card of cards.values()) {
+      try {
+        const binding = this.confirmation(card.sessionId, permitted.get(card.sessionId).nativeId, card.operationId, 1);
+        if (binding.presentation === presentation(card)) card.version = binding.version;
+      } catch { /* Readable cards without complete, current proof remain disabled. */ }
+    }
     const sessions = [...permitted.values()].map(s => {
       const boundary = (s.messages || []).findLastIndex(m => s.nativeContexts?.some(c => c.boundaryId === m.id));
       return { id: s.id, name: s.name, provider: s.provider, state: s.state, roomIds: roomIds(s).filter(id => grant.roomIds.includes(id)),
@@ -80,6 +88,28 @@ class MobileWorkspace {
       capabilities: { queue: grant.roomIds.length > 0, records: grant.records, sensitiveDecisions: false, nativeTerminal: false } };
     if (Buffer.byteLength(JSON.stringify(result)) > 8 * 1024 * 1024) throw denied();
     return result;
+  }
+  confirmationBinding(client, scopes, value, running = false) {
+    if (!value || !['approve', 'deny'].includes(value.decision) || typeof value.id !== 'string' || typeof value.version !== 'string') throw denied();
+    const separator = value.id.indexOf(':'), sessionId = value.id.slice(0, separator), operationId = value.id.slice(separator + 1);
+    // Desktop operation IDs are opaque tokens, including ':' and '.', not
+    // session UUIDs. The authoritative controller matches the exact record.
+    if (separator < 1 || !identifier(sessionId) || !operationId) throw denied();
+    const scope = scopes.find(s => s.sessionId === sessionId && s.actions.includes('read'));
+    const record = this.snapshot(client).sessions.find(s => s.id === sessionId);
+    if (!scope || !record || record.archived || record.nativeContextPending || record.nativeId !== scope.nativeId || client.route(sessionId).key !== scope.serviceKey) throw denied();
+    // Current desktop cards have Cancel=0, Approve=1. Other button schemes are
+    // deliberately left on the Mac, rather than guessing a sensitive decision.
+    const binding = this.confirmation(sessionId, scope.nativeId, operationId, value.decision === 'approve' ? 1 : 0, running);
+    if (binding.version !== value.version || !binding.expiresAt || binding.expiresAt <= this.now()) throw denied();
+    return binding;
+  }
+  async decision(client, scopes, value, permit, valid) {
+    await client.refresh();
+    const check = () => { permit.check(valid(), this.confirmationBinding(client, scopes, value, true)); };
+    check();
+    const binding = this.confirmationBinding(client, scopes, value);
+    return this.decide(binding.sessionId, binding.nativeId, binding.operationId, binding.decision, check);
   }
   async action(client, grant, value, valid) {
     if (typeof valid !== 'function') throw denied();

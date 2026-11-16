@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const { randomUUID, randomBytes, createHash, timingSafeEqual } = require('node:crypto');
 const { MobileAccess } = require('./mobile-access.cjs');
+const { MobileConsent } = require('./mobile-consent.cjs');
 const { MAX_REQUESTS } = require('./mobile-session.cjs');
 const { connect } = require('./service-client.cjs');
 const { WorkspaceClient } = require('./workspace-client.cjs');
@@ -30,6 +31,7 @@ class MobileBroker {
   #contexts = new Map(); #requests = new Map();
   #desktop; #human; #workspaceGrant = null; #workspaceRequests = new Map();
   #push = null; #pushOptions;
+  #consent = new MobileConsent(); #decisions = new Map(); #consentView = false;
   // changed() runs after the phone pairs or logs out, so the app can close its listener when nothing stays open.
   constructor(root, { exclusive, changed, desktop, onHumanInput = () => {}, pushOptions = {} } = {}) {
     this.#access = new MobileAccess(root, { exclusive });
@@ -42,7 +44,7 @@ class MobileBroker {
     // Keep that spelling while separately verifying its canonical authority.
     this.#scope = root;
   }
-  #forget() { this.#push?.close(); this.#push = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); }
+  #forget() { this.#push?.close(); this.#push = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); this.#consent.revoke(); this.#decisions.clear(); this.#consentView = false; }
   #disconnect() { const client = this.#client; this.#client = null; client?.close(); }
   #bound() {
     const client = this.#client;
@@ -124,8 +126,9 @@ class MobileBroker {
   session(auth) {
     const state = this.#authenticate(auth), csrf = this.#csrf;
     if (!csrf || csrf.generation !== state.generation || csrf.deviceId !== state.device.id || digest(csrf.value) !== state.device.csrfHash) throw denied('MOBILE_REPAIR_REQUIRED');
-    return { deviceId: state.device.id, expiresAt: state.device.until, csrf: csrf.value,
-      ...(this.#workspaceGrant ? { workspace: true } : {}),
+    const consent = this.#consent.status(state);
+    return { deviceId: state.device.id, expiresAt: state.device.until, csrf: csrf.value, consent: { registered: consent.registered, enabled: consent.enabled },
+      ...(this.#workspaceGrant || this.#consentView ? { workspace: true } : {}),
       sessions: state.scopes.filter(value => value.actions.includes('read')).map(value => {
         const base = { id: value.sessionId, actions: [...value.actions] };
         try {
@@ -156,14 +159,17 @@ class MobileBroker {
   }
   #workspaceState(auth, write = false) {
     const state = write ? this.#writeState(auth) : this.#authenticate(auth);
-    if (!this.#desktop || !this.#workspaceGrant || this.#workspaceGrant.generation !== state.generation) throw denied();
+    if (!this.#desktop || !this.#workspaceGrant && !this.#consentView || this.#workspaceGrant && this.#workspaceGrant.generation !== state.generation) throw denied();
     return state;
   }
   async workspaceRead(auth) {
     const state = this.#workspaceState(auth), client = this.#bound(), epoch = this.#epoch;
-    const result = await this.#desktop.read(client, this.#workspaceGrant.value, state.scopes);
+    const result = await this.#desktop.read(client, this.#workspaceGrant?.value || { roomIds: [], records: false }, state.scopes);
     if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
     this.#workspaceState(auth);
+    const consent = this.#consent.status(state);
+    result.capabilities.sensitiveDecisions = consent.enabled;
+    for (const card of result.confirmations) card.canDecide = Boolean(consent.enabled && card.version && card.state === 'confirmation-required' && !card.disposition && card.expiresAt > Date.now());
     return result;
   }
   #pushAuthority() {
@@ -194,6 +200,59 @@ class MobileBroker {
     return this.#push.status();
   }
   refreshPush() { return this.#push?.refresh(); }
+  #desktopConsentState() {
+    this.#bound(); const s = this.#access.load();
+    if (this.#access.closed || !s.enabled || !s.device || s.device.until <= this.#access.time() || this.#access.disabledMarker()) throw denied();
+    return s;
+  }
+  approvalStatus() {
+    try { const s = this.#desktopConsentState(); return { paired: true, origin: s.origin, ...this.#consent.status(s) }; }
+    catch { return { paired: false, enabled: false, registered: false, pending: null }; }
+  }
+  approvalBegin() { return this.#consent.beginRegistration(this.#desktopConsentState()); }
+  approvalConfirm(value) { return this.#consent.confirmRegistration(this.#desktopConsentState(), value); }
+  approvalEnable(value) {
+    const result = this.#consent.setEnabled(this.#desktopConsentState(), value);
+    // Enabling cards also exposes their read projection for already-paired
+    // sessions. It grants no rooms or reminders, and survives key revocation so
+    // the phone can still check its original card/receipt without approving.
+    if (result.enabled && this.#desktop) this.#consentView = true;
+    return result;
+  }
+  approvalRevoke() { this.#consent.revoke(); return { enabled: false, registered: false }; }
+  registrationOptions(auth, value) { return this.#consent.registrationOptions(this.#writeState(auth), value); }
+  registerPasskey(auth, value) { return this.#consent.register(this.#writeState(auth), value); }
+  registrationProof(auth, value) { return this.#consent.proveRegistration(this.#writeState(auth), value); }
+  async decisionOptions(auth, value) {
+    if (!exact(value, ['id', 'version', 'decision'])) throw denied();
+    this.#workspaceState(auth, true);
+    const client = this.#bound(), epoch = this.#epoch; await client.refresh();
+    if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
+    const state = this.#workspaceState(auth, true), binding = this.#desktop.confirmationBinding(client, state.scopes, value);
+    return this.#consent.challenge(state, binding);
+  }
+  async decide(auth, value) {
+    if (!exact(value, ['id', 'version', 'decision', 'challengeId', 'assertion'])) throw denied();
+    const state = this.#workspaceState(auth, true), client = this.#bound(), epoch = this.#epoch;
+    const binding = this.#desktop.confirmationBinding(client, state.scopes, value), permit = this.#consent.consume(state, value, binding);
+    if (this.#decisions.size >= MAX_REQUESTS) throw denied();
+    const row = { challengeId: value.challengeId, status: 'unconfirmed', state: null }; this.#decisions.set(value.challengeId, row);
+    const valid = () => {
+      if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
+      return this.#workspaceState(auth, true);
+    };
+    try {
+      const result = await this.#desktop.decision(client, state.scopes, structuredClone(value), permit, valid);
+      row.state = result.state;
+      row.status = ['complete', 'cancelled', 'not-executed', 'confirmation-required'].includes(result.state) ? 'complete' : 'unconfirmed';
+    } catch (error) { if (error.notSent === true) row.status = 'not-sent'; }
+    valid(); return structuredClone(row);
+  }
+  decisionReceipt(auth, value) {
+    this.#workspaceState(auth, true);
+    if (!exact(value, ['challengeId']) || !uuid(value.challengeId) || !this.#decisions.has(value.challengeId)) throw denied('MOBILE_RECEIPT_UNKNOWN');
+    return structuredClone(this.#decisions.get(value.challengeId));
+  }
   async workspaceAction(auth, value) {
     this.#workspaceState(auth, true);
     if (!value || typeof value !== 'object' || Array.isArray(value) || !uuid(value.requestId)) throw denied();
@@ -212,7 +271,7 @@ class MobileBroker {
     if (this.#workspaceRequests.size >= MAX_REQUESTS) throw denied('MOBILE_REQUEST_CONFLICT');
     const row = { mark, result: { requestId: value.requestId, status: 'unconfirmed' } };
     this.#workspaceRequests.set(value.requestId, row);
-    const client = this.#bound(), epoch = this.#epoch, grant = this.#workspaceGrant.value;
+    const client = this.#bound(), epoch = this.#epoch, grant = this.#workspaceGrant?.value || { roomIds: [], records: false };
     const valid = () => {
       if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
       this.#workspaceState(auth, true);

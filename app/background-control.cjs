@@ -806,6 +806,7 @@ class BackgroundControl {
             }
           }
           checkDeadline();
+          approved?.authorize?.();
           handlerEntered = true;
           if (!terminalTarget) return handler(context, ...args.arguments);
           const result = await handler(context, ...args.arguments), frozen = result === undefined ? undefined : clone(result);
@@ -911,7 +912,19 @@ class BackgroundControl {
       });
       return { ...this.receipt(actor, args.operation_id, context), retry: false };
   }
-  async decide(sessionId, nativeId, id, response) {
+  mobileBinding(sessionId, nativeId, id, response, running = false) {
+    const row = this.data.records.find(r => r.actor.id === sessionId && r.actor.nativeId === nativeId && r.id === id);
+    if (!row || !['confirmation-required', ...(running ? ['running'] : [])].includes(row.state) || row.confirmation?.kind !== 'message' ||
+        row.confirmation.options?.buttons?.length !== 2 || (row.confirmation.options.cancelId ?? 0) !== 0 || ![0, 1].includes(response) || this.closed || this.failed || this.expired(row) || this.replacement(row)) throw Error('This mobile confirmation is no longer current');
+    const options = visibleOptions(row.confirmation.options);
+    if (typeof options.message !== 'string' || !options.message.trim() || options.message.length > 2000 ||
+        options.detail !== undefined && (typeof options.detail !== 'string' || options.detail.length > 16000)) throw Error('Read the complete confirmation on the Mac');
+    return { sessionId, nativeId, operationId: id, decision: response, expiresAt: confirmationExpiresAt(row), presentation: digest([options.message || '', options.detail || '']),
+      version: digest({ at: row.at, actor: row.actor, command: row.command, confirmation: row.confirmation, guard: row.guard, terminalConsent: row.terminalConsent }) };
+  }
+  async decide(sessionId, nativeId, id, response, authorize) {
+    if (authorize !== undefined && typeof authorize !== 'function') throw Error('Invalid confirmation authority');
+    authorize?.();
     const row = this.data.records.find(r => r.actor.id === sessionId && r.actor.nativeId === nativeId && r.id === id);
     if (!row || row.state !== 'confirmation-required' || row.confirmation?.kind !== 'message' || !Array.isArray(row.confirmation.options.buttons) ||
         !Number.isSafeInteger(response) || response < 0 || response >= row.confirmation.options.buttons.length || this.inflight.has(this.key(row.actor))) throw Error('This confirmation is no longer current');
@@ -921,6 +934,7 @@ class BackgroundControl {
     return this.exclusive(row.actor, async () => {
     if (confirmationExpiresAt(row) !== null && this.now() >= confirmationExpiresAt(row)) return this.settlePending(row, 'expired', 'deadline-elapsed');
     const context = await this.view(row.actor, row.command.view_id);
+    authorize?.();
     try { await context.checkActor(); }
     catch (error) {
       if (confirmationExpiresAt(row) !== null && this.now() >= confirmationExpiresAt(row)) return this.settlePending(row, 'expired', 'deadline-elapsed');
@@ -934,6 +948,7 @@ class BackgroundControl {
       return this.finishAudit(row.actor, id, context);
     }
     const current = this.receipt(row.actor, id);
+    authorize?.();
     if (!current || current.state !== 'confirmation-required' || !isDeepStrictEqual(current.confirmation, row.confirmation)) throw Error('This confirmation was already handled');
     if (response === (row.confirmation.options.cancelId ?? 0)) {
       this.commit(d => { const r = d.records.find(r => r.id === id && r.actor.id === sessionId && r.actor.nativeId === nativeId); Object.assign(r, { state: 'cancelled', humanDecision: response, finishedAt: this.now() }); });
@@ -957,7 +972,7 @@ class BackgroundControl {
       }
     }
     this.commit(d => { const r = d.records.find(r => r.id === id && r.actor.id === sessionId && r.actor.nativeId === nativeId); delete r.reason; delete r.resultNotice; delete r.stateUiMessage; Object.assign(r, { state: 'running', humanDecision: response, humanDecisionAt: this.now() }); });
-    return this.perform(row.actor, row.command, context, () => context.checkActor(), { operationId: id, confirmation: row.confirmation, response, terminalConsent: row.terminalConsent, expiresAt: confirmationExpiresAt(row) });
+    return this.perform(row.actor, row.command, context, async () => { authorize?.(); await context.checkActor(); authorize?.(); }, { operationId: id, confirmation: row.confirmation, response, terminalConsent: row.terminalConsent, expiresAt: confirmationExpiresAt(row), authorize });
     }).then(result => {
       // Whatever came of it (carried out, cancelled, or not carried out because the asking session changed), the agent
       // that asked is told once it is recorded; an answer refused as no longer current changed nothing and tells nothing.

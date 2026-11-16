@@ -43,6 +43,12 @@ test('push registration needs original Origin/cookie/CSRF and never offers an ar
   assert.equal((await f.invoke({ url: '/mobile/push/send', method: 'POST', value: {} })).statusCode, 404);
   assert.equal(writes, 1);
 });
+test('phone consent has no registration-initiation, enable, replace or revoke management endpoint', async () => {
+  const f = fixture();
+  for (const method of ['approvalBegin', 'approvalEnable', 'approvalRevoke', 'approvalConfirm']) f.broker[method] = () => { assert.fail('Phone cannot manage desktop approval authority'); };
+  for (const route of ['begin', 'enable', 'revoke', 'confirm', 'approvalEnable', 'approvalRevoke']) assert.equal((await f.invoke({ url: '/mobile/consent/' + route, method: 'POST', value: { enabled: true } })).statusCode, 404);
+  assert.equal(f.calls.length, 0);
+});
 test('phone workspace actions require the original CSRF and return only bounded receipts', async () => {
   const f = fixture();
   f.broker.workspaceAction = async (auth, value) => { f.calls.push(['workspaceAction', auth, value]); return { requestId: value.requestId, status: 'complete', itemId: 'task-a' }; };
@@ -135,4 +141,22 @@ test('read-only logout requires explicit request and reports unconfirmed revocat
   const f = fixture(); f.broker.logout = () => ({ authorizationRevoked: false, connectionClosed: true, committedWorkMayContinue: true });
   const r = await f.invoke({ method: 'POST', url: '/mobile/logout', value: {} }); assert.equal(r.statusCode, 409); assert.equal(r.json().authorizationRevoked, false); assert.equal(r.json().committedWorkMayContinue, true); assert.match(r.headers['set-cookie'], /Max-Age=0/);
   assert.equal(r.headers['clear-site-data'], undefined, 'Revocation must not delete original uncertain request IDs or phone drafts');
+});
+
+
+test('port: packaged push and passkey scripts coexist with fixed authenticated routes', async () => {
+  const f = fixture(); let push = 0, consent = 0;
+  f.broker.pushAction = () => { push++; return { enabled: false }; };
+  f.broker.decisionOptions = async () => { consent++; return { challengeId: requestId }; };
+  const shell = await f.invoke({ url: '/mobile/' });
+  for (const file of ['push.js', 'passkeys.js']) {
+    assert.ok(shell.body.includes('src="/mobile/' + file + '"'));
+    assert.equal((await f.invoke({ url: '/mobile/' + file })).statusCode, 200);
+  }
+  for (const url of ['/mobile/push', '/mobile/consent/options']) {
+    const raw = ['Host', 'mobile.invalid', 'Tailscale-User-Login', actor, 'Cookie', `${COOKIE}=${bearer}`, 'X-NAW-Mobile', '1', 'Origin', origin, 'Content-Type', 'application/json'];
+    assert.equal((await f.invoke({ url, method: 'POST', value: {}, raw })).statusCode, 403);
+    assert.equal((await f.invoke({ url, method: 'POST', value: {} })).statusCode, 200);
+  }
+  assert.equal(push, 1); assert.equal(consent, 1);
 });

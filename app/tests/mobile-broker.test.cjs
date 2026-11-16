@@ -436,3 +436,26 @@ test('only a fresh authenticated phone input enters the desktop human quiet gate
   await f.broker.send(auth, value); await f.broker.send(auth, value); await f.broker.receipt(auth, value.requestId);
   assert.deepEqual(human, ['session-a']);
 });
+
+
+test('port: reminder push does not enable approvals and approval revocation leaves push independent', async t => {
+  const desktop = { grant: (_client, value) => value, records: { status: () => ({ count: 3 }) },
+    read: async () => ({ capabilities: {}, confirmations: [{ state: 'confirmation-required', version: 'synthetic-version', expiresAt: Date.now() + 60000 }] }) };
+  const f = fixture(t, { desktop }), { auth } = await f.pair(undefined, false, { roomIds: [], records: true });
+  const before = f.broker.pushInfo(auth);
+  assert.equal(f.broker.approvalStatus().enabled, false);
+  assert.equal((await f.broker.workspaceRead(auth)).confirmations[0].canDecide, false);
+  f.broker.approvalRevoke();
+  assert.equal(f.broker.pushInfo(auth).publicKey, before.publicKey);
+  assert.equal(f.broker.approvalStatus().enabled, false);
+});
+test('port: approval-only card visibility grants no reminder push authority', async t => {
+  // Isolate the broker's grant composition; cryptographic enablement is covered by the consent suite.
+  const { MobileConsent } = require('../mobile-consent.cjs');
+  t.mock.method(MobileConsent.prototype, 'setEnabled', () => ({ enabled: true }));
+  const f = fixture(t, { desktop: { records: { status: () => ({ count: 3 }) } } }), { auth } = await f.pair();
+  f.broker.approvalEnable({ enabled: true });
+  assert.equal(f.broker.session(auth).workspace, true);
+  assert.throws(() => f.broker.pushInfo(auth));
+  assert.throws(() => f.broker.pushAction(auth, { action: 'subscribe', subscription: {} }));
+});

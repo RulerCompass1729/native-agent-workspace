@@ -62,7 +62,7 @@ function fixture() {
   const fire = () => { const due = [...timers]; timers.clear(); for (const [, timer] of due) timer.fn(); };
   return { context, calls, handlers, servers, timers, fire, selection, releasePair: () => releasePair(), quit: event => quit(event), event: { sender, senderFrame: frame } };
 }
-for (const method of ['mobilePairing', 'mobileRevoke']) test(`${method} refuses an agent context before any mobile authority or listener change`, async () => {
+for (const method of ['mobilePairing', 'mobileRevoke', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) test(`${method} refuses an agent context before any mobile authority or listener change`, async () => {
   const f = fixture(); f.context.windows.get(7).background = true;
   const result = await f.handlers.get('workspace:' + method)(f.event, f.selection);
   assert.equal(result.ok, false);
@@ -72,7 +72,7 @@ for (const method of ['mobilePairing', 'mobileRevoke']) test(`${method} refuses 
 test('mobile pairing and revocation are absent from the agent control catalog and invocation handlers', () => {
   const f = fixture(), { BackgroundControl } = require('../background-control.cjs');
   const methods = BackgroundControl.prototype.catalog.call({ handlers: f.context.applicationHandlers }).map(row => row.method);
-  for (const method of ['mobilePairing', 'mobileRevoke']) {
+  for (const method of ['mobilePairing', 'mobileRevoke', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) {
     assert.equal(methods.includes(method), false);
     assert.equal(f.context.applicationHandlers.has(method), false);
   }
@@ -156,14 +156,14 @@ test('an unconfirmed mobile revoke is returned honestly without crashing or clos
   const result = await f.handlers.get('workspace:mobileRevoke')(f.event);
   assert.equal(result.ok, true); assert.equal(result.value.authorizationRevoked, false); assert.equal(result.value.connectionClosed, false); assert.equal(result.value.committedWorkMayContinue, true);
 });
-test('preload exposes only local pairing and revoke among the mobile methods', async () => {
+test('preload exposes explicit desktop-only mobile management methods', async () => {
   const preload = fs.readFileSync(require.resolve('../preload.cjs'), 'utf8'), calls = []; let api;
   vm.runInNewContext(preload, { require(name) { assert.equal(name, 'electron'); return {
     // The preload also exposes the DSH locale bridge; only the workspace API is under test.
     contextBridge: { exposeInMainWorld(key, value) { assert.ok(['workspace', '__DSH_LOCALE__'].includes(key), key); if (key === 'workspace') api = value; } },
     ipcRenderer: { on() {}, invoke: async (...args) => { calls.push(args); return { ok: true, value: 'synthetic-result' }; } },
   }; } });
-  assert.deepEqual(Object.keys(api).filter(key => key.startsWith('mobile')).sort(), ['mobilePairing', 'mobileRevoke']);
+  assert.deepEqual(Object.keys(api).filter(key => key.startsWith('mobile')).sort(), ['mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke', 'mobileApprovalStatus', 'mobilePairing', 'mobileRevoke']);
   assert.equal(await api.mobileRevoke(), 'synthetic-result'); assert.deepEqual(calls, [['workspace:mobileRevoke']]);
 });
 test('the existing GUI payload list includes the app-local broker and its existing authority modules without running a package build', () => {
@@ -171,7 +171,7 @@ test('the existing GUI payload list includes the app-local broker and its existi
   const start = recipe.indexOf('const sources = ['), end = recipe.indexOf('for (const name of sources)', start);
   assert.ok(start > 0 && end > start);
   const names = vm.runInNewContext(recipe.slice(start, end) + ';sources');
-  for (const name of ['mobile-broker.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-http.cjs', 'mobile-workspace.cjs', 'mobile-web/workspace.js', 'mobile-web/index.html', 'mobile-web/client.js', 'mobile-web/style.css']) {
+  for (const name of ['mobile-broker.cjs', 'mobile-consent.cjs', 'mobile-web/passkeys.js', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-http.cjs', 'mobile-workspace.cjs', 'mobile-web/workspace.js', 'mobile-web/index.html', 'mobile-web/client.js', 'mobile-web/style.css']) {
     assert.equal(names.filter(value => value === name).length, 1); assert.ok(fs.statSync(require.resolve('../' + name)).isFile());
   }
 });

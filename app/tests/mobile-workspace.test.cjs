@@ -21,6 +21,16 @@ function fixture(t) {
   const scopes = [{ serviceKey: '.', sessionId: 'a', nativeId: 'native-a', actions: ['read', 'send'] }];
   return { adapter, client, room, source, status, acknowledgements, scopes, hidden, grant: { roomIds: ['shared'], records: true }, spec: extra => ({ requestId: randomUUID(), ...extra }) };
 }
+test('phone confirmation routing preserves opaque desktop operation ids and their full length', t => {
+  const f = fixture(t);
+  for (const operationId of ['approval.stage:original/card', 'x'.repeat(160)]) {
+    f.adapter.confirmation = (sessionId, nativeId, id, decision) => {
+      assert.equal(id, operationId); return { sessionId, nativeId, operationId: id, decision, version: 'original', expiresAt: 200 };
+    };
+    const binding = f.adapter.confirmationBinding(f.client, f.scopes, { id: 'a:' + operationId, version: 'original', decision: 'approve' });
+    assert.equal(binding.operationId, operationId); assert.equal(binding.nativeId, 'native-a');
+  }
+});
 test('phone projection contains only explicit native and room grants and the desktop reminder source', async t => {
   const f = fixture(t), view = await f.adapter.read(f.client, f.grant, f.scopes), raw = JSON.stringify(view);
   assert.equal(view.sessions.length, 1); assert.equal(view.rooms.length, 1);

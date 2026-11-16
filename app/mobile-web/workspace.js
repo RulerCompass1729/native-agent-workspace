@@ -38,6 +38,8 @@
   };
   Object.assign(words.zh, { submitted: '已提交给原生会话', 'reply-written': '回答已写入', 'awaiting-native': '等待原生接收确认', prepared: '已准备，尚未提交', unknown: '状态未知', ended: '已结束', failed: '失败', removeReceipt: '移除已确认回执', invalidated: '已作废 · 未执行', replaced: '已有新的确认卡' });
   Object.assign(words.en, { submitted: 'Submitted to the native session', 'reply-written': 'Answer written', 'awaiting-native': 'Awaiting native acceptance', prepared: 'Prepared, not submitted', unknown: 'Unknown', ended: 'Ended', failed: 'Failed', removeReceipt: 'Remove confirmed receipt', invalidated: 'No longer valid · Not executed', replaced: 'Replaced by a new confirmation' });
+  Object.assign(words.zh, { registerKey: '登记敏感确认凭证', registrationCode: 'Mac 显示的六位登记码', registerHelp: '先在 Mac 发起登记；完成后核对两边公钥指纹，再在 Mac 确认和启用。', registrationReady: '请在 Mac 核对指纹并确认；手机批准仍未启用。', verifyPhone: '每张卡片都需系统验证本人；配对本身不能批准。', verifyFailed: '未完成或结果未确认；请查询回执或回 Mac 核对，不会重发。' });
+  Object.assign(words.en, { registerKey: 'Register an approval passkey', registrationCode: 'Six-digit code shown on the Mac', registerHelp: 'Start registration on the Mac. Then compare public-key fingerprints and confirm and enable it on the Mac.', registrationReady: 'Compare the fingerprint and confirm on the Mac. Phone approvals remain disabled.', verifyPhone: 'Each card requires system user verification. Pairing alone cannot approve.', verifyFailed: 'Not completed or outcome unconfirmed. Check the receipt or Mac; nothing is resent.' });
   function mount() {
     const d = global.document, el = id => d.getElementById(id);
     const fragment = global.location.hash, pairSecret = fragment.startsWith('#pair=') ? fragment.slice(6) : undefined;
@@ -65,6 +67,7 @@
       return result;
     }
     const actions = createWorkspaceActions({ storage, request: api, newId: () => global.crypto.randomUUID(), changed: () => updateCompose() });
+    const passkeys = global.NAWMobilePasskeys.create({ storage, request: api });
     client = global.NAWMobile.createMobileClient({ request: api, storage, newId: () => global.crypto.randomUUID(), onChange: () => updateCompose() });
     const push = global.NAWMobilePush?.create({ request: api, session: () => client.state.session });
     Object.assign(words.zh, { pushTitle: '手机通知', pushEnable: '开启提醒', pushDisable: '关闭提醒', pushNote: '只发送提醒数量，不含名字或正文。通知可能延迟；打开后以当前记录为准。', pushHome: 'iPhone 请先从 Safari 添加到主屏幕，再从主屏幕打开。需要 iOS 16.4 或更新版本。', pushUnsupported: '当前浏览器未提供推送能力。iPhone 请添加到主屏幕后打开。', pushOff: '尚未开启', pushSubscribed: '已登记，尚未提交提醒', pushAccepted: '已交给推送服务，未确认手机送达', pushDelayed: '提交未确认，通知可能延迟；请刷新查看当前提醒', pushExpired: '订阅已失效，请重新开启', pushDenied: '通知权限未允许，请在系统设置中核对', pushUnknown: '设置结果未确认，请刷新核对；需要时在 Mac 撤销此手机' });
@@ -184,14 +187,39 @@
       const card = view.confirmations.find(c => c.id === route.id);
       if (!card) { heading('confirm'); for (const c of view.confirmations) el('content').append(link(c.title, 'confirm/' + encodeURIComponent(c.id), 'link-row')); if (!view.confirmations.length) el('content').append(node('p', t('noData'))); return; }
       const box = node('article', undefined, 'card-detail'), expired = card.disposition === 'expired' || card.state === 'confirmation-required' && card.expiresAt !== null && card.expiresAt <= view.syncedAt + (global.performance.now() - lastReceived);
+      box.dataset.confirmationId = card.id;
       // A presentation deadline alone is not a backend receipt. F's explicit
       // expired disposition can say not-executed; a locally elapsed deadline
       // asks the person to check the Mac instead of inventing that outcome.
       const stateLabel = expired ? card.disposition === 'expired' ? t('expired') : lang === 'zh' ? '已过期 · 请回 Mac 核对' : 'Expired · Check on the Mac' : card.disposition === 'invalidated' ? t('invalidated') : card.state === 'confirmation-required' ? t('pending') : t(({ received: 'submitted', 'not-executed': 'not-sent' })[card.state] || card.state);
       box.append(node('p', card.actorName, 'source'), node('h1', card.title), node('p', stateLabel, expired ? 'sync-error' : 'quiet'));
       const facts = node('dl', undefined, 'facts'); for (const [key, value] of [['scope', card.detail], ['from', card.actorName], ['duration', card.expiresAt ? new Date(card.expiresAt).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en') : t('verifyDeadline')]]) { const row = node('div'); row.append(node('dt', t(key)), node('dd', value)); facts.append(row); } box.append(facts);
-      const buttons = node('div', undefined, 'confirm-actions'); for (const key of ['deny', 'approve']) { const b = button(t(key), null, key === 'approve' ? 'primary' : ''); b.disabled = true; buttons.append(b); } box.append(buttons, node('p', t('verifyMac'), 'auth-note')); el('content').append(box, link(t('back') + ' ›', 'chat/' + encodeURIComponent(card.sessionId), 'link-row'));
+      const pending = passkeys.pending.find(p => p.id === card.id && p.status === 'unconfirmed');
+      const buttons = node('div', undefined, 'confirm-actions');
+      for (const key of ['deny', 'approve']) {
+        const b = button(t(key), async () => {
+          for (const button of buttons.children) button.disabled = true;
+          try { const result = await passkeys.decide(client.state.session, card, key); toast(result.status); }
+          catch { toast('verifyFailed'); }
+          await refresh();
+        }, key === 'approve' ? 'primary' : '');
+        b.id = 'consent-' + key; b.disabled = !card.canDecide || expired || Boolean(pending) || passkeys.busy; buttons.append(b);
+      }
+      box.append(buttons, node('p', t(card.canDecide ? 'verifyPhone' : 'verifyMac'), 'auth-note'));
+      if (pending) box.append(button(t('receipt'), async () => { try { const result = await passkeys.receipt(client.state.session, pending); toast(result.status); } catch { toast('verifyFailed'); } await refresh(); }));
+      el('content').append(box, link(t('back') + ' ›', 'chat/' + encodeURIComponent(card.sessionId), 'link-row'));
       if (!expired && card.expiresAt) expiryTimer = global.setTimeout(paint, Math.max(1, Math.min(2147483647, card.expiresAt - view.syncedAt - (global.performance.now() - lastReceived))));
+    }
+    function registerPasskey() {
+      const form = node('form', undefined, 'auth-form'), label = node('label', t('registrationCode')), input = node('input');
+      input.id = 'registration-code'; input.required = true; input.inputMode = 'numeric'; input.pattern = '[0-9]{6}'; input.minLength = input.maxLength = 6; input.autocomplete = 'one-time-code'; label.htmlFor = input.id;
+      const submit = node('button', t('registerKey'), 'primary'); submit.type = 'submit';
+      form.append(node('p', t('registerHelp')), label, input, submit);
+      form.addEventListener('submit', event => { event.preventDefault(); run(async () => {
+        submit.disabled = true;
+        try { const result = await passkeys.register(client.state.session, input.value); input.value = ''; form.replaceChildren(node('p', t('registrationReady')), node('code', result.fingerprint.match(/.{1,8}/g).join(' '))); }
+        catch { toast('verifyFailed'); } finally { submit.disabled = false; }
+      }); }); dialog(t('registerKey'), form);
     }
     function reminders() {
       heading('reminders'); if (!view.reminders) { el('content').append(node('p', t('noScope'))); return; }
@@ -242,7 +270,7 @@
       d.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; d.title = (route ? t(route.page) : t('home')) + ' · NAW'; el('skip').textContent = t('skip'); el('dialog-close').textContent = t('close');
       if (!route || route.page === 'home') { const homeLink = link('', 'home', 'brand'); homeLink.append(node('span', 'N', 'mark'), node('span', 'NAW')); el('top').append(homeLink, node('span', '', 'grow')); }
       else { const back = link('', 'home', 'icon'); back.setAttribute('aria-label', t('home')); back.append(icon('back')); const title = node('div', route.page === 'chat' ? view?.sessions.find(s => s.id === route.id)?.name || t('chat') : route.page === 'space' ? view?.rooms.find(r => r.id === route.id)?.name || t('space') : t(route.page), 'top-title'); el('top').append(back, title); }
-      const bell = link('', 'reminders', 'icon bell'); bell.setAttribute('aria-label', t('reminders') + ' · ' + (view?.reminders?.count || 0)); bell.append(icon('bell')); if (view?.reminders?.count) bell.append(node('span', view.reminders.count, 'count')); el('top').append(bell, button('···', () => { const menu = node('div', undefined, 'dialog-menu'); menu.append(button(t('refresh'), refresh), button(t('logout'), async () => { await client.logout(); locked = true; view = null; el('dialog').close(); paint(); })); dialog(t('manage'), menu); }, 'icon'));
+      const bell = link('', 'reminders', 'icon bell'); bell.setAttribute('aria-label', t('reminders') + ' · ' + (view?.reminders?.count || 0)); bell.append(icon('bell')); if (view?.reminders?.count) bell.append(node('span', view.reminders.count, 'count')); el('top').append(bell, button('···', () => { const menu = node('div', undefined, 'dialog-menu'); menu.append(button(t('refresh'), refresh), button(t('registerKey'), registerPasskey), button(t('logout'), async () => { await client.logout(); locked = true; view = null; el('dialog').close(); paint(); })); dialog(t('manage'), menu); }, 'icon'));
       el('top').lastElementChild.setAttribute('aria-label', t('manage'));
       const status = node('span', locked ? t('locked') : disconnected ? t('offline') : t('connected') + (view?.syncedAt ? ' · ' + new Date(view.syncedAt).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en', { hour: '2-digit', minute: '2-digit' }) : ''), 'sync-time'); status.id = 'sync-status'; el('connection').append(status, button(t('refresh'), refresh)); const language = link(lang === 'zh' ? 'English' : '中文', (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.href = '#' + (lang === 'zh' ? 'en' : 'zh') + '/' + (route?.nativeId ? 'confirm/native/' + encodeURIComponent(route.nativeId) : (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.id = 'language-link'; el('connection').append(language);
       el('navigation').hidden = locked;
@@ -253,7 +281,7 @@
     }
     async function refresh() {
       if (busy) return; busy = true; const ticket = ++epoch;
-      try { if (!client.state.session) await client.start(); else await client.refresh(); if (locked || !client.state.session) { view = null; return; }
+      try { await client.start(); if (!locked && client.state.session) await client.refresh(); if (locked || !client.state.session) { view = null; return; }
         const next = client.state.session.workspace ? await api('/mobile/workspace') : { sessions: client.state.session.sessions.filter(s => s.available).map(s => ({ ...s,
           messages: client.state.row?.id === s.id ? client.state.row.messages.map(m => ({ ...m, role: 'assistant', name: s.name, attachments: m.unsupportedAttachments })) : [],
           earlierMessagesOmitted: client.state.row?.id === s.id ? client.state.row.earlierMessagesOmitted : 0 })), rooms: [], confirmations: [], reminders: null, syncedAt: Date.now() };
