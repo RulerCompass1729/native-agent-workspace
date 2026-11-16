@@ -103,10 +103,16 @@ class MobilePush {
     if (!this.subscription || this.running) return;
     clearTimeout(this.timer); this.timer = null;
     const stamp = this.stamp, sub = this.subscription, abort = new AbortController();
-    const valid = () => !abort.signal.aborted && this.current() === stamp && this.subscription === sub;
+    const valid = () => {
+      if (abort.signal.aborted || this.current() !== stamp || this.subscription !== sub) return false;
+      if (sub.expirationTime !== null && sub.expirationTime <= this.now()) {
+        this.subscription = null; this.state = 'expired'; abort.abort(); return false;
+      }
+      return true;
+    };
     this.abort = abort; this.running = true;
     try {
-      if (sub.expirationTime !== null && sub.expirationTime <= this.now()) { this.subscription = null; this.state = 'expired'; return; }
+      if (!valid()) return;
       const count = this.count();
       if (!Number.isSafeInteger(count) || count < 0) throw denied();
       if (count === this.lastCount) return;

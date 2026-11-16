@@ -26,3 +26,21 @@ test('importing web-push opens no network, process, timer or writable file', () 
   `;
   assert.equal(execFileSync(process.execPath, ['-e', probe], { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', env: { PATH: process.env.PATH } }), 'IMPORT_NO_IO_PASS');
 });
+
+test('the staged push closure passes the actual production license inventory and missing licenses still block it', t => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-push-licenses-'));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const result = require('../../scripts/list-phone-push-payload.cjs').stagePushPayload(path.join(temporary, 'stage.noindex'));
+  const source = fs.readFileSync(path.join(__dirname, '../../scripts/package-mac.cjs'), 'utf8');
+  const begin = source.indexOf('    const inventory = [];');
+  const end = source.indexOf("    fs.writeFileSync(path.join(stage, 'DEPENDENCIES.json')", begin);
+  assert.ok(begin > 0 && end > begin, 'Execute the unchanged production inventory');
+  const inspect = () => require('node:vm').runInNewContext(source.slice(begin, end) + '\ninventory', { fs, path, stage: result.app });
+  const inventory = inspect(); assert.equal(inventory.length, result.dependencies.length);
+  assert.ok(inventory.every(row => row.notices.length > 0));
+  const license = path.join(result.app, 'node_modules/http_ece/LICENSE');
+  assert.deepEqual(fs.readFileSync(license), fs.readFileSync(path.join(__dirname, '../../third-party/http_ece-1.2.0-LICENSE')));
+  fs.unlinkSync(license);
+  assert.throws(inspect, /Missing distributed license: http_ece/);
+  assert.match(source, /includePushLicenses\(stage\)/, 'Production packaging uses the same supplementation step');
+});

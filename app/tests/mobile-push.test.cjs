@@ -112,3 +112,39 @@ test('the actual encrypted request reaches only the owned loopback TLS endpoint;
   assert.deepEqual(JSON.parse(require('http_ece').decrypt(received, { version: 'aes128gcm', privateKey: f.key, authSecret: f.sub.keys.auth })), { count: 7 });
   status = 302; f.count(9); await f.push.refresh(); assert.equal(hits, 2); assert.equal(f.push.status().state, 'delayed');
 });
+
+for (const at of ['before-write', 'late-response']) test(`subscription expiry at ${at} aborts the request and remains expired`, async t => {
+  let now = Date.now(), resume, submitted = 0, signal;
+  const f = fixture(t, { now: () => now, transport: async (_details, guard) => {
+    signal = guard.signal;
+    await new Promise(r => { resume = r; });
+    if (guard.valid()) submitted++;
+    return 201;
+  } });
+  f.sub.expirationTime = now + 100;
+  f.push.configuration(); f.push.subscribe(f.sub);
+  const pending = f.push.refresh();
+  if (at === 'late-response') {
+    // The service may accept a request sent before expiry; its late response
+    // still must not revive the now-expired local subscription.
+    resume(); await Promise.resolve();
+  }
+  now += 100; // Equality is already expired.
+  if (at === 'before-write') resume();
+  await pending;
+  assert.deepEqual(f.push.status(), { enabled: false, state: 'expired', lastSubmittedAt: null });
+  assert.equal(signal.aborted, true); assert.equal(f.push.timer, null);
+  assert.equal(submitted, at === 'before-write' ? 0 : 1);
+  await f.push.refresh(); assert.equal(submitted, at === 'before-write' ? 0 : 1);
+});
+test('an expired old request cannot expire its replacement subscription', async t => {
+  let now = Date.now(), release;
+  const f = fixture(t, { now: () => now, transport: async (_details, guard) => {
+    await new Promise(r => { release = r; }); return guard.valid() ? 201 : 410;
+  } });
+  f.sub.expirationTime = now + 100;
+  f.push.configuration(); f.push.subscribe(f.sub); const old = f.push.refresh();
+  f.push.subscribe({ ...f.sub, expirationTime: now + 1000, endpoint: 'https://web.push.apple.com/replaced' });
+  now += 100; release(); await old;
+  assert.equal(f.push.status().enabled, true); assert.equal(f.push.status().state, 'subscribed');
+});

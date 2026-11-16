@@ -6,6 +6,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { packageFuseOptions, verifyPackageFuses } = require('./package-fuses.cjs');
+const { includePushLicenses } = require('./package-push-licenses.cjs');
 const root = path.resolve(__dirname, '..');
 const manifest = require('../package.json');
 const run = (bin, args, cwd) => execFileSync(bin, args, { cwd, stdio: 'inherit' });
@@ -248,6 +249,7 @@ async function build() {
       const folder = path.join(stage, 'node_modules/@xterm', name);
       if (!fs.existsSync(path.join(folder, 'LICENSE'))) fs.copyFileSync(path.join(stage, 'node_modules/@xterm/xterm/LICENSE'), path.join(folder, 'LICENSE'));
     }
+    includePushLicenses(stage);
     const inventory = [];
     function packages(folder) {
       if (!fs.existsSync(folder)) return;

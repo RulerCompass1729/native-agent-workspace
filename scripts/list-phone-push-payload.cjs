@@ -2,6 +2,7 @@
 // signing, registering an app, installing packages or accessing the network.
 const fs = require('node:fs'), path = require('node:path');
 const { createRequire } = require('node:module');
+const { includePushLicenses } = require('./package-push-licenses.cjs');
 const root = path.resolve(__dirname, '..');
 function stagePushPayload(output) {
   if (!path.isAbsolute(output) || fs.existsSync(output)) throw Error('New absolute private output directory required');
@@ -30,11 +31,12 @@ function stagePushPayload(output) {
   visit('web-push', root);
   const app = path.join(output, 'Native Agent Workspace.app/Contents/Resources/app');
   fs.mkdirSync(app, { recursive: true });
-  for (const name of ['package.json', 'package-lock.json']) fs.copyFileSync(path.join(root, name), path.join(app, name));
+  for (const name of ['package.json', 'package-lock.json', 'THIRD_PARTY_NOTICES.md']) fs.copyFileSync(path.join(root, name), path.join(app, name));
   for (const name of files) { const target = path.join(app, 'app', name); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.copyFileSync(path.join(root, 'app', name), target); }
   for (const [name, value] of modules) fs.cpSync(value.directory, path.join(app, 'node_modules', name), {
     recursive: true, dereference: true, filter: value => path.basename(value) !== 'node_modules',
   });
+  includePushLicenses(app);
   const listed = [];
   function list(dir) { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const file = path.join(dir, e.name); if (e.isDirectory()) list(file); else listed.push(path.relative(output, file)); } }
   list(output);
