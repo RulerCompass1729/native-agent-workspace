@@ -8,7 +8,7 @@ const secret = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const HTTP_ERROR = Symbol('mobile-transport-error');
 const reject = (status, code) => Object.assign(new Error(code), { status, code, [HTTP_ERROR]: true });
-const types = { '/mobile/': ['index.html', 'text/html; charset=utf-8'], '/mobile/client.js': ['client.js', 'text/javascript; charset=utf-8'], '/mobile/workspace.js': ['workspace.js', 'text/javascript; charset=utf-8'], '/mobile/style.css': ['style.css', 'text/css; charset=utf-8'] };
+const types = { '/mobile/': ['index.html', 'text/html; charset=utf-8'], '/mobile/client.js': ['client.js', 'text/javascript; charset=utf-8'], '/mobile/workspace.js': ['workspace.js', 'text/javascript; charset=utf-8'], '/mobile/push.js': ['push.js', 'text/javascript; charset=utf-8'], '/mobile/sw.js': ['sw.js', 'text/javascript; charset=utf-8'], '/mobile/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'], '/mobile/style.css': ['style.css', 'text/css; charset=utf-8'] };
 function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutMs = 3000 }) {
   const site = new URL(origin);
   if (site.protocol !== 'https:' || site.origin !== origin || site.username || site.password || typeof actor !== 'string' || !actor || actor.length > 320 || /[\x00-\x1f\x7f]/.test(actor) ||
@@ -69,7 +69,7 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
     const nonce = randomBytes(18).toString('base64url');
     response.setHeader('Cache-Control', 'no-store'); response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader('X-Content-Type-Options', 'nosniff'); response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-    response.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}' 'strict-dynamic'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; require-trusted-types-for 'script'; trusted-types 'none'`);
+    response.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}' 'strict-dynamic'; style-src 'self'; connect-src 'self'; img-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; require-trusted-types-for 'script'; trusted-types naw-mobile-worker`);
     response.setHeader('X-Frame-Options', 'DENY');
     response.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
@@ -88,6 +88,10 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
       }
       if (typeof request.url !== 'string' || request.url.includes('?') || request.url.includes('#') || values['x-naw-mobile'] !== '1') throw reject(403, 'MOBILE_DENIED');
       if (request.method === 'GET' && request.url === '/mobile/session') return respond(response, 200, broker.session(auth(values)));
+      if (request.method === 'GET' && request.url === '/mobile/push') {
+        if (typeof broker.pushInfo !== 'function') throw reject(403, 'MOBILE_DENIED');
+        return respond(response, 200, broker.pushInfo(auth(values)));
+      }
       if (request.method === 'GET' && request.url === '/mobile/workspace') {
         const credentials = auth(values);
         if (typeof broker.workspaceRead !== 'function') throw reject(403, 'MOBILE_DENIED');
@@ -95,7 +99,7 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
       }
       const reading = request.method === 'GET' && request.url.match(/^\/mobile\/read\/([A-Za-z0-9_-]{1,100})$/);
       if (reading) return respond(response, 200, await broker.read(auth(values), reading[1]));
-      if (request.method !== 'POST' || !['/mobile/pair', '/mobile/send', '/mobile/answer', '/mobile/receipt', '/mobile/logout', '/mobile/workspace/action'].includes(request.url)) throw reject(404, 'MOBILE_NOT_FOUND');
+      if (request.method !== 'POST' || !['/mobile/pair', '/mobile/send', '/mobile/answer', '/mobile/receipt', '/mobile/logout', '/mobile/workspace/action', '/mobile/push'].includes(request.url)) throw reject(404, 'MOBILE_NOT_FOUND');
       if (values.origin !== origin) throw reject(403, 'MOBILE_DENIED');
       const value = await body(request, values, request.url === '/mobile/pair' ? 4096 : 65536);
       if (request.url === '/mobile/pair') {
@@ -108,6 +112,10 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
       }
       const credentials = auth(values);
       if (!secret(credentials.csrf)) throw reject(403, 'MOBILE_DENIED');
+      if (request.url === '/mobile/push') {
+        if (typeof broker.pushAction !== 'function') throw reject(403, 'MOBILE_DENIED');
+        return respond(response, 200, broker.pushAction(credentials, value));
+      }
       if (request.url === '/mobile/workspace/action') {
         if (typeof broker.workspaceAction !== 'function' || !['queueAdd', 'queueCancel', 'queueResolve', 'recordAcknowledge', 'receipt'].includes(value.action)) throw reject(403, 'MOBILE_DENIED');
         dispatch = true;

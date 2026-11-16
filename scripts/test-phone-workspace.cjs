@@ -153,10 +153,10 @@ async function scenario(lang) {
     await go('confirm/' + encodeURIComponent(ids[1] + ':' + completedId));
     const completedText = await page.locator('.card-detail').innerText();
     check(lang + ' completed operation retains its original outcome', () => { assert.ok(completedText.includes(lang === 'zh' ? '操作已完成' : 'Action completed')); assert.ok(!completedText.includes(lang === 'zh' ? '已过期' : 'Expired')); });
-    await go('reminders'); await page.locator('.reminder-card').first().waitFor(); await shot('reminders');
+    await go('reminders'); await page.locator('.reminder-card[data-record]').first().waitFor(); await shot('reminders');
     const beforeReminder = recordReminders.status(profile, Date.now()).count;
-    const ack = page.locator('.reminder-card').first().getByRole('button', { name: lang === 'zh' ? '知道了' : 'Got it', exact: true }); await ack.click();
-    await page.waitForFunction(before => !document.querySelector('#dialog').open && document.querySelectorAll('.reminder-card').length < before, beforeReminder);
+    const ack = page.locator('.reminder-card[data-record]').first().getByRole('button', { name: lang === 'zh' ? '知道了' : 'Got it', exact: true }); await ack.click();
+    await page.waitForFunction(before => !document.querySelector('#dialog').open && document.querySelectorAll('.reminder-card[data-record]').length < before, beforeReminder);
     check(lang + ' acknowledgement updates the very same desktop reminder source', () => assert.equal(recordReminders.status(profile, Date.now()).count, beforeReminder - 1));
     await go('queue/shared'); await page.locator('#content > button.primary').click(); await page.locator('#new-task-text').fill('PHONE_QUEUE_ORIGINAL'); await page.locator('#new-task-assignee').selectOption(ids[1]); await page.locator('#dialog form button[type="submit"]').click(); await page.waitForFunction(() => !document.querySelector('#dialog').open);
     const added = room.queueItems('shared').find(i => i.text === 'PHONE_QUEUE_ORIGINAL'); check(lang + ' add queue reaches the desktop RoomState as queued', () => assert.equal(added?.status, 'queued'));

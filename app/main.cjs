@@ -158,6 +158,13 @@ let startupWindow, starting = false, wired = false;
 let applicationBuild, applicationMenu;
 let mobileBroker;
 let mobileListener, mobileOpening = false, mobileGeneration = 0, mobileStopped = Promise.resolve(true), mobileExpiry;
+// One status contract for the desktop bell, scoped phone reads and count push.
+function appRecordsStatus() {
+  return recordReminders.status(dataDir, Date.now(), { unavailable: {
+    ...(operationsUnavailable ? { operations: operationsUnavailable } : {}),
+    ...(stewardRecord?.failed ? { steward: stewardRecord.loadError ? 'history' : 'other' } : {}),
+  } });
+}
 function appMobileBroker() {
   if (!primary || quitting || !dataDir) throw Error('The local mobile entry is unavailable.');
   if (!mobileBroker) mobileBroker = new (require('./mobile-broker.cjs').MobileBroker)(dataDir, { exclusive: () => primary && !quitting, changed: () => watchAppMobile(MOBILE_RESPONSE_GRACE_MS), desktop: appMobileWorkspace(), onHumanInput: id => queueDispatcher?.noteHuman(id) });
@@ -167,11 +174,8 @@ function appMobileWorkspace() {
   return new (require('./mobile-workspace.cjs').MobileWorkspace)({
     snapshot: client => displayState(client.snapshot()), roomState, labels: sessionLabels.labels,
     records: {
-      status: () => recordReminders.status(dataDir, Date.now(), { unavailable: {
-        ...(operationsUnavailable ? { operations: operationsUnavailable } : {}),
-        ...(stewardRecord?.failed ? { steward: stewardRecord.loadError ? 'history' : 'other' } : {}),
-      } }),
-      acknowledge: (...args) => recordReminders.acknowledge(dataDir, ...args),
+      status: appRecordsStatus,
+      acknowledge: (...args) => { const result = recordReminders.acknowledge(dataDir, ...args); mobileBroker?.refreshPush(); return result; },
     },
     broadcast: () => broadcastRoom(), schedule: () => queueDispatcher?.schedule(),
   });
@@ -700,6 +704,7 @@ async function assertSpaceFileReader(context, roomId) {
 // ran out (2026-11-10). Everything sent to a window's page goes through here or through pushState.
 // The bell works its reminders out again when a block of the operations record is sealed or added, not by polling.
 function recordsChanged() {
+  mobileBroker?.refreshPush();
   let count = -1; try { count = backgroundControl?.archive?.manifest.blocks.length ?? -1; } catch { /* Read again next time. */ }
   if (count === operationsBlocks && backgroundControl) return;
   operationsBlocks = count;
@@ -1999,8 +2004,8 @@ async function boot() {
     const name = args[0], unavailable = { ...(operationsUnavailable ? { operations: operationsUnavailable } : {}), ...(stewardRecord?.failed ? { steward: stewardRecord.loadError ? 'history' : 'other' } : {}) };
     if (action !== 'status' && action !== 'chooseFolder' && !recordReminders.RECORDS.includes(name)) throw uiError('error.records.unknown');
     try {
-      if (action === 'status' && args.length === 0) return recordReminders.status(dataDir, Date.now(), { unavailable });
-      if (action === 'acknowledge' && args.length === 3) { recordReminders.acknowledge(dataDir, name, args[1], args[2]); return recordReminders.status(dataDir, Date.now(), { unavailable }); }
+      if (action === 'status' && args.length === 0) return appRecordsStatus();
+      if (action === 'acknowledge' && args.length === 3) { recordReminders.acknowledge(dataDir, name, args[1], args[2]); mobileBroker?.refreshPush(); return appRecordsStatus(); }
       if (action === 'blocks' && args.length === 1) return recordReminders.blocks(dataDir, name, Date.now());
       if (action === 'chooseFolder' && args.length === 0) {
         const result = await showDialog(c, 'open', { title: displayText('records.export.chooseTitle'), properties: ['openDirectory', 'createDirectory'] });
