@@ -3478,10 +3478,10 @@ function renderSessions() {
     const moreParams = () => ({ name: record.name, id: sessionShortId(record.id), space: group ? ` · ${spaceName(spaceRecord(group))}` : '' }); ui.display.attribute(row.more, 'aria-label', 'sidebar.sessionActions', moreParams); ui.display.attribute(row.more, 'title', 'sidebar.sessionActions', moreParams); row.more.disabled = renameTarget?.id === record.id;
     ui.display.computed(row.more, 'aria-description', () => sidebarDetails(record).join(' · '));
     // The butler's row is named for what it is; which session it is stands on the line below, before its state.
-    if (steward) { ui.display.text(row.name, 'butler.name'); row.shortId.textContent = ''; ui.display.computed(row.status, 'text', () => uiText('steward.rowStatus', { name: record.name, status: sidebarPresentation(record).compact })); }
-    else { row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); ui.display.computed(row.status, 'text', () => sidebarPresentation(record).compact); }
+    if (steward) { ui.display.text(row.name, 'butler.name'); if (row.shortId.textContent !== '') row.shortId.textContent = ''; ui.display.computed(row.status, 'text', () => uiText('steward.rowStatus', { name: record.name, status: sidebarPresentation(record).compact })); }
+    else { if (row.name.textContent !== record.name) row.name.textContent = record.name; const shortId = sessionShortId(record.id); if (row.shortId.textContent !== shortId) row.shortId.textContent = shortId; ui.display.computed(row.status, 'text', () => sidebarPresentation(record).compact); }
     row.element.classList.toggle('same-name', repeated.has(record.id));
-    row.time.textContent = sessionActivityTime(record); row.time.title = sessionTimes(record);
+    const timeText = sessionActivityTime(record); if (row.time.textContent !== timeText) row.time.textContent = timeText; row.time.title = sessionTimes(record);
     row.dot.className = `state-dot ${presentation.tone}${presentation.workTone ? ' ' + presentation.workTone : ''}`; ui.display.computed(row.dot, 'title', () => sidebarPresentation(record).full); row.dot.dataset.nativeState = record.state;
     row.marker.textContent = presentation.marker; ui.display.computed(row.marker, 'title', () => sidebarPresentation(record).full); row.element.classList.toggle('has-status-detail', presentation.detail);
     const index = positions.get(container) || 0, slot = container.children[index]; if (slot !== row.element) container.insertBefore(row.element, slot || null); positions.set(container, index + 1);
