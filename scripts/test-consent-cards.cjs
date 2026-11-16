@@ -119,6 +119,24 @@ async function main() {
     assert.ok(metrics.scroll <= metrics.width, 'No horizontal page overflow');
     for (const b of metrics.buttons) assert.ok(b.scroll <= b.width + 1, 'Button label fits: ' + b.text);
   }
+  // First open, with no conversation card to have already started the shared clock.
+  assert.equal(await page.locator('.background-state[data-expires-at]').count(), 0);
+  await panel(true);
+  const clocks = page.locator('#stream-waiting-list .background-state[data-expires-at]');
+  assert.equal(await clocks.count(), 2);
+  const mounted = await clocks.elementHandles();
+  const clockSnapshot = () => clocks.evaluateAll(nodes => nodes.map(n => ({ text: n.textContent, expiresAt: n.dataset.expiresAt })));
+  const initialClocks = await clockSnapshot(), startedAt = Date.now();
+  await delay(1600);
+  const nextClocks = await clockSnapshot();
+  console.log('COUNTDOWN', JSON.stringify({ before: initialClocks, after: nextClocks, elapsedMs: Date.now() - startedAt }));
+  for (const [index, initial] of initialClocks.entries()) {
+    assert.ok(await mounted[index].evaluate(n => n.isConnected), 'The same card stays mounted without a state redraw');
+    assert.equal(nextClocks[index].expiresAt, initial.expiresAt, 'Ticking preserves the stored deadline');
+    assert.notEqual(nextClocks[index].text, initial.text, 'First-open waiting countdown changes within 1.6 seconds');
+  }
+  record('both first-open waiting countdowns tick without a conversation card or deadline change');
+  await panel(false);
   for (const lang of ['zh', 'en']) for (const variant of ['implemented']) {
     await page.reload(); await page.locator('#new-session').waitFor(); await language(lang);
     await page.locator(`.session-link[data-session-id="${other}"]`).click();
