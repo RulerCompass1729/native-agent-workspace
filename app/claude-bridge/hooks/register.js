@@ -53,7 +53,11 @@ async function observeAddressedTool($, ownGeneration) {
 let nativeModelSupported = false;
 let modelReadRevision = 0;
 let modelReads = 0, modelReadAgain = false;
+const modelSwitches = new WeakMap();
 async function observeModel($) {
+  // A switch hook can still expose its previous model through the query API.
+  // Activity refreshes must not supersede the hook's resolved selection.
+  if (rootBinding && modelSwitches.has(rootBinding)) return;
   const binding = rootBinding, revision = ++modelReadRevision, ownGeneration = generation;
   if (!nativeModelSupported || !binding || stopped) return;
   // Metadata cannot hold input polling or buffered native output. Native API
@@ -156,11 +160,16 @@ function observePhase($, phase, binding = rootBinding, turnId = activeTurn) {
   lastPhase = { binding, turnId, phase };
   enqueueBlock($, { id: 'control:activity', kind: 'control', status: 'complete', turnId, phase }, binding);
 }
-function heartbeat($, binding, ownGeneration) {
+function heartbeat($, binding, ownGeneration, modelTicks = 0) {
   $.clock.after(1000, () => {
     if (stopped || rootBinding !== binding || generation !== ownGeneration || rootEnds.has(binding.sessionId)) return;
     if (activeTurn && !displayTurns.get(activeTurn)?.ended) enqueueBlock($, { id: 'control:heartbeat', kind: 'control', status: 'complete' }, binding);
-    heartbeat($, binding, ownGeneration);
+    // Reuse the existing tick for local metadata during long root turns;
+    // idle sessions never renew standing-creation authority this way.
+    if (!rootIdle && activeTurn && !displayTurns.get(activeTurn)?.ended) {
+      if (++modelTicks >= 30) { modelTicks = 0; observeModel($); }
+    } else modelTicks = 0;
+    heartbeat($, binding, ownGeneration, modelTicks);
   });
 }
 // Only native turn identity + a complete matching final display can authorize
@@ -950,15 +959,22 @@ export function register(on) {
     const binding = rootBinding, ownGeneration = generation;
     const watching = nativeModelSupported && !stopped && binding && !e.agent_id && e.session_id === binding.sessionId;
     const revision = watching ? ++modelReadRevision : null;
-    if (watching) modelReadAgain = false;
-    const result = await next(e);
-    // The native post-switch event carries the resolved selection. A query
-    // inside this hook can still see the previous value on retained runtimes.
-    if (watching && !stopped && rootBinding === binding && generation === ownGeneration && revision === modelReadRevision &&
-      typeof e.to_model === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]{0,159}$/.test(e.to_model)) {
-      enqueueBlock($, { id: 'control:model', kind: 'control', status: 'complete', model: e.to_model }, binding);
+    if (watching) { modelReadAgain = false; modelSwitches.set(binding, (modelSwitches.get(binding) || 0) + 1); }
+    try {
+      const result = await next(e);
+      // The native post-switch event carries the resolved selection. A query
+      // inside this hook can still see the previous value on retained runtimes.
+      if (watching && !stopped && rootBinding === binding && generation === ownGeneration && revision === modelReadRevision &&
+        typeof e.to_model === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]{0,159}$/.test(e.to_model)) {
+        enqueueBlock($, { id: 'control:model', kind: 'control', status: 'complete', model: e.to_model }, binding);
+      }
+      return result;
+    } finally {
+      if (watching) {
+        const pending = modelSwitches.get(binding) - 1;
+        if (pending) modelSwitches.set(binding, pending); else modelSwitches.delete(binding);
+      }
     }
-    return result;
   }).catch(($, e, next) => next(e));
   on('tool.call', async ($, e, next) => {
     const binding = rootBinding;
@@ -1181,6 +1197,7 @@ export function register(on) {
       shellTurn = triggers.length && !triggers.some(t => t.prompt) ? { binding: rootBinding, turnId: e.turnId } : null;
       enqueueBlock($, { id: 'control:turn-start', kind: 'control', turnId: e.turnId, promptId: rootPrompt?.id, status: 'running',
         ...(triggers.length ? { triggers: { prompts: triggers.filter(t => t.prompt).map(t => t.prompt), rows: triggers.filter(t => t.row).map(t => t.row) } } : {}) });
+      observeModel($);
       // Native contract: root turn.start follows UserPromptSubmit. Repeated
       // starts for the same prompt are ambiguous, never a sharing authority.
       if (rootPrompt?.binding === rootBinding) {
@@ -1226,7 +1243,7 @@ export function register(on) {
       // No tool boundary came: the held message runs as its own turn.
       if (!e.agentId && heldMidturn) releaseHeld(heldMidturn, 'ended');
       if (!e.agentId && binding === rootBinding) {
-        observeUsage($);
+        observeUsage($); observeModel($);
         const turn = displayTurn(e.turnId, binding), final = turn.blocks.get(turn.last);
         // Text equality is only a completeness check inside an explicit native
         // turn, never a substitute for prompt/turn identity. Forward the display

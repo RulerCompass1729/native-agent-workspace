@@ -778,7 +778,7 @@ class BackgroundControl {
             catch (failure) {
               // Reserving standing usage precedes the handler. A prior handler's
               // possible effects must never acquire a safe-to-retry receipt.
-              if (!row.handlerStarted) standingFailure = failure;
+              if (!row.handlerStarted) standingFailure = { value: failure };
               throw failure;
             }
             if (!unasked && !standing) {
@@ -830,10 +830,10 @@ class BackgroundControl {
           reason = unknown ? 'temporarily-unavailable' : disposition === 'expired' ? 'deadline-elapsed' : 'state-changed';
           state = unknown ? 'confirmation-required' : 'not-executed'; confirmation = unknown ? approved.confirmation : undefined;
         }
-        else if (standingFailure && e === standingFailure && !handlerEntered) {
+        else if (standingFailure && Object.is(e, standingFailure.value) && !handlerEntered) {
           refusal = { ...refusalDetails('standing-authorization-unavailable'), retryWithNewOperationId: true,
-            retryHint: 'The operation did not execute. Retry with a new operation_id after standing authorization storage is available.' };
-          state = refusal.state; error = e.message.slice(0, 2048);
+            retryHint: 'The operation did not execute. Retry with a new operation_id.' };
+          state = refusal.state; error = typeof e?.message === 'string' ? e.message.slice(0, 2048) : 'The operation did not execute.';
         }
         else if (preconditionError && e === preconditionError) { refusal = refusalDetails(e.reason); state = refusal.state; error = e.message.slice(0, 2048); }
         else if (e instanceof ConfirmationRequired && e.confirmation?.kind === 'message') {

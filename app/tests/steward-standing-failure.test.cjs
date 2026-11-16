@@ -90,3 +90,44 @@ test('PF07 boundary: final audit failure after a completed handler stays unconfi
   await f.reopen();
   assert.equal((await f.ask('join', 'after-effect')).state, 'unconfirmed'); assert.deepEqual(f.effects, ['join']);
 });
+
+for (const [label, failure] of [['string', 'Synthetic non-Error failure'], ['non-string message', { message: 42 }],
+  ['null', null], ['undefined', undefined], ['false', false], ['zero', 0], ['NaN', NaN], ['empty string', '']])
+  test(`PF07 follow-up: a pre-handler ${label} throw is recorded without a catch failure`, async t => {
+    const f = fixture(t);
+    f.controller.standing = () => { throw failure; };
+    const result = await f.ask('join', 'non-error');
+    assert.equal(result.state, 'not-executed'); assert.equal(result.retryWithNewOperationId, true);
+    assert.equal(typeof result.error, 'string'); assert.ok(result.error.length);
+    assert.deepEqual(f.effects, []); assert.equal(f.policy.read().used.length, 0);
+    await f.reopen();
+    const duplicate = await f.ask('join', 'non-error');
+    assert.equal(duplicate.state, 'not-executed'); assert.equal(duplicate.duplicate, true);
+    assert.deepEqual(f.effects, []);
+    assert.equal((await f.ask('join', 'after-recovery')).state, 'complete');
+    assert.deepEqual(f.effects, ['join']);
+  });
+
+test('PF07 follow-up: display preparation failure after take has a cause-neutral retry hint', async t => {
+  const f = fixture(t), standing = f.controller.standing;
+  f.controller.standing = (...args) => { standing(...args); throw Error('Synthetic display formatting failure'); };
+  const result = await f.ask('join', 'display-failed');
+  assert.equal(result.state, 'not-executed'); assert.deepEqual(f.effects, []);
+  assert.equal(f.policy.read().used.length, 1, 'Storage succeeded before display preparation failed');
+  assert.equal(result.retryHint, 'The operation did not execute. Retry with a new operation_id.');
+  await f.reopen();
+  const duplicate = await f.ask('join', 'display-failed');
+  assert.equal(duplicate.duplicate, true); assert.equal(duplicate.retryHint, result.retryHint);
+  assert.equal((await f.ask('join', 'after-recovery')).state, 'complete');
+  assert.deepEqual(f.effects, ['join']); assert.equal(f.policy.read().used.length, 2);
+});
+
+test('PF07 follow-up boundary: a non-Error throw after handler entry remains unconfirmed', async t => {
+  const f = fixture(t);
+  f.handlers.set('join', () => { f.effects.push('join'); throw 'Synthetic non-Error failure'; });
+  const result = await f.ask('join', 'after-handler');
+  assert.equal(result.state, 'unconfirmed'); assert.notEqual(result.retryWithNewOperationId, true);
+  await f.reopen();
+  assert.equal((await f.ask('join', 'after-handler')).state, 'unconfirmed');
+  assert.deepEqual(f.effects, ['join']);
+});

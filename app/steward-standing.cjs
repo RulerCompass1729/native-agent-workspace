@@ -4,6 +4,7 @@ const fs = require('node:fs'), path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { roomIds } = require('./collaboration-spaces.cjs');
 const HOUR = 3600000, LIMIT = 30;
+const CREATION_OBSERVATION_MAX_AGE_MS = 60000;
 const same = (a, b) => Boolean(a && b && a.sessionId === b.sessionId && a.nativeId === b.nativeId);
 const localAction = command => {
   if (['create', 'spaceCreate', 'join', 'rename', 'roomRename', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'roomMemberOrder'].includes(command.method)) return command.method;
@@ -12,7 +13,7 @@ const localAction = command => {
 };
 // Native defaults and named Codex profiles depend on directory configuration.
 // Only an explicit permission mode can be compared without guessing that config.
-function creationCovered(options, peers) {
+function creationCovered(options, peers, now = Date.now()) {
   if (!options || options.fork != null || options.gitWorktree != null || options.settings?.profile) return false;
   const mode = options.skipPermissions === true ? 'bypassPermissions' : options.settings?.permissionMode;
   // Codex observations currently omit approval/sandbox changes. Its launch flag
@@ -20,10 +21,17 @@ function creationCovered(options, peers) {
   if (options.provider !== 'claude') return false;
   // Explicit cost settings must match current native observations, not old launch requests.
   // An omitted value keeps the person's provider default; no price inference is made.
-  const settingMatches = (key, observed) => options.settings?.[key] === undefined ||
-    typeof options.settings[key] === 'string' && !!observed && options.settings[key] === observed;
+  const settingMatches = (key, peer) => {
+    if (options.settings?.[key] === undefined) return true;
+    const settings = peer.nativeCreationSettings, observed = settings?.[key];
+    return typeof options.settings[key] === 'string' && !!observed?.value && options.settings[key] === observed.value &&
+      typeof peer.nativeId === 'string' && settings.nativeId === peer.nativeId &&
+      Number.isSafeInteger(settings.controlRevision) && settings.controlRevision >= 0 && settings.controlRevision === (peer.controlRevision ?? 0) &&
+      Number.isSafeInteger(observed.observedAt) && observed.observedAt >= 0 && now >= observed.observedAt &&
+      now - observed.observedAt <= CREATION_OBSERVATION_MAX_AGE_MS;
+  };
   return peers.some(p => p.provider === options.provider && !p.archived &&
-    settingMatches('model', p.model) && settingMatches('effort', p.nativeEffort) &&
+    settingMatches('model', p) && settingMatches('effort', p) &&
     ((p.nativePermissionMode ? p.nativePermissionMode === 'bypassPermissions' : p.skipPermissions === true)
       ? mode === 'bypassPermissions' || options.provider === 'claude' && ['plan', 'default', 'acceptEdits', 'dontAsk', 'auto'].includes(mode)
       : options.provider === 'claude' && mode && mode === p.nativePermissionMode && options.newDirectory !== true &&
@@ -71,7 +79,7 @@ class StewardStanding {
     if (!s.on || !same(s.designation, this.role.selected) || !same(current, { sessionId: actor.id, nativeId: actor.nativeId }) || !localAction(command)) return null;
     const owner = state.sessions.find(x => x.id === actor.id && x.nativeId === actor.nativeId && !x.archived && !x.nativeContextPending);
     if (!owner || roomIds(owner).length) return null;
-    if (command.method === 'create' && !creationCovered(command.arguments[0], state.sessions.filter(x => roomIds(x).includes(roomId)))) return null;
+    if (command.method === 'create' && !creationCovered(command.arguments[0], state.sessions.filter(x => roomIds(x).includes(roomId)), this.now())) return null;
     return s;
   }
   take(actor, command, state, roomId) {
@@ -92,4 +100,4 @@ class StewardStanding {
     try { return this.authorized(actor, command, state, roomId)?.revision === grant.revision; } catch { return false; }
   }
 }
-module.exports = { StewardStanding, creationCovered, localAction, LIMIT };
+module.exports = { StewardStanding, creationCovered, localAction, LIMIT, CREATION_OBSERVATION_MAX_AGE_MS };
