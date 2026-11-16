@@ -55,10 +55,12 @@ function read(registryDir = defaultDirectory()) {
 }
 // Stream bounded batches so the small read() inventory limit cannot prevent
 // a large ENOENT backlog from being pruned by the scanner.
-async function* batches(registryDir = defaultDirectory()) {
+async function* batches(registryDir = defaultDirectory(), check = () => {}) {
+  check();
   try { privateDirectory(registryDir); } catch(error) { if(error.code==='ENOENT') return; throw error; }
   const directory=await fs.promises.opendir(registryDir);let batch=[];
   for await (const file of directory) {
+    check();
     if(!receiptName(file.name))continue;
     try {batch.push(entry(path.join(registryDir,file.name)));}
     catch(error) {if(error.code!=='ENOENT')throw error;}
