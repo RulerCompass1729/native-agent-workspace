@@ -57,6 +57,13 @@ const { createStockOutboxView } = require('./computer-use-outbox-view.cjs');
 const background = require('./background-control.cjs');
 const recordReminders = require('./record-reminders.cjs');
 const { inspectTextPaths, openTextPath } = require('./text-paths.cjs');
+const { TempReminders } = require('./temp-reminders.cjs');
+let tempReminders = null, tempRemindersTimer = null, tempQuitWaiting = false;
+function currentTempReminders() {
+  tempReminders ||= new TempReminders({ dataDir, isPerson: isCurrentHumanContext, changed: () => recordsChanged(true) });
+  if (!tempRemindersTimer) { tempRemindersTimer = setInterval(() => tempReminders.status().catch(() => recordsChanged(true)), 86400000); tempRemindersTimer.unref(); }
+  return tempReminders;
+}
 const backgroundOperation = require('./background-operation.cjs');
 const queueRules = require('./queue-dispatch.cjs');
 const { QueueDispatcher } = queueRules;
@@ -700,9 +707,9 @@ async function assertSpaceFileReader(context, roomId) {
 // chunk and progress line sent to each, that memory, which no process accounts for, grew until the machine
 // ran out (2026-11-10). Everything sent to a window's page goes through here or through pushState.
 // The bell works its reminders out again when a block of the operations record is sealed or added, not by polling.
-function recordsChanged() {
+function recordsChanged(force = false) {
   let count = -1; try { count = backgroundControl?.archive?.manifest.blocks.length ?? -1; } catch { /* Read again next time. */ }
-  if (count === operationsBlocks && backgroundControl) return;
+  if (!force && count === operationsBlocks && backgroundControl) return;
   operationsBlocks = count;
   for (const c of windows.values()) sendToPage(c, 'workspace:records-changed');
 }
@@ -1424,6 +1431,9 @@ async function autoBackendSwitchOnce() {
 let backendSwitchTimer;
 async function boot() {
   dataDir = app.getPath('userData'); fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 }); fs.chmodSync(dataDir, 0o700);
+  try {
+    currentTempReminders().status().catch(() => recordsChanged(true));
+  } catch { tempReminders = null; }
   if (!outboxBroker) {
     const descriptorFile = path.join(dataDir, 'outbox-owner.json');
     delete process.env.NAW_OUTBOX_DESCRIPTOR;
@@ -2006,10 +2016,19 @@ async function boot() {
   register('records', async (c, action, ...args) => {
     if (!isCurrentHumanContext(c)) throw uiError('error.records.personOnly');
     const name = args[0], unavailable = { ...(operationsUnavailable ? { operations: operationsUnavailable } : {}), ...(stewardRecord?.failed ? { steward: stewardRecord.loadError ? 'history' : 'other' } : {}) };
+    const status = async (force = false) => {
+      const records = recordReminders.status(dataDir, Date.now(), { unavailable });
+      let temp;
+      try { temp = await currentTempReminders().present(c, force); }
+      catch { if (!isCurrentHumanContext(c)) throw uiError('error.records.personOnly'); temp = { id: 'naw-temp-files', version: 0, directories: 0, bytes: 0, shown: true, anomaly: 'inspection-unavailable' }; }
+      return { ...records, temp, count: records.count + (temp.shown ? 1 : 0) };
+    };
+    if (action === 'status' && (args.length === 0 || args.length === 1 && args[0] === true)) return status(args[0] === true);
+    if (action === 'tempClean' && args.length === 1 && tempReminders) { const result = await tempReminders.clean(c, args[0]); return { ...await status(), result }; }
+    if (action === 'tempAcknowledge' && args.length === 1 && tempReminders) { await tempReminders.acknowledge(c, args[0]); return status(); }
     if (action !== 'status' && action !== 'chooseFolder' && !recordReminders.RECORDS.includes(name)) throw uiError('error.records.unknown');
     try {
-      if (action === 'status' && args.length === 0) return recordReminders.status(dataDir, Date.now(), { unavailable });
-      if (action === 'acknowledge' && args.length === 3) { recordReminders.acknowledge(dataDir, name, args[1], args[2]); return recordReminders.status(dataDir, Date.now(), { unavailable }); }
+      if (action === 'acknowledge' && args.length === 3) { recordReminders.acknowledge(dataDir, name, args[1], args[2]); return status(); }
       if (action === 'blocks' && args.length === 1) return recordReminders.blocks(dataDir, name, Date.now());
       if (action === 'chooseFolder' && args.length === 0) {
         const result = await showDialog(c, 'open', { title: displayText('records.export.chooseTitle'), properties: ['openDirectory', 'createDirectory'] });
@@ -2745,6 +2764,11 @@ app.on('second-instance', (_event, argv) => { if (!argv?.includes('--background'
 if (primary) app.whenReady().then(start);
 app.on('window-all-closed', () => {});
 app.on('before-quit', event => {
+  if (tempReminders?.busy) {
+    event.preventDefault();
+    if (!tempQuitWaiting) { tempQuitWaiting = true; tempReminders.finished.finally(() => { tempQuitWaiting = false; app.quit(); }); }
+    return;
+  }
   pendingReveal = null;
   if (outboxClosing || butlerClosing) { event.preventDefault(); return; }
   if (quitting) return;

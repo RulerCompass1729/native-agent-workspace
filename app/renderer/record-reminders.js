@@ -1,8 +1,7 @@
-/* The bell: reminders about records kept whole (the person, 2026-11-11: 「超过 30 天/或者整个记录大小超过 0.5G 这样的，
-   界面有个小铃铛弹提醒，看如何处理」). The bell is there only while something is due. Its dialog says, for each
-   record, what reached a line, and offers what the person approved: "知道了", export (blocks copied as they are and
-   checked), and for a block that cannot be read, showing it in Finder. Only through the person-only call
-   records(…); nothing here deletes anything. */
+/* Permanent bell for record retention and registered NAW test temporary files.
+   All actions use the existing person-only records entry. Record export/deletion
+   keeps its prior checked-export flow; temporary cleanup uses a displayed,
+   window-bound ticket and reports confirmed results, including skipped folders. */
 (function (global) {
   'use strict';
   function bind({ button, badge, dialog, document, api, text, display }) {
@@ -13,16 +12,18 @@
     const control = (key, action, handler, params) => { const el = make('button', '', key, params); el.type = 'button'; el.dataset.action = action; el.addEventListener('click', handler); return el; };
     // Sizes: one decimal of MiB, never rounded down; past 1 GiB, two decimals of GiB.
     const size = bytes => bytes >= 1024 ** 3 ? `${(Math.ceil(bytes / 1024 ** 3 * 100) / 100).toFixed(2)} GiB` : (tenths => `${tenths % 10 ? (tenths / 10).toFixed(1) : tenths / 10} MiB`)(Math.ceil(bytes / 104857.6));
-    let current = null, ticket = 0;
+    const tempSize = bytes => bytes < 1024 ? `${bytes} B` : bytes < 1024 ** 2 ? `${Math.floor(bytes / 1024)} KiB` : bytes < 1024 ** 3 ? `${(Math.floor(bytes / 1024 ** 2 * 10) / 10).toFixed(1)} MiB` : `${(Math.floor(bytes / 1024 ** 3 * 10) / 10).toFixed(1)} GiB`;
+    let current = null, ticket = 0, lastResult = null, working = false, cleanupFailed = false;
 
-    // The bell follows the reminders that are due; with none it is not there at all.
-    async function refresh() {
+    // The original bell position remains available even when no reminder is due.
+    async function refresh(force = false) {
       const mine = ++ticket;
-      let status; try { status = await api.records('status'); } catch { status = null; }
+      let status; try { status = await (force ? api.records('status', true) : api.records('status')); } catch { status = null; }
       if (mine !== ticket) return current;
       current = status;
       const count = status && Number.isSafeInteger(status.count) ? status.count : 0;
-      button.hidden = count === 0; badge.textContent = count ? String(count) : '';
+      button.hidden = false; badge.textContent = count ? String(count) : '';
+      button.className = 'subtle records-bell' + (count ? ' has-due' : '');
       const label = format('records.bellCount', { count }); button.setAttribute('aria-label', label); button.title = label;
       if (dialog.open && dialog.dataset.view === 'reminders') draw();
       return status;
@@ -39,10 +40,46 @@
     function draw() {
       dialog.dataset.view = 'reminders'; dialog.replaceChildren();
       const title = make('h2', '', 'records.title'); title.id = (dialog.id || 'records-dialog') + '-title'; dialog.setAttribute('aria-labelledby', title.id);
-      dialog.append(title, make('p', 'quiet', 'records.intro'));
+      const head = make('div', 'records-panel-head'), number = make('span', 'records-panel-count');
+      if (current?.count) say(number, current.count === 1 ? 'records.pendingOne' : 'records.pendingCount', { count: current.count });
+      const close = control('records.close', 'close', () => dialog.close()); close.className = 'records-close';
+      head.append(title, number, close); dialog.append(head);
       const due = (current?.records || []).map(record => ({ record, items: record.items.filter(entry => entry.shown) })).filter(group => group.items.length);
       if (!current) dialog.append(make('p', 'records-note', 'records.failed', { reason: '—' }));
-      else if (!due.length) dialog.append(make('p', 'records-note', 'records.nothing'));
+      else if (!due.length && !current.temp?.shown && !lastResult) dialog.append(make('p', 'records-empty', 'records.nothing'));
+      if (lastResult) {
+        const result = make('section', 'records-temp-result'); result.setAttribute('role', 'status');
+        result.append(make('h3', '', 'records.temp.result', { count: lastResult.cleaned }), make('p', '', 'records.temp.freed', { size: tempSize(lastResult.bytes) }));
+        if (lastResult.skipped) result.append(make('p', '', lastResult.reasons?.unverified ? 'records.temp.unverified' : lastResult.reasons?.busy === lastResult.skipped ? 'records.temp.keptBusy' : 'records.temp.kept', { count: lastResult.skipped }));
+        if (lastResult.bookkeepingFailed) result.append(make('p', '', 'records.temp.bookkeepingFailed'));
+        dialog.append(result);
+      }
+      if (current?.temp?.shown) {
+        const temp = current.temp, section = make('section', 'records-section records-temp');
+        section.dataset.record = 'temp';
+        section.append(make('h3', '', temp.anomaly ? 'records.temp.unavailable' : 'records.temp.title'));
+        if (temp.directories) {
+          const facts = make('div', 'records-temp-facts');
+          for (const [value, label] of [[format('records.temp.directories', {count:temp.directories}), 'records.temp.unit'], [tempSize(temp.bytes), 'records.temp.size'], [temp.oldestDay || '—', 'records.temp.oldest']]) {
+            const fact = make('div'), main = make('strong'); main.textContent = value; fact.append(main, make('small', '', label)); facts.append(fact);
+          }
+          section.append(facts);
+        }
+        section.append(make('p', '', temp.anomaly ? 'records.temp.inspectionFailed' : 'records.temp.about'));
+        const actions = make('div', 'records-actions'), clean = control('records.temp.clean', 'tempClean', async () => {
+          if (working) return; working = true; cleanupFailed = false; clean.disabled = true;
+          try { const done = await api.records('tempClean', temp.ticket); lastResult = done.result; current = done; }
+          catch { cleanupFailed = true; }
+          finally { working = false; await refresh(); draw(); }
+        });
+        clean.className = 'primary'; clean.disabled = working || !temp.directories || Boolean(temp.anomaly) || !temp.ticket;
+        const acknowledge = control('records.acknowledge', 'tempAcknowledge', async () => {
+          try { current = await api.records('tempAcknowledge', temp.ticket); } catch { cleanupFailed = true; }
+          await refresh(); draw();
+        }); acknowledge.className = 'records-text-action'; acknowledge.disabled = working || !temp.ticket;
+        actions.append(clean, acknowledge); section.append(actions); dialog.append(section);
+      }
+      if (cleanupFailed) dialog.append(make('p', 'records-note', 'records.temp.failed'));
       for (const { record, items } of due) {
         const section = make('section', 'records-section'); section.dataset.record = record.record;
         section.append(make('h3', '', `records.name.${record.record}`));
@@ -59,7 +96,9 @@
         }
         dialog.append(section);
       }
-      const foot = make('div', 'dialog-actions'); foot.append(control('records.done', 'done', () => dialog.close())); dialog.append(foot);
+      const foot = make('div', 'dialog-actions');
+      if (current?.count) foot.append(make('span', 'records-person', 'records.temp.person'));
+      foot.append(control('records.done', 'done', () => dialog.close())); dialog.append(foot);
     }
     // Export: the record's sealed blocks, the ones past 30 days chosen to start with, a folder, and the copy.
     async function exportView(record) {
@@ -111,11 +150,11 @@
       }
       dialog.append(list, where, status, about, actions); update();
     }
-    async function open() { await refresh(); draw(); if (!dialog.open) dialog.showModal(); }
+    async function open() { await refresh(true); draw(); if (!dialog.open) dialog.showModal(); }
     button.addEventListener('click', () => { open(); });
     // Worked out again when the main process says a record changed (a block sealed or added, a record not loaded).
     if (typeof api.onRecordsChanged === 'function') api.onRecordsChanged(() => { refresh(); });
-    dialog.addEventListener('close', () => { dialog.replaceChildren(); dialog.dataset.view = ''; });
+    dialog.addEventListener('close', () => { dialog.replaceChildren(); dialog.dataset.view = ''; lastResult = null; cleanupFailed = false; });
     return { refresh, open, size };
   }
   const value = { bind };

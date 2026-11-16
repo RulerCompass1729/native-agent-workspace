@@ -61,6 +61,19 @@ async function run(args = process.argv.slice(2)) {
   } finally {
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate);
     if (!retain) removeOwned(owned);
+    // Inner suites can retain a profile that an outer fixture later removes;
+    // its receipt is absent from this journal. Sweep only gone registered
+    // paths, after the last physical cleanup; existing/protected paths stay.
+    // Store housekeeping must not replace the suite/leak-guard result. A bad
+    // receipt remains untouched and still blocks application inspection.
+    let registryDir;
+    try {
+      const ownership = require('../app/temp-ownership.cjs');
+      registryDir = ownership.defaultDirectory();
+      await ownership.pruneMissing(registryDir);
+    } catch {
+      console.error(`TEMP RECEIPTS: sweep skipped (${JSON.stringify(registryDir || 'temp-ownership')})`);
+    }
   }
 }
 module.exports = { run };

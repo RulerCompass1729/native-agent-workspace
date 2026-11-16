@@ -18,7 +18,7 @@ function readLog(dir, days, last = NOW) {
 const of = (status, record) => status.records.find(item => item.record === record);
 const manifestFile = (dir, record) => path.join(dir, 'history', record, 'manifest.json');
 
-test('with nothing at a line there is nothing to remind of, and the bell is not there', t => {
+test('empty record status has no due reminder', t => {
   const dir = folder(t), status = reminders.status(dir, NOW);
   assert.deepEqual([status.count, status.records.map(item => [item.record, item.blocks, item.items.length])], [0, [['operations', 0, 0], ['butler-reads', 0, 0], ['steward', 0, 0]]]);
   assert.equal(fs.existsSync(path.join(dir, 'history')), false, 'Asking writes nothing');
@@ -125,21 +125,21 @@ function page(t, dir, now = NOW) {
   return { view, button, badge, dialog, calls, out, find, answer: hook => { deleteAnswer = hook; }, changed: () => onChanged?.(), unavailable: value => { unavailable = value; }, text: () => dialog.all().filter(node => !node.hidden).map(node => node.textContent).filter(Boolean).join('\n') };
 }
 
-test('the bell is there only while something is due; its dialog says what, and "知道了" puts it away', async t => {
+test('the bell stays present when empty; its dialog says what, and "知道了" puts the item away', async t => {
   const dir = folder(t); readLog(dir, 33);
   const quiet = page(t, folder(t)); await quiet.view.refresh();
-  assert.deepEqual([quiet.button.hidden, quiet.badge.textContent], [true, '']);
+  assert.deepEqual([quiet.button.hidden, quiet.badge.textContent], [false, '']);
   const p = page(t, dir); await p.view.refresh();
   assert.deepEqual([p.button.hidden, p.badge.textContent, p.button.attributes['aria-label']], [false, '1', zh('records.bellCount', { count: 1 })]);
   await p.view.open();
   assert.equal(p.dialog.open, true);
   const text = p.text();
-  for (const line of [zh('records.title'), zh('records.intro'), zh('records.name.butler-reads'), zh('records.item.age', { blocks: 2, oldest: new Date(NOW - 32 * DAY).toISOString().slice(0, 10), total: 33, size: p.view.size(of(reminders.status(dir, NOW), 'butler-reads').bytes) })])
+  for (const line of [zh('records.title'), zh('records.name.butler-reads'), zh('records.item.age', { blocks: 2, oldest: new Date(NOW - 32 * DAY).toISOString().slice(0, 10), total: 33, size: p.view.size(of(reminders.status(dir, NOW), 'butler-reads').bytes) })])
     assert.ok(text.includes(line), line);
   assert.equal(text.includes(zh('records.name.operations')), false, 'A record with nothing due is not listed');
   await p.find('acknowledge').fire('click'); await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(p.calls.find(call => call[0] === 'acknowledge'), ['acknowledge', 'butler-reads', 'age', 1]);
-  assert.deepEqual([p.button.hidden, p.text().includes(zh('records.nothing'))], [true, true]);
+  assert.deepEqual([p.button.hidden, p.text().includes(zh('records.nothing'))], [false, true]);
 });
 
 test('export from the dialog: the old blocks chosen to start with, nothing sent before a folder is chosen, then a checked copy', async t => {
@@ -200,7 +200,7 @@ test('after a checked export the dialog offers to delete exactly those blocks; t
 });
 
 test('the bell is worked out again when the main process says a record changed, and each reason for a stop has its own sentence', async t => {
-  const p = page(t, folder(t)); await p.view.refresh(); assert.equal(p.button.hidden, true);
+  const p = page(t, folder(t)); await p.view.refresh(); assert.equal(p.button.hidden, false);
   p.unavailable({ operations: 'other' }); p.changed(); await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual([p.button.hidden, p.badge.textContent], [false, '1']);
   await p.view.open(); assert.ok(p.text().includes(zh('records.item.unavailableOther'))); assert.equal(p.text().includes(zh('records.item.unavailable')), false);
