@@ -55,7 +55,9 @@ async function operateOutbox(binding, createView, signal) {
     }
   }
 }
-async function createOutboxBroker({ descriptorFile, bind, createView, bindControl, control }) {
+// Each connection is answered within this limit or dropped; tests shorten it.
+const CONNECTION_MS = 100000;
+async function createOutboxBroker({ descriptorFile, bind, createView, bindControl, control, connectionMs = CONNECTION_MS }) {
   if (!path.isAbsolute(descriptorFile) || ![bind, createView].every(f => typeof f === 'function')) throw Error('Outbox owner unavailable');
   const issuer = processIdentity(process.pid);
   if (!issuer) throw Error('Outbox process identity unavailable');
@@ -123,7 +125,7 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
   const server = net.createServer(socket => {
     sockets.add(socket); socket.on('error', () => {});
     const abort = new AbortController(); let data = '', accepted = false;
-    const timer = setTimeout(() => { abort.abort(); socket.destroy(); }, 100000);
+    const timer = setTimeout(() => { abort.abort(); socket.destroy(); }, connectionMs);
     socket.on('close', () => { clearTimeout(timer); abort.abort(); sockets.delete(socket); });
     socket.setEncoding('utf8');
     socket.on('data', part => {
