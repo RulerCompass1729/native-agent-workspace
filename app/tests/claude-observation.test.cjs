@@ -44,8 +44,8 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
     const selected=(hooks.get(name)||[]).filter(hook=>matches(hook.matcher,e));
     const dispatch=(index,value)=>{if(index===selected.length)return next(value);const rest=v=>dispatch(index+1,v);rest.origin=next.origin;return selected[index].fn($,value,rest);};return dispatch(0,e);
   };
-  await invoke('session.start', {}); await clock.shift()(); const poll = clock.find(fn => fn.delay === 0); clock.length = 0;
-  return { r, clock, requests, invoke, poll, setVersion(value) { version = value; }, readUsage() { return testObserveUsage($); }, setUsageReader(fn) { $.session.usage = fn; }, setModelReader(fn) { $.session.model = fn; }, readModel() { return testObserveModel($); }, setToken(value) { token = value; }, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
+  await invoke('session.start', {}); await clock.shift()(); const poll = clock.find(fn => fn.delay === 0), heartbeat = clock.find(fn => fn.delay === 1000); clock.length = 0;
+  return { r, clock, requests, invoke, poll, heartbeat, setVersion(value) { version = value; }, readUsage() { return testObserveUsage($); }, setUsageReader(fn) { $.session.usage = fn; }, setModelReader(fn) { $.session.model = fn; }, readModel() { return testObserveModel($); }, setToken(value) { token = value; }, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
 }
 const response = (text = 'Intermediate native text', extra = {}) => ({ uuid: randomUUID(), door: 'response', origin: { kind: 'model', model: 'synthetic' }, message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] }, ...extra });
 
@@ -1190,6 +1190,126 @@ test(`native interruption cannot override ${boundary}`, async () => {
   assert.ok(!states.includes('idle'));
 });
 
+
+async function standingModelActivity(t) {
+  const { BackgroundControl } = require('../background-control.cjs'), { StewardStanding } = require('../steward-standing.cjs');
+  const { StewardRole } = require('../steward-role.cjs'), { RoomState } = require('../room-state.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-standing-activity-'));
+  let time = Date.now(), reads = 0;
+  t.mock.method(Date, 'now', () => time);
+  const host = { binaries: {}, close() {} }, workspace = new Workspace(host, dir), r = adapter();
+  const peer = Object.assign(r.record, { id: 'peer', provider: 'claude', roomId: 'shared', cwd: dir, owner: 'peer-window',
+    view: 'terminal', controlRevision: 0, memberRevision: 0, messages: [], state: 'idle', skipPermissions: true });
+  r.host = host; workspace.sessions.set(peer.id, peer); workspace.runtimes.set(peer.id, r); workspace.bind(peer, r);
+  r.hook({ hook_event_name: 'SessionStart', session_id: peer.nativeId, model: 'model-current', effort: { level: 'low' } });
+  const bridge = await mod({ runtime: r, version: '2.1.323', now: async () => time });
+  bridge.setModelReader(async () => { reads++; return 'model-current'; });
+  const flush = async () => {
+    for (let n = 0; n < 30; n++) {
+      await new Promise(resolve => setImmediate(resolve));
+      const index = bridge.clock.findIndex(fn => fn.delay === 0);
+      if (index < 0) return;
+      await bridge.clock.splice(index, 1)[0]();
+    }
+    assert.fail('Native observation queue did not settle');
+  };
+  await bridge.readModel(); await flush();
+  assert.equal(r.creationSettingsSnapshot()?.model?.value, 'model-current', 'The real adapter accepted the initial native read');
+  const actor = { id: 'butler', nativeId: 'native-butler', provider: 'codex', name: 'Butler' }, human = {};
+  const role = new StewardRole(dir); role.set({ sessionId: actor.id, nativeId: actor.nativeId });
+  const policy = new StewardStanding(dir, { role, person: c => c === human }); policy.set(human, true);
+  const state = () => { const snapshot = workspace.snapshot(); return { ...snapshot, sessions: [{ ...actor, roomId: null }, ...snapshot.sessions] }; };
+  const auditDir = path.join(dir, 'audit'); fs.mkdirSync(auditDir); const rooms = new RoomState(auditDir), effects = [];
+  const context = { background: true, view: {}, checkActor: async () => {}, fingerprint: () => ({ sessions: [actor], auditRooms: ['shared'] }),
+    client: { snapshot: state, close() {} }, win: { destroy() {} } };
+  const control = new BackgroundControl({ dataDir: dir, context: () => context,
+    handlers: new Map([['create', (_c, options) => { effects.push(options); return 'created'; }]]),
+    confirmation: () => ({ message: 'Confirm configuration', buttons: ['Cancel', 'Confirm'], cancelId: 0 }),
+    standing: (a, command) => policy.take(a, command, state(), 'shared'),
+    standingValid: (a, command, _c, grant) => policy.valid(a, command, state(), 'shared', grant), audit: row => rooms.recordControlOperation(row) });
+  t.after(async () => { await control.close(); workspace.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const f = { ...bridge, peer, workspace, effects, policy, flush, advance: ms => { time += ms; }, reads: () => reads,
+    effort: () => r.hook({ hook_event_name: 'Notification', session_id: peer.nativeId, effort: { level: 'low' } }),
+    ask: settings => control.call({ sender: actor, identity: { callId: 'create', turnId: 'turn' }, valid: () => true },
+      { action: 'invoke', method: 'create', operation_id: 'create', arguments: [{ provider: 'claude', name: 'New', cwd: dir, skipPermissions: true, settings }] }) };
+  let heartbeat = bridge.heartbeat;
+  f.tick = async () => {
+    assert.equal(typeof heartbeat, 'function');
+    f.advance(1000); await heartbeat(); await flush();
+    const index = bridge.clock.findIndex(fn => fn.delay === 1000);
+    assert.notEqual(index, -1); heartbeat = bridge.clock.splice(index, 1)[0];
+  };
+  return f;
+}
+
+for (const boundary of ['start', 'complete']) test(`PF08 activity: root ${boundary} refreshes a five-minute-old model for standing creation`, async t => {
+  const f = await standingModelActivity(t), turnId = randomUUID();
+  if (boundary === 'complete') { await f.invoke('turn.start', { turnId }); await f.flush(); }
+  f.advance(5 * 60000); f.peer.controlRevision++; f.effort();
+  const before = f.reads();
+  await f.invoke(`turn.${boundary}`, { turnId, reason: 'answer', answer: '' }); await f.flush();
+  assert.equal((await f.ask(boundary === 'start' ? { model: 'model-current', effort: 'low' } : { model: 'model-current' })).state, 'complete');
+  assert.equal(f.effects.length, 1); assert.equal(f.reads(), before + 1);
+  assert.equal(f.policy.read().used.length, 1);
+});
+
+test('PF08 activity: the existing heartbeat refreshes model metadata during a long root turn', async t => {
+  const f = await standingModelActivity(t), turnId = randomUUID();
+  await f.invoke('turn.start', { turnId }); await f.flush();
+  const before = f.reads();
+  for (let i = 0; i < 90; i++) await f.tick();
+  assert.equal((await f.ask({ model: 'model-current' })).state, 'complete');
+  assert.equal(f.effects.length, 1); assert.equal(f.reads() - before, 3, 'One local metadata read every thirty existing ticks');
+});
+
+test('PF08 activity: idle ticks and child turn boundaries cannot renew expired root authority', async t => {
+  const f = await standingModelActivity(t), before = f.reads();
+  f.advance(61000);
+  await f.invoke('turn.start', { turnId: randomUUID(), agentId: 'child' });
+  await f.invoke('turn.complete', { turnId: randomUUID(), agentId: 'child', reason: 'answer' });
+  for (let i = 0; i < 30; i++) await f.tick();
+  assert.equal((await f.ask({ model: 'model-current' })).state, 'confirmation-required');
+  assert.deepEqual(f.effects, []); assert.equal(f.reads(), before);
+});
+
+test('PF08 activity: the heartbeat stops renewing model authority after the root turn ends', async t => {
+  const f = await standingModelActivity(t), turnId = randomUUID();
+  await f.invoke('turn.start', { turnId }); await f.flush();
+  await f.invoke('turn.complete', { turnId, reason: 'answer', answer: '' }); await f.flush();
+  const before = f.reads();
+  for (let i = 0; i < 61; i++) await f.tick();
+  assert.equal((await f.ask({ model: 'model-current' })).state, 'confirmation-required');
+  assert.deepEqual(f.effects, []); assert.equal(f.reads(), before);
+});
+
+test('PF08 activity: a failed root metadata refresh leaves expired authority requiring a card', async t => {
+  const f = await standingModelActivity(t); f.advance(5 * 60000);
+  f.setModelReader(async () => { throw Error('Native model metadata unavailable'); });
+  await f.invoke('turn.start', { turnId: randomUUID() }); await f.flush();
+  assert.equal((await f.ask({ model: 'model-current' })).state, 'confirmation-required'); assert.deepEqual(f.effects, []);
+});
+
+test('PF08 activity: a refreshed different model cannot authorize the old configuration', async t => {
+  const f = await standingModelActivity(t); f.advance(5 * 60000);
+  f.setModelReader(async () => 'model-new');
+  await f.invoke('turn.start', { turnId: randomUUID() }); await f.flush();
+  assert.equal(f.r.creationSettingsSnapshot()?.model?.value, 'model-new');
+  assert.equal((await f.ask({ model: 'model-current' })).state, 'confirmation-required'); assert.deepEqual(f.effects, []);
+});
+
+test('PF08 activity: root refresh cannot query inside a pending model switch or supersede its selection', async t => {
+  const f = await standingModelActivity(t); f.advance(5 * 60000);
+  let release;
+  const switching = f.invoke('classic.PostModelSwitch', { session_id: f.peer.nativeId, to_model: 'model-new' },
+    () => new Promise(resolve => { release = resolve; }));
+  const before = f.reads();
+  try {
+    await f.invoke('turn.start', { turnId: randomUUID() }); await f.flush();
+    for (let i = 0; i < 30; i++) await f.tick();
+    assert.equal(f.reads(), before, 'The native query can still return the previous selection inside the switch hook');
+  } finally { release({}); await switching; await f.flush(); }
+  assert.equal((await f.ask({ model: 'model-new' })).state, 'complete'); assert.equal(f.effects.length, 1);
+});
 
 test('native model metadata preserves the active task and ignores children, stale roots and late startup', async () => {
   const f = await mod({ version: '2.1.309' }), models = [];
