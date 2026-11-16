@@ -1,0 +1,49 @@
+/* Hover details for a sidebar row or space heading (round 2, 19:19 feedback: the sidebar's own sizes, translucent;
+   11-15 the person chose A: 70% background, 8px blur, secondary text darker inside the card only, 4.5:1 at worst).
+   The card never takes the mouse; the row keeps its full accessible name and description. */
+#naw-hover-card{
+  --naw-hover-card-opacity:70%;--naw-hover-card-muted:#44484c;
+  position:fixed;inset:auto;margin:0;z-index:2147483000;box-sizing:border-box;
+  width:min(288px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:hidden;
+  padding:10px 12px;border:1px solid var(--border);border-radius:10px;
+  background:color-mix(in srgb,var(--raised) var(--naw-hover-card-opacity),transparent);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+  color:var(--ink);font-size:11px;line-height:1.4;font-weight:400;text-align:left;
+  box-shadow:0 10px 28px rgba(0,0,0,.14),0 1px 3px rgba(0,0,0,.08);
+  pointer-events:none;user-select:none;
+  /* Nested like styles.css, so it also matches once the build wraps every rule in .naw. */
+  body[data-ds-dark-theme] &{box-shadow:0 12px 32px rgba(0,0,0,.55),0 1px 3px rgba(0,0,0,.4);--naw-hover-card-muted:#eceef0}
+}
+#naw-hover-card[hidden]{display:none}
+#naw-hover-card .hover-card-head{display:flex;gap:8px;align-items:flex-start}
+#naw-hover-card .hover-card-head>.agent-icon,#naw-hover-card .hover-card-head>.sidebar-space-tile{flex:none;margin-top:1px}
+#naw-hover-card .hover-card-head>.agent-icon{position:relative;width:22px!important;height:22px!important;border-radius:6px!important;font-size:10px!important}
+#naw-hover-card .hover-card-head>.sidebar-space-tile{display:inline-grid;place-items:center;width:25px;height:25px;border-radius:7px;font-size:12px;font-weight:700;background:var(--space-tint,var(--panel));color:var(--space-ink,var(--muted))}
+#naw-hover-card .hover-card-lines{min-width:0;flex:1}
+#naw-hover-card .hover-card-title{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px}
+#naw-hover-card .hover-card-name{font-size:13px;font-weight:600;line-height:1.35;overflow-wrap:anywhere}
+#naw-hover-card .hover-card-role,#naw-hover-card .hover-card-muted,#naw-hover-card .hover-card-sub,#naw-hover-card dt,#naw-hover-card .hover-card-more{color:var(--naw-hover-card-muted)}
+#naw-hover-card .hover-card-status{margin-top:1px;color:var(--naw-hover-card-muted);overflow-wrap:anywhere}
+#naw-hover-card [data-tone="working"]{color:var(--ink)}
+#naw-hover-card [data-tone="approval"]{color:var(--approval-ink);font-weight:600}
+#naw-hover-card dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:3px 10px;margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)}
+#naw-hover-card dt{white-space:nowrap}
+#naw-hover-card dd{margin:0;min-width:0;overflow-wrap:anywhere}
+#naw-hover-card .hover-card-path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px}
+#naw-hover-card .hover-card-sub{display:block}
+#naw-hover-card .hover-card-nowrap{white-space:nowrap}
+#naw-hover-card .hover-card-members{list-style:none;display:grid;gap:4px;margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)}
+#naw-hover-card .hover-card-members li{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;gap:6px;align-items:center}
+#naw-hover-card .hover-card-members .agent-icon{position:relative;width:19px!important;height:19px!important;border-radius:5px!important;font-size:9px!important}
+#naw-hover-card .hover-card-member-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#naw-hover-card .hover-card-member-state{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--naw-hover-card-muted)}
+#naw-hover-card .hover-card-members li.hover-card-more{display:block}
+/* The row's state marks (styles.css, T-142), on the card's own ring colour. */
+#naw-hover-card .agent-icon>.state-dot{--ring:var(--raised);position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;box-sizing:border-box;box-shadow:0 0 0 1.5px var(--ring)}
+#naw-hover-card .hover-card-members .agent-icon>.state-dot{width:7px;height:7px}
+#naw-hover-card .agent-icon>.state-dot.working{background:radial-gradient(circle,#b78c42 0 1.3px,var(--ring) 1.3px 2.1px,#b78c42 2.1px)}
+#naw-hover-card .agent-icon>.state-dot.idle.bg-work{background:linear-gradient(90deg,#5b7fa6 50%,var(--ring) 50%);box-shadow:0 0 0 1.5px var(--ring),inset 0 0 0 1.5px #5b7fa6}
+#naw-hover-card .agent-icon>.state-dot:is(.ended,.disconnected,.recoverable){background:var(--ring);box-shadow:0 0 0 1.5px var(--ring),inset 0 0 0 2px #868980}
+#naw-hover-card .agent-icon>.state-dot.bg-unknown{background:var(--ring);border:1.5px dashed #6c7266}
+#naw-hover-card .agent-icon>.state-dot.bg-unknown:is(.ended,.disconnected,.recoverable){border:0}
+#naw-hover-card .agent-icon>.state-dot:is(.approval,.error){background:#b26345;border:0;box-shadow:0 0 0 1.5px var(--ring),0 0 0 3px #b26345}

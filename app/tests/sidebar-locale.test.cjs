@@ -19,7 +19,7 @@ class Element {
   add(option) { this.append(option); }
   get nextSibling() { const siblings = this.parentElement?.children || []; return siblings[siblings.indexOf(this) + 1] || null; }
   after(...nodes) { const next = this.nextSibling; for (const node of nodes) this.parentElement.insertBefore(node, next); }
-  append(...nodes) { for (const node of nodes) this.insertBefore(node, null); }
+  append(...nodes) { for (const node of nodes) this.insertBefore(typeof node === 'string' ? new Element('#text', node) : node, null); }
   insertBefore(node, before) { node.remove(); node.parentElement = this; const index = before ? this.children.indexOf(before) : -1; this.children.splice(index < 0 ? this.children.length : index, 0, node); }
   replaceChildren(...nodes) { for (const child of [...this.children]) child.remove(); this.content = ''; this.append(...nodes); }
   remove() { if (this.parentElement) { this.parentElement.children.splice(this.parentElement.children.indexOf(this), 1); this.parentElement = null; } }
@@ -155,11 +155,13 @@ for (const [stored, zh, en] of [[spaces.DEFAULT_ROOM_NAME, '共同工作', 'Shar
     for (const slot of ['aria-label', 'title']) {
       assert.equal(group.more.getAttribute(slot), locale.format(language, 'sidebar.spaceActions', { name }), slot);
       assert.equal(group.toggle.getAttribute(slot), locale.format(language, 'sidebar.collapse', { name }), slot);
-      assert.ok(row.link.getAttribute(slot).includes(locale.format(language, 'sidebar.memberships', { names: `${name}、Team 中文` })), slot);
       assert.ok(row.more.getAttribute(slot).endsWith(' · ' + name), slot);
     }
     assert.equal(row.more.getAttribute('aria-description'), f.run("sidebarDetails(state.sessions[0]).join(' · ')"), 'The row details follow the language');
-    assert.ok(strings(row.badges).includes(`${name}、Team 中文`), 'The +1 badge lists both spaces');
+    // The row's own tooltip is gone (the hover card carries these facts); its accessible name keeps them.
+    assert.ok(row.link.getAttribute('aria-label').includes(locale.format(language, 'sidebar.memberships', { names: `${name}、Team 中文` })));
+    assert.equal(row.link.getAttribute('title'), null, 'No native tooltip competes with the hover card');
+    assert.equal(row.badges.getAttribute('aria-label'), locale.format(language, 'sidebar.memberships', { names: `${name}、Team 中文` }), 'The badges name both spaces');
   };
   expect(zh, 'zh');
   f.refresh('en'); expect(en, 'en');
@@ -240,4 +242,60 @@ test('language refresh preserves an unconfirmed, retained or join-only create wi
     assert.equal(JSON.stringify(f.state), before); assert.equal(session.liveDraft, 'UNSENT 中文'); assert.equal(ticket.creation?.sessionId || ticket.created, kind === 'unconfirmed' ? 'unconfirmed' : session.id);
     assert.deepEqual(f.calls, []);
   }
+});
+
+// Hover details (11-15): built from state the sidebar already has, in the interface language at show time, with no
+// ids, drafts or product calls. The row's own tooltips are gone so no native tooltip competes with the card.
+const cardText = parts => parts.filter(Boolean).map(part => part.textContent).join('\n');
+test('the session hover card shows its facts in the interface language without ids, drafts or product calls', () => {
+  const f = fixture(), s = f.people[0], plan = { repository: '/synthetic/repo', target: '/synthetic/repo-lanes/worker', nonce: 'abc123', branch: 'naw/session-abc' };
+  Object.assign(s, { model: 'RAW 模型', cwd: plan.target, worktreePreparation: plan });
+  f.state.room.queue = [{ id: 'q1', status: 'waiting', sentTo: s.id, text: 'RAW 任务 中文\n第二行不显示' }, { id: 'q2', status: 'queued', text: 'other' }];
+  const before = structuredClone(f.state);
+  for (const language of ['zh', 'en']) {
+    f.refresh(language); const text = cardText(f.run('hoverSessionCard(state.sessions[0], false)')), l = (key, params) => locale.format(language, key, params);
+    for (const part of ['RAW NAME 中文', f.run('sidebarPresentation(state.sessions[0]).full'), l('hover.backend'), 'Codex · RAW 模型', l('hover.spaces'), 'RAW SPACE 中文',
+      l('hover.doing'), 'RAW 任务 中文 · ' + l('hover.waiting'), l('hover.folder'), plan.target, l('hover.branch', { branch: plan.branch }), l('hover.time'), f.run('sessionTimes(state.sessions[0])')])
+      assert.ok(text.includes(part), `${language}: ${part}`);
+    for (const hidden of [s.id, 'original-native', 'original-owner', 'UNSENT 中文', '第二行不显示', 'other']) assert.equal(text.includes(hidden), false, `${language} hides ${hidden}`);
+  }
+  assert.equal(cardText(f.run('hoverSessionCard(state.sessions[0], false)')).includes('后端'), false, 'No Chinese label left in English');
+  // No folder, space or sent item: the card says so instead of leaving gaps.
+  Object.assign(s, { roomIds: [], cwd: '', worktreePreparation: null }); f.state.room.queue = [];
+  f.refresh('zh'); const bare = cardText(f.run('hoverSessionCard(state.sessions[0], false)'));
+  assert.ok(bare.includes(locale.format('zh', 'sidebar.independent')) && bare.includes(locale.format('zh', 'hover.unrecorded')));
+  assert.equal(bare.includes(locale.format('zh', 'hover.doing')), false);
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(Object.keys(f.state), Object.keys(before));
+});
+
+test('the space hover card lists at most six rows and the open queue in the interface language', () => {
+  const f = fixture(), base = f.people[0];
+  const many = Array.from({ length: 7 }, (_, index) => ({ ...base, id: 'member-' + index, name: 'RAW 成员 ' + index, liveDraft: 'UNSENT ' + index }));
+  f.context.orderedMembers = () => many;
+  f.state.room.queue = [{ status: 'queued' }, { status: 'queued' }, { status: 'sent' }, { status: 'waiting' }, { status: 'done' }];
+  for (const language of ['zh', 'en']) {
+    f.refresh(language); const parts = f.run('hoverSpaceCard(state.room)'), text = cardText(parts), l = (key, params) => locale.format(language, key, params);
+    assert.ok(text.includes('RAW SPACE 中文') && text.includes(l('hover.members', { count: 7 })), language);
+    assert.equal(parts[1].children.length, 6, 'Five members and one more-row');
+    assert.ok(text.includes('RAW 成员 4') && !text.includes('RAW 成员 5'), language);
+    assert.ok(text.includes(l('hover.more', { count: 2 })), language);
+    assert.ok(text.includes(l('hover.queueCounts', { queued: 2, sent: 1, waiting: 1 })), language);
+    assert.equal(text.includes('UNSENT'), false);
+  }
+  f.context.orderedMembers = () => many.slice(0, 6); f.state.room.queue = [];
+  const six = f.run('hoverSpaceCard(state.room)');
+  assert.equal(six[1].children.length, 6, 'Six members fit without a more-row'); assert.ok(cardText(six).includes(locale.format('en', 'hover.queueEmpty')));
+  assert.deepEqual(f.calls, []);
+});
+
+test('sidebar rows carry no native tooltips that would compete with the hover card', () => {
+  const f = fixture(); f.people[0].roomIds = ['shared'];
+  f.run('renderSessions()');
+  const row = f.context.sessionRows.get(f.people[0].id);
+  for (const [name, element] of [['link', row.link], ['time', row.time], ['dot', row.dot], ['marker', row.marker], ...row.badges.children.map(badge => ['badge', badge])]) {
+    assert.equal(element.getAttribute('title'), null, name); assert.ok(!element.title, name);
+  }
+  assert.ok(row.link.getAttribute('aria-label').includes('RAW SPACE 中文'), 'The accessible name keeps the facts');
+  assert.doesNotMatch(renderer, /computed\(row\.hier\.(task|folder), 'title'/, 'Folder view rows have no tooltips either');
 });

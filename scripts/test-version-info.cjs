@@ -107,7 +107,7 @@ async function run() {
   for (const value of Object.values(marks)) assert.equal(value.marker, value.text);
   assert.match(marks.missing.title, /后台未报告版本/); assert.match(marks.older.title, /后台 0\.1\.0-alpha\.114/); assert.match(marks.development.title, /后台 development/);
   assert.match(await row(missing).locator('.session-link').getAttribute('aria-label'), /后台未报告版本/);
-  assert.match(await row(older).locator('.session-link').getAttribute('title'), /后台 0.1.0-alpha.114/);
+  assert.match(await row(older).locator('.session-link').getAttribute('aria-label'), /后台 0.1.0-alpha.114/); assert.equal(await row(older).locator('.session-link').getAttribute('title'), null);
   const stable = identity(await snapshot()); await capture('01-visible-own-version-badges');
   check('Matching, differing, missing and development values render independently; exact own values are accessible');
   await row(older).locator('.session-link').focus(); await row(older).locator('.session-backend-version').evaluate(el => { window.savedVersionBadge = el; });

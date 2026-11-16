@@ -91,7 +91,7 @@
     .session-metadata{grid-column:1/-1;display:flex!important;align-items:baseline;gap:6px;min-width:0}
     .session-metadata small{margin:0!important;font-size:11px;color:var(--muted);line-height:15px;white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis}
     .session-row:has(.state-dot.working) .session-metadata small{color:var(--ink)}
-    .session-row:has(.state-dot.approval) .session-metadata small{color:#a8553a!important;font-weight:600}
+    .session-row:has(.state-dot.approval) .session-metadata small{color:var(--approval-ink)!important;font-weight:600}
     .session-time{margin-left:auto;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
     .session-more{width:22px;height:24px;font-size:16px;opacity:0}
     .session-row:hover .session-more,.session-row:focus-within .session-more,.session-more[aria-expanded="true"]{opacity:1}

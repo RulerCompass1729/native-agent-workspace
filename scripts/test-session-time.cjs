@@ -66,9 +66,9 @@ async function run() {
   await until(async () => (await status(a).innerText()).includes('推算 ' + firstText), 'Estimated recorded time visible');
   assert.ok((await status(b).innerText()).includes('时间未知')); assert.ok((await status(c).innerText()).includes(reportedText)); assert.ok(!(await status(c).innerText()).includes('推算'));
   for (const [id, text] of [[a, '最后活动 推算 ' + firstText], [b, '最后活动 时间未知'], [c, '最后活动 ' + reportedText]]) {
-    const link = row(id).locator('[data-session-id]'); assert.ok((await link.getAttribute('aria-label')).includes(text)); assert.ok((await link.getAttribute('title')).includes(text));
+    const link = row(id).locator('[data-session-id]'); assert.ok((await link.getAttribute('aria-label')).includes(text)); assert.equal(await link.getAttribute('title'), null);
   }
-  await capture('01-recorded-estimated-unknown'); check('Old metadata shows an explicit estimate or unknown; backend activity wins and tooltip/accessible text agree');
+  await capture('01-recorded-estimated-unknown'); check('Old metadata shows an explicit estimate or unknown; backend activity wins; the accessible name carries it and no native tooltip competes with the hover card');
   await row(a).locator('[data-session-id]').click(); await page.locator('#chat-tab').click();
   if (await page.locator('#take-control').isVisible()) await page.locator('#take-control').click();
   await until(() => page.locator('#message-input').evaluate(el => !el.readOnly), 'Own fixture control'); await page.locator('#message-input').fill('Unsent original draft');
@@ -79,7 +79,7 @@ async function run() {
   assert.equal(await page.locator('#message-input').inputValue(), 'Unsent original draft'); check('A newer recorded reply updates the estimate without changing the original draft or native identity');
   await page.locator(`[data-session-menu="${a}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
   if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click();
-  const archive = page.locator('#archive-list .archive-item').filter({ has: page.getByText('Old recorded reply', { exact: true }) }); await archive.waitFor();
+  const archive = page.locator('#archive-list .archive-item').filter({ has: page.getByText('[已归档] Old recorded reply', { exact: true }) }); await archive.waitFor();
   assert.ok((await archive.innerText()).includes('推算 ' + laterText));
   await project(a, { lastActivityAt: reported, messages }); await until(async () => (await archive.innerText()).includes('最后活动 ' + reportedText) && !(await archive.innerText()).includes('推算'), 'Open archive updates on time-only metadata change'); await capture('02-archive-metadata-arrived');
   await archive.getByRole('button', { name: '恢复会话', exact: true }).click(); await row(a).waitFor();
