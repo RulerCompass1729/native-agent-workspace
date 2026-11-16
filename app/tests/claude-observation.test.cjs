@@ -158,6 +158,64 @@ test('root activity follows the transparent native stream, while child activity 
   await f.invoke('turn.complete',{turnId,reason:'answer',answer:'',durationMs:100});await f.clock.shift()();assert.equal(f.r.nativeActivity,null);
 });
 
+test('an intermediate ask that native auto mode handles is not a request for the person', async t => {
+  const f = await mod({ version: '2.1.323' }), promptId = randomUUID(), turnId = randomUUID();
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: 'check' });
+  await f.invoke('turn.start', { turnId }); await f.clock.shift()();
+  let finish;
+  const verdict = async () => ({ decision: 'ask' }); verdict.origin = { plugin: 'engine', tier: 'core' };
+  const execute = async () => {
+    await f.invoke('tool.check', { tool: 'Bash', tool_use_id: 'auto-call', input: { command: 'synthetic background task' } }, verdict);
+    return new Promise(resolve => { finish = resolve; });
+  };
+  execute.origin = { plugin: 'engine', tier: 'core' };
+  const running = f.invoke('tool.call', { tool: 'Bash', tool_use_id: 'auto-call' }, execute);
+  await new Promise(resolve => setImmediate(resolve));
+  t.after(async () => { finish({ result: 'background task' }); await running; });
+  while (f.clock.length) await f.clock.shift()();
+  assert.equal(f.r.nativeApproval, null, 'No actual PermissionRequest was made; auto mode is still running');
+  assert.notEqual(f.r.nativeActivity.phase, 'approval');
+  assert.equal(f.r.rootTurn, null, 'The existing conservative sharing boundary remains revoked');
+});
+
+test('intermediate permission metadata cannot hide a genuine request or change another boundary', () => {
+  const r = adapter(), states = []; r.nativeBlocks = true; r.on('state', value => states.push(value));
+  const emit = (id, extra) => r.observeBlock({ block: true, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch,
+    sequence: (r.rootObservation?.sequence || 0) + 1, kind: 'control', status: 'complete', id, ...extra });
+  emit('control:turn-start', { turnId: 'a', promptId: 'prompt-a', status: 'running' });
+  emit('control:permission', { turnId: 'a', permissionId: 'permission:held', title: 'Bash', input: '{}' });
+  emit('control:permission', { turnId: 'a', promptId: 'prompt-a', boundaryOnly: true, awaitingUser: false });
+  assert.equal(r.nativeApproval.requests[0].id, 'permission:held');
+  assert.equal(states.at(-1), 'approval', 'Checking another tool does not resolve the real dialog');
+  for (const extra of [{ boundaryOnly: true, awaitingUser: true }, { boundaryOnly: true, awaitingUser: 'false' }, { awaitingUser: false }])
+    assert.throws(() => emit('control:permission', extra), /Invalid native permission check/);
+  assert.throws(() => emit('control:input', { boundaryOnly: true, awaitingUser: false }), /Invalid native permission check/);
+});
+
+for (const behavior of ['allow', 'deny']) test('a native PermissionRequest hook that decides ' + behavior + ' leaves no user dialog pending', async t => {
+  const f = await mod({ version: '2.1.323' }), promptId = randomUUID(), turnId = randomUUID();
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: 'check' });
+  await f.invoke('turn.start', { turnId }); await f.clock.shift()();
+  let finish; const states = []; f.r.on('state', value => states.push(value));
+  const check = async () => ({ decision: 'ask' }); check.origin = { plugin: 'engine', tier: 'core' };
+  const execute = async () => {
+    await f.invoke('tool.check', { tool: 'Bash', tool_use_id: 'decided', input: { command: 'synthetic' } }, check);
+    return new Promise(resolve => { finish = resolve; });
+  };
+  execute.origin = { plugin: 'engine', tier: 'core' };
+  const running = f.invoke('tool.call', { tool: 'Bash', tool_use_id: 'decided' }, execute);
+  await new Promise(resolve => setImmediate(resolve));
+  t.after(async () => { finish({ result: behavior }); await running; });
+  const result = behavior === 'allow' ? { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior } } } : { decision: { behavior } };
+  const nativeHook = async e => { f.r.hook({ ...e, hook_event_name: 'PermissionRequest' }); return result; };
+  nativeHook.origin = { plugin: 'engine', tier: 'core' };
+  assert.equal(await f.invoke('classic.PermissionRequest', { session_id: f.r.record.nativeId, prompt_id: promptId, tool_name: 'Bash', tool_input: { command: 'synthetic' } }, nativeHook), result);
+  while (f.clock.length) await f.clock.shift()();
+  assert.equal(f.r.nativeApproval, null, 'A native hook decision does not wait for a later tool result or UI render');
+  assert.equal(states.at(-1), 'working');
+  assert.equal(f.r.rootTurn, null, 'Resolution does not restore sharing authority');
+});
+
 test('native permission requests remain private, correlated to actual calls and do not fabricate GUI decisions', async () => {
   const f=await mod({version:'2.1.302',legacy:true}), promptId=randomUUID(),turnId=randomUUID();
   await f.invoke('classic.UserPromptSubmit',{session_id:f.r.record.nativeId,prompt_id:promptId,prompt:'check'});
@@ -166,6 +224,11 @@ test('native permission requests remain private, correlated to actual calls and 
   const verdict=async()=>({decision:'ask'});verdict.origin={plugin:'engine',tier:'core'};
   const make=(id,command,done)=>{const execute=async()=>{await f.invoke('tool.check',{tool:'Bash',tool_use_id:id,input:{command}},verdict);return new Promise(done);};execute.origin={plugin:'engine',tier:'core'};return f.invoke('tool.call',{tool:'Bash',tool_use_id:id,input:{command}},execute);};
   const a=make('first','first',r=>finishA=r),b=make('second','second',r=>finishB=r);await new Promise(r=>setImmediate(r));
+  const nativeHook = async e => e; nativeHook.origin = { plugin: 'engine', tier: 'core' };
+  await f.invoke('classic.PermissionRequest', { session_id: f.r.record.nativeId, prompt_id: promptId, tool_name: 'Bash', tool_input: { command: 'unmatched' } }, nativeHook);
+  while (f.clock.length) await f.clock.shift()();
+  assert.equal(f.r.nativeApproval, null, 'An unmatched real request keeps the native-only fallback without borrowing another call ID');
+  for (const command of ['first', 'second']) await f.invoke('classic.PermissionRequest', { session_id: f.r.record.nativeId, prompt_id: promptId, tool_name: 'Bash', tool_input: { command } }, nativeHook);
   await f.clock.shift()();assert.equal(f.r.nativeActivity.phase,'approval');assert.equal(f.r.nativeApproval.requests.length,2);assert.equal(f.r.nativeApproval.requests[0].input,'{\n  "command": "first"\n}');
   assert.equal(f.r.rootTurn,null);assert.equal(f.r.nativeApproval.availableDecisions,undefined);
   const render=async e=>e;render.origin={plugin:'engine',tier:'core'};
