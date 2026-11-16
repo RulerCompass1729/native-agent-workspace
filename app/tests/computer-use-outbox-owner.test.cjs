@@ -182,7 +182,7 @@ test('direct native outbox rechecks global off and native goal before native wri
     f.natives[1].send = async (_text, _tag, refresh) => { await refresh(); writes++; };
     await assert.rejects(binding.forwardOnce(), error => classifyOutboxFailure(error).failureReason === ('native-goal-disallows'));
     assert.equal(writes, 0); assert.equal(f.bridge.records.length, 1);
-    assert.equal(f.bridge.records[0].agentWakeBudget.senders.sender.streak, 1);
+    assert.equal(f.bridge.records[0].agentWakeBudget.senders[f.records[0].nativeId].streak, 1);
     await binding.close();
   }
   const f = fixture(t), binding = await bindOriginalOutbox(f.deps, f.identity, f.args);

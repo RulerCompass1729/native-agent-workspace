@@ -63,7 +63,7 @@ class ScopedOutboxRuntime {
     // New typing still changes controlRevision and invalidates stable(scope).
     const preservesTerminalEdit = runtime.host?.rpc?.nativeVersion === '0.167.0' && scope.rpc?.nativeClientVersion === '0.167.0' &&
       runtime.terminalNotificationSource && runtime.terminalRpc === scope.rpc;
-    return this.stable(scope) && wake.budgetAllows(s, scope.op, scope.sender?.id) && runtime.scopedOutboxRpc?.() === scope.rpc &&
+    return this.stable(scope) && wake.budgetAllows(s, scope.op, scope.sender?.id, scope.sender?.nativeId) && runtime.scopedOutboxRpc?.() === scope.rpc &&
       (s.state === 'idle' || scope.sent && runtime.pending?.tag === scope.tag) &&
       (!s.pendingTag || scope.sent && s.pendingTag === scope.tag) && (!runtime.pending || scope.sent && runtime.pending.tag === scope.tag) &&
       !runtime.pendingQueue && !runtime.pendingSteer && !runtime.nativeAbortRequest && !runtime.nativeInputRequired &&
@@ -170,7 +170,7 @@ class ScopedOutboxRuntime {
       if (!this.ready(scope)) throw outboxError('recipient-not-idle', 'view-send');
       await this.checkGoal(scope, 'view-send');
       if (!this.ready(scope)) throw outboxError('recipient-not-idle', 'view-send');
-      wake.reserveBudget(scope.actor.s, scope.op, scope.sender?.id);
+      wake.reserveBudget(scope.actor.s, scope.op, scope.sender?.id, scope.sender?.nativeId);
       scope.sent = true; scope.tag = p.tag; scope.monitor.bind(p.tag);
       const tag = await this.workspace.sendScopedOutboxInput(scope.actor.s, scope.actor.runtime, p.text, p.tag, scope.sender, scope.rpc,
         () => this.ready(scope));

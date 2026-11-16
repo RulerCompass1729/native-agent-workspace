@@ -213,7 +213,7 @@ test('a refused wake says why: working, waiting, turned off, or just sent one (w
     ['waiting', f => { f.rb.nativeInputRequired = true; }, '收件方在等批准或等原生输入。', 'The recipient is waiting for an approval or native input.'],
     ['off', f => { f.target.get(f.b).wakeDisabled = true; }, '收件方或全部会话关了自动消息。', 'Automatic messages are turned off for the recipient or for all sessions.'],
     ['queued', f => { f.rb.pendingQueue = 'tag'; }, '收件方已有一条输入在投递或排队。', 'The recipient already has input being delivered or queued.'],
-    ['cooldown', f => { const s = f.target.get(f.b); s.wakeBudget = { version: 2, lastAt: Date.now(), humanRevision: s.wakeHumanRevision || 0, senders: { [f.a]: { id: 'earlier', streak: 1 } } }; }, '收件方刚收过自动消息：两条至少隔 60 秒，连续最多 3 条。', 'The recipient just received an automatic message: at least 60 seconds apart, at most 3 in a row.'],
+    ['cooldown', f => { const s = f.target.get(f.b); s.wakeBudget = { version: 2, lastAt: Date.now(), humanRevision: s.wakeHumanRevision || 0, senders: { [f.source.get(f.a).nativeId]: { id: 'earlier', streak: 1 } } }; }, '收件方刚收过自动消息：两条至少隔 60 秒，连续最多 3 条。', 'The recipient just received an automatic message: at least 60 seconds apart, at most 3 in a row.'],
   ];
   for (const [label, set, zh, en] of cases) {
     for (const when of ['registering', 'delivering']) {
@@ -269,7 +269,7 @@ test('an automatic message to a Claude session mid-turn goes into its native que
   // Not the person: the receiver keeps its owner, draft and control, and its loop guard counts this one.
   assert.deepEqual({ owner: m.s.owner, control: m.s.controlRevision, peer: m.s.peerRevision || 0, human: m.s.wakeHumanRevision || 0 }, before);
   assert.equal(f.target.drafts.get(f.b), 'The person is typing here');
-  assert.equal(m.s.wakeBudget.senders[f.a].streak, 1); assert.equal(f.writes.length, 0);
+  assert.equal(m.s.wakeBudget.senders[f.source.get(f.a).nativeId].streak, 1); assert.equal(f.writes.length, 0);
 });
 test('a queued automatic message the person overtakes before native holds it is not sent, and says so (wake proposal, item 1)', async t => {
   const f = await fixture(t, 'codex', true, false, 'claude'), m = midturnTarget(f, 'claude');
@@ -383,7 +383,7 @@ test('the same receiver budget is per sender, so unrelated senders do not exhaus
   }
   const budget = f.target.get(f.b).wakeBudget;
   assert.equal(budget.version, 2);
-  assert.deepEqual(senders.map(id => budget.senders[id].streak), [1, 1, 1, 1]);
+  assert.deepEqual(senders.map(id => budget.senders[f.source.get(id).nativeId].streak), [1, 1, 1, 1]);
 });
 test('a three-agent ring still stops each directed edge after three rounds', async t => {
   const oldNow = Date.now; let now = oldNow(); Date.now = () => now; t.after(() => { Date.now = oldNow; });
@@ -400,7 +400,7 @@ test('a three-agent ring still stops each directed edge after three rounds', asy
   const refused = await runTurn(f, f.a, f.b, 'ring-fourth', 'Too many.');
   assert.equal(refused.status, 'not-sent');
   assert.equal(f.writes.length, 9);
-  assert.equal(f.target.get(f.b).wakeBudget.senders[f.a].streak, 3);
+  assert.equal(f.target.get(f.b).wakeBudget.senders[f.source.get(f.a).nativeId].streak, 3);
 });
 test('legacy flat wake budget ignores its streak but keeps the receiver cooldown', async t => {
   const oldNow = Date.now; let now = oldNow(); Date.now = () => now; t.after(() => { Date.now = oldNow; });
@@ -417,7 +417,7 @@ test('legacy flat wake budget ignores its streak but keeps the receiver cooldown
   await f.finish();
   assert.equal(f.writes.length, 1);
   assert.equal(s.wakeBudget.version, 2);
-  assert.equal(s.wakeBudget.senders[f.a].streak, 1);
+  assert.equal(s.wakeBudget.senders[f.source.get(f.a).nativeId].streak, 1);
 });
 test('human control during native goal lookup prevents the write', async t => {
   const f = await fixture(t); await f.call();
@@ -487,7 +487,7 @@ test('observation failure cancels a staged intent before any later completion', 
 });
 test('automatic owner restoration does not reset the receiving wake budget', async t => {
   const f = await fixture(t), s = f.target.get(f.b); s.wakeHumanRevision = 4;
-  s.wakeBudget = { version: 2, lastAt: 1, humanRevision: 4, senders: { [f.a]: { id: 'earlier', streak: 3 } } }; s.owner = null;
+  s.wakeBudget = { version: 2, lastAt: 1, humanRevision: 4, senders: { [f.source.get(f.a).nativeId]: { id: 'earlier', streak: 3 } } }; s.owner = null;
   f.target.claim(f.b, 'restored-view-owner'); assert.equal(s.wakeHumanRevision, 4);
 });
 test('failed revocation storage disables automatic messages without blocking the human send', async t => {
@@ -805,7 +805,7 @@ test('the butler sends one message each to three recipients in one turn, each on
   assert.equal(f.writes.length, 3);
   for (const [i, id] of f.ids.entries()) {
     assert.deepEqual(f.received(id).map(m => [m.status, m.text.split('\n')[1]]), [['submitted', `Task ${i + 1}.`]]);
-    assert.equal(f.target.get(id).wakeBudget.senders[f.a].streak, 1, 'each recipient keeps its own limit');
+    assert.equal(f.target.get(id).wakeBudget.senders[f.source.get(f.a).nativeId].streak, 1, 'each recipient keeps its own limit');
   }
   assert.deepEqual(f.sent().map(m => m.wake.status), ['submitted', 'submitted', 'submitted']);
 });
@@ -1110,7 +1110,7 @@ test('a message the butler refuses only for its 60-second limit is held and sent
   assert.equal(f.writes.length, 2); assert.equal(f.writes[1].text.split('\n')[1], 'Second.');
   assert.equal(row.wake.status, 'submitted'); assert.match(row.text, /原生已接收/);
   assert.equal(f.source.wakeHoldTimer, null, 'no timer once nothing is held');
-  assert.equal(f.target.get(f.b).wakeBudget.senders[f.a].streak, 2);
+  assert.equal(f.target.get(f.b).wakeBudget.senders[f.source.get(f.a).nativeId].streak, 2);
 });
 test('the limit itself stays: three in a row still ends it, and other recipients are refused as before (option A)', async t => {
   const wake = require('../session-wake.cjs');
@@ -1128,7 +1128,8 @@ test('the limit itself stays: three in a row still ends it, and other recipients
   const refused = await g.turn('second', 'Second.');
   assert.equal(refused.status, 'not-sent');
   // Each side checks on its own. The recipient's: only the designated butler, refusing for its limit, asks to hold.
-  const ask = h => wake.check(h.target, { id: 'probe', senderId: h.a, recipientId: h.b, boundary: wake.boundary(h.target), targetProof: require('../peer-handoffs.cjs').identity(h.target.get(h.b)) });
+  const ask = h => wake.check(h.target, { id: 'probe', senderId: h.a, senderNativeId: h.source.get(h.a).nativeId,
+    recipientId: h.b, boundary: wake.boundary(h.target), targetProof: require('../peer-handoffs.cjs').identity(h.target.get(h.b)) });
   const plain = await ask(g);
   assert.deepEqual([plain.status, plain.hold, plain.retryAt], ['not-sent', undefined, undefined], 'not the butler: no hold');
   const limited = await ask(f);
@@ -1152,7 +1153,8 @@ test('the butler still holds a message its limit refuses while the one it just t
   await f.turn('first', 'First.'); f.reply(); f.advance(10000);
   f.target.get(f.b).pendingTag = 'an-input-in-flight';
   const wake = require('../session-wake.cjs');
-  const answer = await wake.check(f.target, { id: 'probe', senderId: f.a, recipientId: f.b, boundary: wake.boundary(f.target), targetProof: require('../peer-handoffs.cjs').identity(f.target.get(f.b)) });
+  const answer = await wake.check(f.target, { id: 'probe', senderId: f.a, senderNativeId: f.source.get(f.a).nativeId,
+    recipientId: f.b, boundary: wake.boundary(f.target), targetProof: require('../peer-handoffs.cjs').identity(f.target.get(f.b)) });
   assert.deepEqual([answer.status, answer.hold, answer.retryAt], ['not-sent', true, f.target.get(f.b).wakeBudget.lastAt + 60000]);
   await f.turn('second', 'Second.');
   assert.equal(f.rows().at(-1).wake.status, 'held');

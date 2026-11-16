@@ -260,7 +260,8 @@ async function stageOnce(w, s, r, native, args) {
     sourceProof: sourceIdentity(w, s), recipientId: args.recipient_id, body: args.message, boundary: turn.boundary, ...(epoch ? { epoch } : {}), time: Date.now(), status: 'staged' };
   if (!sourceValid(w, s, r, intent)) throw uiError("error.wake.turnRevokedByHumanOrSetting");
   if (!w.peerRunner) throw uiError("error.wake.backendUnsupported");
-  const target = await w.peerRunner.lookupWake(args.recipient_id, { id: intent.id, boundary: intent.boundary, senderId: s.id });
+  const target = await w.peerRunner.lookupWake(args.recipient_id, {
+    id: intent.id, boundary: intent.boundary, senderId: s.id, senderNativeId: s.nativeId });
   if (native.valid?.() === false || !sourceValid(w, s, r, intent) || r.turnId !== native.turnId) throw uiError("error.wake.authorizationInvalidated");
   intent.targetKey = target.key; intent.targetProof = identity(target.session);
   const row = { id: intent.id, role: 'system', kind: 'notice', name: '自动消息', origin: 'agent-wake-intent', text: `发给 ${target.session.name} 的消息已登记，尚未投递。\n${args.message}`, status: 'complete', time: intent.time, wake: intent };
@@ -418,23 +419,32 @@ function budgetView(s) {
   // A pre-v2 flat streak has no sender. Keep only its receiver-wide cooldown; do not assign its streak to anyone.
   return { version: 2, lastAt, humanRevision, senders: {} };
 }
-function budgetIssue(s, id, senderId) {
-  const budget = budgetView(s), sender = budget.senders[senderId], streak = sender?.streak || 0;
+function budgetSender(budget, senderId, senderKey) {
+  const candidates = [budget.senders[senderKey], senderKey !== senderId ? budget.senders[senderId] : null].filter(Boolean);
+  return candidates.reduce((best, value) => !best || (value.streak || 0) > (best.streak || 0) ? value : best, null);
+}
+function budgetIssue(s, id, senderId, senderKey = senderId) {
+  const budget = budgetView(s);
   // Old senders omit senderId from preflight. Keep the receiver-wide cooldown usable; actual receive still requires the id.
-  if (typeof senderId !== 'string' || !senderId) return budget.lastAt && Date.now() - budget.lastAt < COOLDOWN ? ['error.wake.recipientCooldown'] : null;
+  if (senderId === undefined) return budget.lastAt && Date.now() - budget.lastAt < COOLDOWN ? ['error.wake.recipientCooldown'] : null;
+  if (typeof senderId !== 'string' || !senderId) return ['error.wake.recipientUnreachable'];
+  if (typeof senderKey !== 'string' || !senderKey) return ['error.wake.recipientUnreachable'];
+  const sender = budgetSender(budget, senderId, senderKey), streak = sender?.streak || 0;
   if (sender?.id === id) return streak <= MAX_STREAK ? null : ['error.wake.consecutiveLimit'];
   if (streak >= MAX_STREAK) return ['error.wake.consecutiveLimit'];
   if (budget.lastAt && Date.now() - budget.lastAt < COOLDOWN) return ['error.wake.recipientCooldown'];
   return null;
 }
-function budgetAllows(s, id, senderId) {
-  return !budgetIssue(s, id, senderId);
+function budgetAllows(s, id, senderId, senderKey) {
+  return !budgetIssue(s, id, senderId, senderKey);
 }
-function reserveBudget(s, id, senderId) {
-  if (typeof senderId !== 'string' || !senderId) return null;
-  const budget = budgetView(s), streak = budget.senders[senderId]?.streak || 0;
+function reserveBudget(s, id, senderId, senderKey = senderId) {
+  if (typeof senderId !== 'string' || !senderId || typeof senderKey !== 'string' || !senderKey) return null;
+  const budget = budgetView(s), streak = budgetSender(budget, senderId, senderKey)?.streak || 0;
+  const senders = { ...budget.senders };
+  if (senderKey !== senderId) delete senders[senderId];
   s.wakeBudget = { version: 2, lastAt: Date.now(), humanRevision: s.wakeHumanRevision || 0,
-    senders: { ...budget.senders, [senderId]: { id, streak: streak + 1 } } };
+    senders: { ...senders, [senderKey]: { id, streak: streak + 1 } } };
   return s.wakeBudget;
 }
 function goalAllows(status) { return status === null || status === 'active' || status === 'complete'; }
@@ -472,7 +482,7 @@ function recipientIssue(w, s, r, intent, tag, mode = routeFor(s, r)?.mode, turnI
   if (w.runtimes.get(s.id) !== r || r.stopped || r.transportDisconnected || r.chatAvailable === false) return ['error.wake.recipientUnreachable'];
   // The 60-second limit first among the recipient's current states: a message it refuses is named for it even while
   // the one it just took is still on its way in, so the butler's can be held (option A).
-  const budget = budgetIssue(s, intent.id, intent.senderId);
+  const budget = budgetIssue(s, intent.id, intent.senderId, intent.senderNativeId || intent.nativeId || intent.senderId);
   if (budget) return budget;
   if (mode === 'queue' || mode === 'steer') {
     if (s.approval || r.nativeInputRequired || s.state === 'approval') return ['error.wake.recipientAwaiting'];
@@ -507,6 +517,7 @@ function refuseRecipient(w, s, r, intent) {
 // receiver checks the consumed, exact sender intent again at actual dispatch.
 async function check(w, spec) {
   if (!spec || typeof spec.id !== 'string' || !spec.id || (spec.senderId !== undefined && (typeof spec.senderId !== 'string' || !spec.senderId)) ||
+      (spec.senderNativeId !== undefined && (typeof spec.senderNativeId !== 'string' || !spec.senderNativeId)) ||
       typeof spec.recipientId !== 'string' || !spec.recipientId ||
       typeof spec.boundary !== 'string' || !spec.targetProof || typeof spec.targetProof !== 'object') throw uiError('error.wake.sourceInvalid');
   let s;
@@ -521,7 +532,8 @@ async function check(w, spec) {
   } catch (error) { return notSent(error, holdFor(w, s, error)); }
 }
 async function receive(w, spec) {
-  if (!spec || typeof spec.sourceKey !== 'string' || !readLayout(root(w)).entries.includes(spec.sourceKey) || typeof spec.id !== 'string' || typeof spec.senderId !== 'string') throw uiError("error.wake.sourceInvalid");
+  if (!spec || typeof spec.sourceKey !== 'string' || !readLayout(root(w)).entries.includes(spec.sourceKey) || typeof spec.id !== 'string' ||
+      typeof spec.senderId !== 'string' || !spec.senderId) throw uiError("error.wake.sourceInvalid");
   const s = w.get(spec.recipientId), r = w.runtime(s.id);
   const proof = identity(s), generation = boundary(w);
   const intent = await w.peerRunner.takeWake(spec);
@@ -538,7 +550,7 @@ async function receive(w, spec) {
     refuseRecipient(w, s, r, intent);
     route = routeFor(s, r);
   } catch (error) { return notSent(error, holdFor(w, s, error)); }
-  reserveBudget(s, intent.id, intent.senderId);
+  reserveBudget(s, intent.id, intent.senderId, intent.nativeId);
   // The ticket holds the way chosen here: a message sent as a turn of its own stays one, and a midturn one keeps
   // its slot and turn. Every native step checks it again.
   const ticket = { intent, mode: route.mode, valid: tag => eligible(w, s, r, intent, tag, route.mode, route.turnId) };

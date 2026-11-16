@@ -415,7 +415,7 @@ test('managed native outbox preserves cooldown and consecutive wake limits', asy
 });
 test('managed successful input durably reserves exactly one existing wake budget', async t => {
   const f = await fixture(t); f.start(); const binding = await f.bind(); await binding.forwardOnce();
-  const s = f.backends[1].nativeRecord; assert.equal(s.wakeBudget.senders.sender.streak, 1); assert.equal(f.goalReads.length, 2);
+  const s = f.backends[1].nativeRecord; assert.equal(s.wakeBudget.senders[f.records[0].nativeId].streak, 1); assert.equal(f.goalReads.length, 2);
   assert.equal(f.nativeCalls.length, 1); assert.equal(f.bridge.records[0].agentWakeBudget, undefined);
   await binding.close();
 });
@@ -429,18 +429,19 @@ test('native wake and managed outbox share one recipient budget; the fourth mixe
   fs.mkdirSync(path.join(b.root, sourceKey), { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(b.root, 'services.json'), JSON.stringify({ format: 1, active: '.', entries: ['.', sourceKey] }), { mode: 0o600 });
   w.peerRunner = { root: () => b.root };
-  w.peerRunner.takeWake = async spec => ({ ...spec, senderId: 'sender', boundary: wake.boundary(w), targetProof: inputIdentity(s), body: 'Synthetic native wake', senderName: 'Synthetic source', time: Date.now() });
+  w.peerRunner.takeWake = async spec => ({ ...spec, senderId: 'sender', nativeId: f.records[0].nativeId,
+    boundary: wake.boundary(w), targetProof: inputIdentity(s), body: 'Synthetic native wake', senderName: 'Synthetic source', time: Date.now() });
   b.runtime.chatAvailable = true; b.runtime.needsSubscription = false;
   const settle = () => { b.emit('turn/completed', { turn: { id: 'receiver-turn', status: 'completed' } }); s.wakeBudget.lastAt = 1; };
   await wake.receive(w, { sourceKey, id: randomUUID(), senderId: 'sender', recipientId: s.id });
-  assert.equal(s.wakeBudget.senders.sender.streak, 1); settle();
+  assert.equal(s.wakeBudget.senders[f.records[0].nativeId].streak, 1); settle();
   f.start(); const binding = await f.bind(); await binding.forwardOnce(); await binding.close();
-  assert.equal(s.wakeBudget.senders.sender.streak, 2); settle();
+  assert.equal(s.wakeBudget.senders[f.records[0].nativeId].streak, 2); settle();
   await wake.receive(w, { sourceKey, id: randomUUID(), senderId: 'sender', recipientId: s.id });
-  assert.equal(s.wakeBudget.senders.sender.streak, 3); settle();
+  assert.equal(s.wakeBudget.senders[f.records[0].nativeId].streak, 3); settle();
   f.identity.callId = 'fourth-mixed-call'; f.start();
   await assert.rejects(f.bind());
   assert.equal(f.nativeCalls.filter(c => c.method === 'turn/start').length, 3);
-  assert.equal(s.wakeBudget.senders.sender.streak, 3); assert.equal(f.bridge.records.length, 1);
-  w.persist(); assert.equal(JSON.parse(fs.readFileSync(path.join(b.root, 'workspace.json'))).sessions.find(r => r.id === s.id).wakeBudget.senders.sender.streak, 3);
+  assert.equal(s.wakeBudget.senders[f.records[0].nativeId].streak, 3); assert.equal(f.bridge.records.length, 1);
+  w.persist(); assert.equal(JSON.parse(fs.readFileSync(path.join(b.root, 'workspace.json'))).sessions.find(r => r.id === s.id).wakeBudget.senders[f.records[0].nativeId].streak, 3);
 });
