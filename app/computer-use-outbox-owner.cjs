@@ -203,7 +203,7 @@ async function bindRecipient({ roomState }, { available, find, prepareRecipient 
       target.native.connected && !target.native.closed && (target.root.managed || target.native.adapter === targetAdapter);
     const policyReady = target.entry.state.wakePolicy?.enabled === true &&
       (target.root.managed || !requiresManagedWake(target.entry, record));
-    const budgetReady = target.root.managed || wake.budgetAllows(budgetState(record), wakeId);
+    const budgetReady = target.root.managed || wake.budgetAllows(budgetState(record), wakeId, source.id);
     const ready = stable && policyReady && budgetReady && !record.wakeDisabled && target.native.state === 'idle' && !target.native.pending && !target.native.approval && !target.native.nativeInputRequired &&
       !record.approval && !record.nativeApproval && !record.pendingQueue && !record.pendingSteer && !record.interruptPending &&
       !target.entry.state.room?.run?.status?.includes('running') && !target.entry.state.room?.run?.pausePending && !target.entry.state.room?.run?.pauseUnconfirmed &&
@@ -244,7 +244,7 @@ async function bindRecipient({ roomState }, { available, find, prepareRecipient 
           () => {
             if (!proof.valid() || !valid()) return null;
             const sender = { id: source.id, nativeId: source.nativeId, name: source.name };
-            if (!target.root.managed) sender.agentWakeBudget = wake.reserveBudget(budgetState(target.entry.state.sessions.find(s => s.id === original.id)), wakeId);
+            if (!target.root.managed) sender.agentWakeBudget = wake.reserveBudget(budgetState(target.entry.state.sessions.find(s => s.id === original.id)), wakeId, source.id);
             return sender;
           });
       } catch (error) {

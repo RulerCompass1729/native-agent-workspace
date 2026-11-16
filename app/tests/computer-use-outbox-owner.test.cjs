@@ -182,7 +182,7 @@ test('direct native outbox rechecks global off and native goal before native wri
     f.natives[1].send = async (_text, _tag, refresh) => { await refresh(); writes++; };
     await assert.rejects(binding.forwardOnce(), error => classifyOutboxFailure(error).failureReason === ('native-goal-disallows'));
     assert.equal(writes, 0); assert.equal(f.bridge.records.length, 1);
-    assert.equal(f.bridge.records[0].agentWakeBudget.streak, 1);
+    assert.equal(f.bridge.records[0].agentWakeBudget.senders.sender.streak, 1);
     await binding.close();
   }
   const f = fixture(t), binding = await bindOriginalOutbox(f.deps, f.identity, f.args);
@@ -191,7 +191,10 @@ test('direct native outbox rechecks global off and native goal before native wri
   assert.equal(f.bridge.records.length, 0); await binding.close();
 });
 test('direct native outbox shares existing cooldown and streak admission', async t => {
-  for (const budget of [{ lastAt: Date.now(), streak: 1, humanRevision: 0 }, { lastAt: 1, streak: 3, humanRevision: 0 }]) {
+  for (const budget of [
+    { version: 2, lastAt: Date.now(), humanRevision: 0, senders: { sender: { id: 'earlier', streak: 1 } } },
+    { version: 2, lastAt: 1, humanRevision: 0, senders: { sender: { id: 'earlier', streak: 3 } } },
+  ]) {
     const f = fixture(t); f.bridge.records.push({ sessionId: 'recipient', nativeId: 'recipient-native', agentWakeBudget: budget });
     await assert.rejects(bindOriginalOutbox(f.deps, f.identity, f.args), error => classifyOutboxFailure(error).failureReason === ('wake-limited'));
     assert.equal(f.bridge.records.length, 1);
@@ -201,9 +204,9 @@ test('direct native outbox shares existing cooldown and streak admission', async
 test('a backend with canonical wake accounting cannot fall back to a stale direct ledger', async t => {
   for (const policy of ['capability', 'persisted-budget']) {
     const f = fixture(t);
-    f.bridge.records.push({ sessionId: 'recipient', nativeId: 'recipient-native', agentWakeBudget: { lastAt: 1, streak: 1, humanRevision: 0 } });
+    f.bridge.records.push({ sessionId: 'recipient', nativeId: 'recipient-native', agentWakeBudget: { version: 2, lastAt: 1, humanRevision: 0, senders: { sender: { id: 'earlier', streak: 1 } } } });
     if (policy === 'capability') f.entry.state.capabilities = ['agentWakeV1'];
-    else f.records[1].wakeBudget = { lastAt: 1, streak: 3, humanRevision: 0 };
+    else f.records[1].wakeBudget = { version: 2, lastAt: 1, humanRevision: 0, senders: { sender: { id: 'earlier', streak: 3 } } };
     await assert.rejects(bindOriginalOutbox(f.deps, f.identity, f.args), error => classifyOutboxFailure(error).failureReason === 'wake-policy-unavailable');
     assert.equal(f.bridge.records.length, 1);
   }
