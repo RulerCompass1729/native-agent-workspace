@@ -22,7 +22,8 @@ function valid(r) {
     Number.isSafeInteger(r.owner?.pid) && r.owner.pid>1 && typeof r.owner.started==='string' && Boolean(r.owner.started) && typeof r.creator==='string';
 }
 function entry(file) {
-  const fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
+  // A FIFO must not block before fstat can reject non-regular entries.
+  const fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
   try {const s=fs.fstatSync(fd);if(!s.isFile()||s.uid!==process.getuid()||s.mode&0o077||s.size>8192)throw Error('Unsafe temporary ownership entry');
     const r=JSON.parse(fs.readFileSync(fd,'utf8'));if(!valid(r)||path.basename(file)!==r.id+'.json')throw Error('Invalid temporary ownership receipt');return r;
   } finally {fs.closeSync(fd);}
