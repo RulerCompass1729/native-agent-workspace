@@ -6,12 +6,12 @@ const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
 const a = source.indexOf("app.on('before-quit', event => {"), b = source.indexOf('// Deliberately no native shutdown', a);
 assert.ok(a >= 0 && b > a);
 const tick = () => new Promise(resolve => setImmediate(resolve));
-function fixture(close, butlerBackend = null) {
+function fixture(close, butlerBackend = null, temporaryCleanup = null) {
   let listener, stops = 0, quits = 0, calls = 0; const scheduled = [], timers = new Map(), notices = [];
   if (butlerBackend?.driver && !butlerBackend.driver.beginShutdown) butlerBackend.driver.beginShutdown = () => { butlerBackend.driver.sealed = true; };
   const context = vm.createContext({ setTimeout(fn, ms) { const timer = { unref() {} }; timers.set(timer, { fn, ms }); return timer; }, clearTimeout(timer) { timers.delete(timer); }, notifyButlerQuit(key) { notices.push(key); }, setImmediate(callback) { scheduled.push(callback); }, app: { on(name, cb) { assert.equal(name, 'before-quit'); listener = cb; }, quit() { quits++; } },
     viewStore: undefined, windows: new Map(), saveViews() { throw Error('No GUI or view write in this test'); },
-    dsh: { stop() { stops++; } }, revokeAppMobile() {}, butlerBackend, butlerClosing: false, butlerQuitAttempted: false, backgroundControl: undefined, outboxBroker: close && { close() { calls++; return close(); } }, outboxUnavailable: false });
+    dsh: { stop() { stops++; } }, revokeAppMobile() {}, butlerBackend, butlerClosing: false, butlerQuitAttempted: false, tempReminders: temporaryCleanup, tempQuitWaiting: false, backgroundControl: undefined, outboxBroker: close && { close() { calls++; return close(); } }, outboxUnavailable: false });
   vm.runInContext('let quitting=false, outboxClosing=false, outboxQuitFailed=false;\n' + source.slice(a, b), context);
   return { context, attempt() { let prevented = false; listener({ preventDefault() { prevented = true; } }); return prevented; }, facts: () => ({ stops, quits, calls }), notices, expire() { for (const { fn, ms } of timers.values()) { assert.equal(ms, 5000); fn(); } timers.clear(); }, advanceLoop() { for (const callback of scheduled.splice(0)) callback(); } };
 }
@@ -40,6 +40,12 @@ test('repeated quit during pending cleanup cannot bypass cleanup or stop the fro
 });
 test('normal quit without an outbox preserves the existing frontend shutdown path', () => {
   const f = fixture(null); assert.equal(f.attempt(), false); assert.deepEqual(f.facts(), { stops: 1, quits: 0, calls: 0 });
+});
+test('quit waits for the confirmed temporary cleanup result and repeated quit does not bypass it', async () => {
+  let finish;const cleanup={busy:true,finished:new Promise(resolve=>{finish=resolve;})},f=fixture(null,null,cleanup);
+  assert.equal(f.attempt(),true);assert.equal(f.attempt(),true);assert.deepEqual(f.facts(),{stops:0,quits:0,calls:0});
+  cleanup.busy=false;finish();await tick();assert.deepEqual(f.facts(),{stops:0,quits:1,calls:0});
+  assert.equal(f.attempt(),false);assert.equal(f.facts().stops,1);
 });
 
 test('desktop quit waits for its dedicated butler even without an outbox, and repeated quit cannot bypass it', async () => {

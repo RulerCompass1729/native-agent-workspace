@@ -67,8 +67,8 @@ const fits = label => page.evaluate(name => {
   const problems = [];
   // 1. Nothing due.
   const empty = profile('empty'); await launch(empty); await size(1280, 800);
-  await sleep(500); assert.equal(await page.locator('#records-button').isVisible(), false, 'No bell with nothing due');
-  await shot('no-bell-1280'); checks.push('With nothing at a line there is no bell'); await stop();
+  await sleep(500); assert.equal(await page.locator('#records-button').isVisible(), true, 'Permanent bell with nothing due');
+  await shot('no-bell-1280'); checks.push('The empty bell remains visible'); await stop();
 
   // 2. A read log 33 days long.
   const dir = profile('long'); readLog(dir); await launch(dir);
@@ -79,7 +79,7 @@ const fits = label => page.evaluate(name => {
     await shot(`bell-${lang}-${width}`);
     await bell.click(); await dialog.waitFor({ state: 'visible' });
     const text = await dialog.innerText();
-    for (const key of ['records.title', 'records.intro', 'records.name.butler-reads']) assert.ok(text.includes(say(lang, key)), `${lang}: ${key}`);
+    for (const key of ['records.title', 'records.name.butler-reads']) assert.ok(text.includes(say(lang, key)), `${lang}: ${key}`);
     assert.ok(text.includes(say(lang, 'records.item.age', { blocks: 2, oldest: new Date(NOW - 32 * DAY).toISOString().slice(0, 10), total: 33, size: '\u0000' }).split('\u0000')[0]), `${lang}: the age line`);
     const problem = await fits(`${lang}-${width} reminders`); if (problem) problems.push(problem); await shot(`reminders-${lang}-${width}`);
     // Export view: the two old blocks chosen; nothing can be sent before a folder is chosen.
@@ -93,7 +93,7 @@ const fits = label => page.evaluate(name => {
   }
   checks.push('A read log past 30 days: the bell with 1, its dialog and the export view, in both languages, at 1280 and 860 wide');
   // Export the two old blocks, then delete them: the native confirmation is asked, the files go, their entries stay
-  // (numbers, days, counts, when), the read says so, and the bell goes because nothing past 30 days is left.
+  // (numbers, days, counts, when), the read says so, and the permanent bell has no badge because nothing past 30 days is left.
   await size(1280, 800); await language('zh'); await bell.click(); await dialog.waitFor({ state: 'visible' });
   await dialog.locator('button[data-action="export"]').click(); await dialog.locator('input[type="checkbox"]').first().waitFor();
   await dialog.locator('button[data-action="choose"]').click(); await until(async () => !(await dialog.locator('button[data-action="run"]').isDisabled()), 'A folder chosen');
@@ -114,17 +114,17 @@ const fits = label => page.evaluate(name => {
   const read = new ButlerReadAudit(dir, { authorizePerson: value => value === 'person' }).read('person');
   assert.deepEqual(read.gaps.map(item => [item.fromSequence, item.throughSequence, Number.isSafeInteger(item.deletedAt)]), [[1, 1, true], [2, 2, true]], 'Read back, the two are said to be deleted, in their places');
   assert.equal(read.records.length, 31);
-  await until(async () => !(await bell.isVisible()), 'The bell goes'); await shot('deleted-zh-1280');
-  checks.push('Deleting the exported blocks asks the native confirmation; their files go from NAW (the export keeps them), their entries stay marked deleted, and the bell goes');
+  await until(async () => await bell.isVisible() && await page.locator('#records-badge').innerText() === '', 'The permanent bell has no badge'); await shot('deleted-zh-1280');
+  checks.push('Deleting the exported blocks asks the native confirmation; their files go from NAW (the export keeps them), their entries stay marked deleted, and the permanent bell has no badge');
   await page.keyboard.press('Escape'); await stop();
-  // "知道了", on another record 33 days long: the bell goes, and stays gone after a restart.
+  // "知道了", on another record 33 days long: the reminder goes, while the bell stays after a restart.
   const kept = profile('kept'); readLog(kept); await launch(kept); await size(1280, 800); await language('zh');
   bell = page.locator('#records-button'); dialog = page.locator('#records-dialog');
   await bell.waitFor({ state: 'visible' }); await bell.click(); await dialog.waitFor({ state: 'visible' });
-  await dialog.locator('button[data-action="acknowledge"]').click(); await until(async () => !(await bell.isVisible()), 'The bell goes');
+  await dialog.locator('button[data-action="acknowledge"]').click(); await until(async () => await bell.isVisible() && await page.locator('#records-badge').innerText() === '', 'The permanent bell has no badge');
   assert.ok((await dialog.innerText()).includes(say('zh', 'records.nothing'))); await shot('acknowledged-zh-1280');
   await page.keyboard.press('Escape'); await stop(); await launch(kept); await sleep(800);
-  assert.equal(await page.locator('#records-button').isVisible(), false, 'Still put away after a restart');
+  assert.equal(await page.locator('#records-button').isVisible(), true, 'Permanent bell after a restart');
   checks.push('"知道了" puts the reminder away, also after a restart'); await stop();
 
   // 3. An operations record with a sealed block changed on disk: background control stops rather than risk running an

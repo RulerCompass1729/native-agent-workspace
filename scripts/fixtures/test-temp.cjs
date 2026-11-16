@@ -13,6 +13,7 @@ function removeOwned(record) {
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== record.dev || stat.ino !== record.ino ||
       stat.uid !== record.uid || fs.realpathSync(record.path) !== record.path) throw Error('Temporary directory identity changed: ' + record.path);
   fs.rmSync(record.path, { recursive: true });
+  if (record.reminderReceipt) require('../../app/temp-ownership.cjs').forget(record.reminderReceipt);
 }
 // A delegated directory belongs to test-scratch's process-aware cleanup. While
 // it may still exist, nothing on its path is removed here: neither a directory
@@ -29,6 +30,9 @@ function registry(journal, roots) {
     if (!roots.some(root => inside(root, file))) return;
     const record = { path: file, ...identity(file), pid: process.pid, source: process.argv[1] || '',
       stack: new Error().stack.split('\n').slice(3, 8) };
+    // The suite journal is disposable. This separate creation receipt survives
+    // a killed suite and is readable by the daily app without filename guessing.
+    record.reminderReceipt = require('../../app/temp-ownership.cjs').register(file);
     fs.appendFileSync(journal, JSON.stringify(record) + '\n', { mode: 0o600 });
     owned.push(record);
   };
