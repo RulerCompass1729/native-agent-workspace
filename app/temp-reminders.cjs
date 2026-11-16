@@ -90,8 +90,16 @@ class TempReminders {
   }
   async status(force=false) {
     if(this.pending) return this.pending;
-    if(!force&&this.cached&&this.now()-this.lastScan<DAY&&this.now()>=this.lastScan) return this.cached;
-    this.pending=this.scan().finally(()=>{this.pending=null;}); return this.pending;
+    if(!force&&this.lastScan!==null&&this.cached&&this.now()-this.lastScan<DAY&&this.now()>=this.lastScan) return this.cached;
+    this.pending=this.scan().catch(error=>{
+      const notify=this.cached?.anomaly!=='storage-unavailable';
+      // All readers must see the failure instead of an earlier quiet cache.
+      // Keep it ephemeral, grant no candidate, and retry on the next read.
+      this.cached={...this.saved.reminder,id:'naw-temp-files',checkedAt:this.now(),directories:0,bytes:0,oldestDay:null,oldestAt:null,shown:true,anomaly:'storage-unavailable'};
+      this.candidates=[];this.lastScan=null;
+      if(notify)try{Promise.resolve(this.changed()).catch(()=>{});}catch{}
+      throw error;
+    }).finally(()=>{this.pending=null;}); return this.pending;
   }
   async scan() {
     const now=this.now(); let entries=[],anomaly=null;
