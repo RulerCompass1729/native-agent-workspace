@@ -15,9 +15,14 @@ const PAYLOAD_LIMITS = { text: 12000, title: 400, spaceId: 200, spaceName: 200, 
   memberId: 200, itemId: 200, outcome: 200, reason: 2000, decisionKind: 200, questionKey: 600, supersedes: 200 };
 const MAX_FILE_BYTES = 32 * 1024 * 1024, MAX_RECORD_BYTES = 2 * 1024 * 1024, MAX_BATCH = 100, READ_BYTES = 8 * 1024;
 const FILE_NAME = 'butler-ledger.jsonl';
-// A request for the steward to read a completed report, not a new human task or authority.
-// Keep one v1 event slot so old readers and their cursors can pass it unchanged.
-const REPORT_MARKER = 'naw-steward-report:1', REPORT_PREFIX = 'naw-steward-report:';
+// An old controller records blocked facts without a model batch. Its separately
+// authorized position-only StewardWake notification keeps the ordinary behavior.
+// Keep one v1 event slot, and decode earlier request carriers without rewriting history.
+const REPORT_PREFIX = 'naw-steward-report:', REPORT_MARKER = REPORT_PREFIX + '2', LEGACY_REPORT_MARKER = REPORT_PREFIX + '1';
+const REPORT_NOTICE = '这是成员完成报告的通知（新格式，旧版只显示摘要）；不是成员卡住，不需要处理。';
+function reportNotice(payload) {
+  return `${REPORT_NOTICE}队列项：${payload.itemId || '未提供'}；成员：${payload.memberId || '未提供'}`;
+}
 const QUESTION_SEND_CHANNELS = ['notification', 'butler-ask'];
 const QUESTION_METRIC_GAPS = ['source-unavailable', 'write-failed', 'delivery-unconfirmed', 'unattributed',
   'unobserved-send', 'epoch-unavailable', 'unexpected-display'];
@@ -69,14 +74,19 @@ function normalizeEvent(value) {
   for (const [key, field] of Object.entries(value.payload)) payload[key] = string(field, PAYLOAD_LIMITS[key]);
   const event = { eventId: idString(value.eventId), kind: value.kind, sourceRef: reference(value.sourceRef), payload };
   if (payload.reason?.startsWith(REPORT_PREFIX)) {
-    requireValue(value.kind === 'request' && payload.reason === REPORT_MARKER && payload.outcome === 'done',
+    requireValue(value.kind === 'request' && payload.reason === LEGACY_REPORT_MARKER && payload.outcome === 'done',
       'Invalid steward report envelope');
+  }
+  if (payload.outcome?.startsWith(REPORT_PREFIX) || payload.reason?.startsWith(REPORT_NOTICE)) {
+    requireValue(value.kind === 'blocked' && payload.outcome === REPORT_MARKER && payload.reason === reportNotice(payload),
+      'Invalid passive steward report envelope');
   }
   return event;
 }
 // Decode only at API boundaries. Journal reductions and sealed review prefixes use the same v1 data as old readers.
 function eventView(event) {
-  if (event.kind !== 'request' || event.payload.reason !== REPORT_MARKER) return event;
+  if (!(event.kind === 'request' && event.payload.reason === LEGACY_REPORT_MARKER ||
+    event.kind === 'blocked' && event.payload.outcome === REPORT_MARKER)) return event;
   const { reason, outcome, ...payload } = event.payload;
   return { ...event, kind: 'done', payload };
 }
@@ -84,7 +94,7 @@ function persistedEvent(event) {
   if (event.kind !== 'done') return event;
   requireValue(!Object.hasOwn(event.payload, 'reason') && !Object.hasOwn(event.payload, 'outcome'),
     'Steward reports cannot use reserved envelope fields');
-  const wire = { ...event, kind: 'request', payload: { ...event.payload, reason: REPORT_MARKER, outcome: 'done' } };
+  const wire = { ...event, kind: 'blocked', payload: { ...event.payload, reason: reportNotice(event.payload), outcome: REPORT_MARKER } };
   validateEvent(wire);
   return wire;
 }
@@ -844,6 +854,12 @@ class ButlerLedger {
     this.healthy();
     requireValue(Array.isArray(eventIds) && eventIds.length > 0 && eventIds.length <= 10000, 'Invalid recorded event list');
     eventIds = [...new Set(eventIds.map(idString))];
+    // Keep the new API's logical gate while replaying valid old events-recorded
+    // rows against their canonical v1 blocked carrier in the reducer.
+    for (const eventId of eventIds) {
+      const event = this.state.eventIndex.get(eventId);
+      requireValue(!event || eventView(event).kind !== 'done', 'Only rule-handled events can be recorded without a model');
+    }
     const trial = clone(this.state);
     reduce(trial, { version: 1, sequence: trial.sequence + 1, time: this.now(), type: 'events-recorded', data: { eventIds } });
     const recordedCount = eventIds.filter(eventId => !this.state.processed.has(eventId)).length;
