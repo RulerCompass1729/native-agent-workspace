@@ -6,7 +6,7 @@
 .collaboration-toolbar [aria-pressed="true"]{background:var(--green);color:white}
 .collaboration-statuses,.collaboration-readers{display:grid;grid-template-columns:var(--collaboration-columns,1fr);min-width:0;gap:8px;padding:0 12px}
 .collaboration-statuses{padding-bottom:8px;align-items:stretch}
-.collaboration-readers{grid-auto-rows:minmax(var(--collaboration-row-min,0px),1fr);min-height:0}
+.collaboration-readers{grid-auto-rows:minmax(min-content,1fr);min-height:0}
 .collaboration-member-status{display:flex;flex-direction:column;gap:3px;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--panel);min-width:0}
 .collaboration-member-heading{display:flex;align-items:flex-start;gap:6px;min-width:0}
 .collaboration-member-heading>.collaboration-member-name{flex:1;min-width:0}
@@ -52,7 +52,7 @@
 .collaboration-resize:hover,.collaboration-resize:focus-visible{background:var(--green)}
 /* Each member is one card in every layout and at every member count: its head (handle, maker, name, menu, state)
    inside the card frame, then one 1px line (the head's bottom border), then its own conversation and input. */
-.collaboration-member-unit{display:grid;grid-template-rows:auto minmax(0,1fr);min-width:0;min-height:0;border:1px solid var(--border);border-radius:3px;background:var(--surface)}
+.collaboration-member-unit{display:grid;grid-template-rows:auto minmax(0,1fr);min-width:0;min-height:var(--collaboration-row-min,0px);border:1px solid var(--border);border-radius:3px;background:var(--surface)}
 .collaboration-member-unit>.collaboration-member-reader{border:0;border-radius:0 0 3px 3px}
 .collaboration-member-next{position:absolute;left:6px;top:3px;z-index:3;max-width:calc(100% - 12px);padding:2px 4px;font-size:11px;line-height:16px;white-space:normal;overflow-wrap:anywhere}
 .collaboration-member-next:not(:focus-visible){width:1px;height:1px;padding:0;border:0;clip-path:inset(50%);overflow:hidden}
@@ -125,7 +125,8 @@
 .compact-room-surface .collaboration-member-freshness{font-size:11px;line-height:16px}
 .compact-room-surface .compact-status-hidden{position:absolute;width:1px;height:1px;padding:0;border:0;overflow:hidden;clip-path:inset(50%)}
 
-.collaboration-member-reader.has-column-input{grid-template-rows:minmax(20px,1fr) auto auto}
+/* Rows may scroll; the input and native terminal must not squeeze reading below its 80px floor. */
+.collaboration-member-reader.has-column-input{grid-template-rows:minmax(80px,1fr) auto auto}
 .column-native-footer{min-width:0;min-height:0}
 .column-native-footer .collaboration-member-next{position:static;display:block;max-width:100%;margin:0}
 

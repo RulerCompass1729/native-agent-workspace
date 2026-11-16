@@ -104,9 +104,16 @@
     toolbar.append(back, layouts, simplify);
     const headers = el('div', undefined, 'collaboration-statuses'); display.attribute(headers, 'aria-label', 'collab.memberStatus');
     const readers = el('div', undefined, 'collaboration-readers');
+    const columnCapacity = () => {
+      const style = getComputedStyle(readers), gap = parseFloat(style.columnGap) || 0;
+      const width = (readers.clientWidth || host.clientWidth) - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+      return Math.max(1, Math.floor((width + gap) / (300 + gap)));
+    };
     const showMore = button('', () => {
       const previous = visibleLimit;
+      options.beforeLayout?.();
       visibleRows += 1; memberLimits.set(roomKey, visibleRows); render();
+      options.onLayout?.();
       requestAnimationFrame(() => { const pane = panes.get(records[previous]?.id); pane?.unit.scrollIntoView({ block: 'start' }); });
     }, 'collaboration-show-more');
     const chipsMore = button('', () => { chipsExpanded = !chipsExpanded; render(); }, 'collaboration-chips-more');
@@ -114,8 +121,11 @@
     headers.append(chipsMore);
     host.classList.add('collaboration-overview'); host.append(toolbar, headers, readers, showMore, empty, orderStatus);
     const widthObserver = new ResizeObserver(() => {
-      const next = Math.max(1, Math.floor((readers.clientWidth || host.clientWidth) / 300));
-      if (next !== capacity) { capacity = next; if (!focused && layout === 'grid') render(); }
+      const next = columnCapacity();
+      if (next !== capacity) {
+        options.beforeLayout?.(); capacity = next;
+        if (!focused && layout === 'grid') { render(); options.onLayout?.(); }
+      }
     });
     widthObserver.observe(readers);
     function key(id) { return `collaboration:${options.roomId || 'shared'}:${id}`; }
@@ -164,11 +174,10 @@
       }
     }
     function setWidths() {
-      const width = readers.clientWidth || host.clientWidth;
-      capacity = Math.max(1, Math.floor(width / 300));
-      const total = records.length, allFit = total * 140 <= width;
+      capacity = columnCapacity();
+      const total = records.length, allFit = total <= capacity;
       if (allFit) {
-        host.style.setProperty('--collaboration-columns', records.map(record => `${weights.get(record.id) || 1}fr`).join(' ') || '1fr');
+        host.style.setProperty('--collaboration-columns', records.map(record => `minmax(300px, ${weights.get(record.id) || 1}fr)`).join(' ') || 'minmax(300px, 1fr)');
       } else {
         host.style.setProperty('--collaboration-columns', `repeat(${capacity}, minmax(300px, 1fr))`);
       }
@@ -348,8 +357,8 @@
       const columnInput = layout === 'grid' && !focused && !brief && contentVisible;
       const listUnits = layout === 'list' && !focused && contentVisible;
       host.dataset.listUnits = String(listUnits);
-      capacity = Math.max(1, Math.floor((readers.clientWidth || host.clientWidth) / 300));
-      progressive = records.length * 140 > (readers.clientWidth || host.clientWidth);
+      capacity = columnCapacity();
+      progressive = records.length > capacity;
       host.dataset.progressive = String(progressive);
       const chipIndex = progressive && layout === 'grid' && !focused && contentVisible;
       headers.hidden = !chipIndex; host.dataset.band = String(chipIndex);

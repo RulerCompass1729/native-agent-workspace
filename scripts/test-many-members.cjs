@@ -121,17 +121,18 @@ async function main() {
   // Card-head close-up: the first two cards' frames, heads and the one line under each head.
   if (membersCount <= 6) {
     const clip = await page.evaluate(() => {
-      const units = [...document.querySelectorAll('.collaboration-member-unit')].slice(0, 2).map(u => u.getBoundingClientRect());
+      const units = [...document.querySelectorAll('.collaboration-member-unit')].filter(u => !u.hidden).slice(0, 2).map(u => u.getBoundingClientRect());
       const head = document.querySelector('.collaboration-member-unit>.collaboration-member-status').getBoundingClientRect();
       return { x: Math.max(0, units[0].left - 8), y: Math.max(0, units[0].top - 8), width: units[units.length - 1].right - units[0].left + 16, height: head.bottom - units[0].top + 48 };
     });
     await page.screenshot({ path: path.join(pictures, `${tag}-m${membersCount}-card-head.png`), clip });
     console.log('SHOT', path.join(pictures, `${tag}-m${membersCount}-card-head.png`));
   }
-  // 1. A fitting member set keeps the old full grid (6 members at 1240, sidebar open).
+  // 1. Six members no longer count as fitting when their columns would be below 300px.
   if (membersCount <= 6) check(1, () => {
-    assert.equal(m1240.visible, membersCount, 'fitting members are all shown at 1240');
-    assert.equal(m1240.showMore, null, 'no reveal button when everyone fits');
+    assert.ok(m1240.visible < membersCount, 'only the fitting row is initially shown at 1240');
+    assert.ok(m1240.widths.every(width => width >= 299.5), 'every initial column keeps 300px');
+    assert.ok(m1240.showMore, 'the other members remain reachable through reveal');
   });
   // 2. The index of names takes at most two lines: every chip when they fit, otherwise a "+N" fold inside them.
   if (membersCount >= 12) check(2, () => {
@@ -242,6 +243,13 @@ async function main() {
         await page.locator('.collaboration-show-more').click();
       }
       assert.equal((await measure()).visible, membersCount);
+    });
+    if (membersCount <= 6) await runCheck('a genuinely fitting member set has no reveal button', async () => {
+      await resize([2460, 820]); await delay(200);
+      const fitting = await measure();
+      assert.equal(fitting.visible, membersCount);
+      assert.equal(fitting.showMore, null);
+      assert.ok(fitting.widths.every(width => width >= 299.5));
     });
     fs.writeFileSync(path.join(output, 'list-regression.json'), JSON.stringify(results, null, 2));
     console.log(`LIST RESULT passed=${results.filter(r => r.passed).length} failed=${failures.length}`);

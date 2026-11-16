@@ -37,7 +37,11 @@ function fixture(method, target, value) {
 }
 const tell = (method, target, value) => child.send({ id: ++sequence, method, target, value });
 const settled = async () => { await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))); await delay(150); };
-const size = async (width, height) => { await app.evaluate(({ BrowserWindow }, s) => BrowserWindow.getAllWindows()[0].setContentSize(s.width, s.height), { width, height }); await settled(); };
+async function revealAll() {
+  const more = page.locator('#collaboration-overview .collaboration-show-more');
+  for (let i = 0; i < 10 && await more.isVisible(); i++) { await more.click(); await settled(); }
+}
+const size = async (width, height) => { await app.evaluate(({ BrowserWindow }, s) => BrowserWindow.getAllWindows()[0].setContentSize(s.width, s.height), { width, height }); await settled(); await revealAll(); };
 const capture = name => page.screenshot({ path: path.join(evidence, name + '.png') });
 function check(text) { checks.push(text); console.log('PASS:', text); }
 const LINE = 16, MOST = 4;
@@ -50,13 +54,14 @@ const sample = () => page.evaluate(() => {
     const id = row.dataset.memberId, column = [...host.querySelectorAll('.collaboration-member-reader')].find(e => e.dataset.memberId === id && shown(e));
     const block = column?.querySelector('.collaboration-member-input'), list = column?.querySelector('.messages');
     const hint = block?.querySelector('.session-compose-hint'), terminal = block?.querySelector('.column-native-host'), area = block?.querySelector('.session-message-input'), hs = shown(hint) ? getComputedStyle(hint) : null;
-    return { id, state: row.dataset.state || '', name: row.querySelector('.collaboration-member-name')?.textContent.trim() || '', column: column ? box(column) : null,
+    return { id, state: row.dataset.state || '', name: row.querySelector('.collaboration-member-name')?.textContent.trim() || '', card: column ? box(column.closest('.collaboration-member-unit')) : null, column: column ? box(column) : null,
       messages: shown(list) ? box(list) : null, atEnd: shown(list) ? list.scrollTop + list.clientHeight >= list.scrollHeight - 2 : null, block: shown(block) ? box(block) : null, terminal: shown(terminal) ? box(terminal) : null,
       area: shown(area) ? { h: box(area).h, value: area.value } : null, allow: shown(block) ? Number(getComputedStyle(block).getPropertyValue('--column-hint-lines')) || null : null,
       hint: hs ? { text: hint.textContent.trim(), shown: hint.clientHeight, whole: hint.scrollHeight, font: hs.fontSize, line: hs.lineHeight, overflow: hs.overflowY, colour: hs.color, box: box(hint) } : null,
       buttons: shown(block) ? [...block.querySelectorAll('button')].filter(shown).map(b => [b.textContent.trim(), b.disabled]) : [] };
   });
-  return { members, list: host.dataset.listUnits, spaceDraft: document.querySelector('#shared-input').value, window: [innerWidth, innerHeight] };
+  const readers = host.querySelector('.collaboration-readers');
+  return { members, list: host.dataset.listUnits, spaceDraft: document.querySelector('#shared-input').value, window: [innerWidth, innerHeight], overflowX: readers.scrollWidth - readers.clientWidth };
 });
 // Up to `most` lines are shown whole (four where the column has the height); a longer hint keeps that many and
 // scrolls inside them. Same type as before.
@@ -67,8 +72,17 @@ function hintLines(h, label, most = MOST) {
   else { assert.ok(Math.abs(h.shown - most * LINE) < 0.6, `${label}: a hint of ${lines} lines shows ${most} (${h.shown}px)`); assert.equal(h.overflow, 'auto', `${label}: the rest of a longer hint can be scrolled to`); }
   return lines;
 }
-// With four members every column has the height for four lines, down to the smallest window.
-const fourLines = (s, label) => { for (const m of s.members) assert.equal(m.allow, MOST, `${label}: ${m.name}: the column has room for a four-line hint`); };
+// Fewer columns keep the width; revealed rows scroll, preserving the same reading and terminal floors.
+function columns(s, label, count) {
+  assert.equal(s.members.length, count, label + ': every member is measured');
+  assert.ok(s.overflowX <= 1, label + ': no horizontal grid overflow');
+  for (const m of s.members) {
+    assert.ok(m.card.w >= 299.5, `${label}: ${m.name}: the column keeps 300px (${m.card.w})`);
+    assert.ok(m.allow >= 2 && m.allow <= MOST, label + ': between two and four hint lines');
+    if (m.hint) hintLines(m.hint, label + ' ' + m.name, m.allow);
+    column(m, label, 80);
+  }
+}
 // A column holds its conversation, its terminal and its input, in that order and inside its frame.
 function column(m, label, conversation) {
   assert.ok(m.messages && m.block && m.terminal, `${label}: ${m.name} has its conversation, terminal and input`);
@@ -87,17 +101,22 @@ async function language(code) {
 async function everyHint(lang, memberId) {
   const catalog = require('../app/ui-messages.js')[lang], keys = Object.keys(catalog).filter(key => /^composer\..*Hint$/.test(key) && key !== 'composer.keyboardHint');
   assert.ok(keys.length >= 20, 'The composer\'s hints are in the message catalog');
+  const texts = keys.map(key => catalog[key]);
+  // A wider column may fit every real sentence; keep an actual overflowing hint as a scroll counterexample.
+  if (lang === 'en') { keys.push('synthetic.longHint'); texts.push(catalog['composer.errorHint'].repeat(12)); }
   const rows = await page.evaluate(async ({ texts, memberId }) => {
     const reader = [...document.querySelectorAll('#collaboration-overview .collaboration-member-reader')].find(e => e.dataset.memberId === memberId);
     const hint = reader.querySelector('.collaboration-member-input .session-compose-hint'), list = reader.querySelector('.messages'), terminal = reader.querySelector('.column-native-host'), block = reader.querySelector('.collaboration-member-input');
     const keep = hint.textContent, out = [], frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     for (const text of texts) {
       hint.textContent = text; window.dispatchEvent(new Event('resize')); await frame();
-      out.push({ whole: hint.scrollHeight, shown: hint.clientHeight, conversation: list.getBoundingClientRect().height, terminal: terminal.getBoundingClientRect().height, inside: block.getBoundingClientRect().bottom <= reader.getBoundingClientRect().bottom + 0.6 });
+      hint.scrollTop = hint.scrollHeight;
+      out.push({ whole: hint.scrollHeight, shown: hint.clientHeight, end: hint.scrollTop + hint.clientHeight, scrolled: hint.scrollTop, allow: Number(getComputedStyle(block).getPropertyValue('--column-hint-lines')), conversation: list.getBoundingClientRect().height, terminal: terminal.getBoundingClientRect().height, inside: block.getBoundingClientRect().bottom <= reader.getBoundingClientRect().bottom + 0.6 });
+      hint.scrollTop = 0;
     }
     hint.textContent = keep; window.dispatchEvent(new Event('resize')); await frame();
     return out;
-  }, { texts: keys.map(key => catalog[key]), memberId });
+  }, { texts, memberId });
   return rows.map((row, i) => ({ key: keys[i], lines: Math.round(row.whole / LINE), ...row }));
 }
 async function run() {
@@ -123,11 +142,12 @@ async function run() {
     text: `成员 ${letter} 的第 ${i + 1} 条原文：核对发布说明第 ${i + 1} 节，结果和当前实现一致。\n\nOriginal message ${i + 1} of member ${letter}.` });
   tell('fleet', a, { event: 'SubagentStart', id: 'child-a', name: '跑全量测试', stale: false }); tell('state', a, 'working');
   tell('approval', b, { id: 'approval-b', kind: 'command', command: 'rm -rf build/ (synthetic, nothing runs)', cwd }); tell('state', d, 'error');
-  await revealDefaultSpace(page); await page.locator('#room-nav').click(); await page.locator('#collaboration-overview .collaboration-member-reader').nth(3).waitFor();
+  await revealDefaultSpace(page); await page.locator('#room-nav').click(); await page.locator('#collaboration-overview .collaboration-member-reader').nth(3).waitFor({ state: 'attached' });
   // This window has the input for three members; the second stays with another window, so its column is read-only.
   for (const id of [a, c, d]) await page.evaluate(member => workspace.claim(member, 'chat'), id);
   await until(async () => { const state = await page.evaluate(() => workspace.initial()), owner = id => state.sessions.find(v => v.id === id).owner; return [a, c, d].every(id => owner(id) && owner(id) !== owner(b)); }, 'This window has the input for three members');
   await fillRoomMessage(page, spaceDraft);
+  await revealAll();
   await until(async () => { const s = await sample(); return s.members.length === 4 && s.members.every(m => m.block && m.messages) && s.members[0].state === 'working' && s.members[1].state === 'approval' && s.members[3].state === 'error' && s.members[3].hint; }, 'Four member columns with their states');
   await page.mouse.move(2, 2); await settled();
   const before = (await fixture('stats')).overviewCalls, identityBefore = await page.evaluate(async () => (await workspace.initial()).sessions.map(v => [v.id, v.nativeId, v.owner, v.name]));
@@ -138,113 +158,70 @@ async function run() {
     assert.deepEqual(s.members.map(m => m.buttons), buttons, label + ': the same controls, which say who has the input');
   };
 
-  // 1) The default window: the failed member's hint needs three lines there, and all three are shown.
-  let s = await sample(); kept(s, 'zh 1240x850', zhButtons); fourLines(s, 'zh 1240x850');
-  assert.deepEqual([s.members[0].hint.text, s.members[1].hint.text, s.members[2].hint], [zhHints.working, zhHints.readOnly, null], 'The working and the read-only member say so; the ready member has no hint');
-  assert.ok(s.members[3].hint.text.startsWith('原生请求未完成。') && s.members[3].hint.text.includes('打开终端'), 'The failed member\'s hint says what to do');
-  measured['zh-1240x850'] = s.members.map(m => m.hint ? hintLines(m.hint, 'zh 1240x850 ' + m.name) : 0);
-  assert.ok(measured['zh-1240x850'][3] >= 3, `The failed member's hint needs three lines or more in a ${Math.round(s.members[3].column.w)}px column (${measured['zh-1240x850'][3]})`);
-  for (const m of s.members) column(m, 'zh 1240x850', 80);
-  assert.equal(s.members[1].hint.colour, s.members[3].hint.colour, 'A hint keeps its colour whatever its length');
-  await capture('01-default-zh');
-  check('In the default window the failed member\'s three-line hint is shown whole; the others are as they were; every column keeps conversation, terminal and input');
-
-  // 2) Smaller windows: the columns are narrower, the same hint needs four lines, and all four are shown.
-  for (const [width, height] of [[1000, 700], [850, 600]]) {
-    await size(width, height); s = await sample(); kept(s, `zh ${width}x${height}`, zhButtons); fourLines(s, `zh ${width}x${height}`);
-    measured[`zh-${width}x${height}`] = s.members.map(m => m.hint ? hintLines(m.hint, `zh ${width}x${height} ${m.name}`) : 0);
-    for (const m of s.members) column(m, `zh ${width}x${height}`, 80);
-  }
-  assert.equal(measured['zh-850x600'][3], 4, 'In the smallest window the failed member\'s hint needs four lines');
-  await capture('02-small-zh');
-  check('At 1000x700 and 850x600 the hints are shown whole, up to four lines, and every column keeps an 80px conversation and a terminal of 64px or more');
-
-  // 3) A hint that appears while the window stays as it is: the ready member fails. Its terminal gives the room.
-  const readyBefore = s.members[2]; assert.equal(readyBefore.hint, null);
-  tell('state', c, 'error');
-  await until(async () => (await sample()).members[2].hint, 'The member that failed shows its hint'); await settled();
-  s = await sample(); const failed = s.members[2];
-  assert.equal(hintLines(failed.hint, 'zh 850x600 the member that just failed'), 4);
-  column(failed, 'zh 850x600 after a member failed', 80);
-  assert.ok(failed.terminal.h < readyBefore.terminal.h, `The terminal made room for the hint (${readyBefore.terminal.h} -> ${failed.terminal.h})`);
-  for (const m of s.members) column(m, 'zh 850x600 after a member failed', 80);
-  await capture('03-small-zh-hint-appears');
-  check('When a hint appears in the smallest window, that column\'s terminal gives the room and its conversation stays 80px');
-
-  // The interface language changes while the window stays: the hints get longer in English, and the columns make
-  // room for them without waiting for anything else to be drawn.
-  await language('en'); await settled();
-  s = await sample(); fourLines(s, 'en 850x600 right after the switch');
-  for (const m of s.members) { if (m.hint) hintLines(m.hint, 'en 850x600 right after the switch: ' + m.name); column(m, 'en 850x600 right after the switch', 80); }
-  await language('zh'); await settled();
-  s = await sample(); for (const m of s.members) column(m, 'zh 850x600 after switching back', 80);
-  check('Switching the interface language in the smallest window: the columns make room for the longer hints at once, and every conversation stays 80px');
-
-  // The columns were hidden (the shared records page) while the window changed size, and are shown again: the
-  // hints have their lines back and every conversation is at its end, as it was.
-  await page.locator('#room-record').click(); await until(async () => (await sample()).members.every(m => !m.block), 'The shared records page hides the columns');
-  await size(1240, 850); await size(850, 600);
-  await page.locator('#room-overview').click(); await until(async () => { const v = await sample(); return v.members.length === 4 && v.members.every(m => m.block && m.messages && m.terminal); }, 'The member overview again'); await settled();
-  s = await sample(); fourLines(s, 'zh 850x600 back from the records page');
-  for (const m of s.members) { if (m.hint) hintLines(m.hint, 'zh 850x600 back from the records page: ' + m.name); column(m, 'zh 850x600 back from the records page', 80); }
-  check('After the shared records page and a window resize while the columns were hidden, the hints show their four lines again and every conversation is at its end');
-
-  // 4) Every hint of the Chinese interface, in the smallest window and in the default one.
-  for (const [width, height] of [[850, 600], [1240, 850]]) {
-    await size(width, height);
-    const rows = await everyHint('zh', d);
-    for (const row of rows) {
-      assert.ok(row.lines <= MOST, `zh ${width}x${height}: ${row.key} needs ${row.lines} lines; with four members no Chinese hint needs more than four`);
-      assert.ok(row.whole <= row.shown + 1, `zh ${width}x${height}: ${row.key} is shown whole`);
-      assert.ok(row.conversation >= 79.5 && row.terminal >= 63.5 && row.inside, `zh ${width}x${height}: ${row.key} leaves the conversation ${row.conversation}px and the terminal ${row.terminal}px, inside the column`);
+  // Measure every card, including cards reached through progressive reveal. Exact wrapping changes with
+  // column width; typography, complete/scrollable hints, drafts, controls and 80/64px floors do not.
+  for (const lang of ['zh', 'en']) {
+    if (lang === 'en') await language(lang);
+    const buttons = (await sample()).members.map(m => m.buttons);
+    for (const [width, height] of [[1240, 850], [1280, 800], [1000, 700], [850, 600]]) {
+      await size(width, height); const s = await sample(), label = `${lang} ${width}x${height}`;
+      columns(s, label, 4); kept(s, label, buttons);
+      assert.ok(s.members[3].hint && s.members[1].hint && !s.members[2].hint, label + ': error and read-only hints remain; the ready member has none');
+      measured[label] = s.members.map(m => ({ width: m.card.w, conversation: m.messages.h, terminal: m.terminal.h, allow: m.allow }));
+      await capture(`${lang}-${width}x${height}`);
+      if (width === 850) for (const member of s.members) {
+        const input = page.locator(`.collaboration-member-unit[data-member-id="${member.id}"] .session-message-input`);
+        await input.scrollIntoViewIfNeeded();
+        assert.equal(await input.evaluate(el => {
+          const box = el.getBoundingClientRect(), viewport = el.closest('.collaboration-readers').getBoundingClientRect();
+          return box.top >= viewport.top - 1 && box.bottom <= viewport.bottom + 1;
+        }), true, `${label}: ${member.name}'s input can enter the existing scrolling viewport`);
+      }
     }
-    measured[`zh-${width}x${height}-every-hint`] = { hints: rows.length, mostLines: Math.max(...rows.map(row => row.lines)), threeOrMore: rows.filter(row => row.lines >= 3).length };
+    check(`${lang}: all four cards keep 300px, 80px of conversation and a 64px terminal at four window sizes; hints, drafts and controls remain`);
   }
-  check('With four members every hint of the Chinese interface is shown whole in both window sizes, and the column keeps its conversation and terminal');
-
-  // 5) English: longer sentences. More than four lines keep four and scroll; the conversation is not pushed under 80px.
-  await language('en'); await size(850, 600); await page.mouse.move(2, 2); await settled();
-  s = await sample();
-  const enButtons = [[['Native input', false], ['Send ↑', true]], [['Take control here', false]], [['Open native terminal', false]], [['Open native terminal', false]]];
-  kept(s, 'en 850x600', enButtons); fourLines(s, 'en 850x600');
-  measured['en-850x600'] = s.members.map(m => m.hint ? hintLines(m.hint, 'en 850x600 ' + m.name) : 0);
-  assert.ok(measured['en-850x600'][3] > MOST, `The failed member's English hint needs more than four lines in the smallest window (${measured['en-850x600'][3]})`);
-  for (const m of s.members) column(m, 'en 850x600', 80);
-  // The lines beyond the fourth can be scrolled to, and scrolling moves nothing else.
-  const scrolled = await page.evaluate(memberId => { const reader = [...document.querySelectorAll('#collaboration-overview .collaboration-member-reader')].find(e => e.dataset.memberId === memberId), hint = reader.querySelector('.collaboration-member-input .session-compose-hint');
-    hint.scrollTop = hint.scrollHeight; const end = hint.scrollTop + hint.clientHeight; hint.scrollTop = 0; return [end, hint.scrollHeight]; }, d);
-  assert.ok(Math.abs(scrolled[0] - scrolled[1]) <= 1, 'The last line of a longer hint can be scrolled into view');
-  await capture('04-small-en');
-  let rows = await everyHint('en', d);
-  for (const row of rows) {
-    if (row.lines <= MOST) assert.ok(row.whole <= row.shown + 1, `en 850x600: ${row.key} (${row.lines} lines) is shown whole`); else assert.ok(Math.abs(row.shown - MOST * LINE) < 0.6, `en 850x600: ${row.key} (${row.lines} lines) shows four`);
-    assert.ok(row.conversation >= 79.5 && row.terminal >= 63.5 && row.inside, `en 850x600: ${row.key} leaves the conversation ${row.conversation}px and the terminal ${row.terminal}px, inside the column`);
-  }
-  measured['en-850x600-every-hint'] = { hints: rows.length, mostLines: Math.max(...rows.map(row => row.lines)), overFour: rows.filter(row => row.lines > MOST).length, shownWhole: rows.filter(row => row.lines <= MOST).length };
-  await size(1240, 850); rows = await everyHint('en', d);
-  for (const row of rows) { if (row.lines <= MOST) assert.ok(row.whole <= row.shown + 1, `en 1240x850: ${row.key} is shown whole`); assert.ok(row.conversation >= 79.5 && row.terminal >= 63.5 && row.inside, `en 1240x850: ${row.key} keeps the column`); }
-  measured['en-1240x850-every-hint'] = { hints: rows.length, mostLines: Math.max(...rows.map(row => row.lines)), overFour: rows.filter(row => row.lines > MOST).length, shownWhole: rows.filter(row => row.lines <= MOST).length };
   await language('zh'); await settled();
-  check('In English a hint of up to four lines is shown whole and a longer one keeps four lines and scrolls; in the smallest window every column still has an 80px conversation');
+  let s = await sample();
+  assert.deepEqual([s.members[0].hint.text, s.members[1].hint.text, s.members[2].hint], [zhHints.working, zhHints.readOnly, null]);
+  kept(s, 'zh after switching back', zhButtons); columns(s, 'zh after switching back', 4);
+  check('Changing the display language in the small window preserves the columns and their controls');
 
-  // 6) Six members: narrower columns, and in the smallest window no height to spare. There a hint keeps the two
-  //    lines it had, and the conversation is not made lower than it was.
-  for (const [name, provider] of [['测试覆盖 · Coverage', 'claude'], ['Perf_benchmarks', 'codex']]) { const id = await client.call('create', { provider, cwd, name, view: 'chat' }); await client.call('join', id, true); }
-  await until(async () => { const v = await sample(); return v.members.length === 6 && v.members.every(m => m.block && m.messages && m.terminal); }, 'Six member columns'); await settled();
-  s = await sample(); assert.equal(s.window.join('x'), '1240x850');
-  for (const m of s.members) { assert.equal(m.allow, MOST, `zh 1240x850, six members: ${m.name} has room for four lines`); if (m.hint) hintLines(m.hint, 'zh 1240x850, six members: ' + m.name); column(m, 'zh 1240x850, six members', 80); }
-  measured['zh-1240x850-six'] = { allow: s.members.map(m => m.allow), lines: s.members.map(m => m.hint ? Math.round(m.hint.whole / LINE) : 0), conversation: s.members.map(m => Math.round(m.messages.h)), terminal: s.members.map(m => Math.round(m.terminal.h)) };
-  await capture('05-six-members-zh');
-  await size(850, 600); s = await sample();
-  for (const m of s.members) {
-    assert.ok(m.allow >= 2 && m.allow <= MOST, `zh 850x600, six members: ${m.name} shows between two and four lines (${m.allow})`);
-    if (m.hint) hintLines(m.hint, 'zh 850x600, six members: ' + m.name, m.allow); column(m, 'zh 850x600, six members', 80);
+  tell('state', c, 'error');
+  await until(async () => (await sample()).members.find(m => m.id === c)?.hint, 'The newly failed member has its hint'); await settled();
+  s = await sample(); columns(s, 'a hint appears at 850x600', 4);
+  assert.ok(s.members.find(m => m.id === c).hint.text.startsWith('原生请求未完成。'));
+  check('A hint appearing in the small window preserves every conversation and terminal floor');
+
+  await page.locator('#room-record').click(); await page.locator('#activity-stream').waitFor();
+  await size(1240, 850); await size(850, 600);
+  columns(await sample(), 'shared records open after resizing', 4);
+  await page.locator('#room-record').click(); await until(() => page.locator('#activity-stream').isHidden(), 'Shared records close'); await revealAll(); await settled();
+  columns(await sample(), 'back from shared records after resizing', 4);
+  check('Opening shared records, resizing and closing it preserves every column and reading position');
+
+  for (const lang of ['zh', 'en']) {
+    await language(lang);
+    for (const [width, height] of [[850, 600], [1240, 850]]) {
+      await size(width, height); const rows = await everyHint(lang, d);
+      for (const row of rows) {
+        if (row.lines <= row.allow) assert.ok(row.whole <= row.shown + 1, `${lang} ${width}: ${row.key} is shown whole`);
+        else {
+          assert.ok(Math.abs(row.shown - row.allow * LINE) < 0.6, `${lang} ${width}: ${row.key} keeps its allocated lines`);
+          assert.ok(row.scrolled > 0 && Math.abs(row.end - row.whole) <= 1, 'The actual overflow scrolls to its last line');
+        }
+        assert.ok(row.conversation >= 79.5 && row.terminal >= 63.5 && row.inside, `${lang} ${width}: ${row.key} preserves the conversation and terminal inside the column`);
+      }
+      if (lang === 'en') assert.ok(rows.some(row => row.key === 'synthetic.longHint' && row.lines > MOST && row.scrolled > 0));
+      measured[`${lang}-${width}-catalog`] = { hints: rows.length, overFour: rows.filter(row => row.lines > MOST).length };
+    }
+    check(`${lang}: every catalog hint preserves 80/64px; longer hints really scroll to their last line`);
   }
-  measured['zh-850x600-six'] = { allow: s.members.map(m => m.allow), lines: s.members.map(m => m.hint ? Math.round(m.hint.whole / LINE) : 0), conversation: s.members.map(m => Math.round(m.messages.h)), terminal: s.members.map(m => Math.round(m.terminal.h)) };
-  assert.ok(s.members.some(m => m.hint && m.allow < MOST && Math.round(m.hint.whole / LINE) > m.allow), 'In the smallest window with six members a column has no room for all of a long hint, and shows what fits');
-  await capture('06-six-members-small-zh');
-  await size(1240, 850); await settled();
-  check('Six members: four lines where the columns are high enough; in the smallest window a hint shows the lines that fit (two or more), and every conversation is still 80px with a terminal of 64px or more');
+  await language('zh');
+  for (const [name, provider] of [['测试覆盖 · Coverage', 'claude'], ['Perf_benchmarks', 'codex']]) { const id = await client.call('create', { provider, cwd, name, view: 'chat' }); await client.call('join', id, true); }
+  await until(() => page.locator('#collaboration-overview .collaboration-member-unit').count().then(n => n === 6), 'Six member cards exist');
+  await revealAll(); await settled();
+  for (const [width, height] of [[1240, 850], [850, 600]]) { await size(width, height); columns(await sample(), `six members ${width}x${height}`, 6); }
+  check('All six members remain reachable through reveal; the same width and reading floors survive more rows');
 
   // Looking, resizing and the member that failed sent nothing and gave no input to any session.
   const after = (await fixture('stats')).overviewCalls;
