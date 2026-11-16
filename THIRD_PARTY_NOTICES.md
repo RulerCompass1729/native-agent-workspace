@@ -48,3 +48,33 @@ was verified against native 2.1.309. It reuses the DSH protocol transport above;
 the native MCP call runs through Claude's permission/hook path before the
 root-bound bridge can stage a handoff. Generated provider declarations are not
 redistributed.
+# Count-only Web Push (2026-11-15)
+
+The optional phone notification sender uses unmodified **web-push 3.6.7**,
+MPL-2.0. Its covered source and LICENSE are included with the npm dependency
+payload; the exact source is also available from the
+[official npm archive](https://registry.npmjs.org/web-push/-/web-push-3.6.7.tgz).
+This dependency does not change the license of NAW's own source files.
+
+Runtime dependency closure (all corresponding package licenses are retained):
+agent-base 7.1.4 (MIT), asn1.js 5.4.1 (MIT), bn.js 4.12.5 (MIT),
+buffer-equal-constant-time 1.0.1 (BSD-3-Clause), debug 4.4.3 (MIT),
+ecdsa-sig-formatter 1.0.11 (Apache-2.0), http_ece 1.2.0 (MIT),
+https-proxy-agent 7.0.6 (MIT), inherits 2.0.4 (ISC), jwa 2.0.1 (MIT),
+jws 4.0.1 (MIT), minimalistic-assert 1.0.1 (ISC), minimist 1.2.8 (MIT),
+ms 2.1.3 (MIT), safe-buffer 5.2.1 (MIT), safer-buffer 2.1.2 (MIT).
+
+
+The official npm archive for http_ece 1.2.0 omits its license file. Packaging
+adds the unmodified upstream MIT license as `node_modules/http_ece/LICENSE`;
+the checked-in original is `third-party/http_ece-1.2.0-LICENSE`. No dependency
+source is changed. Provenance:
+
+- Upstream tag: `v1.2.0`, repository `martinthomson/encrypted-content-encoding`.
+- Original: https://raw.githubusercontent.com/martinthomson/encrypted-content-encoding/v1.2.0/LICENSE
+- Retrieved: `2026-11-16T05:50:32Z` (2026-11-15 Pacific).
+- Original bytes: 1082; SHA256: `717363ac0c7f0883042868db171cfed1f4b423119249eac9bce5131291017ea8`.
+
+Both production packaging and the push-closure inspector verify this digest and
+copy the same original. Regression tests run the unchanged production
+per-package license inventory on that staged closure.
