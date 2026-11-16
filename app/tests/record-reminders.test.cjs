@@ -125,6 +125,21 @@ function page(t, dir, now = NOW) {
   return { view, button, badge, dialog, calls, out, find, answer: hook => { deleteAnswer = hook; }, changed: () => onChanged?.(), unavailable: value => { unavailable = value; }, text: () => dialog.all().filter(node => !node.hidden).map(node => node.textContent).filter(Boolean).join('\n') };
 }
 
+for(const language of ['zh','en'])for(const issue of ['incomplete','metadata-unavailable'])test(`registration refusal explains status and the kept result (${issue}, ${language})`,async()=>{
+  const dialog=new Element('dialog'),button=new Element('button'),badge=new Element('span'),document={createElement:tag=>new Element(tag)};
+  const format=(key,params)=>locale.format(language,key,params),key=issue==='incomplete'?'records.temp.registrationIncomplete':'records.temp.registrationUnavailable';
+  const result={cleaned:0,bytes:0,skipped:1,reasons:{unverified:1},registrationIssue:issue};
+  let status={count:1,records:[],temp:{shown:true,directories:1,bytes:4096,ticket:'synthetic-person-ticket'}};
+  const api={records:async action=>{if(action==='tempClean'){status={count:1,records:[],temp:{shown:true,directories:0,anomaly:'registration-unverified',registrationIssue:issue}};return {...status,result};}return status;}};
+  const view=bind({button,badge,dialog,document,api,text:format});await view.open();
+  await dialog.all().find(node=>node.dataset.action==='tempClean').fire('click');
+  const paragraphs=dialog.all().filter(node=>node.tag==='p').map(node=>node.textContent);
+  assert.notEqual(format(key),key,'A translated explanation exists');
+  assert.equal(paragraphs.filter(text=>text===format(key)).length,2,'Both result and blocked status explain the same cause');
+  assert.equal(dialog.all().find(node=>node.dataset.action==='tempClean').disabled,true);
+  assert.ok(dialog.all().some(node=>node.attributes.role==='status'));
+});
+
 for (const language of ['zh','en']) test(`a changed temporary directory uses the existing kept result rather than the in-use-only result (${language})`,async()=>{
   const dialog=new Element('dialog'),button=new Element('button'),badge=new Element('span'),document={createElement:tag=>new Element(tag)};
   const format=(key,params)=>locale.format(language,key,params),result={cleaned:0,bytes:0,skipped:1,reasons:{busy:0,changed:1,unverified:0}};
