@@ -32,6 +32,17 @@ test('authenticated phone workspace uses only the fixed app-local projection end
   const missing = await f.invoke({ url: '/mobile/workspace', raw: ['Host', 'mobile.invalid', 'Tailscale-User-Login', actor, 'X-NAW-Mobile', '1'] });
   assert.equal(missing.statusCode, 401); assert.equal(f.calls.length, 1);
 });
+test('push registration needs original Origin/cookie/CSRF and never offers an arbitrary send endpoint', async () => {
+  const f = fixture(); let writes = 0;
+  f.broker.pushInfo = () => ({ publicKey: 'public', enabled: false, state: 'off', lastSubmittedAt: null });
+  f.broker.pushAction = () => { writes++; return { enabled: true, state: 'subscribed', lastSubmittedAt: null }; };
+  assert.equal((await f.invoke({ url: '/mobile/push' })).statusCode, 200);
+  assert.equal((await f.invoke({ url: '/mobile/push', method: 'POST', value: { action: 'subscribe', subscription: {} } })).statusCode, 200);
+  const raw = ['Host', 'mobile.invalid', 'Tailscale-User-Login', actor, 'Cookie', `${COOKIE}=${bearer}`, 'X-NAW-Mobile', '1', 'Content-Type', 'application/json'];
+  assert.equal((await f.invoke({ url: '/mobile/push', method: 'POST', value: {}, raw })).statusCode, 403);
+  assert.equal((await f.invoke({ url: '/mobile/push/send', method: 'POST', value: {} })).statusCode, 404);
+  assert.equal(writes, 1);
+});
 test('phone workspace actions require the original CSRF and return only bounded receipts', async () => {
   const f = fixture();
   f.broker.workspaceAction = async (auth, value) => { f.calls.push(['workspaceAction', auth, value]); return { requestId: value.requestId, status: 'complete', itemId: 'task-a' }; };

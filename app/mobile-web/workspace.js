@@ -66,6 +66,9 @@
     }
     const actions = createWorkspaceActions({ storage, request: api, newId: () => global.crypto.randomUUID(), changed: () => updateCompose() });
     client = global.NAWMobile.createMobileClient({ request: api, storage, newId: () => global.crypto.randomUUID(), onChange: () => updateCompose() });
+    const push = global.NAWMobilePush?.create({ request: api, session: () => client.state.session });
+    Object.assign(words.zh, { pushTitle: '手机通知', pushEnable: '开启提醒', pushDisable: '关闭提醒', pushNote: '只发送提醒数量，不含名字或正文。通知可能延迟；打开后以当前记录为准。', pushHome: 'iPhone 请先从 Safari 添加到主屏幕，再从主屏幕打开。需要 iOS 16.4 或更新版本。', pushUnsupported: '当前浏览器未提供推送能力。iPhone 请添加到主屏幕后打开。', pushOff: '尚未开启', pushSubscribed: '已登记，尚未提交提醒', pushAccepted: '已交给推送服务，未确认手机送达', pushDelayed: '提交未确认，通知可能延迟；请刷新查看当前提醒', pushExpired: '订阅已失效，请重新开启', pushDenied: '通知权限未允许，请在系统设置中核对', pushUnknown: '设置结果未确认，请刷新核对；需要时在 Mac 撤销此手机' });
+    Object.assign(words.en, { pushTitle: 'Phone notifications', pushEnable: 'Enable reminders', pushDisable: 'Disable reminders', pushNote: 'Only the reminder count is sent, without names or content. Notifications may be delayed; open NAW for current records.', pushHome: 'On iPhone, add this page to the Home Screen in Safari, then open it there. Requires iOS 16.4 or later.', pushUnsupported: 'Push is unavailable in this browser. On iPhone, add NAW to the Home Screen and open it there.', pushOff: 'Not enabled', pushSubscribed: 'Registered; no reminder submitted yet', pushAccepted: 'Accepted by the push service; phone delivery unconfirmed', pushDelayed: 'Submission unconfirmed; notifications may be delayed. Refresh for current reminders.', pushExpired: 'Subscription expired; enable again', pushDenied: 'Notification permission was not granted. Check system settings.', pushUnknown: 'Setting unconfirmed. Refresh to check, or revoke this phone on the Mac.' });
     function avatar(s) { return node('span', (s.provider || 'N').slice(0, 1).toUpperCase(), 'avatar ' + (['claude', 'codex', 'deepseek'].includes(s.provider) ? s.provider : '')); }
     const providerName = name => ({ claude: 'Claude', codex: 'Codex', deepseek: 'DeepSeek' })[name] || name || 'NAW';
     const stateText = s => t(({ idle: 'idle', working: 'working', starting: 'working', approval: 'needs', queued: 'queued', sent: 'working', waiting: 'needs', done: 'done', cancelled: 'cancelled' })[s] || s || 'idle');
@@ -192,7 +195,29 @@
     }
     function reminders() {
       heading('reminders'); if (!view.reminders) { el('content').append(node('p', t('noScope'))); return; }
-      el('content').append(node('p', t('sameBell'), 'quiet'), node('p', t('bellNote'), 'callout'));
+      el('content').append(node('p', t('sameBell'), 'quiet'));
+      if (push) {
+        const card = node('section', undefined, 'reminder-card'); card.id = 'push-card';
+        const title = node('h2', t('pushTitle')); title.id = 'push-title'; card.setAttribute('aria-labelledby', title.id);
+        const supported = push.supported(), state = push.state;
+        const key = ({ off: 'pushOff', subscribed: 'pushSubscribed', accepted: 'pushAccepted', delayed: 'pushDelayed', expired: 'pushExpired', denied: 'pushDenied', unconfirmed: 'pushUnknown' })[state.state] || 'pushUnknown';
+        const status = node('p', t(key)); status.id = 'push-status'; status.setAttribute('role', 'status');
+        if (state.lastSubmittedAt) status.append(node('span', ' · ' + new Date(state.lastSubmittedAt).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en')));
+        card.append(title, node('p', t('pushNote'), 'quiet'), status, node('p', t('pushHome'), 'quiet'));
+        if (supported || state.enabled) {
+          const b = node('button', t(state.enabled ? 'pushDisable' : 'pushEnable'), 'primary'); b.type = 'button'; b.id = 'push-toggle';
+          b.setAttribute('aria-disabled', String(state.busy));
+          b.addEventListener('click', () => {
+            if (push.state.busy) return;
+            b.setAttribute('aria-disabled', 'true');
+            // Bypass the ordinary async action wrapper so Safari receives the
+            // permission request directly in this user's click task.
+            const pending = push.state.enabled ? push.disable() : push.enable();
+            pending.finally(() => { paint(); el('push-toggle')?.focus(); });
+          }); card.append(b);
+        } else card.append(node('p', t('pushUnsupported'), 'callout'));
+        el('content').append(card);
+      }
       for (const r of view.reminders.records) for (const i of r.items.filter(i => i.shown)) {
         const card = node('article', undefined, 'reminder-card'); card.dataset.record = r.record;
         card.append(node('div', t(r.record), 'record'), node('h3', (i.kind === 'age' ? i.blocks + ' ' : '') + t(i.kind)), node('p', r.blocks + ' · ' + Math.round(r.bytes / 1024 / 1024) + ' MiB', 'quiet'));
@@ -233,6 +258,7 @@
           messages: client.state.row?.id === s.id ? client.state.row.messages.map(m => ({ ...m, role: 'assistant', name: s.name, attachments: m.unsupportedAttachments })) : [],
           earlierMessagesOmitted: client.state.row?.id === s.id ? client.state.row.earlierMessagesOmitted : 0 })), rooms: [], confirmations: [], reminders: null, syncedAt: Date.now() };
         if (ticket !== epoch) return; view = next; lastReceived = global.performance.now();
+        if (push && next.reminders) await push.read();
       } catch { disconnected = true; toast('offline'); } finally { if (ticket === epoch) { busy = false; paint(); } }
     }
     async function navigate() {
