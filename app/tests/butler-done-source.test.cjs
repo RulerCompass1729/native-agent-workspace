@@ -69,3 +69,11 @@ test('the first reply line is sanitized and bounded before a compact multiline r
  assert.equal(rules.reportTitle('x'.repeat(500)+'\nOther'), 'x'.repeat(199)+'…');
  assert.equal(rules.reportTitle('PASS\nMore details'),'PASS');
 });
+
+test('done retains the live member name when its old dispatch record is no longer retained',t=>{
+ const f=fixture(t),id=f.item();
+ f.room.update({events:f.room.metadata().events.filter(e=>e.uiMessage?.key!=='notice.queue.dispatched')});
+ f.room.queueSettle('shared',id,'done','','Current member','PASS');
+ const event=f.ingress.ledger.eventsAfter().events[0];
+ assert.equal(event.kind,'done');assert.equal(event.payload.memberId,'member');assert.equal(event.payload.memberName,'Current member');
+});

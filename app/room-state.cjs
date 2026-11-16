@@ -99,7 +99,7 @@ function validateRoom(data) {
 //   a restart, a later write or an older build that added items cannot repeat one.
 const queueRound = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
 const toSend = item => ['queued', 'sent'].includes(item.status);
-function queueFacts(room, roomId, previous, next, queue, replyTitle) {
+function queueFacts(room, roomId, previous, next, queue, replyTitle, memberName) {
   const facts = [], fields = {};
   if (previous && next && previous.status !== 'done' && next.status === 'done' && next.ready) {
     // The name NAW recorded when it sent this member its item; a member holds one item at a time.
@@ -111,7 +111,7 @@ function queueFacts(room, roomId, previous, next, queue, replyTitle) {
       butlerSource: queueReadySource(roomId, next, name) });
   } else if (previous?.status === 'sent' && next?.status === 'done' && !next.ready &&
       previous.addedBy === 'steward' && next.addedBy === 'steward') {
-    const name = room.events.findLast(e => e.sessionId === next.sentTo && e.uiMessage?.key === 'notice.queue.dispatched')?.uiMessage?.params?.name;
+    const name = room.events.findLast(e => e.sessionId === next.sentTo && e.uiMessage?.key === 'notice.queue.dispatched')?.uiMessage?.params?.name ?? memberName;
     const title = queueRules.reportTitle(replyTitle ?? next.reply);
     facts.push({ kind: 'queue', itemId: next.id, sessionId: next.sentTo, text: title,
       monitor: { kind: 'done', key: `done:${roomId}:${next.id}`, itemId: next.id, addedBy: 'steward' },
@@ -634,7 +634,7 @@ class RoomState {
     }
     throw uiError("error.queue.itemMissing");
   }
-  queueReplace(id, itemId, next, event, reportTitle) {
+  queueReplace(id, itemId, next, event, reportTitle, memberName) {
     this.writable(id);
     const queue = [];
     let previous = null;
@@ -647,7 +647,7 @@ class RoomState {
       }
     }
     const checked = queueRules.validateQueue(queue);
-    const noticed = queueFacts(this.metadata(id), id, previous, next, checked, reportTitle);
+    const noticed = queueFacts(this.metadata(id), id, previous, next, checked, reportTitle, memberName);
     return this.update({ queue: checked, ...noticed.fields }, event ? { ...event, itemId } : event, id, noticed.facts);
   }
   // `by` is 'steward' when the butler acts (steward step 2, batch 4): kept on the item, which older builds read as it is.
@@ -833,7 +833,7 @@ class RoomState {
         memberId: item.sentTo, memberName: name, task: item.text, question: decisionQuestion });
       if (source) event.butlerSource = source;
     }
-    const eventId = this.queueReplace(id, itemId, next, event, reportTitle);
+    const eventId = this.queueReplace(id, itemId, next, event, reportTitle, name);
     if (eventId && needsPerson) {
       try {
         this.onQueueOutcome?.({ roomId: id, itemId, eventId, status, reason, memberId: item.sentTo,
