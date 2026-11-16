@@ -9,11 +9,14 @@ const identity = file => {
 };
 function removeOwned(record) {
   let stat;
-  try { stat = fs.lstatSync(record.path); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  try { stat = fs.lstatSync(record.path); } catch (error) {
+    if (error.code === 'ENOENT') { require('../../app/temp-ownership.cjs').forgetMissing(record); return; }
+    throw error;
+  }
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== record.dev || stat.ino !== record.ino ||
       stat.uid !== record.uid || fs.realpathSync(record.path) !== record.path) throw Error('Temporary directory identity changed: ' + record.path);
   fs.rmSync(record.path, { recursive: true });
-  if (record.reminderReceipt) require('../../app/temp-ownership.cjs').forget(record.reminderReceipt);
+  require('../../app/temp-ownership.cjs').forgetMissing(record);
 }
 // A delegated directory belongs to test-scratch's process-aware cleanup. While
 // it may still exist, nothing on its path is removed here: neither a directory

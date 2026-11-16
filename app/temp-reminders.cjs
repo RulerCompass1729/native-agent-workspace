@@ -96,11 +96,11 @@ class TempReminders {
   async scan() {
     const now=this.now(); let entries=[],anomaly=null;
     try {
-      const records=ownership.read(this.registryDir), available=[];
+      const available=[];
       const alive=new Map(); const live=r=>{ const key=JSON.stringify(r.owner); if(!alive.has(key)) alive.set(key,this.isAlive(r.owner)); return alive.get(key); };
-      for(const r of records) { if(!this.roots.some(root=>r.path!==root&&ownership.inside(root,r.path)) || path.resolve(r.path)!==r.path) continue;
+      for await(const batch of ownership.batches(this.registryDir)) for(const r of batch) { if(!this.roots.some(root=>r.path!==root&&ownership.inside(root,r.path)) || path.resolve(r.path)!==r.path) continue;
         try { await fs.promises.lstat(r.path); available.push(r); }
-        catch(error) { if(error.code==='ENOENT') ownership.forget(r.id,this.registryDir); else throw error; } }
+        catch(error) { if(error.code==='ENOENT') ownership.forgetMissing(r,this.registryDir); else throw error; } }
       const protectedPaths=available.filter(live).map(r=>r.path);
       const system=available.some(r=>!live(r))?await this.inspect():{opened:[],mounted:[]};
       for(const r of available.sort((a,b)=>a.path.length-b.path.length)) {

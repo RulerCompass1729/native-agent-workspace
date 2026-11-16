@@ -143,6 +143,7 @@ function removeDirectories() {
   exportEvidence();
   for (const [file, identity] of services) if (same(file, identity)) fs.rmSync(file, { recursive: true, force: true });
   for (const [file, identity] of roots) if (same(file, identity)) fs.rmSync(file, { recursive: true, force: true });
+  for (const [file, identity] of [...roots, ...services]) require('../../app/temp-ownership.cjs').forgetMissing({path:file,...identity});
   released = true;
 }
 function terminate(record, signal) {

@@ -3,6 +3,7 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const { createHash } = require('node:crypto');
 const { lockIdentity } = require('./service-lock.cjs');
 const inside = (root, file) => file === root || file.startsWith(root + path.sep);
+const receiptId = r => createHash('sha256').update(JSON.stringify([r.path,r.dev,r.ino,r.uid ?? process.getuid()])).digest('hex');
 const roots = () => [...new Set([os.tmpdir(), '/tmp'].map(p => fs.realpathSync(p)))];
 const defaultDirectory = () => process.env.NAW_TEMP_REGISTRY_DIR || path.join(process.env.NAW_DATA_DIR ||
   (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support', 'Native Agent Workspace') : path.join(os.homedir(), '.local', 'share', 'Native Agent Workspace')), 'temp-ownership');
@@ -31,7 +32,7 @@ function register(directory, { registryDir = defaultDirectory(), now = Date.now,
   if (!owner?.started) throw Error('Temporary creator identity unavailable');
   const record={version:1,kind:'naw-test',path:file,uid:s.uid,dev:s.dev,ino:s.ino,createdAt:now(),owner,
     creator:path.basename(process.argv[1] || 'NAW test')};
-  record.id=createHash('sha256').update(JSON.stringify([file,s.dev,s.ino,s.uid])).digest('hex');
+  record.id=receiptId(record);
   privateDirectory(registryDir,true);
   const target=path.join(registryDir,record.id+'.json');
   const pending=path.join(registryDir,'.pending-'+require('node:crypto').randomUUID());
@@ -51,6 +52,20 @@ function read(registryDir = defaultDirectory()) {
     return entry(path.join(registryDir,name));
   });
 }
+// Stream bounded batches so the small read() inventory limit cannot prevent
+// a large ENOENT backlog from being pruned by the scanner.
+async function* batches(registryDir = defaultDirectory()) {
+  try { privateDirectory(registryDir); } catch(error) { if(error.code==='ENOENT') return; throw error; }
+  const directory=await fs.promises.opendir(registryDir);let batch=[];
+  for await (const file of directory) {
+    if(/^\.pending-[a-f0-9-]{36}$/.test(file.name))continue;
+    if(!/^[a-f0-9]{64}\.json$/.test(file.name))throw Error('Unknown temporary ownership entry');
+    try {batch.push(entry(path.join(registryDir,file.name)));}
+    catch(error) {if(error.code!=='ENOENT')throw error;}
+    if(batch.length===256){yield batch;batch=[];await new Promise(resolve=>setImmediate(resolve));}
+  }
+  if(batch.length)yield batch;
+}
 function forget(id, registryDir = defaultDirectory()) {
   if(!/^[a-f0-9]{64}$/.test(id)) return;
   privateDirectory(registryDir);
@@ -58,4 +73,19 @@ function forget(id, registryDir = defaultDirectory()) {
   try { const s=fs.lstatSync(file); if(s.isFile() && !s.isSymbolicLink() && s.uid===process.getuid() && !(s.mode&0o077)) fs.unlinkSync(file); }
   catch(error) { if(error.code!=='ENOENT') throw error; }
 }
-module.exports={register,read,forget,defaultDirectory,roots,inside};
+function forgetMissing(record, registryDir = defaultDirectory()) {
+  try {fs.lstatSync(record.path);return false;}
+  catch(error) {if(error.code!=='ENOENT')throw error;}
+  const id=receiptId(record);
+  if((record.reminderReceipt||record.id||id)!==id)throw Error('Temporary ownership receipt identity changed');
+  try {forget(id,registryDir);}catch(error){if(error.code!=='ENOENT')throw error;}return true;
+}
+async function pruneMissing(registryDir = defaultDirectory()) {
+  const allowed=roots();let removed=0;
+  for await(const batch of batches(registryDir)) for(const record of batch) {
+    if(!allowed.some(root=>record.path!==root&&inside(root,record.path))||path.resolve(record.path)!==record.path)continue;
+    if(forgetMissing(record,registryDir))removed++;
+  }
+  return removed;
+}
+module.exports={register,read,batches,forget,forgetMissing,pruneMissing,defaultDirectory,roots,inside};
