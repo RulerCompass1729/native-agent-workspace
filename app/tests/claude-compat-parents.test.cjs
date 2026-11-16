@@ -11,7 +11,7 @@ function fixture(t) {
 
 // The combined bridge differs from both reviewed parents. Both exact managed
 // outputs must remain upgradeable; a modified copy must still fail closed.
-for (const commit of ['cc6fa282', '5b744d75']) for (const existingOnly of [false, true])
+for (const commit of ['94840d46b08ae225c73b6bbac59fe5d452e34bf7', '7a3138f3738ad17043402f118ea402c21bedf42a']) for (const existingOnly of [false, true])
 test(`PF08 integration: parent ${commit} upgrades with existingOnly=${existingOnly}`, t => {
   const { cwd, file } = fixture(t);
   installPlugin(cwd);
