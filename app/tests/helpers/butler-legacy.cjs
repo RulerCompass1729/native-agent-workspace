@@ -1,9 +1,10 @@
 'use strict';
-// Load the exact rollback consumer from local Git, without copying or simplifying
-// its production logic. Like the compatibility-hook tests, this requires history.
+// Load the pinned published rollback consumer from local Git, without copying or simplifying
+// its production logic. Pin the already published origin ancestor, before the
+// local history that publication may rewrite. This requires local Git history.
 const { execFileSync } = require('node:child_process');
 const Module = require('node:module'), path = require('node:path');
-const revision = '3244066ac39b0e2054a307eb3819812086d33e92';
+const revision = 'd877bc9e9b5579c65598355533f9b1a0e5484265';
 const root = path.resolve(__dirname, '../../..'), modules = new Map();
 function source(name) {
   if (!/^[\w/-]+\.(?:cjs|js)$/.test(name) || name.includes('..')) throw Error('Invalid legacy module');

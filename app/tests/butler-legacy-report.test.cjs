@@ -94,16 +94,24 @@ test('permitted legacy position-only wake and notification cooldown are identica
   assert.deepEqual([f.calls.length,actual.snapshot().batches.length,actual.snapshot().attempts.length,f.timers.size,actual.snapshot().questions.length],[0,0,0,0,0]);
  }
 });
-test('legacy room, waiting list, confirmation cards, bell and intake never present a report as work for the person',t=>{
+test('published legacy room, confirmation cards, bell and intake never present a report as work for the person',t=>{
  const {RoomState}=require('../room-state.cjs'),{ButlerIngress,bindQueueOutcomes}=require('../butler-ingress.cjs');
  const f=fixture(t);f.controller.close();const room=new RoomState(f.directory),ledger=new NewLedger(f.directory),intake=new ButlerIngress(f.directory,{roomState:room,ledger});bindQueueOutcomes(room,intake,()=>{});
  const id=room.queueAdd('Synthetic review',null,'shared',{kind:'secretary',name:'Steward',sessionId:'steward'},'steward');room.queueMarkSent('shared',id,'member-a','Synthetic member');room.queueSettle('shared',id,'done','','Synthetic member','PASS');
  const oldRoom=new (legacy.load('room-state.cjs').RoomState)(f.directory),oldLedger=new ButlerLedger(f.directory),oldIntake=new (legacy.load('butler-ingress.cjs').ButlerIngress)(f.directory,{roomState:oldRoom,ledger:oldLedger});oldIntake.recover();
  assert.equal(oldIntake.status().intake,'ready');assert.equal(oldIntake.status().errorCode,null);assert.equal(oldLedger.snapshot().questions.length,0);assert.equal(oldLedger.snapshot().deliveries.length,0);
  const snapshot=oldRoom.apply({sessions:[{id:'member-a',nativeId:'native-member',name:'Synthetic member',state:'idle',messages:[],roomIds:['shared']}],rooms:[]});
- const stream=legacy.load('task-stream.js');assert.deepEqual(stream.waitingItems({rooms:snapshot.rooms,sessions:snapshot.sessions,confirmations:[]}),[]);
+ // This published build predates the later waiting strip; do not import an
+ // unpushed version to assert a surface that did not exist in the pinned build.
+ assert.doesNotMatch(legacy.source('renderer/renderer.js'),/nativeWorkspaceTaskStream|stream-waiting/);
  assert.equal(snapshot.room.queue.find(item=>item.id===id).status,'done');assert.equal(snapshot.sessions[0].state,'idle');
  assert.ok(!snapshot.room.events.some(event=>event.kind==='blocked'||event.questionId));
  const {BackgroundControl}=legacy.load('background-control.cjs'),cards=Object.create(BackgroundControl.prototype);cards.data={records:[]};cards.inflight=new Map();cards.archivedBySession=new Map();cards.now=()=>1;
- assert.deepEqual(cards.pending(snapshot),[]);assert.equal(legacy.load('record-reminders.cjs').status(f.directory,Date.UTC(2026,10,9)).count,0);
+ // The published host appends these per-session rows into the conversation;
+ // the later cross-session pending-card API did not exist in this build.
+ assert.deepEqual(cards.rows('member-a'),[]);assert.equal(legacy.load('record-reminders.cjs').status(f.directory,Date.UTC(2026,10,9)).count,0);
+});
+test('the fixed rollback revision is an ancestor of the locally recorded origin main',()=>{
+ require('node:child_process').execFileSync('git',['merge-base','--is-ancestor',legacy.revision,'refs/remotes/origin/main'],
+  {cwd:path.resolve(__dirname,'../..'),stdio:'pipe',timeout:10000});
 });
