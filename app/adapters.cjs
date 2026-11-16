@@ -905,6 +905,7 @@ class Claude extends EventEmitter {
         if (!message.replayed && !message.gap && this.livePermissions.delete(message.permissionId) && !this.livePermissions.size && this.liveTurn) this.emit('state', 'working');
       } else {
         if (!['control:permission', 'control:input'].includes(message.id)) throw Error('Invalid native control boundary');
+        if (message.awaitingUser !== undefined && (message.id !== 'control:permission' || message.boundaryOnly !== true || message.awaitingUser !== false)) throw Error('Invalid native permission check');
         if (message.id === 'control:permission' && message.turnId &&
             (this.liveTurn && message.turnId !== this.liveTurn.id || this.displayProofs?.get(message.turnId)?.ended)) return { observed: true };
         if (message.id === 'control:permission' && !message.boundaryOnly && !message.replayed && !message.gap) {
@@ -924,7 +925,7 @@ class Claude extends EventEmitter {
         // The ordered ingress owns the human boundary; accepted appends own
         // display. Settings hooks and later attachments must not repeat either.
         if (message.id === 'control:input' && this.nativePromptInput && !message.replayed) this.emit('nativeInput', '', { display: false });
-        if (message.id === 'control:permission' && !message.replayed && !message.gap) this.emit('state', 'approval');
+        if (message.id === 'control:permission' && message.awaitingUser !== false && !message.replayed && !message.gap) this.emit('state', 'approval');
       }
       this.emit('capability'); return { observed: true };
     }

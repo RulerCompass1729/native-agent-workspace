@@ -29,6 +29,9 @@ const planTrial = process.env.NAW_TEST_NATIVE_PLAN === '1', planText = '# PLAN_M
 // Permission case: manual mode asks before a Bash command that writes a file
 // (read-only commands such as echo run without asking).
 const permissionTrial = process.env.NAW_TEST_NATIVE_PERMISSION === '1';
+const staleApprovalTrial = permissionTrial && process.env.NAW_TEST_STALE_APPROVAL === '1';
+if (staleApprovalTrial) assert.match(nativeVersion, /^2\.1\.323\b/, 'The stale-approval witness requires exact Claude 2.1.323');
+if (permissionTrial) assert.ok(['default', 'auto'].includes(process.env.NAW_TEST_PERMISSION_MODE || 'default'));
 // NAW_TEST_NATIVE_MODEL=1: only the zero-inference model switch (no task is sent), for versions whose queue is not qualified (T-133).
 const modelTrial = process.env.NAW_TEST_NATIVE_MODEL === '1';
 // NAW_TEST_NATIVE_READ_IMAGE=1: Claude reads a PNG in its folder; the Read row must show that image (T-133).
@@ -72,7 +75,7 @@ const server = http.createServer((req, res) => {
     if (scrollTrial && number > 1) { unexpectedRequest = Error('Scroll budget exceeded: one local response only'); res.writeHead(429); res.end(); return; }
     if (compatibilityTrial && number > 3) { unexpectedRequest = Error('Compatibility budget exceeded: at most three local responses'); res.writeHead(429); res.end(); return; }
     if (number === 1 && process.env.NAW_TEST_NATIVE_PHASE === '1') await new Promise(resolve => { releaseStart = resolve; });
-    if (number > (imageTrial || promptImageTrial ? 1 : questionTrial || permissionTrial || readImageTrial ? 2 : planTrial ? 4 : 3)) { res.writeHead(429); res.end(); return; }
+    if (number > (staleApprovalTrial ? 4 : imageTrial || promptImageTrial ? 1 : questionTrial || permissionTrial || readImageTrial ? 2 : planTrial ? 4 : 3)) { res.writeHead(429); res.end(); return; }
     const request = JSON.parse(body);
     fs.writeFileSync(path.join(base, `request-${number}.json`), body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -113,9 +116,14 @@ const server = http.createServer((req, res) => {
       event(res, 'message_stop', {}); res.end(); return;
     }
     if (permissionTrial) {
-      if (number === 1) block(res, 0, { type: 'tool_use', id: 'toolu_local_permission', name: 'Bash', input: { command: 'touch native-permission-marker && echo NATIVE_PERMISSION_DONE', description: 'Create a marker file' } });
-      else block(res, 0, { type: 'text', text: 'NATIVE_FINAL: the permitted command ran.\n' });
-      event(res, 'message_delta', { delta: { stop_reason: number === 1 ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } });
+      if (number === 1) block(res, 0, { type: 'tool_use', id: 'toolu_local_permission', name: 'Bash', input: { command: `touch native-permission-marker && ${staleApprovalTrial ? 'sleep 30 && ' : ''}echo NATIVE_PERMISSION_DONE`, description: 'Create a marker file' } });
+      else if (staleApprovalTrial && number === 2) {
+        const match = body.match(/(?:background|backgrounded by user) with ID: ([A-Za-z0-9_-]+)/);
+        if (!match) { unexpectedRequest = Error('The real background Bash result must identify its task'); res.end(); return; }
+        block(res, 0, { type: 'tool_use', id: 'toolu_local_stop', name: 'TaskStop', input: { task_id: match[1] } });
+      } else if (staleApprovalTrial && number === 3) block(res, 0, { type: 'tool_use', id: 'toolu_local_next', name: 'Bash', input: { command: 'printf STALE_NATIVE_CONTINUED', description: 'Continue after stopping the background task' } });
+      else { if (staleApprovalTrial) await new Promise(resolve => { releaseFinal = resolve; }); block(res, 0, { type: 'text', text: 'NATIVE_FINAL: the permitted command ran.\n' }); }
+      event(res, 'message_delta', { delta: { stop_reason: number === 1 || staleApprovalTrial && number < 4 ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } });
       event(res, 'message_stop', {}); res.end(); return;
     }
     if (number === 1) {
@@ -129,7 +137,7 @@ const server = http.createServer((req, res) => {
       event(res, 'content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'NATIVE_PARTIAL: still working.\n' } });
       held = res; return;
     }
-    event(res, 'message_delta', { delta: { stop_reason: number === 1 ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } });
+    event(res, 'message_delta', { delta: { stop_reason: number === 1 || staleApprovalTrial && number < 4 ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } });
     event(res, 'message_stop', {}); res.end();
   });
 });
@@ -149,10 +157,17 @@ async function cleanup() {
   // production adapter methods are replaced by this test.
   fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\nos.environ.pop("ANTHROPIC_AUTH_TOKEN",None)\nos.environ.pop("CLAUDE_CODE_OAUTH_TOKEN",None)\nos.environ.update(' +
     `ANTHROPIC_BASE_URL=${JSON.stringify(`http://127.0.0.1:${server.address().port}`)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",PATH=${JSON.stringify(fakeBin)}+":"+os.environ.get("PATH",""))\n` +
-    `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku","--allowedTools","Bash(printf:*)"${planTrial ? ',"--permission-mode","plan"' : permissionTrial ? ',"--permission-mode","default"' : ''}])\n`, { mode: 0o700 });
+    `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku","--allowedTools","Bash(printf:*)"${planTrial ? ',"--permission-mode","plan"' : permissionTrial ? ',"--permission-mode",' + JSON.stringify(process.env.NAW_TEST_PERMISSION_MODE || 'default') : ''}])\n`, { mode: 0o700 });
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true },
     // New sessions start in their own folder under `${workspace}-sessions` (daemon.cjs).
     [fs.realpathSync(cwd) + '-sessions']: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
+  if (staleApprovalTrial && process.env.NAW_TEST_PERMISSION_HOOK_ALLOW === '1') {
+    const command = payload => "python3 -I -c '" + ("print(" + JSON.stringify(JSON.stringify(payload)) + ")").replaceAll("'", "'\\''") + "'";
+    fs.writeFileSync(path.join(config, 'settings.json'), JSON.stringify({ hooks: {
+      PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: command({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'Synthetic permission lifecycle test' } }) }] }],
+      PermissionRequest: [{ hooks: [{ type: 'command', command: command({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } }) }] }],
+    } }), { mode: 0o600 });
+  }
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim }), { mode: 0o600 });
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await application.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
@@ -385,24 +400,84 @@ async function cleanup() {
   if (permissionTrial) {
     const rows = () => page.locator('#terminal-area .xterm-rows').innerText();
     await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click();
-    await until(async () => (await snapshot()).sessions[0].nativeApproval?.requests.some(r => r.title === 'Bash'), 'Native permission request reaches the private panel', 60000);
-    const request = (await snapshot()).sessions[0].nativeApproval.requests.find(r => r.title === 'Bash');
-    assert.match(request.input, /touch native-permission-marker && echo NATIVE_PERMISSION_DONE/, 'The request carries native\'s tool input as is');
-    // Since b6f633f a native-only request is a compact 待批准 row; its input is one click away.
-    const requestRow = page.locator('#approval .native-approval-request', { hasText: '待批准' }); await requestRow.waitFor(); await requestRow.locator(':scope > summary').click();
-    await until(async () => { const text = await page.locator('#approval').innerText(); return text.includes('Bash') && text.includes('touch native-permission-marker'); }, 'The panel shows the tool and its input', 10000);
-    fs.writeFileSync(path.join(base, 'permission-panel.txt'), await page.locator('#approval').innerText());
-    assert.equal(await page.locator('#approval').getByRole('button', { name: '允许这一次', exact: true }).count(), 0, 'NAW offers no decision of its own');
-    assert.equal(calls, 1, 'No model request before the decision');
-    // New sessions start in their own folder under `${workspace}-sessions`; look where the command actually runs.
-    const sessionCwd = (await snapshot()).sessions[0].cwd; assert.ok(sessionCwd && fs.existsSync(sessionCwd), 'The session folder exists');
-    assert.ok(!fs.existsSync(path.join(sessionCwd, 'native-permission-marker')), 'The command did not run before the decision');
-    await page.locator('#terminal-tab').click();
-    await until(async () => (await rows()).includes('touch native-permission-marker') && /Do you want to proceed\?/.test(await rows()), 'The same native TUI asks before running', 30000);
-    // Option 3 would also switch the session to auto mode; Enter only on plain Yes.
-    await until(async () => (await rows()).includes('❯ 1. Yes'), 'Native option Yes selected before Enter', 5000);
-    fs.writeFileSync(path.join(base, 'permission-terminal.txt'), await rows());
-    await page.locator('#terminal-area .xterm-helper-textarea').press('Enter');
+    const sessionCwd = (await snapshot()).sessions[0].cwd;
+    assert.ok(sessionCwd && fs.existsSync(sessionCwd));
+    if (!staleApprovalTrial || process.env.NAW_TEST_PERMISSION_MODE !== 'auto') {
+      await until(async () => (await snapshot()).sessions[0].nativeApproval?.requests.some(r => r.title === 'Bash'), 'Native permission request reaches the private panel', 60000);
+      const request = (await snapshot()).sessions[0].nativeApproval.requests.find(r => r.title === 'Bash');
+      assert.match(request.input, /touch native-permission-marker && (?:sleep 30 && )?echo NATIVE_PERMISSION_DONE/, 'The request carries native\'s tool input as is');
+      // Since b6f633f a native-only request is a compact 待批准 row; its input is one click away.
+      const requestRow = page.locator('#approval .native-approval-request', { hasText: '待批准' }); await requestRow.waitFor(); await requestRow.locator(':scope > summary').click();
+      await until(async () => { const text = await page.locator('#approval').innerText(); return text.includes('Bash') && text.includes('touch native-permission-marker'); }, 'The panel shows the tool and its input', 10000);
+      fs.writeFileSync(path.join(base, 'permission-panel.txt'), await page.locator('#approval').innerText());
+      assert.equal(await page.locator('#approval').getByRole('button', { name: '允许这一次', exact: true }).count(), 0, 'NAW offers no decision of its own');
+      assert.equal(calls, 1, 'No model request before the decision');
+      // New sessions start in their own folder under `${workspace}-sessions`; look where the command actually runs.
+      assert.ok(!fs.existsSync(path.join(sessionCwd, 'native-permission-marker')), 'The command did not run before the decision');
+      await page.locator('#terminal-tab').click();
+      await until(async () => (await rows()).includes('touch native-permission-marker') && /Do you want to proceed\?/.test(await rows()), 'The same native TUI asks before running', 30000);
+      // Option 3 would also switch the session to auto mode; Enter only on plain Yes.
+      await until(async () => (await rows()).includes('❯ 1. Yes'), 'Native option Yes selected before Enter', 5000);
+      fs.writeFileSync(path.join(base, 'permission-terminal.txt'), await rows());
+      if (staleApprovalTrial) {
+        await sleep(2000);
+        assert.ok((await snapshot()).sessions[0].nativeApproval?.requests.length, 'A held real dialog must remain reported');
+        await page.locator('#chat-tab').click();
+        assert.equal(await page.locator('#approval').isVisible(), true);
+        assert.equal(await page.locator('#stream-waiting').isVisible(), true);
+        assert.match(await page.locator('#session-status').innerText(), /等待确认/);
+        fs.writeFileSync(path.join(base, 'held-surfaces.json'), JSON.stringify({ header: await page.locator('#session-status').innerText(), banner: await page.locator('#approval').innerText(), footer: await page.locator('#native-phase').innerText(), waiting: await page.locator('#stream-waiting').innerText() }, null, 2));
+        await page.locator('#terminal-tab').click();
+        assert.match(await rows(), /❯ 1\. Yes/);
+      }
+      await page.locator('#terminal-area .xterm-helper-textarea').press('Enter');
+    }
+    if (staleApprovalTrial) {
+      await until(() => fs.existsSync(path.join(sessionCwd, 'native-permission-marker')), 'The approved command really starts');
+      if (process.env.NAW_TEST_PERMISSION_MODE === 'auto') {
+        const automatic = (await snapshot()).sessions[0];
+        fs.writeFileSync(path.join(base, 'automatic-running.json'), JSON.stringify({ state: automatic.state, nativeApproval: automatic.nativeApproval }, null, 2));
+        assert.equal(automatic.nativeApproval, null, 'Auto mode is running without asking the person');
+        assert.equal(automatic.state, 'working');
+      }
+      await sleep(2500);
+      const running = (await snapshot()).sessions[0];
+      fs.writeFileSync(path.join(base, 'running-terminal.txt'), await rows());
+      await page.locator('#chat-tab').click();
+      const surfaces = { header: await page.locator('#session-status').innerText(), bannerVisible: await page.locator('#approval').isVisible(), footer: await page.locator('#native-phase').innerText(), waitingVisible: await page.locator('#stream-waiting').isVisible() };
+      fs.writeFileSync(path.join(base, 'running-surfaces.json'), JSON.stringify({ state: running.state, nativeApproval: running.nativeApproval, nativeInputRequired: running.nativeInputRequired, surfaces }, null, 2));
+      console.log('RUNNING PERMISSION', JSON.stringify({ state: running.state, nativeApproval: running.nativeApproval, surfaces }));
+      await page.locator('#terminal-tab').click();
+      const terminal = page.locator('#terminal-area .xterm-helper-textarea');
+      await terminal.pressSequentially('确认');
+      await until(async () => (await rows()).includes('确认'), 'The native edit line contains the intended queued text');
+      await terminal.press('Enter');
+      await until(async () => (await rows()).includes('ctrl+b to run in background'), 'The native background shortcut is available');
+      const backgroundedAt = Date.now();
+      await terminal.press('Control+b');
+      await until(() => calls === 4 && Boolean(releaseFinal), 'Native backgrounds Bash, stops that exact task, and executes the next Bash', 30000);
+      const third = JSON.parse(fs.readFileSync(path.join(base, 'request-3.json'), 'utf8'));
+      const stopped = third.messages.flatMap(m => Array.isArray(m.content) ? m.content : []).find(c => c.tool_use_id === 'toolu_local_stop');
+      assert.match(JSON.parse(stopped.content).message, /^Successfully stopped task:/, 'The real TaskStop succeeded');
+      assert.ok(fs.readFileSync(path.join(base, 'request-4.json'), 'utf8').includes('确认'), 'Native consumed the queued input during this turn');
+      await sleep(2500);
+      const resumed = (await snapshot()).sessions[0];
+      fs.writeFileSync(path.join(base, 'resumed-terminal.txt'), await rows());
+      await page.locator('#chat-tab').click();
+      const resumedSurfaces = { header: await page.locator('#session-status').innerText(), bannerVisible: await page.locator('#approval').isVisible(), footer: await page.locator('#native-phase').innerText(), waitingVisible: await page.locator('#stream-waiting').isVisible() };
+      const clearedAfterMs = Date.now() - backgroundedAt;
+      fs.writeFileSync(path.join(base, 'resumed-surfaces.json'), JSON.stringify({ state: resumed.state, nativeApproval: resumed.nativeApproval, nativeInputRequired: resumed.nativeInputRequired, surfaces: resumedSurfaces, clearedAfterMs }, null, 2));
+      console.log('RESUMED PERMISSION', JSON.stringify({ state: resumed.state, nativeApproval: resumed.nativeApproval, surfaces: resumedSurfaces }));
+      assert.equal(resumed.nativeApproval, null); assert.equal(resumed.state, 'working');
+      assert.equal(resumedSurfaces.bannerVisible, false); assert.equal(resumedSurfaces.waitingVisible, false);
+      assert.doesNotMatch(resumedSurfaces.header, /等待确认/); assert.doesNotMatch(resumedSurfaces.footer, /等待原生确认/);
+      assert.ok(clearedAfterMs < 5000, `All approval surfaces clear within five seconds: ${clearedAfterMs}ms`);
+      releaseFinal();
+      await until(async () => (await snapshot()).sessions[0].state === 'idle', 'The same native turn ends');
+      assert.deepEqual(errors, []);
+      console.log(JSON.stringify({ nativeVersion, localResponses: calls, paidModelCalls: 0, clearedAfterMs, checks: [process.env.NAW_TEST_PERMISSION_MODE === 'auto' ? 'auto mode does not ask the person' : 'held permission remains visible', 'background Bash / TaskStop / following Bash clear every approval surface'] }));
+      return;
+    }
     await until(async () => { const s = (await snapshot()).sessions[0]; return calls === 2 && s.state === 'idle' && s.messages.some(m => m.text?.includes('NATIVE_FINAL: the permitted')); }, 'The permitted command runs and the turn continues', 60000);
     assert.match(fs.readFileSync(path.join(base, 'request-2.json'), 'utf8'), /NATIVE_PERMISSION_DONE/, 'Native ran the command after the decision');
     assert.ok(fs.existsSync(path.join(sessionCwd, 'native-permission-marker')), 'The permitted command changed the folder');

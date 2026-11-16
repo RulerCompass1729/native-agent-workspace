@@ -1003,8 +1003,12 @@ export function register(on) {
     if (!call || e.agentId || call.binding !== rootBinding || next.origin?.plugin !== 'engine' || next.origin?.tier !== 'core' || result.decision !== 'ask') return result;
     let input = '', incomplete = false;
     try { input = JSON.stringify(e.input ?? {}, null, 2); if (input.length > 500000) { input = ''; incomplete = true; } } catch { incomplete = true; }
-    enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete', permissionId: call.id,
-      turnId: call.turnId, title: e.tool || '', input, incomplete }, call.binding);
+    // An intermediate ask can be handled by auto mode without a user dialog.
+    // Keep its conservative sharing boundary, but publish a waiting request only
+    // when native actually reaches PermissionRequest below.
+    call.permission = { permissionId: call.id, title: e.tool || '', input, incomplete };
+    enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete', boundaryOnly: true,
+      awaitingUser: false, turnId: call.turnId, promptId: rootPrompt?.id }, call.binding);
     return result;
   }).catch(($, e, next) => next(e));
   on('ui.render', { component: 'AskUserQuestion' }, ($, e, next) => {
@@ -1048,16 +1052,29 @@ export function register(on) {
     } catch { /* reading only */ }
     return result;
   }).catch(($, e, next) => next(e));
-  on('classic.PermissionRequest', ($, e, next) => {
+  on('classic.PermissionRequest', async ($, e, next) => {
     // Ordered with display observations, before native permission handling.
     // No permission decision or tool payload is copied into the shared room.
     const binding = rootBinding;
     if (e.agent_id || e.session_id !== binding?.sessionId) return next(e);
     const link = promptTurns.get(e.prompt_id);
     const turnId = link?.binding === binding && !link.ambiguous ? link.turnId : undefined;
-    enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete', boundaryOnly: true,
+    // This native hook has no tool_use_id (2.1.323). Only a unique exact input
+    // match may borrow a tracked call's ID; ambiguity keeps the native-only fallback.
+    const input = JSON.stringify(e.tool_input ?? {}, null, 2);
+    const candidates = [...rootToolCalls.values()].filter(call => call.binding === binding && call.permission &&
+      (!turnId || call.turnId === turnId) && call.tool === e.tool_name && call.permission.input === input);
+    const request = next.origin?.plugin === 'engine' && next.origin?.tier === 'core' && candidates.length === 1 ? candidates[0].permission : null;
+    enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete', ...(request || { boundaryOnly: true }),
       turnId, promptId: e.prompt_id }, binding);
-    return next(e);
+    const result = await next(e);
+    const decision = result?.hookSpecificOutput?.decision?.behavior || result?.decision?.behavior;
+    // A native hook can decide without ever showing a terminal dialog. Its
+    // own result closes only this tracked request, not another pending tool.
+    if (request && ['allow', 'deny'].includes(decision)) enqueueBlock($, {
+      id: 'control:permission-end', kind: 'control', status: 'complete', permissionId: request.permissionId,
+    }, binding);
+    return result;
   }).catch(($, e, next) => { markObservationGap(rootBinding); return next(e); });
   on('classic.StopFailure', async ($, e, next) => {
     const binding = rootBinding, prompt = promptTurns.get(e.prompt_id), ownGeneration = generation;
