@@ -3,7 +3,7 @@
   'use strict';
   // Text comes from the catalog (mobile.*). The renderer passes its interface-language text and display bindings, so a
   // language switch repaints the panel in place; without them (unit tests) the Chinese catalog text is used.
-  function bind({ container, document, api, getSessions, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, text, display }) {
+  function bind({ container, document, api, getSessions, getRooms = () => [], now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, text, display }) {
     const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
     const format = text || ((key, params) => locale.format('zh', key, params));
     const say = (el, key, params) => { if (display) display.text(el, key, params); else el.textContent = format(key, params); return el; };
@@ -21,17 +21,27 @@
     const port = field('mobile.port', 'mobile-port', 'number'); port.min = '0'; port.max = '65535'; port.value = '0';
     const carrier = field('mobile.carrier', 'mobile-carrier', 'checkbox');
     const choices = document.createElement('fieldset'); choices.append(node('legend', 'mobile.sessions')); section.append(choices);
+    const spaces = document.createElement('fieldset'); spaces.append(node('legend', 'mobile.spaces')); section.append(spaces);
+    const records = field('mobile.allowRecords', 'mobile-records', 'checkbox');
+    section.append(node('p', 'mobile.workspaceNote'));
     const replace = field('mobile.replace', 'mobile-replace', 'checkbox');
     section.append(node('p', 'mobile.note'));
     const prepare = node('button', 'mobile.prepare'), revoke = node('button', 'mobile.revoke'); prepare.type = revoke.type = 'button'; prepare.id = 'mobile-prepare'; revoke.id = 'mobile-revoke';
     const link = document.createElement('input'); link.id = 'mobile-pair-link'; link.readOnly = true; link.autocomplete = 'off';
     const linkBox = labelled('mobile.link', link); linkBox.hidden = true;
     section.append(prepare, revoke, linkBox, status); container.append(section);
-    let revision = 0, timer, opened = false, busy = false, selections = [];
+    let revision = 0, timer, opened = false, busy = false, selections = [], roomSelections = [];
     const clearLink = () => { clearTimer(timer); timer = undefined; link.value = ''; linkBox.hidden = true; };
     function open() {
       revision++; opened = true; busy = false; prepare.disabled = false; clearLink(); selections = [];
+      records.checked = false;
       choices.replaceChildren(node('legend', 'mobile.sessions'));
+      roomSelections = []; spaces.replaceChildren(node('legend', 'mobile.spaces'));
+      for (const room of getRooms()) {
+        if (!room?.id || room.archived) continue;
+        const label = document.createElement('label'), input = document.createElement('input'); input.type = 'checkbox';
+        label.append(input, raw('span', room.name || room.id)); spaces.append(label); roomSelections.push({ id: room.id, input });
+      }
       for (const record of getSessions()) {
         if (record.archived || record.nativeContextPending || !record.nativeId) continue;
         const box = document.createElement('div'), label = document.createElement('label'), read = document.createElement('input'); read.type = 'checkbox';
@@ -56,6 +66,7 @@
       const ticket = ++revision; busy = true; prepare.disabled = true; say(status, 'mobile.preparing');
       try {
         const result = await api.mobilePairing({ actor: actor.value.trim(), origin: site.origin, port: listenPort, carrierConfirmed: true, replace: replace.checked,
+          ...(roomSelections.some(r => r.input.checked) || records.checked ? { workspace: { roomIds: roomSelections.filter(r => r.input.checked).map(r => r.id), records: records.checked } } : {}),
           selection: selected.map(s => ({ sessionId: s.id, actions: ['read', ...(s.send.checked ? ['send'] : []), ...(s.answer.checked ? ['answer'] : [])] })) });
         if (!opened || revision !== ticket) return;
         if (typeof result.secret !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(result.secret) || !Number.isSafeInteger(result.expiresAt) || result.expiresAt <= now()) throw Error('unconfirmed');
@@ -75,7 +86,7 @@
     }
     function close() {
       revision++; opened = false; busy = false; clearLink(); origin.value = actor.value = ''; port.value = '0'; carrier.checked = replace.checked = false;
-      selections = []; choices.replaceChildren(); quiet(status); prepare.disabled = false; section.open = false;
+      selections = []; roomSelections = []; records.checked = false; spaces.replaceChildren(); choices.replaceChildren(); quiet(status); prepare.disabled = false; section.open = false;
     }
     prepare.addEventListener('click', pair); revoke.addEventListener('click', stop);
     return { open, close, dispose() { close(); section.remove(); } };

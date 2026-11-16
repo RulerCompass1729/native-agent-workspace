@@ -7,7 +7,7 @@ const filename = require.resolve('../mobile-broker.cjs'), requireFromBroker = cr
 const source = fs.readFileSync(filename, 'utf8');
 const actor = 'synthetic-human', origin = 'https://mobile.invalid';
 
-function fixture(t, { requestLimit, holdConnect = false } = {}) {
+function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-mobile-broker-'))), original = fs.statSync(root);
   let exclusive = true, wrongRoot = false, failRevoke = false, holdRead = false, holdSend = false, loseAck = false;
   const calls = [], clients = [], receipts = new Map(), sent = [], answered = [];
@@ -62,10 +62,10 @@ function fixture(t, { requestLimit, holdConnect = false } = {}) {
       if (name === './mobile-session.cjs' && requestLimit !== undefined) return { MAX_REQUESTS: requestLimit };
       return requireFromBroker(name);
     } }, { filename });
-  const changes = [], broker = new module.exports.MobileBroker(root, { exclusive: () => exclusive, changed: () => changes.push('changed') });
+  const changes = [], broker = new module.exports.MobileBroker(root, { exclusive: () => exclusive, changed: () => changes.push('changed'), desktop, onHumanInput });
   const selection = [{ sessionId: record.id, actions: ['read', 'send', 'answer'] }];
-  async function pair(actions = selection[0].actions, replace = false) {
-    const challenge = await broker.beginPairing({ actor, origin, selection: [{ sessionId: record.id, actions }], replace });
+  async function pair(actions = selection[0].actions, replace = false, workspace) {
+    const challenge = await broker.beginPairing({ actor, origin, selection: [{ sessionId: record.id, actions }], replace, ...(workspace ? { workspace } : {}) });
     const device = broker.pair({ secret: challenge.secret, actor, origin });
     const auth = { token: device.cookieValue, actor, origin };
     auth.csrf = broker.session(auth).csrf; return { challenge, device, auth };
@@ -369,4 +369,43 @@ test('a device whose revocation could not be saved no longer keeps the listener 
   const f = fixture(t), { auth, device } = await f.pair(); assert.equal(f.broker.openUntil(), device.expiresAt);
   f.failRevoke(true); f.broker.logout(auth); f.failRevoke(false);
   assert.equal(f.broker.openUntil(), 0, 'A failed revocation save still closes access, so nothing is open');
+});
+
+test('workspace control needs its own desktop grant; native send scope does not imply it', async t => {
+  const desktop = { grant: (_c, grant) => grant, read: async () => ({ rooms: [] }), action: async () => ({ status: 'complete' }) };
+  const f = fixture(t, { desktop }), { auth } = await f.pair();
+  await assert.rejects(f.broker.workspaceRead(auth));
+  await assert.rejects(f.broker.workspaceAction(auth, { requestId: randomUUID(), action: 'queueAdd' }));
+});
+test('workspace writes are authenticated, one-use, payload-bound and revoked with the device', async t => {
+  let writes = 0;
+  const desktop = { grant: (_c, grant) => grant, read: async () => ({ rooms: [] }), action: async (_c, _g, _v, valid) => { valid(); writes++; return { status: 'complete', itemId: 'new-task' }; } };
+  const f = fixture(t, { desktop }), { auth } = await f.pair(undefined, false, { roomIds: ['shared'], records: true });
+  assert.equal(f.broker.session(auth).workspace, true);
+  const value = { requestId: randomUUID(), action: 'queueAdd', roomId: 'shared', text: 'Original', assignee: null };
+  await assert.rejects(f.broker.workspaceAction({ ...auth, csrf: 'z'.repeat(43) }, value)); assert.equal(writes, 0);
+  const first = await f.broker.workspaceAction(auth, value);
+  assert.deepEqual(await f.broker.workspaceAction(auth, value), first); assert.equal(writes, 1);
+  await assert.rejects(f.broker.workspaceAction(auth, { ...value, text: 'Changed' }));
+  await assert.rejects(f.broker.workspaceAction(auth, { requestId: randomUUID(), action: 'backgroundDecision' }));
+  f.broker.revoke(); await assert.rejects(f.broker.workspaceRead(auth)); await assert.rejects(f.broker.workspaceAction(auth, value)); assert.equal(writes, 1);
+});
+test('a lost workspace result stays uncertain and never executes the same ID twice', async t => {
+  let writes = 0;
+  const desktop = { grant: (_c, grant) => grant, read: async () => ({}), action: async (_c, _g, _v, valid) => { valid(); writes++; throw Error('Lost result after business write'); } };
+  const f = fixture(t, { desktop }), { auth } = await f.pair(undefined, false, { roomIds: ['shared'], records: false });
+  const value = { requestId: randomUUID(), action: 'queueAdd', roomId: 'shared', text: 'One task', assignee: null };
+  assert.equal((await f.broker.workspaceAction(auth, value)).status, 'unconfirmed');
+  assert.equal((await f.broker.workspaceAction(auth, value)).status, 'unconfirmed'); assert.equal(writes, 1);
+  assert.equal((await f.broker.workspaceAction(auth, { requestId: value.requestId, action: 'receipt' })).status, 'unconfirmed');
+});
+
+test('only a fresh authenticated phone input enters the desktop human quiet gate', async t => {
+  const human = [], f = fixture(t, { onHumanInput: id => human.push(id) }), { auth } = await f.pair();
+  const read = await f.broker.read(auth, 'session-a');
+  const value = { contextId: read.contextId, requestId: randomUUID(), text: 'Original phone input' };
+  await assert.rejects(f.broker.send({ ...auth, csrf: 'z'.repeat(43) }, value));
+  assert.deepEqual(human, []);
+  await f.broker.send(auth, value); await f.broker.send(auth, value); await f.broker.receipt(auth, value.requestId);
+  assert.deepEqual(human, ['session-a']);
 });

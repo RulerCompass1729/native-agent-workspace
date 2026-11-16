@@ -28,16 +28,19 @@ const receipt = (value, ticket, requestId, action) => {
 class MobileBroker {
   #access; #root; #scope; #client = null; #epoch = 0; #csrf = null; #changed;
   #contexts = new Map(); #requests = new Map();
+  #desktop; #human; #workspaceGrant = null; #workspaceRequests = new Map();
   // changed() runs after the phone pairs or logs out, so the app can close its listener when nothing stays open.
-  constructor(root, { exclusive, changed } = {}) {
+  constructor(root, { exclusive, changed, desktop, onHumanInput = () => {} } = {}) {
     this.#access = new MobileAccess(root, { exclusive });
     this.#changed = typeof changed === 'function' ? changed : () => {};
     this.#root = this.#access.root;
+    this.#desktop = desktop || null;
+    this.#human = onHumanInput;
     // WorkspaceClient shares human boundaries by the exact app scope string.
     // Keep that spelling while separately verifying its canonical authority.
     this.#scope = root;
   }
-  #forget() { this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); }
+  #forget() { this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); }
   #disconnect() { const client = this.#client; this.#client = null; client?.close(); }
   #bound() {
     const client = this.#client;
@@ -70,7 +73,7 @@ class MobileBroker {
   }
   // Only the local desktop owner may call this method. Never expose a generic
   // RPC dispatcher that lets a remote request choose this method or its scope.
-  async beginPairing({ actor, origin, selection, replace = false }) {
+  async beginPairing({ actor, origin, selection, replace = false, workspace }) {
     this.#access.owner();
     if (!Array.isArray(selection) || !selection.length || selection.length > MAX_REQUESTS || typeof replace !== 'boolean' ||
         selection.some(value => !exact(value, ['sessionId', 'actions']) || typeof value.sessionId !== 'string' ||
@@ -95,8 +98,12 @@ class MobileBroker {
             !entry.state.capabilities?.includes('humanMobileV1') || value.actions.some(action => action !== 'read') && !entry.state.capabilities.includes('humanMobilePreparedV1')) throw denied();
         return { serviceKey: entry.key, sessionId: record.id, nativeId: record.nativeId, actions: [...value.actions] };
       });
+      const workspaceGrant = workspace === undefined ? null : this.#desktop?.grant(client, workspace);
+      if (workspace !== undefined && !workspaceGrant) throw denied();
       if (!this.#access.initialized) this.#access.initialize();
-      return this.#access.beginPairing({ actor, origin, scopes, replace });
+      const result = this.#access.beginPairing({ actor, origin, scopes, replace });
+      this.#workspaceGrant = workspaceGrant && { value: workspaceGrant, generation: this.#access.load().generation };
+      return result;
     } catch (error) { this.#forget(); this.#disconnect(); throw error; }
   }
   pair(value) {
@@ -116,6 +123,7 @@ class MobileBroker {
     const state = this.#authenticate(auth), csrf = this.#csrf;
     if (!csrf || csrf.generation !== state.generation || csrf.deviceId !== state.device.id || digest(csrf.value) !== state.device.csrfHash) throw denied('MOBILE_REPAIR_REQUIRED');
     return { deviceId: state.device.id, expiresAt: state.device.until, csrf: csrf.value,
+      ...(this.#workspaceGrant ? { workspace: true } : {}),
       sessions: state.scopes.filter(value => value.actions.includes('read')).map(value => {
         const base = { id: value.sessionId, actions: [...value.actions] };
         try {
@@ -144,6 +152,52 @@ class MobileBroker {
         id: value.id, kind: value.kind, status: value.status, text: value.text, textOmitted: value.textOmitted, unsupportedAttachments: value.unsupportedAttachments,
       })), earlierMessagesOmitted: row.earlierMessagesOmitted };
   }
+  #workspaceState(auth, write = false) {
+    const state = write ? this.#writeState(auth) : this.#authenticate(auth);
+    if (!this.#desktop || !this.#workspaceGrant || this.#workspaceGrant.generation !== state.generation) throw denied();
+    return state;
+  }
+  async workspaceRead(auth) {
+    const state = this.#workspaceState(auth), client = this.#bound(), epoch = this.#epoch;
+    const result = await this.#desktop.read(client, this.#workspaceGrant.value, state.scopes);
+    if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
+    this.#workspaceState(auth);
+    return result;
+  }
+  async workspaceAction(auth, value) {
+    this.#workspaceState(auth, true);
+    if (!value || typeof value !== 'object' || Array.isArray(value) || !uuid(value.requestId)) throw denied();
+    if (value.action === 'receipt' && exact(value, ['action', 'requestId'])) {
+      const previous = this.#workspaceRequests.get(value.requestId);
+      if (!previous) throw denied('MOBILE_RECEIPT_UNKNOWN');
+      return structuredClone(previous.result);
+    }
+    if (!['queueAdd', 'queueCancel', 'queueResolve', 'recordAcknowledge'].includes(value.action)) throw denied();
+    const mark = fingerprint(value), previous = this.#workspaceRequests.get(value.requestId);
+    if (previous) {
+      if (previous.mark !== mark) throw denied('MOBILE_REQUEST_CONFLICT');
+      return structuredClone(previous.result);
+    }
+    // Do not evict uncertain outcomes: a repeated ID must never execute twice.
+    if (this.#workspaceRequests.size >= MAX_REQUESTS) throw denied('MOBILE_REQUEST_CONFLICT');
+    const row = { mark, result: { requestId: value.requestId, status: 'unconfirmed' } };
+    this.#workspaceRequests.set(value.requestId, row);
+    const client = this.#bound(), epoch = this.#epoch, grant = this.#workspaceGrant.value;
+    const valid = () => {
+      if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
+      this.#workspaceState(auth, true);
+    };
+    try {
+      const result = await this.#desktop.action(client, grant, structuredClone(value), valid);
+      valid();
+      row.result = { requestId: value.requestId, status: result.status === 'complete' ? 'complete' : 'unconfirmed',
+        ...(typeof result.itemId === 'string' ? { itemId: result.itemId } : {}) };
+    } catch (error) {
+      // A business write may already be durable: report uncertainty and never retry.
+      row.result = { requestId: value.requestId, status: error.notSent === true ? 'not-sent' : 'unconfirmed' };
+    }
+    valid(); return structuredClone(row.result);
+  }
   async #submit(auth, value, action) {
     const keys = action === 'send' ? ['contextId', 'requestId', 'text'] : ['contextId', 'requestId', 'answers'];
     if (!exact(value, keys) || !token(value.contextId) || !uuid(value.requestId) ||
@@ -166,6 +220,7 @@ class MobileBroker {
     const spec = { requestId: value.requestId, proof: structuredClone(context.proof),
       ...(action === 'send' ? { text: value.text } : { questionId: context.questionId, answers: structuredClone(value.answers) }) };
     if (action === 'answer' && !uuid(spec.questionId)) throw denied();
+    this.#human(ticket.sessionId);
     const client = this.#bound(), epoch = this.#epoch, entry = { action, input, ticket, spec, pending: null };
     this.#requests.set(value.requestId, entry);
     entry.pending = (async () => {

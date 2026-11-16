@@ -24,9 +24,28 @@ function fixture() {
   }
   return { broker, calls, result, invoke, handler };
 }
+test('authenticated phone workspace uses only the fixed app-local projection endpoint', async () => {
+  const f = fixture();
+  f.broker.workspaceRead = async auth => { f.calls.push(['workspaceRead', auth]); return { sessions: [], rooms: [], reminders: { count: 0, records: [] } }; };
+  const result = await f.invoke({ url: '/mobile/workspace' });
+  assert.equal(result.statusCode, 200); assert.deepEqual(result.json().rooms, []);
+  const missing = await f.invoke({ url: '/mobile/workspace', raw: ['Host', 'mobile.invalid', 'Tailscale-User-Login', actor, 'X-NAW-Mobile', '1'] });
+  assert.equal(missing.statusCode, 401); assert.equal(f.calls.length, 1);
+});
+test('phone workspace actions require the original CSRF and return only bounded receipts', async () => {
+  const f = fixture();
+  f.broker.workspaceAction = async (auth, value) => { f.calls.push(['workspaceAction', auth, value]); return { requestId: value.requestId, status: 'complete', itemId: 'task-a' }; };
+  const value = { requestId, action: 'queueAdd', roomId: 'shared', text: 'Explicit phone task', assignee: null };
+  const result = await f.invoke({ url: '/mobile/workspace/action', method: 'POST', value });
+  assert.equal(result.statusCode, 200); assert.equal(result.json().itemId, 'task-a');
+  const raw = ['Host', 'mobile.invalid', 'Tailscale-User-Login', actor, 'X-NAW-Mobile', '1', 'Cookie', `${COOKIE}=${bearer}`, 'Origin', origin, 'Content-Type', 'application/json'];
+  assert.equal((await f.invoke({ url: '/mobile/workspace/action', method: 'POST', value, raw })).statusCode, 403);
+  assert.equal(f.calls.length, 1);
+});
 test('fixed packaged shell and authenticated reads preserve literal originals, no CORS', async () => {
   const f = fixture(); const raw = ['Host', 'mobile.invalid', 'Tailscale-User-Login', actor];
-  const shell = await f.invoke({ url: '/mobile/', raw }); assert.equal(shell.statusCode, 200); assert.match(shell.body, /<script src="\/mobile\/client.js" defer>/); assert.equal(f.calls.length, 0);
+  const shell = await f.invoke({ url: '/mobile/', raw }); assert.equal(shell.statusCode, 200); assert.match(shell.body, /<script src="\/mobile\/client.js" defer nonce="([A-Za-z0-9_-]+)">/); assert.equal(f.calls.length, 0);
+  const nonce = shell.body.match(/nonce="([A-Za-z0-9_-]+)"/)[1]; assert.ok(shell.headers['content-security-policy'].includes("'nonce-" + nonce + "'")); assert.equal(shell.body.includes('__NAW_SCRIPT_NONCE__'), false);
   assert.match(shell.headers['content-security-policy'], /frame-ancestors 'none'/); assert.equal(shell.headers['cache-control'], 'no-store'); assert.equal(shell.headers['access-control-allow-origin'], undefined);
   const read = await f.invoke({ url: '/mobile/read/session-a' }); assert.equal(read.statusCode, 200); assert.equal(read.json().messages[0].text, '<script>literal original</script>');
 });
@@ -104,4 +123,5 @@ test('an arbitrary backend error carrying HTTP-like status/code is still code-on
 test('read-only logout requires explicit request and reports unconfirmed revocation without claiming native cancellation', async () => {
   const f = fixture(); f.broker.logout = () => ({ authorizationRevoked: false, connectionClosed: true, committedWorkMayContinue: true });
   const r = await f.invoke({ method: 'POST', url: '/mobile/logout', value: {} }); assert.equal(r.statusCode, 409); assert.equal(r.json().authorizationRevoked, false); assert.equal(r.json().committedWorkMayContinue, true); assert.match(r.headers['set-cookie'], /Max-Age=0/);
+  assert.equal(r.headers['clear-site-data'], undefined, 'Revocation must not delete original uncertain request IDs or phone drafts');
 });

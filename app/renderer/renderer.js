@@ -29,7 +29,7 @@ const sessionStatus = (record, recoveryBadge = false) => {
   return status + recoveryStatusSuffix(recoveryBadge && exhaustedRecovery(record));
 };
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
-const mobileSetup = window.nativeWorkspaceMobileSetup.bind({ container: $('mobile-setup'), document, api, getSessions: () => state?.sessions || [], text: (key, params) => uiText(key, params), display: ui.display });
+const mobileSetup = window.nativeWorkspaceMobileSetup.bind({ container: $('mobile-setup'), document, api, getSessions: () => state?.sessions || [], getRooms: () => state?.rooms || [], text: (key, params) => uiText(key, params), display: ui.display });
 // The butler's parts are optional to this window: if one cannot be set up (its module or its element is missing),
 // the window starts without it instead of not starting at all, and what took its place says so when it is its turn.
 // A read log page that could not be set up: asked for, it says that the page failed and why, in the page's own

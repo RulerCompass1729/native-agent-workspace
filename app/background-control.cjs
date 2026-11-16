@@ -22,6 +22,10 @@ const settledStates = new Set(['complete', 'received', 'awaiting-native', 'cance
 const recordTime = r => Number.isSafeInteger(r.finishedAt) ? r.finishedAt : r.at;
 const checkArchived = r => { if (!r || !token(r.id) || !r.actor || !token(r.actor.id) || !r.command || !token(r.state)) throw Error('Invalid archived operation'); };
 const MAX_PENDING_PER_ACTOR = 32, MAX_PENDING = 128;
+// Same policy and schema as the stale-card lane; exposed here for presentation.
+// Execution-time expiry remains that lane's gate, never a mobile bypass.
+const CONFIRMATION_TTL_MS = Object.freeze({ input: 2 * 60 * 1000, other: 10 * 60 * 1000 });
+const confirmationExpiresAt = row => Number.isSafeInteger(row?.at) && row.at >= 0 ? row.at + (row.command?.method === 'input' ? CONFIRMATION_TTL_MS.input : CONFIRMATION_TTL_MS.other) : null;
 const REFUSAL_WINDOW_MS = 60000, MAX_REFUSAL_SUMMARIES = 128, NOTIFY_SHARE_MS = 60000;
 const REFUSAL_RETRY_HINT = 'invoke or snapshot: new operation_id or compacted refused ID is a fresh request.';
 const refusalRetry = () => ({ retryWithNewOperationId: true, retryHint: REFUSAL_RETRY_HINT });
@@ -901,7 +905,7 @@ class BackgroundControl {
     return own.map(r => ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
       name: operation.visibleText(r.actor.name), time: r.at, status: ['running', 'awaiting-native'].includes(r.state) ? 'working' : ['complete', 'received', 'cancelled'].includes(r.state) ? 'complete' : 'error',
       text: operation.visibleText(`${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', 'not-executed': '未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`),
-      backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state,
+      backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state, ...(r.state === 'confirmation-required' ? { expiresAt: confirmationExpiresAt(r) } : {}),
         confirmation: r.confirmation ? { ...r.confirmation, options: visibleOptions(r.confirmation.options) } : null,
         resultNotice: r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null,
         ...(names ? { summary: operation.operationSummary(r.command, r.actor, names), arguments: operation.visibleText(JSON.stringify(r.command.arguments ?? [], null, 2)),
@@ -958,4 +962,4 @@ function dialog(context, kind, options, nativeDialog) {
   }
   throw new ConfirmationRequired({ kind, options });
 }
-module.exports = { BackgroundControl, ConfirmationRequired, PreconditionRefused, validate, tool, dialog, agentReply };
+module.exports = { BackgroundControl, ConfirmationRequired, PreconditionRefused, validate, tool, dialog, agentReply, CONFIRMATION_TTL_MS, confirmationExpiresAt };

@@ -166,6 +166,8 @@ async function build() {
       'mobile-web/client.js',
       'mobile-web/index.html',
       'mobile-web/style.css',
+      'mobile-web/workspace.js',
+      'mobile-workspace.cjs',
       'native-blocks.cjs',
       'native-computer-use.cjs',
       'native-directory-trust.cjs',
