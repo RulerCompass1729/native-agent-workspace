@@ -991,8 +991,19 @@ class Workspace extends EventEmitter {
     });
     // A prompt typed during a turn and taken back from native's queue unsent (edited with ↑, deleted, cleared on
     // cancel): the native terminal no longer shows it as sent, so neither does the conversation.
+    on('nativeQueuedInput', ({id,baseId,nativeId,text,time}) => {
+      if(nativeId!==s.nativeId||typeof text!=='string'||!/^claude-prompt-[a-f0-9-]{36}-q[a-f0-9]{8}(?:-e[0-9a-f]{1,14})?$/i.test(id||'')||
+          !/^claude-prompt-[a-f0-9-]{36}-q[a-f0-9]{8}$/i.test(baseId||'')||!(id===baseId||id.startsWith(baseId+'-e'))||s.messages.some(m=>m.id===id))return;
+      const original=s.messages.find(m=>m.id===baseId&&m.role==='user'&&m.origin==='native'&&m.text===text);
+      const labels=original?Object.fromEntries(['name','uiNameMessage','displayText','inputSource'].filter(k=>original[k]!==undefined).map(k=>[k,original[k]])):{};
+      // This is the already observed input's display projection, not another
+      // human-control/wake event, shared message, or inherited image/turn proof.
+      const baseAt=s.messages.findIndex(m=>m.id===baseId),anchor=baseAt>=0?baseAt:s.messages.findIndex(m=>m.id===baseId.replace(/-q[0-9a-f]{8}$/i,''));
+      const at=Number.isFinite(time)?s.messages.findIndex((m,i)=>i>anchor&&Number.isFinite(m.time)&&m.time>time):-1;
+      s.messages.splice(at<0?s.messages.length:at,0,{id,role:'user',text,...labels,status:'submitted',origin:'native',nativeId,time:Number.isFinite(time)?time:Date.now()});this.changed(s.id);
+    });
     on('nativeInputWithdrawn', ({ id, nativeId }) => {
-      if (nativeId !== s.nativeId || !/^claude-prompt-[a-f0-9-]{36}-q[a-f0-9]{8}$/i.test(id || '')) return;
+      if (nativeId !== s.nativeId || !/^claude-prompt-[a-f0-9-]{36}-q[a-f0-9]{8}(?:-e[0-9a-f]{1,14})?$/i.test(id || '')) return;
       const at = s.messages.findIndex(m => m.id === id && m.role === 'user' && m.origin === 'native' && (!m.nativeId || m.nativeId === nativeId) && !m.turnId);
       if (at < 0) return;
       s.messages.splice(at, 1); this.changed();

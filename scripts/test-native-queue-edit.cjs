@@ -166,15 +166,18 @@ function journal(nativeId) {
   checks.push('Native: the edited queued prompt reaches the model once; the original never does');
   view('edited queued prompt', (await shownInputs()).filter(t => /方案/.test(t)), ['方案 B']);
 
-  // 2. The same prompt queued twice, both read: neither is taken back. NAW keeps one row for one text under one
-  // prompt id (claude-unannounced-stop: "the same submit seen twice keeps one row"), so the chat view shows one;
-  // the terminal shows two. That is older than this check and is reported, not asserted here.
-  const twice = await turn('开始第二件', async () => { await typeLine('方案 C'); await typeLine('方案 C'); });
+  // 2. Two proven enqueues remain two rows, unlike a repeated hook/observation.
+  const twice = await turn('开始第二件', async () => {
+    await typeLine('方案 C');await typeLine('方案 C');
+    await until(async()=>(await shownInputs()).filter(t=>t==='方案 C').length===2,'Both equal queued rows appear while the native turn is still running',4000);
+    assert.equal(calls,3,'No second-turn reply has arrived yet');
+  });
   assert.equal(userTexts(twice).filter(t => t.includes('方案 C')).length, 2, 'The model reads both identical prompts');
   checks.push('Native: two identical queued prompts reach the model as two');
   const sameText = (await shownInputs()).filter(t => /方案 C/.test(t));
-  view('two identical queued prompts are not taken back', sameText.length > 0, true);
-  console.log(`KNOWN two identical queued prompts: chat view shows ${sameText.length}, terminal shows 2 (one row per text and prompt id)`);
+  view('two identical queued prompts stay distinct', sameText, ['方案 C','方案 C']);
+  const secondTurn=(await snapshot()).sessions[0].messages,replyAt=secondTurn.findIndex(m=>m.text?.includes('REPLY_4'));
+  view('both C entries precede their native reply',secondTurn.map((m,i)=>m.role==='user'&&m.text==='方案 C'?i:null).filter(i=>i!==null).every(i=>i<replyAt),true);
 
   // 3. Queued, pulled back with ↑ and deleted: never sent, never shown.
   const removed = await turn('开始第三件', async () => {
@@ -183,8 +186,10 @@ function journal(nativeId) {
     await until(async () => (await editLine()) === squeeze('方案 D'), 'The queued prompt is back in the edit line');
     for (let i = 0; i < '方案 D'.length; i++) await page.keyboard.press('Backspace');
     await until(async () => (await editLine()) === '', 'Deleted from the edit line');
+    await typeLine('方案 C'); // same text in a later turn must not grow the earlier turn's queue
   });
   assert.ok(!userTexts(removed).some(t => t.includes('方案 D')), 'The model never reads the deleted prompt');
+  assert.equal(userTexts(removed).filter(t=>t.includes('方案 C')).length-userTexts(twice).filter(t=>t.includes('方案 C')).length,1,'This later turn adds its own single C to native history');
   checks.push('Native: a queued prompt pulled back and deleted never reaches the model');
   view('queued prompt pulled back and deleted', (await shownInputs()).filter(t => /方案 D/.test(t)), []);
 
@@ -193,7 +198,7 @@ function journal(nativeId) {
   fs.writeFileSync(path.join(base, 'chat.txt'), chat);
   await page.screenshot({ path: path.join(base, 'chat.png') });
   view('as drawn (A, B, D)', ['方案 A', '方案 B', '方案 D'].map(word => (chat.match(new RegExp(word, 'g')) || []).length), [0, 1, 0]);
-  view('as drawn (C kept)', (chat.match(/方案 C/g) || []).length > 0, true);
+  view('as drawn (three C entries across two turns)', (chat.match(/方案 C/g) || []).length, 3);
   assert.deepEqual(errors, []); fixture.assertClean();
   assert.deepEqual(viewFailures, [], 'The chat view matches the terminal in every case');
   console.log(JSON.stringify({ checks, nativeVersion, journal: journal(nativeId), fixture: fixture.summary(), localResponses: calls, paidModelCalls: 0, errors, evidence: base }));
