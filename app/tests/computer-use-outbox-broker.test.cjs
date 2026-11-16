@@ -246,6 +246,50 @@ test('a complete control result whose close outlasts the connection limit still 
   assert.equal(result.cleanupUnconfirmed, true); assert.equal(result.value, undefined);
   assert.ok(elapsed < 7000, `answered after ${elapsed} ms`);
 });
+test('shutdown during control business waits for cleanup registered after closing began', { timeout: 5000 }, async t => {
+  const { EventEmitter } = require('node:events');
+  const { openManagedCall } = require('../managed-outbox-transport.cjs');
+  const command = { action: 'invoke', operation_id: 'shutdown-op', method: 'rename', arguments: ['target', 'name'] };
+  const actor = { id: 'sender', nativeId: identity.nativeId, provider: 'claude' };
+  const client = new EventEmitter(), actions = [];
+  let releaseBusiness, releaseCleanup, businessEntered;
+  const entered = new Promise(resolve => { businessEntered = resolve; });
+  const business = new Promise(resolve => { releaseBusiness = resolve; });
+  const cleanup = new Promise(resolve => { releaseCleanup = resolve; });
+  client.call = async (method, action) => {
+    assert.equal(method, 'scopedOutbox'); actions.push(action);
+    if (action === 'controlCall') return { ok: true, value: { token: 'scope-token', sender: { ...actor, name: 'Butler' } } };
+    assert.equal(action, 'close'); await cleanup; return { ok: true, value: true };
+  };
+  const entry = { client, closed: false, state: { capabilities: ['scopedNativeOutboxV1', 'backgroundControlV1'] } };
+  let calls = 0;
+  const f = await fixture(t, { connectionMs: 1200,
+    bindControl: (caller, body, signal) => openManagedCall(entry, { id: actor.id, provider: actor.provider }, caller, body, signal, true),
+    control: async () => {
+      calls++; businessEntered(); await business;
+      return { state: 'complete', id: command.operation_id, actor, value: 'queued' };
+    } });
+  let closing, request;
+  try {
+    request = requestOutbox(f.descriptorFile, identity, command, undefined, true).catch(error => ({ transport: error.message }));
+    await Promise.race([entered, new Promise((_, reject) => setTimeout(() => reject(Error('business did not start')), 1000))]);
+    let closeReturned = false;
+    closing = f.broker.close().then(() => { closeReturned = true; });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    releaseBusiness();
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.equal(closeReturned, false, 'close returned while cleanup remained active');
+    assert.equal(f.broker.active(), 1);
+    releaseCleanup();
+    await closing;
+    await request;
+    assert.equal(f.broker.active(), 0);
+    assert.equal(calls, 1);
+    assert.deepEqual(actions, ['controlCall', 'close']);
+  } finally {
+    releaseBusiness?.(); releaseCleanup?.(); await closing; await request;
+  }
+});
 for (const cause of ['missing', 'consumed', 'root-changed', 'identity', 'arguments']) test(`real Claude native proof refusal reaches the broker receipt (${cause})`, async t => {
   const native = require('../background-control-native.cjs');
   const command = { action: 'invoke', operation_id: 'claude-proof-check', method: 'rename', arguments: ['target', 'name'] };

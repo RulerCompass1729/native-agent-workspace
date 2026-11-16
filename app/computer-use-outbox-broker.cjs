@@ -168,7 +168,7 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
       for (const socket of sockets) socket.destroy();
       for (const controller of controllers) controller.abort();
       await new Promise(resolve => server.close(resolve));
-      await Promise.allSettled([...operations]);
+      while (operations.size) await Promise.allSettled([...operations]);
       if (descriptorIdentity) {
         const current = fs.lstatSync(descriptorFile);
         if (current.ino === descriptorIdentity.ino && current.dev === descriptorIdentity.dev) fs.unlinkSync(descriptorFile);
