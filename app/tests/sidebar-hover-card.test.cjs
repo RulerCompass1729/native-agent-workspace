@@ -89,11 +89,37 @@ test('the card ships in both builds, stays out of the mouse and accessibility tr
   assert.match(build, /'activity-stream\.js', 'sidebar-hover-card\.js', 'renderer\.js'/);
   assert.ok(html.indexOf('href="sidebar-hover-card.css"') > html.indexOf('href="activity-stream.css"'));
   assert.ok(html.indexOf('src="sidebar-hover-card.js"') > 0 && html.indexOf('src="sidebar-hover-card.js"') < html.indexOf('src="renderer.js"'));
-  assert.match(css, /--naw-hover-card-opacity:80%/);
+  assert.match(css, /--naw-hover-card-opacity:70%;/); assert.match(css, /backdrop-filter:blur\(8px\);backdrop-filter:blur\(8px\)/);
   assert.match(css, /background:color-mix\(in srgb,var\(--raised\) var\(--naw-hover-card-opacity\),transparent\)/);
   assert.match(css, /pointer-events:none/);
   assert.match(js, /setAttribute\('aria-hidden', 'true'\)/);
   assert.doesNotMatch(js, /\bapi\.|fetch\(|setInterval\(/, 'Display only: no product API, network or polling');
+});
+
+// 11-15 (the person chose A): 70% background, 8px blur, darker secondary text inside the card only.
+// Strict worst case: the card lies wholly over an area as dark (light look) or as light (dark look) as the
+// page's main text, which no blur softens. Primary and secondary text must keep 4.5:1 there.
+// Theme tokens as rendered on 11-15; test-sidebar-hover-card.cjs re-checks the live values.
+const THEMES = { light: { raised: [255, 255, 255], ink: [15, 17, 21], muted: [97, 102, 107] }, dark: { raised: [44, 44, 46], ink: [249, 250, 251], muted: [207, 211, 214] } };
+const channel = c => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+const luminance = ([r, g, b]) => 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+const contrast = (a, b) => { const [lo, hi] = [luminance(a), luminance(b)].sort((x, y) => x - y); return (hi + 0.05) / (lo + 0.05); };
+const hex = value => [1, 3, 5].map(i => parseInt(value.slice(i, i + 2), 16));
+test('card text keeps 4.5:1 over the strict worst backdrop in both looks', () => {
+  const css = read('app/renderer/sidebar-hover-card.css'), opacity = Number(css.match(/--naw-hover-card-opacity:(\d+)%/)[1]) / 100;
+  const uses = ['dt', 'hover-card-status', 'hover-card-member-state'].map(name => css.match(new RegExp(`(?:#naw-hover-card ${name === 'dt' ? 'dt' : '\\.' + name})[^{]*\\{[^}]*color:var\\((--[\\w-]+)\\)`))[1]);
+  assert.equal(new Set(uses).size, 1, 'Every secondary line uses one colour: ' + uses);
+  const own = { light: css.match(/#naw-hover-card\{[^}]*?--naw-hover-card-muted:(#[0-9a-f]{6})/)?.[1], dark: css.match(/body\[data-ds-dark-theme\] &\{[^}]*--naw-hover-card-muted:(#[0-9a-f]{6})/)?.[1] };
+  const failures = [];
+  for (const [look, t] of Object.entries(THEMES)) {
+    const backdrop = t.raised.map((v, i) => opacity * v + (1 - opacity) * t.ink[i]);
+    const secondary = uses[0] === '--naw-hover-card-muted' ? hex(own[look]) : t.muted;
+    for (const [role, colour] of [['primary', t.ink], ['secondary', secondary]]) {
+      const ratio = contrast(colour, backdrop); if (ratio < 4.5) failures.push(`${look} ${role} ${ratio.toFixed(2)}`);
+    }
+  }
+  assert.deepEqual(failures, []);
+  assert.doesNotMatch(css, /(?:^|[;{])--muted:/m, 'The page --muted outside the card stays as it is');
 });
 
 test('hover card texts exist in Chinese and English with the same placeholders', () => {

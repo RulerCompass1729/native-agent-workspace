@@ -1,6 +1,7 @@
 // Sidebar hover card (11-15): one hidden source-Electron journey per language with synthetic native hosts, an owned
 // temporary profile and synthetic names only. Checks the delay, content, placement, dismissal and that the card never
-// takes a click, then saves comparison pictures (80% and 90% background) for the person. No model, provider or send.
+// takes a click, checks card text keeps 4.5:1 over the strict worst backdrop with the live theme tokens, and saves the
+// pictures (the person's choice A, 11-15) for the person. No model, provider or send.
 // Usage: NAW_HOVER_EVIDENCE_DIR=/abs/new/dir node scripts/test-sidebar-hover-card.cjs zh|en   (run build-ui first)
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto'), { execFileSync } = require('node:child_process');
@@ -153,6 +154,24 @@ async function behaviour() {
   });
 }
 
+// Strict worst case: the card wholly over an area as dark (light look) or light (dark look) as the page's main text.
+// Live tokens and opacity; primary (--ink) and secondary card text must keep 4.5:1. The orange approval tone is not covered.
+async function strictWorst() {
+  return card().evaluate(el => {
+    const rgb = css => { const c = document.createElement('canvas'); c.width = c.height = 1; const x = c.getContext('2d'); x.fillStyle = css; x.fillRect(0, 0, 1, 1); return [...x.getImageData(0, 0, 1, 1).data].slice(0, 3); };
+    const ch = c => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }, lum = ([r, g, b]) => 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b);
+    const ratio = (a, b) => { const [lo, hi] = [lum(a), lum(b)].sort((p, q) => p - q); return (hi + 0.05) / (lo + 0.05); };
+    const style = getComputedStyle(el), raised = rgb(style.getPropertyValue('--raised')), ink = rgb(style.getPropertyValue('--ink')), opacity = parseFloat(style.getPropertyValue('--naw-hover-card-opacity')) / 100;
+    const backdrop = raised.map((v, i) => opacity * v + (1 - opacity) * ink[i]), failures = [], ratios = {};
+    const primary = el.querySelector('.hover-card-name'), secondary = el.querySelector('dt, .hover-card-status:not([data-tone]), .hover-card-member-state:not([data-tone="approval"]):not([data-tone="working"])');
+    if (getComputedStyle(primary).color === getComputedStyle(secondary).color) failures.push('secondary text not found');
+    for (const [role, node] of [['primary', primary], ['secondary', secondary]]) {
+      const r = ratio(rgb(getComputedStyle(node).color), backdrop); ratios[role] = Math.round(r * 100) / 100; if (r < 4.5) failures.push(role + ' ' + r.toFixed(2));
+    }
+    return { opacity, raised, ink, backdrop: backdrop.map(Math.round), ratios, failures };
+  });
+}
+
 async function pictures() {
   const plan = [['wide', 1240, 820, 'session', ids[0], false], ['wide', 1240, 820, 'space', rooms[0], false], ['narrow', 850, 600, 'session', ids[0], false], ['narrow-bottom', 850, 600, 'session', ids[5], false], ['narrow-rail', 850, 600, 'session', ids[0], true]];
   for (const scheme of ['light', 'dark']) {
@@ -161,19 +180,17 @@ async function pictures() {
     for (const [name, w, h, kind, target, onRail] of plan) {
       await size(w, h); await rail(onRail); await away().catch(() => {});
       const selector = kind === 'session' ? S(target) : G(target); await reveal(selector); await hover(selector); await until(shown, 'Card for picture', 2000); await settle();
-      for (const opacity of name === 'wide' ? ['80%', '90%'] : ['80%']) {
-        await card().evaluate((el, value) => el.style.setProperty('--naw-hover-card-opacity', value), opacity); await settle();
-        const g = await geometry(selector); inside(g, `${name} ${scheme} ${opacity}`);
-        const look = await card().evaluate(el => ({ background: getComputedStyle(el).backgroundColor, font: getComputedStyle(el).fontSize, name: getComputedStyle(el.querySelector('.hover-card-name')).fontSize }));
-        const shot = `${kind}-${lang}-${name}-${scheme}-${opacity.replace('%', '')}`;
-        await page.screenshot({ path: path.join(out, shot + '.png') });
-        const clip = await page.evaluate(sel => { const r = document.getElementById('naw-hover-card').getBoundingClientRect(), a = document.querySelector(sel).getBoundingClientRect();
-          const x = Math.max(0, Math.min(r.left, a.left) - 16), y = Math.max(0, Math.min(r.top, a.top) - 16);
-          return { x, y, width: Math.min(innerWidth, Math.max(r.right, a.right) + 16) - x, height: Math.min(innerHeight, Math.max(r.bottom, a.bottom) + 16) - y }; }, selector);
-        await page.screenshot({ path: path.join(out, shot + '-card.png'), clip });
-        shots.push({ shot, kind, name, scheme, opacity, width: w, height: h, geometry: g, look });
-      }
-      await card().evaluate(el => el.style.removeProperty('--naw-hover-card-opacity'));
+      const g = await geometry(selector); inside(g, `${name} ${scheme}`);
+      const look = await card().evaluate(el => ({ background: getComputedStyle(el).backgroundColor, backdrop: getComputedStyle(el).backdropFilter, font: getComputedStyle(el).fontSize, name: getComputedStyle(el.querySelector('.hover-card-name')).fontSize }));
+      assert.equal(look.backdrop, 'blur(8px)', 'Chosen blur');
+      const worst = await strictWorst(); assert.deepEqual(worst.failures, [], `${kind} ${name} ${scheme}: text over the strict worst backdrop ${JSON.stringify(worst)}`);
+      const shot = `${kind}-${lang}-${name}-${scheme}`;
+      await page.screenshot({ path: path.join(out, shot + '.png') });
+      const clip = await page.evaluate(sel => { const r = document.getElementById('naw-hover-card').getBoundingClientRect(), a = document.querySelector(sel).getBoundingClientRect();
+        const x = Math.max(0, Math.min(r.left, a.left) - 16), y = Math.max(0, Math.min(r.top, a.top) - 16);
+        return { x, y, width: Math.min(innerWidth, Math.max(r.right, a.right) + 16) - x, height: Math.min(innerHeight, Math.max(r.bottom, a.bottom) + 16) - y }; }, selector);
+      await page.screenshot({ path: path.join(out, shot + '-card.png'), clip });
+      shots.push({ shot, kind, name, scheme, width: w, height: h, geometry: g, look, contrast: worst });
       await away(); await rail(false);
     }
   }
