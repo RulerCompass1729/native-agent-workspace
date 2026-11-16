@@ -1,6 +1,10 @@
 // Design B: a shared record beside the member view, and the same confirmation
 // cards above every view. Reads existing state; never creates a model call.
 (function (root) {
+  function waitingLabel(items, text) {
+    const confirmations = items.filter(item => item.kind === 'background-confirmation').length, other = items.length - confirmations;
+    return [confirmations ? text(confirmations === 1 ? 'confirmation' : 'confirmations', { count: confirmations }) : '', other ? text('waiting', { count: other }) : ''].filter(Boolean).join(' · ');
+  }
   function bind(host) {
     const doc = host.document, model = root.nativeWorkspaceTaskStream;
     const el = (tag, cls, text) => { const n = doc.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
@@ -43,11 +47,12 @@
       if (key === waitingKey) return;
       waitingKey = key;
       const restoreMore = doc.activeElement?.id === 'stream-waiting-more';
-      strip.replaceChildren(); strip.hidden = !items.length; strip.setAttribute('aria-label', t('waiting', { count: items.length }));
+      const label = waitingLabel(items, t);
+      strip.replaceChildren(); strip.hidden = !items.length; strip.setAttribute('aria-label', label);
       if (!items.length) return;
       const first = items[0], lead = button('stream-waiting-lead', '', () => go(first));
-      lead.append(el('strong', 'stream-waiting-count', t('waiting', { count: items.length })), el('span', 'stream-kind', t(first.kind)),
-        el('strong', '', first.actorName), el('span', 'stream-waiting-title', first.title || t('approval')), el('span', 'quiet', clock(first.time)));
+      lead.append(el('strong', 'stream-waiting-count', label), el('span', 'stream-kind', t(first.kind)),
+        el('strong', '', first.actorName), el('span', 'stream-waiting-title', (first.card && host.cardTitle?.(first.card.message)) || first.title || t('approval')), el('span', 'quiet', clock(first.time)));
       const more = button('small stream-waiting-more', t(waitingOpen ? 'close' : 'allItems'), () => { waitingOpen = !waitingOpen; drawWaiting(); });
       more.id = 'stream-waiting-more'; more.setAttribute('aria-expanded', String(waitingOpen)); more.setAttribute('aria-controls', 'stream-waiting-list');
       strip.append(lead, more);
@@ -152,5 +157,5 @@
     doc.addEventListener('pointerdown', e => { if (waitingOpen && !strip.contains(e.target)) { waitingOpen = false; drawWaiting(); } });
     return { render, open, toggle(roomId) { if (openRoom === roomId) { openRoom = ''; render(); host.toggleChanged(); } else open(roomId); } };
   }
-  root.nativeWorkspaceActivityStream = { bind };
+  root.nativeWorkspaceActivityStream = { bind, waitingLabel };
 })(globalThis);

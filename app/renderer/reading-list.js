@@ -113,8 +113,13 @@ function uiTextKnown(key) { try { window.nativeWorkspaceLocale.format('en', key)
 function readingNawToolPreview(tool) {
   const { input } = tool, text = value => typeof value === 'string' && value.trim() ? value.trim().slice(0, 120) : '';
   if (tool.tool === 'control' && input.action === 'invoke' && text(input.method)) {
+    const args = Array.isArray(input.arguments) ? input.arguments : [];
+    if (input.method === 'clearSharedHistory' || input.method === 'spaceAction' && args[1] === 'clearSharedHistory') {
+      const id = input.method === 'spaceAction' ? args[0] : 'shared', room = (state.rooms || [state.room]).find(room => room?.id === id);
+      return room?.name ? uiText('background.card.clearSharedHistoryShort', { name: text(room.name) }) : uiText('background.action.clearSharedHistory');
+    }
     const action = uiTextKnown('background.action.' + input.method) ? uiText('background.action.' + input.method) : uiText('background.card.call', { method: text(input.method) });
-    const args = Array.isArray(input.arguments) ? input.arguments : [], name = text(input.method === 'create' ? args[0]?.name : input.method === 'spaceCreate' ? args[0] : '');
+    const name = text(input.method === 'create' ? args[0]?.name : input.method === 'spaceCreate' ? args[0] : '');
     return name ? uiText('background.card.named', { action, name }) : action;
   }
   if (tool.tool === 'control') return ['catalog', 'snapshot', 'receipt'].includes(input.action) ? uiText('reading.nawTool.' + input.action) : '';

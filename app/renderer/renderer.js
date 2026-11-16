@@ -2529,14 +2529,16 @@ async function setOperatorEnabled(id, enabled) {
 function backgroundActionText(summary) {
   return summary.action && uiTextKnown('background.action.' + summary.action) ? uiText('background.action.' + summary.action) : uiText('background.card.call', { method: summary.method });
 }
-function backgroundSummaryText(summary) {
+function backgroundSummaryText(summary, compact = false) {
   const action = backgroundActionText(summary);
+  if (summary.action === 'clearSharedHistory' && summary.room) return uiText(compact ? 'background.card.clearSharedHistoryShort' : 'background.card.clearSharedHistory', { name: summary.room });
   const parts = [summary.name ? uiText('background.card.named', { action, name: summary.name }) : action];
   if (summary.target) parts.push(uiText('background.card.session', { name: summary.target }));
   if (summary.room) parts.push(uiText('background.card.room', { name: summary.room }));
   if (summary.provider) parts.push(summary.provider === 'codex' ? 'Codex' : 'Claude');
   if (summary.program) parts.push(summary.program);
   if (summary.folder) parts.push(uiText('background.card.folder', { name: summary.folder }));
+  if (summary.risks?.includes('skipPermissions')) parts.push(uiText('background.card.skipPermissions'));
   if (summary.worktree) parts.push(uiText('background.card.worktree'));
   if (summary.file) parts.push(uiText(summary.files ? 'background.card.files' : 'background.card.file', { name: summary.file, count: summary.files || 1 }));
   return parts.join(' · ');
@@ -2544,9 +2546,11 @@ function backgroundSummaryText(summary) {
 const backgroundStates = ['running', 'complete', 'received', 'awaiting-native', 'confirmation-required', 'cancelled', 'not-executed', 'unconfirmed'];
 const backgroundClock = time => new Date(time).toLocaleTimeString(ui.language.getSnapshot().active, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 // The two buttons main always asks with are said in the display language; any other set keeps its stored labels.
-function backgroundButtonKeys(options) {
+function backgroundButtonKeys(options, summary) {
   const keys = ['common.cancel', 'background.confirm'], format = window.nativeWorkspaceLocale.format;
-  return options.buttons.length === 2 && (options.cancelId ?? 0) === 0 && keys.every((key, i) => ['zh', 'en'].some(locale => format(locale, key) === options.buttons[i])) ? keys : null;
+  const sets = [keys];
+  if (summary?.action === 'clearSharedHistory') sets.push(['common.cancel', 'os.clearSharedButton']);
+  return options.buttons.length === 2 && (options.cancelId ?? 0) === 0 && sets.some(set => set.every((key, i) => ['zh', 'en'].some(locale => format(locale, key) === options.buttons[i]))) ? keys : null;
 }
 function renderBackgroundControls(entry, message) {
   const op = message.backgroundOperation, question = op?.state === 'confirmation-required' && op.confirmation;
@@ -2571,7 +2575,7 @@ function renderBackgroundControls(entry, message) {
   if (summary || card) box.append(line);
   if (summary?.risks?.length) {
     const risks = node('ul', undefined, 'background-risks');
-    for (const risk of summary.risks) risks.append(uiNode('li', 'background.risk.' + risk, undefined, 'background-risk'));
+    for (const risk of summary.risks) risks.append(uiNode('li', 'background.risk.' + risk, undefined, `background-risk${risk === 'deletesSharedHistory' ? ' background-risk-delete' : ''}`));
     box.append(risks);
   }
   if (op.error && !card) box.append(node('p', op.error, 'background-error'));
@@ -2591,11 +2595,11 @@ function renderBackgroundControls(entry, message) {
     details.append(label, node('pre', raw)); box.append(details);
   }
   if (!card || op.replacedBy) return;
-  const buttons = node('div', undefined, 'background-buttons'), keys = backgroundButtonKeys(question.options);
+  const buttons = node('div', undefined, 'background-buttons'), keys = backgroundButtonKeys(question.options, summary);
   question.options.buttons.forEach((label, response) => {
     const cancel = response === (question.options.cancelId ?? 0);
     const button = node('button', keys ? '' : label, cancel ? 'small' : 'small primary'); button.disabled = disconnected;
-    if (keys) ui.display.text(button, keys[response]);
+    if (keys) ui.display.text(button, response === 1 ? 'background.card.confirm' : keys[response]);
     button.addEventListener('click', async () => {
       button.disabled = true;
       try { await api.backgroundDecision(op.sessionId, op.nativeId, op.id, response); }
@@ -3799,6 +3803,7 @@ function getActivityStream() {
     text: uiText, displayText: (text, notice) => ui.displayText(text, notice), label: roomMessageLabel,
     language: () => ui.language.getSnapshot().active, connected: () => !disconnected, attempt,
     selectSpace, confirmation: showBackgroundConfirmation, card: renderBackgroundControls,
+    cardTitle: message => message.backgroundOperation?.summary ? backgroundSummaryText(message.backgroundOperation.summary, true) : '',
     toggleChanged: () => requestAnimationFrame(refreshColumnTerminalHeights),
     original: async target => {
       const loading = ensureMessages([target.sessionId]); if (loading) await loading;
