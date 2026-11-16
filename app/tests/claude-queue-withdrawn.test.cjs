@@ -120,6 +120,63 @@ test('PF06: a peer-sourced equal enqueue is not projected as an extra human copy
   f.queue('enqueue','重复');f.stop(first);
   assert.deepEqual(f.shown(),['开始','重复']);
 });
+test('PF06 B1: human then peer then human preserves mixed-origin evidence',t=>{
+  const f=fixture(t),first=randomUUID();f.prompt(first,'开始');
+  f.typed(first,'继续');f.queue('enqueue','继续');
+  f.r.hook({hook_event_name:'UserPromptSubmit',session_id:f.nativeId,prompt_id:first,prompt:'继续',source:'naw-peer'});f.queue('enqueue','继续');
+  f.typed(first,'继续');f.queue('enqueue','继续');f.stop(first);
+  assert.deepEqual(f.shown(),['开始','继续','继续'],'The peer enqueue is not another human entry');
+});
+test('PF06 B1: root text then peer then human does not relabel the peer enqueue',t=>{
+  const f=fixture(t),first=randomUUID();f.prompt(first,'继续');
+  f.r.hook({hook_event_name:'UserPromptSubmit',session_id:f.nativeId,prompt_id:first,prompt:'继续',source:'naw-peer'});f.queue('enqueue','继续');
+  f.typed(first,'继续');f.queue('enqueue','继续');f.stop(first);
+  assert.deepEqual(f.shown(),['继续','继续'],'Only the root and one proven human queued input are shown');
+});
+test('PF06 T1: an equal-millisecond input stays before its subsequent reply',t=>{
+  const now=Date.now();t.mock.method(Date,'now',()=>now);const f=fixture(t),first=randomUUID();f.prompt(first,'开始');
+  f.typed(first,'重复');f.queue('enqueue','重复',{timestamp:new Date(now).toISOString()});
+  f.typed(first,'重复');f.queue('enqueue','重复',{timestamp:new Date(now).toISOString()});
+  f.w.get('session').messages.push({id:'reply',role:'assistant',text:'原生回复',time:now});f.r.withdrawQueued();
+  assert.deepEqual(f.w.get('session').messages.map(m=>m.text),['开始','重复','重复','原生回复']);
+});
+test('PF06 B1: native task notifications reuse the existing machine-origin classification',t=>{
+  const f=fixture(t),first=randomUUID(),text='<task-notification><task-id>fixture-task</task-id><summary>继续</summary></task-notification>';
+  f.prompt(first,'开始');f.r.backgroundTaskIds=new Set(['fixture-task']);
+  const input=source=>f.r.hook({hook_event_name:'UserPromptSubmit',session_id:f.nativeId,prompt_id:first,prompt:text,...(source?{source}:{})});
+  input('user');f.queue('enqueue',text);input();f.queue('enqueue',text);input('user');f.queue('enqueue',text);f.stop(first);
+  assert.deepEqual(f.shown(),['开始',text,text],'The known untagged task notification cannot become a third human copy');
+});
+test('PF06 B1: a proven human copy does not inherit the preceding peer row labels',t=>{
+  const f=fixture(t),first=randomUUID();f.prompt(first,'开始');
+  f.r.hook({hook_event_name:'UserPromptSubmit',session_id:f.nativeId,prompt_id:first,prompt:'继续',source:'naw-peer'});f.queue('enqueue','继续');
+  f.typed(first,'继续');f.queue('enqueue','继续');f.stop(first);
+  const rows=f.w.get('session').messages.filter(m=>m.text==='继续');assert.equal(rows.length,2);
+  assert.equal(rows[0].inputSource,'naw-peer');
+  assert.equal(rows[1].inputSource,undefined);assert.equal(rows[1].name,undefined);assert.equal(rows[1].displayText,undefined);
+});
+test('PF06 B1: one human observation cannot label multiple enqueues as human',t=>{
+  const f=fixture(t),first=randomUUID();f.prompt(first,'开始');f.typed(first,'继续');
+  f.queue('enqueue','继续');f.queue('enqueue','继续');f.stop(first);
+  assert.deepEqual(f.shown(),['开始','继续'],'An extra enqueue with no matching source observation is not a proven human copy');
+  const g=fixture(t),second=randomUUID();g.prompt(second,'开始');g.queue('enqueue','继续');
+  g.typed(second,'继续');g.queue('enqueue','继续');g.stop(second);
+  assert.deepEqual(g.shown(),['开始','继续'],'A fallback already displays the one proven human observation after an unknown enqueue');
+});
+test('PF06 T1: the observation anchor preserves prior progress at the same millisecond',t=>{
+  const now=Date.now();t.mock.method(Date,'now',()=>now);const f=fixture(t),first=randomUUID();f.prompt(first,'开始');
+  f.typed(first,'重复');f.queue('enqueue','重复',{timestamp:new Date(now).toISOString()});
+  f.w.get('session').messages.push({id:'progress',role:'assistant',text:'此前进度',time:now});
+  f.typed(first,'重复');f.queue('enqueue','重复',{timestamp:new Date(now).toISOString()});f.w.get('session').messages.push({id:'reply',role:'assistant',text:'后续回复',time:now});
+  f.r.withdrawQueued();assert.deepEqual(f.w.get('session').messages.map(m=>m.text),['开始','重复','此前进度','重复','后续回复']);
+});
+test('PF06 T1: equal-time replies from another native turn keep their existing place',t=>{
+  const now=Date.now();t.mock.method(Date,'now',()=>now);const f=fixture(t),first=randomUUID();f.prompt(first,'开始');
+  f.w.get('session').messages[0].turnId='current-turn';
+  f.typed(first,'重复');f.queue('enqueue','重复',{timestamp:new Date(now).toISOString()});f.typed(first,'重复');f.queue('enqueue','重复',{timestamp:new Date(now).toISOString()});
+  f.w.get('session').messages.push({id:'other',role:'assistant',turnId:'other-turn',text:'其他轮',time:now},{id:'reply',role:'assistant',turnId:'current-turn',text:'当前回复',time:now});
+  f.r.withdrawQueued();assert.deepEqual(f.w.get('session').messages.map(m=>m.text),['开始','重复','其他轮','重复','当前回复']);
+});
 test('PF06: a journal write delayed past the first refresh still shows both entries during the turn',{timeout:1500},async t=>{
   const f=fixture(t),first=randomUUID();f.prompt(first,'开始');f.typed(first,'重复');f.queue('enqueue','重复');f.typed(first,'重复');
   const written=setTimeout(()=>f.queue('enqueue','重复'),250);t.after(()=>clearTimeout(written));

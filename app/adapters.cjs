@@ -1347,14 +1347,12 @@ class Claude extends EventEmitter {
         // way), and is not the running turn's input: T-141, it would re-capture that turn's wake authority.
         // Where this prompt's turn begins in the journal: queue rows of the prompts typed during it come later.
         if (event.prompt_id && !this.promptTexts?.has(event.prompt_id) && !this.firstPromptRow(event.prompt_id)) this.queueWindowStart(event.prompt_id);
-        // Equal-text entries with mixed origins have no per-enqueue authorship
-        // proof. Keep their existing rows instead of projecting human copies.
-        if(event.prompt_id&&typeof event.prompt==='string'&&['system','loop_wakeup','schedule_wakeup','poll_event','naw-peer'].includes(event.source))
-          this.queuedRows?.delete(`claude-prompt-${event.prompt_id}-q${promptTextTag(event.prompt)}`);
-        // A typed prompt taken back before this one is not shown as sent (an edited one comes back as this one).
-        this.withdrawQueued();
         const firstText = event.prompt_id ? this.promptFirstText(event.prompt_id, event.prompt) : undefined;
         const laterText = Boolean(event.prompt_id) && typeof event.prompt === 'string' && typeof firstText === 'string' && event.prompt !== firstText;
+        if(!this.nativePromptInput&&event.prompt_id&&typeof event.prompt==='string')
+          this.queueOrigin(event,promptAlreadyAnnounced||laterText);
+        // A typed prompt taken back before this one is not shown as sent (an edited one comes back as this one).
+        this.withdrawQueued();
         const rowId = !event.prompt_id ? null : laterText ? `claude-prompt-${event.prompt_id}-q${promptTextTag(event.prompt)}` : `claude-prompt-${event.prompt_id}`;
         const entering = this.queued || this.pending;
         if (entering && !entering.accepted && this.submission.pending?.authorized && event.prompt === entering.text) {
@@ -1373,11 +1371,7 @@ class Claude extends EventEmitter {
           // but must not recapture that turn's wake proof, even for identical text.
           if (!this.nativePromptInput) this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: rowId, ...(!laterText && !promptAlreadyAnnounced && this.liveTurn?.promptId === event.prompt_id ? { turnId: this.liveTurn.id } : {}), ...(typeof event.source === 'string' ? { source: event.source } : {}), ...(superseded ? { superseded } : {}) } : undefined);
         }
-        if (!this.nativePromptInput && event.prompt_id && typeof event.prompt === 'string' && !['system','loop_wakeup','schedule_wakeup','poll_event','naw-peer'].includes(event.source)) {
-          const key=`claude-prompt-${event.prompt_id}-q${promptTextTag(event.prompt)}`;
-          this.queuedRows ||= new Map(); const prior=this.queuedRows.get(key);
-          this.queuedRows.delete(key); this.queuedRows.set(key,prior||{promptId:event.prompt_id,text:event.prompt,nativeId:this.record.nativeId});
-          while(this.queuedRows.size>16)this.queuedRows.delete(this.queuedRows.keys().next().value);
+        if (!this.nativePromptInput && event.prompt_id && typeof event.prompt === 'string') {
           if(promptAlreadyAnnounced||laterText)this.refreshQueuedSoon();
         }
         break;
@@ -1439,6 +1433,26 @@ class Claude extends EventEmitter {
     if (size !== null) this.queueWindows.set(promptId, size);
     while (this.queueWindows.size > 4) this.queueWindows.delete(this.queueWindows.keys().next().value);
   }
+  queueOrigin(event,queued) {
+    const key=`claude-prompt-${event.prompt_id}-q${promptTextTag(event.prompt)}`;
+    this.queuedRows ||= new Map();const prior=this.queuedRows.get(key);
+    const row=prior?.nativeId===this.record.nativeId?prior:{promptId:event.prompt_id,text:event.prompt,nativeId:this.record.nativeId,origins:[]};
+    this.queuedRows.delete(key);this.queuedRows.set(key,row);
+    while(this.queuedRows.size>16)this.queuedRows.delete(this.queuedRows.keys().next().value);
+    let human=false;
+    this.emit('nativeInputOrigin',event.prompt,{source:event.source},value=>{human=value===true;});
+    let at;
+    try {const s=fs.lstatSync(this.nativeTranscript);if(s.isFile()&&!s.isSymbolicLink()&&s.uid===process.getuid()&&Number.isSafeInteger(s.size))at=s.size;}
+    catch(error){if(error.code==='ENOENT'&&this.queueWindows?.get(event.prompt_id)===0)at=0;}
+    if(at===undefined){row.unverified=true;return;}
+    // Byte boundaries bind source observations to later enqueues. A later
+    // human hook cannot erase a peer/unknown interval, including equal text.
+    const bits=human&&queued?1:2,last=row.origins.at(-1),anchor=this.record.messages?.at(-1);
+    if(last&&at<last.at){row.unverified=true;return;}
+    if(last?.at===at)last.bits|=bits;
+    else if(row.origins.length<256)row.origins.push({at,bits,afterId:anchor&&(!anchor.nativeId||anchor.nativeId===row.nativeId)?anchor.id:undefined});
+    else row.origins[255].bits=2; // Unknown overflow never becomes another human copy.
+  }
   cancelQueueRefresh() {
     clearTimeout(this.queueRefreshTimer);clearTimeout(this.queueRefreshDeadline);
     this.queueRefreshWatch?.close();this.queueRefreshWatch=null;
@@ -1473,11 +1487,15 @@ class Claude extends EventEmitter {
     for (const [id, row] of [...this.queuedRows]) {
       const start = this.queueWindows.get(row.promptId),end=Math.min(Infinity,...[...this.queueWindows.values()].filter(at=>at>start));
       const mine = rows.filter(r => r.at >= start && r.at < end && r.text === row.text);
-      const occurrences=[];
+      const occurrences=[],originsUsed=new Set();
       for(const entry of mine) {
         if(entry.kind==='queued') {
           const key=occurrences.length?`${id}-e${entry.at.toString(16)}`:id;
-          occurrences.push({id:key,time:entry.time,read:false,taken:false,linked:this.record.messages?.some(m=>m.id===key&&m.turnId)});
+          const origin=row.origins?.findLast(item=>item.at<=entry.at);
+          const human=!row.unverified&&origin?.bits===1&&!originsUsed.has(origin);
+          if(human)originsUsed.add(origin);
+          occurrences.push({id:key,time:entry.time,human,afterId:origin?.afterId,
+            read:false,taken:false,linked:this.record.messages?.some(m=>m.id===key&&m.turnId)});
         } else if(entry.kind==='read') {
           const read=occurrences.find(item=>!item.taken&&!item.read);if(read)read.read=true;
         } else {
@@ -1489,10 +1507,18 @@ class Claude extends EventEmitter {
       }
       if(!occurrences.length)continue;
       row.multiple=occurrences.length>1;
-      const wanted=new Set(occurrences.filter(item=>!item.taken).map(item=>item.id));
-      for(const item of occurrences)if(!item.taken)this.emit('nativeQueuedInput',{id:item.id,baseId:id,nativeId:this.record.nativeId,text:row.text,time:item.time});
+      const taken=new Set(occurrences.filter(item=>item.taken).map(item=>item.id));
+      const proven=occurrences.filter(item=>!item.taken&&item.human);
+      // Each source observation proves at most one copy. An already displayed
+      // human fallback also occupies a slot, even when its enqueue is unknown.
+      const displayed=(this.record.messages||[]).filter(m=>m.role==='user'&&m.origin==='native'&&(!m.nativeId||m.nativeId===this.record.nativeId)&&
+        m.text===row.text&&!m.inputSource&&(m.id===id||m.id?.startsWith(id+'-e'))&&(!taken.has(m.id)||m.turnId));
+      let slots=Math.max(0,proven.length-displayed.length);
+      for(const item of proven)if(!this.record.messages?.some(m=>m.id===item.id)&&slots>0) {
+        this.emit('nativeQueuedInput',{id:item.id,baseId:id,nativeId:this.record.nativeId,text:row.text,time:item.time,afterId:item.afterId});slots--;
+      }
       for(const message of [...(this.record.messages||[])])if(message.role==='user'&&message.origin==='native'&&message.text===row.text&&
-          (message.id===id||message.id.startsWith(id+'-e'))&&!wanted.has(message.id))this.emit('nativeInputWithdrawn',{id:message.id,nativeId:this.record.nativeId});
+          taken.has(message.id))this.emit('nativeInputWithdrawn',{id:message.id,nativeId:this.record.nativeId});
     }
   }
   promptFirstText(id, text) {

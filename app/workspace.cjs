@@ -952,7 +952,7 @@ class Workspace extends EventEmitter {
       if (!queue.entries.length && !queue.overflow) this.approvalRoutes.delete(s.id);
       setActivity(s, ...uiActivity("notice.activity.approvalConnectionChanged")); this.changed();
     });
-    on('nativeInput', (text, item) => {
+    const inputOrigin = (text, item) => {
       // Machine-injected turns are not a person at the terminal. Claude 2.1.316 sends no hook source,
       // so a turn made only of notifications for tasks this session started or last reported in flight also counts.
       // On 2.1.322 most notifications arrive during the turn that started the task, before any turn-end report.
@@ -963,11 +963,21 @@ class Workspace extends EventEmitter {
       // control:input boundary (nativeControlBoundary below), which voids wakes staged by or for this session.
       const sourced = ['system', 'loop_wakeup', 'schedule_wakeup', 'poll_event', 'naw-peer'].includes(item?.source);
       const reported = !sourced && !['user', 'sdk'].includes(item?.source) && onlyBlocks && taskIds.every(id => id && runtime.backgroundTaskIds?.has(id));
+      return {blocks,onlyBlocks,taskIds,reported,machine:sourced||reported,inputSource:sourced?item.source:reported?'task-notification':null};
+    };
+    on('nativeInputOrigin', (text, item, reply) => {
+      if(typeof text!=='string'||typeof reply!=='function')return;
+      const origin=inputOrigin(text,item);
+      // Read-only display evidence: do not guess human authorship for unknown
+      // sources or untagged notification-shaped text. Control policy is below.
+      reply(!origin.machine&&(item?.source==='user'||item?.source===undefined&&!origin.onlyBlocks));
+    });
+    on('nativeInput', (text, item) => {
+      const {blocks,onlyBlocks,taskIds,reported,machine,inputSource}=inputOrigin(text,item);
       // A monitor notifies once per event and once when it ends, with the same ID; only a block with a status ends the task
       // (real 2.1.322: an event carries task-id, summary and event; an end, like a finished Bash, a status). What a watched
       // command printed into an event or a summary is not the block's own status.
       if (reported) blocks.forEach((block, i) => { if (/<status>/.test(block.replace(/<(event|summary)>[\s\S]*?<\/\1>/g, ''))) runtime.backgroundTaskIds.delete(taskIds[i]); });
-      const machine = sourced || reported, inputSource = sourced ? item.source : reported ? 'task-notification' : null;
       // Missing source is not proof of human authorship for report questions.
       if (!machine && item?.source === 'user') this.operatorHuman(s.id);
       this.cancelCapacity(s.id);
@@ -991,16 +1001,17 @@ class Workspace extends EventEmitter {
     });
     // A prompt typed during a turn and taken back from native's queue unsent (edited with ↑, deleted, cleared on
     // cancel): the native terminal no longer shows it as sent, so neither does the conversation.
-    on('nativeQueuedInput', ({id,baseId,nativeId,text,time}) => {
+    on('nativeQueuedInput', ({id,baseId,nativeId,text,time,afterId}) => {
       if(nativeId!==s.nativeId||typeof text!=='string'||!/^claude-prompt-[a-f0-9-]{36}-q[a-f0-9]{8}(?:-e[0-9a-f]{1,14})?$/i.test(id||'')||
           !/^claude-prompt-[a-f0-9-]{36}-q[a-f0-9]{8}$/i.test(baseId||'')||!(id===baseId||id.startsWith(baseId+'-e'))||s.messages.some(m=>m.id===id))return;
-      const original=s.messages.find(m=>m.id===baseId&&m.role==='user'&&m.origin==='native'&&m.text===text);
-      const labels=original?Object.fromEntries(['name','uiNameMessage','displayText','inputSource'].filter(k=>original[k]!==undefined).map(k=>[k,original[k]])):{};
       // This is the already observed input's display projection, not another
       // human-control/wake event, shared message, or inherited image/turn proof.
-      const baseAt=s.messages.findIndex(m=>m.id===baseId),anchor=baseAt>=0?baseAt:s.messages.findIndex(m=>m.id===baseId.replace(/-q[0-9a-f]{8}$/i,''));
-      const at=Number.isFinite(time)?s.messages.findIndex((m,i)=>i>anchor&&Number.isFinite(m.time)&&m.time>time):-1;
-      s.messages.splice(at<0?s.messages.length:at,0,{id,role:'user',text,...labels,status:'submitted',origin:'native',nativeId,time:Number.isFinite(time)?time:Date.now()});this.changed(s.id);
+      const root=s.messages.find(m=>m.id===baseId.replace(/-q[0-9a-f]{8}$/i,'')&&m.role==='user'&&(!m.nativeId||m.nativeId===nativeId));
+      const baseAt=s.messages.findIndex(m=>m.id===baseId),observed=typeof afterId==='string'?s.messages.findIndex(m=>m.id===afterId&&(!m.nativeId||m.nativeId===nativeId)):-1;
+      const anchor=Math.max(observed,baseAt>=0?baseAt:s.messages.indexOf(root));
+      const at=Number.isFinite(time)?s.messages.findIndex((m,i)=>i>anchor&&Number.isFinite(m.time)&&(m.time>time||
+        m.time===time&&m.role==='assistant'&&(!m.nativeId||m.nativeId===nativeId)&&(!root?.turnId||!m.turnId||m.turnId===root.turnId))):-1;
+      s.messages.splice(at<0?s.messages.length:at,0,{id,role:'user',text,status:'submitted',origin:'native',nativeId,time:Number.isFinite(time)?time:Date.now()});this.changed(s.id);
     });
     on('nativeInputWithdrawn', ({ id, nativeId }) => {
       if (nativeId !== s.nativeId || !/^claude-prompt-[a-f0-9-]{36}-q[a-f0-9]{8}(?:-e[0-9a-f]{1,14})?$/i.test(id || '')) return;
