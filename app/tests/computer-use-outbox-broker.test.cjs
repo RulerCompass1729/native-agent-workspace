@@ -238,13 +238,42 @@ test('a complete control result whose close outlasts the connection limit still 
   });
   const started = Date.now();
   const result = await requestOutbox(f.descriptorFile, identity, command, undefined, true).catch(error => ({ transport: error.message }));
-  const elapsed = Date.now() - started; release?.();
+  const elapsed = Date.now() - started, activeAfterReply = f.broker.active(); release?.();
   assert.deepEqual(actions, ['controlCall', 'close']); assert.equal(calls, 1);
   assert.equal(result.id, command.operation_id, `no id after ${elapsed} ms: ${JSON.stringify(result)}`);
   assert.deepEqual(result.actor, actor); assert.equal(result.state, 'unconfirmed'); assert.equal(result.retry, false);
   assert.equal(result.failureReason, 'cleanup-unconfirmed'); assert.equal(result.failurePhase, 'cleanup');
   assert.equal(result.cleanupUnconfirmed, true); assert.equal(result.value, undefined);
-  assert.ok(elapsed < 7000, `answered after ${elapsed} ms`);
+  t.diagnostic(`near-limit control reply: ${elapsed}ms (business 500ms)`);
+  assert.ok(activeAfterReply > 0, 'The early answer does not abandon its pending cleanup');
+  assert.ok(elapsed < 2500, `business finished at 500ms, but the reply waited ${elapsed}ms`);
+});
+for (const confirmed of [true, false]) test(`a managed close with an already settled ${confirmed ? 'success' : 'failure'} is answered promptly`, async t => {
+  const { EventEmitter } = require('node:events'), { openManagedCall } = require('../managed-outbox-transport.cjs');
+  const command = { action: 'invoke', operation_id: 'settled-close', method: 'rename', arguments: ['target', 'name'] };
+  const actor = { id: 'sender', nativeId: identity.nativeId, provider: 'claude' }, client = new EventEmitter(), actions = [];
+  let calls = 0;
+  client.call = async (method, action) => {
+    assert.equal(method, 'scopedOutbox'); actions.push(action);
+    if (action === 'controlCall') return { ok: true, value: { token: 'scope-token', sender: { ...actor, name: 'Synthetic actor' } } };
+    assert.equal(action, 'close');
+    return confirmed ? { ok: true, value: true } : { ok: false, failurePhase: 'cleanup', failureReason: 'cleanup-unconfirmed' };
+  };
+  const entry = { client, closed: false, state: { capabilities: ['scopedNativeOutboxV1', 'backgroundControlV1'] } };
+  const f = await fixture(t, { connectionMs: 7000,
+    bindControl: (caller, body, signal) => openManagedCall(entry, actor, caller, body, signal, true),
+    control: async () => { calls++; return { state: 'complete', id: command.operation_id, actor, value: 'PRIVATE_COMPLETE_VALUE' }; },
+  });
+  const started = Date.now(), result = await requestOutbox(f.descriptorFile, identity, command, undefined, true);
+  assert.ok(Date.now() - started < 1000, 'A settled cleanup does not wait for a connection timer');
+  assert.equal(result.state, confirmed ? 'complete' : 'unconfirmed');
+  assert.equal(result.id, command.operation_id); assert.deepEqual(result.actor, actor);
+  if (!confirmed) {
+    assert.equal(result.retry, false); assert.equal(result.cleanupUnconfirmed, true);
+    assert.equal(result.failurePhase, 'cleanup'); assert.equal(result.failureReason, 'cleanup-unconfirmed');
+    assert.equal(result.value, undefined);
+  }
+  assert.equal(calls, 1); assert.deepEqual(actions, ['controlCall', 'close']);
 });
 test('shutdown during control business waits for cleanup registered after closing began', { timeout: 5000 }, async t => {
   const { EventEmitter } = require('node:events');
