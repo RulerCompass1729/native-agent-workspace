@@ -609,6 +609,7 @@ class Claude extends EventEmitter {
   }
   constructor(record, host, { attachOnly = false } = {}) {
     super(); this.record = record; this.host = host; this.pending = null; this.ready = false; this.chatAvailable = false;
+    this.on('state', state => { this.localApprovalState = state; if (state !== 'approval') this.localApprovalPending = false; });
     this.submission = new SubmissionChannel();
     // Rows this adapter's own mid-turn deliveries stored, until the model read them.
     this.midturnRows = new Map();
@@ -1178,6 +1179,28 @@ class Claude extends EventEmitter {
     for (const event of observed) this.hook(event);
     return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia, nativeTurnRecords: this.nativeTurnRecords === true, nativeNarration: this.nativeNarration === true };
   }
+  reconcileLocalApproval() {
+    if (!this.localApprovalPending || this.localApprovalPending !== this.observationEpoch || this.displayGap ||
+        !this.ready || this.rootEnding || this.disposed || this.liveTurn ||
+        this.rootTurn?.status === 'working' || this.livePermissions?.size || this.pending || this.queued ||
+        this.submission?.pending || this.nativeInputRequired || this.nativeAbortRequest) return;
+    const { terminalDialogPrompt, claudeEmptyPrompt } = require('./native-terminal-dialog.cjs');
+    if (terminalDialogPrompt(this.record, this) || !claudeEmptyPrompt(this)) return;
+    this.localApprovalPending = false;
+    this.emit('state', 'idle');
+    return true;
+  }
+  hookApproval() {
+    // Local slash commands can notify without ever starting/stopping a model
+    // turn. Only that unbound hook state may be retired by the native editor.
+    const idleHook = this.localApprovalState === 'idle' || this.localApprovalPending === this.observationEpoch;
+    this.localApprovalPending = idleHook && this.nativeBlocks === true && !this.displayGap && !this.liveTurn && this.rootTurn?.status !== 'working' &&
+      !this.pending && !this.queued && !this.submission?.pending ? this.observationEpoch : false;
+    this.rootTurn = null;
+    if (this.queued) this.queued.superseded = true;
+    this.pending = null;
+    if (!this.reconcileLocalApproval()) this.emit('state', 'approval');
+  }
   hook(event) {
     // A new root can already be receiving human input while its identity is
     // being saved. Buffer observations, but trust none until the mod proves the
@@ -1345,9 +1368,9 @@ class Claude extends EventEmitter {
         }
         break;
       }
-      case 'PermissionRequest': if (this.liveTurn && (!event.prompt_id || event.prompt_id !== this.liveTurn.promptId)) this.liveTurn.question = false; this.rootTurn = null; if (this.queued) this.queued.superseded = true; this.pending = null; this.emit('state', 'approval'); break;
+      case 'PermissionRequest': if (this.liveTurn && (!event.prompt_id || event.prompt_id !== this.liveTurn.promptId)) this.liveTurn.question = false; this.hookApproval(); break;
       case 'Notification':
-        if (/permission|elicitation|auth/.test(event.notification_type || '')) { if (this.liveTurn) this.liveTurn.question = false; this.rootTurn = null; if (this.queued) this.queued.superseded = true; this.pending = null; this.emit('state', 'approval'); }
+        if (/permission|elicitation|auth/.test(event.notification_type || '')) { if (this.liveTurn) this.liveTurn.question = false; this.hookApproval(); }
         break;
       case 'PreToolUse':
         if (this.pending) this.pending.replies.delete(event.prompt_id);

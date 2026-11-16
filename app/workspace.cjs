@@ -896,6 +896,7 @@ class Workspace extends EventEmitter {
       this.changed(state === 'working' ? s.id : undefined);
     });
     on('terminal', event => {
+      if (s.state === 'approval') runtime.reconcileLocalApproval?.();
       const dialog = terminalDialogPrompt(s, runtime);
       if (runtime.terminalDialogObserved !== dialog) { runtime.terminalDialogObserved = dialog; this.changed(); }
       const prompt = directoryTrustPrompt(s, runtime);
