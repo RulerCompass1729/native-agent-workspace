@@ -92,12 +92,14 @@ function storedDoneSource(roomId, parentEvent) {
   const parentId = parentEvent?.id, monitor = parentEvent?.monitor;
   let itemId, ref;
   try {
+    if (Object.hasOwn(parentEvent, 'butlerDoneSource') && Object.hasOwn(parentEvent, 'butlerSource')) invalid();
     if (parentEvent.role !== 'system' || parentEvent.kind !== 'queue' ||
         monitor?.kind !== 'done' || monitor.addedBy !== 'steward') invalid();
     itemId = monitor.itemId; checkedIdentity(roomId, itemId);
     if (monitor.key !== `done:${roomId}:${itemId}`) invalid();
     ref = sourceRef(roomId, itemId, 'done');
-    const value = validateEvent(parentEvent.butlerSource);
+    // Old applications ignore this auxiliary field. Retain the earlier typed source on upgrade too.
+    const value = validateEvent(Object.hasOwn(parentEvent, 'butlerDoneSource') ? parentEvent.butlerDoneSource : parentEvent.butlerSource);
     if (value.eventId !== eventId(roomId, itemId, 'done') || value.sourceRef !== ref ||
         value.payload.spaceId !== roomId || value.payload.itemId !== itemId ||
         value.payload.memberId !== undefined && value.payload.memberId !== parentEvent.sessionId) invalid();

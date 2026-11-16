@@ -113,9 +113,10 @@ function queueFacts(room, roomId, previous, next, queue, replyTitle, memberName)
       previous.addedBy === 'steward' && next.addedBy === 'steward') {
     const name = room.events.findLast(e => e.sessionId === next.sentTo && e.uiMessage?.key === 'notice.queue.dispatched')?.uiMessage?.params?.name ?? memberName;
     const title = queueRules.reportTitle(replyTitle ?? next.reply);
+    // Older source readers ignore this new auxiliary key rather than rejecting an unknown done kind.
     facts.push({ kind: 'queue', itemId: next.id, sessionId: next.sentTo, text: title,
       monitor: { kind: 'done', key: `done:${roomId}:${next.id}`, itemId: next.id, addedBy: 'steward' },
-      butlerSource: queueDoneSource(roomId, next, name, title) });
+      butlerDoneSource: queueDoneSource(roomId, next, name, title) });
   }
   if (previous && next && toSend(previous) && !toSend(next) && !queue.some(toSend)) {
     const round = queueRound(room.queueDryRound) + 1, waiting = queue.filter(item => item.status === 'waiting').length;
@@ -518,7 +519,7 @@ class RoomState {
     this.commit({ ...value, ...fields, revision: value.revision + 1, events }, id);
     // The queue change, delivery source and typed fact are durable before
     // intake can see them. A failed auxiliary consumer cannot undo this write.
-    for (const fact of noticed) if (['ready', 'done'].includes(fact.monitor?.kind) && fact.butlerSource) {
+    for (const fact of noticed) if (['ready', 'done'].includes(fact.monitor?.kind) && (fact.butlerSource || fact.butlerDoneSource)) {
       try { this.onButlerReady?.(id, fact.id); } catch { /* The stored source is replayable. */ }
     }
     return record?.id || null;
@@ -617,7 +618,8 @@ class RoomState {
     if (this.warning || this.spacesWarning) throw Object.assign(Error(this.warning || this.spacesWarning), {
       uiMessage: this.warning ? this.warningUiMessage : this.spacesWarningUiMessage });
     return structuredClone([{ id: DEFAULT_ROOM_ID, events: this.value.events }, ...this.spaces.rooms].flatMap(room => room.events
-      .filter(event => Object.hasOwn(event, 'butlerSource')).map(event => storedQueueSource(room.id, event))));
+      .filter(event => Object.hasOwn(event, 'butlerSource') || Object.hasOwn(event, 'butlerDoneSource'))
+      .map(event => storedQueueSource(room.id, event))));
   }
   queueItems(id) {
     const value = this.metadata(id);

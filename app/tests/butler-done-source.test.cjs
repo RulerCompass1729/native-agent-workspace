@@ -44,8 +44,8 @@ test('typed done admits only steward completions, projects shared reply fields, 
  const f=fixture(t),id=f.item();
  f.room.queueSettle('shared',id,'done','','Member','PASS Report body',undefined,undefined,'PASS');
  const parent=f.room.metadata().events.find(e=>e.monitor?.kind==='done');
- assert.equal(parent.butlerSource.payload.title,'PASS');
- for(const edit of [e=>e.monitor.addedBy='person',e=>e.monitor.key='done:other:item',e=>e.butlerSource.payload.itemId='other',e=>e.butlerSource.payload.memberId='other',e=>e.text='Changed title',e=>e.butlerSource.payload.private='Unapproved field']){
+ assert.equal(parent.butlerDoneSource.payload.title,'PASS');
+ for(const edit of [e=>e.monitor.addedBy='person',e=>e.monitor.key='done:other:item',e=>e.butlerDoneSource.payload.itemId='other',e=>e.butlerDoneSource.payload.memberId='other',e=>e.text='Changed title',e=>e.butlerDoneSource.payload.private='Unapproved field']){
   const copy=structuredClone(parent);edit(copy);const rejected=storedQueueSource('shared',copy);
   assert.equal(rejected.kind,'blocked');assert.equal(rejected.payload.reason,'source-invalid');assert.equal(Object.hasOwn(rejected.payload,'text'),false);
  }
@@ -57,7 +57,7 @@ test('typed done admits only steward completions, projects shared reply fields, 
  assert.equal(queueDoneSource('shared',{...item,ready:{branch:'lane/code',commit:'abcdef1'}},'Member','PASS'),null);
  const oversized=queueDoneSource('shared',{...item,reply:'x'.repeat(201)},'Member','PASS');
  assert.equal(oversized.kind,'blocked');assert.equal(oversized.payload.reason,'input-rejected');
- const malformed=structuredClone(parent);malformed.butlerSource.payload.text='x'.repeat(201);
+ const malformed=structuredClone(parent);malformed.butlerDoneSource.payload.text='x'.repeat(201);
  assert.equal(storedQueueSource('shared',malformed).kind,'blocked');
  const source=queueDoneSource('shared',item,'Member','PASS'),other=queueDoneSource('other-space',item,'Member','PASS');
  assert.notEqual(other.eventId,source.eventId);

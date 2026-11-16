@@ -15,6 +15,9 @@ const PAYLOAD_LIMITS = { text: 12000, title: 400, spaceId: 200, spaceName: 200, 
   memberId: 200, itemId: 200, outcome: 200, reason: 2000, decisionKind: 200, questionKey: 600, supersedes: 200 };
 const MAX_FILE_BYTES = 32 * 1024 * 1024, MAX_RECORD_BYTES = 2 * 1024 * 1024, MAX_BATCH = 100, READ_BYTES = 8 * 1024;
 const FILE_NAME = 'butler-ledger.jsonl';
+// A request for the steward to read a completed report, not a new human task or authority.
+// Keep one v1 event slot so old readers and their cursors can pass it unchanged.
+const REPORT_MARKER = 'naw-steward-report:1', REPORT_PREFIX = 'naw-steward-report:';
 const QUESTION_SEND_CHANNELS = ['notification', 'butler-ask'];
 const QUESTION_METRIC_GAPS = ['source-unavailable', 'write-failed', 'delivery-unconfirmed', 'unattributed',
   'unobserved-send', 'epoch-unavailable', 'unexpected-display'];
@@ -64,7 +67,26 @@ function normalizeEvent(value) {
   object(value.payload, Object.keys(PAYLOAD_LIMITS));
   const payload = {};
   for (const [key, field] of Object.entries(value.payload)) payload[key] = string(field, PAYLOAD_LIMITS[key]);
-  return { eventId: idString(value.eventId), kind: value.kind, sourceRef: reference(value.sourceRef), payload };
+  const event = { eventId: idString(value.eventId), kind: value.kind, sourceRef: reference(value.sourceRef), payload };
+  if (payload.reason?.startsWith(REPORT_PREFIX)) {
+    requireValue(value.kind === 'request' && payload.reason === REPORT_MARKER && payload.outcome === 'done',
+      'Invalid steward report envelope');
+  }
+  return event;
+}
+// Decode only at API boundaries. Journal reductions and sealed review prefixes use the same v1 data as old readers.
+function eventView(event) {
+  if (event.kind !== 'request' || event.payload.reason !== REPORT_MARKER) return event;
+  const { reason, outcome, ...payload } = event.payload;
+  return { ...event, kind: 'done', payload };
+}
+function persistedEvent(event) {
+  if (event.kind !== 'done') return event;
+  requireValue(!Object.hasOwn(event.payload, 'reason') && !Object.hasOwn(event.payload, 'outcome'),
+    'Steward reports cannot use reserved envelope fields');
+  const wire = { ...event, kind: 'request', payload: { ...event.payload, reason: REPORT_MARKER, outcome: 'done' } };
+  validateEvent(wire);
+  return wire;
 }
 function normalizeAction(value) {
   object(value, ['kind', 'sourceRef', 'text', 'spaceId', 'decisionKind', 'evidenceRevision', 'supersedes'], ['kind', 'sourceRef', 'text']);
@@ -764,11 +786,12 @@ class ButlerLedger {
   ingest(value) {
     this.healthy(); const event = normalizeEvent(value), existing = this.state.eventIndex.get(event.eventId);
     if (existing) {
-      const original = { eventId: existing.eventId, kind: existing.kind, sourceRef: existing.sourceRef, payload: existing.payload };
-      requireValue(canonical(event) === canonical(original), 'Event identity reused with different content', 'BUTLER_EVENT_CONFLICT');
-      return clone(existing);
+      const visible = eventView(existing);
+      const original = { eventId: visible.eventId, kind: visible.kind, sourceRef: visible.sourceRef, payload: visible.payload };
+      requireValue(canonical(eventView(event)) === canonical(original), 'Event identity reused with different content', 'BUTLER_EVENT_CONFLICT');
+      return clone(visible);
     }
-    this.#append('event', event); return clone(this.state.eventIndex.get(event.eventId));
+    this.#append('event', persistedEvent(event)); return clone(eventView(this.state.eventIndex.get(event.eventId)));
   }
   // Trusted host observations only. The source's false-to-true edge creates a
   // queue-empty episode; repeated snapshots do not create model work or rows.
@@ -784,7 +807,7 @@ class ButlerLedger {
     this.#append('source-transition', { sourceRef, active, generation, ...(active ? { event } : {}) });
     return { changed: true, event: active ? clone(this.state.eventIndex.get(event.eventId)) : null };
   }
-  pendingEvents() { this.healthy(); return clone(pending(this.state)); }
+  pendingEvents() { this.healthy(); return clone(pending(this.state).map(eventView)); }
   // What the person's designated butler reads to report only what is new: the business events after a position
   // this ledger gave, oldest first, at most `limit`. A position is `<origin>:<sequence>`, origin naming this ledger
   // by its first record, so a restart keeps every position good. One from another ledger (a new profile, a replaced
@@ -806,7 +829,7 @@ class ButlerLedger {
     const later = this.state.events.filter(event => event.sequence > after), events = [];
     let bytes = 0;
     for (const { sequence, time, kind, payload } of later.slice(0, limit)) {
-      const event = clone({ sequence, time, kind, payload }), size = Buffer.byteLength(JSON.stringify(event));
+      const event = clone(eventView({ sequence, time, kind, payload })), size = Buffer.byteLength(JSON.stringify(event));
       if (events.length && bytes + size > READ_BYTES) break;
       events.push(event); bytes += size;
     }
@@ -1076,7 +1099,10 @@ class ButlerLedger {
   }
   snapshot() {
     this.healthy();
-    return clone(snapshotState(this.state));
+    // Journal reductions and frozen audits retain the wire representation, identical to old readers.
+    const result = clone(snapshotState(this.state));
+    result.events = result.events.map(eventView); result.pendingEvents = result.pendingEvents.map(eventView);
+    return result;
   }
 }
 module.exports = { ButlerLedger };

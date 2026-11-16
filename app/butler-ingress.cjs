@@ -34,8 +34,8 @@ function queueOutcomeSource(outcome) {
 // Auxiliary B4 data is interpreted after the space has loaded. A damaged or
 // newly rejected source cannot change the availability of its original space.
 function storedQueueSource(roomId, event) {
-  const source = event.butlerSource;
-  if (event.monitor?.kind === 'done' || source?.kind === 'done' ||
+  const source = event.butlerDoneSource ?? event.butlerSource;
+  if (Object.hasOwn(event, 'butlerDoneSource') || event.monitor?.kind === 'done' || source?.kind === 'done' ||
       typeof source?.eventId === 'string' && source.eventId.startsWith('butler-done:') ||
       typeof source?.sourceRef === 'string' && source.sourceRef.startsWith('queue-done:')) return storedDoneSource(roomId, event);
   if (event.monitor?.kind === 'ready' || source?.kind === 'ready' ||
@@ -104,7 +104,8 @@ class ButlerIngress {
     const scope = `queue-outcome:${roomId}:${eventId}`;
     try {
       const event = this.roomState.metadata(roomId).events.find(value => value.id === eventId);
-      return event && Object.hasOwn(event, 'butlerSource') ? this.record(storedQueueSource(roomId, event)) : { status: 'ignored' };
+      return event && (Object.hasOwn(event, 'butlerSource') || Object.hasOwn(event, 'butlerDoneSource'))
+        ? this.record(storedQueueSource(roomId, event)) : { status: 'ignored' };
     } catch { this.errors.set(scope, 'source-unavailable'); throw unavailable(); }
   }
   recover() {
