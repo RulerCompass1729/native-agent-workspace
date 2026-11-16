@@ -451,3 +451,15 @@ local branch or main; not installed, pushed or published):
 
 Use only checks appropriate to the changed surface. Documentation checks do not
 prove runtime compatibility. Record untested requirements explicitly.
+
+
+## Push rules
+
+- Push only `main`, and only when the person explicitly says to push.
+- Never push `backup/*` or `lane/*`.
+- Never use `--no-verify` or bypass hooks or publication checks.
+- Before pushing, run `python3 scripts/privacy_guard.py history` (see
+  `docs/publication.md`). Its privacy/PII checks and gitleaks must cover the
+  complete unpushed range: every patch, content added then removed, commit
+  messages, author/committer identities and outgoing refs. Show the full
+  scan output to the person, inspect findings and resolve every block first.
