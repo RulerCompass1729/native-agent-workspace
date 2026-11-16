@@ -324,3 +324,71 @@ test('PF12 real detector: shortcut text inside options cannot truncate the optio
   await f.draw(ambiguous('model-y'));
   assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
 });
+
+test('PF12 BLOCK: indented shortcut continuation is not an independent legend', async t => {
+  const f = await statusFixture(t);
+  const frame = folder => '\x1b[2J\x1b[HChoose working directory?\r\n  1. Cancel\r\n❯ 2. Open directory\r\n     Press Enter to confirm or Esc to cancel\r\n     ' + folder;
+  await f.draw(frame('.')); assert.ok(f.current().nativeTerminalDialog);
+  const card = await f.ask('input', [f.target, '\r']);
+  await f.draw(frame('..'));
+  const result = await f.confirm(card);
+  assert.deepEqual(f.bytes, [], 'An indented option continuation cannot authorize dropping later content');
+  assert.equal(result.disposition, 'invalidated');
+});
+test('PF12 BLOCK: a candidate legend must contain its own complete key instructions', async t => {
+  const f = await statusFixture(t);
+  const frame = folder => '\x1b[2J\x1b[HChoose working directory?\r\n  1. Cancel\r\n❯ 2. Open directory; Enter to confirm\r\nEnter folder; Esc to cancel\r\n' + folder;
+  await f.draw(frame('.')); assert.ok(f.current().nativeTerminalDialog);
+  const card = await f.ask('input', [f.target, '\r']); await f.draw(frame('..'));
+  const result = await f.confirm(card);
+  assert.deepEqual(f.bytes, []); assert.equal(result.disposition, 'invalidated');
+});
+test('PF12 control: a separately aligned bordered legend still permits status repaint once', async t => {
+  const f = await statusFixture(t);
+  const frame = status => '\x1b[2J\x1b[H' + statusDialog({ status }).replace(/^\x1b\[2J\x1b\[H/, '').split('\r\n').map(line => '│ ' + line + ' │').join('\r\n');
+  await f.draw(frame('.')); const before = f.current().nativeTerminalDialog; assert.ok(before);
+  const card = await f.ask('input', [f.target, '\r']); await f.draw(frame('..'));
+  assert.equal((await f.confirm(card)).state, 'complete'); assert.deepEqual(f.bytes, ['\r']);
+  assert.deepEqual(f.current().nativeTerminalDialog, before);
+});
+
+
+test('PF12 BLOCK: a dot-only wrapped option path is content when shortcut words are inside the option',async t=>{
+ const f=await statusFixture(t);
+ const frame=folder=>'\x1b[2J\x1b[HChoose working directory?\r\n  1. Cancel\r\n❯ 2. Open directory; Enter to confirm or Esc to cancel\r\n     '+folder;
+ const before=await f.draw(frame('.'));assert.ok(before.nativeTerminalDialog);
+ const viewport=()=>Array.from({length:f.runtime.terminal.screen.rows},(_,i)=>{const l=f.runtime.terminal.screen.buffer.active.getLine(i);return {text:l.translateToString(true),wrapped:l.isWrapped};}).filter(l=>l.text);
+ const beforeRows=viewport();
+ const card=await f.ask('input',[f.target,'\r']);assert.equal(card.state,'confirmation-required');
+ const after=await f.draw(frame('..'));assert.ok(after.nativeTerminalDialog);
+ const result=await f.confirm(card);
+ t.diagnostic(JSON.stringify({beforeRows,afterRows:viewport(),before:before.nativeTerminalDialog,after:after.nativeTerminalDialog,result:result.state,disposition:result.disposition,bytes:f.bytes}));
+ assert.deepEqual(f.bytes,[],'A dot-only last-option directory change must not be mistaken for pulsing footer status');
+ assert.equal(result.disposition,'invalidated');
+});
+test('PF12 BLOCK: dot-only option detail before a separate legend remains protected',async t=>{
+ const f=await statusFixture(t);
+ const frame=folder=>'\x1b[2J\x1b[HChoose working directory?\r\n  1. Cancel\r\n❯ 2. Open directory\r\n     '+folder+'\r\nPress Enter to confirm or Esc to cancel\r\n.';
+ await f.draw(frame('.'));const card=await f.ask();await f.draw(frame('..'));
+ const result=await f.confirm(card);assert.equal(result.disposition,'invalidated');assert.deepEqual(f.bytes,[]);
+});
+test('PF12 BLOCK: standalone legend words remain bound during a footer rewrap',async t=>{
+ const f=await statusFixture(t);
+ const frame=text=>'\x1b[2J\x1b[HSelect model\r\n  1. Default\r\n❯ 2. Opus\r\n  3. Haiku\r\n◉ xHigh effort ←/→ to adjust\r\nUse /fast to turn on Fast mode.\r\n'+text+'\r\n.';
+ await f.draw(frame('Enter to set as default · s to use this session\r\nonly · Esc to cancel'));const card=await f.ask();
+ await f.draw(frame('Enter to use this session only · s to set as default\r\n· Esc to cancel'));
+ const result=await f.confirm(card);assert.equal(result.disposition,'invalidated');assert.deepEqual(f.bytes,[]);
+});
+
+
+const returnFrame=(legend,status='.')=>'\x1b[2J\x1b[HSelect model\r\n❯ 1. Model X\r\n  2. Cancel\r\n'+legend+'\r\n'+status;
+test('PF12 Return: rewrapping a Return legend keeps the same words and executes once',async t=>{
+ const f=await statusFixture(t);await f.draw(returnFrame('Press Return to confirm or Escape to cancel'));
+ const card=await f.ask();await f.draw(returnFrame('Press Return to\r\nconfirm or Escape to cancel','..'));
+ assert.equal((await f.confirm(card)).state,'complete');assert.deepEqual(f.bytes,['\x1b']);
+});
+test('PF12 Return: changing a Return legend word revokes input without bytes',async t=>{
+ const f=await statusFixture(t);await f.draw(returnFrame('Press Return to confirm or Escape to cancel'));
+ const card=await f.ask();await f.draw(returnFrame('Press Return to\r\nselect or Escape to cancel','..'));
+ assert.equal((await f.confirm(card)).disposition,'invalidated');assert.deepEqual(f.bytes,[]);
+});
