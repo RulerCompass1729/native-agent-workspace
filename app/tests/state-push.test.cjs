@@ -569,7 +569,7 @@ test('main hurries the waiting state before every page action\'s reply, except w
   const wrapper = mainSource.slice(start, mainSource.indexOf('\n}', start));
   assert.match(wrapper, /finally \{ if \(hurries\) try \{ context\.statePush\?\.flushNow\(\); \} catch/);
   // The page's report of what it shows and its search are read-only and arrive while the person types.
-  assert.match(mainSource, /const hurries = !\['input', 'resize', 'readingState', 'draft', 'viewState', 'shownSessions', 'search'\]\.includes\(name\);\n  ipcMain\.handle\(`workspace:\$\{name\}`/);
+  assert.match(mainSource, /const hurries = !\['input', 'resize', 'readingState', 'draft', 'viewState', 'shownSessions', 'search', 'textPath'\]\.includes\(name\);\n  ipcMain\.handle\(`workspace:\$\{name\}`/);
 });
 
 test('a clock set back never holds a snapshot longer than the wait', () => {

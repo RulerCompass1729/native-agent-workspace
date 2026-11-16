@@ -56,6 +56,7 @@ const { bindOriginalOutbox, bindClaudeOutbox, bindOriginalControl, bindClaudeCon
 const { createStockOutboxView } = require('./computer-use-outbox-view.cjs');
 const background = require('./background-control.cjs');
 const recordReminders = require('./record-reminders.cjs');
+const { inspectTextPaths, openTextPath } = require('./text-paths.cjs');
 const backgroundOperation = require('./background-operation.cjs');
 const queueRules = require('./queue-dispatch.cjs');
 const { QueueDispatcher } = queueRules;
@@ -1222,7 +1223,7 @@ function register(name, handler) {
   // Sent many times a second while the person types, scrolls or resizes: these do not hurry the next state.
   // viewState goes with every keystroke in a space's composer; it changes the window's view, never the state.
   // shownSessions and search change no state either: what the page needs is in their reply.
-  const hurries = !['input', 'resize', 'readingState', 'draft', 'viewState', 'shownSessions', 'search'].includes(name);
+  const hurries = !['input', 'resize', 'readingState', 'draft', 'viewState', 'shownSessions', 'search', 'textPath'].includes(name);
   ipcMain.handle(`workspace:${name}`, async (event, ...args) => {
     const context = windows.get(event.sender.id);
     if (!context || event.senderFrame !== event.sender.mainFrame || !trusted(event.senderFrame.url)) throw new Error('Unexpected IPC source');
@@ -2461,6 +2462,13 @@ async function boot() {
     windowDefaults: { show: false, focusable: !backgroundTest }, backgroundThrottling: !backgroundTest,
     present: win => { if (backgroundTest) { if (visibleTest) win.showInactive(); return; } if (win.isMinimized()) win.restore(); win.show(); win.focus(); },
   })).open(id, requested, { background: c.background }));
+  register('textPath', (c, action, value) => {
+    if (!isCurrentHumanContext(c)) throw uiError('error.paths.personOnly');
+    if (action === 'inspect') return inspectTextPaths(value);
+    if (action === 'open') return openTextPath(value, { openPath: target => shell.openPath(target), reveal: target => shell.showItemInFolder(target), isCurrent: () => isCurrentHumanContext(c) });
+    throw uiError('error.files.localPathInvalid');
+  });
+  applicationHandlers.delete('textPath');
   register('openExternal', (c, href) => { const url = new URL(href); if (!['http:', 'https:'].includes(url.protocol)) throw uiError("error.main.unsupportedLinkType"); return c.background ? { url: url.href } : shell.openExternal(url.href); });
   register('openMessageFile', (c, source, file, options) => openMessageFile({
     snapshot: async () => roomState.apply(await c.client.call('initial')),

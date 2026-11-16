@@ -116,6 +116,7 @@ window.__ModuleLoader__.load({
         const markdownRoots = new Map();
         function MessageMarkdown({ text, streaming, onLayout, source }) {
           React.useSyncExternalStore(subscribeLocale, localeSnapshot, localeSnapshot);
+          const linkHost = React.useRef(null);
           const pendingCopy = React.useRef(new WeakSet());
           const pendingFile = React.useRef(null), alive = React.useRef(true);
           const [fileStatus, setFileStatus] = React.useState(''), [fileBusy, setFileBusy] = React.useState(false);
@@ -139,6 +140,7 @@ window.__ModuleLoader__.load({
               if (current) setFileBusy(false);
             });
           };
+          React.useLayoutEffect(() => linkHost.current && window.nawCmdLinks?.bindMarkdown(linkHost.current, { api: window.workspace, onError: error => { if (stillVisible()) setFileStatus({ key: 'markdown.openFileFailed', error }); } }), [sourceKey, text]);
           const showTarget = event => {
             const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
             if (anchor && event.currentTarget.contains(anchor)) anchor.title = anchor.getAttribute('href') || '';
@@ -157,7 +159,7 @@ window.__ModuleLoader__.load({
               pendingCopy.current.delete(button); button.removeAttribute('aria-busy');
             });
           };
-          return React.createElement('div', { className: 'naw-markdown', onClickCapture: copy, onMouseOverCapture: showTarget, onFocusCapture: showTarget, 'aria-busy': fileBusy || undefined },
+          return React.createElement('div', { ref: linkHost, className: 'naw-markdown', onClickCapture: copy, onMouseOverCapture: showTarget, onFocusCapture: showTarget, 'aria-busy': fileBusy || undefined },
             React.createElement(MarkdownDelegateProvider, { openFile, openExternalLink: href => {
               Promise.resolve().then(() => window.workspace.openExternal(href)).catch(error => { if (stillVisible()) setFileStatus({ key: 'markdown.openLinkFailed', error: error?.message ? error : { message: String(error) } }); });
             } }, React.createElement(MarkdownText, { text, streaming, className: 'dsh-markdown', labels: { code: { copyLabel: t('markdown.copy'), copiedLabel: t('markdown.copied') }, footnotes: t('markdown.footnotes') } })),

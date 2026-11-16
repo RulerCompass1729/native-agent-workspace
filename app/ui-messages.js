@@ -2,6 +2,7 @@
 (function (root) {
   const messages = {
   "zh": {
+    "error.paths.personOnly": "只能由你本人在窗口里打开路径。",
     "vendor.label": "{vendor} 模型 · 在 {shell} 里运行",
     "vendor.unreported": "在 {shell} 里运行 · 模型厂商未报告",
     "stream.waiting": "{count} 件等你",
@@ -3237,6 +3238,7 @@
     "butler.reads.retry": "再读一次"
   },
   "en": {
+    "error.paths.personOnly": "Only you can open a path from the desktop window.",
     "vendor.label": "{vendor} model · runs in {shell}",
     "vendor.unreported": "Runs in {shell} · model vendor not reported",
     "stream.waiting": "{count} waiting for you",
