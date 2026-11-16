@@ -134,14 +134,22 @@ function maintenanceAction(method, args = [], actor) {
 // Scope only the generic maintenance cases whose existing objects are known.
 // Archive, placement, rename and creation have their own fingerprint branches;
 // global pause, merge and unknown operations retain their existing broad guard.
-function maintenanceTargets(command, actor, snapshot) {
+function maintenanceTargets(command, actor, snapshot, client) {
   const { method, arguments: args = [] } = command;
   const sessions = new Set(), rooms = new Set(), add = (set, id) => { if (typeof id === 'string' && id) set.add(id); };
   const conversation = conversationTarget(method, args, actor);
   if (conversation) sessions.add(conversation);
-  else if (['interrupt', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent', 'openLocalFile'].includes(method)) add(sessions, args[0]);
+  else if (['interrupt', 'claim', 'terminal', 'input'].includes(method)) {
+    // These routes can pause every armed backend, even when their first
+    // argument names one session. Unknown routing evidence stays broad.
+    let scope;
+    try { scope = client?.controlPauseScope?.(method, args); } catch { /* Keep the broad guard. */ }
+    if (scope !== 'target') return null;
+    add(sessions, args[0]);
+  }
+  else if (['terminalSnapshot', 'resize', 'answer', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent', 'openLocalFile'].includes(method)) add(sessions, args[0]);
   else if (method === 'runtimeLocation' || method === 'saveLocalFile') { /* Only the actor is an existing session target. */ }
-  else if (method === 'openMessageFile') { add(sessions, args[0]?.sessionId); add(rooms, args[0]?.roomId); }
+  else if (method === 'openMessageFile') { add(sessions, args[0]?.sessionId); add(rooms, args[0]?.kind === 'room' ? args[0].roomId || 'shared' : args[0]?.roomId); }
   else if (method === 'spaceFiles') add(rooms, args[0]);
   else if (method === 'roomMemberOrder' || method === 'spaceAction' && args[1] === 'memberOrder') {
     const id = method === 'roomMemberOrder' ? 'shared' : args[0]; add(rooms, id);
