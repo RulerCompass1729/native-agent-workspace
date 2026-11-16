@@ -851,7 +851,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     entry.item.classList.toggle('native-notice', Boolean(m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && session?.nativeContexts?.some(c => c.boundaryId === m.id))));
     const nativeTitle = entry.exploration ? entry.exploration.active ? 'Exploring' : 'Explored' : m.toolKind === 'commandExecution' ? ['running', 'streaming'].includes(m.status) ? 'Running' : m.commandSource === 'userShell' ? 'You ran' : 'Ran' : m.kind === 'summary' && m.title === '过程摘要' || m.kind === 'plan' && m.title === '计划' || m.toolKind === 'webSearch' && ['搜索网页', '打开网页', '页内查找'].includes(m.title) || m.toolKind === 'fileChange' && m.title === '文件修改' ? '' : m.title;
     const nawTool = readingNawTool(m);
-    const messageName = () => {
+    const readMessageName = () => {
       if (wake) {
         const target = state.sessions.find(s => s.id === wake.recipientId);
         const recipient = target ? participantLabel(target, state.sessions) : wake.recipientId;
@@ -864,7 +864,11 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (!room && m.origin === 'naw-dispatch' && typeof m.dispatchItem === 'string' && m.dispatchItem.startsWith('steward-wake:')) return uiText('reading.stewardWake');
       return (room ? roomMessageLabel(m) : ui.displayText(m.name, m.uiNameMessage)) || (m.role === 'user' ? uiText('reading.you') : sessionProvider === 'claude' ? 'Claude' : 'Codex');
     };
-    const name = messageName();
+    // Heading/action bindings share this synchronous author resolution. Release
+    // it before painting content so retained getters stay live if painting fails.
+    let drawnName = readMessageName();
+    const messageName = () => { return drawnName ?? readMessageName(); };
+    const name = drawnName;
     const messageTime = readingMessageClock(m);
     const spaceStatus = readingSpaceMessageStatus(m, room);
     const snapshotSource = room && m.snapshotSource && state.room.merge?.sources.find(source => source.id === m.snapshotSource.roomId);
@@ -932,6 +936,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     entry.copyLabel = () => readingActionLabel(m, messageName());
     ui.display.computed(entry.copyText, 'aria-label', () => uiText('reading.copyAction', { label: readingActionLabel(m, messageName()) }));
     ui.display.computed(entry.share, 'aria-label', () => uiText('reading.shareAction', { label: readingActionLabel(m, messageName()) }));
+    drawnName = null;
     // Keep tools' original disclosure and source IDs. The toolbar belongs to
     // this heading, rather than floating over the next record's content.
     if ((wake || m.role !== 'system') && entry.actions.parentElement !== entry.heading) entry.heading.append(entry.actions);
