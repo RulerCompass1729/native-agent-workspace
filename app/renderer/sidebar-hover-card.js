@@ -80,15 +80,37 @@
     }
     const control = controller({ delay, grace, show: paint, hide });
     const keyOf = (element, how) => element instanceof Element ? resolve(element, how)?.key || null : null;
+    // The card stays click-through, so its own pointerenter cannot keep it open.
+    // Treat its visible rectangle as part of the open item's hover surface.
+    let cardPointer = null;
+    const overCard = event => {
+      if (!control.open || card.hidden || event.pointerType === 'touch' || event.buttons) return false;
+      const r = card.getBoundingClientRect();
+      return event.clientX >= r.left && event.clientX < r.right && event.clientY >= r.top && event.clientY < r.bottom;
+    };
+    function leaveCard() {
+      const key = cardPointer; cardPointer = null;
+      if (key) control.leave(key, 'pointer');
+    }
     const listeners = [
       [root, 'pointerover', event => {
-        if (event.pointerType === 'touch' || event.buttons) return;
+        if (event.pointerType === 'touch' || event.buttons || overCard(event)) return;
         const key = keyOf(event.target, 'pointer'); if (key) control.enter(key, 'pointer');
       }],
       [root, 'pointerout', event => {
         const key = keyOf(event.target, 'pointer'); if (!key || keyOf(event.relatedTarget, 'pointer') === key) return;
         control.leave(key, 'pointer');
       }],
+      [document, 'pointermove', event => {
+        if (overCard(event)) { cardPointer = control.open; control.enter(cardPointer, 'pointer'); }
+        else if (cardPointer) {
+          leaveCard();
+          if (event.pointerType !== 'touch' && !event.buttons && root.contains(event.target)) {
+            const key = keyOf(event.target, 'pointer'); if (key) control.enter(key, 'pointer');
+          }
+        }
+      }, true],
+      [document, 'pointerout', event => { if (!event.relatedTarget) leaveCard(); }, true],
       [root, 'focusin', event => {
         const key = keyOf(event.target, 'focus'); if (key && event.target.matches(':focus-visible')) control.enter(key, 'focus');
       }],

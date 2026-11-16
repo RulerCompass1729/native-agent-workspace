@@ -152,6 +152,56 @@ async function behaviour() {
     await rail(true); await reveal(S(ids[0])); await hover(S(ids[0])); await until(shown, 'Rail card', 2000); const g = await geometry(S(ids[0])); inside(g, 'rail'); assert.ok(g.left >= g.sidebarRight); await away(); await rail(false);
     await size(1240, 820);
   });
+  await step('B1: the pointer can enter and read the click-through card, then leave both surfaces', async () => {
+    // C's counterexample: no keyboard focus on the trigger, real pointer input,
+    // then wait beyond the 120ms grace while over the visible card's body.
+    await page.evaluate(() => document.activeElement?.blur()); await away();
+    await hover(S(ids[0])); await until(shown, 'B1 card', 2000);
+    const before = await cardText(), box = await card().boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await delay(350);
+    assert.equal(await shown(), true, 'B1: hovering the card body keeps it visible');
+    await delay(900); assert.equal(await shown(), true, 'Reading without moving has no timeout');
+    await page.mouse.move(box.x + box.width - 4, box.y + box.height - 4); await delay(350);
+    assert.equal(await shown(), true, 'Moving inside the card keeps it visible'); assert.equal(await cardText(), before);
+    await hover(S(ids[0])); await delay(350); assert.equal(await shown(), true, 'Returning to the row keeps it visible');
+    await away();
+  });
+  await step('Escape and the window blur signal dismiss a card held by its own hover area', async () => {
+    for (const action of ['Escape', 'blur']) {
+      await away(); await hover(S(ids[0])); await until(shown, 'Card before ' + action, 2000);
+      const b = await card().boundingBox(); await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2); await delay(350);
+      assert.equal(await shown(), true);
+      if (action === 'Escape') await page.keyboard.press('Escape');
+      else await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+      assert.equal(await shown(), false); await delay(350); assert.equal(await shown(), false, 'Dismissed card stays closed');
+      await away();
+    }
+  });
+  await step('a click through the hovered card reaches the observed underlying message and closes the card', async () => {
+    await hover(S(ids[0])); await until(shown, 'Card before click-through', 2000);
+    const point = await page.evaluate(() => {
+      const r = document.getElementById('naw-hover-card').getBoundingClientRect();
+      for (const fx of [0.5, 0.75, 0.25]) for (const fy of [0.5, 0.75, 0.9]) {
+        const x = r.left + fx * r.width, y = r.top + fy * r.height, hit = document.elementFromPoint(x, y);
+        if (!hit?.closest('#messages') || hit.closest('button,a,input,textarea,select,[role="button"]')) continue;
+        globalThis.hoverClickThrough = false;
+        hit.addEventListener('click', () => { globalThis.hoverClickThrough = true; }, { once: true });
+        return { x, y, tag: hit.tagName };
+      }
+      return null;
+    });
+    assert.ok(point, 'A uniquely observed non-interactive message point under the card');
+    await page.mouse.move(point.x, point.y); await delay(350); assert.equal(await shown(), true);
+    await page.mouse.click(point.x, point.y); assert.equal(await shown(), false);
+    assert.equal(await page.evaluate(() => globalThis.hoverClickThrough), true, 'Underlying message received its click');
+    await delay(350); assert.equal(await shown(), false); await away();
+  });
+  await step('leaving the window while over the card releases its hover hold', async () => {
+    await hover(S(ids[0])); await until(shown, 'Card before window exit', 2000);
+    const b = await card().boundingBox(); await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2); await delay(350);
+    assert.equal(await shown(), true); await page.mouse.move(-10, -10);
+    await until(async () => !await shown(), 'Outside the document closes the card', 1500); await away();
+  });
 }
 
 // Strict worst case: the card wholly over an area as dark (light look) or light (dark look) as the page's main text.
