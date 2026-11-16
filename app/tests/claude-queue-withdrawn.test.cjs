@@ -282,3 +282,67 @@ test('another session\'s withdrawal and other row shapes are ignored', t => {
   f.r.emit('nativeInputWithdrawn', { id, nativeId: randomUUID() });
   assert.deepEqual(f.shown(), ['开始', '方案 P']);
 });
+
+test('PF06 B2: two human hooks before both enqueue appends retain both inputs', t => {
+  const f = fixture(t), first = randomUUID(); f.prompt(first, '开始');
+  for (let i = 0; i < 2; i++) f.r.hook({ hook_event_name: 'UserPromptSubmit', session_id: f.nativeId,
+    transcript_path: f.r.nativeTranscript, prompt_id: first, prompt: '重复', source: 'user' });
+  const control = f.w.get('session').controlRevision;
+  f.queue('enqueue', '重复'); f.queue('enqueue', '重复'); f.stop(first);
+  assert.deepEqual(f.shown(), ['开始', '重复', '重复']);
+  const ids = f.w.get('session').messages.map(m => m.id);
+  for (let i = 0; i < 5; i++) f.r.withdrawQueued();
+  assert.deepEqual(f.w.get('session').messages.map(m => m.id), ids);
+  assert.equal(f.w.get('session').controlRevision, control);
+});
+
+test('PF06 B2: three coalesced human observations each prove one enqueue', t => {
+  const f = fixture(t), first = randomUUID(); f.prompt(first, '开始');
+  for (let i = 0; i < 3; i++) f.typed(first, '重复');
+  for (let i = 0; i < 3; i++) f.queue('enqueue', '重复');
+  f.stop(first);
+  assert.deepEqual(f.shown(), ['开始', '重复', '重复', '重复']);
+  assert.equal(new Set(f.w.get('session').messages.map(m => m.id)).size, 4);
+});
+
+test('PF06 B2: repeated same-boundary observations accumulate without exhausting the origin bound', t => {
+  const f = fixture(t), first = randomUUID(), count = 300; f.prompt(first, '开始');
+  for (let i = 0; i < count; i++) f.typed(first, '重复');
+  for (let i = 0; i < count; i++) f.queue('enqueue', '重复');
+  f.stop(first);
+  assert.equal(f.shown().filter(text => text === '重复').length, count);
+  assert.ok([...f.r.queuedRows.values()].every(row => row.origins.length <= 256));
+});
+
+test('PF06 B2: coalesced source counts do not label an additional unknown enqueue', t => {
+  const f = fixture(t), first = randomUUID(); f.prompt(first, '开始');
+  f.typed(first, '重复'); f.typed(first, '重复');
+  for (let i = 0; i < 3; i++) f.queue('enqueue', '重复');
+  f.stop(first);
+  assert.deepEqual(f.shown(), ['开始', '重复', '重复']);
+});
+
+test('PF06 B2: a coalesced mixed-origin boundary cannot supply human copy proofs', t => {
+  for (const source of ['naw-peer', 'unknown-source']) {
+    const f = fixture(t), first = randomUUID(); f.prompt(first, '开始');
+    f.typed(first, '重复'); f.typed(first, '重复');
+    f.r.hook({ hook_event_name: 'UserPromptSubmit', session_id: f.nativeId, prompt_id: first, prompt: '重复', source });
+    f.typed(first, '重复');
+    for (let i = 0; i < 4; i++) f.queue('enqueue', '重复');
+    f.stop(first);
+    assert.deepEqual(f.shown(), ['开始', '重复']);
+  }
+});
+
+test('PF06 B2: coalesced observations retain their separate equal-time progress anchors', t => {
+  const now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = fixture(t), first = randomUUID(); f.prompt(first, '开始');
+  f.typed(first, '重复');
+  f.w.get('session').messages.push({ id: 'progress', role: 'assistant', text: '此前进度', time: now });
+  f.typed(first, '重复');
+  f.queue('enqueue', '重复', { timestamp: new Date(now).toISOString() });
+  f.queue('enqueue', '重复', { timestamp: new Date(now).toISOString() });
+  f.w.get('session').messages.push({ id: 'reply', role: 'assistant', text: '后续回复', time: now });
+  f.stop(first);
+  assert.deepEqual(f.w.get('session').messages.map(m => m.text), ['开始', '重复', '此前进度', '重复', '后续回复']);
+});

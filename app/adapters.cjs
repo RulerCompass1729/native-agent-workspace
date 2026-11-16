@@ -1448,9 +1448,12 @@ class Claude extends EventEmitter {
     // Byte boundaries bind source observations to later enqueues. A later
     // human hook cannot erase a peer/unknown interval, including equal text.
     const bits=human&&queued?1:2,last=row.origins.at(-1),anchor=this.record.messages?.at(-1);
+    const afterId=anchor&&(!anchor.nativeId||anchor.nativeId===row.nativeId)?anchor.id:undefined;
     if(last&&at<last.at){row.unverified=true;return;}
-    if(last?.at===at)last.bits|=bits;
-    else if(row.origins.length<256)row.origins.push({at,bits,afterId:anchor&&(!anchor.nativeId||anchor.nativeId===row.nativeId)?anchor.id:undefined});
+    // Several hooks may precede one journal flush. Count equal observations,
+    // keeping separate runs when the source or progress anchor changes.
+    if(last?.at===at&&last.bits===bits&&last.afterId===afterId&&Number.isSafeInteger(last.count+1))last.count++;
+    else if(row.origins.length<256)row.origins.push({at,bits,count:1,afterId});
     else row.origins[255].bits=2; // Unknown overflow never becomes another human copy.
   }
   cancelQueueRefresh() {
@@ -1487,14 +1490,22 @@ class Claude extends EventEmitter {
     for (const [id, row] of [...this.queuedRows]) {
       const start = this.queueWindows.get(row.promptId),end=Math.min(Infinity,...[...this.queueWindows.values()].filter(at=>at>start));
       const mine = rows.filter(r => r.at >= start && r.at < end && r.text === row.text);
-      const occurrences=[],originsUsed=new Set();
+      const occurrences=[],origins=[],originsUsed=new Map();
+      for(const observation of row.origins||[]) {
+        let group=origins.at(-1);
+        if(!group||group.at!==observation.at){group={at:observation.at,proofs:[],count:0,allHuman:true};origins.push(group);}
+        if(Number.isSafeInteger(observation.count)&&observation.count>0&&Number.isSafeInteger(group.count+observation.count)) {
+          group.count+=observation.count;group.proofs.push({through:group.count,afterId:observation.afterId});
+        } else group.allHuman=false;
+        if(observation.bits!==1)group.allHuman=false;
+      }
       for(const entry of mine) {
         if(entry.kind==='queued') {
           const key=occurrences.length?`${id}-e${entry.at.toString(16)}`:id;
-          const origin=row.origins?.findLast(item=>item.at<=entry.at);
-          const human=!row.unverified&&origin?.bits===1&&!originsUsed.has(origin);
-          if(human)originsUsed.add(origin);
-          occurrences.push({id:key,time:entry.time,human,afterId:origin?.afterId,
+          const origin=origins.findLast(item=>item.at<=entry.at),used=originsUsed.get(origin)||0,proof=origin?.proofs.find(item=>item.through>used);
+          const human=!row.unverified&&origin?.allHuman===true&&Boolean(proof);
+          if(human)originsUsed.set(origin,used+1);
+          occurrences.push({id:key,time:entry.time,human,afterId:proof?.afterId,
             read:false,taken:false,linked:this.record.messages?.some(m=>m.id===key&&m.turnId)});
         } else if(entry.kind==='read') {
           const read=occurrences.find(item=>!item.taken&&!item.read);if(read)read.read=true;
