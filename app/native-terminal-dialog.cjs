@@ -1,7 +1,14 @@
 'use strict';
 // Read the live cooked viewport, never scrollback or the GUI's scroll position.
 // This observes a choice; it neither answers it nor changes native agent state.
-const observed = new WeakMap(), frames = new WeakMap();
+const observed = new WeakMap(), frames = new WeakMap(), regions = new WeakMap();
+const plainEdge = line => line.replace(/^[\s│┃╭╰─┌└]+|[\s│┃╮╯─┐┘]+$/g, '');
+function dismiss(runtime) {
+  observed.delete(runtime);
+  const previous = regions.get(runtime);
+  if (previous) regions.set(runtime, { key: null, since: previous.since });
+  return null;
+}
 function readTerminalDialogPrompt(session, runtime) {
   if (!['claude', 'codex'].includes(session?.provider) || !runtime?.terminal?.alive ||
       ['ended', 'recoverable', 'disconnected', 'background'].includes(session.state)) return null;
@@ -22,22 +29,33 @@ function readTerminalDialogPrompt(session, runtime) {
     // The native key legend AND a selected multi-choice list must be current.
     // Requiring both avoids classifying ordinary prose, drafts and slash menus.
     if (!/\b(?:enter|return)\b.*\b(?:confirm|select|continue|submit|set|accept|proceed|choose)\b/i.test(footer) ||
-        !/\besc(?:ape)?\b.*\b(?:cancel|back|exit|dismiss)[ .·│]*$/i.test(footer)) { observed.delete(runtime); return null; }
+        !/\besc(?:ape)?\b.*\b(?:cancel|back|exit|dismiss)[ .·│]*$/i.test(footer)) { return dismiss(runtime); }
     const choice = /^\s*[│┃]?\s*(?:[❯›>●]\s*)?\d+[.)]\s+\S/;
     const selected = /^\s*[│┃]?\s*[❯›>●]\s+\S/;
     const indexes = lines.map((line, i) => choice.test(line) ? i : -1).filter(i => i >= 0);
     let first = indexes[0];
     if (indexes.length < 2) {
       first = lines.findIndex(line => selected.test(line));
-      if (first < 0 || !/^\s{2,}\S/.test(lines[first + 1] || '')) { observed.delete(runtime); return null; }
+      if (first < 0 || !/^\s{2,}\S/.test(lines[first + 1] || '')) { return dismiss(runtime); }
     }
-    if (!lines.slice(first, -1).some(line => selected.test(line))) { observed.delete(runtime); return null; }
-    const before = lines.slice(0, first).map(line => line.replace(/^[\s│┃╭╰─┌└]+|[\s│┃╮╯─┐┘]+$/g, '')).filter(Boolean);
-    const title = (before.findLast(line => /[?？]$/.test(line) || /^(?:select|choose|confirm|allow|approve|permission|trust|folder)\b/i.test(line)) || before.at(-1) || '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200);
-    if (!title) { observed.delete(runtime); return null; }
-    const previous = observed.get(runtime);
-    if (previous?.title === title) return previous;
-    const prompt = { kind: 'choice', title, since: Math.max(Date.now(), (previous?.since || 0) + 1) };
+    if (!lines.slice(first, -1).some(line => selected.test(line))) { return dismiss(runtime); }
+    const before = lines.slice(0, first).map((line, index) => ({ text: plainEdge(line), index })).filter(line => line.text);
+    const heading = before.findLast(line => /[?？]$/.test(line.text) || /^(?:select|choose|confirm|allow|approve|permission|trust|folder)\b/i.test(line.text)) || before.at(-1);
+    const title = (heading?.text || '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200);
+    if (!title) return dismiss(runtime);
+    // Hard-wrapped option details and controls after numbered choices also
+    // affect what Enter does. Stop at the native key legend, not its last number.
+    let last = lines.length - 1;
+    while (last > first && (!plainEdge(lines[last]) || /\b(?:enter|return)\b.*\b(?:confirm|select|continue|submit|set|accept|proceed|choose)\b|\besc(?:ape)?\b.*\b(?:cancel|back|exit|dismiss)\b/i.test(lines[last]))) last--;
+    // The region (including the selected marker) never leaves this WeakMap.
+    // Ignore only layout padding/borders so cosmetic repaint/resize is stable.
+    const key = lines.slice(heading.index, last + 1).map(plainEdge).join('\n');
+    const previous = observed.get(runtime), memory = regions.get(runtime);
+    if (previous?.title === title && memory?.key === key) return previous;
+    const prompt = previous?.title === title
+      ? { ...previous, revision: previous.revision + 1 }
+      : { kind: 'choice', title, since: Math.max(Date.now(), (memory?.since || 0) + 1), revision: 0 };
+    regions.set(runtime, { key, since: prompt.since });
     observed.set(runtime, prompt); return prompt;
   } catch { return observed.get(runtime) || null; } // An unreadable live frame does not prove dismissal.
 }
