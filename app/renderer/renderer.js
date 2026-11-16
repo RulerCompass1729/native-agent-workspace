@@ -553,8 +553,9 @@ function renderColumnInput(host, record, visible) {
   if (binding.nativeSash) {
     binding.nativeSash.hidden = !nativeVisible;
     ui.display.attribute(binding.nativeSash, 'aria-label', 'terminal.heightName', { name: participantLabel(record, state.sessions) });
+    // Its height is measured with every other column once the whole space is drawn (refreshColumnTerminalHeights):
+    // measuring here, between columns, laid the page out again for each column on every redraw.
     if (!nativeVisible) binding.terminalDrag = null;
-    else if (!binding.terminalDrag) applyColumnTerminalHeight(binding, columnTerminalHeight(record.id));
   }
   if (nativeVisible && nativeUsable(record) && record.terminalState?.alive) renderTerminal(record.id, true);
   syncTerminalMount(record.id);
