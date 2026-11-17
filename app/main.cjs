@@ -301,7 +301,8 @@ function acceptLocale(value, generation) {
 function workspaceMenuReady() { return Boolean(wired && dsh && entry && dataDir && viewStore?.loaded && !starting && !quitting && !startupWindow); }
 function switchWindowMode(mode, win = BrowserWindow.getFocusedWindow()) {
   if (!workspaceMenuReady() || !['chat', 'terminal'].includes(mode)) return;
-  if (win && windows.get(win.webContents.id)?.win === win) win.webContents.send('workspace:switch-mode', mode);
+  const context = win && windows.get(win.webContents.id);
+  if (context && context.win === win) sendToPage(context, 'workspace:switch-mode', mode);
 }
 function updateApplicationMenu() {
   const text = key => displayText(key, { app: app.name });
