@@ -500,3 +500,98 @@ test('PF11 fallback: frame advance after desktop approval is rejected by the fin
   });
   assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
 });
+test('inbox reconciles a newly stale input before counting, retains its history and writes no terminal input', async t => {
+  const f = await fixture(t), request = await f.ask();
+  const list = () => f.controller.confirmations(f.c.client.snapshot());
+  let rows = list(); assert.equal(rows.filter(r => r.actionable).length, 1);
+  f.w.get(f.target).state = 'working'; rows = list();
+  assert.equal(rows.filter(r => r.actionable).length, 0); assert.equal(rows.find(r => r.operationId === request.id).state, 'unverifiable');
+  assert.equal(f.controller.receipt(f.actor, request.id).state, 'confirmation-required');
+  assert.equal((await f.confirm(request)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
+test('inbox uncertainty excludes the count without claiming the disconnected target disappeared', async t => {
+  const f = await fixture(t), request = await f.ask(); f.disconnect(true);
+  let card = f.controller.confirmations(f.c.client.snapshot())[0];
+  assert.equal(card.actionable, false); assert.equal(card.state, 'unverifiable'); assert.equal(card.reason, 'temporarily-unavailable');
+  assert.equal(f.controller.receipt(f.actor, request.id).state, 'confirmation-required');
+  f.disconnect(false); assert.equal(f.controller.confirmations(f.c.client.snapshot())[0].actionable, true); assert.deepEqual(f.bytes, []);
+});
+test('an incomplete disconnected snapshot never settles a missing target as gone', async t => {
+ const f=await fixture(t),request=await f.ask();f.remove();
+ let rows=f.controller.confirmations({...f.c.client.snapshot(),unavailable:true});assert.equal(rows[0].state,'unverifiable');assert.equal(f.controller.receipt(f.actor,request.id).state,'confirmation-required');
+ rows=f.controller.confirmations(f.c.client.snapshot());assert.equal(rows[0].state,'unverifiable');assert.equal(rows[0].reason,'temporarily-unavailable');assert.equal(f.controller.receipt(f.actor,request.id).state,'confirmation-required');
+ const result=await f.confirm(request);assert.equal(result.reason,'target-missing');assert.equal(result.disposition,'invalidated');assert.deepEqual(f.bytes,[]);
+});
+test('inbox all retains completed, withdrawn and expired cards with full original identity', async t => {
+  const f = await fixture(t), first = await f.ask(); await f.confirm(first);
+  const second = await f.ask(); await f.ask('backgroundWithdraw', [second.id]);
+  const third = await f.ask(); f.setClock(f.clock() + 120000); f.controller.expirePending();
+  const rows = f.controller.confirmations(f.c.client.snapshot());
+  assert.equal(rows.length, 3); assert.equal(rows.filter(r => r.actionable).length, 0);
+  assert.deepEqual(rows.map(r => [r.sessionId, r.nativeId, r.id]), [first, second, third].map(r => [f.actor.id, f.actor.nativeId, 'background:' + f.actor.nativeId + ':' + r.id]));
+  assert.equal(rows[0].state, 'complete'); assert.equal(rows[1].disposition, 'withdrawn'); assert.equal(rows[2].disposition, 'expired');
+  assert.deepEqual(f.bytes, ['\x1b']);
+});
+test('inbox accepts redraws of the same dialog and rejects a new instance', async t => {
+  const f = await fixture(t), runtime = f.runtimes.get(f.target);
+  runtime.nativeTerminalDialog = { kind: 'choice', title: 'Synthetic choice?', since: 1, revision: 0 };
+  const request = await f.ask();
+  runtime.terminal.journal.append('output', 'redraw', 100, 30, () => 'redraw');
+  assert.equal(f.controller.confirmations(f.c.client.snapshot())[0].actionable, true);
+  runtime.nativeTerminalDialog = { ...runtime.nativeTerminalDialog, since: 2 };
+  assert.equal(f.controller.confirmations(f.c.client.snapshot())[0].state, 'unverifiable');
+  assert.equal((await f.confirm(request)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
+test('inbox can verify after restart without opening a view; missing proof stays uncertain and never counted', async t => {
+ const f=await fixture(t),request=await f.ask();
+ const cold=new BackgroundControl({...f.config,context:()=>assert.fail('Projection must not open a background view'),confirmationFingerprint:(row,snapshot,view)=>operation.controlFingerprint(row.command,{state:snapshot,actor:row.actor,context:{view},roomState:{apply:s=>s,value:{sessionArchives:{}},metadata:()=>({restoreMembers:[],restorePlacements:{}})},sessionLabels:{apply:s=>s}})});
+ try { assert.equal(cold.confirmations(f.c.client.snapshot())[0].actionable,true);cold.commit(d=>{delete d.records.find(r=>r.id===request.id).guard;});
+ const row=cold.confirmations(f.c.client.snapshot())[0];assert.equal(row.actionable,false);assert.equal(row.state,'unverifiable');assert.equal(cold.receipt(f.actor,request.id).state,'confirmation-required'); }
+ finally {await cold.close();}
+ assert.deepEqual(f.bytes,[]);
+});
+
+
+function projectionFixture(controller) {
+ const source=fs.readFileSync(require.resolve('../main.cjs'),'utf8'),events=[];
+ const scope=vm.createContext({roomState:{apply:s=>s},sessionLabels:{apply:s=>s},submissionState:s=>s,
+  confirmationInbox:require('../confirmation-inbox.cjs'),confirmationProjectionKey:'',confirmationProjectionKeys:new WeakMap(),recordsChanged:()=>events.push('changed'),
+  confirmationSnapshot:(_client,snapshot)=>snapshot,backgroundControl:controller,backgroundUnavailable:false,outboxQuitFailed:false,outboxUnavailable:false,
+  queueSecretary:null,integratorRole:null,stewardRole:null,queueDispatcher:null,butlerIngress:null,localVendorIcons:()=>({}),
+  roomPeerIdentity:()=>null,endedByMove:()=>[],viewStorageWarning:'',viewStorageWarningUiMessage:null});
+ vm.runInContext(source.slice(source.indexOf('function displayState('),source.indexOf('function reportViewStorage(')),scope);
+ return {events,show:(snapshot,context={view:{},win:{}})=>scope.displayState(snapshot,context)};
+}
+for(const change of ['missing-target','missing-origin','different-native','working']) test(`follow-up: one stale snapshot (${change}) must not permanently invalidate a valid card`,async t=>{
+ const f=await fixture(t),request=await f.ask(),fresh=f.c.client.snapshot();
+ const lagging={...fresh,sessions:fresh.sessions.filter(s=>s.id!==(change==='missing-target'?f.target:change==='missing-origin'?f.actor.id:null)).map(s=>s.id===f.target?{...s,...(change==='different-native'?{nativeId:'previous-native'}:change==='working'?{state:'working'}:{})}:s)};
+ const projected=f.controller.confirmations(lagging)[0];
+ assert.equal(projected.actionable,false);assert.equal(projected.state,'unverifiable');assert.equal(projected.reason,'temporarily-unavailable');assert.equal(f.controller.receipt(f.actor,request.id).state,'confirmation-required');
+ assert.equal(f.controller.confirmations(fresh)[0].actionable,true,'A fresh snapshot restores this same card');
+ assert.equal((await f.confirm(request)).state,'complete');assert.deepEqual(f.bytes,['\x1b']);
+});
+test('follow-up: a real projection write failure retains the conversation and marks cards unverifiable',async t=>{
+ const f=await fixture(t),request=await f.ask(),p=projectionFixture(f.controller),rename=fs.renameSync;
+ f.setClock(f.clock()+120000);
+ fs.renameSync=function(from,to,...rest){if(to===f.controller.file)throw Object.assign(Error('Synthetic write denied'),{code:'EACCES'});return rename.call(this,from,to,...rest);};
+ let display;try{assert.doesNotThrow(()=>{display=p.show(f.c.client.snapshot());});}finally{fs.renameSync=rename;}
+ assert.equal(f.controller.failed,true);assert.equal(display.sessions.length,2);assert.equal(display.backgroundConfirmations[0].state,'unverifiable');assert.equal(display.backgroundConfirmations[0].actionable,false);
+ assert.equal(p.show(f.c.client.snapshot()).backgroundConfirmations[0].state,'unverifiable');
+ await assert.rejects(f.confirm(request));assert.deepEqual(f.bytes,[]);
+});
+test('follow-up: per-window projection keys do not alternate between healthy and disconnected snapshots',()=>{
+ const p=projectionFixture({rows:()=>[],confirmations:(_names,snapshot)=>[{id:'card',state:snapshot.unavailable?'unverifiable':'confirmation-required',actionable:!snapshot.unavailable}]}),a={view:{},win:{}},b={view:{},win:{}};
+ const healthy={sessions:[]},disconnected={sessions:[],unavailable:true};
+ p.show(healthy,a);p.show(disconnected,b);assert.equal(p.events.length,2);
+ p.show(healthy,a);p.show(disconnected,b);assert.equal(p.events.length,2,'Unchanged windows do not force extra bell refreshes');
+ p.show(disconnected,a);assert.equal(p.events.length,3,'An actual change in one window still notifies');
+});
+
+
+test('follow-up: uncertainty after an earlier step retains the partial-operation warning',async t=>{
+ const f=await fixture(t);let effects=0;
+ f.handlers.set('rename',async context=>{effects++;await dialog(context,'message',{message:'Continue synthetic step?',buttons:['Cancel','Continue'],cancelId:0});});
+ const request=await f.ask('rename',[f.target,'New name']);const follow=await f.confirm(request);assert.equal(follow.state,'confirmation-required');assert.equal(effects,1);
+ const fresh=f.c.client.snapshot(),lagging={...fresh,sessions:fresh.sessions.filter(s=>s.id!==f.target)};
+ const row=f.controller.confirmations(lagging)[0];assert.equal(row.state,'unverifiable');assert.equal(row.afterStart,true);assert.equal(row.reason,'partial-operation');assert.equal(effects,1);
+});

@@ -4,19 +4,86 @@
    window-bound ticket and reports confirmed results, including skipped folders. */
 (function (global) {
   'use strict';
-  function bind({ button, badge, dialog, document, api, text, display }) {
+  function bind({ button, badge, dialog, document, api, text, display, summaryText = summary => summary.method || '', confirmation = async () => false, now = Date.now }) {
     const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
     const format = text || ((key, params) => locale.format('zh', key, params));
     const say = (el, key, params) => { if (display) display.text(el, key, params); else el.textContent = format(key, params); return el; };
     const make = (tag, cls, key, params) => { const el = document.createElement(tag); if (cls) el.className = cls; if (key) say(el, key, params); return el; };
-    const control = (key, action, handler, params) => { const el = make('button', '', key, params); el.type = 'button'; el.dataset.action = action; el.addEventListener('click', handler); return el; };
+    const focusTargets = new Map();
+    const control = (key, action, handler, params, focusKey = action) => { const el = make('button', '', key, params); el.type = 'button'; el.dataset.action = action; el.dataset.focusKey = focusKey; focusTargets.set(focusKey, el); el.addEventListener('click', handler); return el; };
     // Sizes: one decimal of MiB, never rounded down; past 1 GiB, two decimals of GiB.
     const size = bytes => bytes >= 1024 ** 3 ? `${(Math.ceil(bytes / 1024 ** 3 * 100) / 100).toFixed(2)} GiB` : (tenths => `${tenths % 10 ? (tenths / 10).toFixed(1) : tenths / 10} MiB`)(Math.ceil(bytes / 104857.6));
     const tempSize = bytes => bytes < 1024 ? `${bytes} B` : bytes < 1024 ** 2 ? `${Math.floor(bytes / 1024)} KiB` : bytes < 1024 ** 3 ? `${(Math.floor(bytes / 1024 ** 2 * 10) / 10).toFixed(1)} MiB` : `${(Math.floor(bytes / 1024 ** 3 * 10) / 10).toFixed(1)} GiB`;
     let current = null, ticket = 0, lastResult = null, working = false, cleanupFailed = false;
+    let filter = 'pending', clock = null, clockRows = [], disposed = false, navigationFailed = false;
+    const expiryRequested = new Set();
+    function stopClock() { clearTimeout(clock); clock = null; }
+    function updateTimes() {
+      let expired = false;
+      for (const { row, waited, remaining } of clockRows) {
+        const ended = !row.actionable && !['unverifiable', 'confirmation-required'].includes(row.state);
+        const through = ended ? row.finishedAt || row.expiresAt || now() : now();
+        const age = Math.max(0, Math.floor((through - row.time) / 1000));
+        waited.textContent = format('records.confirmations.waited', { minutes: Math.floor(age / 60), seconds: age % 60 });
+        if (row.actionable && Number.isSafeInteger(row.expiresAt)) {
+          const left = Math.max(0, Math.ceil((row.expiresAt - now()) / 1000));
+          remaining.textContent = format('records.confirmations.remaining', { minutes: Math.floor(left / 60), seconds: left % 60 });
+          const key = row.key || row.id;
+          if (!left && !expiryRequested.has(key)) { expiryRequested.add(key); expired = true; }
+        }
+      }
+      if (expired) void refresh(); // Source TTL decides eligibility; this only requests its fresh projection.
+    }
+    function armClock() {
+      stopClock();
+      if (disposed || !dialog.open || dialog.dataset.view !== 'reminders' || !clockRows.some(({ row }) => row.actionable && row.expiresAt > now())) return;
+      clock = setTimeout(() => { clock = null; updateTimes(); armClock(); }, 1000); clock.unref?.();
+    }
+    function confirmationSection() {
+      const section = make('section', 'records-section'); section.dataset.record = 'confirmations';
+      section.append(make('h3', '', 'records.confirmations.title'));
+      const filters = make('div', 'records-actions'); filters.setAttribute('role', 'group'); filters.setAttribute('aria-label', format('records.confirmations.filters'));
+      for (const value of ['pending', 'all']) {
+        const tab = control('records.confirmations.' + value, value === 'pending' ? 'pendingConfirmations' : 'allConfirmations', () => { filter = value; draw(); });
+        if (filter === value) tab.className = 'primary';
+        tab.setAttribute('aria-pressed', String(filter === value)); filters.append(tab);
+      }
+      section.append(filters);
+      const rows = (current.confirmations || []).filter(row => filter === 'all' || row.actionable === true);
+      const list = make('ul', 'records-confirmations');
+      for (const row of rows) {
+        const li = make('li'), key = row.key || [row.sessionId, row.nativeId, row.operationId].join(':');
+        const link = control(null, 'openConfirmation', async () => {
+          dialog.close();
+          let opened = false;
+          try { opened = await confirmation({ sessionId: row.sessionId, nativeId: row.nativeId, messageId: row.id, operationId: row.operationId, history: true }); } catch { /* Keep the summary available. */ }
+          if (opened === false && !disposed) { navigationFailed = true; draw(); dialog.showModal(); armClock(); }
+        }, null, 'confirmation:' + key);
+        link.className = 'background-operation records-confirmation-link'; link.dataset.confirmationKey = key;
+        const who = make('strong'); who.textContent = format('records.confirmations.fromTo', { actor: row.actorName, target: row.targetName || format('records.confirmations.targetUnknown') });
+        const action = make('span');
+        if (row.summary && display?.computed) display.computed(action, 'text', () => summaryText(row.summary));
+        else action.textContent = row.summary ? summaryText(row.summary) : row.title;
+        const state = make('span', 'quiet');
+        const stateKey = row.disposition ? 'background.card.' + row.disposition + (row.afterStart ? 'AfterStart' : '')
+          : ['unverifiable', 'replaced'].includes(row.state) ? 'records.confirmations.' + row.state
+          : row.actionable ? 'background.card.waiting' : 'background.state.' + row.state;
+        say(state, stateKey);
+        const waited = make('time', 'quiet'), remaining = make('time', 'quiet');
+        if (Number.isSafeInteger(row.time)) waited.setAttribute('datetime', new Date(row.time).toISOString());
+        if (Number.isSafeInteger(row.expiresAt)) remaining.setAttribute('datetime', new Date(row.expiresAt).toISOString());
+        clockRows.push({ row, waited, remaining }); link.append(who, action, state, waited, remaining);
+        if (row.afterStart && (row.disposition || row.state === 'cancelled' || row.state === 'unconfirmed')) link.append(make('span', 'quiet', 'records.confirmations.partial'));
+        else if (row.reason && row.reason !== 'replaced') link.append(make('span', 'quiet', 'background.card.reason.' + row.reason));
+        li.append(link); list.append(li);
+      }
+      if (!rows.length) section.append(make('p', 'records-empty', filter === 'all' ? 'records.confirmations.emptyAll' : current.count === 0 && !current.confirmations.length ? 'records.nothing' : 'records.confirmations.empty'));
+      section.append(list); return section;
+    }
 
     // The original bell position remains available even when no reminder is due.
     async function refresh(force = false) {
+      if (disposed) return current;
       const mine = ++ticket;
       let status; try { status = await (force ? api.records('status', true) : api.records('status')); } catch { status = null; }
       if (mine !== ticket) return current;
@@ -39,6 +106,8 @@
     // The reminders: one section per record with something due, in the order the records are listed.
     const registrationText = issue => issue === 'incomplete' ? 'records.temp.registrationIncomplete' : issue === 'metadata-unavailable' ? 'records.temp.registrationUnavailable' : null;
     function draw() {
+      const restore = document.activeElement?.dataset?.focusKey;
+      stopClock(); clockRows = []; focusTargets.clear();
       dialog.dataset.view = 'reminders'; dialog.replaceChildren();
       const title = make('h2', '', 'records.title'); title.id = (dialog.id || 'records-dialog') + '-title'; dialog.setAttribute('aria-labelledby', title.id);
       const head = make('div', 'records-panel-head'), number = make('span', 'records-panel-count');
@@ -47,7 +116,10 @@
       head.append(title, number, close); dialog.append(head);
       const due = (current?.records || []).map(record => ({ record, items: record.items.filter(entry => entry.shown) })).filter(group => group.items.length);
       if (!current) dialog.append(make('p', 'records-note', 'records.failed', { reason: '—' }));
-      else if (!due.length && !current.temp?.shown && !lastResult) dialog.append(make('p', 'records-empty', 'records.nothing'));
+      else if (!Array.isArray(current.confirmations) && !due.length && !current.temp?.shown && !lastResult) dialog.append(make('p', 'records-empty', 'records.nothing'));
+      if (Array.isArray(current?.confirmations)) dialog.append(confirmationSection());
+      if (navigationFailed) dialog.append(make('p', 'records-note', 'records.confirmations.unavailable'));
+      if (Array.isArray(current?.confirmations) && (due.length || current.temp?.shown || lastResult)) dialog.append(make('h3', '', 'records.confirmations.reminders'));
       if (lastResult) {
         const result = make('section', 'records-temp-result'); result.setAttribute('role', 'status');
         result.append(make('h3', '', 'records.temp.result', { count: lastResult.cleaned }), make('p', '', 'records.temp.freed', { size: tempSize(lastResult.bytes) }));
@@ -100,9 +172,12 @@
       const foot = make('div', 'dialog-actions');
       if (current?.count) foot.append(make('span', 'records-person', 'records.temp.person'));
       foot.append(control('records.done', 'done', () => dialog.close())); dialog.append(foot);
+      updateTimes(); armClock();
+      if (restore && dialog.open) (focusTargets.get(restore) || focusTargets.get('pendingConfirmations') || close).focus?.();
     }
     // Export: the record's sealed blocks, the ones past 30 days chosen to start with, a folder, and the copy.
     async function exportView(record) {
+      stopClock(); clockRows = [];
       dialog.dataset.view = 'export'; dialog.replaceChildren();
       const title = make('h2', '', 'records.export.title', { name: format(`records.name.${record}`) }); title.id = (dialog.id || 'records-dialog') + '-title';
       const status = make('p', 'records-note'); status.setAttribute('role', 'status');
@@ -151,12 +226,13 @@
       }
       dialog.append(list, where, status, about, actions); update();
     }
-    async function open() { await refresh(true); draw(); if (!dialog.open) dialog.showModal(); }
-    button.addEventListener('click', () => { open(); });
-    // Worked out again when the main process says a record changed (a block sealed or added, a record not loaded).
-    if (typeof api.onRecordsChanged === 'function') api.onRecordsChanged(() => { refresh(); });
-    dialog.addEventListener('close', () => { dialog.replaceChildren(); dialog.dataset.view = ''; lastResult = null; cleanupFailed = false; });
-    return { refresh, open, size };
+    async function open() { await refresh(true); if (disposed) return; draw(); if (!dialog.open) dialog.showModal(); armClock(); }
+    const click = () => { void open(); };
+    const onClose = () => { stopClock(); clockRows = []; expiryRequested.clear(); dialog.replaceChildren(); dialog.dataset.view = ''; lastResult = null; cleanupFailed = false; navigationFailed = false; filter = 'pending'; };
+    button.addEventListener('click', click);
+    const off = typeof api.onRecordsChanged === 'function' ? api.onRecordsChanged(() => { void refresh(); }) : null;
+    dialog.addEventListener('close', onClose);
+    return { refresh, open, size, dispose() { disposed = true; ticket++; stopClock(); clockRows = []; if (typeof off === 'function') off(); button.removeEventListener?.('click', click); dialog.removeEventListener?.('close', onClose); } };
   }
   const value = { bind };
   if (typeof module === 'object' && module.exports) module.exports = value;

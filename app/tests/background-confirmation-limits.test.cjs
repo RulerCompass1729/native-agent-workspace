@@ -94,7 +94,7 @@ test('the real desktop roster marks a backend session archived for admission and
   await rooms.membership(client, id, true); await rooms.archiveSession(client, id);
   const raw = client.snapshot().sessions.find(s => s.id === id); assert.equal(Object.hasOwn(raw, 'archived'), false);
   const actor = { id, nativeId: raw.nativeId, provider: 'codex', name: 'Actor' }, c = { client, background: true, view: {}, refresh: client.refresh, win: { destroy() {} } };
-  const scope = { context: c, client, actor, roomState: rooms, backgroundOperation: operation, roomIds: require('../collaboration-spaces.cjs').roomIds };
+  const scope = { context: c, client, confirmationSnapshot: (client, snapshot) => snapshot || client.snapshot(), actor, roomState: rooms, sessionLabels: { apply: value => value }, backgroundOperation: operation, roomIds: require('../collaboration-spaces.cjs').roomIds };
   vm.createContext(scope);
   if (main.includes('function controlRequestActors(')) vm.runInContext(part('function controlRequestActors(', '\nfunction projectBackgroundRecord('), scope);
   const start = main.indexOf('      context.confirmationActors =');
@@ -127,7 +127,7 @@ for (const provider of ['claude', 'codex']) test(`${provider}: archiving a stand
   client.entries = [{ key: 'backend', state: { ...client.snapshot(), capabilities: [operation.CAPABILITY] } }];
   const actor = { id, nativeId: workspace.get(id).nativeId, provider, name: 'Actor' };
   const c = { background: true, actor, client, view: {}, refresh: client.refresh, win: { destroy() {}, isDestroyed: () => false } };
-  const scope = vm.createContext({ context: c, client, actor, roomState: rooms, backgroundOperation: operation, roomIds: require('../collaboration-spaces.cjs').roomIds,
+  const scope = vm.createContext({ context: c, client, confirmationSnapshot: (client, snapshot) => snapshot || client.snapshot(), actor, roomState: rooms, sessionLabels: { apply: value => value }, backgroundOperation: operation, roomIds: require('../collaboration-spaces.cjs').roomIds,
     applicationHandlers: handlers, ipcMain: { handle() {} }, showDialog: (context, kind, options) => dialog(context, kind, options), displayText: key => key, uiError: require('../ui-errors.cjs').uiError });
   vm.runInContext(part('function controlRequestActors(', '\nfunction projectBackgroundRecord('), scope);
   vm.runInContext(part('      context.confirmationActors =', '      context.fingerprint ='), scope);

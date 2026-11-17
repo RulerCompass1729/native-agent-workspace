@@ -186,7 +186,7 @@ class MobileBroker {
     this.#workspaceState(auth);
     if (!this.#pushAuthority()) throw denied();
     this.#push ||= new (require('./mobile-push.cjs').MobilePush)({ ...this.#pushOptions,
-      authority: () => this.#pushAuthority(), count: () => this.#desktop.records.status().count });
+      authority: () => this.#pushAuthority(), count: () => this.#desktop.records.status(null, this.#bound()).count });
     return this.#push.configuration();
   }
   pushAction(auth, value) {

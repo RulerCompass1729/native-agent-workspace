@@ -2,6 +2,7 @@
 // receipts and person-bound deletion snapshots never enter the public summary.
 const fs=require('node:fs'), path=require('node:path'), {execFile}=require('node:child_process');
 const {randomUUID}=require('node:crypto'), {promisify}=require('node:util');
+const {isDeepStrictEqual}=require('node:util');
 const ownership=require('./temp-ownership.cjs'), {pythonExecutable}=require('./platform.cjs');
 const {lockIdentity}=require('./service-lock.cjs');
 const run=promisify(execFile), DAY=86400000, LINE=512*1024*1024, WEEK=7*DAY;
@@ -139,6 +140,11 @@ class TempReminders {
   person(c) { if(typeof this.isPerson!=='function'||!this.isPerson(c)) throw Error('Temporary cleanup is person-only'); }
   async present(c,force=false) {
     this.person(c); const status=await this.status(force); this.person(c);
+    const prior=this.tickets.get(c), stable=({version,checkedAt,...value})=>value;
+    if(prior && this.now()>=prior.at && this.now()-prior.at<=DAY &&
+        isDeepStrictEqual(prior.entries,this.candidates) && isDeepStrictEqual(stable(prior.status),stable(status))) {
+      prior.version=status.version;prior.status=status;return {...status,ticket:prior.ticket};
+    }
     const ticket=randomUUID(); this.tickets.set(c,{ticket,version:status.version,entries:[...this.candidates],status,at:this.now()});
     return {...status,ticket};
   }

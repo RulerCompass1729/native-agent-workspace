@@ -35,7 +35,7 @@ async function fixture(t, provider) {
   const actor = { id, nativeId: workspace.get(id).nativeId, provider, name: 'Butler' };
   const c = { background: true, actor, client, view: {}, refresh: client.refresh, win: { destroy() {}, isDestroyed: () => false } };
   const handlers = new Map();
-  const scope = vm.createContext({ context: c, client, actor, roomState: rooms, sessionLabels: labels, backgroundOperation: operation, roomIds: require('../collaboration-spaces.cjs').roomIds,
+  const scope = vm.createContext({ context: c, client, confirmationSnapshot: (client, snapshot) => snapshot || client.snapshot(), actor, roomState: rooms, sessionLabels: labels, backgroundOperation: operation, roomIds: require('../collaboration-spaces.cjs').roomIds,
     applicationHandlers: handlers, ipcMain: { handle() {} }, showDialog: (context, kind, options) => dialog(context, kind, options), displayText: (key, params) => require('../ui-locale.js').format('en', key, params), uiError: require('../ui-errors.cjs').uiError,
     assertNativeCreation: require('../submission-policy.cjs').assertNativeCreation, capabilitiesFor: () => ['resume', 'resubscribe', 'transportReconnect'],
     validRoomId: require('../collaboration-spaces.cjs').roomId, keepStewardOutside() {},

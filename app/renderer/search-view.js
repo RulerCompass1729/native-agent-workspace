@@ -149,7 +149,8 @@ async function showBackgroundConfirmation(target) {
   if (loading) await loading;
   const record = state.sessions.find(s => s.id === target.sessionId && s.nativeId === target.nativeId);
   const row = record?.messagesOmitted ? null : record?.messages.find(m => m.id === target.messageId);
-  if (!row || row.backgroundOperation?.state !== 'confirmation-required') { toast(uiText('search.changed')); return false; }
+  if (!row?.backgroundOperation || !target.history && row.backgroundOperation.state !== 'confirmation-required' ||
+      row.backgroundOperation.nativeId !== target.nativeId || target.operationId && row.backgroundOperation.id !== target.operationId) { toast(uiText('search.changed')); return false; }
   await select(record.id, 'chat');
   return pointToMessage($('messages'), record.id, row.id);
 }

@@ -173,3 +173,12 @@ test('closing the person window preserves confirmed partial cleanup and skips th
   assert.equal(result.cleaned,1);assert.equal(result.skipped,2);
   assert.equal(require('../temp-reminders.cjs').readSummary(path.join(f.base,'profile')).result.cleaned,1);
 });
+
+test('unchanged refresh keeps the displayed cleanup ticket; a changed snapshot replaces it', async t => {
+ const f=fixture(t);f.candidate();const c={person:true};
+ const first=await f.manager.present(c),again=await f.manager.present(c);
+ assert.equal(again.ticket,first.ticket,'A count-only bell refresh must not revoke the displayed cleanup');
+ f.time(NOW+1000);const rescanned=await f.manager.present(c,true);assert.equal(rescanned.ticket,first.ticket,'A scan with identical contents keeps its ticket');
+ f.candidate('another');const changed=await f.manager.present(c,true);assert.notEqual(changed.ticket,first.ticket);
+ await assert.rejects(f.manager.clean(c,first.ticket),/snapshot/i);
+});

@@ -159,7 +159,7 @@ const compactRefusal = row => { row.guard = { auditRooms: row.guard?.auditRooms 
 const queuedDelivery = args => ['queue', 'queueShared'].includes(args.method === 'spaceAction' ? args.arguments?.[1] : args.method);
 class BackgroundControl {
   constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now, readCopyBytes = MAX_RECORD_BYTES,
-    retireAfter = RETIRE_AFTER, retireHold = () => false, unasked = () => false, standing = () => null, standingValid = () => false, stagedPollMs = 200, decided = () => {}, receiptRead = () => {} }) {
+    retireAfter = RETIRE_AFTER, retireHold = () => false, unasked = () => false, standing = () => null, standingValid = () => false, stagedPollMs = 200, decided = () => {}, receiptRead = () => {}, confirmationFingerprint = null }) {
     if (!Number.isSafeInteger(readCopyBytes) || readCopyBytes < 1 || readCopyBytes > MAX_RECORD_BYTES) throw Error('Invalid read copy budget');
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
     this.data = { version: STATE_VERSION, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
@@ -177,6 +177,7 @@ class BackgroundControl {
     this.unasked = unasked;
     this.standing = standing; this.standingValid = standingValid;
     this.confirmationPending = confirmationPending;
+    this.confirmationFingerprint = confirmationFingerprint;
     // The person's answer on a card, once its outcome is recorded, and the agent reading a receipt itself: what main.cjs
     // tells the agent that asked (answer-notices.cjs). Neither can change an outcome.
     this.decided = decided; this.receiptRead = receiptRead;
@@ -289,6 +290,9 @@ class BackgroundControl {
     throw Error('No place for the older background operation record');
   }
   commit(change) {
+    const signature = records => records.filter(r => r.confirmation || r.confirmationRequestedAt != null || r.humanDecision != null)
+      .map(r => [this.key(r.actor), r.id, r.state, r.disposition, r.reason, r.confirmation, r.confirmationSummary, r.humanDecision]);
+    const before = signature(this.data.records);
     if (this.failed) throw Error('Background operation storage is unavailable');
     const next = clone(this.data); change(next);
     next.refusals = operation.retainRefusalRows(next.refusals, 128, 32);
@@ -331,7 +335,7 @@ class BackgroundControl {
       try { fs.writeFileSync(fd, text); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
       fs.renameSync(temporary, this.file); renamed = true;
       const dir = fs.openSync(path.dirname(this.file), 'r'); try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
-      this.data = next; this.scheduleExpiry(); this.changed();
+      this.data = next; this.scheduleExpiry(); this.changed({ confirmations: !isDeepStrictEqual(before, signature(next.records)) });
     } catch (error) {
       this.failed = true; if (!renamed) fs.rmSync(temporary, { force: true });
       throw Error('Background operation save is unconfirmed; no automatic replay', { cause: error });
@@ -879,6 +883,11 @@ class BackgroundControl {
         const row = d.records.find(r => r.id === args.operation_id && this.key(r.actor) === key);
         d.views[key + ':' + (args.view_id || 'default')] = clone(context.view);
         delete row.confirmation;
+        if (confirmation?.kind === 'message') {
+          row.confirmationRequestedAt ??= this.now();
+          row.confirmationTitle = operation.visibleText(confirmation.options?.message || '');
+          row.confirmationSummary = operation.operationSummary(args, actor, this.terminalSnapshot(context) || {});
+        }
         // Only a resumable handler needs this marker. A later approval cannot
         // claim non-execution if an earlier handler may already have had effects.
         if (handlerEntered && state === 'confirmation-required') row.handlerStarted = true;
@@ -1008,8 +1017,8 @@ class BackgroundControl {
     return done.length ? { time: Math.max(...done) } : null;
   }
   // `names` is the page's display state; an agent's own view (null) gets the rows as before, without the card's words.
-  rows(sessionId, names = {}) {
-    this.expirePending();
+  rows(sessionId, names = {}, { expire = true } = {}) {
+    if (expire) this.expirePending();
     const own = [...(this.archivedBySession.get(sessionId) || []), ...this.data.records.filter(r => r.actor.id === sessionId)];
     return own.map(saved => { const r = this.expired(saved) ? { ...saved, ...this.expiryFields(saved) } : saved; return ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
       name: operation.visibleText(r.actor.name), time: r.at, status: ['running', 'awaiting-native'].includes(r.state) ? 'working' : ['complete', 'received', 'cancelled'].includes(r.state) ? 'complete' : 'error',
@@ -1022,6 +1031,65 @@ class BackgroundControl {
           ...(r.state === 'confirmation-required' ? { replacedBy: this.replacement(r, own), repeated: this.repeated(r, own) } : {}) } : {}) } }); });
   }
   // Human-window waiting strip: reuse the conversation card and its warnings.
+  confirmationState(row, snapshot) {
+    const unknown = reason => ({ state: 'unverifiable', actionable: false, reason: row.handlerStarted ? 'partial-operation' : reason });
+    if (!snapshot || !Array.isArray(snapshot.sessions)) return unknown('evidence-unavailable');
+    if (confirmationExpiresAt(row) === null) return unknown('evidence-unavailable');
+    if (snapshot.unavailable) return unknown('temporarily-unavailable');
+    const origin = snapshot.sessions.find(s => s.id === row.actor.id);
+    if (!origin || origin.archived || origin.nativeId !== row.actor.nativeId) return unknown('temporarily-unavailable');
+    if (origin.backendUnavailable || origin.transportDisconnected || origin.nativeContextPending) return unknown('temporarily-unavailable');
+    for (const expected of row.guard?.sessions || []) {
+      const target = snapshot.sessions.find(s => s.id === expected.id);
+      if (!target) return unknown('temporarily-unavailable');
+      if (target.archived) return unknown('temporarily-unavailable');
+      if (target.backendUnavailable || target.transportDisconnected || target.nativeContextPending) return unknown('temporarily-unavailable');
+      if (expected.nativeId && target.nativeId !== expected.nativeId) return unknown('temporarily-unavailable');
+    }
+    if (row.command.method === 'input') {
+      const checked = operation.checkTerminalInput(row.terminalConsent, snapshot, row.command.arguments[0]);
+      if (checked.status === 'invalid') return unknown('temporarily-unavailable');
+      if (checked.status !== 'valid') return unknown(checked.reason);
+    }
+    if (!row.guard) return unknown('evidence-unavailable');
+    if (row.guard) {
+      const key = this.key(row.actor) + ':' + (row.command.view_id || 'default'), live = this.opened.get(key)?.context;
+      try {
+        const context = this.confirmationFingerprint ? { fingerprint: command => this.confirmationFingerprint(row, snapshot, live?.view || this.data.views[key] || { selected: row.actor.id }, live) } : live;
+        if (!context?.fingerprint) return unknown('evidence-unavailable');
+        if (!isDeepStrictEqual(row.guard, controlGuard(context, row.command))) return unknown('temporarily-unavailable');
+      } catch (error) { return error.uiMessage?.key === 'error.planWorking' ? unknown('temporarily-unavailable') : unknown('evidence-unavailable'); }
+    }
+    return { state: 'confirmation-required', actionable: true, reason: null };
+  }
+  // One ledger projection for the bell, waiting strip and scoped phone reader.
+  // No context is opened and no command is invoked while inspecting it.
+  confirmations(names = {}, snapshot = names) {
+    let unavailable = this.failed;
+    // Expiry may persist a receipt. A failed write cannot take the person's
+    // conversation down or make a pending card look executable.
+    try { this.expirePending(); } catch { unavailable = true; }
+    const all = () => [...this.archivedBySession.values()].flat().concat(this.data.records);
+    const observed = { ...snapshot, ...(Array.isArray(names.sessions) ? { sessions: names.sessions } : {}) };
+    const source = all(), messages = new Map();
+    return source.filter(r => r.confirmation?.kind === 'message' || Number.isSafeInteger(r.confirmationRequestedAt) || Number.isSafeInteger(r.humanDecision))
+      .map(row => {
+        const replacedBy = this.replacement(row, source), expired = this.expired(row);
+        const status = row.state === 'confirmation-required' && unavailable ? { state: 'unverifiable', actionable: false, reason: row.handlerStarted ? 'partial-operation' : 'evidence-unavailable' }
+          : expired ? { state: 'expired', disposition: 'expired', actionable: false, reason: 'deadline-elapsed' }
+          : replacedBy ? { state: 'replaced', actionable: false, reason: 'replaced' }
+          : row.state === 'confirmation-required' ? this.confirmationState(row, observed)
+          : { state: row.state, disposition: row.disposition || null, reason: row.reason || null, actionable: false };
+        if (!messages.has(row.actor.id)) messages.set(row.actor.id, this.rows(row.actor.id, names, { expire: false }));
+        const message = messages.get(row.actor.id).find(m => m.backgroundOperation.id === row.id && m.backgroundOperation.nativeId === row.actor.nativeId);
+        const summary = row.confirmationSummary || operation.operationSummary(row.command, row.actor, names);
+        return { id: message.id, key: [row.actor.id, row.actor.nativeId, row.id].join(':'), operationId: row.id, sessionId: row.actor.id, nativeId: row.actor.nativeId,
+          actorName: operation.visibleText(row.actor.name), targetName: summary?.target || summary?.room || summary?.name || '',
+          title: row.confirmationTitle || row.confirmation?.options?.message || summary?.method || '', summary,
+          time: row.at, expiresAt: confirmationExpiresAt(row), finishedAt: replacedBy?.time || row.finishedAt || null,
+          afterStart: row.handlerStarted === true, ...status, replacedBy, message };
+      }).sort((a, b) => a.time - b.time || (a.sessionId + ':' + a.nativeId + ':' + a.operationId).localeCompare(b.sessionId + ':' + b.nativeId + ':' + b.operationId));
+  }
   pending(names = {}) {
     this.expirePending();
     const rows = new Map();

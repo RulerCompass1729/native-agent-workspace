@@ -269,4 +269,5 @@ function inputGuard(workspace, ids, origin = current()) {
   if (!valid()) throw require('./ui-errors.cjs').uiError('error.backgroundMessagesDisabled');
   return valid;
 }
-module.exports = { actor, current, request, retainRefusalRows, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, maintenanceTargets, operationSummary, run, message, activity, deliveryTargets, assertDeliveryPolicy, terminalInputProof, checkTerminalInput, inputGuard, CAPABILITY: 'backgroundControlV1' };
+function controlFingerprint(command, state) { return require('./background-fingerprint.cjs').fingerprint(command, state); }
+module.exports = { controlFingerprint, actor, current, request, retainRefusalRows, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, maintenanceTargets, operationSummary, run, message, activity, deliveryTargets, assertDeliveryPolicy, terminalInputProof, checkTerminalInput, inputGuard, CAPABILITY: 'backgroundControlV1' };

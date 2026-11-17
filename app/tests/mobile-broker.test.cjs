@@ -459,3 +459,31 @@ test('port: approval-only card visibility grants no reminder push authority', as
   assert.throws(() => f.broker.pushInfo(auth));
   assert.throws(() => f.broker.pushAction(auth, { action: 'subscribe', subscription: {} }));
 });
+
+
+function inboxDesktop() {
+ const main=fs.readFileSync(require.resolve('../main.cjs'),'utf8'),temp={shown:true,version:1,checkedAt:1,directories:1,bytes:1,oldestDay:null};let reads=0;
+ const cards=snapshot=>Array.from({length:snapshot.unavailable?0:snapshot.cardCount||0},(_,i)=>({id:'card-'+i,key:'a:n:'+i,operationId:String(i),sessionId:'a',nativeId:'n',actionable:true,state:'confirmation-required',summary:{action:'input'},time:1,expiresAt:600001}));
+ const scope=vm.createContext({recordReminders:{status:()=>({count:1,records:[]})},operationsUnavailable:null,stewardRecord:null,dataDir:'/synthetic',tempReminders:{cached:temp},tempSummary:require('../temp-reminders.cjs').tempSummary,
+  roomState:{apply:s=>s},sessionLabels:{apply:s=>s,labels:new Map()},confirmationInbox:require('../confirmation-inbox.cjs'),backgroundControl:{confirmations:(_names,snapshot)=>cards(snapshot)},displayState:s=>s,queueDispatcher:null,broadcastRoom(){},
+  require(name){assert.equal(name,'./mobile-workspace.cjs');return {MobileWorkspace:class{constructor(options){Object.assign(this,options);}}};}});
+ vm.runInContext(main.slice(main.indexOf('function confirmationSnapshot('),main.indexOf('// The listener stays open')),scope);
+ const adapter=scope.appMobileWorkspace();return {grant:(_client,grant)=>grant,records:adapter.records,read:async client=>{reads++;return {...adapter.snapshot(client),capabilities:{},confirmations:[]};},total:client=>scope.appRecordsStatus(client.snapshot()).count,reads:()=>reads};
+}
+for(const rebind of [false,true])test(`bound push count: ${rebind?'a new client replaces the last phone reader':'subscribe before any phone read'}`,async t=>{
+ const desktop=inboxDesktop(),messages=[],curve=require('node:crypto').createECDH('prime256v1');curve.generateKeys();
+ const f=fixture(t,{desktop,pushOptions:{transport:async d=>{messages.push(d);return 201;}}});
+ const pairing=await f.pair(undefined,false,{roomIds:[],records:true}),old=f.clients.at(-1);old.snapshot=()=>({sessions:[],cardCount:1});
+ const subscription={endpoint:'https://web.push.apple.com/synthetic',expirationTime:null,keys:{p256dh:curve.getPublicKey().toString('base64url'),auth:Buffer.alloc(16,7).toString('base64url')}};
+ const notify=async auth=>{f.broker.pushInfo(auth);f.broker.pushAction(auth,{action:'subscribe',subscription});await f.broker.refreshPush();return JSON.parse(require('http_ece').decrypt(messages.at(-1).body,{version:'aes128gcm',privateKey:curve,authSecret:subscription.keys.auth}));};
+ if(!rebind){assert.equal(desktop.reads(),0);assert.deepEqual(await notify(pairing.auth),{count:desktop.total(old)});assert.equal(desktop.total(old),3);assert.equal(desktop.reads(),0);}
+ else {
+  await f.broker.workspaceRead(pairing.auth);assert.deepEqual(await notify(pairing.auth),{count:3});
+  const next=await f.pair(undefined,true,{roomIds:[],records:true}),current=f.clients.at(-1);let n=2;current.snapshot=()=>({sessions:[],cardCount:n});
+  assert.notEqual(current,old);assert.equal(old.closing,true);assert.equal(desktop.reads(),1);
+  assert.deepEqual(await notify(next.auth),{count:desktop.total(current)});assert.equal(desktop.total(current),4);
+  old.emit('closed');n=3;await f.broker.refreshPush();assert.deepEqual(JSON.parse(require('http_ece').decrypt(messages.at(-1).body,{version:'aes128gcm',privateKey:curve,authSecret:subscription.keys.auth})),{count:5});
+  f.broker.revoke();n=4;const sent=messages.length;await f.broker.refreshPush();assert.equal(messages.length,sent);
+ }
+ assert.deepEqual(f.calls,[],'No original conversation read or native input is needed to count');
+});

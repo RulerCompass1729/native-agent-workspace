@@ -151,10 +151,10 @@
         time: Number.isFinite(s.nativeApproval?.observedAt) ? s.nativeApproval.observedAt : now });
     }
     for (const card of Array.isArray(confirmations) ? confirmations : []) {
-      if (!card || card.replacedBy || !live.has(card.sessionId) || live.get(card.sessionId).nativeId !== card.nativeId) continue;
+      if (!card || card.actionable !== true || card.replacedBy || !live.has(card.sessionId) || live.get(card.sessionId).nativeId !== card.nativeId) continue;
       // The card's message starts with the asker's name, which the row already shows beside it.
       const title = String(card.title || ''), actor = String(card.actorName || '');
-      list.push({ id: card.id, kind: 'background-confirmation', title: actor && title.startsWith(actor + ' ') ? title.slice(actor.length + 1) : title,
+      list.push({ id: card.key || card.id, kind: 'background-confirmation', title: actor && title.startsWith(actor + ' ') ? title.slice(actor.length + 1) : title,
         actorId: card.sessionId, actorName: plainName(actor), sessionId: card.sessionId, roomId: roomOf(card.sessionId), card, time: Number.isFinite(card.time) ? card.time : now });
     }
     return list.sort((a, b) => RANK[a.kind] - RANK[b.kind] || b.time - a.time);

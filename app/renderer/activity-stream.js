@@ -36,7 +36,7 @@
     const day = time => validTime(time) ? new Date(time).toLocaleDateString(host.language(), { year: 'numeric', month: 'long', day: 'numeric' }) : t('unknownDate');
     async function go(item) {
       waitingOpen = false; waitingKey = ''; drawWaiting();
-      if (item.card) return host.confirmation({ sessionId: item.sessionId, nativeId: item.card.nativeId, messageId: item.id });
+      if (item.card) return host.confirmation({ sessionId: item.sessionId, nativeId: item.card.nativeId, messageId: item.card.id, operationId: item.card.operationId });
       if (item.sessionId || item.actorId) return host.original({ sessionId: item.sessionId || item.actorId, messageId: item.messageId || '', nativeId: '' });
       if (item.roomId) { await host.selectSpace(item.roomId); open(item.roomId); }
     }

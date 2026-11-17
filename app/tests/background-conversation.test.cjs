@@ -43,6 +43,7 @@ function fixture(t, provider = 'codex', extra = {}) {
   state.sessions[0].roomIds = ['shared'];
   const sandbox = { background: require('../background-control.cjs'), omitHidden: require('../shown-sessions.cjs').omitHidden, backgroundOperation: operation, submissionState: s => s, sessionLabels: { apply: s => s }, roomState: { apply: s => s, value: { sessionArchives: {} }, metadata: () => ({ restoreMembers: [], restorePlacements: {} }) },
     queueSecretary: { current: () => sandbox.secretary || null }, backgroundControl: null, roomPeerIdentity: () => ({ nativeId: 'metadata' }), endedByMove: () => [], queueDispatcher: null, butlerIngress: null,
+    confirmationInbox: require('../confirmation-inbox.cjs'), confirmationProjectionKey: '', windows: new Map(), operationsBlocks: -1, recordsChanged() {}, confirmationSnapshot: (client, snapshot) => snapshot || client.snapshot(),
     localVendorIcons: () => ({ openai: 'PRIVATE_VENDOR_IMAGE' }),
     viewStorageWarning: '', viewStorageWarningUiMessage: null, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
     displayText: (key, params) => locale.format('zh', key, params), uiError: require('../ui-errors.cjs').uiError, applicationBuild: {}, app: { getVersion: () => 'fixture' }, localeWarning: '', preflight: () => ({}), notifyCapacity() {},

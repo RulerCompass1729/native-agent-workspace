@@ -12,7 +12,7 @@ for (const [count, shown] of [[0,false],[37,false],[0,true],[37,true]]) test(`en
     recordReminders: { status: () => ({ count, records: [], privateName: 'PRIVATE_NAME' }), RECORDS: [] },
     tempSummary:tempSource.tempSummary, readTempSummary:()=>tempSource.tempSummary(temp), tempReminders:{cached:temp},
     currentTempReminders:()=>({present:async()=>temp}),
-    roomState: {}, sessionLabels: { labels: new Map() }, broadcastRoom: async () => {},
+    roomState: {apply:s=>s}, sessionLabels: {apply:s=>s,labels:new Map()}, confirmationInbox:require('../confirmation-inbox.cjs'),backgroundControl:null, broadcastRoom: async () => {},
     isCurrentHumanContext: () => true, register: (name, fn) => { commands[name] = fn; },
     require: name => { assert.equal(name, './mobile-workspace.cjs'); return { MobileWorkspace: class { constructor(options) { Object.assign(this, options); } } }; },
   });
@@ -28,7 +28,7 @@ for (const [count, shown] of [[0,false],[37,false],[0,true],[37,true]]) test(`en
     keys: { p256dh: curve.getPublicKey().toString('base64url'), auth } });
   {
     await push.refresh();
-    const desktop = await commands.records({}, 'status');
+    const desktop = await commands.records({client:{snapshot:()=>({sessions:[],rooms:[]})}}, 'status');
     const payload = JSON.parse(require('http_ece').decrypt(body, { version: 'aes128gcm', privateKey: curve, authSecret: auth }));
     const phone=workspace.records.status();
     assert.equal(desktop.count,count+(shown?1:0));
@@ -52,12 +52,12 @@ for(const count of [0,37])test(`present storage failure keeps desktop, phone and
   const context=vm.createContext({dataDir:profile,operationsUnavailable:null,stewardRecord:null,
     recordReminders:{status:()=>({count,records:[]}),RECORDS:[]},tempSummary:tempSource.tempSummary,
     readTempSummary:()=>tempSource.readSummary(profile),tempReminders:manager,currentTempReminders:()=>manager,
-    roomState:{},sessionLabels:{labels:new Map()},broadcastRoom:async()=>{},
+    roomState:{apply:s=>s},sessionLabels:{apply:s=>s,labels:new Map()},confirmationInbox:require('../confirmation-inbox.cjs'),backgroundControl:null,broadcastRoom:async()=>{},
     isCurrentHumanContext:c=>c.human===true,uiError:key=>Error(key),register:(name,fn)=>{commands[name]=fn;},
     require:name=>{assert.equal(name,'./mobile-workspace.cjs');return {MobileWorkspace:class{constructor(options){Object.assign(this,options);}}};},
   });
   vm.runInContext(source.slice(start,end),context);vm.runInContext(source.slice(records,recordsEnd),context);
-  const workspace=context.appMobileWorkspace(),person={human:true},desktop=await commands.records(person,'status',true);
+  const workspace=context.appMobileWorkspace(),person={human:true,client:{snapshot:()=>({sessions:[],rooms:[]})}},desktop=await commands.records(person,'status',true);
   const phone=workspace.records.status();
   const curve=crypto.createECDH('prime256v1');curve.generateKeys();const auth=crypto.randomBytes(16).toString('base64url');let body;
   const push=new (require('../mobile-push.cjs').MobilePush)({authority:()=> 'synthetic-device',count:()=>workspace.records.status().count,

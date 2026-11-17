@@ -44,8 +44,9 @@ test('background audit links to its exact operation card and original native ide
     { sessionId: 'a', nativeId: 'native-a', messageId: 'background:native-a:op-1' });
 });
 test('waiting strip excludes replaced or different-native cards while preserving confirmation detail', () => {
-  const card = { id: 'card', sessionId: 'a', nativeId: 'native-a', title: 'Confirm', detail: 'Full destructive-action warning', buttons: ['Cancel', 'Confirm'], time: 3 };
-  const state = { sessions: [{ id: 'a', nativeId: 'native-a', name: 'A' }], confirmations: [card, { ...card, id: 'old', replacedBy: 'card' }, { ...card, id: 'wrong', nativeId: 'different' }] };
+  const card = { actionable: true, id: 'card', sessionId: 'a', nativeId: 'native-a', title: 'Confirm', detail: 'Full destructive-action warning', buttons: ['Cancel', 'Confirm'], time: 3 };
+  const state = { sessions: [{ id: 'a', nativeId: 'native-a', name: 'A' }], confirmations: [card, { ...card, id: 'old', replacedBy: 'card' }, { ...card, id: 'wrong', nativeId: 'different' },
+    ...['expired','invalidated','cancelled','complete','unverifiable'].map(state=>({...card,id:state,state,actionable:false}))] };
   const items = stream.waitingItems(state);
   assert.deepEqual(items.map(i => i.id), ['card']);
   assert.equal(items[0].card.detail, card.detail);

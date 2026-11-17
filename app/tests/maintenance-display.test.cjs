@@ -60,7 +60,7 @@ test('existing own-input and stop dialogs escape text before binding the human d
 });
 test('the real consent fingerprint changes with the independent clipboard, including ABA writes', () => {
   const actor = { id: 'agent' }, snapshot = { sessions: [{ id: 'target', nativeId: 'native', roomIds: [] }], rooms: [] }, c = {};
-  const sandbox = { context: c, actor, client: { snapshot: () => snapshot }, roomState: { apply: value => value, value: { sessionArchives: {} } }, backgroundOperation: operation, roomIds: () => [], randomUUID: require('node:crypto').randomUUID,
+  const sandbox = { context: c, actor, client: { snapshot: () => snapshot }, sessionLabels: { apply: value => value }, roomState: { apply: value => value, value: { sessionArchives: {} } }, backgroundOperation: operation, roomIds: () => [], randomUUID: require('node:crypto').randomUUID,
     register: (_name, handler) => { sandbox.copy = handler; }, clipboard: { writeText() { throw Error('System clipboard must not be read or written'); } } };
   vm.createContext(sandbox);
   const start = main.indexOf('      context.fingerprint = command =>'), end = main.indexOf('\n      context.delivery =', start);

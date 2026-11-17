@@ -105,13 +105,13 @@ class Element {
   close() { if (!this.open) return; this.open = false; this.fire('close'); }
   all() { return [this, ...this.children.flatMap(child => child.all())]; }
 }
-function page(t, dir, now = NOW) {
+function page(t, dir, now = NOW, options = {}) {
   const document = { createElement: tag => new Element(tag) }, button = new Element('button'), badge = new Element('span'), dialog = new Element('dialog'), calls = [];
   const out = folder(t); let chosen = null, deleteAnswer = () => ({ deleted: [] });
-  let onChanged = null, unavailable = {};
+  let onChanged = null, unavailable = {}, overlay = {}; const navigated = [];
   const api = { onRecordsChanged: callback => { onChanged = callback; }, records: async (action, ...args) => {
     calls.push([action, ...args]);
-    if (action === 'status') return reminders.status(dir, now, { unavailable });
+    if (action === 'status') return { ...reminders.status(dir, now, { unavailable }), ...overlay };
     if (action === 'acknowledge') { reminders.acknowledge(dir, ...args); return reminders.status(dir, now); }
     if (action === 'blocks') return reminders.blocks(dir, args[0], now);
     if (action === 'chooseFolder') { chosen = out; return { folder: out }; }
@@ -120,9 +120,10 @@ function page(t, dir, now = NOW) {
     if (action === 'delete') return deleteAnswer();
     throw Error('unknown');
   } };
-  const view = bind({ button, badge, dialog, document, api, text: zh });
+  const view = bind({ button, badge, dialog, document, api, text: zh, summaryText: s => zh('background.action.' + s.action), confirmation: async target => { navigated.push(target); return true; }, ...options });
+  t.after(() => view.dispose?.());
   const find = action => dialog.all().find(node => node.tag === 'button' && node.dataset.action === action);
-  return { view, button, badge, dialog, calls, out, find, answer: hook => { deleteAnswer = hook; }, changed: () => onChanged?.(), unavailable: value => { unavailable = value; }, text: () => dialog.all().filter(node => !node.hidden).map(node => node.textContent).filter(Boolean).join('\n') };
+  return { view, button, badge, dialog, calls, out, find, navigated, status: value => { overlay = value; }, answer: hook => { deleteAnswer = hook; }, changed: () => onChanged?.(), unavailable: value => { unavailable = value; }, text: () => dialog.all().filter(node => !node.hidden).map(node => node.textContent).filter(Boolean).join('\n') };
 }
 
 for(const language of ['zh','en'])for(const issue of ['incomplete','metadata-unavailable'])test(`registration refusal explains status and the kept result (${issue}, ${language})`,async()=>{
@@ -239,8 +240,38 @@ test('the bell is worked out again when the main process says a record changed, 
   assert.ok(p.text().includes(zh('records.item.unavailable')));
   // The main process: a sealed or added block, or a record not loaded at start, sends the event; nothing polls.
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.cjs'), 'utf8');
-  assert.ok(main.includes("changed: () => { broadcastRoom().catch(() => {}); recordsChanged(); },"));
+  assert.ok(main.includes("changed: change => { broadcastRoom().catch(() => {}); recordsChanged(change?.confirmations === true); },"));
   assert.ok(main.includes("operationsUnavailable = /history cannot be read/.test(String(error?.message)) ? 'history' : 'other'; recordsChanged(); }"));
   assert.ok(main.includes("for (const c of windows.values()) sendToPage(c, 'workspace:records-changed');"));
   assert.ok(fs.readFileSync(path.join(__dirname, '..', 'preload.cjs'), 'utf8').includes("['onRecordsChanged', 'workspace:records-changed']"));
+});
+
+test('confirmations lead the bell, All includes ended cards, and a row only navigates to its exact original card', async t => {
+ const p=page(t,folder(t)),time=Date.now(),card={id:'background:old-native:same-operation',key:'requester:old-native:same-operation',operationId:'same-operation',sessionId:'requester',nativeId:'old-native',actorName:'Requester',targetName:'Target',summary:{action:'input',method:'input',target:'Target'},state:'confirmation-required',actionable:true,time,expiresAt:time+120000};
+ p.status({count:1,confirmationCount:1,confirmations:[card,{...card,id:'background:new-native:same-operation',key:'requester:new-native:same-operation',nativeId:'new-native',state:'not-executed',disposition:'expired',actionable:false}]});
+ await p.view.open();assert.equal(p.badge.textContent,'1');
+ const sections=p.dialog.all().filter(n=>n.tag==='section');assert.equal(sections[0]?.dataset.record,'confirmations');
+ assert.equal(p.dialog.all().filter(n=>n.dataset.action==='openConfirmation').length,1);
+ assert.equal(sections[0].all().some(n=>/acknowledge/i.test(n.dataset.action||'')),false,'Confirmation TTL has no acknowledgement');
+ await p.find('allConfirmations').fire('click');assert.equal(p.dialog.all().filter(n=>n.dataset.action==='openConfirmation').length,2);
+ await p.find('openConfirmation').fire('click');assert.deepEqual(p.navigated,[{sessionId:'requester',nativeId:'old-native',messageId:card.id,operationId:card.operationId,history:true}]);
+ assert.equal(p.dialog.open,false);assert.ok(p.calls.every(c=>c[0]==='status'),'No decision, terminal input, cleanup or acknowledgement from filtering/navigation');
+});
+
+
+test('the open-dialog clock refreshes once at the source deadline and stops on close', async t => {
+ t.mock.timers.enable({apis:['setTimeout']});let clock=NOW;
+ const p=page(t,folder(t),NOW,{now:()=>clock}),card={id:'original',key:'a:n:op',sessionId:'a',nativeId:'n',operationId:'op',actorName:'A',targetName:'B',summary:{action:'input'},state:'confirmation-required',actionable:true,time:NOW,expiresAt:NOW+2000};
+ p.status({count:1,confirmations:[card]});await p.view.open();const reads=p.calls.length;
+ clock+=1000;t.mock.timers.tick(1000);assert.equal(p.calls.length,reads,'No per-second RPC');
+ clock+=1000;t.mock.timers.tick(1000);await Promise.resolve();assert.equal(p.calls.length,reads+1,'One source refresh at expiry');
+ p.dialog.close();clock+=10000;t.mock.timers.tick(10000);assert.equal(p.calls.length,reads+1,'Closed dialog stops its display clock');
+});
+
+test('a missing original keeps its summary and follow-up expiry never claims earlier steps were undone', async t => {
+ const p=page(t,folder(t),NOW,{confirmation:async()=>false});
+ p.status({count:0,confirmations:[{id:'original',key:'a:n:op',sessionId:'a',nativeId:'n',operationId:'op',actorName:'A',targetName:'B',summary:{action:'input'},state:'unconfirmed',disposition:'expired',afterStart:true,actionable:false,time:NOW-120000,expiresAt:NOW}]});
+ await p.view.open();await p.find('allConfirmations').fire('click');assert.ok(p.text().includes(zh('background.card.expiredAfterStart')));assert.ok(p.text().includes(zh('records.confirmations.partial')));
+ await p.find('openConfirmation').fire('click');assert.equal(p.dialog.open,true);assert.ok(p.text().includes(zh('records.confirmations.unavailable')));
+ await p.find('allConfirmations').fire('click');assert.equal(p.find('openConfirmation')!==undefined,true,'Original summary remains available');
 });

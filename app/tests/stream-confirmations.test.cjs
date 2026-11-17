@@ -30,7 +30,8 @@ test('pending confirmations are projected only into human windows, never agent s
   const body = source.slice(source.indexOf('function displayState('), source.indexOf('function reportViewStorage('));
   let reads = 0;
   const context = { roomState: { apply: x => x }, sessionLabels: { apply: x => x }, submissionState: x => x,
-    backgroundControl: { rows: () => [], pending: () => { reads++; return [{ id: 'human-card' }]; } },
+    confirmationInbox: require('../confirmation-inbox.cjs'), confirmationProjectionKey: '', recordsChanged() {},
+    backgroundControl: { rows: () => [], confirmations: () => { reads++; return [{ id: 'human-card' }]; } },
     backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
     queueSecretary: null, integratorRole: null, stewardRole: null, queueDispatcher: null, butlerIngress: null,
     viewStorageWarning: '', viewStorageWarningUiMessage: null, endedByMove: () => [], roomPeerIdentity: () => null,

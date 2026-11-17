@@ -178,7 +178,7 @@ catch (error) { console.error(error); butlerEntry = failedButlerEntry(!window.na
 let newDirectory = false, creatingSession = false;
 // The bell: reminders about records kept whole, asked for once as the window starts (nothing polls).
 let recordReminders = null;
-try { recordReminders = window.nativeWorkspaceRecordReminders.bind({ button: $('records-button'), badge: $('records-badge'), dialog: $('records-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display });
+try { recordReminders = window.nativeWorkspaceRecordReminders.bind({ button: $('records-button'), badge: $('records-badge'), dialog: $('records-dialog'), document, api, confirmation: showBackgroundConfirmation, summaryText: summary => backgroundSummaryText(summary, true), text: (key, params) => uiText(key, params), display: ui.display });
   recordReminders.refresh(); }
 catch (error) { console.error(error); }
 // 「大管家的记录」, opened from the butler's own menu.
@@ -5434,6 +5434,7 @@ function writeTerminal(entry, event) {
   if (indexed) entry.observationIndex = event.index;
 }
 const disposers = [
+  () => recordReminders?.dispose(),
   () => mobileSetup.dispose(),
   () => butlerEntry.dispose(),
   disposeButlerReview,

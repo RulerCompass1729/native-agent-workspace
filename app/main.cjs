@@ -58,6 +58,7 @@ const background = require('./background-control.cjs');
 const recordReminders = require('./record-reminders.cjs');
 const { inspectTextPaths, openTextPath } = require('./text-paths.cjs');
 const { TempReminders, readSummary: readTempSummary, tempSummary } = require('./temp-reminders.cjs');
+const confirmationInbox = require('./confirmation-inbox.cjs');
 let tempReminders = null, tempRemindersTimer = null, tempQuitWaiting = false;
 function currentTempReminders() {
   tempReminders ||= new TempReminders({ dataDir, isPerson: isCurrentHumanContext, changed: () => recordsChanged(true) });
@@ -157,6 +158,7 @@ const toolWaitNotifications = new Map();
 const capacityNotifications = new Map();
 const queueOutcomeSeen = new Set(), queueOutcomeNotifications = new Map();
 let pendingReveal = null;
+const confirmationProjectionKeys = new WeakMap();
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
 let dataDir, sessionLabels, roomState, queueSecretary, integratorRole, stewardRole, landingOwner = null, butlerIngress, butlerReadAudit = null, butlerBackend = null, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
@@ -167,6 +169,10 @@ let applicationBuild, applicationMenu;
 let mobileBroker;
 let mobileListener, mobileOpening = false, mobileGeneration = 0, mobileStopped = Promise.resolve(true), mobileExpiry;
 // One status contract for the desktop bell, scoped phone reads and count push.
+function confirmationSnapshot(client, snapshot = client.snapshot()) {
+  return { ...snapshot, unavailable: Boolean(snapshot.unavailable || client.closing || client.socket?.destroyed ||
+    client.entries?.some(e => e.closed || e.closing || e.client?.socket?.destroyed)) };
+}
 function appRecordsStatus(snapshot = null, suppliedTemp = null) {
   const records = recordReminders.status(dataDir, Date.now(), { unavailable: {
     ...(operationsUnavailable ? { operations: operationsUnavailable } : {}),
@@ -175,7 +181,9 @@ function appRecordsStatus(snapshot = null, suppliedTemp = null) {
   let temp;
   try { temp = suppliedTemp ? tempSummary(suppliedTemp) : tempReminders?.cached ? tempSummary(tempReminders.cached) : readTempSummary(dataDir); }
   catch { temp = { id: 'naw-temp-files', version: 0, state: 'unavailable', checkedAt: Date.now(), directories: 0, bytes: 0, oldestDay: null, shown: true, result: null }; }
-  return { ...records, temp, count: records.count + (temp.shown ? 1 : 0) };
+  const names = snapshot && sessionLabels.apply(roomState.apply(snapshot));
+  const cards = snapshot?.backgroundConfirmations || (backgroundControl && names ? backgroundControl.confirmations(names, snapshot) : []);
+  return confirmationInbox.inboxStatus(records, temp, cards.map(confirmationInbox.confirmationSummary));
 }
 function appMobileBroker() {
   if (!primary || quitting || !dataDir) throw Error('The local mobile entry is unavailable.');
@@ -184,9 +192,9 @@ function appMobileBroker() {
 }
 function appMobileWorkspace() {
   return new (require('./mobile-workspace.cjs').MobileWorkspace)({
-    snapshot: client => displayState(client.snapshot()), roomState, labels: sessionLabels.labels,
+    snapshot: client => displayState(confirmationSnapshot(client)), roomState, labels: sessionLabels.labels,
     records: {
-      status: appRecordsStatus,
+      status: (state, client) => appRecordsStatus(state || (client && confirmationSnapshot(client))),
       acknowledge: (...args) => { const result = recordReminders.acknowledge(dataDir, ...args); mobileBroker?.refreshPush(); return result; },
     },
     confirmation: (...args) => backgroundControl.mobileBinding(...args), decide: (...args) => backgroundControl.decide(...args),
@@ -823,11 +831,17 @@ function bindClient(context) {
   client.on('closed', () => { if (context.client === client) { const notice = uiError('error.warning.serviceDisconnected'); send('workspace:disconnected', notice.message, notice.uiMessage); } });
 }
 function displayState(snapshot, context, read = null) {
+  if (context?.client) snapshot = confirmationSnapshot(context.client, snapshot);
   const roomId = context?.view?.spaceId || 'shared';
   const display = roomState.apply(sessionLabels.apply(submissionState(snapshot)), roomId);
   display.sessions = display.sessions.map(s => ({ ...s }));
+  const backgroundConfirmations = context?.background ? [] : backgroundControl?.confirmations(display, snapshot) || [];
+  if (!context?.background && context?.win) {
+    const key = JSON.stringify(backgroundConfirmations.map(confirmationInbox.confirmationSummary));
+    if (key !== confirmationProjectionKeys.get(context.win)) { confirmationProjectionKeys.set(context.win, key); recordsChanged(true); }
+  }
   if (backgroundControl) for (const s of display.sessions) {
-    const rows = backgroundControl.rows(s.id, context?.background ? null : display);
+    const rows = backgroundControl.rows(s.id, context?.background ? null : display, { expire: context?.background === true });
     if (rows.length) s.messages = [...s.messages, ...rows].sort((a, b) => a.time - b.time);
     if (context?.background) {
       s.liveDraft = ''; s.draft = '';
@@ -845,7 +859,7 @@ function displayState(snapshot, context, read = null) {
   const warning = [outboxWarning, secretaryWarning, integratorWarning, stewardWarning].filter(Boolean).join('\n');
   // The page asks about handoffs only where they are enabled (or could not start): elsewhere the state is as it always was.
   const handoffEnabled = queueDispatcher?.integration || queueDispatcher?.integrationError ? { handoffEnabled: true } : {};
-  const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { backgroundConfirmations: backgroundControl?.pending(display) || [] }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
+  const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { backgroundConfirmations }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
   return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected, conversationAccess(context.actor, snapshot)) : result;
@@ -1521,7 +1535,9 @@ async function boot() {
   viewStore = new ViewStore(dataDir);
   const loaded = dropRetiredViewFields(viewStore.load());
   views = loaded.views;
-  try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: () => { broadcastRoom().catch(() => {}); recordsChanged(); },
+  try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: change => { broadcastRoom().catch(() => {}); recordsChanged(change?.confirmations === true); },
+    confirmationFingerprint: (row, snapshot, view, live) => backgroundOperation.controlFingerprint(row.command,
+      { state: snapshot, actor: row.actor, context: live || { view }, roomState, sessionLabels, client: live?.client }),
     confirmationPending: notifyBackgroundConfirmation,
     decided: (actor, receipt, decision) => answerNotices.add(actor, receipt, decision),
     receiptRead: (actor, id) => answerNotices.read(actor, id),
@@ -1584,131 +1600,14 @@ async function boot() {
       context.metadataOnly = () => !conversationReaderAllowed(actor);
       context.refresh = () => client.refresh();
       context.confirmationActors = () => controlRequestActors(client);
-      context.terminalConsentSnapshot = () => ({ ...roomState.apply(client.snapshot()), unavailable: Boolean(client.socket?.destroyed || client.closing || client.entries?.some(e => e.closed || e.closing || e.client.socket.destroyed)) });
+      context.terminalConsentSnapshot = () => confirmationSnapshot(client, roomState.apply(client.snapshot()));
       context.checkActor = async () => {
         await context.refresh();
         const record = context.confirmationActors().find(s => s.id === actor.id);
         if (!record || record.nativeId !== actor.nativeId || record.archived || record.nativeContextPending) throw Error('The originating native session changed');
       };
       context.fingerprint = command => {
-        const strings = new Set();
-        const scan = v => { if (typeof v === 'string') strings.add(v); else if (Array.isArray(v)) v.forEach(scan); else if (v && typeof v === 'object') Object.values(v).forEach(scan); };
-        scan(command.arguments);
-        const state = client.snapshot();
-        const maintenance = backgroundOperation.maintenanceAction(command.method, command.arguments, actor);
-        if (maintenance) {
-          const metadata = roomState.apply(state), auditRooms = new Set();
-          if (maintenance === 'archiveSession') {
-            const target = metadata.sessions.find(s => s.id === command.arguments[0]);
-            if (target && (['starting', 'working', 'approval', 'stopping', 'background'].includes(target.state) ||
-                target.activeTurnId || target.pendingTag || target.pendingQueue || target.pendingSteer || target.nativeInputRequired ||
-                target.approval || target.nativeApproval?.requests?.length || target.nativeGoal?.status === 'active' ||
-                target.background > 0 || target.scheduled > 0)) throw uiError('error.planWorking');
-          }
-          const controlTarget = ['interrupt', 'pause', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent'].includes(command.method) ? command.arguments[0] : null;
-          for (const s of state.sessions) if (s.id === actor.id || strings.has(s.id)) {
-            roomIds(s).forEach(id => auditRooms.add(id));
-            roomState.value.sessionArchives[s.id]?.rooms.forEach(r => auditRooms.add(r.id));
-          }
-          for (const r of metadata.rooms) if (strings.has(r.id)) auditRooms.add(r.id);
-          if (['archiveRoom', 'restoreRoom', 'join', 'roomRename'].includes(command.method)) auditRooms.add('shared');
-          if (command.method === 'spaceMerge') {
-            const id = command.arguments[1]?.operationId;
-            const batch = roomState.mergePreviews.get(id)?.batch || roomState.mergeRecord(id)?.merge?.batch;
-            batch?.sources.forEach(r => auditRooms.add(r.id));
-          }
-          // Placement and archive state are consent targets. Background native
-          // progress and the audit event itself must not invalidate consent.
-          const placement = s => ({ id: s.id, nativeId: s.nativeId, connectionRevision: s.connectionRevision,
-            nativeContextPending: s.nativeContextPending, archived: s.archived, roomIds: roomIds(s), placementRevision: s.placementRevision,
-            memberRevision: s.memberRevision, roomMembershipRevisions: s.roomMembershipRevisions,
-            ...(s.id === controlTarget && s.id !== actor.id ? { owner: s.owner, controlRevision: s.controlRevision, activeTurnId: s.activeTurnId,
-              approvalId: s.approval?.requestId, nativeApprovalIds: s.nativeApproval?.requests?.map(r => r.id), nativeInputRequired: s.nativeInputRequired } : {}) });
-          // These operations do not depend on another member's progress, roster
-          // ordering, unrelated archives or space notes. Keep identity/placement
-          // for the actual member and actor, and only the affected space facts.
-          if (['joinRoom', 'leaveRoom'].includes(maintenance)) {
-            const targetId = command.method === 'spaceAction' ? command.arguments[2]?.[0] : command.arguments[0];
-            const destination = command.method === 'spaceAction' ? command.arguments[0] : 'shared';
-            const target = metadata.sessions.find(s => s.id === targetId);
-            const affected = new Set([destination, ...(target ? roomIds(target) : [])]);
-            return { auditRooms: [...auditRooms].sort(),
-              sessions: metadata.sessions.filter(s => s.id === actor.id || s.id === targetId).map(placement),
-              rooms: metadata.rooms.filter(r => affected.has(r.id)).map(r => ({ id: r.id, archived: r.archived })),
-              sessionArchives: { [targetId]: roomState.value.sessionArchives[targetId] || null } };
-          }
-          if (maintenance === 'renameRoom') {
-            const targetId = command.method === 'spaceAction' ? command.arguments[0] : 'shared';
-            const requested = command.method === 'spaceAction' ? command.arguments[2]?.[0] : command.arguments[0];
-            const name = typeof requested === 'string' ? requested.trim() : '';
-            return { auditRooms: [...auditRooms].sort(),
-              sessions: metadata.sessions.filter(s => s.id === actor.id).map(placement),
-              rooms: metadata.rooms.filter(r => r.id === targetId).map(r => ({ id: r.id, name: r.name, archived: r.archived })),
-              named: metadata.rooms.filter(r => r.id !== targetId && r.name === name).map(r => r.id).sort() };
-          }
-          if (maintenance === 'rename') {
-            const targetId = command.arguments[0], name = typeof command.arguments[1] === 'string' ? command.arguments[1].trim() : '';
-            const named = sessionLabels.apply(metadata).sessions;
-            return { auditRooms: [...auditRooms].sort(),
-              sessions: metadata.sessions.filter(s => s.id === actor.id || s.id === targetId).map(s => ({ ...placement(s),
-                ...(s.id === targetId ? { name: named.find(x => x.id === targetId)?.name } : {}) })),
-              named: named.filter(s => s.id !== targetId && s.name === name).map(s => s.id).sort() };
-          }
-          // A new session or space touches nothing that exists. Its consent is the asking session as it was, and which
-          // sessions or spaces already carry the requested name: one appearing or renamed onto it voids the card, so
-          // two answered cards cannot leave two of one name. Others the person confirms meanwhile do not (2026-11-13:
-          // a space and two sessions confirmed together, and only the space was made).
-          if (['create', 'spaceCreate'].includes(command.method)) {
-            const requested = command.method === 'create' ? command.arguments[0]?.name : command.arguments[0];
-            const name = typeof requested === 'string' ? requested.trim() : '';
-            const holders = command.method === 'create' ? sessionLabels.apply(metadata).sessions : metadata.rooms;
-            return { auditRooms: [...(auditRooms.size ? auditRooms : ['shared'])].sort(),
-              sessions: metadata.sessions.filter(s => s.id === actor.id).map(placement),
-              named: name ? holders.filter(x => x.name === name).map(x => x.id).sort() : [] };
-          }
-          // Bind maintenance consent to the records it can change. Other cards may
-          // create, disconnect or archive independent sessions while this one waits.
-          let targets = null, targetRooms = null;
-          if (['archiveSession', 'restoreSession', 'resume', 'importHistory'].includes(maintenance)) {
-            if (maintenance === 'importHistory') {
-              const provider = command.arguments[1]?.provider ?? 'codex', requested = command.arguments[0];
-              // Match WorkspaceClient's provider-specific native history identity.
-              const nativeId = provider === 'claude' && typeof requested === 'string' ? requested.toLowerCase() : requested;
-              targets = new Set(metadata.sessions.filter(s => s.provider === provider && s.nativeId === nativeId).map(s => s.id));
-            } else targets = new Set([command.arguments[0]]);
-            targetRooms = new Set();
-            for (const s of metadata.sessions) if (targets.has(s.id)) roomIds(s).forEach(id => targetRooms.add(id));
-            for (const id of targets) roomState.value.sessionArchives[id]?.rooms.forEach(r => targetRooms.add(r.id));
-          } else if (['archiveRoom', 'restoreRoom'].includes(maintenance)) {
-            const id = command.method === 'spaceAction' ? command.arguments[0] : 'shared';
-            targetRooms = new Set([id]);
-            targets = new Set(metadata.sessions.filter(s => roomIds(s).includes(id)).map(s => s.id));
-            // Restore acts on detached saved members too, not just today's roster.
-            roomState.metadata(id).restoreMembers.forEach(member => targets.add(member));
-          } else {
-            const scope = backgroundOperation.maintenanceTargets(command, actor, metadata, client);
-            if (scope) { targets = new Set(scope.sessions); targetRooms = new Set(scope.rooms); }
-          }
-          if (targets) {
-            targets.add(actor.id); // Keep the asking session's placement/connection guard as well as checkActor.
-            targetRooms.forEach(id => auditRooms.add(id));
-          }
-          return { auditRooms: [...(auditRooms.size ? auditRooms : ['shared'])].sort(),
-            ...(command.method === 'initial' ? { selected: context.view.selected } : {}),
-            ...(command.method === 'pasteNativeContent' ? { clipboardRevision: context.clipboardRevision || null } : {}),
-            ...(maintenance === 'archiveRoom' ? { archivePlan: roomState.roomArchivePlan(state, command.method === 'spaceAction' ? command.arguments[0] : 'shared') } : {}),
-            sessions: metadata.sessions.filter(s => !targets || targets.has(s.id)).map(placement),
-            rooms: metadata.rooms.filter(r => !targetRooms || targetRooms.has(r.id)).map(r => ({ id: r.id, name: r.name, archived: r.archived, memberOrder: r.memberOrder,
-              // Session archive saves its neighbour/slot when it executes. Other
-              // members leaving must not void its card; whole-room consent still binds the roster.
-              ...(targetRooms && maintenance !== 'archiveSession' ? { memberIds: metadata.sessions.filter(s => roomIds(s).includes(r.id)).map(s => s.id).sort() } : {}),
-              restoreMembers: roomState.metadata(r.id).restoreMembers, restorePlacements: roomState.metadata(r.id).restorePlacements })),
-            sessionArchives: targets ? Object.fromEntries(Object.entries(roomState.value.sessionArchives).filter(([id]) => targets.has(id))) : roomState.value.sessionArchives };
-        }
-        const global = ['quitService', 'clearSharedHistory', 'archiveRoom', 'switchBackend', 'continueConnection'].includes(command.method);
-        return { sessions: roomState.apply(state).sessions.filter(s => global || strings.has(s.id)).map(s => ({ id: s.id, nativeId: s.nativeId, pid: s.pid, owner: s.owner, state: s.state, activeTurnId: s.activeTurnId, pendingTag: s.pendingTag, controlRevision: s.controlRevision,
-          connectionRevision: s.connectionRevision, archived: s.archived, approval: s.approval, nativeApproval: s.nativeApproval })),
-          rooms: (state.rooms || [state.room]).filter(r => r && (global || strings.has(r.id))).map(r => ({ id: r.id, memberIds: r.memberIds })) };
+        return backgroundOperation.controlFingerprint(command, { state: client.snapshot(), actor, context, roomState, sessionLabels, client });
       };
       context.delivery = async (command, value, sender, guard) => {
         const method = command.method === 'spaceAction' ? command.arguments[1] : command.method;
@@ -2039,7 +1938,7 @@ async function boot() {
       let temp;
       try { temp = await currentTempReminders().present(c, force); }
       catch { if (!isCurrentHumanContext(c)) throw uiError('error.records.personOnly'); temp = { id: 'naw-temp-files', version: 0, checkedAt: Date.now(), directories: 0, bytes: 0, shown: true, anomaly: 'inspection-unavailable' }; }
-      return { ...appRecordsStatus(null, temp), temp };
+      return { ...appRecordsStatus(confirmationSnapshot(c.client), temp), temp };
     };
     if (action === 'status' && (args.length === 0 || args.length === 1 && args[0] === true)) return status(args[0] === true);
     if (action === 'tempClean' && args.length === 1 && tempReminders) { const result = await tempReminders.clean(c, args[0]); return { ...await status(), result }; }

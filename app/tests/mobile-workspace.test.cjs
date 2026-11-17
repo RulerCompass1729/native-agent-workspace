@@ -67,20 +67,20 @@ test('phone reminder acknowledgement cannot hide a future level', async t => {
   await assert.rejects(f.adapter.action(f.client, f.grant, f.spec({ action: 'recordAcknowledge', record: 'operations', kind: 'age', level: 999 }), () => {})); assert.equal(f.acknowledgements.length, 1);
 });
 test('phone cards retain desktop expiry/disposition and grant no sensitive approval', async t => {
-  const f = fixture(t); f.source.sessions[0].messages.push({ id: 'card', role: 'system', time: 10, backgroundOperation: { id: 'card-a', nativeId: 'native-a', state: 'not-executed', disposition: 'expired', expiresAt: 120010, confirmation: { options: { message: 'Original action', detail: 'Exact scope' } } } });
+  const f = fixture(t); delete f.source.backgroundConfirmations; f.source.sessions[0].messages.push({ id: 'card', role: 'system', time: 10, backgroundOperation: { id: 'card-a', nativeId: 'native-a', state: 'not-executed', disposition: 'expired', expiresAt: 120010, confirmation: { options: { message: 'Original action', detail: 'Exact scope' } } } });
   const view = await f.adapter.read(f.client, f.grant, f.scopes); assert.equal(view.confirmations[0].disposition, 'expired'); assert.equal(view.confirmations[0].expiresAt, 120010); assert.equal(view.confirmations[0].canDecide, false);
   await assert.rejects(f.adapter.action(f.client, f.grant, f.spec({ action: 'backgroundDecision', operationId: 'card-a', response: 1 }), () => {}));
 });
 
 test('cards with equal operation IDs in different paired sessions remain distinct', async t => {
-  const f = fixture(t);
+  const f = fixture(t); delete f.source.backgroundConfirmations;
   f.source.sessions[1].messages = [];
   for (const s of f.source.sessions) s.messages.push({ id: 'card-' + s.id, role: 'system', time: 1, backgroundOperation: {
     id: 'same-request', nativeId: s.nativeId, state: 'confirmation-required', expiresAt: 600001,
     confirmation: { options: { message: 'For ' + s.name } },
   } });
   const view = await f.adapter.read(f.client, f.grant, [...f.scopes, { serviceKey: '.', sessionId: 'b', nativeId: 'native-b', actions: ['read'] }]);
-  assert.deepEqual(view.confirmations.map(c => c.id), ['a:same-request', 'b:same-request']);
+  assert.deepEqual(view.confirmations.map(c => c.id), ['a:native-a:same-request', 'b:native-b:same-request']);
 });
 
 test('the desktop card projection supplies two-minute input and ten-minute other deadlines', () => {
@@ -92,4 +92,36 @@ test('the desktop card projection supplies two-minute input and ten-minute other
   control.data = { records: ['input', 'observe'].map(method => ({ id: method, actor: { id: 'a', nativeId: 'n', name: 'Synthetic' }, command: { method, arguments: [] }, at: 1000, state: 'confirmation-required' })) };
   const rows = control.rows('a', null);
   assert.deepEqual(rows.map(r => r.backgroundOperation.expiresAt - r.time), [120000, 600000]);
+});
+
+test('unified mobile summaries respect native grants and contain no private card body or cleanup authority', async t => {
+  const f=fixture(t),base={id:'original',key:'a:native-a:request',operationId:'request',sessionId:'a',nativeId:'native-a',actorName:'Requester',targetName:'Target',state:'confirmation-required',actionable:true,time:10,expiresAt:120010,summary:{action:'input',target:'Target',folder:'PRIVATE_FOLDER'},title:'PRIVATE_PROMPT',detail:'PRIVATE_APPROVAL',message:{text:'PRIVATE_BODY'},guard:{secret:'PRIVATE_GUARD'}};
+  f.source.backgroundConfirmations=[base,{...base,key:'b:native-b:request',sessionId:'b',nativeId:'native-b',actorName:'UNPAIRED_ACTOR'},{...base,key:'a:old:request',nativeId:'old',actorName:'OLD_NATIVE'}];
+  f.source.sessions[0].messages.push({id:'original',role:'system',text:'PRIVATE_ARGUMENTS',backgroundOperation:{id:'request',nativeId:'native-a'}},{id:'old',role:'system',text:'OLD_NATIVE_BODY',backgroundOperation:{id:'request',nativeId:'old'}});
+  Object.assign(f.status,{count:4,confirmationCount:2,confirmations:f.source.backgroundConfirmations,temp:{id:'naw-temp-files',shown:true,version:1,checkedAt:1,directories:1,bytes:1,oldestDay:null,ticket:'PRIVATE_TICKET',candidates:['PRIVATE_PATH']}});
+  const view=await f.adapter.read(f.client,f.grant,f.scopes),raw=JSON.stringify(view);
+  assert.equal(view.reminders.count,4);assert.equal(view.confirmations.length,1);assert.equal(view.reminders.confirmations.length,1);assert.equal(view.confirmations[0].messageId,'original');assert.equal(view.confirmations[0].canDecide,false);
+  assert.doesNotMatch(raw,/PRIVATE_|UNPAIRED_ACTOR|OLD_NATIVE/);assert.equal(view.sessions[0].messages.at(-1).confirmationId,'a:native-a:request');
+});
+
+test('port: full inbox identity retains the exact phone decision presentation and version', async t => {
+ const f=fixture(t),operationId='request:with.parts',title='RAW_DECISION_TITLE',detail='RAW_DECISION_SCOPE';
+ const row={id:'message',key:'a:native-a:'+operationId,sessionId:'a',nativeId:'native-a',operationId,title,detail,summary:{action:'input',target:'Synthetic target'},state:'confirmation-required',actionable:true,time:1,expiresAt:200};
+ f.source.backgroundConfirmations=[row];Object.assign(f.status,{confirmations:[row],confirmationCount:1,count:1});
+ f.adapter.confirmation=(sessionId,nativeId,id,decision)=>{assert.equal(id,operationId);return {sessionId,nativeId,operationId:id,decision,version:'bound-proof',expiresAt:200,presentation:'sha256:'+require('node:crypto').createHash('sha256').update(JSON.stringify([title,detail])).digest('hex')};};
+ const view=await f.adapter.read(f.client,f.grant,f.scopes),card=view.confirmations[0];
+ assert.equal(card.id,row.key);assert.equal(card.title,title);assert.equal(card.detail,detail);assert.equal(card.titles,undefined);assert.equal(card.version,'bound-proof');
+ assert.doesNotMatch(JSON.stringify(view.reminders),/RAW_DECISION/,'Reminder summaries keep their safe contract');
+ assert.equal(f.adapter.confirmationBinding(f.client,f.scopes,{id:card.id,version:card.version,decision:'approve'}).operationId,operationId);
+});
+test('port: a mismatched presentation never gains a version or exposes the raw decision body', async t => {
+ const f=fixture(t);f.source.backgroundConfirmations=[{key:'a:native-a:req',sessionId:'a',nativeId:'native-a',operationId:'req',title:'PRIVATE_PROMPT',detail:'PRIVATE_DETAIL',summary:{action:'input'},state:'confirmation-required',actionable:true}];
+ f.adapter.confirmation=()=>({presentation:'other',version:'wrong'});const view=await f.adapter.read(f.client,f.grant,f.scopes);
+ assert.equal(view.confirmations[0].version,undefined);assert.doesNotMatch(JSON.stringify(view),/PRIVATE_|wrong/);
+});
+test('port: ambiguous legacy and full card identities fail closed before requesting authority', t => {
+ const f=fixture(t);let calls=0;
+ f.source.backgroundConfirmations=['req','native-a:req'].map(operationId=>({key:'a:native-a:'+operationId,sessionId:'a',nativeId:'native-a',operationId}));
+ f.adapter.confirmation=()=>{calls++;throw Error('Authority requested');};
+ assert.throws(()=>f.adapter.confirmationBinding(f.client,f.scopes,{id:'a:native-a:req',version:'same',decision:'approve'}));assert.equal(calls,0);
 });
