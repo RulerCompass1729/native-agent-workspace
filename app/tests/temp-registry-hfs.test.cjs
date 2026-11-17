@@ -14,28 +14,75 @@ for(const phase of ['Node','Python'])test(`B1 HFS ${phase}: a new live receipt w
   for(const p of [payload,nested,dir])fs.utimesSync(p,new Date(old),new Date(old));
   const manager=new TempReminders({dataDir,registryDir,roots:[root],now:()=>now,isPerson:c=>c.person}),person={person:true};
   const shown=await manager.present(person);assert.equal(shown.directories,1);
-  // Start safely inside a fresh one-second timestamp interval. No stat values,
-  // register(), receipt contents, liveness oracle or deletion gates are mocked.
-  await new Promise(r=>setTimeout(r,1000-Date.now()%1000+25));
-  const touch=path.join(registryDir,'.time-marker');fs.writeFileSync(touch,'x');fs.unlinkSync(touch);
+  // Model timestamp aliasing without depending on process startup or a fresh
+  // wall-clock second. Only this registry directory's proof timestamps are
+  // projected; its identity, receipts, owner and deletion remain real.
   if(phase==='Node') {
-  const realInspect=manager.inspect;let proofBefore,proofAfter,liveId,ownerAlive;manager.inspect=async()=>{
-   if(!liveId){proofBefore=ownership.revision(registryDir);liveId=ownership.register(nested,{registryDir});proofAfter=ownership.revision(registryDir);
+  const realInspect=manager.inspect,originalStat=fs.lstatSync,pinned=originalStat(registryDir,{bigint:true});
+  const actualIdentity=()=>{const s=originalStat(registryDir,{bigint:true});return [s.dev,s.ino,s.uid,s.mode,s.mtimeNs,s.ctimeNs].map(String);};
+  let proofBefore,proofAfter,liveId,ownerAlive,actualBefore,actualAfter;
+  fs.lstatSync=(...args)=>{
+   const s=originalStat(...args);
+   if(s.dev===pinned.dev&&s.ino===pinned.ino){s.mtimeNs=pinned.mtimeNs;s.ctimeNs=pinned.ctimeNs;}
+   return s;
+  };
+  try {manager.inspect=async()=>{
+   if(!liveId){proofBefore=ownership.revision(registryDir);actualBefore=actualIdentity();liveId=ownership.register(nested,{registryDir});actualAfter=actualIdentity();proofAfter=ownership.revision(registryDir);
     const live=ownership.read(registryDir).find(r=>r.id===liveId);ownerAlive=manager.isAlive(live.owner);assert.equal(ownerAlive,true);
-    t.diagnostic(JSON.stringify({attach:attach.trim(),registryFilesystemType:fs.statfsSync(registryDir).type,targetFilesystemType:fs.statfsSync(dir).type,proofBefore,proofAfter,proofEqual:JSON.stringify(proofBefore)===JSON.stringify(proofAfter),ownerAlive}));
+    t.diagnostic(JSON.stringify({attach:attach.trim(),registryFilesystemType:fs.statfsSync(registryDir).type,targetFilesystemType:fs.statfsSync(dir).type,proofBefore,proofAfter,actualBefore,actualAfter,proofEqual:JSON.stringify(proofBefore)===JSON.stringify(proofAfter),ownerAlive}));
    }return await realInspect();
   };
   const result=await manager.clean(person,shown.ticket);t.diagnostic(JSON.stringify({result,candidateExists:fs.existsSync(dir),activeDataExists:fs.existsSync(payload),ownerAlive}));
   assert.deepEqual(proofBefore.identity,proofAfter.identity,'The old timestamp-only proof really collides');
   assert.equal(result.cleaned,0,'Registering a live child on a supported private filesystem must preserve its data');
+  assert.deepEqual(actualBefore.slice(0,4),proofBefore.identity.slice(0,4));assert.deepEqual(actualAfter.slice(0,4),actualBefore.slice(0,4));
+  assert.equal(result.bytes,0,'The live child must lose zero bytes');assert.equal(fs.existsSync(dir),true);
+  } finally {fs.lstatSync=originalStat;}
   } else {
    const snapshot=manager.candidates[0],owner=require('../service-lock.cjs').lockIdentity(process.pid),diagnostic=path.join(base,'helper-proof.json');
    const register="require(process.argv[1]).register(process.argv[2],{registryDir:process.argv[3],owner:JSON.parse(process.argv[4])})";
    const request={path:dir,owner:snapshot.record.owner,roots:[root],entries:snapshot.entries,registry:ownership.revision(registryDir)};
-   const harness=`import sys,json,subprocess,os\nscript,live,registry,node,module,owner,register,diagnostic=sys.argv[1:]\nscope={}\nexec(compile(open(script).read().rsplit('\\ntry: main()',1)[0],script,'exec'),scope)\noriginal=scope['idle_again']\ndef identity():\n s=os.stat(registry)\n return [str(s.st_dev),str(s.st_ino),str(s.st_uid),str(s.st_mode),str(s.st_mtime_ns),str(s.st_ctime_ns)]\ndef race(*args):\n original(*args)\n before=identity()\n subprocess.run([node,'-e',register,module,live,registry,owner],check=True)\n with open(diagnostic,'w') as f: json.dump({'before':before,'after':identity()},f)\nscope['idle_again']=race\nscope['main']()\n`;
+   const harness=`import sys,json,subprocess,os,io
+script,live,registry,node,module,owner,register,diagnostic=sys.argv[1:]
+scope={}
+exec(compile(open(script).read().rsplit('\\ntry: main()',1)[0],script,'exec'),scope)
+request=json.load(sys.stdin)
+sys.stdin=io.StringIO(json.dumps(request))
+original_stat=os.stat
+registry_stat=original_stat(registry)
+fixed_mtime,fixed_ctime=map(int,request['registry']['identity'][4:])
+class RegistryTimes:
+ def __init__(self,actual): self.actual=actual
+ def __getattr__(self,name):
+  if name=='st_mtime_ns': return fixed_mtime
+  if name=='st_ctime_ns': return fixed_ctime
+  if name=='st_mtime': return fixed_mtime/1000000000
+  if name=='st_ctime': return fixed_ctime/1000000000
+  return getattr(self.actual,name)
+def fixed_registry_times(original):
+ def read(*args,**kwargs):
+  actual=original(*args,**kwargs)
+  if (actual.st_dev,actual.st_ino)==(registry_stat.st_dev,registry_stat.st_ino): return RegistryTimes(actual)
+  return actual
+ return read
+for name in ('stat','lstat','fstat'): setattr(os,name,fixed_registry_times(getattr(os,name)))
+original=scope['idle_again']
+def identity(raw=False):
+ s=original_stat(registry) if raw else os.stat(registry)
+ return [str(s.st_dev),str(s.st_ino),str(s.st_uid),str(s.st_mode),str(s.st_mtime_ns),str(s.st_ctime_ns)]
+def race(*args):
+ original(*args)
+ before=identity()
+ actual_before=identity(True)
+ subprocess.run([node,'-e',register,module,live,registry,owner],check=True)
+ with open(diagnostic,'w') as f: json.dump({'before':before,'after':identity(),'actualBefore':actual_before,'actualAfter':identity(True)},f)
+scope['idle_again']=race
+scope['main']()
+`;
    const result=JSON.parse(execFileSync(require('../platform.cjs').pythonExecutable(),['-c',harness,path.join(__dirname,'../temp-cleanup.py'),nested,registryDir,process.execPath,require.resolve('../temp-ownership.cjs'),JSON.stringify(owner),register,diagnostic],{input:JSON.stringify(request),encoding:'utf8',timeout:10000}));
    const observed=JSON.parse(fs.readFileSync(diagnostic,'utf8'));
    assert.deepEqual(observed.before,request.registry.identity);assert.deepEqual(observed.after,observed.before,'Python must detect a registration the timestamp-only proof misses');
+   assert.deepEqual(observed.actualBefore.slice(0,4),request.registry.identity.slice(0,4));assert.deepEqual(observed.actualAfter.slice(0,4),observed.actualBefore.slice(0,4));
    const live=ownership.read(registryDir).find(r=>r.path===nested);assert.equal(manager.isAlive(live.owner),true);
    t.diagnostic(JSON.stringify({phase,result,observed,candidateExists:fs.existsSync(dir),activeDataExists:fs.existsSync(payload)}));
    assert.equal(result.removed,false,'The real helper must retain the live data even when Node already dispatched it');
