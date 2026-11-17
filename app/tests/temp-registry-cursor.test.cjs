@@ -14,18 +14,10 @@ for(const phase of ['Python'])test(`B1 HFS_CURSOR ${phase}: a live receipt regis
   for(const p of [payload,nested,dir])fs.utimesSync(p,new Date(old),new Date(old));
   const manager=new TempReminders({dataDir,registryDir,roots:[root],now:()=>now,isPerson:c=>c.person}),person={person:true};
   for(let i=0;i<32;i++){const sibling=path.join(root,'active-sibling-'+i);fs.mkdirSync(sibling);ownership.register(sibling,{registryDir});}
-  // Choose a real child whose legitimate receipt name sorts behind the already
-  // consumed HFS directory cursor. No filesystem result or digest is replaced.
-  const firstName=ownership.read(registryDir).map(r=>r.id).sort()[0];let chosenId=null;
-  for(let i=0;i<4096;i++){
-   const alternative=path.join(dir,'nested-'+i);fs.mkdirSync(alternative);const st=fs.statSync(alternative);
-   const id=require('node:crypto').createHash('sha256').update(JSON.stringify([alternative,st.dev,st.ino,st.uid])).digest('hex');
-   if(id<firstName){fs.renameSync(payload,path.join(alternative,'keep'));fs.rmdirSync(nested);nested=alternative;payload=path.join(nested,'keep');chosenId=id;break;}
-   fs.rmdirSync(alternative);
-  }
-  assert.ok(chosenId,'A bounded synthetic setup must find a lower real receipt id');
-  for(const p of [payload,nested,dir])fs.utimesSync(p,new Date(old),new Date(old));
-  t.diagnostic(JSON.stringify({chosenId,firstName,ordering:chosenId<firstName}));
+  // Every hex receipt name sorts before this existing generation counter on
+  // HFS+. Register after consuming it: no random hash search is needed to put
+  // the new receipt behind the real directory cursor.
+  const cursorName='registration-finished';
   const shown=await manager.present(person);assert.equal(shown.directories,1);
   // Start safely inside a fresh one-second timestamp interval. No stat values,
   // register(), receipt contents, liveness oracle or deletion gates are mocked.
@@ -45,12 +37,15 @@ for(const phase of ['Python'])test(`B1 HFS_CURSOR ${phase}: a live receipt regis
    const snapshot=manager.candidates[0],owner=require('../service-lock.cjs').lockIdentity(process.pid),diagnostic=path.join(base,'helper-proof.json');
    const register="require(process.argv[1]).register(process.argv[2],{registryDir:process.argv[3],owner:JSON.parse(process.argv[4])})";
    const request={path:dir,owner:snapshot.record.owner,roots:[root],entries:snapshot.entries,registry:ownership.revision(registryDir)};
-   const harness=`import sys,json,subprocess,os\nscript,live,registry,node,module,owner,register,diagnostic=sys.argv[1:]\nscope={}\nexec(compile(open(script).read().rsplit('\\ntry: main()',1)[0],script,'exec'),scope)\noriginal_scan=os.scandir\nscans=0\nregistered=False\ndef identity():\n s=os.stat(registry)\n return [str(s.st_dev),str(s.st_ino),str(s.st_uid),str(s.st_mode),str(s.st_mtime_ns),str(s.st_ctime_ns)]\nclass ChangingScan:\n def __init__(self,fd):\n  global scans\n  scans+=1\n  self.number=scans\n  self.inner=original_scan(fd)\n  self.started=False\n  self.seen=[]\n  self.details=None\n def __enter__(self):\n  self.inner.__enter__()\n  return self\n def __exit__(self,*args):\n  if self.details is not None:\n   self.details['enumerated']=self.seen\n   with open(diagnostic,'w') as f: json.dump(self.details,f)\n  return self.inner.__exit__(*args)\n def __iter__(self): return self\n def __next__(self):\n  global registered\n  entry=next(self.inner)\n  self.seen.append(entry.name)\n  if self.number==3 and not self.started:\n   self.started=True\n   before=identity()\n   subprocess.run([node,'-e',register,module,live,registry,owner],check=True)\n   registered=True\n   self.details={'before':before,'after':identity(),'duringScan':self.number,'firstEntry':entry.name}\n  return entry\nos.scandir=ChangingScan\nscope['main']()\n`;
+   const harness=`import sys,json,subprocess,os\nscript,live,registry,node,module,owner,register,diagnostic=sys.argv[1:]\nscope={}\nexec(compile(open(script).read().rsplit('\\ntry: main()',1)[0],script,'exec'),scope)\noriginal_scan=os.scandir\nscans=0\nregistered=False\ndef identity():\n s=os.stat(registry)\n return [str(s.st_dev),str(s.st_ino),str(s.st_uid),str(s.st_mode),str(s.st_mtime_ns),str(s.st_ctime_ns)]\nclass ChangingScan:\n def __init__(self,fd):\n  global scans\n  scans+=1\n  self.number=scans\n  self.inner=original_scan(fd)\n  self.started=False\n  self.seen=[]\n  self.details=None\n def __enter__(self):\n  self.inner.__enter__()\n  return self\n def __exit__(self,*args):\n  if self.details is not None:\n   self.details['enumerated']=self.seen\n   with open(diagnostic,'w') as f: json.dump(self.details,f)\n  return self.inner.__exit__(*args)\n def __iter__(self): return self\n def __next__(self):\n  global registered\n  entry=next(self.inner)\n  self.seen.append(entry.name)\n  if self.number==3 and entry.name=='registration-finished' and not self.started:\n   self.started=True\n   before=identity()\n   subprocess.run([node,'-e',register,module,live,registry,owner],check=True)\n   registered=True\n   self.details={'before':before,'after':identity(),'duringScan':self.number,'firstEntry':entry.name}\n  return entry\nos.scandir=ChangingScan\nscope['main']()\n`;
    const result=JSON.parse(execFileSync(require('../platform.cjs').pythonExecutable(),['-c',harness,path.join(__dirname,'../temp-cleanup.py'),nested,registryDir,process.execPath,require.resolve('../temp-ownership.cjs'),JSON.stringify(owner),register,diagnostic],{input:JSON.stringify(request),encoding:'utf8',timeout:10000}));
    const observed=JSON.parse(fs.readFileSync(diagnostic,'utf8'));
    assert.deepEqual(observed.before,request.registry.identity);assert.deepEqual(observed.after,observed.before,'Python must detect a registration the timestamp-only proof misses');
    const live=ownership.read(registryDir).find(r=>r.path===nested);assert.equal(manager.isAlive(live.owner),true);observed.liveId=live.id;observed.liveReceiptSeen=observed.enumerated.includes(live.id+'.json');observed.enumeratedCount=observed.enumerated.length;
    t.diagnostic(JSON.stringify({phase,result,observed,candidateExists:fs.existsSync(dir),activeDataExists:fs.existsSync(payload)}));
+   assert.equal(observed.firstEntry,cursorName,'Register only after the existing counter has been consumed');
+   assert.ok(live.id+'.json'<cursorName,'The real receipt must sort behind the consumed cursor');
+   assert.equal(observed.liveReceiptSeen,false,'The real HFS iterator must miss the new live receipt');
    assert.equal(result.removed,false,'The real helper must retain the live data even when Node already dispatched it');
    assert.equal(result.bytes,0);assert.equal(result.registryChanged,true);assert.equal(result.untouched,true);
   }
