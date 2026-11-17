@@ -33,6 +33,7 @@ async function run() {
   app = await _electron.launch({ executablePath: require('electron'), args: [root], env, timeout: 60000 }); page = await app.firstWindow(); page.setDefaultTimeout(15000);
   const pageErrors = []; page.on('pageerror', error => pageErrors.push(error.message));
   await page.locator('#new-session').waitFor(); if (await page.locator('#setup-dialog').isVisible()) await page.keyboard.press('Escape');
+  await require('./fixtures/default-space.cjs').revealDefaultSpace(page);
   assert.ok((await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), focused: win.isFocused() })))).every(win => !win.visible && !win.focused)); check('Source window stays hidden and unfocused');
   await menu('terminal'); assert.equal((await client.call('initial')).sessions.length, 0); check('Menu on welcome does not create or claim a session');
   await page.locator('#new-session').click(); await page.locator('input[name=provider][value=codex]').check(); await page.locator('#session-name').fill('Export demo'); await createIn(page, 'chat');
