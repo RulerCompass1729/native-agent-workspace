@@ -92,7 +92,7 @@ class CodexTerminalBridge {
         // Retain only routing metadata, never prompts, credentials or history.
         const metadata = { key: ++this.sequence, method: request.method, threadId: request.params?.threadId, ephemeral: request.params?.ephemeral === true };
         state.pending.set(request.id, metadata);
-        this.observe({ kind: 'request', ...metadata });
+        this.observe({ kind: 'request', ...metadata, rpc });
       }
       if (upstream.readyState === WebSocket.OPEN) {
         upstream.send(data, { binary });

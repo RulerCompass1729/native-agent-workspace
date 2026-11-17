@@ -2013,15 +2013,47 @@ class Codex extends EventEmitter {
       effort: value.effort ? { value: value.effort, observedAt: value.observedAt } : null,
       permissions: { modelProvider: 'openai', approvalPolicy: 'never', sandboxMode: 'dangerFullAccess', observedAt: value.observedAt } };
   }
+  creationPermissionsKnown(settings) {
+    return settings?.modelProvider === 'openai' && settings.approvalPolicy === 'never' &&
+      settings.sandboxPolicy?.type === 'dangerFullAccess' && Object.keys(settings.sandboxPolicy).length === 1 &&
+      settings.activePermissionProfile === null && settings.approvalsReviewer === 'user' &&
+      typeof settings.model === 'string' && Boolean(settings.model);
+  }
+  settleTerminalSettings(event) {
+    const request = this.creationPermissionPending?.get(event.key);
+    if (!request) return null;
+    this.creationPermissionPending.delete(event.key);
+    if (!this.creationPermissionPending.size) this.creationPermissionPending = null;
+    const ticket = request.creationTicket, thread = event.result?.thread;
+    const settings = { model: event.result?.model || thread?.model, effort: event.result?.reasoningEffort,
+      modelProvider: event.result?.modelProvider, approvalPolicy: event.result?.approvalPolicy,
+      sandboxPolicy: event.result?.sandbox, activePermissionProfile: event.result?.activePermissionProfile,
+      approvalsReviewer: event.result?.approvalsReviewer };
+    const verified = !event.error && thread?.id === this.record.nativeId && /^[a-f0-9-]{36}$/i.test(thread.id) &&
+      !thread.ephemeral && !thread.parentThreadId && request.nativeId === this.record.nativeId &&
+      ticket.rpc === event.rpc && this.currentRpc(event.rpc) && ticket.lifecycle === this.lifecycleRevision &&
+      ticket.control === (this.record.controlRevision ?? 0) && this.creationPermissionsKnown(settings);
+    const effort = typeof settings.effort === 'string' ? settings.effort : null;
+    const signature = verified ? JSON.stringify([settings.model, effort]) : null;
+    request.batch.signature ??= signature;
+    request.batch.verified &&= Boolean(verified && request.batch.signature === signature);
+    const observed = this.creationSettingsObservation;
+    // An older/error/unknown reply cannot be hidden by the last display request.
+    // Conflicting concurrent cost settings also cannot prove the current model.
+    if (!request.batch.verified || observed && (observed.model !== settings.model || observed.effort !== effort)) {
+      this.creationSettingsObservation = null;
+      this.creationSettingsVersion = (this.creationSettingsVersion || 0) + 1;
+    }
+    this.emit('capability');
+    return request;
+  }
   observeSettings(settings, sourceRpc = this.terminalNotificationSource ? this.terminalRpc : this.host?.rpc, permissionCurrent = true, observedAt = Date.now()) {
     this.creationSettingsVersion = (this.creationSettingsVersion || 0) + 1;
     this.creationSettingsObservation = null;
     // A legacy sandbox projection cannot establish a custom permission profile.
     // Keep only the exact unprofiled, native full-access case; no paths/config.
-    if (permissionCurrent && sourceRpc && this.currentRpc(sourceRpc) && settings?.modelProvider === 'openai' &&
-      settings.approvalPolicy === 'never' && settings.sandboxPolicy?.type === 'dangerFullAccess' &&
-      Object.keys(settings.sandboxPolicy).length === 1 && settings.activePermissionProfile === null && settings.approvalsReviewer === 'user' &&
-      typeof settings.model === 'string' && settings.model && typeof this.record.nativeId === 'string' && this.record.nativeId) {
+    if (permissionCurrent && sourceRpc && this.currentRpc(sourceRpc) && this.creationPermissionsKnown(settings) &&
+      typeof this.record.nativeId === 'string' && this.record.nativeId) {
       this.creationSettingsObservation = { nativeId: this.record.nativeId, control: this.record.controlRevision ?? 0,
         lifecycle: this.lifecycleRevision, rpc: sourceRpc, observedAt, model: settings.model,
         effort: typeof settings.effort === 'string' ? settings.effort : null };
@@ -2085,8 +2117,18 @@ class Codex extends EventEmitter {
       return;
     }
     if (event.kind === 'disconnected') {
+      let revoked = false;
+      for (const [key, request] of this.creationPermissionPending || []) if (request.creationTicket.rpc === event.rpc) {
+        this.creationPermissionPending.delete(key); request.batch.verified = false; revoked = true;
+      }
+      if (revoked) {
+        if (!this.creationPermissionPending.size) this.creationPermissionPending = null;
+        if (this.terminalSettingsRequest?.creationTicket.rpc === event.rpc) this.terminalSettingsRequest = null;
+        this.creationSettingsObservation = null; this.creationSettingsVersion = (this.creationSettingsVersion || 0) + 1;
+        this.emit('capability');
+      }
       if (this.terminalRpc !== event.rpc) return;
-      this.creationSettingsObservation = null; this.creationPermissionPending = null;
+      this.creationSettingsObservation = null; this.creationPermissionPending = null; this.terminalSettingsRequest = null;
       const ownedNotifications = this.terminalNotificationSource;
       if (ownedNotifications) this.invalidateNativeGoal();
       this.emit('approvalUnavailable', event.rpc);
@@ -2116,10 +2158,13 @@ class Codex extends EventEmitter {
     if (event.ephemeral) return; // Native title/Recap helpers are not the displayed root.
     if (event.kind === 'request') {
       this.invalidateNativeGoal();
-      this.terminalSettingsRequest = { key: event.key, previous: this.nativeSettings, creationTicket: this.creationSettingsTicket(event.rpc) };
-      this.creationPermissionPending = event.key;
+      const pending = this.creationPermissionPending ||= new Map();
+      const creationTicket = this.creationSettingsTicket(event.rpc);
+      const batch = pending.size ? pending.values().next().value.batch : { verified: true, signature: null };
+      this.terminalSettingsRequest = { key: event.key, nativeId: this.record.nativeId, previous: this.nativeSettings, creationTicket, batch };
+      pending.set(event.key, this.terminalSettingsRequest);
       this.creationSettingsObservation = null;
-      if (event.method === 'thread/resume' && event.threadId === this.record.nativeId && !this.terminalSwitch) return;
+      if (event.method === 'thread/resume' && event.threadId === this.record.nativeId && !this.terminalSwitch) { this.emit('capability'); return; }
       if (!this.record.nativeId) return;
       this.pendingTerminalContext = null; this.terminalSwitch = event.key; this.chatAvailable = false;
       this.emit('contextEnd', { nativeId: this.record.nativeId, reason: 'terminal-switch' });
@@ -2133,7 +2178,8 @@ class Codex extends EventEmitter {
       this.emit('capability'); return;
     }
     if (event.kind !== 'response') return;
-    if (this.creationPermissionPending === event.key) this.creationPermissionPending = null;
+    const settingsRequest = this.settleTerminalSettings(event);
+    const latestSettings = settingsRequest && this.terminalSettingsRequest?.key === event.key ? settingsRequest : null;
     if (event.error) {
       if (this.terminalSwitch === event.key) this.emit('activity', ...uiActivity("notice.activity.nativeSwitchUnconfirmed"));
       return;
@@ -2142,13 +2188,13 @@ class Codex extends EventEmitter {
     if (!thread || !/^[a-f0-9-]{36}$/i.test(thread.id || '') || thread.ephemeral || thread.parentThreadId) return;
     if (!this.record.nativeId) {
       this.terminalNotificationSource = true; this.terminalRpc = event.rpc;
-      const settings = this.terminalSettingsRequest?.key === event.key ? this.terminalSettingsRequest.previous : this.nativeSettings;
+      const settings = latestSettings ? latestSettings.previous : this.nativeSettings;
       this.initialTerminalThread?.(thread, event.result.model); this.initialTerminalThread = null;
-      this.observeReplySettings(event.result, settings, event.rpc, this.terminalSettingsRequest?.key === event.key ? this.terminalSettingsRequest.creationTicket : null); this.emit('capability'); return;
+      this.observeReplySettings(event.result, settings, event.rpc, latestSettings?.creationTicket || null); this.emit('capability'); return;
     }
     if (event.method === 'thread/resume' && thread.id === this.record.nativeId && !this.terminalSwitch) {
       this.terminalRpc = event.rpc;
-      if (this.terminalSettingsRequest?.key === event.key) this.observeReplySettings(event.result, this.terminalSettingsRequest.previous, event.rpc, this.terminalSettingsRequest.creationTicket);
+      if (latestSettings) this.observeReplySettings(event.result, latestSettings.previous, event.rpc, latestSettings.creationTicket);
       return;
     }
     if (this.terminalSwitch !== event.key) return;
