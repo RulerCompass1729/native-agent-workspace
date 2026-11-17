@@ -2564,7 +2564,9 @@ class QueueDispatcher {
       let identity;
       try {
         if (this.roomState.value.archivedSessions?.includes(session.id) ||
-            !sessionReady(session, snapshot.wakePolicy).ready || humanRecent(session.id, this.humanAt, now, this.humanQuietMs)) throw Error('not-ready');
+            !sessionReady(session, snapshot.wakePolicy).ready || humanRecent(session.id, this.humanAt, now, this.humanQuietMs)) {
+          this.vacancySince.delete(session.id); this.vacancyIdentity.delete(session.id); continue;
+        }
         identity = JSON.stringify([session.nativeId, session.provider, session.connectionRevision || 0,
           session.controlRevision || 0, roomIds(session).sort()]);
       } catch { this.vacancySince.delete(session.id); this.vacancyIdentity.delete(session.id); continue; }
