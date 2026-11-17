@@ -22,9 +22,13 @@ test('cold bootstrap stages the disabled local prepared-command service without 
     assert.equal(fs.existsSync(path.join(directory, 'mobile-authority.json')), false);
     const runtimes = fs.readdirSync(path.join(directory, 'runtimes'));
     assert.equal(runtimes.length, 1);
-    for (const name of ['mobile-access.cjs', 'mobile-session.cjs', 'native-computer-use.cjs']) {
+    for (const name of ['mobile-access.cjs', 'mobile-session.cjs', 'native-computer-use.cjs', 'background-fingerprint.cjs']) {
       assert.deepEqual(fs.readFileSync(path.join(directory, 'runtimes', runtimes[0], name)), fs.readFileSync(path.join(__dirname, '..', name)));
     }
+    const { controlFingerprint } = require(path.join(directory, 'runtimes', runtimes[0], 'background-operation.cjs'));
+    assert.deepEqual(controlFingerprint({ method: 'send', arguments: [] }, {
+      state: { sessions: [], rooms: [] }, actor: { id: 'synthetic' }, roomState: { apply: value => value },
+    }), { sessions: [], rooms: [] });
   } finally {
     client?.close(); await stopOwnEmptyService(directory);
     fs.rmSync(directory, { recursive: true, force: true });

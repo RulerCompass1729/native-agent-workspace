@@ -141,13 +141,16 @@ test('background notification renders format characters visibly in the actor nam
 });
 test('session confirmation navigation rejects stale identities or handled requests before changing views', async () => {
   const source = fs.readFileSync(require.resolve('../renderer/search-view.js'), 'utf8'), calls = [];
-  const row = { id: 'message', backgroundOperation: { state: 'confirmation-required' } }, record = { id: 'agent', nativeId: 'native-agent', messages: [row] };
+  const row = { id: 'message', backgroundOperation: { id: 'operation', nativeId: 'native-agent', state: 'confirmation-required' } }, record = { id: 'agent', nativeId: 'native-agent', messages: [row] };
   const c = { state: { sessions: [record] }, toast: m => calls.push(m), uiText: k => k, $: () => ({}), ensureMessages: () => null,
     select: async (...args) => calls.push(args), pointToMessage: (_el, key, id) => { calls.push([key, id]); return true; } };
   vm.createContext(c); vm.runInContext(section(source, 'async function showBackgroundConfirmation(', '\nasync function showRoomRecord('), c);
-  const target = { sessionId: 'agent', nativeId: 'native-agent', messageId: 'message' };
+  const target = { sessionId: 'agent', nativeId: 'native-agent', messageId: 'message', operationId: 'operation' };
   assert.equal(await c.showBackgroundConfirmation({ ...target, nativeId: 'new-native' }), false); assert.deepEqual(calls, ['search.changed']);
   calls.length = 0; assert.equal(await c.showBackgroundConfirmation(target), true); assert.deepEqual(calls, [['agent', 'chat'], ['agent', 'message']]);
+  calls.length = 0; row.backgroundOperation.nativeId = 'old-native'; assert.equal(await c.showBackgroundConfirmation(target), false); assert.deepEqual(calls, ['search.changed']);
+  row.backgroundOperation.nativeId = target.nativeId;
+  calls.length = 0; assert.equal(await c.showBackgroundConfirmation({ ...target, operationId: 'other-operation' }), false); assert.deepEqual(calls, ['search.changed']);
   calls.length = 0; row.backgroundOperation.state = 'complete'; assert.equal(await c.showBackgroundConfirmation(target), false); assert.deepEqual(calls, ['search.changed']);
   // A session this page does not show comes without messages: they are fetched first (shown-sessions.cjs).
   row.backgroundOperation.state = 'confirmation-required';
